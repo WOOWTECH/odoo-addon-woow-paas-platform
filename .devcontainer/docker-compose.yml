@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  # Override for VS Code devcontainer
+  web:
+    volumes:
+      # Mount the entire project folder for VS Code
+      - ..:/mnt/extra-addons/woow_paas_platform:cached
+
+    # Override default command to keep container running for development
+    command: /bin/sh -c "while sleep 1000; do :; done"
+
+    # Enable ptrace for debugging
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined

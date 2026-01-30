@@ -1,0 +1,66 @@
+// For format details, see https://aka.ms/devcontainer.json
+// Odoo 18 Development Container for woow_paas_platform
+{
+    "name": "Woow PaaS Platform - Odoo 18",
+
+    // Docker Compose files to use
+    "dockerComposeFile": [
+        "../docker-compose.yml",
+        "docker-compose.yml"
+    ],
+
+    // The service to use as the development container
+    "service": "web",
+
+    // Workspace folder inside the container
+    "workspaceFolder": "/mnt/extra-addons/woow_paas_platform",
+
+    // VS Code customizations
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                // Python development
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "charliermarsh.ruff",
+                // XML support for Odoo views
+                "redhat.vscode-xml",
+                // Git integration
+                "eamodio.gitlens",
+                // Docker support
+                "ms-azuretools.vscode-docker"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/bin/python3",
+                "python.analysis.extraPaths": [
+                    "/usr/lib/python3/dist-packages",
+                    "/mnt/extra-addons"
+                ],
+                "python.languageServer": "Pylance",
+                "[python]": {
+                    "editor.defaultFormatter": "charliermarsh.ruff",
+                    "editor.formatOnSave": true
+                }
+            }
+        }
+    },
+
+    // Ports to forward
+    "forwardPorts": [
+        8069,
+        8000
+    ],
+
+    // Features to add
+    "features": {
+        "ghcr.io/devcontainers/features/git:1": {}
+    },
+
+    // Post-create command to install additional dependencies if needed
+    "postCreateCommand": "echo 'Woow PaaS Platform development container ready!'",
+
+    // Environment variables
+    "remoteEnv": {
+        "ODOO_RC": "/etc/odoo/odoo.conf"
+    }
+}
