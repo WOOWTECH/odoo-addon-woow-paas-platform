@@ -78,14 +78,24 @@ cd ../woow_paas_platform.worktrees/<feature-name>
 
 **腳本會自動：**
 1. 檢查 `.env` 配置
-2. 啟動 Docker Compose
-3. 等待 Odoo 服務就緒
-4. 顯示訪問 URL
+2. 從模板生成 `odoo.conf`（使用 envsubst）
+3. 啟動 Docker Compose
+4. 等待 Odoo 服務就緒
+5. **自動建立資料庫並安裝 `base` + `woow_paas_platform`**（首次啟動）
+6. 顯示訪問 URL
 
 **預期輸出範例**：
 ```
 🚀 啟動 Odoo 開發環境...
+✓ 已從模板生成 odoo.conf
+📦 啟動 Docker 容器...
 ✅ Odoo 服務已就緒！
+
+🔍 檢查資料庫 woow_epic_workspace_api...
+  等待 PostgreSQL... 就緒
+📦 資料庫不存在，正在建立並安裝模組...
+   （首次啟動需要 1-3 分鐘，請耐心等候）
+✅ 資料庫建立完成！
 
 訪問 Odoo：
   http://localhost:8234
@@ -103,45 +113,65 @@ docker compose ps
 docker compose logs -f web
 ```
 
-### 步驟 5：首次訪問 Odoo
+### 步驟 5：訪問 Odoo
 
 在瀏覽器開啟：`http://localhost:<PORT>`（使用 setup 顯示的 port）
 
-**首次啟動流程**：
-1. 選擇「Create Database」
-2. 填寫資料庫資訊：
-   - **Database Name**: `woow_epic_workspace_api`（使用 setup 顯示的資料庫名稱）
-   - **Email**: `admin@woow.com`
-   - **Password**: `admin`
-   - **Language**: `Chinese (Traditional) / 正體中文`
-   - **Country**: `Taiwan`
-3. 勾選「Load demonstration data」（開發環境建議勾選）
-4. 點擊「Continue」
+**自動建立的環境**：
+- 資料庫已自動建立（名稱依據 branch，如 `woow_epic_workspace_api`）
+- `woow_paas_platform` 模組已自動安裝
+- 語言已設定為繁體中文（zh_TW）
+- 無 demo 資料（乾淨環境）
 
-**安裝 Addon**：
-1. 進入 Odoo 後台
-2. 點選「Apps」
-3. 移除「Apps」搜尋框的預設篩選器
-4. 搜尋「woow_paas_platform」
-5. 點擊「Install」
+**登入資訊**：
+- **Email**: `admin`
+- **Password**: `admin`
+
+> **注意**：如果看到「Create Database」頁面，表示自動建立失敗。請查看日誌：
+> ```bash
+> docker compose logs web | tail -50
+> ```
 
 ### 步驟 6：開發與即時更新
 
-**修改 Python 程式碼後**：
+目前的 `dev_mode` 設定為 `reload,qweb,xml`，大部分修改會**自動重載**。
+
+#### 自動重載（無需操作）
+
+| 修改類型 | 說明 |
+|---------|------|
+| Python 程式碼 | `dev_mode=reload` 自動偵測並重載 |
+| XML 視圖 | `dev_mode=xml` 自動重載 |
+| QWeb 模板 | `dev_mode=qweb` 自動重載 |
+| JS/CSS/SCSS | 刷新瀏覽器即可（Ctrl+Shift+R 清除快取） |
+
+#### 需要手動更新模組（`-u`）
+
+以下情況需要執行更新指令：
+
 ```bash
-# 重啟 Odoo 服務以載入變更
-docker compose restart web
+# 更新模組
+docker compose exec web odoo -d <DB_NAME> -u woow_paas_platform --stop-after-init
 ```
 
-**修改 XML/JS 程式碼後**：
-```bash
-# 使用 --dev xml 模式更新模組（支援熱重載）
-docker compose exec web odoo -d woow_epic_workspace_api -u woow_paas_platform --dev xml
-```
+| 修改類型 | 說明 |
+|---------|------|
+| `__manifest__.py` | 修改模組依賴、版本等 |
+| 新增/修改欄位 | models 中新增 `fields.Char()` 等 |
+| 新增模型 | 新增 `class NewModel(models.Model)` |
+| data/*.xml | 初始資料檔案 |
+| security/*.csv | 權限設定 |
 
-**查看即時日誌**：
+#### 查看即時日誌
+
 ```bash
 docker compose logs -f web
+```
+
+#### 完全重啟（如果自動重載失效）
+
+```bash
+docker compose restart web
 ```
 
 ### 步驟 7：執行 Addon 測試
@@ -311,33 +341,42 @@ cd /mnt/extra-addons/woow_paas_platform
 cd ~/Documents/woow/AREA-odoo/woow-addons/woow_paas_platform
 git worktree add ../woow_paas_platform.worktrees/workspace-api -b epic/workspace-api
 
-# 2. 設定並啟動
+# 2. 切換到 worktree 並啟動（自動設定環境 + 建立資料庫）
 cd ../woow_paas_platform.worktrees/workspace-api
-./scripts/setup-worktree-env.sh
 ./scripts/start-dev.sh
+# 首次啟動會自動：
+# - 生成 .env 和 odoo.conf
+# - 建立資料庫並安裝 woow_paas_platform
 
-# 3. 訪問 Odoo
+# 3. 訪問 Odoo（登入：admin / admin）
 open http://localhost:8234
 
-# 4. 開發完成後執行測試
+# 4. 開發...修改程式碼（大部分會自動重載）
+
+# 5. 如有結構性變更，更新模組
+docker compose exec web odoo -d woow_epic_workspace_api -u woow_paas_platform --stop-after-init
+
+# 6. 執行測試
 ./scripts/test-addon.sh
 
-# 5. 提交變更
+# 7. 提交變更
 git add .
 git commit -m "feat: implement workspace CRUD API"
 git push -u origin epic/workspace-api
 
-# 6. 清理
+# 8. 清理
 docker compose stop
 ```
 
 ## 重要提醒
 
-- **資料庫名稱**：必須使用 setup 腳本顯示的名稱
-- **Port**：每個 worktree 自動分配唯一 port
-- **環境變數**：由腳本自動生成，請勿手動修改 `.env`
-- **測試 URL**：使用 `http://localhost`（不是 `:8069`）以啟用 websocket
+- **自動化**：`start-dev.sh` 會自動處理環境設定、資料庫建立、模組安裝
+- **Port**：每個 worktree 自動分配唯一 port（8069-9068）
+- **資料庫**：自動建立，名稱基於 branch（如 `woow_epic_feature`）
+- **配置檔**：`odoo.conf` 由 `envsubst` 從模板生成，請修改 `.template` 檔
+- **測試 URL**：使用 `http://localhost:<PORT>`
 - **資源管理**：建議最多同時運行 3-4 個 worktree
+- **自動重載**：`dev_mode=reload,qweb,xml` 讓大部分修改自動生效
 
 ## 進階選項
 
