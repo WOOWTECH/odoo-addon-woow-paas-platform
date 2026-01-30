@@ -1,14 +1,13 @@
-version: '3.8'
-
 services:
   # Odoo 18 Web Application Service
   web:
     image: odoo:18.0
+    container_name: ${COMPOSE_PROJECT_NAME:-woow_paas_platform}_web
     depends_on:
       - db
     restart: "no"
     ports:
-      - "8069:8069"
+      - "${ODOO_PORT:-8069}:8069"
     volumes:
       # Odoo configuration
       - ./config:/etc/odoo
@@ -17,20 +16,35 @@ services:
       # Odoo data persistence
       - odoo-data:/var/lib/odoo
     environment:
-      - HOST=db
-      - USER=odoo
-      - PASSWORD=odoo
+      - HOST=${POSTGRES_HOST:-db}
+      - USER=${POSTGRES_USER:-odoo}
+      - PASSWORD=${POSTGRES_PASSWORD:-odoo}
+      - POSTGRES_HOST=${POSTGRES_HOST:-db}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER:-odoo}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-odoo}
+      - ODOO_DB_NAME=${ODOO_DB_NAME:-woow_main}
+    networks:
+      - default
+      - shared
 
   # PostgreSQL Database Service
+  # 僅在 USE_SHARED_DB=false 時啟動（預設）
   db:
     image: postgres:15
+    container_name: ${COMPOSE_PROJECT_NAME:-woow_paas_platform}_db
     restart: "no"
     volumes:
       - postgresql-data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_PASSWORD=odoo
-      - POSTGRES_USER=odoo
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-odoo}
+      - POSTGRES_USER=${POSTGRES_USER:-odoo}
       - POSTGRES_DB=postgres
+    networks:
+      - default
+    profiles:
+      - "" # 預設啟動
+      - standalone
 
   # Nginx Reverse Proxy (optional)
   nginx:
@@ -65,5 +79,16 @@ services:
 
 volumes:
   odoo-data:
+    name: ${COMPOSE_PROJECT_NAME:-woow_paas_platform}_odoo_data
   postgresql-data:
+    name: ${COMPOSE_PROJECT_NAME:-woow_paas_platform}_postgres_data
   pgadmin-data:
+    name: ${COMPOSE_PROJECT_NAME:-woow_paas_platform}_pgadmin_data
+
+networks:
+  default:
+    name: ${COMPOSE_PROJECT_NAME:-woow_paas_platform}_network
+  shared:
+    name: ${SHARED_DB_NETWORK:-odoo_network}
+    external: true
+    # 僅在 USE_SHARED_DB=true 時使用此網路

@@ -1,3 +1,84 @@
 {
-  "python.languageServer": "None"
+  // Python 解釋器設定
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+
+  // Python 分析設定
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/src"
+  ],
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoImportCompletions": true,
+
+  // 格式化設定
+  "editor.formatOnSave": true,
+  "python.formatting.provider": "black",
+  "python.formatting.blackArgs": [
+    "--line-length=120"
+  ],
+
+  // Linting 設定
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": false,
+  "python.linting.flake8Enabled": true,
+  "python.linting.flake8Args": [
+    "--max-line-length=120",
+    "--ignore=E203,W503"
+  ],
+
+  // 檔案排除設定（提升效能）
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/.DS_Store": true
+  },
+
+  // 搜尋排除設定
+  "search.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/node_modules": true,
+    "**/venv": true,
+    "**/.venv": true
+  },
+
+  // XML 設定（用於 Odoo views）
+  "[xml]": {
+    "editor.defaultFormatter": "redhat.vscode-xml",
+    "editor.formatOnSave": true
+  },
+
+  // JavaScript/TypeScript 設定
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  // SCSS 設定
+  "[scss]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  // 終端機設定
+  "terminal.integrated.env.osx": {
+    "PYTHONPATH": "${workspaceFolder}/src"
+  },
+  "terminal.integrated.env.linux": {
+    "PYTHONPATH": "${workspaceFolder}/src"
+  },
+
+  // Git 設定
+  "git.ignoreLimitWarning": true,
+
+  // Odoo 特定設定
+  "odoo.addonsPath": [
+    "${workspaceFolder}/src"
+  ]
 }

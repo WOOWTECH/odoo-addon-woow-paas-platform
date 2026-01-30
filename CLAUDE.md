@@ -220,30 +220,100 @@ This project uses Claude Code PM (`.claude/` directory) for project management.
 
 ## Worktree Development
 
-當使用 git worktree 進行開發時，變更會在 worktree 目錄進行，但 Docker 掛載的是原始專案目錄，因此需要同步後才能測試。
+此專案支援 git worktree 並行測試，每個 worktree 可以獨立運行自己的 Docker 環境。
+
+### 快速開始
 
 ```bash
-# 專案路徑 (請將 <branch-name> 替換為實際的分支名稱)
-MAIN_PROJECT="/Users/eugene/Documents/woow/AREA-odoo/odoo-server"
-WORKTREE_ROOT="/Users/eugene/Documents/woow/AREA-odoo/odoo-server.worktrees"
-BRANCH="<branch-name>"
-WORKTREE="$WORKTREE_ROOT/$BRANCH"
-ADDON_PATH="data/18/addons/<target-addon>"
+# 1. 建立 worktree
+git worktree add ../woow_paas_platform.worktrees/epic-feature -b epic/feature
 
-# 同步 git 追蹤的檔案到主專案並重啟 (推薦用法)
-cd "$WORKTREE" && git ls-files "$ADDON_PATH" | rsync -av --files-from=- "$WORKTREE/" "$MAIN_PROJECT/" && \
-cd "$MAIN_PROJECT" && docker compose -f docker-compose-18.yml restart web
+# 2. 切換到 worktree
+cd ../woow_paas_platform.worktrees/epic-feature
 
-# 同步後更新 addon (需要重新安裝模組時)
-cd "$WORKTREE" && git ls-files "$ADDON_PATH" | rsync -av --files-from=- "$WORKTREE/" "$MAIN_PROJECT/" && \
-cd "$MAIN_PROJECT" && docker compose -f docker-compose-18.yml exec web odoo -d odoo -u <target-addon> --dev xml
+# 3. 自動設定環境並啟動
+./scripts/start-dev.sh
 ```
 
-**注意事項**：
+### 環境配置
 
-- 網站測試是：http://localhost 不是 http://localhost:8069
-- 使用 `git ls-files` 只同步 git 追蹤的檔案
-- 若只修改 XML/JS，同步後重啟即可；若修改 Python 模型，需執行 `-u <target-addon>`
+每個 worktree 會自動配置：
+- **唯一的 port**（8069 + 目錄 hash）- 避免衝突
+- **獨立的資料庫名稱**（`woow_<branch>`）- 資料隔離
+- **獨立的 Docker 容器**（基於 `COMPOSE_PROJECT_NAME`）
+
+所有配置透過 `.env` 檔案管理（由 `scripts/setup-worktree-env.sh` 自動生成）。
+
+### 可用腳本
+
+```bash
+# 設定環境變數（.env）
+./scripts/setup-worktree-env.sh
+
+# 啟動開發環境
+./scripts/start-dev.sh
+
+# 執行測試
+./scripts/test-addon.sh
+
+# 清理環境
+./scripts/cleanup-worktree.sh
+```
+
+### 並行測試範例
+
+同時運行多個 worktree：
+
+```bash
+# Terminal 1 - 主專案
+cd /path/to/woow_paas_platform
+./scripts/start-dev.sh
+# → http://localhost:8069 (woow_main)
+
+# Terminal 2 - Feature A
+cd ../woow_paas_platform.worktrees/epic-feature-a
+./scripts/start-dev.sh
+# → http://localhost:8234 (woow_epic_feature_a)
+
+# Terminal 3 - Feature B
+cd ../woow_paas_platform.worktrees/fix-bug-123
+./scripts/start-dev.sh
+# → http://localhost:8501 (woow_fix_bug_123)
+```
+
+每個實例使用各自的資料庫，互不干擾。
+
+### 共享 PostgreSQL（可選）
+
+如果希望節省資源，可以讓所有 worktree 共享一個 PostgreSQL 容器：
+
+```bash
+# 1. 首次啟動共享資料庫
+docker compose -f docker-compose.shared-db.yml up -d
+
+# 2. 在每個 worktree 的 .env 設定
+echo "USE_SHARED_DB=true" >> .env
+echo "POSTGRES_HOST=odoo_postgres_shared" >> .env
+
+# 3. 啟動（不會建立獨立的 PostgreSQL）
+./scripts/start-dev.sh
+```
+
+### VS Code 本機開發
+
+使用本機 VS Code（不使用 Dev Container）：
+- 每個 worktree 可以開啟獨立的 VS Code 視窗
+- Odoo 服務運行在 Docker 容器中
+- 支援遠端調試（Python debugger attach to container）
+
+推薦擴充套件已配置在 `.vscode/extensions.json`。
+
+### 重要提醒
+
+- **網址測試**：使用 http://localhost（不是 :8069）以啟用 websocket
+- **自動配置**：環境變數由腳本自動生成，請勿手動修改 `.env`
+- **資料庫名稱**：基於 branch 名稱，將 `/` 和 `-` 轉為 `_`
+- **Port 範圍**：8069-9068（基於目錄路徑 hash 計算）
 
 <!-- lst97 CLAUDE.md Start -->
 
@@ -275,6 +345,7 @@ Break work into 3–5 cross-stack stages (front-end, back-end, database, integra
 
 ```markdown
 ## Stage N: [Name]
+
 **Goal**: [Specific deliverable across the stack]
 **Success Criteria**: [User story + passing tests]
 **Tests**: [Unit, integration, E2E coverage]
@@ -321,7 +392,7 @@ Break work into 3–5 cross-stack stages (front-end, back-end, database, integra
 **Before committing:**
 
 - Run formatter, linter, and security scans.
-- Ensure commit messages explain *why*, not just *what*.
+- Ensure commit messages explain _why_, not just _what_.
 
 ### Error Handling
 

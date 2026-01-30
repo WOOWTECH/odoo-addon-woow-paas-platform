@@ -1,0 +1,43 @@
+# 共享 PostgreSQL 配置
+# 用於多個 worktree 共享同一個資料庫容器
+#
+# 使用方式：
+# 1. 首次啟動共享資料庫：
+#    docker compose -f docker-compose.shared-db.yml up -d
+#
+# 2. 在每個 worktree 的 .env 設定：
+#    USE_SHARED_DB=true
+#    POSTGRES_HOST=odoo_postgres_shared
+#
+# 3. 啟動 worktree（不會建立獨立的 PostgreSQL）：
+#    docker compose up -d
+
+services:
+  postgres-shared:
+    image: postgres:15
+    container_name: odoo_postgres_shared
+    restart: unless-stopped
+    volumes:
+      - postgres-shared-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=odoo
+      - POSTGRES_USER=odoo
+      - POSTGRES_DB=postgres
+    ports:
+      - "5432:5432"
+    networks:
+      - odoo_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-shared-data:
+    name: odoo_postgres_shared_data
+
+networks:
+  odoo_network:
+    name: odoo_network
+    driver: bridge

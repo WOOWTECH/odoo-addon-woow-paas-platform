@@ -1,0 +1,26 @@
+{
+  "recommendations": [
+    // Python 開發
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff",
+
+    // XML 支援（Odoo views）
+    "redhat.vscode-xml",
+
+    // JavaScript/TypeScript 支援
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+
+    // Git 工具
+    "eamodio.gitlens",
+    "mhutchie.git-graph",
+
+    // Docker 工具
+    "ms-azuretools.vscode-docker",
+
+    // 通用工具
+    "editorconfig.editorconfig",
+    "gruntfuggly.todo-tree"
+  ]
+}
