@@ -8,6 +8,7 @@ usage: |
   - Need step-by-step guide from worktree creation to addon testing
 
   Invoke with: "Set up end-to-end worktree development for epic/feature-name"
+  Keywords: end-to-end testing, e2e, ui testing, 網頁測試
 ---
 
 # Setup End-to-End Worktree Development
@@ -36,6 +37,7 @@ git worktree add ../woow_paas_platform.worktrees/<feature-name> -b epic/<feature
 ```
 
 **驗證**：
+
 ```bash
 # 確認 worktree 已建立
 git worktree list
@@ -55,12 +57,14 @@ cd ../woow_paas_platform.worktrees/<feature-name>
 ```
 
 **腳本會自動：**
+
 - 偵測 git branch 名稱
 - 計算唯一的 port（避免與其他 worktree 衝突）
 - 生成資料庫名稱（`woow_<branch>`）
 - 建立 `.env` 檔案
 
 **預期輸出範例**：
+
 ```
 ✅ Worktree 環境配置完成
   Branch:       epic/workspace-api
@@ -77,6 +81,7 @@ cd ../woow_paas_platform.worktrees/<feature-name>
 ```
 
 **腳本會自動：**
+
 1. 檢查 `.env` 配置
 2. 從模板生成 `odoo.conf`（使用 envsubst）
 3. 啟動 Docker Compose
@@ -85,6 +90,7 @@ cd ../woow_paas_platform.worktrees/<feature-name>
 6. 顯示訪問 URL
 
 **預期輸出範例**：
+
 ```
 🚀 啟動 Odoo 開發環境...
 ✓ 已從模板生成 odoo.conf
@@ -105,6 +111,7 @@ cd ../woow_paas_platform.worktrees/<feature-name>
 ```
 
 **驗證容器狀態**：
+
 ```bash
 # 檢查容器是否運行
 docker compose ps
@@ -118,16 +125,19 @@ docker compose logs -f web
 在瀏覽器開啟：`http://localhost:<PORT>`（使用 setup 顯示的 port）
 
 **自動建立的環境**：
+
 - 資料庫已自動建立（名稱依據 branch，如 `woow_epic_workspace_api`）
 - `woow_paas_platform` 模組已自動安裝
 - 語言已設定為繁體中文（zh_TW）
 - 無 demo 資料（乾淨環境）
 
 **登入資訊**：
+
 - **Email**: `admin`
 - **Password**: `admin`
 
 > **注意**：如果看到「Create Database」頁面，表示自動建立失敗。請查看日誌：
+>
 > ```bash
 > docker compose logs web | tail -50
 > ```
@@ -138,12 +148,12 @@ docker compose logs -f web
 
 #### 自動重載（無需操作）
 
-| 修改類型 | 說明 |
-|---------|------|
-| Python 程式碼 | `dev_mode=reload` 自動偵測並重載 |
-| XML 視圖 | `dev_mode=xml` 自動重載 |
-| QWeb 模板 | `dev_mode=qweb` 自動重載 |
-| JS/CSS/SCSS | 刷新瀏覽器即可（Ctrl+Shift+R 清除快取） |
+| 修改類型      | 說明                                    |
+| ------------- | --------------------------------------- |
+| Python 程式碼 | `dev_mode=reload` 自動偵測並重載        |
+| XML 視圖      | `dev_mode=xml` 自動重載                 |
+| QWeb 模板     | `dev_mode=qweb` 自動重載                |
+| JS/CSS/SCSS   | 刷新瀏覽器即可（Ctrl+Shift+R 清除快取） |
 
 #### 需要手動更新模組（`-u`）
 
@@ -154,13 +164,13 @@ docker compose logs -f web
 docker compose exec web odoo -d <DB_NAME> -u woow_paas_platform --stop-after-init
 ```
 
-| 修改類型 | 說明 |
-|---------|------|
-| `__manifest__.py` | 修改模組依賴、版本等 |
-| 新增/修改欄位 | models 中新增 `fields.Char()` 等 |
-| 新增模型 | 新增 `class NewModel(models.Model)` |
-| data/*.xml | 初始資料檔案 |
-| security/*.csv | 權限設定 |
+| 修改類型          | 說明                                |
+| ----------------- | ----------------------------------- |
+| `__manifest__.py` | 修改模組依賴、版本等                |
+| 新增/修改欄位     | models 中新增 `fields.Char()` 等    |
+| 新增模型          | 新增 `class NewModel(models.Model)` |
+| data/\*.xml       | 初始資料檔案                        |
+| security/\*.csv   | 權限設定                            |
 
 #### 查看即時日誌
 
@@ -182,6 +192,7 @@ docker compose restart web
 ```
 
 **手動執行測試（進階）**：
+
 ```bash
 # 進入容器執行測試
 docker compose exec web odoo \
@@ -193,6 +204,7 @@ docker compose exec web odoo \
 ```
 
 **測試特定模組**：
+
 ```bash
 # 測試特定的 Python 檔案
 docker compose exec web odoo \
@@ -203,6 +215,7 @@ docker compose exec web odoo \
 ```
 
 **驗證測試結果**：
+
 - ✅ 所有測試通過：繼續開發
 - ❌ 測試失敗：查看日誌修復問題
 
@@ -223,6 +236,7 @@ cd ../woow_paas_platform.worktrees/feature-b
 ```
 
 每個 worktree 使用：
+
 - 不同的 port（自動分配）
 - 獨立的資料庫（資料隔離）
 - 獨立的 Docker 容器
@@ -235,6 +249,7 @@ code .
 ```
 
 **推薦設定**：
+
 - 安裝推薦擴充套件（`.vscode/extensions.json`）
 - 使用 Python 虛擬環境（如需本機 linting）
 - 配置遠端調試（`.vscode/launch.json`）
@@ -259,6 +274,7 @@ git push -u origin epic/<feature-name>
 ### 步驟 11：清理環境
 
 **完成開發後**：
+
 ```bash
 # 停止容器（保留資料）
 docker compose stop
@@ -268,6 +284,7 @@ docker compose stop
 ```
 
 **刪除 worktree**（開發完成並合併後）：
+
 ```bash
 # 返回主專案
 cd /path/to/woow_paas_platform
