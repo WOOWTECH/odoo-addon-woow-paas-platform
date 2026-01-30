@@ -10,9 +10,9 @@ services:
       - "${ODOO_PORT:-8069}:8069"
     volumes:
       # Odoo configuration
-      - ./config:/etc/odoo
-      # Custom addons - mount the parent directory to include all addons
-      - ./:/mnt/extra-addons/woow_paas_platform
+      - ./config/odoo:/etc/odoo
+      # Custom addons - mount src directory as the addon
+      - ./src:/mnt/extra-addons/woow_paas_platform
       # Odoo data persistence
       - odoo-data:/var/lib/odoo
     environment:

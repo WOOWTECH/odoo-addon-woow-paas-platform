@@ -110,6 +110,9 @@ POSTGRES_PORT=5432
 POSTGRES_USER=odoo
 POSTGRES_PASSWORD=odoo
 
+# Odoo 配置
+ODOO_ADMIN_PASSWD=admin
+
 # 共享資料庫模式（可選）
 USE_SHARED_DB=false
 SHARED_DB_NETWORK=odoo_network

@@ -14,6 +14,9 @@ resource/stitch_paas_web_app_shell_global_navigation_*
 .env.local
 .env.*.local
 
+# Generated config (from template)
+config/odoo/odoo.conf
+
 # Docker override
 docker-compose.override.yml
 

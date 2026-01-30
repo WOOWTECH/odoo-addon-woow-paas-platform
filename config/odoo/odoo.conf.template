@@ -4,10 +4,10 @@
 ; 請修改此模板而非 odoo.conf
 
 ; Database settings
-db_host = db
-db_port = 5432
-db_user = odoo
-db_password = odoo
+db_host = ${POSTGRES_HOST}
+db_port = ${POSTGRES_PORT}
+db_user = ${POSTGRES_USER}
+db_password = ${POSTGRES_PASSWORD}
 db_name = False
 db_template = template0
 db_maxconn = 64
@@ -36,7 +36,7 @@ log_handler = :INFO
 dev_mode = reload,qweb,xml
 
 ; Security
-admin_passwd = admin
+admin_passwd = ${ODOO_ADMIN_PASSWD}
 list_db = True
 
 ; CORS (for development)

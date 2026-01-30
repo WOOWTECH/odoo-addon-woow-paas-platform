@@ -47,7 +47,17 @@ echo -e "  ${BLUE}Port:${NC}         ${ODOO_PORT:-8069}"
 echo -e "  ${BLUE}Database:${NC}     ${ODOO_DB_NAME:-woow_main}"
 echo ""
 
-# 4. 啟動 docker-compose
+# 4. 從模板生成 Odoo 配置（使用 envsubst 替換環境變數）
+TEMPLATE_FILE="$PROJECT_ROOT/config/odoo/odoo.conf.template"
+CONFIG_FILE="$PROJECT_ROOT/config/odoo/odoo.conf"
+if [ -f "$TEMPLATE_FILE" ]; then
+    envsubst < "$TEMPLATE_FILE" > "$CONFIG_FILE"
+    echo -e "${GREEN}✓${NC} 已從模板生成 odoo.conf"
+else
+    echo -e "${YELLOW}⚠️  找不到 odoo.conf.template，跳過配置生成${NC}"
+fi
+
+# 5. 啟動 docker-compose
 echo -e "${BLUE}📦 啟動 Docker 容器...${NC}"
 docker compose up -d
 
@@ -78,6 +88,60 @@ if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
     echo -e "${YELLOW}⚠️  警告：Odoo 服務可能尚未完全啟動${NC}"
     echo -e "${YELLOW}   請等待幾分鐘後再訪問，或執行以下命令查看日誌：${NC}"
     echo -e "${YELLOW}   docker compose logs -f web${NC}"
+fi
+
+# 6. 檢查並自動建立資料庫
+DB_NAME="${ODOO_DB_NAME:-woow_main}"
+echo ""
+echo -e "${BLUE}🔍 檢查資料庫 ${DB_NAME}...${NC}"
+
+# 等待 PostgreSQL 就緒
+echo -n "  等待 PostgreSQL..."
+PG_READY=0
+for i in {1..30}; do
+    if docker compose exec -T db pg_isready -U "${POSTGRES_USER:-odoo}" > /dev/null 2>&1; then
+        PG_READY=1
+        echo -e " ${GREEN}就緒${NC}"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+if [ "$PG_READY" = "0" ]; then
+    echo -e " ${YELLOW}超時${NC}"
+    echo -e "${YELLOW}⚠️  PostgreSQL 可能尚未完全啟動，跳過自動建立資料庫${NC}"
+else
+    # 檢查資料庫是否已存在（明確檢查）
+    DB_LIST=$(docker compose exec -T db psql -U "${POSTGRES_USER:-odoo}" -lqt 2>/dev/null | cut -d \| -f 1 | tr -d ' ')
+    if echo "$DB_LIST" | grep -qx "$DB_NAME"; then
+        DB_EXISTS="1"
+    else
+        DB_EXISTS="0"
+    fi
+
+    if [ "$DB_EXISTS" = "0" ]; then
+        echo -e "${YELLOW}📦 資料庫不存在，正在建立並安裝模組...${NC}"
+        echo -e "${YELLOW}   （首次啟動需要 1-3 分鐘，請耐心等候）${NC}"
+
+        # 使用 Odoo CLI 初始化資料庫並安裝 base + woow_paas_platform
+        if docker compose exec -T web odoo \
+            -d "$DB_NAME" \
+            -i base,woow_paas_platform \
+            --stop-after-init \
+            --without-demo=all \
+            --load-language=zh_TW 2>&1 | tee /tmp/odoo_init.log | grep -E "(Loading|Installing|init db|error|Error)" | head -20; then
+            echo -e "${GREEN}✅ 資料庫建立完成！${NC}"
+            # 重啟 web 容器（因為 --stop-after-init 會停止 Odoo 進程）
+            echo -e "${BLUE}🔄 重啟 Odoo 服務...${NC}"
+            docker compose restart web > /dev/null 2>&1
+            sleep 3
+        else
+            echo -e "${YELLOW}⚠️  資料庫初始化可能有問題，查看完整日誌：cat /tmp/odoo_init.log${NC}"
+        fi
+    else
+        echo -e "${GREEN}✓${NC} 資料庫 ${DB_NAME} 已存在"
+    fi
 fi
 
 # 6. 顯示訪問資訊
