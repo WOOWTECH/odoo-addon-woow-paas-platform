@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.Sidebar">
+        <aside class="o_woow_sidebar">
+            <div class="o_woow_sidebar_header">
+                <div class="o_woow_logo">
+                    <span class="material-symbols-outlined">deployed_code</span>
+                    <span class="o_woow_logo_text">WoowTech</span>
+                </div>
+            </div>
+            <nav class="o_woow_sidebar_nav">
+                <t t-foreach="navItems" t-as="item" t-key="item.path">
+                    <a t-att-class="'o_woow_nav_item ' + (props.router.current === item.path ? 'active' : '')"
+                       t-on-click="() => props.router.navigate(item.path)">
+                        <span class="material-symbols-outlined"><t t-esc="item.icon"/></span>
+                        <span><t t-esc="item.name"/></span>
+                    </a>
+                </t>
+            </nav>
+            <div class="o_woow_sidebar_footer">
+                <a class="o_woow_nav_item" href="#">
+                    <span class="material-symbols-outlined">help</span>
+                    <span>Help &amp; Support</span>
+                </a>
+                <a class="o_woow_nav_item o_woow_logout" href="#">
+                    <span class="material-symbols-outlined">logout</span>
+                    <span>Log Out</span>
+                </a>
+            </div>
+        </aside>
+    </t>
+</templates>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- 主選單 -->
+    <menuitem
+        id="menu_woow_paas_platform_root"
+        name="Woow PaaS"
+        sequence="100"
+        web_icon="woow_paas_platform,static/description/icon.png"/>
+</odoo>

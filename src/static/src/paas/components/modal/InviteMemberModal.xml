@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.InviteMemberModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal">
+                <div class="o_woow_modal_header">
+                    <h2>Invite Team Member</h2>
+                    <button class="o_woow_modal_close" t-on-click="props.onClose">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <div class="o_woow_form_group">
+                        <label for="member_email">Email Address</label>
+                        <input
+                            type="email"
+                            id="member_email"
+                            class="o_woow_input"
+                            placeholder="colleague@example.com"
+                            t-att-value="state.email"
+                            t-on-input="onEmailInput"
+                            t-att-disabled="state.loading"
+                        />
+                    </div>
+
+                    <div class="o_woow_form_group">
+                        <label>Role</label>
+                        <div class="o_woow_role_options">
+                            <t t-foreach="roles" t-as="role" t-key="role.value">
+                                <label class="o_woow_role_option" t-att-class="{'selected': state.role === role.value}">
+                                    <input
+                                        type="radio"
+                                        name="role"
+                                        t-att-value="role.value"
+                                        t-att-checked="state.role === role.value"
+                                        t-on-change="onRoleChange"
+                                        t-att-disabled="state.loading"
+                                    />
+                                    <div class="o_woow_role_content">
+                                        <span class="o_woow_role_label" t-esc="role.label"/>
+                                        <span class="o_woow_role_desc" t-esc="role.description"/>
+                                    </div>
+                                </label>
+                            </t>
+                        </div>
+                    </div>
+
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton variant="'ghost'" size="'md'" onClick="props.onClose" t-att-disabled="state.loading">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="onSubmit" t-att-disabled="state.loading">
+                        <t t-if="state.loading">
+                            <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                            Inviting...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'send'" size="16"/>
+                            Send Invitation
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

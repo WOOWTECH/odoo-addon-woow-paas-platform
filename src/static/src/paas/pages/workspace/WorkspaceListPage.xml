@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.WorkspaceListPage">
+        <div class="o_woow_workspace">
+            <!-- Header Section -->
+            <div class="o_woow_workspace_header">
+                <div class="o_woow_workspace_title">
+                    <h1>Workspaces</h1>
+                    <p>Manage your workspaces and team collaboration.</p>
+                </div>
+                <WoowButton variant="'primary'" size="'md'" onClick.bind="openCreateModal">
+                    <WoowIcon name="'add'" size="18"/>
+                    Create Workspace
+                </WoowButton>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading workspaces...</p>
+                </div>
+            </t>
+
+            <!-- Workspace List -->
+            <t t-elif="hasWorkspaces">
+                <div class="o_woow_workspace_list">
+                    <t t-foreach="workspaces" t-as="workspace" t-key="workspace.id">
+                        <WoowCard shadow="true" class="'o_woow_workspace_item'" t-on-click="() => this.navigateToWorkspace(workspace.id)">
+                            <div class="o_woow_workspace_item_content">
+                                <div class="o_woow_workspace_item_icon">
+                                    <WoowIcon name="'folder'" size="24"/>
+                                </div>
+                                <div class="o_woow_workspace_item_info">
+                                    <div class="o_woow_workspace_item_header">
+                                        <h3 t-esc="workspace.name"/>
+                                        <span t-att-class="'o_woow_badge ' + getRoleBadgeClass(workspace.role)">
+                                            <t t-esc="workspace.role"/>
+                                        </span>
+                                    </div>
+                                    <p t-if="workspace.description" class="o_woow_workspace_item_desc" t-esc="workspace.description"/>
+                                    <div class="o_woow_workspace_item_meta">
+                                        <span>
+                                            <WoowIcon name="'group'" size="14"/>
+                                            <t t-esc="workspace.member_count"/> members
+                                        </span>
+                                        <span>
+                                            <WoowIcon name="'schedule'" size="14"/>
+                                            Created <t t-esc="formatDate(workspace.created_date)"/>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="o_woow_workspace_item_arrow">
+                                    <WoowIcon name="'chevron_right'" size="20"/>
+                                </div>
+                            </div>
+                        </WoowCard>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Empty State / Get Started -->
+            <t t-else="">
+                <WoowCard shadow="true" class="'o_woow_get_started'">
+                    <div class="o_woow_get_started_header">
+                        <WoowIcon name="'rocket_launch'" size="32" class="'o_woow_rocket_icon'"/>
+                        <div>
+                            <h2>Welcome to Workspaces</h2>
+                            <p>Create your first workspace to start managing your team and services.</p>
+                        </div>
+                    </div>
+
+                    <div class="o_woow_empty_action">
+                        <WoowButton variant="'primary'" size="'lg'" onClick.bind="openCreateModal">
+                            <WoowIcon name="'add'" size="20"/>
+                            Create Your First Workspace
+                        </WoowButton>
+                    </div>
+
+                    <div class="o_woow_service_grid">
+                        <t t-foreach="serviceTypes" t-as="service" t-key="service.name">
+                            <div t-att-class="'o_woow_service_card o_woow_service_card_' + service.color">
+                                <div class="o_woow_service_icon">
+                                    <WoowIcon t-att-name="service.icon" size="32"/>
+                                </div>
+                                <h3><t t-esc="service.name"/></h3>
+                                <p><t t-esc="service.description"/></p>
+                            </div>
+                        </t>
+                    </div>
+                </WoowCard>
+            </t>
+
+            <!-- Create Workspace Modal -->
+            <CreateWorkspaceModal
+                t-if="state.showCreateModal"
+                onClose.bind="closeCreateModal"
+                onCreated.bind="onWorkspaceCreated"
+            />
+        </div>
+    </t>
+</templates>

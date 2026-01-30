@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.DashboardPage">
+        <div class="o_woow_dashboard">
+            <!-- Welcome Section -->
+            <div class="o_woow_welcome">
+                <h1>Welcome back, Sarah!</h1>
+                <p>Here is what is happening with your workspaces today.</p>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="o_woow_stats_grid">
+                <t t-foreach="stats" t-as="stat" t-key="stat.label">
+                    <WoowCard shadow="true" class="'o_woow_stat_card'">
+                        <div class="o_woow_stat_header">
+                            <div t-att-class="'o_woow_stat_icon o_woow_stat_icon_' + (stat.color || 'default')">
+                                <WoowIcon name="stat.icon" size="24"/>
+                            </div>
+                            <div class="o_woow_stat_titles">
+                                <span class="o_woow_stat_label"><t t-esc="stat.label"/></span>
+                                <span t-if="stat.subtitle" class="o_woow_stat_subtitle"><t t-esc="stat.subtitle"/></span>
+                            </div>
+                        </div>
+                        <div class="o_woow_stat_items">
+                            <t t-foreach="stat.items" t-as="item" t-key="item.label">
+                                <div t-att-class="'o_woow_stat_item' + (item.highlight ? ' highlight' : '')">
+                                    <span class="o_woow_item_label"><t t-esc="item.label"/></span>
+                                    <span class="o_woow_item_value">
+                                        <t t-esc="item.value"/>
+                                        <t t-if="item.max">/<t t-esc="item.max"/></t>
+                                    </span>
+                                </div>
+                            </t>
+                        </div>
+                    </WoowCard>
+                </t>
+            </div>
+
+            <!-- Main Content Grid -->
+            <div class="o_woow_dashboard_grid">
+                <!-- Recent Activity -->
+                <WoowCard class="'o_woow_activity_card'">
+                    <h3>Recent Activity</h3>
+                    <div class="o_woow_activity_list">
+                        <t t-foreach="activities" t-as="activity" t-key="activity_index">
+                            <div class="o_woow_activity_item">
+                                <span class="o_woow_activity_time"><t t-esc="activity.time"/></span>
+                                <div class="o_woow_activity_avatar">
+                                    <t t-esc="activity.user[0]"/>
+                                </div>
+                                <div class="o_woow_activity_content">
+                                    <span class="o_woow_activity_user"><t t-esc="activity.user"/></span>
+                                    <span class="o_woow_activity_action"> <t t-esc="activity.action"/> </span>
+                                    <span class="o_woow_activity_target"><t t-esc="activity.target"/></span>
+                                </div>
+                            </div>
+                        </t>
+                    </div>
+                </WoowCard>
+
+                <!-- Quick Access -->
+                <WoowCard class="'o_woow_quick_access_card'">
+                    <h3>Quick Access</h3>
+                    <div class="o_woow_quick_grid">
+                        <t t-foreach="quickAccess" t-as="item" t-key="item.name">
+                            <div t-att-class="'o_woow_quick_item o_woow_quick_item_' + item.color">
+                                <div class="o_woow_quick_icon">
+                                    <WoowIcon name="item.icon" size="28"/>
+                                </div>
+                                <div class="o_woow_quick_info">
+                                    <span class="o_woow_quick_name"><t t-esc="item.name"/></span>
+                                    <t t-if="item.tag">
+                                        <span class="o_woow_quick_tag"><t t-esc="item.tag"/></span>
+                                    </t>
+                                </div>
+                                <WoowButton variant="'ghost'" size="'sm'">
+                                    <t t-esc="item.action"/>
+                                </WoowButton>
+                            </div>
+                        </t>
+                    </div>
+                </WoowCard>
+            </div>
+        </div>
+    </t>
+</templates>

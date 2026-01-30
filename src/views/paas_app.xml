@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="paas_app" name="Woow PaaS Application">
+        <html>
+            <head>
+                <meta charset="utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <title>Woow PaaS Platform</title>
+                <!-- Google Fonts: Manrope & Outfit -->
+                <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&amp;family=Outfit:wght@300..700&amp;display=swap" rel="stylesheet"/>
+                <!-- Material Symbols Outlined -->
+                <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+                <script type="text/javascript">
+                    var odoo = {
+                        csrf_token: "<t t-esc="request.csrf_token(None)"/>",
+                        debug: "<t t-out="debug"/>",
+                        __session_info__: <t t-out="json.dumps(session_info)"/>,
+                    };
+                </script>
+                <t t-call-assets="woow_paas_platform.assets_paas"/>
+            </head>
+            <body/>
+        </html>
+    </template>
+</odoo>

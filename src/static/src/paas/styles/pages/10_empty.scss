@@ -1,0 +1,46 @@
+// variables loaded via manifest
+
+.o_woow_empty_state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - #{$woow-header-height} - 3rem);
+    padding: 2rem;
+}
+
+.o_woow_empty_content {
+    text-align: center;
+    max-width: 400px;
+}
+
+.o_woow_empty_icon {
+    width: 120px;
+    height: 120px;
+    margin: 0 auto 2rem;
+    background: rgba($woow-primary, 0.1);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: $woow-primary;
+}
+
+.o_woow_empty_state h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    margin-bottom: 0.5rem;
+}
+
+.o_woow_empty_state h2 {
+    font-size: 1.125rem;
+    font-weight: 500;
+    color: $woow-text-secondary;
+    margin-bottom: 1rem;
+}
+
+.o_woow_empty_state p {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+    line-height: 1.6;
+}

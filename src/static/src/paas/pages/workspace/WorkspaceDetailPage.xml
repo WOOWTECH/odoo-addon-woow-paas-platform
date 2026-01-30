@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.WorkspaceDetailPage">
+        <div class="o_woow_workspace_detail">
+            <!-- Loading State -->
+            <t t-if="state.loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading workspace...</p>
+                </div>
+            </t>
+
+            <!-- Error State -->
+            <t t-elif="state.error">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'error'" size="48"/>
+                    <h2>Unable to load workspace</h2>
+                    <p t-esc="state.error"/>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Workspaces
+                    </WoowButton>
+                </div>
+            </t>
+
+            <!-- Workspace Content -->
+            <t t-elif="workspace">
+                <!-- Breadcrumb / Back Navigation -->
+                <div class="o_woow_breadcrumb">
+                    <button class="o_woow_back_btn" t-on-click="goBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_parent">Workspaces</span>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_current" t-esc="workspace.name"/>
+                </div>
+
+                <!-- Header Section -->
+                <div class="o_woow_workspace_detail_header">
+                    <div class="o_woow_workspace_detail_info">
+                        <div class="o_woow_workspace_detail_icon">
+                            <WoowIcon name="'folder'" size="28"/>
+                        </div>
+                        <div>
+                            <div class="o_woow_workspace_detail_title">
+                                <h1 t-esc="workspace.name"/>
+                                <span t-att-class="'o_woow_badge ' + getRoleBadgeClass(workspace.role)">
+                                    <t t-esc="workspace.role"/>
+                                </span>
+                            </div>
+                            <p t-if="workspace.description" class="o_woow_workspace_detail_desc" t-esc="workspace.description"/>
+                            <div class="o_woow_workspace_detail_meta">
+                                <span>
+                                    <WoowIcon name="'group'" size="14"/>
+                                    <t t-esc="workspace.member_count"/> members
+                                </span>
+                                <span>
+                                    <WoowIcon name="'schedule'" size="14"/>
+                                    Created <t t-esc="formatDate(workspace.created_date)"/>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="o_woow_workspace_detail_actions">
+                        <WoowButton variant="'secondary'" size="'md'" onClick.bind="goToTeam">
+                            <WoowIcon name="'group'" size="18"/>
+                            Team
+                        </WoowButton>
+                        <WoowButton variant="'secondary'" size="'md'" onClick.bind="goToSettings">
+                            <WoowIcon name="'settings'" size="18"/>
+                            Settings
+                        </WoowButton>
+                    </div>
+                </div>
+
+                <!-- Stats Cards -->
+                <div class="o_woow_stats_grid">
+                    <t t-foreach="stats" t-as="stat" t-key="stat.label">
+                        <WoowCard class="'o_woow_stat_mini_card'">
+                            <div class="o_woow_stat_mini_content">
+                                <div t-att-class="'o_woow_stat_mini_icon o_woow_stat_mini_icon_' + stat.color">
+                                    <WoowIcon t-att-name="stat.icon" size="20"/>
+                                </div>
+                                <div class="o_woow_stat_mini_info">
+                                    <span class="o_woow_stat_mini_value" t-esc="stat.value"/>
+                                    <span class="o_woow_stat_mini_label" t-esc="stat.label"/>
+                                </div>
+                            </div>
+                        </WoowCard>
+                    </t>
+                </div>
+
+                <!-- Get Started Section -->
+                <WoowCard shadow="true" class="'o_woow_get_started'">
+                    <div class="o_woow_get_started_header">
+                        <WoowIcon name="'rocket_launch'" size="32" class="'o_woow_rocket_icon'"/>
+                        <div>
+                            <h2>Deploy Your First Service</h2>
+                            <p>Choose a service type below to begin setting up your infrastructure.</p>
+                        </div>
+                    </div>
+
+                    <div class="o_woow_service_grid">
+                        <t t-foreach="serviceTypes" t-as="service" t-key="service.name">
+                            <div t-att-class="'o_woow_service_card o_woow_service_card_' + service.color">
+                                <div class="o_woow_service_icon">
+                                    <WoowIcon t-att-name="service.icon" size="32"/>
+                                </div>
+                                <h3><t t-esc="service.name"/></h3>
+                                <p><t t-esc="service.description"/></p>
+                                <WoowButton variant="'primary'" size="'sm'">
+                                    Get Started
+                                    <WoowIcon name="'arrow_forward'" size="16"/>
+                                </WoowButton>
+                            </div>
+                        </t>
+                    </div>
+                </WoowCard>
+            </t>
+        </div>
+    </t>
+</templates>

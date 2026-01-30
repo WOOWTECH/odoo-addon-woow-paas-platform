@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AppShell">
+        <div class="o_woow_layout">
+            <Sidebar router="props.router"/>
+            <main class="o_woow_main">
+                <Header router="props.router"/>
+                <div class="o_woow_content">
+                    <t t-slot="default"/>
+                </div>
+            </main>
+        </div>
+    </t>
+</templates>

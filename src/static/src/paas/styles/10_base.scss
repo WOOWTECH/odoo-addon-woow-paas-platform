@@ -1,0 +1,54 @@
+// =============================================================================
+// Base Styles
+// Global styles for the Woow PaaS Platform
+// =============================================================================
+// Note: variables.scss is loaded before this file via __manifest__.py
+
+// -----------------------------------------------------------------------------
+// App Container
+// -----------------------------------------------------------------------------
+
+.o_woow_app {
+    font-family: $woow-font-display;
+    background: $woow-background-light;
+    color: $woow-text-primary;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+
+    // Custom Scrollbar Styles
+    ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 3px;
+
+        &:hover {
+            background: #94a3b8;
+        }
+    }
+
+    // Firefox scrollbar
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+}
+
+// -----------------------------------------------------------------------------
+// Material Symbols Configuration
+// -----------------------------------------------------------------------------
+
+.material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+
+    // Filled variant
+    &.filled {
+        font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+}

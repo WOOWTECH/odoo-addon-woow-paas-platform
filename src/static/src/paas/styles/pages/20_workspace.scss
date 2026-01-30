@@ -1,0 +1,594 @@
+// variables loaded via manifest
+
+.o_woow_workspace {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.o_woow_workspace_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+}
+
+.o_woow_workspace_title {
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+    }
+}
+
+.o_woow_get_started {
+    padding: 2rem;
+}
+
+.o_woow_get_started_header {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 2rem;
+
+    .o_woow_rocket_icon {
+        color: $woow-primary;
+    }
+
+    h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+    }
+}
+
+.o_woow_service_grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+
+    @media (max-width: 768px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_service_card {
+    padding: 1.5rem;
+    border-radius: $woow-radius-lg;
+    border: 1px solid $woow-border-light;
+    transition: all 0.3s ease;
+    cursor: pointer;
+
+    &:hover {
+        transform: translateY(-4px);
+        box-shadow: $woow-shadow-soft;
+    }
+
+    h3 {
+        font-size: 1.125rem;
+        font-weight: 600;
+        margin: 1rem 0 0.5rem;
+        color: $woow-text-primary;
+    }
+
+    p {
+        font-size: 0.875rem;
+        color: $woow-text-secondary;
+        margin-bottom: 1.5rem;
+        line-height: 1.5;
+    }
+}
+
+.o_woow_service_icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.o_woow_service_card_blue {
+    .o_woow_service_icon {
+        background: rgba(59, 130, 246, 0.1);
+        color: #3b82f6;
+    }
+}
+
+.o_woow_service_card_emerald {
+    .o_woow_service_icon {
+        background: rgba(16, 185, 129, 0.1);
+        color: #10b981;
+    }
+}
+
+.o_woow_service_card_orange {
+    .o_woow_service_icon {
+        background: rgba(249, 115, 22, 0.1);
+        color: #f97316;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Workspace List
+// -----------------------------------------------------------------------------
+
+.o_woow_workspace_list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.o_woow_workspace_item {
+    cursor: pointer;
+    transition: all 0.2s ease;
+
+    &:hover {
+        transform: translateY(-2px);
+        box-shadow: $woow-shadow-soft;
+    }
+}
+
+.o_woow_workspace_item_content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.o_woow_workspace_item_icon {
+    width: 48px;
+    height: 48px;
+    border-radius: $woow-radius-default;
+    background: rgba($woow-primary, 0.1);
+    color: $woow-primary;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.o_woow_workspace_item_info {
+    flex: 1;
+    min-width: 0;
+}
+
+.o_woow_workspace_item_header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.25rem;
+
+    h3 {
+        font-size: 1rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+}
+
+.o_woow_workspace_item_desc {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+    margin: 0 0 0.5rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.o_woow_workspace_item_meta {
+    display: flex;
+    gap: 1.5rem;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+
+    span {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+    }
+}
+
+.o_woow_workspace_item_arrow {
+    color: $woow-text-secondary;
+    flex-shrink: 0;
+}
+
+// Empty State
+.o_woow_empty_action {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 2rem;
+}
+
+// -----------------------------------------------------------------------------
+// Breadcrumb Navigation
+// -----------------------------------------------------------------------------
+
+.o_woow_breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.875rem;
+}
+
+.o_woow_back_btn {
+    background: transparent;
+    border: none;
+    padding: 0.5rem;
+    cursor: pointer;
+    color: $woow-text-secondary;
+    border-radius: $woow-radius-default;
+    transition: all 0.2s ease;
+
+    &:hover {
+        background: rgba(0, 0, 0, 0.05);
+        color: $woow-text-primary;
+    }
+}
+
+.o_woow_breadcrumb_sep {
+    color: $woow-text-secondary;
+}
+
+.o_woow_breadcrumb_parent {
+    color: $woow-text-secondary;
+}
+
+.o_woow_breadcrumb_current {
+    color: $woow-text-primary;
+    font-weight: 500;
+}
+
+// -----------------------------------------------------------------------------
+// Workspace Detail Page
+// -----------------------------------------------------------------------------
+
+.o_woow_workspace_detail {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.o_woow_workspace_detail_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+    gap: 1rem;
+
+    @media (max-width: 768px) {
+        flex-direction: column;
+    }
+}
+
+.o_woow_workspace_detail_info {
+    display: flex;
+    gap: 1rem;
+}
+
+.o_woow_workspace_detail_icon {
+    width: 56px;
+    height: 56px;
+    border-radius: $woow-radius-lg;
+    background: rgba($woow-primary, 0.1);
+    color: $woow-primary;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.o_woow_workspace_detail_title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.25rem;
+
+    h1 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: $woow-text-primary;
+        margin: 0;
+    }
+}
+
+.o_woow_workspace_detail_desc {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+    margin: 0 0 0.5rem;
+}
+
+.o_woow_workspace_detail_meta {
+    display: flex;
+    gap: 1.5rem;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+
+    span {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+    }
+}
+
+.o_woow_workspace_detail_actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+// Stats Grid
+.o_woow_stats_grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+
+    @media (max-width: 1024px) {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    @media (max-width: 640px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_stat_mini_card {
+    padding: 1rem !important;
+}
+
+.o_woow_stat_mini_content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.o_woow_stat_mini_icon {
+    width: 40px;
+    height: 40px;
+    border-radius: $woow-radius-default;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    &.o_woow_stat_mini_icon_purple {
+        background: rgba($woow-primary, 0.1);
+        color: $woow-primary;
+    }
+
+    &.o_woow_stat_mini_icon_blue {
+        background: rgba(59, 130, 246, 0.1);
+        color: #3b82f6;
+    }
+
+    &.o_woow_stat_mini_icon_green {
+        background: rgba(34, 197, 94, 0.1);
+        color: #22c55e;
+    }
+
+    &.o_woow_stat_mini_icon_orange {
+        background: rgba(249, 115, 22, 0.1);
+        color: #f97316;
+    }
+}
+
+.o_woow_stat_mini_info {
+    display: flex;
+    flex-direction: column;
+}
+
+.o_woow_stat_mini_value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+}
+
+.o_woow_stat_mini_label {
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+}
+
+// Error State
+.o_woow_error_state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem;
+    text-align: center;
+    color: $woow-text-secondary;
+
+    h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 1rem 0 0.5rem;
+    }
+
+    p {
+        margin-bottom: 1.5rem;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Workspace Team Page
+// -----------------------------------------------------------------------------
+
+.o_woow_workspace_team {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.o_woow_team_card {
+    padding: 0 !important;
+}
+
+.o_woow_team_list {
+    display: flex;
+    flex-direction: column;
+}
+
+.o_woow_team_member {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid $woow-border-light;
+
+    &:last-child {
+        border-bottom: none;
+    }
+
+    &:hover {
+        background: rgba(0, 0, 0, 0.02);
+    }
+}
+
+.o_woow_member_avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: $woow-radius-full;
+    background: rgba($woow-primary, 0.1);
+    color: $woow-primary;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.875rem;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.o_woow_member_info {
+    flex: 1;
+    min-width: 0;
+}
+
+.o_woow_member_name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.125rem;
+
+    span:first-child {
+        font-weight: 500;
+        color: $woow-text-primary;
+    }
+}
+
+.o_woow_member_email {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+}
+
+.o_woow_member_meta {
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    margin-top: 0.25rem;
+}
+
+.o_woow_member_actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.o_woow_role_select {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.875rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    color: $woow-text-primary;
+    cursor: pointer;
+
+    &:focus {
+        outline: none;
+        border-color: $woow-primary;
+    }
+}
+
+.o_woow_remove_btn {
+    background: transparent;
+    border: none;
+    padding: 0.375rem;
+    cursor: pointer;
+    color: $woow-text-secondary;
+    border-radius: $woow-radius-default;
+    transition: all 0.2s ease;
+
+    &:hover {
+        background: rgba(239, 68, 68, 0.1);
+        color: #ef4444;
+    }
+}
+
+.o_woow_team_empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem;
+    color: $woow-text-secondary;
+
+    p {
+        margin-top: 1rem;
+    }
+}
+
+// Role Options for Invite Modal
+.o_woow_role_options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.o_woow_role_option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    cursor: pointer;
+    transition: all 0.2s ease;
+
+    &:hover {
+        border-color: rgba($woow-primary, 0.5);
+    }
+
+    &.selected {
+        border-color: $woow-primary;
+        background: rgba($woow-primary, 0.05);
+    }
+
+    input[type="radio"] {
+        margin-top: 0.125rem;
+    }
+}
+
+.o_woow_role_content {
+    display: flex;
+    flex-direction: column;
+}
+
+.o_woow_role_label {
+    font-weight: 500;
+    color: $woow-text-primary;
+}
+
+.o_woow_role_desc {
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+}

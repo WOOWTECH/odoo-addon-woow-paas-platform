@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.WorkspaceTeamPage">
+        <div class="o_woow_workspace_team">
+            <!-- Loading State -->
+            <t t-if="state.loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading team...</p>
+                </div>
+            </t>
+
+            <!-- Error State -->
+            <t t-elif="state.error">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'error'" size="48"/>
+                    <h2>Unable to load team</h2>
+                    <p t-esc="state.error"/>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Workspace
+                    </WoowButton>
+                </div>
+            </t>
+
+            <!-- Team Content -->
+            <t t-elif="workspace">
+                <!-- Breadcrumb / Back Navigation -->
+                <div class="o_woow_breadcrumb">
+                    <button class="o_woow_back_btn" t-on-click="goBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_parent" t-esc="workspace.name"/>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_current">Team</span>
+                </div>
+
+                <!-- Header Section -->
+                <div class="o_woow_workspace_header">
+                    <div class="o_woow_workspace_title">
+                        <h1>Team Members</h1>
+                        <p>Manage who has access to this workspace and their permissions.</p>
+                    </div>
+                    <WoowButton t-if="canManageMembers" variant="'primary'" size="'md'" onClick.bind="openInviteModal">
+                        <WoowIcon name="'person_add'" size="18"/>
+                        Invite Member
+                    </WoowButton>
+                </div>
+
+                <!-- Members List -->
+                <WoowCard shadow="true" class="'o_woow_team_card'">
+                    <div class="o_woow_team_list">
+                        <t t-foreach="members" t-as="member" t-key="member.id">
+                            <div class="o_woow_team_member">
+                                <div class="o_woow_member_avatar">
+                                    <t t-esc="getInitials(member.name)"/>
+                                </div>
+                                <div class="o_woow_member_info">
+                                    <div class="o_woow_member_name">
+                                        <span t-esc="member.name"/>
+                                        <span t-att-class="'o_woow_badge ' + getRoleBadgeClass(member.role)">
+                                            <t t-esc="member.role"/>
+                                        </span>
+                                    </div>
+                                    <div class="o_woow_member_email" t-esc="member.email"/>
+                                    <div class="o_woow_member_meta" t-if="member.invited_by">
+                                        <span>Invited by <t t-esc="member.invited_by"/> on <t t-esc="formatDate(member.invited_date)"/></span>
+                                    </div>
+                                </div>
+                                <div class="o_woow_member_actions" t-if="canManageMembers and member.role !== 'owner'">
+                                    <select class="o_woow_role_select" t-att-value="member.role" t-on-change="(ev) => this.onRoleChange(member, ev.target.value)">
+                                        <option value="admin">Admin</option>
+                                        <option value="user">User</option>
+                                        <option value="guest">Guest</option>
+                                    </select>
+                                    <button class="o_woow_remove_btn" t-on-click="() => this.removeMember(member)" title="Remove member">
+                                        <WoowIcon name="'close'" size="18"/>
+                                    </button>
+                                </div>
+                            </div>
+                        </t>
+
+                        <!-- Empty State -->
+                        <div t-if="!members.length" class="o_woow_team_empty">
+                            <WoowIcon name="'group'" size="48"/>
+                            <p>No team members yet</p>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Invite Modal -->
+                <InviteMemberModal
+                    t-if="state.showInviteModal"
+                    workspaceId="props.workspaceId"
+                    onClose.bind="closeInviteModal"
+                    onInvited.bind="onMemberInvited"
+                />
+            </t>
+        </div>
+    </t>
+</templates>

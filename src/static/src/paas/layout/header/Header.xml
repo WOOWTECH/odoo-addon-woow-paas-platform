@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.Header">
+        <header class="o_woow_header">
+            <div class="o_woow_breadcrumb">
+                <span class="o_woow_breadcrumb_item">Home</span>
+                <span class="material-symbols-outlined">chevron_right</span>
+                <span class="o_woow_breadcrumb_item active"><t t-esc="currentPageName"/></span>
+            </div>
+            <div class="o_woow_header_actions">
+                <!-- Credits 徽章 -->
+                <div class="o_woow_credits_badge">
+                    <span class="material-symbols-outlined">payments</span>
+                    <span class="o_woow_credits_label">CREDITS</span>
+                    <span class="o_woow_credits_amount">$2,450.00</span>
+                    <button class="o_woow_credits_add">
+                        <span class="material-symbols-outlined">add</span>
+                    </button>
+                </div>
+
+                <!-- 通知 -->
+                <button class="o_woow_notification_btn">
+                    <span class="material-symbols-outlined">notifications</span>
+                    <span class="o_woow_notification_badge"/>
+                </button>
+
+                <!-- 使用者資訊 -->
+                <div class="o_woow_user_header">
+                    <div class="o_woow_user_text">
+                        <span class="o_woow_user_name">Sarah Wilson</span>
+                        <span class="o_woow_user_plan">PRO PLAN</span>
+                    </div>
+                    <div class="o_woow_avatar_header">SW</div>
+                </div>
+            </div>
+        </header>
+    </t>
+</templates>

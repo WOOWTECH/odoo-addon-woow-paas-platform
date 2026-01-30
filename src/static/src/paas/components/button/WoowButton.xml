@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.WoowButton">
+        <button t-att-class="'o_woow_btn o_woow_btn_' + (props.variant || 'primary') + ' o_woow_btn_' + (props.size || 'md')"
+                t-on-click="handleClick">
+            <t t-slot="default"/>
+        </button>
+    </t>
+</templates>

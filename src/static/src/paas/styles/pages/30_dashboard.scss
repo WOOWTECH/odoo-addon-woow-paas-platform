@@ -1,0 +1,205 @@
+// variables loaded via manifest
+
+.o_woow_dashboard {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.o_woow_welcome {
+    margin-bottom: 2rem;
+
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+    }
+}
+
+.o_woow_stats_grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+
+    @media (max-width: 768px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_stat_card {
+    padding: 1.25rem;
+}
+
+.o_woow_stat_header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.o_woow_stat_icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba($woow-primary, 0.1);
+    color: $woow-primary;
+
+    &.o_woow_stat_icon_green {
+        background: rgba(34, 197, 94, 0.1);
+        color: #22c55e;
+    }
+}
+
+.o_woow_stat_label {
+    font-weight: 500;
+    color: $woow-text-secondary;
+}
+
+.o_woow_stat_value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    margin-bottom: 0.5rem;
+}
+
+.o_woow_stat_note {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+}
+
+.o_woow_dashboard_grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+
+    @media (max-width: 1024px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_activity_card h3,
+.o_woow_quick_access_card h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: $woow-text-primary;
+}
+
+.o_woow_activity_list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.o_woow_activity_item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+}
+
+.o_woow_activity_time {
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    width: 60px;
+    flex-shrink: 0;
+}
+
+.o_woow_activity_avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: $woow-primary;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 0.875rem;
+    flex-shrink: 0;
+}
+
+.o_woow_activity_content {
+    font-size: 0.875rem;
+}
+
+.o_woow_activity_user {
+    font-weight: 500;
+    color: $woow-text-primary;
+}
+
+.o_woow_activity_action {
+    color: $woow-text-secondary;
+}
+
+.o_woow_activity_target {
+    font-weight: 500;
+    color: $woow-primary;
+}
+
+.o_woow_quick_grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+
+    @media (max-width: 480px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_quick_item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    border-radius: $woow-radius-default;
+    border: 1px solid $woow-border-light;
+    transition: all 0.2s;
+
+    &:hover {
+        border-color: $woow-primary;
+    }
+}
+
+.o_woow_quick_icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.o_woow_quick_item_purple .o_woow_quick_icon { background: rgba(147, 51, 234, 0.1); color: #9333ea; }
+.o_woow_quick_item_blue .o_woow_quick_icon { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+.o_woow_quick_item_orange .o_woow_quick_icon { background: rgba(249, 115, 22, 0.1); color: #f97316; }
+.o_woow_quick_item_slate .o_woow_quick_icon { background: rgba(100, 116, 139, 0.1); color: #64748b; }
+
+.o_woow_quick_info {
+    flex: 1;
+}
+
+.o_woow_quick_name {
+    display: block;
+    font-weight: 500;
+    color: $woow-text-primary;
+}
+
+.o_woow_quick_tag {
+    display: inline-block;
+    font-size: 0.625rem;
+    padding: 0.125rem 0.5rem;
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: $woow-radius-full;
+    color: $woow-text-secondary;
+    text-transform: uppercase;
+    margin-top: 0.25rem;
+}

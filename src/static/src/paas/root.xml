@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.Root">
+        <AppShell router="router">
+            <t t-if="router.current === 'dashboard'">
+                <DashboardPage/>
+            </t>
+            <t t-elif="router.current === 'workspaces'">
+                <WorkspaceListPage/>
+            </t>
+            <t t-elif="router.current === 'workspace-detail'">
+                <WorkspaceDetailPage workspaceId="workspaceId"/>
+            </t>
+            <t t-elif="router.current === 'workspace-team'">
+                <WorkspaceTeamPage workspaceId="workspaceId"/>
+            </t>
+            <t t-else="">
+                <EmptyState/>
+            </t>
+        </AppShell>
+    </t>
+</templates>

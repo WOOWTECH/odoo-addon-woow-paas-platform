@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.WoowIcon">
+        <span t-att-class="'material-symbols-outlined ' + (props.class || '')"
+              t-att-style="props.size ? 'font-size: ' + props.size + 'px' : ''"
+              t-att-data-filled="props.filled ? '1' : '0'">
+            <t t-esc="props.name"/>
+        </span>
+    </t>
+</templates>

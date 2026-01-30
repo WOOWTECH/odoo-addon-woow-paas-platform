@@ -1,0 +1,406 @@
+// =============================================================================
+// UI Components Styles
+// WoowIcon, WoowCard, WoowButton
+// =============================================================================
+
+// variables loaded via manifest
+
+// -----------------------------------------------------------------------------
+// Icon - Material Symbols filled state
+// -----------------------------------------------------------------------------
+
+.material-symbols-outlined[data-filled="1"] {
+    font-variation-settings: 'FILL' 1;
+}
+
+// -----------------------------------------------------------------------------
+// Card
+// -----------------------------------------------------------------------------
+
+.o_woow_card {
+    background: $woow-card-light;
+    border-radius: $woow-radius-lg;
+    border: 1px solid $woow-border-light;
+    padding: 1.5rem;
+
+    &.o_woow_card_shadow {
+        box-shadow: $woow-shadow-card;
+        border: none;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Dashboard Stat Card
+// -----------------------------------------------------------------------------
+
+.o_woow_stat_card {
+    .o_woow_stat_header {
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .o_woow_stat_icon {
+        width: 48px;
+        height: 48px;
+        border-radius: $woow-radius-default;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+
+        &.o_woow_stat_icon_blue {
+            background: rgba(59, 130, 246, 0.1);
+            color: #3b82f6;
+        }
+
+        &.o_woow_stat_icon_green {
+            background: rgba(34, 197, 94, 0.1);
+            color: #22c55e;
+        }
+
+        &.o_woow_stat_icon_purple {
+            background: rgba($woow-primary, 0.1);
+            color: $woow-primary;
+        }
+
+        &.o_woow_stat_icon_default {
+            background: rgba(0, 0, 0, 0.05);
+            color: $woow-text-secondary;
+        }
+    }
+
+    .o_woow_stat_titles {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .o_woow_stat_label {
+        font-weight: 600;
+        color: $woow-text-primary;
+        font-size: 1rem;
+    }
+
+    .o_woow_stat_subtitle {
+        font-size: 0.75rem;
+        color: $woow-text-secondary;
+    }
+
+    .o_woow_stat_items {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .o_woow_stat_item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid $woow-border-light;
+
+        &:last-child {
+            border-bottom: none;
+        }
+
+        &.highlight {
+            .o_woow_item_value {
+                color: $woow-primary;
+                font-weight: 600;
+            }
+        }
+    }
+
+    .o_woow_item_label {
+        color: $woow-text-secondary;
+        font-size: 0.875rem;
+    }
+
+    .o_woow_item_value {
+        font-weight: 500;
+        color: $woow-text-primary;
+        font-size: 0.875rem;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Button
+// -----------------------------------------------------------------------------
+
+.o_woow_btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-family: $woow-font-display;
+    font-weight: 600;
+    border-radius: $woow-radius-default;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    border: none;
+    outline: none;
+
+    &:focus {
+        outline: 2px solid rgba($woow-primary, 0.3);
+        outline-offset: 2px;
+    }
+
+    // Variants
+    &.o_woow_btn_primary {
+        background: $woow-primary;
+        color: white;
+        &:hover { background: $woow-primary-hover; }
+    }
+
+    &.o_woow_btn_secondary {
+        background: transparent;
+        border: 1px solid $woow-border-light;
+        color: $woow-text-secondary;
+        &:hover {
+            border-color: $woow-primary;
+            color: $woow-primary;
+        }
+    }
+
+    &.o_woow_btn_ghost {
+        background: transparent;
+        color: $woow-text-secondary;
+        &:hover {
+            background: rgba(0, 0, 0, 0.05);
+        }
+    }
+
+    // Sizes
+    &.o_woow_btn_sm {
+        padding: 0.5rem 1rem;
+        font-size: 0.75rem;
+    }
+
+    &.o_woow_btn_md {
+        padding: 0.75rem 1.5rem;
+        font-size: 0.875rem;
+    }
+
+    &.o_woow_btn_lg {
+        padding: 1rem 2rem;
+        font-size: 1rem;
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Modal
+// -----------------------------------------------------------------------------
+
+.o_woow_modal_backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.o_woow_modal {
+    background: $woow-card-light;
+    border-radius: $woow-radius-xl;
+    width: 100%;
+    max-width: 480px;
+    margin: 1rem;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    animation: slideUp 0.3s ease;
+}
+
+.o_woow_modal_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem;
+    border-bottom: 1px solid $woow-border-light;
+
+    h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 0;
+    }
+}
+
+.o_woow_modal_close {
+    background: transparent;
+    border: none;
+    padding: 0.5rem;
+    cursor: pointer;
+    color: $woow-text-secondary;
+    border-radius: $woow-radius-default;
+    transition: all 0.2s ease;
+
+    &:hover {
+        background: rgba(0, 0, 0, 0.05);
+        color: $woow-text-primary;
+    }
+}
+
+.o_woow_modal_body {
+    padding: 1.5rem;
+}
+
+.o_woow_modal_footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    border-top: 1px solid $woow-border-light;
+}
+
+// -----------------------------------------------------------------------------
+// Form Elements
+// -----------------------------------------------------------------------------
+
+.o_woow_form_group {
+    margin-bottom: 1.25rem;
+
+    &:last-child {
+        margin-bottom: 0;
+    }
+
+    label {
+        display: block;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: $woow-text-primary;
+        margin-bottom: 0.5rem;
+    }
+}
+
+.o_woow_input,
+.o_woow_textarea {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    font-family: $woow-font-body;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    color: $woow-text-primary;
+    transition: all 0.2s ease;
+
+    &::placeholder {
+        color: $woow-text-secondary;
+    }
+
+    &:focus {
+        outline: none;
+        border-color: $woow-primary;
+        box-shadow: 0 0 0 3px rgba($woow-primary, 0.1);
+    }
+
+    &:disabled {
+        background: rgba(0, 0, 0, 0.03);
+        cursor: not-allowed;
+    }
+}
+
+.o_woow_textarea {
+    resize: vertical;
+    min-height: 80px;
+}
+
+.o_woow_error_message {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: rgba(239, 68, 68, 0.1);
+    border-radius: $woow-radius-default;
+    color: #ef4444;
+    font-size: 0.875rem;
+    margin-top: 1rem;
+}
+
+// -----------------------------------------------------------------------------
+// Badges
+// -----------------------------------------------------------------------------
+
+.o_woow_badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.75rem;
+    border-radius: $woow-radius-full;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+.o_woow_badge_purple {
+    background: rgba(139, 92, 246, 0.1);
+    color: #8b5cf6;
+}
+
+.o_woow_badge_blue {
+    background: rgba(59, 130, 246, 0.1);
+    color: #3b82f6;
+}
+
+.o_woow_badge_green {
+    background: rgba(34, 197, 94, 0.1);
+    color: #22c55e;
+}
+
+.o_woow_badge_gray {
+    background: rgba(107, 114, 128, 0.1);
+    color: #6b7280;
+}
+
+// -----------------------------------------------------------------------------
+// Loading / Spin Animation
+// -----------------------------------------------------------------------------
+
+.o_woow_loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem;
+    color: $woow-text-secondary;
+
+    p {
+        margin-top: 1rem;
+    }
+}
+
+.o_woow_spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
