@@ -80,7 +80,7 @@
                         <WoowCard class="'o_woow_stat_mini_card'">
                             <div class="o_woow_stat_mini_content">
                                 <div t-att-class="'o_woow_stat_mini_icon o_woow_stat_mini_icon_' + stat.color">
-                                    <WoowIcon t-att-name="stat.icon" size="20"/>
+                                    <WoowIcon name="stat.icon" size="20"/>
                                 </div>
                                 <div class="o_woow_stat_mini_info">
                                     <span class="o_woow_stat_mini_value" t-esc="stat.value"/>
@@ -105,7 +105,7 @@
                         <t t-foreach="serviceTypes" t-as="service" t-key="service.name">
                             <div t-att-class="'o_woow_service_card o_woow_service_card_' + service.color">
                                 <div class="o_woow_service_icon">
-                                    <WoowIcon t-att-name="service.icon" size="32"/>
+                                    <WoowIcon name="service.icon" size="32"/>
                                 </div>
                                 <h3><t t-esc="service.name"/></h3>
                                 <p><t t-esc="service.description"/></p>

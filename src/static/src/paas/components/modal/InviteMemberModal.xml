@@ -53,10 +53,10 @@
                 </div>
 
                 <div class="o_woow_modal_footer">
-                    <WoowButton variant="'ghost'" size="'md'" onClick="props.onClose" t-att-disabled="state.loading">
+                    <WoowButton variant="'ghost'" size="'md'" onClick="props.onClose" disabled="state.loading">
                         Cancel
                     </WoowButton>
-                    <WoowButton variant="'primary'" size="'md'" onClick.bind="onSubmit" t-att-disabled="state.loading">
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="onSubmit" disabled="state.loading">
                         <t t-if="state.loading">
                             <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
                             Inviting...
