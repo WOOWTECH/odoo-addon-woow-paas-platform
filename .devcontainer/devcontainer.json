@@ -61,6 +61,6 @@
 
     // Environment variables
     "remoteEnv": {
-        "ODOO_RC": "/etc/odoo/odoo.conf"
+        "ODOO_RC": "/etc/odoo/odoo/odoo.conf"
     }
 }

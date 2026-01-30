@@ -7,6 +7,20 @@
 - Docker Desktop（或 Docker Engine + Docker Compose）
 - VS Code 搭配「Dev Containers」擴充套件（`ms-vscode-remote.remote-containers`）
 
+## 專案結構
+
+```
+woow_paas_platform/
+├── .devcontainer/          # VS Code Dev Container 配置
+├── config/
+│   ├── odoo/
+│   │   └── odoo.conf      # Odoo 配置檔案
+│   └── nginx/
+│       └── default.conf   # Nginx 反向代理配置
+├── src/                    # Odoo addon 模組程式碼
+└── docker-compose.yml      # 主要 Docker Compose 配置
+```
+
 ## 快速開始
 
 1. 在 VS Code 中開啟 `woow_paas_platform` 資料夾
@@ -29,6 +43,22 @@
 ```bash
 docker compose --profile full up -d
 ```
+
+## 配置檔案
+
+### Odoo 配置
+配置檔案位於 `config/odoo/odoo.conf`，包含：
+- 資料庫連線設定
+- Addons 路徑配置
+- 開發模式啟用（reload, qweb, xml）
+- 效能和日誌設定
+
+### Nginx 配置
+反向代理配置位於 `config/nginx/default.conf`，提供：
+- WebSocket 支援
+- 靜態檔案快取
+- Gzip 壓縮
+- 請求代理設定
 
 ## 資料庫憑證
 
