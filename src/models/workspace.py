@@ -90,11 +90,13 @@ class Workspace(models.Model):
         """Restore archived workspace"""
         self.write({'state': 'active'})
 
-    def check_access(self, user=None, required_role=None):
+    def check_user_access(self, user=None, required_role=None):
         """
         Check if user has access to this workspace.
         Returns the access record if found.
         """
+        if not self:
+            return False
         self.ensure_one()
         user = user or self.env.user
         access = self.env['woow_paas_platform.workspace_access'].search([

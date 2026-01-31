@@ -1,5 +1,9 @@
 import json
+import logging
+import traceback
 from odoo.http import request, route, Controller, Response
+
+_logger = logging.getLogger(__name__)
 
 
 class PaasController(Controller):
@@ -58,15 +62,15 @@ class PaasController(Controller):
             'count': len(workspaces),
         })
 
-    @route("/api/workspaces", auth="user", methods=["POST"], type="json", csrf=False)
+    @route("/api/workspaces", auth="user", methods=["POST"], type="http", csrf=False)
     def create_workspace(self):
         """Create a new workspace"""
-        params = request.jsonrequest
+        params = json.loads(request.httprequest.data)
         name = params.get('name', '').strip()
         description = params.get('description', '').strip()
 
         if not name:
-            return {'success': False, 'error': 'Workspace name is required'}
+            return self._json_response({'success': False, 'error': 'Workspace name is required'}, 400)
 
         Workspace = request.env['woow_paas_platform.workspace']
 
@@ -76,7 +80,7 @@ class PaasController(Controller):
                 'description': description,
             })
 
-            return {
+            return self._json_response({
                 'success': True,
                 'data': {
                     'id': workspace.id,
@@ -89,9 +93,10 @@ class PaasController(Controller):
                     'is_owner': True,
                     'created_date': workspace.create_date.isoformat() if workspace.create_date else None,
                 }
-            }
+            })
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            _logger.error("Error creating workspace: %s\n%s", str(e), traceback.format_exc())
+            return self._json_response({'success': False, 'error': str(e)}, 500)
 
     @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["GET"], type="http", csrf=False)
     def get_workspace(self, workspace_id):
@@ -104,7 +109,7 @@ class PaasController(Controller):
             return self._error_response('Workspace not found', 404)
 
         # Check access
-        access = workspace.check_access(user)
+        access = workspace.check_user_access(user)
         if not access:
             return self._error_response('Access denied', 403)
 
@@ -128,27 +133,27 @@ class PaasController(Controller):
             }
         })
 
-    @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["PUT"], type="json", csrf=False)
+    @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["PUT"], type="http", csrf=False)
     def update_workspace(self, workspace_id):
         """Update a workspace"""
         user = request.env.user
-        params = request.jsonrequest
+        params = json.loads(request.httprequest.data)
         Workspace = request.env['woow_paas_platform.workspace']
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
+            return self._json_response({'success': False, 'error': 'Workspace not found'}, 404)
 
         # Check access (need admin or owner)
-        access = workspace.check_access(user, required_role='admin')
+        access = workspace.check_user_access(user, required_role='admin')
         if not access:
-            return {'success': False, 'error': 'Access denied'}
+            return self._json_response({'success': False, 'error': 'Access denied'}, 403)
 
         update_vals = {}
         if 'name' in params:
             name = params['name'].strip()
             if not name:
-                return {'success': False, 'error': 'Workspace name cannot be empty'}
+                return self._json_response({'success': False, 'error': 'Workspace name cannot be empty'}, 400)
             update_vals['name'] = name
         if 'description' in params:
             update_vals['description'] = params['description'].strip()
@@ -156,7 +161,7 @@ class PaasController(Controller):
         if update_vals:
             workspace.write(update_vals)
 
-        return {
+        return self._json_response({
             'success': True,
             'data': {
                 'id': workspace.id,
@@ -164,7 +169,7 @@ class PaasController(Controller):
                 'description': workspace.description or '',
                 'slug': workspace.slug,
             }
-        }
+        })
 
     @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["DELETE"], type="http", csrf=False)
     def delete_workspace(self, workspace_id):
@@ -196,7 +201,7 @@ class PaasController(Controller):
             return self._error_response('Workspace not found', 404)
 
         # Check access
-        access = workspace.check_access(user)
+        access = workspace.check_user_access(user)
         if not access:
             return self._error_response('Access denied', 403)
 
@@ -218,38 +223,38 @@ class PaasController(Controller):
             'count': len(members),
         })
 
-    @route("/api/workspaces/<int:workspace_id>/members", auth="user", methods=["POST"], type="json", csrf=False)
+    @route("/api/workspaces/<int:workspace_id>/members", auth="user", methods=["POST"], type="http", csrf=False)
     def invite_member(self, workspace_id):
         """Invite a member to workspace"""
         user = request.env.user
-        params = request.jsonrequest
+        params = json.loads(request.httprequest.data)
         Workspace = request.env['woow_paas_platform.workspace']
         WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
+            return self._json_response({'success': False, 'error': 'Workspace not found'}, 404)
 
         # Check access (need admin or owner to invite)
-        access = workspace.check_access(user, required_role='admin')
+        access = workspace.check_user_access(user, required_role='admin')
         if not access:
-            return {'success': False, 'error': 'Access denied. Only admins can invite members.'}
+            return self._json_response({'success': False, 'error': 'Access denied. Only admins can invite members.'}, 403)
 
         email = params.get('email', '').strip().lower()
         role = params.get('role', 'user')
 
         if not email:
-            return {'success': False, 'error': 'Email is required'}
+            return self._json_response({'success': False, 'error': 'Email is required'}, 400)
 
         if role not in ['admin', 'user', 'guest']:
-            return {'success': False, 'error': 'Invalid role'}
+            return self._json_response({'success': False, 'error': 'Invalid role'}, 400)
 
         # Find user by email
         ResUsers = request.env['res.users'].sudo()
         target_user = ResUsers.search([('email', '=ilike', email)], limit=1)
 
         if not target_user:
-            return {'success': False, 'error': f'No user found with email: {email}'}
+            return self._json_response({'success': False, 'error': f'No user found with email: {email}'}, 404)
 
         # Check if already a member
         existing = WorkspaceAccess.search([
@@ -258,7 +263,7 @@ class PaasController(Controller):
         ], limit=1)
 
         if existing:
-            return {'success': False, 'error': 'User is already a member of this workspace'}
+            return self._json_response({'success': False, 'error': 'User is already a member of this workspace'}, 400)
 
         try:
             new_access = WorkspaceAccess.create({
@@ -268,7 +273,7 @@ class PaasController(Controller):
                 'invited_by_id': user.id,
             })
 
-            return {
+            return self._json_response({
                 'success': True,
                 'data': {
                     'id': new_access.id,
@@ -277,47 +282,47 @@ class PaasController(Controller):
                     'email': target_user.email,
                     'role': role,
                 }
-            }
+            })
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            return self._json_response({'success': False, 'error': str(e)}, 500)
 
-    @route("/api/workspaces/<int:workspace_id>/members/<int:access_id>", auth="user", methods=["PUT"], type="json", csrf=False)
+    @route("/api/workspaces/<int:workspace_id>/members/<int:access_id>", auth="user", methods=["PUT"], type="http", csrf=False)
     def update_member_role(self, workspace_id, access_id):
         """Update a member's role"""
         user = request.env.user
-        params = request.jsonrequest
+        params = json.loads(request.httprequest.data)
         Workspace = request.env['woow_paas_platform.workspace']
         WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
+            return self._json_response({'success': False, 'error': 'Workspace not found'}, 404)
 
         # Check access (need admin or owner)
-        access = workspace.check_access(user, required_role='admin')
+        access = workspace.check_user_access(user, required_role='admin')
         if not access:
-            return {'success': False, 'error': 'Access denied'}
+            return self._json_response({'success': False, 'error': 'Access denied'}, 403)
 
         target_access = WorkspaceAccess.browse(access_id)
         if not target_access.exists() or target_access.workspace_id.id != workspace_id:
-            return {'success': False, 'error': 'Member not found'}
+            return self._json_response({'success': False, 'error': 'Member not found'}, 404)
 
         role = params.get('role')
         if role not in ['admin', 'user', 'guest']:
-            return {'success': False, 'error': 'Invalid role'}
+            return self._json_response({'success': False, 'error': 'Invalid role'}, 400)
 
         # Cannot change owner's role directly
         if target_access.role == 'owner':
-            return {'success': False, 'error': 'Cannot change owner role. Use transfer ownership instead.'}
+            return self._json_response({'success': False, 'error': 'Cannot change owner role. Use transfer ownership instead.'}, 400)
 
         target_access.write({'role': role})
-        return {
+        return self._json_response({
             'success': True,
             'data': {
                 'id': target_access.id,
                 'role': role,
             }
-        }
+        })
 
     @route("/api/workspaces/<int:workspace_id>/members/<int:access_id>", auth="user", methods=["DELETE"], type="http", csrf=False)
     def remove_member(self, workspace_id, access_id):
@@ -331,7 +336,7 @@ class PaasController(Controller):
             return self._error_response('Workspace not found', 404)
 
         # Check access (need admin or owner)
-        access = workspace.check_access(user, required_role='admin')
+        access = workspace.check_user_access(user, required_role='admin')
         if not access:
             return self._error_response('Access denied', 403)
 

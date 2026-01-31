@@ -52,11 +52,15 @@ export const workspaceService = reactive({
                 body: JSON.stringify(payload),
             });
             const data = await response.json();
-            if (data.result && data.result.success) {
-                this.workspaces = [data.result.data, ...this.workspaces];
-                return { success: true, data: data.result.data };
+            if (data.success) {
+                this.workspaces = [data.data, ...this.workspaces];
+                return { success: true, data: data.data };
             } else {
-                const errMsg = data.result?.error || data.error || "Failed to create workspace";
+                let errMsg = data.error || "Failed to create workspace";
+                // Ensure error is a string, not an object
+                if (typeof errMsg === "object") {
+                    errMsg = errMsg.message || errMsg.name || JSON.stringify(errMsg);
+                }
                 this.error = errMsg;
                 return { success: false, error: errMsg };
             }
@@ -106,15 +110,15 @@ export const workspaceService = reactive({
                 body: JSON.stringify(payload),
             });
             const data = await response.json();
-            if (data.result && data.result.success) {
+            if (data.success) {
                 // Update local state
                 const index = this.workspaces.findIndex(w => w.id === workspaceId);
                 if (index !== -1) {
-                    this.workspaces[index] = { ...this.workspaces[index], ...data.result.data };
+                    this.workspaces[index] = { ...this.workspaces[index], ...data.data };
                 }
-                return { success: true, data: data.result.data };
+                return { success: true, data: data.data };
             } else {
-                return { success: false, error: data.result?.error || data.error };
+                return { success: false, error: data.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
@@ -184,10 +188,10 @@ export const workspaceService = reactive({
                 body: JSON.stringify(payload),
             });
             const data = await response.json();
-            if (data.result && data.result.success) {
-                return { success: true, data: data.result.data };
+            if (data.success) {
+                return { success: true, data: data.data };
             } else {
-                return { success: false, error: data.result?.error || data.error };
+                return { success: false, error: data.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
@@ -210,10 +214,10 @@ export const workspaceService = reactive({
                 body: JSON.stringify({ role }),
             });
             const data = await response.json();
-            if (data.result && data.result.success) {
-                return { success: true, data: data.result.data };
+            if (data.success) {
+                return { success: true, data: data.data };
             } else {
-                return { success: false, error: data.result?.error || data.error };
+                return { success: false, error: data.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
