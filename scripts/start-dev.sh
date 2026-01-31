@@ -4,9 +4,10 @@
 #
 # 此腳本會：
 # 1. 執行環境設定（如果 .env 不存在）
-# 2. 啟動 docker-compose
-# 3. 等待 Odoo 服務就緒
-# 4. 顯示訪問 URL
+# 2. 根據 USE_SHARED_DB 決定啟動模式
+# 3. 啟動 docker-compose
+# 4. 等待 Odoo 服務就緒
+# 5. 顯示訪問 URL
 
 set -euo pipefail
 
@@ -45,9 +46,32 @@ echo -e "  ${BLUE}Branch:${NC}       ${BRANCH_NAME:-unknown}"
 echo -e "  ${BLUE}Project:${NC}      ${COMPOSE_PROJECT_NAME:-unknown}"
 echo -e "  ${BLUE}Port:${NC}         ${ODOO_PORT:-8069}"
 echo -e "  ${BLUE}Database:${NC}     ${ODOO_DB_NAME:-woow_main}"
+
+# 4. 判斷資料庫模式
+USE_SHARED_DB="${USE_SHARED_DB:-false}"
+if [ "$USE_SHARED_DB" = "true" ]; then
+    echo -e "  ${BLUE}DB Mode:${NC}      ${GREEN}共享模式${NC} (${POSTGRES_HOST:-db})"
+    COMPOSE_PROFILES=""
+
+    # 確保共享網路存在
+    SHARED_NETWORK="${SHARED_DB_NETWORK:-odoo_network}"
+    if ! docker network inspect "$SHARED_NETWORK" > /dev/null 2>&1; then
+        echo -e "${YELLOW}⚠️  共享網路 $SHARED_NETWORK 不存在，正在建立...${NC}"
+        docker network create "$SHARED_NETWORK" > /dev/null 2>&1 || true
+    fi
+else
+    echo -e "  ${BLUE}DB Mode:${NC}      ${YELLOW}獨立模式${NC}"
+    COMPOSE_PROFILES="standalone"
+
+    # 確保共享網路存在（即使是獨立模式也需要，因為 docker-compose.yml 定義了它）
+    SHARED_NETWORK="${SHARED_DB_NETWORK:-odoo_network}"
+    if ! docker network inspect "$SHARED_NETWORK" > /dev/null 2>&1; then
+        docker network create "$SHARED_NETWORK" > /dev/null 2>&1 || true
+    fi
+fi
 echo ""
 
-# 4. 從模板生成 Odoo 配置（使用 envsubst 替換環境變數）
+# 5. 從模板生成 Odoo 配置（使用 envsubst 替換環境變數）
 TEMPLATE_FILE="$PROJECT_ROOT/config/odoo/odoo.conf.template"
 CONFIG_FILE="$PROJECT_ROOT/config/odoo/odoo.conf"
 if [ -f "$TEMPLATE_FILE" ]; then
@@ -57,11 +81,15 @@ else
     echo -e "${YELLOW}⚠️  找不到 odoo.conf.template，跳過配置生成${NC}"
 fi
 
-# 5. 啟動 docker-compose
+# 6. 啟動 docker-compose
 echo -e "${BLUE}📦 啟動 Docker 容器...${NC}"
-docker compose up -d
+if [ -n "$COMPOSE_PROFILES" ]; then
+    COMPOSE_PROFILES="$COMPOSE_PROFILES" docker compose up -d
+else
+    docker compose up -d web
+fi
 
-# 5. 等待 Odoo 服務就緒
+# 7. 等待 Odoo 服務就緒
 echo ""
 echo -e "${BLUE}⏳ 等待 Odoo 服務就緒...${NC}"
 
@@ -90,30 +118,52 @@ if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
     echo -e "${YELLOW}   docker compose logs -f web${NC}"
 fi
 
-# 6. 檢查並自動建立資料庫
+# 8. 檢查並自動建立資料庫
 DB_NAME="${ODOO_DB_NAME:-woow_main}"
 echo ""
 echo -e "${BLUE}🔍 檢查資料庫 ${DB_NAME}...${NC}"
 
-# 等待 PostgreSQL 就緒
-echo -n "  等待 PostgreSQL..."
-PG_READY=0
-for i in {1..30}; do
-    if docker compose exec -T db pg_isready -U "${POSTGRES_USER:-odoo}" > /dev/null 2>&1; then
-        PG_READY=1
-        echo -e " ${GREEN}就緒${NC}"
-        break
-    fi
-    echo -n "."
-    sleep 1
-done
+# 根據模式選擇正確的容器來檢查 PostgreSQL
+if [ "$USE_SHARED_DB" = "true" ]; then
+    PG_CONTAINER="${POSTGRES_HOST:-db}"
+    # 嘗試從 web 容器內部檢查 PostgreSQL
+    echo -n "  等待 PostgreSQL ($PG_CONTAINER)..."
+    PG_READY=0
+    for i in {1..30}; do
+        if docker compose exec -T web bash -c "pg_isready -h $PG_CONTAINER -U ${POSTGRES_USER:-odoo}" > /dev/null 2>&1; then
+            PG_READY=1
+            echo -e " ${GREEN}就緒${NC}"
+            break
+        fi
+        echo -n "."
+        sleep 1
+    done
+else
+    # 獨立模式：使用本地 db 容器
+    echo -n "  等待 PostgreSQL..."
+    PG_READY=0
+    for i in {1..30}; do
+        if docker compose exec -T db pg_isready -U "${POSTGRES_USER:-odoo}" > /dev/null 2>&1; then
+            PG_READY=1
+            echo -e " ${GREEN}就緒${NC}"
+            break
+        fi
+        echo -n "."
+        sleep 1
+    done
+fi
 
 if [ "$PG_READY" = "0" ]; then
     echo -e " ${YELLOW}超時${NC}"
     echo -e "${YELLOW}⚠️  PostgreSQL 可能尚未完全啟動，跳過自動建立資料庫${NC}"
 else
-    # 檢查資料庫是否已存在（明確檢查）
-    DB_LIST=$(docker compose exec -T db psql -U "${POSTGRES_USER:-odoo}" -lqt 2>/dev/null | cut -d \| -f 1 | tr -d ' ')
+    # 檢查資料庫是否已存在
+    if [ "$USE_SHARED_DB" = "true" ]; then
+        DB_LIST=$(docker compose exec -T web bash -c "psql -h ${POSTGRES_HOST:-db} -U ${POSTGRES_USER:-odoo} -lqt 2>/dev/null | cut -d \| -f 1 | tr -d ' '" 2>/dev/null || echo "")
+    else
+        DB_LIST=$(docker compose exec -T db psql -U "${POSTGRES_USER:-odoo}" -lqt 2>/dev/null | cut -d \| -f 1 | tr -d ' ')
+    fi
+
     if echo "$DB_LIST" | grep -qx "$DB_NAME"; then
         DB_EXISTS="1"
     else
@@ -144,7 +194,7 @@ else
     fi
 fi
 
-# 6. 顯示訪問資訊
+# 9. 顯示訪問資訊
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}🎉 開發環境已啟動！${NC}"
@@ -155,6 +205,13 @@ echo -e "  ${YELLOW}$ODOO_URL${NC}"
 echo ""
 echo -e "${BLUE}資料庫名稱：${NC}"
 echo -e "  ${YELLOW}${ODOO_DB_NAME:-woow_main}${NC}"
+echo ""
+echo -e "${BLUE}資料庫模式：${NC}"
+if [ "$USE_SHARED_DB" = "true" ]; then
+    echo -e "  ${GREEN}共享模式${NC} - 連接到 ${POSTGRES_HOST:-db}"
+else
+    echo -e "  ${YELLOW}獨立模式${NC} - 使用獨立的 PostgreSQL 容器"
+fi
 echo ""
 echo -e "${BLUE}常用命令：${NC}"
 echo -e "  查看日誌：    ${YELLOW}docker compose logs -f web${NC}"

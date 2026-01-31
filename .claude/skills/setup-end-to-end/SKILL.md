@@ -402,14 +402,13 @@ docker compose stop
 節省資源，多個 worktree 共享一個 PostgreSQL：
 
 ```bash
-# 1. 啟動共享資料庫（只需執行一次）
+# 1. 啟動共享資料庫（只需執行一次，在主專案目錄）
 cd ~/Documents/woow/AREA-odoo/woow-addons/woow_paas_platform
 docker compose -f docker-compose.shared-db.yml up -d
 
-# 2. 在每個 worktree 設定
+# 2. 在每個 worktree 設定環境（使用 --shared-db 參數）
 cd ../woow_paas_platform.worktrees/<feature-name>
-echo "USE_SHARED_DB=true" >> .env
-echo "POSTGRES_HOST=odoo_postgres_shared" >> .env
+./scripts/setup-worktree-env.sh --shared-db
 
 # 3. 啟動（不會建立獨立 PostgreSQL）
 ./scripts/start-dev.sh

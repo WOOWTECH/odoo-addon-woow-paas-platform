@@ -288,12 +288,11 @@ cd ../woow_paas_platform.worktrees/fix-bug-123
 如果希望節省資源，可以讓所有 worktree 共享一個 PostgreSQL 容器：
 
 ```bash
-# 1. 首次啟動共享資料庫
+# 1. 首次啟動共享資料庫（在主專案目錄執行一次）
 docker compose -f docker-compose.shared-db.yml up -d
 
-# 2. 在每個 worktree 的 .env 設定
-echo "USE_SHARED_DB=true" >> .env
-echo "POSTGRES_HOST=odoo_postgres_shared" >> .env
+# 2. 在每個 worktree 設定環境（使用 --shared-db 參數）
+./scripts/setup-worktree-env.sh --shared-db
 
 # 3. 啟動（不會建立獨立的 PostgreSQL）
 ./scripts/start-dev.sh

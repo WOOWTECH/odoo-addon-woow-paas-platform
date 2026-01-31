@@ -23,8 +23,9 @@ services:
       - POSTGRES_PASSWORD=odoo
       - POSTGRES_USER=odoo
       - POSTGRES_DB=postgres
-    ports:
-      - "5432:5432"
+    # 不需要 port 映射，只使用內部網路
+    # ports:
+    #   - "5432:5432"
     networks:
       - odoo_network
     healthcheck:

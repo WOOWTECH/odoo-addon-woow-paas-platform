@@ -3,8 +3,11 @@ services:
   web:
     image: odoo:18.0
     container_name: ${COMPOSE_PROJECT_NAME:-woow_paas_platform}_web
+    # 條件性依賴：僅在非共享模式下依賴 db
     depends_on:
-      - db
+      db:
+        condition: service_started
+        required: false
     restart: "no"
     ports:
       - "${ODOO_PORT:-8069}:8069"
@@ -29,7 +32,8 @@ services:
       - shared
 
   # PostgreSQL Database Service
-  # 僅在 USE_SHARED_DB=false 時啟動（預設）
+  # 僅在獨立模式啟動（USE_SHARED_DB=false 或未設定）
+  # 使用 --profile standalone 或設定 COMPOSE_PROFILES=standalone
   db:
     image: postgres:15
     container_name: ${COMPOSE_PROJECT_NAME:-woow_paas_platform}_db
@@ -43,7 +47,6 @@ services:
     networks:
       - default
     profiles:
-      - "" # 預設啟動
       - standalone
 
   # Nginx Reverse Proxy (optional)
@@ -66,7 +69,9 @@ services:
     image: dpage/pgadmin4
     restart: "no"
     depends_on:
-      - db
+      db:
+        condition: service_started
+        required: false
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@woow.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
@@ -91,4 +96,3 @@ networks:
   shared:
     name: ${SHARED_DB_NETWORK:-odoo_network}
     external: true
-    # 僅在 USE_SHARED_DB=true 時使用此網路

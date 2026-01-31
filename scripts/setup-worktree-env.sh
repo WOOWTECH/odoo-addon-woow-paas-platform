@@ -17,6 +17,33 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# 解析參數
+USE_SHARED_DB=false
+POSTGRES_HOST=db
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --shared-db)
+            USE_SHARED_DB=true
+            POSTGRES_HOST=odoo_postgres_shared
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --shared-db    使用共享 PostgreSQL（連接到 odoo_postgres_shared）"
+            echo "  -h, --help     顯示此說明"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 # 取得專案根目錄（腳本所在目錄的上一層）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -105,7 +132,7 @@ ODOO_PORT=$ODOO_PORT
 ODOO_DB_NAME=$DB_NAME
 
 # PostgreSQL 配置
-POSTGRES_HOST=db
+POSTGRES_HOST=$POSTGRES_HOST
 POSTGRES_PORT=5432
 POSTGRES_USER=odoo
 POSTGRES_PASSWORD=odoo
@@ -113,8 +140,8 @@ POSTGRES_PASSWORD=odoo
 # Odoo 配置
 ODOO_ADMIN_PASSWD=admin
 
-# 共享資料庫模式（可選）
-USE_SHARED_DB=false
+# 共享資料庫模式
+USE_SHARED_DB=$USE_SHARED_DB
 SHARED_DB_NETWORK=odoo_network
 
 # PgAdmin 配置（可選）
@@ -132,8 +159,12 @@ echo -e "  ${BLUE}Branch:${NC}       $BRANCH_NAME"
 echo -e "  ${BLUE}Project:${NC}      $COMPOSE_PROJECT_NAME"
 echo -e "  ${BLUE}Port:${NC}         $ODOO_PORT"
 echo -e "  ${BLUE}Database:${NC}     $DB_NAME"
+if [ "$USE_SHARED_DB" = "true" ]; then
+    echo -e "  ${BLUE}DB Mode:${NC}      ${GREEN}共享模式${NC} ($POSTGRES_HOST)"
+else
+    echo -e "  ${BLUE}DB Mode:${NC}      ${YELLOW}獨立模式${NC}"
+fi
 echo ""
 echo -e "${GREEN}下一步：${NC}"
 echo -e "  執行: ${YELLOW}./scripts/start-dev.sh${NC}"
-echo -e "  或執行: ${YELLOW}docker compose up -d${NC}"
 echo ""

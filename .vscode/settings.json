@@ -80,5 +80,6 @@
   // Odoo 特定設定
   "odoo.addonsPath": [
     "${workspaceFolder}/src"
-  ]
+  ],
+  "python.languageServer": "None"
 }
