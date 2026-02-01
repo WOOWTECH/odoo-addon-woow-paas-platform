@@ -2,6 +2,11 @@ import logging
 import traceback
 from odoo.http import request, route, Controller
 
+from ..models.workspace_access import (
+    ROLE_OWNER, ROLE_ADMIN, ROLE_USER,
+    ASSIGNABLE_ROLES,
+)
+
 _logger = logging.getLogger(__name__)
 
 
@@ -156,7 +161,7 @@ class PaasController(Controller):
                     'description': workspace.description or '',
                     'slug': workspace.slug,
                     'state': workspace.state,
-                    'role': 'owner',
+                    'role': ROLE_OWNER,
                     'member_count': 1,
                     'is_owner': True,
                     'created_date': workspace.create_date.isoformat() if workspace.create_date else None,
@@ -219,7 +224,7 @@ class PaasController(Controller):
                 'role': access.role,
                 'member_count': workspace.member_count,
                 'is_owner': workspace.owner_id.id == user.id,
-                'owner': {
+                ROLE_OWNER: {
                     'id': workspace.owner_id.id,
                     'name': workspace.owner_id.name,
                     'email': workspace.owner_id.email,
@@ -263,7 +268,7 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Workspace not found'}
 
         # Check access (need admin or owner)
-        access = workspace.check_user_access(user, required_role='admin')
+        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
         if not access:
             return {'success': False, 'error': 'Access denied'}
 
@@ -462,17 +467,17 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Workspace not found'}
 
         # Check access (need admin or owner to invite)
-        access = workspace.check_user_access(user, required_role='admin')
+        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
         if not access:
             return {'success': False, 'error': 'Access denied. Only admins can invite members.'}
 
         email = (email or '').strip().lower()
-        role = role or 'user'
+        role = role or ROLE_USER
 
         if not email:
             return {'success': False, 'error': 'Email is required'}
 
-        if role not in ['admin', 'user', 'guest']:
+        if role not in ASSIGNABLE_ROLES:
             return {'success': False, 'error': 'Invalid role'}
 
         # Find user by email
@@ -547,7 +552,7 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Workspace not found'}
 
         # Check access (need admin or owner)
-        access = workspace.check_user_access(user, required_role='admin')
+        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
         if not access:
             return {'success': False, 'error': 'Access denied'}
 
@@ -558,11 +563,11 @@ class PaasController(Controller):
         if not target_access.exists() or target_access.workspace_id.id != workspace_id:
             return {'success': False, 'error': 'Member not found'}
 
-        if role not in ['admin', 'user', 'guest']:
+        if role not in ASSIGNABLE_ROLES:
             return {'success': False, 'error': 'Invalid role'}
 
         # Cannot change owner's role directly
-        if target_access.role == 'owner':
+        if target_access.role == ROLE_OWNER:
             return {'success': False, 'error': 'Cannot change owner role. Use transfer ownership instead.'}
 
         target_access.write({'role': role})
@@ -610,7 +615,7 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Workspace not found'}
 
         # Check access (need admin or owner)
-        access = workspace.check_user_access(user, required_role='admin')
+        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
         if not access:
             return {'success': False, 'error': 'Access denied'}
 
@@ -619,7 +624,7 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Member not found'}
 
         # Cannot remove owner
-        if target_access.role == 'owner':
+        if target_access.role == ROLE_OWNER:
             return {'success': False, 'error': 'Cannot remove the workspace owner'}
 
         target_access.unlink()

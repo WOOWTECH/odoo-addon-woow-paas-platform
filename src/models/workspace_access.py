@@ -2,6 +2,27 @@ from odoo import models, fields, api
 from odoo.exceptions import ValidationError
 
 
+# Role constants
+ROLE_OWNER = 'owner'
+ROLE_ADMIN = 'admin'
+ROLE_USER = 'user'
+ROLE_GUEST = 'guest'
+
+# Role hierarchy (low to high)
+ROLE_HIERARCHY = [ROLE_GUEST, ROLE_USER, ROLE_ADMIN, ROLE_OWNER]
+
+# Roles that can be assigned by admins (excludes owner)
+ASSIGNABLE_ROLES = [ROLE_ADMIN, ROLE_USER, ROLE_GUEST]
+
+# Role selection for fields.Selection
+ROLE_SELECTION = [
+    (ROLE_OWNER, 'Owner'),
+    (ROLE_ADMIN, 'Admin'),
+    (ROLE_USER, 'User'),
+    (ROLE_GUEST, 'Guest'),
+]
+
+
 class WorkspaceAccess(models.Model):
     _name = 'woow_paas_platform.workspace_access'
     _description = 'Workspace User Access'
@@ -25,12 +46,13 @@ class WorkspaceAccess(models.Model):
     )
 
     # Role
-    role = fields.Selection([
-        ('owner', 'Owner'),
-        ('admin', 'Admin'),
-        ('user', 'User'),
-        ('guest', 'Guest'),
-    ], string='Role', required=True, default='user', index=True)
+    role = fields.Selection(
+        ROLE_SELECTION,
+        string='Role',
+        required=True,
+        default=ROLE_USER,
+        index=True
+    )
 
     # Related fields for convenience
     user_name = fields.Char(related='user_id.name', string='User Name', store=True)
@@ -57,10 +79,10 @@ class WorkspaceAccess(models.Model):
     def _check_owner_count(self):
         """Ensure each workspace has exactly one owner"""
         for access in self:
-            if access.role == 'owner':
+            if access.role == ROLE_OWNER:
                 owner_count = self.search_count([
                     ('workspace_id', '=', access.workspace_id.id),
-                    ('role', '=', 'owner'),
+                    ('role', '=', ROLE_OWNER),
                     ('id', '!=', access.id),
                 ])
                 if owner_count > 0:
@@ -72,7 +94,7 @@ class WorkspaceAccess(models.Model):
     def transfer_ownership(self, new_owner_id):
         """Transfer ownership to another user"""
         self.ensure_one()
-        if self.role != 'owner':
+        if self.role != ROLE_OWNER:
             raise ValidationError('Only the current owner can transfer ownership.')
 
         new_owner_access = self.search([
@@ -84,9 +106,9 @@ class WorkspaceAccess(models.Model):
             raise ValidationError('The new owner must be an existing member of the workspace.')
 
         # Demote current owner to admin
-        self.write({'role': 'admin'})
+        self.write({'role': ROLE_ADMIN})
         # Promote new owner
-        new_owner_access.write({'role': 'owner'})
+        new_owner_access.write({'role': ROLE_OWNER})
         # Update workspace owner_id
         self.workspace_id.write({'owner_id': new_owner_id})
 
@@ -94,7 +116,7 @@ class WorkspaceAccess(models.Model):
     def get_role_permissions(self, role):
         """Get permissions for a given role"""
         permissions = {
-            'owner': {
+            ROLE_OWNER: {
                 'can_view': True,
                 'can_edit': True,
                 'can_delete': True,
@@ -102,7 +124,7 @@ class WorkspaceAccess(models.Model):
                 'can_manage_workspace': True,
                 'can_transfer_ownership': True,
             },
-            'admin': {
+            ROLE_ADMIN: {
                 'can_view': True,
                 'can_edit': True,
                 'can_delete': False,
@@ -110,7 +132,7 @@ class WorkspaceAccess(models.Model):
                 'can_manage_workspace': True,
                 'can_transfer_ownership': False,
             },
-            'user': {
+            ROLE_USER: {
                 'can_view': True,
                 'can_edit': True,
                 'can_delete': False,
@@ -118,7 +140,7 @@ class WorkspaceAccess(models.Model):
                 'can_manage_workspace': False,
                 'can_transfer_ownership': False,
             },
-            'guest': {
+            ROLE_GUEST: {
                 'can_view': True,
                 'can_edit': False,
                 'can_delete': False,

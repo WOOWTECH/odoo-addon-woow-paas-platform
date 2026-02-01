@@ -2,6 +2,8 @@ from odoo import models, fields, api
 from odoo.exceptions import AccessError, ValidationError
 import re
 
+from .workspace_access import ROLE_OWNER, ROLE_HIERARCHY
+
 
 class Workspace(models.Model):
     _name = 'woow_paas_platform.workspace'
@@ -63,7 +65,7 @@ class Workspace(models.Model):
             self.env['woow_paas_platform.workspace_access'].create({
                 'workspace_id': workspace.id,
                 'user_id': workspace.owner_id.id,
-                'role': 'owner',
+                'role': ROLE_OWNER,
             })
         return workspaces
 
@@ -117,8 +119,7 @@ class Workspace(models.Model):
             return False
 
         if required_role:
-            role_hierarchy = ['guest', 'user', 'admin', 'owner']
-            if role_hierarchy.index(access.role) < role_hierarchy.index(required_role):
+            if ROLE_HIERARCHY.index(access.role) < ROLE_HIERARCHY.index(required_role):
                 return False
 
         return access
