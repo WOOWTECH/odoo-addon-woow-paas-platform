@@ -11,6 +11,10 @@
   // ],
   "python.languageServer": "None",
 
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportGeneralTypeIssues": "none"
+  },
+
   // 格式化設定（使用 Ruff）
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff",
