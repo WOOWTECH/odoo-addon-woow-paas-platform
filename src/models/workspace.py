@@ -93,7 +93,16 @@ class Workspace(models.Model):
     def check_user_access(self, user=None, required_role=None):
         """
         Check if user has access to this workspace.
-        Returns the access record if found.
+
+        Args:
+            user: Target user (defaults to current user)
+            required_role: Minimum role required ('guest', 'user', 'admin', 'owner')
+
+        Returns:
+            workspace_access record if authorized, False otherwise
+
+        Role hierarchy (low to high): guest < user < admin < owner
+        User's role must be >= required_role to pass the check.
         """
         if not self:
             return False
