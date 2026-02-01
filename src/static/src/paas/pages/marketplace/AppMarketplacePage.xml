@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AppMarketplacePage">
+        <div class="o_woow_marketplace">
+            <!-- Breadcrumb Navigation -->
+            <div class="o_woow_breadcrumb">
+                <button class="o_woow_back_btn" t-on-click="goBack" type="button">
+                    <WoowIcon name="'arrow_back'" size="20"/>
+                </button>
+                <span class="o_woow_breadcrumb_sep">/</span>
+                <span class="o_woow_breadcrumb_parent">Workspace</span>
+                <span class="o_woow_breadcrumb_sep">/</span>
+                <span class="o_woow_breadcrumb_current">App Marketplace</span>
+            </div>
+
+            <!-- Header Section -->
+            <div class="o_woow_marketplace_header">
+                <div class="o_woow_marketplace_title">
+                    <h1>App Marketplace</h1>
+                    <p>Deploy cloud applications with one click. Choose from our curated collection of templates.</p>
+                </div>
+            </div>
+
+            <!-- Search and Filter Section -->
+            <div class="o_woow_marketplace_controls">
+                <form class="o_woow_marketplace_search" t-on-submit="onSearchSubmit">
+                    <div class="o_woow_search_input_wrapper">
+                        <WoowIcon name="'search'" size="20" class="'o_woow_search_icon'"/>
+                        <input
+                            type="text"
+                            class="o_woow_search_input"
+                            placeholder="Search applications..."
+                            t-att-value="state.searchQuery"
+                            t-on-input="onSearchInput"
+                        />
+                    </div>
+                </form>
+
+                <CategoryFilter
+                    selectedCategory="state.selectedCategory"
+                    onCategoryChange.bind="onCategoryChange"
+                />
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading applications...</p>
+                </div>
+            </t>
+
+            <!-- Templates Grid -->
+            <t t-elif="hasTemplates">
+                <div class="o_woow_marketplace_grid">
+                    <t t-foreach="templates" t-as="template" t-key="template.id">
+                        <AppCard
+                            template="template"
+                            onAdd.bind="onAddTemplate"
+                        />
+                    </t>
+                </div>
+            </t>
+
+            <!-- Empty State -->
+            <t t-else="">
+                <WoowCard shadow="true" class="'o_woow_marketplace_empty'">
+                    <div class="o_woow_empty_content">
+                        <WoowIcon name="'search_off'" size="48"/>
+                        <h2>No applications found</h2>
+                        <p t-if="state.searchQuery">
+                            No applications match "<t t-esc="state.searchQuery"/>".
+                            Try a different search term or category.
+                        </p>
+                        <p t-else="">
+                            No applications available in this category.
+                            Try selecting a different category.
+                        </p>
+                        <WoowButton
+                            t-if="state.selectedCategory !== 'all' or state.searchQuery"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="() => { this.state.selectedCategory = 'all'; this.state.searchQuery = ''; this.loadTemplates(); }"
+                        >
+                            <WoowIcon name="'refresh'" size="18"/>
+                            Clear Filters
+                        </WoowButton>
+                    </div>
+                </WoowCard>
+            </t>
+        </div>
+    </t>
+</templates>

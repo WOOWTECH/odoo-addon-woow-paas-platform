@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.CategoryFilter">
+        <div class="o_woow_category_filter">
+            <t t-foreach="categories" t-as="category" t-key="category.key">
+                <button
+                    t-att-class="'o_woow_category_tab' + (isSelected(category.key) ? ' o_woow_category_tab_active' : '')"
+                    t-on-click="() => this.selectCategory(category.key)"
+                    type="button"
+                >
+                    <t t-esc="category.label"/>
+                </button>
+            </t>
+        </div>
+    </t>
+</templates>

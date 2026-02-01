@@ -6,6 +6,7 @@ import { DashboardPage } from "./pages/dashboard/DashboardPage";
 import { WorkspaceListPage } from "./pages/workspace/WorkspaceListPage";
 import { WorkspaceDetailPage } from "./pages/workspace/WorkspaceDetailPage";
 import { WorkspaceTeamPage } from "./pages/workspace/WorkspaceTeamPage";
+import { AppMarketplacePage } from "./pages/marketplace/AppMarketplacePage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -16,6 +17,7 @@ export class Root extends Component {
         WorkspaceListPage,
         WorkspaceDetailPage,
         WorkspaceTeamPage,
+        AppMarketplacePage,
         EmptyState,
     };
     static props = {};
