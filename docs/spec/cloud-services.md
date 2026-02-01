@@ -104,9 +104,38 @@ Example: paas-ws-123-anythingllm-01
 
 > **Note**: 不提供 Start/Stop 操作。若需要暫停服務，請使用 Delete 移除；需要時再重新 Deploy。這樣設計是因為一個 Helm Chart 可能包含多種 workloads（Deployment、StatefulSet、CronJob 等），無法用單一 scale 指令控制。
 
+### DNS & TLS Architecture (Cloudflare)
+
+域名 `*.woowtech.com` 由 Cloudflare 管理，採用 **Cloudflare Proxy** 模式處理 TLS：
+
+```
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│    User      │      │  Cloudflare  │      │   K3s Node   │      │   Service    │
+│   Browser    │─────▶│  Proxy (CDN) │─────▶│   Traefik    │─────▶│    Pod       │
+│              │ TLS  │              │ HTTP │              │      │              │
+└──────────────┘      └──────────────┘  or  └──────────────┘      └──────────────┘
+                                      Origin
+                                       TLS
+```
+
+**Cloudflare 設定**：
+
+| 設定項目 | 值 | 說明 |
+|----------|-----|------|
+| DNS Record | `*.woowtech.com` → K3s Node IP | Wildcard A record |
+| Proxy Status | Proxied (Orange cloud) | 啟用 Cloudflare CDN + DDoS 保護 |
+| SSL/TLS Mode | Full (Strict) | Cloudflare ↔ Origin 使用 TLS |
+| Origin Certificate | Cloudflare Origin CA | 15 年有效期，免費 |
+
+**流量路徑**：
+1. User 訪問 `https://my-app.woowtech.com`
+2. Cloudflare 終止 TLS，驗證憑證
+3. Cloudflare 使用 Origin CA 與 K3s 建立加密連線
+4. Traefik 路由到對應的 Service
+
 ### Ingress Configuration
 
-使用 K3s 預設的 **Traefik** Ingress Controller（K3s 自動部署於 `/var/lib/rancher/k3s/server/manifests/traefik.yaml`）：
+使用 K3s 預設的 **Traefik** Ingress Controller：
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -116,14 +145,11 @@ metadata:
   namespace: paas-ws-123
   annotations:
     kubernetes.io/ingress.class: traefik
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
-    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
   tls:
     - hosts:
         - my-ai-assistant.woowtech.com
-      secretName: paas-ws-123-anythingllm-01-tls
+      secretName: cloudflare-origin-tls  # Shared Origin CA cert
   rules:
     - host: my-ai-assistant.woowtech.com
       http:
@@ -137,7 +163,24 @@ spec:
                   number: 3001
 ```
 
-> **Note**: K3s 預設使用 Traefik 並開放 port 80/443。如需自訂 Traefik 設定，應建立 HelmChartConfig 於 `/var/lib/rancher/k3s/server/manifests/` 目錄。
+**Origin CA Secret（整個 cluster 共用）**：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-origin-tls
+  namespace: default  # 或建立在每個 workspace namespace
+type: kubernetes.io/tls
+data:
+  tls.crt: <base64-encoded-origin-cert>
+  tls.key: <base64-encoded-origin-key>
+```
+
+> **Note**:
+> - Cloudflare Origin CA 憑證為 wildcard (`*.woowtech.com`)，可供所有子網域共用
+> - K3s 預設使用 Traefik 並開放 port 80/443
+> - 如需自訂 Traefik 設定，應建立 HelmChartConfig 於 `/var/lib/rancher/k3s/server/manifests/`
 
 ### Resource Quotas
 
@@ -372,8 +415,8 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 
 **4.4 Edit Custom Domain**
 - Modal with domain input
-- DNS verification instructions
-- SSL certificate auto-provisioning (cert-manager)
+- 用戶需自行在其 DNS 設定 CNAME 指向 `{subdomain}.woowtech.com`
+- 或直接使用平台提供的 `*.woowtech.com` 子網域（已含 TLS）
 
 ---
 
