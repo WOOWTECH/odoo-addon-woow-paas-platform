@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { CreateWorkspaceModal } from "../../components/modal/CreateWorkspaceModal";
 import { workspaceService } from "../../services/workspace_service";
 import { router } from "../../core/router";
+import { getRoleBadgeClass, formatDate } from "../../services/utils";
 
 export class WorkspaceListPage extends Component {
     static template = "woow_paas_platform.WorkspaceListPage";
@@ -58,23 +59,11 @@ export class WorkspaceListPage extends Component {
     }
 
     getRoleBadgeClass(role) {
-        const classes = {
-            owner: "o_woow_badge_purple",
-            admin: "o_woow_badge_blue",
-            user: "o_woow_badge_green",
-            guest: "o_woow_badge_gray",
-        };
-        return classes[role] || "o_woow_badge_gray";
+        return getRoleBadgeClass(role);
     }
 
     formatDate(dateString) {
-        if (!dateString) return "";
-        const date = new Date(dateString);
-        return date.toLocaleDateString("zh-TW", {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-        });
+        return formatDate(dateString);
     }
 
     serviceTypes = [

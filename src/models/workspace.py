@@ -1,5 +1,5 @@
 from odoo import models, fields, api
-from odoo.exceptions import AccessError, ValidationError
+from odoo.exceptions import ValidationError
 import re
 
 from .workspace_access import ROLE_OWNER, ROLE_HIERARCHY
@@ -18,6 +18,10 @@ class Workspace(models.Model):
         index=True,
         help='URL-friendly unique identifier'
     )
+
+    _sql_constraints = [
+        ('unique_slug', 'UNIQUE(slug)', 'Slug must be unique.'),
+    ]
 
     # Ownership
     owner_id = fields.Many2one(
