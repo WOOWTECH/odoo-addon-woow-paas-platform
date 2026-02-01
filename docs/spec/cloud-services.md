@@ -106,7 +106,7 @@ Example: paas-ws-123-anythingllm-01
 
 ### Ingress Configuration
 
-使用 NGINX Ingress Controller 或 Traefik：
+使用 K3s 預設的 **Traefik** Ingress Controller（K3s 自動部署於 `/var/lib/rancher/k3s/server/manifests/traefik.yaml`）：
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -115,7 +115,10 @@ metadata:
   name: paas-ws-123-anythingllm-01
   namespace: paas-ws-123
   annotations:
+    kubernetes.io/ingress.class: traefik
     cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
   tls:
     - hosts:
@@ -133,6 +136,8 @@ spec:
                 port:
                   number: 3001
 ```
+
+> **Note**: K3s 預設使用 Traefik 並開放 port 80/443。如需自訂 Traefik 設定，應建立 HelmChartConfig 於 `/var/lib/rancher/k3s/server/manifests/` 目錄。
 
 ### Resource Quotas
 
