@@ -45,7 +45,7 @@ Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠�
 每個 Workspace 對應一個 Kubernetes Namespace：
 
 ```
-Namespace: woow-ws-{workspace_id}
+Namespace: paas-ws-{workspace_id}
 ├── Deployment: {release_name}-{app}
 ├── Service: {release_name}-{app}
 ├── Ingress: {release_name}-ingress
@@ -112,7 +112,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ws123-anythingllm-01
-  namespace: woow-ws-123
+  namespace: paas-ws-123
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
@@ -142,7 +142,7 @@ apiVersion: v1
 kind: ResourceQuota
 metadata:
   name: workspace-quota
-  namespace: woow-ws-123
+  namespace: paas-ws-123
 spec:
   hard:
     requests.cpu: "8"
