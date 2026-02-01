@@ -372,27 +372,9 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - Network chart (IN/OUT)
 - Active Connections count
 
-#### Tab 3.4: Backups
-- **Upload Volume for Deployment** (drag & drop, supports .tar.gz, .zip, .vol)
-- **Current Backups** list with Restore action
-- **Backup History** table (Date, Status, Size, Actions)
-- Create Backup button
+#### Tab 3.4: Backups *(Future Phase)*
 
-#### Tab 3.5: Activity Logs
-- Search by keyword
-- Filter by Type
-- Date Range filter
-- Export button
-- **Recent Activity** list:
-  - Application Started
-  - Configuration Updated
-  - Application Stopped
-  - Service Alert: High Latency
-- **Real-time Application Logs** panel:
-  - Auto-scroll toggle
-  - Stop Streaming button
-  - Download Logs button
-  - Log entries with timestamp, level ([INFO], [DEBUG], [ERROR]), message
+#### Tab 3.5: Activity Logs *(Future Phase)*
 
 ---
 
@@ -545,52 +527,9 @@ class CloudService(models.Model):
     last_upgraded_at = fields.Datetime()
 ```
 
-### CloudServiceBackup
+### CloudServiceBackup *(Future Phase)*
 
-```python
-class CloudServiceBackup(models.Model):
-    _name = 'woow_paas_platform.cloud_service_backup'
-    _description = 'Cloud Service Backup'
-
-    service_id = fields.Many2one('woow_paas_platform.cloud_service', required=True, ondelete='cascade')
-    name = fields.Char()  # e.g., "backup_v221_full.tar.gz"
-    size_bytes = fields.Integer()
-    status = fields.Selection([
-        ('pending', 'Pending'),
-        ('in_progress', 'In Progress'),
-        ('completed', 'Completed'),
-        ('failed', 'Failed'),
-    ])
-    backup_type = fields.Selection([
-        ('manual', 'Manual'),
-        ('scheduled', 'Scheduled'),
-        ('pre_update', 'Pre-Update'),
-    ])
-    storage_path = fields.Char()
-    created_by = fields.Many2one('res.users')
-```
-
-### CloudServiceLog
-
-```python
-class CloudServiceLog(models.Model):
-    _name = 'woow_paas_platform.cloud_service_log'
-    _description = 'Cloud Service Activity Log'
-
-    service_id = fields.Many2one('woow_paas_platform.cloud_service', required=True, ondelete='cascade')
-    event_type = fields.Selection([
-        ('started', 'Application Started'),
-        ('stopped', 'Application Stopped'),
-        ('config_updated', 'Configuration Updated'),
-        ('alert', 'Service Alert'),
-        ('backup_created', 'Backup Created'),
-        ('backup_restored', 'Backup Restored'),
-    ])
-    message = fields.Text()
-    details = fields.Text()  # JSON
-    initiated_by = fields.Many2one('res.users')
-    logged_at = fields.Datetime(default=fields.Datetime.now)
-```
+### CloudServiceLog *(Future Phase)*
 
 ---
 
@@ -641,14 +580,7 @@ GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
      &search={query}
 ```
 
-#### Backups
-
-```
-GET    /api/v1/workspaces/{workspace_id}/services/{service_id}/backups
-POST   /api/v1/workspaces/{workspace_id}/services/{service_id}/backups
-POST   /api/v1/workspaces/{workspace_id}/services/{service_id}/backups/{backup_id}/restore
-DELETE /api/v1/workspaces/{workspace_id}/services/{service_id}/backups/{backup_id}
-```
+#### Backups *(Future Phase)*
 
 ---
 
@@ -672,8 +604,8 @@ DELETE /api/v1/workspaces/{workspace_id}/services/{service_id}/backups/{backup_i
 | CategoryFilter | `components/marketplace/CategoryFilter.js` | 分類篩選器 |
 | EnvVarForm | `components/config/EnvVarForm.js` | 動態環境變數表單 |
 | MetricsChart | `components/metrics/MetricsChart.js` | 效能指標圖表 |
-| LogViewer | `components/logs/LogViewer.js` | 即時日誌查看器 |
-| BackupList | `components/backup/BackupList.js` | 備份列表 |
+| ~~LogViewer~~ | ~~`components/logs/LogViewer.js`~~ | ~~即時日誌查看器~~ *(Future Phase)* |
+| ~~BackupList~~ | ~~`components/backup/BackupList.js`~~ | ~~備份列表~~ *(Future Phase)* |
 | StatusBadge | `components/common/StatusBadge.js` | 狀態標籤 |
 
 ### New Modals
@@ -682,8 +614,8 @@ DELETE /api/v1/workspaces/{workspace_id}/services/{service_id}/backups/{backup_i
 |-------|-------------|
 | EditDomainModal | 編輯自訂網域 |
 | DeleteServiceModal | 確認刪除服務 |
-| CreateBackupModal | 建立備份 |
-| RestoreBackupModal | 還原備份確認 |
+| ~~CreateBackupModal~~ | ~~建立備份~~ *(Future Phase)* |
+| ~~RestoreBackupModal~~ | ~~還原備份確認~~ *(Future Phase)* |
 
 ---
 
@@ -711,12 +643,14 @@ DELETE /api/v1/workspaces/{workspace_id}/services/{service_id}/backups/{backup_i
 - [ ] Service start/stop/restart APIs
 - [ ] Status polling
 
-### Phase 5: Metrics & Logs
+### Phase 5: Metrics *(Future Phase)*
 - [ ] Metrics tab + charts
+
+### Phase 6: Activity Logs *(Future Phase)*
 - [ ] Activity Logs tab
 - [ ] Real-time log streaming
 
-### Phase 6: Backups
+### Phase 7: Backups *(Future Phase)*
 - [ ] Backup model
 - [ ] Backup APIs
 - [ ] Backups tab UI
