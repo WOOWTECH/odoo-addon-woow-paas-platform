@@ -98,6 +98,9 @@ class PaasController(Controller):
             ('workspace_id.state', '=', 'active'),
         ])
 
+        # Prefetch related workspace data to avoid N+1 queries
+        access_records.mapped('workspace_id')
+
         workspaces = []
         for access in access_records:
             ws = access.workspace_id
