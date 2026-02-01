@@ -592,3 +592,77 @@
     font-size: 0.75rem;
     color: $woow-text-secondary;
 }
+
+// -----------------------------------------------------------------------------
+// Cloud Services Section
+// -----------------------------------------------------------------------------
+
+.o_woow_services_section {
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+}
+
+.o_woow_services_section_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+
+    h2 {
+        margin: 0;
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+    }
+}
+
+.o_woow_services_loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    color: $woow-text-secondary;
+
+    p {
+        margin-top: 1rem;
+        margin-bottom: 0;
+    }
+}
+
+.o_woow_empty_services {
+    text-align: center;
+    padding: 4rem 2rem;
+    background: $woow-card-light;
+    border-radius: $woow-radius-lg;
+    border: 2px dashed $woow-border-light;
+
+    h3 {
+        margin: 1rem 0 0.5rem;
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+        margin-bottom: 1.5rem;
+        max-width: 400px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .material-symbols-rounded {
+        color: $woow-text-secondary;
+    }
+}
+
+.o_woow_cloud_services_grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+
+    @media (max-width: 640px) {
+        grid-template-columns: 1fr;
+    }
+}

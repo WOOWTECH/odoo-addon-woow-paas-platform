@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.StatusBadge">
+        <span t-att-class="badgeClass">
+            <span t-if="showSpinner" class="o_woow_status_spinner"/>
+            <span class="o_woow_status_dot"/>
+            <span class="o_woow_status_label" t-esc="label"/>
+        </span>
+    </t>
+</templates>

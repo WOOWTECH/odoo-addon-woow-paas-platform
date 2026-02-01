@@ -17,6 +17,12 @@
             <t t-elif="router.current === 'marketplace'">
                 <AppMarketplacePage workspaceId="workspaceId"/>
             </t>
+            <t t-elif="router.current === 'configure'">
+                <AppConfigurationPage workspaceId="workspaceId" templateId="templateId"/>
+            </t>
+            <t t-elif="router.current === 'service-detail'">
+                <ServiceDetailPage workspaceId="workspaceId" serviceId="serviceId" initialTab="serviceTab"/>
+            </t>
             <t t-else="">
                 <EmptyState/>
             </t>

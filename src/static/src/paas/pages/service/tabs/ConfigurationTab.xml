@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ConfigurationTab">
+        <div class="o_woow_configuration_tab">
+            <!-- Header with Edit Button -->
+            <div class="o_woow_config_header">
+                <div class="o_woow_config_title">
+                    <WoowIcon name="'tune'" size="24"/>
+                    <h3>Helm Values Configuration</h3>
+                </div>
+                <div class="o_woow_config_actions">
+                    <t t-if="!state.editing">
+                        <WoowButton
+                            t-if="canEdit"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="startEditing">
+                            <WoowIcon name="'edit'" size="18"/>
+                            Edit Configuration
+                        </WoowButton>
+                    </t>
+                    <t t-else="">
+                        <WoowButton
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="cancelEditing">
+                            Cancel
+                        </WoowButton>
+                        <WoowButton
+                            variant="'primary'"
+                            size="'md'"
+                            onClick.bind="saveChanges">
+                            <t t-if="state.saving">
+                                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                                Saving...
+                            </t>
+                            <t t-else="">
+                                <WoowIcon name="'save'" size="18"/>
+                                Save Changes
+                            </t>
+                        </WoowButton>
+                    </t>
+                </div>
+            </div>
+
+            <!-- Error Message -->
+            <div t-if="state.error" class="o_woow_error_message">
+                <WoowIcon name="'error'" size="18"/>
+                <span t-esc="state.error"/>
+            </div>
+
+            <!-- Upgrading Notice -->
+            <div t-if="props.service.state === 'upgrading'" class="o_woow_upgrade_notice">
+                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                <span>Service is upgrading. Configuration changes are disabled until the upgrade completes.</span>
+            </div>
+
+            <!-- View Mode -->
+            <t t-if="!state.editing">
+                <WoowCard class="'o_woow_config_card'">
+                    <t t-if="flattenedValues.length === 0">
+                        <div class="o_woow_config_empty">
+                            <WoowIcon name="'settings'" size="32"/>
+                            <p>No configuration values set.</p>
+                            <p class="o_woow_hint">Click "Edit Configuration" to add values.</p>
+                        </div>
+                    </t>
+                    <t t-else="">
+                        <div class="o_woow_config_list">
+                            <t t-foreach="flattenedValues" t-as="item" t-key="item.key">
+                                <div class="o_woow_config_item">
+                                    <span class="o_woow_config_key" t-esc="item.key"/>
+                                    <span t-att-class="'o_woow_config_value' + (item.isSecret ? ' o_woow_secret' : '')">
+                                        <t t-if="item.isSecret">********</t>
+                                        <t t-else="" t-esc="item.value"/>
+                                    </span>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+                </WoowCard>
+            </t>
+
+            <!-- Edit Mode -->
+            <t t-if="state.editing">
+                <WoowCard class="'o_woow_config_card'">
+                    <div class="o_woow_config_editor">
+                        <div class="o_woow_editor_hint">
+                            <WoowIcon name="'info'" size="16"/>
+                            <span>Edit the JSON configuration below. Changes will trigger a service upgrade.</span>
+                        </div>
+                        <textarea
+                            class="o_woow_config_textarea"
+                            t-att-value="editedValuesJson"
+                            t-on-input="onValuesChange"
+                            rows="20"
+                            spellcheck="false"/>
+                        <div class="o_woow_editor_footer">
+                            <span t-if="hasChanges" class="o_woow_changes_indicator">
+                                <WoowIcon name="'edit'" size="14"/>
+                                Unsaved changes
+                            </span>
+                        </div>
+                    </div>
+                </WoowCard>
+            </t>
+
+            <!-- Chart Info -->
+            <WoowCard class="'o_woow_config_info_card'">
+                <div class="o_woow_config_info_header">
+                    <WoowIcon name="'info'" size="18"/>
+                    <h4>Configuration Reference</h4>
+                </div>
+                <div class="o_woow_config_info_content">
+                    <p>
+                        <strong>Chart:</strong>
+                        <t t-esc="props.service.template?.name || 'Unknown'"/>
+                        <t t-if="props.service.helm_chart_version">
+                            <span class="o_woow_version_badge" t-esc="props.service.helm_chart_version"/>
+                        </t>
+                    </p>
+                    <p t-if="props.service.template?.documentation_url">
+                        <a t-att-href="props.service.template.documentation_url" target="_blank" rel="noopener noreferrer">
+                            View Documentation
+                            <WoowIcon name="'open_in_new'" size="14"/>
+                        </a>
+                    </p>
+                </div>
+            </WoowCard>
+        </div>
+    </t>
+</templates>

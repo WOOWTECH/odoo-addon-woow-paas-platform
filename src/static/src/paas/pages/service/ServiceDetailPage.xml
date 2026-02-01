@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ServiceDetailPage">
+        <div class="o_woow_service_detail">
+            <!-- Loading State -->
+            <t t-if="state.loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading service...</p>
+                </div>
+            </t>
+
+            <!-- Error State -->
+            <t t-elif="state.error">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'error'" size="48"/>
+                    <h2>Unable to load service</h2>
+                    <p t-esc="state.error"/>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Workspace
+                    </WoowButton>
+                </div>
+            </t>
+
+            <!-- Service Content -->
+            <t t-elif="service">
+                <!-- Breadcrumb / Back Navigation -->
+                <div class="o_woow_breadcrumb">
+                    <button class="o_woow_back_btn" t-on-click="goBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_parent">Services</span>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_current" t-esc="service.name"/>
+                </div>
+
+                <!-- Service Header -->
+                <div class="o_woow_service_header">
+                    <div class="o_woow_service_header_info">
+                        <div class="o_woow_service_header_icon">
+                            <WoowIcon name="templateIcon" size="32"/>
+                        </div>
+                        <div class="o_woow_service_header_text">
+                            <div class="o_woow_service_header_title">
+                                <h1 t-esc="service.name"/>
+                                <StatusBadge status="service.state"/>
+                            </div>
+                            <div class="o_woow_service_header_meta">
+                                <span class="o_woow_service_template">
+                                    <WoowIcon name="'apps'" size="14"/>
+                                    <t t-esc="service.template?.name || 'Unknown Template'"/>
+                                </span>
+                                <span t-if="service.subdomain" class="o_woow_service_domain">
+                                    <WoowIcon name="'language'" size="14"/>
+                                    <t t-esc="service.subdomain"/>.woowtech.com
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="o_woow_service_header_actions">
+                        <WoowButton
+                            t-if="service.state === 'running'"
+                            variant="'primary'"
+                            size="'md'"
+                            onClick.bind="openWebUI">
+                            <WoowIcon name="'open_in_new'" size="18"/>
+                            Open Web UI
+                        </WoowButton>
+                        <WoowButton
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showRollback">
+                            <WoowIcon name="'history'" size="18"/>
+                            Rollback
+                        </WoowButton>
+                        <WoowButton
+                            variant="'ghost'"
+                            size="'md'"
+                            onClick.bind="showDelete">
+                            <WoowIcon name="'delete'" size="18"/>
+                        </WoowButton>
+                    </div>
+                </div>
+
+                <!-- Error Message Banner -->
+                <div t-if="service.error_message" class="o_woow_service_error_banner">
+                    <WoowIcon name="'error'" size="20"/>
+                    <span t-esc="service.error_message"/>
+                </div>
+
+                <!-- Tab Navigation -->
+                <div class="o_woow_tabs">
+                    <button
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'overview'}"
+                        t-on-click="() => this.setTab('overview')">
+                        <WoowIcon name="'info'" size="18"/>
+                        Overview
+                    </button>
+                    <button
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'configuration'}"
+                        t-on-click="() => this.setTab('configuration')">
+                        <WoowIcon name="'settings'" size="18"/>
+                        Configuration
+                    </button>
+                </div>
+
+                <!-- Tab Content -->
+                <div class="o_woow_tab_content">
+                    <OverviewTab
+                        t-if="currentTab === 'overview'"
+                        service="service"/>
+                    <ConfigurationTab
+                        t-if="currentTab === 'configuration'"
+                        service="service"
+                        workspaceId="props.workspaceId"
+                        onSave.bind="handleConfigSave"/>
+                </div>
+            </t>
+
+            <!-- Delete Confirmation Modal -->
+            <t t-if="state.showDeleteConfirm">
+                <div class="o_woow_modal_backdrop" t-on-click="hideDelete">
+                    <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                        <div class="o_woow_modal_header">
+                            <h2>Delete Service</h2>
+                            <button class="o_woow_modal_close" t-on-click="hideDelete">
+                                <WoowIcon name="'close'" size="24"/>
+                            </button>
+                        </div>
+                        <div class="o_woow_modal_body">
+                            <div class="o_woow_delete_warning">
+                                <WoowIcon name="'warning'" size="48"/>
+                                <p>Are you sure you want to delete <strong t-esc="service.name"/>?</p>
+                                <p class="o_woow_delete_hint">This action cannot be undone. All data associated with this service will be permanently removed.</p>
+                            </div>
+                        </div>
+                        <div class="o_woow_modal_footer">
+                            <WoowButton variant="'secondary'" size="'md'" onClick.bind="hideDelete">
+                                Cancel
+                            </WoowButton>
+                            <WoowButton
+                                variant="'danger'"
+                                size="'md'"
+                                onClick.bind="confirmDelete">
+                                <t t-if="state.deleting">
+                                    <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                                    Deleting...
+                                </t>
+                                <t t-else="">
+                                    <WoowIcon name="'delete'" size="18"/>
+                                    Delete Service
+                                </t>
+                            </WoowButton>
+                        </div>
+                    </div>
+                </div>
+            </t>
+
+            <!-- Rollback Modal (placeholder for now) -->
+            <t t-if="state.showRollbackModal">
+                <div class="o_woow_modal_backdrop" t-on-click="hideRollback">
+                    <div class="o_woow_modal" t-on-click.stop="">
+                        <div class="o_woow_modal_header">
+                            <h2>Rollback Service</h2>
+                            <button class="o_woow_modal_close" t-on-click="hideRollback">
+                                <WoowIcon name="'close'" size="24"/>
+                            </button>
+                        </div>
+                        <div class="o_woow_modal_body">
+                            <p>Select a revision to rollback to:</p>
+                            <p class="o_woow_hint">Current revision: <strong t-esc="service.helm_revision"/></p>
+                            <!-- Revision list would be loaded here -->
+                            <div class="o_woow_empty_revisions">
+                                <WoowIcon name="'history'" size="32"/>
+                                <p>Revision history will be available once the service is deployed.</p>
+                            </div>
+                        </div>
+                        <div class="o_woow_modal_footer">
+                            <WoowButton variant="'secondary'" size="'md'" onClick.bind="hideRollback">
+                                Cancel
+                            </WoowButton>
+                        </div>
+                    </div>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

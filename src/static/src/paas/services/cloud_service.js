@@ -226,6 +226,42 @@ export const cloudService = reactive({
     },
 
     /**
+     * Update/upgrade a service
+     * @param {number} workspaceId - Workspace ID
+     * @param {number} serviceId - Service ID
+     * @param {Object} values - New Helm values
+     * @param {string} version - Optional chart version
+     * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
+     */
+    async updateService(workspaceId, serviceId, values, version = null) {
+        this.operationLoading.updateService = true;
+        try {
+            const params = {
+                action: "update",
+                values: values,
+            };
+            if (version) {
+                params.version = version;
+            }
+            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services/${serviceId}`, params);
+            if (result.success) {
+                // Update local state
+                const index = this.services.findIndex(s => s.id === serviceId);
+                if (index !== -1) {
+                    this.services[index] = { ...this.services[index], ...result.data };
+                }
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.updateService = false;
+        }
+    },
+
+    /**
      * Delete a service
      * @param {number} workspaceId - Workspace ID
      * @param {number} serviceId - Service ID

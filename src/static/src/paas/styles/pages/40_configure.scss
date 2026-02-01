@@ -1,0 +1,359 @@
+// =============================================================================
+// App Configuration Page Styles
+// Configuration page for launching cloud services
+// =============================================================================
+
+// variables loaded via manifest
+
+.o_woow_configure_page {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+// -----------------------------------------------------------------------------
+// Template Header
+// -----------------------------------------------------------------------------
+
+.o_woow_configure_header {
+    margin-bottom: 1.5rem;
+}
+
+.o_woow_template_header {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+
+    @media (max-width: 640px) {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+}
+
+.o_woow_template_icon {
+    width: 72px;
+    height: 72px;
+    border-radius: $woow-radius-lg;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    &.o_woow_template_icon_database {
+        background: rgba(59, 130, 246, 0.1);
+        color: #3b82f6;
+    }
+
+    &.o_woow_template_icon_cache {
+        background: rgba(249, 115, 22, 0.1);
+        color: #f97316;
+    }
+
+    &.o_woow_template_icon_messaging {
+        background: rgba(34, 197, 94, 0.1);
+        color: #22c55e;
+    }
+
+    &.o_woow_template_icon_monitoring {
+        background: rgba(139, 92, 246, 0.1);
+        color: #8b5cf6;
+    }
+
+    &.o_woow_template_icon_storage {
+        background: rgba(236, 72, 153, 0.1);
+        color: #ec4899;
+    }
+
+    &.o_woow_template_icon_compute,
+    &.o_woow_template_icon_web,
+    &.o_woow_template_icon_other {
+        background: rgba($woow-primary, 0.1);
+        color: $woow-primary;
+    }
+}
+
+.o_woow_template_info {
+    flex: 1;
+
+    h1 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: $woow-text-primary;
+        margin: 0 0 0.5rem;
+    }
+
+    > p {
+        font-size: 0.9375rem;
+        color: $woow-text-secondary;
+        margin: 0 0 1rem;
+        line-height: 1.5;
+    }
+}
+
+.o_woow_template_meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+
+    span {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+    }
+
+    @media (max-width: 640px) {
+        justify-content: center;
+    }
+}
+
+.o_woow_template_category {
+    text-transform: capitalize;
+}
+
+// -----------------------------------------------------------------------------
+// Configuration Sections
+// -----------------------------------------------------------------------------
+
+.o_woow_configure_section {
+    margin-bottom: 1.5rem;
+}
+
+.o_woow_section_header {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid $woow-border-light;
+    color: $woow-primary;
+
+    h2 {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 0 0 0.25rem;
+    }
+
+    p {
+        font-size: 0.875rem;
+        color: $woow-text-secondary;
+        margin: 0;
+    }
+}
+
+.o_woow_section_body {
+    padding: 0;
+}
+
+// -----------------------------------------------------------------------------
+// Form Elements (Extended)
+// -----------------------------------------------------------------------------
+
+.o_woow_required_mark {
+    color: #ef4444;
+    margin-left: 0.25rem;
+}
+
+.o_woow_has_error {
+    .o_woow_input,
+    .o_woow_select {
+        border-color: #ef4444;
+
+        &:focus {
+            border-color: #ef4444;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+        }
+    }
+}
+
+.o_woow_field_error {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.8125rem;
+    color: #ef4444;
+    margin-top: 0.5rem;
+}
+
+.o_woow_field_hint {
+    font-size: 0.8125rem;
+    color: $woow-text-secondary;
+    margin-top: 0.5rem;
+    line-height: 1.4;
+
+    strong {
+        color: $woow-text-primary;
+        font-weight: 500;
+    }
+}
+
+.o_woow_input_readonly {
+    background: rgba(0, 0, 0, 0.03) !important;
+    color: $woow-text-secondary !important;
+    cursor: not-allowed;
+}
+
+// Input with suffix (subdomain)
+.o_woow_input_with_suffix {
+    display: flex;
+    align-items: center;
+
+    .o_woow_input {
+        border-radius: $woow-radius-default 0 0 $woow-radius-default;
+        border-right: none;
+    }
+
+    .o_woow_input_suffix {
+        padding: 0.75rem 1rem;
+        background: rgba(0, 0, 0, 0.03);
+        border: 1px solid $woow-border-light;
+        border-left: none;
+        border-radius: 0 $woow-radius-default $woow-radius-default 0;
+        font-size: 0.875rem;
+        color: $woow-text-secondary;
+        white-space: nowrap;
+    }
+}
+
+// Input with icon button (password toggle)
+.o_woow_input_wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+
+    .o_woow_input {
+        padding-right: 2.75rem;
+    }
+
+    .o_woow_input_icon_btn {
+        position: absolute;
+        right: 0.5rem;
+        background: transparent;
+        border: none;
+        padding: 0.5rem;
+        cursor: pointer;
+        color: $woow-text-secondary;
+        border-radius: $woow-radius-default;
+        transition: all 0.2s ease;
+
+        &:hover {
+            background: rgba(0, 0, 0, 0.05);
+            color: $woow-text-primary;
+        }
+    }
+}
+
+// Checkbox styles
+.o_woow_checkbox_group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.o_woow_checkbox {
+    width: 18px;
+    height: 18px;
+    accent-color: $woow-primary;
+    cursor: pointer;
+}
+
+.o_woow_checkbox_label {
+    font-weight: 500;
+    color: $woow-text-primary;
+    cursor: pointer;
+    margin-bottom: 0 !important;
+}
+
+.o_woow_checkbox_hint {
+    margin-left: 2.25rem;
+}
+
+// Select styles
+.o_woow_select {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    font-family: $woow-font-body;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    color: $woow-text-primary;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f698c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6,9 12,15 18,9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    padding-right: 2.5rem;
+
+    &:focus {
+        outline: none;
+        border-color: $woow-primary;
+        box-shadow: 0 0 0 3px rgba($woow-primary, 0.1);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Helm Value Form
+// -----------------------------------------------------------------------------
+
+.o_woow_helm_form {
+    // Styles handled by form group styles
+}
+
+.o_woow_helm_section {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.o_woow_helm_optional {
+    padding-top: 1rem;
+    margin-top: 1rem;
+    border-top: 1px dashed $woow-border-light;
+}
+
+// Advanced settings toggle
+.o_woow_advanced_toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+    padding: 0.625rem 1rem;
+    background: rgba($woow-primary, 0.05);
+    border: 1px solid rgba($woow-primary, 0.2);
+    border-radius: $woow-radius-default;
+    color: $woow-primary;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+
+    &:hover {
+        background: rgba($woow-primary, 0.1);
+        border-color: rgba($woow-primary, 0.3);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Footer Actions
+// -----------------------------------------------------------------------------
+
+.o_woow_configure_footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid $woow-border-light;
+
+    @media (max-width: 640px) {
+        flex-direction: column-reverse;
+
+        .o_woow_btn {
+            width: 100%;
+        }
+    }
+}

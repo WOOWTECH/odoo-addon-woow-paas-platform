@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.HelmValueForm">
+        <div class="o_woow_helm_form">
+            <!-- Required Fields Section -->
+            <t t-if="requiredSpecs.length > 0">
+                <div class="o_woow_helm_section">
+                    <t t-foreach="requiredSpecs" t-as="spec" t-key="spec.key">
+                        <div t-att-class="'o_woow_form_group' + (hasError(spec.key) ? ' o_woow_has_error' : '')">
+                            <!-- Text/Password/Number Input -->
+                            <t t-if="isTextInput(spec)">
+                                <label t-att-for="'helm_' + spec.key">
+                                    <t t-esc="spec.label"/>
+                                    <span class="o_woow_required_mark">*</span>
+                                </label>
+                                <div class="o_woow_input_wrapper">
+                                    <input
+                                        t-att-type="getInputType(spec)"
+                                        t-att-id="'helm_' + spec.key"
+                                        t-att-value="getDisplayValue(spec)"
+                                        t-att-placeholder="spec.placeholder || ''"
+                                        t-on-input="(ev) => this.onInputChange(spec, ev)"
+                                        class="o_woow_input"
+                                    />
+                                    <t t-if="isPasswordField(spec)">
+                                        <button
+                                            type="button"
+                                            class="o_woow_input_icon_btn"
+                                            t-on-click="() => this.togglePasswordVisibility(spec.key)"
+                                        >
+                                            <WoowIcon
+                                                t-if="isPasswordVisible(spec.key)"
+                                                name="'visibility_off'"
+                                                size="18"
+                                            />
+                                            <WoowIcon
+                                                t-else=""
+                                                name="'visibility'"
+                                                size="18"
+                                            />
+                                        </button>
+                                    </t>
+                                </div>
+                                <p t-if="spec.description" class="o_woow_field_hint">
+                                    <t t-esc="spec.description"/>
+                                </p>
+                            </t>
+
+                            <!-- Boolean/Checkbox Input -->
+                            <t t-if="isBooleanField(spec)">
+                                <div class="o_woow_checkbox_group">
+                                    <input
+                                        type="checkbox"
+                                        t-att-id="'helm_' + spec.key"
+                                        t-att-checked="getValue(spec)"
+                                        t-on-change="(ev) => this.onCheckboxChange(spec, ev)"
+                                        class="o_woow_checkbox"
+                                    />
+                                    <label t-att-for="'helm_' + spec.key" class="o_woow_checkbox_label">
+                                        <t t-esc="spec.label"/>
+                                        <span class="o_woow_required_mark">*</span>
+                                    </label>
+                                </div>
+                                <p t-if="spec.description" class="o_woow_field_hint o_woow_checkbox_hint">
+                                    <t t-esc="spec.description"/>
+                                </p>
+                            </t>
+
+                            <!-- Select Input -->
+                            <t t-if="isSelectField(spec)">
+                                <label t-att-for="'helm_' + spec.key">
+                                    <t t-esc="spec.label"/>
+                                    <span class="o_woow_required_mark">*</span>
+                                </label>
+                                <select
+                                    t-att-id="'helm_' + spec.key"
+                                    t-on-change="(ev) => this.onSelectChange(spec, ev)"
+                                    class="o_woow_select"
+                                >
+                                    <option value="" disabled="disabled">Select an option</option>
+                                    <t t-foreach="getSelectOptions(spec)" t-as="option" t-key="option.value">
+                                        <option
+                                            t-att-value="option.value"
+                                            t-att-selected="isOptionSelected(spec, option.value)"
+                                        >
+                                            <t t-esc="option.label"/>
+                                        </option>
+                                    </t>
+                                </select>
+                                <p t-if="spec.description" class="o_woow_field_hint">
+                                    <t t-esc="spec.description"/>
+                                </p>
+                            </t>
+
+                            <!-- Error Message -->
+                            <t t-if="hasError(spec.key)">
+                                <p class="o_woow_field_error">
+                                    <WoowIcon name="'error'" size="14"/>
+                                    <t t-esc="getError(spec.key)"/>
+                                </p>
+                            </t>
+                        </div>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Optional Fields Section (Advanced Settings) -->
+            <t t-if="hasOptionalSpecs and props.showAdvanced">
+                <div class="o_woow_helm_section o_woow_helm_optional">
+                    <t t-foreach="optionalSpecs" t-as="spec" t-key="spec.key">
+                        <div t-att-class="'o_woow_form_group' + (hasError(spec.key) ? ' o_woow_has_error' : '')">
+                            <!-- Text/Password/Number Input -->
+                            <t t-if="isTextInput(spec)">
+                                <label t-att-for="'helm_' + spec.key">
+                                    <t t-esc="spec.label"/>
+                                </label>
+                                <div class="o_woow_input_wrapper">
+                                    <input
+                                        t-att-type="getInputType(spec)"
+                                        t-att-id="'helm_' + spec.key"
+                                        t-att-value="getDisplayValue(spec)"
+                                        t-att-placeholder="spec.placeholder || ''"
+                                        t-on-input="(ev) => this.onInputChange(spec, ev)"
+                                        class="o_woow_input"
+                                    />
+                                    <t t-if="isPasswordField(spec)">
+                                        <button
+                                            type="button"
+                                            class="o_woow_input_icon_btn"
+                                            t-on-click="() => this.togglePasswordVisibility(spec.key)"
+                                        >
+                                            <WoowIcon
+                                                t-if="isPasswordVisible(spec.key)"
+                                                name="'visibility_off'"
+                                                size="18"
+                                            />
+                                            <WoowIcon
+                                                t-else=""
+                                                name="'visibility'"
+                                                size="18"
+                                            />
+                                        </button>
+                                    </t>
+                                </div>
+                                <p t-if="spec.description" class="o_woow_field_hint">
+                                    <t t-esc="spec.description"/>
+                                </p>
+                            </t>
+
+                            <!-- Boolean/Checkbox Input -->
+                            <t t-if="isBooleanField(spec)">
+                                <div class="o_woow_checkbox_group">
+                                    <input
+                                        type="checkbox"
+                                        t-att-id="'helm_' + spec.key"
+                                        t-att-checked="getValue(spec)"
+                                        t-on-change="(ev) => this.onCheckboxChange(spec, ev)"
+                                        class="o_woow_checkbox"
+                                    />
+                                    <label t-att-for="'helm_' + spec.key" class="o_woow_checkbox_label">
+                                        <t t-esc="spec.label"/>
+                                    </label>
+                                </div>
+                                <p t-if="spec.description" class="o_woow_field_hint o_woow_checkbox_hint">
+                                    <t t-esc="spec.description"/>
+                                </p>
+                            </t>
+
+                            <!-- Select Input -->
+                            <t t-if="isSelectField(spec)">
+                                <label t-att-for="'helm_' + spec.key">
+                                    <t t-esc="spec.label"/>
+                                </label>
+                                <select
+                                    t-att-id="'helm_' + spec.key"
+                                    t-on-change="(ev) => this.onSelectChange(spec, ev)"
+                                    class="o_woow_select"
+                                >
+                                    <option value="">Select an option (optional)</option>
+                                    <t t-foreach="getSelectOptions(spec)" t-as="option" t-key="option.value">
+                                        <option
+                                            t-att-value="option.value"
+                                            t-att-selected="isOptionSelected(spec, option.value)"
+                                        >
+                                            <t t-esc="option.label"/>
+                                        </option>
+                                    </t>
+                                </select>
+                                <p t-if="spec.description" class="o_woow_field_hint">
+                                    <t t-esc="spec.description"/>
+                                </p>
+                            </t>
+
+                            <!-- Error Message -->
+                            <t t-if="hasError(spec.key)">
+                                <p class="o_woow_field_error">
+                                    <WoowIcon name="'error'" size="14"/>
+                                    <t t-esc="getError(spec.key)"/>
+                                </p>
+                            </t>
+                        </div>
+                    </t>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

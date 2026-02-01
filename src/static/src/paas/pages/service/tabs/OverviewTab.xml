@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.OverviewTab">
+        <div class="o_woow_overview_tab">
+            <!-- Connection Info Card -->
+            <WoowCard class="'o_woow_info_card'">
+                <div class="o_woow_card_header">
+                    <WoowIcon name="'link'" size="20"/>
+                    <h3>Connection Info</h3>
+                </div>
+                <div class="o_woow_info_grid">
+                    <!-- Status -->
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label">Status</span>
+                        <span t-att-class="'o_woow_info_value o_woow_connection_status ' + (isOnline ? 'online' : 'offline')">
+                            <span class="o_woow_status_indicator"/>
+                            <t t-if="isOnline">ONLINE</t>
+                            <t t-else="">OFFLINE</t>
+                        </span>
+                    </div>
+
+                    <!-- Public URL -->
+                    <div class="o_woow_info_row" t-if="publicUrl">
+                        <span class="o_woow_info_label">Public URL</span>
+                        <span class="o_woow_info_value o_woow_info_copyable">
+                            <a t-att-href="publicUrl" target="_blank" rel="noopener noreferrer">
+                                <t t-esc="publicUrl"/>
+                                <WoowIcon name="'open_in_new'" size="14"/>
+                            </a>
+                            <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(publicUrl)" title="Copy URL">
+                                <WoowIcon name="'content_copy'" size="16"/>
+                            </button>
+                        </span>
+                    </div>
+
+                    <!-- Custom Domain -->
+                    <div class="o_woow_info_row" t-if="props.service.custom_domain">
+                        <span class="o_woow_info_label">Custom Domain</span>
+                        <span class="o_woow_info_value o_woow_info_copyable">
+                            <a t-att-href="'https://' + props.service.custom_domain" target="_blank" rel="noopener noreferrer">
+                                <t t-esc="props.service.custom_domain"/>
+                                <WoowIcon name="'open_in_new'" size="14"/>
+                            </a>
+                            <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(props.service.custom_domain)" title="Copy domain">
+                                <WoowIcon name="'content_copy'" size="16"/>
+                            </button>
+                        </span>
+                    </div>
+
+                    <!-- Internal Port -->
+                    <div class="o_woow_info_row" t-if="props.service.internal_port">
+                        <span class="o_woow_info_label">Internal Port</span>
+                        <span class="o_woow_info_value">
+                            <code t-esc="props.service.internal_port"/>
+                        </span>
+                    </div>
+                </div>
+            </WoowCard>
+
+            <!-- Resources Card -->
+            <WoowCard class="'o_woow_info_card'">
+                <div class="o_woow_card_header">
+                    <WoowIcon name="'deployed_code'" size="20"/>
+                    <h3>Resources</h3>
+                </div>
+                <div class="o_woow_info_grid">
+                    <!-- Helm Release -->
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label">Helm Release</span>
+                        <span class="o_woow_info_value">
+                            <code t-esc="props.service.helm_release_name"/>
+                        </span>
+                    </div>
+
+                    <!-- Chart Version -->
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label">Chart Version</span>
+                        <span class="o_woow_info_value">
+                            <t t-esc="props.service.template?.name || 'Unknown'"/>
+                            <t t-if="props.service.helm_chart_version">
+                                <span class="o_woow_version_badge" t-esc="props.service.helm_chart_version"/>
+                            </t>
+                        </span>
+                    </div>
+
+                    <!-- Revision -->
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label">Revision</span>
+                        <span class="o_woow_info_value">
+                            #<t t-esc="props.service.helm_revision || 1"/>
+                        </span>
+                    </div>
+
+                    <!-- Namespace -->
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label">Namespace</span>
+                        <span class="o_woow_info_value">
+                            <code t-esc="helmNamespace"/>
+                        </span>
+                    </div>
+
+                    <!-- Deployed At -->
+                    <div class="o_woow_info_row" t-if="props.service.deployed_at">
+                        <span class="o_woow_info_label">Deployed At</span>
+                        <span class="o_woow_info_value">
+                            <t t-esc="formatDate(props.service.deployed_at)"/>
+                        </span>
+                    </div>
+
+                    <!-- Last Upgraded -->
+                    <div class="o_woow_info_row" t-if="props.service.last_upgraded_at">
+                        <span class="o_woow_info_label">Last Upgraded</span>
+                        <span class="o_woow_info_value">
+                            <t t-esc="formatDate(props.service.last_upgraded_at)"/>
+                        </span>
+                    </div>
+                </div>
+            </WoowCard>
+
+            <!-- Resource Allocation Card -->
+            <WoowCard class="'o_woow_info_card'" t-if="props.service.allocated_vcpu || props.service.allocated_ram_gb || props.service.allocated_storage_gb">
+                <div class="o_woow_card_header">
+                    <WoowIcon name="'memory'" size="20"/>
+                    <h3>Resource Allocation</h3>
+                </div>
+                <div class="o_woow_resource_grid">
+                    <!-- vCPU -->
+                    <div class="o_woow_resource_item" t-if="props.service.allocated_vcpu">
+                        <div class="o_woow_resource_icon">
+                            <WoowIcon name="'developer_board'" size="24"/>
+                        </div>
+                        <div class="o_woow_resource_info">
+                            <span class="o_woow_resource_value" t-esc="props.service.allocated_vcpu"/>
+                            <span class="o_woow_resource_label">vCPU</span>
+                        </div>
+                    </div>
+
+                    <!-- RAM -->
+                    <div class="o_woow_resource_item" t-if="props.service.allocated_ram_gb">
+                        <div class="o_woow_resource_icon">
+                            <WoowIcon name="'memory'" size="24"/>
+                        </div>
+                        <div class="o_woow_resource_info">
+                            <span class="o_woow_resource_value">
+                                <t t-esc="props.service.allocated_ram_gb"/> GB
+                            </span>
+                            <span class="o_woow_resource_label">RAM</span>
+                        </div>
+                    </div>
+
+                    <!-- Storage -->
+                    <div class="o_woow_resource_item" t-if="props.service.allocated_storage_gb">
+                        <div class="o_woow_resource_icon">
+                            <WoowIcon name="'storage'" size="24"/>
+                        </div>
+                        <div class="o_woow_resource_info">
+                            <span class="o_woow_resource_value">
+                                <t t-esc="props.service.allocated_storage_gb"/> GB
+                            </span>
+                            <span class="o_woow_resource_label">Storage</span>
+                        </div>
+                    </div>
+                </div>
+            </WoowCard>
+        </div>
+    </t>
+</templates>
