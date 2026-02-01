@@ -58,16 +58,54 @@ async function jsonRpc(url, params) {
 }
 
 /**
+ * @typedef {Object} WorkspaceData
+ * @property {number} id - Workspace ID
+ * @property {string} name - Workspace name
+ * @property {string} description - Workspace description
+ * @property {string} slug - URL-friendly identifier
+ * @property {string} state - Workspace state ('active' | 'archived')
+ * @property {string} role - Current user's role ('owner' | 'admin' | 'user' | 'guest')
+ * @property {number} member_count - Number of members
+ * @property {boolean} is_owner - Whether current user is owner
+ * @property {string} created_date - ISO date string
+ */
+
+/**
+ * @typedef {Object} MemberData
+ * @property {number} id - Access record ID
+ * @property {number} user_id - User ID
+ * @property {string} name - User display name
+ * @property {string} email - User email
+ * @property {string} role - Member role
+ * @property {string|null} invited_by - Name of inviter
+ * @property {string|null} invited_date - ISO date string
+ */
+
+/**
+ * @typedef {Object} ApiResponse
+ * @property {boolean} success - Whether operation succeeded
+ * @property {*} [data] - Response data (on success)
+ * @property {string} [error] - Error message (on failure)
+ */
+
+/**
  * Workspace Service
  * Handles all API calls related to workspaces using Odoo JSON-RPC
+ * @type {Object}
  */
 export const workspaceService = reactive({
+    /** @type {WorkspaceData[]} */
     workspaces: [],
+    /** @type {boolean} Global loading state */
     loading: false,
+    /** @type {Object.<string, boolean>} Operation-specific loading states */
+    operationLoading: {},
+    /** @type {string|null} */
     error: null,
 
     /**
      * Fetch all workspaces for current user
+     * @returns {Promise<void>}
      */
     async fetchWorkspaces() {
         this.loading = true;
@@ -88,10 +126,14 @@ export const workspaceService = reactive({
 
     /**
      * Create a new workspace
-     * @param {Object} payload - { name, description }
+     * @param {Object} payload - Workspace creation data
+     * @param {string} payload.name - Workspace name
+     * @param {string} [payload.description] - Workspace description
+     * @returns {Promise<ApiResponse<WorkspaceData>>}
      */
     async createWorkspace(payload) {
         this.loading = true;
+        this.operationLoading.create = true;
         this.error = null;
         try {
             const result = await jsonRpc("/api/workspaces", {
@@ -115,14 +157,17 @@ export const workspaceService = reactive({
             return { success: false, error: this.error };
         } finally {
             this.loading = false;
+            this.operationLoading.create = false;
         }
     },
 
     /**
      * Get a single workspace by ID
-     * @param {number} workspaceId
+     * @param {number} workspaceId - Target workspace ID
+     * @returns {Promise<ApiResponse<WorkspaceData>>}
      */
     async getWorkspace(workspaceId) {
+        this.operationLoading.get = true;
         try {
             const result = await jsonRpc("/api/workspaces", {
                 method: "get",
@@ -135,15 +180,21 @@ export const workspaceService = reactive({
             }
         } catch (err) {
             return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.get = false;
         }
     },
 
     /**
      * Update a workspace
-     * @param {number} workspaceId
-     * @param {Object} payload - { name, description }
+     * @param {number} workspaceId - Target workspace ID
+     * @param {Object} payload - Update data
+     * @param {string} [payload.name] - New workspace name
+     * @param {string} [payload.description] - New workspace description
+     * @returns {Promise<ApiResponse<WorkspaceData>>}
      */
     async updateWorkspace(workspaceId, payload) {
+        this.operationLoading.update = true;
         try {
             const result = await jsonRpc("/api/workspaces", {
                 method: "update",
@@ -162,14 +213,18 @@ export const workspaceService = reactive({
             }
         } catch (err) {
             return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.update = false;
         }
     },
 
     /**
      * Delete (archive) a workspace
-     * @param {number} workspaceId
+     * @param {number} workspaceId - Target workspace ID
+     * @returns {Promise<ApiResponse<void>>}
      */
     async deleteWorkspace(workspaceId) {
+        this.operationLoading.delete = true;
         try {
             const result = await jsonRpc("/api/workspaces", {
                 method: "delete",
@@ -184,14 +239,18 @@ export const workspaceService = reactive({
             }
         } catch (err) {
             return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.delete = false;
         }
     },
 
     /**
      * Get workspace members
-     * @param {number} workspaceId
+     * @param {number} workspaceId - Target workspace ID
+     * @returns {Promise<ApiResponse<MemberData[]>>}
      */
     async getMembers(workspaceId) {
+        this.operationLoading.getMembers = true;
         try {
             const result = await jsonRpc("/api/workspaces/members", {
                 method: "list",
@@ -204,15 +263,21 @@ export const workspaceService = reactive({
             }
         } catch (err) {
             return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.getMembers = false;
         }
     },
 
     /**
      * Invite a member to workspace
-     * @param {number} workspaceId
-     * @param {Object} payload - { email, role }
+     * @param {number} workspaceId - Target workspace ID
+     * @param {Object} payload - Invitation data
+     * @param {string} payload.email - User email to invite
+     * @param {string} [payload.role='user'] - Role to assign
+     * @returns {Promise<ApiResponse<MemberData>>}
      */
     async inviteMember(workspaceId, payload) {
+        this.operationLoading.invite = true;
         try {
             const result = await jsonRpc("/api/workspaces/members", {
                 method: "invite",
@@ -227,16 +292,20 @@ export const workspaceService = reactive({
             }
         } catch (err) {
             return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.invite = false;
         }
     },
 
     /**
      * Update member role
-     * @param {number} workspaceId
-     * @param {number} accessId
-     * @param {string} role
+     * @param {number} workspaceId - Target workspace ID
+     * @param {number} accessId - Access record ID
+     * @param {string} role - New role ('admin' | 'user' | 'guest')
+     * @returns {Promise<ApiResponse<{id: number, role: string}>>}
      */
     async updateMemberRole(workspaceId, accessId, role) {
+        this.operationLoading.updateRole = true;
         try {
             const result = await jsonRpc("/api/workspaces/members", {
                 method: "update_role",
@@ -251,15 +320,19 @@ export const workspaceService = reactive({
             }
         } catch (err) {
             return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.updateRole = false;
         }
     },
 
     /**
      * Remove a member from workspace
-     * @param {number} workspaceId
-     * @param {number} accessId
+     * @param {number} workspaceId - Target workspace ID
+     * @param {number} accessId - Access record ID to remove
+     * @returns {Promise<ApiResponse<void>>}
      */
     async removeMember(workspaceId, accessId) {
+        this.operationLoading.remove = true;
         try {
             const result = await jsonRpc("/api/workspaces/members", {
                 method: "remove",
@@ -273,6 +346,17 @@ export const workspaceService = reactive({
             }
         } catch (err) {
             return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.remove = false;
         }
+    },
+
+    /**
+     * Check if a specific operation is loading
+     * @param {string} operation - Operation name
+     * @returns {boolean}
+     */
+    isLoading(operation) {
+        return this.operationLoading[operation] || false;
     },
 });

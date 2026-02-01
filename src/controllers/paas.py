@@ -230,7 +230,7 @@ class PaasController(Controller):
                 'role': access.role,
                 'member_count': workspace.member_count,
                 'is_owner': workspace.owner_id.id == user.id,
-                ROLE_OWNER: {
+                'owner': {
                     'id': workspace.owner_id.id,
                     'name': workspace.owner_id.name,
                     'email': workspace.owner_id.email,
