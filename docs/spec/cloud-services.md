@@ -2,7 +2,9 @@
 
 ## Overview
 
-Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠一鍵部署 Docker 容器化應用程式。用戶可以從 Application Marketplace 選擇預設應用（如 AnythingLLM、n8n、PostgreSQL 等），設定必要參數後即可快速啟動服務。
+Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠一鍵部署容器化應用程式。用戶可以從 Application Marketplace 選擇預設應用（如 AnythingLLM、n8n、PostgreSQL 等），設定必要參數後即可快速啟動服務。
+
+**部署架構**：使用 Kubernetes + Helm Charts 進行服務編排與部署。
 
 ### Service Types
 
@@ -10,11 +12,146 @@ Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠�
 
 | Service Type | Description | Use Case |
 |-------------|-------------|----------|
-| **Cloud Services** | Deploy Docker apps with one click | AnythingLLM, n8n, PostgreSQL, Redis, etc. |
+| **Cloud Services** | Deploy containerized apps via Helm | AnythingLLM, n8n, PostgreSQL, Redis, etc. |
 | **Security Access** | Zero Trust Tunnels via Podman/HAOS | Secure remote connections |
 | **Smart Home Connect** | Home Assistant & Woow App integration | Remote access configuration |
 
 本文件專注於 **Cloud Services** 的規格設計。
+
+---
+
+## Deployment Architecture
+
+### Kubernetes + Helm Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        WoowTech PaaS                            │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
+│  │   Odoo API   │───▶│  K8s Client  │───▶│  K8s Cluster │      │
+│  │  (Backend)   │    │   Service    │    │              │      │
+│  └──────────────┘    └──────────────┘    └──────────────┘      │
+│         │                                       │               │
+│         ▼                                       ▼               │
+│  ┌──────────────┐                      ┌──────────────┐        │
+│  │  PostgreSQL  │                      │ Helm Release │        │
+│  │  (Metadata)  │                      │   Manager    │        │
+│  └──────────────┘                      └──────────────┘        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Namespace Strategy
+
+每個 Workspace 對應一個 Kubernetes Namespace：
+
+```
+Namespace: woow-ws-{workspace_id}
+├── Deployment: {release_name}-{app}
+├── Service: {release_name}-{app}
+├── Ingress: {release_name}-ingress
+├── PVC: {release_name}-data
+├── Secret: {release_name}-secrets
+└── ConfigMap: {release_name}-config
+```
+
+### Helm Release Naming Convention
+
+```
+Release Name: ws{workspace_id}-{reference_id}
+Example: ws123-anythingllm-01
+```
+
+### Deployment Flow
+
+```
+1. User clicks "Launch Application"
+           │
+           ▼
+2. API validates input & creates CloudService record (state=pending)
+           │
+           ▼
+3. Background job triggered
+           │
+           ▼
+4. Create namespace if not exists
+           │
+           ▼
+5. Add Helm repo (if not cached)
+           │
+           ▼
+6. helm install {release} {chart} -f values.yaml -n {namespace}
+           │
+           ▼
+7. Poll deployment status until ready
+           │
+           ▼
+8. Create/Update Ingress for subdomain
+           │
+           ▼
+9. Update CloudService record (state=running)
+```
+
+### Supported Operations
+
+| Operation | Helm Command | K8s Action |
+|-----------|--------------|------------|
+| Deploy | `helm install` | Create release |
+| Start | `kubectl scale --replicas=1` | Scale up |
+| Stop | `kubectl scale --replicas=0` | Scale down |
+| Restart | `kubectl rollout restart` | Rolling restart |
+| Upgrade | `helm upgrade` | Update release |
+| Delete | `helm uninstall` | Remove release |
+| Rollback | `helm rollback` | Revert to revision |
+
+### Ingress Configuration
+
+使用 NGINX Ingress Controller 或 Traefik：
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ws123-anythingllm-01
+  namespace: woow-ws-123
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+    - hosts:
+        - my-ai-assistant.woowtech.com
+      secretName: ws123-anythingllm-01-tls
+  rules:
+    - host: my-ai-assistant.woowtech.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ws123-anythingllm-01
+                port:
+                  number: 3001
+```
+
+### Resource Quotas
+
+每個 Workspace namespace 設定資源配額：
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: workspace-quota
+  namespace: woow-ws-123
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    persistentvolumeclaims: "10"
+    requests.storage: 100Gi
+```
 
 ---
 
@@ -72,24 +209,34 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - tags: string[]  # e.g., ["AI", "Chatbot"]
 - category: enum  # AI_LLM, Automation, Database, Analytics, DevOps, Web, Container
 - monthly_price: decimal
-- docker_image: string
+- helm_chart: HelmChartSpec
 - default_port: integer
-- required_env_vars: EnvVarSpec[]
-- optional_env_vars: EnvVarSpec[]
+- required_values: HelmValueSpec[]  # Helm values that user must provide
+- optional_values: HelmValueSpec[]  # Optional Helm values with defaults
 - documentation_url: string
 - min_resources: ResourceSpec
 ```
 
-**EnvVarSpec**:
+**HelmChartSpec**:
 ```yaml
-- key: string
-- label: string
-- type: enum  # text, password, number, boolean
-- default_value: string?
+- repository: string      # e.g., "https://charts.bitnami.com/bitnami"
+- chart_name: string      # e.g., "postgresql"
+- chart_version: string   # e.g., "12.5.8"
+- default_values: object  # Base values.yaml overrides
+```
+
+**HelmValueSpec**:
+```yaml
+- key: string            # Helm value path, e.g., "auth.postgresPassword"
+- label: string          # UI display label
+- type: enum             # text, password, number, boolean, select
+- default_value: any?
 - placeholder: string?
 - help_text: string?
 - required: boolean
+- options: string[]?     # For select type
 ```
+
 
 **ResourceSpec**:
 ```yaml
@@ -114,9 +261,9 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
    - Subdomain (e.g., `my-ai-assistant.houseoffoss.com`)
    - Private Network toggle (restrict to VPN only)
 
-3. **Docker Variables** (dynamic based on app)
-   - Required environment variables
-   - Optional environment variables (Advanced toggle)
+3. **Helm Values** (dynamic based on app template)
+   - Required values (user must provide)
+   - Optional values (Advanced toggle, with defaults)
 
 4. **Resource Allocation** (future phase)
    - Instance Type selection
@@ -158,7 +305,7 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - **Resources**
   - CPU Usage (percentage + status)
   - RAM Usage (current / allocated)
-  - Docker Tag + SHA
+  - Helm Release info (chart version, revision)
 - **Live Traffic** chart (last 1 hour)
 - **Support** links
 - **Environment** info (Region, Instance Type)
@@ -166,7 +313,7 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 #### Tab 3.2: Configuration
 - General Settings (name, reference ID)
 - Network & Domain
-- Docker Variables (view/edit)
+- Helm Values (view/edit)
 - Resource Allocation
 
 #### Tab 3.3: Metrics
@@ -213,7 +360,7 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 **4.3 Delete Service**
 - Confirmation modal required
 - Option to keep/delete backups
-- Cleanup: container, volumes, domain records
+- Cleanup: Helm release uninstall, PVCs, Ingress rules
 
 **4.4 Edit Custom Domain**
 - Modal with domain input
@@ -231,10 +378,11 @@ class CloudAppTemplate(models.Model):
     _name = 'woow_paas_platform.cloud_app_template'
     _description = 'Cloud Application Template'
 
+    # Basic Info
     name = fields.Char(required=True)
     slug = fields.Char(index=True)
     icon = fields.Binary()
-    description = fields.Char()  # Short description
+    description = fields.Char()  # Short description (~100 chars)
     full_description = fields.Text()
     category = fields.Selection([
         ('ai_llm', 'AI & LLM'),
@@ -245,16 +393,51 @@ class CloudAppTemplate(models.Model):
         ('web', 'Web'),
         ('container', 'Container'),
     ])
-    tags = fields.Char()  # JSON array
+    tags = fields.Char()  # JSON array, e.g., '["AI", "Chatbot"]'
     monthly_price = fields.Float()
-    docker_image = fields.Char(required=True)
-    default_port = fields.Integer(default=3000)
-    env_var_specs = fields.Text()  # JSON schema
     documentation_url = fields.Char()
+
+    # Helm Chart Configuration
+    helm_repo_url = fields.Char(required=True)  # e.g., "https://charts.bitnami.com/bitnami"
+    helm_chart_name = fields.Char(required=True)  # e.g., "postgresql"
+    helm_chart_version = fields.Char(required=True)  # e.g., "12.5.8"
+    helm_default_values = fields.Text()  # JSON: base values.yaml overrides
+    helm_value_specs = fields.Text()  # JSON: schema for user-configurable values
+
+    # Service Configuration
+    default_port = fields.Integer(default=80)
+    ingress_enabled = fields.Boolean(default=True)
+
+    # Resource Requirements
     min_vcpu = fields.Integer(default=1)
     min_ram_gb = fields.Float(default=1)
     min_storage_gb = fields.Integer(default=5)
+
     is_active = fields.Boolean(default=True)
+```
+
+**helm_value_specs JSON Schema Example**:
+```json
+{
+  "required": [
+    {
+      "key": "auth.postgresPassword",
+      "label": "PostgreSQL Password",
+      "type": "password",
+      "required": true,
+      "help_text": "Password for the postgres admin user"
+    }
+  ],
+  "optional": [
+    {
+      "key": "primary.persistence.size",
+      "label": "Storage Size",
+      "type": "select",
+      "default_value": "8Gi",
+      "options": ["8Gi", "16Gi", "32Gi", "64Gi"]
+    }
+  ]
+}
 ```
 
 ### CloudService (Deployed Instance)
@@ -271,7 +454,7 @@ class CloudService(models.Model):
     # Identity
     name = fields.Char(required=True)
     reference_id = fields.Char(index=True)  # e.g., "anything-llm-01"
-    deployment_id = fields.Char()  # e.g., "#8291"
+    deployment_id = fields.Char()  # Auto-generated, e.g., "#8291"
 
     # State
     state = fields.Selection([
@@ -280,16 +463,22 @@ class CloudService(models.Model):
         ('running', 'Running'),
         ('stopped', 'Stopped'),
         ('error', 'Error'),
+        ('upgrading', 'Upgrading'),
     ], default='pending')
+    error_message = fields.Text()  # Error details when state='error'
 
     # Network
-    subdomain = fields.Char()
-    custom_domain = fields.Char()
+    subdomain = fields.Char()  # e.g., "my-app" → my-app.woowtech.com
+    custom_domain = fields.Char()  # Optional custom domain
     internal_port = fields.Integer()
     is_private_network = fields.Boolean(default=False)
 
-    # Configuration
-    env_vars = fields.Text()  # JSON encrypted
+    # Helm Release Info
+    helm_release_name = fields.Char()  # K8s release name, e.g., "ws-123-myapp"
+    helm_namespace = fields.Char()  # K8s namespace, e.g., "workspace-123"
+    helm_values = fields.Text()  # JSON: merged values used for deployment
+    helm_revision = fields.Integer(default=1)  # Current Helm revision number
+    helm_chart_version = fields.Char()  # Deployed chart version
 
     # Resources
     allocated_vcpu = fields.Integer()
@@ -297,16 +486,14 @@ class CloudService(models.Model):
     allocated_storage_gb = fields.Integer()
 
     # Infrastructure
+    k8s_cluster = fields.Char(default='default')  # Target K8s cluster
     region = fields.Char(default='us-east-1')
-    instance_type = fields.Char(default='t3.medium')
-    container_id = fields.Char()
-    docker_tag = fields.Char()
-    docker_sha = fields.Char()
 
     # Timestamps
     deployed_at = fields.Datetime()
     last_started_at = fields.Datetime()
     last_stopped_at = fields.Datetime()
+    last_upgraded_at = fields.Datetime()
 ```
 
 ### CloudServiceBackup
@@ -502,12 +689,146 @@ DELETE /api/v1/workspaces/{workspace_id}/services/{service_id}/backups/{backup_i
 
 ---
 
+## Helm Chart Examples
+
+### Example 1: PostgreSQL (Bitnami)
+
+```yaml
+# CloudAppTemplate seed data
+name: PostgreSQL
+slug: postgresql
+helm_repo_url: https://charts.bitnami.com/bitnami
+helm_chart_name: postgresql
+helm_chart_version: "15.5.0"
+helm_default_values: |
+  {
+    "primary": {
+      "persistence": {
+        "enabled": true,
+        "size": "8Gi"
+      }
+    },
+    "metrics": {
+      "enabled": true
+    }
+  }
+helm_value_specs: |
+  {
+    "required": [
+      {
+        "key": "auth.postgresPassword",
+        "label": "Admin Password",
+        "type": "password",
+        "required": true
+      },
+      {
+        "key": "auth.database",
+        "label": "Database Name",
+        "type": "text",
+        "default_value": "app_db"
+      }
+    ],
+    "optional": [
+      {
+        "key": "primary.persistence.size",
+        "label": "Storage Size",
+        "type": "select",
+        "default_value": "8Gi",
+        "options": ["8Gi", "16Gi", "32Gi"]
+      }
+    ]
+  }
+```
+
+### Example 2: n8n (Custom/Community Chart)
+
+```yaml
+name: n8n Workflow
+slug: n8n
+helm_repo_url: https://8gears.github.io/n8n-helm-chart
+helm_chart_name: n8n
+helm_chart_version: "0.23.0"
+helm_default_values: |
+  {
+    "n8n": {
+      "encryption_key": "auto-generated"
+    },
+    "persistence": {
+      "enabled": true,
+      "size": "5Gi"
+    }
+  }
+helm_value_specs: |
+  {
+    "required": [],
+    "optional": [
+      {
+        "key": "n8n.basicAuth.active",
+        "label": "Enable Basic Auth",
+        "type": "boolean",
+        "default_value": false
+      },
+      {
+        "key": "n8n.basicAuth.user",
+        "label": "Basic Auth Username",
+        "type": "text"
+      },
+      {
+        "key": "n8n.basicAuth.password",
+        "label": "Basic Auth Password",
+        "type": "password"
+      }
+    ]
+  }
+```
+
+### Example 3: Redis (Bitnami)
+
+```yaml
+name: Redis
+slug: redis
+helm_repo_url: https://charts.bitnami.com/bitnami
+helm_chart_name: redis
+helm_chart_version: "19.0.0"
+helm_default_values: |
+  {
+    "architecture": "standalone",
+    "auth": {
+      "enabled": true
+    }
+  }
+helm_value_specs: |
+  {
+    "required": [
+      {
+        "key": "auth.password",
+        "label": "Redis Password",
+        "type": "password",
+        "required": true
+      }
+    ],
+    "optional": [
+      {
+        "key": "master.persistence.size",
+        "label": "Storage Size",
+        "type": "select",
+        "default_value": "4Gi",
+        "options": ["4Gi", "8Gi", "16Gi"]
+      }
+    ]
+  }
+```
+
+---
+
 ## Open Questions
 
-1. **Docker orchestration**: 使用 Docker Swarm 還是 Kubernetes？
-2. **Metrics collection**: 整合 Prometheus 還是自建方案？
-3. **Log aggregation**: 整合 Loki/ELK 還是簡化方案？
-4. **Billing integration**: 如何與帳單系統整合計費？
+1. **K8s Client Library**: 使用 Python kubernetes-client 還是透過 kubectl/helm CLI subprocess？
+2. **Helm Chart Repository**: 自建 Chart Museum 還是使用公開 repos (Bitnami, ArtifactHub)？
+3. **Metrics collection**: 整合 Prometheus + Grafana 還是使用 K8s metrics-server？
+4. **Log aggregation**: 整合 Loki/Promtail 還是使用 K8s native logs？
+5. **Billing integration**: 如何根據 resource usage 計費？
+6. **Multi-cluster support**: 是否需要支援多個 K8s cluster？
 
 ---
 
