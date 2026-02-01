@@ -807,14 +807,16 @@ helm_value_specs: |
 
 ---
 
-## Open Questions
+## Technical Decisions
 
-1. **K8s Client Library**: 使用 Python kubernetes-client 還是透過 kubectl/helm CLI subprocess？
-2. **Helm Chart Repository**: 自建 Chart Museum 還是使用公開 repos (Bitnami, ArtifactHub)？
-3. **Metrics collection**: 整合 Prometheus + Grafana 還是使用 K8s metrics-server？
-4. **Log aggregation**: 整合 Loki/Promtail 還是使用 K8s native logs？
-5. **Billing integration**: 如何根據 resource usage 計費？
-6. **Multi-cluster support**: 是否需要支援多個 K8s cluster？
+| 項目 | 決定 | 說明 |
+|------|------|------|
+| **K8s/Helm Client** | subprocess 調用 `helm` CLI | Python kubernetes-client 不支援 Helm，使用 CLI 較穩定 |
+| **Helm Chart Repository** | 公開 repos + 自建 | 使用 Bitnami/ArtifactHub，未來可自建 Chart Museum |
+| **Metrics collection** | Prometheus + Grafana | K8s metrics-server 不保留歷史，無法支援 24h/7d/30d 查詢 |
+| **Log aggregation** | Loki + Promtail | 整合 Grafana 生態系 |
+| **Billing integration** | *(Future Phase)* | 暫不實作 |
+| **Multi-cluster support** | 不支援 | 單一 K8s cluster |
 
 ---
 
