@@ -57,9 +57,11 @@ Namespace: paas-ws-{workspace_id}
 ### Helm Release Naming Convention
 
 ```
-Release Name: ws{workspace_id}-{reference_id}
-Example: ws123-anythingllm-01
+Release Name: paas-ws-{workspace_id}-{reference_id}
+Example: paas-ws-123-anythingllm-01
 ```
+
+這樣 Release Name 與 Namespace 有相同的前綴 `paas-ws-{workspace_id}`，方便識別和管理。
 
 ### Deployment Flow
 
@@ -111,7 +113,7 @@ Example: ws123-anythingllm-01
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ws123-anythingllm-01
+  name: paas-ws-123-anythingllm-01
   namespace: paas-ws-123
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
@@ -119,7 +121,7 @@ spec:
   tls:
     - hosts:
         - my-ai-assistant.woowtech.com
-      secretName: ws123-anythingllm-01-tls
+      secretName: paas-ws-123-anythingllm-01-tls
   rules:
     - host: my-ai-assistant.woowtech.com
       http:
@@ -128,7 +130,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: ws123-anythingllm-01
+                name: paas-ws-123-anythingllm-01
                 port:
                   number: 3001
 ```
@@ -474,8 +476,8 @@ class CloudService(models.Model):
     is_private_network = fields.Boolean(default=False)
 
     # Helm Release Info
-    helm_release_name = fields.Char()  # K8s release name, e.g., "ws-123-myapp"
-    helm_namespace = fields.Char()  # K8s namespace, e.g., "workspace-123"
+    helm_release_name = fields.Char()  # K8s release name, e.g., "paas-ws-123-myapp"
+    helm_namespace = fields.Char()  # K8s namespace, e.g., "paas-ws-123"
     helm_values = fields.Text()  # JSON: merged values used for deployment
     helm_revision = fields.Integer(default=1)  # Current Helm revision number
     helm_chart_version = fields.Char()  # Deployed chart version
