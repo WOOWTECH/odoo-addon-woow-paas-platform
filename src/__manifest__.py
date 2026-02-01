@@ -13,6 +13,7 @@
     'data': [
         'security/ir.model.access.csv',
         'security/ir_rules.xml',
+        'data/cloud_app_templates.xml',
         'views/res_config_settings_views.xml',
         'views/menu.xml',
         'views/paas_app.xml',
