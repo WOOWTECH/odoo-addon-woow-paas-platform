@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-01-14T07:02:23Z
-version: 1.1
+last_updated: 2026-02-01T13:22:40Z
+version: 1.2
 author: Claude Code PM System
 ---
 
@@ -154,7 +154,36 @@ docker compose -f docker-compose-18.yml logs -f web
 |-----------|----------|---------|
 | DashboardPage | `pages/dashboard/` | Main dashboard |
 | WorkspaceListPage | `pages/workspace/` | Workspace listing |
+| WorkspaceDetailPage | `pages/workspace/` | Workspace detail view ✅ NEW |
+| WorkspaceTeamPage | `pages/workspace/` | Team member management ✅ NEW |
 | EmptyState | `pages/empty/` | Placeholder page |
 
+### Modal Components ✅ NEW
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| CreateWorkspaceModal | `components/modal/` | Create new workspace dialog |
+| InviteMemberModal | `components/modal/` | Invite team member dialog |
+
+### Service Components ✅ NEW
+| Service | Location | Purpose |
+|---------|----------|---------|
+| workspace_service | `services/` | Workspace API client |
+
+## API Patterns
+
+### JSON Controller Pattern (Odoo 18)
+```python
+@http.route('/woow/api/workspaces', type='json', auth='user')
+def api_workspaces(self, **kw):
+    # Direct JSON response without jsonrpc wrapper
+    return {'workspaces': [...]}
+```
+
+**Key Notes:**
+- Use `type='json'` for direct JSON response
+- No need for `json.dumps()` in response
+- Frontend receives clean JSON data
+
 ## Update History
+- 2026-02-01: Added new page components, modal components, services, API patterns
 - 2026-01-14: Added asset bundles, OWL components, Docker commands

@@ -15,8 +15,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```
 Phase 1: Foundation    [████████] 100%
-Phase 2: OWL App Shell [████████] 100%  ← Completed
-Phase 3: Core Models   [        ]   0%
+Phase 2: OWL App Shell [████████] 100%
+Phase 3: Core Models   [████    ]  50%  ← In Progress (Workspace + WorkspaceAccess)
 Phase 4: Integrations  [        ]   0%
 ```
 
@@ -62,46 +62,55 @@ docker compose -f docker-compose-18.yml logs -f web
 
 ```
 woow_paas_platform/
-├── __manifest__.py           # Module metadata, dependencies, assets
-├── __init__.py               # Python package init
-├── controllers/
-│   └── paas.py               # /woow endpoint controller
-├── models/
-│   └── res_config_settings.py
-├── views/
-│   ├── paas_app.xml          # QWeb template for /woow
-│   ├── res_config_settings_views.xml
-│   └── menu.xml
-├── security/
-│   └── ir.model.access.csv
-├── static/
-│   └── src/
-│       ├── paas/             # Standalone OWL App
-│       │   ├── app.js        # Mount entry point
-│       │   ├── root.js/xml   # Root component + router
-│       │   ├── core/router.js
-│       │   ├── layout/       # AppShell, Sidebar, Header
-│       │   ├── components/   # WoowIcon, WoowCard, WoowButton
-│       │   ├── pages/        # Dashboard, Workspace, Empty
-│       │   └── styles/       # SCSS theme system
-│       ├── scss/             # Backend asset styles
-│       ├── components/       # Backend OWL components
-│       └── services/         # Backend JS services
-└── .claude/                  # Claude Code PM configuration
+├── src/                          # Odoo module source code
+│   ├── __manifest__.py           # Module metadata, dependencies, assets
+│   ├── __init__.py               # Python package init
+│   ├── controllers/
+│   │   └── paas.py               # /woow endpoint controller (JSON API)
+│   ├── models/
+│   │   ├── res_config_settings.py
+│   │   ├── workspace.py          # Workspace model
+│   │   └── workspace_access.py   # Workspace access/member model
+│   ├── views/
+│   │   ├── paas_app.xml          # QWeb template for /woow
+│   │   ├── res_config_settings_views.xml
+│   │   └── menu.xml
+│   ├── security/
+│   │   └── ir.model.access.csv
+│   └── static/
+│       ├── description/icon.png
+│       └── src/
+│           ├── paas/             # Standalone OWL App
+│           │   ├── app.js        # Mount entry point
+│           │   ├── root.js/xml   # Root component + router
+│           │   ├── core/router.js
+│           │   ├── layout/       # AppShell, Sidebar, Header
+│           │   ├── components/   # WoowIcon, WoowCard, WoowButton, Modal
+│           │   ├── pages/        # Dashboard, Workspace (List/Detail/Team), Empty
+│           │   ├── services/     # workspace_service.js (API client)
+│           │   └── styles/       # SCSS theme system + pages/
+│           ├── scss/             # Backend asset styles
+│           ├── components/       # Backend OWL components (預留)
+│           └── services/         # Backend JS services (預留)
+├── scripts/                      # Development scripts
+├── docs/                         # Documentation
+└── .claude/                      # Claude Code PM configuration
 ```
 
 ### Standalone OWL Application (`/woow`)
 
 The module provides an independent frontend application:
 
-**Entry Point**: `controllers/paas.py` → `/woow`
-**Template**: `views/paas_app.xml`
+**Entry Point**: `src/controllers/paas.py` → `/woow`
+**Template**: `src/views/paas_app.xml`
 **Assets**: `woow_paas_platform.assets_paas` bundle
 
 **Routes** (hash-based):
 
 - `#/dashboard` - Dashboard page
 - `#/workspaces` - Workspace list
+- `#/workspaces/:id` - Workspace detail
+- `#/workspaces/:id/team` - Workspace team management
 - `#/settings`, `#/users`, `#/help` - Empty state placeholders
 
 **Component Architecture**:
@@ -114,6 +123,8 @@ Root (router logic)
     └── Main Content
         ├── DashboardPage
         ├── WorkspaceListPage
+        ├── WorkspaceDetailPage
+        ├── WorkspaceTeamPage
         └── EmptyState
 ```
 
@@ -121,16 +132,16 @@ Root (router logic)
 
 **Adding a new model:**
 
-1. Create `models/your_model.py` with class inheriting `models.Model`
-2. Add import in `models/__init__.py`
-3. Add security rules in `security/ir.model.access.csv`
-4. Create views in `views/your_model_views.xml`
-5. Update `__manifest__.py` data list
+1. Create `src/models/your_model.py` with class inheriting `models.Model`
+2. Add import in `src/models/__init__.py`
+3. Add security rules in `src/security/ir.model.access.csv`
+4. Create views in `src/views/your_model_views.xml`
+5. Update `src/__manifest__.py` data list
 
 **Adding frontend assets:**
 
-1. Put OWL components in `static/src/paas/components/`
-2. Register in `__manifest__.py` under `woow_paas_platform.assets_paas`
+1. Put OWL components in `src/static/src/paas/components/`
+2. Register in `src/__manifest__.py` under `woow_paas_platform.assets_paas`
 
 **Extending existing models:**
 
@@ -217,6 +228,24 @@ This project uses Claude Code PM (`.claude/` directory) for project management.
 - `.claude/context/tech-context.md` - Technology stack
 - `.claude/context/project-style-guide.md` - Coding conventions
 - `.claude/context/system-patterns.md` - Architecture patterns
+
+### Rules Reference
+
+The `.claude/rules/` directory contains coding standards and operation patterns that are automatically loaded by Claude Code PM:
+
+| Rule File | Description |
+|-----------|-------------|
+| `datetime.md` | ISO 8601 datetime format standards for frontmatter |
+| `frontmatter-operations.md` | YAML frontmatter reading/updating patterns |
+| `github-operations.md` | GitHub CLI patterns and repository protection |
+| `standard-patterns.md` | Core validation, output, and error handling patterns |
+| `strip-frontmatter.md` | Removing frontmatter before GitHub sync |
+| `path-standards.md` | Relative path usage for portability and privacy |
+| `worktree-operations.md` | Git worktree creation and management |
+| `branch-operations.md` | Git branch workflows |
+| `agent-coordination.md` | Multi-agent parallel execution rules |
+| `test-execution.md` | Test runner patterns |
+| `use-ast-grep.md` | AST-based code search and refactoring |
 
 ## Worktree Development
 

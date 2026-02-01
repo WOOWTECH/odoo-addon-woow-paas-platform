@@ -90,11 +90,22 @@ class Workspace(models.Model):
         """Restore archived workspace"""
         self.write({'state': 'active'})
 
-    def check_access(self, user=None, required_role=None):
+    def check_user_access(self, user=None, required_role=None):
         """
         Check if user has access to this workspace.
-        Returns the access record if found.
+
+        Args:
+            user: Target user (defaults to current user)
+            required_role: Minimum role required ('guest', 'user', 'admin', 'owner')
+
+        Returns:
+            workspace_access record if authorized, False otherwise
+
+        Role hierarchy (low to high): guest < user < admin < owner
+        User's role must be >= required_role to pass the check.
         """
+        if not self:
+            return False
         self.ensure_one()
         user = user or self.env.user
         access = self.env['woow_paas_platform.workspace_access'].search([

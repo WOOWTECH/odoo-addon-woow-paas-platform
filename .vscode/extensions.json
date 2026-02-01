@@ -5,6 +5,9 @@
     "ms-python.vscode-pylance",
     "charliermarsh.ruff",
 
+    // Odoo 開發
+    "trinhanhngoc.vscode-odoo",
+
     // XML 支援（Odoo views）
     "redhat.vscode-xml",
 

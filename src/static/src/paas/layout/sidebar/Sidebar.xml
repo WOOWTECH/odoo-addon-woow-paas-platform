@@ -18,11 +18,11 @@
                 </t>
             </nav>
             <div class="o_woow_sidebar_footer">
-                <a class="o_woow_nav_item" href="#">
+                <a class="o_woow_nav_item" t-on-click="openHelp">
                     <span class="material-symbols-outlined">help</span>
                     <span>Help &amp; Support</span>
                 </a>
-                <a class="o_woow_nav_item o_woow_logout" href="#">
+                <a class="o_woow_nav_item o_woow_logout" t-on-click="logout">
                     <span class="material-symbols-outlined">logout</span>
                     <span>Log Out</span>
                 </a>

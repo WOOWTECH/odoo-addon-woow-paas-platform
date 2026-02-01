@@ -3,27 +3,30 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
 
   // Python 分析設定
-  "python.analysis.extraPaths": [
-    "${workspaceFolder}/src"
-  ],
   "python.analysis.typeCheckingMode": "basic",
   "python.analysis.autoImportCompletions": true,
+  // "python.analysis.extraPaths": [
+  //   "/Users/woow/odoo-18.0",
+  //   "/Users/woow/odoo_env/lib/python3.9/site-packages",
+  // ],
+  "python.languageServer": "None",
 
-  // 格式化設定
-  "editor.formatOnSave": true,
-  "python.formatting.provider": "black",
-  "python.formatting.blackArgs": [
-    "--line-length=120"
-  ],
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportGeneralTypeIssues": "none"
+  },
 
-  // Linting 設定
-  "python.linting.enabled": true,
-  "python.linting.pylintEnabled": false,
-  "python.linting.flake8Enabled": true,
-  "python.linting.flake8Args": [
-    "--max-line-length=120",
-    "--ignore=E203,W503"
-  ],
+  // 格式化設定（使用 Ruff）
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+
+  // Ruff 設定（取代 Black + Flake8 + isort）
+  "ruff.lineLength": 120,
+  "ruff.lint.ignore": ["E203"],
 
   // 檔案排除設定（提升效能）
   "files.exclude": {
@@ -52,6 +55,7 @@
     "editor.defaultFormatter": "redhat.vscode-xml",
     "editor.formatOnSave": true
   },
+  "xml.symbols.enabled": false,
 
   // JavaScript/TypeScript 設定
   "[javascript]": {
@@ -78,8 +82,5 @@
   "git.ignoreLimitWarning": true,
 
   // Odoo 特定設定
-  "odoo.addonsPath": [
-    "${workspaceFolder}/src"
-  ],
-  "python.languageServer": "None"
+  "odoo.addonsPath": ["${workspaceFolder}"]
 }

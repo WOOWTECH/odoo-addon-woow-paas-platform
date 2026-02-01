@@ -2,8 +2,37 @@
 import { reactive } from "@odoo/owl";
 
 /**
+ * JSON-RPC helper for Odoo API calls
+ * Odoo type="json" routes wrap response in { jsonrpc: "2.0", result: {...} }
+ */
+async function jsonRpc(url, params) {
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "call",
+            params: params,
+            id: Math.floor(Math.random() * 1000000),
+        }),
+    });
+
+    const data = await response.json();
+
+    // Handle JSON-RPC error
+    if (data.error) {
+        const errorMsg = data.error.data?.message || data.error.message || "Unknown error";
+        throw new Error(errorMsg);
+    }
+
+    return data.result;
+}
+
+/**
  * Workspace Service
- * Handles all API calls related to workspaces
+ * Handles all API calls related to workspaces using Odoo JSON-RPC
  */
 export const workspaceService = reactive({
     workspaces: [],
@@ -17,17 +46,11 @@ export const workspaceService = reactive({
         this.loading = true;
         this.error = null;
         try {
-            const response = await fetch("/api/workspaces", {
-                method: "GET",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-            });
-            const data = await response.json();
-            if (data.success) {
-                this.workspaces = data.data;
+            const result = await jsonRpc("/api/workspaces", { method: "list" });
+            if (result.success) {
+                this.workspaces = result.data;
             } else {
-                this.error = data.error || "Failed to fetch workspaces";
+                this.error = result.error || "Failed to fetch workspaces";
             }
         } catch (err) {
             this.error = err.message || "Network error";
@@ -44,19 +67,19 @@ export const workspaceService = reactive({
         this.loading = true;
         this.error = null;
         try {
-            const response = await fetch("/api/workspaces", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(payload),
+            const result = await jsonRpc("/api/workspaces", {
+                method: "create",
+                name: payload.name,
+                description: payload.description || "",
             });
-            const data = await response.json();
-            if (data.result && data.result.success) {
-                this.workspaces = [data.result.data, ...this.workspaces];
-                return { success: true, data: data.result.data };
+            if (result.success) {
+                this.workspaces = [result.data, ...this.workspaces];
+                return { success: true, data: result.data };
             } else {
-                const errMsg = data.result?.error || data.error || "Failed to create workspace";
+                let errMsg = result.error || "Failed to create workspace";
+                if (typeof errMsg === "object") {
+                    errMsg = errMsg.message || errMsg.name || JSON.stringify(errMsg);
+                }
                 this.error = errMsg;
                 return { success: false, error: errMsg };
             }
@@ -74,17 +97,14 @@ export const workspaceService = reactive({
      */
     async getWorkspace(workspaceId) {
         try {
-            const response = await fetch(`/api/workspaces/${workspaceId}`, {
-                method: "GET",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+            const result = await jsonRpc("/api/workspaces", {
+                method: "get",
+                workspace_id: workspaceId,
             });
-            const data = await response.json();
-            if (data.success) {
-                return { success: true, data: data.data };
+            if (result.success) {
+                return { success: true, data: result.data };
             } else {
-                return { success: false, error: data.error };
+                return { success: false, error: result.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
@@ -98,23 +118,20 @@ export const workspaceService = reactive({
      */
     async updateWorkspace(workspaceId, payload) {
         try {
-            const response = await fetch(`/api/workspaces/${workspaceId}`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(payload),
+            const result = await jsonRpc("/api/workspaces", {
+                method: "update",
+                workspace_id: workspaceId,
+                ...payload,
             });
-            const data = await response.json();
-            if (data.result && data.result.success) {
+            if (result.success) {
                 // Update local state
                 const index = this.workspaces.findIndex(w => w.id === workspaceId);
                 if (index !== -1) {
-                    this.workspaces[index] = { ...this.workspaces[index], ...data.result.data };
+                    this.workspaces[index] = { ...this.workspaces[index], ...result.data };
                 }
-                return { success: true, data: data.result.data };
+                return { success: true, data: result.data };
             } else {
-                return { success: false, error: data.result?.error || data.error };
+                return { success: false, error: result.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
@@ -127,19 +144,16 @@ export const workspaceService = reactive({
      */
     async deleteWorkspace(workspaceId) {
         try {
-            const response = await fetch(`/api/workspaces/${workspaceId}`, {
-                method: "DELETE",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+            const result = await jsonRpc("/api/workspaces", {
+                method: "delete",
+                workspace_id: workspaceId,
             });
-            const data = await response.json();
-            if (data.success) {
+            if (result.success) {
                 // Remove from local state
                 this.workspaces = this.workspaces.filter(w => w.id !== workspaceId);
                 return { success: true };
             } else {
-                return { success: false, error: data.error };
+                return { success: false, error: result.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
@@ -152,17 +166,14 @@ export const workspaceService = reactive({
      */
     async getMembers(workspaceId) {
         try {
-            const response = await fetch(`/api/workspaces/${workspaceId}/members`, {
-                method: "GET",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+            const result = await jsonRpc("/api/workspaces/members", {
+                method: "list",
+                workspace_id: workspaceId,
             });
-            const data = await response.json();
-            if (data.success) {
-                return { success: true, data: data.data };
+            if (result.success) {
+                return { success: true, data: result.data };
             } else {
-                return { success: false, error: data.error };
+                return { success: false, error: result.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
@@ -176,18 +187,16 @@ export const workspaceService = reactive({
      */
     async inviteMember(workspaceId, payload) {
         try {
-            const response = await fetch(`/api/workspaces/${workspaceId}/members`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(payload),
+            const result = await jsonRpc("/api/workspaces/members", {
+                method: "invite",
+                workspace_id: workspaceId,
+                email: payload.email,
+                role: payload.role || "user",
             });
-            const data = await response.json();
-            if (data.result && data.result.success) {
-                return { success: true, data: data.result.data };
+            if (result.success) {
+                return { success: true, data: result.data };
             } else {
-                return { success: false, error: data.result?.error || data.error };
+                return { success: false, error: result.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
@@ -202,18 +211,16 @@ export const workspaceService = reactive({
      */
     async updateMemberRole(workspaceId, accessId, role) {
         try {
-            const response = await fetch(`/api/workspaces/${workspaceId}/members/${accessId}`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ role }),
+            const result = await jsonRpc("/api/workspaces/members", {
+                method: "update_role",
+                workspace_id: workspaceId,
+                access_id: accessId,
+                role: role,
             });
-            const data = await response.json();
-            if (data.result && data.result.success) {
-                return { success: true, data: data.result.data };
+            if (result.success) {
+                return { success: true, data: result.data };
             } else {
-                return { success: false, error: data.result?.error || data.error };
+                return { success: false, error: result.error };
             }
         } catch (err) {
             return { success: false, error: err.message };
@@ -227,17 +234,15 @@ export const workspaceService = reactive({
      */
     async removeMember(workspaceId, accessId) {
         try {
-            const response = await fetch(`/api/workspaces/${workspaceId}/members/${accessId}`, {
-                method: "DELETE",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+            const result = await jsonRpc("/api/workspaces/members", {
+                method: "remove",
+                workspace_id: workspaceId,
+                access_id: accessId,
             });
-            const data = await response.json();
-            if (data.success) {
+            if (result.success) {
                 return { success: true };
             } else {
-                return { success: false, error: data.error };
+                return { success: false, error: result.error };
             }
         } catch (err) {
             return { success: false, error: err.message };

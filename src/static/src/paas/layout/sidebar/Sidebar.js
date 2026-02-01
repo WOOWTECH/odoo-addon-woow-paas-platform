@@ -11,4 +11,12 @@ export class Sidebar extends Component {
         { path: "billing", name: "Billing", icon: "payments" },
         { path: "settings", name: "Settings", icon: "settings" },
     ];
+
+    logout() {
+        window.location.href = "/web/session/logout";
+    }
+
+    openHelp() {
+        window.open("https://docs.woowtech.com", "_blank");
+    }
 }
