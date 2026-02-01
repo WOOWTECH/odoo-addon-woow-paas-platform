@@ -307,8 +307,8 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
    - Reference ID (auto-generated, **建立後不可修改**，用於 Helm Release 命名)
 
 2. **Network & Domain**
-   - Subdomain (e.g., `my-ai-assistant.houseoffoss.com`)
-   - Private Network toggle (restrict to VPN only)
+   - Subdomain (e.g., `my-ai-assistant.woowtech.com`)
+   - ~~Private Network toggle (restrict to VPN only)~~ *(Future Phase)*
 
 3. **Helm Values** (dynamic based on app template)
    - Required values (user must provide)
@@ -522,7 +522,7 @@ class CloudService(models.Model):
     subdomain = fields.Char()  # e.g., "my-app" → my-app.woowtech.com
     custom_domain = fields.Char()  # Optional custom domain
     internal_port = fields.Integer()
-    is_private_network = fields.Boolean(default=False)
+    # is_private_network = fields.Boolean(default=False)  # Future Phase
 
     # Helm Release Info
     helm_release_name = fields.Char()  # K8s release name, e.g., "paas-ws-123-myapp"
