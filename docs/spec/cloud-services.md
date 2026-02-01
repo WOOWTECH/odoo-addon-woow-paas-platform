@@ -95,15 +95,14 @@ Example: paas-ws-123-anythingllm-01
 
 ### Supported Operations
 
-| Operation | Helm Command | K8s Action |
-|-----------|--------------|------------|
-| Deploy | `helm install` | Create release |
-| Start | `kubectl scale --replicas=1` | Scale up |
-| Stop | `kubectl scale --replicas=0` | Scale down |
-| Restart | `kubectl rollout restart` | Rolling restart |
-| Upgrade | `helm upgrade` | Update release |
-| Delete | `helm uninstall` | Remove release |
-| Rollback | `helm rollback` | Revert to revision |
+| Operation | Helm Command | Description |
+|-----------|--------------|-------------|
+| Deploy | `helm install` | Create new release |
+| Upgrade | `helm upgrade` | Update release (config changes, version upgrade) |
+| Delete | `helm uninstall` | Remove release and cleanup resources |
+| Rollback | `helm rollback {revision}` | Revert to previous revision |
+
+> **Note**: 不提供 Start/Stop 操作。若需要暫停服務，請使用 Delete 移除；需要時再重新 Deploy。這樣設計是因為一個 Helm Chart 可能包含多種 workloads（Deployment、StatefulSet、CronJob 等），無法用單一 scale 指令控制。
 
 ### Ingress Configuration
 
@@ -288,12 +287,11 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 
 **Header Section**:
 - App Icon + Name (e.g., "AnythingLLM_221")
-- Status Badge (Running, Stopped, Error, Deploying)
+- Status Badge (Running, Error, Deploying, Upgrading)
 - Deployment ID
 - Quick Actions:
   - "Open Web UI" button
-  - Restart button
-  - Stop button
+  - Rollback button (dropdown with revision history)
   - Delete button
 
 **Tab Navigation**:
@@ -352,22 +350,25 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 
 ### F4: Service Actions
 
-**4.1 Start/Stop Service**
-- Graceful shutdown with configurable timeout
-- State persisted to database
+**4.1 Upgrade Service**
+- 更新 Helm values（環境變數、資源配置等）
+- 升級 Chart 版本
+- 自動建立新的 Helm revision
 
-**4.2 Restart Service**
-- Rolling restart with health check
-
-**4.3 Delete Service**
+**4.2 Delete Service**
 - Confirmation modal required
-- Option to keep/delete backups
-- Cleanup: Helm release uninstall, PVCs, Ingress rules
+- Option to keep/delete backups (PVCs)
+- Cleanup: `helm uninstall`, 移除 Ingress rules
+
+**4.3 Rollback Service**
+- 選擇要回滾的 revision
+- 執行 `helm rollback`
+- 顯示 revision history
 
 **4.4 Edit Custom Domain**
 - Modal with domain input
 - DNS verification instructions
-- SSL certificate auto-provisioning
+- SSL certificate auto-provisioning (cert-manager)
 
 ---
 
@@ -463,9 +464,9 @@ class CloudService(models.Model):
         ('pending', 'Pending'),
         ('deploying', 'Deploying'),
         ('running', 'Running'),
-        ('stopped', 'Stopped'),
         ('error', 'Error'),
         ('upgrading', 'Upgrading'),
+        ('deleting', 'Deleting'),
     ], default='pending')
     error_message = fields.Text()  # Error details when state='error'
 
@@ -493,8 +494,6 @@ class CloudService(models.Model):
 
     # Timestamps
     deployed_at = fields.Datetime()
-    last_started_at = fields.Datetime()
-    last_stopped_at = fields.Datetime()
     last_upgraded_at = fields.Datetime()
 ```
 
@@ -567,15 +566,18 @@ GET  /api/v1/cloud/templates/{id}
 ```
 GET    /api/v1/workspaces/{workspace_id}/services
 POST   /api/v1/workspaces/{workspace_id}/services
-       Body: { template_id, name, subdomain, env_vars, ... }
+       Body: { template_id, name, subdomain, helm_values, ... }
 
 GET    /api/v1/workspaces/{workspace_id}/services/{service_id}
 PATCH  /api/v1/workspaces/{workspace_id}/services/{service_id}
+       → Triggers helm upgrade
 DELETE /api/v1/workspaces/{workspace_id}/services/{service_id}
+       → Triggers helm uninstall
 
-POST   /api/v1/workspaces/{workspace_id}/services/{service_id}/start
-POST   /api/v1/workspaces/{workspace_id}/services/{service_id}/stop
-POST   /api/v1/workspaces/{workspace_id}/services/{service_id}/restart
+POST   /api/v1/workspaces/{workspace_id}/services/{service_id}/rollback
+       Body: { revision: number }
+GET    /api/v1/workspaces/{workspace_id}/services/{service_id}/revisions
+       → List helm revision history
 ```
 
 #### Metrics
