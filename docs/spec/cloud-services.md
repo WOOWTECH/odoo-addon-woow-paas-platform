@@ -303,8 +303,8 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 **Configuration Sections**:
 
 1. **General Settings**
-   - Application Name (required)
-   - Reference ID (auto-generated, editable)
+   - Application Name (required, 可修改)
+   - Reference ID (auto-generated, **建立後不可修改**，用於 Helm Release 命名)
 
 2. **Network & Domain**
    - Subdomain (e.g., `my-ai-assistant.houseoffoss.com`)
@@ -359,9 +359,9 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - **Environment** info (Region, Instance Type)
 
 #### Tab 3.2: Configuration
-- General Settings (name, reference ID)
-- Network & Domain
-- Helm Values (view/edit)
+- General Settings (name 可改, reference ID 唯讀)
+- Network & Domain (subdomain 唯讀, custom domain 可改)
+- Helm Values (view/edit, 修改後觸發 `helm upgrade`)
 - Resource Allocation
 
 #### Tab 3.3: Metrics
@@ -503,9 +503,9 @@ class CloudService(models.Model):
     template_id = fields.Many2one('woow_paas_platform.cloud_app_template', required=True)
 
     # Identity
-    name = fields.Char(required=True)
-    reference_id = fields.Char(index=True)  # e.g., "anything-llm-01"
-    deployment_id = fields.Char()  # Auto-generated, e.g., "#8291"
+    name = fields.Char(required=True)  # Display name, can be changed
+    reference_id = fields.Char(index=True, readonly=True)  # Immutable after creation, used in Helm release name
+    deployment_id = fields.Char()  # Auto-generated sequence, e.g., "#8291"
 
     # State
     state = fields.Selection([
