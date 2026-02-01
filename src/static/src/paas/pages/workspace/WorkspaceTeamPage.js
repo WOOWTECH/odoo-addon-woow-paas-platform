@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { InviteMemberModal } from "../../components/modal/InviteMemberModal";
 import { workspaceService } from "../../services/workspace_service";
 import { router } from "../../core/router";
+import { MANAGEMENT_ROLES, getRoleBadgeClass, formatDate, getInitials } from "../../services/utils";
 
 export class WorkspaceTeamPage extends Component {
     static template = "woow_paas_platform.WorkspaceTeamPage";
@@ -62,7 +63,7 @@ export class WorkspaceTeamPage extends Component {
 
     get canManageMembers() {
         if (!this.workspace) return false;
-        return ["owner", "admin"].includes(this.workspace.role);
+        return MANAGEMENT_ROLES.includes(this.workspace.role);
     }
 
     goBack() {
@@ -114,27 +115,14 @@ export class WorkspaceTeamPage extends Component {
     }
 
     getRoleBadgeClass(role) {
-        const classes = {
-            owner: "o_woow_badge_purple",
-            admin: "o_woow_badge_blue",
-            user: "o_woow_badge_green",
-            guest: "o_woow_badge_gray",
-        };
-        return classes[role] || "o_woow_badge_gray";
+        return getRoleBadgeClass(role);
     }
 
     formatDate(dateString) {
-        if (!dateString) return "";
-        const date = new Date(dateString);
-        return date.toLocaleDateString("zh-TW", {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-        });
+        return formatDate(dateString);
     }
 
     getInitials(name) {
-        if (!name) return "?";
-        return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
+        return getInitials(name);
     }
 }

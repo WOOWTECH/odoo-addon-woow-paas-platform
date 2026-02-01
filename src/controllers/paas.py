@@ -31,7 +31,7 @@ class PaasController(Controller):
 
     # ==================== Workspace API ====================
 
-    @route("/api/workspaces", auth="user", methods=["POST"], type="json", csrf=False)
+    @route("/api/workspaces", auth="user", methods=["POST"], type="json")
     def workspace_api(self, method='list', workspace_id=None, name=None, description=None, **kwargs):
         """
         Handle workspace CRUD operations via JSON-RPC.
@@ -169,7 +169,7 @@ class PaasController(Controller):
             }
         except Exception as e:
             _logger.error("Error creating workspace: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': str(e)}
+            return {'success': False, 'error': 'An error occurred while creating the workspace. Please try again.'}
 
     def _get_workspace(self, workspace_id):
         """
@@ -195,23 +195,26 @@ class PaasController(Controller):
 
         Errors:
             - 'Workspace ID is required' if workspace_id is None
-            - 'Workspace not found' if ID doesn't exist
-            - 'Access denied' if user has no access
+            - 'Workspace not found or access denied' if ID doesn't exist or no access
         """
         if not workspace_id:
             return {'success': False, 'error': 'Workspace ID is required'}
+
+        # Validate workspace_id is an integer
+        try:
+            workspace_id = int(workspace_id)
+        except (TypeError, ValueError):
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']
 
         workspace = Workspace.browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
 
-        # Check access
-        access = workspace.check_user_access(user)
+        # Combine existence and access check to prevent information leakage
+        access = workspace.check_user_access(user) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         return {
             'success': True,
@@ -253,24 +256,27 @@ class PaasController(Controller):
 
         Errors:
             - 'Workspace ID is required' if workspace_id is None
-            - 'Workspace not found' if ID doesn't exist
-            - 'Access denied' if user lacks admin/owner role
+            - 'Workspace not found or access denied' if ID doesn't exist or no access
             - 'Workspace name cannot be empty' if name is empty string
         """
         if not workspace_id:
             return {'success': False, 'error': 'Workspace ID is required'}
 
+        # Validate workspace_id is an integer
+        try:
+            workspace_id = int(workspace_id)
+        except (TypeError, ValueError):
+            return {'success': False, 'error': 'Workspace not found or access denied'}
+
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']
 
         workspace = Workspace.browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
 
-        # Check access (need admin or owner)
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
+        # Combine existence and access check to prevent information leakage
+        access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         update_vals = {}
         if name is not None:
@@ -313,29 +319,32 @@ class PaasController(Controller):
 
         Errors:
             - 'Workspace ID is required' if workspace_id is None
-            - 'Workspace not found' if ID doesn't exist
-            - 'Only the owner can delete a workspace' if not owner
+            - 'Workspace not found or access denied' if ID doesn't exist or not owner
         """
         if not workspace_id:
             return {'success': False, 'error': 'Workspace ID is required'}
+
+        # Validate workspace_id is an integer
+        try:
+            workspace_id = int(workspace_id)
+        except (TypeError, ValueError):
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']
 
         workspace = Workspace.browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
 
-        # Only owner can delete
-        if workspace.owner_id.id != user.id:
-            return {'success': False, 'error': 'Only the owner can delete a workspace'}
+        # Combine existence and ownership check to prevent information leakage
+        if not workspace.exists() or workspace.owner_id.id != user.id:
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         workspace.action_archive()
         return {'success': True, 'message': 'Workspace archived'}
 
     # ==================== Workspace Members API ====================
 
-    @route("/api/workspaces/members", auth="user", methods=["POST"], type="json", csrf=False)
+    @route("/api/workspaces/members", auth="user", methods=["POST"], type="json")
     def workspace_members_api(self, method='list', workspace_id=None, access_id=None, email=None, role=None, **kwargs):
         """
         Handle workspace member management operations via JSON-RPC.
@@ -364,6 +373,12 @@ class PaasController(Controller):
         """
         if not workspace_id:
             return {'success': False, 'error': 'Workspace ID is required'}
+
+        # Validate workspace_id is an integer
+        try:
+            workspace_id = int(workspace_id)
+        except (TypeError, ValueError):
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         if method == 'list':
             return self._list_members(workspace_id)
@@ -399,20 +414,17 @@ class PaasController(Controller):
                 - count (int): Number of members
 
         Errors:
-            - 'Workspace not found' if ID doesn't exist
-            - 'Access denied' if user has no access
+            - 'Workspace not found or access denied' if ID doesn't exist or no access
         """
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']
 
         workspace = Workspace.browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
 
-        # Check access
-        access = workspace.check_user_access(user)
+        # Combine existence and access check to prevent information leakage
+        access = workspace.check_user_access(user) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         members = []
         for member_access in workspace.access_ids:
@@ -452,7 +464,7 @@ class PaasController(Controller):
                 - error (str): Error message (on failure)
 
         Errors:
-            - 'Access denied. Only admins can invite members.' if not admin/owner
+            - 'Workspace not found or access denied' if not admin/owner or workspace doesn't exist
             - 'Email is required' if email is empty
             - 'Invalid role' if role not in allowed values
             - 'No user found with email: {email}' if user doesn't exist
@@ -463,13 +475,11 @@ class PaasController(Controller):
         WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
 
         workspace = Workspace.browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
 
-        # Check access (need admin or owner to invite)
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
+        # Combine existence and access check to prevent information leakage
+        access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Access denied. Only admins can invite members.'}
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         email = (email or '').strip().lower()
         role = role or ROLE_USER
@@ -515,7 +525,8 @@ class PaasController(Controller):
                 }
             }
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            _logger.error("Error inviting member: %s\n%s", str(e), traceback.format_exc())
+            return {'success': False, 'error': 'An error occurred while inviting the member. Please try again.'}
 
     def _update_member_role(self, workspace_id, access_id, role):
         """
@@ -536,8 +547,7 @@ class PaasController(Controller):
                 - error (str): Error message (on failure)
 
         Errors:
-            - 'Workspace not found' if workspace doesn't exist
-            - 'Access denied' if user lacks admin/owner role
+            - 'Workspace not found or access denied' if workspace doesn't exist or lacks permission
             - 'Access ID is required' if access_id is None
             - 'Member not found' if access record doesn't exist
             - 'Invalid role' if role not in allowed values
@@ -548,13 +558,11 @@ class PaasController(Controller):
         WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
 
         workspace = Workspace.browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
 
-        # Check access (need admin or owner)
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
+        # Combine existence and access check to prevent information leakage
+        access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         if not access_id:
             return {'success': False, 'error': 'Access ID is required'}
@@ -598,8 +606,7 @@ class PaasController(Controller):
 
         Errors:
             - 'Access ID is required' if access_id is None
-            - 'Workspace not found' if workspace doesn't exist
-            - 'Access denied' if user lacks admin/owner role
+            - 'Workspace not found or access denied' if workspace doesn't exist or lacks permission
             - 'Member not found' if access record doesn't exist
             - 'Cannot remove the workspace owner' if target is owner
         """
@@ -611,13 +618,11 @@ class PaasController(Controller):
         WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
 
         workspace = Workspace.browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
 
-        # Check access (need admin or owner)
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
+        # Combine existence and access check to prevent information leakage
+        access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': 'Workspace not found or access denied'}
 
         target_access = WorkspaceAccess.browse(access_id)
         if not target_access.exists() or target_access.workspace_id.id != workspace_id:

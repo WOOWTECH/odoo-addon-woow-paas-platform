@@ -4,22 +4,49 @@ import { reactive } from "@odoo/owl";
 /**
  * JSON-RPC helper for Odoo API calls
  * Odoo type="json" routes wrap response in { jsonrpc: "2.0", result: {...} }
+ * @param {string} url - API endpoint
+ * @param {Object} params - Request parameters
+ * @returns {Promise<Object>} API response result
+ * @throws {Error} Network or API errors
  */
 async function jsonRpc(url, params) {
-    const response = await fetch(url, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            jsonrpc: "2.0",
-            method: "call",
-            params: params,
-            id: Math.floor(Math.random() * 1000000),
-        }),
-    });
+    let response;
+    try {
+        response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                jsonrpc: "2.0",
+                method: "call",
+                params: params,
+                id: Math.floor(Math.random() * 1000000),
+            }),
+        });
+    } catch (networkError) {
+        throw new Error("Network error. Please check your connection and try again.");
+    }
 
-    const data = await response.json();
+    // Check HTTP status before parsing
+    if (!response.ok) {
+        if (response.status === 401) {
+            throw new Error("Session expired. Please refresh the page.");
+        } else if (response.status === 403) {
+            throw new Error("Access denied.");
+        } else if (response.status >= 500) {
+            throw new Error("Server error. Please try again later.");
+        }
+        throw new Error(`Request failed with status ${response.status}`);
+    }
+
+    // Parse JSON response
+    let data;
+    try {
+        data = await response.json();
+    } catch (parseError) {
+        throw new Error("Invalid response from server.");
+    }
 
     // Handle JSON-RPC error
     if (data.error) {
