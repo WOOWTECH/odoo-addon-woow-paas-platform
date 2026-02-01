@@ -22,23 +22,127 @@ Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠�
 
 ## Deployment Architecture
 
-### Kubernetes + Helm Overview
+### System Architecture
+
+由於 Odoo 運行在 K8s Pod 內，無法直接操作 Helm CLI，因此採用獨立的 **PaaS Operator** 服務架構：
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        WoowTech PaaS                            │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
-│  │   Odoo API   │───▶│  K8s Client  │───▶│  K8s Cluster │      │
-│  │  (Backend)   │    │   Service    │    │              │      │
-│  └──────────────┘    └──────────────┘    └──────────────┘      │
-│         │                                       │               │
-│         ▼                                       ▼               │
-│  ┌──────────────┐                      ┌──────────────┐        │
-│  │  PostgreSQL  │                      │ Helm Release │        │
-│  │  (Metadata)  │                      │   Manager    │        │
-│  └──────────────┘                      └──────────────┘        │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           K8s Cluster                                   │
+│                                                                         │
+│  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐          │
+│  │   Odoo Pod   │      │ PaaS Operator│      │ User Service │          │
+│  │  (Frontend + │─────▶│   (FastAPI)  │─────▶│    Pods      │          │
+│  │   Metadata)  │ HTTP │              │ Helm │              │          │
+│  └──────────────┘      └──────────────┘      └──────────────┘          │
+│         │                     │                                         │
+│         ▼                     ▼                                         │
+│  ┌──────────────┐      ┌──────────────┐                                │
+│  │  PostgreSQL  │      │ ServiceAccount                                │
+│  │  (Metadata)  │      │ + RBAC       │                                │
+│  └──────────────┘      └──────────────┘                                │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### PaaS Operator Service
+
+獨立的 Python FastAPI 服務，負責執行所有 Helm 操作：
+
+**技術棧**：
+- Python 3.11+
+- FastAPI
+- Helm CLI (installed in container)
+- kubectl (for status checks)
+
+**Deployment**：
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paas-operator
+  namespace: paas-system
+spec:
+  replicas: 1
+  template:
+    spec:
+      serviceAccountName: paas-operator
+      containers:
+        - name: operator
+          image: woowtech/paas-operator:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: paas-operator-secrets
+                  key: api-key
+```
+
+**ServiceAccount RBAC**：
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: paas-operator
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "secrets", "configmaps", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+```
+
+**API Endpoints**：
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/releases` | helm install |
+| GET | `/api/releases/{namespace}/{name}` | Get release status |
+| PATCH | `/api/releases/{namespace}/{name}` | helm upgrade |
+| DELETE | `/api/releases/{namespace}/{name}` | helm uninstall |
+| POST | `/api/releases/{namespace}/{name}/rollback` | helm rollback |
+| GET | `/api/releases/{namespace}/{name}/revisions` | helm history |
+| GET | `/api/releases/{namespace}/{name}/status` | Get pod/deployment status |
+| POST | `/api/namespaces` | Create namespace with quota |
+
+**Request/Response Example**：
+
+```json
+// POST /api/releases
+{
+  "namespace": "paas-ws-123",
+  "release_name": "paas-ws-123-anythingllm-01",
+  "chart": {
+    "repo_url": "https://charts.bitnami.com/bitnami",
+    "name": "postgresql",
+    "version": "15.5.0"
+  },
+  "values": {
+    "auth": {
+      "postgresPassword": "secret123",
+      "database": "app_db"
+    }
+  }
+}
+
+// Response
+{
+  "status": "deployed",
+  "revision": 1,
+  "namespace": "paas-ws-123",
+  "release_name": "paas-ws-123-anythingllm-01"
+}
+```
+
+**Security**：
+- API Key authentication (Odoo ↔ Operator)
+- Internal ClusterIP service (不對外暴露)
+- RBAC 限制只能操作 `paas-ws-*` namespace
 
 ### Namespace Strategy
 
@@ -69,28 +173,22 @@ Example: paas-ws-123-anythingllm-01
 1. User clicks "Launch Application"
            │
            ▼
-2. API validates input & creates CloudService record (state=pending)
+2. Odoo API validates input & creates CloudService record (state=pending)
            │
            ▼
-3. Background job triggered
+3. Odoo calls PaaS Operator API: POST /api/namespaces (if not exists)
            │
            ▼
-4. Create namespace if not exists
+4. Odoo calls PaaS Operator API: POST /api/releases
            │
            ▼
-5. Add Helm repo (if not cached)
+5. PaaS Operator executes: helm install {release} {chart} -n {namespace}
            │
            ▼
-6. helm install {release} {chart} -f values.yaml -n {namespace}
+6. Odoo polls PaaS Operator API: GET /api/releases/{ns}/{name}/status
            │
            ▼
-7. Poll deployment status until ready
-           │
-           ▼
-8. Create/Update Ingress for subdomain
-           │
-           ▼
-9. Update CloudService record (state=running)
+7. When ready, Odoo updates CloudService record (state=running)
 ```
 
 ### Supported Operations
@@ -621,9 +719,18 @@ GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
 
 ## Implementation Phases
 
-### Phase 1: Foundation
+### Phase 0: PaaS Operator Service
+- [ ] FastAPI project setup
+- [ ] Helm CLI integration (subprocess)
+- [ ] API endpoints: releases CRUD, namespaces
+- [ ] API Key authentication
+- [ ] Dockerfile + K8s manifests (Deployment, Service, RBAC)
+- [ ] Health check endpoint
+
+### Phase 1: Foundation (Odoo)
 - [ ] CloudAppTemplate model + seed data
 - [ ] CloudService model
+- [ ] PaaS Operator client service (HTTP calls)
 - [ ] Basic CRUD APIs
 
 ### Phase 2: Marketplace UI
@@ -811,7 +918,9 @@ helm_value_specs: |
 
 | 項目 | 決定 | 說明 |
 |------|------|------|
-| **K8s/Helm Client** | subprocess 調用 `helm` CLI | Python kubernetes-client 不支援 Helm，使用 CLI 較穩定 |
+| **K8s/Helm 操作** | 獨立 PaaS Operator 服務 | Odoo Pod 無法直接執行 Helm，需透過獨立服務 |
+| **PaaS Operator 技術棧** | Python FastAPI + Helm CLI | FastAPI 輕量快速，subprocess 調用 Helm CLI |
+| **Odoo ↔ Operator 通訊** | HTTP REST + API Key | Internal ClusterIP，不對外暴露 |
 | **Helm Chart Repository** | 公開 repos + 自建 | 使用 Bitnami/ArtifactHub，未來可自建 Chart Museum |
 | **Metrics collection** | Prometheus + Grafana | K8s metrics-server 不保留歷史，無法支援 24h/7d/30d 查詢 |
 | **Log aggregation** | Loki + Promtail | 整合 Grafana 生態系 |
