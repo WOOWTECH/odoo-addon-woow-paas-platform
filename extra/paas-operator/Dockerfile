@@ -37,20 +37,24 @@ RUN curl -LO "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kube
     mv kubectl /usr/local/bin/kubectl && \
     kubectl version --client
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Create non-root user BEFORE copying packages
+RUN useradd -m -u 1000 -g operator operator 2>/dev/null || \
+    useradd -m -u 1000 operator 2>/dev/null || true
+
+# Copy Python packages from builder to operator's home
+COPY --from=builder /root/.local /home/operator/.local
 
 # Copy application code
 COPY src/ ./src/
 
-# Create non-root user
-RUN useradd -m -u 1000 operator && \
-    chown -R operator:operator /app
+# Set ownership
+RUN chown -R operator:operator /app /home/operator/.local
 
 USER operator
 
-# Add local Python packages to PATH
-ENV PATH=/root/.local/bin:$PATH
+# Add local Python packages to PATH (use operator's home)
+ENV PATH=/home/operator/.local/bin:$PATH
+ENV PYTHONPATH=/home/operator/.local/lib/python3.11/site-packages
 ENV PYTHONUNBUFFERED=1
 
 # Expose application port
