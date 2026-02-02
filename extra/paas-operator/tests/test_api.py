@@ -336,3 +336,174 @@ class TestAuthentication:
 
             # Should succeed without API key
             assert response.status_code == 200
+
+
+class TestFullDeploymentFlow:
+    """Test complete deployment lifecycle."""
+
+    @patch("src.api.namespaces.k8s_service")
+    @patch("src.api.releases.helm_service")
+    def test_full_deployment_flow(self, mock_helm, mock_k8s, client):
+        """Test complete flow: namespace → install → status."""
+        # Step 1: Create namespace
+        mock_k8s.create_namespace.return_value = {
+            "message": "Namespace paas-ws-test created"
+        }
+
+        namespace_response = client.post(
+            "/api/namespaces",
+            json={
+                "name": "paas-ws-test",
+                "cpu_limit": "2",
+                "memory_limit": "4Gi",
+                "storage_limit": "20Gi",
+            },
+        )
+        assert namespace_response.status_code == 201
+
+        # Step 2: Install release
+        mock_helm.install.return_value = ReleaseInfo(
+            name="test-app",
+            namespace="paas-ws-test",
+            revision=1,
+            status=ReleaseStatus.DEPLOYED,
+            chart="nginx",
+            app_version="1.0.0",
+            updated="2024-01-01T00:00:00Z",
+        )
+
+        install_response = client.post(
+            "/api/releases",
+            json={
+                "namespace": "paas-ws-test",
+                "name": "test-app",
+                "chart": "nginx",
+                "version": "1.0.0",
+            },
+        )
+        assert install_response.status_code == 201
+        data = install_response.json()
+        assert data["name"] == "test-app"
+        assert data["status"] == "deployed"
+
+        # Step 3: Check status
+        mock_helm.get.return_value = ReleaseInfo(
+            name="test-app",
+            namespace="paas-ws-test",
+            revision=1,
+            status=ReleaseStatus.DEPLOYED,
+            chart="nginx",
+            app_version="1.0.0",
+            updated="2024-01-01T00:00:00Z",
+        )
+        mock_k8s.get_pods.return_value = [
+            PodInfo(
+                name="test-pod-1",
+                phase=PodPhase.RUNNING,
+                ready="1/1",
+                restarts=0,
+                age="5m",
+            )
+        ]
+
+        status_response = client.get("/api/releases/paas-ws-test/test-app/status")
+        assert status_response.status_code == 200
+        status_data = status_response.json()
+        assert status_data["release"]["name"] == "test-app"
+        assert len(status_data["pods"]) == 1
+
+    @patch("src.api.releases.helm_service")
+    def test_upgrade_flow(self, mock_helm, client):
+        """Test upgrade flow."""
+        # Install initial version
+        mock_helm.install.return_value = ReleaseInfo(
+            name="test-app",
+            namespace="paas-ws-test",
+            revision=1,
+            status=ReleaseStatus.DEPLOYED,
+            chart="nginx",
+            app_version="1.0.0",
+            updated="2024-01-01T00:00:00Z",
+        )
+
+        client.post(
+            "/api/releases",
+            json={
+                "namespace": "paas-ws-test",
+                "name": "test-app",
+                "chart": "nginx",
+            },
+        )
+
+        # Upgrade to new version
+        mock_helm.upgrade.return_value = ReleaseInfo(
+            name="test-app",
+            namespace="paas-ws-test",
+            revision=2,
+            status=ReleaseStatus.DEPLOYED,
+            chart="nginx",
+            app_version="2.0.0",
+            updated="2024-01-02T00:00:00Z",
+        )
+
+        upgrade_response = client.patch(
+            "/api/releases/paas-ws-test/test-app",
+            json={
+                "version": "2.0.0",
+                "values": {"replicas": 3},
+            },
+        )
+
+        assert upgrade_response.status_code == 200
+        data = upgrade_response.json()
+        assert data["revision"] == 2
+
+    @patch("src.api.releases.helm_service")
+    def test_rollback_flow(self, mock_helm, client):
+        """Test rollback flow."""
+        # Setup: release is at revision 2
+        mock_helm.get.return_value = ReleaseInfo(
+            name="test-app",
+            namespace="paas-ws-test",
+            revision=2,
+            status=ReleaseStatus.DEPLOYED,
+            chart="nginx",
+            app_version="2.0.0",
+            updated="2024-01-02T00:00:00Z",
+        )
+
+        # Rollback to revision 1
+        mock_helm.rollback.return_value = {"message": "Rollback successful"}
+
+        rollback_response = client.post(
+            "/api/releases/paas-ws-test/test-app/rollback",
+            json={"revision": 1},
+        )
+
+        assert rollback_response.status_code == 200
+        data = rollback_response.json()
+        assert "successful" in data["message"].lower()
+
+    @patch("src.api.releases.helm_service")
+    def test_delete_flow(self, mock_helm, client):
+        """Test uninstall and cleanup flow."""
+        # Uninstall release
+        mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+
+        delete_response = client.delete("/api/releases/paas-ws-test/test-app")
+
+        assert delete_response.status_code == 200
+        data = delete_response.json()
+        assert "uninstalled" in data["message"].lower()
+
+        # Verify release is gone
+        from src.services.helm import HelmException
+
+        mock_helm.get.side_effect = HelmException(
+            message="Not found",
+            command="helm get",
+            stderr="Error: release not found",
+        )
+
+        get_response = client.get("/api/releases/paas-ws-test/test-app")
+        assert get_response.status_code == 404
