@@ -1,0 +1,16 @@
+apiVersion: v2
+name: paas-operator
+description: PaaS Operator - Kubernetes operator for managing PaaS service deployments
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - paas
+  - operator
+  - kubernetes
+  - helm
+maintainers:
+  - name: WOOW
+home: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform
+sources:
+  - https://github.com/WOOWTECH/odoo-addon-woow-paas-platform
