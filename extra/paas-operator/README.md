@@ -117,7 +117,7 @@ pytest tests/test_helm.py -v
 docker build -t paas-operator:latest .
 ```
 
-### Deploy to Kubernetes
+### Deploy to Kubernetes with Helm
 
 1. **Generate API Key:**
 
@@ -125,38 +125,75 @@ docker build -t paas-operator:latest .
 openssl rand -base64 32
 ```
 
-2. **Update secret:**
-
-Edit `k8s/secret.yaml` and replace `CHANGEME_GENERATE_SECURE_KEY` with the generated key.
-
-3. **Deploy:**
+2. **Install with Helm:**
 
 ```bash
-# Create RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
-kubectl apply -f k8s/rbac.yaml
+# Install with custom API key
+helm install paas-operator ./helm \
+  --namespace paas-system \
+  --create-namespace \
+  --set auth.apiKey="YOUR_GENERATED_KEY"
 
-# Create Secret
-kubectl apply -f k8s/secret.yaml
+# Or use an existing secret
+helm install paas-operator ./helm \
+  --namespace paas-system \
+  --create-namespace \
+  --set auth.existingSecret="my-secret" \
+  --set auth.existingSecretKey="api-key"
+```
 
-# Deploy application
-kubectl apply -f k8s/deployment.yaml
+3. **Customize configuration:**
 
-# Create Service
-kubectl apply -f k8s/service.yaml
+```bash
+# Override values
+helm install paas-operator ./helm \
+  --namespace paas-system \
+  --create-namespace \
+  --set auth.apiKey="YOUR_KEY" \
+  --set replicaCount=3 \
+  --set resources.limits.memory=1Gi
+```
+
+Or create a `values-prod.yaml`:
+
+```yaml
+replicaCount: 3
+auth:
+  apiKey: "your-secure-key"
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+```
+
+```bash
+helm install paas-operator ./helm -f values-prod.yaml --namespace paas-system
 ```
 
 4. **Verify deployment:**
 
 ```bash
 # Check pods
-kubectl get pods -l app=paas-operator
+kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 
 # Check service
-kubectl get svc paas-operator
+kubectl get svc -n paas-system paas-operator
 
 # Test health endpoint
 kubectl run test-curl --rm -it --restart=Never --image=curlimages/curl -- \
-  curl http://paas-operator/health
+  curl http://paas-operator.paas-system/health
+```
+
+5. **Upgrade:**
+
+```bash
+helm upgrade paas-operator ./helm --namespace paas-system --set image.tag=v1.1.0
+```
+
+6. **Uninstall:**
+
+```bash
+helm uninstall paas-operator --namespace paas-system
 ```
 
 ### Access the Service
