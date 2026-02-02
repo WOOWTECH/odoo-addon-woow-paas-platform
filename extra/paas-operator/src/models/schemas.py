@@ -122,6 +122,9 @@ class ReleaseStatusResponse(BaseModel):
 
     release: ReleaseInfo
     pods: List[PodInfo]
+    pod_retrieval_error: Optional[str] = Field(
+        None, description="Error message if pod retrieval failed"
+    )
 
 
 class ReleaseListResponse(BaseModel):

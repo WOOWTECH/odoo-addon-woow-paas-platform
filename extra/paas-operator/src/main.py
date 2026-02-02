@@ -26,13 +26,14 @@ async def lifespan(app: FastAPI):
     logger.info("Starting PaaS Operator Service...")
     logger.info(f"Namespace prefix: {settings.namespace_prefix}")
 
-    # Verify Helm is available
+    # Verify Helm is available - FAIL FAST if not
     try:
         helm_service = HelmService()
         version = helm_service.get_version()
         logger.info(f"Helm version: {version}")
     except Exception as e:
-        logger.error(f"Helm not available: {e}")
+        logger.critical(f"Helm not available: {e} - Service cannot start!")
+        raise RuntimeError(f"Helm is required but not available: {e}")
 
     yield
 

@@ -287,16 +287,22 @@ async def get_release_status(namespace: str, name: str):
         release = helm_service.get(namespace, name)
 
         # Get pods in namespace (filter by app.kubernetes.io/instance label)
+        pods = []
+        pod_retrieval_error = None
         try:
             pods = k8s_service.get_pods(
                 namespace=namespace,
                 label_selector=f"app.kubernetes.io/instance={name}",
             )
         except Exception as e:
-            logger.warning(f"Failed to get pods: {e}")
-            pods = []
+            logger.error(f"Failed to get pods for {namespace}/{name}: {e}")
+            pod_retrieval_error = str(e)
 
-        return ReleaseStatusResponse(release=release, pods=pods)
+        return ReleaseStatusResponse(
+            release=release,
+            pods=pods,
+            pod_retrieval_error=pod_retrieval_error,
+        )
 
     except ValueError as e:
         raise HTTPException(

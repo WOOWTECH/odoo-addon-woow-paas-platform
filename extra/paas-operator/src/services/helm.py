@@ -483,35 +483,43 @@ class KubernetesService:
                 f"Namespace must start with '{settings.namespace_prefix}'"
             )
 
-        # Create namespace
-        ns_manifest = f"""
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {name}
-  labels:
-    paas-managed: "true"
-"""
+        import yaml
 
-        quota_manifest = f"""
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: {name}-quota
-  namespace: {name}
-spec:
-  hard:
-    requests.cpu: "{cpu_limit}"
-    requests.memory: "{memory_limit}"
-    limits.cpu: "{cpu_limit}"
-    limits.memory: "{memory_limit}"
-    persistentvolumeclaims: "10"
-    requests.storage: "{storage_limit}"
-"""
+        # Create namespace manifest using yaml.safe_dump to prevent injection
+        ns_manifest = {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+                "name": name,
+                "labels": {
+                    "paas-managed": "true",
+                },
+            },
+        }
+
+        # Create quota manifest using yaml.safe_dump to prevent injection
+        quota_manifest = {
+            "apiVersion": "v1",
+            "kind": "ResourceQuota",
+            "metadata": {
+                "name": f"{name}-quota",
+                "namespace": name,
+            },
+            "spec": {
+                "hard": {
+                    "requests.cpu": cpu_limit,
+                    "requests.memory": memory_limit,
+                    "limits.cpu": cpu_limit,
+                    "limits.memory": memory_limit,
+                    "persistentvolumeclaims": "10",
+                    "requests.storage": storage_limit,
+                },
+            },
+        }
 
         # Apply namespace
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(ns_manifest)
+            yaml.safe_dump(ns_manifest, f)
             ns_file = f.name
 
         try:
@@ -521,7 +529,7 @@ spec:
 
         # Apply quota
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(quota_manifest)
+            yaml.safe_dump(quota_manifest, f)
             quota_file = f.name
 
         try:
