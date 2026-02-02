@@ -1,3 +1,5 @@
+import uuid
+
 from odoo import fields, models
 
 
@@ -45,6 +47,7 @@ class CloudService(models.Model):
         string='Reference ID',
         index=True,
         readonly=True,
+        default=lambda self: str(uuid.uuid4()),
         help='Immutable unique identifier for this service',
     )
     deployment_id = fields.Char(

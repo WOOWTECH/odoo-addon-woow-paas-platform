@@ -490,11 +490,17 @@ class TestWorkspaceAPI(TransactionCase):
         # Initially should have 1 member (owner)
         self.assertEqual(workspace.member_count, 1)
 
-        # Add another member
-        demo_user = self.env.ref('base.user_demo')
+        # Create a test user instead of using demo user
+        test_user = self.env['res.users'].create({
+            'name': 'Test Member User',
+            'login': 'test_member_user',
+            'email': 'test_member@example.com',
+        })
+
+        # Add as a member
         self.WorkspaceAccess.create({
             'workspace_id': workspace.id,
-            'user_id': demo_user.id,
+            'user_id': test_user.id,
             'role': 'user',
         })
 
