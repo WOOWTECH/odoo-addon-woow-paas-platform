@@ -406,7 +406,7 @@ logger.error(f"Helm install failed: {error_message}")
 Check logs:
 
 ```bash
-kubectl logs -l app=paas-operator --tail=100
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator --tail=100
 ```
 
 Common issues:
