@@ -9,7 +9,8 @@ woow_paas_platform/
 ├── src/tests/                       # Odoo module tests
 │   ├── test_cloud_app_template.py  # CloudAppTemplate model tests
 │   ├── test_cloud_service.py       # CloudService model tests
-│   └── test_cloud_api.py           # API endpoint tests
+│   ├── test_cloud_api.py           # API endpoint & controller tests
+│   └── test_paas_operator.py       # PaaSOperatorClient HTTP client tests
 └── extra/paas-operator/tests/      # PaaS Operator service tests
     ├── test_helm.py                # Helm service tests
     └── test_api.py                 # FastAPI endpoint tests
@@ -145,6 +146,19 @@ tail -f odoo.log | grep -E '(TEST|ERROR|FAIL)'
 - Service state updates
 - Workspace isolation
 - Error handling for non-existent resources
+- Helm values filtering based on template specs
+- Subdomain/reference_id uniqueness constraints
+- Service state transitions
+- Workspace member management
+
+**test_paas_operator.py** covers:
+- PaaSOperatorClient initialization
+- All HTTP client methods (health_check, install_release, upgrade_release, etc.)
+- Error handling (connection errors, timeouts, API errors)
+- HTTP status code handling (400, 404, 500)
+- Empty response handling
+- `get_paas_operator_client` helper function
+- Configuration from Odoo settings
 
 ## Expected Test Results
 
@@ -183,6 +197,11 @@ odoo.tests.test_cloud_app_template.TestCloudAppTemplate.test_create_template_wit
 odoo.tests.test_cloud_service.TestCloudService.test_create_service_minimal ... ok
 odoo.tests.test_cloud_service.TestCloudService.test_service_state_transitions ... ok
 odoo.tests.test_cloud_api.TestCloudAPI.test_get_templates_list ... ok
+odoo.tests.test_cloud_api.TestCloudServiceController.test_helm_values_filtering ... ok
+odoo.tests.test_cloud_api.TestCloudServiceController.test_service_subdomain_uniqueness ... ok
+odoo.tests.test_paas_operator.TestPaaSOperatorClient.test_install_release_success ... ok
+odoo.tests.test_paas_operator.TestPaaSOperatorClient.test_connection_error_handling ... ok
+odoo.tests.test_paas_operator.TestGetPaaSOperatorClient.test_returns_client_when_configured ... ok
 ...
 
 ----------------------------------------------------------------------

@@ -143,6 +143,13 @@ rules:
 - API Key authentication (Odoo ↔ Operator)
 - Internal ClusterIP service (不對外暴露)
 - RBAC 限制只能操作 `paas-ws-*` namespace
+- YAML injection prevention using `yaml.safe_dump()`
+- Error message sanitization (防止敏感資訊外洩)
+- Fail-fast startup (Helm 不可用時拒絕啟動)
+- Configurable CORS origins for cross-origin requests
+- Request timeout handling (前端 30 秒超時)
+- Optimistic locking for race condition prevention
+- Helm values whitelist filtering based on template specs
 
 ### Namespace Strategy
 
@@ -577,6 +584,13 @@ class CloudAppTemplate(models.Model):
 class CloudService(models.Model):
     _name = 'woow_paas_platform.cloud_service'
     _description = 'Cloud Service Instance'
+
+    _sql_constraints = [
+        ('unique_subdomain', 'UNIQUE(subdomain)',
+         'Subdomain must be unique across all services.'),
+        ('unique_reference_id', 'UNIQUE(reference_id)',
+         'Reference ID must be unique.'),
+    ]
 
     # Relationships
     workspace_id = fields.Many2one('woow_paas_platform.workspace', required=True, ondelete='cascade')

@@ -181,6 +181,7 @@ Environment variables:
 | `NAMESPACE_PREFIX` | Allowed namespace prefix | paas-ws- |
 | `HELM_BINARY` | Path to Helm binary | /usr/local/bin/helm |
 | `HELM_TIMEOUT` | Helm command timeout (seconds) | 300 |
+| `CORS_ORIGINS` | Comma-separated allowed CORS origins | "" (none) |
 
 ## Security
 
@@ -206,6 +207,60 @@ The service uses a dedicated ServiceAccount with ClusterRole permissions limited
 - Apps resources (Deployments, StatefulSets)
 - Networking (Ingresses)
 - Resource quotas
+
+### YAML Injection Prevention
+
+All Kubernetes manifests are created using `yaml.safe_dump()` to prevent YAML injection attacks. User inputs are never directly interpolated into YAML strings.
+
+### CORS Configuration
+
+For cross-origin requests, configure allowed origins:
+
+```bash
+# Allow specific origins
+CORS_ORIGINS=https://odoo.example.com,https://admin.example.com
+
+# Leave empty to block all cross-origin requests (recommended for internal services)
+CORS_ORIGINS=
+```
+
+## Error Handling
+
+The service provides structured error responses for all failure cases:
+
+### Error Response Format
+
+```json
+{
+  "detail": "Human-readable error message"
+}
+```
+
+### HTTP Status Codes
+
+| Status Code | Meaning |
+|-------------|---------|
+| 400 | Bad Request - Invalid input or namespace |
+| 401 | Unauthorized - Missing or invalid API key |
+| 404 | Not Found - Release or namespace doesn't exist |
+| 409 | Conflict - Resource already exists |
+| 500 | Internal Server Error - Helm command failed |
+
+### Sanitized Error Messages
+
+All error messages returned to clients are sanitized to prevent information disclosure:
+
+- Internal paths and filenames are removed
+- Helm stderr output is logged but not exposed to clients
+- Stack traces are never included in responses
+
+### Fail-Fast Startup
+
+The service validates Helm availability on startup. If Helm is not accessible, the service will fail to start with a clear error message:
+
+```
+CRITICAL: Helm not available: {error} - Service cannot start!
+```
 
 ## Usage Examples
 
