@@ -27,8 +27,19 @@
         ],
         'woow_paas_platform.assets_paas': [
             ('include', 'web.assets_backend'),
-            # SCSS/JS/XML - use number prefixes for load order (00_, 10_, 20_, ...)
-            'woow_paas_platform/static/src/paas/**/*',
+            # SCSS - explicit load order to ensure variables are loaded first
+            'woow_paas_platform/static/src/paas/styles/00_variables.scss',
+            'woow_paas_platform/static/src/paas/styles/10_base.scss',
+            'woow_paas_platform/static/src/paas/styles/20_layout.scss',
+            'woow_paas_platform/static/src/paas/styles/30_components.scss',
+            'woow_paas_platform/static/src/paas/styles/pages/*.scss',
+            'woow_paas_platform/static/src/paas/styles/99_main.scss',
+            # Component-specific SCSS (after base styles)
+            'woow_paas_platform/static/src/paas/components/**/*.scss',
+            'woow_paas_platform/static/src/paas/pages/**/*.scss',
+            # JS and XML files
+            'woow_paas_platform/static/src/paas/**/*.js',
+            'woow_paas_platform/static/src/paas/**/*.xml',
         ],
     },
     'installable': True,
