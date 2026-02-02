@@ -6,6 +6,19 @@ class CloudService(models.Model):
     _description = 'Cloud Service Instance'
     _order = 'create_date desc'
 
+    _sql_constraints = [
+        (
+            'unique_subdomain',
+            'UNIQUE(subdomain)',
+            'Subdomain must be unique across all services.',
+        ),
+        (
+            'unique_reference_id',
+            'UNIQUE(reference_id)',
+            'Reference ID must be unique.',
+        ),
+    ]
+
     # Relationships
     workspace_id = fields.Many2one(
         comodel_name='woow_paas_platform.workspace',

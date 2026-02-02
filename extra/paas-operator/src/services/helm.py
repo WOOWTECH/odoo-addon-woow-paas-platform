@@ -28,6 +28,16 @@ class HelmException(Exception):
         super().__init__(self.message)
 
 
+class KubectlException(Exception):
+    """Exception raised when kubectl command fails."""
+
+    def __init__(self, message: str, command: str, stderr: str):
+        self.message = message
+        self.command = command
+        self.stderr = stderr
+        super().__init__(self.message)
+
+
 class HelmService:
     """Service for executing Helm CLI operations."""
 
@@ -387,22 +397,50 @@ class KubernetesService:
         self.kubectl_bin = "kubectl"
 
     def _run_command(self, args: List[str]) -> subprocess.CompletedProcess:
-        """Execute a kubectl command."""
+        """Execute a kubectl command.
+
+        Args:
+            args: Command arguments (without 'kubectl' prefix)
+
+        Returns:
+            CompletedProcess object
+
+        Raises:
+            KubectlException: If command fails or times out
+        """
         cmd = [self.kubectl_bin] + args
         logger.info(f"Executing: {' '.join(cmd)}")
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
 
-        if result.returncode != 0:
-            raise Exception(f"kubectl failed: {result.stderr}")
+            if result.returncode != 0:
+                raise KubectlException(
+                    message=f"kubectl command failed with code {result.returncode}",
+                    command=" ".join(cmd),
+                    stderr=result.stderr,
+                )
 
-        return result
+            return result
+
+        except subprocess.TimeoutExpired as e:
+            raise KubectlException(
+                message="kubectl command timed out after 30s",
+                command=" ".join(cmd),
+                stderr=str(e),
+            )
+        except FileNotFoundError:
+            raise KubectlException(
+                message=f"kubectl binary not found: {self.kubectl_bin}",
+                command=" ".join(cmd),
+                stderr="",
+            )
 
     def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[PodInfo]:
         """Get pods in a namespace.
