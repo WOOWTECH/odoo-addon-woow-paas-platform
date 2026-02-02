@@ -80,6 +80,30 @@ docker compose -f docker-compose-18.yml logs -f web
 
 **Test URL**: http://localhost (NOT :8069, to enable websocket)
 
+### PaaS Operator Local Development
+
+When the PaaS Operator is running in Kubernetes without Ingress, use port-forward to access it locally:
+
+```bash
+# Port forward the paas-operator service to localhost:8000
+kubectl port-forward -n paas-system svc/paas-operator 8000:80
+
+# Verify connection
+curl http://localhost:8000/health
+```
+
+**Get API Key from Kubernetes Secret:**
+
+```bash
+kubectl get secret -n paas-system paas-operator-secret -o jsonpath='{.data.api-key}' | base64 -d
+```
+
+**Odoo Configuration (Settings → Woow PaaS):**
+- **PaaS Operator URL**: `http://localhost:8000`
+- **PaaS Operator API Key**: (value from secret above)
+
+> **Note**: The port-forward session must remain active while testing. If you close the terminal, re-run the port-forward command.
+
 ## Architecture
 
 ### Directory Structure
