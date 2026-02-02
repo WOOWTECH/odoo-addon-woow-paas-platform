@@ -900,6 +900,61 @@ class PaasController(Controller):
 
     # ==================== Cloud Service Helpers ====================
 
+    def _filter_allowed_helm_values(self, values, template):
+        """
+        Filter Helm values to only include keys allowed by template's value_specs.
+
+        This prevents users from overriding critical system values like namespace,
+        resource limits, or security settings that should be controlled by the template.
+
+        Args:
+            values (dict): User-provided Helm values
+            template: CloudAppTemplate record with helm_value_specs
+
+        Returns:
+            dict: Filtered values containing only allowed keys
+        """
+        if not values:
+            return {}
+
+        if not template.helm_value_specs:
+            # No specs defined - allow all values (backward compatibility)
+            return values
+
+        try:
+            specs = json.loads(template.helm_value_specs)
+        except (json.JSONDecodeError, TypeError):
+            _logger.warning("Invalid helm_value_specs for template %s", template.name)
+            return values
+
+        # Build set of allowed keys from specs
+        allowed_keys = set()
+
+        # Get keys from required and optional fields
+        for field_list in [specs.get('required', []), specs.get('optional', [])]:
+            for field in field_list:
+                if isinstance(field, dict) and 'key' in field:
+                    allowed_keys.add(field['key'])
+                elif isinstance(field, str):
+                    allowed_keys.add(field)
+
+        if not allowed_keys:
+            # No keys defined in specs - allow all
+            return values
+
+        # Filter values to only allowed keys
+        filtered = {}
+        for key, value in values.items():
+            if key in allowed_keys:
+                filtered[key] = value
+            else:
+                _logger.debug(
+                    "Filtered out non-allowed Helm value key '%s' for template %s",
+                    key, template.name
+                )
+
+        return filtered
+
     def _list_services(self, workspace):
         """List all services in a workspace."""
         CloudService = request.env['woow_paas_platform.cloud_service']
@@ -944,9 +999,10 @@ class PaasController(Controller):
         helm_release_name = f"svc-{reference_id[:8]}"
         helm_namespace = f"paas-ws-{workspace.id}"
 
-        # Merge default values with user values
+        # Filter user values to only allowed keys, then merge with defaults
         default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
-        merged_values = {**default_values, **(values or {})}
+        filtered_user_values = self._filter_allowed_helm_values(values, template)
+        merged_values = {**default_values, **filtered_user_values}
 
         try:
             # Create service record in pending state
@@ -1065,9 +1121,10 @@ class PaasController(Controller):
             return {'success': False, 'error': 'PaaS Operator not configured'}
 
         try:
-            # Merge existing values with new values
+            # Filter user values to only allowed keys, then merge with existing
             existing_values = json.loads(service.helm_values) if service.helm_values else {}
-            merged_values = {**existing_values, **(values or {})}
+            filtered_user_values = self._filter_allowed_helm_values(values, service.template_id)
+            merged_values = {**existing_values, **filtered_user_values}
 
             # Upgrade release
             release_info = client.upgrade_release(
@@ -1205,10 +1262,19 @@ class PaasController(Controller):
             return {'success': False, 'error': f'Failed to get revisions: {e.detail or e.message}'}
 
     def _update_service_status(self, service):
-        """Poll operator for service status and update record."""
+        """Poll operator for service status and update record.
+
+        Uses optimistic locking to prevent race conditions:
+        - Re-fetches service before updating to get latest state
+        - Only updates if service is still in expected state
+        - Skips update if state changed (another process already updated)
+        """
         client = get_paas_operator_client(request.env)
         if not client:
             return
+
+        original_state = service.state
+        service_id = service.id
 
         try:
             status = client.get_status(
@@ -1221,6 +1287,22 @@ class PaasController(Controller):
 
             release_status = release.get('status', '')
             helm_revision = release.get('revision', service.helm_revision)
+
+            # Re-fetch service to get latest state (optimistic locking)
+            CloudService = request.env['woow_paas_platform.cloud_service']
+            service = CloudService.browse(service_id)
+
+            if not service.exists():
+                _logger.debug("Service %s no longer exists, skipping status update", service_id)
+                return
+
+            # Only proceed if state hasn't changed since we started
+            if service.state != original_state:
+                _logger.debug(
+                    "Service %s state changed from %s to %s, skipping update",
+                    service_id, original_state, service.state
+                )
+                return
 
             # Determine new state based on release status and pod status
             if release_status == 'deployed':
@@ -1253,7 +1335,10 @@ class PaasController(Controller):
         except PaaSOperatorError as e:
             if e.status_code == 404:
                 # Release not found - might have been deleted
-                if service.state == 'deleting':
+                # Re-fetch to check current state
+                CloudService = request.env['woow_paas_platform.cloud_service']
+                service = CloudService.browse(service_id)
+                if service.exists() and service.state == 'deleting':
                     service.unlink()
             else:
                 _logger.warning("Error polling service status: %s", str(e))

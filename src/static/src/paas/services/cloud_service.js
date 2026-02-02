@@ -1,13 +1,20 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
 
+/** Default timeout for API requests (30 seconds) */
+const REQUEST_TIMEOUT_MS = 30000;
+
 /**
  * JSON-RPC helper for Odoo API calls
  * @param {string} url - API endpoint
  * @param {Object} params - Request parameters
+ * @param {number} [timeoutMs=30000] - Request timeout in milliseconds
  * @returns {Promise<Object>} API response result
  */
-async function jsonRpc(url, params) {
+async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     let response;
     try {
         response = await fetch(url, {
@@ -21,9 +28,15 @@ async function jsonRpc(url, params) {
                 params: params,
                 id: Math.floor(Math.random() * 1000000),
             }),
+            signal: controller.signal,
         });
-    } catch (networkError) {
+    } catch (error) {
+        if (error.name === "AbortError") {
+            throw new Error("Request timed out. Please try again.");
+        }
         throw new Error("Network error. Please check your connection and try again.");
+    } finally {
+        clearTimeout(timeoutId);
     }
 
     if (!response.ok) {
