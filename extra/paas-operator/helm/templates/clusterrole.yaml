@@ -17,6 +17,7 @@ rules:
       - "secrets"
       - "configmaps"
       - "services"
+      - "serviceaccounts"
       - "persistentvolumeclaims"
       - "pods"
       - "pods/log"
@@ -39,7 +40,22 @@ rules:
 
   # Networking
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Policy (PodDisruptionBudgets)
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Autoscaling
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Coordination (leases for leader election)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
   # Batch jobs

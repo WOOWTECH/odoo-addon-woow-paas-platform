@@ -188,19 +188,28 @@ class HelmService:
         """
         self._validate_namespace(namespace)
 
+        # Use 'helm list --filter' which provides all needed info in one call
         args = [
-            "get",
-            "all",
-            name,
+            "list",
             "--namespace",
             namespace,
+            "--filter",
+            f"^{name}$",
             "--output",
             "json",
         ]
 
         result = self._run_command(args)
-        release_data = json.loads(result.stdout)
-        return self._parse_release_info(release_data)
+        releases = json.loads(result.stdout)
+
+        if not releases:
+            raise HelmException(
+                message=f"Release {name} not found",
+                command=" ".join(args),
+                stderr=f"Release {name} not found in namespace {namespace}",
+            )
+
+        return self._parse_list_release_info(releases[0])
 
     def upgrade(
         self,
@@ -217,7 +226,7 @@ class HelmService:
         Args:
             namespace: Release namespace
             name: Release name
-            chart: Chart reference (required if reset_values=True)
+            chart: Chart reference (full URL like oci://... or repo/chart)
             values: Values override
             version: Chart version
             reset_values: Reset to chart default values
@@ -225,13 +234,19 @@ class HelmService:
 
         Returns:
             Updated release information
+
+        Raises:
+            ValueError: If chart is not provided (Helm doesn't store original chart URL)
         """
         self._validate_namespace(namespace)
 
-        # Get current release to extract chart if not provided
+        # Chart is required for upgrade - Helm doesn't store the original chart URL
         if not chart:
-            current = self.get(namespace, name)
-            chart = current.chart
+            raise ValueError(
+                "Chart reference is required for upgrade. "
+                "Helm does not store the original chart URL. "
+                "Please provide the full chart reference (e.g., oci://registry-1.docker.io/bitnamicharts/postgresql)"
+            )
 
         args = [
             "upgrade",
@@ -366,10 +381,10 @@ class HelmService:
         return result.stdout.strip()
 
     def _parse_release_info(self, data: Dict[str, Any]) -> ReleaseInfo:
-        """Parse Helm JSON output to ReleaseInfo.
+        """Parse Helm install/upgrade JSON output to ReleaseInfo.
 
         Args:
-            data: Helm JSON output
+            data: Helm JSON output from install/upgrade
 
         Returns:
             ReleaseInfo object
@@ -387,6 +402,32 @@ class HelmService:
             updated=info.get("last_deployed", ""),
             description=info.get("description"),
             values=data.get("config"),
+        )
+
+    def _parse_list_release_info(self, data: Dict[str, Any]) -> ReleaseInfo:
+        """Parse Helm list JSON output to ReleaseInfo.
+
+        Args:
+            data: Single release from helm list output
+
+        Returns:
+            ReleaseInfo object
+        """
+        # helm list output: name, namespace, revision, updated, status, chart, app_version
+        # Extract chart name without version (e.g., "postgresql-18.2.3" -> "postgresql")
+        chart_with_version = data.get("chart", "")
+        chart_name = chart_with_version.rsplit("-", 1)[0] if "-" in chart_with_version else chart_with_version
+
+        return ReleaseInfo(
+            name=data.get("name", ""),
+            namespace=data.get("namespace", ""),
+            revision=int(data.get("revision", 0)),
+            status=ReleaseStatus(data.get("status", "unknown").lower()),
+            chart=chart_name,
+            app_version=data.get("app_version", ""),
+            updated=data.get("updated", ""),
+            description=None,
+            values=None,
         )
 
 
