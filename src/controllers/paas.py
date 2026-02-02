@@ -990,9 +990,18 @@ class PaasController(Controller):
                         storage_limit=f"{template.min_storage_gb * 2}Gi",
                     )
                 except PaaSOperatorError as e:
-                    # Namespace might already exist, which is fine
-                    if e.status_code != 409:  # Not a conflict/already exists error
-                        _logger.warning("Namespace creation warning: %s", str(e))
+                    # Namespace might already exist (409), which is fine
+                    if e.status_code != 409:
+                        _logger.error("Namespace creation failed: %s", str(e))
+                        service.write({
+                            'state': 'error',
+                            'error_message': f'Failed to create namespace: {e.detail or e.message}',
+                        })
+                        return {
+                            'success': True,
+                            'data': self._format_service(service),
+                            'warning': 'Namespace creation failed',
+                        }
 
                 # Install Helm release
                 release_info = client.install_release(
@@ -1096,9 +1105,16 @@ class PaasController(Controller):
 
         client = get_paas_operator_client(request.env)
         if not client:
-            # If operator not configured, just delete the record
-            service.unlink()
-            return {'success': True, 'message': 'Service deleted'}
+            # Block deletion - we cannot clean up K8s resources without operator
+            _logger.error(
+                "Cannot delete service %s: PaaS Operator not configured. "
+                "Kubernetes resources will NOT be cleaned up.",
+                service.name
+            )
+            return {
+                'success': False,
+                'error': 'PaaS Operator not configured. Cannot safely delete service without cleaning up Kubernetes resources. Contact administrator.',
+            }
 
         try:
             service.write({'state': 'deleting'})

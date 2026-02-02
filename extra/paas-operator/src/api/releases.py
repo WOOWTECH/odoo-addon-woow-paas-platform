@@ -57,10 +57,11 @@ async def create_release(request: ReleaseCreateRequest):
             detail=str(e),
         )
     except HelmException as e:
-        logger.error(f"Helm install failed: {e.message}")
+        logger.error(f"Helm install failed: {e.message}\nStderr: {e.stderr}")
+        # Sanitize error message - don't expose internal details
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Helm installation failed: {e.message}",
+            detail="Helm installation failed. Check operator logs for details.",
         )
 
 
@@ -97,9 +98,10 @@ async def get_release(namespace: str, name: str):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Release {name} not found in namespace {namespace}",
             )
+        logger.error(f"Failed to get release: {e.message}\nStderr: {e.stderr}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get release: {e.message}",
+            detail="Failed to get release. Check operator logs for details.",
         )
 
 
@@ -145,10 +147,10 @@ async def upgrade_release(
             detail=str(e),
         )
     except HelmException as e:
-        logger.error(f"Helm upgrade failed: {e.message}")
+        logger.error(f"Helm upgrade failed: {e.message}\nStderr: {e.stderr}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Helm upgrade failed: {e.message}",
+            detail="Helm upgrade failed. Check operator logs for details.",
         )
 
 
@@ -181,10 +183,10 @@ async def delete_release(namespace: str, name: str):
             detail=str(e),
         )
     except HelmException as e:
-        logger.error(f"Helm uninstall failed: {e.message}")
+        logger.error(f"Helm uninstall failed: {e.message}\nStderr: {e.stderr}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Helm uninstall failed: {e.message}",
+            detail="Helm uninstall failed. Check operator logs for details.",
         )
 
 
@@ -222,10 +224,10 @@ async def rollback_release(
             detail=str(e),
         )
     except HelmException as e:
-        logger.error(f"Helm rollback failed: {e.message}")
+        logger.error(f"Helm rollback failed: {e.message}\nStderr: {e.stderr}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Helm rollback failed: {e.message}",
+            detail="Helm rollback failed. Check operator logs for details.",
         )
 
 
@@ -257,10 +259,10 @@ async def get_release_revisions(namespace: str, name: str):
             detail=str(e),
         )
     except HelmException as e:
-        logger.error(f"Failed to get history: {e.message}")
+        logger.error(f"Failed to get history: {e.message}\nStderr: {e.stderr}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get release history: {e.message}",
+            detail="Failed to get release history. Check operator logs for details.",
         )
 
 
@@ -310,8 +312,8 @@ async def get_release_status(namespace: str, name: str):
             detail=str(e),
         )
     except HelmException as e:
-        logger.error(f"Failed to get status: {e.message}")
+        logger.error(f"Failed to get status: {e.message}\nStderr: {e.stderr}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get release status: {e.message}",
+            detail="Failed to get release status. Check operator logs for details.",
         )

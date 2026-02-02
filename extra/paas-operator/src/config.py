@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     helm_binary: str = "/usr/local/bin/helm"
     helm_timeout: int = 300  # seconds
 
+    # CORS
+    cors_origins: str = ""  # Comma-separated list of allowed origins, empty = block all external
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
