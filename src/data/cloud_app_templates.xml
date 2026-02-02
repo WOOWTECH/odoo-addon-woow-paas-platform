@@ -13,9 +13,9 @@
             <field name="documentation_url">https://www.postgresql.org/docs/</field>
 
             <!-- Helm Configuration -->
-            <field name="helm_repo_url">https://charts.bitnami.com/bitnami</field>
-            <field name="helm_chart_name">postgresql</field>
-            <field name="helm_chart_version">12.12.10</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/postgresql</field>
+            <field name="helm_chart_version"></field>
             <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"}}</field>
             <field name="helm_value_specs">{"properties": {"auth": {"type": "object", "properties": {"username": {"type": "string"}, "database": {"type": "string"}}}}}</field>
 
@@ -73,9 +73,9 @@
             <field name="documentation_url">https://redis.io/docs/</field>
 
             <!-- Helm Configuration -->
-            <field name="helm_repo_url">https://charts.bitnami.com/bitnami</field>
-            <field name="helm_chart_name">redis</field>
-            <field name="helm_chart_version">18.4.0</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/redis</field>
+            <field name="helm_chart_version"></field>
             <field name="helm_default_values">{"architecture": "standalone"}</field>
             <field name="helm_value_specs">{"properties": {"architecture": {"type": "string", "enum": ["standalone", "replication"]}}}</field>
 

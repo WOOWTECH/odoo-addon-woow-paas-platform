@@ -99,10 +99,27 @@ kubectl get secret -n paas-system paas-operator-secret -o jsonpath='{.data.api-k
 ```
 
 **Odoo Configuration (Settings → Woow PaaS):**
-- **PaaS Operator URL**: `http://localhost:8000`
+- **PaaS Operator URL**: `http://localhost:8000` (本機 Odoo) 或 `http://host.docker.internal:8000` (Docker Odoo)
 - **PaaS Operator API Key**: (value from secret above)
 
 > **Note**: The port-forward session must remain active while testing. If you close the terminal, re-run the port-forward command.
+
+**Docker 網路注意事項：**
+
+當 Odoo 運行在 Docker 容器中時，容器內的 `localhost` 指向容器本身，而非宿主機。因此需要使用 `host.docker.internal` 來連接宿主機上的 port-forward：
+
+| Odoo 運行環境 | PaaS Operator URL |
+|--------------|-------------------|
+| 本機直接運行 | `http://localhost:8000` |
+| Docker 容器 | `http://host.docker.internal:8000` |
+
+```bash
+# 確認 port-forward 正在運行
+kubectl port-forward -n paas-system svc/paas-operator 8000:80
+
+# 從 Docker 容器內測試連線
+docker exec -it <odoo-container> curl http://host.docker.internal:8000/health
+```
 
 ## Architecture
 
