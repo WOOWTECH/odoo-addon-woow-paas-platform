@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.DeleteServiceModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Delete Service</h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.deleting">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <div class="o_woow_delete_warning">
+                        <WoowIcon name="'warning'" size="48"/>
+                        <p>Are you sure you want to delete <strong t-esc="props.service.name"/>?</p>
+                        <p class="o_woow_delete_hint">
+                            This action cannot be undone. All data associated with this service
+                            will be permanently removed, including configurations and deployment history.
+                        </p>
+                    </div>
+
+                    <div class="o_woow_form_group o_woow_confirm_input">
+                        <label for="confirm_name">
+                            Type <strong t-esc="props.service.name"/> to confirm
+                        </label>
+                        <input
+                            type="text"
+                            id="confirm_name"
+                            class="o_woow_input"
+                            t-att-placeholder="props.service.name"
+                            t-att-value="state.confirmName"
+                            t-on-input="onConfirmNameInput"
+                            t-att-disabled="state.deleting"
+                            autocomplete="off"
+                        />
+                    </div>
+
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.deleting">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton
+                        variant="'danger'"
+                        size="'md'"
+                        onClick.bind="onDelete"
+                        disabled="!canDelete or state.deleting">
+                        <t t-if="state.deleting">
+                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            Deleting...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'delete'" size="18"/>
+                            Delete Service
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

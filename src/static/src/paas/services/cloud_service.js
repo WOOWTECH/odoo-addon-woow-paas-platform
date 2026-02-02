@@ -287,6 +287,60 @@ export const cloudService = reactive({
     },
 
     /**
+     * Get revision history for a service
+     * @param {number} workspaceId - Workspace ID
+     * @param {number} serviceId - Service ID
+     * @returns {Promise<{success: boolean, data?: Array, error?: string}>}
+     */
+    async getRevisions(workspaceId, serviceId) {
+        this.operationLoading.getRevisions = true;
+        try {
+            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services/${serviceId}/revisions`, {});
+            if (result.success) {
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.getRevisions = false;
+        }
+    },
+
+    /**
+     * Rollback a service to a previous revision
+     * @param {number} workspaceId - Workspace ID
+     * @param {number} serviceId - Service ID
+     * @param {number} revision - Target revision number
+     * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
+     */
+    async rollbackService(workspaceId, serviceId, revision) {
+        this.operationLoading.rollbackService = true;
+        try {
+            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services/${serviceId}/rollback`, {
+                revision: revision,
+            });
+            if (result.success) {
+                // Update local state if service data is returned
+                if (result.data) {
+                    const index = this.services.findIndex(s => s.id === serviceId);
+                    if (index !== -1) {
+                        this.services[index] = { ...this.services[index], ...result.data };
+                    }
+                }
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.rollbackService = false;
+        }
+    },
+
+    /**
      * Check if a specific operation is loading
      * @param {string} operation - Operation name
      * @returns {boolean}

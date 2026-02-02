@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.RollbackModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_rollback" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Rollback Service</h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.rolling">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <!-- Loading State -->
+                    <t t-if="state.loading">
+                        <div class="o_woow_revisions_loading">
+                            <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                            <p>Loading revision history...</p>
+                        </div>
+                    </t>
+
+                    <!-- Error State -->
+                    <t t-elif="state.error and !state.revisions.length">
+                        <div class="o_woow_revisions_error">
+                            <WoowIcon name="'error'" size="48"/>
+                            <p t-esc="state.error"/>
+                            <WoowButton variant="'secondary'" size="'sm'" onClick.bind="loadRevisions">
+                                <WoowIcon name="'refresh'" size="16"/>
+                                Retry
+                            </WoowButton>
+                        </div>
+                    </t>
+
+                    <!-- Empty State -->
+                    <t t-elif="!state.revisions.length">
+                        <div class="o_woow_empty_revisions">
+                            <WoowIcon name="'history'" size="48"/>
+                            <p>No revision history available.</p>
+                            <span class="o_woow_hint">
+                                Revisions are created when the service is deployed or updated.
+                            </span>
+                        </div>
+                    </t>
+
+                    <!-- Revisions List -->
+                    <t t-else="">
+                        <div class="o_woow_rollback_info">
+                            <WoowIcon name="'info'" size="18"/>
+                            <span>
+                                Select a revision to rollback to. Current revision:
+                                <strong t-esc="currentRevision"/>
+                            </span>
+                        </div>
+
+                        <div class="o_woow_revisions_list">
+                            <t t-foreach="state.revisions" t-as="revision" t-key="revision.revision">
+                                <div
+                                    t-att-class="{
+                                        'o_woow_revision_item': true,
+                                        'o_woow_revision_current': isCurrent(revision),
+                                        'o_woow_revision_selected': isSelected(revision),
+                                        'o_woow_revision_disabled': state.rolling
+                                    }"
+                                    t-on-click="() => this.selectRevision(revision)">
+                                    <div class="o_woow_revision_radio">
+                                        <div class="o_woow_radio_circle">
+                                            <div t-if="isSelected(revision)" class="o_woow_radio_dot"/>
+                                        </div>
+                                    </div>
+                                    <div class="o_woow_revision_content">
+                                        <div class="o_woow_revision_header">
+                                            <span class="o_woow_revision_number">
+                                                Revision <t t-esc="revision.revision"/>
+                                            </span>
+                                            <span
+                                                t-att-class="'o_woow_revision_status ' + getStatusClass(revision.status)"
+                                                t-esc="revision.status"/>
+                                            <span t-if="isCurrent(revision)" class="o_woow_revision_badge">
+                                                Current
+                                            </span>
+                                        </div>
+                                        <div class="o_woow_revision_meta">
+                                            <span class="o_woow_revision_date">
+                                                <WoowIcon name="'schedule'" size="14"/>
+                                                <t t-esc="formatDate(revision.updated)"/>
+                                            </span>
+                                            <span t-if="revision.description" class="o_woow_revision_desc">
+                                                <t t-esc="revision.description"/>
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+
+                        <!-- Error during rollback -->
+                        <div t-if="state.error" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.error"/>
+                        </div>
+                    </t>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.rolling">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton
+                        variant="'primary'"
+                        size="'md'"
+                        onClick.bind="onRollback"
+                        disabled="!canRollback">
+                        <t t-if="state.rolling">
+                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            Rolling back...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'history'" size="18"/>
+                            Rollback to Revision <t t-esc="state.selectedRevision or '...'"/>
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

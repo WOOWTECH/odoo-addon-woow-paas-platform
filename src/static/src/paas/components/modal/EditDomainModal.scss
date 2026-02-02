@@ -1,0 +1,154 @@
+// =============================================================================
+// Edit Domain Modal Styles
+// =============================================================================
+
+.o_woow_modal_domain {
+    max-width: 520px !important;
+}
+
+.o_woow_domain_readonly {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: rgba(0, 0, 0, 0.03);
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    font-size: 0.9375rem;
+    color: $woow-text-primary;
+
+    .material-symbols-outlined {
+        color: $woow-primary;
+    }
+}
+
+.o_woow_domain_none {
+    color: $woow-text-secondary;
+    font-style: italic;
+}
+
+.o_woow_form_hint {
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: $woow-text-secondary;
+}
+
+.o_woow_form_error {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: #ef4444;
+}
+
+.o_woow_domain_input_wrapper {
+    position: relative;
+
+    .o_woow_input {
+        padding-right: 2.5rem;
+    }
+}
+
+.o_woow_domain_clear {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    padding: 0.375rem;
+    cursor: pointer;
+    color: $woow-text-secondary;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+
+    &:hover {
+        background: rgba(0, 0, 0, 0.05);
+        color: $woow-text-primary;
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+// CNAME Instructions
+.o_woow_cname_instructions {
+    margin-top: 1.5rem;
+    border: 1px solid rgba($woow-primary, 0.2);
+    border-radius: $woow-radius-default;
+    overflow: hidden;
+}
+
+.o_woow_cname_header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: rgba($woow-primary, 0.05);
+    color: $woow-primary;
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+.o_woow_cname_content {
+    padding: 1rem;
+
+    > p {
+        margin: 0 0 0.75rem;
+        font-size: 0.875rem;
+        color: $woow-text-secondary;
+    }
+}
+
+.o_woow_cname_record {
+    background: rgba(0, 0, 0, 0.02);
+    border-radius: $woow-radius-default;
+    padding: 0.75rem;
+}
+
+.o_woow_cname_row {
+    display: flex;
+    align-items: center;
+    padding: 0.375rem 0;
+    border-bottom: 1px solid $woow-border-light;
+
+    &:last-child {
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+
+    &:first-child {
+        padding-top: 0;
+    }
+}
+
+.o_woow_cname_label {
+    flex: 0 0 100px;
+    font-size: 0.8rem;
+    color: $woow-text-secondary;
+    font-weight: 500;
+}
+
+.o_woow_cname_value {
+    flex: 1;
+    font-size: 0.875rem;
+    color: $woow-text-primary;
+
+    code {
+        background: rgba($woow-primary, 0.1);
+        color: $woow-primary;
+        padding: 0.125rem 0.375rem;
+        border-radius: 4px;
+        font-family: 'Monaco', 'Menlo', monospace;
+        font-size: 0.8rem;
+    }
+}
+
+.o_woow_cname_note {
+    margin-top: 0.75rem !important;
+    font-size: 0.75rem !important;
+    font-style: italic;
+}

@@ -71,14 +71,24 @@
                         <WoowButton
                             variant="'secondary'"
                             size="'md'"
-                            onClick.bind="showRollback">
+                            onClick.bind="showDomainModal"
+                            disabled="!canPerformActions">
+                            <WoowIcon name="'language'" size="18"/>
+                            Domain
+                        </WoowButton>
+                        <WoowButton
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showRollback"
+                            disabled="!canPerformActions">
                             <WoowIcon name="'history'" size="18"/>
                             Rollback
                         </WoowButton>
                         <WoowButton
                             variant="'ghost'"
                             size="'md'"
-                            onClick.bind="showDelete">
+                            onClick.bind="showDelete"
+                            disabled="!canPerformActions">
                             <WoowIcon name="'delete'" size="18"/>
                         </WoowButton>
                     </div>
@@ -119,72 +129,26 @@
                 </div>
             </t>
 
-            <!-- Delete Confirmation Modal -->
-            <t t-if="state.showDeleteConfirm">
-                <div class="o_woow_modal_backdrop" t-on-click="hideDelete">
-                    <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
-                        <div class="o_woow_modal_header">
-                            <h2>Delete Service</h2>
-                            <button class="o_woow_modal_close" t-on-click="hideDelete">
-                                <WoowIcon name="'close'" size="24"/>
-                            </button>
-                        </div>
-                        <div class="o_woow_modal_body">
-                            <div class="o_woow_delete_warning">
-                                <WoowIcon name="'warning'" size="48"/>
-                                <p>Are you sure you want to delete <strong t-esc="service.name"/>?</p>
-                                <p class="o_woow_delete_hint">This action cannot be undone. All data associated with this service will be permanently removed.</p>
-                            </div>
-                        </div>
-                        <div class="o_woow_modal_footer">
-                            <WoowButton variant="'secondary'" size="'md'" onClick.bind="hideDelete">
-                                Cancel
-                            </WoowButton>
-                            <WoowButton
-                                variant="'danger'"
-                                size="'md'"
-                                onClick.bind="confirmDelete">
-                                <t t-if="state.deleting">
-                                    <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
-                                    Deleting...
-                                </t>
-                                <t t-else="">
-                                    <WoowIcon name="'delete'" size="18"/>
-                                    Delete Service
-                                </t>
-                            </WoowButton>
-                        </div>
-                    </div>
-                </div>
-            </t>
+            <!-- Delete Service Modal -->
+            <DeleteServiceModal
+                t-if="state.showDeleteModal and serviceForModal"
+                service="serviceForModal"
+                onClose.bind="hideDelete"
+                onDeleted.bind="onServiceDeleted"/>
 
-            <!-- Rollback Modal (placeholder for now) -->
-            <t t-if="state.showRollbackModal">
-                <div class="o_woow_modal_backdrop" t-on-click="hideRollback">
-                    <div class="o_woow_modal" t-on-click.stop="">
-                        <div class="o_woow_modal_header">
-                            <h2>Rollback Service</h2>
-                            <button class="o_woow_modal_close" t-on-click="hideRollback">
-                                <WoowIcon name="'close'" size="24"/>
-                            </button>
-                        </div>
-                        <div class="o_woow_modal_body">
-                            <p>Select a revision to rollback to:</p>
-                            <p class="o_woow_hint">Current revision: <strong t-esc="service.helm_revision"/></p>
-                            <!-- Revision list would be loaded here -->
-                            <div class="o_woow_empty_revisions">
-                                <WoowIcon name="'history'" size="32"/>
-                                <p>Revision history will be available once the service is deployed.</p>
-                            </div>
-                        </div>
-                        <div class="o_woow_modal_footer">
-                            <WoowButton variant="'secondary'" size="'md'" onClick.bind="hideRollback">
-                                Cancel
-                            </WoowButton>
-                        </div>
-                    </div>
-                </div>
-            </t>
+            <!-- Rollback Modal -->
+            <RollbackModal
+                t-if="state.showRollbackModal and serviceForModal"
+                service="serviceForModal"
+                onClose.bind="hideRollback"
+                onRollback.bind="onRollbackComplete"/>
+
+            <!-- Edit Domain Modal -->
+            <EditDomainModal
+                t-if="state.showDomainModal and serviceForModal"
+                service="serviceForModal"
+                onClose.bind="hideDomainModal"
+                onSaved.bind="onDomainSaved"/>
         </div>
     </t>
 </templates>

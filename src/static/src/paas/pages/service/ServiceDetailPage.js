@@ -6,6 +6,9 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { OverviewTab } from "./tabs/OverviewTab";
 import { ConfigurationTab } from "./tabs/ConfigurationTab";
+import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
+import { RollbackModal } from "../../components/modal/RollbackModal";
+import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { cloudService } from "../../services/cloud_service";
 import { router } from "../../core/router";
 
@@ -33,6 +36,9 @@ export class ServiceDetailPage extends Component {
         StatusBadge,
         OverviewTab,
         ConfigurationTab,
+        DeleteServiceModal,
+        RollbackModal,
+        EditDomainModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -46,9 +52,9 @@ export class ServiceDetailPage extends Component {
             loading: true,
             error: null,
             currentTab: this.props.initialTab || "overview",
-            showDeleteConfirm: false,
+            showDeleteModal: false,
             showRollbackModal: false,
-            deleting: false,
+            showDomainModal: false,
         });
         this.router = useState(router);
         this.pollingInterval = null;
@@ -136,6 +142,21 @@ export class ServiceDetailPage extends Component {
         }
     }
 
+    // Delete Modal
+    showDelete() {
+        this.state.showDeleteModal = true;
+    }
+
+    hideDelete() {
+        this.state.showDeleteModal = false;
+    }
+
+    onServiceDeleted() {
+        this.hideDelete();
+        this.goBack();
+    }
+
+    // Rollback Modal
     showRollback() {
         this.state.showRollbackModal = true;
     }
@@ -144,30 +165,23 @@ export class ServiceDetailPage extends Component {
         this.state.showRollbackModal = false;
     }
 
-    showDelete() {
-        this.state.showDeleteConfirm = true;
+    onRollbackComplete() {
+        this.hideRollback();
+        this.loadService();
     }
 
-    hideDelete() {
-        this.state.showDeleteConfirm = false;
+    // Domain Modal
+    showDomainModal() {
+        this.state.showDomainModal = true;
     }
 
-    async confirmDelete() {
-        this.state.deleting = true;
+    hideDomainModal() {
+        this.state.showDomainModal = false;
+    }
 
-        const result = await cloudService.deleteService(
-            this.props.workspaceId,
-            this.props.serviceId
-        );
-
-        if (result.success) {
-            this.goBack();
-        } else {
-            this.state.error = result.error || "Failed to delete service";
-            this.state.showDeleteConfirm = false;
-        }
-
-        this.state.deleting = false;
+    onDomainSaved() {
+        this.hideDomainModal();
+        this.loadService();
     }
 
     async handleConfigSave(values) {
@@ -179,5 +193,14 @@ export class ServiceDetailPage extends Component {
     get templateIcon() {
         // Use template icon if available, otherwise default to cloud icon
         return this.service?.template?.icon || "cloud";
+    }
+
+    // Service data for modals (includes workspace_id)
+    get serviceForModal() {
+        if (!this.service) return null;
+        return {
+            ...this.service,
+            workspace_id: this.props.workspaceId,
+        };
     }
 }
