@@ -40,7 +40,7 @@
                     variant="'ghost'"
                     size="'sm'"
                     onClick.bind="openWebUI"
-                    t-att-disabled="!isClickable">
+                    disabled="!isClickable">
                     <WoowIcon name="'open_in_new'" size="18"/>
                 </WoowButton>
                 <WoowButton
