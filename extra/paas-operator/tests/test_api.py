@@ -341,12 +341,13 @@ class TestAuthentication:
 class TestFullDeploymentFlow:
     """Test complete deployment lifecycle."""
 
+    @patch("src.api.releases.k8s_service")
     @patch("src.api.namespaces.k8s_service")
     @patch("src.api.releases.helm_service")
-    def test_full_deployment_flow(self, mock_helm, mock_k8s, client):
+    def test_full_deployment_flow(self, mock_helm, mock_ns_k8s, mock_releases_k8s, client):
         """Test complete flow: namespace → install → status."""
         # Step 1: Create namespace
-        mock_k8s.create_namespace.return_value = {
+        mock_ns_k8s.create_namespace.return_value = {
             "message": "Namespace paas-ws-test created"
         }
 
@@ -396,7 +397,7 @@ class TestFullDeploymentFlow:
             app_version="1.0.0",
             updated="2024-01-01T00:00:00Z",
         )
-        mock_k8s.get_pods.return_value = [
+        mock_releases_k8s.get_pods.return_value = [
             PodInfo(
                 name="test-pod-1",
                 phase=PodPhase.RUNNING,
