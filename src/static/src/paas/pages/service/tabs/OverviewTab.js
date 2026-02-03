@@ -3,6 +3,7 @@ import { Component } from "@odoo/owl";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { formatDate } from "../../../services/utils";
+import { cloudService } from "../../../services/cloud_service";
 
 /**
  * OverviewTab Component
@@ -28,7 +29,7 @@ export class OverviewTab extends Component {
 
     get publicUrl() {
         if (!this.props.service.subdomain) return null;
-        return `https://${this.props.service.subdomain}.woowtech.com`;
+        return `https://${this.props.service.subdomain}.${cloudService.domain}`;
     }
 
     get helmNamespace() {

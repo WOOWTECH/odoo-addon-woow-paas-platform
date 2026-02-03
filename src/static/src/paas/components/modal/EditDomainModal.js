@@ -38,7 +38,7 @@ export class EditDomainModal extends Component {
     }
 
     get fullSubdomain() {
-        return this.subdomain ? `${this.subdomain}.woowtech.com` : "";
+        return this.subdomain ? `${this.subdomain}.${cloudService.domain}` : "";
     }
 
     get hasChanges() {

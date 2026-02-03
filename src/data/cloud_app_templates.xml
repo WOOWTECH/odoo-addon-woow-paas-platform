@@ -16,7 +16,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/postgresql</field>
             <field name="helm_chart_version"></field>
-            <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"}}</field>
+            <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"}, "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}}}</field>
             <field name="helm_value_specs">{"properties": {"auth": {"type": "object", "properties": {"username": {"type": "string"}, "database": {"type": "string"}}}}}</field>
 
             <!-- Service Configuration -->
@@ -42,11 +42,11 @@
             <field name="monthly_price">0</field>
             <field name="documentation_url">https://docs.n8n.io/</field>
 
-            <!-- Helm Configuration -->
-            <field name="helm_repo_url">https://8gears.container-registry.com/chartrepo/library</field>
-            <field name="helm_chart_name">n8n</field>
-            <field name="helm_chart_version">0.21.0</field>
-            <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}}</field>
+            <!-- Helm Configuration (OCI registry format) -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://8gears.container-registry.com/library/n8n</field>
+            <field name="helm_chart_version"></field>
+            <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "1000m", "memory": "1Gi"}}}}</field>
             <field name="helm_value_specs">{"properties": {"config": {"type": "object", "properties": {"database": {"type": "object", "properties": {"type": {"type": "string", "enum": ["sqlite", "postgres"]}}}}}}}</field>
 
             <!-- Service Configuration -->
@@ -76,7 +76,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/redis</field>
             <field name="helm_chart_version"></field>
-            <field name="helm_default_values">{"architecture": "standalone"}</field>
+            <field name="helm_default_values">{"architecture": "standalone", "master": {"resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory": "512Mi"}}}}</field>
             <field name="helm_value_specs">{"properties": {"architecture": {"type": "string", "enum": ["standalone", "replication"]}}}</field>
 
             <!-- Service Configuration -->

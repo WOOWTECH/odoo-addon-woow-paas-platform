@@ -15,3 +15,11 @@ class ResConfigSettings(models.TransientModel):
         config_parameter='woow_paas_platform.operator_api_key',
         help='API key for authenticating with the PaaS Operator service',
     )
+
+    # Domain Configuration
+    woow_paas_domain = fields.Char(
+        string='PaaS Domain',
+        config_parameter='woow_paas_platform.paas_domain',
+        default='woowtech.io',
+        help='Base domain for deployed services (e.g., woowtech.io)',
+    )

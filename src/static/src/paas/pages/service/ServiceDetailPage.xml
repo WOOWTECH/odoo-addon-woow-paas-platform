@@ -54,7 +54,7 @@
                                 </span>
                                 <span t-if="service.subdomain" class="o_woow_service_domain">
                                     <WoowIcon name="'language'" size="14"/>
-                                    <t t-esc="service.subdomain"/>.woowtech.com
+                                    <t t-esc="service.subdomain"/>.<t t-esc="domain"/>
                                 </span>
                             </div>
                         </div>

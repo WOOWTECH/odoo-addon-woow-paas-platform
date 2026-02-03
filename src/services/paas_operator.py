@@ -225,6 +225,7 @@ class PaaSOperatorClient:
         version: Optional[str] = None,
         values: Optional[Dict[str, Any]] = None,
         create_namespace: bool = False,
+        expose: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Install a new Helm release.
 
@@ -236,6 +237,8 @@ class PaaSOperatorClient:
             version: Chart version (optional)
             values: Helm values override
             create_namespace: Whether to create namespace if not exists
+            expose: Cloudflare Tunnel expose configuration
+                    e.g., {'enabled': True, 'subdomain': 'myapp', 'service_port': 8080}
 
         Returns:
             Release information
@@ -261,6 +264,13 @@ class PaaSOperatorClient:
             data['version'] = version
         if values:
             data['values'] = values
+        if expose:
+            data['expose'] = expose
+            _logger.info("install_release: Adding expose config to request: %s", expose)
+        else:
+            _logger.info("install_release: No expose config provided")
+
+        _logger.debug("install_release: Full request data: %s", data)
 
         return self._request(
             'POST',

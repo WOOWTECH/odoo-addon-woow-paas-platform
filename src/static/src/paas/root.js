@@ -1,6 +1,7 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
 import { router } from "./core/router";
+import { cloudService } from "./services/cloud_service";
 import { AppShell } from "./layout/app_shell/AppShell";
 import { DashboardPage } from "./pages/dashboard/DashboardPage";
 import { WorkspaceListPage } from "./pages/workspace/WorkspaceListPage";
@@ -30,6 +31,8 @@ export class Root extends Component {
         this.router = useState(router);
         onMounted(() => {
             this.router.init();
+            // Initialize platform config (domain, etc.)
+            cloudService.initConfig();
         });
     }
 

@@ -114,7 +114,11 @@ export class ServiceDetailPage extends Component {
 
     get publicUrl() {
         if (!this.service?.subdomain) return null;
-        return `https://${this.service.subdomain}.woowtech.com`;
+        return `https://${this.service.subdomain}.${cloudService.domain}`;
+    }
+
+    get domain() {
+        return cloudService.domain;
     }
 
     get canPerformActions() {

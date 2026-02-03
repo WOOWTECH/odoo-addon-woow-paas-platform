@@ -141,7 +141,7 @@ export class AppConfigurationPage extends Component {
      * @returns {string}
      */
     get subdomainSuffix() {
-        return '.woowtech.com';
+        return `.${cloudService.domain}`;
     }
 
     /**

@@ -97,6 +97,41 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
  */
 
 /**
+ * Platform configuration cache
+ */
+let _configCache = null;
+
+/**
+ * Get platform configuration (cached)
+ * @returns {Promise<{domain: string}>}
+ */
+export async function getConfig() {
+    if (_configCache) {
+        return _configCache;
+    }
+    try {
+        const result = await jsonRpc("/woow/api/config", {});
+        if (result.success) {
+            _configCache = result.data;
+            return _configCache;
+        }
+    } catch (err) {
+        console.warn("Failed to fetch config, using defaults:", err);
+    }
+    // Return default config
+    return { domain: "woowtech.io" };
+}
+
+/**
+ * Get the configured domain
+ * @returns {Promise<string>}
+ */
+export async function getDomain() {
+    const config = await getConfig();
+    return config.domain;
+}
+
+/**
  * Cloud Service
  * Handles all API calls related to cloud templates and services
  */
@@ -111,6 +146,16 @@ export const cloudService = reactive({
     operationLoading: {},
     /** @type {string|null} */
     error: null,
+    /** @type {string} */
+    domain: "woowtech.io",
+
+    /**
+     * Initialize config (call this early in app lifecycle)
+     */
+    async initConfig() {
+        const config = await getConfig();
+        this.domain = config.domain;
+    },
 
     /**
      * Fetch all available templates

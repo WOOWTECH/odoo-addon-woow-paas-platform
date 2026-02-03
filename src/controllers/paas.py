@@ -38,6 +38,29 @@ class PaasController(Controller):
             {'session_info': session_info}
         )
 
+    # ==================== Config API ====================
+
+    @route("/woow/api/config", auth="user", methods=["POST"], type="json")
+    def api_config(self):
+        """
+        Get PaaS platform configuration for frontend.
+
+        Returns:
+            dict: Configuration including:
+                - success (bool): True
+                - data (dict): Configuration values
+                    - domain: Base domain for deployed services (e.g., woowtech.io)
+        """
+        IrConfigParameter = request.env['ir.config_parameter'].sudo()
+        domain = IrConfigParameter.get_param('woow_paas_platform.paas_domain', 'woowtech.io')
+
+        return {
+            'success': True,
+            'data': {
+                'domain': domain,
+            }
+        }
+
     # ==================== Workspace API ====================
 
     @route("/api/workspaces", auth="user", methods=["POST"], type="json")
@@ -1059,6 +1082,23 @@ class PaasController(Controller):
                             'warning': 'Namespace creation failed',
                         }
 
+                # Build expose configuration for Cloudflare Tunnel
+                expose_config = None
+                _logger.info(
+                    "Template %s (id=%d): ingress_enabled=%s, default_port=%s",
+                    template.name, template.id, template.ingress_enabled, template.default_port
+                )
+                if template.ingress_enabled:
+                    # Note: Don't pass service_port - let PaaS Operator auto-detect
+                    # from K8s Service (which may map port 80 -> container port)
+                    expose_config = {
+                        'enabled': True,
+                        'subdomain': subdomain,
+                    }
+                    _logger.info("Built expose_config: %s", expose_config)
+                else:
+                    _logger.info("Skipping expose_config: ingress_enabled is False")
+
                 # Install Helm release
                 release_info = client.install_release(
                     namespace=helm_namespace,
@@ -1068,6 +1108,7 @@ class PaasController(Controller):
                     version=template.helm_chart_version,
                     values=merged_values,
                     create_namespace=True,  # Let operator handle namespace if needed
+                    expose=expose_config,
                 )
 
                 # Update service state
