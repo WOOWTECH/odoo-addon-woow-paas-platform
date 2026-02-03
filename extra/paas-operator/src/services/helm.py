@@ -618,6 +618,57 @@ class KubernetesService:
 
         return {"message": f"Namespace {name} created with quota"}
 
+    def get_services(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get services in a namespace.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Optional label selector
+
+        Returns:
+            List of service information dicts with name, ports, type
+        """
+        args = [
+            "get",
+            "services",
+            "--namespace",
+            namespace,
+            "--output",
+            "json",
+        ]
+
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
+        services_data = json.loads(result.stdout)
+
+        services = []
+        for svc in services_data.get("items", []):
+            metadata = svc.get("metadata", {})
+            spec = svc.get("spec", {})
+
+            ports = []
+            for port in spec.get("ports", []):
+                ports.append({
+                    "name": port.get("name", ""),
+                    "port": port.get("port"),
+                    "targetPort": port.get("targetPort"),
+                    "protocol": port.get("protocol", "TCP"),
+                })
+
+            services.append({
+                "name": metadata.get("name", ""),
+                "namespace": namespace,
+                "type": spec.get("type", "ClusterIP"),
+                "clusterIP": spec.get("clusterIP"),
+                "ports": ports,
+            })
+
+        return services
+
     @staticmethod
     def _calculate_age(created_timestamp: str) -> str:
         """Calculate age from creation timestamp."""

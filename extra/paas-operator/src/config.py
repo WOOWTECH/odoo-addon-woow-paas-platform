@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = ""  # Comma-separated list of allowed origins, empty = block all external
 
+    # Cloudflare Tunnel Integration
+    cloudflare_enabled: bool = False  # Set to true to enable automatic route management
+    cloudflare_api_token: str = ""  # API token with Cloudflare Tunnel:Edit permission
+    cloudflare_account_id: str = ""  # Cloudflare account ID
+    cloudflare_tunnel_id: str = ""  # Tunnel ID from Zero Trust dashboard
+    cloudflare_domain: str = ""  # Base domain (e.g., woowtech.io)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

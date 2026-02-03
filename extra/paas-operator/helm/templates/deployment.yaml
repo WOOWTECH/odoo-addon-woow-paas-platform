@@ -52,6 +52,25 @@ spec:
               value: {{ .Values.config.helmBinary | quote }}
             - name: HELM_TIMEOUT
               value: {{ .Values.config.helmTimeout | quote }}
+            {{- if .Values.cloudflare.enabled }}
+            - name: CLOUDFLARE_ENABLED
+              value: "true"
+            - name: CLOUDFLARE_DOMAIN
+              value: {{ .Values.cloudflare.domain | quote }}
+            - name: CLOUDFLARE_ACCOUNT_ID
+              value: {{ .Values.cloudflare.accountId | quote }}
+            - name: CLOUDFLARE_TUNNEL_ID
+              value: {{ .Values.cloudflare.tunnelId | quote }}
+            - name: CLOUDFLARE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.cloudflare.existingSecret }}
+                  name: {{ .Values.cloudflare.existingSecret }}
+                  {{- else }}
+                  name: {{ include "paas-operator.fullname" . }}-cloudflare
+                  {{- end }}
+                  key: {{ .Values.cloudflare.existingSecretKey }}
+            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

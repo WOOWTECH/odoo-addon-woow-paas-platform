@@ -33,6 +33,24 @@ class PodPhase(str, Enum):
 # Request Models
 
 
+class ExposeConfig(BaseModel):
+    """Configuration for exposing a service via Cloudflare Tunnel."""
+
+    enabled: bool = Field(default=False, description="Enable public access via Cloudflare Tunnel")
+    subdomain: Optional[str] = Field(
+        None,
+        description="Custom subdomain (auto-generated if not provided)",
+    )
+    service_name: Optional[str] = Field(
+        None,
+        description="K8s service name to expose (auto-detected if not provided)",
+    )
+    service_port: Optional[int] = Field(
+        None,
+        description="Service port to expose (auto-detected if not provided)",
+    )
+
+
 class ReleaseCreateRequest(BaseModel):
     """Request to create a new Helm release."""
 
@@ -45,6 +63,10 @@ class ReleaseCreateRequest(BaseModel):
     )
     create_namespace: bool = Field(
         default=False, description="Create namespace if not exists"
+    )
+    expose: Optional[ExposeConfig] = Field(
+        default=None,
+        description="Configuration for exposing service via Cloudflare Tunnel",
     )
 
 
@@ -103,6 +125,14 @@ class ReleaseRevision(BaseModel):
     description: str
 
 
+class RouteInfo(BaseModel):
+    """Information about a Cloudflare Tunnel route."""
+
+    hostname: str = Field(..., description="Public hostname (e.g., myapp.example.com)")
+    service_url: str = Field(..., description="Internal service URL")
+    enabled: bool = Field(default=True, description="Whether the route is active")
+
+
 class ReleaseInfo(BaseModel):
     """Detailed information about a Helm release."""
 
@@ -115,6 +145,7 @@ class ReleaseInfo(BaseModel):
     updated: str
     description: Optional[str] = None
     values: Optional[Dict[str, Any]] = None
+    route: Optional[RouteInfo] = Field(None, description="Cloudflare Tunnel route info if exposed")
 
 
 class ReleaseStatusResponse(BaseModel):

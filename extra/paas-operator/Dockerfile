@@ -23,16 +23,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Helm
+# Detect architecture and install Helm
 ARG HELM_VERSION=3.13.3
-RUN curl -fsSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz | tar xz && \
-    mv linux-amd64/helm /usr/local/bin/helm && \
-    rm -rf linux-amd64 && \
+ARG TARGETARCH
+RUN ARCH=${TARGETARCH:-amd64} && \
+    curl -fsSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz | tar xz && \
+    mv linux-${ARCH}/helm /usr/local/bin/helm && \
+    rm -rf linux-${ARCH} && \
     helm version
 
-# Install kubectl
+# Install kubectl (matching architecture)
 ARG KUBECTL_VERSION=1.28.4
-RUN curl -LO "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+RUN ARCH=${TARGETARCH:-amd64} && \
+    curl -LO "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" && \
     chmod +x kubectl && \
     mv kubectl /usr/local/bin/kubectl && \
     kubectl version --client

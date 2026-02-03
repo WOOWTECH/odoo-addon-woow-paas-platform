@@ -27,3 +27,7 @@ venv/
 # IDE
 .vscode/*.log
 .idea/
+
+# helm values
+*values.yaml
+*values.yml

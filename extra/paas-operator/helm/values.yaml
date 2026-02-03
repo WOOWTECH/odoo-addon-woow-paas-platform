@@ -35,6 +35,18 @@ config:
   helmBinary: "/usr/local/bin/helm"
   helmTimeout: 300
 
+# Cloudflare Tunnel integration
+cloudflare:
+  enabled: false  # Set to true to enable automatic route management
+  domain: ""      # Base domain (e.g., woowtech.io)
+  accountId: ""   # Cloudflare account ID
+  tunnelId: ""    # Tunnel ID from Zero Trust dashboard
+  # API token with Cloudflare Tunnel:Edit permission
+  apiToken: ""
+  # Or use existing secret
+  existingSecret: ""
+  existingSecretKey: "cloudflare-api-token"
+
 service:
   type: ClusterIP
   port: 80
