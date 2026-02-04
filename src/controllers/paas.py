@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import traceback
@@ -765,7 +766,7 @@ class PaasController(Controller):
     # ==================== Cloud Services API ====================
 
     @route("/woow/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
-    def api_workspace_services(self, workspace_id, action='list', template_id=None, name=None, values=None, **kw):
+    def api_workspace_services(self, workspace_id, action='list', template_id=None, name=None, reference_id=None, values=None, **kw):
         """
         Handle cloud service operations for a workspace.
 
@@ -800,7 +801,7 @@ class PaasController(Controller):
             # Only admin/owner can create services
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._create_service(workspace, template_id, name, values)
+            return self._create_service(workspace, template_id, name, reference_id, values)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
@@ -996,7 +997,7 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    def _create_service(self, workspace, template_id, name, values):
+    def _create_service(self, workspace, template_id, name, reference_id, values):
         """Create a new cloud service."""
         if not template_id:
             return {'success': False, 'error': 'Template ID is required'}
@@ -1014,11 +1015,14 @@ class PaasController(Controller):
         if not template.exists() or not template.is_active:
             return {'success': False, 'error': 'Template not found'}
 
-        # Generate unique identifiers
-        reference_id = str(uuid.uuid4())
-        subdomain_base = name.lower().replace(' ', '-').replace('_', '-')
-        # Ensure subdomain is unique by adding workspace ID
-        subdomain = f"{subdomain_base}-{workspace.id}"
+        # Use provided reference_id or generate a new one
+        if not reference_id:
+            reference_id = str(uuid.uuid4())
+        # Generate subdomain with salted hash: paas-{ws_id}-{hash(reference_id + name)[:8]}
+        # Using reference_id as salt prevents subdomain guessing from service name alone
+        salted_input = reference_id + name
+        name_hash = hashlib.md5(salted_input.encode()).hexdigest()[:8]
+        subdomain = f"paas-{workspace.id}-{name_hash}"
         helm_release_name = f"svc-{reference_id[:8]}"
         helm_namespace = f"paas-ws-{workspace.id}"
 

@@ -118,36 +118,33 @@
                         <WoowIcon name="'language'" size="24"/>
                         <div>
                             <h2>Network and Domain</h2>
-                            <p>Configure how your service is accessed</p>
+                            <p>Your service URL (auto-generated)</p>
                         </div>
                     </div>
                     <div class="o_woow_section_body">
-                        <!-- Subdomain -->
-                        <div t-att-class="'o_woow_form_group' + (state.errors.subdomain ? ' o_woow_has_error' : '')">
+                        <!-- Subdomain (auto-generated, read-only) -->
+                        <div class="o_woow_form_group">
                             <label for="subdomain">
                                 Subdomain
-                                <span class="o_woow_required_mark">*</span>
                             </label>
                             <div class="o_woow_input_with_suffix">
                                 <input
                                     type="text"
                                     id="subdomain"
                                     t-att-value="state.subdomain"
-                                    t-on-input="onSubdomainChange"
-                                    placeholder="my-service"
-                                    class="o_woow_input"
+                                    disabled="disabled"
+                                    class="o_woow_input o_woow_input_readonly"
                                 />
                                 <span class="o_woow_input_suffix" t-esc="subdomainSuffix"/>
                             </div>
                             <p class="o_woow_field_hint">
-                                Your service will be available at <strong><t t-esc="state.subdomain || 'my-service'"/><t t-esc="subdomainSuffix"/></strong>
+                                <t t-if="state.subdomain">
+                                    Your service will be available at <strong><t t-esc="state.subdomain"/><t t-esc="subdomainSuffix"/></strong>
+                                </t>
+                                <t t-else="">
+                                    Enter a service name to generate the URL
+                                </t>
                             </p>
-                            <t t-if="state.errors.subdomain">
-                                <p class="o_woow_field_error">
-                                    <WoowIcon name="'error'" size="14"/>
-                                    <t t-esc="state.errors.subdomain"/>
-                                </p>
-                            </t>
                         </div>
                     </div>
                 </WoowCard>
