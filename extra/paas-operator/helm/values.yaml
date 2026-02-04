@@ -41,7 +41,8 @@ cloudflare:
   domain: ""      # Base domain (e.g., woowtech.io)
   accountId: ""   # Cloudflare account ID
   tunnelId: ""    # Tunnel ID from Zero Trust dashboard
-  # API token with Cloudflare Tunnel:Edit permission
+  zoneId: ""      # Zone ID for DNS management (found in domain overview)
+  # API token with Cloudflare Tunnel:Edit and DNS:Edit permission
   apiToken: ""
   # Or use existing secret
   existingSecret: ""

@@ -342,12 +342,18 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
-    def uninstall_release(self, namespace: str, release_name: str) -> Dict[str, str]:
+    def uninstall_release(
+        self,
+        namespace: str,
+        release_name: str,
+        subdomain: Optional[str] = None,
+    ) -> Dict[str, str]:
         """Uninstall a Helm release.
 
         Args:
             namespace: Release namespace
             release_name: Release name
+            subdomain: Optional subdomain to delete from Cloudflare
 
         Returns:
             Deletion confirmation
@@ -355,9 +361,12 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If uninstallation fails
         """
+        url = f'/api/releases/{namespace}/{release_name}'
+        if subdomain:
+            url += f'?subdomain={subdomain}'
         return self._request(
             'DELETE',
-            f'/api/releases/{namespace}/{release_name}',
+            url,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 

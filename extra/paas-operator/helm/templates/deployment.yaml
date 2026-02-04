@@ -61,6 +61,10 @@ spec:
               value: {{ .Values.cloudflare.accountId | quote }}
             - name: CLOUDFLARE_TUNNEL_ID
               value: {{ .Values.cloudflare.tunnelId | quote }}
+            {{- if .Values.cloudflare.zoneId }}
+            - name: CLOUDFLARE_ZONE_ID
+              value: {{ .Values.cloudflare.zoneId | quote }}
+            {{- end }}
             - name: CLOUDFLARE_API_TOKEN
               valueFrom:
                 secretKeyRef:

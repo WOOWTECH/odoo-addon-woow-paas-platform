@@ -176,12 +176,13 @@ async def upgrade_release(
     response_model=Dict[str, str],
     summary="Uninstall a Helm release",
 )
-async def delete_release(namespace: str, name: str):
+async def delete_release(namespace: str, name: str, subdomain: Optional[str] = None):
     """Uninstall a Helm release.
 
     Args:
         namespace: Release namespace
         name: Release name
+        subdomain: Optional subdomain to delete from Cloudflare (if not provided, auto-generated)
 
     Returns:
         Deletion confirmation message
@@ -195,9 +196,10 @@ async def delete_release(namespace: str, name: str):
 
         # Delete Cloudflare Tunnel route if exists
         try:
-            subdomain = cloudflare_service.generate_subdomain(namespace, name)
-            await cloudflare_service.delete_route(subdomain)
-            logger.info(f"Deleted Cloudflare route for {subdomain}")
+            # Use provided subdomain or fall back to auto-generated
+            route_subdomain = subdomain or cloudflare_service.generate_subdomain(namespace, name)
+            await cloudflare_service.delete_route(route_subdomain)
+            logger.info(f"Deleted Cloudflare route for {route_subdomain}")
         except CloudflareException as e:
             # Log but don't fail - release is already uninstalled
             logger.warning(f"Failed to delete Cloudflare route: {e.message}")

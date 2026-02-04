@@ -26,9 +26,10 @@ class Settings(BaseSettings):
 
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
-    cloudflare_api_token: str = ""  # API token with Cloudflare Tunnel:Edit permission
+    cloudflare_api_token: str = ""  # API token with Cloudflare Tunnel:Edit and DNS:Edit permission
     cloudflare_account_id: str = ""  # Cloudflare account ID
     cloudflare_tunnel_id: str = ""  # Tunnel ID from Zero Trust dashboard
+    cloudflare_zone_id: str = ""  # Zone ID for DNS management (found in domain overview)
     cloudflare_domain: str = ""  # Base domain (e.g., woowtech.io)
 
     model_config = SettingsConfigDict(

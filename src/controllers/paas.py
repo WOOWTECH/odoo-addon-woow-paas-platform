@@ -1217,10 +1217,11 @@ class PaasController(Controller):
         try:
             service.write({'state': 'deleting'})
 
-            # Uninstall Helm release
+            # Uninstall Helm release (pass subdomain for Cloudflare cleanup)
             client.uninstall_release(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
+                subdomain=service.subdomain,
             )
 
             # Delete the record
