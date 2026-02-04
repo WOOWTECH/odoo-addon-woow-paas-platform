@@ -234,18 +234,24 @@ export const cloudService = reactive({
      * @param {Object} payload - Service creation data
      * @param {number} payload.template_id - Template ID
      * @param {string} payload.name - Service name
-     * @param {Object} payload.values - Helm values override
+     * @param {string} [payload.reference_id] - Unique reference ID (auto-generated if not provided)
+     * @param {Object} [payload.values] - Helm values override
      * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
      */
     async createService(workspaceId, payload) {
         this.operationLoading.createService = true;
         try {
-            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services`, {
+            const params = {
                 action: "create",
                 template_id: payload.template_id,
                 name: payload.name,
                 values: payload.values || {},
-            });
+            };
+            // Include reference_id if provided (for subdomain consistency)
+            if (payload.reference_id) {
+                params.reference_id = payload.reference_id;
+            }
+            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services`, params);
             if (result.success) {
                 this.services = [result.data, ...this.services];
                 return { success: true, data: result.data };
