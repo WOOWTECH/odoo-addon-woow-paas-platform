@@ -1,8 +1,11 @@
 ---
 name: cloud-services-mvp
 description: MVP implementation of Cloud Services feature enabling one-click containerized app deployment via Helm
-status: backlog
+status: implemented
 created: 2026-02-01T17:16:16Z
+updated: 2026-02-04T16:06:28Z
+epic: .claude/epics/cloud-services-mvp/epic.md
+pr: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/pull/15
 ---
 
 # PRD: Cloud Services MVP

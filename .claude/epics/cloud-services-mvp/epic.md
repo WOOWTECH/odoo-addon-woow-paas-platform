@@ -1,11 +1,12 @@
 ---
 name: cloud-services-mvp
-status: backlog
+status: completed
 created: 2026-02-01T17:21:51Z
-updated: 2026-02-01T17:39:37Z
-progress: 0%
+updated: 2026-02-04T15:50:46Z
+progress: 100%
 prd: .claude/prds/cloud-services-mvp.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/4
+pr: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/pull/15
 ---
 
 # Epic: cloud-services-mvp
@@ -58,16 +59,16 @@ github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/4
 
 限制為 **10 個以內** 的高內聚任務：
 
-- [ ] **Task 1: PaaS Operator Service** - FastAPI + Helm wrapper + Dockerfile + K8s manifests
-- [ ] **Task 2: Odoo Models & Seed Data** - CloudAppTemplate + CloudService + 3 個初始應用
-- [ ] **Task 3: Odoo API & Operator Client** - Cloud Service JSON APIs + HTTP client
-- [ ] **Task 4: Marketplace UI** - AppMarketplacePage + AppCard + CategoryFilter + Search
-- [ ] **Task 5: Configuration & Launch UI** - AppConfigurationPage + HelmValueForm + Launch flow
-- [ ] **Task 6: Service Detail UI** - ServiceDetailPage + Overview/Config tabs + StatusBadge
-- [ ] **Task 7: Service Operations** - Rollback + Delete + Edit Domain modals
-- [ ] **Task 8: Dashboard Integration** - ServiceCard on WorkspaceDetailPage + 引導畫面
-- [ ] **Task 9: E2E Testing** - All user flows + Integration tests + Error cases
-- [ ] **Task 10: Documentation & Deployment** - README + K8s deployment guide
+- [x] **Task 1: PaaS Operator Service** - FastAPI + Helm wrapper + Dockerfile + K8s manifests
+- [x] **Task 2: Odoo Models & Seed Data** - CloudAppTemplate + CloudService + 3 個初始應用
+- [x] **Task 3: Odoo API & Operator Client** - Cloud Service JSON APIs + HTTP client
+- [x] **Task 4: Marketplace UI** - AppMarketplacePage + AppCard + CategoryFilter + Search
+- [x] **Task 5: Configuration & Launch UI** - AppConfigurationPage + HelmValueForm + Launch flow
+- [x] **Task 6: Service Detail UI** - ServiceDetailPage + Overview/Config tabs + StatusBadge
+- [x] **Task 7: Service Operations** - Rollback + Delete + Edit Domain modals
+- [x] **Task 8: Dashboard Integration** - ServiceCard on WorkspaceDetailPage + 引導畫面
+- [x] **Task 9: E2E Testing** - All user flows + Integration tests + Error cases
+- [x] **Task 10: Documentation & Deployment** - README + K8s deployment guide
 
 ## Dependencies
 
