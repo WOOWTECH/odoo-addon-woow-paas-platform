@@ -1,8 +1,9 @@
 /** @odoo-module **/
-import { Component } from "@odoo/owl";
+import { Component, useState, onWillStart } from "@odoo/owl";
 import { StatusBadge } from "../common/StatusBadge";
 import { WoowIcon } from "../icon/WoowIcon";
 import { WoowButton } from "../button/WoowButton";
+import { getDomain } from "../../services/cloud_service";
 
 /**
  * ServiceCard Component
@@ -23,6 +24,16 @@ export class ServiceCard extends Component {
         onOpen: { type: Function, optional: true },
         onSettings: { type: Function, optional: true },
     };
+
+    setup() {
+        this.state = useState({
+            domain: "woowtech.io",
+        });
+
+        onWillStart(async () => {
+            this.state.domain = await getDomain();
+        });
+    }
 
     /**
      * Category to icon mapping
@@ -47,7 +58,7 @@ export class ServiceCard extends Component {
     get serviceUrl() {
         const subdomain = this.props.service.subdomain;
         if (subdomain) {
-            return `https://${subdomain}.paas.woow.tw`;
+            return `https://${subdomain}.${this.state.domain}`;
         }
         return null;
     }
@@ -55,7 +66,7 @@ export class ServiceCard extends Component {
     get displayUrl() {
         const subdomain = this.props.service.subdomain;
         if (subdomain) {
-            return `${subdomain}.paas.woow.tw`;
+            return `${subdomain}.${this.state.domain}`;
         }
         return null;
     }

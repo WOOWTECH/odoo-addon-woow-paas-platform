@@ -1,11 +1,11 @@
 /** @odoo-module **/
-import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
+import { Component, useState, onMounted, onWillUnmount, onWillStart } from "@odoo/owl";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { ServiceCard } from "../../components/service-card/ServiceCard";
 import { workspaceService } from "../../services/workspace_service";
-import { cloudService } from "../../services/cloud_service";
+import { cloudService, getDomain } from "../../services/cloud_service";
 import { router } from "../../core/router";
 import { getRoleBadgeClass, formatDate } from "../../services/utils";
 
@@ -24,9 +24,14 @@ export class WorkspaceDetailPage extends Component {
             services: [],
             loadingServices: true,
             servicesError: null,
+            domain: "woowtech.io",
         });
         this.router = useState(router);
         this.servicesPollingInterval = null;
+
+        onWillStart(async () => {
+            this.state.domain = await getDomain();
+        });
 
         onMounted(() => {
             this.loadData();
@@ -147,7 +152,7 @@ export class WorkspaceDetailPage extends Component {
         // Open service web UI - ServiceCard handles this internally
         const service = this.state.services.find(s => s.id === serviceId);
         if (service && service.subdomain && service.state === "running") {
-            window.open(`https://${service.subdomain}.paas.woow.tw`, "_blank");
+            window.open(`https://${service.subdomain}.${this.state.domain}`, "_blank");
         }
     }
 

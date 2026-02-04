@@ -77,7 +77,7 @@ class CloudService(models.Model):
     # Network
     subdomain = fields.Char(
         string='Subdomain',
-        help='Subdomain for accessing this service (e.g., myapp.paas.woow.tw)',
+        help='Subdomain for accessing this service (combined with PaaS domain, e.g., myapp.woowtech.io)',
     )
     custom_domain = fields.Char(
         string='Custom Domain',
