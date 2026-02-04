@@ -67,16 +67,20 @@ pytest tests/ -v --cov=src
 
 ### Docker Development (Recommended)
 
+使用 Worktree Development 腳本來管理開發環境：
+
 ```bash
-# Restart web container after changes
-docker compose -f docker-compose-18.yml restart web
+# 啟動開發環境（自動設定 .env 並啟動 Docker）
+./scripts/start-dev.sh
 
-# Update module in Docker
-docker compose -f docker-compose-18.yml exec web odoo -d odoo -u woow_paas_platform --dev xml
+# 執行測試
+./scripts/test-addon.sh
 
-# View logs
-docker compose -f docker-compose-18.yml logs -f web
+# 清理環境
+./scripts/cleanup-worktree.sh
 ```
+
+詳細說明請參考下方 [Worktree Development](#worktree-development) 章節。
 
 **Test URL**: http://localhost (NOT :8069, to enable websocket)
 

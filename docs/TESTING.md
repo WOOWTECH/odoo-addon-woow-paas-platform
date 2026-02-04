@@ -73,8 +73,12 @@ From the odoo-bin directory:
 If using Docker development environment:
 
 ```bash
-docker compose -f docker-compose-18.yml exec web \
-  odoo -d odoo --test-enable --test-tags woow_paas_platform --stop-after-init
+# 使用 Worktree Development 腳本（推薦）
+./scripts/test-addon.sh
+
+# 或手動執行（需先啟動開發環境）
+docker compose exec web \
+  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform --stop-after-init
 ```
 
 ### Run Specific Test Class
@@ -227,8 +231,8 @@ OK
 
 ### Docker Test Issues
 
-1. **Container not running**: `docker compose -f docker-compose-18.yml up -d`
-2. **Module not installed**: Run update command in container
+1. **Container not running**: `./scripts/start-dev.sh`
+2. **Module not installed**: `./scripts/test-addon.sh` 會自動更新模組
 3. **Permission errors**: Check volume mounts
 
 ## Continuous Integration

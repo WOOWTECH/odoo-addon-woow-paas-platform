@@ -106,11 +106,11 @@ Access:
 # Return to project root
 cd ../..
 
-# Start Odoo with Docker Compose
-docker compose -f docker-compose-18.yml up -d
+# 使用 Worktree Development 腳本啟動開發環境（推薦）
+./scripts/start-dev.sh
 
-# Wait for services to be ready (about 30 seconds)
-docker compose -f docker-compose-18.yml logs -f web
+# 或查看日誌
+docker compose logs -f web
 ```
 
 Access Odoo:
@@ -227,7 +227,7 @@ woow_paas_platform/
 │   ├── test-addon.sh           # Run Odoo tests
 │   └── setup-worktree-env.sh   # Worktree configuration
 │
-├── docker-compose-18.yml        # Local Odoo development
+├── docker-compose.yml           # Local Odoo development
 └── CLAUDE.md                    # AI assistant context
 ```
 
@@ -256,17 +256,20 @@ woow_paas_platform/
 ### Odoo Tests
 
 ```bash
-# Run all module tests
-docker compose -f docker-compose-18.yml exec web \
-  odoo -d odoo --test-enable --test-tags woow_paas_platform --stop-after-init
+# 使用 Worktree Development 腳本執行測試（推薦）
+./scripts/test-addon.sh
+
+# 或手動執行（需先啟動開發環境）
+docker compose exec web \
+  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform --stop-after-init
 
 # Run specific test file
-docker compose -f docker-compose-18.yml exec web \
-  odoo -d odoo --test-enable --test-tags woow_paas_platform.test_workspace --stop-after-init
+docker compose exec web \
+  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform.test_workspace --stop-after-init
 
 # Run with verbose output
-docker compose -f docker-compose-18.yml exec web \
-  odoo -d odoo --test-enable --test-tags woow_paas_platform --log-level=test --stop-after-init
+docker compose exec web \
+  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform --log-level=test --stop-after-init
 ```
 
 ### PaaS Operator Tests
@@ -311,18 +314,17 @@ npm test
 1. **Edit Python/JavaScript/SCSS files**
 2. **Restart Odoo** (picks up Python changes):
    ```bash
-   docker compose -f docker-compose-18.yml restart web
+   docker compose restart web
    ```
 3. **Update module** (picks up XML/data changes):
    ```bash
-   docker compose -f docker-compose-18.yml exec web \
-     odoo -d odoo -u woow_paas_platform --stop-after-init
+   docker compose exec web \
+     odoo -d ${POSTGRES_DB:-odoo} -u woow_paas_platform --stop-after-init
    ```
 4. **Test changes**: http://localhost/woow
 5. **Run tests**:
    ```bash
-   docker compose -f docker-compose-18.yml exec web \
-     odoo -d odoo --test-enable --test-tags woow_paas_platform --stop-after-init
+   ./scripts/test-addon.sh
    ```
 
 ### Making Changes to PaaS Operator
