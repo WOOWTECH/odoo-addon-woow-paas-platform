@@ -89,7 +89,7 @@ class ReleaseUpgradeRequest(BaseModel):
 class ReleaseRollbackRequest(BaseModel):
     """Request to rollback a Helm release."""
 
-    revision: Optional[int] = Field(None, description="Target revision (0 = previous)")
+    revision: Optional[int] = Field(None, description="Target revision number. If not provided, rolls back to the previous revision.")
 
 
 class NamespaceCreateRequest(BaseModel):

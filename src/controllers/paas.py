@@ -775,6 +775,8 @@ class PaasController(Controller):
             action (str): 'list' or 'create'
             template_id (int, optional): Template ID (for create)
             name (str, optional): Service name (for create)
+            reference_id (str, optional): Unique reference ID for subdomain generation
+                (for create). If not provided, a UUID will be auto-generated.
             values (dict, optional): Helm values override (for create)
 
         Returns:
@@ -854,14 +856,15 @@ class PaasController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     @route("/woow/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
-    def api_service_rollback(self, workspace_id, service_id, revision, **kw):
+    def api_service_rollback(self, workspace_id, service_id, revision=None, **kw):
         """
         Rollback a service to a previous revision.
 
         Args:
             workspace_id (int): Workspace ID
             service_id (int): Service ID
-            revision (int): Target revision number
+            revision (int, optional): Target revision number. If not provided or 0,
+                rolls back to the previous revision.
 
         Returns:
             dict: Response containing:
@@ -869,6 +872,15 @@ class PaasController(Controller):
                 - message (str): Rollback confirmation
                 - error (str): Error message (on failure)
         """
+        # Validate revision parameter
+        if revision is not None:
+            try:
+                revision = int(revision)
+                if revision < 0:
+                    return {'success': False, 'error': 'Revision must be a non-negative integer'}
+            except (TypeError, ValueError):
+                return {'success': False, 'error': 'Invalid revision number'}
+
         # Validate workspace and service access
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']

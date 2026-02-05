@@ -105,7 +105,8 @@ class CloudflareService:
             )
 
             if response.status_code != 200:
-                logger.error(f"Failed to get DNS record: {response.status_code} - {response.text}")
+                logger.error(f"Failed to get DNS record: {response.status_code}")
+                logger.debug(f"Response details: {response.text}")
                 return None
 
             data = response.json()
@@ -157,7 +158,8 @@ class CloudflareService:
             )
 
             if response.status_code not in (200, 201):
-                logger.error(f"Failed to create DNS record: {response.status_code} - {response.text}")
+                logger.error(f"Failed to create DNS record: {response.status_code}")
+                logger.debug(f"Response details: {response.text}")
                 raise CloudflareException(
                     f"Failed to create DNS record: {response.text}",
                     status_code=response.status_code,
@@ -201,7 +203,8 @@ class CloudflareService:
             )
 
             if response.status_code != 200:
-                logger.error(f"Failed to update DNS record: {response.status_code} - {response.text}")
+                logger.error(f"Failed to update DNS record: {response.status_code}")
+                logger.debug(f"Response details: {response.text}")
                 return False
 
             logger.info(f"DNS record updated: {hostname}")
@@ -239,7 +242,8 @@ class CloudflareService:
             )
 
             if response.status_code != 200:
-                logger.error(f"Failed to delete DNS record: {response.status_code} - {response.text}")
+                logger.error(f"Failed to delete DNS record: {response.status_code}")
+                logger.debug(f"Response details: {response.text}")
                 return False
 
             logger.info(f"DNS record deleted: {hostname}")

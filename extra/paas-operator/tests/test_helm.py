@@ -122,23 +122,18 @@ class TestHelmService:
     @patch("subprocess.run")
     def test_get_release(self, mock_run, helm_service):
         """Test get release info."""
+        # helm list returns a JSON array, not a single object
         mock_run.return_value = Mock(
             returncode=0,
-            stdout=json.dumps({
+            stdout=json.dumps([{
                 "name": "test-release",
                 "namespace": "paas-ws-test",
-                "info": {
-                    "status": "deployed",
-                    "revision": 2,
-                    "last_deployed": "2024-01-01T00:00:00Z",
-                },
-                "chart": {
-                    "metadata": {
-                        "name": "nginx",
-                        "appVersion": "1.0.0",
-                    }
-                },
-            }),
+                "status": "deployed",
+                "revision": "2",
+                "updated": "2024-01-01 00:00:00.000000000 +0000 UTC",
+                "chart": "nginx-1.0.0",
+                "app_version": "1.0.0",
+            }]),
             stderr="",
         )
 

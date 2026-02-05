@@ -104,16 +104,19 @@ export class EditDomainModal extends Component {
         this.state.saving = true;
         this.state.error = null;
 
-        const result = await cloudService.updateService(
-            this.props.service.workspace_id,
-            this.props.service.id,
-            { custom_domain: domain || null }
-        );
+        try {
+            const result = await cloudService.updateService(
+                this.props.service.workspace_id,
+                this.props.service.id,
+                { custom_domain: domain || null }
+            );
 
-        if (result.success) {
-            this.props.onSaved();
-        } else {
-            this.state.error = result.error || "Failed to update domain";
+            if (result.success) {
+                this.props.onSaved();
+            } else {
+                this.state.error = result.error || "Failed to update domain";
+            }
+        } finally {
             this.state.saving = false;
         }
     }

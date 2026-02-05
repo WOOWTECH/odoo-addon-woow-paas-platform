@@ -314,7 +314,8 @@ class HelmService:
         Args:
             namespace: Release namespace
             name: Release name
-            revision: Target revision (None = previous)
+            revision: Target revision number. If not provided, rolls back to the
+                previous revision.
 
         Returns:
             Rollback result message
