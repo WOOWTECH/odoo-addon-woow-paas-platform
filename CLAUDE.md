@@ -179,11 +179,10 @@ woow_paas_platform/
 │   │   └── models/
 │   │       └── schemas.py       # Pydantic models
 │   ├── tests/                   # Operator unit tests
-│   ├── k8s/                     # Kubernetes manifests
-│   │   ├── deployment.yaml
-│   │   ├── service.yaml
-│   │   ├── rbac.yaml
-│   │   └── secret.yaml
+│   ├── helm/                    # Helm chart for K8s deployment
+│   │   ├── Chart.yaml
+│   │   ├── values.yaml
+│   │   └── templates/          # K8s resource templates
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── scripts/                      # Development scripts
