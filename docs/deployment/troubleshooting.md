@@ -24,35 +24,35 @@ This guide covers common issues encountered when deploying and operating the Woo
 
 ```bash
 # Check pod status
-kubectl get pods -n paas-system -l app=paas-operator
+kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 
 # View pod logs
-kubectl logs -n paas-system -l app=paas-operator --tail=100
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator --tail=100
 
 # Describe pod for events
-kubectl describe pod -n paas-system -l app=paas-operator
+kubectl describe pod -n paas-system -l app.kubernetes.io/name=paas-operator
 ```
 
 **Common Causes & Solutions**:
 
 | Cause                     | Solution                                                                        |
 | ------------------------- | ------------------------------------------------------------------------------- |
-| Missing API key in secret | Verify secret exists: `kubectl get secret paas-operator-secrets -n paas-system` |
-| RBAC permissions missing  | Apply RBAC: `kubectl apply -f k8s/rbac.yaml`                                    |
+| Missing API key in secret | Verify secret exists: `kubectl get secret paas-operator-secret -n paas-system` |
+| RBAC permissions missing  | Reinstall Helm chart: `helm upgrade paas-operator ./helm -n paas-system`         |
 | Helm binary not found     | Check Dockerfile includes Helm installation                                     |
 | Python dependencies issue | Verify requirements.txt is complete, rebuild image                              |
 
 **Fix Example**:
 
 ```bash
-# Recreate secret with valid API key
-kubectl delete secret paas-operator-secrets -n paas-system
-kubectl create secret generic paas-operator-secrets \
-  --from-literal=api-key=$(openssl rand -hex 32) \
-  -n paas-system
+# Regenerate API key and upgrade via Helm
+API_KEY=$(openssl rand -hex 32)
+helm upgrade paas-operator ./helm \
+  --namespace paas-system \
+  --set auth.apiKey=$API_KEY
 
-# Restart deployment
-kubectl rollout restart deployment/paas-operator -n paas-system
+# Verify pod restarted with new secret
+kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 ```
 
 ### Issue: PaaS Operator Returns 401 Unauthorized
@@ -63,11 +63,11 @@ kubectl rollout restart deployment/paas-operator -n paas-system
 
 ```bash
 # Check the API key in secret
-kubectl get secret paas-operator-secrets -n paas-system -o jsonpath='{.data.api-key}' | base64 -d
+kubectl get secret paas-operator-secret -n paas-system -o jsonpath='{.data.api-key}' | base64 -d
 
 # Test with correct API key
 kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
-  curl -H "X-API-Key: YOUR_KEY" http://paas-operator.paas-system.svc:8000/health
+  curl -H "X-API-Key: YOUR_KEY" http://paas-operator.paas-system.svc/health
 ```
 
 **Common Causes**:
@@ -80,7 +80,7 @@ kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
 
 ```bash
 # Get current API key
-CURRENT_KEY=$(kubectl get secret paas-operator-secrets -n paas-system -o jsonpath='{.data.api-key}' | base64 -d)
+CURRENT_KEY=$(kubectl get secret paas-operator-secret -n paas-system -o jsonpath='{.data.api-key}' | base64 -d)
 echo "Current API Key: $CURRENT_KEY"
 
 # Update Odoo settings with this exact key
@@ -99,7 +99,7 @@ echo "Current API Key: $CURRENT_KEY"
 
 ```bash
 # Check PaaS Operator logs
-kubectl logs -n paas-system -l app=paas-operator --tail=50
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator --tail=50
 
 # Check Helm release status
 helm list -n paas-ws-{workspace_id}
@@ -185,7 +185,7 @@ kubectl port-forward -n paas-ws-{workspace_id} <pod-name> 8080:8080
 
 ```bash
 # Check PaaS Operator logs for detailed error
-kubectl logs -n paas-system -l app=paas-operator | grep "ERROR"
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator | grep "ERROR"
 
 # Check Helm release
 helm list -n paas-ws-{workspace_id}
@@ -268,7 +268,7 @@ curl -v https://{subdomain}.woowtech.io
 
 ```bash
 # Verify operator pod is running
-kubectl get pods -n paas-system -l app=paas-operator
+kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 
 # Verify service exists
 kubectl get svc paas-operator -n paas-system
@@ -276,7 +276,7 @@ kubectl get svc paas-operator -n paas-system
 # Test connectivity from Odoo pod
 ODOO_POD=$(kubectl get pods -n <odoo-namespace> -l app=odoo -o jsonpath='{.items[0].metadata.name}')
 kubectl exec -it $ODOO_POD -n <odoo-namespace> -- \
-  curl http://paas-operator.paas-system.svc:8000/health
+  curl http://paas-operator.paas-system.svc/health
 
 # Check network policies
 kubectl get networkpolicies -n paas-system
@@ -294,7 +294,7 @@ kubectl get networkpolicies -n <odoo-namespace>
 
 ```bash
 # Verify correct URL in Odoo settings
-# Should be: http://paas-operator.paas-system.svc:8000
+# Should be: http://paas-operator.paas-system.svc (port 80)
 
 # Check service port
 kubectl get svc paas-operator -n paas-system -o yaml
@@ -321,7 +321,7 @@ docker compose logs web | grep -i "cloud"
 # Test PaaS Operator API directly
 kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
   curl -H "X-API-Key: YOUR_KEY" \
-  http://paas-operator.paas-system.svc:8000/api/templates
+  http://paas-operator.paas-system.svc/api/templates
 ```
 
 **Common Causes**:
@@ -335,7 +335,7 @@ kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
 
 1. Verify Odoo Settings:
    - Go to Settings → General Settings → Woow PaaS
-   - Ensure URL is: `http://paas-operator.paas-system.svc:8000`
+   - Ensure URL is: `http://paas-operator.paas-system.svc`
    - Ensure API key matches K8s secret
 2. Check browser console for JavaScript errors
 3. Restart Odoo if needed
@@ -370,7 +370,7 @@ docker compose logs web | grep "status"
 # Check PaaS Operator status endpoint
 kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
   curl -H "X-API-Key: YOUR_KEY" \
-  http://paas-operator.paas-system.svc:8000/api/releases/paas-ws-X/<service-name>/status
+  http://paas-operator.paas-system.svc/api/releases/paas-ws-X/<service-name>/status
 ```
 
 ---
@@ -401,13 +401,11 @@ kubectl describe node
 **Solution**:
 
 ```bash
-# Increase Helm timeout in operator config
-# Edit deployment and add env var:
-kubectl set env deployment/paas-operator \
-  HELM_TIMEOUT=600 \
-  -n paas-system
-
-# Or update k8s/deployment.yaml and reapply
+# Increase Helm timeout via Helm upgrade
+helm upgrade paas-operator ./helm \
+  --namespace paas-system \
+  --reuse-values \
+  --set env.HELM_TIMEOUT=600
 ```
 
 ### Issue: Helm Chart Not Found
@@ -568,10 +566,10 @@ helm install <name> <chart> --dry-run --debug -n paas-ws-{workspace_id}
 
 ```bash
 # View real-time logs
-kubectl logs -f -n paas-system -l app=paas-operator
+kubectl logs -f -n paas-system -l app.kubernetes.io/name=paas-operator
 
 # Search for errors
-kubectl logs -n paas-system -l app=paas-operator | grep -i error
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator | grep -i error
 
 # Check API health
 kubectl exec -it <paas-operator-pod> -n paas-system -- \
@@ -592,7 +590,7 @@ If you're still experiencing issues after trying these solutions:
 
    ```bash
    # Save all relevant logs
-   kubectl logs -n paas-system -l app=paas-operator > paas-operator.log
+   kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator > paas-operator.log
    kubectl get all -n paas-ws-{workspace_id} -o yaml > workspace-resources.yaml
    helm list -n paas-ws-{workspace_id} > helm-releases.txt
    ```
