@@ -42,7 +42,7 @@ Create a dedicated namespace for PaaS system components:
 kubectl create namespace paas-system
 ```
 
-## Step 2: Generate and Store API Key
+## Step 2: Generate API Key
 
 Generate a secure API key for communication between Odoo and PaaS Operator:
 
@@ -51,52 +51,59 @@ Generate a secure API key for communication between Odoo and PaaS Operator:
 API_KEY=$(openssl rand -hex 32)
 echo "Save this API key for Odoo configuration: $API_KEY"
 echo ""
-echo "Store this key securely - you'll need it in Step 4!"
+echo "Store this key securely - you'll need it in Step 3 (Helm install) and Step 4 (Odoo config)!"
 ```
 
-Create Kubernetes secret with the API key:
-
-```bash
-kubectl create secret generic paas-operator-secrets \
-  --from-literal=api-key=$API_KEY \
-  -n paas-system
-```
+> **Note**: The Kubernetes secret will be created automatically by Helm in Step 3.
 
 ## Step 3: Deploy PaaS Operator Service
 
-The PaaS Operator requires RBAC permissions to manage Helm releases and namespaces.
+The PaaS Operator is deployed using Helm chart. This automatically creates:
 
-### 3.1 Apply RBAC Configuration
+- ServiceAccount with RBAC permissions (scoped to `paas-ws-*` namespaces)
+- Kubernetes Secret for API key
+- Deployment and Service
+
+### 3.1 Install with Helm
 
 ```bash
 cd extra/paas-operator
-kubectl apply -f k8s/rbac.yaml
+
+# Install PaaS Operator using Helm
+helm install paas-operator ./helm \
+  --namespace paas-system \
+  --set auth.apiKey=$API_KEY
 ```
 
-This creates:
+Alternatively, create a `values-override.yaml` file:
 
-- ServiceAccount: `paas-operator`
-- ClusterRole: `paas-operator-role` (scoped to `paas-ws-*` namespaces)
-- ClusterRoleBinding: Links the ServiceAccount to the ClusterRole
+```yaml
+# values-override.yaml
+auth:
+  apiKey: "your-generated-api-key-here"
 
-### 3.2 Deploy the Service
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+```
+
+Then install with:
 
 ```bash
-# Apply secret (already created in Step 2, but ensures it exists)
-kubectl apply -f k8s/secret.yaml
-
-# Deploy the application
-kubectl apply -f k8s/deployment.yaml
-
-# Create the internal service
-kubectl apply -f k8s/service.yaml
+helm install paas-operator ./helm \
+  --namespace paas-system \
+  -f values-override.yaml
 ```
 
-### 3.3 Verify Deployment
+### 3.2 Verify Deployment
 
 ```bash
 # Check if pod is running
-kubectl get pods -n paas-system -l app=paas-operator
+kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 
 # Expected output:
 # NAME                              READY   STATUS    RESTARTS   AGE
@@ -107,7 +114,7 @@ kubectl get svc -n paas-system paas-operator
 
 # Test health endpoint from within cluster
 kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
-  curl http://paas-operator.paas-system.svc:8000/health
+  curl http://paas-operator.paas-system.svc/health
 
 # Expected output:
 # {"status":"healthy","helm_version":"v3.13.0","timestamp":"2024-02-02T10:30:45Z"}
@@ -116,7 +123,7 @@ kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
 If the pod is not running, check logs:
 
 ```bash
-kubectl logs -n paas-system -l app=paas-operator --tail=50
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator --tail=50
 ```
 
 ## Step 4: Configure Odoo Integration
@@ -131,15 +138,15 @@ kubectl logs -n paas-system -l app=paas-operator --tail=50
 
 Set the following configuration:
 
-| Field                 | Value                                       | Notes                              |
-| --------------------- | ------------------------------------------- | ---------------------------------- |
-| **PaaS Operator URL** | `http://paas-operator.paas-system.svc:8000` | Internal K8s service DNS           |
-| **API Key**           | `<API_KEY from Step 2>`                     | The key you generated with openssl |
+| Field                 | Value                                   | Notes                              |
+| --------------------- | --------------------------------------- | ---------------------------------- |
+| **PaaS Operator URL** | `http://paas-operator.paas-system.svc`  | Internal K8s service DNS (port 80) |
+| **API Key**           | `<API_KEY from Step 2>`                 | The key you generated with openssl |
 
 Example:
 
 ```
-PaaS Operator URL: http://paas-operator.paas-system.svc:8000
+PaaS Operator URL: http://paas-operator.paas-system.svc
 API Key: a3f2b8c9d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1
 ```
 
@@ -158,7 +165,7 @@ Click **Save** to apply the settings.
 
 If templates don't appear:
 
-- Check PaaS Operator logs: `kubectl logs -n paas-system -l app=paas-operator`
+- Check PaaS Operator logs: `kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator`
 - Verify API key matches in both Odoo settings and K8s secret
 - Test connectivity from Odoo pod (see Step 5.3)
 
@@ -185,7 +192,7 @@ ODOO_POD=$(kubectl get pods -n odoo-namespace -l app=odoo -o jsonpath='{.items[0
 # Test connectivity from Odoo pod
 kubectl exec -it $ODOO_POD -n odoo-namespace -- \
   curl -H "X-API-Key: YOUR_API_KEY" \
-  http://paas-operator.paas-system.svc:8000/health
+  http://paas-operator.paas-system.svc/health
 
 # Check DNS resolution
 kubectl exec -it $ODOO_POD -n odoo-namespace -- \
@@ -301,13 +308,15 @@ cd extra/paas-operator
 # Pull latest changes
 git pull origin main
 
-# Build new image
-docker build -t paas-operator:latest .
+# Upgrade with Helm
+helm upgrade paas-operator ./helm \
+  --namespace paas-system \
+  --reuse-values
 
-# Update deployment
-kubectl set image deployment/paas-operator \
-  paas-operator=paas-operator:latest \
-  -n paas-system
+# Or upgrade with new values
+helm upgrade paas-operator ./helm \
+  --namespace paas-system \
+  --set image.tag=v1.2.0
 
 # Verify rollout
 kubectl rollout status deployment/paas-operator -n paas-system
@@ -332,15 +341,11 @@ To remove the PaaS platform:
 # 1. Delete all user workspaces
 kubectl delete namespace -l woow-paas=workspace
 
-# 2. Delete PaaS Operator
-kubectl delete -f extra/paas-operator/k8s/
+# 2. Uninstall PaaS Operator with Helm (removes RBAC, secrets, deployment, service)
+helm uninstall paas-operator -n paas-system
 
 # 3. Delete system namespace
 kubectl delete namespace paas-system
-
-# 4. Remove RBAC
-kubectl delete clusterrole paas-operator-role
-kubectl delete clusterrolebinding paas-operator-binding
 ```
 
 ## Next Steps
