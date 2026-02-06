@@ -51,7 +51,7 @@ kubectl create namespace cloudflare-system
 cloudflare:
   tunnel_token: "你的_tunnel_token"
 
-replicaCount: 2
+replicaCount: 1
 
 resources:
   limits:
