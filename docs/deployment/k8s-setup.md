@@ -5,7 +5,7 @@
 - K3s or K8s cluster running (1.28+)
 - kubectl configured and authenticated
 - Helm 3.13+ installed
-- Cloudflare DNS setup (*.woowtech.com) or your own domain
+- Cloudflare DNS setup (\*.woowtech.io) or your own domain
 - PostgreSQL database for Odoo (can be external or in-cluster)
 
 ## Architecture Overview
@@ -74,6 +74,7 @@ kubectl apply -f k8s/rbac.yaml
 ```
 
 This creates:
+
 - ServiceAccount: `paas-operator`
 - ClusterRole: `paas-operator-role` (scoped to `paas-ws-*` namespaces)
 - ClusterRoleBinding: Links the ServiceAccount to the ClusterRole
@@ -130,10 +131,10 @@ kubectl logs -n paas-system -l app=paas-operator --tail=50
 
 Set the following configuration:
 
-| Field | Value | Notes |
-|-------|-------|-------|
-| **PaaS Operator URL** | `http://paas-operator.paas-system.svc:8000` | Internal K8s service DNS |
-| **API Key** | `<API_KEY from Step 2>` | The key you generated with openssl |
+| Field                 | Value                                       | Notes                              |
+| --------------------- | ------------------------------------------- | ---------------------------------- |
+| **PaaS Operator URL** | `http://paas-operator.paas-system.svc:8000` | Internal K8s service DNS           |
+| **API Key**           | `<API_KEY from Step 2>`                     | The key you generated with openssl |
 
 Example:
 
@@ -156,6 +157,7 @@ Click **Save** to apply the settings.
 4. You should see application templates (AnythingLLM, n8n, PostgreSQL, etc.)
 
 If templates don't appear:
+
 - Check PaaS Operator logs: `kubectl logs -n paas-system -l app=paas-operator`
 - Verify API key matches in both Odoo settings and K8s secret
 - Test connectivity from Odoo pod (see Step 5.3)
@@ -207,10 +209,11 @@ kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik
 Point your wildcard domain to the cluster's external IP:
 
 ```
-*.woowtech.com → <CLUSTER_EXTERNAL_IP>
+*.woowtech.io → <CLUSTER_EXTERNAL_IP>
 ```
 
 For Cloudflare DNS:
+
 1. Go to DNS settings
 2. Add A record: `*` → `<CLUSTER_EXTERNAL_IP>`
 3. Enable proxy (orange cloud) for DDoS protection
@@ -224,7 +227,7 @@ After deploying a service with custom subdomain:
 kubectl get ingress -n paas-ws-1
 
 # Test access
-curl https://test-app.woowtech.com
+curl https://test-app.woowtech.io
 ```
 
 ## Step 7: Production Considerations
@@ -274,6 +277,7 @@ helm install monitoring prometheus-community/kube-prometheus-stack -n monitoring
 ```
 
 Monitor:
+
 - PaaS Operator pod health
 - Workspace resource usage
 - Helm release status
@@ -348,5 +352,6 @@ kubectl delete clusterrolebinding paas-operator-binding
 ## Support
 
 For issues or questions:
+
 - GitHub Issues: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues
 - Documentation: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/tree/main/docs

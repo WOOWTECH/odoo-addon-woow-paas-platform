@@ -17,6 +17,6 @@ export class Sidebar extends Component {
     }
 
     openHelp() {
-        window.open("https://docs.woowtech.com", "_blank");
+        window.open("https://docs.woowtech.io", "_blank");
     }
 }
