@@ -110,7 +110,7 @@ export async function getConfig() {
         return _configCache;
     }
     try {
-        const result = await jsonRpc("/woow/api/config", {});
+        const result = await jsonRpc("/api/config", {});
         if (result.success) {
             _configCache = result.data;
             return _configCache;
@@ -167,7 +167,7 @@ export const cloudService = reactive({
         this.loading = true;
         this.error = null;
         try {
-            const result = await jsonRpc("/woow/api/cloud/templates", {
+            const result = await jsonRpc("/api/cloud/templates", {
                 category: category || null,
                 search: search || null,
             });
@@ -191,7 +191,7 @@ export const cloudService = reactive({
     async getTemplate(templateId) {
         this.operationLoading.getTemplate = true;
         try {
-            const result = await jsonRpc(`/woow/api/cloud/templates/${templateId}`, {});
+            const result = await jsonRpc(`/api/cloud/templates/${templateId}`, {});
             if (result.success) {
                 return { success: true, data: result.data };
             } else {
@@ -213,7 +213,7 @@ export const cloudService = reactive({
         this.operationLoading.fetchServices = true;
         this.error = null;
         try {
-            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services`, {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services`, {
                 action: "list",
             });
             if (result.success) {
@@ -251,7 +251,7 @@ export const cloudService = reactive({
             if (payload.reference_id) {
                 params.reference_id = payload.reference_id;
             }
-            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services`, params);
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services`, params);
             if (result.success) {
                 this.services = [result.data, ...this.services];
                 return { success: true, data: result.data };
@@ -274,7 +274,7 @@ export const cloudService = reactive({
     async getService(workspaceId, serviceId) {
         this.operationLoading.getService = true;
         try {
-            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services/${serviceId}`, {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}`, {
                 action: "get",
             });
             if (result.success) {
@@ -307,7 +307,7 @@ export const cloudService = reactive({
             if (version) {
                 params.version = version;
             }
-            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services/${serviceId}`, params);
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}`, params);
             if (result.success) {
                 // Update local state
                 const index = this.services.findIndex(s => s.id === serviceId);
@@ -334,7 +334,7 @@ export const cloudService = reactive({
     async deleteService(workspaceId, serviceId) {
         this.operationLoading.deleteService = true;
         try {
-            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services/${serviceId}`, {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}`, {
                 action: "delete",
             });
             if (result.success) {
@@ -359,7 +359,7 @@ export const cloudService = reactive({
     async getRevisions(workspaceId, serviceId) {
         this.operationLoading.getRevisions = true;
         try {
-            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services/${serviceId}/revisions`, {});
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/revisions`, {});
             if (result.success) {
                 return { success: true, data: result.data };
             } else {
@@ -382,7 +382,7 @@ export const cloudService = reactive({
     async rollbackService(workspaceId, serviceId, revision) {
         this.operationLoading.rollbackService = true;
         try {
-            const result = await jsonRpc(`/woow/api/workspaces/${workspaceId}/services/${serviceId}/rollback`, {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/rollback`, {
                 revision: revision,
             });
             if (result.success) {

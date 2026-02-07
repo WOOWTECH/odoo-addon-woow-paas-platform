@@ -41,7 +41,7 @@ class PaasController(Controller):
 
     # ==================== Config API ====================
 
-    @route("/woow/api/config", auth="user", methods=["POST"], type="json")
+    @route("/api/config", auth="user", methods=["POST"], type="json")
     def api_config(self):
         """
         Get PaaS platform configuration for frontend.
@@ -685,7 +685,7 @@ class PaasController(Controller):
 
     # ==================== Cloud Templates API ====================
 
-    @route("/woow/api/cloud/templates", auth="user", methods=["POST"], type="json")
+    @route("/api/cloud/templates", auth="user", methods=["POST"], type="json")
     def api_cloud_templates(self, category=None, search=None, **kw):
         """
         List available cloud application templates.
@@ -725,7 +725,7 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    @route("/woow/api/cloud/templates/<int:template_id>", auth="user", methods=["POST"], type="json")
+    @route("/api/cloud/templates/<int:template_id>", auth="user", methods=["POST"], type="json")
     def api_cloud_template(self, template_id, **kw):
         """
         Get a single cloud application template by ID.
@@ -777,7 +777,7 @@ class PaasController(Controller):
 
     # ==================== Cloud Services API ====================
 
-    @route("/woow/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
+    @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
     def api_workspace_services(self, workspace_id, action='list', template_id=None, name=None, reference_id=None, values=None, **kw):
         """
         Handle cloud service operations for a workspace.
@@ -819,7 +819,7 @@ class PaasController(Controller):
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
-    @route("/woow/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id, service_id, action='get', values=None, version=None, **kw):
         """
         Handle operations on a specific cloud service.
@@ -867,7 +867,7 @@ class PaasController(Controller):
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
-    @route("/woow/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
     def api_service_rollback(self, workspace_id, service_id, revision=None, **kw):
         """
         Rollback a service to a previous revision.
@@ -912,7 +912,7 @@ class PaasController(Controller):
 
         return self._rollback_service(service, revision)
 
-    @route("/woow/api/workspaces/<int:workspace_id>/services/<int:service_id>/revisions", auth="user", methods=["POST"], type="json")
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/revisions", auth="user", methods=["POST"], type="json")
     def api_service_revisions(self, workspace_id, service_id, **kw):
         """
         Get revision history for a service.
