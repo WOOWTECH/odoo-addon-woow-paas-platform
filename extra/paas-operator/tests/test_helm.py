@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.services.helm import HelmException, HelmService, KubernetesService
+from src.services.helm import HelmException, HelmService, KubernetesService, validate_namespace
 
 
 class TestHelmService:
@@ -19,16 +19,16 @@ class TestHelmService:
     def test_validate_namespace_valid(self, helm_service):
         """Test namespace validation with valid prefix."""
         # Should not raise
-        helm_service._validate_namespace("paas-ws-test")
-        helm_service._validate_namespace("paas-ws-123")
+        validate_namespace("paas-ws-test")
+        validate_namespace("paas-ws-123")
 
     def test_validate_namespace_invalid(self, helm_service):
         """Test namespace validation with invalid prefix."""
         with pytest.raises(ValueError, match="must start with"):
-            helm_service._validate_namespace("invalid-namespace")
+            validate_namespace("invalid-namespace")
 
         with pytest.raises(ValueError, match="must start with"):
-            helm_service._validate_namespace("test")
+            validate_namespace("test")
 
     @patch("subprocess.run")
     def test_run_command_success(self, mock_run, helm_service):
