@@ -397,52 +397,47 @@ class PaasController(Controller):
 
     # ==================== Workspace Members API ====================
 
-    @route("/api/workspaces/members", auth="user", methods=["POST"], type="json")
-    def workspace_members_api(self, method='list', workspace_id=None, access_id=None, email=None, role=None, **kwargs):
+    @route("/api/workspaces/<int:workspace_id>/members", auth="user", methods=["POST"], type="json")
+    def api_workspace_members(self, workspace_id, action='list', email=None, role=None, **kwargs):
         """
-        Handle workspace member management operations via JSON-RPC.
-
-        This endpoint manages the access control for workspaces,
-        allowing admins/owners to invite, update, and remove members.
+        Handle workspace member collection operations via JSON-RPC.
 
         Args:
-            method (str): Operation type. One of:
-                - 'list': Get all members of a workspace
-                - 'invite': Invite a new member by email
-                - 'update_role': Change a member's role
-                - 'remove': Remove a member from workspace
-            workspace_id (int): Target workspace ID (required for all operations)
-            access_id (int, optional): Target access record ID (for update_role/remove)
+            workspace_id (int): Target workspace ID (from URL path)
+            action (str): Operation type - 'list' or 'invite'
             email (str, optional): User email to invite (for invite)
             role (str, optional): Role to assign ('admin', 'user', 'guest')
-            **kwargs: Additional parameters (ignored)
 
         Returns:
-            dict: JSON response with structure:
-                - success (bool): Whether the operation succeeded
-                - data (dict|list): Result data (on success)
-                - error (str): Error message (on failure)
-                - count (int): Item count (for list operations)
+            dict: JSON response with success/error structure
         """
-        if not workspace_id:
-            return {'success': False, 'error': 'Workspace ID is required'}
-
-        # Validate workspace_id is an integer
-        try:
-            workspace_id = int(workspace_id)
-        except (TypeError, ValueError):
-            return {'success': False, 'error': 'Workspace not found or access denied'}
-
-        if method == 'list':
+        if action == 'list':
             return self._list_members(workspace_id)
-        elif method == 'invite':
+        elif action == 'invite':
             return self._invite_member(workspace_id, email, role)
-        elif method == 'update_role':
+        else:
+            return {'success': False, 'error': f'Unknown action: {action}'}
+
+    @route("/api/workspaces/<int:workspace_id>/members/<int:access_id>", auth="user", methods=["POST"], type="json")
+    def api_workspace_member(self, workspace_id, access_id, action='update_role', role=None, **kwargs):
+        """
+        Handle individual workspace member operations via JSON-RPC.
+
+        Args:
+            workspace_id (int): Target workspace ID (from URL path)
+            access_id (int): Target access record ID (from URL path)
+            action (str): Operation type - 'update_role' or 'remove'
+            role (str, optional): New role to assign ('admin', 'user', 'guest')
+
+        Returns:
+            dict: JSON response with success/error structure
+        """
+        if action == 'update_role':
             return self._update_member_role(workspace_id, access_id, role)
-        elif method == 'remove':
+        elif action == 'remove':
             return self._remove_member(workspace_id, access_id)
         else:
-            return {'success': False, 'error': f'Unknown method: {method}'}
+            return {'success': False, 'error': f'Unknown action: {action}'}
 
     def _list_members(self, workspace_id):
         """

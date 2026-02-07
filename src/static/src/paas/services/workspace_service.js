@@ -249,9 +249,8 @@ export const workspaceService = reactive({
     async getMembers(workspaceId) {
         this.operationLoading.getMembers = true;
         try {
-            const result = await jsonRpc("/api/workspaces/members", {
-                method: "list",
-                workspace_id: workspaceId,
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/members`, {
+                action: "list",
             });
             if (result.success) {
                 return { success: true, data: result.data };
@@ -276,9 +275,8 @@ export const workspaceService = reactive({
     async inviteMember(workspaceId, payload) {
         this.operationLoading.invite = true;
         try {
-            const result = await jsonRpc("/api/workspaces/members", {
-                method: "invite",
-                workspace_id: workspaceId,
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/members`, {
+                action: "invite",
                 email: payload.email,
                 role: payload.role || "user",
             });
@@ -304,10 +302,8 @@ export const workspaceService = reactive({
     async updateMemberRole(workspaceId, accessId, role) {
         this.operationLoading.updateRole = true;
         try {
-            const result = await jsonRpc("/api/workspaces/members", {
-                method: "update_role",
-                workspace_id: workspaceId,
-                access_id: accessId,
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/members/${accessId}`, {
+                action: "update_role",
                 role: role,
             });
             if (result.success) {
@@ -331,10 +327,8 @@ export const workspaceService = reactive({
     async removeMember(workspaceId, accessId) {
         this.operationLoading.remove = true;
         try {
-            const result = await jsonRpc("/api/workspaces/members", {
-                method: "remove",
-                workspace_id: workspaceId,
-                access_id: accessId,
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/members/${accessId}`, {
+                action: "remove",
             });
             if (result.success) {
                 return { success: true };
