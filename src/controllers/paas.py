@@ -65,22 +65,15 @@ class PaasController(Controller):
     # ==================== Workspace API ====================
 
     @route("/api/workspaces", auth="user", methods=["POST"], type="json")
-    def workspace_api(self, method='list', workspace_id=None, name=None, description=None, **kwargs):
+    def api_workspace(self, action='list', name=None, description=None, **kwargs):
         """
-        Handle workspace CRUD operations via JSON-RPC.
-
-        This is the main entry point for all workspace-related API calls.
-        The 'method' parameter determines which operation to perform.
+        Handle workspace collection operations via JSON-RPC.
 
         Args:
-            method (str): Operation type. One of:
+            action (str): Operation type. One of:
                 - 'list': Get all accessible workspaces
                 - 'create': Create a new workspace
-                - 'get': Get a specific workspace by ID
-                - 'update': Update workspace name/description
-                - 'delete': Archive a workspace (soft delete)
-            workspace_id (int, optional): Target workspace ID (required for get/update/delete)
-            name (str, optional): Workspace name (required for create, optional for update)
+            name (str, optional): Workspace name (required for create)
             description (str, optional): Workspace description
             **kwargs: Additional parameters (ignored)
 
@@ -91,18 +84,42 @@ class PaasController(Controller):
                 - error (str): Error message (on failure)
                 - count (int): Item count (for list operations)
         """
-        if method == 'list':
+        if action == 'list':
             return self._list_workspaces()
-        elif method == 'create':
+        elif action == 'create':
             return self._create_workspace(name, description)
-        elif method == 'get':
+        else:
+            return {'success': False, 'error': f'Unknown action: {action}'}
+
+    @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["POST"], type="json")
+    def api_workspace_detail(self, workspace_id, action='get', name=None, description=None, **kwargs):
+        """
+        Handle single workspace operations via JSON-RPC.
+
+        Args:
+            workspace_id (int): Target workspace ID (from URL path)
+            action (str): Operation type. One of:
+                - 'get': Get workspace details
+                - 'update': Update workspace name/description
+                - 'delete': Archive a workspace (soft delete)
+            name (str, optional): Workspace name (optional for update)
+            description (str, optional): Workspace description
+            **kwargs: Additional parameters (ignored)
+
+        Returns:
+            dict: JSON response with structure:
+                - success (bool): Whether the operation succeeded
+                - data (dict): Result data (on success)
+                - error (str): Error message (on failure)
+        """
+        if action == 'get':
             return self._get_workspace(workspace_id)
-        elif method == 'update':
+        elif action == 'update':
             return self._update_workspace(workspace_id, name, description)
-        elif method == 'delete':
+        elif action == 'delete':
             return self._delete_workspace(workspace_id)
         else:
-            return {'success': False, 'error': f'Unknown method: {method}'}
+            return {'success': False, 'error': f'Unknown action: {action}'}
 
     def _list_workspaces(self):
         """

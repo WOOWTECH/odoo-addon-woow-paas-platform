@@ -111,7 +111,7 @@ export const workspaceService = reactive({
         this.loading = true;
         this.error = null;
         try {
-            const result = await jsonRpc("/api/workspaces", { method: "list" });
+            const result = await jsonRpc("/api/workspaces", { action: "list" });
             if (result.success) {
                 this.workspaces = result.data;
             } else {
@@ -137,7 +137,7 @@ export const workspaceService = reactive({
         this.error = null;
         try {
             const result = await jsonRpc("/api/workspaces", {
-                method: "create",
+                action: "create",
                 name: payload.name,
                 description: payload.description || "",
             });
@@ -169,9 +169,8 @@ export const workspaceService = reactive({
     async getWorkspace(workspaceId) {
         this.operationLoading.get = true;
         try {
-            const result = await jsonRpc("/api/workspaces", {
-                method: "get",
-                workspace_id: workspaceId,
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}`, {
+                action: "get",
             });
             if (result.success) {
                 return { success: true, data: result.data };
@@ -196,9 +195,8 @@ export const workspaceService = reactive({
     async updateWorkspace(workspaceId, payload) {
         this.operationLoading.update = true;
         try {
-            const result = await jsonRpc("/api/workspaces", {
-                method: "update",
-                workspace_id: workspaceId,
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}`, {
+                action: "update",
                 ...payload,
             });
             if (result.success) {
@@ -226,9 +224,8 @@ export const workspaceService = reactive({
     async deleteWorkspace(workspaceId) {
         this.operationLoading.delete = true;
         try {
-            const result = await jsonRpc("/api/workspaces", {
-                method: "delete",
-                workspace_id: workspaceId,
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}`, {
+                action: "delete",
             });
             if (result.success) {
                 // Remove from local state
