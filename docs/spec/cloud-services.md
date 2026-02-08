@@ -10,11 +10,11 @@ Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠�
 
 平台提供三種主要服務類型：
 
-| Service Type | Description | Use Case |
-|-------------|-------------|----------|
-| **Cloud Services** | Deploy containerized apps via Helm | AnythingLLM, n8n, PostgreSQL, Redis, etc. |
-| **Security Access** | Zero Trust Tunnels via Podman/HAOS | Secure remote connections |
-| **Smart Home Connect** | Home Assistant & Woow App integration | Remote access configuration |
+| Service Type           | Description                           | Use Case                                  |
+| ---------------------- | ------------------------------------- | ----------------------------------------- |
+| **Cloud Services**     | Deploy containerized apps via Helm    | AnythingLLM, n8n, PostgreSQL, Redis, etc. |
+| **Security Access**    | Zero Trust Tunnels via Podman/HAOS    | Secure remote connections                 |
+| **Smart Home Connect** | Home Assistant & Woow App integration | Remote access configuration               |
 
 本文件專注於 **Cloud Services** 的規格設計。
 
@@ -49,12 +49,14 @@ Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠�
 獨立的 Python FastAPI 服務，負責執行所有 Helm 操作：
 
 **技術棧**：
+
 - Python 3.11+
 - FastAPI
 - Helm CLI (installed in container)
 - kubectl (for status checks)
 
 **Deployment**：
+
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -80,6 +82,7 @@ spec:
 ```
 
 **ServiceAccount RBAC**：
+
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -87,7 +90,14 @@ metadata:
   name: paas-operator
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "secrets", "configmaps", "services", "persistentvolumeclaims"]
+    resources:
+      [
+        "namespaces",
+        "secrets",
+        "configmaps",
+        "services",
+        "persistentvolumeclaims",
+      ]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
@@ -99,16 +109,16 @@ rules:
 
 **API Endpoints**：
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/releases` | helm install |
-| GET | `/api/releases/{namespace}/{name}` | Get release status |
-| PATCH | `/api/releases/{namespace}/{name}` | helm upgrade |
-| DELETE | `/api/releases/{namespace}/{name}` | helm uninstall |
-| POST | `/api/releases/{namespace}/{name}/rollback` | helm rollback |
-| GET | `/api/releases/{namespace}/{name}/revisions` | helm history |
-| GET | `/api/releases/{namespace}/{name}/status` | Get pod/deployment status |
-| POST | `/api/namespaces` | Create namespace with quota |
+| Method | Endpoint                                     | Description                 |
+| ------ | -------------------------------------------- | --------------------------- |
+| POST   | `/api/releases`                              | helm install                |
+| GET    | `/api/releases/{namespace}/{name}`           | Get release status          |
+| PATCH  | `/api/releases/{namespace}/{name}`           | helm upgrade                |
+| DELETE | `/api/releases/{namespace}/{name}`           | helm uninstall              |
+| POST   | `/api/releases/{namespace}/{name}/rollback`  | helm rollback               |
+| GET    | `/api/releases/{namespace}/{name}/revisions` | helm history                |
+| GET    | `/api/releases/{namespace}/{name}/status`    | Get pod/deployment status   |
+| POST   | `/api/namespaces`                            | Create namespace with quota |
 
 **Request/Response Example**：
 
@@ -140,9 +150,17 @@ rules:
 ```
 
 **Security**：
+
 - API Key authentication (Odoo ↔ Operator)
 - Internal ClusterIP service (不對外暴露)
 - RBAC 限制只能操作 `paas-ws-*` namespace
+- YAML injection prevention using `yaml.safe_dump()`
+- Error message sanitization (防止敏感資訊外洩)
+- Fail-fast startup (Helm 不可用時拒絕啟動)
+- Configurable CORS origins for cross-origin requests
+- Request timeout handling (前端 30 秒超時)
+- Optimistic locking for race condition prevention
+- Helm values whitelist filtering based on template specs
 
 ### Namespace Strategy
 
@@ -193,18 +211,18 @@ Example: paas-ws-123-anythingllm-01
 
 ### Supported Operations
 
-| Operation | Helm Command | Description |
-|-----------|--------------|-------------|
-| Deploy | `helm install` | Create new release |
-| Upgrade | `helm upgrade` | Update release (config changes, version upgrade) |
-| Delete | `helm uninstall` | Remove release and cleanup resources |
-| Rollback | `helm rollback {revision}` | Revert to previous revision |
+| Operation | Helm Command               | Description                                      |
+| --------- | -------------------------- | ------------------------------------------------ |
+| Deploy    | `helm install`             | Create new release                               |
+| Upgrade   | `helm upgrade`             | Update release (config changes, version upgrade) |
+| Delete    | `helm uninstall`           | Remove release and cleanup resources             |
+| Rollback  | `helm rollback {revision}` | Revert to previous revision                      |
 
 > **Note**: 不提供 Start/Stop 操作。若需要暫停服務，請使用 Delete 移除；需要時再重新 Deploy。這樣設計是因為一個 Helm Chart 可能包含多種 workloads（Deployment、StatefulSet、CronJob 等），無法用單一 scale 指令控制。
 
 ### DNS & TLS Architecture (Cloudflare)
 
-域名 `*.woowtech.com` 由 Cloudflare 管理，採用 **Cloudflare Proxy** 模式處理 TLS：
+域名 `*.woowtech.io` 由 Cloudflare 管理，採用 **Cloudflare Proxy** 模式處理 TLS：
 
 ```
 ┌──────────────┐      ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
@@ -218,15 +236,16 @@ Example: paas-ws-123-anythingllm-01
 
 **Cloudflare 設定**：
 
-| 設定項目 | 值 | 說明 |
-|----------|-----|------|
-| DNS Record | `*.woowtech.com` → K3s Node IP | Wildcard A record |
-| Proxy Status | Proxied (Orange cloud) | 啟用 Cloudflare CDN + DDoS 保護 |
-| SSL/TLS Mode | Full (Strict) | Cloudflare ↔ Origin 使用 TLS |
-| Origin Certificate | Cloudflare Origin CA | 15 年有效期，免費 |
+| 設定項目           | 值                            | 說明                            |
+| ------------------ | ----------------------------- | ------------------------------- |
+| DNS Record         | `*.woowtech.io` → K3s Node IP | Wildcard A record               |
+| Proxy Status       | Proxied (Orange cloud)        | 啟用 Cloudflare CDN + DDoS 保護 |
+| SSL/TLS Mode       | Full (Strict)                 | Cloudflare ↔ Origin 使用 TLS    |
+| Origin Certificate | Cloudflare Origin CA          | 15 年有效期，免費               |
 
 **流量路徑**：
-1. User 訪問 `https://my-app.woowtech.com`
+
+1. User 訪問 `https://my-app.woowtech.io`
 2. Cloudflare 終止 TLS，驗證憑證
 3. Cloudflare 使用 Origin CA 與 K3s 建立加密連線
 4. Traefik 路由到對應的 Service
@@ -246,10 +265,10 @@ metadata:
 spec:
   tls:
     - hosts:
-        - my-ai-assistant.woowtech.com
-      secretName: cloudflare-origin-tls  # Shared Origin CA cert
+        - my-ai-assistant.woowtech.io
+      secretName: cloudflare-origin-tls # Shared Origin CA cert
   rules:
-    - host: my-ai-assistant.woowtech.com
+    - host: my-ai-assistant.woowtech.io
       http:
         paths:
           - path: /
@@ -268,7 +287,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: cloudflare-origin-tls
-  namespace: default  # 或建立在每個 workspace namespace
+  namespace: default # 或建立在每個 workspace namespace
 type: kubernetes.io/tls
 data:
   tls.crt: <base64-encoded-origin-cert>
@@ -276,7 +295,8 @@ data:
 ```
 
 > **Note**:
-> - Cloudflare Origin CA 憑證為 wildcard (`*.woowtech.com`)，可供所有子網域共用
+>
+> - Cloudflare Origin CA 憑證為 wildcard (`*.woowtech.io`)，可供所有子網域共用
 > - K3s 預設使用 Traefik 並開放 port 80/443
 > - 如需自訂 Traefik 設定，應建立 HelmChartConfig 於 `/var/lib/rancher/k3s/server/manifests/`
 
@@ -347,49 +367,52 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - FR1.4: 點擊「+」按鈕進入配置頁面
 
 **Application Card Data**:
+
 ```yaml
 - id: string
 - name: string
 - icon_url: string
 - description: string (short, ~100 chars)
 - full_description: text
-- tags: string[]  # e.g., ["AI", "Chatbot"]
-- category: enum  # AI_LLM, Automation, Database, Analytics, DevOps, Web, Container
+- tags: string[] # e.g., ["AI", "Chatbot"]
+- category: enum # AI_LLM, Automation, Database, Analytics, DevOps, Web, Container
 - monthly_price: decimal
 - helm_chart: HelmChartSpec
 - default_port: integer
-- required_values: HelmValueSpec[]  # Helm values that user must provide
-- optional_values: HelmValueSpec[]  # Optional Helm values with defaults
+- required_values: HelmValueSpec[] # Helm values that user must provide
+- optional_values: HelmValueSpec[] # Optional Helm values with defaults
 - documentation_url: string
 - min_resources: ResourceSpec
 ```
 
 **HelmChartSpec**:
+
 ```yaml
-- repository: string      # e.g., "https://charts.bitnami.com/bitnami"
-- chart_name: string      # e.g., "postgresql"
-- chart_version: string   # e.g., "12.5.8"
-- default_values: object  # Base values.yaml overrides
+- repository: string # e.g., "https://charts.bitnami.com/bitnami"
+- chart_name: string # e.g., "postgresql"
+- chart_version: string # e.g., "12.5.8"
+- default_values: object # Base values.yaml overrides
 ```
 
 **HelmValueSpec**:
+
 ```yaml
-- key: string            # Helm value path, e.g., "auth.postgresPassword"
-- label: string          # UI display label
-- type: enum             # text, password, number, boolean, select
+- key: string # Helm value path, e.g., "auth.postgresPassword"
+- label: string # UI display label
+- type: enum # text, password, number, boolean, select
 - default_value: any?
 - placeholder: string?
 - help_text: string?
 - required: boolean
-- options: string[]?     # For select type
+- options: string[]? # For select type
 ```
 
-
 **ResourceSpec**:
+
 ```yaml
-- vcpu: integer  # e.g., 2
-- ram_gb: decimal  # e.g., 4
-- storage_gb: integer  # e.g., 10
+- vcpu: integer # e.g., 2
+- ram_gb: decimal # e.g., 4
+- storage_gb: integer # e.g., 10
 ```
 
 ---
@@ -405,8 +428,8 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
    - Reference ID (auto-generated, **建立後不可修改**，用於 Helm Release 命名)
 
 2. **Network & Domain**
-   - Subdomain (e.g., `my-ai-assistant.woowtech.com`)
-   - ~~Private Network toggle (restrict to VPN only)~~ *(Future Phase)*
+   - Subdomain (e.g., `my-ai-assistant.woowtech.io`)
+   - ~~Private Network toggle (restrict to VPN only)~~ _(Future Phase)_
 
 3. **Helm Values** (dynamic based on app template)
    - Required values (user must provide)
@@ -417,9 +440,11 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
    - Storage allocation
 
 **Deployment Note**:
+
 > Initial setup may take up to 5 minutes. Your instance will be available at your custom subdomain.
 
 **Actions**:
+
 - Cancel / Discard
 - Launch Application
 
@@ -432,6 +457,7 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 **Purpose**: 管理已部署的服務實例
 
 **Header Section**:
+
 - App Icon + Name (e.g., "AnythingLLM_221")
 - Status Badge (Running, Error, Deploying, Upgrading)
 - Deployment ID
@@ -443,6 +469,7 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 **Tab Navigation**:
 
 #### Tab 3.1: Overview
+
 - **Connection**
   - Status (ONLINE/OFFLINE)
   - Public URL
@@ -457,12 +484,14 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - **Environment** info (Region, Instance Type)
 
 #### Tab 3.2: Configuration
+
 - General Settings (name 可改, reference ID 唯讀)
 - Network & Domain (subdomain 唯讀, custom domain 可改)
 - Helm Values (view/edit, 修改後觸發 `helm upgrade`)
 - Resource Allocation
 
 #### Tab 3.3: Metrics
+
 - **Performance Overview** (time range selector: Last Hour, 24h, 7d, 30d)
 - vCPU Usage chart
 - RAM Usage chart
@@ -470,33 +499,37 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - Network chart (IN/OUT)
 - Active Connections count
 
-#### Tab 3.4: Backups *(Future Phase)*
+#### Tab 3.4: Backups _(Future Phase)_
 
-#### Tab 3.5: Activity Logs *(Future Phase)*
+#### Tab 3.5: Activity Logs _(Future Phase)_
 
 ---
 
 ### F4: Service Actions
 
 **4.1 Upgrade Service**
+
 - 更新 Helm values（環境變數、資源配置等）
 - 升級 Chart 版本
 - 自動建立新的 Helm revision
 
 **4.2 Delete Service**
+
 - Confirmation modal required
 - Option to keep/delete backups (PVCs)
 - Cleanup: `helm uninstall`, 移除 Ingress rules
 
 **4.3 Rollback Service**
+
 - 選擇要回滾的 revision
 - 執行 `helm rollback`
 - 顯示 revision history
 
 **4.4 Edit Custom Domain**
+
 - Modal with domain input
-- 用戶需自行在其 DNS 設定 CNAME 指向 `{subdomain}.woowtech.com`
-- 或直接使用平台提供的 `*.woowtech.com` 子網域（已含 TLS）
+- 用戶需自行在其 DNS 設定 CNAME 指向 `{subdomain}.woowtech.io`
+- 或直接使用平台提供的 `*.woowtech.io` 子網域（已含 TLS）
 
 ---
 
@@ -548,6 +581,7 @@ class CloudAppTemplate(models.Model):
 ```
 
 **helm_value_specs JSON Schema Example**:
+
 ```json
 {
   "required": [
@@ -578,6 +612,13 @@ class CloudService(models.Model):
     _name = 'woow_paas_platform.cloud_service'
     _description = 'Cloud Service Instance'
 
+    _sql_constraints = [
+        ('unique_subdomain', 'UNIQUE(subdomain)',
+         'Subdomain must be unique across all services.'),
+        ('unique_reference_id', 'UNIQUE(reference_id)',
+         'Reference ID must be unique.'),
+    ]
+
     # Relationships
     workspace_id = fields.Many2one('woow_paas_platform.workspace', required=True, ondelete='cascade')
     template_id = fields.Many2one('woow_paas_platform.cloud_app_template', required=True)
@@ -599,7 +640,7 @@ class CloudService(models.Model):
     error_message = fields.Text()  # Error details when state='error'
 
     # Network
-    subdomain = fields.Char()  # e.g., "my-app" → my-app.woowtech.com
+    subdomain = fields.Char()  # e.g., "my-app" → my-app.woowtech.io
     custom_domain = fields.Char()  # Optional custom domain
     internal_port = fields.Integer()
     # is_private_network = fields.Boolean(default=False)  # Future Phase
@@ -625,9 +666,9 @@ class CloudService(models.Model):
     last_upgraded_at = fields.Datetime()
 ```
 
-### CloudServiceBackup *(Future Phase)*
+### CloudServiceBackup _(Future Phase)_
 
-### CloudServiceLog *(Future Phase)*
+### CloudServiceLog _(Future Phase)_
 
 ---
 
@@ -678,7 +719,7 @@ GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
      &search={query}
 ```
 
-#### Backups *(Future Phase)*
+#### Backups _(Future Phase)_
 
 ---
 
@@ -686,40 +727,41 @@ GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
 
 ### New Pages
 
-| Page | Route | Description |
-|------|-------|-------------|
-| ServiceSelectionPage | `#/workspaces/:id/services/new` | 服務類型選擇（首次部署引導） |
-| AppMarketplacePage | `#/workspaces/:id/services/marketplace` | 應用程式市集 |
-| AppConfigurationPage | `#/workspaces/:id/services/configure/:templateId` | 應用配置頁面 |
-| ServiceDetailPage | `#/workspaces/:id/services/:serviceId` | 服務詳情（含五個 Tab） |
+| Page                 | Route                                             | Description                  |
+| -------------------- | ------------------------------------------------- | ---------------------------- |
+| ServiceSelectionPage | `#/workspaces/:id/services/new`                   | 服務類型選擇（首次部署引導） |
+| AppMarketplacePage   | `#/workspaces/:id/services/marketplace`           | 應用程式市集                 |
+| AppConfigurationPage | `#/workspaces/:id/services/configure/:templateId` | 應用配置頁面                 |
+| ServiceDetailPage    | `#/workspaces/:id/services/:serviceId`            | 服務詳情（含五個 Tab）       |
 
 ### New Components
 
-| Component | Location | Description |
-|-----------|----------|-------------|
-| ServiceCard | `components/service/ServiceCard.js` | 服務卡片（顯示於 Dashboard） |
-| AppCard | `components/marketplace/AppCard.js` | 應用程式卡片（市集用） |
-| CategoryFilter | `components/marketplace/CategoryFilter.js` | 分類篩選器 |
-| EnvVarForm | `components/config/EnvVarForm.js` | 動態環境變數表單 |
-| MetricsChart | `components/metrics/MetricsChart.js` | 效能指標圖表 |
-| ~~LogViewer~~ | ~~`components/logs/LogViewer.js`~~ | ~~即時日誌查看器~~ *(Future Phase)* |
-| ~~BackupList~~ | ~~`components/backup/BackupList.js`~~ | ~~備份列表~~ *(Future Phase)* |
-| StatusBadge | `components/common/StatusBadge.js` | 狀態標籤 |
+| Component      | Location                                   | Description                         |
+| -------------- | ------------------------------------------ | ----------------------------------- |
+| ServiceCard    | `components/service/ServiceCard.js`        | 服務卡片（顯示於 Dashboard）        |
+| AppCard        | `components/marketplace/AppCard.js`        | 應用程式卡片（市集用）              |
+| CategoryFilter | `components/marketplace/CategoryFilter.js` | 分類篩選器                          |
+| EnvVarForm     | `components/config/EnvVarForm.js`          | 動態環境變數表單                    |
+| MetricsChart   | `components/metrics/MetricsChart.js`       | 效能指標圖表                        |
+| ~~LogViewer~~  | ~~`components/logs/LogViewer.js`~~         | ~~即時日誌查看器~~ _(Future Phase)_ |
+| ~~BackupList~~ | ~~`components/backup/BackupList.js`~~      | ~~備份列表~~ _(Future Phase)_       |
+| StatusBadge    | `components/common/StatusBadge.js`         | 狀態標籤                            |
 
 ### New Modals
 
-| Modal | Description |
-|-------|-------------|
-| EditDomainModal | 編輯自訂網域 |
-| DeleteServiceModal | 確認刪除服務 |
-| ~~CreateBackupModal~~ | ~~建立備份~~ *(Future Phase)* |
-| ~~RestoreBackupModal~~ | ~~還原備份確認~~ *(Future Phase)* |
+| Modal                  | Description                       |
+| ---------------------- | --------------------------------- |
+| EditDomainModal        | 編輯自訂網域                      |
+| DeleteServiceModal     | 確認刪除服務                      |
+| ~~CreateBackupModal~~  | ~~建立備份~~ _(Future Phase)_     |
+| ~~RestoreBackupModal~~ | ~~還原備份確認~~ _(Future Phase)_ |
 
 ---
 
 ## Implementation Phases
 
 ### Phase 0: PaaS Operator Service
+
 - [ ] FastAPI project setup
 - [ ] Helm CLI integration (subprocess)
 - [ ] API endpoints: releases CRUD, namespaces
@@ -728,36 +770,43 @@ GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
 - [ ] Health check endpoint
 
 ### Phase 1: Foundation (Odoo)
+
 - [ ] CloudAppTemplate model + seed data
 - [ ] CloudService model
 - [ ] PaaS Operator client service (HTTP calls)
 - [ ] Basic CRUD APIs
 
 ### Phase 2: Marketplace UI
+
 - [ ] AppMarketplacePage
 - [ ] AppCard component
 - [ ] Category filter
 - [ ] Search functionality
 
 ### Phase 3: Configuration & Launch
+
 - [ ] AppConfigurationPage
 - [ ] EnvVarForm component
 - [ ] Service creation API
 - [ ] Subdomain validation
 
 ### Phase 4: Service Management
+
 - [ ] ServiceDetailPage (Overview tab)
 - [ ] Service start/stop/restart APIs
 - [ ] Status polling
 
-### Phase 5: Metrics *(Future Phase)*
+### Phase 5: Metrics _(Future Phase)_
+
 - [ ] Metrics tab + charts
 
-### Phase 6: Activity Logs *(Future Phase)*
+### Phase 6: Activity Logs _(Future Phase)_
+
 - [ ] Activity Logs tab
 - [ ] Real-time log streaming
 
-### Phase 7: Backups *(Future Phase)*
+### Phase 7: Backups _(Future Phase)_
+
 - [ ] Backup model
 - [ ] Backup APIs
 - [ ] Backups tab UI
@@ -767,16 +816,19 @@ GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
 ## Non-Functional Requirements
 
 ### Performance
+
 - Marketplace page load < 500ms
 - Metrics chart update interval: 5s
 - Log streaming latency < 1s
 
 ### Security
+
 - Environment variables encrypted at rest
 - HTTPS required for all public URLs
 - Role-based access (workspace member roles)
 
 ### Scalability
+
 - Support up to 50 services per workspace
 - Support up to 30-day metrics retention
 
@@ -916,16 +968,16 @@ helm_value_specs: |
 
 ## Technical Decisions
 
-| 項目 | 決定 | 說明 |
-|------|------|------|
-| **K8s/Helm 操作** | 獨立 PaaS Operator 服務 | Odoo Pod 無法直接執行 Helm，需透過獨立服務 |
-| **PaaS Operator 技術棧** | Python FastAPI + Helm CLI | FastAPI 輕量快速，subprocess 調用 Helm CLI |
-| **Odoo ↔ Operator 通訊** | HTTP REST + API Key | Internal ClusterIP，不對外暴露 |
-| **Helm Chart Repository** | 公開 repos + 自建 | 使用 Bitnami/ArtifactHub，未來可自建 Chart Museum |
-| **Metrics collection** | Prometheus + Grafana | K8s metrics-server 不保留歷史，無法支援 24h/7d/30d 查詢 |
-| **Log aggregation** | Loki + Promtail | 整合 Grafana 生態系 |
-| **Billing integration** | *(Future Phase)* | 暫不實作 |
-| **Multi-cluster support** | 不支援 | 單一 K8s cluster |
+| 項目                      | 決定                      | 說明                                                    |
+| ------------------------- | ------------------------- | ------------------------------------------------------- |
+| **K8s/Helm 操作**         | 獨立 PaaS Operator 服務   | Odoo Pod 無法直接執行 Helm，需透過獨立服務              |
+| **PaaS Operator 技術棧**  | Python FastAPI + Helm CLI | FastAPI 輕量快速，subprocess 調用 Helm CLI              |
+| **Odoo ↔ Operator 通訊**  | HTTP REST + API Key       | Internal ClusterIP，不對外暴露                          |
+| **Helm Chart Repository** | 公開 repos + 自建         | 使用 Bitnami/ArtifactHub，未來可自建 Chart Museum       |
+| **Metrics collection**    | Prometheus + Grafana      | K8s metrics-server 不保留歷史，無法支援 24h/7d/30d 查詢 |
+| **Log aggregation**       | Loki + Promtail           | 整合 Grafana 生態系                                     |
+| **Billing integration**   | _(Future Phase)_          | 暫不實作                                                |
+| **Multi-cluster support** | 不支援                    | 單一 K8s cluster                                        |
 
 ---
 

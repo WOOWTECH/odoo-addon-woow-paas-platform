@@ -27,3 +27,9 @@ venv/
 # IDE
 .vscode/*.log
 .idea/
+
+# helm values (exclude real, keep examples)
+*values.yaml
+*values.yml
+!*values.example.yml
+!*values.example.yaml

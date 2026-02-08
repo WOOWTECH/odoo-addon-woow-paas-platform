@@ -1,3 +1,5 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_workspace_user,woow_paas_platform.workspace.user,model_woow_paas_platform_workspace,base.group_user,1,1,1,0
 access_workspace_access_user,woow_paas_platform.workspace_access.user,model_woow_paas_platform_workspace_access,base.group_user,1,1,1,0
+access_cloud_app_template_user,woow_paas_platform.cloud_app_template.user,model_woow_paas_platform_cloud_app_template,base.group_user,1,0,0,0
+access_cloud_service_user,woow_paas_platform.cloud_service.user,model_woow_paas_platform_cloud_service,base.group_user,1,1,1,1

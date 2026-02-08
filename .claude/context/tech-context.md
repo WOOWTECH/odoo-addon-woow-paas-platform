@@ -91,15 +91,31 @@ Standalone OWL application assets:
 ## Development Environment
 
 ### Docker Commands (Recommended)
+
+使用 Worktree Development 腳本來管理開發環境：
+
+```bash
+# 啟動開發環境（自動設定 .env 並啟動 Docker）
+./scripts/start-dev.sh
+
+# 執行測試
+./scripts/test-addon.sh
+
+# 清理環境
+./scripts/cleanup-worktree.sh
+```
+
+手動操作（需先執行 `./scripts/start-dev.sh`）：
+
 ```bash
 # Restart after changes
-docker compose -f docker-compose-18.yml restart web
+docker compose restart web
 
 # Update module
-docker compose -f docker-compose-18.yml exec web odoo -d odoo -u woow_paas_platform --dev xml
+docker compose exec web odoo -d ${POSTGRES_DB:-odoo} -u woow_paas_platform --dev xml
 
 # View logs
-docker compose -f docker-compose-18.yml logs -f web
+docker compose logs -f web
 ```
 
 ### Direct Commands

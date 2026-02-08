@@ -46,6 +46,14 @@ class Workspace(models.Model):
         string='Access Controls'
     )
 
+    # Cloud Services
+    service_ids = fields.One2many(
+        'woow_paas_platform.cloud_service',
+        'workspace_id',
+        string='Cloud Services',
+        help='Cloud services deployed in this workspace',
+    )
+
     # Computed fields
     member_count = fields.Integer(
         string='Member Count',

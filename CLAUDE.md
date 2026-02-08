@@ -14,10 +14,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Development Status
 
 ```
-Phase 1: Foundation    [████████] 100%
-Phase 2: OWL App Shell [████████] 100%
-Phase 3: Core Models   [████    ]  50%  ← In Progress (Workspace + WorkspaceAccess)
-Phase 4: Integrations  [        ]   0%
+Phase 1: Foundation      [████████] 100%
+Phase 2: OWL App Shell   [████████] 100%
+Phase 3: Core Models     [████████] 100%  ✓ Complete (Workspace + WorkspaceAccess)
+Phase 4: Cloud Services  [████████] 100%  ✓ Complete (Templates + Services + Operator)
+Phase 5: Integrations    [        ]   0%
+```
+
+### Cloud Services (New!)
+
+The module now includes a complete Cloud Services feature that allows users to deploy containerized applications via Kubernetes and Helm.
+
+**Key Components**:
+- **CloudAppTemplate** model - Application marketplace templates (AnythingLLM, n8n, PostgreSQL, etc.)
+- **CloudService** model - Deployed service instances with lifecycle management
+- **PaaS Operator Service** - FastAPI service at `extra/paas-operator/` that wraps Helm CLI operations
+- **Marketplace UI** - OWL components for browsing and deploying applications
+
+**Architecture**:
+```
+┌─────────────┐      ┌──────────────┐      ┌──────────────┐
+│   Odoo      │─────▶│ PaaS Operator│─────▶│ Kubernetes   │
+│  (Frontend) │ HTTP │   (FastAPI)  │ Helm │ + User Pods  │
+└─────────────┘      └──────────────┘      └──────────────┘
 ```
 
 ## Development Commands
@@ -38,23 +57,73 @@ Phase 4: Integrations  [        ]   0%
 ### Run tests for this module
 
 ```bash
+# Odoo module tests
 ./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init
+
+# PaaS Operator tests
+cd extra/paas-operator
+pytest tests/ -v --cov=src
 ```
 
 ### Docker Development (Recommended)
 
+使用 Worktree Development 腳本來管理開發環境：
+
 ```bash
-# Restart web container after changes
-docker compose -f docker-compose-18.yml restart web
+# 啟動開發環境（自動設定 .env 並啟動 Docker）
+./scripts/start-dev.sh
 
-# Update module in Docker
-docker compose -f docker-compose-18.yml exec web odoo -d odoo -u woow_paas_platform --dev xml
+# 執行測試
+./scripts/test-addon.sh
 
-# View logs
-docker compose -f docker-compose-18.yml logs -f web
+# 清理環境
+./scripts/cleanup-worktree.sh
 ```
 
+詳細說明請參考下方 [Worktree Development](#worktree-development) 章節。
+
 **Test URL**: http://localhost (NOT :8069, to enable websocket)
+
+### PaaS Operator Local Development
+
+When the PaaS Operator is running in Kubernetes without Ingress, use port-forward to access it locally:
+
+```bash
+# Port forward the paas-operator service to localhost:8000
+kubectl port-forward -n paas-system svc/paas-operator 8000:80
+
+# Verify connection
+curl http://localhost:8000/health
+```
+
+**Get API Key from Kubernetes Secret:**
+
+```bash
+kubectl get secret -n paas-system paas-operator-secret -o jsonpath='{.data.api-key}' | base64 -d
+```
+
+**Odoo Configuration (Settings → Woow PaaS):**
+- **PaaS Operator URL**: `http://localhost:8000` (本機 Odoo) 或 `http://host.docker.internal:8000` (Docker Odoo)
+- **PaaS Operator API Key**: (value from secret above)
+
+> **Note**: The port-forward session must remain active while testing. If you close the terminal, re-run the port-forward command.
+
+**Docker 網路注意事項：**
+
+當 Odoo 運行在 Docker 容器中時，容器內的 `localhost` 指向容器本身，而非宿主機。因此需要使用 `host.docker.internal` 來連接宿主機上的 port-forward：
+
+| Odoo 運行環境 | PaaS Operator URL |
+|--------------|-------------------|
+| 本機直接運行 | `http://localhost:8000` |
+| Docker 容器 | `http://host.docker.internal:8000` |
+
+```bash
+# 確認 port-forward 正在運行
+kubectl port-forward -n paas-system svc/paas-operator 8000:80
+
+# 從 Docker 容器內測試連線
+docker exec -it <odoo-container> curl http://host.docker.internal:8000/health
+```
 
 ## Architecture
 
@@ -66,15 +135,21 @@ woow_paas_platform/
 │   ├── __manifest__.py           # Module metadata, dependencies, assets
 │   ├── __init__.py               # Python package init
 │   ├── controllers/
-│   │   └── paas.py               # /woow endpoint controller (JSON API)
+│   │   ├── paas.py               # /woow endpoint controller (JSON API)
+│   │   └── cloud_services.py    # Cloud services API endpoints
 │   ├── models/
-│   │   ├── res_config_settings.py
-│   │   ├── workspace.py          # Workspace model
-│   │   └── workspace_access.py   # Workspace access/member model
+│   │   ├── res_config_settings.py       # PaaS Operator configuration
+│   │   ├── workspace.py                 # Workspace model
+│   │   ├── workspace_access.py          # Workspace access/member model
+│   │   ├── cloud_app_template.py        # Application marketplace templates
+│   │   ├── cloud_service.py             # Deployed service instances
+│   │   └── paas_operator_client.py      # HTTP client for PaaS Operator
 │   ├── views/
 │   │   ├── paas_app.xml          # QWeb template for /woow
 │   │   ├── res_config_settings_views.xml
 │   │   └── menu.xml
+│   ├── data/
+│   │   └── cloud_app_templates.xml      # Default app templates (AnythingLLM, n8n, etc.)
 │   ├── security/
 │   │   └── ir.model.access.csv
 │   └── static/
@@ -92,8 +167,29 @@ woow_paas_platform/
 │           ├── scss/             # Backend asset styles
 │           ├── components/       # Backend OWL components (預留)
 │           └── services/         # Backend JS services (預留)
+├── extra/paas-operator/          # PaaS Operator Service (FastAPI)
+│   ├── src/
+│   │   ├── main.py              # FastAPI app + middleware
+│   │   ├── config.py            # Settings management
+│   │   ├── api/                 # API endpoints
+│   │   │   ├── releases.py      # Helm release operations
+│   │   │   └── namespaces.py    # Namespace management
+│   │   ├── services/
+│   │   │   └── helm.py          # Helm CLI wrapper
+│   │   └── models/
+│   │       └── schemas.py       # Pydantic models
+│   ├── tests/                   # Operator unit tests
+│   ├── helm/                    # Helm chart for K8s deployment
+│   │   ├── Chart.yaml
+│   │   ├── values.yaml
+│   │   └── templates/          # K8s resource templates
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── scripts/                      # Development scripts
 ├── docs/                         # Documentation
+│   ├── deployment/              # K8s setup, troubleshooting
+│   ├── development/             # Developer guides
+│   └── spec/                    # Feature specifications
 └── .claude/                      # Claude Code PM configuration
 ```
 
@@ -104,6 +200,19 @@ The module provides an independent frontend application:
 **Entry Point**: `src/controllers/paas.py` → `/woow`
 **Template**: `src/views/paas_app.xml`
 **Assets**: `woow_paas_platform.assets_paas` bundle
+
+### Cloud Services API Endpoints
+
+**Controller**: `src/controllers/cloud_services.py`
+
+- `GET /api/cloud-services/templates` - List application templates
+- `GET /api/cloud-services/templates/<id>` - Get template details
+- `GET /api/cloud-services/<workspace_id>/services` - List workspace services
+- `POST /api/cloud-services/<workspace_id>/services` - Deploy new service
+- `GET /api/cloud-services/services/<id>` - Get service status
+- `POST /api/cloud-services/services/<id>/start` - Start service
+- `POST /api/cloud-services/services/<id>/stop` - Stop service
+- `DELETE /api/cloud-services/services/<id>` - Delete service
 
 **Routes** (hash-based):
 
@@ -207,9 +316,22 @@ export class SubscriptionCard extends Component {
 
 ## Dependencies
 
+### Odoo Module
 - Base Odoo modules: `base`, `web`
 - Odoo version: 18.0
 - External fonts: Google Fonts (Manrope, Outfit), Material Symbols
+
+### PaaS Operator Service
+- Python 3.11+
+- FastAPI
+- Helm 3.13+
+- kubectl 1.28+
+- Kubernetes cluster access
+
+### Deployment
+- Kubernetes 1.28+ (K3s recommended for self-hosted)
+- PostgreSQL 14+ (for Odoo)
+- Cloudflare DNS (or custom domain for Ingress)
 
 ## Claude Code PM
 

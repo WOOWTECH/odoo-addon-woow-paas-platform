@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AppConfigurationPage">
+        <div class="o_woow_configure_page">
+            <!-- Loading State -->
+            <t t-if="state.loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading template...</p>
+                </div>
+            </t>
+
+            <!-- Error State -->
+            <t t-elif="state.error">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'error'" size="48"/>
+                    <h2>Unable to load template</h2>
+                    <p t-esc="state.error"/>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Marketplace
+                    </WoowButton>
+                </div>
+            </t>
+
+            <!-- Configuration Form -->
+            <t t-elif="template">
+                <!-- Breadcrumb / Back Navigation -->
+                <div class="o_woow_breadcrumb">
+                    <button class="o_woow_back_btn" t-on-click="goBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_parent">Marketplace</span>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_current">Configure <t t-esc="template.name"/></span>
+                </div>
+
+                <!-- Header Section -->
+                <WoowCard shadow="true" class="'o_woow_configure_header'">
+                    <div class="o_woow_template_header">
+                        <div t-att-class="'o_woow_template_icon o_woow_template_icon_' + template.category">
+                            <WoowIcon name="categoryIcon" size="32"/>
+                        </div>
+                        <div class="o_woow_template_info">
+                            <h1 t-esc="template.name"/>
+                            <p t-esc="template.description"/>
+                            <div class="o_woow_template_meta">
+                                <span class="o_woow_template_category">
+                                    <WoowIcon name="'category'" size="14"/>
+                                    <t t-esc="template.category"/>
+                                </span>
+                                <span class="o_woow_template_price">
+                                    <WoowIcon name="'payments'" size="14"/>
+                                    $<t t-esc="template.monthly_price"/>/month
+                                </span>
+                                <span class="o_woow_template_resources">
+                                    <WoowIcon name="'memory'" size="14"/>
+                                    <t t-esc="template.min_vcpu"/> vCPU, <t t-esc="template.min_ram_gb"/> GB RAM
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- General Settings Section -->
+                <WoowCard shadow="true" class="'o_woow_configure_section'">
+                    <div class="o_woow_section_header">
+                        <WoowIcon name="'settings'" size="24"/>
+                        <div>
+                            <h2>General Settings</h2>
+                            <p>Basic configuration for your service</p>
+                        </div>
+                    </div>
+                    <div class="o_woow_section_body">
+                        <!-- Service Name -->
+                        <div t-att-class="'o_woow_form_group' + (state.errors.name ? ' o_woow_has_error' : '')">
+                            <label for="service_name">
+                                Service Name
+                                <span class="o_woow_required_mark">*</span>
+                            </label>
+                            <input
+                                type="text"
+                                id="service_name"
+                                t-att-value="state.name"
+                                t-on-input="onNameChange"
+                                placeholder="Enter service name"
+                                class="o_woow_input"
+                            />
+                            <t t-if="state.errors.name">
+                                <p class="o_woow_field_error">
+                                    <WoowIcon name="'error'" size="14"/>
+                                    <t t-esc="state.errors.name"/>
+                                </p>
+                            </t>
+                        </div>
+
+                        <!-- Reference ID -->
+                        <div class="o_woow_form_group">
+                            <label for="reference_id">
+                                Reference ID
+                            </label>
+                            <input
+                                type="text"
+                                id="reference_id"
+                                t-att-value="state.referenceId"
+                                disabled="disabled"
+                                class="o_woow_input o_woow_input_readonly"
+                            />
+                            <p class="o_woow_field_hint">Auto-generated unique identifier for this service</p>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Network & Domain Section -->
+                <WoowCard shadow="true" class="'o_woow_configure_section'">
+                    <div class="o_woow_section_header">
+                        <WoowIcon name="'language'" size="24"/>
+                        <div>
+                            <h2>Network and Domain</h2>
+                            <p>Your service URL (auto-generated)</p>
+                        </div>
+                    </div>
+                    <div class="o_woow_section_body">
+                        <!-- Subdomain (auto-generated, read-only) -->
+                        <div class="o_woow_form_group">
+                            <label for="subdomain">
+                                Subdomain
+                            </label>
+                            <div class="o_woow_input_with_suffix">
+                                <input
+                                    type="text"
+                                    id="subdomain"
+                                    t-att-value="state.subdomain"
+                                    disabled="disabled"
+                                    class="o_woow_input o_woow_input_readonly"
+                                />
+                                <span class="o_woow_input_suffix" t-esc="subdomainSuffix"/>
+                            </div>
+                            <p class="o_woow_field_hint">
+                                <t t-if="state.subdomain">
+                                    Your service will be available at <strong><t t-esc="state.subdomain"/><t t-esc="subdomainSuffix"/></strong>
+                                </t>
+                                <t t-else="">
+                                    Enter a service name to generate the URL
+                                </t>
+                            </p>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Helm Values Section -->
+                <t t-if="helmValueSpecs.required and helmValueSpecs.required.length > 0">
+                    <WoowCard shadow="true" class="'o_woow_configure_section'">
+                        <div class="o_woow_section_header">
+                            <WoowIcon name="'tune'" size="24"/>
+                            <div>
+                                <h2>Application Settings</h2>
+                                <p>Configure application-specific settings</p>
+                            </div>
+                        </div>
+                        <div class="o_woow_section_body">
+                            <HelmValueForm
+                                specs="helmValueSpecs"
+                                values="state.helmValues"
+                                onUpdate.bind="onHelmValueUpdate"
+                                showAdvanced="state.showAdvanced"
+                                errors="state.errors"
+                            />
+
+                            <!-- Advanced Settings Toggle -->
+                            <t t-if="hasOptionalSettings">
+                                <button
+                                    type="button"
+                                    class="o_woow_advanced_toggle"
+                                    t-on-click="toggleAdvanced"
+                                >
+                                    <WoowIcon
+                                        t-if="state.showAdvanced"
+                                        name="'expand_less'"
+                                        size="18"
+                                    />
+                                    <WoowIcon
+                                        t-else=""
+                                        name="'expand_more'"
+                                        size="18"
+                                    />
+                                    <t t-if="state.showAdvanced">Hide Advanced Settings</t>
+                                    <t t-else="">Show Advanced Settings</t>
+                                </button>
+                            </t>
+                        </div>
+                    </WoowCard>
+                </t>
+
+                <!-- Launch Error -->
+                <t t-if="state.launchError">
+                    <div class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="18"/>
+                        <t t-esc="state.launchError"/>
+                    </div>
+                </t>
+
+                <!-- Footer Actions -->
+                <div class="o_woow_configure_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'lg'"
+                        onClick.bind="onCancel"
+                    >
+                        Cancel
+                    </WoowButton>
+                    <WoowButton
+                        variant="'primary'"
+                        size="'lg'"
+                        onClick.bind="onLaunch"
+                    >
+                        <t t-if="state.launching">
+                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            Launching...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'rocket_launch'" size="18"/>
+                            Launch Application
+                        </t>
+                    </WoowButton>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

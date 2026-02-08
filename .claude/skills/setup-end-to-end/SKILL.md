@@ -18,7 +18,7 @@ usage: |
 ## 前置需求
 
 - Git repository 已初始化
-- Docker 和 Docker Compose 已安裝
+- Docker (or podman) 和 Docker Compose 已安裝
 - 專案已包含 worktree 自動化腳本（`scripts/` 目錄）
 
 ## 完整流程

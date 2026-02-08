@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ServiceCard">
+        <div t-att-class="cardClass" t-on-click="onClick">
+            <!-- Card Header with Icon and Status -->
+            <div class="o_woow_cloud_service_card_header">
+                <div class="o_woow_cloud_service_icon">
+                    <WoowIcon name="templateIcon" size="28"/>
+                </div>
+                <StatusBadge status="props.service.state" size="'sm'"/>
+            </div>
+
+            <!-- Card Body with Name and URL -->
+            <div class="o_woow_cloud_service_card_body">
+                <h3 class="o_woow_cloud_service_name" t-esc="props.service.name"/>
+                <div class="o_woow_cloud_service_template">
+                    <t t-esc="props.service.template?.name || 'Unknown'"/>
+                </div>
+                <t t-if="displayUrl">
+                    <a
+                        t-att-href="serviceUrl"
+                        target="_blank"
+                        class="o_woow_cloud_service_url"
+                        t-on-click="onUrlClick">
+                        <WoowIcon name="'link'" size="14"/>
+                        <span t-esc="displayUrl"/>
+                    </a>
+                </t>
+                <t t-if="props.service.state === 'error' and props.service.error_message">
+                    <div class="o_woow_cloud_service_error">
+                        <WoowIcon name="'error'" size="14"/>
+                        <span t-esc="props.service.error_message"/>
+                    </div>
+                </t>
+            </div>
+
+            <!-- Card Actions -->
+            <div class="o_woow_cloud_service_card_actions">
+                <WoowButton
+                    variant="'ghost'"
+                    size="'sm'"
+                    onClick.bind="openWebUI"
+                    disabled="!isClickable">
+                    <WoowIcon name="'open_in_new'" size="18"/>
+                </WoowButton>
+                <WoowButton
+                    variant="'ghost'"
+                    size="'sm'"
+                    onClick.bind="openSettings">
+                    <WoowIcon name="'settings'" size="18"/>
+                </WoowButton>
+            </div>
+        </div>
+    </t>
+</templates>

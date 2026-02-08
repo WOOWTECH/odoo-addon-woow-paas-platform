@@ -76,7 +76,7 @@
 
                 <!-- Stats Cards -->
                 <div class="o_woow_stats_grid">
-                    <t t-foreach="stats" t-as="stat" t-key="stat.label">
+                    <t t-foreach="computedStats" t-as="stat" t-key="stat.label">
                         <WoowCard class="'o_woow_stat_mini_card'">
                             <div class="o_woow_stat_mini_content">
                                 <div t-att-class="'o_woow_stat_mini_icon o_woow_stat_mini_icon_' + stat.color">
@@ -91,12 +91,62 @@
                     </t>
                 </div>
 
-                <!-- Get Started Section -->
+                <!-- Cloud Services Section -->
+                <section class="o_woow_services_section">
+                    <div class="o_woow_services_section_header">
+                        <h2>Cloud Services</h2>
+                        <WoowButton
+                            variant="'primary'"
+                            size="'md'"
+                            onClick.bind="goToMarketplace">
+                            <WoowIcon name="'add'" size="18"/>
+                            Add Service
+                        </WoowButton>
+                    </div>
+
+                    <!-- Loading Services -->
+                    <t t-if="state.loadingServices and !hasServices">
+                        <div class="o_woow_services_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <p>Loading services...</p>
+                        </div>
+                    </t>
+
+                    <!-- Empty State -->
+                    <t t-elif="!hasServices and !state.loadingServices">
+                        <div class="o_woow_empty_services">
+                            <WoowIcon name="'cloud_upload'" size="48"/>
+                            <h3>Get Started: Deploy Your First Service</h3>
+                            <p>Launch containerized applications like databases, automation tools, and more with one click.</p>
+                            <WoowButton
+                                variant="'primary'"
+                                size="'md'"
+                                onClick.bind="goToMarketplace">
+                                <WoowIcon name="'explore'" size="18"/>
+                                Browse Marketplace
+                            </WoowButton>
+                        </div>
+                    </t>
+
+                    <!-- Service Grid -->
+                    <t t-if="hasServices">
+                        <div class="o_woow_cloud_services_grid">
+                            <t t-foreach="state.services" t-as="service" t-key="service.id">
+                                <ServiceCard
+                                    service="service"
+                                    onOpen="() => this.openService(service.id)"
+                                    onSettings="() => this.goToService(service.id)"/>
+                            </t>
+                        </div>
+                    </t>
+                </section>
+
+                <!-- Get Started Section (Service Types) -->
                 <WoowCard shadow="true" class="'o_woow_get_started'">
                     <div class="o_woow_get_started_header">
                         <WoowIcon name="'rocket_launch'" size="32" class="'o_woow_rocket_icon'"/>
                         <div>
-                            <h2>Deploy Your First Service</h2>
+                            <h2>Explore More Services</h2>
                             <p>Choose a service type below to begin setting up your infrastructure.</p>
                         </div>
                     </div>
@@ -109,7 +159,7 @@
                                 </div>
                                 <h3><t t-esc="service.name"/></h3>
                                 <p><t t-esc="service.description"/></p>
-                                <WoowButton variant="'primary'" size="'sm'">
+                                <WoowButton variant="'primary'" size="'sm'" onClick.bind="goToMarketplace">
                                     Get Started
                                     <WoowIcon name="'arrow_forward'" size="16"/>
                                 </WoowButton>

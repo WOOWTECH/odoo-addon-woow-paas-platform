@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.EditDomainModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_domain" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Domain Settings</h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.saving">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <!-- Default Subdomain (readonly) -->
+                    <div class="o_woow_form_group">
+                        <label>Default Subdomain</label>
+                        <div class="o_woow_domain_readonly">
+                            <WoowIcon name="'language'" size="18"/>
+                            <span t-if="fullSubdomain" t-esc="fullSubdomain"/>
+                            <span t-else="" class="o_woow_domain_none">Not assigned</span>
+                        </div>
+                        <p class="o_woow_form_hint">
+                            This is your default service URL, automatically assigned by the platform.
+                        </p>
+                    </div>
+
+                    <!-- Custom Domain Input -->
+                    <div class="o_woow_form_group">
+                        <label for="custom_domain">Custom Domain (Optional)</label>
+                        <div class="o_woow_domain_input_wrapper">
+                            <input
+                                type="text"
+                                id="custom_domain"
+                                class="o_woow_input"
+                                placeholder="app.yourdomain.com"
+                                t-att-value="state.customDomain"
+                                t-on-input="onDomainInput"
+                                t-att-disabled="state.saving"
+                                autocomplete="off"
+                            />
+                            <button
+                                t-if="state.customDomain"
+                                class="o_woow_domain_clear"
+                                t-on-click="clearDomain"
+                                t-att-disabled="state.saving">
+                                <WoowIcon name="'close'" size="16"/>
+                            </button>
+                        </div>
+                        <p t-if="state.validationError" class="o_woow_form_error">
+                            <WoowIcon name="'error'" size="14"/>
+                            <t t-esc="state.validationError"/>
+                        </p>
+                    </div>
+
+                    <!-- CNAME Instructions -->
+                    <div t-if="state.customDomain and !state.validationError" class="o_woow_cname_instructions">
+                        <div class="o_woow_cname_header">
+                            <WoowIcon name="'info'" size="18"/>
+                            <span>DNS Configuration Required</span>
+                        </div>
+                        <div class="o_woow_cname_content">
+                            <p>Add a CNAME record to your domain's DNS settings:</p>
+                            <div class="o_woow_cname_record">
+                                <div class="o_woow_cname_row">
+                                    <span class="o_woow_cname_label">Type</span>
+                                    <span class="o_woow_cname_value">CNAME</span>
+                                </div>
+                                <div class="o_woow_cname_row">
+                                    <span class="o_woow_cname_label">Name/Host</span>
+                                    <span class="o_woow_cname_value">
+                                        <code t-esc="state.customDomain.split('.')[0]"/>
+                                    </span>
+                                </div>
+                                <div class="o_woow_cname_row">
+                                    <span class="o_woow_cname_label">Target/Value</span>
+                                    <span class="o_woow_cname_value">
+                                        <code t-esc="fullSubdomain"/>
+                                    </span>
+                                </div>
+                            </div>
+                            <p class="o_woow_cname_note">
+                                DNS changes may take up to 48 hours to propagate.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Error Message -->
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.saving">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton
+                        variant="'primary'"
+                        size="'md'"
+                        onClick.bind="onSave"
+                        disabled="!canSave">
+                        <t t-if="state.saving">
+                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            Saving...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'check'" size="18"/>
+                            Save Changes
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

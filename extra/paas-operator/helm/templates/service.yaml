@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "paas-operator.fullname" . }}
+  labels:
+    {{- include "paas-operator.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "paas-operator.selectorLabels" . | nindent 4 }}
+  sessionAffinity: None

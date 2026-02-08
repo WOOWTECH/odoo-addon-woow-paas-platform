@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AppCard">
+        <div class="o_woow_app_card">
+            <div class="o_woow_app_card_header">
+                <div t-att-class="'o_woow_app_card_icon o_woow_app_card_icon_' + categoryColor">
+                    <WoowIcon name="categoryIcon" size="28"/>
+                </div>
+                <button
+                    class="o_woow_app_card_add_btn"
+                    type="button"
+                    t-on-click="handleAdd"
+                    title="Add application"
+                >
+                    <WoowIcon name="'add'" size="20"/>
+                </button>
+            </div>
+
+            <div class="o_woow_app_card_body">
+                <h3 class="o_woow_app_card_name" t-esc="props.template.name"/>
+                <p class="o_woow_app_card_description" t-esc="props.template.description"/>
+            </div>
+
+            <div class="o_woow_app_card_footer">
+                <div class="o_woow_app_card_tags">
+                    <t t-foreach="tags" t-as="tag" t-key="tag">
+                        <span class="o_woow_app_card_tag" t-esc="tag"/>
+                    </t>
+                </div>
+                <div class="o_woow_app_card_price" t-esc="formattedPrice"/>
+            </div>
+        </div>
+    </t>
+</templates>

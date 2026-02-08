@@ -1,0 +1,311 @@
+// =============================================================================
+// App Marketplace Page Styles
+// =============================================================================
+
+// variables loaded via manifest
+
+// -----------------------------------------------------------------------------
+// Marketplace Page Layout
+// -----------------------------------------------------------------------------
+
+.o_woow_marketplace {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.o_woow_marketplace_header {
+    margin-bottom: 2rem;
+}
+
+.o_woow_marketplace_title {
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+        max-width: 600px;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Search and Controls
+// -----------------------------------------------------------------------------
+
+.o_woow_marketplace_controls {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    margin-bottom: 2rem;
+}
+
+.o_woow_marketplace_search {
+    width: 100%;
+    max-width: 400px;
+}
+
+.o_woow_search_input_wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.o_woow_search_icon {
+    position: absolute;
+    left: 1rem;
+    color: $woow-text-secondary;
+    pointer-events: none;
+}
+
+.o_woow_search_input {
+    width: 100%;
+    padding: 0.75rem 1rem 0.75rem 2.75rem;
+    font-size: 0.875rem;
+    font-family: $woow-font-body;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    color: $woow-text-primary;
+    transition: all 0.2s ease;
+
+    &::placeholder {
+        color: $woow-text-secondary;
+    }
+
+    &:focus {
+        outline: none;
+        border-color: $woow-primary;
+        box-shadow: 0 0 0 3px rgba($woow-primary, 0.1);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Category Filter
+// -----------------------------------------------------------------------------
+
+.o_woow_category_filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.o_woow_category_tab {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-family: $woow-font-display;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-full;
+    background: transparent;
+    color: $woow-text-secondary;
+    cursor: pointer;
+    transition: all 0.2s ease;
+
+    &:hover {
+        border-color: rgba($woow-primary, 0.5);
+        color: $woow-primary;
+    }
+
+    &.o_woow_category_tab_active {
+        background: $woow-primary;
+        border-color: $woow-primary;
+        color: white;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Templates Grid
+// -----------------------------------------------------------------------------
+
+.o_woow_marketplace_grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.5rem;
+
+    @media (max-width: 640px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// App Card
+// -----------------------------------------------------------------------------
+
+.o_woow_app_card {
+    background: $woow-card-light;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-lg;
+    padding: 1.5rem;
+    transition: all 0.3s ease;
+    display: flex;
+    flex-direction: column;
+
+    &:hover {
+        transform: translateY(-4px);
+        box-shadow: $woow-shadow-soft;
+
+        .o_woow_app_card_add_btn {
+            opacity: 1;
+        }
+    }
+}
+
+.o_woow_app_card_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+}
+
+.o_woow_app_card_icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    // Color variants
+    &.o_woow_app_card_icon_purple {
+        background: rgba(139, 92, 246, 0.1);
+        color: #8b5cf6;
+    }
+
+    &.o_woow_app_card_icon_blue {
+        background: rgba(59, 130, 246, 0.1);
+        color: #3b82f6;
+    }
+
+    &.o_woow_app_card_icon_green {
+        background: rgba(34, 197, 94, 0.1);
+        color: #22c55e;
+    }
+
+    &.o_woow_app_card_icon_orange {
+        background: rgba(249, 115, 22, 0.1);
+        color: #f97316;
+    }
+
+    &.o_woow_app_card_icon_emerald {
+        background: rgba(16, 185, 129, 0.1);
+        color: #10b981;
+    }
+
+    &.o_woow_app_card_icon_indigo {
+        background: rgba(99, 102, 241, 0.1);
+        color: #6366f1;
+    }
+
+    &.o_woow_app_card_icon_gray {
+        background: rgba(107, 114, 128, 0.1);
+        color: #6b7280;
+    }
+}
+
+.o_woow_app_card_add_btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: $woow-radius-default;
+    background: $woow-primary;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: all 0.2s ease;
+
+    &:hover {
+        background: $woow-primary-hover;
+        transform: scale(1.05);
+    }
+
+    &:focus {
+        outline: 2px solid rgba($woow-primary, 0.3);
+        outline-offset: 2px;
+        opacity: 1;
+    }
+}
+
+.o_woow_app_card_body {
+    flex: 1;
+    margin-bottom: 1rem;
+}
+
+.o_woow_app_card_name {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    margin: 0 0 0.5rem;
+}
+
+.o_woow_app_card_description {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+    line-height: 1.5;
+    margin: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.o_woow_app_card_footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 1rem;
+    border-top: 1px solid $woow-border-light;
+}
+
+.o_woow_app_card_tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+}
+
+.o_woow_app_card_tag {
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: $woow-radius-full;
+    color: $woow-text-secondary;
+}
+
+.o_woow_app_card_price {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $woow-primary;
+}
+
+// -----------------------------------------------------------------------------
+// Empty State
+// -----------------------------------------------------------------------------
+
+.o_woow_marketplace_empty {
+    padding: 4rem 2rem !important;
+}
+
+.o_woow_empty_content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    color: $woow-text-secondary;
+
+    h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 1rem 0 0.5rem;
+    }
+
+    p {
+        max-width: 400px;
+        margin-bottom: 1.5rem;
+    }
+}

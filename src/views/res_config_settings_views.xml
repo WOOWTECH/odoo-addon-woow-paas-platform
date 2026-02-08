@@ -7,10 +7,35 @@
         <field name="arch" type="xml">
             <xpath expr="//form" position="inside">
                 <app data-string="Woow PaaS" string="Woow PaaS" name="woow_paas_platform">
-                    <block title="Woow PaaS Platform Settings">
-                        <setting string="Configuration" help="Configure Woow PaaS Platform settings here.">
-                            <!-- 在此添加設定欄位 -->
-                            <!-- <field name="woow_api_key"/> -->
+                    <block title="PaaS Operator Configuration" name="paas_operator">
+                        <setting string="Operator Connection"
+                                 help="Configure connection to the PaaS Operator service for Kubernetes deployments.">
+                            <div class="content-group">
+                                <div class="row mt16">
+                                    <label for="woow_paas_operator_url" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_paas_operator_url"
+                                           placeholder="http://paas-operator:8000"
+                                           class="col-lg-6"/>
+                                </div>
+                                <div class="row mt8">
+                                    <label for="woow_paas_operator_api_key" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_paas_operator_api_key"
+                                           password="True"
+                                           placeholder="Enter API Key"
+                                           class="col-lg-6"/>
+                                </div>
+                            </div>
+                        </setting>
+                        <setting string="Domain Configuration"
+                                 help="Configure the base domain for deployed services.">
+                            <div class="content-group">
+                                <div class="row mt16">
+                                    <label for="woow_paas_domain" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_paas_domain"
+                                           placeholder="woowtech.io"
+                                           class="col-lg-6"/>
+                                </div>
+                            </div>
                         </setting>
                     </block>
                 </app>

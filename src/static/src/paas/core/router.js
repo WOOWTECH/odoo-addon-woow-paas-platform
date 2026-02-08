@@ -7,6 +7,10 @@ const routes = [
     { path: "workspaces", name: "Workspaces", routeName: "workspaces" },
     { path: "workspace/:id", name: "Workspace Detail", routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
     { path: "workspace/:id/team", name: "Workspace Team", routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },
+    { path: "workspace/:id/services/marketplace", name: "App Marketplace", routeName: "marketplace", pattern: /^workspace\/(\d+)\/services\/marketplace$/ },
+    { path: "workspace/:id/services/configure/:templateId", name: "Configure Service", routeName: "configure", pattern: /^workspace\/(\d+)\/services\/configure\/(\d+)$/ },
+    { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration)$/ },
+    { path: "workspace/:id/services/:serviceId", name: "Service Detail", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
     { path: "deployments", name: "Deployments", routeName: "deployments" },
     { path: "billing", name: "Billing", routeName: "billing" },
     { path: "settings", name: "Settings", routeName: "settings" },
@@ -38,6 +42,17 @@ export const router = reactive({
                 if (match) {
                     this.current = route.routeName;
                     this.params.id = match[1];
+                    // Handle additional params for routes with multiple captures
+                    if (match[2]) {
+                        if (route.routeName === 'configure') {
+                            this.params.templateId = match[2];
+                        } else if (route.routeName === 'service-detail') {
+                            this.params.serviceId = match[2];
+                            if (match[3]) {
+                                this.params.tab = match[3];
+                            }
+                        }
+                    }
                     return;
                 }
             }
