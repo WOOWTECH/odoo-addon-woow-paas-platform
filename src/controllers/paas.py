@@ -41,7 +41,7 @@ class PaasController(Controller):
 
     # ==================== Config API ====================
 
-    @route("/woow/api/config", auth="user", methods=["POST"], type="json")
+    @route("/api/config", auth="user", methods=["POST"], type="json")
     def api_config(self):
         """
         Get PaaS platform configuration for frontend.
@@ -65,22 +65,15 @@ class PaasController(Controller):
     # ==================== Workspace API ====================
 
     @route("/api/workspaces", auth="user", methods=["POST"], type="json")
-    def workspace_api(self, method='list', workspace_id=None, name=None, description=None, **kwargs):
+    def api_workspace(self, action='list', name=None, description=None, **kwargs):
         """
-        Handle workspace CRUD operations via JSON-RPC.
-
-        This is the main entry point for all workspace-related API calls.
-        The 'method' parameter determines which operation to perform.
+        Handle workspace collection operations via JSON-RPC.
 
         Args:
-            method (str): Operation type. One of:
+            action (str): Operation type. One of:
                 - 'list': Get all accessible workspaces
                 - 'create': Create a new workspace
-                - 'get': Get a specific workspace by ID
-                - 'update': Update workspace name/description
-                - 'delete': Archive a workspace (soft delete)
-            workspace_id (int, optional): Target workspace ID (required for get/update/delete)
-            name (str, optional): Workspace name (required for create, optional for update)
+            name (str, optional): Workspace name (required for create)
             description (str, optional): Workspace description
             **kwargs: Additional parameters (ignored)
 
@@ -91,18 +84,42 @@ class PaasController(Controller):
                 - error (str): Error message (on failure)
                 - count (int): Item count (for list operations)
         """
-        if method == 'list':
+        if action == 'list':
             return self._list_workspaces()
-        elif method == 'create':
+        elif action == 'create':
             return self._create_workspace(name, description)
-        elif method == 'get':
+        else:
+            return {'success': False, 'error': f'Unknown action: {action}'}
+
+    @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["POST"], type="json")
+    def api_workspace_detail(self, workspace_id, action='get', name=None, description=None, **kwargs):
+        """
+        Handle single workspace operations via JSON-RPC.
+
+        Args:
+            workspace_id (int): Target workspace ID (from URL path)
+            action (str): Operation type. One of:
+                - 'get': Get workspace details
+                - 'update': Update workspace name/description
+                - 'delete': Archive a workspace (soft delete)
+            name (str, optional): Workspace name (optional for update)
+            description (str, optional): Workspace description
+            **kwargs: Additional parameters (ignored)
+
+        Returns:
+            dict: JSON response with structure:
+                - success (bool): Whether the operation succeeded
+                - data (dict): Result data (on success)
+                - error (str): Error message (on failure)
+        """
+        if action == 'get':
             return self._get_workspace(workspace_id)
-        elif method == 'update':
+        elif action == 'update':
             return self._update_workspace(workspace_id, name, description)
-        elif method == 'delete':
+        elif action == 'delete':
             return self._delete_workspace(workspace_id)
         else:
-            return {'success': False, 'error': f'Unknown method: {method}'}
+            return {'success': False, 'error': f'Unknown action: {action}'}
 
     def _list_workspaces(self):
         """
@@ -380,52 +397,47 @@ class PaasController(Controller):
 
     # ==================== Workspace Members API ====================
 
-    @route("/api/workspaces/members", auth="user", methods=["POST"], type="json")
-    def workspace_members_api(self, method='list', workspace_id=None, access_id=None, email=None, role=None, **kwargs):
+    @route("/api/workspaces/<int:workspace_id>/members", auth="user", methods=["POST"], type="json")
+    def api_workspace_members(self, workspace_id, action='list', email=None, role=None, **kwargs):
         """
-        Handle workspace member management operations via JSON-RPC.
-
-        This endpoint manages the access control for workspaces,
-        allowing admins/owners to invite, update, and remove members.
+        Handle workspace member collection operations via JSON-RPC.
 
         Args:
-            method (str): Operation type. One of:
-                - 'list': Get all members of a workspace
-                - 'invite': Invite a new member by email
-                - 'update_role': Change a member's role
-                - 'remove': Remove a member from workspace
-            workspace_id (int): Target workspace ID (required for all operations)
-            access_id (int, optional): Target access record ID (for update_role/remove)
+            workspace_id (int): Target workspace ID (from URL path)
+            action (str): Operation type - 'list' or 'invite'
             email (str, optional): User email to invite (for invite)
             role (str, optional): Role to assign ('admin', 'user', 'guest')
-            **kwargs: Additional parameters (ignored)
 
         Returns:
-            dict: JSON response with structure:
-                - success (bool): Whether the operation succeeded
-                - data (dict|list): Result data (on success)
-                - error (str): Error message (on failure)
-                - count (int): Item count (for list operations)
+            dict: JSON response with success/error structure
         """
-        if not workspace_id:
-            return {'success': False, 'error': 'Workspace ID is required'}
-
-        # Validate workspace_id is an integer
-        try:
-            workspace_id = int(workspace_id)
-        except (TypeError, ValueError):
-            return {'success': False, 'error': 'Workspace not found or access denied'}
-
-        if method == 'list':
+        if action == 'list':
             return self._list_members(workspace_id)
-        elif method == 'invite':
+        elif action == 'invite':
             return self._invite_member(workspace_id, email, role)
-        elif method == 'update_role':
+        else:
+            return {'success': False, 'error': f'Unknown action: {action}'}
+
+    @route("/api/workspaces/<int:workspace_id>/members/<int:access_id>", auth="user", methods=["POST"], type="json")
+    def api_workspace_member(self, workspace_id, access_id, action='update_role', role=None, **kwargs):
+        """
+        Handle individual workspace member operations via JSON-RPC.
+
+        Args:
+            workspace_id (int): Target workspace ID (from URL path)
+            access_id (int): Target access record ID (from URL path)
+            action (str): Operation type - 'update_role' or 'remove'
+            role (str, optional): New role to assign ('admin', 'user', 'guest')
+
+        Returns:
+            dict: JSON response with success/error structure
+        """
+        if action == 'update_role':
             return self._update_member_role(workspace_id, access_id, role)
-        elif method == 'remove':
+        elif action == 'remove':
             return self._remove_member(workspace_id, access_id)
         else:
-            return {'success': False, 'error': f'Unknown method: {method}'}
+            return {'success': False, 'error': f'Unknown action: {action}'}
 
     def _list_members(self, workspace_id):
         """
@@ -673,7 +685,7 @@ class PaasController(Controller):
 
     # ==================== Cloud Templates API ====================
 
-    @route("/woow/api/cloud/templates", auth="user", methods=["POST"], type="json")
+    @route("/api/cloud/templates", auth="user", methods=["POST"], type="json")
     def api_cloud_templates(self, category=None, search=None, **kw):
         """
         List available cloud application templates.
@@ -713,7 +725,7 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    @route("/woow/api/cloud/templates/<int:template_id>", auth="user", methods=["POST"], type="json")
+    @route("/api/cloud/templates/<int:template_id>", auth="user", methods=["POST"], type="json")
     def api_cloud_template(self, template_id, **kw):
         """
         Get a single cloud application template by ID.
@@ -765,8 +777,8 @@ class PaasController(Controller):
 
     # ==================== Cloud Services API ====================
 
-    @route("/woow/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
-    def api_workspace_services(self, workspace_id, action='list', template_id=None, name=None, reference_id=None, values=None, **kw):
+    @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
+    def api_workspace_services(self, workspace_id, action='list', template_id=None, name=None, values=None, **kw):
         """
         Handle cloud service operations for a workspace.
 
@@ -775,8 +787,6 @@ class PaasController(Controller):
             action (str): 'list' or 'create'
             template_id (int, optional): Template ID (for create)
             name (str, optional): Service name (for create)
-            reference_id (str, optional): Unique reference ID for subdomain generation
-                (for create). If not provided, a UUID will be auto-generated.
             values (dict, optional): Helm values override (for create)
 
         Returns:
@@ -803,11 +813,11 @@ class PaasController(Controller):
             # Only admin/owner can create services
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._create_service(workspace, template_id, name, reference_id, values)
+            return self._create_service(workspace, template_id, name, values)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
-    @route("/woow/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id, service_id, action='get', values=None, version=None, **kw):
         """
         Handle operations on a specific cloud service.
@@ -855,7 +865,7 @@ class PaasController(Controller):
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
-    @route("/woow/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
     def api_service_rollback(self, workspace_id, service_id, revision=None, **kw):
         """
         Rollback a service to a previous revision.
@@ -900,7 +910,7 @@ class PaasController(Controller):
 
         return self._rollback_service(service, revision)
 
-    @route("/woow/api/workspaces/<int:workspace_id>/services/<int:service_id>/revisions", auth="user", methods=["POST"], type="json")
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/revisions", auth="user", methods=["POST"], type="json")
     def api_service_revisions(self, workspace_id, service_id, **kw):
         """
         Get revision history for a service.
@@ -1009,7 +1019,7 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    def _create_service(self, workspace, template_id, name, reference_id, values):
+    def _create_service(self, workspace, template_id, name, values):
         """Create a new cloud service."""
         if not template_id:
             return {'success': False, 'error': 'Template ID is required'}
@@ -1027,9 +1037,8 @@ class PaasController(Controller):
         if not template.exists() or not template.is_active:
             return {'success': False, 'error': 'Template not found'}
 
-        # Use provided reference_id or generate a new one
-        if not reference_id:
-            reference_id = str(uuid.uuid4())
+        # Always generate reference_id server-side (never accept from frontend)
+        reference_id = str(uuid.uuid4())
         # Generate subdomain with salted hash: paas-{ws_id}-{hash(reference_id + name)[:8]}
         # Using reference_id as salt prevents subdomain guessing from service name alone
         salted_input = reference_id + name
@@ -1409,7 +1418,6 @@ class PaasController(Controller):
         data = {
             'id': service.id,
             'name': service.name,
-            'reference_id': service.reference_id,
             'state': service.state,
             'subdomain': service.subdomain or '',
             'custom_domain': service.custom_domain or '',

@@ -95,20 +95,6 @@
                             </t>
                         </div>
 
-                        <!-- Reference ID -->
-                        <div class="o_woow_form_group">
-                            <label for="reference_id">
-                                Reference ID
-                            </label>
-                            <input
-                                type="text"
-                                id="reference_id"
-                                t-att-value="state.referenceId"
-                                disabled="disabled"
-                                class="o_woow_input o_woow_input_readonly"
-                            />
-                            <p class="o_woow_field_hint">Auto-generated unique identifier for this service</p>
-                        </div>
                     </div>
                 </WoowCard>
 
@@ -122,7 +108,7 @@
                         </div>
                     </div>
                     <div class="o_woow_section_body">
-                        <!-- Subdomain (auto-generated, read-only) -->
+                        <!-- Subdomain (auto-generated after deployment) -->
                         <div class="o_woow_form_group">
                             <label for="subdomain">
                                 Subdomain
@@ -131,19 +117,15 @@
                                 <input
                                     type="text"
                                     id="subdomain"
-                                    t-att-value="state.subdomain"
+                                    value=""
                                     disabled="disabled"
                                     class="o_woow_input o_woow_input_readonly"
+                                    placeholder="Auto-generated on deployment"
                                 />
                                 <span class="o_woow_input_suffix" t-esc="subdomainSuffix"/>
                             </div>
                             <p class="o_woow_field_hint">
-                                <t t-if="state.subdomain">
-                                    Your service will be available at <strong><t t-esc="state.subdomain"/><t t-esc="subdomainSuffix"/></strong>
-                                </t>
-                                <t t-else="">
-                                    Enter a service name to generate the URL
-                                </t>
+                                A unique subdomain will be automatically assigned when the service is deployed
                             </p>
                         </div>
                     </div>

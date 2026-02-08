@@ -72,7 +72,7 @@ export class ServiceDetailPage extends Component {
         this.state.loading = true;
         this.state.error = null;
 
-        const result = await cloudService.getService(
+        const result = await cloudService.fetchService(
             this.props.workspaceId,
             this.props.serviceId
         );

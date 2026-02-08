@@ -53,7 +53,7 @@ export class RollbackModal extends Component {
         this.state.loading = true;
         this.state.error = null;
 
-        const result = await cloudService.getRevisions(
+        const result = await cloudService.fetchRevisions(
             this.props.service.workspace_id,
             this.props.service.id
         );

@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-01T13:22:40Z
-version: 1.2
+last_updated: 2026-02-08T01:39:42Z
+version: 1.4
 author: Claude Code PM System
 ---
 
@@ -21,10 +21,17 @@ author: Claude Code PM System
 - **Google Fonts** - Manrope, Outfit typography
 - **Material Symbols** - Icon font
 
+### PaaS Operator Service
+- **FastAPI** - Async Python web framework for operator API
+- **Helm 3.13+** - Kubernetes package manager
+- **kubectl 1.28+** - Kubernetes CLI
+- **Pydantic** - Data validation for API schemas
+
 ### Development Tools
 - **Claude Code PM** - Project management system
 - **Git** - Version control
 - **Docker** - Development environment
+- **pytest** - PaaS Operator testing
 
 ## Dependencies
 
@@ -170,36 +177,74 @@ docker compose logs -f web
 |-----------|----------|---------|
 | DashboardPage | `pages/dashboard/` | Main dashboard |
 | WorkspaceListPage | `pages/workspace/` | Workspace listing |
-| WorkspaceDetailPage | `pages/workspace/` | Workspace detail view ✅ NEW |
-| WorkspaceTeamPage | `pages/workspace/` | Team member management ✅ NEW |
+| WorkspaceDetailPage | `pages/workspace/` | Workspace detail view |
+| WorkspaceTeamPage | `pages/workspace/` | Team member management |
+| AppMarketplacePage | `pages/marketplace/` | Application marketplace browser |
+| ServiceDetailPage | `pages/service/` | Service detail with tabs |
+| OverviewTab | `pages/service/tabs/` | Service overview tab |
+| ConfigurationTab | `pages/service/tabs/` | Service configuration tab |
+| AppConfigurationPage | `pages/configure/` | App deployment configuration |
 | EmptyState | `pages/empty/` | Placeholder page |
 
-### Modal Components ✅ NEW
+### Modal Components
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | CreateWorkspaceModal | `components/modal/` | Create new workspace dialog |
 | InviteMemberModal | `components/modal/` | Invite team member dialog |
+| DeleteServiceModal | `components/modal/` | Service deletion confirmation |
+| RollbackModal | `components/modal/` | Service rollback dialog |
+| EditDomainModal | `components/modal/` | Edit service domain dialog |
 
-### Service Components ✅ NEW
+### Feature Components
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| AppCard | `components/marketplace/` | App template card |
+| CategoryFilter | `components/marketplace/` | Category filter UI |
+| StatusBadge | `components/common/` | Service status indicator |
+| HelmValueForm | `components/config/` | Helm values editor |
+| ServiceCard | `components/service-card/` | Service instance card |
+
+### Service Components
 | Service | Location | Purpose |
 |---------|----------|---------|
 | workspace_service | `services/` | Workspace API client |
+| cloud_service | `services/` | Cloud services API client |
+| utils | `services/` | Shared utility functions |
 
 ## API Patterns
 
-### JSON Controller Pattern (Odoo 18)
+### RESTful-style JSON-RPC Endpoints (Odoo 18)
+
+API 路由使用 `/api/...` prefix（不含 `/woow`），並拆分為 collection 和 detail endpoints：
+
 ```python
-@http.route('/woow/api/workspaces', type='json', auth='user')
-def api_workspaces(self, **kw):
-    # Direct JSON response without jsonrpc wrapper
-    return {'workspaces': [...]}
+# Collection endpoint
+@http.route('/api/workspaces', type='json', auth='user')
+def api_workspace(self, action='list', **kw):
+    if action == 'list': ...
+    elif action == 'create': ...
+
+# Detail endpoint with URL parameter
+@http.route('/api/workspaces/<int:workspace_id>', type='json', auth='user')
+def api_workspace_detail(self, workspace_id, action='get', **kw):
+    if action == 'get': ...
+    elif action == 'update': ...
+    elif action == 'delete': ...
 ```
 
 **Key Notes:**
 - Use `type='json'` for direct JSON response
-- No need for `json.dumps()` in response
-- Frontend receives clean JSON data
+- Use `action` parameter (not `method`) to determine operation
+- Collection vs detail endpoints split for RESTful semantics
+- URL parameters for resource IDs (`<int:workspace_id>`)
+
+### Cloud Services Architecture
+```
+Odoo (Frontend) ──HTTP──▶ PaaS Operator (FastAPI) ──Helm──▶ Kubernetes
+```
 
 ## Update History
+- 2026-02-08: Full component inventory update - added marketplace, service, configure pages; modal, feature component groups; utils service
+- 2026-02-08: Updated API patterns for RESTful refactor, added cloud service components
 - 2026-02-01: Added new page components, modal components, services, API patterns
 - 2026-01-14: Added asset bundles, OWL components, Docker commands
