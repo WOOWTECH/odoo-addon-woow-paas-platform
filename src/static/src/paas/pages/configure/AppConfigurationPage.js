@@ -6,7 +6,6 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { HelmValueForm } from "../../components/config/HelmValueForm";
 import { cloudService } from "../../services/cloud_service";
 import { router } from "../../core/router";
-import { generateUUID, md5 } from "../../utils/hash";
 
 /**
  * AppConfigurationPage Component
@@ -27,8 +26,6 @@ export class AppConfigurationPage extends Component {
             error: null,
             // Form state
             name: '',
-            subdomain: '',
-            referenceId: generateUUID(),
             helmValues: {},
             showAdvanced: false,
             // Validation errors
@@ -141,26 +138,6 @@ export class AppConfigurationPage extends Component {
         const value = event.target.value;
         this.state.name = value;
         this.clearError('name');
-
-        // Auto-generate subdomain: paas-{ws_id}-{hash(name)[:8]}
-        this.state.subdomain = this.generateSubdomain(value);
-    }
-
-    /**
-     * Generate subdomain from service name with salt
-     * Format: paas-{workspace_id}-{hash(referenceId + name)[:8]}
-     * Uses referenceId as salt to prevent subdomain guessing
-     * @param {string} name - Service name
-     * @returns {string}
-     */
-    generateSubdomain(name) {
-        if (!name || !name.trim()) {
-            return '';
-        }
-        // Use referenceId as salt to prevent subdomain guessing
-        const saltedInput = this.state.referenceId + name.trim();
-        const nameHash = md5(saltedInput).substring(0, 8);
-        return `paas-${this.props.workspaceId}-${nameHash}`;
     }
 
     /**
@@ -251,7 +228,6 @@ export class AppConfigurationPage extends Component {
             const result = await cloudService.createService(this.props.workspaceId, {
                 template_id: this.props.templateId,
                 name: this.state.name.trim(),
-                reference_id: this.state.referenceId,
                 values: this.state.helmValues,
             });
 

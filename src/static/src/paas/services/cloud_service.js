@@ -86,7 +86,6 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
  * @typedef {Object} ServiceData
  * @property {number} id - Service ID
  * @property {string} name - Service name
- * @property {string} reference_id - Unique reference ID
  * @property {string} state - Service state
  * @property {string} subdomain - Service subdomain
  * @property {string} custom_domain - Custom domain
@@ -234,7 +233,6 @@ export const cloudService = reactive({
      * @param {Object} payload - Service creation data
      * @param {number} payload.template_id - Template ID
      * @param {string} payload.name - Service name
-     * @param {string} [payload.reference_id] - Unique reference ID (auto-generated if not provided)
      * @param {Object} [payload.values] - Helm values override
      * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
      */
@@ -247,10 +245,6 @@ export const cloudService = reactive({
                 name: payload.name,
                 values: payload.values || {},
             };
-            // Include reference_id if provided (for subdomain consistency)
-            if (payload.reference_id) {
-                params.reference_id = payload.reference_id;
-            }
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/services`, params);
             if (result.success) {
                 this.services = [result.data, ...this.services];

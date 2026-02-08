@@ -778,7 +778,7 @@ class PaasController(Controller):
     # ==================== Cloud Services API ====================
 
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
-    def api_workspace_services(self, workspace_id, action='list', template_id=None, name=None, reference_id=None, values=None, **kw):
+    def api_workspace_services(self, workspace_id, action='list', template_id=None, name=None, values=None, **kw):
         """
         Handle cloud service operations for a workspace.
 
@@ -787,8 +787,6 @@ class PaasController(Controller):
             action (str): 'list' or 'create'
             template_id (int, optional): Template ID (for create)
             name (str, optional): Service name (for create)
-            reference_id (str, optional): Unique reference ID for subdomain generation
-                (for create). If not provided, a UUID will be auto-generated.
             values (dict, optional): Helm values override (for create)
 
         Returns:
@@ -815,7 +813,7 @@ class PaasController(Controller):
             # Only admin/owner can create services
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._create_service(workspace, template_id, name, reference_id, values)
+            return self._create_service(workspace, template_id, name, values)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
@@ -1021,7 +1019,7 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    def _create_service(self, workspace, template_id, name, reference_id, values):
+    def _create_service(self, workspace, template_id, name, values):
         """Create a new cloud service."""
         if not template_id:
             return {'success': False, 'error': 'Template ID is required'}
@@ -1039,9 +1037,8 @@ class PaasController(Controller):
         if not template.exists() or not template.is_active:
             return {'success': False, 'error': 'Template not found'}
 
-        # Use provided reference_id or generate a new one
-        if not reference_id:
-            reference_id = str(uuid.uuid4())
+        # Always generate reference_id server-side (never accept from frontend)
+        reference_id = str(uuid.uuid4())
         # Generate subdomain with salted hash: paas-{ws_id}-{hash(reference_id + name)[:8]}
         # Using reference_id as salt prevents subdomain guessing from service name alone
         salted_input = reference_id + name
@@ -1421,7 +1418,6 @@ class PaasController(Controller):
         data = {
             'id': service.id,
             'name': service.name,
-            'reference_id': service.reference_id,
             'state': service.state,
             'subdomain': service.subdomain or '',
             'custom_domain': service.custom_domain or '',
