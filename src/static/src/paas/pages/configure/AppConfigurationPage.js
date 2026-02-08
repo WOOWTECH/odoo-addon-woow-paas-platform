@@ -48,7 +48,7 @@ export class AppConfigurationPage extends Component {
         this.state.loading = true;
         this.state.error = null;
 
-        const result = await cloudService.getTemplate(this.props.templateId);
+        const result = await cloudService.fetchTemplate(this.props.templateId);
 
         if (result.success) {
             this.state.template = result.data;

@@ -187,8 +187,8 @@ export const cloudService = reactive({
      * @param {number} templateId - Template ID
      * @returns {Promise<{success: boolean, data?: TemplateData, error?: string}>}
      */
-    async getTemplate(templateId) {
-        this.operationLoading.getTemplate = true;
+    async fetchTemplate(templateId) {
+        this.operationLoading.fetchTemplate = true;
         try {
             const result = await jsonRpc(`/api/cloud/templates/${templateId}`, {});
             if (result.success) {
@@ -199,7 +199,7 @@ export const cloudService = reactive({
         } catch (err) {
             return { success: false, error: err.message };
         } finally {
-            this.operationLoading.getTemplate = false;
+            this.operationLoading.fetchTemplate = false;
         }
     },
 
@@ -265,8 +265,8 @@ export const cloudService = reactive({
      * @param {number} serviceId - Service ID
      * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
      */
-    async getService(workspaceId, serviceId) {
-        this.operationLoading.getService = true;
+    async fetchService(workspaceId, serviceId) {
+        this.operationLoading.fetchService = true;
         try {
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}`, {
                 action: "get",
@@ -279,7 +279,7 @@ export const cloudService = reactive({
         } catch (err) {
             return { success: false, error: err.message };
         } finally {
-            this.operationLoading.getService = false;
+            this.operationLoading.fetchService = false;
         }
     },
 
@@ -350,8 +350,8 @@ export const cloudService = reactive({
      * @param {number} serviceId - Service ID
      * @returns {Promise<{success: boolean, data?: Array, error?: string}>}
      */
-    async getRevisions(workspaceId, serviceId) {
-        this.operationLoading.getRevisions = true;
+    async fetchRevisions(workspaceId, serviceId) {
+        this.operationLoading.fetchRevisions = true;
         try {
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/revisions`, {});
             if (result.success) {
@@ -362,7 +362,7 @@ export const cloudService = reactive({
         } catch (err) {
             return { success: false, error: err.message };
         } finally {
-            this.operationLoading.getRevisions = false;
+            this.operationLoading.fetchRevisions = false;
         }
     },
 
