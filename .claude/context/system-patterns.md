@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-01-13T17:24:23Z
-version: 1.0
+last_updated: 2026-02-08T00:35:24Z
+version: 1.1
 author: Claude Code PM System
 ---
 
@@ -127,6 +127,47 @@ Hierarchical menu with sequence ordering:
     sequence="10"/>
 ```
 
+## API Endpoint Pattern (RESTful-style JSON-RPC)
+
+API endpoints 採用 collection/detail 分離模式：
+
+```python
+# Collection: /api/{resource}
+@route("/api/workspaces", type="json", auth="user")
+def api_workspace(self, action='list', ...):
+    # action: list, create
+
+# Detail: /api/{resource}/<int:id>
+@route("/api/workspaces/<int:workspace_id>", type="json", auth="user")
+def api_workspace_detail(self, workspace_id, action='get', ...):
+    # action: get, update, delete
+
+# Nested: /api/{resource}/<int:id>/{sub-resource}
+@route("/api/workspaces/<int:workspace_id>/members", type="json", auth="user")
+def api_workspace_members(self, workspace_id, action='list', ...):
+    # action: list, invite
+```
+
+**Key conventions:**
+- Route prefix: `/api/` (no `/woow/`)
+- Operation selector: `action` parameter (not `method`)
+- Resource IDs in URL path, not in request body
+
+## External Service Integration Pattern
+
+PaaS Operator 整合使用 HTTP client 封裝：
+
+```python
+# models/paas_operator_client.py
+class PaasOperatorClient(models.AbstractModel):
+    _name = 'woow_paas_platform.paas_operator_client'
+
+    def _call_operator(self, endpoint, method='GET', data=None):
+        # Read config from ir.config_parameter
+        # Make HTTP request to PaaS Operator
+        # Handle errors uniformly
+```
+
 ## Naming Conventions
 
 | Type | Pattern | Example |
@@ -135,3 +176,7 @@ Hierarchical menu with sequence ordering:
 | XML ID | `module.type_name` | `woow_paas_platform.view_subscription_form` |
 | Menu ID | `menu_*` | `menu_woow_paas_platform_root` |
 | Config param | `module.param_name` | `woow_paas_platform.api_key` |
+| API route | `/api/{resource}` | `/api/workspaces` |
+
+## Update History
+- 2026-02-08: Added RESTful API endpoint pattern and external service integration pattern

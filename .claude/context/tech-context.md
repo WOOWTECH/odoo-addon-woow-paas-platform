@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-01T13:22:40Z
-version: 1.2
+last_updated: 2026-02-08T00:35:24Z
+version: 1.3
 author: Claude Code PM System
 ---
 
@@ -21,10 +21,17 @@ author: Claude Code PM System
 - **Google Fonts** - Manrope, Outfit typography
 - **Material Symbols** - Icon font
 
+### PaaS Operator Service
+- **FastAPI** - Async Python web framework for operator API
+- **Helm 3.13+** - Kubernetes package manager
+- **kubectl 1.28+** - Kubernetes CLI
+- **Pydantic** - Data validation for API schemas
+
 ### Development Tools
 - **Claude Code PM** - Project management system
 - **Git** - Version control
 - **Docker** - Development environment
+- **pytest** - PaaS Operator testing
 
 ## Dependencies
 
@@ -180,26 +187,45 @@ docker compose logs -f web
 | CreateWorkspaceModal | `components/modal/` | Create new workspace dialog |
 | InviteMemberModal | `components/modal/` | Invite team member dialog |
 
-### Service Components ✅ NEW
+### Service Components
 | Service | Location | Purpose |
 |---------|----------|---------|
 | workspace_service | `services/` | Workspace API client |
+| cloud_service | `services/` | Cloud services API client |
 
 ## API Patterns
 
-### JSON Controller Pattern (Odoo 18)
+### RESTful-style JSON-RPC Endpoints (Odoo 18)
+
+API 路由使用 `/api/...` prefix（不含 `/woow`），並拆分為 collection 和 detail endpoints：
+
 ```python
-@http.route('/woow/api/workspaces', type='json', auth='user')
-def api_workspaces(self, **kw):
-    # Direct JSON response without jsonrpc wrapper
-    return {'workspaces': [...]}
+# Collection endpoint
+@http.route('/api/workspaces', type='json', auth='user')
+def api_workspace(self, action='list', **kw):
+    if action == 'list': ...
+    elif action == 'create': ...
+
+# Detail endpoint with URL parameter
+@http.route('/api/workspaces/<int:workspace_id>', type='json', auth='user')
+def api_workspace_detail(self, workspace_id, action='get', **kw):
+    if action == 'get': ...
+    elif action == 'update': ...
+    elif action == 'delete': ...
 ```
 
 **Key Notes:**
 - Use `type='json'` for direct JSON response
-- No need for `json.dumps()` in response
-- Frontend receives clean JSON data
+- Use `action` parameter (not `method`) to determine operation
+- Collection vs detail endpoints split for RESTful semantics
+- URL parameters for resource IDs (`<int:workspace_id>`)
+
+### Cloud Services Architecture
+```
+Odoo (Frontend) ──HTTP──▶ PaaS Operator (FastAPI) ──Helm──▶ Kubernetes
+```
 
 ## Update History
+- 2026-02-08: Updated API patterns for RESTful refactor, added cloud service components
 - 2026-02-01: Added new page components, modal components, services, API patterns
 - 2026-01-14: Added asset bundles, OWL components, Docker commands

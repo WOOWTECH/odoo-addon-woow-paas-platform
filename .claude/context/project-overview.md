@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-01T13:22:40Z
-version: 1.2
+last_updated: 2026-02-08T00:35:24Z
+version: 1.3
 author: Claude Code PM System
 ---
 
@@ -44,19 +44,25 @@ Woow PaaS Platform is an Odoo 18 addon module providing the foundation for a mul
    - Command set for PRDs, Epics, Issues
    - Rules for code standards
 
-6. **Workspace Management** ✅ NEW (Phase 3 In Progress)
+6. **Workspace Management** ✅ Complete (Phase 3)
    - Workspace model with CRUD operations
    - WorkspaceAccess model for member roles
-   - JSON API endpoints (`type="json"`)
+   - RESTful-style JSON API endpoints
    - Frontend service layer
    - Workspace list, detail, team pages
    - Create workspace modal
    - Invite member modal
 
+7. **Cloud Services** ✅ Complete (Phase 4)
+   - CloudAppTemplate model - Application marketplace templates
+   - CloudService model - Deployed service instances with lifecycle management
+   - PaaS Operator Service (FastAPI at `extra/paas-operator/`)
+   - Marketplace UI components
+   - Service deploy, start, stop, delete, rollback, revisions API
+   - Helm chart for K8s deployment of operator
+
 ### Not Yet Implemented
-- Additional business models (subscriptions, billing)
-- External API integrations
-- Backend OWL components
+- External integrations (Phase 5)
 - Unit tests
 - Multi-tenant logic
 - Dark mode theme
@@ -89,11 +95,11 @@ Woow PaaS Platform is an Odoo 18 addon module providing the foundation for a mul
 ## Development Status
 
 ```
-Phase 1: Foundation    [████████] 100%
-Phase 2: OWL App Shell [████████] 100%
-Phase 3: Core Models   [████    ]  50%  ← In Progress (Workspace + WorkspaceAccess)
-Phase 4: Integrations  [        ]   0%
-Phase 5: Testing       [        ]   0%
+Phase 1: Foundation      [████████] 100%
+Phase 2: OWL App Shell   [████████] 100%
+Phase 3: Core Models     [████████] 100%  ✓ Complete (Workspace + WorkspaceAccess)
+Phase 4: Cloud Services  [████████] 100%  ✓ Complete (Templates + Services + Operator)
+Phase 5: Integrations    [        ]   0%
 ```
 
 ## Quick Links
@@ -120,5 +126,6 @@ Settings → General Settings → Woow PaaS
 ```
 
 ## Update History
+- 2026-02-08: Phase 3 & 4 complete, added Cloud Services feature
 - 2026-02-01: Added Workspace management (Phase 3 in progress)
 - 2026-01-14: Added standalone OWL application (Phase 2 complete)

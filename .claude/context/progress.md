@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-01T13:22:40Z
-version: 1.2
+last_updated: 2026-02-08T00:35:24Z
+version: 1.3
 author: Claude Code PM System
 ---
 
@@ -9,63 +9,66 @@ author: Claude Code PM System
 
 ## Current Status
 
-**Branch:** vk/b04f-workspce-end-to (worktree)
-**State:** Workspace E2E implementation in progress
+**Branch:** epic/cloud-services-mvp
+**State:** Cloud Services MVP - API 重構完成，clean working tree
 
 ## Recent Work
 
 ### Latest Commits
-- `0b2d339` chore: disable Python type checking for Odoo development
-- `18f5662` chore: update VS Code configuration for Odoo development
-- `bb16f91` API 統一改用 `type="json"` 成功
-- `237261b` Workspace 功能規格文件已建立在 `docs/workspace-feature-spec.md`
-- `9643449` E2E 測試完成總結
+- `e43de66` refactor: remove /woow prefix from API route paths
+- `73fffef` refactor: split workspace members API into collection and detail endpoints
+- `1fb7948` refactor: split workspace API into collection and detail endpoints
+- `a4c0c23` refactor: extract shared validate_namespace function from HelmService and KubernetesService
+- `c3bc2c8` docs: add RBAC diagram and Cloudflare integration documentation
 
 ### Current Sprint
 
-**Epic: Workspace End-to-End** 🔄 In Progress
-- Workspace model with CRUD operations
-- WorkspaceAccess model for member management
-- JSON API endpoints in `src/controllers/paas.py`
-- Frontend service integration (`workspace_service.js`)
-- UI pages: List, Detail, Team management
+**Epic: Cloud Services MVP** ✅ Complete
+- Cloud App Template 模型（應用市場模板）
+- Cloud Service 模型（已部署服務實例）
+- PaaS Operator 服務（FastAPI + Helm CLI）
+- Marketplace UI 元件
 
-**What Has Been Accomplished:**
-1. Created Workspace model (`src/models/workspace.py`)
-   - Fields: name, description, slug, owner_id, state
-   - Methods: check_user_access, get_user_role
-   - Auto-generated slugs
-2. Created WorkspaceAccess model (`src/models/workspace_access.py`)
-   - Role-based access: owner, admin, user, guest
-3. JSON API endpoints using `type="json"`
-4. Frontend workspace service for API calls
-5. New pages: WorkspaceDetailPage, WorkspaceTeamPage
-6. Modal components: CreateWorkspaceModal, InviteMemberModal
+**最近重構完成：**
+1. API 路由清理 - 移除 `/woow` prefix，統一使用 `/api/...`
+2. Workspace API 拆分為 collection (`/api/workspaces`) 和 detail (`/api/workspaces/<id>`) endpoints
+3. Members API 拆分為 collection (`/api/workspaces/<id>/members`) 和 detail (`/api/workspaces/<id>/members/<id>`) endpoints
+4. 參數命名統一：`method` → `action`
+5. PaaS Operator 提取共用 `validate_namespace` function
+6. 前端 service 同步更新路徑
+
+**累計完成：**
+1. Workspace model + WorkspaceAccess model（Phase 3 ✅）
+2. Cloud App Template + Cloud Service models（Phase 4 ✅）
+3. PaaS Operator service（FastAPI wrapper for Helm）
+4. RESTful-style API endpoints with JSON-RPC
+5. Frontend workspace & cloud service layers
+6. RBAC 文件與 Cloudflare 整合文件
 
 ## Outstanding Changes
 
 ```
-M CLAUDE.md                  # Updated documentation
-M src/controllers/paas.py    # API refinements
-M src/models/workspace.py    # Model adjustments
+(clean working tree)
 ```
 
 ## Immediate Next Steps
 
-1. Complete workspace CRUD operations testing
-2. Implement member invitation flow
-3. Add workspace settings page
-4. Write unit tests for models
+1. Phase 5: External integrations
+2. Unit tests for all models
+3. E2E testing with real Kubernetes cluster
+4. UI polish and error handling improvements
 
 ## Technical Debt
 
-- Need unit tests for Workspace and WorkspaceAccess models
-- API error handling improvements
+- Need unit tests for Workspace, WorkspaceAccess, CloudAppTemplate, CloudService models
+- Frontend error handling improvements
+- API rate limiting
 
 ## Blockers
 
 - None currently
 
 ## Update History
+- 2026-02-08: Updated for API refactor completion, Phase 4 complete
 - 2026-02-01: Updated for workspace E2E development progress
 - 2026-01-14: Updated for standalone-owl-app-shell epic completion
