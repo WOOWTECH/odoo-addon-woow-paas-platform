@@ -1,8 +1,20 @@
 # WoowTech PaaS Platform - API 串接規格文件
 
 > 基於 Stitch Design System 設計稿分析
-> 版本: 1.0.0
+> 版本: 1.1.0
 > 日期: 2026-01-22
+> 最後更新: 2026-02-08
+
+> **Implementation Status Note**:
+> 本文件為完整的設計規格，涵蓋所有規劃功能。以下模組已實作：
+> - **Workspace CRUD** ✅ (使用 `/api/workspaces` JSON-RPC 端點)
+> - **Team Management** ✅ (使用 `/api/workspaces/<id>/members` JSON-RPC 端點)
+> - **Cloud Services** ✅ (使用 `/api/cloud/templates` 與 `/api/workspaces/<id>/services` JSON-RPC 端點)
+> - **PaaS Operator** ✅ (獨立 FastAPI 服務)
+>
+> 實際實作使用 **JSON-RPC (POST + action 參數)** 而非 RESTful HTTP 動詞。
+> 端點路徑為 `/api/*` 而非設計稿中的 `/paas/api/v1/*`。
+> 尚未實作的模組：Dashboard、Billing、Smart Home Connect、Security Access、Settings。
 
 ---
 
@@ -78,11 +90,16 @@ WoowTech PaaS Platform 是一個多租戶雲端服務管理平台，提供：
 ### 2.2 API 基礎路徑
 
 ```
-Base URL: /paas/api/v1
+Design Spec Base URL: /paas/api/v1  (設計規格)
+Actual Base URL:      /api           (實際實作)
 Authentication: Odoo Session Cookie (自動處理)
 Content-Type: application/json
-Request Type: JSON-RPC (Odoo 標準)
+Request Type: JSON-RPC (Odoo 標準, 所有請求為 POST)
+Controller File: src/controllers/paas.py
 ```
+
+> **Note**: 實際實作中，所有 API 端點都在單一 controller 檔案 `src/controllers/paas.py` 中，
+> 使用 `action` 參數區分操作（如 `action: "list"`, `action: "create"`）。
 
 **Controller 類型說明:**
 | type 參數 | Content-Type | 適用情境 |
@@ -199,7 +216,7 @@ Response (success):
     role: "owner" | "admin" | "user" | "guest"
 ```
 
-### 4.2 Dashboard API
+### 4.2 Dashboard API ⬜ (未實作)
 
 ```yaml
 # 取得儀表板統計
@@ -237,10 +254,13 @@ Response (success):
     total: number
 ```
 
-### 4.3 Workspace API
+### 4.3 Workspace API ✅ (已實作)
+
+> **Actual Endpoint**: `POST /api/workspaces` with `action` parameter
+> **Actual Endpoint**: `POST /api/workspaces/<id>` with `action` parameter
 
 ```yaml
-# 工作區清單
+# 工作區清單 (設計規格)
 GET /paas/api/v1/workspaces
 Query:
   - page: number
@@ -307,10 +327,18 @@ Response (success):
     message: "Workspace deleted successfully"
 ```
 
-### 4.4 Cloud Application API
+### 4.4 Cloud Application API ✅ (已實作)
+
+> **Actual Endpoints**:
+> - `POST /api/cloud/templates` - 應用程式模板列表
+> - `POST /api/cloud/templates/<id>` - 單一模板詳情
+> - `POST /api/workspaces/<id>/services` with `action` - 服務 CRUD
+> - `POST /api/workspaces/<id>/services/<id>` with `action` - 單一服務操作
+> - `POST /api/workspaces/<id>/services/<id>/rollback` - 回滾
+> - `POST /api/workspaces/<id>/services/<id>/revisions` - 版本歷史
 
 ```yaml
-# 應用程式市集
+# 應用程式市集 (設計規格)
 GET /paas/api/v1/marketplace/apps
 Query:
   - category: "ai" | "automation" | "database" | "analytics" | "devops" | "cms"
@@ -425,7 +453,7 @@ Response (success):
     message: "Domain removed"
 ```
 
-### 4.5 Smart Home Connect API
+### 4.5 Smart Home Connect API ⬜ (未實作)
 
 ```yaml
 # 取得 Hub 清單
@@ -498,7 +526,7 @@ Response (success):
     message: "Restore started"
 ```
 
-### 4.6 Security Access API
+### 4.6 Security Access API ⬜ (未實作)
 
 ```yaml
 # 取得安全通道清單
@@ -571,7 +599,7 @@ Response (success):
     tunnel_token: string (masked)
 ```
 
-### 4.7 Billing API
+### 4.7 Billing API ⬜ (未實作)
 
 ```yaml
 # 取得帳單概覽
@@ -691,7 +719,11 @@ Response (success):
     message: "Auto-reload settings updated"
 ```
 
-### 4.8 Team Management API
+### 4.8 Team Management API ✅ (已實作)
+
+> **Actual Endpoints**:
+> - `POST /api/workspaces/<id>/members` with `action` parameter (`list`, `invite`)
+> - `POST /api/workspaces/<id>/members/<access_id>` with `action` parameter (`update_role`, `remove`)
 
 ```yaml
 # 取得團隊成員清單
@@ -759,7 +791,7 @@ Response (success):
     message: "Member removed"
 ```
 
-### 4.9 User Settings API
+### 4.9 User Settings API ⬜ (未實作)
 
 ```yaml
 # 取得用戶設定
@@ -875,8 +907,26 @@ Response (success):
 
 ### 5.2 Odoo Model 定義
 
+> **Note**: 以下為設計規格中的 model 名稱。實際實作使用 `woow_paas_platform.*` 命名空間。
+
+**已實作的 Models:**
+
+| 設計規格名稱 | 實際 Model 名稱 | 檔案位置 |
+|-------------|----------------|---------|
+| `woow.workspace` | `woow_paas_platform.workspace` | `src/models/workspace.py` |
+| (新增) | `woow_paas_platform.workspace_access` | `src/models/workspace_access.py` |
+| `woow.app.template` | `woow_paas_platform.cloud_app_template` | `src/models/cloud_app_template.py` |
+| `woow.cloud.app` | `woow_paas_platform.cloud_service` | `src/models/cloud_service.py` |
+| (新增) | `res.config.settings` (inherit) | `src/models/res_config_settings.py` |
+
+**PaaS Operator HTTP Client:**
+- `src/services/paas_operator.py` - 與 PaaS Operator FastAPI 服務通訊
+
 ```python
-# models/workspace.py
+# 以下為設計規格中的 model 定義，僅供參考
+# 實際實作請參考 src/models/ 目錄下的檔案
+
+# models/workspace.py (設計規格)
 class WoowWorkspace(models.Model):
     _name = 'woow.workspace'
     _description = 'PaaS Workspace'
@@ -892,7 +942,7 @@ class WoowWorkspace(models.Model):
     hub_ids = fields.One2many('woow.hub.connect', 'workspace_id')
     tunnel_ids = fields.One2many('woow.tunnel', 'workspace_id')
 
-# models/cloud_app.py
+# models/cloud_app.py (設計規格)
 class WoowCloudApp(models.Model):
     _name = 'woow.cloud.app'
     _description = 'Deployed Cloud Application'

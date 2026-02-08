@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
 import traceback
 import uuid
 from datetime import datetime
+from typing import Any
 
 from odoo.http import request, route, Controller
 
@@ -22,7 +25,7 @@ _logger = logging.getLogger(__name__)
 
 class PaasController(Controller):
     @route("/woow", auth="user", website=False)
-    def paas_app(self):
+    def paas_app(self) -> Any:
         """
         Render the main PaaS application page.
 
@@ -42,7 +45,7 @@ class PaasController(Controller):
     # ==================== Config API ====================
 
     @route("/api/config", auth="user", methods=["POST"], type="json")
-    def api_config(self):
+    def api_config(self) -> dict[str, Any]:
         """
         Get PaaS platform configuration for frontend.
 
@@ -65,7 +68,7 @@ class PaasController(Controller):
     # ==================== Workspace API ====================
 
     @route("/api/workspaces", auth="user", methods=["POST"], type="json")
-    def api_workspace(self, action='list', name=None, description=None, **kwargs):
+    def api_workspace(self, action: str = 'list', name: str | None = None, description: str | None = None, **kwargs: Any) -> dict[str, Any]:
         """
         Handle workspace collection operations via JSON-RPC.
 
@@ -92,7 +95,7 @@ class PaasController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["POST"], type="json")
-    def api_workspace_detail(self, workspace_id, action='get', name=None, description=None, **kwargs):
+    def api_workspace_detail(self, workspace_id: int, action: str = 'get', name: str | None = None, description: str | None = None, **kwargs: Any) -> dict[str, Any]:
         """
         Handle single workspace operations via JSON-RPC.
 
@@ -121,7 +124,7 @@ class PaasController(Controller):
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
-    def _list_workspaces(self):
+    def _list_workspaces(self) -> dict[str, Any]:
         """
         Get all workspaces accessible by the current user.
 
@@ -172,7 +175,7 @@ class PaasController(Controller):
             'count': len(workspaces),
         }
 
-    def _create_workspace(self, name, description):
+    def _create_workspace(self, name: str | None, description: str | None) -> dict[str, Any]:
         """
         Create a new workspace with the current user as owner.
 
@@ -224,7 +227,7 @@ class PaasController(Controller):
             _logger.error("Error creating workspace: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while creating the workspace. Please try again.'}
 
-    def _get_workspace(self, workspace_id):
+    def _get_workspace(self, workspace_id: int) -> dict[str, Any]:
         """
         Get detailed information for a specific workspace.
 
@@ -289,7 +292,7 @@ class PaasController(Controller):
             }
         }
 
-    def _update_workspace(self, workspace_id, name, description):
+    def _update_workspace(self, workspace_id: int, name: str | None, description: str | None) -> dict[str, Any]:
         """
         Update workspace name and/or description.
 
@@ -353,7 +356,7 @@ class PaasController(Controller):
             }
         }
 
-    def _delete_workspace(self, workspace_id):
+    def _delete_workspace(self, workspace_id: int) -> dict[str, Any]:
         """
         Archive a workspace (soft delete).
 
@@ -398,7 +401,7 @@ class PaasController(Controller):
     # ==================== Workspace Members API ====================
 
     @route("/api/workspaces/<int:workspace_id>/members", auth="user", methods=["POST"], type="json")
-    def api_workspace_members(self, workspace_id, action='list', email=None, role=None, **kwargs):
+    def api_workspace_members(self, workspace_id: int, action: str = 'list', email: str | None = None, role: str | None = None, **kwargs: Any) -> dict[str, Any]:
         """
         Handle workspace member collection operations via JSON-RPC.
 
@@ -419,7 +422,7 @@ class PaasController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     @route("/api/workspaces/<int:workspace_id>/members/<int:access_id>", auth="user", methods=["POST"], type="json")
-    def api_workspace_member(self, workspace_id, access_id, action='update_role', role=None, **kwargs):
+    def api_workspace_member(self, workspace_id: int, access_id: int, action: str = 'update_role', role: str | None = None, **kwargs: Any) -> dict[str, Any]:
         """
         Handle individual workspace member operations via JSON-RPC.
 
@@ -439,7 +442,7 @@ class PaasController(Controller):
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
-    def _list_members(self, workspace_id):
+    def _list_members(self, workspace_id: int) -> dict[str, Any]:
         """
         Get all members of a workspace.
 
@@ -492,7 +495,7 @@ class PaasController(Controller):
             'count': len(members),
         }
 
-    def _invite_member(self, workspace_id, email, role):
+    def _invite_member(self, workspace_id: int, email: str | None, role: str | None) -> dict[str, Any]:
         """
         Invite a new member to a workspace by email.
 
@@ -576,7 +579,7 @@ class PaasController(Controller):
             _logger.error("Error inviting member: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while inviting the member. Please try again.'}
 
-    def _update_member_role(self, workspace_id, access_id, role):
+    def _update_member_role(self, workspace_id: int, access_id: int, role: str | None) -> dict[str, Any]:
         """
         Update a workspace member's role.
 
@@ -635,7 +638,7 @@ class PaasController(Controller):
             }
         }
 
-    def _remove_member(self, workspace_id, access_id):
+    def _remove_member(self, workspace_id: int, access_id: int) -> dict[str, Any]:
         """
         Remove a member from a workspace.
 
@@ -686,7 +689,7 @@ class PaasController(Controller):
     # ==================== Cloud Templates API ====================
 
     @route("/api/cloud/templates", auth="user", methods=["POST"], type="json")
-    def api_cloud_templates(self, category=None, search=None, **kw):
+    def api_cloud_templates(self, category: str | None = None, search: str | None = None, **kw: Any) -> dict[str, Any]:
         """
         List available cloud application templates.
 
@@ -726,7 +729,7 @@ class PaasController(Controller):
         }
 
     @route("/api/cloud/templates/<int:template_id>", auth="user", methods=["POST"], type="json")
-    def api_cloud_template(self, template_id, **kw):
+    def api_cloud_template(self, template_id: int, **kw: Any) -> dict[str, Any]:
         """
         Get a single cloud application template by ID.
 
@@ -750,7 +753,7 @@ class PaasController(Controller):
             'data': self._format_template(template, include_values=True),
         }
 
-    def _format_template(self, template, include_values=False):
+    def _format_template(self, template: Any, include_values: bool = False) -> dict[str, Any]:
         """Format a template record for API response."""
         data = {
             'id': template.id,
@@ -778,7 +781,7 @@ class PaasController(Controller):
     # ==================== Cloud Services API ====================
 
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
-    def api_workspace_services(self, workspace_id, action='list', template_id=None, name=None, values=None, **kw):
+    def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, **kw: Any) -> dict[str, Any]:
         """
         Handle cloud service operations for a workspace.
 
@@ -818,7 +821,7 @@ class PaasController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
-    def api_workspace_service(self, workspace_id, service_id, action='get', values=None, version=None, **kw):
+    def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, **kw: Any) -> dict[str, Any]:
         """
         Handle operations on a specific cloud service.
 
@@ -866,7 +869,7 @@ class PaasController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
-    def api_service_rollback(self, workspace_id, service_id, revision=None, **kw):
+    def api_service_rollback(self, workspace_id: int, service_id: int, revision: int | None = None, **kw: Any) -> dict[str, Any]:
         """
         Rollback a service to a previous revision.
 
@@ -911,7 +914,7 @@ class PaasController(Controller):
         return self._rollback_service(service, revision)
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/revisions", auth="user", methods=["POST"], type="json")
-    def api_service_revisions(self, workspace_id, service_id, **kw):
+    def api_service_revisions(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
         """
         Get revision history for a service.
 
@@ -946,7 +949,7 @@ class PaasController(Controller):
 
     # ==================== Cloud Service Helpers ====================
 
-    def _filter_allowed_helm_values(self, values, template):
+    def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> dict[str, Any]:
         """
         Filter Helm values to only include keys allowed by template's value_specs.
 
@@ -1001,7 +1004,7 @@ class PaasController(Controller):
 
         return filtered
 
-    def _list_services(self, workspace):
+    def _list_services(self, workspace: Any) -> dict[str, Any]:
         """List all services in a workspace."""
         CloudService = request.env['woow_paas_platform.cloud_service']
 
@@ -1019,7 +1022,7 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    def _create_service(self, workspace, template_id, name, values):
+    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None) -> dict[str, Any]:
         """Create a new cloud service."""
         if not template_id:
             return {'success': False, 'error': 'Template ID is required'}
@@ -1166,7 +1169,7 @@ class PaasController(Controller):
             _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while creating the service.'}
 
-    def _get_service(self, service):
+    def _get_service(self, service: Any) -> dict[str, Any]:
         """Get service details, updating status from operator if needed."""
         # Check if we need to poll operator for status
         if service.state in ['deploying', 'upgrading']:
@@ -1177,7 +1180,7 @@ class PaasController(Controller):
             'data': self._format_service(service, include_details=True),
         }
 
-    def _update_service(self, service, values, version):
+    def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None) -> dict[str, Any]:
         """Update/upgrade a service."""
         if service.state in ['pending', 'deleting', 'error']:
             return {'success': False, 'error': f'Cannot update service in {service.state} state'}
@@ -1221,7 +1224,7 @@ class PaasController(Controller):
             _logger.error("Operator error during upgrade: %s", str(e))
             return {'success': False, 'error': f'Upgrade failed: {e.detail or e.message}'}
 
-    def _delete_service(self, service):
+    def _delete_service(self, service: Any) -> dict[str, Any]:
         """Delete/uninstall a service."""
         if service.state == 'deleting':
             return {'success': False, 'error': 'Service is already being deleted'}
@@ -1273,7 +1276,7 @@ class PaasController(Controller):
             })
             return {'success': False, 'error': f'Deletion failed: {e.detail or e.message}'}
 
-    def _rollback_service(self, service, revision):
+    def _rollback_service(self, service: Any, revision: int | None) -> dict[str, Any]:
         """Rollback service to a previous revision."""
         if service.state in ['pending', 'deleting']:
             return {'success': False, 'error': f'Cannot rollback service in {service.state} state'}
@@ -1303,7 +1306,7 @@ class PaasController(Controller):
             _logger.error("Operator error during rollback: %s", str(e))
             return {'success': False, 'error': f'Rollback failed: {e.detail or e.message}'}
 
-    def _get_service_revisions(self, service):
+    def _get_service_revisions(self, service: Any) -> dict[str, Any]:
         """Get revision history for a service."""
         client = get_paas_operator_client(request.env)
         if not client:
@@ -1328,7 +1331,7 @@ class PaasController(Controller):
                 return {'success': True, 'data': []}
             return {'success': False, 'error': f'Failed to get revisions: {e.detail or e.message}'}
 
-    def _update_service_status(self, service):
+    def _update_service_status(self, service: Any) -> None:
         """Poll operator for service status and update record.
 
         Uses optimistic locking to prevent race conditions:
@@ -1413,7 +1416,7 @@ class PaasController(Controller):
         except Exception as e:
             _logger.warning("Error polling service status: %s", str(e))
 
-    def _format_service(self, service, include_details=False):
+    def _format_service(self, service: Any, include_details: bool = False) -> dict[str, Any]:
         """Format a service record for API response."""
         data = {
             'id': service.id,
