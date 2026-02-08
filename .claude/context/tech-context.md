@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-08T00:35:24Z
-version: 1.3
+last_updated: 2026-02-08T01:39:42Z
+version: 1.4
 author: Claude Code PM System
 ---
 
@@ -177,21 +177,39 @@ docker compose logs -f web
 |-----------|----------|---------|
 | DashboardPage | `pages/dashboard/` | Main dashboard |
 | WorkspaceListPage | `pages/workspace/` | Workspace listing |
-| WorkspaceDetailPage | `pages/workspace/` | Workspace detail view ✅ NEW |
-| WorkspaceTeamPage | `pages/workspace/` | Team member management ✅ NEW |
+| WorkspaceDetailPage | `pages/workspace/` | Workspace detail view |
+| WorkspaceTeamPage | `pages/workspace/` | Team member management |
+| AppMarketplacePage | `pages/marketplace/` | Application marketplace browser |
+| ServiceDetailPage | `pages/service/` | Service detail with tabs |
+| OverviewTab | `pages/service/tabs/` | Service overview tab |
+| ConfigurationTab | `pages/service/tabs/` | Service configuration tab |
+| AppConfigurationPage | `pages/configure/` | App deployment configuration |
 | EmptyState | `pages/empty/` | Placeholder page |
 
-### Modal Components ✅ NEW
+### Modal Components
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | CreateWorkspaceModal | `components/modal/` | Create new workspace dialog |
 | InviteMemberModal | `components/modal/` | Invite team member dialog |
+| DeleteServiceModal | `components/modal/` | Service deletion confirmation |
+| RollbackModal | `components/modal/` | Service rollback dialog |
+| EditDomainModal | `components/modal/` | Edit service domain dialog |
+
+### Feature Components
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| AppCard | `components/marketplace/` | App template card |
+| CategoryFilter | `components/marketplace/` | Category filter UI |
+| StatusBadge | `components/common/` | Service status indicator |
+| HelmValueForm | `components/config/` | Helm values editor |
+| ServiceCard | `components/service-card/` | Service instance card |
 
 ### Service Components
 | Service | Location | Purpose |
 |---------|----------|---------|
 | workspace_service | `services/` | Workspace API client |
 | cloud_service | `services/` | Cloud services API client |
+| utils | `services/` | Shared utility functions |
 
 ## API Patterns
 
@@ -226,6 +244,7 @@ Odoo (Frontend) ──HTTP──▶ PaaS Operator (FastAPI) ──Helm──▶ 
 ```
 
 ## Update History
+- 2026-02-08: Full component inventory update - added marketplace, service, configure pages; modal, feature component groups; utils service
 - 2026-02-08: Updated API patterns for RESTful refactor, added cloud service components
 - 2026-02-01: Added new page components, modal components, services, API patterns
 - 2026-01-14: Added asset bundles, OWL components, Docker commands

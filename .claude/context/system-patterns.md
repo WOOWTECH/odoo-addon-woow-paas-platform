@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-08T00:35:24Z
-version: 1.1
+last_updated: 2026-02-08T01:39:42Z
+version: 1.2
 author: Claude Code PM System
 ---
 
@@ -155,18 +155,23 @@ def api_workspace_members(self, workspace_id, action='list', ...):
 
 ## External Service Integration Pattern
 
-PaaS Operator 整合使用 HTTP client 封裝：
+PaaS Operator 整合使用獨立的 Python service layer（非 ORM model）：
 
 ```python
-# models/paas_operator_client.py
-class PaasOperatorClient(models.AbstractModel):
-    _name = 'woow_paas_platform.paas_operator_client'
+# services/paas_operator.py
+class PaasOperatorClient:
+    """HTTP client for PaaS Operator Service."""
 
-    def _call_operator(self, endpoint, method='GET', data=None):
-        # Read config from ir.config_parameter
+    def __init__(self, base_url, api_key):
+        self.base_url = base_url
+        self.api_key = api_key
+
+    def _request(self, method, endpoint, **kwargs):
         # Make HTTP request to PaaS Operator
         # Handle errors uniformly
 ```
+
+Controller 透過 `ir.config_parameter` 取得設定後建立 client instance。
 
 ## Naming Conventions
 
@@ -179,4 +184,5 @@ class PaasOperatorClient(models.AbstractModel):
 | API route | `/api/{resource}` | `/api/workspaces` |
 
 ## Update History
+- 2026-02-08: Updated external service pattern from ORM model to standalone service class
 - 2026-02-08: Added RESTful API endpoint pattern and external service integration pattern

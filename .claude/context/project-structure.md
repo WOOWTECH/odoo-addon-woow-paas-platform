@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-08T00:35:24Z
-version: 1.3
+last_updated: 2026-02-08T01:39:42Z
+version: 1.4
 author: Claude Code PM System
 ---
 
@@ -17,8 +17,7 @@ woow_paas_platform/
 │   │
 │   ├── controllers/             # HTTP routes (JSON API)
 │   │   ├── __init__.py
-│   │   ├── paas.py              # /woow endpoint + workspace/cloud API
-│   │   └── cloud_services.py    # Cloud services API endpoints
+│   │   └── paas.py              # /woow endpoint + all API routes (workspace, cloud, members)
 │   │
 │   ├── models/                  # Business logic layer
 │   │   ├── __init__.py          # Model imports
@@ -26,8 +25,21 @@ woow_paas_platform/
 │   │   ├── workspace.py                 # Workspace model
 │   │   ├── workspace_access.py          # Workspace access/member model
 │   │   ├── cloud_app_template.py        # Application marketplace templates
-│   │   ├── cloud_service.py             # Deployed service instances
-│   │   └── paas_operator_client.py      # HTTP client for PaaS Operator
+│   │   └── cloud_service.py             # Deployed service instances
+│   │
+│   ├── services/                # Python service layer (non-ORM)
+│   │   ├── __init__.py
+│   │   └── paas_operator.py     # HTTP client for PaaS Operator
+│   │
+│   ├── tests/                   # Odoo module tests
+│   │   ├── __init__.py
+│   │   ├── test_cloud_app_template.py
+│   │   ├── test_cloud_service.py
+│   │   ├── test_cloud_api.py
+│   │   └── test_paas_operator.py
+│   │
+│   ├── data/                    # Default data files
+│   │   └── cloud_app_templates.xml  # Default app templates
 │   │
 │   ├── views/                   # UI definitions (XML)
 │   │   ├── menu.xml             # Menu structure
@@ -54,14 +66,22 @@ woow_paas_platform/
 │           │   │   ├── icon/       # WoowIcon.js/xml
 │           │   │   ├── card/       # WoowCard.js/xml
 │           │   │   ├── button/     # WoowButton.js/xml
-│           │   │   └── modal/      # CreateWorkspaceModal, InviteMemberModal ✅ NEW
+│           │   │   ├── modal/      # CreateWorkspaceModal, InviteMemberModal, DeleteServiceModal, RollbackModal, EditDomainModal
+│           │   │   ├── marketplace/  # AppCard, CategoryFilter
+│           │   │   ├── common/     # StatusBadge
+│           │   │   ├── config/     # HelmValueForm
+│           │   │   └── service-card/  # ServiceCard
 │           │   ├── pages/
-│           │   │   ├── dashboard/  # DashboardPage.js/xml
-│           │   │   ├── workspace/  # WorkspaceListPage, WorkspaceDetailPage, WorkspaceTeamPage ✅ UPDATED
-│           │   │   └── empty/      # EmptyState.js/xml
+│           │   │   ├── dashboard/    # DashboardPage
+│           │   │   ├── workspace/    # WorkspaceListPage, WorkspaceDetailPage, WorkspaceTeamPage
+│           │   │   ├── marketplace/  # AppMarketplacePage
+│           │   │   ├── service/      # ServiceDetailPage + tabs/ (OverviewTab, ConfigurationTab)
+│           │   │   ├── configure/    # AppConfigurationPage
+│           │   │   └── empty/        # EmptyState
 │           │   ├── services/
 │           │   │   ├── workspace_service.js  # Workspace API client
-│           │   │   └── cloud_service.js      # Cloud services API client
+│           │   │   ├── cloud_service.js      # Cloud services API client
+│           │   │   └── utils.js              # Shared utility functions
 │           │   └── styles/
 │           │       ├── 00_variables.scss
 │           │       ├── 10_base.scss
@@ -71,7 +91,9 @@ woow_paas_platform/
 │           │       └── pages/
 │           │           ├── 10_empty.scss
 │           │           ├── 20_workspace.scss
-│           │           └── 30_dashboard.scss
+│           │           ├── 30_dashboard.scss
+│           │           ├── 40_marketplace.scss
+│           │           └── 40_configure.scss
 │           ├── scss/            # Backend asset styles
 │           │   └── main.scss
 │           ├── components/      # Backend OWL components (future)
@@ -138,7 +160,7 @@ woow_paas_platform/
 - TransientModel for settings, AbstractModel for mixins
 
 ### Controllers (`src/controllers/`)
-- HTTP route handlers with JSON API
+- Single controller `paas.py` handles all routes (workspace, cloud services, members)
 - Using `type="json"` for Odoo 18 JSON responses
 - Imported via `src/controllers/__init__.py`
 
@@ -149,8 +171,9 @@ woow_paas_platform/
 
 ### Frontend (`src/static/src/`)
 - `paas/` - Standalone OWL application
-  - `services/` - API client services
-  - `components/modal/` - Modal dialogs
+  - `services/` - API client services + utilities
+  - `components/` - UI components (modal, marketplace, common, config, service-card)
+  - `pages/` - Page components (dashboard, workspace, marketplace, service, configure, empty)
 - `scss/` - Backend stylesheets
 - `components/` - Backend OWL components (future)
 - `services/` - JS services (future)
@@ -160,12 +183,12 @@ woow_paas_platform/
 | File | Purpose |
 |------|---------|
 | `src/__manifest__.py` | Module metadata, version, dependencies, assets |
-| `src/controllers/paas.py` | `/woow` endpoint + workspace/cloud JSON API |
+| `src/controllers/paas.py` | `/woow` endpoint + all API routes (workspace, cloud, members) |
 | `src/models/workspace.py` | Workspace model with CRUD |
 | `src/models/workspace_access.py` | Workspace member access control |
 | `src/models/cloud_app_template.py` | Application marketplace templates |
 | `src/models/cloud_service.py` | Deployed service instances |
-| `src/models/paas_operator_client.py` | HTTP client for PaaS Operator |
+| `src/services/paas_operator.py` | HTTP client for PaaS Operator |
 | `src/static/src/paas/services/cloud_service.js` | Frontend cloud services API client |
 | `extra/paas-operator/src/main.py` | PaaS Operator FastAPI app |
 | `src/views/paas_app.xml` | QWeb template for standalone app |
@@ -174,6 +197,7 @@ woow_paas_platform/
 | `src/security/ir.model.access.csv` | CRUD permissions per model |
 
 ## Update History
+- 2026-02-08: Full frontend structure update - added marketplace, service, configure pages; new component groups; removed hash.js, paas_operator_client.py, cloud_services.py controller
 - 2026-02-08: Added extra/paas-operator/, cloud models, cloud_service.js, expanded docs/
 - 2026-02-01: Updated for src/ directory structure, added models and services
 - 2026-01-14: Added controllers/, paas/ frontend structure
