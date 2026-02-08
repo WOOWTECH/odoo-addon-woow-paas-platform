@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Any, Union
+
 from odoo import models, fields, api
 from odoo.exceptions import ValidationError
 import re
@@ -62,12 +66,12 @@ class Workspace(models.Model):
     )
 
     @api.depends('access_ids')
-    def _compute_member_count(self):
+    def _compute_member_count(self) -> None:
         for workspace in self:
             workspace.member_count = len(workspace.access_ids)
 
     @api.model_create_multi
-    def create(self, vals_list):
+    def create(self, vals_list: list[dict[str, Any]]) -> Workspace:
         for vals in vals_list:
             if not vals.get('slug'):
                 vals['slug'] = self._generate_slug(vals.get('name', ''))
@@ -81,7 +85,7 @@ class Workspace(models.Model):
             })
         return workspaces
 
-    def _generate_slug(self, name):
+    def _generate_slug(self, name: str) -> str:
         """Generate a URL-friendly slug from name"""
         if not name:
             return ''
@@ -96,15 +100,15 @@ class Workspace(models.Model):
             counter += 1
         return slug
 
-    def action_archive(self):
+    def action_archive(self) -> None:
         """Archive the workspace"""
         self.write({'state': 'archived'})
 
-    def action_restore(self):
+    def action_restore(self) -> None:
         """Restore archived workspace"""
         self.write({'state': 'active'})
 
-    def check_user_access(self, user=None, required_role=None):
+    def check_user_access(self, user: Any = None, required_role: str | None = None) -> Union[Any, bool]:
         """
         Check if user has access to this workspace.
 
@@ -136,7 +140,7 @@ class Workspace(models.Model):
 
         return access
 
-    def get_user_role(self, user=None):
+    def get_user_role(self, user: Any = None) -> str | None:
         """Get the role of a user in this workspace"""
         self.ensure_one()
         user = user or self.env.user

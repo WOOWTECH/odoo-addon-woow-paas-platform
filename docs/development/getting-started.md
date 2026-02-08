@@ -151,21 +151,21 @@ woow_paas_platform/
 │   ├── __init__.py               # Python package init
 │   │
 │   ├── controllers/              # HTTP endpoints
-│   │   ├── paas.py              # Main /woow endpoint & JSON API
-│   │   └── cloud_services.py    # Cloud services API endpoints
+│   │   └── paas.py              # All API endpoints (workspace, members, cloud services)
 │   │
 │   ├── models/                   # Odoo ORM models
 │   │   ├── res_config_settings.py       # PaaS settings
 │   │   ├── workspace.py                 # Workspace model
-│   │   ├── workspace_access.py          # Workspace members
+│   │   ├── workspace_access.py          # Workspace members & roles
 │   │   ├── cloud_app_template.py        # Application templates
-│   │   ├── cloud_service.py             # Deployed services
-│   │   └── paas_operator_client.py      # HTTP client for operator
+│   │   └── cloud_service.py             # Deployed services
+│   │
+│   ├── services/                  # Service layer
+│   │   └── paas_operator.py      # HTTP client for PaaS Operator
 │   │
 │   ├── views/                    # QWeb templates & XML views
 │   │   ├── paas_app.xml         # SPA entry point template
 │   │   ├── res_config_settings_views.xml
-│   │   ├── workspace_views.xml
 │   │   └── menu.xml
 │   │
 │   ├── security/                 # Access control
@@ -187,9 +187,10 @@ woow_paas_platform/
 │   │   └── scss/                # Backend SCSS
 │   │
 │   └── tests/                    # Odoo Python tests
-│       ├── test_workspace.py
-│       ├── test_cloud_service.py
-│       └── test_paas_operator_client.py
+│       ├── test_cloud_api.py            # API endpoint & controller tests
+│       ├── test_cloud_app_template.py   # CloudAppTemplate model tests
+│       ├── test_cloud_service.py        # CloudService model tests
+│       └── test_paas_operator.py        # PaaSOperatorClient HTTP client tests
 │
 ├── extra/paas-operator/          # PaaS Operator service (FastAPI)
 │   ├── src/

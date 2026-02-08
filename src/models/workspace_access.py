@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from odoo import models, fields, api
 from odoo.exceptions import ValidationError
 
@@ -76,7 +78,7 @@ class WorkspaceAccess(models.Model):
     ]
 
     @api.constrains('role', 'workspace_id')
-    def _check_owner_count(self):
+    def _check_owner_count(self) -> None:
         """Ensure each workspace has exactly one owner"""
         for access in self:
             if access.role == ROLE_OWNER:
@@ -91,7 +93,7 @@ class WorkspaceAccess(models.Model):
                         'Transfer ownership first before assigning a new owner.'
                     )
 
-    def transfer_ownership(self, new_owner_id):
+    def transfer_ownership(self, new_owner_id: int) -> None:
         """Transfer ownership to another user"""
         self.ensure_one()
         if self.role != ROLE_OWNER:
@@ -113,7 +115,7 @@ class WorkspaceAccess(models.Model):
         self.workspace_id.write({'owner_id': new_owner_id})
 
     @api.model
-    def get_role_permissions(self, role):
+    def get_role_permissions(self, role: str) -> dict[str, bool]:
         """Get permissions for a given role"""
         permissions = {
             ROLE_OWNER: {
@@ -151,7 +153,7 @@ class WorkspaceAccess(models.Model):
         }
         return permissions.get(role, {})
 
-    def get_permissions(self):
+    def get_permissions(self) -> dict[str, bool]:
         """Get permissions for this access record"""
         self.ensure_one()
         return self.get_role_permissions(self.role)

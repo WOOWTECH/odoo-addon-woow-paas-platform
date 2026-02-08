@@ -657,10 +657,6 @@ class CloudService(models.Model):
     allocated_ram_gb = fields.Float()
     allocated_storage_gb = fields.Integer()
 
-    # Infrastructure
-    k8s_cluster = fields.Char(default='default')  # Target K8s cluster
-    region = fields.Char(default='us-east-1')
-
     # Timestamps
     deployed_at = fields.Datetime()
     last_upgraded_at = fields.Datetime()
@@ -674,50 +670,37 @@ class CloudService(models.Model):
 
 ## API Design
 
-### Endpoints
+> **Implementation Note**: 實際實作使用 Odoo JSON-RPC (POST + `action` 參數) 而非 RESTful endpoints。
+> 所有請求皆為 `POST` 方法，透過 `action` 參數區分操作。以下為實際端點。
+
+### Endpoints (Implemented)
 
 #### Application Templates
 
 ```
-GET  /api/v1/cloud/templates
-     ?category={category}
-     &search={query}
-     &tags={tag1,tag2}
+POST /api/cloud/templates          # action 參數不適用，直接 list
+     Body: { category, search }
 
-GET  /api/v1/cloud/templates/{id}
+POST /api/cloud/templates/<id>     # 取得單一 template
 ```
 
 #### Cloud Services
 
 ```
-GET    /api/v1/workspaces/{workspace_id}/services
-POST   /api/v1/workspaces/{workspace_id}/services
-       Body: { template_id, name, subdomain, helm_values, ... }
+POST /api/workspaces/<workspace_id>/services
+     Body: { action: "list" | "create", template_id, name, values }
 
-GET    /api/v1/workspaces/{workspace_id}/services/{service_id}
-PATCH  /api/v1/workspaces/{workspace_id}/services/{service_id}
-       → Triggers helm upgrade
-DELETE /api/v1/workspaces/{workspace_id}/services/{service_id}
-       → Triggers helm uninstall
+POST /api/workspaces/<workspace_id>/services/<service_id>
+     Body: { action: "get" | "update" | "delete", values, version }
 
-POST   /api/v1/workspaces/{workspace_id}/services/{service_id}/rollback
-       Body: { revision: number }
-GET    /api/v1/workspaces/{workspace_id}/services/{service_id}/revisions
-       → List helm revision history
+POST /api/workspaces/<workspace_id>/services/<service_id>/rollback
+     Body: { revision }
+
+POST /api/workspaces/<workspace_id>/services/<service_id>/revisions
+     # 取得 revision history
 ```
 
-#### Metrics
-
-```
-GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/metrics
-     ?range={1h|24h|7d|30d}
-
-GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
-     ?type={event_type}
-     &from={datetime}
-     &to={datetime}
-     &search={query}
-```
+#### Metrics _(Future Phase)_
 
 #### Backups _(Future Phase)_
 
@@ -760,21 +743,21 @@ GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
 
 ## Implementation Phases
 
-### Phase 0: PaaS Operator Service
+### Phase 0: PaaS Operator Service ✅
 
-- [ ] FastAPI project setup
-- [ ] Helm CLI integration (subprocess)
-- [ ] API endpoints: releases CRUD, namespaces
-- [ ] API Key authentication
-- [ ] Dockerfile + K8s manifests (Deployment, Service, RBAC)
-- [ ] Health check endpoint
+- [x] FastAPI project setup
+- [x] Helm CLI integration (subprocess)
+- [x] API endpoints: releases CRUD, namespaces
+- [x] API Key authentication
+- [x] Dockerfile + K8s manifests (Deployment, Service, RBAC)
+- [x] Health check endpoint
 
-### Phase 1: Foundation (Odoo)
+### Phase 1: Foundation (Odoo) ✅
 
-- [ ] CloudAppTemplate model + seed data
-- [ ] CloudService model
-- [ ] PaaS Operator client service (HTTP calls)
-- [ ] Basic CRUD APIs
+- [x] CloudAppTemplate model + seed data
+- [x] CloudService model
+- [x] PaaS Operator client service (HTTP calls)
+- [x] Basic CRUD APIs
 
 ### Phase 2: Marketplace UI
 
@@ -787,14 +770,14 @@ GET  /api/v1/workspaces/{workspace_id}/services/{service_id}/logs
 
 - [ ] AppConfigurationPage
 - [ ] EnvVarForm component
-- [ ] Service creation API
-- [ ] Subdomain validation
+- [x] Service creation API
+- [x] Subdomain validation
 
 ### Phase 4: Service Management
 
 - [ ] ServiceDetailPage (Overview tab)
-- [ ] Service start/stop/restart APIs
-- [ ] Status polling
+- [x] Service upgrade/delete/rollback APIs
+- [x] Status polling
 
 ### Phase 5: Metrics _(Future Phase)_
 
