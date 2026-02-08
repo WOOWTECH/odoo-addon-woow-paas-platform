@@ -21,36 +21,38 @@ This guide covers common issues encountered when deploying and operating the Woo
 **Symptoms**: Pod is in `CrashLoopBackOff` or `Error` state
 
 **Diagnosis**:
+
 ```bash
 # Check pod status
-kubectl get pods -n paas-system -l app=paas-operator
+kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 
 # View pod logs
-kubectl logs -n paas-system -l app=paas-operator --tail=100
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator --tail=100
 
 # Describe pod for events
-kubectl describe pod -n paas-system -l app=paas-operator
+kubectl describe pod -n paas-system -l app.kubernetes.io/name=paas-operator
 ```
 
 **Common Causes & Solutions**:
 
-| Cause | Solution |
-|-------|----------|
-| Missing API key in secret | Verify secret exists: `kubectl get secret paas-operator-secrets -n paas-system` |
-| RBAC permissions missing | Apply RBAC: `kubectl apply -f k8s/rbac.yaml` |
-| Helm binary not found | Check Dockerfile includes Helm installation |
-| Python dependencies issue | Verify requirements.txt is complete, rebuild image |
+| Cause                     | Solution                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| Missing API key in secret | Verify secret exists: `kubectl get secret paas-operator-secret -n paas-system` |
+| RBAC permissions missing  | Reinstall Helm chart: `helm upgrade paas-operator ./helm -n paas-system`         |
+| Helm binary not found     | Check Dockerfile includes Helm installation                                     |
+| Python dependencies issue | Verify requirements.txt is complete, rebuild image                              |
 
 **Fix Example**:
-```bash
-# Recreate secret with valid API key
-kubectl delete secret paas-operator-secrets -n paas-system
-kubectl create secret generic paas-operator-secrets \
-  --from-literal=api-key=$(openssl rand -hex 32) \
-  -n paas-system
 
-# Restart deployment
-kubectl rollout restart deployment/paas-operator -n paas-system
+```bash
+# Regenerate API key and upgrade via Helm
+API_KEY=$(openssl rand -hex 32)
+helm upgrade paas-operator ./helm \
+  --namespace paas-system \
+  --set auth.apiKey=$API_KEY
+
+# Verify pod restarted with new secret
+kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 ```
 
 ### Issue: PaaS Operator Returns 401 Unauthorized
@@ -58,24 +60,27 @@ kubectl rollout restart deployment/paas-operator -n paas-system
 **Symptoms**: Odoo shows "Authentication failed" when connecting to PaaS Operator
 
 **Diagnosis**:
+
 ```bash
 # Check the API key in secret
-kubectl get secret paas-operator-secrets -n paas-system -o jsonpath='{.data.api-key}' | base64 -d
+kubectl get secret paas-operator-secret -n paas-system -o jsonpath='{.data.api-key}' | base64 -d
 
 # Test with correct API key
 kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
-  curl -H "X-API-Key: YOUR_KEY" http://paas-operator.paas-system.svc:8000/health
+  curl -H "X-API-Key: YOUR_KEY" http://paas-operator.paas-system.svc/health
 ```
 
 **Common Causes**:
+
 - API key mismatch between K8s secret and Odoo settings
 - Missing `X-API-Key` header in requests
 - Incorrect secret name in deployment
 
 **Solution**:
+
 ```bash
 # Get current API key
-CURRENT_KEY=$(kubectl get secret paas-operator-secrets -n paas-system -o jsonpath='{.data.api-key}' | base64 -d)
+CURRENT_KEY=$(kubectl get secret paas-operator-secret -n paas-system -o jsonpath='{.data.api-key}' | base64 -d)
 echo "Current API Key: $CURRENT_KEY"
 
 # Update Odoo settings with this exact key
@@ -91,9 +96,10 @@ echo "Current API Key: $CURRENT_KEY"
 **Symptoms**: Service shows "Deploying" for more than 5 minutes, status never changes to "Running"
 
 **Diagnosis**:
+
 ```bash
 # Check PaaS Operator logs
-kubectl logs -n paas-system -l app=paas-operator --tail=50
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator --tail=50
 
 # Check Helm release status
 helm list -n paas-ws-{workspace_id}
@@ -107,14 +113,15 @@ kubectl describe pod -n paas-ws-{workspace_id}
 
 **Common Causes**:
 
-| Cause | Diagnosis Command | Solution |
-|-------|------------------|----------|
-| Image pull failure | `kubectl get pods -n paas-ws-X -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}'` | Add imagePullSecrets or use public image |
-| Resource quota exceeded | `kubectl describe resourcequota -n paas-ws-X` | Increase quota or reduce resource requests |
-| PVC provisioning issue | `kubectl get pvc -n paas-ws-X` | Check storage class exists, increase timeout |
-| Init container failing | `kubectl logs -n paas-ws-X <pod-name> -c init-container` | Fix init container configuration |
+| Cause                   | Diagnosis Command                                                                                          | Solution                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Image pull failure      | `kubectl get pods -n paas-ws-X -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}'` | Add imagePullSecrets or use public image     |
+| Resource quota exceeded | `kubectl describe resourcequota -n paas-ws-X`                                                              | Increase quota or reduce resource requests   |
+| PVC provisioning issue  | `kubectl get pvc -n paas-ws-X`                                                                             | Check storage class exists, increase timeout |
+| Init container failing  | `kubectl logs -n paas-ws-X <pod-name> -c init-container`                                                   | Fix init container configuration             |
 
 **Fix Example**:
+
 ```bash
 # If image pull issue, create imagePullSecret
 kubectl create secret docker-registry regcred \
@@ -133,6 +140,7 @@ kubectl patch deployment <deployment-name> -n paas-ws-{workspace_id} \
 **Symptoms**: Service status is "Running", pods are healthy, but application is unreachable
 
 **Diagnosis**:
+
 ```bash
 # Check service endpoint
 kubectl get svc -n paas-ws-{workspace_id}
@@ -149,12 +157,14 @@ kubectl logs -n paas-ws-{workspace_id} -l app=<app-name>
 ```
 
 **Common Causes**:
+
 - Service port mismatch
 - Ingress not created or misconfigured
 - Application not listening on expected port
 - Network policy blocking traffic
 
 **Solution**:
+
 ```bash
 # Verify service ports
 kubectl get svc <service-name> -n paas-ws-{workspace_id} -o yaml
@@ -172,9 +182,10 @@ kubectl port-forward -n paas-ws-{workspace_id} <pod-name> 8080:8080
 **Symptoms**: Service shows "Error" state, Odoo logs show Helm command failure
 
 **Diagnosis**:
+
 ```bash
 # Check PaaS Operator logs for detailed error
-kubectl logs -n paas-system -l app=paas-operator | grep "ERROR"
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator | grep "ERROR"
 
 # Check Helm release
 helm list -n paas-ws-{workspace_id}
@@ -185,12 +196,14 @@ helm history <release-name> -n paas-ws-{workspace_id}
 ```
 
 **Common Causes**:
+
 - Invalid Helm chart values
 - Chart repository unreachable
 - Namespace quota exceeded
 - RBAC permissions insufficient
 
 **Solution**:
+
 ```bash
 # Verify RBAC permissions
 kubectl auth can-i create deployments \
@@ -212,6 +225,7 @@ helm uninstall <release-name> -n paas-ws-{workspace_id}
 **Symptoms**: Accessing service URL returns 404 error
 
 **Diagnosis**:
+
 ```bash
 # Check if ingress exists
 kubectl get ingress -n paas-ws-{workspace_id}
@@ -223,16 +237,18 @@ kubectl describe ingress -n paas-ws-{workspace_id}
 kubectl logs -l app.kubernetes.io/name=traefik -n kube-system --tail=50
 
 # Verify DNS resolution
-nslookup {subdomain}.woowtech.com
+nslookup {subdomain}.woowtech.io
 ```
 
 **Common Causes**:
+
 - Ingress not created (missing in Helm chart)
 - Wrong ingress class
 - DNS not pointing to cluster
 - Ingress controller not running
 
 **Solution**:
+
 ```bash
 # Check ingress controller is running
 kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik
@@ -241,7 +257,7 @@ kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik
 kubectl get ingressclass
 
 # Test ingress with curl
-curl -v https://{subdomain}.woowtech.com
+curl -v https://{subdomain}.woowtech.io
 ```
 
 ### Issue: Connection Refused to PaaS Operator
@@ -249,9 +265,10 @@ curl -v https://{subdomain}.woowtech.com
 **Symptoms**: Odoo shows "Failed to connect to PaaS Operator" or connection timeout
 
 **Diagnosis**:
+
 ```bash
 # Verify operator pod is running
-kubectl get pods -n paas-system -l app=paas-operator
+kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 
 # Verify service exists
 kubectl get svc paas-operator -n paas-system
@@ -259,7 +276,7 @@ kubectl get svc paas-operator -n paas-system
 # Test connectivity from Odoo pod
 ODOO_POD=$(kubectl get pods -n <odoo-namespace> -l app=odoo -o jsonpath='{.items[0].metadata.name}')
 kubectl exec -it $ODOO_POD -n <odoo-namespace> -- \
-  curl http://paas-operator.paas-system.svc:8000/health
+  curl http://paas-operator.paas-system.svc/health
 
 # Check network policies
 kubectl get networkpolicies -n paas-system
@@ -267,15 +284,17 @@ kubectl get networkpolicies -n <odoo-namespace>
 ```
 
 **Common Causes**:
+
 - PaaS Operator pod crashed
 - Wrong URL in Odoo settings
 - Network policy blocking traffic
 - Service port mismatch
 
 **Solution**:
+
 ```bash
 # Verify correct URL in Odoo settings
-# Should be: http://paas-operator.paas-system.svc:8000
+# Should be: http://paas-operator.paas-system.svc (port 80)
 
 # Check service port
 kubectl get svc paas-operator -n paas-system -o yaml
@@ -293,6 +312,7 @@ kubectl rollout restart deployment/paas-operator -n paas-system
 **Symptoms**: Clicking "Browse Marketplace" shows no templates or loading error
 
 **Diagnosis**:
+
 ```bash
 # Check browser console for errors
 # Check Odoo logs
@@ -301,19 +321,21 @@ docker compose logs web | grep -i "cloud"
 # Test PaaS Operator API directly
 kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
   curl -H "X-API-Key: YOUR_KEY" \
-  http://paas-operator.paas-system.svc:8000/api/templates
+  http://paas-operator.paas-system.svc/api/templates
 ```
 
 **Common Causes**:
+
 - PaaS Operator not configured in Odoo settings
 - Incorrect API key
 - JavaScript error in frontend
 - PaaS Operator service down
 
 **Solution**:
+
 1. Verify Odoo Settings:
    - Go to Settings → General Settings → Woow PaaS
-   - Ensure URL is: `http://paas-operator.paas-system.svc:8000`
+   - Ensure URL is: `http://paas-operator.paas-system.svc`
    - Ensure API key matches K8s secret
 2. Check browser console for JavaScript errors
 3. Restart Odoo if needed
@@ -323,6 +345,7 @@ kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
 **Symptoms**: Service deployed successfully but Odoo still shows "Deploying"
 
 **Diagnosis**:
+
 ```bash
 # Check service status in K8s
 kubectl get pods -n paas-ws-{workspace_id}
@@ -333,11 +356,13 @@ docker compose logs web | grep "status"
 ```
 
 **Common Causes**:
+
 - Status polling not working
 - PaaS Operator returning incorrect status
 - Database connection issue
 
 **Solution**:
+
 ```bash
 # Manually trigger status refresh in Odoo
 # Click "Refresh" button in service detail page
@@ -345,7 +370,7 @@ docker compose logs web | grep "status"
 # Check PaaS Operator status endpoint
 kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
   curl -H "X-API-Key: YOUR_KEY" \
-  http://paas-operator.paas-system.svc:8000/api/releases/paas-ws-X/<service-name>/status
+  http://paas-operator.paas-system.svc/api/releases/paas-ws-X/<service-name>/status
 ```
 
 ---
@@ -357,6 +382,7 @@ kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
 **Symptoms**: PaaS Operator logs show "Helm command timeout" error
 
 **Diagnosis**:
+
 ```bash
 # Check HELM_TIMEOUT setting
 kubectl get configmap -n paas-system
@@ -367,19 +393,19 @@ kubectl describe node
 ```
 
 **Common Causes**:
+
 - Image pull taking too long
 - Pod startup probe timing out
 - Insufficient cluster resources
 
 **Solution**:
-```bash
-# Increase Helm timeout in operator config
-# Edit deployment and add env var:
-kubectl set env deployment/paas-operator \
-  HELM_TIMEOUT=600 \
-  -n paas-system
 
-# Or update k8s/deployment.yaml and reapply
+```bash
+# Increase Helm timeout via Helm upgrade
+helm upgrade paas-operator ./helm \
+  --namespace paas-system \
+  --reuse-values \
+  --set env.HELM_TIMEOUT=600
 ```
 
 ### Issue: Helm Chart Not Found
@@ -387,6 +413,7 @@ kubectl set env deployment/paas-operator \
 **Symptoms**: Service deployment fails with "chart not found" error
 
 **Diagnosis**:
+
 ```bash
 # Test Helm repo access from operator pod
 kubectl exec -it <paas-operator-pod> -n paas-system -- \
@@ -398,11 +425,13 @@ kubectl exec -it <paas-operator-pod> -n paas-system -- \
 ```
 
 **Common Causes**:
+
 - Chart repository not added
 - Network issue accessing chart repo
 - Chart version doesn't exist
 
 **Solution**:
+
 ```bash
 # Add missing chart repositories in operator startup script
 # Edit src/main.py to add repo on startup:
@@ -419,6 +448,7 @@ kubectl exec -it <paas-operator-pod> -n paas-system -- \
 **Symptoms**: Service deployment fails with "exceeded quota" error
 
 **Diagnosis**:
+
 ```bash
 # Check namespace resource quota
 kubectl describe resourcequota -n paas-ws-{workspace_id}
@@ -428,11 +458,13 @@ kubectl top pods -n paas-ws-{workspace_id}
 ```
 
 **Common Causes**:
+
 - Too many services in one workspace
 - Service requesting more resources than available
 - Default quota too restrictive
 
 **Solution**:
+
 ```bash
 # Increase namespace quota
 kubectl patch resourcequota workspace-quota -n paas-ws-{workspace_id} \
@@ -447,6 +479,7 @@ helm uninstall <old-service> -n paas-ws-{workspace_id}
 **Symptoms**: Pod stuck in "Pending" state, events show "FailedScheduling: persistentvolumeclaim not found"
 
 **Diagnosis**:
+
 ```bash
 # Check PVC status
 kubectl get pvc -n paas-ws-{workspace_id}
@@ -459,11 +492,13 @@ kubectl describe pvc -n paas-ws-{workspace_id}
 ```
 
 **Common Causes**:
+
 - No storage class available
 - Storage provisioner not running
 - Storage quota exceeded
 
 **Solution**:
+
 ```bash
 # Check if storage provisioner is running (K3s local-path)
 kubectl get pods -n kube-system -l app=local-path-provisioner
@@ -531,10 +566,10 @@ helm install <name> <chart> --dry-run --debug -n paas-ws-{workspace_id}
 
 ```bash
 # View real-time logs
-kubectl logs -f -n paas-system -l app=paas-operator
+kubectl logs -f -n paas-system -l app.kubernetes.io/name=paas-operator
 
 # Search for errors
-kubectl logs -n paas-system -l app=paas-operator | grep -i error
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator | grep -i error
 
 # Check API health
 kubectl exec -it <paas-operator-pod> -n paas-system -- \
@@ -552,9 +587,10 @@ kubectl exec -it <paas-operator-pod> -n paas-system -- \
 If you're still experiencing issues after trying these solutions:
 
 1. **Collect diagnostic information**:
+
    ```bash
    # Save all relevant logs
-   kubectl logs -n paas-system -l app=paas-operator > paas-operator.log
+   kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator > paas-operator.log
    kubectl get all -n paas-ws-{workspace_id} -o yaml > workspace-resources.yaml
    helm list -n paas-ws-{workspace_id} > helm-releases.txt
    ```

@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-01-13T17:24:23Z
-version: 1.0
+last_updated: 2026-02-08T01:39:42Z
+version: 1.2
 author: Claude Code PM System
 ---
 
@@ -127,6 +127,52 @@ Hierarchical menu with sequence ordering:
     sequence="10"/>
 ```
 
+## API Endpoint Pattern (RESTful-style JSON-RPC)
+
+API endpoints 採用 collection/detail 分離模式：
+
+```python
+# Collection: /api/{resource}
+@route("/api/workspaces", type="json", auth="user")
+def api_workspace(self, action='list', ...):
+    # action: list, create
+
+# Detail: /api/{resource}/<int:id>
+@route("/api/workspaces/<int:workspace_id>", type="json", auth="user")
+def api_workspace_detail(self, workspace_id, action='get', ...):
+    # action: get, update, delete
+
+# Nested: /api/{resource}/<int:id>/{sub-resource}
+@route("/api/workspaces/<int:workspace_id>/members", type="json", auth="user")
+def api_workspace_members(self, workspace_id, action='list', ...):
+    # action: list, invite
+```
+
+**Key conventions:**
+- Route prefix: `/api/` (no `/woow/`)
+- Operation selector: `action` parameter (not `method`)
+- Resource IDs in URL path, not in request body
+
+## External Service Integration Pattern
+
+PaaS Operator 整合使用獨立的 Python service layer（非 ORM model）：
+
+```python
+# services/paas_operator.py
+class PaasOperatorClient:
+    """HTTP client for PaaS Operator Service."""
+
+    def __init__(self, base_url, api_key):
+        self.base_url = base_url
+        self.api_key = api_key
+
+    def _request(self, method, endpoint, **kwargs):
+        # Make HTTP request to PaaS Operator
+        # Handle errors uniformly
+```
+
+Controller 透過 `ir.config_parameter` 取得設定後建立 client instance。
+
 ## Naming Conventions
 
 | Type | Pattern | Example |
@@ -135,3 +181,8 @@ Hierarchical menu with sequence ordering:
 | XML ID | `module.type_name` | `woow_paas_platform.view_subscription_form` |
 | Menu ID | `menu_*` | `menu_woow_paas_platform_root` |
 | Config param | `module.param_name` | `woow_paas_platform.api_key` |
+| API route | `/api/{resource}` | `/api/workspaces` |
+
+## Update History
+- 2026-02-08: Updated external service pattern from ORM model to standalone service class
+- 2026-02-08: Added RESTful API endpoint pattern and external service integration pattern

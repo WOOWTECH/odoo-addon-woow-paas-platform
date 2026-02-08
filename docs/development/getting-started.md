@@ -208,11 +208,16 @@ woow_paas_platform/
 │   │   ├── test_releases.py
 │   │   └── test_namespaces.py
 │   │
-│   ├── k8s/                     # Kubernetes manifests
-│   │   ├── deployment.yaml
-│   │   ├── service.yaml
-│   │   ├── rbac.yaml
-│   │   └── secret.yaml
+│   ├── helm/                    # Helm chart for K8s deployment
+│   │   ├── Chart.yaml
+│   │   ├── values.yaml
+│   │   └── templates/
+│   │       ├── deployment.yaml
+│   │       ├── service.yaml
+│   │       ├── secret.yaml
+│   │       ├── serviceaccount.yaml
+│   │       ├── clusterrole.yaml
+│   │       └── clusterrolebinding.yaml
 │   │
 │   ├── Dockerfile               # Container image
 │   └── requirements.txt         # Python dependencies

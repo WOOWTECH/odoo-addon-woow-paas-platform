@@ -11,6 +11,7 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 - **Helm Operations**: Install, upgrade, rollback, and uninstall Helm releases
 - **Namespace Management**: Create namespaces with resource quotas
 - **Pod Monitoring**: Real-time pod status and health checks
+- **Cloudflare Integration**: Automatic DNS record and Tunnel route management for public service access
 - **Security**: API key authentication and namespace prefix enforcement
 - **High Performance**: Async-first FastAPI with connection pooling
 - **Production-Ready**: Health checks, structured logging, and error handling
@@ -24,15 +25,15 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 └──────┬───────┘
        │ HTTP + API Key
        ▼
-┌──────────────────────┐
-│  PaaS Operator API   │
-│     (FastAPI)        │
-└──────┬───────────────┘
+┌──────────────────────┐       ┌─────────────────┐
+│  PaaS Operator API   │──────▶│  Cloudflare API │
+│     (FastAPI)        │ HTTPS │  (DNS + Tunnel) │
+└──────┬───────────────┘       └─────────────────┘
        │ subprocess
        ▼
-┌──────────────────────┐      ┌─────────────────┐
-│    Helm CLI          │─────▶│  Kubernetes API │
-└──────────────────────┘      └─────────────────┘
+┌──────────────────────┐       ┌─────────────────┐
+│    Helm CLI          │──────▶│  Kubernetes API │
+└──────────────────────┘       └─────────────────┘
 ```
 
 ## API Endpoints
@@ -54,6 +55,12 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 ### Namespaces
 
 - `POST /api/namespaces` - Create namespace with resource quota
+
+### Routes (Cloudflare Tunnel)
+
+- `GET /api/routes` - List all tunnel routes
+- `POST /api/routes` - Create a tunnel route
+- `DELETE /api/routes/{subdomain}` - Delete a tunnel route
 
 ## Quick Start
 
@@ -220,6 +227,19 @@ Environment variables:
 | `HELM_TIMEOUT` | Helm command timeout (seconds) | 300 |
 | `CORS_ORIGINS` | Comma-separated allowed CORS origins | "" (none) |
 
+### Cloudflare Integration (Optional)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLOUDFLARE_ENABLED` | Enable Cloudflare integration | false |
+| `CLOUDFLARE_API_TOKEN` | API token with Tunnel:Edit and DNS:Edit permissions | "" |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID | "" |
+| `CLOUDFLARE_TUNNEL_ID` | Tunnel ID from Zero Trust dashboard | "" |
+| `CLOUDFLARE_ZONE_ID` | Zone ID for DNS management (optional) | "" |
+| `CLOUDFLARE_DOMAIN` | Base domain (e.g., woowtech.io) | "" |
+
+> **Note**: If `CLOUDFLARE_ZONE_ID` is not set, DNS records must be managed manually. Routes will still be created in the tunnel configuration.
+
 ## Security
 
 ### Namespace Enforcement
@@ -368,6 +388,32 @@ curl -X POST http://paas-operator/api/namespaces \
   }'
 ```
 
+### Create Cloudflare Tunnel Route
+
+```bash
+curl -X POST http://paas-operator/api/routes \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subdomain": "myapp-demo",
+    "service_url": "http://my-nginx.paas-ws-demo.svc.cluster.local:80"
+  }'
+```
+
+### List All Tunnel Routes
+
+```bash
+curl http://paas-operator/api/routes \
+  -H "X-API-Key: your-key"
+```
+
+### Delete a Tunnel Route
+
+```bash
+curl -X DELETE http://paas-operator/api/routes/myapp-demo \
+  -H "X-API-Key: your-key"
+```
+
 ## Monitoring
 
 ### Health Checks
@@ -426,6 +472,24 @@ Common issues:
 - Verify RBAC permissions include the namespace
 - Check ClusterRoleBinding is correctly applied
 
+### Cloudflare Integration Issues
+
+**Route creation fails:**
+- Verify `CLOUDFLARE_API_TOKEN` has correct permissions (Tunnel:Edit, DNS:Edit)
+- Check `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_TUNNEL_ID` are correct
+- Ensure the tunnel is running and connected
+
+**DNS records not created:**
+- Confirm `CLOUDFLARE_ZONE_ID` is set (required for DNS management)
+- Verify the domain matches the zone
+
+**Check Cloudflare status:**
+
+```bash
+# View operator logs for Cloudflare errors
+kubectl logs -n paas-system -l app.kubernetes.io/name=paas-operator | grep -i cloudflare
+```
+
 ## Development
 
 ### Code Structure
@@ -436,9 +500,11 @@ src/
 ├── config.py            # Settings management
 ├── api/
 │   ├── releases.py      # Release endpoints
-│   └── namespaces.py    # Namespace endpoints
+│   ├── namespaces.py    # Namespace endpoints
+│   └── routes.py        # Cloudflare route endpoints
 ├── services/
-│   └── helm.py          # Helm/kubectl wrappers
+│   ├── helm.py          # Helm/kubectl wrappers
+│   └── cloudflare.py    # Cloudflare Tunnel API client
 └── models/
     └── schemas.py       # Pydantic models
 ```

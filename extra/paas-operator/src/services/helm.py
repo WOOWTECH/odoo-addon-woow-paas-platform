@@ -18,6 +18,14 @@ from src.models.schemas import (
 logger = logging.getLogger(__name__)
 
 
+def validate_namespace(namespace: str) -> None:
+    """Validate that namespace starts with allowed prefix."""
+    if not namespace.startswith(settings.namespace_prefix):
+        raise ValueError(
+            f"Namespace must start with '{settings.namespace_prefix}'"
+        )
+
+
 class HelmException(Exception):
     """Exception raised when Helm command fails."""
 
@@ -99,20 +107,6 @@ class HelmService:
                 stderr="",
             )
 
-    def _validate_namespace(self, namespace: str):
-        """Validate that namespace starts with allowed prefix.
-
-        Args:
-            namespace: Namespace name
-
-        Raises:
-            ValueError: If namespace doesn't match pattern
-        """
-        if not namespace.startswith(settings.namespace_prefix):
-            raise ValueError(
-                f"Namespace must start with '{settings.namespace_prefix}'"
-            )
-
     def install(
         self,
         namespace: str,
@@ -139,7 +133,7 @@ class HelmService:
             ValueError: If namespace is invalid
             HelmException: If installation fails
         """
-        self._validate_namespace(namespace)
+        validate_namespace(namespace)
 
         args = [
             "install",
@@ -186,7 +180,7 @@ class HelmService:
         Returns:
             Release information
         """
-        self._validate_namespace(namespace)
+        validate_namespace(namespace)
 
         # Use 'helm list --filter' which provides all needed info in one call
         args = [
@@ -238,7 +232,7 @@ class HelmService:
         Raises:
             ValueError: If chart is not provided (Helm doesn't store original chart URL)
         """
-        self._validate_namespace(namespace)
+        validate_namespace(namespace)
 
         # Chart is required for upgrade - Helm doesn't store the original chart URL
         if not chart:
@@ -294,7 +288,7 @@ class HelmService:
         Returns:
             Uninstall result message
         """
-        self._validate_namespace(namespace)
+        validate_namespace(namespace)
 
         args = [
             "uninstall",
@@ -320,7 +314,7 @@ class HelmService:
         Returns:
             Rollback result message
         """
-        self._validate_namespace(namespace)
+        validate_namespace(namespace)
 
         args = [
             "rollback",
@@ -345,7 +339,7 @@ class HelmService:
         Returns:
             List of revisions
         """
-        self._validate_namespace(namespace)
+        validate_namespace(namespace)
 
         args = [
             "history",
@@ -494,6 +488,8 @@ class KubernetesService:
         Returns:
             List of pod information
         """
+        validate_namespace(namespace)
+
         args = [
             "get",
             "pods",
@@ -557,11 +553,7 @@ class KubernetesService:
         Returns:
             Creation result
         """
-        # Validate namespace prefix
-        if not name.startswith(settings.namespace_prefix):
-            raise ValueError(
-                f"Namespace must start with '{settings.namespace_prefix}'"
-            )
+        validate_namespace(name)
 
         import yaml
 
@@ -631,6 +623,8 @@ class KubernetesService:
         Returns:
             List of service information dicts with name, ports, type
         """
+        validate_namespace(namespace)
+
         args = [
             "get",
             "services",
