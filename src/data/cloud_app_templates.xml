@@ -90,5 +90,35 @@
 
             <field name="is_active" eval="True"/>
         </record>
+
+        <!-- Odoo ERP -->
+        <record id="cloud_app_odoo" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Odoo</field>
+            <field name="slug">odoo</field>
+            <field name="description">Open-source business apps suite</field>
+            <field name="full_description">Odoo is a comprehensive suite of open-source business applications including CRM, eCommerce, accounting, inventory, project management, and more. It provides an all-in-one management software that is fully integrated and customizable.</field>
+            <field name="category">web</field>
+            <field name="tags">["odoo", "erp", "crm", "web", "business"]</field>
+            <field name="monthly_price">0</field>
+            <field name="documentation_url">https://www.odoo.com/documentation/</field>
+
+            <!-- Helm Configuration (OCI registry format) -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/odoo</field>
+            <field name="helm_chart_version"></field>
+            <field name="helm_default_values">{"odooEmail": "user@example.com", "odooSkipInstall": false, "loadDemoData": false, "service": {"type": "ClusterIP"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "postgresql": {"enabled": true, "architecture": "standalone", "auth": {"username": "bn_odoo", "database": "bitnami_odoo"}}, "persistence": {"enabled": true, "size": "10Gi"}}</field>
+            <field name="helm_value_specs">{"properties": {"odooEmail": {"type": "string", "description": "Administrator email"}, "odooPassword": {"type": "string", "description": "Administrator password"}, "loadDemoData": {"type": "boolean", "description": "Load demo data during initialization"}}}</field>
+
+            <!-- Service Configuration -->
+            <field name="default_port">8069</field>
+            <field name="ingress_enabled" eval="True"/>
+
+            <!-- Resource Requirements -->
+            <field name="min_vcpu">2</field>
+            <field name="min_ram_gb">2.0</field>
+            <field name="min_storage_gb">10</field>
+
+            <field name="is_active" eval="True"/>
+        </record>
     </data>
 </odoo>
