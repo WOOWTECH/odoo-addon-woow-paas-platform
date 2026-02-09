@@ -23,3 +23,11 @@ class ResConfigSettings(models.TransientModel):
         default='woowtech.io',
         help='Base domain for deployed services (e.g., woowtech.io)',
     )
+
+    # AI Provider Configuration
+    woow_ai_provider_id = fields.Many2one(
+        'woow_paas_platform.ai_provider',
+        string='Default AI Provider',
+        config_parameter='woow_paas_platform.default_ai_provider_id',
+        help='Default AI provider used for AI assistant features',
+    )
