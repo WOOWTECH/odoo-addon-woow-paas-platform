@@ -17,6 +17,7 @@
         'data/ai_agents.xml',
         'views/ai_provider_views.xml',
         'views/ai_agent_views.xml',
+        'views/project_task_views.xml',
         'views/res_config_settings_views.xml',
         'views/menu.xml',
         'views/paas_app.xml',

@@ -5,3 +5,5 @@ from . import cloud_app_template
 from . import cloud_service
 from . import ai_provider
 from . import ai_agent
+from . import project_project
+from . import project_task
