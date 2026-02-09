@@ -23,6 +23,27 @@
             <t t-elif="router.current === 'service-detail'">
                 <ServiceDetailPage workspaceId="workspaceId" serviceId="serviceId" initialTab="serviceTab"/>
             </t>
+            <t t-elif="router.current === 'ai-assistant' or router.current === 'ai-projects' or router.current === 'ai-tasks' or router.current === 'ai-task-detail' or router.current === 'ai-chat'">
+                <t t-if="router.current === 'ai-assistant'">
+                    <AiAssistantPage/>
+                </t>
+                <t t-elif="router.current === 'ai-projects'">
+                    <!-- SupportProjectsPage placeholder (future Task #23) -->
+                    <EmptyState/>
+                </t>
+                <t t-elif="router.current === 'ai-tasks'">
+                    <!-- SupportTasksPage placeholder (future Task #26) -->
+                    <EmptyState/>
+                </t>
+                <t t-elif="router.current === 'ai-task-detail'">
+                    <!-- TaskDetailPage placeholder (future Task #27) -->
+                    <EmptyState/>
+                </t>
+                <t t-elif="router.current === 'ai-chat'">
+                    <!-- AiChat full page placeholder (future Task #29) -->
+                    <EmptyState/>
+                </t>
+            </t>
             <t t-else="">
                 <EmptyState/>
             </t>
