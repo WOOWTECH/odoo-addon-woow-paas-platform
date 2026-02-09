@@ -106,7 +106,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/odoo</field>
             <field name="helm_chart_version"></field>
-            <field name="helm_default_values">{"odooEmail": "user@example.com", "odooSkipInstall": false, "loadDemoData": false, "service": {"type": "ClusterIP"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "postgresql": {"enabled": true, "architecture": "standalone", "auth": {"username": "bn_odoo", "database": "bitnami_odoo"}}, "persistence": {"enabled": true, "size": "10Gi"}}</field>
+            <field name="helm_default_values">{"global": {"security": {"allowInsecureImages": true}}, "image": {"registry": "docker.io", "repository": "bitnami/odoo", "tag": "18.0.20260205"}, "odooEmail": "user@example.com", "odooSkipInstall": false, "loadDemoData": false, "service": {"type": "ClusterIP"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "postgresql": {"enabled": true, "architecture": "standalone", "auth": {"username": "bn_odoo", "database": "bitnami_odoo"}, "image": {"registry": "registry-1.docker.io", "repository": "bitnami/postgresql", "tag": "17.7.0"}}, "persistence": {"enabled": true, "size": "10Gi"}}</field>
             <field name="helm_value_specs">{"properties": {"odooEmail": {"type": "string", "description": "Administrator email"}, "odooPassword": {"type": "string", "description": "Administrator password"}, "loadDemoData": {"type": "boolean", "description": "Load demo data during initialization"}}}</field>
 
             <!-- Service Configuration -->
