@@ -1,6 +1,7 @@
 import logging
 
 from odoo import api, models
+from odoo.tools import html2plaintext
 
 _logger = logging.getLogger(__name__)
 
@@ -24,6 +25,10 @@ class DiscussChannel(models.Model):
 
         # Only process regular user messages (not system / notification)
         if kwargs.get('message_type', 'comment') != 'comment':
+            return message
+
+        # Skip when called from SSE handler to prevent duplicate AI replies
+        if self.env.context.get('skip_ai_reply'):
             return message
 
         # Skip AI-authored messages to prevent infinite recursion
@@ -199,7 +204,7 @@ class DiscussChannel(models.Model):
         history = []
         for msg in reversed(messages):
             role = 'assistant' if msg.author_id.id == root_partner_id else 'user'
-            body = msg.body or ''
-            if body:
-                history.append({'role': role, 'content': body})
+            body_text = html2plaintext(msg.body or '').strip()
+            if body_text:
+                history.append({'role': role, 'content': body_text})
         return history

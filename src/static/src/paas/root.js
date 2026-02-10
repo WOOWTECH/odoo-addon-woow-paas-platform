@@ -64,6 +64,10 @@ export class Root extends Component {
         return this.router.params.tab || 'overview';
     }
 
+    get projectId() {
+        return this.router.params.id ? parseInt(this.router.params.id, 10) : null;
+    }
+
     get taskId() {
         return this.router.params.taskId ? parseInt(this.router.params.taskId, 10) : null;
     }

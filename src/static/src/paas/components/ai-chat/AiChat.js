@@ -54,6 +54,7 @@ export class AiChat extends Component {
         this._reconnectTimer = null;
         this._maxReconnectAttempts = 3;
         this._connectedTimer = null;
+        this._consecutiveParseErrors = 0;
 
         onMounted(async () => {
             await this.loadAgents();
@@ -76,8 +77,12 @@ export class AiChat extends Component {
      * Load available AI agents from the service.
      */
     async loadAgents() {
-        await aiService.fetchAgents();
-        this.state.agents = [...aiService.agents];
+        try {
+            await aiService.fetchAgents();
+            this.state.agents = [...aiService.agents];
+        } catch (err) {
+            console.error("Failed to load AI agents:", err);
+        }
     }
 
     /**
@@ -186,6 +191,7 @@ export class AiChat extends Component {
 
                 if (data.chunk) {
                     this._reconnectAttempts = 0;
+                    this._consecutiveParseErrors = 0;
                     if (this.state.connectionState !== "streaming") {
                         this.state.connectionState = "streaming";
                     }
@@ -222,7 +228,13 @@ export class AiChat extends Component {
                     this.scrollToBottom();
                 }
             } catch (parseErr) {
-                console.warn("Failed to parse SSE chunk:", event.data, parseErr);
+                console.error("Failed to parse SSE data:", event.data, parseErr);
+                this._consecutiveParseErrors++;
+                if (this._consecutiveParseErrors >= 3) {
+                    this.state.error = "接收 AI 回覆時發生資料錯誤，請重新整理頁面。";
+                    this.state.connectionState = "error";
+                    this.closeStream();
+                }
             }
         };
 
@@ -233,7 +245,7 @@ export class AiChat extends Component {
             if (hadContent) {
                 this.state.messages.push({
                     id: Date.now(),
-                    body: partialText,
+                    body: partialText + "\n\n⚠️ (回覆因連線中斷而不完整)",
                     author_name: "AI Assistant",
                     author_id: null,
                     date: new Date().toISOString(),
@@ -241,8 +253,8 @@ export class AiChat extends Component {
                     message_type: "comment",
                     attachments: [],
                 });
-                this._reconnectAttempts = 0;
-                this.state.connectionState = "idle";
+                this.state.error = "AI 回覆因連線中斷而不完整，您可以重新傳送訊息以取得完整回覆。";
+                this.state.connectionState = "error";
             } else {
                 this.state.connectionState = "reconnecting";
                 this._scheduleReconnect();
@@ -539,12 +551,11 @@ export class AiChat extends Component {
         if (!dateStr) {
             return "";
         }
-        try {
-            const date = new Date(dateStr);
-            return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        } catch {
+        const date = new Date(dateStr);
+        if (isNaN(date.getTime())) {
             return "";
         }
+        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
     /**

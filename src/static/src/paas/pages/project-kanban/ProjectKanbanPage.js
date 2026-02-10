@@ -66,10 +66,8 @@ export class ProjectKanbanPage extends Component {
             }
         }
 
-        return stages
-            .slice()
-            .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
-            .map((stage) => ({
+        // Stages are already sorted by sequence from the backend
+        return stages.map((stage) => ({
                 stage,
                 tasks: tasksByStage[stage.id] || [],
             }));
@@ -86,7 +84,7 @@ export class ProjectKanbanPage extends Component {
     }
 
     formatDeadline(dateStr) {
-        return formatDate(dateStr) || "";
+        return formatDate(dateStr);
     }
 
     getDeadlineClass(dateStr) {
@@ -157,7 +155,9 @@ export class ProjectKanbanPage extends Component {
         let data;
         try {
             data = JSON.parse(ev.dataTransfer.getData("text/plain"));
-        } catch {
+        } catch (parseErr) {
+            console.error("Failed to parse drag data:", parseErr);
+            this.supportService.error = "拖曳操作失敗，請重新整理頁面後再試。";
             return;
         }
 
@@ -168,12 +168,15 @@ export class ProjectKanbanPage extends Component {
         // Optimistic UI update
         this._moveTaskLocally(data.taskId, targetStageId);
 
-        // Call API
-        const result = await supportService.updateTask(data.taskId, { stage_id: targetStageId });
-        if (!result.success) {
-            // Rollback on failure
+        try {
+            const result = await supportService.updateTask(data.taskId, { stage_id: targetStageId });
+            if (!result.success) {
+                this._moveTaskLocally(data.taskId, data.fromStageId);
+                this.supportService.error = result.error || "更新任務階段失敗，請重試。";
+            }
+        } catch (err) {
             this._moveTaskLocally(data.taskId, data.fromStageId);
-            this.supportService.error = result.error || "Failed to update task stage";
+            this.supportService.error = "更新任務階段時發生錯誤，請重試。";
         }
     }
 

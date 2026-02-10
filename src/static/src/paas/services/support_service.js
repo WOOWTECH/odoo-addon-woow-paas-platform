@@ -53,6 +53,8 @@ export const supportService = reactive({
     tasks: [],
     /** @type {boolean} */
     loading: false,
+    /** @type {number} */
+    _loadingCount: 0,
     /** @type {Object.<string, boolean>} */
     operationLoading: {},
     /** @type {string|null} */
@@ -68,6 +70,7 @@ export const supportService = reactive({
      * @returns {Promise<void>}
      */
     async fetchProjectStages(projectId) {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -80,7 +83,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 
@@ -89,6 +93,7 @@ export const supportService = reactive({
      * @returns {Promise<void>}
      */
     async fetchAllProjects() {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -103,7 +108,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 
@@ -113,6 +119,7 @@ export const supportService = reactive({
      * @returns {Promise<void>}
      */
     async fetchProjects(workspaceId) {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -127,7 +134,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 
@@ -140,6 +148,7 @@ export const supportService = reactive({
      * @returns {Promise<void>}
      */
     async fetchAllTasks(filters = {}) {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -161,7 +170,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 
@@ -175,6 +185,7 @@ export const supportService = reactive({
      * @returns {Promise<void>}
      */
     async fetchTasks(workspaceId, filters = {}) {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -197,7 +208,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 
