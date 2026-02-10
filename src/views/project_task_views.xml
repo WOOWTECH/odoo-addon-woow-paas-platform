@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Extend project.task form view: add AI Chat tab -->
+    <record id="view_task_form_inherit_chat" model="ir.ui.view">
+        <field name="name">project.task.form.inherit.woow.chat</field>
+        <field name="model">project.task</field>
+        <field name="inherit_id" ref="project.view_task_form2"/>
+        <field name="arch" type="xml">
+            <!-- Add Chat fields inside a new notebook page -->
+            <xpath expr="//notebook" position="inside">
+                <page string="AI Chat" name="ai_chat">
+                    <group>
+                        <group string="Chat Settings">
+                            <field name="chat_enabled"/>
+                            <field name="ai_auto_reply"
+                                   invisible="not chat_enabled"/>
+                        </group>
+                        <group string="Channel"
+                               invisible="not chat_enabled">
+                            <field name="channel_id" readonly="1"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Extend project.project form view: add workspace_id -->
+    <record id="view_project_form_inherit_workspace" model="ir.ui.view">
+        <field name="name">project.project.form.inherit.woow.workspace</field>
+        <field name="model">project.project</field>
+        <field name="inherit_id" ref="project.edit_project"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet//group" position="inside">
+                <field name="workspace_id"/>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

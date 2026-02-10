@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AiChat">
+        <div class="o_woow_ai_chat">
+            <!-- Error banner -->
+            <div t-if="state.error" class="o_woow_ai_chat__error">
+                <span class="material-symbols-outlined">error</span>
+                <span t-esc="state.error"/>
+                <button class="o_woow_ai_chat__error_close"
+                        t-on-click="() => this.state.error = null">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+
+            <!-- Message list -->
+            <div class="o_woow_ai_chat__messages" t-ref="messageList">
+                <!-- Loading state -->
+                <div t-if="state.loading" class="o_woow_ai_chat__loading">
+                    <div class="o_woow_ai_chat__typing">
+                        <span class="o_woow_ai_chat__dot"/>
+                        <span class="o_woow_ai_chat__dot"/>
+                        <span class="o_woow_ai_chat__dot"/>
+                    </div>
+                    <span>Loading messages...</span>
+                </div>
+
+                <!-- Empty state -->
+                <div t-elif="!hasMessages" class="o_woow_ai_chat__empty">
+                    <span class="material-symbols-outlined o_woow_ai_chat__empty_icon">chat</span>
+                    <p>No messages yet. Start the conversation!</p>
+                </div>
+
+                <!-- Messages -->
+                <t t-else="">
+                    <t t-foreach="state.messages" t-as="msg" t-key="msg.id">
+                        <!-- System / notification messages -->
+                        <div t-if="msg.message_type === 'notification'"
+                             class="o_woow_ai_chat__message o_woow_ai_chat__message--system">
+                            <div class="o_woow_ai_chat__system_text" t-out="msg.body"/>
+                        </div>
+
+                        <!-- User messages -->
+                        <div t-elif="!msg.is_ai"
+                             class="o_woow_ai_chat__message o_woow_ai_chat__message--user">
+                            <div class="o_woow_ai_chat__bubble">
+                                <div class="o_woow_ai_chat__meta">
+                                    <span class="o_woow_ai_chat__author" t-esc="msg.author_name"/>
+                                    <span class="o_woow_ai_chat__time" t-esc="formatTime(msg.date)"/>
+                                </div>
+                                <div class="o_woow_ai_chat__body" t-out="msg.body"/>
+                                <!-- Attachments -->
+                                <div t-if="msg.attachments and msg.attachments.length"
+                                     class="o_woow_ai_chat__attachments">
+                                    <t t-foreach="msg.attachments" t-as="att" t-key="att.id">
+                                        <a class="o_woow_ai_chat__attachment"
+                                           t-att-href="att.url" target="_blank">
+                                            <span class="material-symbols-outlined">attach_file</span>
+                                            <span t-esc="att.name"/>
+                                        </a>
+                                    </t>
+                                </div>
+                            </div>
+                            <div class="o_woow_ai_chat__avatar o_woow_ai_chat__avatar--user">
+                                <t t-esc="getAuthorInitial(msg)"/>
+                            </div>
+                        </div>
+
+                        <!-- AI messages -->
+                        <div t-else=""
+                             class="o_woow_ai_chat__message o_woow_ai_chat__message--assistant">
+                            <div class="o_woow_ai_chat__avatar o_woow_ai_chat__avatar--ai">
+                                <span class="material-symbols-outlined">smart_toy</span>
+                            </div>
+                            <div class="o_woow_ai_chat__bubble">
+                                <div class="o_woow_ai_chat__meta">
+                                    <span class="o_woow_ai_chat__author" t-esc="msg.author_name"/>
+                                    <span class="o_woow_ai_chat__time" t-esc="formatTime(msg.date)"/>
+                                </div>
+                                <div class="o_woow_ai_chat__body" t-out="msg.body"/>
+                                <!-- Attachments -->
+                                <div t-if="msg.attachments and msg.attachments.length"
+                                     class="o_woow_ai_chat__attachments">
+                                    <t t-foreach="msg.attachments" t-as="att" t-key="att.id">
+                                        <a class="o_woow_ai_chat__attachment"
+                                           t-att-href="att.url" target="_blank">
+                                            <span class="material-symbols-outlined">attach_file</span>
+                                            <span t-esc="att.name"/>
+                                        </a>
+                                    </t>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+
+                    <!-- Streaming indicator -->
+                    <div t-if="state.streaming"
+                         class="o_woow_ai_chat__message o_woow_ai_chat__message--assistant">
+                        <div class="o_woow_ai_chat__avatar o_woow_ai_chat__avatar--ai">
+                            <span class="material-symbols-outlined">smart_toy</span>
+                        </div>
+                        <div class="o_woow_ai_chat__bubble o_woow_ai_chat__bubble--streaming">
+                            <div t-if="state.streamingText"
+                                 class="o_woow_ai_chat__body" t-out="state.streamingText"/>
+                            <div class="o_woow_ai_chat__typing">
+                                <span class="o_woow_ai_chat__dot"/>
+                                <span class="o_woow_ai_chat__dot"/>
+                                <span class="o_woow_ai_chat__dot"/>
+                            </div>
+                        </div>
+                    </div>
+                </t>
+            </div>
+
+            <!-- Input area -->
+            <div class="o_woow_ai_chat__input">
+                <!-- Mention dropdown (positioned above input) -->
+                <AiMentionDropdown
+                    agents="state.agents"
+                    visible="state.mentionVisible"
+                    query="state.mentionQuery"
+                    onSelect.bind="onAgentSelect"
+                    onClose.bind="closeMention"/>
+
+                <div class="o_woow_ai_chat__input_row">
+                    <!-- File upload button -->
+                    <button class="o_woow_ai_chat__btn o_woow_ai_chat__btn--attach"
+                            t-on-click="triggerFileUpload"
+                            t-att-disabled="state.uploadingFile"
+                            title="Upload file">
+                        <span class="material-symbols-outlined">
+                            <t t-if="state.uploadingFile">hourglass_empty</t>
+                            <t t-else="">attach_file</t>
+                        </span>
+                    </button>
+
+                    <!-- Hidden file input -->
+                    <input type="file" t-ref="fileInput"
+                           class="o_woow_ai_chat__file_input"
+                           t-on-change="handleFileUpload"/>
+
+                    <!-- Textarea -->
+                    <textarea t-ref="textarea"
+                              class="o_woow_ai_chat__textarea"
+                              t-att-value="state.inputText"
+                              t-on-keydown="handleKeydown"
+                              t-on-input="handleInput"
+                              placeholder="Type a message... Use @ to mention an AI agent"
+                              rows="1"
+                              t-att-disabled="state.streaming"/>
+
+                    <!-- Send button -->
+                    <button class="o_woow_ai_chat__btn o_woow_ai_chat__btn--send"
+                            t-on-click="sendMessage"
+                            t-att-disabled="sendDisabled"
+                            title="Send message">
+                        <span class="material-symbols-outlined">
+                            <t t-if="state.sending">hourglass_empty</t>
+                            <t t-else="">send</t>
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

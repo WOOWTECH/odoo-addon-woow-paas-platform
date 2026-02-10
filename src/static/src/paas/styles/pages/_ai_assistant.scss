@@ -1,0 +1,251 @@
+// =============================================================================
+// AI Assistant Hub Page
+// =============================================================================
+// variables loaded via manifest
+
+.o_woow_ai_assistant {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+// -----------------------------------------------------------------------------
+// Page Header
+// -----------------------------------------------------------------------------
+
+.o_woow_ai_header {
+    margin-bottom: 2rem;
+
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+        margin: 0;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Stats Overview Grid
+// -----------------------------------------------------------------------------
+
+.o_woow_ai_stats_grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+
+    @media (max-width: 768px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_ai_stat_card {
+    padding: 1.25rem;
+}
+
+.o_woow_ai_stat_content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.o_woow_ai_stat_icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    &.o_woow_ai_stat_icon_blue {
+        background: rgba($woow-primary, 0.1);
+        color: $woow-primary;
+    }
+
+    &.o_woow_ai_stat_icon_green {
+        background: rgba(34, 197, 94, 0.1);
+        color: #22c55e;
+    }
+
+    &.o_woow_ai_stat_icon_purple {
+        background: rgba(147, 51, 234, 0.1);
+        color: #9333ea;
+    }
+}
+
+.o_woow_ai_stat_info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.o_woow_ai_stat_label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: $woow-text-secondary;
+}
+
+.o_woow_ai_stat_value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    line-height: 1;
+}
+
+.o_woow_ai_stat_loading {
+    opacity: 0.4;
+    animation: woow-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes woow-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.7; }
+}
+
+// -----------------------------------------------------------------------------
+// Navigation Cards Grid
+// -----------------------------------------------------------------------------
+
+.o_woow_ai_nav_grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+
+    @media (max-width: 1024px) {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    @media (max-width: 640px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_ai_nav_card {
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.2s;
+
+    &:hover {
+        border-color: rgba($woow-primary, 0.3);
+    }
+}
+
+.o_woow_ai_nav_card_header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+
+    h3 {
+        font-size: 1rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 0;
+    }
+}
+
+.o_woow_ai_nav_icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    &.o_woow_ai_nav_icon_blue {
+        background: rgba($woow-primary, 0.1);
+        color: $woow-primary;
+    }
+
+    &.o_woow_ai_nav_icon_green {
+        background: rgba(34, 197, 94, 0.1);
+        color: #22c55e;
+    }
+
+    &.o_woow_ai_nav_icon_gray {
+        background: rgba(100, 116, 139, 0.1);
+        color: #64748b;
+    }
+}
+
+.o_woow_ai_nav_desc {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+    line-height: 1.5;
+    flex: 1;
+    margin-bottom: 1rem;
+}
+
+.o_woow_ai_nav_footer {
+    margin-top: auto;
+}
+
+// -----------------------------------------------------------------------------
+// AI Connection Status
+// -----------------------------------------------------------------------------
+
+.o_woow_ai_connection_status {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    flex: 1;
+}
+
+.o_woow_ai_status_row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.o_woow_ai_status_label {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+}
+
+.o_woow_ai_status_value {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: $woow-text-primary;
+}
+
+.o_woow_ai_status_badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.625rem;
+    border-radius: $woow-radius-full;
+
+    &::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+    }
+
+    &.o_woow_ai_status_connected {
+        background: rgba(34, 197, 94, 0.1);
+        color: #16a34a;
+
+        &::before {
+            background: #22c55e;
+        }
+    }
+
+    &.o_woow_ai_status_disconnected {
+        background: rgba(100, 116, 139, 0.1);
+        color: #64748b;
+
+        &::before {
+            background: #94a3b8;
+        }
+    }
+}

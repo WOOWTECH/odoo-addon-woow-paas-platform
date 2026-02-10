@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AiChatPage">
+        <div class="o_woow_chat_page">
+            <!-- Header bar -->
+            <div class="o_woow_chat_page__header">
+                <button class="o_woow_back_btn" t-on-click="goBack">
+                    <WoowIcon name="'arrow_back'" size="20"/>
+                </button>
+                <div class="o_woow_chat_page__title">
+                    <WoowIcon name="'smart_toy'" size="24"/>
+                    <h2 t-esc="state.channelName"/>
+                </div>
+            </div>
+
+            <!-- Chat area (full height) -->
+            <div class="o_woow_chat_page__body">
+                <t t-if="state.loading">
+                    <div class="o_woow_loading">
+                        <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                        <p>Loading chat...</p>
+                    </div>
+                </t>
+                <t t-elif="state.error">
+                    <div class="o_woow_error_state">
+                        <WoowIcon name="'error'" size="48"/>
+                        <h3>Failed to load chat</h3>
+                        <p t-esc="state.error"/>
+                    </div>
+                </t>
+                <t t-else="">
+                    <AiChat channelId="props.conversationId" autoReply="true"/>
+                </t>
+            </div>
+        </div>
+    </t>
+</templates>
