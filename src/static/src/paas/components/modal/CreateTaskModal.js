@@ -14,7 +14,7 @@ export class CreateTaskModal extends Component {
     };
 
     setup() {
-        this.supportService = supportService;
+        this.supportService = useState(supportService);
         this.state = useState({
             name: "",
             description: "",

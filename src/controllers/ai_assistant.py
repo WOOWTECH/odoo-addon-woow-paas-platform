@@ -580,6 +580,8 @@ class AiAssistantController(Controller):
             'id': proj.id,
             'name': proj.name,
             'description': proj.description or '',
+            'workspace_id': proj.workspace_id.id if proj.workspace_id else None,
+            'workspace_name': proj.workspace_id.name if proj.workspace_id else '',
             'task_count': proj.task_count,
             'created_date': proj.create_date.isoformat() if proj.create_date else None,
         } for proj in projects]
