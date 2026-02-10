@@ -31,3 +31,54 @@ class ResConfigSettings(models.TransientModel):
         config_parameter='woow_paas_platform.default_ai_provider_id',
         help='Default AI provider used for AI assistant features',
     )
+
+    def action_test_ai_connection(self):
+        """Test connection to the configured AI provider."""
+        self.ensure_one()
+        provider = self.woow_ai_provider_id
+        if not provider:
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'AI Connection Test',
+                    'message': 'No AI provider configured. Please select a provider first.',
+                    'type': 'warning',
+                    'sticky': False,
+                },
+            }
+
+        from .ai_client import AIClient, AIClientError
+
+        try:
+            client = AIClient(
+                api_base_url=provider.api_base_url,
+                api_key=provider.api_key,
+                model_name=provider.model_name,
+                max_tokens=50,
+                temperature=0.1,
+            )
+            response = client.chat_completion([
+                {"role": "user", "content": "Say 'Connection successful' in exactly two words."},
+            ])
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'AI Connection Test',
+                    'message': f'Connection successful! Response: {response[:100]}',
+                    'type': 'success',
+                    'sticky': False,
+                },
+            }
+        except AIClientError as e:
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'AI Connection Test Failed',
+                    'message': f'Connection failed: {e.message}',
+                    'type': 'danger',
+                    'sticky': True,
+                },
+            }

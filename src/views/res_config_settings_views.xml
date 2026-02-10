@@ -54,6 +54,13 @@
                                             class="btn-link"
                                             icon="fa-external-link"/>
                                 </div>
+                                <div class="mt8">
+                                    <button name="action_test_ai_connection"
+                                            type="object"
+                                            string="Test Connection"
+                                            class="btn-secondary"
+                                            icon="fa-plug"/>
+                                </div>
                             </div>
                         </setting>
                     </block>
