@@ -28,7 +28,7 @@
                     <AiAssistantPage/>
                 </t>
                 <t t-elif="router.current === 'ai-project-kanban'">
-                    <ProjectKanbanPage projectId="workspaceId"/>
+                    <ProjectKanbanPage projectId="projectId"/>
                 </t>
                 <t t-elif="router.current === 'ai-projects'">
                     <SupportProjectsPage/>

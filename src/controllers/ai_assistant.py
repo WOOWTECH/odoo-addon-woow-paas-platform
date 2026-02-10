@@ -8,12 +8,41 @@ from typing import Any
 from werkzeug.wrappers import Response
 
 from odoo.http import request, route, Controller
+from odoo.tools import html_sanitize
 
 _logger = logging.getLogger(__name__)
 
 
 class AiAssistantController(Controller):
     """Controller for AI assistant and support API endpoints."""
+
+    # ==================== Helpers ====================
+
+    def _check_channel_access(self, channel):
+        """Verify the current user has access to the channel.
+
+        Returns True if the user's partner is a member of the channel.
+        """
+        user_partner = request.env.user.partner_id
+        return user_partner in channel.channel_partner_ids
+
+    def _sse_error_response(self, error: str, error_code: str) -> Response:
+        """Build a structured SSE error response (HTTP 200)."""
+        _logger.warning('SSE error [%s]: %s (user=%s)', error_code, error, request.env.user.login)
+        return Response(
+            'data: ' + json.dumps({
+                'error': error,
+                'error_code': error_code,
+                'done': True,
+            }) + '\n\n',
+            content_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            },
+            status=200,
+        )
 
     # ==================== AI Provider / Agent API ====================
 
@@ -95,6 +124,8 @@ class AiAssistantController(Controller):
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
             return {'success': False, 'error': 'Channel not found'}
+        if not self._check_channel_access(channel):
+            return {'success': False, 'error': 'Access denied'}
 
         domain = [
             ('res_id', '=', channel_id),
@@ -169,6 +200,8 @@ class AiAssistantController(Controller):
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
             return {'success': False, 'error': 'Channel not found'}
+        if not self._check_channel_access(channel):
+            return {'success': False, 'error': 'Access denied'}
 
         message = channel.message_post(
             body=body.strip(),
@@ -221,6 +254,12 @@ class AiAssistantController(Controller):
                 json.dumps({'success': False, 'error': 'Channel not found'}),
                 content_type='application/json',
                 status=404,
+            )
+        if not self._check_channel_access(channel):
+            return Response(
+                json.dumps({'success': False, 'error': 'Access denied'}),
+                content_type='application/json',
+                status=403,
             )
 
         uploaded_file = kwargs.get('file')
@@ -285,51 +324,21 @@ class AiAssistantController(Controller):
         Returns:
             werkzeug.Response: SSE stream with text/event-stream content type.
         """
-        sse_error_headers = {
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'X-Accel-Buffering': 'no',
-        }
-
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
-            return Response(
-                'data: ' + json.dumps({
-                    'error': 'Channel not found',
-                    'error_code': 'channel_not_found',
-                    'done': True,
-                }) + '\n\n',
-                content_type='text/event-stream',
-                headers=sse_error_headers,
-                status=200,
-            )
+            return self._sse_error_response('Channel not found', 'channel_not_found')
+        if not self._check_channel_access(channel):
+            return self._sse_error_response('Access denied', 'access_denied')
 
         # Find the agent for this channel
         agent = self._get_channel_agent(channel)
         if not agent:
-            return Response(
-                'data: ' + json.dumps({
-                    'error': 'No AI agent available',
-                    'error_code': 'no_agent',
-                    'done': True,
-                }) + '\n\n',
-                content_type='text/event-stream',
-                headers=sse_error_headers,
-                status=200,
-            )
+            return self._sse_error_response('No AI agent available', 'no_agent')
 
         provider = agent.provider_id
         if not provider or not provider.is_active:
-            return Response(
-                'data: ' + json.dumps({
-                    'error': 'AI provider not configured',
-                    'error_code': 'provider_not_configured',
-                    'done': True,
-                }) + '\n\n',
-                content_type='text/event-stream',
-                headers=sse_error_headers,
-                status=200,
-            )
+            _logger.error('AI provider not configured for agent %s in channel %s', agent.name, channel_id)
+            return self._sse_error_response('AI provider not configured', 'provider_not_configured')
 
         # Get the latest user message
         last_message = request.env['mail.message'].sudo().search([
@@ -340,16 +349,7 @@ class AiAssistantController(Controller):
         ], order='id desc', limit=1)
 
         if not last_message:
-            return Response(
-                'data: ' + json.dumps({
-                    'error': 'No user message found',
-                    'error_code': 'no_message',
-                    'done': True,
-                }) + '\n\n',
-                content_type='text/event-stream',
-                headers=sse_error_headers,
-                status=200,
-            )
+            return self._sse_error_response('No user message found', 'no_message')
 
         user_message = last_message.body or ''
 
@@ -391,8 +391,11 @@ class AiAssistantController(Controller):
             # Post the full AI response to the channel
             if full_response:
                 try:
-                    channel.with_context(mail_create_nosubscribe=True).message_post(
-                        body=full_response,
+                    channel.with_context(
+                        mail_create_nosubscribe=True,
+                        skip_ai_reply=True,
+                    ).message_post(
+                        body=html_sanitize(full_response),
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment',
                         author_id=root_partner_id,
@@ -400,7 +403,7 @@ class AiAssistantController(Controller):
                 except Exception:
                     _logger.exception('Failed to post AI response to channel %s', channel_id)
                     warn_data = json.dumps({
-                        'warning': 'AI response was generated but could not be saved. Please refresh to check.',
+                        'warning': 'AI 回覆已生成但無法儲存，請重新整理頁面確認。',
                     })
                     yield f'data: {warn_data}\n\n'
 
@@ -475,11 +478,9 @@ class AiAssistantController(Controller):
         Returns:
             dict: Task stats (total, active, completion percentage).
         """
-        tasks = request.env['project.task'].sudo().search([])
-        total = len(tasks)
-        done = len(tasks.filtered(
-            lambda t: t.stage_id.name in ('Done', 'Cancelled')
-        ))
+        Task = request.env['project.task'].sudo()
+        total = Task.search_count([])
+        done = Task.search_count([('stage_id.name', 'in', ('Done', 'Cancelled'))])
         active = total - done
         completion = round((done / total) * 100) if total > 0 else 0
         return {

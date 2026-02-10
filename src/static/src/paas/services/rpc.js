@@ -53,7 +53,8 @@ export async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
     try {
         data = await response.json();
     } catch (parseError) {
-        throw new Error("Invalid response from server.");
+        console.error(`JSON parse failed for ${url}:`, parseError);
+        throw new Error(`Invalid response from server (${url}). The server may be restarting.`);
     }
 
     if (data.error) {
