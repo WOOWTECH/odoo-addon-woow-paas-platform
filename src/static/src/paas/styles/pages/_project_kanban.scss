@@ -68,6 +68,50 @@
     }
 }
 
+.o_woow_kanban__page_header_right {
+    display: flex;
+    align-items: center;
+}
+
+.o_woow_kanban__create_btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #fff;
+    background: $woow-primary;
+    border: none;
+    border-radius: $woow-radius-default;
+    cursor: pointer;
+    transition: background 0.2s;
+
+    &:hover {
+        background: darken($woow-primary, 8%);
+    }
+}
+
+.o_woow_kanban__column_add_btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin-left: auto;
+    border: none;
+    border-radius: $woow-radius-default;
+    background: transparent;
+    color: $woow-text-secondary;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+        color: $woow-primary;
+        background: rgba($woow-primary, 0.1);
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Kanban Board Container
 // -----------------------------------------------------------------------------

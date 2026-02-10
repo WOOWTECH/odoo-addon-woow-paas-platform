@@ -13,6 +13,12 @@
                         <p><t t-esc="taskCount"/> tasks</p>
                     </div>
                 </div>
+                <div class="o_woow_kanban__page_header_right">
+                    <button class="o_woow_kanban__create_btn" t-on-click="() => this.openCreateModal()">
+                        <WoowIcon name="'add'" size="20"/>
+                        <span>Create Task</span>
+                    </button>
+                </div>
             </div>
 
             <!-- Loading State -->
@@ -48,6 +54,10 @@
                             <div class="o_woow_kanban__column_header">
                                 <span class="o_woow_kanban__column_name" t-esc="column.stage.name"/>
                                 <span class="o_woow_kanban__column_count" t-esc="column.tasks.length"/>
+                                <button class="o_woow_kanban__column_add_btn"
+                                        t-on-click="(ev) => { ev.stopPropagation(); this.openCreateModal(column.stage.id); }">
+                                    <WoowIcon name="'add'" size="16"/>
+                                </button>
                             </div>
 
                             <!-- Task Cards -->
@@ -97,9 +107,20 @@
             <t t-else="">
                 <div class="o_woow_kanban__empty">
                     <WoowIcon name="'view_kanban'" size="48"/>
-                    <p>No stages configured for this project.</p>
+                    <p>No tasks yet. Create your first task to get started!</p>
+                    <button class="o_woow_kanban__create_btn" t-on-click="() => this.openCreateModal()">
+                        <WoowIcon name="'add'" size="20"/>
+                        <span>Create Task</span>
+                    </button>
                 </div>
             </t>
+
+            <!-- Create Task Modal -->
+            <CreateTaskModal t-if="state.showCreateModal"
+                defaultProjectId="props.projectId"
+                defaultStageId="state.defaultStageId"
+                onClose.bind="closeCreateModal"
+                onCreated.bind="onTaskCreated"/>
         </div>
     </t>
 </templates>

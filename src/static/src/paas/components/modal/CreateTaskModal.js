@@ -11,6 +11,7 @@ export class CreateTaskModal extends Component {
         onClose: { type: Function },
         onCreated: { type: Function },
         defaultProjectId: { type: Number, optional: true },
+        defaultStageId: { type: Number, optional: true },
     };
 
     setup() {
@@ -104,6 +105,9 @@ export class CreateTaskModal extends Component {
 
             if (this.state.deadline) {
                 data.date_deadline = this.state.deadline;
+            }
+            if (this.props.defaultStageId) {
+                data.stage_id = this.props.defaultStageId;
             }
 
             const result = await supportService.createTask(workspaceId, data);

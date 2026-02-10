@@ -1,13 +1,14 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { CreateTaskModal } from "../../components/modal/CreateTaskModal";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
 import { formatDate } from "../../services/utils";
 
 export class ProjectKanbanPage extends Component {
     static template = "woow_paas_platform.ProjectKanbanPage";
-    static components = { WoowIcon };
+    static components = { WoowIcon, CreateTaskModal };
     static props = {
         projectId: { type: Number },
     };
@@ -15,10 +16,30 @@ export class ProjectKanbanPage extends Component {
     setup() {
         this.router = router;
         this.supportService = useState(supportService);
+        this.state = useState({
+            showCreateModal: false,
+            defaultStageId: null,
+        });
 
         onMounted(async () => {
             await this._loadData();
         });
+    }
+
+    openCreateModal(stageId = null) {
+        this.state.showCreateModal = true;
+        this.state.defaultStageId = stageId;
+    }
+
+    closeCreateModal() {
+        this.state.showCreateModal = false;
+        this.state.defaultStageId = null;
+    }
+
+    async onTaskCreated(task) {
+        this.state.showCreateModal = false;
+        this.state.defaultStageId = null;
+        await this._loadData();
     }
 
     async _loadData() {

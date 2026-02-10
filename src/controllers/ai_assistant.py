@@ -619,8 +619,16 @@ class AiAssistantController(Controller):
 
     # ==================== Private: Project Helpers ====================
 
+    _DEFAULT_STAGES = [
+        {'name': 'New', 'sequence': 1},
+        {'name': 'In Progress', 'sequence': 5},
+        {'name': 'Done', 'sequence': 10},
+    ]
+
     def _get_project_stages(self, project_id: int) -> list[dict]:
         """Get stages for a project, sorted by sequence.
+
+        Auto-creates default stages (New, In Progress, Done) when none exist.
 
         Args:
             project_id: The project.project ID.
@@ -632,7 +640,30 @@ class AiAssistantController(Controller):
             [('project_ids', 'in', [project_id])],
             order='sequence asc',
         )
+        if not stages:
+            stages = self._ensure_default_stages(project_id)
         return [{'id': s.id, 'name': s.name, 'sequence': s.sequence} for s in stages]
+
+    def _ensure_default_stages(self, project_id: int):
+        """Create default stages for a project that has none.
+
+        Reuses existing stages by name when possible to avoid duplicates.
+        """
+        TaskType = request.env['project.task.type'].sudo()
+        result = TaskType
+        for stage_def in self._DEFAULT_STAGES:
+            existing = TaskType.search([('name', '=', stage_def['name'])], limit=1)
+            if existing:
+                if project_id not in existing.project_ids.ids:
+                    existing.write({'project_ids': [(4, project_id)]})
+                result |= existing
+            else:
+                result |= TaskType.create({
+                    'name': stage_def['name'],
+                    'sequence': stage_def['sequence'],
+                    'project_ids': [(4, project_id)],
+                })
+        return result.sorted('sequence')
 
     def _list_projects(self, workspace) -> dict[str, Any]:
         """List projects, optionally filtered by workspace."""
@@ -765,6 +796,11 @@ class AiAssistantController(Controller):
             vals['priority'] = str(params['priority'])
         if params.get('date_deadline'):
             vals['date_deadline'] = params['date_deadline']
+
+        if params.get('stage_id'):
+            stage = request.env['project.task.type'].sudo().browse(int(params['stage_id']))
+            if stage.exists():
+                vals['stage_id'] = stage.id
 
         if params.get('chat_enabled'):
             vals['chat_enabled'] = True
