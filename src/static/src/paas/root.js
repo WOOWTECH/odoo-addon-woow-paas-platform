@@ -11,6 +11,7 @@ import { AppMarketplacePage } from "./pages/marketplace/AppMarketplacePage";
 import { AppConfigurationPage } from "./pages/configure/AppConfigurationPage";
 import { ServiceDetailPage } from "./pages/service/ServiceDetailPage";
 import { AiAssistantPage } from "./pages/ai-assistant/AiAssistantPage";
+import { SupportProjectsPage } from "./pages/support-projects/SupportProjectsPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -25,6 +26,7 @@ export class Root extends Component {
         AppConfigurationPage,
         ServiceDetailPage,
         AiAssistantPage,
+        SupportProjectsPage,
         EmptyState,
     };
     static props = {};
