@@ -285,29 +285,50 @@ class AiAssistantController(Controller):
         Returns:
             werkzeug.Response: SSE stream with text/event-stream content type.
         """
+        sse_error_headers = {
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        }
+
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
             return Response(
-                'data: {"error": "Channel not found"}\n\n',
+                'data: ' + json.dumps({
+                    'error': 'Channel not found',
+                    'error_code': 'channel_not_found',
+                    'done': True,
+                }) + '\n\n',
                 content_type='text/event-stream',
-                status=404,
+                headers=sse_error_headers,
+                status=200,
             )
 
         # Find the agent for this channel
         agent = self._get_channel_agent(channel)
         if not agent:
             return Response(
-                'data: {"error": "No AI agent available"}\n\n',
+                'data: ' + json.dumps({
+                    'error': 'No AI agent available',
+                    'error_code': 'no_agent',
+                    'done': True,
+                }) + '\n\n',
                 content_type='text/event-stream',
-                status=400,
+                headers=sse_error_headers,
+                status=200,
             )
 
         provider = agent.provider_id
         if not provider or not provider.is_active:
             return Response(
-                'data: {"error": "AI provider not configured"}\n\n',
+                'data: ' + json.dumps({
+                    'error': 'AI provider not configured',
+                    'error_code': 'provider_not_configured',
+                    'done': True,
+                }) + '\n\n',
                 content_type='text/event-stream',
-                status=400,
+                headers=sse_error_headers,
+                status=200,
             )
 
         # Get the latest user message
@@ -320,9 +341,14 @@ class AiAssistantController(Controller):
 
         if not last_message:
             return Response(
-                'data: {"error": "No user message found"}\n\n',
+                'data: ' + json.dumps({
+                    'error': 'No user message found',
+                    'error_code': 'no_message',
+                    'done': True,
+                }) + '\n\n',
                 content_type='text/event-stream',
-                status=400,
+                headers=sse_error_headers,
+                status=200,
             )
 
         user_message = last_message.body or ''
@@ -505,6 +531,26 @@ class AiAssistantController(Controller):
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
+    @route('/api/support/projects/<int:project_id>/stages', auth='user', methods=['POST'], type='json')
+    def api_support_project_stages(
+        self,
+        project_id: int,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """List stages for a project.
+
+        Args:
+            project_id: The project.project ID.
+
+        Returns:
+            dict: Response with stage list sorted by sequence.
+        """
+        stages = self._get_project_stages(project_id)
+        return {
+            'success': True,
+            'data': stages,
+        }
+
     @route(
         ['/api/support/tasks', '/api/support/tasks/<int:workspace_id>'],
         auth='user', methods=['POST'], type='json',
@@ -569,6 +615,21 @@ class AiAssistantController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     # ==================== Private: Project Helpers ====================
+
+    def _get_project_stages(self, project_id: int) -> list[dict]:
+        """Get stages for a project, sorted by sequence.
+
+        Args:
+            project_id: The project.project ID.
+
+        Returns:
+            list: Stage dicts with id, name, and sequence.
+        """
+        stages = request.env['project.task.type'].sudo().search(
+            [('project_ids', 'in', [project_id])],
+            order='sequence asc',
+        )
+        return [{'id': s.id, 'name': s.name, 'sequence': s.sequence} for s in stages]
 
     def _list_projects(self, workspace) -> dict[str, Any]:
         """List projects, optionally filtered by workspace."""
@@ -728,6 +789,8 @@ class AiAssistantController(Controller):
                 vals['name'] = name
         if 'description' in params:
             vals['description'] = (params['description'] or '').strip()
+        if 'stage_id' in params:
+            vals['stage_id'] = int(params['stage_id'])
         if 'chat_enabled' in params:
             vals['chat_enabled'] = bool(params['chat_enabled'])
         if 'ai_auto_reply' in params:
@@ -757,7 +820,11 @@ class AiAssistantController(Controller):
             'chat_enabled': task.chat_enabled,
             'channel_id': task.channel_id.id if task.channel_id else None,
             'ai_auto_reply': task.ai_auto_reply,
+            'stage_id': task.stage_id.id if task.stage_id else None,
             'stage_name': task.stage_id.name if task.stage_id else None,
+            'priority': task.priority or '0',
+            'date_deadline': task.date_deadline.isoformat() if task.date_deadline else None,
+            'user_name': task.user_ids[0].name if task.user_ids else None,
             'user_ids': [u.id for u in task.user_ids] if task.user_ids else [],
             'created_date': task.create_date.isoformat() if task.create_date else None,
         }
