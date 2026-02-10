@@ -117,4 +117,70 @@ export class ProjectKanbanPage extends Component {
     navigateBack() {
         this.router.navigate("ai-assistant/projects");
     }
+
+    // ==================== Drag and Drop ====================
+
+    onDragStart(ev, task) {
+        ev.dataTransfer.setData("text/plain", JSON.stringify({
+            taskId: task.id,
+            fromStageId: task.stage_id,
+        }));
+        ev.dataTransfer.effectAllowed = "move";
+        ev.currentTarget.classList.add("o_woow_kanban__card--dragging");
+    }
+
+    onDragEnd(ev) {
+        ev.currentTarget.classList.remove("o_woow_kanban__card--dragging");
+    }
+
+    onDragOver(ev) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+        const column = ev.currentTarget;
+        if (!column.classList.contains("o_woow_kanban__column--dragover")) {
+            column.classList.add("o_woow_kanban__column--dragover");
+        }
+    }
+
+    onDragLeave(ev) {
+        const column = ev.currentTarget;
+        // Only remove if leaving the column element itself (not entering a child)
+        if (!column.contains(ev.relatedTarget)) {
+            column.classList.remove("o_woow_kanban__column--dragover");
+        }
+    }
+
+    async onDrop(ev, targetStageId) {
+        ev.preventDefault();
+        ev.currentTarget.classList.remove("o_woow_kanban__column--dragover");
+
+        let data;
+        try {
+            data = JSON.parse(ev.dataTransfer.getData("text/plain"));
+        } catch {
+            return;
+        }
+
+        if (data.fromStageId === targetStageId) {
+            return;
+        }
+
+        // Optimistic UI update
+        this._moveTaskLocally(data.taskId, targetStageId);
+
+        // Call API
+        const result = await supportService.updateTask(data.taskId, { stage_id: targetStageId });
+        if (!result.success) {
+            // Rollback on failure
+            this._moveTaskLocally(data.taskId, data.fromStageId);
+            this.supportService.error = result.error || "Failed to update task stage";
+        }
+    }
+
+    _moveTaskLocally(taskId, newStageId) {
+        const task = this.supportService.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.stage_id = newStageId;
+        }
+    }
 }

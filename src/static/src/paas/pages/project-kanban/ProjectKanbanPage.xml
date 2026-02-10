@@ -40,7 +40,10 @@
             <t t-elif="columns.length > 0">
                 <div class="o_woow_kanban">
                     <t t-foreach="columns" t-as="column" t-key="column.stage.id">
-                        <div class="o_woow_kanban__column">
+                        <div class="o_woow_kanban__column"
+                             t-on-dragover="onDragOver"
+                             t-on-dragleave="onDragLeave"
+                             t-on-drop="(ev) => this.onDrop(ev, column.stage.id)">
                             <!-- Column Header -->
                             <div class="o_woow_kanban__column_header">
                                 <span class="o_woow_kanban__column_name" t-esc="column.stage.name"/>
@@ -51,7 +54,11 @@
                             <div class="o_woow_kanban__column_body">
                                 <t t-if="column.tasks.length > 0">
                                     <t t-foreach="column.tasks" t-as="task" t-key="task.id">
-                                        <div class="o_woow_kanban__card" t-on-click="() => this.navigateToTask(task.id)">
+                                        <div class="o_woow_kanban__card"
+                                             draggable="true"
+                                             t-on-click="() => this.navigateToTask(task.id)"
+                                             t-on-dragstart="(ev) => this.onDragStart(ev, task)"
+                                             t-on-dragend="onDragEnd">
                                             <div class="o_woow_kanban__card_title" t-esc="task.name"/>
 
                                             <t t-if="hasPriority(task)">
