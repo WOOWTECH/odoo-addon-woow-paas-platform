@@ -258,6 +258,8 @@ class AIClient:
         }
 
         response = self._make_request(payload, stream=True)
+        # Ensure UTF-8 decoding for SSE streams (spec mandates UTF-8)
+        response.encoding = 'utf-8'
 
         # Parse SSE stream line by line; wrap in try/except to catch
         # network errors that can occur mid-stream.

@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { Component, useState, useRef, onMounted, onWillUnmount } from "@odoo/owl";
+import { Component, useState, useRef, onMounted, onWillUnmount, markup } from "@odoo/owl";
 import { AiMentionDropdown } from "../ai-mention/AiMentionDropdown";
 import { aiService } from "../../services/ai_service";
 
@@ -96,7 +96,10 @@ export class AiChat extends Component {
         try {
             const result = await aiService.fetchChatHistory(this.props.channelId);
             if (result.success) {
-                this.state.messages = result.data || [];
+                this.state.messages = (result.data || []).map(msg => ({
+                    ...msg,
+                    body: msg.body ? markup(msg.body) : "",
+                }));
             } else {
                 this.state.error = result.error || "Failed to load chat history";
             }
@@ -132,6 +135,7 @@ export class AiChat extends Component {
             if (result.success && result.data) {
                 this.state.messages.push({
                     ...result.data,
+                    body: result.data.body ? markup(result.data.body) : "",
                     is_ai: false,
                     message_type: "comment",
                     attachments: result.data.attachments || [],
@@ -571,7 +575,7 @@ export class AiChat extends Component {
     _createAiMessage(body) {
         return {
             id: Date.now(),
-            body,
+            body: body ? markup(`<p>${body}</p>`) : "",
             author_name: "AI Assistant",
             author_id: null,
             date: new Date().toISOString(),

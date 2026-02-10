@@ -323,7 +323,7 @@ class AiAssistantController(Controller):
         """
         # Validate CSRF token (GET endpoints bypass Odoo's automatic check)
         csrf_token = kwargs.get('csrf_token', '')
-        if not csrf_token or csrf_token != request.csrf_token():
+        if not csrf_token or not request.validate_csrf(csrf_token):
             return self._sse_error_response('Invalid request', 'csrf_error')
 
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
