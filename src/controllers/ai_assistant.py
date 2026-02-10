@@ -62,10 +62,7 @@ class AiAssistantController(Controller):
         data = [{
             'id': p.id,
             'name': p.name,
-            'api_base_url': p.api_base_url,
             'model_name': p.model_name,
-            'max_tokens': p.max_tokens,
-            'temperature': p.temperature,
             'is_active': p.is_active,
         } for p in providers]
         return {
@@ -324,6 +321,11 @@ class AiAssistantController(Controller):
         Returns:
             werkzeug.Response: SSE stream with text/event-stream content type.
         """
+        # Validate CSRF token (GET endpoints bypass Odoo's automatic check)
+        csrf_token = kwargs.get('csrf_token', '')
+        if not csrf_token or csrf_token != request.csrf_token():
+            return self._sse_error_response('Invalid request', 'csrf_error')
+
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
             return self._sse_error_response('Channel not found', 'channel_not_found')
@@ -400,8 +402,8 @@ class AiAssistantController(Controller):
                         subtype_xmlid='mail.mt_comment',
                         author_id=root_partner_id,
                     )
-                except Exception:
-                    _logger.exception('Failed to post AI response to channel %s', channel_id)
+                except Exception as exc:
+                    _logger.exception('Failed to post AI response to channel %s: %s', channel_id, exc)
                     warn_data = json.dumps({
                         'warning': 'AI 回覆已生成但無法儲存，請重新整理頁面確認。',
                     })
