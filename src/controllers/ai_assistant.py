@@ -848,9 +848,9 @@ class AiAssistantController(Controller):
         task.write({'active': False})
         return {'success': True, 'data': {'id': task.id}}
 
-    def _serialize_task(self, task) -> dict:
+    def _serialize_task(self, task, include_children=True) -> dict:
         """Serialize a project.task record to a dict."""
-        return {
+        data = {
             'id': task.id,
             'name': task.name,
             'description': task.description or '',
@@ -866,4 +866,11 @@ class AiAssistantController(Controller):
             'user_name': task.user_ids[0].name if task.user_ids else None,
             'user_ids': [u.id for u in task.user_ids] if task.user_ids else [],
             'created_date': task.create_date.isoformat() if task.create_date else None,
+            'parent_id': task.parent_id.id if task.parent_id else None,
         }
+        if include_children:
+            data['child_ids'] = [
+                self._serialize_task(child, include_children=False)
+                for child in task.child_ids
+            ]
+        return data
