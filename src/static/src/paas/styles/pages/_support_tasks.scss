@@ -1,0 +1,386 @@
+.o_woow_support_tasks {
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+// -- Header --
+
+.o_woow_support_tasks_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1.5rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.o_woow_support_tasks_header_left {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.o_woow_support_tasks_title {
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+        margin: 0;
+    }
+}
+
+.o_woow_support_tasks_header_right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+// -- Filter Toggle --
+
+.o_woow_filter_toggle {
+    display: flex;
+    background: $woow-background-light;
+    border-radius: $woow-radius-default;
+    padding: 0.25rem;
+}
+
+.o_woow_filter_btn {
+    background: none;
+    border: none;
+    padding: 0.4rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $woow-text-secondary;
+    border-radius: calc(#{$woow-radius-default} - 2px);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: $woow-font-body;
+    white-space: nowrap;
+
+    &:hover {
+        color: $woow-text-primary;
+    }
+
+    &.o_woow_filter_btn_active {
+        background: $woow-card-light;
+        color: $woow-primary;
+        box-shadow: $woow-shadow-card;
+    }
+}
+
+// -- Kanban Board --
+
+.o_woow_kanban_board {
+    display: flex;
+    gap: 1.25rem;
+    overflow-x: auto;
+    padding-bottom: 1rem;
+    min-height: 400px;
+    align-items: flex-start;
+
+    &::-webkit-scrollbar {
+        height: 6px;
+    }
+
+    &::-webkit-scrollbar-track {
+        background: $woow-background-light;
+        border-radius: 3px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+        background: rgba(0, 0, 0, 0.15);
+        border-radius: 3px;
+    }
+}
+
+// -- Kanban Column --
+
+.o_woow_kanban_column {
+    min-width: 300px;
+    max-width: 340px;
+    flex: 0 0 300px;
+    background: $woow-background-light;
+    border-radius: $woow-radius-lg;
+    padding: 1rem;
+}
+
+.o_woow_kanban_column_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+    padding: 0.25rem 0;
+}
+
+.o_woow_kanban_column_title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: $woow-text-primary;
+}
+
+.o_woow_kanban_column_count {
+    background: $woow-card-light;
+    color: $woow-text-secondary;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: $woow-radius-full;
+    box-shadow: $woow-shadow-card;
+}
+
+// -- Kanban Cards Container --
+
+.o_woow_kanban_cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+}
+
+// -- Task Card --
+
+.o_woow_task_card {
+    background: $woow-card-light;
+    border-radius: $woow-radius-default;
+    padding: 1rem;
+    box-shadow: $woow-shadow-card;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+
+    &:hover {
+        box-shadow: $woow-shadow-soft;
+        border-color: $woow-primary;
+        transform: translateY(-1px);
+    }
+}
+
+.o_woow_task_card_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.5rem;
+    gap: 0.5rem;
+}
+
+.o_woow_task_card_title {
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: $woow-text-primary;
+    line-height: 1.4;
+    flex: 1;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.o_woow_task_id_badge {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: $woow-text-secondary;
+    background: $woow-background-light;
+    padding: 0.125rem 0.375rem;
+    border-radius: $woow-radius-full;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+// -- Priority Stars --
+
+.o_woow_task_priority {
+    display: flex;
+    gap: 0.125rem;
+    margin-bottom: 0.375rem;
+}
+
+.o_woow_star_filled {
+    color: #f59e0b;
+}
+
+.o_woow_star_empty {
+    color: #d1d5db;
+}
+
+// -- Stage Badge --
+
+.o_woow_task_stage {
+    margin-bottom: 0.5rem;
+}
+
+.o_woow_stage_badge {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    padding: 0.2rem 0.5rem;
+    border-radius: $woow-radius-full;
+    background: rgba(95, 129, 252, 0.1);
+    color: $woow-primary;
+}
+
+// -- Progress Bar --
+
+.o_woow_task_progress {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.625rem;
+}
+
+.o_woow_progress_bar {
+    flex: 1;
+    height: 4px;
+    background: $woow-background-light;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.o_woow_progress_fill {
+    height: 100%;
+    background: $woow-primary;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.o_woow_progress_text {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: $woow-text-secondary;
+    white-space: nowrap;
+}
+
+// -- Task Footer --
+
+.o_woow_task_card_footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.o_woow_task_due {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+}
+
+.o_woow_overdue {
+    color: #ef4444;
+    font-weight: 500;
+}
+
+.o_woow_task_assignee {
+    display: flex;
+    align-items: center;
+}
+
+.o_woow_avatar_sm {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: $woow-primary;
+    color: white;
+    font-size: 0.625rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+// -- Empty State --
+
+.o_woow_support_tasks_empty {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: $woow-text-secondary;
+
+    h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 1rem 0 0.5rem;
+    }
+
+    p {
+        max-width: 400px;
+        margin: 0 auto;
+    }
+}
+
+// -- Loading Skeleton --
+
+.o_woow_kanban_column_skeleton {
+    opacity: 0.6;
+}
+
+.o_woow_kanban_column_header_skeleton {
+    height: 24px;
+    background: rgba(0, 0, 0, 0.08);
+    border-radius: $woow-radius-default;
+    margin-bottom: 0.75rem;
+    animation: o_woow_skeleton_pulse 1.5s ease-in-out infinite;
+}
+
+.o_woow_task_card_skeleton {
+    background: $woow-card-light;
+    border-radius: $woow-radius-default;
+    padding: 1rem;
+    margin-bottom: 0.625rem;
+    box-shadow: $woow-shadow-card;
+}
+
+.o_woow_skeleton_line {
+    border-radius: 4px;
+    animation: o_woow_skeleton_pulse 1.5s ease-in-out infinite;
+}
+
+.o_woow_skeleton_title {
+    height: 16px;
+    background: rgba(0, 0, 0, 0.08);
+    width: 80%;
+    margin-bottom: 0.625rem;
+}
+
+.o_woow_skeleton_short {
+    height: 12px;
+    background: rgba(0, 0, 0, 0.06);
+    width: 50%;
+    margin-bottom: 0.625rem;
+}
+
+.o_woow_skeleton_bar {
+    height: 4px;
+    background: rgba(0, 0, 0, 0.06);
+    width: 100%;
+}
+
+@keyframes o_woow_skeleton_pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+// -- Responsive --
+
+@media (max-width: 768px) {
+    .o_woow_support_tasks_header {
+        flex-direction: column;
+    }
+
+    .o_woow_support_tasks_header_right {
+        flex-wrap: wrap;
+        width: 100%;
+    }
+
+    .o_woow_kanban_column {
+        min-width: 260px;
+        flex: 0 0 260px;
+    }
+}

@@ -1,0 +1,547 @@
+// =============================================================================
+// AiChat Component Styles
+// =============================================================================
+
+.o_woow_ai_chat {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background-color: $woow-background-light;
+    border-radius: $woow-radius-lg;
+    overflow: hidden;
+
+    // -------------------------------------------------------------------------
+    // Error Banner
+    // -------------------------------------------------------------------------
+    &__error {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.625rem 1rem;
+        background-color: #fef2f2;
+        border-bottom: 1px solid #fecaca;
+        color: #991b1b;
+        font-family: $woow-font-body;
+        font-size: 0.8125rem;
+
+        .material-symbols-outlined {
+            font-size: 18px;
+            color: #dc2626;
+        }
+    }
+
+    &__error_close {
+        margin-left: auto;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 2px;
+        color: #991b1b;
+        opacity: 0.6;
+
+        &:hover {
+            opacity: 1;
+        }
+
+        .material-symbols-outlined {
+            font-size: 16px;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Message List
+    // -------------------------------------------------------------------------
+    &__messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+
+        // Custom scrollbar
+        &::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        &::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        &::-webkit-scrollbar-thumb {
+            background-color: rgba(0, 0, 0, 0.15);
+            border-radius: 3px;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Loading State
+    // -------------------------------------------------------------------------
+    &__loading {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        padding: 2rem;
+        color: $woow-text-secondary;
+        font-family: $woow-font-body;
+        font-size: 0.875rem;
+    }
+
+    // -------------------------------------------------------------------------
+    // Empty State
+    // -------------------------------------------------------------------------
+    &__empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        flex: 1;
+        color: $woow-text-secondary;
+        font-family: $woow-font-body;
+        font-size: 0.875rem;
+        gap: 0.75rem;
+    }
+
+    &__empty_icon {
+        font-size: 48px;
+        opacity: 0.3;
+    }
+
+    // -------------------------------------------------------------------------
+    // Message Bubble
+    // -------------------------------------------------------------------------
+    &__message {
+        display: flex;
+        gap: 0.625rem;
+        max-width: 85%;
+        animation: o_woow_chat_fadeIn 0.2s ease-out;
+
+        // User messages: right-aligned
+        &--user {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+
+            .o_woow_ai_chat__bubble {
+                background-color: $woow-primary;
+                color: #ffffff;
+                border-radius: $woow-radius-default $woow-radius-default 4px $woow-radius-default;
+            }
+
+            .o_woow_ai_chat__author {
+                color: rgba(255, 255, 255, 0.8);
+            }
+
+            .o_woow_ai_chat__time {
+                color: rgba(255, 255, 255, 0.6);
+            }
+
+            .o_woow_ai_chat__attachment {
+                color: rgba(255, 255, 255, 0.9);
+                border-color: rgba(255, 255, 255, 0.3);
+
+                &:hover {
+                    background-color: rgba(255, 255, 255, 0.1);
+                }
+            }
+        }
+
+        // AI messages: left-aligned
+        &--assistant {
+            align-self: flex-start;
+
+            .o_woow_ai_chat__bubble {
+                background-color: $woow-card-light;
+                color: $woow-text-primary;
+                border-radius: $woow-radius-default $woow-radius-default $woow-radius-default 4px;
+                box-shadow: $woow-shadow-card;
+            }
+        }
+
+        // System messages: centered
+        &--system {
+            align-self: center;
+            max-width: 70%;
+        }
+    }
+
+    &__bubble {
+        padding: 0.75rem 1rem;
+        font-family: $woow-font-body;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        word-break: break-word;
+
+        &--streaming {
+            border: 1px dashed $woow-border-light;
+        }
+    }
+
+    &__meta {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.25rem;
+    }
+
+    &__author {
+        font-family: $woow-font-display;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: $woow-text-secondary;
+    }
+
+    &__time {
+        font-size: 0.6875rem;
+        color: $woow-text-secondary;
+        opacity: 0.7;
+    }
+
+    &__body {
+        // Support HTML content from mail.message
+        p {
+            margin: 0 0 0.25rem;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: underline;
+        }
+
+        code {
+            background-color: rgba(0, 0, 0, 0.06);
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            font-size: 0.8125rem;
+        }
+
+        pre {
+            background-color: rgba(0, 0, 0, 0.06);
+            padding: 0.75rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 0.5rem 0;
+
+            code {
+                background: none;
+                padding: 0;
+            }
+        }
+    }
+
+    &__system_text {
+        padding: 0.375rem 0.75rem;
+        background-color: rgba(0, 0, 0, 0.04);
+        border-radius: $woow-radius-full;
+        font-family: $woow-font-body;
+        font-size: 0.75rem;
+        color: $woow-text-secondary;
+        text-align: center;
+    }
+
+    // -------------------------------------------------------------------------
+    // Attachments
+    // -------------------------------------------------------------------------
+    &__attachments {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.375rem;
+        margin-top: 0.5rem;
+    }
+
+    &__attachment {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.5rem;
+        border: 1px solid $woow-border-light;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        color: $woow-text-secondary;
+        text-decoration: none;
+        transition: background-color 0.15s;
+
+        &:hover {
+            background-color: rgba(0, 0, 0, 0.04);
+        }
+
+        .material-symbols-outlined {
+            font-size: 14px;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Avatar
+    // -------------------------------------------------------------------------
+    &__avatar {
+        width: 32px;
+        height: 32px;
+        min-width: 32px;
+        border-radius: $woow-radius-full;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: $woow-font-display;
+        font-size: 0.8125rem;
+        font-weight: 700;
+        flex-shrink: 0;
+
+        &--user {
+            background-color: $woow-primary;
+            color: #ffffff;
+        }
+
+        &--ai {
+            background-color: #10b981;
+            color: #ffffff;
+
+            .material-symbols-outlined {
+                font-size: 18px;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Typing Indicator
+    // -------------------------------------------------------------------------
+    &__typing {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 0;
+    }
+
+    &__dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background-color: $woow-text-secondary;
+        opacity: 0.5;
+        animation: o_woow_chat_bounce 1.2s infinite ease-in-out;
+
+        &:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        &:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Input Area
+    // -------------------------------------------------------------------------
+    &__input {
+        position: relative;
+        padding: 0.75rem 1rem;
+        border-top: 1px solid $woow-border-light;
+        background-color: $woow-card-light;
+    }
+
+    &__input_row {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.5rem;
+    }
+
+    &__textarea {
+        flex: 1;
+        resize: none;
+        border: 1px solid $woow-border-light;
+        border-radius: $woow-radius-default;
+        padding: 0.625rem 0.75rem;
+        font-family: $woow-font-body;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        color: $woow-text-primary;
+        background-color: $woow-background-light;
+        outline: none;
+        max-height: 150px;
+        overflow-y: auto;
+        transition: border-color 0.15s;
+
+        &::placeholder {
+            color: $woow-text-secondary;
+            opacity: 0.6;
+        }
+
+        &:focus {
+            border-color: $woow-primary;
+        }
+
+        &:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    }
+
+    &__btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        min-width: 36px;
+        border: none;
+        border-radius: $woow-radius-default;
+        cursor: pointer;
+        transition: background-color 0.15s, opacity 0.15s;
+        padding: 0;
+
+        .material-symbols-outlined {
+            font-size: 20px;
+        }
+
+        &:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        &--attach {
+            background-color: transparent;
+            color: $woow-text-secondary;
+
+            &:hover:not(:disabled) {
+                background-color: rgba(0, 0, 0, 0.06);
+            }
+        }
+
+        &--send {
+            background-color: $woow-primary;
+            color: #ffffff;
+
+            &:hover:not(:disabled) {
+                background-color: $woow-primary-hover;
+            }
+        }
+    }
+
+    &__file_input {
+        display: none;
+    }
+}
+
+// =============================================================================
+// Mention Dropdown Styles
+// =============================================================================
+
+.o_woow_mention_dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 1rem;
+    right: 1rem;
+    margin-bottom: 0.375rem;
+    background-color: $woow-card-light;
+    border-radius: $woow-radius-default;
+    box-shadow: 0 -4px 20px -2px rgba(0, 0, 0, 0.12);
+    border: 1px solid $woow-border-light;
+    max-height: 220px;
+    overflow-y: auto;
+    z-index: 10;
+
+    &__header {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid $woow-border-light;
+    }
+
+    &__title {
+        font-family: $woow-font-display;
+        font-size: 0.6875rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: $woow-text-secondary;
+    }
+
+    &__list {
+        list-style: none;
+        margin: 0;
+        padding: 0.25rem 0;
+    }
+
+    &__item {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        padding: 0.5rem 0.75rem;
+        cursor: pointer;
+        transition: background-color 0.1s;
+
+        &:hover,
+        &--selected {
+            background-color: rgba($woow-primary, 0.08);
+        }
+    }
+
+    &__avatar {
+        width: 28px;
+        height: 28px;
+        min-width: 28px;
+        border-radius: $woow-radius-full;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #ffffff;
+        font-family: $woow-font-display;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+    &__info {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+    }
+
+    &__name {
+        font-family: $woow-font-body;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        color: $woow-text-primary;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    &__desc {
+        font-family: $woow-font-body;
+        font-size: 0.6875rem;
+        color: $woow-text-secondary;
+    }
+
+    &__empty {
+        padding: 1rem 0.75rem;
+        text-align: center;
+        font-family: $woow-font-body;
+        font-size: 0.8125rem;
+        color: $woow-text-secondary;
+    }
+}
+
+// =============================================================================
+// Animations
+// =============================================================================
+
+@keyframes o_woow_chat_fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes o_woow_chat_bounce {
+    0%, 60%, 100% {
+        transform: translateY(0);
+        opacity: 0.5;
+    }
+    30% {
+        transform: translateY(-4px);
+        opacity: 1;
+    }
+}

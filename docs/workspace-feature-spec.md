@@ -35,6 +35,7 @@ Workspace 是 Woow PaaS Platform 的核心功能，提供多租戶工作空間�
 | `state` | Selection | ✅ | 狀態：`active`、`archived` |
 | `access_ids` | One2many | - | 存取控制記錄 |
 | `member_count` | Integer | 計算 | 成員數量（自動計算） |
+| `service_ids` | One2many | - | 已部署的 Cloud Services |
 
 **檔案位置**: `src/models/workspace.py`
 
@@ -249,9 +250,13 @@ Reactive 服務物件，管理所有 Workspace 相關 API 呼叫與狀態。
 src/
 ├── models/
 │   ├── workspace.py           # Workspace 資料模型
-│   └── workspace_access.py    # 存取控制模型
+│   ├── workspace_access.py    # 存取控制模型
+│   ├── cloud_app_template.py  # 應用程式模板
+│   └── cloud_service.py       # 已部署服務實例
 ├── controllers/
-│   └── paas.py                # API 控制器
+│   └── paas.py                # 所有 API 端點（workspace、成員、cloud services）
+├── services/
+│   └── paas_operator.py       # PaaS Operator HTTP 客戶端
 └── static/src/paas/
     ├── services/
     │   └── workspace_service.js  # 前端 API 服務
