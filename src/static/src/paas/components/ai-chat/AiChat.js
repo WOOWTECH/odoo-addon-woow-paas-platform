@@ -4,6 +4,13 @@ import { Component, useState, useRef, onMounted, onWillUnmount } from "@odoo/owl
 import { AiMentionDropdown } from "../ai-mention/AiMentionDropdown";
 import { aiService } from "../../services/ai_service";
 
+const ERROR_MESSAGES = {
+    channel_not_found: "聊天頻道不存在，請重新整理頁面。",
+    no_agent: "目前沒有可用的 AI 助理，請聯繫管理員設定 AI agent。",
+    provider_not_configured: "AI 供應商尚未設定，請聯繫管理員。",
+    no_message: "找不到訊息，請重新傳送。",
+};
+
 /**
  * AiChat
  *
@@ -141,6 +148,13 @@ export class AiChat extends Component {
      * Start an SSE connection to stream the AI response.
      */
     startStream() {
+        // Pre-flight: validate channelId
+        const channelId = this.props.channelId;
+        if (!channelId || typeof channelId !== 'number' || channelId <= 0) {
+            this.state.error = "此任務尚未啟用聊天功能，請先點擊「啟用聊天」。";
+            return;
+        }
+
         this.closeStream();
         this.state.streaming = true;
         this.state.streamingText = "";
@@ -153,7 +167,7 @@ export class AiChat extends Component {
                 const data = JSON.parse(event.data);
 
                 if (data.error) {
-                    this.state.error = data.error;
+                    this.state.error = ERROR_MESSAGES[data.error_code] || data.error;
                     this.closeStream();
                     return;
                 }
@@ -205,7 +219,7 @@ export class AiChat extends Component {
                     attachments: [],
                 });
             }
-            this.state.error = "Connection to AI was lost. Please try sending your message again.";
+            this.state.error = "與 AI 的連線中斷，正在嘗試重新連線...";
         };
     }
 
