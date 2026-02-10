@@ -1,6 +1,7 @@
 import logging
 
 from odoo import api, models
+from odoo.tools import html2plaintext
 
 _logger = logging.getLogger(__name__)
 
@@ -26,6 +27,10 @@ class DiscussChannel(models.Model):
         if kwargs.get('message_type', 'comment') != 'comment':
             return message
 
+        # Skip when called from SSE handler to prevent duplicate AI replies
+        if self.env.context.get('skip_ai_reply'):
+            return message
+
         # Skip AI-authored messages to prevent infinite recursion
         author_id = kwargs.get('author_id')
         if author_id and author_id == self.env.ref('base.partner_root').id:
@@ -49,6 +54,13 @@ class DiscussChannel(models.Model):
             _logger.exception(
                 'Failed to generate AI reply in channel %s (id=%s)',
                 self.name, self.id,
+            )
+            # Notify the user in channel that AI reply failed
+            self.with_context(skip_ai_reply=True, mail_create_nosubscribe=True).message_post(
+                body='⚠️ AI 助理回覆失敗，請稍後再試或聯繫管理員。',
+                message_type='notification',
+                subtype_xmlid='mail.mt_note',
+                author_id=self.env.ref('base.partner_root').id,
             )
 
         return message
@@ -112,11 +124,9 @@ class DiscussChannel(models.Model):
 
         provider = agent.provider_id
         if not provider or not provider.is_active:
-            _logger.warning(
-                'Agent %s has no active provider, skipping AI reply',
-                agent.name,
+            raise ValueError(
+                f'Agent {agent.name} has no active provider configured'
             )
-            return
 
         # Build conversation history from recent channel messages
         history = self._get_chat_history(limit=20)
@@ -199,7 +209,7 @@ class DiscussChannel(models.Model):
         history = []
         for msg in reversed(messages):
             role = 'assistant' if msg.author_id.id == root_partner_id else 'user'
-            body = msg.body or ''
-            if body:
-                history.append({'role': role, 'content': body})
+            body_text = html2plaintext(msg.body or '').strip()
+            if body_text:
+                history.append({'role': role, 'content': body_text})
         return history

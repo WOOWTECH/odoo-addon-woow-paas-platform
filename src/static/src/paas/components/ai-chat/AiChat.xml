@@ -2,6 +2,16 @@
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.AiChat">
         <div class="o_woow_ai_chat">
+            <!-- Connection status indicator -->
+            <div t-if="connectionIndicator.visible"
+                 t-attf-class="o_woow_ai_chat__status o_woow_ai_chat__status--#{connectionIndicator.color}">
+                <span t-attf-class="o_woow_ai_chat__status_dot o_woow_ai_chat__status_dot--#{connectionIndicator.animate or 'none'}"/>
+                <span class="o_woow_ai_chat__status_text" t-esc="connectionIndicator.text"/>
+                <button t-if="state.connectionState === 'error'"
+                        class="o_woow_ai_chat__retry_btn"
+                        t-on-click="onRetryClick">重試</button>
+            </div>
+
             <!-- Error banner -->
             <div t-if="state.error" class="o_woow_ai_chat__error">
                 <span class="material-symbols-outlined">error</span>
@@ -100,7 +110,7 @@
                         </div>
                         <div class="o_woow_ai_chat__bubble o_woow_ai_chat__bubble--streaming">
                             <div t-if="state.streamingText"
-                                 class="o_woow_ai_chat__body" t-out="state.streamingText"/>
+                                 class="o_woow_ai_chat__body" t-esc="state.streamingText"/>
                             <div class="o_woow_ai_chat__typing">
                                 <span class="o_woow_ai_chat__dot"/>
                                 <span class="o_woow_ai_chat__dot"/>

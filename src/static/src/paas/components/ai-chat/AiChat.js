@@ -1,8 +1,17 @@
 /** @odoo-module **/
 
-import { Component, useState, useRef, onMounted, onWillUnmount } from "@odoo/owl";
+import { Component, useState, useRef, onMounted, onWillUnmount, markup } from "@odoo/owl";
 import { AiMentionDropdown } from "../ai-mention/AiMentionDropdown";
 import { aiService } from "../../services/ai_service";
+
+const ERROR_MESSAGES = {
+    channel_not_found: "聊天頻道不存在，請重新整理頁面。",
+    no_agent: "目前沒有可用的 AI 助理，請聯繫管理員設定 AI agent。",
+    provider_not_configured: "AI 供應商尚未設定，請聯繫管理員。",
+    no_message: "找不到訊息，請重新傳送。",
+    access_denied: "您無權存取此聊天頻道。",
+    csrf_error: "請求驗證失敗，請重新整理頁面。",
+};
 
 /**
  * AiChat
@@ -35,6 +44,7 @@ export class AiChat extends Component {
             selectedAgentId: null,
             uploadingFile: false,
             error: null,
+            connectionState: "idle", // idle | connecting | connected | streaming | error | reconnecting
         });
 
         this.messageListRef = useRef("messageList");
@@ -42,6 +52,11 @@ export class AiChat extends Component {
         this.fileInputRef = useRef("fileInput");
         this.eventSource = null;
         this._mentionSelectedIndex = 0;
+        this._reconnectAttempts = 0;
+        this._reconnectTimer = null;
+        this._maxReconnectAttempts = 3;
+        this._connectedTimer = null;
+        this._consecutiveParseErrors = 0;
 
         onMounted(async () => {
             await this.loadAgents();
@@ -51,6 +66,10 @@ export class AiChat extends Component {
 
         onWillUnmount(() => {
             this.closeStream();
+            this._clearReconnectTimer();
+            if (this._connectedTimer) {
+                clearTimeout(this._connectedTimer);
+            }
         });
     }
 
@@ -60,8 +79,12 @@ export class AiChat extends Component {
      * Load available AI agents from the service.
      */
     async loadAgents() {
-        await aiService.fetchAgents();
-        this.state.agents = [...aiService.agents];
+        try {
+            await aiService.fetchAgents();
+            this.state.agents = [...aiService.agents];
+        } catch (err) {
+            console.error("Failed to load AI agents:", err);
+        }
     }
 
     /**
@@ -73,7 +96,10 @@ export class AiChat extends Component {
         try {
             const result = await aiService.fetchChatHistory(this.props.channelId);
             if (result.success) {
-                this.state.messages = result.data || [];
+                this.state.messages = (result.data || []).map(msg => ({
+                    ...msg,
+                    body: msg.body ? markup(msg.body) : "",
+                }));
             } else {
                 this.state.error = result.error || "Failed to load chat history";
             }
@@ -108,14 +134,11 @@ export class AiChat extends Component {
             );
             if (result.success && result.data) {
                 this.state.messages.push({
-                    id: result.data.id,
-                    body: result.data.body,
-                    author_name: result.data.author_name,
-                    author_id: result.data.author_id,
-                    date: result.data.date,
+                    ...result.data,
+                    body: result.data.body ? markup(result.data.body) : "",
                     is_ai: false,
                     message_type: "comment",
-                    attachments: [],
+                    attachments: result.data.attachments || [],
                 });
                 this.state.inputText = "";
                 this.state.selectedAgentId = null;
@@ -141,6 +164,15 @@ export class AiChat extends Component {
      * Start an SSE connection to stream the AI response.
      */
     startStream() {
+        // Pre-flight: validate channelId
+        const channelId = this.props.channelId;
+        if (!channelId || typeof channelId !== 'number' || channelId <= 0) {
+            this.state.error = "此任務尚未啟用聊天功能，請先點擊「啟用聊天」。";
+            this.state.connectionState = "error";
+            return;
+        }
+
+        this.state.connectionState = "connecting";
         this.closeStream();
         this.state.streaming = true;
         this.state.streamingText = "";
@@ -153,12 +185,18 @@ export class AiChat extends Component {
                 const data = JSON.parse(event.data);
 
                 if (data.error) {
-                    this.state.error = data.error;
+                    this.state.error = ERROR_MESSAGES[data.error_code] || data.error;
+                    this.state.connectionState = "error";
                     this.closeStream();
                     return;
                 }
 
                 if (data.chunk) {
+                    this._reconnectAttempts = 0;
+                    this._consecutiveParseErrors = 0;
+                    if (this.state.connectionState !== "streaming") {
+                        this.state.connectionState = "streaming";
+                    }
                     this.state.streamingText += data.chunk;
                     this.scrollToBottom();
                 }
@@ -170,22 +208,28 @@ export class AiChat extends Component {
                 if (data.done) {
                     // Add the complete AI message to the list
                     if (this.state.streamingText) {
-                        this.state.messages.push({
-                            id: Date.now(),
-                            body: data.full_response || this.state.streamingText,
-                            author_name: "AI Assistant",
-                            author_id: null,
-                            date: new Date().toISOString(),
-                            is_ai: true,
-                            message_type: "comment",
-                            attachments: [],
-                        });
+                        this.state.messages.push(
+                            this._createAiMessage(data.full_response || this.state.streamingText)
+                        );
                     }
                     this.closeStream();
+                    this.state.connectionState = "connected";
+                    // Auto-hide after 2 seconds
+                    this._connectedTimer = setTimeout(() => {
+                        if (this.state.connectionState === "connected") {
+                            this.state.connectionState = "idle";
+                        }
+                    }, 2000);
                     this.scrollToBottom();
                 }
             } catch (parseErr) {
-                console.warn("Failed to parse SSE chunk:", event.data, parseErr);
+                console.error("Failed to parse SSE data:", event.data, parseErr);
+                this._consecutiveParseErrors++;
+                if (this._consecutiveParseErrors >= 3) {
+                    this.state.error = "接收 AI 回覆時發生資料錯誤，請重新整理頁面。";
+                    this.state.connectionState = "error";
+                    this.closeStream();
+                }
             }
         };
 
@@ -194,18 +238,15 @@ export class AiChat extends Component {
             const partialText = this.state.streamingText;
             this.closeStream();
             if (hadContent) {
-                this.state.messages.push({
-                    id: Date.now(),
-                    body: partialText,
-                    author_name: "AI Assistant",
-                    author_id: null,
-                    date: new Date().toISOString(),
-                    is_ai: true,
-                    message_type: "comment",
-                    attachments: [],
-                });
+                this.state.messages.push(
+                    this._createAiMessage(partialText + "\n\n⚠️ (回覆因連線中斷而不完整)")
+                );
+                this.state.error = "AI 回覆因連線中斷而不完整，您可以重新傳送訊息以取得完整回覆。";
+                this.state.connectionState = "error";
+            } else {
+                this.state.connectionState = "reconnecting";
+                this._scheduleReconnect();
             }
-            this.state.error = "Connection to AI was lost. Please try sending your message again.";
         };
     }
 
@@ -213,12 +254,36 @@ export class AiChat extends Component {
      * Close the active EventSource connection and reset streaming state.
      */
     closeStream() {
+        this._clearReconnectTimer();
         if (this.eventSource) {
             this.eventSource.close();
             this.eventSource = null;
         }
         this.state.streaming = false;
         this.state.streamingText = "";
+    }
+
+    _scheduleReconnect() {
+        if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+            this.state.error = "無法連線至 AI 服務，請稍後再試或重新整理頁面。";
+            this.state.connectionState = "error";
+            return;
+        }
+        const delay = Math.pow(2, this._reconnectAttempts) * 1000; // 1s, 2s, 4s
+        this._reconnectAttempts++;
+        this.state.error = `正在重新連線...（第 ${this._reconnectAttempts} 次嘗試）`;
+        this.state.connectionState = "reconnecting";
+
+        this._reconnectTimer = setTimeout(() => {
+            this.startStream();
+        }, delay);
+    }
+
+    _clearReconnectTimer() {
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
     }
 
     // ==================== Input Handling ====================
@@ -474,12 +539,11 @@ export class AiChat extends Component {
         if (!dateStr) {
             return "";
         }
-        try {
-            const date = new Date(dateStr);
-            return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        } catch {
+        const date = new Date(dateStr);
+        if (isNaN(date.getTime())) {
             return "";
         }
+        return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
     /**
@@ -506,5 +570,37 @@ export class AiChat extends Component {
      */
     get sendDisabled() {
         return !this.state.inputText.trim() || this.state.sending || this.state.streaming;
+    }
+
+    _createAiMessage(body) {
+        return {
+            id: Date.now(),
+            body: body ? markup(`<p>${body}</p>`) : "",
+            author_name: "AI Assistant",
+            author_id: null,
+            date: new Date().toISOString(),
+            is_ai: true,
+            message_type: "comment",
+            attachments: [],
+        };
+    }
+
+    get connectionIndicator() {
+        const map = {
+            idle: { color: "gray", text: "待命中", visible: false },
+            connecting: { color: "yellow", text: "連線中...", visible: true, animate: "blink" },
+            connected: { color: "green", text: "已連線", visible: true },
+            streaming: { color: "green", text: "AI 回覆中...", visible: true, animate: "pulse" },
+            error: { color: "red", text: this.state.error || "連線錯誤", visible: true },
+            reconnecting: { color: "yellow", text: this.state.error || "重新連線中...", visible: true, animate: "blink" },
+        };
+        return map[this.state.connectionState] || map.idle;
+    }
+
+    onRetryClick() {
+        this._reconnectAttempts = 0;
+        this.state.connectionState = "connecting";
+        this.state.error = null;
+        this.startStream();
     }
 }

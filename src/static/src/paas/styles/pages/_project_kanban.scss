@@ -1,0 +1,375 @@
+// =============================================================================
+// Project Kanban Page
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Page Layout
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban__page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+// -----------------------------------------------------------------------------
+// Page Header
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban__page_header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 1.5rem;
+    flex-shrink: 0;
+}
+
+.o_woow_kanban__page_header_left {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.o_woow_kanban__back_btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    color: $woow-text-secondary;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 4px;
+
+    &:hover {
+        color: $woow-text-primary;
+        border-color: rgba($woow-primary, 0.3);
+        background: rgba($woow-primary, 0.05);
+    }
+}
+
+.o_woow_kanban__page_header_text {
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+        color: $woow-text-primary;
+        font-family: $woow-font-display;
+    }
+
+    p {
+        color: $woow-text-secondary;
+        margin: 0;
+        font-size: 0.875rem;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Kanban Board Container
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban {
+    display: flex;
+    gap: 16px;
+    overflow-x: auto;
+    padding: 4px 4px 24px;
+    flex: 1;
+    min-height: 0;
+    align-items: flex-start;
+
+    // Custom scrollbar
+    &::-webkit-scrollbar {
+        height: 6px;
+    }
+
+    &::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+        background: rgba(0, 0, 0, 0.15);
+        border-radius: 3px;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Kanban Column
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban__column {
+    min-width: 280px;
+    max-width: 320px;
+    flex-shrink: 0;
+    background: $woow-background-light;
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+}
+
+.o_woow_kanban__column_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid $woow-border-light;
+}
+
+.o_woow_kanban__column_name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    font-family: $woow-font-display;
+}
+
+.o_woow_kanban__column_count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $woow-text-secondary;
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: $woow-radius-full;
+}
+
+.o_woow_kanban__column_body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+
+    &::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    &::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+        background: rgba(0, 0, 0, 0.1);
+        border-radius: 2px;
+    }
+}
+
+.o_woow_kanban__column_empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 12px;
+    color: $woow-text-secondary;
+    font-size: 0.8125rem;
+    font-style: italic;
+    text-align: center;
+}
+
+// -----------------------------------------------------------------------------
+// Task Card
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban__card {
+    background: $woow-card-light;
+    border-radius: 8px;
+    padding: 12px;
+    cursor: pointer;
+    box-shadow: $woow-shadow-card;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.1);
+        border-color: rgba($woow-primary, 0.2);
+    }
+
+    &--dragging {
+        opacity: 0.5;
+        transform: rotate(2deg);
+        box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.15);
+    }
+}
+
+.o_woow_kanban__column--dragover {
+    background: rgba($woow-primary, 0.05);
+    border: 2px dashed rgba($woow-primary, 0.3);
+    border-radius: 12px;
+
+    .o_woow_kanban__column_body {
+        min-height: 60px;
+    }
+}
+
+.o_woow_kanban__card_title {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: $woow-text-primary;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.o_woow_kanban__card_priority {
+    font-size: 0.8125rem;
+    color: #f59e0b;
+    letter-spacing: 1px;
+}
+
+.o_woow_kanban__card_meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+}
+
+.o_woow_kanban__card_user {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 140px;
+}
+
+.o_woow_kanban__card_deadline {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    white-space: nowrap;
+
+    &--overdue {
+        color: #ef4444;
+        font-weight: 500;
+    }
+
+    &--soon {
+        color: #f59e0b;
+        font-weight: 500;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Loading State
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban__loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 2rem;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+    gap: 1rem;
+
+    p {
+        margin: 0;
+    }
+}
+
+.o_woow_kanban__loading_dots {
+    display: flex;
+    gap: 6px;
+}
+
+.o_woow_kanban__loading_dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: $woow-primary;
+    animation: o_woow_kanban_bounce 1.4s ease-in-out infinite;
+
+    &:nth-child(2) {
+        animation-delay: 0.16s;
+    }
+
+    &:nth-child(3) {
+        animation-delay: 0.32s;
+    }
+}
+
+@keyframes o_woow_kanban_bounce {
+    0%, 80%, 100% {
+        opacity: 0.3;
+        transform: scale(0.8);
+    }
+    40% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Error State
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban__error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 2rem;
+    color: $woow-text-secondary;
+    text-align: center;
+    gap: 0.75rem;
+
+    p {
+        margin: 0;
+        font-size: 0.875rem;
+    }
+}
+
+.o_woow_kanban__retry_btn {
+    margin-top: 0.5rem;
+    padding: 0.5rem 1.25rem;
+    background: $woow-primary;
+    color: #fff;
+    border: none;
+    border-radius: $woow-radius-default;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+
+    &:hover {
+        background: $woow-primary-hover;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Empty Board
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 2rem;
+    color: $woow-text-secondary;
+    text-align: center;
+    gap: 0.75rem;
+
+    p {
+        margin: 0;
+        font-size: 0.875rem;
+    }
+}

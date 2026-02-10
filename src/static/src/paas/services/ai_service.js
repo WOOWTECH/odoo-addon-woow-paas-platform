@@ -136,7 +136,8 @@ export const aiService = reactive({
      * @returns {string} SSE endpoint URL
      */
     getStreamUrl(channelId) {
-        return `/api/ai/stream/${channelId}`;
+        const csrfToken = encodeURIComponent(odoo.csrf_token || '');
+        return `/api/ai/stream/${channelId}?csrf_token=${csrfToken}`;
     },
 
     /**

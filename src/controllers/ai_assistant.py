@@ -8,12 +8,41 @@ from typing import Any
 from werkzeug.wrappers import Response
 
 from odoo.http import request, route, Controller
+from odoo.tools import html_sanitize
 
 _logger = logging.getLogger(__name__)
 
 
 class AiAssistantController(Controller):
     """Controller for AI assistant and support API endpoints."""
+
+    # ==================== Helpers ====================
+
+    def _check_channel_access(self, channel):
+        """Verify the current user has access to the channel.
+
+        Returns True if the user's partner is a member of the channel.
+        """
+        user_partner = request.env.user.partner_id
+        return user_partner in channel.channel_partner_ids
+
+    def _sse_error_response(self, error: str, error_code: str) -> Response:
+        """Build a structured SSE error response (HTTP 200)."""
+        _logger.warning('SSE error [%s]: %s (user=%s)', error_code, error, request.env.user.login)
+        return Response(
+            'data: ' + json.dumps({
+                'error': error,
+                'error_code': error_code,
+                'done': True,
+            }) + '\n\n',
+            content_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            },
+            status=200,
+        )
 
     # ==================== AI Provider / Agent API ====================
 
@@ -33,10 +62,7 @@ class AiAssistantController(Controller):
         data = [{
             'id': p.id,
             'name': p.name,
-            'api_base_url': p.api_base_url,
             'model_name': p.model_name,
-            'max_tokens': p.max_tokens,
-            'temperature': p.temperature,
             'is_active': p.is_active,
         } for p in providers]
         return {
@@ -95,6 +121,8 @@ class AiAssistantController(Controller):
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
             return {'success': False, 'error': 'Channel not found'}
+        if not self._check_channel_access(channel):
+            return {'success': False, 'error': 'Access denied'}
 
         domain = [
             ('res_id', '=', channel_id),
@@ -169,6 +197,8 @@ class AiAssistantController(Controller):
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
             return {'success': False, 'error': 'Channel not found'}
+        if not self._check_channel_access(channel):
+            return {'success': False, 'error': 'Access denied'}
 
         message = channel.message_post(
             body=body.strip(),
@@ -221,6 +251,12 @@ class AiAssistantController(Controller):
                 json.dumps({'success': False, 'error': 'Channel not found'}),
                 content_type='application/json',
                 status=404,
+            )
+        if not self._check_channel_access(channel):
+            return Response(
+                json.dumps({'success': False, 'error': 'Access denied'}),
+                content_type='application/json',
+                status=403,
             )
 
         uploaded_file = kwargs.get('file')
@@ -285,30 +321,26 @@ class AiAssistantController(Controller):
         Returns:
             werkzeug.Response: SSE stream with text/event-stream content type.
         """
+        # Validate CSRF token (GET endpoints bypass Odoo's automatic check)
+        csrf_token = kwargs.get('csrf_token', '')
+        if not csrf_token or not request.validate_csrf(csrf_token):
+            return self._sse_error_response('Invalid request', 'csrf_error')
+
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
-            return Response(
-                'data: {"error": "Channel not found"}\n\n',
-                content_type='text/event-stream',
-                status=404,
-            )
+            return self._sse_error_response('Channel not found', 'channel_not_found')
+        if not self._check_channel_access(channel):
+            return self._sse_error_response('Access denied', 'access_denied')
 
         # Find the agent for this channel
         agent = self._get_channel_agent(channel)
         if not agent:
-            return Response(
-                'data: {"error": "No AI agent available"}\n\n',
-                content_type='text/event-stream',
-                status=400,
-            )
+            return self._sse_error_response('No AI agent available', 'no_agent')
 
         provider = agent.provider_id
         if not provider or not provider.is_active:
-            return Response(
-                'data: {"error": "AI provider not configured"}\n\n',
-                content_type='text/event-stream',
-                status=400,
-            )
+            _logger.error('AI provider not configured for agent %s in channel %s', agent.name, channel_id)
+            return self._sse_error_response('AI provider not configured', 'provider_not_configured')
 
         # Get the latest user message
         last_message = request.env['mail.message'].sudo().search([
@@ -319,11 +351,7 @@ class AiAssistantController(Controller):
         ], order='id desc', limit=1)
 
         if not last_message:
-            return Response(
-                'data: {"error": "No user message found"}\n\n',
-                content_type='text/event-stream',
-                status=400,
-            )
+            return self._sse_error_response('No user message found', 'no_message')
 
         user_message = last_message.body or ''
 
@@ -365,16 +393,19 @@ class AiAssistantController(Controller):
             # Post the full AI response to the channel
             if full_response:
                 try:
-                    channel.with_context(mail_create_nosubscribe=True).message_post(
-                        body=full_response,
+                    channel.with_context(
+                        mail_create_nosubscribe=True,
+                        skip_ai_reply=True,
+                    ).message_post(
+                        body=html_sanitize(full_response),
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment',
                         author_id=root_partner_id,
                     )
-                except Exception:
-                    _logger.exception('Failed to post AI response to channel %s', channel_id)
+                except Exception as exc:
+                    _logger.exception('Failed to post AI response to channel %s: %s', channel_id, exc)
                     warn_data = json.dumps({
-                        'warning': 'AI response was generated but could not be saved. Please refresh to check.',
+                        'warning': 'AI 回覆已生成但無法儲存，請重新整理頁面確認。',
                     })
                     yield f'data: {warn_data}\n\n'
 
@@ -449,11 +480,9 @@ class AiAssistantController(Controller):
         Returns:
             dict: Task stats (total, active, completion percentage).
         """
-        tasks = request.env['project.task'].sudo().search([])
-        total = len(tasks)
-        done = len(tasks.filtered(
-            lambda t: t.stage_id.name in ('Done', 'Cancelled')
-        ))
+        Task = request.env['project.task'].sudo()
+        total = Task.search_count([])
+        done = Task.search_count([('stage_id.name', 'in', ('Done', 'Cancelled'))])
         active = total - done
         completion = round((done / total) * 100) if total > 0 else 0
         return {
@@ -504,6 +533,26 @@ class AiAssistantController(Controller):
             return self._delete_project(kwargs)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
+
+    @route('/api/support/projects/<int:project_id>/stages', auth='user', methods=['POST'], type='json')
+    def api_support_project_stages(
+        self,
+        project_id: int,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """List stages for a project.
+
+        Args:
+            project_id: The project.project ID.
+
+        Returns:
+            dict: Response with stage list sorted by sequence.
+        """
+        stages = self._get_project_stages(project_id)
+        return {
+            'success': True,
+            'data': stages,
+        }
 
     @route(
         ['/api/support/tasks', '/api/support/tasks/<int:workspace_id>'],
@@ -569,6 +618,21 @@ class AiAssistantController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     # ==================== Private: Project Helpers ====================
+
+    def _get_project_stages(self, project_id: int) -> list[dict]:
+        """Get stages for a project, sorted by sequence.
+
+        Args:
+            project_id: The project.project ID.
+
+        Returns:
+            list: Stage dicts with id, name, and sequence.
+        """
+        stages = request.env['project.task.type'].sudo().search(
+            [('project_ids', 'in', [project_id])],
+            order='sequence asc',
+        )
+        return [{'id': s.id, 'name': s.name, 'sequence': s.sequence} for s in stages]
 
     def _list_projects(self, workspace) -> dict[str, Any]:
         """List projects, optionally filtered by workspace."""
@@ -728,6 +792,8 @@ class AiAssistantController(Controller):
                 vals['name'] = name
         if 'description' in params:
             vals['description'] = (params['description'] or '').strip()
+        if 'stage_id' in params:
+            vals['stage_id'] = int(params['stage_id'])
         if 'chat_enabled' in params:
             vals['chat_enabled'] = bool(params['chat_enabled'])
         if 'ai_auto_reply' in params:
@@ -757,7 +823,11 @@ class AiAssistantController(Controller):
             'chat_enabled': task.chat_enabled,
             'channel_id': task.channel_id.id if task.channel_id else None,
             'ai_auto_reply': task.ai_auto_reply,
+            'stage_id': task.stage_id.id if task.stage_id else None,
             'stage_name': task.stage_id.name if task.stage_id else None,
+            'priority': task.priority or '0',
+            'date_deadline': task.date_deadline.isoformat() if task.date_deadline else None,
+            'user_name': task.user_ids[0].name if task.user_ids else None,
             'user_ids': [u.id for u in task.user_ids] if task.user_ids else [],
             'created_date': task.create_date.isoformat() if task.create_date else None,
         }
