@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.CreateTaskModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal">
+                <div class="o_woow_modal_header">
+                    <h2>Create New Task</h2>
+                    <button class="o_woow_modal_close" t-on-click="props.onClose">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <div class="o_woow_form_group">
+                        <label for="task_name">Task Name</label>
+                        <input
+                            type="text"
+                            id="task_name"
+                            class="o_woow_input"
+                            placeholder="e.g., Fix login page layout"
+                            t-att-value="state.name"
+                            t-on-input="onNameInput"
+                            t-att-disabled="state.loading"
+                        />
+                    </div>
+
+                    <div class="o_woow_form_group">
+                        <label for="task_description">Description (optional)</label>
+                        <textarea
+                            id="task_description"
+                            class="o_woow_textarea"
+                            placeholder="Describe the task..."
+                            rows="3"
+                            t-att-value="state.description"
+                            t-on-input="onDescriptionInput"
+                            t-att-disabled="state.loading"
+                        />
+                    </div>
+
+                    <div class="o_woow_form_group">
+                        <label for="task_project">Project</label>
+                        <select
+                            id="task_project"
+                            class="o_woow_input"
+                            t-on-change="onProjectChange"
+                            t-att-disabled="state.loading"
+                        >
+                            <option value="">-- Select a project --</option>
+                            <t t-foreach="supportService.projects" t-as="project" t-key="project.id">
+                                <option
+                                    t-att-value="project.id"
+                                    t-att-selected="state.projectId === project.id"
+                                    t-esc="project.name"
+                                />
+                            </t>
+                        </select>
+                    </div>
+
+                    <div class="o_woow_form_group">
+                        <label for="task_priority">Priority</label>
+                        <select
+                            id="task_priority"
+                            class="o_woow_input"
+                            t-on-change="onPriorityChange"
+                            t-att-disabled="state.loading"
+                        >
+                            <option value="0" t-att-selected="state.priority === '0'">Low</option>
+                            <option value="1" t-att-selected="state.priority === '1'">Normal</option>
+                            <option value="2" t-att-selected="state.priority === '2'">High</option>
+                            <option value="3" t-att-selected="state.priority === '3'">Urgent</option>
+                        </select>
+                    </div>
+
+                    <div class="o_woow_form_group">
+                        <label for="task_deadline">Deadline (optional)</label>
+                        <input
+                            type="date"
+                            id="task_deadline"
+                            class="o_woow_input"
+                            t-att-value="state.deadline"
+                            t-on-input="onDeadlineInput"
+                            t-att-disabled="state.loading"
+                        />
+                    </div>
+
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton variant="'ghost'" size="'md'" onClick="props.onClose" disabled="state.loading">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="onSubmit" disabled="state.loading">
+                        <t t-if="state.loading">
+                            <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                            Creating...
+                        </t>
+                        <t t-else="">
+                            Create Task
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

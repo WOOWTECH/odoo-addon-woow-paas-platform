@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.CreateProjectModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal">
+                <div class="o_woow_modal_header">
+                    <h2>Create New Project</h2>
+                    <button class="o_woow_modal_close" t-on-click="props.onClose">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <div class="o_woow_form_group">
+                        <label for="project_name">Project Name</label>
+                        <input
+                            type="text"
+                            id="project_name"
+                            class="o_woow_input"
+                            placeholder="e.g., Customer Portal Redesign"
+                            t-att-value="state.name"
+                            t-on-input="onNameInput"
+                            t-att-disabled="state.loading"
+                        />
+                    </div>
+
+                    <div class="o_woow_form_group">
+                        <label for="project_description">Description (optional)</label>
+                        <textarea
+                            id="project_description"
+                            class="o_woow_textarea"
+                            placeholder="Describe your project..."
+                            rows="3"
+                            t-att-value="state.description"
+                            t-on-input="onDescriptionInput"
+                            t-att-disabled="state.loading"
+                        />
+                    </div>
+
+                    <div class="o_woow_form_group">
+                        <label for="project_workspace">Workspace</label>
+                        <t t-if="state.workspacesLoading">
+                            <div class="o_woow_input o_woow_select_loading">
+                                <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                                <span>Loading workspaces...</span>
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <select
+                                id="project_workspace"
+                                class="o_woow_input o_woow_select"
+                                t-att-value="state.workspaceId"
+                                t-on-change="onWorkspaceChange"
+                                t-att-disabled="state.loading"
+                            >
+                                <option value="">Select a workspace...</option>
+                                <t t-foreach="state.workspaces" t-as="ws" t-key="ws.id">
+                                    <option t-att-value="ws.id" t-att-selected="String(ws.id) === state.workspaceId" t-esc="ws.name"/>
+                                </t>
+                            </select>
+                        </t>
+                    </div>
+
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton variant="'ghost'" size="'md'" onClick="props.onClose" disabled="state.loading">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="onSubmit" disabled="state.loading || state.workspacesLoading">
+                        <t t-if="state.loading">
+                            <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                            Creating...
+                        </t>
+                        <t t-else="">
+                            Create Project
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>
