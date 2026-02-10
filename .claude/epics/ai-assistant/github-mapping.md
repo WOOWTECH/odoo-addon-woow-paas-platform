@@ -2,7 +2,7 @@
 epic: ai-assistant
 epic_issue: 21
 repo: WOOWTECH/odoo-addon-woow-paas-platform
-synced: 2026-02-10T00:45:00Z
+synced: 2026-02-10T06:15:15Z
 ---
 
 # GitHub Issue Mapping

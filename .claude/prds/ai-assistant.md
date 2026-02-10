@@ -1,9 +1,9 @@
 ---
 name: ai-assistant
 description: Workspace 內嵌 AI 助手功能，支援多人群組聊天 + AI agent @ mention、多組 OpenAI compatible provider 設定、任務管理與專案追蹤。採用 _inherit 擴展 project.task + discuss.channel 實現。
-status: backlog
+status: complete
 created: 2026-02-09T14:58:30Z
-updated: 2026-02-09T15:57:18Z
+updated: 2026-02-10T06:15:15Z
 ---
 
 # PRD: AI Assistant

@@ -1,8 +1,9 @@
 ---
 name: ai-assistant
-status: backlog
+status: completed
 created: 2026-02-09T16:30:02Z
-progress: 0%
+updated: 2026-02-10T06:11:51Z
+progress: 100%
 prd: .claude/prds/ai-assistant.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/21
 ---
@@ -132,16 +133,16 @@ Support Projects + Tasks UI + Task Detail（嵌入 Chat）
 
 ## Task Breakdown (10 Tasks)
 
-- [ ] **Task 1: AI Provider + Agent Models + Settings UI** — 建立 `ai_provider`、`ai_agent` models（`_name`），擴展 `res_config_settings`，建立 views + 預設 WoowBot data + ACL，新增 `project`/`mail`/`bus` 依賴到 `__manifest__.py`
-- [ ] **Task 2: Extend project.project + project.task** — `_inherit` 擴展加入 `workspace_id`、`chat_enabled`、`channel_id`、`ai_auto_reply`，實作 `_create_chat_channel()` lazy creation + `write()` hook，建立 `project_task_views.xml`
-- [ ] **Task 3: Extend discuss.channel + AI Client + Controller** — Override `message_post()` 觸發 AI 回覆 + bus 通知，建立 `ai_client.py` OpenAI HTTP client（含 streaming），建立 `ai_assistant.py` controller（全部 API endpoints）
-- [ ] **Task 4: Frontend Routing + Hub + Services** — 擴展 `router.js` + `root.js/xml` + `Sidebar.js/xml`，建立 `AiAssistantPage`（Hub），建立 `ai_service.js` + `support_service.js` reactive services
-- [ ] **Task 5: AiChat Component + @ Mention** — 建立 `AiChat` OWL 元件（訊息列表、輸入框、SSE EventSource、附件上傳），建立 `AiMentionDropdown`（`@` 偵測 + agent 下拉），建立 `AiChat.scss`
-- [ ] **Task 6: Support Projects Page** — 建立 `SupportProjectsPage`（card grid），搜尋 + 篩選 + grid/list 切換，Apply for Project 功能，`_support_projects.scss`
-- [ ] **Task 7: Support Tasks Page (Kanban)** — 建立 `SupportTasksPage`（Kanban by project），任務卡片 + My & Shared 篩選，`_support_tasks.scss`
-- [ ] **Task 8: Task Detail Page + Embedded Chat** — 建立 `TaskDetailPage`（info panel + Description/Sub-tasks/Chat tabs），Chat tab 嵌入 `AiChat`，`_task_detail.scss`
-- [ ] **Task 9: AI Chat Full Page + Workspace Integration** — 建立全頁 Chat 路由，Settings 連線測試按鈕，混合模式 auto_reply toggle UI
-- [ ] **Task 10: Integration Testing + Polish** — 端到端測試（Provider → 訊息 → AI 串流），錯誤處理，UI 對照設計圖，安全審查
+- [x] **Task 1: AI Provider + Agent Models + Settings UI** — 建立 `ai_provider`、`ai_agent` models（`_name`），擴展 `res_config_settings`，建立 views + 預設 WoowBot data + ACL，新增 `project`/`mail`/`bus` 依賴到 `__manifest__.py`
+- [x] **Task 2: Extend project.project + project.task** — `_inherit` 擴展加入 `workspace_id`、`chat_enabled`、`channel_id`、`ai_auto_reply`，實作 `_create_chat_channel()` lazy creation + `write()` hook，建立 `project_task_views.xml`
+- [x] **Task 3: Extend discuss.channel + AI Client + Controller** — Override `message_post()` 觸發 AI 回覆 + bus 通知，建立 `ai_client.py` OpenAI HTTP client（含 streaming），建立 `ai_assistant.py` controller（全部 API endpoints）
+- [x] **Task 4: Frontend Routing + Hub + Services** — 擴展 `router.js` + `root.js/xml` + `Sidebar.js/xml`，建立 `AiAssistantPage`（Hub），建立 `ai_service.js` + `support_service.js` reactive services
+- [x] **Task 5: AiChat Component + @ Mention** — 建立 `AiChat` OWL 元件（訊息列表、輸入框、SSE EventSource、附件上傳），建立 `AiMentionDropdown`（`@` 偵測 + agent 下拉），建立 `AiChat.scss`
+- [x] **Task 6: Support Projects Page** — 建立 `SupportProjectsPage`（card grid），搜尋 + 篩選 + grid/list 切換，Apply for Project 功能，`_support_projects.scss`
+- [x] **Task 7: Support Tasks Page (Kanban)** — 建立 `SupportTasksPage`（Kanban by project），任務卡片 + My & Shared 篩選，`_support_tasks.scss`
+- [x] **Task 8: Task Detail Page + Embedded Chat** — 建立 `TaskDetailPage`（info panel + Description/Sub-tasks/Chat tabs），Chat tab 嵌入 `AiChat`，`_task_detail.scss`
+- [x] **Task 9: AI Chat Full Page + Workspace Integration** — 建立全頁 Chat 路由，Settings 連線測試按鈕，混合模式 auto_reply toggle UI
+- [x] **Task 10: Integration Testing + Polish** — 端到端測試（Provider → 訊息 → AI 串流），錯誤處理，UI 對照設計圖，安全審查
 
 ## Implementation Order
 
@@ -226,16 +227,16 @@ Task 10 (Testing + Polish)
 **Critical Path**: Task 1 → Task 3 → Task 5 → Task 8
 
 ## Tasks Created
-- [ ] #22 (22.md) - AI Provider + Agent Models + Settings UI (parallel: false)
-- [ ] #24 (24.md) - Extend project.project + project.task (parallel: true)
-- [ ] #25 (25.md) - Extend discuss.channel + AI Client + Controller (parallel: true)
-- [ ] #28 (28.md) - Frontend Routing + Hub + Services (parallel: true)
-- [ ] #31 (31.md) - AiChat Component + @ Mention (parallel: false)
-- [ ] #23 (23.md) - Support Projects Page (parallel: true)
-- [ ] #26 (26.md) - Support Tasks Page / Kanban (parallel: true)
-- [ ] #27 (27.md) - Task Detail Page + Embedded Chat (parallel: false)
-- [ ] #29 (29.md) - AI Chat Full Page + Workspace Integration (parallel: true)
-- [ ] #30 (30.md) - Integration Testing + Polish (parallel: false)
+- [x] #22 (22.md) - AI Provider + Agent Models + Settings UI (parallel: false)
+- [x] #24 (24.md) - Extend project.project + project.task (parallel: true)
+- [x] #25 (25.md) - Extend discuss.channel + AI Client + Controller (parallel: true)
+- [x] #28 (28.md) - Frontend Routing + Hub + Services (parallel: true)
+- [x] #31 (31.md) - AiChat Component + @ Mention (parallel: false)
+- [x] #23 (23.md) - Support Projects Page (parallel: true)
+- [x] #26 (26.md) - Support Tasks Page / Kanban (parallel: true)
+- [x] #27 (27.md) - Task Detail Page + Embedded Chat (parallel: false)
+- [x] #29 (29.md) - AI Chat Full Page + Workspace Integration (parallel: true)
+- [x] #30 (30.md) - Integration Testing + Polish (parallel: false)
 
 Total tasks: 10
 Parallel tasks: 5 (#24, #25, #28, #23, #26, #29)
