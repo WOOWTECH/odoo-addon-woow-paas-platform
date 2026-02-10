@@ -26,7 +26,7 @@ export class SupportProjectsPage extends Component {
 
     async _loadProjects() {
         try {
-            await supportService.fetchProjects(0);
+            await supportService.fetchAllProjects();
         } catch (err) {
             console.warn("Failed to load support projects:", err);
         }

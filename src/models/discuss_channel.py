@@ -26,6 +26,11 @@ class DiscussChannel(models.Model):
         if kwargs.get('message_type', 'comment') != 'comment':
             return message
 
+        # Skip AI-authored messages to prevent infinite recursion
+        author_id = kwargs.get('author_id')
+        if author_id and author_id == self.env.ref('base.partner_root').id:
+            return message
+
         body = kwargs.get('body', '') or ''
         if not body:
             return message
@@ -140,13 +145,12 @@ class DiscussChannel(models.Model):
                 'AI client error for agent %s: %s',
                 agent.name, exc.message,
             )
-            ai_response = f'Sorry, I encountered an error: {exc.message}'
+            ai_response = 'Sorry, I encountered an error and could not process your request. Please try again later.'
 
         if not ai_response:
             return
 
         # Post the AI reply as a message in the channel
-        display_name = agent.agent_display_name or agent.name
         ai_message = self.with_context(mail_create_nosubscribe=True).message_post(
             body=ai_response,
             message_type='comment',
@@ -155,15 +159,16 @@ class DiscussChannel(models.Model):
         )
 
         # Send bus notification for real-time UI update
+        agent_display = agent.agent_display_name or agent.name
         channel_info = {
             'id': ai_message.id,
             'body': ai_response,
             'author': {
                 'id': self.env.ref('base.partner_root').id,
-                'name': display_name,
+                'name': agent_display,
             },
             'agent_id': agent.id,
-            'agent_name': display_name,
+            'agent_name': agent_display,
             'agent_color': agent.avatar_color or '#875A7B',
         }
         self.env['bus.bus']._sendone(

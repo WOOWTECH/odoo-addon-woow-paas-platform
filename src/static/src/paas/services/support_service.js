@@ -124,6 +124,29 @@ export const supportService = reactive({
     stats: { total: 0, active: 0, completion: 0 },
 
     /**
+     * Fetch all projects (no workspace filter)
+     * @returns {Promise<void>}
+     */
+    async fetchAllProjects() {
+        this.loading = true;
+        this.error = null;
+        try {
+            const result = await jsonRpc("/api/support/projects", {
+                action: "list",
+            });
+            if (result.success) {
+                this.projects = result.data;
+            } else {
+                this.error = result.error || "Failed to fetch projects";
+            }
+        } catch (err) {
+            this.error = err.message || "Network error";
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    /**
      * Fetch projects for a workspace
      * @param {number} workspaceId - Workspace ID
      * @returns {Promise<void>}
@@ -139,6 +162,40 @@ export const supportService = reactive({
                 this.projects = result.data;
             } else {
                 this.error = result.error || "Failed to fetch projects";
+            }
+        } catch (err) {
+            this.error = err.message || "Network error";
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    /**
+     * Fetch all tasks (no workspace filter)
+     * @param {Object} [filters={}] - Optional filters
+     * @param {number} [filters.project_id] - Filter by project
+     * @param {string} [filters.stage] - Filter by stage name
+     * @param {boolean} [filters.my_tasks] - Only show current user's tasks
+     * @returns {Promise<void>}
+     */
+    async fetchAllTasks(filters = {}) {
+        this.loading = true;
+        this.error = null;
+        try {
+            const params = {
+                action: "list",
+                ...filters,
+            };
+            const result = await jsonRpc("/api/support/tasks", params);
+            if (result.success) {
+                this.tasks = result.data.tasks || result.data;
+                if (result.data.stats) {
+                    this.stats = result.data.stats;
+                } else {
+                    this._computeStats();
+                }
+            } else {
+                this.error = result.error || "Failed to fetch tasks";
             }
         } catch (err) {
             this.error = err.message || "Network error";

@@ -36,7 +36,8 @@ export class AiChatPage extends Component {
             } else {
                 this.state.channelName = `Chat #${this.props.conversationId}`;
             }
-        } catch {
+        } catch (err) {
+            console.warn("Failed to load channel info:", err);
             this.state.channelName = `Chat #${this.props.conversationId}`;
         } finally {
             this.state.loading = false;

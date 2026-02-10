@@ -33,7 +33,7 @@ export class SupportTasksPage extends Component {
             if (this.state.filterMode === "my") {
                 filters.my_tasks = true;
             }
-            await supportService.fetchTasks(null, filters);
+            await supportService.fetchAllTasks(filters);
         } catch (err) {
             console.warn("Failed to load tasks:", err);
         } finally {

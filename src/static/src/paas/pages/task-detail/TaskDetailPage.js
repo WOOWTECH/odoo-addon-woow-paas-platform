@@ -61,9 +61,11 @@ export class TaskDetailPage extends Component {
             });
             if (result.success) {
                 await this.loadTask();
+            } else {
+                this.state.error = result.error || "Failed to enable chat";
             }
         } catch (err) {
-            console.warn("Failed to enable chat:", err);
+            this.state.error = err.message || "Failed to enable chat";
         }
     }
 
@@ -76,9 +78,11 @@ export class TaskDetailPage extends Component {
             });
             if (result.success) {
                 await this.loadTask();
+            } else {
+                this.state.error = result.error || "Failed to toggle auto-reply";
             }
         } catch (err) {
-            console.warn("Failed to toggle auto-reply:", err);
+            this.state.error = err.message || "Failed to toggle auto-reply";
         }
     }
 

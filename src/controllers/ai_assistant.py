@@ -192,18 +192,26 @@ class AiAssistantController(Controller):
             },
         }
 
-    @route('/api/ai/chat/upload', auth='user', methods=['POST'], type='http', csrf=False)
+    @route('/api/ai/chat/upload', auth='user', methods=['POST'], type='http')
     def api_ai_chat_upload(self, **kwargs: Any) -> str:
         """Upload a file attachment to a channel.
 
         Expects multipart form data with:
         - channel_id: The discuss.channel ID
         - file: The uploaded file
+        - csrf_token: CSRF token
 
         Returns:
             JSON string with upload result.
         """
-        channel_id = int(kwargs.get('channel_id', 0))
+        try:
+            channel_id = int(kwargs.get('channel_id', 0))
+        except (TypeError, ValueError):
+            return Response(
+                json.dumps({'success': False, 'error': 'Invalid channel_id'}),
+                content_type='application/json',
+                status=400,
+            )
         if not channel_id:
             return Response(
                 json.dumps({'success': False, 'error': 'channel_id is required'}),
@@ -323,23 +331,26 @@ class AiAssistantController(Controller):
 
         user_message = last_message.body or ''
 
+        # Pre-fetch ORM data before entering the generator to avoid
+        # accessing the ORM after the request lifecycle has ended.
+        from ..models.ai_client import AIClient, AIClientError
+
+        history = channel._get_chat_history(limit=20)
+        client = AIClient(
+            api_base_url=provider.api_base_url,
+            api_key=provider.api_key,
+            model_name=provider.model_name,
+            max_tokens=provider.max_tokens,
+            temperature=provider.temperature,
+        )
+        messages = client.build_messages(
+            system_prompt=agent.system_prompt or '',
+            history=history,
+            user_message=user_message,
+        )
+        root_partner_id = request.env.ref('base.partner_root').id
+
         def generate():
-            from ..models.ai_client import AIClient, AIClientError
-
-            history = channel._get_chat_history(limit=20)
-            client = AIClient(
-                api_base_url=provider.api_base_url,
-                api_key=provider.api_key,
-                model_name=provider.model_name,
-                max_tokens=provider.max_tokens,
-                temperature=provider.temperature,
-            )
-            messages = client.build_messages(
-                system_prompt=agent.system_prompt or '',
-                history=history,
-                user_message=user_message,
-            )
-
             full_response = ''
             try:
                 for chunk in client.chat_completion_stream(messages):
@@ -358,15 +369,18 @@ class AiAssistantController(Controller):
             # Post the full AI response to the channel
             if full_response:
                 try:
-                    display_name = agent.agent_display_name or agent.name
                     channel.with_context(mail_create_nosubscribe=True).message_post(
                         body=full_response,
                         message_type='comment',
                         subtype_xmlid='mail.mt_comment',
-                        author_id=request.env.ref('base.partner_root').id,
+                        author_id=root_partner_id,
                     )
                 except Exception:
                     _logger.exception('Failed to post AI response to channel %s', channel_id)
+                    warn_data = json.dumps({
+                        'warning': 'AI response was generated but could not be saved. Please refresh to check.',
+                    })
+                    yield f'data: {warn_data}\n\n'
 
         return Response(
             generate(),
@@ -404,31 +418,93 @@ class AiAssistantController(Controller):
         # Fallback to the default agent
         return AiAgent.search([('is_default', '=', True)], limit=1)
 
+    # ==================== AI Connection Status ====================
+
+    @route('/api/ai/connection-status', auth='user', methods=['POST'], type='json')
+    def api_ai_connection_status(self, **kwargs: Any) -> dict[str, Any]:
+        """Check the AI provider connection status.
+
+        Returns:
+            dict: Connection status with provider and model info.
+        """
+        provider = request.env['woow_paas_platform.ai_provider'].sudo().search([
+            ('is_active', '=', True),
+        ], limit=1)
+        if not provider:
+            return {
+                'success': True,
+                'data': {
+                    'connected': False,
+                    'provider_name': '',
+                    'model_name': '',
+                },
+            }
+        return {
+            'success': True,
+            'data': {
+                'connected': True,
+                'provider_name': provider.name,
+                'model_name': provider.model_name,
+            },
+        }
+
+    # ==================== Support Stats API ====================
+
+    @route('/api/support/stats', auth='user', methods=['POST'], type='json')
+    def api_support_stats(self, **kwargs: Any) -> dict[str, Any]:
+        """Get task statistics for the current user.
+
+        Returns:
+            dict: Task stats (total, active, completion percentage).
+        """
+        tasks = request.env['project.task'].sudo().search([])
+        total = len(tasks)
+        done = len(tasks.filtered(
+            lambda t: t.stage_id.name in ('Done', 'Cancelled')
+        ))
+        active = total - done
+        completion = round((done / total) * 100) if total > 0 else 0
+        return {
+            'success': True,
+            'data': {
+                'total': total,
+                'active': active,
+                'completion': completion,
+            },
+        }
+
     # ==================== Support / Project API ====================
 
-    @route('/api/support/projects/<int:workspace_id>', auth='user', methods=['POST'], type='json')
+    @route(
+        ['/api/support/projects', '/api/support/projects/<int:workspace_id>'],
+        auth='user', methods=['POST'], type='json',
+    )
     def api_support_projects(
         self,
-        workspace_id: int,
+        workspace_id: int = 0,
         action: str = 'list',
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Project CRUD operations for a workspace.
+        """Project CRUD operations, optionally scoped to a workspace.
 
         Args:
-            workspace_id: The workspace ID.
+            workspace_id: The workspace ID (0 = all projects).
             action: Operation type ('list', 'create', 'update', 'delete').
 
         Returns:
             dict: Response with project data.
         """
-        workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
+        workspace = None
+        if workspace_id:
+            workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
+            if not workspace.exists():
+                return {'success': False, 'error': 'Workspace not found'}
 
         if action == 'list':
             return self._list_projects(workspace)
         elif action == 'create':
+            if not workspace:
+                return {'success': False, 'error': 'workspace_id is required for create'}
             return self._create_project(workspace, kwargs)
         elif action == 'update':
             return self._update_project(kwargs)
@@ -437,29 +513,36 @@ class AiAssistantController(Controller):
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
-    @route('/api/support/tasks/<int:workspace_id>', auth='user', methods=['POST'], type='json')
+    @route(
+        ['/api/support/tasks', '/api/support/tasks/<int:workspace_id>'],
+        auth='user', methods=['POST'], type='json',
+    )
     def api_support_tasks(
         self,
-        workspace_id: int,
+        workspace_id: int = 0,
         action: str = 'list',
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Task list/create operations for a workspace.
+        """Task list/create operations, optionally scoped to a workspace.
 
         Args:
-            workspace_id: The workspace ID.
+            workspace_id: The workspace ID (0 = all tasks).
             action: Operation type ('list', 'create').
 
         Returns:
             dict: Response with task data.
         """
-        workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
-        if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found'}
+        workspace = None
+        if workspace_id:
+            workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
+            if not workspace.exists():
+                return {'success': False, 'error': 'Workspace not found'}
 
         if action == 'list':
             return self._list_tasks(workspace, kwargs)
         elif action == 'create':
+            if not workspace:
+                return {'success': False, 'error': 'workspace_id is required for create'}
             return self._create_task(workspace, kwargs)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
@@ -496,10 +579,11 @@ class AiAssistantController(Controller):
     # ==================== Private: Project Helpers ====================
 
     def _list_projects(self, workspace) -> dict[str, Any]:
-        """List all projects in a workspace."""
-        projects = request.env['project.project'].sudo().search([
-            ('workspace_id', '=', workspace.id),
-        ])
+        """List projects, optionally filtered by workspace."""
+        domain = []
+        if workspace:
+            domain.append(('workspace_id', '=', workspace.id))
+        projects = request.env['project.project'].sudo().search(domain)
         data = []
         for proj in projects:
             data.append({
@@ -582,9 +666,11 @@ class AiAssistantController(Controller):
     # ==================== Private: Task Helpers ====================
 
     def _list_tasks(self, workspace, params: dict) -> dict[str, Any]:
-        """List tasks for projects in a workspace."""
+        """List tasks, optionally filtered by workspace."""
         project_id = params.get('project_id')
-        domain = [('project_id.workspace_id', '=', workspace.id)]
+        domain = []
+        if workspace:
+            domain.append(('project_id.workspace_id', '=', workspace.id))
         if project_id:
             domain.append(('project_id', '=', int(project_id)))
 

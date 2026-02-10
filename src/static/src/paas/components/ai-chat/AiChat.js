@@ -162,6 +162,10 @@ export class AiChat extends Component {
                     this.scrollToBottom();
                 }
 
+                if (data.warning) {
+                    this.state.error = data.warning;
+                }
+
                 if (data.done) {
                     // Add the complete AI message to the list
                     if (this.state.streamingText) {
@@ -180,12 +184,27 @@ export class AiChat extends Component {
                     this.scrollToBottom();
                 }
             } catch (parseErr) {
-                // Ignore parse errors for malformed SSE data
+                console.warn("Failed to parse SSE chunk:", event.data, parseErr);
             }
         };
 
         this.eventSource.onerror = () => {
+            const hadContent = !!this.state.streamingText;
+            const partialText = this.state.streamingText;
             this.closeStream();
+            if (hadContent) {
+                this.state.messages.push({
+                    id: Date.now(),
+                    body: partialText,
+                    author_name: "AI Assistant",
+                    author_id: null,
+                    date: new Date().toISOString(),
+                    is_ai: true,
+                    message_type: "comment",
+                    attachments: [],
+                });
+            }
+            this.state.error = "Connection to AI was lost. Please try sending your message again.";
         };
     }
 
@@ -397,6 +416,7 @@ export class AiChat extends Component {
             const formData = new FormData();
             formData.append("channel_id", this.props.channelId);
             formData.append("file", file);
+            formData.append("csrf_token", odoo.csrf_token || "");
 
             const response = await fetch("/api/ai/chat/upload", {
                 method: "POST",
