@@ -14,7 +14,6 @@
                     </div>
                 </div>
                 <div class="o_woow_support_tasks_header_right">
-                    <!-- New Task Button -->
                     <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateModal">
                         <WoowIcon name="'add'" size="16"/>
                         New Task

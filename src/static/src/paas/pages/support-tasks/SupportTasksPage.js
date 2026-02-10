@@ -23,9 +23,7 @@ export class SupportTasksPage extends Component {
         });
         this.supportService = useState(supportService);
 
-        onMounted(async () => {
-            await this._loadTasks();
-        });
+        onMounted(() => this._loadTasks());
     }
 
     async _loadTasks() {

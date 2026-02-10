@@ -17,16 +17,14 @@ export class CreateProjectModal extends Component {
         this.state = useState({
             name: "",
             description: "",
-            workspaceId: "",
+            workspaceId: null,
             loading: false,
             error: null,
             workspaces: [],
             workspacesLoading: true,
         });
 
-        onMounted(async () => {
-            await this._loadWorkspaces();
-        });
+        onMounted(() => this._loadWorkspaces());
     }
 
     async _loadWorkspaces() {
@@ -36,7 +34,7 @@ export class CreateProjectModal extends Component {
             this.state.workspaces = workspaceService.workspaces;
             // Auto-select first workspace if only one exists
             if (this.state.workspaces.length === 1) {
-                this.state.workspaceId = String(this.state.workspaces[0].id);
+                this.state.workspaceId = this.state.workspaces[0].id;
             }
         } catch (err) {
             console.error("CreateProjectModal: failed to load workspaces:", err);
@@ -56,7 +54,7 @@ export class CreateProjectModal extends Component {
     }
 
     onWorkspaceChange(ev) {
-        this.state.workspaceId = ev.target.value;
+        this.state.workspaceId = ev.target.value ? parseInt(ev.target.value, 10) : null;
         this.state.error = null;
     }
 
@@ -82,8 +80,7 @@ export class CreateProjectModal extends Component {
         this.state.error = null;
 
         try {
-            const workspaceId = parseInt(this.state.workspaceId, 10);
-            const result = await supportService.createProject(workspaceId, {
+            const result = await supportService.createProject(this.state.workspaceId, {
                 name,
                 description: this.state.description.trim(),
             });

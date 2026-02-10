@@ -22,9 +22,7 @@ export class SupportProjectsPage extends Component {
             viewMode: "grid",
             showCreateModal: false,
         });
-        onMounted(async () => {
-            await this._loadProjects();
-        });
+        onMounted(() => this._loadProjects());
     }
 
     async _loadProjects() {

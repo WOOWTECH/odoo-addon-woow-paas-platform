@@ -55,7 +55,7 @@
                             >
                                 <option value="">Select a workspace...</option>
                                 <t t-foreach="state.workspaces" t-as="ws" t-key="ws.id">
-                                    <option t-att-value="ws.id" t-att-selected="'' + ws.id === state.workspaceId" t-esc="ws.name"/>
+                                    <option t-att-value="ws.id" t-att-selected="ws.id === state.workspaceId" t-esc="ws.name"/>
                                 </t>
                             </select>
                         </t>
