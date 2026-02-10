@@ -49,6 +49,9 @@ export class AiChat extends Component {
         this.fileInputRef = useRef("fileInput");
         this.eventSource = null;
         this._mentionSelectedIndex = 0;
+        this._reconnectAttempts = 0;
+        this._reconnectTimer = null;
+        this._maxReconnectAttempts = 3;
 
         onMounted(async () => {
             await this.loadAgents();
@@ -58,6 +61,7 @@ export class AiChat extends Component {
 
         onWillUnmount(() => {
             this.closeStream();
+            this._clearReconnectTimer();
         });
     }
 
@@ -173,6 +177,7 @@ export class AiChat extends Component {
                 }
 
                 if (data.chunk) {
+                    this._reconnectAttempts = 0;
                     this.state.streamingText += data.chunk;
                     this.scrollToBottom();
                 }
@@ -218,8 +223,10 @@ export class AiChat extends Component {
                     message_type: "comment",
                     attachments: [],
                 });
+                this._reconnectAttempts = 0;
+            } else {
+                this._scheduleReconnect();
             }
-            this.state.error = "與 AI 的連線中斷，正在嘗試重新連線...";
         };
     }
 
@@ -227,12 +234,34 @@ export class AiChat extends Component {
      * Close the active EventSource connection and reset streaming state.
      */
     closeStream() {
+        this._clearReconnectTimer();
         if (this.eventSource) {
             this.eventSource.close();
             this.eventSource = null;
         }
         this.state.streaming = false;
         this.state.streamingText = "";
+    }
+
+    _scheduleReconnect() {
+        if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+            this.state.error = "無法連線至 AI 服務，請稍後再試或重新整理頁面。";
+            return;
+        }
+        const delay = Math.pow(2, this._reconnectAttempts) * 1000; // 1s, 2s, 4s
+        this._reconnectAttempts++;
+        this.state.error = `正在重新連線...（第 ${this._reconnectAttempts} 次嘗試）`;
+
+        this._reconnectTimer = setTimeout(() => {
+            this.startStream();
+        }, delay);
+    }
+
+    _clearReconnectTimer() {
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
     }
 
     // ==================== Input Handling ====================
