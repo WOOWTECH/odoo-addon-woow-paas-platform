@@ -134,7 +134,7 @@ export class SupportProjectsPage extends Component {
     }
 
     navigateToProject(projectId) {
-        this.router.navigate("ai-assistant/tasks?project=" + projectId);
+        this.router.navigate("ai-assistant/projects/" + projectId);
     }
 
     navigateBack() {

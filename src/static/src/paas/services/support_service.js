@@ -59,6 +59,30 @@ export const supportService = reactive({
     error: null,
     /** @type {TaskStats} */
     stats: { total: 0, active: 0, completion: 0 },
+    /** @type {Array<{id: number, name: string, sequence: number}>} */
+    stages: [],
+
+    /**
+     * Fetch stages for a specific project
+     * @param {number} projectId - Project ID
+     * @returns {Promise<void>}
+     */
+    async fetchProjectStages(projectId) {
+        this.loading = true;
+        this.error = null;
+        try {
+            const result = await jsonRpc(`/api/support/projects/${projectId}/stages`, {});
+            if (result.success) {
+                this.stages = result.data;
+            } else {
+                this.error = result.error || "Failed to fetch stages";
+            }
+        } catch (err) {
+            this.error = err.message || "Network error";
+        } finally {
+            this.loading = false;
+        }
+    },
 
     /**
      * Fetch all projects (no workspace filter)

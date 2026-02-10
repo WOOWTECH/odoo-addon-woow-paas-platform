@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ProjectKanbanPage">
+        <div class="o_woow_kanban__page">
+            <!-- Page Header -->
+            <div class="o_woow_kanban__page_header">
+                <div class="o_woow_kanban__page_header_left">
+                    <button class="o_woow_kanban__back_btn" t-on-click="navigateBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <div class="o_woow_kanban__page_header_text">
+                        <h1 t-esc="projectName"/>
+                        <p><t t-esc="taskCount"/> tasks</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_kanban__loading">
+                    <div class="o_woow_kanban__loading_dots">
+                        <span class="o_woow_kanban__loading_dot"/>
+                        <span class="o_woow_kanban__loading_dot"/>
+                        <span class="o_woow_kanban__loading_dot"/>
+                    </div>
+                    <p>Loading kanban board...</p>
+                </div>
+            </t>
+
+            <!-- Error State -->
+            <t t-elif="error">
+                <div class="o_woow_kanban__error">
+                    <WoowIcon name="'error'" size="48"/>
+                    <p t-esc="error"/>
+                    <button class="o_woow_kanban__retry_btn" t-on-click="_loadData">Retry</button>
+                </div>
+            </t>
+
+            <!-- Kanban Board -->
+            <t t-elif="columns.length > 0">
+                <div class="o_woow_kanban">
+                    <t t-foreach="columns" t-as="column" t-key="column.stage.id">
+                        <div class="o_woow_kanban__column">
+                            <!-- Column Header -->
+                            <div class="o_woow_kanban__column_header">
+                                <span class="o_woow_kanban__column_name" t-esc="column.stage.name"/>
+                                <span class="o_woow_kanban__column_count" t-esc="column.tasks.length"/>
+                            </div>
+
+                            <!-- Task Cards -->
+                            <div class="o_woow_kanban__column_body">
+                                <t t-if="column.tasks.length > 0">
+                                    <t t-foreach="column.tasks" t-as="task" t-key="task.id">
+                                        <div class="o_woow_kanban__card" t-on-click="() => this.navigateToTask(task.id)">
+                                            <div class="o_woow_kanban__card_title" t-esc="task.name"/>
+
+                                            <t t-if="hasPriority(task)">
+                                                <span class="o_woow_kanban__card_priority" t-esc="getPriorityStars(task)"/>
+                                            </t>
+
+                                            <div class="o_woow_kanban__card_meta">
+                                                <t t-if="task.user_name">
+                                                    <span class="o_woow_kanban__card_user">
+                                                        <WoowIcon name="'person'" size="14"/>
+                                                        <t t-esc="task.user_name"/>
+                                                    </span>
+                                                </t>
+                                                <t t-if="task.date_deadline">
+                                                    <span t-att-class="'o_woow_kanban__card_deadline ' + getDeadlineClass(task.date_deadline)">
+                                                        <WoowIcon name="'schedule'" size="14"/>
+                                                        <t t-esc="formatDeadline(task.date_deadline)"/>
+                                                    </span>
+                                                </t>
+                                            </div>
+                                        </div>
+                                    </t>
+                                </t>
+                                <t t-else="">
+                                    <div class="o_woow_kanban__column_empty">
+                                        <span>No tasks in this stage</span>
+                                    </div>
+                                </t>
+                            </div>
+                        </div>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Empty Board (no stages) -->
+            <t t-else="">
+                <div class="o_woow_kanban__empty">
+                    <WoowIcon name="'view_kanban'" size="48"/>
+                    <p>No stages configured for this project.</p>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

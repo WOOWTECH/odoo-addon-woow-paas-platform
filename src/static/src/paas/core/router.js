@@ -12,6 +12,7 @@ const routes = [
     { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration)$/ },
     { path: "workspace/:id/services/:serviceId", name: "Service Detail", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
     { path: "ai-assistant", name: "AI Assistant", routeName: "ai-assistant" },
+    { path: "ai-assistant/projects/:id", name: "Project Kanban", routeName: "ai-project-kanban", pattern: /^ai-assistant\/projects\/(\d+)$/ },
     { path: "ai-assistant/projects", name: "Support Projects", routeName: "ai-projects" },
     { path: "ai-assistant/tasks/:taskId", name: "Task Detail", routeName: "ai-task-detail", pattern: /^ai-assistant\/tasks\/(\d+)$/ },
     { path: "ai-assistant/tasks", name: "Support Tasks", routeName: "ai-tasks" },
@@ -63,6 +64,8 @@ export const router = reactive({
                         this.params.taskId = match[1];
                     } else if (route.routeName === 'ai-chat') {
                         this.params.conversationId = match[1];
+                    } else if (route.routeName === 'ai-project-kanban') {
+                        this.params.id = match[1];
                     }
                     return;
                 }
