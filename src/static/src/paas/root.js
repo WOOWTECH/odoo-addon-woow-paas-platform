@@ -13,6 +13,8 @@ import { ServiceDetailPage } from "./pages/service/ServiceDetailPage";
 import { AiAssistantPage } from "./pages/ai-assistant/AiAssistantPage";
 import { SupportProjectsPage } from "./pages/support-projects/SupportProjectsPage";
 import { SupportTasksPage } from "./pages/support-tasks/SupportTasksPage";
+import { TaskDetailPage } from "./pages/task-detail/TaskDetailPage";
+import { AiChatPage } from "./pages/ai-chat/AiChatPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -29,6 +31,8 @@ export class Root extends Component {
         AiAssistantPage,
         SupportProjectsPage,
         SupportTasksPage,
+        TaskDetailPage,
+        AiChatPage,
         EmptyState,
     };
     static props = {};

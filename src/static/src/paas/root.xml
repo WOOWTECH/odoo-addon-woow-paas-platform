@@ -34,12 +34,10 @@
                     <SupportTasksPage/>
                 </t>
                 <t t-elif="router.current === 'ai-task-detail'">
-                    <!-- TaskDetailPage placeholder (future Task #27) -->
-                    <EmptyState/>
+                    <TaskDetailPage taskId="taskId"/>
                 </t>
                 <t t-elif="router.current === 'ai-chat'">
-                    <!-- AiChat full page placeholder (future Task #29) -->
-                    <EmptyState/>
+                    <AiChatPage conversationId="conversationId"/>
                 </t>
             </t>
             <t t-else="">
