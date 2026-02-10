@@ -42,6 +42,7 @@ export class AiChat extends Component {
             selectedAgentId: null,
             uploadingFile: false,
             error: null,
+            connectionState: "idle", // idle | connecting | connected | streaming | error | reconnecting
         });
 
         this.messageListRef = useRef("messageList");
@@ -52,6 +53,7 @@ export class AiChat extends Component {
         this._reconnectAttempts = 0;
         this._reconnectTimer = null;
         this._maxReconnectAttempts = 3;
+        this._connectedTimer = null;
 
         onMounted(async () => {
             await this.loadAgents();
@@ -62,6 +64,9 @@ export class AiChat extends Component {
         onWillUnmount(() => {
             this.closeStream();
             this._clearReconnectTimer();
+            if (this._connectedTimer) {
+                clearTimeout(this._connectedTimer);
+            }
         });
     }
 
@@ -156,9 +161,11 @@ export class AiChat extends Component {
         const channelId = this.props.channelId;
         if (!channelId || typeof channelId !== 'number' || channelId <= 0) {
             this.state.error = "此任務尚未啟用聊天功能，請先點擊「啟用聊天」。";
+            this.state.connectionState = "error";
             return;
         }
 
+        this.state.connectionState = "connecting";
         this.closeStream();
         this.state.streaming = true;
         this.state.streamingText = "";
@@ -172,12 +179,16 @@ export class AiChat extends Component {
 
                 if (data.error) {
                     this.state.error = ERROR_MESSAGES[data.error_code] || data.error;
+                    this.state.connectionState = "error";
                     this.closeStream();
                     return;
                 }
 
                 if (data.chunk) {
                     this._reconnectAttempts = 0;
+                    if (this.state.connectionState !== "streaming") {
+                        this.state.connectionState = "streaming";
+                    }
                     this.state.streamingText += data.chunk;
                     this.scrollToBottom();
                 }
@@ -201,6 +212,13 @@ export class AiChat extends Component {
                         });
                     }
                     this.closeStream();
+                    this.state.connectionState = "connected";
+                    // Auto-hide after 2 seconds
+                    this._connectedTimer = setTimeout(() => {
+                        if (this.state.connectionState === "connected") {
+                            this.state.connectionState = "idle";
+                        }
+                    }, 2000);
                     this.scrollToBottom();
                 }
             } catch (parseErr) {
@@ -224,7 +242,9 @@ export class AiChat extends Component {
                     attachments: [],
                 });
                 this._reconnectAttempts = 0;
+                this.state.connectionState = "idle";
             } else {
+                this.state.connectionState = "reconnecting";
                 this._scheduleReconnect();
             }
         };
@@ -246,11 +266,13 @@ export class AiChat extends Component {
     _scheduleReconnect() {
         if (this._reconnectAttempts >= this._maxReconnectAttempts) {
             this.state.error = "無法連線至 AI 服務，請稍後再試或重新整理頁面。";
+            this.state.connectionState = "error";
             return;
         }
         const delay = Math.pow(2, this._reconnectAttempts) * 1000; // 1s, 2s, 4s
         this._reconnectAttempts++;
         this.state.error = `正在重新連線...（第 ${this._reconnectAttempts} 次嘗試）`;
+        this.state.connectionState = "reconnecting";
 
         this._reconnectTimer = setTimeout(() => {
             this.startStream();
@@ -549,5 +571,24 @@ export class AiChat extends Component {
      */
     get sendDisabled() {
         return !this.state.inputText.trim() || this.state.sending || this.state.streaming;
+    }
+
+    get connectionIndicator() {
+        const map = {
+            idle: { color: "gray", text: "待命中", visible: false },
+            connecting: { color: "yellow", text: "連線中...", visible: true, animate: "blink" },
+            connected: { color: "green", text: "已連線", visible: true },
+            streaming: { color: "green", text: "AI 回覆中...", visible: true, animate: "pulse" },
+            error: { color: "red", text: this.state.error || "連線錯誤", visible: true },
+            reconnecting: { color: "yellow", text: this.state.error || "重新連線中...", visible: true, animate: "blink" },
+        };
+        return map[this.state.connectionState] || map.idle;
+    }
+
+    onRetryClick() {
+        this._reconnectAttempts = 0;
+        this.state.connectionState = "connecting";
+        this.state.error = null;
+        this.startStream();
     }
 }

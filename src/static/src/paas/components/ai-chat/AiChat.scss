@@ -49,6 +49,86 @@
     }
 
     // -------------------------------------------------------------------------
+    // Connection Status Indicator
+    // -------------------------------------------------------------------------
+    &__status {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        font-family: $woow-font-body;
+        font-size: 0.75rem;
+        border-bottom: 1px solid $woow-border-light;
+
+        &--green {
+            color: #15803d;
+            background: #f0fdf4;
+            border-bottom-color: #bbf7d0;
+        }
+
+        &--yellow {
+            color: #a16207;
+            background: #fefce8;
+            border-bottom-color: #fde68a;
+        }
+
+        &--red {
+            color: #991b1b;
+            background: #fef2f2;
+            border-bottom-color: #fecaca;
+        }
+
+        &--gray {
+            color: $woow-text-secondary;
+            background: $woow-background-light;
+        }
+    }
+
+    &__status_dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+
+        .o_woow_ai_chat__status--green & { background: #22c55e; }
+        .o_woow_ai_chat__status--yellow & { background: #f59e0b; }
+        .o_woow_ai_chat__status--red & { background: #ef4444; }
+        .o_woow_ai_chat__status--gray & { background: #9ca3af; }
+
+        &--blink {
+            animation: o_woow_status_blink 1s infinite;
+        }
+
+        &--pulse {
+            animation: o_woow_status_pulse 1.5s infinite;
+        }
+
+        &--none {
+            // No animation
+        }
+    }
+
+    &__status_text {
+        flex: 1;
+    }
+
+    &__retry_btn {
+        padding: 2px 10px;
+        background: none;
+        border: 1px solid currentColor;
+        border-radius: 4px;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        color: inherit;
+        cursor: pointer;
+        transition: background-color 0.15s;
+
+        &:hover {
+            background: rgba(0, 0, 0, 0.05);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Message List
     // -------------------------------------------------------------------------
     &__messages {
@@ -543,5 +623,21 @@
     30% {
         transform: translateY(-4px);
         opacity: 1;
+    }
+}
+
+@keyframes o_woow_status_blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+@keyframes o_woow_status_pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.6;
+        transform: scale(1.3);
     }
 }
