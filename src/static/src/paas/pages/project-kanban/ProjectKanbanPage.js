@@ -73,14 +73,16 @@ export class ProjectKanbanPage extends Component {
             }));
     }
 
+    _getPriorityLevel(task) {
+        return parseInt(task.priority, 10) || 0;
+    }
+
     hasPriority(task) {
-        const level = parseInt(task.priority, 10) || 0;
-        return level > 0;
+        return this._getPriorityLevel(task) > 0;
     }
 
     getPriorityStars(task) {
-        const level = parseInt(task.priority, 10) || 0;
-        return "\u2605".repeat(level);
+        return "\u2605".repeat(this._getPriorityLevel(task));
     }
 
     formatDeadline(dateStr) {

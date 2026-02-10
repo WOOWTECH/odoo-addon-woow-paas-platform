@@ -9,6 +9,8 @@ const ERROR_MESSAGES = {
     no_agent: "目前沒有可用的 AI 助理，請聯繫管理員設定 AI agent。",
     provider_not_configured: "AI 供應商尚未設定，請聯繫管理員。",
     no_message: "找不到訊息，請重新傳送。",
+    access_denied: "您無權存取此聊天頻道。",
+    csrf_error: "請求驗證失敗，請重新整理頁面。",
 };
 
 /**
@@ -129,14 +131,10 @@ export class AiChat extends Component {
             );
             if (result.success && result.data) {
                 this.state.messages.push({
-                    id: result.data.id,
-                    body: result.data.body,
-                    author_name: result.data.author_name,
-                    author_id: result.data.author_id,
-                    date: result.data.date,
+                    ...result.data,
                     is_ai: false,
                     message_type: "comment",
-                    attachments: [],
+                    attachments: result.data.attachments || [],
                 });
                 this.state.inputText = "";
                 this.state.selectedAgentId = null;
@@ -206,16 +204,9 @@ export class AiChat extends Component {
                 if (data.done) {
                     // Add the complete AI message to the list
                     if (this.state.streamingText) {
-                        this.state.messages.push({
-                            id: Date.now(),
-                            body: data.full_response || this.state.streamingText,
-                            author_name: "AI Assistant",
-                            author_id: null,
-                            date: new Date().toISOString(),
-                            is_ai: true,
-                            message_type: "comment",
-                            attachments: [],
-                        });
+                        this.state.messages.push(
+                            this._createAiMessage(data.full_response || this.state.streamingText)
+                        );
                     }
                     this.closeStream();
                     this.state.connectionState = "connected";
@@ -243,16 +234,9 @@ export class AiChat extends Component {
             const partialText = this.state.streamingText;
             this.closeStream();
             if (hadContent) {
-                this.state.messages.push({
-                    id: Date.now(),
-                    body: partialText + "\n\n⚠️ (回覆因連線中斷而不完整)",
-                    author_name: "AI Assistant",
-                    author_id: null,
-                    date: new Date().toISOString(),
-                    is_ai: true,
-                    message_type: "comment",
-                    attachments: [],
-                });
+                this.state.messages.push(
+                    this._createAiMessage(partialText + "\n\n⚠️ (回覆因連線中斷而不完整)")
+                );
                 this.state.error = "AI 回覆因連線中斷而不完整，您可以重新傳送訊息以取得完整回覆。";
                 this.state.connectionState = "error";
             } else {
@@ -582,6 +566,19 @@ export class AiChat extends Component {
      */
     get sendDisabled() {
         return !this.state.inputText.trim() || this.state.sending || this.state.streaming;
+    }
+
+    _createAiMessage(body) {
+        return {
+            id: Date.now(),
+            body,
+            author_name: "AI Assistant",
+            author_id: null,
+            date: new Date().toISOString(),
+            is_ai: true,
+            message_type: "comment",
+            attachments: [],
+        };
     }
 
     get connectionIndicator() {
