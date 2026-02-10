@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.SupportTasksPage">
+        <div class="o_woow_support_tasks">
+            <!-- Page Header -->
+            <div class="o_woow_support_tasks_header">
+                <div class="o_woow_support_tasks_header_left">
+                    <button class="o_woow_back_btn" t-on-click="navigateBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <div class="o_woow_support_tasks_title">
+                        <h1>My Support Tasks</h1>
+                        <p>View and manage tasks across all projects.</p>
+                    </div>
+                </div>
+                <div class="o_woow_support_tasks_header_right">
+                    <!-- Search -->
+                    <div class="o_woow_search_box">
+                        <WoowIcon name="'search'" size="18"/>
+                        <input type="text"
+                               placeholder="Search tasks..."
+                               t-att-value="state.searchQuery"
+                               t-on-input="onSearch"/>
+                    </div>
+                    <!-- Filter Toggle -->
+                    <div class="o_woow_filter_toggle">
+                        <button t-att-class="'o_woow_filter_btn' + (state.filterMode === 'my' ? ' o_woow_filter_btn_active' : '')"
+                                t-on-click="() => this.onFilterToggle('my')">
+                            My Tasks
+                        </button>
+                        <button t-att-class="'o_woow_filter_btn' + (state.filterMode === 'shared' ? ' o_woow_filter_btn_active' : '')"
+                                t-on-click="() => this.onFilterToggle('shared')">
+                            Shared
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="isLoading">
+                <div class="o_woow_kanban_board">
+                    <t t-foreach="[1, 2, 3]" t-as="col" t-key="col">
+                        <div class="o_woow_kanban_column o_woow_kanban_column_skeleton">
+                            <div class="o_woow_kanban_column_header_skeleton"/>
+                            <t t-foreach="[1, 2]" t-as="card" t-key="card">
+                                <div class="o_woow_task_card_skeleton">
+                                    <div class="o_woow_skeleton_line o_woow_skeleton_title"/>
+                                    <div class="o_woow_skeleton_line o_woow_skeleton_short"/>
+                                    <div class="o_woow_skeleton_line o_woow_skeleton_bar"/>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Empty State -->
+            <t t-elif="!hasTasks">
+                <div class="o_woow_support_tasks_empty">
+                    <WoowIcon name="'assignment'" size="64"/>
+                    <h2>No tasks found</h2>
+                    <t t-if="state.searchQuery">
+                        <p>No tasks match your search. Try different keywords.</p>
+                    </t>
+                    <t t-elif="state.filterMode === 'my'">
+                        <p>You have no assigned tasks. Switch to "Shared" to see all workspace tasks.</p>
+                    </t>
+                    <t t-else="">
+                        <p>No tasks in your workspaces yet. Create a project and add tasks to get started.</p>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Kanban Board -->
+            <t t-else="">
+                <div class="o_woow_kanban_board">
+                    <t t-foreach="groupedTasks" t-as="group" t-key="group.projectId">
+                        <div class="o_woow_kanban_column">
+                            <!-- Column Header -->
+                            <div class="o_woow_kanban_column_header">
+                                <div class="o_woow_kanban_column_title">
+                                    <WoowIcon name="'folder_open'" size="18"/>
+                                    <span t-esc="group.projectName"/>
+                                </div>
+                                <span class="o_woow_kanban_column_count">
+                                    <t t-esc="group.tasks.length"/>
+                                </span>
+                            </div>
+
+                            <!-- Task Cards -->
+                            <div class="o_woow_kanban_cards">
+                                <t t-foreach="group.tasks" t-as="task" t-key="task.id">
+                                    <div class="o_woow_task_card" t-on-click="() => this.navigateToTask(task.id)">
+                                        <!-- Task Header: Title + ID Badge -->
+                                        <div class="o_woow_task_card_header">
+                                            <span class="o_woow_task_card_title" t-esc="task.name"/>
+                                            <span class="o_woow_task_id_badge">#<t t-esc="task.id"/></span>
+                                        </div>
+
+                                        <!-- Priority Stars -->
+                                        <div class="o_woow_task_priority">
+                                            <t t-foreach="getPriorityStars(task.priority)" t-as="filled" t-key="filled_index">
+                                                <WoowIcon t-if="filled" name="'star'" size="14" filled="true" class="'o_woow_star_filled'"/>
+                                                <WoowIcon t-else="" name="'star'" size="14" class="'o_woow_star_empty'"/>
+                                            </t>
+                                        </div>
+
+                                        <!-- Stage Badge -->
+                                        <div class="o_woow_task_stage">
+                                            <span class="o_woow_stage_badge" t-esc="task.stage_name"/>
+                                        </div>
+
+                                        <!-- Progress Bar -->
+                                        <div class="o_woow_task_progress">
+                                            <div class="o_woow_progress_bar">
+                                                <div class="o_woow_progress_fill"
+                                                     t-attf-style="width: {{ getCompletion(task) }}%"/>
+                                            </div>
+                                            <span class="o_woow_progress_text">
+                                                <t t-esc="getCompletion(task)"/>%
+                                            </span>
+                                        </div>
+
+                                        <!-- Task Footer: Due Date + Assignee -->
+                                        <div class="o_woow_task_card_footer">
+                                            <div class="o_woow_task_due" t-if="task.date_deadline">
+                                                <WoowIcon name="'event'" size="14"/>
+                                                <span t-att-class="isOverdue(task) ? 'o_woow_overdue' : ''"
+                                                      t-esc="formatDate(task.date_deadline)"/>
+                                            </div>
+                                            <div class="o_woow_task_due" t-else="">
+                                                <!-- spacer -->
+                                            </div>
+                                            <div class="o_woow_task_assignee" t-if="task.user_name">
+                                                <span class="o_woow_avatar_sm" t-esc="getInitials(task.user_name)"
+                                                      t-att-title="task.user_name"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </t>
+                            </div>
+                        </div>
+                    </t>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

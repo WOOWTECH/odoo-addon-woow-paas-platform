@@ -31,8 +31,7 @@
                     <SupportProjectsPage/>
                 </t>
                 <t t-elif="router.current === 'ai-tasks'">
-                    <!-- SupportTasksPage placeholder (future Task #26) -->
-                    <EmptyState/>
+                    <SupportTasksPage/>
                 </t>
                 <t t-elif="router.current === 'ai-task-detail'">
                     <!-- TaskDetailPage placeholder (future Task #27) -->
