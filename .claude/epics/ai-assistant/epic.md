@@ -23,56 +23,60 @@ github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/21
 
 ## Architecture Decisions
 
-| 決策 | 選擇 | 理由 |
-|------|------|------|
-| 對話儲存 | `_inherit` 擴展 `discuss.channel` + `mail.message` | 天然多人群組聊天、bus 即時通知、附件系統；Woow_odoo_task_ai_solver 已驗證 |
-| 任務管理 | `_inherit` 擴展 `project.project` + `project.task` | 重用 Odoo 專案/任務 CRUD、stage 管理、指派人 |
-| AI 配置 | `_name` 新建 `ai_provider` + `ai_agent` | 獨立業務邏輯，無對應原生 model |
-| API 風格 | JSON-RPC POST（同 `paas.py`） | 與現有 controller 一致 |
-| AI 串流 | SSE via HTTP controller (`type='http'`) | API Key 不暴露前端，server-side proxy |
-| @ Mention | 前端 `@` 偵測 + agent dropdown | 輕量實作，參考 UI 設計圖 |
-| 新增依賴 | `project`, `mail`, `bus` | `_inherit` 擴展所需 |
-| State Management | `ai_service.js` + `support_service.js` reactive | 同 `workspace_service.js` 模式 |
+| 決策             | 選擇                                               | 理由                                                                      |
+| ---------------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
+| 對話儲存         | `_inherit` 擴展 `discuss.channel` + `mail.message` | 天然多人群組聊天、bus 即時通知、附件系統；Woow_odoo_task_ai_solver 已驗證 |
+| 任務管理         | `_inherit` 擴展 `project.project` + `project.task` | 重用 Odoo 專案/任務 CRUD、stage 管理、指派人                              |
+| AI 配置          | `_name` 新建 `ai_provider` + `ai_agent`            | 獨立業務邏輯，無對應原生 model                                            |
+| API 風格         | JSON-RPC POST（同 `paas.py`）                      | 與現有 controller 一致                                                    |
+| AI 串流          | SSE via HTTP controller (`type='http'`)            | API Key 不暴露前端，server-side proxy                                     |
+| @ Mention        | 前端 `@` 偵測 + agent dropdown                     | 輕量實作，參考 UI 設計圖                                                  |
+| 新增依賴         | `project`, `mail`, `bus`                           | `_inherit` 擴展所需                                                       |
+| State Management | `ai_service.js` + `support_service.js` reactive    | 同 `workspace_service.js` 模式                                            |
 
 ### Model 策略
 
-| Model | 模式 | 說明 |
-|-------|------|------|
-| `woow_paas_platform.ai_provider` | `_name` 全新 | AI Provider 設定 |
-| `woow_paas_platform.ai_agent` | `_name` 全新 | AI Agent 定義 |
-| `project.project` | `_inherit` 擴展 | 新增 `workspace_id` |
-| `project.task` | `_inherit` 擴展 | 新增 `chat_enabled`, `channel_id`, `ai_auto_reply` |
-| `discuss.channel` | `_inherit` 擴展 | Override `message_post()` 觸發 AI + bus |
+| Model                            | 模式            | 說明                                               |
+| -------------------------------- | --------------- | -------------------------------------------------- |
+| `woow_paas_platform.ai_provider` | `_name` 全新    | AI Provider 設定                                   |
+| `woow_paas_platform.ai_agent`    | `_name` 全新    | AI Agent 定義                                      |
+| `project.project`                | `_inherit` 擴展 | 新增 `workspace_id`                                |
+| `project.task`                   | `_inherit` 擴展 | 新增 `chat_enabled`, `channel_id`, `ai_auto_reply` |
+| `discuss.channel`                | `_inherit` 擴展 | Override `message_post()` 觸發 AI + bus            |
 
 ### 重用 Woow_odoo_task_ai_solver 模式
 
-| Pattern | Source | Usage |
-|---------|--------|-------|
-| Lazy Channel Creation | `project_task.py` `_create_chat_channel()` | 任務首次開 Chat 自動建 channel |
-| Bus Notifications | `discuss_channel.py` `message_post` override | 多人即時同步 |
-| Access Validation | `portal.py` `_validate_portal_channel_access()` | 權限檢查 |
-| Chat History API | `portal.py` 訊息歷史 + attachment enrichment | 聊天記錄 |
-| File Upload | `portal.py` 附件上傳 + access token | 附件上傳 |
+| Pattern               | Source                                          | Usage                          |
+| --------------------- | ----------------------------------------------- | ------------------------------ |
+| Lazy Channel Creation | `project_task.py` `_create_chat_channel()`      | 任務首次開 Chat 自動建 channel |
+| Bus Notifications     | `discuss_channel.py` `message_post` override    | 多人即時同步                   |
+| Access Validation     | `portal.py` `_validate_portal_channel_access()` | 權限檢查                       |
+| Chat History API      | `portal.py` 訊息歷史 + attachment enrichment    | 聊天記錄                       |
+| File Upload           | `portal.py` 附件上傳 + access token             | 附件上傳                       |
 
 ## Technical Approach
 
 ### Backend
 
 **全新 Models（`_name`）：**
+
 - `ai_provider` — name, api_base_url, api_key, model_name, is_active, max_tokens, temperature
 - `ai_agent` — name, display_name, system_prompt, provider_id, avatar_color, is_default
 
 **擴展 Models（`_inherit`）：**
+
 - `project.project` — 新增 `workspace_id` (Many2one → workspace)
 - `project.task` — 新增 `chat_enabled`, `channel_id`, `ai_auto_reply`；`_create_chat_channel()` lazy creation
 - `discuss.channel` — Override `message_post()` 觸發 AI 回覆 + bus 通知
 
 **AI Client：** `ai_client.py`
+
 - OpenAI compatible HTTP client (`requests`)
 - `chat_completion()` 一般回覆 + `chat_completion_stream()` SSE 串流
 - Messages array 組裝（system prompt + history + user message）
 
 **Controller：** `ai_assistant.py`
+
 - `/api/ai/providers` — 列出 providers（GET）
 - `/api/ai/agents` — 列出 agents（GET）
 - `/api/ai/stream/<int:channel_id>` — SSE 串流（HTTP type）
@@ -86,20 +90,24 @@ github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/21
 ### Frontend
 
 **Pages：**
+
 - `AiAssistantPage` — Hub（統計卡片 + 導航）
 - `SupportProjectsPage` — 專案列表（card grid + search + filter）
 - `SupportTasksPage` — Kanban（按專案分組 + search + filter）
 - `TaskDetailPage` — 詳情（info panel + tabs: Description / Sub-tasks / Chat）
 
 **Components：**
+
 - `AiChat` — 訊息列表 + 輸入框 + SSE 串流 + 附件上傳
 - `AiMentionDropdown` — `@` 偵測 + agent 下拉
 
 **Services：**
+
 - `ai_service.js` — agents, streaming, chat history
 - `support_service.js` — projects, tasks CRUD
 
 **路由（hash-based，新增至 `router.js`）：**
+
 ```
 ai-assistant                          → AiAssistantPage
 ai-assistant/projects                 → SupportProjectsPage
@@ -120,15 +128,19 @@ ai-assistant/chat/:conversationId     → AiChat（全頁）
 採用 **垂直切片** — 每個 task 交付一段可測試的端到端功能。
 
 ### Phase 1: Backend Foundation（Task 1-3）
+
 建立所有 models、settings、AI client、discuss.channel 擴展和 controller API
 
 ### Phase 2: Frontend Foundation（Task 4-5）
+
 建立 routing、Hub 頁面、AiChat 元件、@ mention
 
 ### Phase 3: Support System（Task 6-8）
+
 Support Projects + Tasks UI + Task Detail（嵌入 Chat）
 
 ### Phase 4: Integration（Task 9-10）
+
 全頁 Chat、workspace 整合、測試、打磨
 
 ## Task Breakdown (10 Tasks)
@@ -165,6 +177,7 @@ Task 10 (Testing + Polish)
 ## Dependencies
 
 ### Prerequisites（已完成）
+
 - `woow_paas_platform.workspace` model ✓
 - `woow_paas_platform.workspace_access` model ✓
 - Standalone OWL app shell + router ✓
@@ -173,11 +186,13 @@ Task 10 (Testing + Polish)
 - `workspace_service.js` / `cloud_service.js` service pattern ✓
 
 ### External Dependencies
+
 - OpenAI Compatible API 服務（使用者自行提供）
 - Python `requests`（Odoo 已內建）
 - Odoo 18 modules: `project`, `mail`, `bus`
 
 ### Internal Task Dependencies
+
 - Task 2, 3 depend on Task 1
 - Task 4 independent（可與 Task 2-3 平行）
 - Task 5 depends on Task 3
@@ -188,45 +203,46 @@ Task 10 (Testing + Polish)
 
 ## Existing Code to Reuse
 
-| Pattern | Source | Usage |
-|---------|--------|-------|
-| JSON-RPC `jsonRpc()` | `services/workspace_service.js` | ai_service / support_service |
-| Reactive service | `workspace_service.js` / `cloud_service.js` | service pattern |
-| Router | `core/router.js` | 新增路由 |
-| Page component | `WorkspaceDetailPage.js` | TaskDetailPage 參考 |
-| Card/Button/Icon | `WoowCard.js` / `WoowButton.js` / `WoowIcon.js` | 直接使用 |
-| Modal | `CreateWorkspaceModal.js` | 各 modal 參考 |
-| SCSS variables | `styles/00_variables.scss` | 樣式一致性 |
-| Controller | `controllers/paas.py` | API response format |
-| Settings | `models/res_config_settings.py` | AI settings 擴展 |
-| Chat patterns | `Woow_odoo_task_ai_solver/` | channel creation / bus / history / upload |
+| Pattern              | Source                                          | Usage                                     |
+| -------------------- | ----------------------------------------------- | ----------------------------------------- |
+| JSON-RPC `jsonRpc()` | `services/workspace_service.js`                 | ai_service / support_service              |
+| Reactive service     | `workspace_service.js` / `cloud_service.js`     | service pattern                           |
+| Router               | `core/router.js`                                | 新增路由                                  |
+| Page component       | `WorkspaceDetailPage.js`                        | TaskDetailPage 參考                       |
+| Card/Button/Icon     | `WoowCard.js` / `WoowButton.js` / `WoowIcon.js` | 直接使用                                  |
+| Modal                | `CreateWorkspaceModal.js`                       | 各 modal 參考                             |
+| SCSS variables       | `styles/00_variables.scss`                      | 樣式一致性                                |
+| Controller           | `controllers/paas.py`                           | API response format                       |
+| Settings             | `models/res_config_settings.py`                 | AI settings 擴展                          |
+| Chat patterns        | `Woow_odoo_task_ai_solver/`                     | channel creation / bus / history / upload |
 
 ## Success Criteria (Technical)
 
-| Criteria | Target |
-|----------|--------|
-| AI 對話端到端 | Provider 設定 → 發訊息 → SSE 串流回覆 |
-| 多人群組聊天 | 多成員同一 Chat 即時同步 |
-| @ mention | 選 agent → 對應 system prompt 回覆 |
-| Bus 通知 | 發訊息 → 其他成員即時收到 |
-| Settings 連線測試 | 按鈕驗證 API 連線 |
-| 任務 CRUD | 基於 project.project + project.task |
-| API Key 安全 | 前端不接觸 API Key |
-| ACL | ir.model.access.csv 覆蓋 ai_provider, ai_agent |
-| UI | 對照設計圖驗證 |
+| Criteria          | Target                                         |
+| ----------------- | ---------------------------------------------- |
+| AI 對話端到端     | Provider 設定 → 發訊息 → SSE 串流回覆          |
+| 多人群組聊天      | 多成員同一 Chat 即時同步                       |
+| @ mention         | 選 agent → 對應 system prompt 回覆             |
+| Bus 通知          | 發訊息 → 其他成員即時收到                      |
+| Settings 連線測試 | 按鈕驗證 API 連線                              |
+| 任務 CRUD         | 基於 project.project + project.task            |
+| API Key 安全      | 前端不接觸 API Key                             |
+| ACL               | ir.model.access.csv 覆蓋 ai_provider, ai_agent |
+| UI                | 對照設計圖驗證                                 |
 
 ## Estimated Effort
 
-| Phase | Tasks | 估計 |
-|-------|-------|------|
-| Phase 1: Backend Foundation | Task 1-3 | 中等 |
-| Phase 2: Frontend Foundation | Task 4-5 | 較高（SSE 串流技術難點） |
-| Phase 3: Support System | Task 6-8 | 中等（CRUD + UI） |
-| Phase 4: Integration | Task 9-10 | 中等 |
+| Phase                        | Tasks     | 估計                     |
+| ---------------------------- | --------- | ------------------------ |
+| Phase 1: Backend Foundation  | Task 1-3  | 中等                     |
+| Phase 2: Frontend Foundation | Task 4-5  | 較高（SSE 串流技術難點） |
+| Phase 3: Support System      | Task 6-8  | 中等（CRUD + UI）        |
+| Phase 4: Integration         | Task 9-10 | 中等                     |
 
 **Critical Path**: Task 1 → Task 3 → Task 5 → Task 8
 
 ## Tasks Created
+
 - [x] #22 (22.md) - AI Provider + Agent Models + Settings UI (parallel: false)
 - [x] #24 (24.md) - Extend project.project + project.task (parallel: true)
 - [x] #25 (25.md) - Extend discuss.channel + AI Client + Controller (parallel: true)
