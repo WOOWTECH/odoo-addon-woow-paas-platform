@@ -53,18 +53,47 @@ export const supportService = reactive({
     tasks: [],
     /** @type {boolean} */
     loading: false,
+    /** @type {number} */
+    _loadingCount: 0,
     /** @type {Object.<string, boolean>} */
     operationLoading: {},
     /** @type {string|null} */
     error: null,
     /** @type {TaskStats} */
     stats: { total: 0, active: 0, completion: 0 },
+    /** @type {Array<{id: number, name: string, sequence: number}>} */
+    stages: [],
+
+    /**
+     * Fetch stages for a specific project
+     * @param {number} projectId - Project ID
+     * @returns {Promise<void>}
+     */
+    async fetchProjectStages(projectId) {
+        this._loadingCount++;
+        this.loading = true;
+        this.error = null;
+        try {
+            const result = await jsonRpc(`/api/support/projects/${projectId}/stages`, {});
+            if (result.success) {
+                this.stages = result.data;
+            } else {
+                this.error = result.error || "Failed to fetch stages";
+            }
+        } catch (err) {
+            this.error = err.message || "Network error";
+        } finally {
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
+        }
+    },
 
     /**
      * Fetch all projects (no workspace filter)
      * @returns {Promise<void>}
      */
     async fetchAllProjects() {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -79,7 +108,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 
@@ -89,6 +119,7 @@ export const supportService = reactive({
      * @returns {Promise<void>}
      */
     async fetchProjects(workspaceId) {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -103,7 +134,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 
@@ -116,6 +148,7 @@ export const supportService = reactive({
      * @returns {Promise<void>}
      */
     async fetchAllTasks(filters = {}) {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -137,7 +170,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 
@@ -151,6 +185,7 @@ export const supportService = reactive({
      * @returns {Promise<void>}
      */
     async fetchTasks(workspaceId, filters = {}) {
+        this._loadingCount++;
         this.loading = true;
         this.error = null;
         try {
@@ -173,7 +208,8 @@ export const supportService = reactive({
         } catch (err) {
             this.error = err.message || "Network error";
         } finally {
-            this.loading = false;
+            this._loadingCount = Math.max(0, this._loadingCount - 1);
+            this.loading = this._loadingCount > 0;
         }
     },
 

@@ -183,5 +183,12 @@
                 onCreated.bind="onProjectCreated"
             />
         </div>
+
+            <!-- Create Project Modal -->
+            <CreateProjectModal
+                t-if="state.showCreateModal"
+                onClose.bind="closeCreateModal"
+                onCreated.bind="onProjectCreated"
+            />
     </t>
 </templates>
