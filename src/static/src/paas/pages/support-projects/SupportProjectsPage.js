@@ -5,6 +5,7 @@ import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
+import { formatDate, getInitials } from "../../services/utils";
 
 export class SupportProjectsPage extends Component {
     static template = "woow_paas_platform.SupportProjectsPage";
@@ -97,16 +98,7 @@ export class SupportProjectsPage extends Component {
     }
 
     formatDate(dateStr) {
-        if (!dateStr) return "--";
-        try {
-            return new Date(dateStr).toLocaleDateString("en-US", {
-                month: "short",
-                day: "numeric",
-                year: "numeric",
-            });
-        } catch {
-            return dateStr;
-        }
+        return formatDate(dateStr) || "--";
     }
 
     getTeamAvatars(project) {
@@ -118,13 +110,7 @@ export class SupportProjectsPage extends Component {
     }
 
     getMemberInitials(member) {
-        const name = member.name || member.user_name || "?";
-        return name
-            .split(" ")
-            .map((w) => w[0])
-            .join("")
-            .toUpperCase()
-            .slice(0, 2);
+        return getInitials(member.name || member.user_name);
     }
 
     getAvatarColor(member, index) {

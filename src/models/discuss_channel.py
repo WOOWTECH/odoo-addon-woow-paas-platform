@@ -85,9 +85,8 @@ class DiscussChannel(models.Model):
         Returns:
             A ``woow_paas_platform.ai_agent`` record or empty recordset.
         """
-        AiAgent = self.env['woow_paas_platform.ai_agent'].sudo()
+        AiAgent = self.env['woow_paas_platform.ai_agent']
 
-        # Find tasks linked to this channel with auto_reply enabled
         task = self.env['project.task'].sudo().search([
             ('channel_id', '=', self.id),
             ('ai_auto_reply', '=', True),
@@ -95,9 +94,7 @@ class DiscussChannel(models.Model):
         if not task:
             return AiAgent.browse()
 
-        # Return the default agent
-        default_agent = AiAgent.search([('is_default', '=', True)], limit=1)
-        return default_agent
+        return AiAgent.get_default()
 
     def _post_ai_reply(self, agent, user_message: str, original_message):
         """Generate an AI response and post it back to the channel.

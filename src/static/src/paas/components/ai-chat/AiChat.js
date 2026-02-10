@@ -41,6 +41,7 @@ export class AiChat extends Component {
         this.textareaRef = useRef("textarea");
         this.fileInputRef = useRef("fileInput");
         this.eventSource = null;
+        this._mentionSelectedIndex = 0;
 
         onMounted(async () => {
             await this.loadAgents();

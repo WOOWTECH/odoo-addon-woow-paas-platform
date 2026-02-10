@@ -57,3 +57,8 @@ class WoowAiAgent(models.Model):
                 ('id', 'not in', self.ids),
             ]).write({'is_default': False})
         return result
+
+    @api.model
+    def get_default(self):
+        """Return the default AI agent, or an empty recordset if none exists."""
+        return self.sudo().search([('is_default', '=', True)], limit=1)

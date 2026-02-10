@@ -9,7 +9,12 @@ import logging
 from typing import Generator, List, Optional
 
 import requests
-from requests.exceptions import ConnectionError, RequestException, Timeout
+from requests.exceptions import (
+    ChunkedEncodingError,
+    ConnectionError,
+    RequestException,
+    Timeout,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -127,34 +132,37 @@ class AIClient:
         messages.append({"role": "user", "content": user_message})
         return messages
 
-    def chat_completion(self, messages: List[dict]) -> str:
-        """Send a chat completion request and return the full response.
+    def _make_request(
+        self,
+        payload: dict,
+        stream: bool = False,
+    ) -> requests.Response:
+        """Send a request to the chat completions endpoint.
+
+        Centralises connection, timeout, and HTTP-error handling shared
+        by both the synchronous and streaming code paths.
 
         Args:
-            messages: List of message dicts with "role" and "content".
+            payload: JSON body for the request.
+            stream: Whether to open a streaming response.
 
         Returns:
-            The assistant response text.
+            The :class:`requests.Response` object.
 
         Raises:
             AIClientConnectionError: If the connection fails.
             AIClientTimeoutError: If the request times out.
-            AIClientAPIError: If the API returns an error.
+            AIClientAPIError: If the API returns a non-200 status.
         """
         url = f"{self.api_base_url}/chat/completions"
-        payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "stream": False,
-        }
+        timeout = STREAM_TIMEOUT if stream else DEFAULT_TIMEOUT
 
         try:
             response = self._session.post(
                 url,
                 json=payload,
-                timeout=DEFAULT_TIMEOUT,
+                timeout=timeout,
+                stream=stream,
             )
         except ConnectionError as exc:
             raise AIClientConnectionError(
@@ -163,7 +171,7 @@ class AIClient:
             ) from exc
         except Timeout as exc:
             raise AIClientTimeoutError(
-                f"Request to AI provider timed out after {DEFAULT_TIMEOUT}s",
+                f"Request to AI provider timed out after {timeout}s",
                 detail=str(exc),
             ) from exc
         except RequestException as exc:
@@ -179,6 +187,32 @@ class AIClient:
                 status_code=response.status_code,
                 detail=detail,
             )
+
+        return response
+
+    def chat_completion(self, messages: List[dict]) -> str:
+        """Send a chat completion request and return the full response.
+
+        Args:
+            messages: List of message dicts with "role" and "content".
+
+        Returns:
+            The assistant response text.
+
+        Raises:
+            AIClientConnectionError: If the connection fails.
+            AIClientTimeoutError: If the request times out.
+            AIClientAPIError: If the API returns an error.
+        """
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "stream": False,
+        }
+
+        response = self._make_request(payload)
 
         try:
             data = response.json()
@@ -215,7 +249,6 @@ class AIClient:
             AIClientTimeoutError: If the request times out.
             AIClientAPIError: If the API returns an error.
         """
-        url = f"{self.api_base_url}/chat/completions"
         payload = {
             "model": self.model_name,
             "messages": messages,
@@ -224,53 +257,36 @@ class AIClient:
             "stream": True,
         }
 
+        response = self._make_request(payload, stream=True)
+
+        # Parse SSE stream line by line; wrap in try/except to catch
+        # network errors that can occur mid-stream.
         try:
-            response = self._session.post(
-                url,
-                json=payload,
-                timeout=STREAM_TIMEOUT,
-                stream=True,
-            )
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except (json.JSONDecodeError, ValueError):
+                        _logger.warning("Skipping invalid SSE chunk: %s", data_str)
+                        continue
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            yield content
+        except ChunkedEncodingError as exc:
+            raise AIClientConnectionError(
+                "Connection lost during streaming response",
+                detail=str(exc),
+            ) from exc
         except ConnectionError as exc:
             raise AIClientConnectionError(
-                f"Failed to connect to AI provider at {self.api_base_url}",
+                "Connection lost during streaming response",
                 detail=str(exc),
             ) from exc
-        except Timeout as exc:
-            raise AIClientTimeoutError(
-                "Streaming request to AI provider timed out",
-                detail=str(exc),
-            ) from exc
-        except RequestException as exc:
-            raise AIClientError(
-                f"Unexpected error communicating with AI provider: {exc}",
-                detail=str(exc),
-            ) from exc
-
-        if response.status_code != 200:
-            detail = response.text[:500] if response.text else None
-            raise AIClientAPIError(
-                f"AI provider returned HTTP {response.status_code}",
-                status_code=response.status_code,
-                detail=detail,
-            )
-
-        # Parse SSE stream line by line
-        for line in response.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            if line.startswith("data: "):
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                except (json.JSONDecodeError, ValueError):
-                    _logger.warning("Skipping invalid SSE chunk: %s", data_str)
-                    continue
-                choices = chunk.get("choices", [])
-                if choices:
-                    delta = choices[0].get("delta", {})
-                    content = delta.get("content")
-                    if content:
-                        yield content

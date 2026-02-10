@@ -5,7 +5,7 @@ import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
-import { formatDate, getInitials } from "../../services/utils";
+import { formatDate, getInitials, getPriorityStars } from "../../services/utils";
 
 export class SupportTasksPage extends Component {
     static template = "woow_paas_platform.SupportTasksPage";
@@ -98,8 +98,7 @@ export class SupportTasksPage extends Component {
     }
 
     getPriorityStars(priority) {
-        const level = parseInt(priority, 10) || 0;
-        return [level >= 1, level >= 2, level >= 3];
+        return getPriorityStars(priority);
     }
 
     formatDate(dateString) {

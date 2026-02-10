@@ -6,7 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { AiChat } from "../../components/ai-chat/AiChat";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
-import { formatDate, getInitials } from "../../services/utils";
+import { formatDate, getInitials, getPriorityStars } from "../../services/utils";
 
 export class TaskDetailPage extends Component {
     static template = "woow_paas_platform.TaskDetailPage";
@@ -98,8 +98,7 @@ export class TaskDetailPage extends Component {
     }
 
     getPriorityStars(priority) {
-        const level = parseInt(priority, 10) || 0;
-        return [level >= 1, level >= 2, level >= 3];
+        return getPriorityStars(priority);
     }
 
     formatDate(dateString) {

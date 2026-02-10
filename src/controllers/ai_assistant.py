@@ -30,17 +30,15 @@ class AiAssistantController(Controller):
         providers = request.env['woow_paas_platform.ai_provider'].sudo().search([
             ('is_active', '=', True),
         ])
-        data = []
-        for p in providers:
-            data.append({
-                'id': p.id,
-                'name': p.name,
-                'api_base_url': p.api_base_url,
-                'model_name': p.model_name,
-                'max_tokens': p.max_tokens,
-                'temperature': p.temperature,
-                'is_active': p.is_active,
-            })
+        data = [{
+            'id': p.id,
+            'name': p.name,
+            'api_base_url': p.api_base_url,
+            'model_name': p.model_name,
+            'max_tokens': p.max_tokens,
+            'temperature': p.temperature,
+            'is_active': p.is_active,
+        } for p in providers]
         return {
             'success': True,
             'data': data,
@@ -55,18 +53,16 @@ class AiAssistantController(Controller):
             dict: Response with agent list.
         """
         agents = request.env['woow_paas_platform.ai_agent'].sudo().search([])
-        data = []
-        for a in agents:
-            data.append({
-                'id': a.id,
-                'name': a.name,
-                'agent_display_name': a.agent_display_name or a.name,
-                'system_prompt': a.system_prompt or '',
-                'provider_id': a.provider_id.id if a.provider_id else None,
-                'provider_name': a.provider_id.name if a.provider_id else None,
-                'avatar_color': a.avatar_color or '#875A7B',
-                'is_default': a.is_default,
-            })
+        data = [{
+            'id': a.id,
+            'name': a.name,
+            'agent_display_name': a.agent_display_name or a.name,
+            'system_prompt': a.system_prompt or '',
+            'provider_id': a.provider_id.id if a.provider_id else None,
+            'provider_name': a.provider_id.name if a.provider_id else None,
+            'avatar_color': a.avatar_color or '#875A7B',
+            'is_default': a.is_default,
+        } for a in agents]
         return {
             'success': True,
             'data': data,
@@ -395,8 +391,9 @@ class AiAssistantController(Controller):
     def _get_channel_agent(self, channel):
         """Find the appropriate AI agent for a channel.
 
-        Checks if the channel is linked to a task and uses the task's
-        agent configuration, or falls back to the default agent.
+        Only returns an agent if the channel is linked to a task with
+        ``ai_auto_reply`` enabled, ensuring we don't reply on channels
+        that haven't opted in.
 
         Args:
             channel: A ``discuss.channel`` recordset.
@@ -404,19 +401,14 @@ class AiAssistantController(Controller):
         Returns:
             A ``woow_paas_platform.ai_agent`` record or None.
         """
-        AiAgent = request.env['woow_paas_platform.ai_agent'].sudo()
-
-        # Check if channel is linked to a task
         task = request.env['project.task'].sudo().search([
             ('channel_id', '=', channel.id),
+            ('ai_auto_reply', '=', True),
         ], limit=1)
-        if task and task.ai_auto_reply:
-            default_agent = AiAgent.search([('is_default', '=', True)], limit=1)
-            if default_agent:
-                return default_agent
+        if not task:
+            return None
 
-        # Fallback to the default agent
-        return AiAgent.search([('is_default', '=', True)], limit=1)
+        return request.env['woow_paas_platform.ai_agent'].get_default() or None
 
     # ==================== AI Connection Status ====================
 
@@ -584,15 +576,13 @@ class AiAssistantController(Controller):
         if workspace:
             domain.append(('workspace_id', '=', workspace.id))
         projects = request.env['project.project'].sudo().search(domain)
-        data = []
-        for proj in projects:
-            data.append({
-                'id': proj.id,
-                'name': proj.name,
-                'description': proj.description or '',
-                'task_count': proj.task_count,
-                'created_date': proj.create_date.isoformat() if proj.create_date else None,
-            })
+        data = [{
+            'id': proj.id,
+            'name': proj.name,
+            'description': proj.description or '',
+            'task_count': proj.task_count,
+            'created_date': proj.create_date.isoformat() if proj.create_date else None,
+        } for proj in projects]
         return {
             'success': True,
             'data': data,
@@ -675,9 +665,7 @@ class AiAssistantController(Controller):
             domain.append(('project_id', '=', int(project_id)))
 
         tasks = request.env['project.task'].sudo().search(domain)
-        data = []
-        for task in tasks:
-            data.append(self._serialize_task(task))
+        data = [self._serialize_task(task) for task in tasks]
         return {
             'success': True,
             'data': data,
