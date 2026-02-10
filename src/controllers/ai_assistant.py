@@ -609,6 +609,9 @@ class AiAssistantController(Controller):
                 'name': project.name,
                 'description': project.description or '',
                 'workspace_id': workspace.id,
+                'workspace_name': workspace.name,
+                'task_count': 0,
+                'created_date': project.create_date.isoformat() if project.create_date else None,
             },
         }
 

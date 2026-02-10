@@ -39,21 +39,29 @@
 
                     <div class="o_woow_form_group">
                         <label for="task_project">Project</label>
-                        <select
-                            id="task_project"
-                            class="o_woow_input"
-                            t-on-change="onProjectChange"
-                            t-att-disabled="state.loading"
-                        >
-                            <option value="">-- Select a project --</option>
-                            <t t-foreach="supportService.projects" t-as="project" t-key="project.id">
-                                <option
-                                    t-att-value="project.id"
-                                    t-att-selected="state.projectId === project.id"
-                                    t-esc="project.name"
-                                />
-                            </t>
-                        </select>
+                        <t t-if="state.projectsLoading">
+                            <div class="o_woow_input o_woow_select_loading">
+                                <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                                <span>Loading projects...</span>
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <select
+                                id="task_project"
+                                class="o_woow_input"
+                                t-on-change="onProjectChange"
+                                t-att-disabled="state.loading"
+                            >
+                                <option value="">Select a project...</option>
+                                <t t-foreach="supportService.projects" t-as="project" t-key="project.id">
+                                    <option
+                                        t-att-value="project.id"
+                                        t-att-selected="state.projectId === project.id"
+                                        t-esc="project.name"
+                                    />
+                                </t>
+                            </select>
+                        </t>
                     </div>
 
                     <div class="o_woow_form_group">

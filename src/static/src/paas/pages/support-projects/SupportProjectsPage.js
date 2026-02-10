@@ -31,7 +31,7 @@ export class SupportProjectsPage extends Component {
         try {
             await supportService.fetchAllProjects();
         } catch (err) {
-            console.warn("Failed to load support projects:", err);
+            console.error("Failed to load support projects:", err);
         }
     }
 

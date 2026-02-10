@@ -22,6 +22,7 @@ export class CreateTaskModal extends Component {
             priority: "0",
             deadline: "",
             loading: false,
+            projectsLoading: true,
             error: null,
         });
 
@@ -29,11 +30,14 @@ export class CreateTaskModal extends Component {
     }
 
     async _loadProjects() {
+        this.state.projectsLoading = true;
         try {
             await supportService.fetchAllProjects();
         } catch (err) {
             console.error("CreateTaskModal: failed to load projects:", err);
             this.state.error = "Failed to load projects";
+        } finally {
+            this.state.projectsLoading = false;
         }
     }
 
