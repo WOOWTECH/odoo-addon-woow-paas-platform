@@ -3,13 +3,14 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
+import { CreateTaskModal } from "../../components/modal/CreateTaskModal";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
 import { formatDate, getInitials, getPriorityStars } from "../../services/utils";
 
 export class SupportTasksPage extends Component {
     static template = "woow_paas_platform.SupportTasksPage";
-    static components = { WoowCard, WoowIcon, WoowButton };
+    static components = { WoowCard, WoowIcon, WoowButton, CreateTaskModal };
     static props = {};
 
     setup() {
@@ -18,12 +19,11 @@ export class SupportTasksPage extends Component {
             loading: true,
             searchQuery: "",
             filterMode: "my",
+            showCreateModal: false,
         });
         this.supportService = useState(supportService);
 
-        onMounted(async () => {
-            await this._loadTasks();
-        });
+        onMounted(() => this._loadTasks());
     }
 
     async _loadTasks() {
@@ -35,7 +35,7 @@ export class SupportTasksPage extends Component {
             }
             await supportService.fetchAllTasks(filters);
         } catch (err) {
-            console.warn("Failed to load tasks:", err);
+            console.error("Failed to load tasks:", err);
         } finally {
             this.state.loading = false;
         }
@@ -86,6 +86,19 @@ export class SupportTasksPage extends Component {
     async onFilterToggle(mode) {
         if (this.state.filterMode === mode) return;
         this.state.filterMode = mode;
+        await this._loadTasks();
+    }
+
+    openCreateModal() {
+        this.state.showCreateModal = true;
+    }
+
+    closeCreateModal() {
+        this.state.showCreateModal = false;
+    }
+
+    async onTaskCreated(task) {
+        this.state.showCreateModal = false;
         await this._loadTasks();
     }
 

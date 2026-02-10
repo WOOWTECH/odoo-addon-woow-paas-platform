@@ -14,6 +14,10 @@
                     </div>
                 </div>
                 <div class="o_woow_support_tasks_header_right">
+                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateModal">
+                        <WoowIcon name="'add'" size="16"/>
+                        New Task
+                    </WoowButton>
                     <!-- Search -->
                     <div class="o_woow_search_box">
                         <WoowIcon name="'search'" size="18"/>
@@ -67,6 +71,10 @@
                     </t>
                     <t t-else="">
                         <p>No tasks in your workspaces yet. Create a project and add tasks to get started.</p>
+                        <WoowButton variant="'primary'" size="'md'" onClick.bind="openCreateModal">
+                            <WoowIcon name="'add'" size="16"/>
+                            Create your first task
+                        </WoowButton>
                     </t>
                 </div>
             </t>
@@ -143,6 +151,12 @@
                     </t>
                 </div>
             </t>
+            <!-- Create Task Modal -->
+            <CreateTaskModal
+                t-if="state.showCreateModal"
+                onClose.bind="closeCreateModal"
+                onCreated.bind="onTaskCreated"
+            />
         </div>
     </t>
 </templates>

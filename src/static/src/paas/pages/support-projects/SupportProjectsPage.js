@@ -3,13 +3,14 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
+import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
 import { formatDate, getInitials } from "../../services/utils";
 
 export class SupportProjectsPage extends Component {
     static template = "woow_paas_platform.SupportProjectsPage";
-    static components = { WoowCard, WoowIcon, WoowButton };
+    static components = { WoowCard, WoowIcon, WoowButton, CreateProjectModal };
     static props = {};
 
     setup() {
@@ -19,17 +20,16 @@ export class SupportProjectsPage extends Component {
             searchQuery: "",
             statusFilter: "all",
             viewMode: "grid",
+            showCreateModal: false,
         });
-        onMounted(async () => {
-            await this._loadProjects();
-        });
+        onMounted(() => this._loadProjects());
     }
 
     async _loadProjects() {
         try {
             await supportService.fetchAllProjects();
         } catch (err) {
-            console.warn("Failed to load support projects:", err);
+            console.error("Failed to load support projects:", err);
         }
     }
 
@@ -131,6 +131,19 @@ export class SupportProjectsPage extends Component {
 
     onViewModeChange(mode) {
         this.state.viewMode = mode;
+    }
+
+    openCreateModal() {
+        this.state.showCreateModal = true;
+    }
+
+    closeCreateModal() {
+        this.state.showCreateModal = false;
+    }
+
+    async onProjectCreated(project) {
+        this.state.showCreateModal = false;
+        await this._loadProjects();
     }
 
     navigateToProject(projectId) {

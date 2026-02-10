@@ -13,6 +13,12 @@
                         <p>Browse and manage support projects across your workspaces.</p>
                     </div>
                 </div>
+                <div class="o_woow_sp_header_right">
+                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateModal">
+                        <WoowIcon name="'add'" size="18"/>
+                        New Project
+                    </WoowButton>
+                </div>
             </div>
 
             <!-- Toolbar: Search + Filters + View Toggle -->
@@ -160,12 +166,22 @@
                                 </WoowButton>
                             </t>
                             <t t-else="">
-                                <p>There are no support projects available yet. Projects will appear here once they are created.</p>
+                                <p>There are no support projects available yet. Create your first project to get started.</p>
+                                <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateModal">
+                                    <WoowIcon name="'add'" size="18"/>
+                                    Create your first project
+                                </WoowButton>
                             </t>
                         </div>
                     </WoowCard>
                 </div>
             </t>
+            <!-- Create Project Modal -->
+            <CreateProjectModal
+                t-if="state.showCreateModal"
+                onClose.bind="closeCreateModal"
+                onCreated.bind="onProjectCreated"
+            />
         </div>
     </t>
 </templates>

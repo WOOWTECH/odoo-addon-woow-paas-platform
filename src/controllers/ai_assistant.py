@@ -580,6 +580,8 @@ class AiAssistantController(Controller):
             'id': proj.id,
             'name': proj.name,
             'description': proj.description or '',
+            'workspace_id': proj.workspace_id.id if proj.workspace_id else None,
+            'workspace_name': proj.workspace_id.name if proj.workspace_id else '',
             'task_count': proj.task_count,
             'created_date': proj.create_date.isoformat() if proj.create_date else None,
         } for proj in projects]
@@ -607,6 +609,9 @@ class AiAssistantController(Controller):
                 'name': project.name,
                 'description': project.description or '',
                 'workspace_id': workspace.id,
+                'workspace_name': workspace.name,
+                'task_count': 0,
+                'created_date': project.create_date.isoformat() if project.create_date else None,
             },
         }
 
@@ -691,6 +696,11 @@ class AiAssistantController(Controller):
             'project_id': project.id,
             'description': (params.get('description') or '').strip(),
         }
+
+        if params.get('priority'):
+            vals['priority'] = str(params['priority'])
+        if params.get('date_deadline'):
+            vals['date_deadline'] = params['date_deadline']
 
         if params.get('chat_enabled'):
             vals['chat_enabled'] = True
