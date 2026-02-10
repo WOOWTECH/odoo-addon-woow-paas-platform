@@ -7,3 +7,4 @@ from . import ai_provider
 from . import ai_agent
 from . import project_project
 from . import project_task
+from . import discuss_channel
