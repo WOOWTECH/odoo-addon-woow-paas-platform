@@ -694,6 +694,11 @@ class AiAssistantController(Controller):
             'description': (params.get('description') or '').strip(),
         }
 
+        if params.get('priority'):
+            vals['priority'] = str(params['priority'])
+        if params.get('date_deadline'):
+            vals['date_deadline'] = params['date_deadline']
+
         if params.get('chat_enabled'):
             vals['chat_enabled'] = True
             vals['ai_auto_reply'] = params.get('ai_auto_reply', True)

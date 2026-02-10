@@ -39,6 +39,7 @@ export class CreateProjectModal extends Component {
                 this.state.workspaceId = String(this.state.workspaces[0].id);
             }
         } catch (err) {
+            console.error("CreateProjectModal: failed to load workspaces:", err);
             this.state.error = "Failed to load workspaces";
         } finally {
             this.state.workspacesLoading = false;
@@ -80,18 +81,23 @@ export class CreateProjectModal extends Component {
         this.state.loading = true;
         this.state.error = null;
 
-        const workspaceId = parseInt(this.state.workspaceId, 10);
-        const result = await supportService.createProject(workspaceId, {
-            name,
-            description: this.state.description.trim(),
-        });
+        try {
+            const workspaceId = parseInt(this.state.workspaceId, 10);
+            const result = await supportService.createProject(workspaceId, {
+                name,
+                description: this.state.description.trim(),
+            });
 
-        this.state.loading = false;
-
-        if (result.success) {
-            this.props.onCreated(result.data);
-        } else {
-            this.state.error = result.error || "Failed to create project";
+            if (result.success) {
+                this.props.onCreated(result.data);
+            } else {
+                this.state.error = result.error || "Failed to create project";
+            }
+        } catch (err) {
+            console.error("CreateProjectModal: submit failed:", err);
+            this.state.error = "An unexpected error occurred. Please try again.";
+        } finally {
+            this.state.loading = false;
         }
     }
 }

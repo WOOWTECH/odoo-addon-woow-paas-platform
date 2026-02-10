@@ -25,9 +25,16 @@ export class CreateTaskModal extends Component {
             error: null,
         });
 
-        onMounted(async () => {
+        onMounted(() => this._loadProjects());
+    }
+
+    async _loadProjects() {
+        try {
             await supportService.fetchAllProjects();
-        });
+        } catch (err) {
+            console.error("CreateTaskModal: failed to load projects:", err);
+            this.state.error = "Failed to load projects";
+        }
     }
 
     onNameInput(ev) {
@@ -83,25 +90,30 @@ export class CreateTaskModal extends Component {
         this.state.loading = true;
         this.state.error = null;
 
-        const data = {
-            name,
-            description: this.state.description.trim(),
-            project_id: this.state.projectId,
-            priority: this.state.priority,
-        };
+        try {
+            const data = {
+                name,
+                description: this.state.description.trim(),
+                project_id: this.state.projectId,
+                priority: this.state.priority,
+            };
 
-        if (this.state.deadline) {
-            data.date_deadline = this.state.deadline;
-        }
+            if (this.state.deadline) {
+                data.date_deadline = this.state.deadline;
+            }
 
-        const result = await supportService.createTask(workspaceId, data);
+            const result = await supportService.createTask(workspaceId, data);
 
-        this.state.loading = false;
-
-        if (result.success) {
-            this.props.onCreated(result.data);
-        } else {
-            this.state.error = result.error || "Failed to create task";
+            if (result.success) {
+                this.props.onCreated(result.data);
+            } else {
+                this.state.error = result.error || "Failed to create task";
+            }
+        } catch (err) {
+            console.error("CreateTaskModal: submit failed:", err);
+            this.state.error = "An unexpected error occurred. Please try again.";
+        } finally {
+            this.state.loading = false;
         }
     }
 }
