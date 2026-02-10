@@ -199,6 +199,34 @@ export const supportService = reactive({
     },
 
     /**
+     * Create a new project in a workspace
+     * @param {number} workspaceId - Workspace ID
+     * @param {Object} data - Project creation data
+     * @param {string} data.name - Project name
+     * @param {string} [data.description] - Project description
+     * @returns {Promise<{success: boolean, data?: ProjectData, error?: string}>}
+     */
+    async createProject(workspaceId, data) {
+        this.operationLoading.createProject = true;
+        try {
+            const result = await jsonRpc(`/api/support/projects/${workspaceId}`, {
+                action: "create",
+                ...data,
+            });
+            if (result.success) {
+                this.projects = [result.data, ...this.projects];
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.createProject = false;
+        }
+    },
+
+    /**
      * Create a new task in a workspace project
      * @param {number} workspaceId - Workspace ID
      * @param {Object} data - Task creation data
