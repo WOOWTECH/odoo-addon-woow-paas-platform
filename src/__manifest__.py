@@ -43,6 +43,7 @@
             'woow_paas_platform/static/src/paas/pages/**/*.scss',
             # Third-party libraries (must load before app JS)
             'woow_paas_platform/static/src/paas/lib/purify.min.js',
+            'woow_paas_platform/static/src/paas/lib/marked.min.js',
             # JS and XML files
             'woow_paas_platform/static/src/paas/**/*.js',
             'woow_paas_platform/static/src/paas/**/*.xml',

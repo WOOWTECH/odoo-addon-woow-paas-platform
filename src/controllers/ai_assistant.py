@@ -8,7 +8,6 @@ from typing import Any
 from werkzeug.wrappers import Response
 
 from odoo.http import request, route, Controller
-from odoo.tools import html_sanitize
 
 _logger = logging.getLogger(__name__)
 
@@ -409,7 +408,7 @@ class AiAssistantController(Controller):
                             mail_create_nosubscribe=True,
                             skip_ai_reply=True,
                         ).message_post(
-                            body=html_sanitize(full_response),
+                            body=full_response,  # Store raw Markdown from AI
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment',
                             author_id=root_partner_id,

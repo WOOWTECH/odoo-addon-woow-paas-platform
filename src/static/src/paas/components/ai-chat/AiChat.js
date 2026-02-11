@@ -4,6 +4,7 @@ import { Component, useState, useRef, onMounted, onWillUnmount } from "@odoo/owl
 import { AiMentionDropdown } from "../ai-mention/AiMentionDropdown";
 import { aiService } from "../../services/ai_service";
 import { safeHtml } from "../../services/html_sanitize";
+import { parseMarkdown } from "../../services/markdown_parser";
 
 const ERROR_MESSAGES = {
     channel_not_found: "聊天頻道不存在，請重新整理頁面。",
@@ -97,10 +98,16 @@ export class AiChat extends Component {
         try {
             const result = await aiService.fetchChatHistory(this.props.channelId);
             if (result.success) {
-                this.state.messages = (result.data || []).map(msg => ({
-                    ...msg,
-                    body: msg.body ? safeHtml(msg.body) : "",
-                }));
+                this.state.messages = (result.data || []).map(msg => {
+                    // AI messages are in Markdown, user messages may contain HTML
+                    const body = msg.body
+                        ? (msg.is_ai ? parseMarkdown(msg.body) : safeHtml(msg.body))
+                        : "";
+                    return {
+                        ...msg,
+                        body,
+                    };
+                });
             } else {
                 this.state.error = result.error || "Failed to load chat history";
             }
@@ -579,7 +586,7 @@ export class AiChat extends Component {
     _createAiMessage(body, messageId) {
         return {
             id: messageId || Date.now(),
-            body: body ? safeHtml(body) : "",
+            body: body ? parseMarkdown(body) : "",  // AI responses are in Markdown
             author_name: "AI Assistant",
             author_id: null,
             date: new Date().toISOString(),
@@ -590,7 +597,7 @@ export class AiChat extends Component {
     }
 
     get streamingHtml() {
-        return safeHtml(this.state.streamingText);
+        return parseMarkdown(this.state.streamingText);  // Real-time Markdown conversion
     }
 
     get connectionIndicator() {
