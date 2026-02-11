@@ -200,7 +200,7 @@ class AiAssistantController(Controller):
         if not self._check_channel_access(channel):
             return {'success': False, 'error': 'Access denied'}
 
-        message = channel.message_post(
+        message = channel.with_context(from_paas_chat=True).message_post(
             body=body.strip(),
             message_type='comment',
             subtype_xmlid='mail.mt_comment',
