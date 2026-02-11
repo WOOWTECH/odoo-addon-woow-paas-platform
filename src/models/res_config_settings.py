@@ -1,4 +1,4 @@
-from odoo import fields, models
+from odoo import api, fields, models
 
 
 class ResConfigSettings(models.TransientModel):
@@ -31,6 +31,21 @@ class ResConfigSettings(models.TransientModel):
         config_parameter='woow_paas_platform.default_ai_provider_id',
         help='Default AI provider used for AI assistant features',
     )
+
+    def set_values(self):
+        """Override to sync default provider to agents without a provider."""
+        provider_before = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.default_ai_provider_id',
+        )
+        super().set_values()
+        provider_after = self.woow_ai_provider_id
+        if provider_after and str(provider_after.id) != str(provider_before or ''):
+            # Assign the new default provider to agents that have no provider set
+            agents_without_provider = self.env['woow_paas_platform.ai_agent'].sudo().search([
+                ('provider_id', '=', False),
+            ])
+            if agents_without_provider:
+                agents_without_provider.write({'provider_id': provider_after.id})
 
     def action_test_ai_connection(self):
         """Test connection to the configured AI provider."""

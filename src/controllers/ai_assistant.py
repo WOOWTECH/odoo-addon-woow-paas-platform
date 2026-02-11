@@ -338,6 +338,9 @@ class AiAssistantController(Controller):
 
         provider = agent.provider_id
         if not provider or not provider.is_active:
+            # Fallback to system default provider from Settings
+            provider = self._get_default_provider()
+        if not provider or not provider.is_active:
             _logger.error('AI provider not configured for agent %s in channel %s', agent.name, channel_id)
             return self._sse_error_response('AI provider not configured', 'provider_not_configured')
 
@@ -464,6 +467,20 @@ class AiAssistantController(Controller):
             return None
 
         return request.env['woow_paas_platform.ai_agent'].get_default() or None
+
+    def _get_default_provider(self):
+        """Get the system default AI provider from Settings."""
+        provider_id = request.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.default_ai_provider_id',
+        )
+        if provider_id:
+            try:
+                provider = request.env['woow_paas_platform.ai_provider'].sudo().browse(int(provider_id))
+                if provider.exists():
+                    return provider
+            except (ValueError, TypeError):
+                pass
+        return None
 
     # ==================== AI Connection Status ====================
 
