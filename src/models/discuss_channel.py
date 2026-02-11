@@ -31,6 +31,11 @@ class DiscussChannel(models.Model):
         if self.env.context.get('skip_ai_reply'):
             return message
 
+        # Skip when called from PaaS chat API; the frontend handles AI
+        # replies via SSE streaming so we must not block the HTTP response.
+        if self.env.context.get('from_paas_chat'):
+            return message
+
         # Skip AI-authored messages to prevent infinite recursion
         author_id = kwargs.get('author_id')
         if author_id and author_id == self.env.ref('base.partner_root').id:
