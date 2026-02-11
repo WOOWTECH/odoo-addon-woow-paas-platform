@@ -16,22 +16,9 @@ from langchain_openai import ChatOpenAI
 _logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# HTML output instruction appended to every system prompt so the model
-# returns well-structured HTML instead of raw Markdown.
+# The AI model will respond in its default format (typically Markdown).
+# The frontend will handle conversion to HTML for display.
 # ---------------------------------------------------------------------------
-HTML_OUTPUT_INSTRUCTION = (
-    "\n\n[Output Format]\n"
-    "You MUST reply in HTML. Follow these rules:\n"
-    "- Wrap paragraphs in <p>.\n"
-    "- Use <strong> for bold and <em> for italic.\n"
-    "- Use <pre><code> for code blocks and <code> for inline code.\n"
-    "- Use <ul>/<ol> with <li> for lists.\n"
-    "- Use <h3> or <h4> for headings (never <h1> or <h2>).\n"
-    "- Use <blockquote> for quotes.\n"
-    "- Use <table>/<thead>/<tbody>/<tr>/<th>/<td> for tables.\n"
-    "- Do NOT use Markdown syntax (**, ```, #, etc.).\n"
-    "- Do NOT wrap output in <html>, <head>, or <body> tags."
-)
 
 
 # ---------------------------------------------------------------------------
@@ -114,16 +101,12 @@ class AIClient:
     ) -> list:
         """Build a LangChain message list for a chat completion call.
 
-        The *HTML_OUTPUT_INSTRUCTION* is appended to *system_prompt* so
-        the model replies in HTML rather than Markdown.
+        The model will respond in its default format (typically Markdown).
         """
         messages: list = []
 
-        combined_prompt = (
-            (system_prompt or "") + HTML_OUTPUT_INSTRUCTION
-        ).strip()
-        if combined_prompt:
-            messages.append(SystemMessage(content=combined_prompt))
+        if system_prompt and system_prompt.strip():
+            messages.append(SystemMessage(content=system_prompt.strip()))
 
         for msg in history:
             role = msg.get("role", "user")
@@ -142,7 +125,7 @@ class AIClient:
         """Send a chat completion request and return the full response.
 
         Returns:
-            The assistant response text (HTML).
+            The assistant response text (typically Markdown).
 
         Raises:
             AIClientConnectionError: Connection to the provider failed.
