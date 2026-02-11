@@ -8,7 +8,6 @@ from typing import Any
 from werkzeug.wrappers import Response
 
 from odoo.http import request, route, Controller
-from odoo.tools import html_sanitize
 
 _logger = logging.getLogger(__name__)
 
@@ -374,6 +373,12 @@ class AiAssistantController(Controller):
         )
         root_partner_id = request.env.ref('base.partner_root').id
 
+        # Pre-capture DB info for use inside the generator where the
+        # original request cursor may no longer be valid.
+        db_name = request.env.cr.dbname
+        uid = request.env.uid
+        context = dict(request.env.context)
+
         def generate():
             full_response = ''
             try:
@@ -386,28 +391,47 @@ class AiAssistantController(Controller):
                 yield f'data: {error_data}\n\n'
                 return
 
-            # Send the done signal
-            done_data = json.dumps({'chunk': '', 'done': True, 'full_response': full_response})
-            yield f'data: {done_data}\n\n'
-
-            # Post the full AI response to the channel
+            # Persist the AI response BEFORE sending the done signal so
+            # that the message is guaranteed to be in the database when
+            # the frontend receives the done event.
+            saved_message_id = None
+            warning = None
             if full_response:
                 try:
-                    channel.with_context(
-                        mail_create_nosubscribe=True,
-                        skip_ai_reply=True,
-                    ).message_post(
-                        body=html_sanitize(full_response),
-                        message_type='comment',
-                        subtype_xmlid='mail.mt_comment',
-                        author_id=root_partner_id,
-                    )
+                    import odoo
+                    from odoo import api as odoo_api
+                    registry = odoo.registry(db_name)
+                    with registry.cursor() as new_cr:
+                        new_env = odoo_api.Environment(new_cr, uid, context)
+                        new_channel = new_env['discuss.channel'].browse(channel_id)
+                        msg = new_channel.with_context(
+                            mail_create_nosubscribe=True,
+                            skip_ai_reply=True,
+                        ).message_post(
+                            body=full_response,  # Store raw Markdown from AI
+                            message_type='comment',
+                            subtype_xmlid='mail.mt_comment',
+                            author_id=root_partner_id,
+                        )
+                        saved_message_id = msg.id
                 except Exception as exc:
-                    _logger.exception('Failed to post AI response to channel %s: %s', channel_id, exc)
-                    warn_data = json.dumps({
-                        'warning': 'AI 回覆已生成但無法儲存，請重新整理頁面確認。',
-                    })
-                    yield f'data: {warn_data}\n\n'
+                    _logger.exception(
+                        'Failed to post AI response to channel %s: %s',
+                        channel_id, exc,
+                    )
+                    warning = 'AI 回覆已生成但無法儲存，請重新整理頁面確認。'
+
+            # Send the done signal (with message_id when available)
+            done_payload = {
+                'chunk': '',
+                'done': True,
+                'full_response': full_response,
+            }
+            if saved_message_id:
+                done_payload['message_id'] = saved_message_id
+            if warning:
+                done_payload['warning'] = warning
+            yield f'data: {json.dumps(done_payload)}\n\n'
 
         return Response(
             generate(),
