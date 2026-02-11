@@ -1,8 +1,8 @@
 ---
 name: kanban-empty-and-create-task
-status: backlog
+status: completed
 created: 2026-02-10T15:41:44Z
-progress: 0%
+progress: 100%
 prd: .claude/prds/kanban-empty-and-create-task.md
 updated: 2026-02-10T15:57:34Z
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/52
