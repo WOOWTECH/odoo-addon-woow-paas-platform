@@ -41,10 +41,15 @@
             # Component-specific SCSS (after base styles)
             'woow_paas_platform/static/src/paas/components/**/*.scss',
             'woow_paas_platform/static/src/paas/pages/**/*.scss',
+            # Third-party libraries (must load before app JS)
+            'woow_paas_platform/static/src/paas/lib/purify.min.js',
             # JS and XML files
             'woow_paas_platform/static/src/paas/**/*.js',
             'woow_paas_platform/static/src/paas/**/*.xml',
         ],
+    },
+    'external_dependencies': {
+        'python': ['langchain_openai', 'langchain_core'],
     },
     'installable': True,
     'application': True,

@@ -1,28 +1,42 @@
-"""OpenAI-compatible HTTP client for AI providers.
+"""AI client powered by LangChain's ChatOpenAI.
 
-This module provides a plain Python class (NOT an Odoo model) that wraps
-HTTP calls to any OpenAI-compatible chat completion API, including support
-for streaming (SSE) responses.
+This module wraps ``langchain-openai``'s :class:`ChatOpenAI` to provide a
+simple interface for chat completions (both synchronous and streaming)
+against any OpenAI-compatible API endpoint.
+
+The public interface is intentionally kept identical to the previous
+hand-rolled HTTP client so that callers do not need any changes.
 """
-import json
 import logging
 from typing import Generator, List, Optional
 
-import requests
-from requests.exceptions import (
-    ChunkedEncodingError,
-    ConnectionError,
-    RequestException,
-    Timeout,
-)
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
 _logger = logging.getLogger(__name__)
 
-# Default timeout for non-streaming requests (seconds)
-DEFAULT_TIMEOUT = 60
-# Timeout for streaming requests (seconds) -- longer to allow generation
-STREAM_TIMEOUT = 300
+# ---------------------------------------------------------------------------
+# HTML output instruction appended to every system prompt so the model
+# returns well-structured HTML instead of raw Markdown.
+# ---------------------------------------------------------------------------
+HTML_OUTPUT_INSTRUCTION = (
+    "\n\n[Output Format]\n"
+    "You MUST reply in HTML. Follow these rules:\n"
+    "- Wrap paragraphs in <p>.\n"
+    "- Use <strong> for bold and <em> for italic.\n"
+    "- Use <pre><code> for code blocks and <code> for inline code.\n"
+    "- Use <ul>/<ol> with <li> for lists.\n"
+    "- Use <h3> or <h4> for headings (never <h1> or <h2>).\n"
+    "- Use <blockquote> for quotes.\n"
+    "- Use <table>/<thead>/<tbody>/<tr>/<th>/<td> for tables.\n"
+    "- Do NOT use Markdown syntax (**, ```, #, etc.).\n"
+    "- Do NOT wrap output in <html>, <head>, or <body> tags."
+)
 
+
+# ---------------------------------------------------------------------------
+# Exception hierarchy (unchanged from the previous implementation)
+# ---------------------------------------------------------------------------
 
 class AIClientError(Exception):
     """Base exception for AI client errors."""
@@ -41,21 +55,22 @@ class AIClientError(Exception):
 
 class AIClientConnectionError(AIClientError):
     """Raised when connection to the AI provider fails."""
-    pass
 
 
 class AIClientTimeoutError(AIClientError):
     """Raised when the AI provider request times out."""
-    pass
 
 
 class AIClientAPIError(AIClientError):
     """Raised when the AI provider returns an error response."""
-    pass
 
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
 
 class AIClient:
-    """OpenAI-compatible HTTP client for chat completions.
+    """OpenAI-compatible chat client backed by LangChain.
 
     Supports any API that follows the OpenAI chat completion format,
     including OpenAI, Azure OpenAI, Ollama, and other compatible services.
@@ -68,8 +83,8 @@ class AIClient:
             model_name="gpt-4o",
         )
         response = client.chat_completion([
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
+            SystemMessage(content="You are helpful."),
+            HumanMessage(content="Hello!"),
         ])
     """
 
@@ -81,214 +96,132 @@ class AIClient:
         max_tokens: int = 4096,
         temperature: float = 0.7,
     ):
-        """Initialize the AI client.
+        self.llm = ChatOpenAI(
+            base_url=api_base_url.rstrip("/"),
+            api_key=api_key,
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
 
-        Args:
-            api_base_url: Base URL of the OpenAI-compatible API.
-            api_key: API key for authentication.
-            model_name: Model identifier (e.g., "gpt-4o", "llama3").
-            max_tokens: Maximum number of tokens in the response.
-            temperature: Sampling temperature (0.0-1.0).
-        """
-        self.api_base_url = api_base_url.rstrip("/")
-        self.api_key = api_key
-        self.model_name = model_name
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        self._session = requests.Session()
-        self._session.headers.update({
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        })
+    # -------------------- message helpers --------------------
 
     def build_messages(
         self,
         system_prompt: str,
         history: List[dict],
         user_message: str,
-    ) -> List[dict]:
-        """Build a messages array for the chat completion API.
+    ) -> list:
+        """Build a LangChain message list for a chat completion call.
 
-        Assembles the final list of messages from a system prompt,
-        conversation history, and the latest user message.
-
-        Args:
-            system_prompt: The system-level instruction for the AI.
-            history: Previous conversation messages, each with
-                     "role" and "content" keys.
-            user_message: The latest user message to respond to.
-
-        Returns:
-            A list of message dicts ready for the chat completion API.
+        The *HTML_OUTPUT_INSTRUCTION* is appended to *system_prompt* so
+        the model replies in HTML rather than Markdown.
         """
-        messages: List[dict] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+        messages: list = []
+
+        combined_prompt = (
+            (system_prompt or "") + HTML_OUTPUT_INSTRUCTION
+        ).strip()
+        if combined_prompt:
+            messages.append(SystemMessage(content=combined_prompt))
+
         for msg in history:
-            messages.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", ""),
-            })
-        messages.append({"role": "user", "content": user_message})
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "assistant":
+                messages.append(AIMessage(content=content))
+            else:
+                messages.append(HumanMessage(content=content))
+
+        messages.append(HumanMessage(content=user_message))
         return messages
 
-    def _make_request(
-        self,
-        payload: dict,
-        stream: bool = False,
-    ) -> requests.Response:
-        """Send a request to the chat completions endpoint.
+    # -------------------- completions --------------------
 
-        Centralises connection, timeout, and HTTP-error handling shared
-        by both the synchronous and streaming code paths.
-
-        Args:
-            payload: JSON body for the request.
-            stream: Whether to open a streaming response.
-
-        Returns:
-            The :class:`requests.Response` object.
-
-        Raises:
-            AIClientConnectionError: If the connection fails.
-            AIClientTimeoutError: If the request times out.
-            AIClientAPIError: If the API returns a non-200 status.
-        """
-        url = f"{self.api_base_url}/chat/completions"
-        timeout = STREAM_TIMEOUT if stream else DEFAULT_TIMEOUT
-
-        try:
-            response = self._session.post(
-                url,
-                json=payload,
-                timeout=timeout,
-                stream=stream,
-            )
-        except ConnectionError as exc:
-            raise AIClientConnectionError(
-                f"Failed to connect to AI provider at {self.api_base_url}",
-                detail=str(exc),
-            ) from exc
-        except Timeout as exc:
-            raise AIClientTimeoutError(
-                f"Request to AI provider timed out after {timeout}s",
-                detail=str(exc),
-            ) from exc
-        except RequestException as exc:
-            raise AIClientError(
-                f"Unexpected error communicating with AI provider: {exc}",
-                detail=str(exc),
-            ) from exc
-
-        if response.status_code != 200:
-            detail = response.text[:500] if response.text else None
-            raise AIClientAPIError(
-                f"AI provider returned HTTP {response.status_code}",
-                status_code=response.status_code,
-                detail=detail,
-            )
-
-        return response
-
-    def chat_completion(self, messages: List[dict]) -> str:
+    def chat_completion(self, messages: list) -> str:
         """Send a chat completion request and return the full response.
 
-        Args:
-            messages: List of message dicts with "role" and "content".
-
         Returns:
-            The assistant response text.
+            The assistant response text (HTML).
 
         Raises:
-            AIClientConnectionError: If the connection fails.
-            AIClientTimeoutError: If the request times out.
-            AIClientAPIError: If the API returns an error.
+            AIClientConnectionError: Connection to the provider failed.
+            AIClientTimeoutError: The request timed out.
+            AIClientAPIError: The provider returned an error.
         """
-        payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "stream": False,
-        }
-
-        response = self._make_request(payload)
-
         try:
-            data = response.json()
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise AIClientAPIError(
-                "AI provider returned invalid JSON",
-                detail=str(exc),
-            ) from exc
-
-        choices = data.get("choices", [])
-        if not choices:
-            raise AIClientAPIError(
-                "AI provider returned empty choices",
-                detail=json.dumps(data),
-            )
-        return choices[0].get("message", {}).get("content", "")
+            result = self.llm.invoke(messages)
+            return result.content
+        except Exception as exc:
+            raise _translate_exception(exc) from exc
 
     def chat_completion_stream(
-        self, messages: List[dict],
+        self,
+        messages: list,
     ) -> Generator[str, None, None]:
-        """Send a streaming chat completion request.
-
-        Yields text chunks as they arrive from the AI provider using
-        Server-Sent Events (SSE) format.
-
-        Args:
-            messages: List of message dicts with "role" and "content".
+        """Stream a chat completion, yielding text chunks.
 
         Yields:
             Text chunks (strings) from the assistant response.
 
         Raises:
-            AIClientConnectionError: If the connection fails.
-            AIClientTimeoutError: If the request times out.
-            AIClientAPIError: If the API returns an error.
+            AIClientConnectionError: Connection to the provider failed.
+            AIClientTimeoutError: The request timed out.
+            AIClientAPIError: The provider returned an error.
         """
-        payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "stream": True,
-        }
-
-        response = self._make_request(payload, stream=True)
-        # Ensure UTF-8 decoding for SSE streams (spec mandates UTF-8)
-        response.encoding = 'utf-8'
-
-        # Parse SSE stream line by line; wrap in try/except to catch
-        # network errors that can occur mid-stream.
         try:
-            for line in response.iter_lines(decode_unicode=True):
-                if not line:
-                    continue
-                if line.startswith("data: "):
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                    except (json.JSONDecodeError, ValueError):
-                        _logger.warning("Skipping invalid SSE chunk: %s", data_str)
-                        continue
-                    choices = chunk.get("choices", [])
-                    if choices:
-                        delta = choices[0].get("delta", {})
-                        content = delta.get("content")
-                        if content:
-                            yield content
-        except ChunkedEncodingError as exc:
-            raise AIClientConnectionError(
-                "Connection lost during streaming response",
-                detail=str(exc),
-            ) from exc
-        except ConnectionError as exc:
-            raise AIClientConnectionError(
-                "Connection lost during streaming response",
-                detail=str(exc),
-            ) from exc
+            for chunk in self.llm.stream(messages):
+                if chunk.content:
+                    yield chunk.content
+        except Exception as exc:
+            raise _translate_exception(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# Internal: translate LangChain / openai exceptions into AIClient* errors
+# ---------------------------------------------------------------------------
+
+def _translate_exception(exc: Exception) -> AIClientError:
+    """Map upstream exceptions to the AIClient* hierarchy."""
+    exc_type = type(exc).__name__
+    exc_module = type(exc).__module__ or ""
+    detail = str(exc)
+
+    # openai library errors (re-exported via langchain-openai)
+    if "openai" in exc_module:
+        if "APIConnectionError" in exc_type:
+            return AIClientConnectionError(
+                "Failed to connect to AI provider",
+                detail=detail,
+            )
+        if "Timeout" in exc_type or "APITimeoutError" in exc_type:
+            return AIClientTimeoutError(
+                "Request to AI provider timed out",
+                detail=detail,
+            )
+        # AuthenticationError, RateLimitError, BadRequestError, etc.
+        status_code = getattr(exc, "status_code", None)
+        return AIClientAPIError(
+            f"AI provider error: {exc_type}",
+            status_code=status_code,
+            detail=detail,
+        )
+
+    # httpx / requests connection errors
+    if "ConnectError" in exc_type or "ConnectionError" in exc_type:
+        return AIClientConnectionError(
+            "Failed to connect to AI provider",
+            detail=detail,
+        )
+
+    if "Timeout" in exc_type or "ReadTimeout" in exc_type:
+        return AIClientTimeoutError(
+            "Request to AI provider timed out",
+            detail=detail,
+        )
+
+    # Fallback
+    return AIClientError(
+        f"Unexpected AI client error: {exc_type}",
+        detail=detail,
+    )
