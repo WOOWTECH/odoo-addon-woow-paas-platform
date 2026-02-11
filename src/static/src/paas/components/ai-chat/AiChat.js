@@ -1,8 +1,9 @@
 /** @odoo-module **/
 
-import { Component, useState, useRef, onMounted, onWillUnmount, markup } from "@odoo/owl";
+import { Component, useState, useRef, onMounted, onWillUnmount } from "@odoo/owl";
 import { AiMentionDropdown } from "../ai-mention/AiMentionDropdown";
 import { aiService } from "../../services/ai_service";
+import { safeHtml } from "../../services/html_sanitize";
 
 const ERROR_MESSAGES = {
     channel_not_found: "聊天頻道不存在，請重新整理頁面。",
@@ -98,7 +99,7 @@ export class AiChat extends Component {
             if (result.success) {
                 this.state.messages = (result.data || []).map(msg => ({
                     ...msg,
-                    body: msg.body ? markup(msg.body) : "",
+                    body: msg.body ? safeHtml(msg.body) : "",
                 }));
             } else {
                 this.state.error = result.error || "Failed to load chat history";
@@ -135,7 +136,7 @@ export class AiChat extends Component {
             if (result.success && result.data) {
                 this.state.messages.push({
                     ...result.data,
-                    body: result.data.body ? markup(result.data.body) : "",
+                    body: result.data.body ? safeHtml(result.data.body) : "",
                     is_ai: false,
                     message_type: "comment",
                     attachments: result.data.attachments || [],
@@ -209,7 +210,10 @@ export class AiChat extends Component {
                     // Add the complete AI message to the list
                     if (this.state.streamingText) {
                         this.state.messages.push(
-                            this._createAiMessage(data.full_response || this.state.streamingText)
+                            this._createAiMessage(
+                                data.full_response || this.state.streamingText,
+                                data.message_id,
+                            )
                         );
                     }
                     this.closeStream();
@@ -572,10 +576,10 @@ export class AiChat extends Component {
         return !this.state.inputText.trim() || this.state.sending || this.state.streaming;
     }
 
-    _createAiMessage(body) {
+    _createAiMessage(body, messageId) {
         return {
-            id: Date.now(),
-            body: body ? markup(`<p>${body}</p>`) : "",
+            id: messageId || Date.now(),
+            body: body ? safeHtml(body) : "",
             author_name: "AI Assistant",
             author_id: null,
             date: new Date().toISOString(),
@@ -583,6 +587,10 @@ export class AiChat extends Component {
             message_type: "comment",
             attachments: [],
         };
+    }
+
+    get streamingHtml() {
+        return safeHtml(this.state.streamingText);
     }
 
     get connectionIndicator() {

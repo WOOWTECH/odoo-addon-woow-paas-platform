@@ -1,8 +1,8 @@
 ---
 name: project-kanban-and-chat-fix
-status: backlog
+status: completed
 created: 2026-02-10T09:00:00Z
-progress: 0%
+progress: 100%
 prd: .claude/prds/project-kanban-and-chat-fix.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/39
 ---

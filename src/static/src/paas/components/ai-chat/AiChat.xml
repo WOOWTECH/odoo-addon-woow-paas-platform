@@ -110,7 +110,7 @@
                         </div>
                         <div class="o_woow_ai_chat__bubble o_woow_ai_chat__bubble--streaming">
                             <div t-if="state.streamingText"
-                                 class="o_woow_ai_chat__body" t-esc="state.streamingText"/>
+                                 class="o_woow_ai_chat__body" t-out="streamingHtml"/>
                             <div class="o_woow_ai_chat__typing">
                                 <span class="o_woow_ai_chat__dot"/>
                                 <span class="o_woow_ai_chat__dot"/>

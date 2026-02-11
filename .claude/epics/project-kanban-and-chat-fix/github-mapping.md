@@ -12,4 +12,4 @@ Tasks:
 - #46: 前端 — 路由接線與導航修改 - https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/46
 - #47: 前端 — AiChat 連線狀態指示器 UI - https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/47
 
-Synced: 2026-02-10T11:16:40Z
+Synced: 2026-02-11T02:05:26Z

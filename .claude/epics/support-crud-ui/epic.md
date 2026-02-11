@@ -1,8 +1,8 @@
 ---
 name: support-crud-ui
-status: backlog
+status: completed
 created: 2026-02-10T06:42:15Z
-progress: 0%
+progress: 100%
 prd: .claude/prds/support-crud-ui.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/33
 ---
