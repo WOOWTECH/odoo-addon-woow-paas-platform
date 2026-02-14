@@ -774,7 +774,7 @@ class PaasController(Controller):
             data['helm_chart_name'] = template.helm_chart_name
             data['helm_chart_version'] = template.helm_chart_version
             data['helm_default_values'] = json.loads(template.helm_default_values) if template.helm_default_values else {}
-            data['helm_value_specs'] = json.loads(template.helm_value_specs) if template.helm_value_specs else {}
+            data['helm_value_specs'] = self._parse_helm_value_specs(template)
             data['full_description'] = template.full_description or ''
         return data
 
@@ -949,6 +949,23 @@ class PaasController(Controller):
 
     # ==================== Cloud Service Helpers ====================
 
+    def _parse_helm_value_specs(self, template: Any) -> dict[str, list]:
+        """Parse helm_value_specs JSON from a template record.
+
+        Args:
+            template: CloudAppTemplate record
+
+        Returns:
+            dict with 'required' and 'optional' lists, or empty dict if no specs
+        """
+        if not template or not template.helm_value_specs:
+            return {}
+        try:
+            return json.loads(template.helm_value_specs)
+        except (json.JSONDecodeError, TypeError):
+            _logger.warning("Invalid helm_value_specs for template %s", template.name)
+            return {}
+
     def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> dict[str, Any]:
         """
         Filter Helm values to only include keys allowed by template's value_specs.
@@ -966,14 +983,9 @@ class PaasController(Controller):
         if not values:
             return {}
 
-        if not template.helm_value_specs:
+        specs = self._parse_helm_value_specs(template)
+        if not specs:
             # No specs defined - allow all values (backward compatibility)
-            return values
-
-        try:
-            specs = json.loads(template.helm_value_specs)
-        except (json.JSONDecodeError, TypeError):
-            _logger.warning("Invalid helm_value_specs for template %s", template.name)
             return values
 
         # Build set of allowed keys from specs
@@ -1429,6 +1441,7 @@ class PaasController(Controller):
                 'id': service.template_id.id,
                 'name': service.template_id.name,
                 'category': service.template_id.category,
+                'helm_value_specs': self._parse_helm_value_specs(service.template_id),
             },
             'helm_revision': service.helm_revision,
             'created_date': service.create_date.isoformat() if service.create_date else None,
