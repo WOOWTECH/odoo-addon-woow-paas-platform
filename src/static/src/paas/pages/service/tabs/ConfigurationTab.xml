@@ -85,20 +85,35 @@
                     <div class="o_woow_config_editor">
                         <div class="o_woow_editor_hint">
                             <WoowIcon name="'info'" size="16"/>
-                            <span>Edit the JSON configuration below. Changes will trigger a service upgrade.</span>
+                            <span>Modify configuration values below. Changes will trigger a service upgrade.</span>
                         </div>
-                        <textarea
-                            class="o_woow_config_textarea"
-                            t-att-value="editedValuesJson"
-                            t-on-input="onValuesChange"
-                            rows="20"
-                            spellcheck="false"/>
-                        <div class="o_woow_editor_footer">
-                            <span t-if="hasChanges" class="o_woow_changes_indicator">
-                                <WoowIcon name="'edit'" size="14"/>
-                                Unsaved changes
-                            </span>
-                        </div>
+                        <HelmValueForm
+                            specs="helmValueSpecs"
+                            values="state.editedValues"
+                            onUpdate.bind="onHelmValueUpdate"
+                            showAdvanced="state.showAdvanced"
+                            errors="state.errors"
+                        />
+                        <t t-if="hasOptionalSettings">
+                            <button
+                                type="button"
+                                class="o_woow_advanced_toggle"
+                                t-on-click="toggleAdvanced"
+                            >
+                                <WoowIcon
+                                    t-if="state.showAdvanced"
+                                    name="'expand_less'"
+                                    size="18"
+                                />
+                                <WoowIcon
+                                    t-else=""
+                                    name="'expand_more'"
+                                    size="18"
+                                />
+                                <t t-if="state.showAdvanced">Hide Advanced Settings</t>
+                                <t t-else="">Show Advanced Settings</t>
+                            </button>
+                        </t>
                     </div>
                 </WoowCard>
             </t>

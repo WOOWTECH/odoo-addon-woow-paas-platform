@@ -3,26 +3,23 @@ import { Component, useState } from "@odoo/owl";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
+import { HelmValueForm } from "../../../components/config/HelmValueForm";
 import { cloudService } from "../../../services/cloud_service";
 
 /**
  * ConfigurationTab Component
  *
  * Displays and allows editing of Helm values for a cloud service.
- * Features:
- * - Display current Helm values in a read-only view
- * - Edit mode for modifying values
- * - Save button to trigger upgrade API
- * - Shows upgrade progress
+ * Uses HelmValueForm for structured editing based on template specs.
  *
  * Props:
- *   - service (Object): Service data object with helm_values
+ *   - service (Object): Service data object with helm_values and template.helm_value_specs
  *   - workspaceId (number): Workspace ID for API calls
  *   - onSave (Function): Callback when configuration is saved
  */
 export class ConfigurationTab extends Component {
     static template = "woow_paas_platform.ConfigurationTab";
-    static components = { WoowCard, WoowIcon, WoowButton };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm };
     static props = {
         service: { type: Object },
         workspaceId: { type: Number },
@@ -34,84 +31,14 @@ export class ConfigurationTab extends Component {
             editing: false,
             saving: false,
             error: null,
-            editedValues: null,
+            editedValues: {},
+            showAdvanced: false,
+            errors: {},
         });
     }
 
     get currentValues() {
         return this.props.service.helm_values || {};
-    }
-
-    get valuesJson() {
-        return JSON.stringify(this.currentValues, null, 2);
-    }
-
-    get editedValuesJson() {
-        if (this.state.editedValues === null) {
-            return this.valuesJson;
-        }
-        return this.state.editedValues;
-    }
-
-    get hasChanges() {
-        if (this.state.editedValues === null) return false;
-        return this.state.editedValues !== this.valuesJson;
-    }
-
-    get canEdit() {
-        // Disable editing when service is in transitional state
-        const disabledStates = ["deploying", "upgrading", "deleting", "pending"];
-        return !disabledStates.includes(this.props.service.state);
-    }
-
-    startEditing() {
-        this.state.editing = true;
-        this.state.editedValues = this.valuesJson;
-        this.state.error = null;
-    }
-
-    cancelEditing() {
-        this.state.editing = false;
-        this.state.editedValues = null;
-        this.state.error = null;
-    }
-
-    onValuesChange(ev) {
-        this.state.editedValues = ev.target.value;
-        this.state.error = null;
-    }
-
-    async saveChanges() {
-        // Validate JSON
-        let parsedValues;
-        try {
-            parsedValues = JSON.parse(this.state.editedValues);
-        } catch (e) {
-            this.state.error = "Invalid JSON format. Please check your configuration.";
-            return;
-        }
-
-        this.state.saving = true;
-        this.state.error = null;
-
-        // Call API to update service
-        const result = await cloudService.updateService(
-            this.props.workspaceId,
-            this.props.service.id,
-            parsedValues
-        );
-
-        if (result.success) {
-            this.state.editing = false;
-            this.state.editedValues = null;
-            if (this.props.onSave) {
-                this.props.onSave(parsedValues);
-            }
-        } else {
-            this.state.error = result.error || "Failed to update configuration";
-        }
-
-        this.state.saving = false;
     }
 
     get helmValueSpecs() {
@@ -120,6 +47,15 @@ export class ConfigurationTab extends Component {
 
     get allSpecs() {
         return [...(this.helmValueSpecs.required || []), ...(this.helmValueSpecs.optional || [])];
+    }
+
+    get hasOptionalSettings() {
+        return (this.helmValueSpecs.optional || []).length > 0;
+    }
+
+    get canEdit() {
+        const disabledStates = ["deploying", "upgrading", "deleting", "pending"];
+        return !disabledStates.includes(this.props.service.state);
     }
 
     getSpecValue(spec) {
@@ -135,5 +71,75 @@ export class ConfigurationTab extends Component {
         if (spec.type === "boolean") return value ? "Enabled" : "Disabled";
         if (value === null || value === undefined) return "-";
         return String(value);
+    }
+
+    startEditing() {
+        const values = {};
+        for (const spec of this.allSpecs) {
+            values[spec.key] = this.getSpecValue(spec);
+        }
+        this.state.editedValues = values;
+        this.state.editing = true;
+        this.state.error = null;
+        this.state.errors = {};
+    }
+
+    cancelEditing() {
+        this.state.editing = false;
+        this.state.editedValues = {};
+        this.state.error = null;
+        this.state.errors = {};
+        this.state.showAdvanced = false;
+    }
+
+    onHelmValueUpdate(key, value) {
+        this.state.editedValues = { ...this.state.editedValues, [key]: value };
+        if (this.state.errors[key]) {
+            const newErrors = { ...this.state.errors };
+            delete newErrors[key];
+            this.state.errors = newErrors;
+        }
+    }
+
+    toggleAdvanced() {
+        this.state.showAdvanced = !this.state.showAdvanced;
+    }
+
+    validateForm() {
+        const errors = {};
+        for (const spec of (this.helmValueSpecs.required || [])) {
+            const value = this.state.editedValues[spec.key];
+            if (value === undefined || value === null || value === "") {
+                errors[spec.key] = `${spec.label || spec.key} is required`;
+            }
+        }
+        this.state.errors = errors;
+        return Object.keys(errors).length === 0;
+    }
+
+    async saveChanges() {
+        if (!this.validateForm()) return;
+
+        this.state.saving = true;
+        this.state.error = null;
+
+        const result = await cloudService.updateService(
+            this.props.workspaceId,
+            this.props.service.id,
+            this.state.editedValues
+        );
+
+        if (result.success) {
+            this.state.editing = false;
+            this.state.editedValues = {};
+            this.state.showAdvanced = false;
+            if (this.props.onSave) {
+                this.props.onSave(result.data);
+            }
+        } else {
+            this.state.error = result.error || "Failed to update configuration";
+        }
+
+        this.state.saving = false;
     }
 }
