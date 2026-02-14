@@ -114,52 +114,26 @@ export class ConfigurationTab extends Component {
         this.state.saving = false;
     }
 
-    formatKey(key) {
-        // Convert camelCase or snake_case to Title Case
-        return key
-            .replace(/([A-Z])/g, " $1")
-            .replace(/_/g, " ")
-            .replace(/^./, (str) => str.toUpperCase())
-            .trim();
+    get helmValueSpecs() {
+        return this.props.service.template?.helm_value_specs || { required: [], optional: [] };
     }
 
-    isObject(value) {
-        return typeof value === "object" && value !== null && !Array.isArray(value);
+    get allSpecs() {
+        return [...(this.helmValueSpecs.required || []), ...(this.helmValueSpecs.optional || [])];
     }
 
-    isArray(value) {
-        return Array.isArray(value);
+    getSpecValue(spec) {
+        const values = this.currentValues;
+        const value = values[spec.key];
+        if (value !== undefined) return value;
+        return spec.default !== undefined ? spec.default : "";
     }
 
-    formatValue(value) {
-        if (value === null || value === undefined) return "null";
-        if (typeof value === "boolean") return value ? "true" : "false";
-        if (typeof value === "number") return String(value);
-        if (typeof value === "string") return value;
-        return JSON.stringify(value);
-    }
-
-    get flattenedValues() {
-        // Flatten nested objects for display
-        const result = [];
-        const flatten = (obj, prefix = "") => {
-            for (const [key, value] of Object.entries(obj)) {
-                const fullKey = prefix ? `${prefix}.${key}` : key;
-                if (this.isObject(value) && Object.keys(value).length > 0) {
-                    flatten(value, fullKey);
-                } else {
-                    result.push({
-                        key: fullKey,
-                        label: this.formatKey(key),
-                        value: this.formatValue(value),
-                        isSecret: key.toLowerCase().includes("password") ||
-                                  key.toLowerCase().includes("secret") ||
-                                  key.toLowerCase().includes("key"),
-                    });
-                }
-            }
-        };
-        flatten(this.currentValues);
-        return result;
+    formatSpecValue(spec) {
+        const value = this.getSpecValue(spec);
+        if (spec.type === "password") return "********";
+        if (spec.type === "boolean") return value ? "Enabled" : "Disabled";
+        if (value === null || value === undefined) return "-";
+        return String(value);
     }
 }

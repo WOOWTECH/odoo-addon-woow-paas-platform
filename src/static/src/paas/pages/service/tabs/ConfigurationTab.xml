@@ -58,21 +58,19 @@
             <!-- View Mode -->
             <t t-if="!state.editing">
                 <WoowCard class="'o_woow_config_card'">
-                    <t t-if="flattenedValues.length === 0">
+                    <t t-if="allSpecs.length === 0">
                         <div class="o_woow_config_empty">
                             <WoowIcon name="'settings'" size="32"/>
-                            <p>No configuration values set.</p>
-                            <p class="o_woow_hint">Click "Edit Configuration" to add values.</p>
+                            <p>No configurable settings for this service.</p>
                         </div>
                     </t>
                     <t t-else="">
                         <div class="o_woow_config_list">
-                            <t t-foreach="flattenedValues" t-as="item" t-key="item.key">
+                            <t t-foreach="allSpecs" t-as="spec" t-key="spec.key">
                                 <div class="o_woow_config_item">
-                                    <span class="o_woow_config_key" t-esc="item.key"/>
-                                    <span t-att-class="'o_woow_config_value' + (item.isSecret ? ' o_woow_secret' : '')">
-                                        <t t-if="item.isSecret">********</t>
-                                        <t t-else="" t-esc="item.value"/>
+                                    <span class="o_woow_config_key" t-esc="spec.label || spec.key"/>
+                                    <span t-att-class="'o_woow_config_value' + (spec.type === 'password' ? ' o_woow_secret' : '')">
+                                        <t t-esc="formatSpecValue(spec)"/>
                                     </span>
                                 </div>
                             </t>
