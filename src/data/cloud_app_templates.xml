@@ -6,7 +6,9 @@
             <field name="name">PostgreSQL</field>
             <field name="slug">postgresql</field>
             <field name="description">Open-source relational database</field>
-            <field name="full_description">PostgreSQL is a powerful, open-source object-relational database system with over 35 years of active development. It has a strong reputation for reliability, feature robustness, and performance.</field>
+            <field name="full_description">PostgreSQL is a powerful, open-source object-relational
+                database system with over 35 years of active development. It has a strong reputation
+                for reliability, feature robustness, and performance.</field>
             <field name="category">database</field>
             <field name="tags">["postgresql", "database", "sql", "relational"]</field>
             <field name="monthly_price">0</field>
@@ -16,19 +18,21 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/postgresql</field>
             <field name="helm_chart_version"></field>
-            <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"}, "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}}}</field>
-            <field name="helm_value_specs">{"properties": {"auth": {"type": "object", "properties": {"username": {"type": "string"}, "database": {"type": "string"}}}}}</field>
+            <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"},
+                "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits":
+                {"cpu": "2000m", "memory": "2Gi"}}}}</field>
+            <field name="helm_value_specs">{"required": [{"key": "auth.username", "label": "Database Username", "type": "text", "default": "woow"}, {"key": "auth.database", "label": "Database Name", "type": "text", "default": "woowdb"}], "optional": []}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5432</field>
-            <field name="ingress_enabled" eval="False"/>
+            <field name="ingress_enabled" eval="False" />
 
             <!-- Resource Requirements -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">2.0</field>
             <field name="min_storage_gb">10</field>
 
-            <field name="is_active" eval="True"/>
+            <field name="is_active" eval="True" />
         </record>
 
         <!-- n8n Workflow Automation -->
@@ -36,7 +40,9 @@
             <field name="name">n8n</field>
             <field name="slug">n8n</field>
             <field name="description">Workflow automation tool</field>
-            <field name="full_description">n8n is a fair-code licensed workflow automation tool. It allows you to connect apps and services in flexible ways to automate tasks. With over 280+ integrations, you can build workflows without code.</field>
+            <field name="full_description">n8n is a fair-code licensed workflow automation tool. It
+                allows you to connect apps and services in flexible ways to automate tasks. With
+                over 280+ integrations, you can build workflows without code.</field>
             <field name="category">automation</field>
             <field name="tags">["n8n", "automation", "workflow", "integration", "no-code"]</field>
             <field name="monthly_price">0</field>
@@ -46,19 +52,21 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://8gears.container-registry.com/library/n8n</field>
             <field name="helm_chart_version"></field>
-            <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "1000m", "memory": "1Gi"}}}}</field>
-            <field name="helm_value_specs">{"properties": {"config": {"type": "object", "properties": {"database": {"type": "object", "properties": {"type": {"type": "string", "enum": ["sqlite", "postgres"]}}}}}}}</field>
+            <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main":
+                {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
+                "1000m", "memory": "1Gi"}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [{"key": "config.database.type", "label": "Database Type", "type": "select", "default": "sqlite", "options": ["sqlite", "postgres"]}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5678</field>
-            <field name="ingress_enabled" eval="True"/>
+            <field name="ingress_enabled" eval="True" />
 
             <!-- Resource Requirements -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
             <field name="min_storage_gb">5</field>
 
-            <field name="is_active" eval="True"/>
+            <field name="is_active" eval="True" />
         </record>
 
         <!-- Redis Cache -->
@@ -66,7 +74,9 @@
             <field name="name">Redis</field>
             <field name="slug">redis</field>
             <field name="description">In-memory data structure store</field>
-            <field name="full_description">Redis is an open-source, in-memory data structure store used as a database, cache, message broker, and streaming engine. It supports data structures such as strings, hashes, lists, sets, and sorted sets.</field>
+            <field name="full_description">Redis is an open-source, in-memory data structure store
+                used as a database, cache, message broker, and streaming engine. It supports data
+                structures such as strings, hashes, lists, sets, and sorted sets.</field>
             <field name="category">database</field>
             <field name="tags">["redis", "cache", "in-memory", "key-value", "nosql"]</field>
             <field name="monthly_price">0</field>
@@ -76,19 +86,63 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/redis</field>
             <field name="helm_chart_version"></field>
-            <field name="helm_default_values">{"architecture": "standalone", "master": {"resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory": "512Mi"}}}}</field>
-            <field name="helm_value_specs">{"properties": {"architecture": {"type": "string", "enum": ["standalone", "replication"]}}}</field>
+            <field name="helm_default_values">{"architecture": "standalone", "master": {"resources":
+                {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory":
+                "512Mi"}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [{"key": "architecture", "label": "Architecture", "type": "select", "default": "standalone", "options": ["standalone", "replication"]}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">6379</field>
-            <field name="ingress_enabled" eval="False"/>
+            <field name="ingress_enabled" eval="False" />
 
             <!-- Resource Requirements -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
             <field name="min_storage_gb">5</field>
 
-            <field name="is_active" eval="True"/>
+            <field name="is_active" eval="True" />
+        </record>
+
+        <!-- Odoo ERP -->
+        <record id="cloud_app_odoo" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Odoo</field>
+            <field name="slug">odoo</field>
+            <field name="description">Open-source business apps suite</field>
+            <field name="full_description">Odoo is a comprehensive suite of open-source business
+                applications including CRM, eCommerce, accounting, inventory, project management,
+                and more. It provides an all-in-one management software that is fully integrated and
+                customizable.</field>
+            <field name="category">web</field>
+            <field name="tags">["odoo", "erp", "crm", "web", "business"]</field>
+            <field name="monthly_price">0</field>
+            <field name="documentation_url">https://www.odoo.com/documentation/</field>
+
+            <!-- Helm Configuration (OCI registry format) -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/odoo</field>
+            <field name="helm_chart_version"></field>
+            <field name="helm_default_values">{"global": {"security": {"allowInsecureImages":
+                true}}, "image": {"registry": "docker.io", "repository": "bitnamilegacy/odoo",
+                "tag": "18.0.20250805-debian-12-r9"}, "odooEmail": "user@example.com",
+                "odooSkipInstall": false,
+                "loadDemoData": false, "service": {"type": "ClusterIP"}, "resources": {"requests":
+                {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}},
+                "postgresql": {"enabled": true, "architecture": "standalone", "auth": {"username":
+                "bn_odoo", "database": "bitnami_odoo"}, "image": {"registry":
+                "docker.io", "repository": "bitnamilegacy/postgresql", "tag": "17.6.0-debian-12-r4"}},
+                "persistence": {"enabled": true, "size": "10Gi"}}</field>
+            <field name="helm_value_specs">{"required": [{"key": "odooEmail", "label": "Administrator Email", "type": "text", "default": "user@example.com"}, {"key": "odooPassword", "label": "Administrator Password", "type": "password"}], "optional": [{"key": "loadDemoData", "label": "Load Demo Data", "type": "boolean", "default": false}]}</field>
+
+            <!-- Service Configuration -->
+            <field name="default_port">8069</field>
+            <field name="ingress_enabled" eval="True" />
+
+            <!-- Resource Requirements -->
+            <field name="min_vcpu">2</field>
+            <field name="min_ram_gb">2.0</field>
+            <field name="min_storage_gb">10</field>
+
+            <field name="is_active" eval="True" />
         </record>
     </data>
 </odoo>
