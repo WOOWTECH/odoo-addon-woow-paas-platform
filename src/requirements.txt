@@ -1,0 +1,3 @@
+# Woow PaaS Platform - LangChain Dependencies
+langchain-openai>=0.3.0
+langchain-core>=0.3.0

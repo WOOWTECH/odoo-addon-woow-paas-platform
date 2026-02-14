@@ -49,9 +49,9 @@
             'woow_paas_platform/static/src/paas/**/*.xml',
         ],
     },
-    'external_dependencies': {
-        'python': ['langchain_openai', 'langchain_core'],
-    },
+    # Note: Python dependencies (langchain-openai, langchain-core) are auto-installed by pre_init_hook
+    # Do not use external_dependencies as it blocks installation before hook runs
+    'pre_init_hook': 'pre_init_hook',
     'installable': True,
     'application': True,
     'auto_install': False,
