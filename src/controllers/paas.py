@@ -1218,6 +1218,7 @@ class PaasController(Controller):
             release_info = client.upgrade_release(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
+                chart=service.template_id.helm_chart_name,
                 values=merged_values,
                 version=version,
             )
