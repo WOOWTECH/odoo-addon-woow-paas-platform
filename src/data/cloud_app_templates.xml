@@ -21,8 +21,7 @@
             <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"},
                 "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits":
                 {"cpu": "2000m", "memory": "2Gi"}}}}</field>
-            <field name="helm_value_specs">{"properties": {"auth": {"type": "object", "properties":
-                {"username": {"type": "string"}, "database": {"type": "string"}}}}}</field>
+            <field name="helm_value_specs">{"required": [{"key": "auth.username", "label": "Database Username", "type": "text", "default": "woow"}, {"key": "auth.database", "label": "Database Name", "type": "text", "default": "woowdb"}], "optional": []}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5432</field>
@@ -56,9 +55,7 @@
             <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main":
                 {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
                 "1000m", "memory": "1Gi"}}}}</field>
-            <field name="helm_value_specs">{"properties": {"config": {"type": "object",
-                "properties": {"database": {"type": "object", "properties": {"type": {"type":
-                "string", "enum": ["sqlite", "postgres"]}}}}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [{"key": "config.database.type", "label": "Database Type", "type": "select", "default": "sqlite", "options": ["sqlite", "postgres"]}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5678</field>
@@ -92,8 +89,7 @@
             <field name="helm_default_values">{"architecture": "standalone", "master": {"resources":
                 {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory":
                 "512Mi"}}}}</field>
-            <field name="helm_value_specs">{"properties": {"architecture": {"type": "string",
-                "enum": ["standalone", "replication"]}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [{"key": "architecture", "label": "Architecture", "type": "select", "default": "standalone", "options": ["standalone", "replication"]}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">6379</field>
@@ -135,10 +131,7 @@
                 "bn_odoo", "database": "bitnami_odoo"}, "image": {"registry":
                 "registry-1.docker.io", "repository": "bitnami/postgresql", "tag": "17.7.0"}},
                 "persistence": {"enabled": true, "size": "10Gi"}}</field>
-            <field name="helm_value_specs">{"properties": {"odooEmail": {"type": "string",
-                "description": "Administrator email"}, "odooPassword": {"type": "string",
-                "description": "Administrator password"}, "loadDemoData": {"type": "boolean",
-                "description": "Load demo data during initialization"}}}</field>
+            <field name="helm_value_specs">{"required": [{"key": "odooEmail", "label": "Administrator Email", "type": "text", "default": "user@example.com"}, {"key": "odooPassword", "label": "Administrator Password", "type": "password"}], "optional": [{"key": "loadDemoData", "label": "Load Demo Data", "type": "boolean", "default": false}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">8069</field>
