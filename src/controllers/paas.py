@@ -1067,10 +1067,9 @@ class PaasController(Controller):
         helm_namespace = f"paas-ws-{workspace.id}"
 
         # Filter user values to only allowed keys, then merge with defaults
+        # Note: silently filter on create (frontend may send defaults alongside user values)
         default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
-        filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, template)
-        if rejected_keys:
-            return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
+        filtered_user_values, _rejected = self._filter_allowed_helm_values(values, template)
         merged_values = {**default_values, **filtered_user_values}
 
         try:
