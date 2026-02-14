@@ -1,8 +1,9 @@
 ---
 name: cloud-service-odoo-template
-status: backlog
+status: completed
 created: 2026-02-08T05:37:43Z
-progress: 0%
+updated: 2026-02-14T15:50:56Z
+progress: 100%
 prd: .claude/prds/cloud-service-odoo-template.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/16
 ---
@@ -61,8 +62,8 @@ Key Helm values:
 
 ## Task Breakdown Preview
 
-- [ ] Task 1: 新增 Odoo template XML record 到 `cloud_app_templates.xml`
-- [ ] Task 2: 部署驗證 — 更新模組並確認 Marketplace 顯示正確、可成功部署
+- [x] Task 1: 新增 Odoo template XML record 到 `cloud_app_templates.xml`
+- [x] Task 2: 部署驗證 — 更新模組並確認 Marketplace 顯示正確、可成功部署
 
 ## Dependencies
 
@@ -94,8 +95,8 @@ Key Helm values:
 
 ## Tasks Created
 
-- [ ] #17 - Add Odoo template XML record (parallel: false)
-- [ ] #18 - Deployment verification (parallel: false, depends_on: #17)
+- [x] #17 - Add Odoo template XML record (parallel: false)
+- [x] #18 - Deployment verification (parallel: false, depends_on: #17)
 
 Total tasks: 2
 Parallel tasks: 0
