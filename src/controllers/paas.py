@@ -966,7 +966,7 @@ class PaasController(Controller):
             _logger.warning("Invalid helm_value_specs for template %s", template.name)
             return {}
 
-    def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> dict[str, Any]:
+    def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> tuple[dict[str, Any], list[str]]:
         """
         Filter Helm values to only include keys allowed by template's value_specs.
 
@@ -978,15 +978,15 @@ class PaasController(Controller):
             template: CloudAppTemplate record with helm_value_specs
 
         Returns:
-            dict: Filtered values containing only allowed keys
+            tuple: (filtered_values dict, rejected_keys list)
         """
         if not values:
-            return {}
+            return {}, []
 
         specs = self._parse_helm_value_specs(template)
         if not specs:
             # No specs defined - allow all values (backward compatibility)
-            return values
+            return values, []
 
         # Build set of allowed keys from specs
         allowed_keys = set()
@@ -1001,20 +1001,24 @@ class PaasController(Controller):
 
         if not allowed_keys:
             # No keys defined in specs - allow all
-            return values
+            return values, []
 
         # Filter values to only allowed keys
         filtered = {}
+        rejected = []
         for key, value in values.items():
             if key in allowed_keys:
                 filtered[key] = value
             else:
-                _logger.debug(
-                    "Filtered out non-allowed Helm value key '%s' for template %s",
-                    key, template.name
-                )
+                rejected.append(key)
 
-        return filtered
+        if rejected:
+            _logger.warning(
+                "Rejected unauthorized Helm value keys %s for template %s",
+                rejected, template.name
+            )
+
+        return filtered, rejected
 
     def _list_services(self, workspace: Any) -> dict[str, Any]:
         """List all services in a workspace."""
@@ -1064,7 +1068,9 @@ class PaasController(Controller):
 
         # Filter user values to only allowed keys, then merge with defaults
         default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
-        filtered_user_values = self._filter_allowed_helm_values(values, template)
+        filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, template)
+        if rejected_keys:
+            return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
         merged_values = {**default_values, **filtered_user_values}
 
         try:
@@ -1202,9 +1208,11 @@ class PaasController(Controller):
             return {'success': False, 'error': 'PaaS Operator not configured'}
 
         try:
-            # Filter user values to only allowed keys, then merge with existing
+            # Filter user values to only allowed keys, reject unauthorized
             existing_values = json.loads(service.helm_values) if service.helm_values else {}
-            filtered_user_values = self._filter_allowed_helm_values(values, service.template_id)
+            filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
+            if rejected_keys:
+                return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
             merged_values = {**existing_values, **filtered_user_values}
 
             # Upgrade release
