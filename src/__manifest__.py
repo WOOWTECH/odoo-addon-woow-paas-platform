@@ -9,13 +9,17 @@
     ''',
     'author': 'Woow',
     'website': '',
-    'depends': ['base', 'web'],
+    'depends': ['base', 'web', 'project', 'mail', 'bus'],
     'data': [
         'security/ir.model.access.csv',
         'security/ir_rules.xml',
         'data/cloud_app_templates.xml',
-        'views/res_config_settings_views.xml',
         'views/menu.xml',
+        'views/ai_provider_views.xml',
+        'views/ai_agent_views.xml',
+        'data/ai_agents.xml',
+        'views/project_task_views.xml',
+        'views/res_config_settings_views.xml',
         'views/paas_app.xml',
     ],
     'assets': {
@@ -37,10 +41,16 @@
             # Component-specific SCSS (after base styles)
             'woow_paas_platform/static/src/paas/components/**/*.scss',
             'woow_paas_platform/static/src/paas/pages/**/*.scss',
+            # Third-party libraries (must load before app JS)
+            'woow_paas_platform/static/src/paas/lib/purify.min.js',
+            'woow_paas_platform/static/src/paas/lib/marked.min.js',
             # JS and XML files
             'woow_paas_platform/static/src/paas/**/*.js',
             'woow_paas_platform/static/src/paas/**/*.xml',
         ],
+    },
+    'external_dependencies': {
+        'python': ['langchain_openai', 'langchain_core'],
     },
     'installable': True,
     'application': True,

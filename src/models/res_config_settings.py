@@ -1,4 +1,4 @@
-from odoo import fields, models
+from odoo import api, fields, models
 
 
 class ResConfigSettings(models.TransientModel):
@@ -23,3 +23,77 @@ class ResConfigSettings(models.TransientModel):
         default='woowtech.io',
         help='Base domain for deployed services (e.g., woowtech.io)',
     )
+
+    # AI Provider Configuration
+    woow_ai_provider_id = fields.Many2one(
+        'woow_paas_platform.ai_provider',
+        string='Default AI Provider',
+        config_parameter='woow_paas_platform.default_ai_provider_id',
+        help='Default AI provider used for AI assistant features',
+    )
+
+    def set_values(self):
+        """Override to sync default provider to agents without a provider."""
+        provider_before = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.default_ai_provider_id',
+        )
+        super().set_values()
+        provider_after = self.woow_ai_provider_id
+        if provider_after and str(provider_after.id) != str(provider_before or ''):
+            # Assign the new default provider to agents that have no provider set
+            agents_without_provider = self.env['woow_paas_platform.ai_agent'].sudo().search([
+                ('provider_id', '=', False),
+            ])
+            if agents_without_provider:
+                agents_without_provider.write({'provider_id': provider_after.id})
+
+    def action_test_ai_connection(self):
+        """Test connection to the configured AI provider."""
+        self.ensure_one()
+        provider = self.woow_ai_provider_id
+        if not provider:
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'AI Connection Test',
+                    'message': 'No AI provider configured. Please select a provider first.',
+                    'type': 'warning',
+                    'sticky': False,
+                },
+            }
+
+        from .ai_client import AIClient, AIClientError
+
+        try:
+            client = AIClient(
+                api_base_url=provider.api_base_url,
+                api_key=provider.api_key,
+                model_name=provider.model_name,
+                max_tokens=50,
+                temperature=0.1,
+            )
+            response = client.chat_completion([
+                {"role": "user", "content": "Say 'Connection successful' in exactly two words."},
+            ])
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'AI Connection Test',
+                    'message': f'Connection successful! Response: {response[:100]}',
+                    'type': 'success',
+                    'sticky': False,
+                },
+            }
+        except AIClientError as e:
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'AI Connection Test Failed',
+                    'message': f'Connection failed: {e.message}',
+                    'type': 'danger',
+                    'sticky': True,
+                },
+            }

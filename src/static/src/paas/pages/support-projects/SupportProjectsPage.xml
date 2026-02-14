@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.SupportProjectsPage">
+        <div class="o_woow_sp">
+            <!-- Page Header -->
+            <div class="o_woow_sp_header">
+                <div class="o_woow_sp_header_left">
+                    <button class="o_woow_sp_back_btn" t-on-click="navigateBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <div class="o_woow_sp_header_text">
+                        <h1>Support Projects</h1>
+                        <p>Browse and manage support projects across your workspaces.</p>
+                    </div>
+                </div>
+                <div class="o_woow_sp_header_right">
+                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateModal">
+                        <WoowIcon name="'add'" size="18"/>
+                        New Project
+                    </WoowButton>
+                </div>
+            </div>
+
+            <!-- Toolbar: Search + Filters + View Toggle -->
+            <div class="o_woow_sp_toolbar">
+                <div class="o_woow_sp_search">
+                    <WoowIcon name="'search'" size="18"/>
+                    <input
+                        type="text"
+                        placeholder="Search projects..."
+                        t-att-value="state.searchQuery"
+                        t-on-input="onSearchInput"
+                    />
+                </div>
+
+                <div class="o_woow_sp_filters">
+                    <t t-foreach="statusFilters" t-as="filter" t-key="filter.key">
+                        <button
+                            t-att-class="'o_woow_sp_filter_btn' + (state.statusFilter === filter.key ? ' o_woow_sp_filter_active' : '')"
+                            t-on-click="() => this.onFilterChange(filter.key)"
+                        >
+                            <t t-esc="filter.label"/>
+                        </button>
+                    </t>
+                </div>
+
+                <div class="o_woow_sp_view_toggle">
+                    <button
+                        t-att-class="'o_woow_sp_toggle_btn' + (isGridView ? ' o_woow_sp_toggle_active' : '')"
+                        t-on-click="() => this.onViewModeChange('grid')"
+                        title="Grid view"
+                    >
+                        <WoowIcon name="'grid_view'" size="18"/>
+                    </button>
+                    <button
+                        t-att-class="'o_woow_sp_toggle_btn' + (isListView ? ' o_woow_sp_toggle_active' : '')"
+                        t-on-click="() => this.onViewModeChange('list')"
+                        title="List view"
+                    >
+                        <WoowIcon name="'view_list'" size="18"/>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div t-att-class="'o_woow_sp_grid' + (isListView ? ' o_woow_sp_grid_list' : '')">
+                    <t t-foreach="[1,2,3,4,5,6]" t-as="i" t-key="i">
+                        <WoowCard shadow="true" class="'o_woow_sp_card o_woow_sp_card_skeleton'">
+                            <div class="o_woow_sp_card_body">
+                                <div class="o_woow_sp_skeleton_line o_woow_sp_skeleton_title"/>
+                                <div class="o_woow_sp_skeleton_line o_woow_sp_skeleton_badge"/>
+                                <div class="o_woow_sp_skeleton_line o_woow_sp_skeleton_meta"/>
+                                <div class="o_woow_sp_skeleton_line o_woow_sp_skeleton_meta"/>
+                                <div class="o_woow_sp_skeleton_avatars">
+                                    <div class="o_woow_sp_skeleton_avatar"/>
+                                    <div class="o_woow_sp_skeleton_avatar"/>
+                                    <div class="o_woow_sp_skeleton_avatar"/>
+                                </div>
+                            </div>
+                        </WoowCard>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Projects Grid -->
+            <t t-elif="hasProjects">
+                <div t-att-class="'o_woow_sp_grid' + (isListView ? ' o_woow_sp_grid_list' : '')">
+                    <t t-foreach="filteredProjects" t-as="project" t-key="project.id">
+                        <WoowCard shadow="true" class="'o_woow_sp_card'" t-on-click="() => this.navigateToProject(project.id)">
+                            <div class="o_woow_sp_card_body">
+                                <!-- Project Name + Status -->
+                                <div class="o_woow_sp_card_top">
+                                    <h3 class="o_woow_sp_card_title" t-esc="project.name"/>
+                                    <span t-att-class="'o_woow_sp_badge ' + getStatusBadgeClass(project)">
+                                        <t t-esc="getStatusLabel(project)"/>
+                                    </span>
+                                </div>
+
+                                <!-- Description -->
+                                <p t-if="project.description" class="o_woow_sp_card_desc" t-esc="project.description"/>
+
+                                <!-- Meta Info -->
+                                <div class="o_woow_sp_card_meta">
+                                    <div class="o_woow_sp_meta_item">
+                                        <WoowIcon name="'calendar_today'" size="14"/>
+                                        <span>
+                                            <t t-esc="formatDate(project.created_date || project.date_start)"/>
+                                            <t t-if="project.date_end">
+                                                - <t t-esc="formatDate(project.date_end)"/>
+                                            </t>
+                                        </span>
+                                    </div>
+                                    <div class="o_woow_sp_meta_item">
+                                        <WoowIcon name="'task_alt'" size="14"/>
+                                        <span><t t-esc="project.task_count || 0"/> tasks</span>
+                                        <t t-if="project.open_task_count !== undefined">
+                                            <span class="o_woow_sp_meta_sub">(<t t-esc="project.open_task_count"/> open)</span>
+                                        </t>
+                                    </div>
+                                </div>
+
+                                <!-- Workspace -->
+                                <div t-if="project.workspace_name" class="o_woow_sp_card_workspace">
+                                    <WoowIcon name="'folder'" size="14"/>
+                                    <span t-esc="project.workspace_name"/>
+                                </div>
+
+                                <!-- Team Avatars -->
+                                <div class="o_woow_sp_card_team">
+                                    <div class="o_woow_sp_avatar_group">
+                                        <t t-set="avatars" t-value="getTeamAvatars(project)"/>
+                                        <t t-foreach="avatars.visible" t-as="member" t-key="member.id || member_index">
+                                            <div
+                                                class="o_woow_sp_avatar"
+                                                t-att-title="member.name || member.user_name"
+                                                t-att-style="'background-color: ' + getAvatarColor(member, member_index)"
+                                            >
+                                                <t t-esc="getMemberInitials(member)"/>
+                                            </div>
+                                        </t>
+                                        <div t-if="avatars.extraCount > 0" class="o_woow_sp_avatar o_woow_sp_avatar_extra">
+                                            +<t t-esc="avatars.extraCount"/>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </WoowCard>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Empty State -->
+            <t t-else="">
+                <div class="o_woow_sp_empty">
+                    <WoowCard shadow="true" class="'o_woow_sp_empty_card'">
+                        <div class="o_woow_sp_empty_content">
+                            <div class="o_woow_sp_empty_icon">
+                                <WoowIcon name="'folder_off'" size="48"/>
+                            </div>
+                            <h3>No Projects Found</h3>
+                            <t t-if="state.searchQuery || state.statusFilter !== 'all'">
+                                <p>No projects match your current filters. Try adjusting your search or filter criteria.</p>
+                                <WoowButton variant="'secondary'" size="'sm'" onClick.bind="() => { this.state.searchQuery = ''; this.state.statusFilter = 'all'; }">
+                                    Clear Filters
+                                </WoowButton>
+                            </t>
+                            <t t-else="">
+                                <p>There are no support projects available yet. Create your first project to get started.</p>
+                                <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateModal">
+                                    <WoowIcon name="'add'" size="18"/>
+                                    Create your first project
+                                </WoowButton>
+                            </t>
+                        </div>
+                    </WoowCard>
+                </div>
+            </t>
+            <!-- Create Project Modal -->
+            <CreateProjectModal
+                t-if="state.showCreateModal"
+                onClose.bind="closeCreateModal"
+                onCreated.bind="onProjectCreated"
+            />
+        </div>
+
+            <!-- Create Project Modal -->
+            <CreateProjectModal
+                t-if="state.showCreateModal"
+                onClose.bind="closeCreateModal"
+                onCreated.bind="onProjectCreated"
+            />
+    </t>
+</templates>
