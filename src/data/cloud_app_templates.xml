@@ -53,9 +53,11 @@
             <field name="helm_chart_name">oci://8gears.container-registry.com/library/n8n</field>
             <field name="helm_chart_version"></field>
             <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main":
-                {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
+                {"config": {"GENERIC_TIMEZONE": "Asia/Taipei", "N8N_LOG_LEVEL": "info",
+                "N8N_BASIC_AUTH_ACTIVE": "true"}, "secret": {"N8N_BASIC_AUTH_USER": "admin"},
+                "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
                 "1000m", "memory": "1Gi"}}}}</field>
-            <field name="helm_value_specs">{"required": [], "optional": [{"key": "config.database.type", "label": "Database Type", "type": "select", "default": "sqlite", "options": ["sqlite", "postgres"]}]}</field>
+            <field name="helm_value_specs">{"required": [{"key": "main.secret.N8N_BASIC_AUTH_USER", "label": "Basic Auth Username", "type": "text", "default": "admin"}, {"key": "main.secret.N8N_BASIC_AUTH_PASSWORD", "label": "Basic Auth Password", "type": "password"}], "optional": [{"key": "config.database.type", "label": "Database Type", "type": "select", "default": "sqlite", "options": ["sqlite", "postgres"]}, {"key": "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select", "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai", "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]}, {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select", "default": "info", "options": ["info", "warn", "error", "debug"]}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5678</field>
