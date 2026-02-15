@@ -949,6 +949,38 @@ class PaasController(Controller):
 
     # ==================== Cloud Service Helpers ====================
 
+    @staticmethod
+    def _unflatten_dotpath_keys(flat_dict: dict[str, Any]) -> dict[str, Any]:
+        """Convert flat dot-path keys to nested dict structure.
+
+        Example: {"a.b.c": 1, "a.b.d": 2} → {"a": {"b": {"c": 1, "d": 2}}}
+        Keys without dots are kept as-is.
+        """
+        result = {}
+        for key, value in flat_dict.items():
+            parts = key.split('.')
+            if len(parts) == 1:
+                result[key] = value
+                continue
+            d = result
+            for part in parts[:-1]:
+                if part not in d or not isinstance(d[part], dict):
+                    d[part] = {}
+                d = d[part]
+            d[parts[-1]] = value
+        return result
+
+    @staticmethod
+    def _deep_merge(base: dict, override: dict) -> dict:
+        """Deep merge override into base. Override values win on conflict."""
+        result = base.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = PaasController._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
     def _parse_helm_value_specs(self, template: Any) -> dict[str, list]:
         """Parse helm_value_specs JSON from a template record.
 
@@ -1070,7 +1102,8 @@ class PaasController(Controller):
         # Note: silently filter on create (frontend may send defaults alongside user values)
         default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
         filtered_user_values, _rejected = self._filter_allowed_helm_values(values, template)
-        merged_values = {**default_values, **filtered_user_values}
+        nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
+        merged_values = self._deep_merge(default_values, nested_user_values)
 
         try:
             # Create service record in pending state
@@ -1212,7 +1245,8 @@ class PaasController(Controller):
             filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
             if rejected_keys:
                 return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
-            merged_values = {**existing_values, **filtered_user_values}
+            nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
+            merged_values = self._deep_merge(existing_values, nested_user_values)
 
             # Upgrade release
             release_info = client.upgrade_release(

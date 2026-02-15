@@ -60,8 +60,22 @@ export class ConfigurationTab extends Component {
 
     getSpecValue(spec) {
         const values = this.currentValues;
-        const value = values[spec.key];
-        if (value !== undefined) return value;
+        // Try flat key first (backward compatibility)
+        const flatValue = values[spec.key];
+        if (flatValue !== undefined) return flatValue;
+        // Try nested lookup via dot-path
+        const parts = spec.key.split('.');
+        if (parts.length > 1) {
+            let value = values;
+            for (const part of parts) {
+                if (value === undefined || value === null || typeof value !== 'object') {
+                    value = undefined;
+                    break;
+                }
+                value = value[part];
+            }
+            if (value !== undefined) return value;
+        }
         return spec.default !== undefined ? spec.default : "";
     }
 

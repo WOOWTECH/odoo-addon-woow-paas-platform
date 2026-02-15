@@ -1,8 +1,8 @@
 ---
 name: n8n-config-restriction
-status: backlog
+status: completed
 created: 2026-02-15T10:40:37Z
-progress: 0%
+progress: 100%
 prd: .claude/prds/n8n-config-restriction.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/65
 ---

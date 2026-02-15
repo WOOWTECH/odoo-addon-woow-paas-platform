@@ -44,14 +44,32 @@ export class HelmValueForm extends Component {
     }
 
     /**
-     * Get the current value for a spec key, using default if not set
+     * Get the current value for a spec key, using default if not set.
+     * Supports both flat keys ("name") and dot-path keys ("config.database.type")
+     * by first trying flat lookup, then traversing nested structure.
      * @param {Object} spec - The spec object
      * @returns {*} The current value
      */
     getValue(spec) {
-        const currentValue = this.props.values[spec.key];
-        if (currentValue !== undefined) {
-            return currentValue;
+        // Try flat key first (backward compatibility)
+        const flatValue = this.props.values[spec.key];
+        if (flatValue !== undefined) {
+            return flatValue;
+        }
+        // Try nested lookup via dot-path
+        const parts = spec.key.split('.');
+        if (parts.length > 1) {
+            let value = this.props.values;
+            for (const part of parts) {
+                if (value === undefined || value === null || typeof value !== 'object') {
+                    value = undefined;
+                    break;
+                }
+                value = value[part];
+            }
+            if (value !== undefined) {
+                return value;
+            }
         }
         return spec.default !== undefined ? spec.default : '';
     }
