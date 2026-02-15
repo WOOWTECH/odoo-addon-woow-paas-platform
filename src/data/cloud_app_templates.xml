@@ -32,7 +32,7 @@
             <field name="min_ram_gb">2.0</field>
             <field name="min_storage_gb">10</field>
 
-            <field name="is_active" eval="True" />
+            <field name="is_active" eval="False" />
         </record>
 
         <!-- n8n Workflow Automation -->
@@ -102,7 +102,7 @@
             <field name="min_ram_gb">1.0</field>
             <field name="min_storage_gb">5</field>
 
-            <field name="is_active" eval="True" />
+            <field name="is_active" eval="False" />
         </record>
 
         <!-- Odoo ERP -->
