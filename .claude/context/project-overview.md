@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-08T00:35:24Z
-version: 1.3
+last_updated: 2026-02-15T09:39:26Z
+version: 1.4
 author: Claude Code PM System
 ---
 
@@ -61,6 +61,21 @@ Woow PaaS Platform is an Odoo 18 addon module providing the foundation for a mul
    - Service deploy, start, stop, delete, rollback, revisions API
    - Helm chart for K8s deployment of operator
 
+8. **Cloud Service Config Restriction** ✅ Complete
+   - Helm value key 白名單限制（`helm_value_specs`）
+   - HelmValueForm 元件取代 textarea
+   - 靜默過濾未授權 keys
+
+9. **AI Assistant** 🔄 In Progress
+   - AI Agent / AI Provider / AI Client models
+   - AI Assistant controller + API endpoints
+   - AiAssistantPage / AiChatPage 前端頁面
+   - AiChat / AiMentionDropdown 元件
+   - Markdown parsing (marked.js) + HTML sanitization (DOMPurify)
+   - Support projects / tasks 管理頁面
+   - Project Kanban 頁面
+   - Module hooks (`hooks.py`) + 2 database migrations
+
 ### Not Yet Implemented
 - External integrations (Phase 5)
 - Unit tests
@@ -72,7 +87,7 @@ Woow PaaS Platform is an Odoo 18 addon module providing the foundation for a mul
 | Property | Value |
 |----------|-------|
 | Technical Name | `woow_paas_platform` |
-| Version | 18.0.1.0.0 |
+| Version | 18.0.1.0.2 |
 | Category | WOOW |
 | Application | Yes |
 | License | LGPL-3 |
@@ -99,6 +114,8 @@ Phase 1: Foundation      [████████] 100%
 Phase 2: OWL App Shell   [████████] 100%
 Phase 3: Core Models     [████████] 100%  ✓ Complete (Workspace + WorkspaceAccess)
 Phase 4: Cloud Services  [████████] 100%  ✓ Complete (Templates + Services + Operator)
+Phase 4b: Config Restrict[████████] 100%  ✓ Complete (Helm value whitelist)
+Phase 4c: AI Assistant   [██████  ]  75%  🔄 In Progress
 Phase 5: Integrations    [        ]   0%
 ```
 
@@ -126,6 +143,7 @@ Settings → General Settings → Woow PaaS
 ```
 
 ## Update History
+- 2026-02-15: Added AI Assistant feature, Cloud Service Config Restriction, version bump to 18.0.1.0.2
 - 2026-02-08: Phase 3 & 4 complete, added Cloud Services feature
 - 2026-02-01: Added Workspace management (Phase 3 in progress)
 - 2026-01-14: Added standalone OWL application (Phase 2 complete)

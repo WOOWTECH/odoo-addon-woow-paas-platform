@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-08T01:39:42Z
-version: 1.2
+last_updated: 2026-02-15T09:39:26Z
+version: 1.3
 author: Claude Code PM System
 ---
 
@@ -183,6 +183,53 @@ Controller 透過 `ir.config_parameter` 取得設定後建立 client instance。
 | Config param | `module.param_name` | `woow_paas_platform.api_key` |
 | API route | `/api/{resource}` | `/api/workspaces` |
 
+## Module Hooks Pattern
+
+Odoo module hooks for initialization and cleanup logic:
+
+```python
+# hooks.py
+def post_init_hook(env):
+    """Called after module installation."""
+    # Initialize default data, run setup tasks
+
+def uninstall_hook(env):
+    """Called before module uninstallation."""
+    # Clean up resources
+```
+
+Referenced in `__manifest__.py`:
+```python
+'post_init_hook': 'post_init_hook',
+'uninstall_hook': 'uninstall_hook',
+```
+
+## Migration Pattern
+
+Database migrations for schema/data changes between versions:
+
+```
+src/migrations/
+├── 18.0.1.0.1/
+│   └── post-migrate.py    # Runs after upgrade to 1.0.1
+└── 18.0.1.0.2/
+    └── post-migrate.py    # Runs after upgrade to 1.0.2
+```
+
+Migration files use `def migrate(cr, version)` entry point.
+
+## Helm Value Restriction Pattern
+
+Templates define allowed configuration keys via `helm_value_specs` (JSON field):
+
+```python
+# cloud_app_template.py
+helm_value_specs = fields.Text()  # JSON defining allowed keys + types + defaults
+```
+
+Frontend `HelmValueForm` component renders form inputs based on specs, and backend silently filters unauthorized keys on creation/update.
+
 ## Update History
+- 2026-02-15: Added module hooks, migration, and helm value restriction patterns
 - 2026-02-08: Updated external service pattern from ORM model to standalone service class
 - 2026-02-08: Added RESTful API endpoint pattern and external service integration pattern
