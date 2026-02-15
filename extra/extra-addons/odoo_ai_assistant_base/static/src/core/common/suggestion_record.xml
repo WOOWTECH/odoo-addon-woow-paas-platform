@@ -1,0 +1,20 @@
+<templates xml:space="preserve">
+    <t t-name="ai_mail_gt.Composer.suggestionModel">
+        <i class="fa fa-database me-2"/>
+        <strong class="px-2 py-1 align-self-center flex-shrink-0 text-truncate">
+            <t t-esc="option.label"/>
+        </strong>
+        <span class="text-600 text-truncate align-self-center">
+            <t t-esc="option.name"/>
+        </span>
+    </t>
+    <t t-name="ai_mail_gt.Composer.suggestionRecord">
+        <i class="fa fa-file-o me-2"/>
+        <strong class="px-2 py-1 align-self-center flex-shrink-0 text-truncate">
+            <t t-esc="option.label"/>
+        </strong>
+        <span class="text-600 text-truncate align-self-center">
+            <t t-esc="option.name"/>
+        </span>
+    </t>
+</templates>
