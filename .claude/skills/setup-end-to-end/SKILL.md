@@ -8,7 +8,7 @@ usage: |
   - Need step-by-step guide from worktree creation to addon testing
 
   Invoke with: "Set up end-to-end worktree development for epic/feature-name"
-  Keywords: end-to-end testing, e2e, ui testing, 網頁測試
+  Keywords: end-to-end testing, e2e, ui testing, 網頁測試, extra addons
 ---
 
 # Setup End-to-End Worktree Development
@@ -86,7 +86,9 @@ cd ../woow_paas_platform.worktrees/<feature-name>
 2. 從模板生成 `odoo.conf`（使用 envsubst）
 3. 啟動 Docker Compose
 4. 等待 Odoo 服務就緒
-5. **自動建立資料庫並安裝 `base` + `woow_paas_platform`**（首次啟動）
+5. **自動建立資料庫並安裝模組**（首次啟動）：
+   - `base` + `woow_paas_platform`（核心模組）
+   - 自動掃描 `extra/extra-addons/` 下所有包含 `__manifest__.py` 的模組並一起安裝
 6. 顯示訪問 URL
 
 **預期輸出範例**：
@@ -101,6 +103,7 @@ cd ../woow_paas_platform.worktrees/<feature-name>
   等待 PostgreSQL... 就緒
 📦 資料庫不存在，正在建立並安裝模組...
    （首次啟動需要 1-3 分鐘，請耐心等候）
+  安裝模組： base,woow_paas_platform,odoo_ai_assistant_base,...
 ✅ 資料庫建立完成！
 
 訪問 Odoo：
@@ -128,6 +131,7 @@ docker compose logs -f web
 
 - 資料庫已自動建立（名稱依據 branch，如 `woow_epic_workspace_api`）
 - `woow_paas_platform` 模組已自動安裝
+- `extra/extra-addons/` 下的所有模組已自動偵測並安裝（掛載於 `/mnt/extra-addons-ext`）
 - 語言已設定為繁體中文（zh_TW）
 - 無 demo 資料（乾淨環境）
 
@@ -332,8 +336,11 @@ cat .env | grep POSTGRES
 ### 問題 4：Addon 未顯示
 
 ```bash
-# 確認 addon 路徑掛載
+# 確認主 addon 路徑掛載
 docker compose exec web ls -la /mnt/extra-addons/woow_paas_platform
+
+# 確認 extra addons 路徑掛載
+docker compose exec web ls -la /mnt/extra-addons-ext/
 
 # 重新啟動並更新 apps 列表
 docker compose restart web
