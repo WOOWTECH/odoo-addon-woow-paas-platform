@@ -44,7 +44,13 @@ export function parseMarkdown(markdown) {
     // Fallback if marked.js is not loaded
     if (!window.marked) {
         console.warn("marked.js not loaded, falling back to plain text with line breaks");
-        return markup(markdown.replace(/\n/g, "<br>"));
+        const escaped = markdown
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/\n/g, "<br>");
+        return markup(escaped);
     }
 
     // Markdown → HTML

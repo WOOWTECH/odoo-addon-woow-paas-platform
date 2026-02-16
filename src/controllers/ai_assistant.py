@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any
 
+from markupsafe import escape
 from werkzeug.wrappers import Response
 
 from odoo.http import request, route, Controller
@@ -17,6 +18,8 @@ class AiAssistantController(Controller):
 
     # ==================== Helpers ====================
 
+    MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+
     def _check_channel_access(self, channel):
         """Verify the current user has access to the channel.
 
@@ -24,6 +27,36 @@ class AiAssistantController(Controller):
         """
         user_partner = request.env.user.partner_id
         return user_partner in channel.channel_partner_ids
+
+    def _check_workspace_access(self, workspace):
+        """Verify the current user is a member of the workspace.
+
+        Returns True if an access record exists for the current user.
+        """
+        return request.env['woow_paas_platform.workspace_access'].sudo().search_count([
+            ('workspace_id', '=', workspace.id),
+            ('user_id', '=', request.env.user.id),
+        ]) > 0
+
+    def _check_project_access(self, project):
+        """Verify the current user has access to the project's workspace.
+
+        Returns True if the project has no workspace (global) or the user
+        is a member of the associated workspace.
+        """
+        if not project.workspace_id:
+            return True
+        return self._check_workspace_access(project.workspace_id)
+
+    def _check_task_access(self, task):
+        """Verify the current user has access to the task's project workspace.
+
+        Returns True if the task has no project/workspace or the user
+        is a member of the associated workspace.
+        """
+        if not task.project_id or not task.project_id.workspace_id:
+            return True
+        return self._check_workspace_access(task.project_id.workspace_id)
 
     def _sse_error_response(self, error: str, error_code: str) -> Response:
         """Build a structured SSE error response (HTTP 200)."""
@@ -266,7 +299,13 @@ class AiAssistantController(Controller):
                 status=400,
             )
 
-        file_data = uploaded_file.read()
+        file_data = uploaded_file.read(self.MAX_UPLOAD_SIZE + 1)
+        if len(file_data) > self.MAX_UPLOAD_SIZE:
+            return Response(
+                json.dumps({'success': False, 'error': 'File too large (max 10 MB)'}),
+                content_type='application/json',
+                status=413,
+            )
         file_name = uploaded_file.filename
 
         attachment = request.env['ir.attachment'].sudo().create({
@@ -276,9 +315,9 @@ class AiAssistantController(Controller):
             'res_id': channel_id,
         })
 
-        # Post a message with the attachment
+        # Post a message with the attachment (escape filename to prevent XSS)
         message = channel.message_post(
-            body=f'Uploaded: {file_name}',
+            body=f'Uploaded: {escape(file_name)}',
             message_type='comment',
             subtype_xmlid='mail.mt_comment',
             author_id=request.env.user.partner_id.id,
@@ -561,6 +600,8 @@ class AiAssistantController(Controller):
             workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
             if not workspace.exists():
                 return {'success': False, 'error': 'Workspace not found'}
+            if not self._check_workspace_access(workspace):
+                return {'success': False, 'error': 'Access denied'}
 
         if action == 'list':
             return self._list_projects(workspace)
@@ -619,6 +660,8 @@ class AiAssistantController(Controller):
             workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
             if not workspace.exists():
                 return {'success': False, 'error': 'Workspace not found'}
+            if not self._check_workspace_access(workspace):
+                return {'success': False, 'error': 'Access denied'}
 
         if action == 'list':
             return self._list_tasks(workspace, kwargs)
@@ -648,6 +691,8 @@ class AiAssistantController(Controller):
         task = request.env['project.task'].sudo().browse(task_id)
         if not task.exists():
             return {'success': False, 'error': 'Task not found'}
+        if not self._check_task_access(task):
+            return {'success': False, 'error': 'Access denied'}
 
         if action == 'get':
             return self._get_task(task)
@@ -760,6 +805,8 @@ class AiAssistantController(Controller):
         project = request.env['project.project'].sudo().browse(int(project_id))
         if not project.exists():
             return {'success': False, 'error': 'Project not found'}
+        if not self._check_project_access(project):
+            return {'success': False, 'error': 'Access denied'}
 
         vals = {}
         if 'name' in params:
@@ -790,6 +837,8 @@ class AiAssistantController(Controller):
         project = request.env['project.project'].sudo().browse(int(project_id))
         if not project.exists():
             return {'success': False, 'error': 'Project not found'}
+        if not self._check_project_access(project):
+            return {'success': False, 'error': 'Access denied'}
 
         project.write({'active': False})
         return {'success': True, 'data': {'id': project.id}}
