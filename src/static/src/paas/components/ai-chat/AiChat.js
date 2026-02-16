@@ -86,6 +86,7 @@ export class AiChat extends Component {
             this.state.agents = [...aiService.agents];
         } catch (err) {
             console.error("Failed to load AI agents:", err);
+            this.state.error = "無法載入 AI 助理列表，請重新整理頁面。";
         }
     }
 
@@ -244,7 +245,8 @@ export class AiChat extends Component {
             }
         };
 
-        this.eventSource.onerror = () => {
+        this.eventSource.onerror = (event) => {
+            console.error("SSE connection error:", event);
             const hadContent = !!this.state.streamingText;
             const partialText = this.state.streamingText;
             this.closeStream();

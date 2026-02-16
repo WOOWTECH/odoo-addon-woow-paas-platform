@@ -518,7 +518,7 @@ class AiAssistantController(Controller):
                 if provider.exists():
                     return provider
             except (ValueError, TypeError):
-                pass
+                _logger.warning('Invalid default_ai_provider_id value: %r', provider_id)
         return None
 
     # ==================== AI Connection Status ====================
@@ -560,9 +560,15 @@ class AiAssistantController(Controller):
         Returns:
             dict: Task stats (total, active, completion percentage).
         """
+        # Scope stats to projects the current user has access to
+        user = request.env.user
+        accessible_projects = request.env['project.project'].sudo().search([
+            ('workspace_id.access_ids.user_id', '=', user.id),
+        ])
+        task_domain = [('project_id', 'in', accessible_projects.ids)]
         Task = request.env['project.task'].sudo()
-        total = Task.search_count([])
-        done = Task.search_count([('stage_id.name', 'in', ('Done', 'Cancelled'))])
+        total = Task.search_count(task_domain)
+        done = Task.search_count(task_domain + [('stage_id.name', 'in', ('Done', 'Cancelled'))])
         active = total - done
         completion = round((done / total) * 100) if total > 0 else 0
         return {
@@ -802,7 +808,12 @@ class AiAssistantController(Controller):
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
 
-        project = request.env['project.project'].sudo().browse(int(project_id))
+        try:
+            pid = int(project_id)
+        except (ValueError, TypeError):
+            return {'success': False, 'error': 'Invalid project_id'}
+
+        project = request.env['project.project'].sudo().browse(pid)
         if not project.exists():
             return {'success': False, 'error': 'Project not found'}
         if not self._check_project_access(project):
@@ -834,7 +845,12 @@ class AiAssistantController(Controller):
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
 
-        project = request.env['project.project'].sudo().browse(int(project_id))
+        try:
+            pid = int(project_id)
+        except (ValueError, TypeError):
+            return {'success': False, 'error': 'Invalid project_id'}
+
+        project = request.env['project.project'].sudo().browse(pid)
         if not project.exists():
             return {'success': False, 'error': 'Project not found'}
         if not self._check_project_access(project):
@@ -852,7 +868,10 @@ class AiAssistantController(Controller):
         if workspace:
             domain.append(('project_id.workspace_id', '=', workspace.id))
         if project_id:
-            domain.append(('project_id', '=', int(project_id)))
+            try:
+                domain.append(('project_id', '=', int(project_id)))
+            except (ValueError, TypeError):
+                return {'success': False, 'error': 'Invalid project_id'}
 
         tasks = request.env['project.task'].sudo().search(domain)
         data = [self._serialize_task(task) for task in tasks]
@@ -872,7 +891,12 @@ class AiAssistantController(Controller):
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
 
-        project = request.env['project.project'].sudo().browse(int(project_id))
+        try:
+            pid = int(project_id)
+        except (ValueError, TypeError):
+            return {'success': False, 'error': 'Invalid project_id'}
+
+        project = request.env['project.project'].sudo().browse(pid)
         if not project.exists() or project.workspace_id.id != workspace.id:
             return {'success': False, 'error': 'Project not found in workspace'}
 
@@ -888,7 +912,11 @@ class AiAssistantController(Controller):
             vals['date_deadline'] = params['date_deadline']
 
         if params.get('stage_id'):
-            stage = request.env['project.task.type'].sudo().browse(int(params['stage_id']))
+            try:
+                stage_id_int = int(params['stage_id'])
+            except (ValueError, TypeError):
+                return {'success': False, 'error': 'Invalid stage_id'}
+            stage = request.env['project.task.type'].sudo().browse(stage_id_int)
             if stage.exists():
                 vals['stage_id'] = stage.id
 
@@ -919,7 +947,10 @@ class AiAssistantController(Controller):
         if 'description' in params:
             vals['description'] = (params['description'] or '').strip()
         if 'stage_id' in params:
-            vals['stage_id'] = int(params['stage_id'])
+            try:
+                vals['stage_id'] = int(params['stage_id'])
+            except (ValueError, TypeError):
+                return {'success': False, 'error': 'Invalid stage_id'}
         if 'chat_enabled' in params:
             vals['chat_enabled'] = bool(params['chat_enabled'])
         if 'ai_auto_reply' in params:

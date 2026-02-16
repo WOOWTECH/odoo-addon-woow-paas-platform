@@ -137,23 +137,27 @@ export class ConfigurationTab extends Component {
         this.state.saving = true;
         this.state.error = null;
 
-        const result = await cloudService.updateService(
-            this.props.workspaceId,
-            this.props.service.id,
-            this.state.editedValues
-        );
+        try {
+            const result = await cloudService.updateService(
+                this.props.workspaceId,
+                this.props.service.id,
+                this.state.editedValues
+            );
 
-        if (result.success) {
-            this.state.editing = false;
-            this.state.editedValues = {};
-            this.state.showAdvanced = false;
-            if (this.props.onSave) {
-                this.props.onSave(result.data);
+            if (result.success) {
+                this.state.editing = false;
+                this.state.editedValues = {};
+                this.state.showAdvanced = false;
+                if (this.props.onSave) {
+                    this.props.onSave(result.data);
+                }
+            } else {
+                this.state.error = result.error || "Failed to update configuration";
             }
-        } else {
-            this.state.error = result.error || "Failed to update configuration";
+        } catch (err) {
+            this.state.error = err.message || "Failed to update configuration";
+        } finally {
+            this.state.saving = false;
         }
-
-        this.state.saving = false;
     }
 }

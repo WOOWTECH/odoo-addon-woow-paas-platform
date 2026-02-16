@@ -27,7 +27,11 @@ export const router = reactive({
     params: {},
     routes,
 
+    _initialized: false,
+
     init() {
+        if (this._initialized) return;
+        this._initialized = true;
         this.parseRoute();
         window.addEventListener("hashchange", () => {
             this.parseRoute();
