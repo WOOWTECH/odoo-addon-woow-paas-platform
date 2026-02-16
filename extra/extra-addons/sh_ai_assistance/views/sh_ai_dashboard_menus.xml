@@ -1,0 +1,48 @@
+<?xml version='1.0' encoding='utf-8'?>
+<odoo>
+    
+    <!-- Root Menu - Only AI Users can see -->
+    <menuitem
+        id="menu_ai_assistance"
+        name="AI Assistance"
+        web_icon="sh_ai_assistance,static/description/icon.png"
+        groups="sh_ai_base.group_sh_ai_user"
+        sequence="15"/>
+    
+
+    <!-- Configuration Menu - Only AI Managers -->
+    <menuitem
+        id="menu_ai_configuration"
+        name="Configuration"
+        parent="menu_ai_assistance"
+        groups="sh_ai_base.group_sh_ai_manager"
+        sequence="30"/>
+
+    <!-- LLM Menu under Configuration - Only AI Managers -->
+    <menuitem
+        id="menu_sh_ai_llm"
+        name="LLM Providers"
+        action="sh_ai_base.action_sh_ai_llm"
+        parent="menu_ai_configuration"
+        groups="sh_ai_base.group_sh_ai_manager"
+        sequence="10"/>
+
+    <!-- Chat Sessions Menu under AI Assistance -->
+    <menuitem
+        id="menu_sh_ai_chat_sessions"
+        name="Chat Sessions"
+        action="action_sh_ai_chat_session"
+        parent="menu_ai_assistance"
+        groups="sh_ai_base.group_sh_ai_manager"
+        sequence="10"/>
+
+    <!-- AI Chat Dashboard Menu -->
+    <menuitem
+        id="menu_ai_chat_dashboard"
+        name="AI Chat"
+        action="action_ai_assistance_dashboard"
+        parent="menu_ai_assistance"
+        groups="sh_ai_base.group_sh_ai_user"
+        sequence="5"/>
+
+</odoo>

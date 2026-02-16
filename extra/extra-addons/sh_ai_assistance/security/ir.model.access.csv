@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_sh_ai_chat_session_user,sh.ai.chat.session.user,model_sh_ai_chat_session,sh_ai_base.group_sh_ai_user,1,1,1,1
+access_sh_ai_chat_message_user,sh.ai.chat.message.user,model_sh_ai_chat_message,sh_ai_base.group_sh_ai_user,1,1,1,1
+access_sh_ai_chat_session_snapshot_user,sh.ai.chat.session.snapshot.user,model_sh_ai_chat_session_snapshot,sh_ai_base.group_sh_ai_user,1,1,1,1
