@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Demo Gemini 2.5 Flash Provider -->
+        <record id="demo_gemini_2_5_flash" model="sh.ai.llm">
+            <field name="name">Gemini 2.5 Flash</field>
+            <field name="sh_company">Google</field>
+            <field name="sh_model_code">gemini-2.5-flash</field>
+            <field name="sh_api_key">YOUR_GEMINI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/gemini.png"/>
+            <field name="active">True</field>
+            <field name="is_default">True</field>
+        </record>
+
+        <!-- Demo Gemini Flash Latest Provider -->
+        <record id="demo_gemini_2_5_flash_latest" model="sh.ai.llm">
+            <field name="name">Gemini 2.5 Flash Latest</field>
+            <field name="sh_company">Google</field>
+            <field name="sh_model_code">gemini-2.5-flash-preview-09-2025</field>
+            <field name="sh_api_key">YOUR_GEMINI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/gemini.png"/>
+            <field name="active">True</field>
+        </record>
+
+        <record id="demo_gemini_2_5_flash_lite" model="sh.ai.llm">
+            <field name="name">Gemini 2.5 Flash Lite</field>
+            <field name="sh_company">Google</field>
+            <field name="sh_model_code">gemini-2.5-flash-lite</field>
+            <field name="sh_api_key">YOUR_GEMINI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/gemini.png"/>
+            <field name="active">True</field>
+        </record>
+
+        <record id="demo_gemini_2_0_flash_lite" model="sh.ai.llm">
+            <field name="name">Gemini 2.0 Flash Lite</field>
+            <field name="sh_company">Google</field>
+            <field name="sh_model_code">gemini-2.0-flash-lite</field>
+            <field name="sh_api_key">YOUR_GEMINI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/gemini.png"/>
+            <field name="active">True</field>
+        </record>
+
+        <record id="demo_gemini_flash_lite_latest" model="sh.ai.llm">
+            <field name="name">Gemini Flash Lite Latest</field>
+            <field name="sh_company">Google</field>
+            <field name="sh_model_code">gemini-flash-lite-latest</field>
+            <field name="sh_api_key">YOUR_GEMINI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/gemini.png"/>
+            <field name="active">True</field>
+        </record>
+
+        <!-- Demo ChatGPT 4o Provider -->
+        <record id="demo_chatgpt_4o" model="sh.ai.llm">
+            <field name="name">ChatGPT 4o</field>
+            <field name="sh_company">OpenAI</field>
+            <field name="sh_model_code">gpt-4o</field>
+            <field name="sh_api_key">YOUR_OPENAI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/chatgpt.png"/>
+            <field name="active">True</field>
+        </record>
+
+        <!-- Demo ChatGPT 4o Mini Provider -->
+        <record id="demo_chatgpt_4o_mini" model="sh.ai.llm">
+            <field name="name">ChatGPT 4o Mini</field>
+            <field name="sh_company">OpenAI</field>
+            <field name="sh_model_code">gpt-4o-mini</field>
+            <field name="sh_api_key">YOUR_OPENAI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/chatgpt.png"/>
+            <field name="active">True</field>
+        </record>
+
+        <!-- Demo ChatGPT gpt-5-nano Provider -->
+        <record id="demo_chatgpt_gpt-5-nano" model="sh.ai.llm">
+            <field name="name">ChatGPT-5 nano</field>
+            <field name="sh_company">OpenAI</field>
+            <field name="sh_model_code">gpt-5-nano</field>
+            <field name="sh_api_key">YOUR_OPENAI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/chatgpt.png"/>
+            <field name="active">True</field>
+        </record>
+
+        <!-- Demo ChatGPT gpt-5-mini Provider -->
+        <record id="demo_chatgpt_gpt-5-mini" model="sh.ai.llm">
+            <field name="name">ChatGPT-5 mini</field>
+            <field name="sh_company">OpenAI</field>
+            <field name="sh_model_code">gpt-5-mini</field>
+            <field name="sh_api_key">YOUR_OPENAI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/chatgpt.png"/>
+            <field name="active">True</field>
+        </record>
+        
+        <!-- Demo ChatGPT gpt-4.1-mini Provider -->
+        <record id="demo_chatgpt_gpt-4-1-mini" model="sh.ai.llm">
+            <field name="name">ChatGPT-4.1 mini</field>
+            <field name="sh_company">OpenAI</field>
+            <field name="sh_model_code">gpt-4.1-mini</field>
+            <field name="sh_api_key">YOUR_OPENAI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/chatgpt.png"/>
+            <field name="active">True</field>
+        </record>
+
+        <!-- Demo ChatGPT gpt-4-nano Provider -->
+        <record id="demo_chatgpt_gpt-4-1-nano" model="sh.ai.llm">
+            <field name="name">ChatGPT-4.1 nano</field>
+            <field name="sh_company">OpenAI</field>
+            <field name="sh_model_code">gpt-4.1-nano</field>
+            <field name="sh_api_key">YOUR_OPENAI_API_KEY_HERE</field>
+            <field name="image" type="base64" file="sh_ai_base/static/img/chatgpt.png"/>
+            <field name="active">True</field>
+        </record>
+        
+    </data>
+</odoo>

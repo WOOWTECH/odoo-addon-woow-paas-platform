@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="view_delivery_comparison_wizard_form" model="ir.ui.view">
+            <field name="name">Delivery Comparison Wizard</field>
+            <field name="model">delivery.carrier.comparison.wizard</field>
+            <field name="arch" type="xml">
+                <form string="">
+                    <!-- <h3>Delivery Carrier Comparison</h3> -->
+                    <div>
+                        <group>
+                            <field name="org_partner_id"/>
+                            <field name="dest_partner_id"/>
+                            <field name="weight"/>
+                            <field name="length"/>
+                            <field name="width"/>
+                            <field name="height"/>
+                        </group>
+                        <button name="compute_comparison" type="object" string="Comparison" class="oe_highlight" >
+                            <i class="oi oi-arrow-right me-1"/>Get rate
+                        </button>
+                        <field name="lines" readonly="1">
+                            <list>
+                                <field name="carrier_id"/>
+                                <field name="fee"/>
+                                <button name="action_update" type="object" string="Select" class="oe_highlight"/>
+                            </list>
+                        </field>
+                    </div>
+                    <!-- <footer>
+                        <button name="action_confirm" string="OK" class="oe_highlight" type="object" />
+                        or
+                        <button special="cancel" string="Cancel" class="oe_link" />
+                    </footer> -->
+                </form>
+            </field>
+        </record>
+
+        <record id="action_delivery_comparison" model="ir.actions.act_window">
+            <field name="name">Delivery Comparison</field>
+            <field name="type">ir.actions.act_window</field>
+            <field name="res_model">delivery.carrier.comparison.wizard</field>
+            <field name="view_mode">form</field>
+            <field name="target">new</field>
+        </record>
+    </data>
+</odoo>

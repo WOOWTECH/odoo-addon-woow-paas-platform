@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Debug Form View -->
+    <record id="view_sh_ai_chat_message_debug_form" model="ir.ui.view">
+        <field name="name">sh.ai.chat.message.debug.form</field>
+        <field name="model">sh.ai.chat.message</field>
+        <field name="arch" type="xml">
+            <form string="AI Response Debug Information">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="create_date" readonly="1"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="message_type" readonly="1"/>
+                            <field name="llm_id" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <group string="Technical Analytics">
+                        <group>
+                            <field name="prompt_tokens"/>
+                            <field name="completion_tokens"/>
+                            <field name="total_tokens" class="fw-bold"/>
+                        </group>
+                        <group>
+                            <field name="tool_call_count"/>
+                            <field name="execution_time" widget="float_time" string="Execution Time"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <page string="Response Content">
+                            <field name="content" readonly="1" widget="text"/>
+                        </page>
+
+                        <page string="Query Execution" invisible="not query_details">
+                             <group>
+                                <field name="query_details" readonly="1" widget="ace" options="{'mode': 'python'}"/>
+                            </group>
+                        </page>
+
+                        <page string="Debug Information (JSON)">
+                            <div class="alert alert-info mb-3">
+                                <strong>Debug Info Contents:</strong>
+                                <ul>
+                                    <li><strong>tool_calls:</strong> Array of all tools called (name, args, results)</li>
+                                    <li><strong>total_iterations:</strong> Number of function calling rounds</li>
+                                    <li><strong>final_query:</strong> Last search query details (model, domain, fields)</li>
+                                    <li><strong>model_catalog_cached:</strong> Whether catalog was loaded from cache</li>
+                                    <li><strong>timestamp:</strong> When the response was generated</li>
+                                </ul>
+                            </div>
+                            <group>
+                                <field name="debug_info_formatted" readonly="1" widget="ace" options="{'mode': 'python'}" nolabel="1"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+</odoo>
