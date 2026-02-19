@@ -26,7 +26,8 @@ export class Sidebar extends Component {
                 || current === "ai-projects"
                 || current === "ai-tasks"
                 || current === "ai-task-detail"
-                || current === "ai-chat";
+                || current === "ai-chat"
+                || current === "ai-project-kanban";
         }
         return current === item.path;
     }

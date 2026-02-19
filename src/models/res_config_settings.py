@@ -73,9 +73,12 @@ class ResConfigSettings(models.TransientModel):
                 max_tokens=50,
                 temperature=0.1,
             )
-            response = client.chat_completion([
-                {"role": "user", "content": "Say 'Connection successful' in exactly two words."},
-            ])
+            messages = client.build_messages(
+                system_prompt='',
+                history=[],
+                user_message="Say 'Connection successful' in exactly two words.",
+            )
+            response = client.chat_completion(messages)
             return {
                 'type': 'ir.actions.client',
                 'tag': 'display_notification',

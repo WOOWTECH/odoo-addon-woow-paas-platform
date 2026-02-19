@@ -1139,12 +1139,23 @@ class PaasController(Controller):
 
             try:
                 # Create namespace if needed
+                # Calculate total resource needs for ALL services in this workspace
+                # Include all states except 'deleting' to account for deployed/pending resources
+                all_services = CloudService.search([
+                    ('workspace_id', '=', workspace.id),
+                    ('state', '!=', 'deleting'),
+                ])
+                total_vcpu = sum(s.allocated_vcpu for s in all_services)
+                total_ram = sum(s.allocated_ram_gb for s in all_services)
+                total_storage = sum(s.allocated_storage_gb for s in all_services)
+                # Each Helm chart may create additional PVCs (e.g. PostgreSQL sub-chart)
+                # Use 3x headroom to account for sub-chart PVCs and overhead
                 try:
                     client.create_namespace(
                         namespace=helm_namespace,
-                        cpu_limit=str(template.min_vcpu * 2),  # Allow some headroom
-                        memory_limit=f"{int(template.min_ram_gb * 2)}Gi",
-                        storage_limit=f"{template.min_storage_gb * 2}Gi",
+                        cpu_limit=str(max(total_vcpu * 3, 8)),
+                        memory_limit=f"{max(int(total_ram * 3), 8)}Gi",
+                        storage_limit=f"{max(total_storage * 3, 100)}Gi",
                     )
                 except PaaSOperatorError as e:
                     # Namespace might already exist (409), which is fine

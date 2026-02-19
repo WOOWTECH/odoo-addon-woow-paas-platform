@@ -36,6 +36,7 @@ export class SupportTasksPage extends Component {
             await supportService.fetchAllTasks(filters);
         } catch (err) {
             console.error("Failed to load tasks:", err);
+            this.supportService.error = err.message || "Failed to load tasks";
         } finally {
             this.state.loading = false;
         }

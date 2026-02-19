@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { AiChat } from "../../components/ai-chat/AiChat";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
+import { safeHtml } from "../../services/html_sanitize";
 import { formatDate, getInitials, getPriorityStars } from "../../services/utils";
 
 export class TaskDetailPage extends Component {
@@ -35,7 +36,11 @@ export class TaskDetailPage extends Component {
         try {
             const result = await supportService.fetchTask(this.props.taskId);
             if (result.success) {
-                this.state.task = result.data;
+                const data = result.data;
+                if (data.description) {
+                    data.description = safeHtml(data.description);
+                }
+                this.state.task = data;
             } else {
                 this.state.error = result.error || "Failed to load task";
             }

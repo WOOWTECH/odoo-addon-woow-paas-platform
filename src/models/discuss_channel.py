@@ -1,6 +1,6 @@
 import logging
 
-from odoo import api, models
+from odoo import models
 from odoo.tools import html2plaintext
 
 _logger = logging.getLogger(__name__)
@@ -154,10 +154,17 @@ class DiscussChannel(models.Model):
             ai_response = client.chat_completion(messages)
         except AIClientError as exc:
             _logger.error(
-                'AI client error for agent %s: %s',
-                agent.name, exc.message,
+                'AI client error for agent %s: %s (detail=%s)',
+                agent.name, exc.message, getattr(exc, 'detail', ''),
             )
-            ai_response = 'Sorry, I encountered an error and could not process your request. Please try again later.'
+            error_msg = f'⚠️ AI 助理回覆失敗：{exc.message}。請稍後再試。'
+            self.with_context(skip_ai_reply=True, mail_create_nosubscribe=True).message_post(
+                body=error_msg,
+                message_type='notification',
+                subtype_xmlid='mail.mt_note',
+                author_id=self.env.ref('base.partner_root').id,
+            )
+            return
 
         if not ai_response:
             return

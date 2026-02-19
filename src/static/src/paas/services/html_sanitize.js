@@ -25,6 +25,15 @@ export function safeHtml(html) {
     if (!html) {
         return "";
     }
+    if (!window.DOMPurify) {
+        console.warn("DOMPurify not loaded, falling back to text content");
+        const escaped = String(html)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        return markup(escaped);
+    }
     const clean = window.DOMPurify.sanitize(html, {
         ALLOWED_TAGS,
         ALLOWED_ATTR,
