@@ -41,7 +41,6 @@ export class AiChat extends Component {
             sending: false,
             streaming: false,
             streamingText: "",
-            streamingToolCalls: [],
             assistants: [],
             mentionVisible: false,
             mentionQuery: "",
