@@ -125,10 +125,10 @@
             <div class="o_woow_ai_chat__input">
                 <!-- Mention dropdown (positioned above input) -->
                 <AiMentionDropdown
-                    agents="state.agents"
+                    assistants="state.assistants"
                     visible="state.mentionVisible"
                     query="state.mentionQuery"
-                    onSelect.bind="onAgentSelect"
+                    onSelect.bind="onAssistantSelect"
                     onClose.bind="closeMention"/>
 
                 <div class="o_woow_ai_chat__input_row">
@@ -154,7 +154,7 @@
                               t-att-value="state.inputText"
                               t-on-keydown="handleKeydown"
                               t-on-input="handleInput"
-                              placeholder="Type a message... Use @ to mention an AI agent"
+                              placeholder="Type a message... Use @ to mention an AI assistant"
                               rows="1"
                               t-att-disabled="state.streaming"/>
 

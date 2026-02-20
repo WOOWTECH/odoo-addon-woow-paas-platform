@@ -3,21 +3,21 @@ import { reactive } from "@odoo/owl";
 import { jsonRpc } from "./rpc";
 
 /**
- * @typedef {Object} AgentData
- * @property {number} id - Agent ID
- * @property {string} name - Agent internal name
- * @property {string} display_name - Agent display name
- * @property {string} system_prompt - Agent system prompt
- * @property {number} provider_id - Associated provider ID
+ * @typedef {Object} AssistantData
+ * @property {number} id - Assistant ID
+ * @property {string} name - Assistant name
+ * @property {string} description - Assistant description
+ * @property {number|null} config_id - Associated AI config ID
+ * @property {string|null} config_name - Associated AI config name
  * @property {string} avatar_color - Avatar color hex
- * @property {boolean} is_default - Whether this is the default agent
+ * @property {boolean} is_default - Whether this is the default assistant
  */
 
 /**
  * @typedef {Object} ChatMessage
  * @property {number} id - Message ID
  * @property {string} body - Message body (HTML)
- * @property {string} author - Author display name
+ * @property {string} author_name - Author display name
  * @property {number} author_id - Author user ID
  * @property {string} date - ISO datetime string
  * @property {boolean} is_ai - Whether message is from AI
@@ -26,19 +26,19 @@ import { jsonRpc } from "./rpc";
 
 /**
  * @typedef {Object} ConnectionStatus
- * @property {boolean} connected - Whether AI provider is connected
- * @property {string} provider_name - Active provider name
+ * @property {boolean} connected - Whether AI is connected
+ * @property {string} provider_name - Active config name
  * @property {string} model_name - Active model name
  */
 
 /**
  * AI Service
- * Handles all API calls related to AI agents, chat, and streaming
+ * Handles all API calls related to AI assistants, chat, and streaming
  * @type {Object}
  */
 export const aiService = reactive({
-    /** @type {AgentData[]} */
-    agents: [],
+    /** @type {AssistantData[]} */
+    assistants: [],
     /** @type {boolean} */
     loading: false,
     /** @type {Object.<string, boolean>} */
@@ -49,18 +49,18 @@ export const aiService = reactive({
     connectionStatus: null,
 
     /**
-     * Fetch all available AI agents
+     * Fetch all available AI assistants
      * @returns {Promise<void>}
      */
-    async fetchAgents() {
+    async fetchAssistants() {
         this.loading = true;
         this.error = null;
         try {
             const result = await jsonRpc("/api/ai/agents", {});
             if (result.success) {
-                this.agents = result.data;
+                this.assistants = result.data;
             } else {
-                this.error = result.error || "Failed to fetch agents";
+                this.error = result.error || "Failed to fetch assistants";
             }
         } catch (err) {
             this.error = err.message || "Network error";
@@ -103,19 +103,15 @@ export const aiService = reactive({
      * Post a message to a chat channel
      * @param {number} channelId - discuss.channel ID
      * @param {string} body - Message body text
-     * @param {number|null} [agentId=null] - AI agent to mention (triggers AI reply)
      * @returns {Promise<{success: boolean, data?: ChatMessage, error?: string}>}
      */
-    async postMessage(channelId, body, agentId = null) {
+    async postMessage(channelId, body) {
         this.operationLoading.postMessage = true;
         try {
             const params = {
                 channel_id: channelId,
                 body: body,
             };
-            if (agentId) {
-                params.agent_id = agentId;
-            }
             const result = await jsonRpc("/api/ai/chat/post", params);
             if (result.success) {
                 return { success: true, data: result.data };
@@ -141,21 +137,15 @@ export const aiService = reactive({
     },
 
     /**
-     * Fetch AI connection status (active provider info)
+     * Fetch AI connection status
      * @returns {Promise<{success: boolean, data?: ConnectionStatus, error?: string}>}
      */
     async fetchConnectionStatus() {
         this.operationLoading.connectionStatus = true;
         try {
-            const result = await jsonRpc("/api/ai/providers", {});
+            const result = await jsonRpc("/api/ai/connection-status", {});
             if (result.success) {
-                const providers = result.data || [];
-                const active = providers.find(p => p.is_active);
-                this.connectionStatus = {
-                    connected: !!active,
-                    provider_name: active ? active.name : "",
-                    model_name: active ? active.model_name : "",
-                };
+                this.connectionStatus = result.data;
                 return { success: true, data: this.connectionStatus };
             } else {
                 this.connectionStatus = { connected: false, provider_name: "", model_name: "" };
