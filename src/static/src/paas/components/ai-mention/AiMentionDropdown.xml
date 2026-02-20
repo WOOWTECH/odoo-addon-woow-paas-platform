@@ -3,29 +3,29 @@
     <t t-name="woow_paas_platform.AiMentionDropdown">
         <div t-if="props.visible" class="o_woow_mention_dropdown">
             <div class="o_woow_mention_dropdown__header">
-                <span class="o_woow_mention_dropdown__title">AI Agents</span>
+                <span class="o_woow_mention_dropdown__title">AI Assistants</span>
             </div>
-            <ul class="o_woow_mention_dropdown__list" t-if="filteredAgents.length">
-                <li t-foreach="filteredAgents" t-as="agent" t-key="agent.id"
-                    t-att-class="'o_woow_mention_dropdown__item' + (agent_index === state.selectedIndex ? ' o_woow_mention_dropdown__item--selected' : '')"
-                    t-on-click="() => this.selectAgent(agent)"
-                    t-on-mouseenter="() => this.state.selectedIndex = agent_index">
+            <ul class="o_woow_mention_dropdown__list" t-if="filteredAssistants.length">
+                <li t-foreach="filteredAssistants" t-as="assistant" t-key="assistant.id"
+                    t-att-class="'o_woow_mention_dropdown__item' + (assistant_index === state.selectedIndex ? ' o_woow_mention_dropdown__item--selected' : '')"
+                    t-on-click="() => this.selectAssistant(assistant)"
+                    t-on-mouseenter="() => this.state.selectedIndex = assistant_index">
                     <span class="o_woow_mention_dropdown__avatar"
-                          t-att-style="'background-color: ' + (agent.avatar_color || '#875A7B')">
-                        <t t-esc="getInitial(agent)"/>
+                          t-att-style="'background-color: ' + (assistant.avatar_color || '#875A7B')">
+                        <t t-esc="getInitial(assistant)"/>
                     </span>
                     <div class="o_woow_mention_dropdown__info">
                         <span class="o_woow_mention_dropdown__name">
-                            <t t-esc="agent.agent_display_name || agent.name"/>
+                            <t t-esc="assistant.name"/>
                         </span>
-                        <span class="o_woow_mention_dropdown__desc" t-if="agent.provider_name">
-                            <t t-esc="agent.provider_name"/>
+                        <span class="o_woow_mention_dropdown__desc" t-if="assistant.config_name">
+                            <t t-esc="assistant.config_name"/>
                         </span>
                     </div>
                 </li>
             </ul>
             <div t-else="" class="o_woow_mention_dropdown__empty">
-                No agents found
+                No assistants found
             </div>
         </div>
     </t>

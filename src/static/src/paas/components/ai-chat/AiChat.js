@@ -8,7 +8,7 @@ import { parseMarkdown } from "../../services/markdown_parser";
 
 const ERROR_MESSAGES = {
     channel_not_found: "聊天頻道不存在，請重新整理頁面。",
-    no_agent: "目前沒有可用的 AI 助理，請聯繫管理員設定 AI agent。",
+    no_agent: "目前沒有可用的 AI 助理，請聯繫管理員設定。",
     provider_not_configured: "AI 供應商尚未設定，請聯繫管理員。",
     no_message: "找不到訊息，請重新傳送。",
     access_denied: "您無權存取此聊天頻道。",
@@ -19,7 +19,7 @@ const ERROR_MESSAGES = {
  * AiChat
  *
  * Core chat component with message list, input box, SSE streaming,
- * file upload, and @-mention agent selection.
+ * file upload, and @-mention assistant selection.
  *
  * @prop {number} channelId - The discuss.channel ID
  * @prop {boolean} [autoReply=false] - Whether to auto-trigger AI streaming after sending
@@ -40,10 +40,10 @@ export class AiChat extends Component {
             sending: false,
             streaming: false,
             streamingText: "",
-            agents: [],
+            assistants: [],
             mentionVisible: false,
             mentionQuery: "",
-            selectedAgentId: null,
+            selectedAssistantId: null,
             uploadingFile: false,
             error: null,
             connectionState: "idle", // idle | connecting | connected | streaming | error | reconnecting
@@ -61,7 +61,7 @@ export class AiChat extends Component {
         this._consecutiveParseErrors = 0;
 
         onMounted(async () => {
-            await this.loadAgents();
+            await this.loadAssistants();
             await this.loadHistory();
             this.scrollToBottom();
         });
@@ -78,14 +78,14 @@ export class AiChat extends Component {
     // ==================== Data Loading ====================
 
     /**
-     * Load available AI agents from the service.
+     * Load available AI assistants from the service.
      */
-    async loadAgents() {
+    async loadAssistants() {
         try {
-            await aiService.fetchAgents();
-            this.state.agents = [...aiService.agents];
+            await aiService.fetchAssistants();
+            this.state.assistants = [...aiService.assistants];
         } catch (err) {
-            console.error("Failed to load AI agents:", err);
+            console.error("Failed to load AI assistants:", err);
             this.state.error = "無法載入 AI 助理列表，請重新整理頁面。";
         }
     }
@@ -139,7 +139,6 @@ export class AiChat extends Component {
             const result = await aiService.postMessage(
                 this.props.channelId,
                 text,
-                this.state.selectedAgentId,
             );
             if (result.success && result.data) {
                 this.state.messages.push({
@@ -150,7 +149,7 @@ export class AiChat extends Component {
                     attachments: result.data.attachments || [],
                 });
                 this.state.inputText = "";
-                this.state.selectedAgentId = null;
+                this.state.selectedAssistantId = null;
                 this.scrollToBottom();
 
                 // Auto-trigger streaming AI reply
@@ -311,8 +310,6 @@ export class AiChat extends Component {
         // Delegate to mention dropdown if visible
         if (this.state.mentionVisible) {
             if (["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(ev.key)) {
-                // The AiMentionDropdown handles these via its own handleKeydown
-                // We call it through a ref or direct method
                 this._mentionKeydown(ev);
                 return;
             }
@@ -367,12 +364,11 @@ export class AiChat extends Component {
 
     /**
      * Forward keydown events to the mention dropdown component.
-     * This is used internally when the mention dropdown is visible.
      * @param {KeyboardEvent} ev
      */
     _mentionKeydown(ev) {
-        const agents = this._getFilteredAgents();
-        if (!agents.length) {
+        const assistants = this._getFilteredAssistants();
+        if (!assistants.length) {
             return;
         }
 
@@ -380,16 +376,16 @@ export class AiChat extends Component {
             case "ArrowDown":
                 ev.preventDefault();
                 this._mentionSelectedIndex =
-                    ((this._mentionSelectedIndex || 0) + 1) % agents.length;
+                    ((this._mentionSelectedIndex || 0) + 1) % assistants.length;
                 break;
             case "ArrowUp":
                 ev.preventDefault();
                 this._mentionSelectedIndex =
-                    ((this._mentionSelectedIndex || 0) - 1 + agents.length) % agents.length;
+                    ((this._mentionSelectedIndex || 0) - 1 + assistants.length) % assistants.length;
                 break;
             case "Enter":
                 ev.preventDefault();
-                this.onAgentSelect(agents[this._mentionSelectedIndex || 0]);
+                this.onAssistantSelect(assistants[this._mentionSelectedIndex || 0]);
                 break;
             case "Escape":
                 ev.preventDefault();
@@ -399,29 +395,28 @@ export class AiChat extends Component {
     }
 
     /**
-     * Get filtered agents based on current mention query.
+     * Get filtered assistants based on current mention query.
      * @returns {Array}
      */
-    _getFilteredAgents() {
+    _getFilteredAssistants() {
         const query = (this.state.mentionQuery || "").toLowerCase().trim();
         if (!query) {
-            return this.state.agents;
+            return this.state.assistants;
         }
-        return this.state.agents.filter((agent) => {
-            const displayName = (agent.agent_display_name || agent.name || "").toLowerCase();
-            const name = (agent.name || "").toLowerCase();
-            return displayName.includes(query) || name.includes(query);
+        return this.state.assistants.filter((assistant) => {
+            const name = (assistant.name || "").toLowerCase();
+            return name.includes(query);
         });
     }
 
     // ==================== Mention Selection ====================
 
     /**
-     * Handle agent selection from the mention dropdown.
-     * Inserts the agent @mention into the textarea at the cursor position.
-     * @param {Object} agent - The selected agent record
+     * Handle assistant selection from the mention dropdown.
+     * Inserts the assistant @mention into the textarea at the cursor position.
+     * @param {Object} assistant - The selected assistant record
      */
-    onAgentSelect(agent) {
+    onAssistantSelect(assistant) {
         const textarea = this.textareaRef.el;
         if (!textarea) {
             return;
@@ -437,13 +432,13 @@ export class AiChat extends Component {
             return;
         }
 
-        const displayName = agent.agent_display_name || agent.name;
+        const displayName = assistant.name;
         const before = value.substring(0, atIndex);
         const after = value.substring(cursorPos);
         const newText = before + "@" + displayName + " " + after;
 
         this.state.inputText = newText;
-        this.state.selectedAgentId = agent.id;
+        this.state.selectedAssistantId = assistant.id;
         this.closeMention();
 
         // Set cursor position after the inserted mention
