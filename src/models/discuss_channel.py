@@ -13,13 +13,13 @@ class DiscussChannel(models.Model):
         """Override message_post to detect AI @mentions and trigger AI replies.
 
         After the message is posted via super(), this method checks whether
-        the message body contains an @agent_name mention.  If the channel is
-        linked to a task with ``ai_auto_reply`` enabled or if an explicit
+        the message body contains an @assistant_name mention.  If the channel
+        is linked to a task with ``ai_auto_reply`` enabled or if an explicit
         @mention is found, it triggers an AI response and posts it back to
         the channel.
 
-        The AI response is generated using the agent's configured provider
-        and system prompt via :class:`~.ai_client.AIClient`.
+        The AI response is generated using ``AIClient.from_assistant()``
+        backed by LangChain.
         """
         message = super().message_post(**kwargs)
 
@@ -38,7 +38,10 @@ class DiscussChannel(models.Model):
 
         # Skip AI-authored messages to prevent infinite recursion
         author_id = kwargs.get('author_id')
-        if author_id and author_id == self.env.ref('base.partner_root').id:
+        ai_partner_ids = set(
+            self.env['ai.assistant'].sudo().search([]).mapped('partner_id.id')
+        )
+        if author_id and author_id in ai_partner_ids:
             return message
 
         body = kwargs.get('body', '') or ''
@@ -46,123 +49,122 @@ class DiscussChannel(models.Model):
             return message
 
         # Determine whether we should trigger AI
-        agent = self._detect_ai_agent(body)
-        if not agent:
-            agent = self._get_auto_reply_agent()
-        if not agent:
+        assistant = self._detect_ai_assistant(body)
+        if not assistant:
+            assistant = self._get_auto_reply_assistant()
+        if not assistant:
             return message
 
         # Generate and post the AI reply
         try:
-            self._post_ai_reply(agent, body, message)
+            self._post_ai_reply(assistant, body, message)
         except Exception:
             _logger.exception(
                 'Failed to generate AI reply in channel %s (id=%s)',
                 self.name, self.id,
             )
             # Notify the user in channel that AI reply failed
+            error_author_id = assistant.partner_id.id if assistant else self.env.ref('base.partner_root').id
             self.with_context(skip_ai_reply=True, mail_create_nosubscribe=True).message_post(
                 body='⚠️ AI 助理回覆失敗，請稍後再試或聯繫管理員。',
                 message_type='notification',
                 subtype_xmlid='mail.mt_note',
-                author_id=self.env.ref('base.partner_root').id,
+                author_id=error_author_id,
             )
 
         return message
 
-    def _detect_ai_agent(self, body: str):
-        """Detect an @agent_name mention in the message body.
+    def _detect_ai_assistant(self, body: str):
+        """Detect an @assistant_name mention in the message body.
 
-        Searches for any configured AI agent whose name appears in the
-        message body as an @mention (e.g., ``@woowbot``).
+        Searches for any configured AI assistant whose partner name
+        appears in the message body as an @mention (e.g., ``@WoowBot``).
 
         Args:
             body: The raw message body text / HTML.
 
         Returns:
-            A ``woow_paas_platform.ai_agent`` recordset (single record)
-            if a mention is detected, or an empty recordset otherwise.
+            An ``ai.assistant`` recordset (single record) if a mention
+            is detected, or an empty recordset otherwise.
         """
-        AiAgent = self.env['woow_paas_platform.ai_agent'].sudo()
-        agents = AiAgent.search([])
-        for agent in agents:
-            # Check both the technical name and display name
-            if f'@{agent.name}' in body:
-                return agent
-            if agent.agent_display_name and f'@{agent.agent_display_name}' in body:
-                return agent
-        return AiAgent.browse()
+        Assistant = self.env['ai.assistant'].sudo()
+        assistants = Assistant.search([])
+        for assistant in assistants:
+            if f'@{assistant.name}' in body:
+                return assistant
+        return Assistant.browse()
 
-    def _get_auto_reply_agent(self):
-        """Return the default AI agent if auto-reply is enabled for this channel.
+    def _get_auto_reply_assistant(self):
+        """Return the default AI assistant if auto-reply is enabled for this channel.
 
         Checks whether this channel is linked to a project task that has
-        ``ai_auto_reply`` enabled.  If so, returns the default AI agent.
+        ``ai_auto_reply`` enabled.  If so, returns the default AI assistant.
 
         Returns:
-            A ``woow_paas_platform.ai_agent`` record or empty recordset.
+            An ``ai.assistant`` record or empty recordset.
         """
-        AiAgent = self.env['woow_paas_platform.ai_agent']
+        Assistant = self.env['ai.assistant']
 
         task = self.env['project.task'].sudo().search([
             ('channel_id', '=', self.id),
             ('ai_auto_reply', '=', True),
         ], limit=1)
         if not task:
-            return AiAgent.browse()
+            return Assistant.browse()
 
-        return AiAgent.get_default()
+        assistant_id = int(self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.default_ai_assistant_id', '0'))
+        return Assistant.sudo().browse(assistant_id).exists() or Assistant.browse()
 
-    def _post_ai_reply(self, agent, user_message: str, original_message):
+    def _post_ai_reply(self, assistant, user_message: str, original_message):
         """Generate an AI response and post it back to the channel.
 
-        Uses the agent's provider configuration to call the AI API, then
-        posts the response as a new message in the channel and sends a
-        bus notification.
+        Uses ``AIClient.from_assistant()`` to call the AI API via LangChain,
+        then posts the response as a new message authored by the assistant's
+        partner.
 
         Args:
-            agent: The ``woow_paas_platform.ai_agent`` record to use.
+            assistant: The ``ai.assistant`` record to use.
             user_message: The user's message text.
             original_message: The original ``mail.message`` record.
         """
         from .ai_client import AIClient, AIClientError
 
-        provider = agent.provider_id
-        if not provider or not provider.is_active:
+        try:
+            client = AIClient.from_assistant(assistant)
+        except AIClientError as exc:
             raise ValueError(
-                f'Agent {agent.name} has no active provider configured'
-            )
+                f'Assistant {assistant.name} configuration error: {exc.message}'
+            ) from exc
 
         # Build conversation history from recent channel messages
         history = self._get_chat_history(limit=20)
 
-        client = AIClient(
-            api_base_url=provider.api_base_url,
-            api_key=provider.api_key,
-            model_name=provider.model_name,
-            max_tokens=provider.max_tokens,
-            temperature=provider.temperature,
-        )
+        system_prompt = ''
+        if assistant.context_id:
+            system_prompt = assistant.context_id.context or ''
 
         messages = client.build_messages(
-            system_prompt=agent.system_prompt or '',
+            system_prompt=system_prompt,
             history=history,
             user_message=user_message,
         )
+
+        assistant_partner_id = assistant.partner_id.id
 
         try:
             ai_response = client.chat_completion(messages)
         except AIClientError as exc:
             _logger.error(
-                'AI client error for agent %s: %s (detail=%s)',
-                agent.name, exc.message, getattr(exc, 'detail', ''),
+                'AI client error for assistant %s: %s (detail=%s)',
+                assistant.name, exc.message, getattr(exc, 'detail', ''),
             )
             error_msg = f'⚠️ AI 助理回覆失敗：{exc.message}。請稍後再試。'
             self.with_context(skip_ai_reply=True, mail_create_nosubscribe=True).message_post(
                 body=error_msg,
                 message_type='notification',
                 subtype_xmlid='mail.mt_note',
-                author_id=self.env.ref('base.partner_root').id,
+                author_id=assistant_partner_id,
             )
             return
 
@@ -174,21 +176,19 @@ class DiscussChannel(models.Model):
             body=ai_response,
             message_type='comment',
             subtype_xmlid='mail.mt_comment',
-            author_id=self.env.ref('base.partner_root').id,
+            author_id=assistant_partner_id,
         )
 
         # Send bus notification for real-time UI update
-        agent_display = agent.agent_display_name or agent.name
         channel_info = {
             'id': ai_message.id,
             'body': ai_response,
             'author': {
-                'id': self.env.ref('base.partner_root').id,
-                'name': agent_display,
+                'id': assistant_partner_id,
+                'name': assistant.name,
             },
-            'agent_id': agent.id,
-            'agent_name': agent_display,
-            'agent_color': agent.avatar_color or '#875A7B',
+            'assistant_id': assistant.id,
+            'assistant_name': assistant.name,
         }
         self.env['bus.bus']._sendone(
             self,
@@ -197,8 +197,8 @@ class DiscussChannel(models.Model):
         )
 
         _logger.info(
-            'AI agent %s replied in channel %s (id=%s)',
-            agent.name, self.name, self.id,
+            'AI assistant %s replied in channel %s (id=%s)',
+            assistant.name, self.name, self.id,
         )
 
     def _get_chat_history(self, limit: int = 20) -> list:
@@ -217,10 +217,15 @@ class DiscussChannel(models.Model):
             ('message_type', '=', 'comment'),
         ], order='id desc', limit=limit)
 
-        root_partner_id = self.env.ref('base.partner_root').id
+        # Identify AI partner IDs for role detection
+        ai_partner_ids = set(
+            self.env['ai.assistant'].sudo().search([]).mapped('partner_id.id')
+        )
+        ai_partner_ids.add(self.env.ref('base.partner_root').id)
+
         history = []
         for msg in reversed(messages):
-            role = 'assistant' if msg.author_id.id == root_partner_id else 'user'
+            role = 'assistant' if msg.author_id.id in ai_partner_ids else 'user'
             body_text = html2plaintext(msg.body or '').strip()
             if body_text:
                 history.append({'role': role, 'content': body_text})
