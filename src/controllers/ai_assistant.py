@@ -80,23 +80,19 @@ class AiAssistantController(Controller):
 
     @route('/api/ai/providers', auth='user', methods=['POST'], type='json')
     def api_ai_providers(self, **kwargs: Any) -> dict[str, Any]:
-        """List all active AI providers.
+        """List all active AI configurations.
 
-        Returns provider information with api_key explicitly excluded
-        for security.
-
-        Returns:
-            dict: Response with provider list (api_key hidden).
+        Returns config information with api_key explicitly excluded.
         """
-        providers = request.env['woow_paas_platform.ai_provider'].sudo().search([
-            ('is_active', '=', True),
+        configs = request.env['ai.config'].sudo().search([
+            ('active', '=', True),
         ])
         data = [{
-            'id': p.id,
-            'name': p.name,
-            'model_name': p.model_name,
-            'is_active': p.is_active,
-        } for p in providers]
+            'id': c.id,
+            'name': c.name,
+            'model_name': c.model or '',
+            'is_active': c.active,
+        } for c in configs]
         return {
             'success': True,
             'data': data,
@@ -105,22 +101,22 @@ class AiAssistantController(Controller):
 
     @route('/api/ai/agents', auth='user', methods=['POST'], type='json')
     def api_ai_agents(self, **kwargs: Any) -> dict[str, Any]:
-        """List all AI agents.
+        """List all AI assistants.
 
         Returns:
-            dict: Response with agent list.
+            dict: Response with assistant list.
         """
-        agents = request.env['woow_paas_platform.ai_agent'].sudo().search([])
+        assistants = request.env['ai.assistant'].sudo().search([])
         data = [{
             'id': a.id,
             'name': a.name,
-            'agent_display_name': a.agent_display_name or a.name,
-            'system_prompt': a.system_prompt or '',
-            'provider_id': a.provider_id.id if a.provider_id else None,
-            'provider_name': a.provider_id.name if a.provider_id else None,
-            'avatar_color': a.avatar_color or '#875A7B',
-            'is_default': a.is_default,
-        } for a in agents]
+            'agent_display_name': a.name,
+            'description': a.description or '',
+            'config_id': a.config_id.id if a.config_id else None,
+            'config_name': a.config_id.name if a.config_id else None,
+            'avatar_color': '#875A7B',
+            'is_default': False,
+        } for a in assistants]
         return {
             'success': True,
             'data': data,
@@ -170,7 +166,13 @@ class AiAssistantController(Controller):
             limit=limit,
         )
 
-        root_partner_id = request.env.ref('base.partner_root').id
+        # Collect all AI assistant partner IDs to identify AI messages
+        ai_partner_ids = set(
+            request.env['ai.assistant'].sudo().search([]).mapped('partner_id.id')
+        )
+        # Also include partner_root for backward compatibility with old messages
+        ai_partner_ids.add(request.env.ref('base.partner_root').id)
+
         data = []
         for msg in reversed(messages):
             attachments = []
@@ -183,7 +185,7 @@ class AiAssistantController(Controller):
                     'url': f'/web/content/{att.id}?download=true',
                 })
 
-            is_ai = msg.author_id.id == root_partner_id
+            is_ai = msg.author_id.id in ai_partner_ids
             data.append({
                 'id': msg.id,
                 'body': msg.body or '',
@@ -370,25 +372,26 @@ class AiAssistantController(Controller):
         if not self._check_channel_access(channel):
             return self._sse_error_response('Access denied', 'access_denied')
 
-        # Find the agent for this channel
-        agent = self._get_channel_agent(channel)
-        if not agent:
-            return self._sse_error_response('No AI agent available', 'no_agent')
+        # Find the assistant for this channel
+        assistant = self._get_channel_assistant(channel)
+        if not assistant:
+            return self._sse_error_response('No AI assistant available', 'no_agent')
 
-        provider = agent.provider_id
-        if not provider or not provider.is_active:
-            # Fallback to system default provider from Settings
-            provider = self._get_default_provider()
-        if not provider or not provider.is_active:
-            _logger.error('AI provider not configured for agent %s in channel %s', agent.name, channel_id)
+        from ..models.ai_client import AIClient, AIClientError
+
+        try:
+            client = AIClient.from_assistant(assistant)
+        except AIClientError as exc:
+            _logger.error('AI client error for assistant %s in channel %s: %s', assistant.name, channel_id, exc.message)
             return self._sse_error_response('AI provider not configured', 'provider_not_configured')
 
-        # Get the latest user message
+        # Get the latest user message (exclude messages from the assistant's partner)
+        assistant_partner_id = assistant.partner_id.id
         last_message = request.env['mail.message'].sudo().search([
             ('res_id', '=', channel_id),
             ('model', '=', 'discuss.channel'),
             ('message_type', '=', 'comment'),
-            ('author_id', '!=', request.env.ref('base.partner_root').id),
+            ('author_id', '!=', assistant_partner_id),
         ], order='id desc', limit=1)
 
         if not last_message:
@@ -396,24 +399,18 @@ class AiAssistantController(Controller):
 
         user_message = last_message.body or ''
 
-        # Pre-fetch ORM data before entering the generator to avoid
-        # accessing the ORM after the request lifecycle has ended.
-        from ..models.ai_client import AIClient, AIClientError
+        # Pre-fetch ORM data before entering the generator
+        system_prompt = ''
+        if assistant.context_id:
+            system_prompt = assistant.context_id.context or ''
 
         history = channel._get_chat_history(limit=20)
-        client = AIClient(
-            api_base_url=provider.api_base_url,
-            api_key=provider.api_key,
-            model_name=provider.model_name,
-            max_tokens=provider.max_tokens,
-            temperature=provider.temperature,
-        )
         messages = client.build_messages(
-            system_prompt=agent.system_prompt or '',
+            system_prompt=system_prompt,
             history=history,
             user_message=user_message,
         )
-        root_partner_id = request.env.ref('base.partner_root').id
+        root_partner_id = assistant_partner_id
 
         # Pre-capture DB info for use inside the generator where the
         # original request cursor may no longer be valid.
@@ -485,10 +482,10 @@ class AiAssistantController(Controller):
             },
         )
 
-    def _get_channel_agent(self, channel):
-        """Find the appropriate AI agent for a channel.
+    def _get_channel_assistant(self, channel):
+        """Find the appropriate AI assistant for a channel.
 
-        Only returns an agent if the channel is linked to a task with
+        Only returns an assistant if the channel is linked to a task with
         ``ai_auto_reply`` enabled, ensuring we don't reply on channels
         that haven't opted in.
 
@@ -496,7 +493,7 @@ class AiAssistantController(Controller):
             channel: A ``discuss.channel`` recordset.
 
         Returns:
-            A ``woow_paas_platform.ai_agent`` record or None.
+            An ``ai.assistant`` record or None.
         """
         task = request.env['project.task'].sudo().search([
             ('channel_id', '=', channel.id),
@@ -505,35 +502,33 @@ class AiAssistantController(Controller):
         if not task:
             return None
 
-        return request.env['woow_paas_platform.ai_agent'].get_default() or None
+        return self._get_default_assistant()
 
-    def _get_default_provider(self):
-        """Get the system default AI provider from Settings."""
-        provider_id = request.env['ir.config_parameter'].sudo().get_param(
-            'woow_paas_platform.default_ai_provider_id',
+    def _get_default_assistant(self):
+        """Get the system default AI assistant from Settings."""
+        assistant_id = request.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.default_ai_assistant_id',
         )
-        if provider_id:
+        if assistant_id:
             try:
-                provider = request.env['woow_paas_platform.ai_provider'].sudo().browse(int(provider_id))
-                if provider.exists():
-                    return provider
+                assistant = request.env['ai.assistant'].sudo().browse(int(assistant_id))
+                if assistant.exists():
+                    return assistant
             except (ValueError, TypeError):
-                _logger.warning('Invalid default_ai_provider_id value: %r', provider_id)
+                _logger.warning('Invalid default_ai_assistant_id value: %r', assistant_id)
         return None
 
     # ==================== AI Connection Status ====================
 
     @route('/api/ai/connection-status', auth='user', methods=['POST'], type='json')
     def api_ai_connection_status(self, **kwargs: Any) -> dict[str, Any]:
-        """Check the AI provider connection status.
+        """Check the AI configuration connection status.
 
         Returns:
-            dict: Connection status with provider and model info.
+            dict: Connection status with config and model info.
         """
-        provider = request.env['woow_paas_platform.ai_provider'].sudo().search([
-            ('is_active', '=', True),
-        ], limit=1)
-        if not provider:
+        assistant = self._get_default_assistant()
+        if not assistant or not assistant.config_id:
             return {
                 'success': True,
                 'data': {
@@ -542,12 +537,13 @@ class AiAssistantController(Controller):
                     'model_name': '',
                 },
             }
+        config = assistant.config_id
         return {
             'success': True,
             'data': {
-                'connected': True,
-                'provider_name': provider.name,
-                'model_name': provider.model_name,
+                'connected': bool(config.api_key),
+                'provider_name': config.name,
+                'model_name': config.model or '',
             },
         }
 
