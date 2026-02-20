@@ -154,6 +154,25 @@
     flex-shrink: 0;
 }
 
+.o_woow_header_left {
+    display: flex;
+    align-items: center;
+}
+
+.o_woow_mobile_logo {
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    font-size: 1.125rem;
+    color: $woow-text-primary;
+
+    .material-symbols-outlined {
+        font-size: 24px;
+        color: $woow-primary;
+    }
+}
+
 .o_woow_breadcrumb {
     display: flex;
     align-items: center;
@@ -355,14 +374,92 @@
 }
 
 // -----------------------------------------------------------------------------
+// Bottom Navigation (Mobile)
+// -----------------------------------------------------------------------------
+
+.o_woow_bottom_nav {
+    display: none;
+}
+
+// -----------------------------------------------------------------------------
 // Responsive
 // -----------------------------------------------------------------------------
 
 @media (max-width: 768px) {
     .o_woow_sidebar {
-        transform: translateX(-100%);
+        display: none;
     }
+
     .o_woow_main {
         margin-left: 0;
+    }
+
+    .o_woow_header {
+        height: 56px;
+        padding: 0 1rem;
+    }
+
+    .o_woow_mobile_logo {
+        display: flex;
+    }
+
+    .o_woow_breadcrumb,
+    .o_woow_credits_badge,
+    .o_woow_user_header {
+        display: none;
+    }
+
+    .o_woow_content {
+        padding: 1rem;
+        padding-bottom: calc(#{$woow-bottom-nav-height} + 1rem);
+    }
+
+    .o_woow_bottom_nav {
+        display: flex;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: $woow-bottom-nav-height;
+        background: $woow-card-light;
+        border-top: 1px solid $woow-border-light;
+        z-index: 100;
+        align-items: center;
+        justify-content: space-around;
+        padding: 0 0.5rem;
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .o_woow_bottom_nav_item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        padding: 6px 0;
+        flex: 1;
+        color: $woow-text-secondary;
+        text-decoration: none;
+        cursor: pointer;
+        transition: color 0.2s;
+        -webkit-tap-highlight-color: transparent;
+
+        .material-symbols-outlined {
+            font-size: 22px;
+        }
+
+        &.active {
+            color: $woow-primary;
+
+            .material-symbols-outlined {
+                font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+            }
+        }
+    }
+
+    .o_woow_bottom_nav_label {
+        font-size: 0.625rem;
+        font-weight: 500;
+        letter-spacing: 0.02em;
     }
 }

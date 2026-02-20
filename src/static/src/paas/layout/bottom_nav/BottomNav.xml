@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.BottomNav">
+        <nav class="o_woow_bottom_nav">
+            <t t-foreach="navItems" t-as="item" t-key="item.path">
+                <a t-att-class="'o_woow_bottom_nav_item' + (isActive(item) ? ' active' : '')"
+                   t-on-click="() => props.router.navigate(item.path)">
+                    <span class="material-symbols-outlined"><t t-esc="item.icon"/></span>
+                    <span class="o_woow_bottom_nav_label"><t t-esc="item.name"/></span>
+                </a>
+            </t>
+        </nav>
+    </t>
+</templates>
