@@ -91,6 +91,38 @@ class AIClient:
             temperature=temperature,
         )
 
+    @classmethod
+    def from_assistant(cls, assistant):
+        """Create an AIClient from an ``ai.assistant`` record.
+
+        Reads configuration from ``assistant.config_id`` (an ``ai.config``
+        record) and builds a LangChain client.  The ``api_base_url`` field
+        comes from our custom extension of ``ai.config``.
+
+        Args:
+            assistant: An ``ai.assistant`` Odoo recordset (single record).
+
+        Returns:
+            A configured :class:`AIClient` instance.
+
+        Raises:
+            AIClientError: If the assistant has no configuration or is missing
+                a required API key.
+        """
+        config = assistant.sudo().config_id
+        if not config:
+            raise AIClientError("AI assistant has no configuration")
+        api_key = config.api_key
+        if not api_key:
+            raise AIClientError("AI configuration is missing an API key")
+        return cls(
+            api_base_url=config.api_base_url or 'https://api.openai.com/v1',
+            api_key=api_key,
+            model_name=config.model or 'gpt-4o-mini',
+            max_tokens=config.max_tokens or 4096,
+            temperature=config.temperature if config.temperature is not None else 0.7,
+        )
+
     # -------------------- message helpers --------------------
 
     def build_messages(
