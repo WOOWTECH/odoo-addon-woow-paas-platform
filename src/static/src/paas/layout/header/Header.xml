@@ -2,10 +2,16 @@
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.Header">
         <header class="o_woow_header">
-            <div class="o_woow_breadcrumb">
-                <span class="o_woow_breadcrumb_item">Home</span>
-                <span class="material-symbols-outlined">chevron_right</span>
-                <span class="o_woow_breadcrumb_item active"><t t-esc="currentPageName"/></span>
+            <div class="o_woow_header_left">
+                <div class="o_woow_mobile_logo">
+                    <span class="material-symbols-outlined">deployed_code</span>
+                    <span>WoowTech</span>
+                </div>
+                <div class="o_woow_breadcrumb">
+                    <span class="o_woow_breadcrumb_item">Home</span>
+                    <span class="material-symbols-outlined">chevron_right</span>
+                    <span class="o_woow_breadcrumb_item active"><t t-esc="currentPageName"/></span>
+                </div>
             </div>
             <div class="o_woow_header_actions">
                 <!-- Credits 徽章 -->
