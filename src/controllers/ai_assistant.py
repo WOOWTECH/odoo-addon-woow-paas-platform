@@ -39,24 +39,24 @@ class AiAssistantController(Controller):
         ]) > 0
 
     def _check_project_access(self, project):
-        """Verify the current user has access to the project's workspace.
+        """Verify the current user has access to the project via cloud service.
 
-        Returns True if the project has no workspace (global) or the user
-        is a member of the associated workspace.
+        Returns True if the project has no cloud service (global) or the user
+        is a member of the workspace that owns the cloud service.
         """
-        if not project.workspace_id:
+        if not project.cloud_service_id or not project.cloud_service_id.workspace_id:
             return True
-        return self._check_workspace_access(project.workspace_id)
+        return self._check_workspace_access(project.cloud_service_id.workspace_id)
 
     def _check_task_access(self, task):
-        """Verify the current user has access to the task's project workspace.
+        """Verify the current user has access to the task's project.
 
-        Returns True if the task has no project/workspace or the user
+        Returns True if the task has no project/cloud_service or the user
         is a member of the associated workspace.
         """
-        if not task.project_id or not task.project_id.workspace_id:
+        if not task.project_id:
             return True
-        return self._check_workspace_access(task.project_id.workspace_id)
+        return self._check_project_access(task.project_id)
 
     def _sse_error_response(self, error: str, error_code: str) -> Response:
         """Build a structured SSE error response (HTTP 200)."""
@@ -404,6 +404,12 @@ class AiAssistantController(Controller):
         if assistant.context_id:
             system_prompt = assistant.context_id.context or ''
 
+        # Append cloud service context if the channel is linked to a task
+        # whose project is bound to a cloud service
+        cloud_context = self._get_cloud_service_context_for_channel(channel)
+        if cloud_context:
+            system_prompt = (system_prompt + '\n\n' + cloud_context).strip()
+
         history = channel._get_chat_history(limit=20)
         messages = client.build_messages(
             system_prompt=system_prompt,
@@ -518,6 +524,45 @@ class AiAssistantController(Controller):
                 _logger.warning('Invalid default_ai_assistant_id value: %r', assistant_id)
         return None
 
+    def _get_cloud_service_context_for_channel(self, channel) -> str:
+        """Build cloud service context for AI system prompt.
+
+        Looks up the task linked to this channel, then the project's
+        cloud service, and assembles relevant context.
+
+        Returns:
+            A formatted context string, or empty string if not applicable.
+        """
+        task = request.env['project.task'].sudo().search([
+            ('channel_id', '=', channel.id),
+        ], limit=1)
+        if not task or not task.project_id or not task.project_id.cloud_service_id:
+            return ''
+
+        service = task.project_id.cloud_service_id
+        template = service.template_id
+
+        parts = ['## Cloud Service Information']
+        if template:
+            parts.append(f'- Application: {template.name}')
+            if template.category:
+                parts.append(f'- Category: {template.category}')
+            if template.description:
+                parts.append(f'- Description: {template.description}')
+
+        parts.append(f'- Service Name: {service.name}')
+        parts.append(f'- Status: {service.state or "unknown"}')
+
+        if service.subdomain:
+            parts.append(f'- URL: https://{service.subdomain}')
+        if service.error_message:
+            parts.append(f'- Error: {service.error_message}')
+
+        if service.helm_values:
+            parts.append(f'- Configuration (Helm Values):\n```json\n{service.helm_values}\n```')
+
+        return '\n'.join(parts)
+
     # ==================== AI Connection Status ====================
 
     @route('/api/ai/connection-status', auth='user', methods=['POST'], type='json')
@@ -559,7 +604,7 @@ class AiAssistantController(Controller):
         # Scope stats to projects the current user has access to
         user = request.env.user
         accessible_projects = request.env['project.project'].sudo().search([
-            ('workspace_id.access_ids.user_id', '=', user.id),
+            ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
         ])
         task_domain = [('project_id', 'in', accessible_projects.ids)]
         Task = request.env['project.task'].sudo()
@@ -579,26 +624,40 @@ class AiAssistantController(Controller):
     # ==================== Support / Project API ====================
 
     @route(
-        ['/api/support/projects', '/api/support/projects/<int:workspace_id>'],
+        [
+            '/api/support/projects',
+            '/api/support/projects/<int:workspace_id>',
+            '/api/support/cloud-services/<int:cloud_service_id>/project',
+        ],
         auth='user', methods=['POST'], type='json',
     )
     def api_support_projects(
         self,
         workspace_id: int = 0,
+        cloud_service_id: int = 0,
         action: str = 'list',
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Project CRUD operations, optionally scoped to a workspace.
+        """Project CRUD operations, optionally scoped to a cloud service or workspace.
 
         Args:
-            workspace_id: The workspace ID (0 = all projects).
+            workspace_id: Legacy workspace ID (0 = all projects).
+            cloud_service_id: The cloud service ID (0 = all projects).
             action: Operation type ('list', 'create', 'update', 'delete').
 
         Returns:
             dict: Response with project data.
         """
+        cloud_service = None
         workspace = None
-        if workspace_id:
+
+        if cloud_service_id:
+            cloud_service = request.env['woow_paas_platform.cloud_service'].sudo().browse(cloud_service_id)
+            if not cloud_service.exists():
+                return {'success': False, 'error': 'Cloud Service not found'}
+            if not self._check_workspace_access(cloud_service.workspace_id):
+                return {'success': False, 'error': 'Access denied'}
+        elif workspace_id:
             workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
             if not workspace.exists():
                 return {'success': False, 'error': 'Workspace not found'}
@@ -606,11 +665,11 @@ class AiAssistantController(Controller):
                 return {'success': False, 'error': 'Access denied'}
 
         if action == 'list':
-            return self._list_projects(workspace)
+            return self._list_projects(workspace, cloud_service)
         elif action == 'create':
-            if not workspace:
-                return {'success': False, 'error': 'workspace_id is required for create'}
-            return self._create_project(workspace, kwargs)
+            if not cloud_service and not workspace:
+                return {'success': False, 'error': 'cloud_service_id is required for create'}
+            return self._create_project(kwargs, cloud_service=cloud_service, workspace=workspace)
         elif action == 'update':
             return self._update_project(kwargs)
         elif action == 'delete':
@@ -668,8 +727,6 @@ class AiAssistantController(Controller):
         if action == 'list':
             return self._list_tasks(workspace, kwargs)
         elif action == 'create':
-            if not workspace:
-                return {'success': False, 'error': 'workspace_id is required for create'}
             return self._create_task(workspace, kwargs)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
@@ -753,16 +810,20 @@ class AiAssistantController(Controller):
                 })
         return result.sorted('sequence')
 
-    def _list_projects(self, workspace) -> dict[str, Any]:
-        """List projects, optionally filtered by workspace."""
+    def _list_projects(self, workspace=None, cloud_service=None) -> dict[str, Any]:
+        """List projects, optionally filtered by cloud service or workspace."""
         domain = []
-        if workspace:
-            domain.append(('workspace_id', '=', workspace.id))
+        if cloud_service:
+            domain.append(('cloud_service_id', '=', cloud_service.id))
+        elif workspace:
+            domain.append(('cloud_service_id.workspace_id', '=', workspace.id))
         projects = request.env['project.project'].sudo().search(domain)
         data = [{
             'id': proj.id,
             'name': proj.name,
             'description': proj.description or '',
+            'cloud_service_id': proj.cloud_service_id.id if proj.cloud_service_id else None,
+            'cloud_service_name': proj.cloud_service_id.name if proj.cloud_service_id else '',
             'workspace_id': proj.workspace_id.id if proj.workspace_id else None,
             'workspace_name': proj.workspace_id.name if proj.workspace_id else '',
             'task_count': proj.task_count,
@@ -774,25 +835,39 @@ class AiAssistantController(Controller):
             'count': len(data),
         }
 
-    def _create_project(self, workspace, params: dict) -> dict[str, Any]:
-        """Create a new project in a workspace."""
+    def _create_project(self, params: dict, cloud_service=None, workspace=None) -> dict[str, Any]:
+        """Create a new project bound to a cloud service."""
         name = (params.get('name') or '').strip()
         if not name:
             return {'success': False, 'error': 'Project name is required'}
 
-        project = request.env['project.project'].sudo().create({
+        vals = {
             'name': name,
             'description': (params.get('description') or '').strip(),
-            'workspace_id': workspace.id,
-        })
+        }
+
+        if cloud_service:
+            # Check 1:1 constraint before attempting create
+            if cloud_service.project_ids:
+                return {'success': False, 'error': 'This Cloud Service already has a Support Project'}
+            vals['cloud_service_id'] = cloud_service.id
+        elif workspace:
+            # Legacy: find cloud_service_id from params if provided
+            cs_id = params.get('cloud_service_id')
+            if cs_id:
+                vals['cloud_service_id'] = int(cs_id)
+
+        project = request.env['project.project'].sudo().create(vals)
         return {
             'success': True,
             'data': {
                 'id': project.id,
                 'name': project.name,
                 'description': project.description or '',
-                'workspace_id': workspace.id,
-                'workspace_name': workspace.name,
+                'cloud_service_id': project.cloud_service_id.id if project.cloud_service_id else None,
+                'cloud_service_name': project.cloud_service_id.name if project.cloud_service_id else '',
+                'workspace_id': project.workspace_id.id if project.workspace_id else None,
+                'workspace_name': project.workspace_id.name if project.workspace_id else '',
                 'task_count': 0,
                 'created_date': project.create_date.isoformat() if project.create_date else None,
             },
@@ -862,7 +937,7 @@ class AiAssistantController(Controller):
         project_id = params.get('project_id')
         domain = []
         if workspace:
-            domain.append(('project_id.workspace_id', '=', workspace.id))
+            domain.append(('project_id.cloud_service_id.workspace_id', '=', workspace.id))
         if project_id:
             try:
                 domain.append(('project_id', '=', int(project_id)))
@@ -878,7 +953,7 @@ class AiAssistantController(Controller):
         }
 
     def _create_task(self, workspace, params: dict) -> dict[str, Any]:
-        """Create a new task in a workspace project."""
+        """Create a new task in a project."""
         name = (params.get('name') or '').strip()
         project_id = params.get('project_id')
 
@@ -893,8 +968,10 @@ class AiAssistantController(Controller):
             return {'success': False, 'error': 'Invalid project_id'}
 
         project = request.env['project.project'].sudo().browse(pid)
-        if not project.exists() or project.workspace_id.id != workspace.id:
-            return {'success': False, 'error': 'Project not found in workspace'}
+        if not project.exists():
+            return {'success': False, 'error': 'Project not found'}
+        if not self._check_project_access(project):
+            return {'success': False, 'error': 'Access denied'}
 
         vals = {
             'name': name,
