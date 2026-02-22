@@ -144,6 +144,11 @@ class DiscussChannel(models.Model):
         if assistant.context_id:
             system_prompt = assistant.context_id.context or ''
 
+        # Append cloud service context if available
+        cloud_context = self._get_cloud_service_context()
+        if cloud_context:
+            system_prompt = (system_prompt + '\n\n' + cloud_context).strip()
+
         messages = client.build_messages(
             system_prompt=system_prompt,
             history=history,
@@ -200,6 +205,42 @@ class DiscussChannel(models.Model):
             'AI assistant %s replied in channel %s (id=%s)',
             assistant.name, self.name, self.id,
         )
+
+    def _get_cloud_service_context(self) -> str:
+        """Build cloud service context for AI system prompt.
+
+        Looks up the task linked to this channel, then the project's
+        cloud service, and assembles relevant context.
+        """
+        task = self.env['project.task'].sudo().search([
+            ('channel_id', '=', self.id),
+        ], limit=1)
+        if not task or not task.project_id or not task.project_id.cloud_service_id:
+            return ''
+
+        service = task.project_id.cloud_service_id
+        template = service.template_id
+
+        parts = ['## Cloud Service Information']
+        if template:
+            parts.append(f'- Application: {template.name}')
+            if template.category:
+                parts.append(f'- Category: {template.category}')
+            if template.description:
+                parts.append(f'- Description: {template.description}')
+
+        parts.append(f'- Service Name: {service.name}')
+        parts.append(f'- Status: {service.state or "unknown"}')
+
+        if service.subdomain:
+            parts.append(f'- URL: https://{service.subdomain}')
+        if service.error_message:
+            parts.append(f'- Error: {service.error_message}')
+
+        if service.helm_values:
+            parts.append(f'- Configuration (Helm Values):\n```json\n{service.helm_values}\n```')
+
+        return '\n'.join(parts)
 
     def _get_chat_history(self, limit: int = 20) -> list:
         """Retrieve recent chat messages from this channel.
