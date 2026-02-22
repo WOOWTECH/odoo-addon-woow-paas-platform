@@ -7,7 +7,9 @@ import { jsonRpc } from "./rpc";
  * @property {number} id - Project ID
  * @property {string} name - Project name
  * @property {string} description - Project description
- * @property {number} workspace_id - Associated workspace ID
+ * @property {number|null} cloud_service_id - Associated cloud service ID
+ * @property {string} cloud_service_name - Associated cloud service name
+ * @property {number|null} workspace_id - Associated workspace ID (computed)
  * @property {string} workspace_name - Associated workspace name
  * @property {number} task_count - Number of tasks
  * @property {number} open_task_count - Number of open tasks
@@ -263,8 +265,59 @@ export const supportService = reactive({
     },
 
     /**
-     * Create a new task in a workspace project
-     * @param {number} workspaceId - Workspace ID
+     * Create a new project bound to a cloud service
+     * @param {number} cloudServiceId - Cloud Service ID
+     * @param {Object} data - Project creation data
+     * @param {string} data.name - Project name
+     * @param {string} [data.description] - Project description
+     * @returns {Promise<{success: boolean, data?: ProjectData, error?: string}>}
+     */
+    async createProjectForService(cloudServiceId, data) {
+        this.operationLoading.createProject = true;
+        try {
+            const result = await jsonRpc(`/api/support/cloud-services/${cloudServiceId}/project`, {
+                action: "create",
+                ...data,
+            });
+            if (result.success) {
+                this.projects = [result.data, ...this.projects];
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.createProject = false;
+        }
+    },
+
+    /**
+     * Fetch the project bound to a cloud service (if any)
+     * @param {number} cloudServiceId - Cloud Service ID
+     * @returns {Promise<{success: boolean, data?: ProjectData|null, error?: string}>}
+     */
+    async fetchProjectForService(cloudServiceId) {
+        this.operationLoading.fetchProjectForService = true;
+        try {
+            const result = await jsonRpc(`/api/support/cloud-services/${cloudServiceId}/project`, {
+                action: "list",
+            });
+            if (result.success) {
+                const project = result.data.length > 0 ? result.data[0] : null;
+                return { success: true, data: project };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.fetchProjectForService = false;
+        }
+    },
+
+    /**
+     * Create a new task in a project
      * @param {Object} data - Task creation data
      * @param {string} data.name - Task title
      * @param {string} [data.description] - Task description
@@ -274,10 +327,10 @@ export const supportService = reactive({
      * @param {string|null} [data.date_deadline] - Deadline ISO date
      * @returns {Promise<{success: boolean, data?: TaskData, error?: string}>}
      */
-    async createTask(workspaceId, data) {
+    async createTask(data) {
         this.operationLoading.createTask = true;
         try {
-            const result = await jsonRpc(`/api/support/tasks/${workspaceId}`, {
+            const result = await jsonRpc("/api/support/tasks", {
                 action: "create",
                 ...data,
             });

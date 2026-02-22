@@ -82,16 +82,6 @@ export class CreateTaskModal extends Component {
             return;
         }
 
-        const project = supportService.projects.find(
-            (p) => p.id === this.state.projectId
-        );
-        const workspaceId = project?.workspace_id;
-
-        if (!workspaceId) {
-            this.state.error = "Selected project has no associated workspace";
-            return;
-        }
-
         this.state.loading = true;
         this.state.error = null;
 
@@ -110,7 +100,7 @@ export class CreateTaskModal extends Component {
                 data.stage_id = this.props.defaultStageId;
             }
 
-            const result = await supportService.createTask(workspaceId, data);
+            const result = await supportService.createTask(data);
 
             if (result.success) {
                 this.props.onCreated(result.data);
