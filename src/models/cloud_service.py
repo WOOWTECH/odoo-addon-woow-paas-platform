@@ -125,6 +125,13 @@ class CloudService(models.Model):
         help='Storage in GB allocated to this service',
     )
 
+    # Support Project
+    project_ids = fields.One2many(
+        comodel_name='project.project',
+        inverse_name='cloud_service_id',
+        string='Support Projects',
+    )
+
     # Timestamps
     deployed_at = fields.Datetime(
         string='Deployed At',
