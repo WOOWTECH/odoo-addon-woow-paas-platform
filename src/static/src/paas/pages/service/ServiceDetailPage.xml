@@ -60,6 +60,23 @@
                         </div>
                     </div>
                     <div class="o_woow_service_header_actions">
+                        <!-- Support Project Button -->
+                        <WoowButton
+                            t-if="state.supportProject"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="openSupportProject">
+                            <WoowIcon name="'support_agent'" size="18"/>
+                            Support Project
+                        </WoowButton>
+                        <WoowButton
+                            t-elif="!state.supportProjectLoading"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showCreateProject">
+                            <WoowIcon name="'add_circle'" size="18"/>
+                            Create Support Project
+                        </WoowButton>
                         <WoowButton
                             t-if="service.state === 'running'"
                             variant="'primary'"
@@ -149,6 +166,14 @@
                 service="serviceForModal"
                 onClose.bind="hideDomainModal"
                 onSaved.bind="onDomainSaved"/>
+
+            <!-- Create Support Project Modal -->
+            <CreateProjectModal
+                t-if="state.showCreateProjectModal"
+                cloudServiceId="props.serviceId"
+                cloudServiceName="service and service.name"
+                onClose.bind="hideCreateProject"
+                onCreated.bind="onProjectCreated"/>
         </div>
     </t>
 </templates>

@@ -11,6 +11,8 @@ export class CreateProjectModal extends Component {
     static props = {
         onClose: { type: Function },
         onCreated: { type: Function },
+        cloudServiceId: { type: Number, optional: true },
+        cloudServiceName: { type: String, optional: true },
     };
 
     setup() {
@@ -21,10 +23,12 @@ export class CreateProjectModal extends Component {
             loading: false,
             error: null,
             workspaces: [],
-            workspacesLoading: true,
+            workspacesLoading: !this.props.cloudServiceId,
         });
 
-        onMounted(() => this._loadWorkspaces());
+        if (!this.props.cloudServiceId) {
+            onMounted(() => this._loadWorkspaces());
+        }
     }
 
     async _loadWorkspaces() {
@@ -32,7 +36,6 @@ export class CreateProjectModal extends Component {
         try {
             await workspaceService.fetchWorkspaces();
             this.state.workspaces = workspaceService.workspaces;
-            // Auto-select first workspace if only one exists
             if (this.state.workspaces.length === 1) {
                 this.state.workspaceId = this.state.workspaces[0].id;
             }
@@ -71,19 +74,27 @@ export class CreateProjectModal extends Component {
             return;
         }
 
-        if (!this.state.workspaceId) {
-            this.state.error = "Please select a workspace";
-            return;
-        }
-
         this.state.loading = true;
         this.state.error = null;
 
         try {
-            const result = await supportService.createProject(this.state.workspaceId, {
-                name,
-                description: this.state.description.trim(),
-            });
+            let result;
+            if (this.props.cloudServiceId) {
+                result = await supportService.createProjectForService(this.props.cloudServiceId, {
+                    name,
+                    description: this.state.description.trim(),
+                });
+            } else {
+                if (!this.state.workspaceId) {
+                    this.state.error = "Please select a workspace";
+                    this.state.loading = false;
+                    return;
+                }
+                result = await supportService.createProject(this.state.workspaceId, {
+                    name,
+                    description: this.state.description.trim(),
+                });
+            }
 
             if (result.success) {
                 this.props.onCreated(result.data);

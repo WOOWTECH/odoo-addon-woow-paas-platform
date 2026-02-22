@@ -120,8 +120,13 @@
                                     </div>
                                 </div>
 
+                                <!-- Cloud Service -->
+                                <div t-if="project.cloud_service_name" class="o_woow_sp_card_workspace">
+                                    <WoowIcon name="'cloud'" size="14"/>
+                                    <span t-esc="project.cloud_service_name"/>
+                                </div>
                                 <!-- Workspace -->
-                                <div t-if="project.workspace_name" class="o_woow_sp_card_workspace">
+                                <div t-elif="project.workspace_name" class="o_woow_sp_card_workspace">
                                     <WoowIcon name="'folder'" size="14"/>
                                     <span t-esc="project.workspace_name"/>
                                 </div>
