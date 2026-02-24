@@ -178,14 +178,50 @@
     align-items: center;
     gap: 0.5rem;
     color: $woow-text-secondary;
+    min-width: 0;
 
     .material-symbols-outlined {
         font-size: 18px;
+        flex-shrink: 0;
     }
 
     .active {
         color: $woow-text-primary;
         font-weight: 500;
+    }
+
+    .o_woow_breadcrumb_current {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
+
+.o_woow_breadcrumb_link {
+    cursor: pointer;
+    transition: color 0.2s;
+
+    &:hover {
+        color: $woow-primary;
+    }
+}
+
+.o_woow_back_btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: $woow-text-secondary;
+    border-radius: $woow-radius-default;
+    flex-shrink: 0;
+
+    &:hover {
+        background: rgba(0, 0, 0, 0.04);
+        color: $woow-text-primary;
     }
 }
 
@@ -403,7 +439,12 @@
         display: flex;
     }
 
-    .o_woow_breadcrumb,
+    .o_woow_header {
+        .o_woow_breadcrumb {
+            display: none;
+        }
+    }
+
     .o_woow_credits_badge,
     .o_woow_user_header {
         display: none;

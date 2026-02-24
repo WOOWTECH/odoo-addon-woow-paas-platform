@@ -31,7 +31,7 @@
                         <WoowIcon name="'arrow_back'" size="20"/>
                     </button>
                     <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent">Marketplace</span>
+                    <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack">Marketplace</span>
                     <span class="o_woow_breadcrumb_sep">/</span>
                     <span class="o_woow_breadcrumb_current">Configure <t t-esc="template.name"/></span>
                 </div>

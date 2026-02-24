@@ -7,11 +7,18 @@
                     <span class="material-symbols-outlined">deployed_code</span>
                     <span>WoowTech</span>
                 </div>
-                <div class="o_woow_breadcrumb">
-                    <span class="o_woow_breadcrumb_item">Home</span>
-                    <span class="material-symbols-outlined">chevron_right</span>
-                    <span class="o_woow_breadcrumb_item active"><t t-esc="currentPageName"/></span>
-                </div>
+                <nav class="o_woow_breadcrumb" aria-label="breadcrumb">
+                    <t t-foreach="breadcrumbItems" t-as="item" t-key="item_index">
+                        <span t-if="item_index > 0" class="material-symbols-outlined o_woow_breadcrumb_sep">chevron_right</span>
+                        <span t-if="item.path"
+                              class="o_woow_breadcrumb_item o_woow_breadcrumb_link"
+                              t-on-click="() => this.onBreadcrumbClick(item.path)"
+                              t-esc="item.label"/>
+                        <span t-else=""
+                              class="o_woow_breadcrumb_item active"
+                              t-esc="item.label"/>
+                    </t>
+                </nav>
             </div>
             <div class="o_woow_header_actions">
                 <!-- Credits 徽章 -->
