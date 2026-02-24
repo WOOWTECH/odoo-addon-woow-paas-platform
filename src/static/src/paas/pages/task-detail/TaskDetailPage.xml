@@ -31,7 +31,7 @@
                         <WoowIcon name="'arrow_back'" size="20"/>
                     </button>
                     <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent">AI Tasks</span>
+                    <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack">AI Tasks</span>
                     <span class="o_woow_breadcrumb_sep">/</span>
                     <span class="o_woow_breadcrumb_current" t-esc="state.task.name"/>
                 </div>

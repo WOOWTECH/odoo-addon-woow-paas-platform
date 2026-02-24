@@ -31,7 +31,7 @@
                         <WoowIcon name="'arrow_back'" size="20"/>
                     </button>
                     <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent">Services</span>
+                    <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack">Services</span>
                     <span class="o_woow_breadcrumb_sep">/</span>
                     <span class="o_woow_breadcrumb_current" t-esc="service.name"/>
                 </div>
@@ -170,6 +170,7 @@
             <!-- Create Support Project Modal -->
             <CreateProjectModal
                 t-if="state.showCreateProjectModal"
+                workspaceId="props.workspaceId"
                 cloudServiceId="props.serviceId"
                 cloudServiceName="service and service.name"
                 onClose.bind="hideCreateProject"
