@@ -1490,6 +1490,7 @@ class PaasController(Controller):
             'subdomain': service.subdomain or '',
             'custom_domain': service.custom_domain or '',
             'error_message': service.error_message or '',
+            'has_project': bool(service.project_ids),
             'template': {
                 'id': service.template_id.id,
                 'name': service.template_id.name,
