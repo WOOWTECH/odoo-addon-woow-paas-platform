@@ -4,9 +4,11 @@ This module wraps ``langchain-openai``'s :class:`ChatOpenAI` to provide a
 simple interface for chat completions (both synchronous and streaming)
 against any OpenAI-compatible API endpoint.
 
-The public interface is intentionally kept identical to the previous
-hand-rolled HTTP client so that callers do not need any changes.
+Supports optional MCP tool calling via ``langchain-mcp-adapters`` and
+LangGraph's ``StateGraph`` with ``ToolNode``.
 """
+import asyncio
+import json
 import logging
 from typing import Generator, List, Optional
 
@@ -153,6 +155,156 @@ class AIClient:
 
     # -------------------- completions --------------------
 
+    # -------------------- tool calling --------------------
+
+    def chat_completion_with_tools(
+        self,
+        messages: list,
+        mcp_tools=None,
+    ) -> str:
+        """Chat completion with optional MCP tool calling.
+
+        Uses LangGraph agent to handle the tool-call loop. Falls back to
+        plain ``chat_completion`` when no tools are provided or on failure.
+
+        Args:
+            messages: LangChain message list.
+            mcp_tools: Odoo recordset of ``woow_paas_platform.mcp_tool``.
+
+        Returns:
+            The final assistant response text.
+        """
+        if not mcp_tools:
+            return self.chat_completion(messages)
+        server_config = _build_mcp_server_config(mcp_tools)
+        enabled_names = {t.name for t in mcp_tools}
+        try:
+            return asyncio.run(
+                self._async_agent_invoke(messages, server_config, enabled_names)
+            )
+        except Exception as exc:
+            _logger.warning("Tool calling failed, falling back to text-only: %s", exc)
+            return self.chat_completion(messages)
+
+    def chat_completion_stream_with_tools(
+        self,
+        messages: list,
+        mcp_tools=None,
+    ) -> Generator[dict, None, None]:
+        """Streaming chat completion with optional MCP tool calling.
+
+        Yields event dicts with ``type`` key:
+
+        - ``{"type": "text_chunk", "content": "..."}``
+        - ``{"type": "tool_call", "tool": "name", "args": {...}}``
+        - ``{"type": "tool_result", "tool": "name", "result": "..."}``
+
+        Falls back to text-only streaming when no tools or on failure.
+
+        Args:
+            messages: LangChain message list.
+            mcp_tools: Odoo recordset of ``woow_paas_platform.mcp_tool``.
+        """
+        if not mcp_tools:
+            for chunk in self.chat_completion_stream(messages):
+                yield {"type": "text_chunk", "content": chunk}
+            return
+
+        server_config = _build_mcp_server_config(mcp_tools)
+        enabled_names = {t.name for t in mcp_tools}
+        try:
+            events = asyncio.run(
+                self._async_agent_stream(messages, server_config, enabled_names)
+            )
+            yield from events
+        except Exception as exc:
+            _logger.warning(
+                "Tool calling stream failed, falling back to text-only: %s", exc
+            )
+            for chunk in self.chat_completion_stream(messages):
+                yield {"type": "text_chunk", "content": chunk}
+
+    async def _async_agent_invoke(self, messages, server_config, enabled_names):
+        """Build LangGraph agent, invoke, and return final text."""
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        async with MultiServerMCPClient(server_config) as client:
+            tools = await client.get_tools()
+            tools = [t for t in tools if t.name in enabled_names]
+            if not tools:
+                result = self.llm.invoke(messages)
+                return result.content
+            graph = self._build_agent_graph(tools)
+            result = await graph.ainvoke({"messages": messages})
+            return result["messages"][-1].content
+
+    async def _async_agent_stream(self, messages, server_config, enabled_names):
+        """Build LangGraph agent, stream updates, return event list."""
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        events = []
+        async with MultiServerMCPClient(server_config) as client:
+            tools = await client.get_tools()
+            tools = [t for t in tools if t.name in enabled_names]
+            if not tools:
+                # No matching tools, just invoke normally
+                result = self.llm.invoke(messages)
+                events.append({"type": "text_chunk", "content": result.content})
+                return events
+            graph = self._build_agent_graph(tools)
+            async for chunk in graph.astream(
+                {"messages": messages}, stream_mode="updates"
+            ):
+                for node_name, node_output in chunk.items():
+                    for msg in node_output.get("messages", []):
+                        if (
+                            hasattr(msg, "tool_calls")
+                            and msg.tool_calls
+                        ):
+                            for tc in msg.tool_calls:
+                                events.append({
+                                    "type": "tool_call",
+                                    "tool": tc["name"],
+                                    "args": tc.get("args", {}),
+                                })
+                        elif node_name == "tools" and hasattr(msg, "content"):
+                            events.append({
+                                "type": "tool_result",
+                                "tool": getattr(msg, "name", "unknown"),
+                                "result": str(msg.content),
+                            })
+                        elif (
+                            node_name == "call_model"
+                            and hasattr(msg, "content")
+                            and msg.content
+                            and not getattr(msg, "tool_calls", None)
+                        ):
+                            events.append({
+                                "type": "text_chunk",
+                                "content": msg.content,
+                            })
+        return events
+
+    def _build_agent_graph(self, tools):
+        """Build a LangGraph StateGraph with ToolNode for tool calling."""
+        from langgraph.graph import START, MessagesState, StateGraph
+        from langgraph.prebuilt import ToolNode, tools_condition
+
+        llm_with_tools = self.llm.bind_tools(tools)
+
+        def call_model(state):
+            return {"messages": [llm_with_tools.invoke(state["messages"])]}
+
+        builder = StateGraph(MessagesState)
+        builder.add_node("call_model", call_model)
+        builder.add_node("tools", ToolNode(tools))
+        builder.add_edge(START, "call_model")
+        builder.add_conditional_edges("call_model", tools_condition)
+        builder.add_edge("tools", "call_model")
+        return builder.compile(recursion_limit=5)
+
+    # -------------------- completions --------------------
+
     def chat_completion(self, messages: list) -> str:
         """Send a chat completion request and return the full response.
 
@@ -190,6 +342,24 @@ class AIClient:
                     yield chunk.content
         except Exception as exc:
             raise _translate_exception(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _build_mcp_server_config(mcp_tools):
+    """Build MultiServerMCPClient config from an Odoo mcp_tool recordset.
+
+    Groups tools by their server and returns a dict keyed by server name,
+    with each value being the server's connection config.
+    """
+    servers = {}
+    for tool in mcp_tools:
+        server = tool.server_id
+        if server.name not in servers:
+            servers[server.name] = server._get_mcp_client_config()
+    return servers
 
 
 # ---------------------------------------------------------------------------
