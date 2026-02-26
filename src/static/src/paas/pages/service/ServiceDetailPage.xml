@@ -131,6 +131,12 @@
                         <WoowIcon name="'settings'" size="18"/>
                         Configuration
                     </button>
+                    <button
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'mcp-servers'}"
+                        t-on-click="() => this.setTab('mcp-servers')">
+                        <WoowIcon name="'extension'" size="18"/>
+                        MCP Servers
+                    </button>
                 </div>
 
                 <!-- Tab Content -->
@@ -143,6 +149,10 @@
                         service="service"
                         workspaceId="props.workspaceId"
                         onSave.bind="handleConfigSave"/>
+                    <McpServersTab
+                        t-if="currentTab === 'mcp-servers'"
+                        service="service"
+                        workspaceId="props.workspaceId"/>
                 </div>
             </t>
 

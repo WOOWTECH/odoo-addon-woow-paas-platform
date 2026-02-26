@@ -428,8 +428,16 @@ class AiAssistantController(Controller):
 
         # Pre-fetch MCP tools and build config before the generator
         # (ORM cursor may not be valid inside the streaming generator).
+        # Combine system-scope tools from the assistant and user-scope tools
+        # from the cloud service linked to this channel's task/project.
         from ..models.ai_client import _build_mcp_server_config
         mcp_tools = assistant.get_enabled_mcp_tools()
+
+        # Also gather user-scope MCP tools from the cloud service
+        user_mcp_tools = self._get_user_mcp_tools_for_channel(channel)
+        if user_mcp_tools:
+            mcp_tools = (mcp_tools | user_mcp_tools) if mcp_tools else user_mcp_tools
+
         mcp_server_config = None
         mcp_tool_names = None
         if mcp_tools:
@@ -602,6 +610,31 @@ class AiAssistantController(Controller):
             parts.append(f'- Configuration (Helm Values):\n```json\n{service.helm_values}\n```')
 
         return '\n'.join(parts)
+
+    def _get_user_mcp_tools_for_channel(self, channel):
+        """Get user-scope MCP tools from the cloud service linked to this channel.
+
+        Follows the chain: channel → task → project → cloud_service → user_mcp_servers → tools.
+        Returns an MCP tool recordset, or empty recordset if not applicable.
+        """
+        McpTool = request.env['woow_paas_platform.mcp_tool'].sudo()
+        task = request.env['project.task'].sudo().search([
+            ('channel_id', '=', channel.id),
+        ], limit=1)
+        if not task or not task.project_id or not task.project_id.cloud_service_id:
+            return McpTool.browse()
+
+        service = task.project_id.cloud_service_id
+        servers = service.user_mcp_server_ids.filtered(
+            lambda s: s.active and s.state == 'connected'
+        )
+        if not servers:
+            return McpTool.browse()
+
+        return McpTool.search([
+            ('server_id', 'in', servers.ids),
+            ('active', '=', True),
+        ])
 
     # ==================== AI Connection Status ====================
 

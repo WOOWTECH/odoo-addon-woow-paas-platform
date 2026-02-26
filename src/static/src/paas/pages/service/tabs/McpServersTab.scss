@@ -1,0 +1,228 @@
+.o_woow_mcp_tab {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+
+    &__header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+
+        h3 {
+            margin: 0 0 0.25rem 0;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+    }
+
+    &__subtitle {
+        margin: 0;
+        color: $woow-text-secondary;
+        font-size: 0.85rem;
+    }
+
+    &__loading,
+    &__error {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 1.5rem;
+        color: $woow-text-secondary;
+    }
+}
+
+// Form
+.o_woow_mcp_form_card {
+    border: 1px solid $woow-primary;
+}
+
+.o_woow_mcp_form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+
+    h4 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+    }
+
+    &__error {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        background: #fef2f2;
+        border-radius: $woow-radius-default;
+        color: #dc2626;
+        font-size: 0.85rem;
+    }
+
+    &__field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        flex: 1;
+
+        label {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: $woow-text-secondary;
+        }
+
+        input, select, textarea {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid $woow-border-light;
+            border-radius: $woow-radius-default;
+            font-size: 0.875rem;
+            font-family: $woow-font-body;
+            background: $woow-card-light;
+            transition: border-color 0.2s;
+
+            &:focus {
+                outline: none;
+                border-color: $woow-primary;
+            }
+        }
+
+        textarea {
+            resize: vertical;
+        }
+    }
+
+    &__row {
+        display: flex;
+        gap: 0.75rem;
+    }
+
+    &__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        padding-top: 0.25rem;
+    }
+}
+
+// Empty state
+.o_woow_mcp_empty {
+    &__content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 2rem;
+        gap: 0.5rem;
+        color: $woow-text-secondary;
+
+        h4 {
+            margin: 0.5rem 0 0;
+            font-size: 1rem;
+            color: $woow-text-primary;
+        }
+
+        p {
+            margin: 0 0 0.5rem;
+            font-size: 0.875rem;
+        }
+    }
+}
+
+// Server card
+.o_woow_mcp_server_card {
+    &:hover {
+        border-color: $woow-primary;
+    }
+}
+
+.o_woow_mcp_server {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+
+    &__info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    &__name_row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.25rem;
+    }
+
+    &__name {
+        font-weight: 600;
+        font-size: 0.95rem;
+    }
+
+    &__url {
+        font-size: 0.8rem;
+        color: $woow-text-secondary;
+        font-family: monospace;
+        word-break: break-all;
+    }
+
+    &__desc {
+        font-size: 0.85rem;
+        color: $woow-text-secondary;
+        margin-top: 0.25rem;
+    }
+
+    &__meta {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-top: 0.5rem;
+        font-size: 0.8rem;
+        color: $woow-text-secondary;
+    }
+
+    &__transport {
+        padding: 0.1rem 0.5rem;
+        background: rgba($woow-primary, 0.08);
+        border-radius: $woow-radius-full;
+        font-weight: 500;
+    }
+
+    &__tools {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    &__tool_list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        margin-top: 0.5rem;
+    }
+
+    &__tool_tag {
+        padding: 0.15rem 0.5rem;
+        background: $woow-background-light;
+        border-radius: $woow-radius-full;
+        font-size: 0.75rem;
+        font-family: monospace;
+        color: $woow-text-secondary;
+    }
+
+    &__actions {
+        display: flex;
+        gap: 0.25rem;
+        flex-shrink: 0;
+    }
+
+    &__error {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        background: #fef2f2;
+        border-radius: $woow-radius-default;
+        color: #dc2626;
+        font-size: 0.8rem;
+    }
+}

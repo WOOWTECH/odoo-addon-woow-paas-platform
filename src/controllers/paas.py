@@ -947,6 +947,179 @@ class PaasController(Controller):
 
         return self._get_service_revisions(service)
 
+    # ==================== MCP Server API (per-service) ====================
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/services/<int:service_id>/mcp-servers",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_service_mcp_servers(
+        self,
+        workspace_id: int,
+        service_id: int,
+        action: str = 'list',
+        **kw: Any,
+    ) -> dict[str, Any]:
+        """CRUD operations for user-scope MCP servers on a cloud service."""
+        user = request.env.user
+        Workspace = request.env['woow_paas_platform.workspace']
+        CloudService = request.env['woow_paas_platform.cloud_service']
+
+        workspace = Workspace.browse(workspace_id)
+        if not workspace.exists():
+            return {'success': False, 'error': 'Workspace not found or access denied'}
+
+        access = workspace.check_user_access(user)
+        if not access:
+            return {'success': False, 'error': 'Workspace not found or access denied'}
+
+        service = CloudService.browse(service_id)
+        if not service.exists() or service.workspace_id.id != workspace_id:
+            return {'success': False, 'error': 'Service not found'}
+
+        if action == 'list':
+            return self._list_mcp_servers(service)
+        elif action == 'create':
+            if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+                return {'success': False, 'error': 'Permission denied'}
+            return self._create_mcp_server(service, kw)
+        elif action == 'update':
+            if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+                return {'success': False, 'error': 'Permission denied'}
+            return self._update_mcp_server(service, kw)
+        elif action == 'delete':
+            if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+                return {'success': False, 'error': 'Permission denied'}
+            return self._delete_mcp_server(service, kw)
+        elif action == 'sync':
+            if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+                return {'success': False, 'error': 'Permission denied'}
+            return self._sync_mcp_server(service, kw)
+        elif action == 'test':
+            return self._test_mcp_server(service, kw)
+        else:
+            return {'success': False, 'error': f'Unknown action: {action}'}
+
+    def _list_mcp_servers(self, service) -> dict[str, Any]:
+        servers = service.sudo().user_mcp_server_ids.filtered(lambda s: s.active)
+        return {
+            'success': True,
+            'data': [self._format_mcp_server(s) for s in servers],
+        }
+
+    def _create_mcp_server(self, service, params: dict) -> dict[str, Any]:
+        name = params.get('name', '').strip()
+        url = params.get('url', '').strip()
+        if not name or not url:
+            return {'success': False, 'error': 'Name and URL are required'}
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        server = McpServer.create({
+            'name': name,
+            'url': url,
+            'transport': params.get('transport', 'sse'),
+            'api_key': params.get('api_key', ''),
+            'headers_json': params.get('headers_json', ''),
+            'description': params.get('description', ''),
+            'scope': 'user',
+            'cloud_service_id': service.id,
+        })
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _update_mcp_server(self, service, params: dict) -> dict[str, Any]:
+        server_id = params.get('server_id')
+        if not server_id:
+            return {'success': False, 'error': 'server_id is required'}
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        server = McpServer.browse(int(server_id))
+        if not server.exists() or server.cloud_service_id.id != service.id:
+            return {'success': False, 'error': 'MCP Server not found'}
+
+        vals = {}
+        for field in ('name', 'url', 'transport', 'api_key', 'headers_json', 'description'):
+            if field in params:
+                vals[field] = params[field]
+        if vals:
+            server.write(vals)
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _delete_mcp_server(self, service, params: dict) -> dict[str, Any]:
+        server_id = params.get('server_id')
+        if not server_id:
+            return {'success': False, 'error': 'server_id is required'}
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        server = McpServer.browse(int(server_id))
+        if not server.exists() or server.cloud_service_id.id != service.id:
+            return {'success': False, 'error': 'MCP Server not found'}
+
+        server.unlink()
+        return {'success': True}
+
+    def _sync_mcp_server(self, service, params: dict) -> dict[str, Any]:
+        server_id = params.get('server_id')
+        if not server_id:
+            return {'success': False, 'error': 'server_id is required'}
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        server = McpServer.browse(int(server_id))
+        if not server.exists() or server.cloud_service_id.id != service.id:
+            return {'success': False, 'error': 'MCP Server not found'}
+
+        try:
+            server.action_sync_tools()
+        except Exception as e:
+            _logger.warning('MCP sync failed for server %s: %s', server.name, e)
+            return {'success': False, 'error': f'Sync failed: {e}'}
+
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _test_mcp_server(self, service, params: dict) -> dict[str, Any]:
+        server_id = params.get('server_id')
+        if not server_id:
+            return {'success': False, 'error': 'server_id is required'}
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        server = McpServer.browse(int(server_id))
+        if not server.exists() or server.cloud_service_id.id != service.id:
+            return {'success': False, 'error': 'MCP Server not found'}
+
+        try:
+            server.action_test_connection()
+        except Exception as e:
+            return {'success': False, 'error': f'Connection test failed: {e}'}
+
+        return {
+            'success': True,
+            'data': {
+                'state': server.state,
+                'state_message': server.state_message or '',
+            },
+        }
+
+    @staticmethod
+    def _format_mcp_server(server) -> dict[str, Any]:
+        tools = []
+        for t in server.tool_ids.filtered(lambda x: x.active):
+            tools.append({
+                'id': t.id,
+                'name': t.name,
+                'description': t.description or '',
+            })
+        return {
+            'id': server.id,
+            'name': server.name,
+            'url': server.url,
+            'transport': server.transport,
+            'description': server.description or '',
+            'state': server.state,
+            'state_message': server.state_message or '',
+            'tool_count': server.tool_count,
+            'tools': tools,
+            'last_sync': server.last_sync.isoformat() if server.last_sync else None,
+        }
+
     # ==================== Cloud Service Helpers ====================
 
     @staticmethod

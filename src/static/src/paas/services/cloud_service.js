@@ -406,4 +406,158 @@ export const cloudService = reactive({
     isLoading(operation) {
         return this.operationLoading[operation] || false;
     },
+
+    // ==================== MCP Servers ====================
+
+    /**
+     * Fetch MCP servers for a service
+     * @param {number} workspaceId
+     * @param {number} serviceId
+     * @returns {Promise<{success: boolean, data?: Array, error?: string}>}
+     */
+    async fetchMcpServers(workspaceId, serviceId) {
+        this.operationLoading.fetchMcpServers = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/mcp-servers`,
+                { action: "list" },
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.fetchMcpServers = false;
+        }
+    },
+
+    /**
+     * Create an MCP server for a service
+     * @param {number} workspaceId
+     * @param {number} serviceId
+     * @param {Object} payload - { name, url, transport?, api_key?, description? }
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async createMcpServer(workspaceId, serviceId, payload) {
+        this.operationLoading.createMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/mcp-servers`,
+                { action: "create", ...payload },
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.createMcpServer = false;
+        }
+    },
+
+    /**
+     * Update an MCP server
+     * @param {number} workspaceId
+     * @param {number} serviceId
+     * @param {number} serverId
+     * @param {Object} payload - fields to update
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async updateMcpServer(workspaceId, serviceId, serverId, payload) {
+        this.operationLoading.updateMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/mcp-servers`,
+                { action: "update", server_id: serverId, ...payload },
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.updateMcpServer = false;
+        }
+    },
+
+    /**
+     * Delete an MCP server
+     * @param {number} workspaceId
+     * @param {number} serviceId
+     * @param {number} serverId
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async deleteMcpServer(workspaceId, serviceId, serverId) {
+        this.operationLoading.deleteMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/mcp-servers`,
+                { action: "delete", server_id: serverId },
+            );
+            if (result.success) {
+                return { success: true };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.deleteMcpServer = false;
+        }
+    },
+
+    /**
+     * Sync tools from an MCP server
+     * @param {number} workspaceId
+     * @param {number} serviceId
+     * @param {number} serverId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async syncMcpServer(workspaceId, serviceId, serverId) {
+        this.operationLoading.syncMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/mcp-servers`,
+                { action: "sync", server_id: serverId },
+                60000,  // 60s timeout for tool sync
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.syncMcpServer = false;
+        }
+    },
+
+    /**
+     * Test MCP server connection
+     * @param {number} workspaceId
+     * @param {number} serviceId
+     * @param {number} serverId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async testMcpServer(workspaceId, serviceId, serverId) {
+        this.operationLoading.testMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/mcp-servers`,
+                { action: "test", server_id: serverId },
+                60000,
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.testMcpServer = false;
+        }
+    },
 });

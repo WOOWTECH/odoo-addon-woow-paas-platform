@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { OverviewTab } from "./tabs/OverviewTab";
 import { ConfigurationTab } from "./tabs/ConfigurationTab";
+import { McpServersTab } from "./tabs/McpServersTab";
 import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
@@ -38,6 +39,7 @@ export class ServiceDetailPage extends Component {
         StatusBadge,
         OverviewTab,
         ConfigurationTab,
+        McpServersTab,
         DeleteServiceModal,
         RollbackModal,
         EditDomainModal,

@@ -132,6 +132,14 @@ class CloudService(models.Model):
         string='Support Projects',
     )
 
+    # User MCP Servers
+    user_mcp_server_ids = fields.One2many(
+        comodel_name='woow_paas_platform.mcp_server',
+        inverse_name='cloud_service_id',
+        string='MCP Servers',
+        domain=[('scope', '=', 'user')],
+    )
+
     # Timestamps
     deployed_at = fields.Datetime(
         string='Deployed At',
