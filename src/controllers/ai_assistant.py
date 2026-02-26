@@ -470,7 +470,7 @@ class AiAssistantController(Controller):
                                 'chunk': chunk, 'done': False,
                             })
                             yield f'data: {event_data}\n\n'
-                        elif event_type in ('tool_call', 'tool_result'):
+                        elif event_type in ('tool_call', 'tool_result', 'tool_error'):
                             yield f'data: {json.dumps({**event, "done": False})}\n\n'
                 else:
                     for chunk in client.chat_completion_stream(messages):
