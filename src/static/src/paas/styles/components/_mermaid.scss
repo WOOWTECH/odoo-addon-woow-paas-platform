@@ -1,0 +1,90 @@
+// =============================================================================
+// Mermaid Diagram Container
+// Interactive container with zoom, pan, reset, and toolbar support.
+// =============================================================================
+
+.o_woow_mermaid {
+    position: relative;
+    border: 1px solid $woow-border-light;
+    border-radius: 8px;
+    background: #fafbfc;
+    overflow: hidden;
+    max-height: 400px;
+    margin: 8px 0;
+
+    // SVG wrapper - supports transform for zoom/pan
+    &__svg_wrapper {
+        transform-origin: 0 0;
+        cursor: grab;
+
+        &:active {
+            cursor: grabbing;
+        }
+    }
+
+    // Toolbar - appears on container hover
+    &__toolbar {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        display: flex;
+        gap: 4px;
+        z-index: 1;
+        opacity: 0;
+        transition: opacity 0.2s;
+    }
+
+    &:hover &__toolbar {
+        opacity: 1;
+    }
+
+    // Toolbar buttons
+    &__btn {
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 4px;
+        cursor: pointer;
+        line-height: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+
+        .material-symbols-outlined {
+            font-size: 18px;
+        }
+
+        &:hover {
+            background: #fff;
+        }
+    }
+
+    // Loading state
+    &--loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100px;
+        color: $woow-text-secondary;
+    }
+
+    // Error state (class used in mermaid_loader.js _showError)
+    &_error,
+    &__error {
+        background: #fff5f5;
+        border: 1px solid #fc8181;
+        border-radius: 4px;
+        padding: 8px 12px;
+        margin: 8px;
+        color: #c53030;
+        font-size: 13px;
+    }
+
+    // Raw code fallback (shown on error)
+    pre {
+        margin: 0;
+        padding: 12px;
+        font-size: 13px;
+        overflow-x: auto;
+    }
+}
