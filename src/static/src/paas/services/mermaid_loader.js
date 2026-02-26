@@ -136,7 +136,9 @@ export async function renderMermaidBlocks(containerEl) {
 
         try {
             const { svg } = await window.mermaid.render(uniqueId, diagramSource);
-            block.innerHTML = svg;
+            block.innerHTML = `<div class="o_woow_mermaid__svg_wrapper">${svg}</div>`;
+            _addToolbar(block);
+            _attachInteraction(block);
         } catch (e) {
             console.error("[mermaid_loader] Failed to render mermaid diagram:", e);
             _showError(block, e.message || "Failed to render diagram");
@@ -144,6 +146,155 @@ export async function renderMermaidBlocks(containerEl) {
 
         block.setAttribute("data-processed", "true");
     }
+}
+
+/**
+ * Inject the zoom/pan/reset toolbar into a rendered mermaid container.
+ *
+ * @param {HTMLElement} block - The mermaid container element
+ * @private
+ */
+function _addToolbar(block) {
+    const toolbar = document.createElement("div");
+    toolbar.className = "o_woow_mermaid__toolbar";
+    toolbar.innerHTML = `
+        <button class="o_woow_mermaid__btn" data-action="zoom-in" title="放大">
+            <span class="material-symbols-outlined">zoom_in</span>
+        </button>
+        <button class="o_woow_mermaid__btn" data-action="zoom-out" title="縮小">
+            <span class="material-symbols-outlined">zoom_out</span>
+        </button>
+        <button class="o_woow_mermaid__btn" data-action="reset" title="重置">
+            <span class="material-symbols-outlined">fit_screen</span>
+        </button>
+    `;
+    block.prepend(toolbar);
+}
+
+/**
+ * Apply CSS transform for zoom and pan to an element.
+ *
+ * @param {HTMLElement} el - Target element
+ * @param {number} scale - Zoom scale factor
+ * @param {number} x - Horizontal translation in pixels
+ * @param {number} y - Vertical translation in pixels
+ * @private
+ */
+function _applyTransform(el, scale, x, y) {
+    el.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+}
+
+/**
+ * Attach interactive zoom, pan, and reset handlers to a mermaid container.
+ *
+ * Supports:
+ * - Mouse wheel zoom (0.5x to 3x)
+ * - Left-click drag to pan
+ * - Double-click to reset
+ * - Toolbar buttons for zoom-in, zoom-out, and reset
+ *
+ * @param {HTMLElement} container - The mermaid container element
+ * @private
+ */
+function _attachInteraction(container) {
+    let scale = 1;
+    let translateX = 0;
+    let translateY = 0;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+
+    const svgWrapper = container.querySelector(".o_woow_mermaid__svg_wrapper");
+    if (!svgWrapper) {
+        return;
+    }
+
+    // --- Wheel zoom ---
+    const onWheel = (e) => {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        scale = Math.max(0.5, Math.min(3, scale + delta));
+        _applyTransform(svgWrapper, scale, translateX, translateY);
+    };
+    container.addEventListener("wheel", onWheel, { passive: false });
+
+    // --- Drag pan ---
+    const onMouseDown = (e) => {
+        // Only respond to left button; ignore toolbar button clicks
+        if (e.button !== 0 || e.target.closest(".o_woow_mermaid__toolbar")) {
+            return;
+        }
+        isDragging = true;
+        startX = e.clientX - translateX;
+        startY = e.clientY - translateY;
+        container.style.cursor = "grabbing";
+    };
+
+    const onMouseMove = (e) => {
+        if (!isDragging) {
+            return;
+        }
+        translateX = e.clientX - startX;
+        translateY = e.clientY - startY;
+        _applyTransform(svgWrapper, scale, translateX, translateY);
+    };
+
+    const onMouseUp = () => {
+        if (!isDragging) {
+            return;
+        }
+        isDragging = false;
+        container.style.cursor = "";
+    };
+
+    container.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+
+    // --- Double-click reset ---
+    const onDblClick = () => {
+        scale = 1;
+        translateX = 0;
+        translateY = 0;
+        _applyTransform(svgWrapper, scale, translateX, translateY);
+    };
+    container.addEventListener("dblclick", onDblClick);
+
+    // --- Toolbar buttons ---
+    const onToolbarClick = (e) => {
+        const btn = e.target.closest("[data-action]");
+        if (!btn) {
+            return;
+        }
+        const action = btn.getAttribute("data-action");
+        if (action === "zoom-in") {
+            scale = Math.min(3, scale + 0.2);
+        } else if (action === "zoom-out") {
+            scale = Math.max(0.5, scale - 0.2);
+        } else if (action === "reset") {
+            scale = 1;
+            translateX = 0;
+            translateY = 0;
+        }
+        _applyTransform(svgWrapper, scale, translateX, translateY);
+    };
+
+    const toolbar = container.querySelector(".o_woow_mermaid__toolbar");
+    if (toolbar) {
+        toolbar.addEventListener("click", onToolbarClick);
+    }
+
+    // Store cleanup function for potential future use
+    container._mermaidCleanup = () => {
+        container.removeEventListener("wheel", onWheel);
+        container.removeEventListener("mousedown", onMouseDown);
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        container.removeEventListener("dblclick", onDblClick);
+        if (toolbar) {
+            toolbar.removeEventListener("click", onToolbarClick);
+        }
+    };
 }
 
 /**

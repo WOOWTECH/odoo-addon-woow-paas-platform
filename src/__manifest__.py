@@ -38,6 +38,7 @@
             'woow_paas_platform/static/src/paas/styles/pages/*.scss',
             'woow_paas_platform/static/src/paas/styles/99_main.scss',
             # Component-specific SCSS (after base styles)
+            'woow_paas_platform/static/src/paas/styles/components/*.scss',
             'woow_paas_platform/static/src/paas/components/**/*.scss',
             'woow_paas_platform/static/src/paas/pages/**/*.scss',
             # Third-party libraries (must load before app JS)
