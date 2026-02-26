@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import html
 import json
@@ -425,13 +426,51 @@ class AiAssistantController(Controller):
         uid = request.env.uid
         context = dict(request.env.context)
 
+        # Pre-fetch MCP tools and build config before the generator
+        # (ORM cursor may not be valid inside the streaming generator).
+        from ..models.ai_client import _build_mcp_server_config
+        mcp_tools = assistant.get_enabled_mcp_tools()
+        mcp_server_config = None
+        mcp_tool_names = None
+        if mcp_tools:
+            mcp_server_config = _build_mcp_server_config(mcp_tools)
+            mcp_tool_names = {t.name for t in mcp_tools}
+
         def generate():
             full_response = ''
             try:
-                for chunk in client.chat_completion_stream(messages):
-                    full_response += chunk
-                    event_data = json.dumps({'chunk': chunk, 'done': False})
-                    yield f'data: {event_data}\n\n'
+                tool_events = None
+                if mcp_server_config:
+                    try:
+                        tool_events = asyncio.run(
+                            client._async_agent_stream(
+                                messages, mcp_server_config, mcp_tool_names,
+                            )
+                        )
+                    except Exception as exc:
+                        _logger.warning(
+                            'MCP tool stream failed, falling back to text-only: %s', exc,
+                        )
+
+                if tool_events is not None:
+                    for event in tool_events:
+                        event_type = event.get('type', 'text_chunk')
+                        if event_type == 'text_chunk':
+                            chunk = event.get('content', '')
+                            full_response += chunk
+                            event_data = json.dumps({
+                                'chunk': chunk, 'done': False,
+                            })
+                            yield f'data: {event_data}\n\n'
+                        elif event_type in ('tool_call', 'tool_result'):
+                            yield f'data: {json.dumps({**event, "done": False})}\n\n'
+                else:
+                    for chunk in client.chat_completion_stream(messages):
+                        full_response += chunk
+                        event_data = json.dumps({
+                            'chunk': chunk, 'done': False,
+                        })
+                        yield f'data: {event_data}\n\n'
             except AIClientError as exc:
                 error_data = json.dumps({'error': exc.message, 'done': True})
                 yield f'data: {error_data}\n\n'
