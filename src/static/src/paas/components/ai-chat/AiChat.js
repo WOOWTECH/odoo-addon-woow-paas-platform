@@ -1,10 +1,11 @@
 /** @odoo-module **/
 
-import { Component, useState, useRef, onMounted, onWillUnmount } from "@odoo/owl";
+import { Component, useState, useRef, onMounted, onWillUnmount, onPatched } from "@odoo/owl";
 import { AiMentionDropdown } from "../ai-mention/AiMentionDropdown";
 import { aiService } from "../../services/ai_service";
 import { safeHtml } from "../../services/html_sanitize";
 import { parseMarkdown } from "../../services/markdown_parser";
+import { renderMermaidBlocks } from "../../services/mermaid_loader";
 
 const ERROR_MESSAGES = {
     channel_not_found: "聊天頻道不存在，請重新整理頁面。",
@@ -72,6 +73,10 @@ export class AiChat extends Component {
             if (this._connectedTimer) {
                 clearTimeout(this._connectedTimer);
             }
+        });
+
+        onPatched(() => {
+            this._renderMermaidInMessages();
         });
     }
 
@@ -593,8 +598,71 @@ export class AiChat extends Component {
         };
     }
 
+    // ==================== Mermaid Rendering ====================
+
+    /**
+     * Scan the message list for unprocessed mermaid blocks and trigger rendering.
+     * Uses requestAnimationFrame to avoid blocking the UI thread.
+     * The data-processed attribute prevents re-rendering on subsequent patch cycles.
+     */
+    _renderMermaidInMessages() {
+        const messageList = this.messageListRef.el;
+        if (!messageList) return;
+
+        const pending = messageList.querySelectorAll(".o_woow_mermaid:not([data-processed])");
+        if (pending.length === 0) return;
+
+        requestAnimationFrame(() => {
+            renderMermaidBlocks(messageList);
+        });
+    }
+
+    /**
+     * Replace incomplete mermaid blocks in streaming text with a placeholder.
+     * Complete blocks are left as-is for parseMarkdown to handle.
+     * @param {string} text - The raw streaming text
+     * @returns {string} Processed text with placeholders for incomplete blocks
+     */
+    _handleStreamingMermaidBlocks(text) {
+        const parts = text.split(/(```mermaid\n)/);
+        let result = "";
+        let inMermaidBlock = false;
+
+        for (const part of parts) {
+            if (part === "```mermaid\n") {
+                inMermaidBlock = true;
+                result += part;
+                continue;
+            }
+
+            if (inMermaidBlock) {
+                // Check if this part contains the closing ```
+                const closeIdx = part.indexOf("\n```");
+                if (closeIdx !== -1) {
+                    // Block is complete - include it as-is
+                    result += part;
+                    inMermaidBlock = false;
+                } else {
+                    // Block is incomplete - append placeholder and close the code fence
+                    result += part + "\n*(圖表載入中...)*\n```";
+                    inMermaidBlock = false;
+                }
+            } else {
+                result += part;
+            }
+        }
+
+        return result;
+    }
+
     get streamingHtml() {
-        return parseMarkdown(this.state.streamingText);  // Real-time Markdown conversion
+        let text = this.state.streamingText;
+        if (!text) return "";
+
+        // Handle incomplete mermaid blocks during streaming
+        text = this._handleStreamingMermaidBlocks(text);
+
+        return parseMarkdown(text);
     }
 
     get connectionIndicator() {
