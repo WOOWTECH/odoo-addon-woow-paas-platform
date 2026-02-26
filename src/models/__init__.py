@@ -11,3 +11,5 @@ from . import oauth_client
 from . import oauth_token
 from . import oauth_code
 from . import smart_home
+from . import mcp_server
+from . import mcp_tool

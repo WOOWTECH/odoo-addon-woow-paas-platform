@@ -62,6 +62,20 @@
                             </div>
                         </setting>
                     </block>
+                    <block title="MCP Servers" name="mcp_servers">
+                        <setting string="MCP Server Management"
+                                 help="Manage MCP (Model Context Protocol) servers that provide external tools for AI Assistants.">
+                            <div class="content-group">
+                                <div class="mt8">
+                                    <button name="%(action_mcp_server)d"
+                                            type="action"
+                                            string="Manage MCP Servers"
+                                            class="btn-link"
+                                            icon="fa-arrow-right"/>
+                                </div>
+                            </div>
+                        </setting>
+                    </block>
                 </app>
             </xpath>
         </field>
