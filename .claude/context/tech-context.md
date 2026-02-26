@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-15T09:39:26Z
-version: 1.5
+last_updated: 2026-02-26T15:29:18Z
+version: 1.6
 author: Claude Code PM System
 ---
 
@@ -22,6 +22,7 @@ author: Claude Code PM System
 - **Material Symbols** - Icon font
 - **marked.js** - Markdown to HTML parser (bundled in `lib/`)
 - **DOMPurify** - HTML sanitization library (bundled in `lib/`)
+- **mermaid.js** - Diagram/chart rendering (~2MB, lazy loaded from `static/lib/mermaid/`)
 
 ### PaaS Operator Service
 - **FastAPI** - Async Python web framework for operator API
@@ -40,13 +41,14 @@ author: Claude Code PM System
 
 ### Odoo Module Dependencies
 ```python
-'depends': ['base', 'web']
+'depends': ['base', 'web', 'ai_base_gt']
 ```
 
 | Module | Purpose |
 |--------|---------|
 | `base` | Core Odoo functionality, models, access control |
 | `web` | Web client, assets, OWL framework |
+| `ai_base_gt` | AI configuration (`ai.config`), assistant (`ai.assistant`), thread management |
 
 ### External Dependencies (CDN)
 | Resource | Purpose |
@@ -59,6 +61,11 @@ author: Claude Code PM System
 |---------|---------|
 | marked.min.js | Markdown → HTML parsing |
 | purify.min.js | DOMPurify HTML sanitization |
+
+### Lazy-Loaded Libraries (`static/lib/`)
+| Library | Purpose |
+|---------|---------|
+| mermaid/mermaid.min.js | Mermaid diagram rendering (~2MB, loaded on demand via dynamic script tag) |
 
 ## Module Metadata
 
@@ -268,6 +275,7 @@ Odoo (Frontend) ──HTTP──▶ PaaS Operator (FastAPI) ──Helm──▶ 
 ```
 
 ## Update History
+- 2026-02-26: Added mermaid.js (lazy-loaded), ai_base_gt dependency, OpenAI Compatible provider
 - 2026-02-15: Added AI Assistant components (pages, services, libs), Serena integration, version bump, bundled libraries
 - 2026-02-08: Full component inventory update - added marketplace, service, configure pages; modal, feature component groups; utils service
 - 2026-02-08: Updated API patterns for RESTful refactor, added cloud service components
