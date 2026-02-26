@@ -122,7 +122,8 @@ export async function renderMermaidBlocks(containerEl) {
 
         let diagramSource;
         try {
-            diagramSource = atob(encodedContent);
+            const bytes = Uint8Array.from(atob(encodedContent), (c) => c.charCodeAt(0));
+            diagramSource = new TextDecoder().decode(bytes);
         } catch (e) {
             console.error("[mermaid_loader] Failed to decode base64 content:", e);
             _showError(block, "圖表資料解碼失敗");
