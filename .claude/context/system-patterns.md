@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-15T09:39:26Z
-version: 1.3
+last_updated: 2026-02-26T15:29:18Z
+version: 1.4
 author: Claude Code PM System
 ---
 
@@ -229,7 +229,52 @@ helm_value_specs = fields.Text()  # JSON defining allowed keys + types + default
 
 Frontend `HelmValueForm` component renders form inputs based on specs, and backend silently filters unauthorized keys on creation/update.
 
+## AI Integration Pattern (ai_base_gt)
+
+混合架構：使用 `ai_base_gt` 的 Odoo 層管理配置和助手身份，保留 LangChain 做 AI 呼叫。
+
+```python
+# ai_client.py - Factory method pattern
+class AiClient:
+    @classmethod
+    def from_assistant(cls, assistant_record):
+        """Build client from ai.assistant record."""
+        config = assistant_record.ai_config_id
+        return cls(
+            api_key=config.api_key,
+            model=config.model_id,
+            base_url=config.api_base_url,
+            system_prompt=assistant_record.system_prompt,
+        )
+```
+
+Key models from `ai_base_gt`:
+- `ai.config` — API provider 設定（key, model, base_url, type）
+- `ai.assistant` — 助手定義（system prompt, linked config）
+
+## Lazy Loading Pattern (Heavy Libraries)
+
+大型 JS library 放在 `static/lib/`（非 `static/src/paas/`）避免被 `__manifest__.py` glob 自動打包：
+
+```javascript
+// mermaid_loader.js
+class MermaidLoader {
+    async load() {
+        if (window.mermaid) return;
+        return new Promise((resolve) => {
+            const script = document.createElement('script');
+            script.src = '/woow_paas_platform/static/lib/mermaid/mermaid.min.js';
+            script.onload = () => resolve();
+            document.head.appendChild(script);
+        });
+    }
+}
+```
+
+適用於：mermaid.js (~2MB) 等按需載入的資源。
+
 ## Update History
+- 2026-02-26: Added AI integration pattern (ai_base_gt), lazy loading pattern (mermaid)
 - 2026-02-15: Added module hooks, migration, and helm value restriction patterns
 - 2026-02-08: Updated external service pattern from ORM model to standalone service class
 - 2026-02-08: Added RESTful API endpoint pattern and external service integration pattern

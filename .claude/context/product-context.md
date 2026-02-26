@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-15T09:39:26Z
-version: 1.2
+last_updated: 2026-02-26T15:29:18Z
+version: 1.3
 author: Claude Code PM System
 ---
 
@@ -80,8 +80,13 @@ Customers manage their subscription plans and billing.
 | Cloud Services (Templates + Deploy) | Complete |
 | PaaS Operator (Helm wrapper) | Complete |
 | Cloud Service Config Restriction | Complete |
-| AI Assistant (Agent + Chat) | In Progress |
-| Support Projects / Tasks | In Progress |
+| AI Assistant (Agent + Chat) | Complete |
+| AI Refactor (ai_base_gt) | Complete |
+| OpenAI Compatible Provider | Complete |
+| Support Projects / Tasks | Complete |
+| Project-Cloud Service Binding | Complete |
+| Navbar Fix + Responsive | Complete |
+| Mermaid Diagram Rendering | Complete |
 | External integrations | Not started |
 | Billing integration | Not started |
 

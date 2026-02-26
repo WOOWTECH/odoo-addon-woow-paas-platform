@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-15T09:39:26Z
-version: 1.5
+last_updated: 2026-02-26T15:29:18Z
+version: 1.6
 author: Claude Code PM System
 ---
 
@@ -67,6 +67,9 @@ woow_paas_platform/
 │   └── static/                  # Frontend assets
 │       ├── description/
 │       │   └── icon.png         # Module icon
+│       ├── lib/
+│       │   └── mermaid/
+│       │       └── mermaid.min.js  # Mermaid.js (lazy loaded, NOT in paas/ bundle)
 │       └── src/
 │           ├── paas/            # Standalone OWL Application
 │           │   ├── app.js       # Mount entry point
@@ -74,8 +77,8 @@ woow_paas_platform/
 │           │   ├── core/
 │           │   │   └── router.js  # Hash-based router service
 │           │   ├── lib/           # Third-party libraries
-│           │   │   ├── marked.min.js   # Markdown parser
-│           │   │   └── purify.min.js   # DOMPurify HTML sanitizer
+│           │   │   ├── marked.min.js     # Markdown parser
+│           │   │   └── purify.min.js     # DOMPurify HTML sanitizer
 │           │   ├── layout/
 │           │   │   ├── app_shell/  # AppShell.js/xml
 │           │   │   ├── sidebar/    # Sidebar.js/xml
@@ -111,7 +114,8 @@ woow_paas_platform/
 │           │   │   ├── support_service.js    # Support/project API client
 │           │   │   ├── rpc.js                # RPC utility
 │           │   │   ├── html_sanitize.js      # HTML sanitization service
-│           │   │   ├── markdown_parser.js    # Markdown parsing service
+│           │   │   ├── markdown_parser.js    # Markdown parsing service (+ mermaid block detection)
+│           │   │   ├── mermaid_loader.js    # Mermaid.js lazy loader + renderer service
 │           │   │   └── utils.js              # Shared utility functions
 │           │   └── styles/
 │           │       ├── 00_variables.scss
@@ -119,6 +123,8 @@ woow_paas_platform/
 │           │       ├── 20_layout.scss
 │           │       ├── 30_components.scss
 │           │       ├── 99_main.scss
+│           │       ├── components/
+│           │       │   └── _mermaid.scss     # Mermaid container styles (zoom/pan/toggle)
 │           │       └── pages/
 │           │           ├── 10_empty.scss
 │           │           ├── 20_workspace.scss
@@ -135,6 +141,9 @@ woow_paas_platform/
 │   ├── start-dev.sh
 │   ├── test-addon.sh
 │   └── cleanup-worktree.sh
+│
+├── extra/extra-addons/            # External addon dependencies
+│   └── ai_base_gt/               # AI Base GT module (ai.config, ai.assistant, ai.thread)
 │
 ├── extra/paas-operator/          # PaaS Operator Service (FastAPI)
 │   ├── src/
@@ -241,6 +250,7 @@ woow_paas_platform/
 | `src/security/ir.model.access.csv` | CRUD permissions per model |
 
 ## Update History
+- 2026-02-26: Added mermaid.js (static/lib/), mermaid_loader.js service, _mermaid.scss, extra/extra-addons/ai_base_gt/
 - 2026-02-15: Added AI Assistant feature (models, controller, pages, components, services, lib/), migrations/, hooks.py, .serena/, docs/testing/
 - 2026-02-08: Full frontend structure update - added marketplace, service, configure pages; new component groups; removed hash.js, paas_operator_client.py, cloud_services.py controller
 - 2026-02-08: Added extra/paas-operator/, cloud models, cloud_service.js, expanded docs/

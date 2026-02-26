@@ -1,8 +1,9 @@
 ---
 name: ai-chat-mermaid-rendering
-status: backlog
+status: completed
 created: 2026-02-26T07:07:49Z
-progress: 0%
+updated: 2026-02-26T15:27:11Z
+progress: 100%
 prd: .claude/prds/ai-chat-mermaid-rendering.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/90
 ---

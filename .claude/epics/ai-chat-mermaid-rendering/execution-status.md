@@ -17,5 +17,9 @@ branch: epic/ai-chat-mermaid-rendering
 - #93 - AiChat Mermaid 渲染整合 ✅
 - #94 - 互動式 Mermaid 容器與樣式 ✅
 - #95 - 錯誤處理與 Loading 狀態 ✅
+- #92 - Markdown Parser Mermaid 擴展 ✅
+- #93 - AiChat Mermaid 渲染整合 ✅
+- #94 - 互動式 Mermaid 容器與樣式 ✅
+- #95 - 錯誤處理與 Loading 狀態 ✅
 
 All 5 tasks completed.
