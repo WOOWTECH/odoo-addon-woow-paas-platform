@@ -86,6 +86,32 @@
                                     <span class="o_woow_ai_chat__author" t-esc="msg.author_name"/>
                                     <span class="o_woow_ai_chat__time" t-esc="formatTime(msg.date)"/>
                                 </div>
+                                <!-- Tool call blocks (finalized) -->
+                                <t t-if="msg.toolCalls and msg.toolCalls.length">
+                                    <t t-foreach="msg.toolCalls" t-as="tc" t-key="tc.id">
+                                        <div class="o_woow_tool_call">
+                                            <div class="o_woow_tool_call__header" t-on-click="() => this.toggleToolCall(tc)">
+                                                <span class="material-symbols-outlined">build</span>
+                                                <span class="o_woow_tool_call__name" t-esc="tc.tool"/>
+                                                <span class="o_woow_tool_call__badge">Used tool</span>
+                                                <span class="material-symbols-outlined o_woow_tool_call__chevron">
+                                                    <t t-if="tc.expanded">expand_less</t>
+                                                    <t t-else="">expand_more</t>
+                                                </span>
+                                            </div>
+                                            <div t-if="tc.expanded" class="o_woow_tool_call__body">
+                                                <div class="o_woow_tool_call__section">
+                                                    <label>Input</label>
+                                                    <pre t-esc="JSON.stringify(tc.args, null, 2)"/>
+                                                </div>
+                                                <div t-if="tc.result" class="o_woow_tool_call__section">
+                                                    <label>Result</label>
+                                                    <pre t-esc="tc.result"/>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </t>
+                                </t>
                                 <div class="o_woow_ai_chat__body" t-out="msg.body"/>
                                 <!-- Attachments -->
                                 <div t-if="msg.attachments and msg.attachments.length"
@@ -109,6 +135,39 @@
                             <span class="material-symbols-outlined">smart_toy</span>
                         </div>
                         <div class="o_woow_ai_chat__bubble o_woow_ai_chat__bubble--streaming">
+                            <!-- Tool calls during streaming -->
+                            <t t-foreach="state.streamingToolCalls" t-as="tc" t-key="tc.id">
+                                <div class="o_woow_tool_call" t-att-class="{'o_woow_tool_call--loading': !tc.result}">
+                                    <div class="o_woow_tool_call__header" t-on-click="() => this.toggleToolCall(tc)">
+                                        <span class="material-symbols-outlined">build</span>
+                                        <span class="o_woow_tool_call__name" t-esc="tc.tool"/>
+                                        <span class="o_woow_tool_call__badge">
+                                            <t t-if="!tc.result">Calling...</t>
+                                            <t t-else="">Used tool</t>
+                                        </span>
+                                        <span class="material-symbols-outlined o_woow_tool_call__chevron">
+                                            <t t-if="tc.expanded">expand_less</t>
+                                            <t t-else="">expand_more</t>
+                                        </span>
+                                    </div>
+                                    <div t-if="tc.expanded" class="o_woow_tool_call__body">
+                                        <div class="o_woow_tool_call__section">
+                                            <label>Input</label>
+                                            <pre t-esc="JSON.stringify(tc.args, null, 2)"/>
+                                        </div>
+                                        <t t-if="tc.result">
+                                            <div class="o_woow_tool_call__section">
+                                                <label>Result</label>
+                                                <pre t-esc="tc.result"/>
+                                            </div>
+                                        </t>
+                                        <div t-else="" class="o_woow_tool_call__loading_text">
+                                            <div class="o_woow_tool_call__spinner"/>
+                                            <span>Calling tool...</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </t>
                             <div t-if="state.streamingText"
                                  class="o_woow_ai_chat__body" t-out="streamingHtml"/>
                             <div class="o_woow_ai_chat__typing">

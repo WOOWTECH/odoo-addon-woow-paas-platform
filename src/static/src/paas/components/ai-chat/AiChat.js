@@ -41,6 +41,7 @@ export class AiChat extends Component {
             sending: false,
             streaming: false,
             streamingText: "",
+            streamingToolCalls: [],
             assistants: [],
             mentionVisible: false,
             mentionQuery: "",
@@ -60,6 +61,7 @@ export class AiChat extends Component {
         this._maxReconnectAttempts = 3;
         this._connectedTimer = null;
         this._consecutiveParseErrors = 0;
+        this._toolCallCounter = 0;
 
         onMounted(async () => {
             await this.loadAssistants();
@@ -204,6 +206,36 @@ export class AiChat extends Component {
                     return;
                 }
 
+                // Handle MCP tool call events
+                if (data.type === 'tool_call') {
+                    this._reconnectAttempts = 0;
+                    this._consecutiveParseErrors = 0;
+                    if (this.state.connectionState !== "streaming") {
+                        this.state.connectionState = "streaming";
+                    }
+                    this.state.streamingToolCalls.push({
+                        id: ++this._toolCallCounter,
+                        tool: data.tool,
+                        args: data.args || {},
+                        result: null,
+                        expanded: false,
+                    });
+                    this.scrollToBottom();
+                    return;
+                }
+
+                if (data.type === 'tool_result') {
+                    this._reconnectAttempts = 0;
+                    this._consecutiveParseErrors = 0;
+                    const tc = [...this.state.streamingToolCalls].reverse()
+                        .find(t => t.tool === data.tool && t.result === null);
+                    if (tc) {
+                        tc.result = data.result || '';
+                    }
+                    this.scrollToBottom();
+                    return;
+                }
+
                 if (data.chunk) {
                     this._reconnectAttempts = 0;
                     this._consecutiveParseErrors = 0;
@@ -219,14 +251,22 @@ export class AiChat extends Component {
                 }
 
                 if (data.done) {
+                    // Capture tool calls before closeStream resets them
+                    const toolCalls = this.state.streamingToolCalls.length
+                        ? [...this.state.streamingToolCalls]
+                        : null;
+                    const hadContent = this.state.streamingText || toolCalls;
+
                     // Add the complete AI message to the list
-                    if (this.state.streamingText) {
-                        this.state.messages.push(
-                            this._createAiMessage(
-                                data.full_response || this.state.streamingText,
-                                data.message_id,
-                            )
+                    if (hadContent) {
+                        const aiMsg = this._createAiMessage(
+                            data.full_response || this.state.streamingText,
+                            data.message_id,
                         );
+                        if (toolCalls) {
+                            aiMsg.toolCalls = toolCalls;
+                        }
+                        this.state.messages.push(aiMsg);
                     }
                     this.closeStream();
                     this.state.connectionState = "connected";
@@ -278,6 +318,7 @@ export class AiChat extends Component {
         }
         this.state.streaming = false;
         this.state.streamingText = "";
+        this.state.streamingToolCalls = [];
     }
 
     _scheduleReconnect() {
@@ -684,5 +725,9 @@ export class AiChat extends Component {
         this.state.connectionState = "connecting";
         this.state.error = null;
         this.startStream();
+    }
+
+    toggleToolCall(tc) {
+        tc.expanded = !tc.expanded;
     }
 }
