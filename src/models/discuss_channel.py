@@ -159,6 +159,11 @@ class DiscussChannel(models.Model):
 
         mcp_tools = assistant.get_enabled_mcp_tools()
 
+        # Also gather user-scope MCP tools from the linked cloud service
+        user_mcp_tools = self._get_user_mcp_tools()
+        if user_mcp_tools:
+            mcp_tools = (mcp_tools | user_mcp_tools) if mcp_tools else user_mcp_tools
+
         try:
             ai_response = client.chat_completion_with_tools(messages, mcp_tools)
         except AIClientError as exc:
@@ -243,6 +248,30 @@ class DiscussChannel(models.Model):
             parts.append(f'- Configuration (Helm Values):\n```json\n{service.helm_values}\n```')
 
         return '\n'.join(parts)
+
+    def _get_user_mcp_tools(self):
+        """Get user-scope MCP tools from the cloud service linked to this channel.
+
+        Follows: channel → task → project → cloud_service → user_mcp_servers → tools.
+        """
+        McpTool = self.env['woow_paas_platform.mcp_tool'].sudo()
+        task = self.env['project.task'].sudo().search([
+            ('channel_id', '=', self.id),
+        ], limit=1)
+        if not task or not task.project_id or not task.project_id.cloud_service_id:
+            return McpTool.browse()
+
+        service = task.project_id.cloud_service_id
+        servers = service.user_mcp_server_ids.filtered(
+            lambda s: s.active and s.state == 'connected'
+        )
+        if not servers:
+            return McpTool.browse()
+
+        return McpTool.search([
+            ('server_id', 'in', servers.ids),
+            ('active', '=', True),
+        ])
 
     def _get_chat_history(self, limit: int = 20) -> list:
         """Retrieve recent chat messages from this channel.
