@@ -1,5 +1,5 @@
 ---
-name: Deploy Addon to Local Odoo
+name: deploy-local
 description: Copy the addon source to local Odoo addons directory and restart the Odoo container.
 usage: |
   Use when:
