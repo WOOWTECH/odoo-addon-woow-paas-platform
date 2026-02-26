@@ -606,6 +606,9 @@ export class AiChat extends Component {
      * The data-processed attribute prevents re-rendering on subsequent patch cycles.
      */
     _renderMermaidInMessages() {
+        // Defer mermaid rendering until streaming completes to prevent jitter
+        if (this.state.streaming) return;
+
         const messageList = this.messageListRef.el;
         if (!messageList) return;
 
@@ -618,10 +621,11 @@ export class AiChat extends Component {
     }
 
     /**
-     * Replace incomplete mermaid blocks in streaming text with a placeholder.
-     * Complete blocks are left as-is for parseMarkdown to handle.
+     * Replace all mermaid blocks in streaming text with placeholders.
+     * Both complete and incomplete blocks are replaced to prevent mermaid SVG
+     * rendering during streaming, which causes jitter from render-destroy cycles.
      * @param {string} text - The raw streaming text
-     * @returns {string} Processed text with placeholders for incomplete blocks
+     * @returns {string} Processed text with placeholders for all mermaid blocks
      */
     _handleStreamingMermaidBlocks(text) {
         const parts = text.split(/(```mermaid\n)/);
@@ -631,22 +635,20 @@ export class AiChat extends Component {
         for (const part of parts) {
             if (part === "```mermaid\n") {
                 inMermaidBlock = true;
-                result += part;
                 continue;
             }
 
             if (inMermaidBlock) {
-                // Check if this part contains the closing ```
                 const closeIdx = part.indexOf("\n```");
                 if (closeIdx !== -1) {
-                    // Block is complete - include it as-is
-                    result += part;
-                    inMermaidBlock = false;
+                    // Complete block - replace with placeholder, keep text after closing fence
+                    const afterClose = part.substring(closeIdx + 4);
+                    result += "\n> 📊 *圖表將在回覆完成後顯示*\n" + afterClose;
                 } else {
-                    // Block is incomplete - append placeholder and close the code fence
-                    result += part + "\n*(圖表載入中...)*\n```";
-                    inMermaidBlock = false;
+                    // Incomplete block - replace with loading placeholder
+                    result += "\n> 📊 *圖表載入中...*\n";
                 }
+                inMermaidBlock = false;
             } else {
                 result += part;
             }
