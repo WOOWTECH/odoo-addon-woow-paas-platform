@@ -236,6 +236,19 @@ export class AiChat extends Component {
                     return;
                 }
 
+                if (data.type === 'tool_error') {
+                    this._reconnectAttempts = 0;
+                    this._consecutiveParseErrors = 0;
+                    const tc = [...this.state.streamingToolCalls].reverse()
+                        .find(t => t.tool === data.tool && t.result === null);
+                    if (tc) {
+                        tc.result = null;
+                        tc.error = data.error || 'Tool execution failed';
+                    }
+                    this.scrollToBottom();
+                    return;
+                }
+
                 if (data.chunk) {
                     this._reconnectAttempts = 0;
                     this._consecutiveParseErrors = 0;

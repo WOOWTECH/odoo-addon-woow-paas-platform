@@ -89,11 +89,15 @@
                                 <!-- Tool call blocks (finalized) -->
                                 <t t-if="msg.toolCalls and msg.toolCalls.length">
                                     <t t-foreach="msg.toolCalls" t-as="tc" t-key="tc.id">
-                                        <div class="o_woow_tool_call">
+                                        <div t-att-class="{'o_woow_tool_call': true, 'o_woow_tool_call--error': tc.error}">
                                             <div class="o_woow_tool_call__header" t-on-click="() => this.toggleToolCall(tc)">
-                                                <span class="material-symbols-outlined">build</span>
+                                                <span class="material-symbols-outlined">
+                                                    <t t-if="tc.error">error</t>
+                                                    <t t-else="">build</t>
+                                                </span>
                                                 <span class="o_woow_tool_call__name" t-esc="tc.tool"/>
-                                                <span class="o_woow_tool_call__badge">Used tool</span>
+                                                <span t-if="tc.error" class="o_woow_tool_call__badge o_woow_tool_call__badge--error">Error</span>
+                                                <span t-else="" class="o_woow_tool_call__badge">Used tool</span>
                                                 <span class="material-symbols-outlined o_woow_tool_call__chevron">
                                                     <t t-if="tc.expanded">expand_less</t>
                                                     <t t-else="">expand_more</t>
@@ -104,7 +108,11 @@
                                                     <label>Input</label>
                                                     <pre t-esc="JSON.stringify(tc.args, null, 2)"/>
                                                 </div>
-                                                <div t-if="tc.result" class="o_woow_tool_call__section">
+                                                <div t-if="tc.error" class="o_woow_tool_call__section o_woow_tool_call__section--error">
+                                                    <label>Error</label>
+                                                    <pre t-esc="tc.error"/>
+                                                </div>
+                                                <div t-elif="tc.result" class="o_woow_tool_call__section">
                                                     <label>Result</label>
                                                     <pre t-esc="tc.result"/>
                                                 </div>
@@ -137,12 +145,16 @@
                         <div class="o_woow_ai_chat__bubble o_woow_ai_chat__bubble--streaming">
                             <!-- Tool calls during streaming -->
                             <t t-foreach="state.streamingToolCalls" t-as="tc" t-key="tc.id">
-                                <div class="o_woow_tool_call" t-att-class="{'o_woow_tool_call--loading': !tc.result}">
+                                <div t-att-class="{'o_woow_tool_call': true, 'o_woow_tool_call--loading': !tc.result and !tc.error, 'o_woow_tool_call--error': tc.error}">
                                     <div class="o_woow_tool_call__header" t-on-click="() => this.toggleToolCall(tc)">
-                                        <span class="material-symbols-outlined">build</span>
+                                        <span class="material-symbols-outlined">
+                                            <t t-if="tc.error">error</t>
+                                            <t t-else="">build</t>
+                                        </span>
                                         <span class="o_woow_tool_call__name" t-esc="tc.tool"/>
-                                        <span class="o_woow_tool_call__badge">
-                                            <t t-if="!tc.result">Calling...</t>
+                                        <span t-att-class="{'o_woow_tool_call__badge': true, 'o_woow_tool_call__badge--error': tc.error}">
+                                            <t t-if="tc.error">Error</t>
+                                            <t t-elif="!tc.result">Calling...</t>
                                             <t t-else="">Used tool</t>
                                         </span>
                                         <span class="material-symbols-outlined o_woow_tool_call__chevron">
@@ -155,7 +167,13 @@
                                             <label>Input</label>
                                             <pre t-esc="JSON.stringify(tc.args, null, 2)"/>
                                         </div>
-                                        <t t-if="tc.result">
+                                        <t t-if="tc.error">
+                                            <div class="o_woow_tool_call__section o_woow_tool_call__section--error">
+                                                <label>Error</label>
+                                                <pre t-esc="tc.error"/>
+                                            </div>
+                                        </t>
+                                        <t t-elif="tc.result">
                                             <div class="o_woow_tool_call__section">
                                                 <label>Result</label>
                                                 <pre t-esc="tc.result"/>

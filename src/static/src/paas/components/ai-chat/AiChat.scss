@@ -685,6 +685,30 @@
             color: #d97706;
         }
     }
+
+    &--error {
+        border-color: rgba(220, 38, 38, 0.2);
+
+        .o_woow_tool_call__header .material-symbols-outlined {
+            color: #dc2626;
+        }
+    }
+
+    &__badge--error {
+        background-color: rgba(220, 38, 38, 0.1) !important;
+        color: #dc2626 !important;
+    }
+
+    &__section--error {
+        pre {
+            background-color: #2d1515;
+            color: #fca5a5;
+        }
+
+        label {
+            color: #dc2626;
+        }
+    }
 }
 
 // =============================================================================
