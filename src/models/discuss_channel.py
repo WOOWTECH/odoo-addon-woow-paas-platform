@@ -157,8 +157,10 @@ class DiscussChannel(models.Model):
 
         assistant_partner_id = assistant.partner_id.id
 
+        mcp_tools = assistant.get_enabled_mcp_tools()
+
         try:
-            ai_response = client.chat_completion(messages)
+            ai_response = client.chat_completion_with_tools(messages, mcp_tools)
         except AIClientError as exc:
             _logger.error(
                 'AI client error for assistant %s: %s (detail=%s)',
