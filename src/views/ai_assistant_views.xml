@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_ai_assistant_form_inherit_woow" model="ir.ui.view">
+        <field name="name">ai.assistant.form.inherit.woow.mcp</field>
+        <field name="model">ai.assistant</field>
+        <field name="inherit_id" ref="ai_base_gt.view_ai_assistant_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="MCP Servers" name="mcp_servers">
+                    <group string="MCP Server Configuration">
+                        <field name="mcp_server_ids" widget="many2many_checkboxes"
+                               nolabel="1"/>
+                    </group>
+                    <group string="Disabled Tools"
+                           invisible="not mcp_server_ids">
+                        <field name="mcp_tool_disabled_ids" widget="many2many_tags"
+                               nolabel="1"
+                               domain="[('server_id', 'in', mcp_server_ids)]"
+                               placeholder="Select tools to disable..."/>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>
