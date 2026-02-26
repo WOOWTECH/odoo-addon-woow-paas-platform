@@ -18,6 +18,7 @@
         'data/ai_assistant_data.xml',
         'views/project_task_views.xml',
         'views/ai_config_views.xml',
+        'views/mcp_server_views.xml',
         'views/res_config_settings_views.xml',
         'views/paas_app.xml',
     ],

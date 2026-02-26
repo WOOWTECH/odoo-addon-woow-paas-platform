@@ -7,3 +7,5 @@ from . import ai_config
 from . import project_project
 from . import project_task
 from . import discuss_channel
+from . import mcp_server
+from . import mcp_tool

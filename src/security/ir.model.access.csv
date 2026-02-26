@@ -3,3 +3,7 @@ access_workspace_user,woow_paas_platform.workspace.user,model_woow_paas_platform
 access_workspace_access_user,woow_paas_platform.workspace_access.user,model_woow_paas_platform_workspace_access,base.group_user,1,1,1,0
 access_cloud_app_template_user,woow_paas_platform.cloud_app_template.user,model_woow_paas_platform_cloud_app_template,base.group_user,1,0,0,0
 access_cloud_service_user,woow_paas_platform.cloud_service.user,model_woow_paas_platform_cloud_service,base.group_user,1,1,1,1
+access_mcp_server_user,woow_paas_platform.mcp_server.user,model_woow_paas_platform_mcp_server,base.group_user,1,0,0,0
+access_mcp_server_admin,woow_paas_platform.mcp_server.admin,model_woow_paas_platform_mcp_server,base.group_system,1,1,1,1
+access_mcp_tool_user,woow_paas_platform.mcp_tool.user,model_woow_paas_platform_mcp_tool,base.group_user,1,0,0,0
+access_mcp_tool_admin,woow_paas_platform.mcp_tool.admin,model_woow_paas_platform_mcp_tool,base.group_system,1,1,1,1
