@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import logging
 from typing import Any
@@ -188,7 +189,7 @@ class AiAssistantController(Controller):
             is_ai = msg.author_id.id in ai_partner_ids
             data.append({
                 'id': msg.id,
-                'body': msg.body or '',
+                'body': html.unescape(msg.body) if is_ai and msg.body else (msg.body or ''),
                 'author_id': msg.author_id.id if msg.author_id else None,
                 'author_name': msg.author_id.name if msg.author_id else 'Unknown',
                 'is_ai': is_ai,

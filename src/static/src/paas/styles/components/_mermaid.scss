@@ -94,6 +94,22 @@
         font-size: 13px;
         overflow-x: auto;
     }
+
+    // Source code view (toggled via toolbar button)
+    &__source {
+        margin: 0;
+        padding: 12px;
+        font-size: 13px;
+        overflow: auto;
+        max-height: 380px;
+        background: #f6f8fa;
+        border-top: 1px solid $woow-border-light;
+
+        code {
+            white-space: pre;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        }
+    }
 }
 
 // Spinner keyframe animation (outside component block for global scope)
