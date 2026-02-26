@@ -186,6 +186,9 @@ function _addToolbar(block) {
         <button class="o_woow_mermaid__btn" data-action="reset" title="重置">
             <span class="material-symbols-outlined">fit_screen</span>
         </button>
+        <button class="o_woow_mermaid__btn" data-action="toggle-source" title="顯示原始碼">
+            <span class="material-symbols-outlined">code</span>
+        </button>
     `;
     block.prepend(toolbar);
 }
@@ -294,6 +297,9 @@ function _attachInteraction(container) {
             scale = 1;
             translateX = 0;
             translateY = 0;
+        } else if (action === "toggle-source") {
+            _toggleSource(container, btn);
+            return;
         }
         _applyTransform(svgWrapper, scale, translateX, translateY);
     };
@@ -341,6 +347,57 @@ function _removeLoading(block) {
     if (loading) {
         loading.remove();
     }
+}
+
+/**
+ * Toggle between the rendered SVG diagram and the raw mermaid source code.
+ *
+ * @param {HTMLElement} container - The mermaid container element
+ * @param {HTMLElement} btn - The toggle button element
+ * @private
+ */
+function _toggleSource(container, btn) {
+    const svgWrapper = container.querySelector(".o_woow_mermaid__svg_wrapper");
+    let sourceBlock = container.querySelector(".o_woow_mermaid__source");
+
+    if (sourceBlock) {
+        // Toggle back to SVG view
+        sourceBlock.remove();
+        if (svgWrapper) {
+            svgWrapper.style.display = "";
+        }
+        btn.title = "顯示原始碼";
+        btn.querySelector(".material-symbols-outlined").textContent = "code";
+        return;
+    }
+
+    // Show source code
+    const encoded = container.getAttribute("data-mermaid");
+    if (!encoded) {
+        return;
+    }
+
+    let source;
+    try {
+        const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
+        source = new TextDecoder().decode(bytes);
+    } catch (e) {
+        source = atob(encoded);
+    }
+
+    sourceBlock = document.createElement("pre");
+    sourceBlock.className = "o_woow_mermaid__source";
+    const codeEl = document.createElement("code");
+    codeEl.textContent = source;
+    sourceBlock.appendChild(codeEl);
+
+    if (svgWrapper) {
+        svgWrapper.style.display = "none";
+    }
+    container.appendChild(sourceBlock);
+
+    btn.title = "顯示圖表";
+    btn.querySelector(".material-symbols-outlined").textContent = "visibility";
 }
 
 /**
