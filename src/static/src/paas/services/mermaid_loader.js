@@ -111,13 +111,11 @@ export async function renderMermaidBlocks(containerEl) {
         return;
     }
 
-    // Only load the library when we actually have blocks to render
-    await ensureLoaded();
-
     // Render sequentially to avoid mermaid.render() concurrency issues
     for (const block of blocks) {
         const encodedContent = block.getAttribute("data-mermaid");
         if (!encodedContent) {
+            _showError(block, "空的圖表定義");
             block.setAttribute("data-processed", "true");
             continue;
         }
@@ -127,7 +125,25 @@ export async function renderMermaidBlocks(containerEl) {
             diagramSource = atob(encodedContent);
         } catch (e) {
             console.error("[mermaid_loader] Failed to decode base64 content:", e);
-            _showError(block, "Failed to decode diagram content");
+            _showError(block, "圖表資料解碼失敗");
+            block.setAttribute("data-processed", "true");
+            continue;
+        }
+
+        if (!diagramSource || !diagramSource.trim()) {
+            _showError(block, "空的圖表定義");
+            block.setAttribute("data-processed", "true");
+            continue;
+        }
+
+        _showLoading(block);
+
+        try {
+            await ensureLoaded();
+        } catch (loadErr) {
+            console.error("[mermaid_loader] Failed to load library:", loadErr);
+            _removeLoading(block);
+            _showError(block, "無法載入圖表渲染引擎，請重新整理頁面");
             block.setAttribute("data-processed", "true");
             continue;
         }
@@ -136,12 +152,15 @@ export async function renderMermaidBlocks(containerEl) {
 
         try {
             const { svg } = await window.mermaid.render(uniqueId, diagramSource);
+            _removeLoading(block);
             block.innerHTML = `<div class="o_woow_mermaid__svg_wrapper">${svg}</div>`;
             _addToolbar(block);
             _attachInteraction(block);
         } catch (e) {
-            console.error("[mermaid_loader] Failed to render mermaid diagram:", e);
-            _showError(block, e.message || "Failed to render diagram");
+            console.error("[mermaid_loader] Render error:", e);
+            _removeLoading(block);
+            _showError(block, "圖表語法有誤，請檢查 Mermaid 語法");
+            // Original <pre><code> remains visible below the error
         }
 
         block.setAttribute("data-processed", "true");
@@ -298,19 +317,48 @@ function _attachInteraction(container) {
 }
 
 /**
+ * Display a loading indicator inside a mermaid block.
+ *
+ * @param {HTMLElement} block - The mermaid container element
+ * @private
+ */
+function _showLoading(block) {
+    const loading = document.createElement("div");
+    loading.className = "o_woow_mermaid--loading";
+    loading.innerHTML =
+        '<span class="material-symbols-outlined o_woow_mermaid__spinner">progress_activity</span> 圖表載入中...';
+    block.prepend(loading);
+}
+
+/**
+ * Remove the loading indicator from a mermaid block.
+ *
+ * @param {HTMLElement} block - The mermaid container element
+ * @private
+ */
+function _removeLoading(block) {
+    const loading = block.querySelector(".o_woow_mermaid--loading");
+    if (loading) {
+        loading.remove();
+    }
+}
+
+/**
  * Display an error message inside a mermaid block while preserving the
  * original code content so users can still read the diagram source.
  *
+ * Uses the CSS class `o_woow_mermaid__error` (defined in _mermaid.scss)
+ * instead of inline styles.
+ *
  * @param {HTMLElement} block - The mermaid container element
- * @param {string} message - Human-readable error description
+ * @param {string} message - Human-readable error description (Chinese)
  * @private
  */
 function _showError(block, message) {
     const errorDiv = document.createElement("div");
-    errorDiv.className = "o_woow_mermaid_error";
-    errorDiv.style.cssText =
-        "color: #dc3545; font-size: 0.85em; padding: 4px 8px; " +
-        "margin-bottom: 4px; border-left: 3px solid #dc3545; background: #fff5f5;";
-    errorDiv.textContent = `Diagram render error: ${message}`;
+    errorDiv.className = "o_woow_mermaid__error";
+    errorDiv.innerHTML =
+        '<span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:4px">warning</span>' +
+        message;
     block.insertBefore(errorDiv, block.firstChild);
 }
