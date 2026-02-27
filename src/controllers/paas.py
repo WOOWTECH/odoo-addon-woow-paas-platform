@@ -1171,6 +1171,66 @@ class PaasController(Controller):
             _logger.warning("Invalid helm_value_specs for template %s", template.name)
             return {}
 
+    def _build_mcp_sidecar_config(self, template: Any, auth_token: str) -> dict[str, Any]:
+        """Build MCP sidecar container config for PaaS Operator patch endpoint.
+
+        Constructs the sidecar container spec from the template's MCP fields,
+        merging any custom environment variables from `template.mcp_sidecar_env`
+        with the required environment variables.
+
+        Args:
+            template: CloudAppTemplate record with MCP fields
+            auth_token: Generated AUTH_TOKEN for sidecar authentication
+
+        Returns:
+            Dict matching the SidecarPatchRequest schema expected by PaaS Operator
+        """
+        sidecar_port = template.mcp_sidecar_port or 3000
+
+        # Required env vars for the MCP sidecar
+        env_vars = [
+            {'name': 'MCP_MODE', 'value': 'http'},
+            {'name': 'AUTH_TOKEN', 'value': auth_token},
+            {'name': 'N8N_API_URL', 'value': f'http://localhost:{template.default_port}'},
+            {'name': 'PORT', 'value': str(sidecar_port)},
+        ]
+
+        # Merge custom env vars from template (if any)
+        if template.mcp_sidecar_env:
+            try:
+                custom_env = json.loads(template.mcp_sidecar_env)
+                # custom_env is a dict like {"KEY": "VALUE"}
+                # Required keys that should not be overridden
+                reserved_keys = {'MCP_MODE', 'AUTH_TOKEN', 'PORT', 'N8N_API_URL'}
+                for key, value in custom_env.items():
+                    if key not in reserved_keys:
+                        env_vars.append({'name': key, 'value': str(value)})
+            except (json.JSONDecodeError, TypeError):
+                _logger.warning("Invalid MCP sidecar env JSON in template %s", template.name)
+
+        container_spec = {
+            'name': 'mcp-sidecar',
+            'image': template.mcp_sidecar_image,
+            'ports': [{'containerPort': sidecar_port}],
+            'env': env_vars,
+            'resources': {
+                'requests': {'memory': '128Mi', 'cpu': '100m'},
+                'limits': {'memory': '256Mi', 'cpu': '200m'},
+            },
+            'livenessProbe': {
+                'httpGet': {'path': '/health', 'port': sidecar_port},
+                'initialDelaySeconds': 15,
+                'periodSeconds': 30,
+            },
+            'readinessProbe': {
+                'httpGet': {'path': '/health', 'port': sidecar_port},
+                'initialDelaySeconds': 10,
+                'periodSeconds': 10,
+            },
+        }
+
+        return {'container': container_spec}
+
     def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> tuple[dict[str, Any], list[str]]:
         """
         Filter Helm values to only include keys allowed by template's value_specs.
@@ -1372,6 +1432,26 @@ class PaasController(Controller):
                     create_namespace=True,  # Let operator handle namespace if needed
                     expose=expose_config,
                 )
+
+                # After Helm install, patch sidecar if MCP enabled
+                if template.mcp_enabled and template.mcp_sidecar_image:
+                    mcp_auth_token = str(uuid.uuid4())
+                    sidecar_config = self._build_mcp_sidecar_config(template, mcp_auth_token)
+                    try:
+                        client.patch_sidecar(
+                            namespace=helm_namespace,
+                            release_name=helm_release_name,
+                            sidecar_config=sidecar_config,
+                        )
+                        # Store auth_token in service for later MCP Server creation
+                        service.write({'mcp_auth_token': mcp_auth_token})
+                        _logger.info(
+                            "MCP sidecar patched for service %s (release=%s)",
+                            service.name, helm_release_name,
+                        )
+                    except PaaSOperatorError as e:
+                        _logger.warning("Failed to patch MCP sidecar: %s", e)
+                        # Don't fail the deployment, sidecar is optional
 
                 # Update service state
                 service.write({

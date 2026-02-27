@@ -140,6 +140,14 @@ class CloudService(models.Model):
         domain=[('scope', '=', 'user')],
     )
 
+    # MCP Sidecar
+    mcp_auth_token = fields.Char(
+        string='MCP Auth Token',
+        readonly=True,
+        groups='base.group_system',
+        help='Authentication token for the MCP sidecar, auto-generated during deployment',
+    )
+
     # Timestamps
     deployed_at = fields.Datetime(
         string='Deployed At',
