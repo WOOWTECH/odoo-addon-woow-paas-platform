@@ -16,7 +16,7 @@ def _check_python_dependencies():
     required_packages = {
         'langchain_openai': 'langchain-openai>=0.3.0',
         'langchain_core': 'langchain-core>=0.3.0',
-        'langchain_mcp_adapters': 'langchain-mcp-adapters>=0.1.0',
+        'langchain_mcp_adapters': 'langchain-mcp-adapters>=0.2.0,<0.3.0',
         'langgraph': 'langgraph>=0.2.0',
     }
 

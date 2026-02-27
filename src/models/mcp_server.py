@@ -137,8 +137,8 @@ class McpServer(models.Model):
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         config = {self.name: self._get_mcp_client_config()}
-        async with MultiServerMCPClient(config) as client:
-            tools = await client.get_tools()
+        client = MultiServerMCPClient(config)
+        tools = await client.get_tools()
 
         # Process discovered tools back in sync context
         McpTool = self.env['woow_paas_platform.mcp_tool']
@@ -192,6 +192,6 @@ class McpServer(models.Model):
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         config = {self.name: self._get_mcp_client_config()}
-        async with MultiServerMCPClient(config) as client:
-            # If we can connect and get tools, the server is reachable
-            await client.get_tools()
+        client = MultiServerMCPClient(config)
+        # If we can connect and get tools, the server is reachable
+        await client.get_tools()

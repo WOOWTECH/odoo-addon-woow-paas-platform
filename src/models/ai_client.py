@@ -237,20 +237,23 @@ class AIClient:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         try:
-            async with MultiServerMCPClient(server_config) as client:
-                tools = await asyncio.wait_for(
-                    client.get_tools(), timeout=self._MCP_TIMEOUT,
-                )
-                tools = [t for t in tools if t.name in enabled_names]
-                if not tools:
-                    result = self.llm.invoke(messages)
-                    return result.content
-                graph = self._build_agent_graph(tools)
-                result = await asyncio.wait_for(
-                    graph.ainvoke({"messages": messages}),
-                    timeout=self._MCP_TIMEOUT,
-                )
-                return result["messages"][-1].content
+            client = MultiServerMCPClient(server_config)
+            tools = await asyncio.wait_for(
+                client.get_tools(), timeout=self._MCP_TIMEOUT,
+            )
+            tools = [t for t in tools if t.name in enabled_names]
+            if not tools:
+                result = self.llm.invoke(messages)
+                return result.content
+            graph = self._build_agent_graph(tools)
+            result = await asyncio.wait_for(
+                graph.ainvoke(
+                    {"messages": messages},
+                    {"recursion_limit": self._RECURSION_LIMIT},
+                ),
+                timeout=self._MCP_TIMEOUT,
+            )
+            return result["messages"][-1].content
         except asyncio.TimeoutError:
             _logger.warning("MCP tool calling timed out after %ss", self._MCP_TIMEOUT)
             raise
@@ -276,62 +279,76 @@ class AIClient:
 
         events = []
         try:
-            async with MultiServerMCPClient(server_config) as client:
-                tools = await asyncio.wait_for(
-                    client.get_tools(), timeout=self._MCP_TIMEOUT,
-                )
-                tools = [t for t in tools if t.name in enabled_names]
-                if not tools:
-                    result = self.llm.invoke(messages)
-                    events.append({"type": "text_chunk", "content": result.content})
-                    return events
-                graph = self._build_agent_graph(tools)
-                async for chunk in graph.astream(
-                    {"messages": messages}, stream_mode="updates"
-                ):
-                    for node_name, node_output in chunk.items():
-                        for msg in node_output.get("messages", []):
-                            if (
-                                hasattr(msg, "tool_calls")
-                                and msg.tool_calls
-                            ):
-                                for tc in msg.tool_calls:
-                                    events.append({
-                                        "type": "tool_call",
-                                        "tool": tc["name"],
-                                        "args": tc.get("args", {}),
-                                    })
-                            elif node_name == "tools" and hasattr(msg, "content"):
-                                content = str(msg.content)
-                                tool_name = getattr(msg, "name", "unknown")
-                                # Detect tool execution errors
-                                is_error = getattr(msg, "status", None) == "error"
-                                if is_error:
-                                    events.append({
-                                        "type": "tool_error",
-                                        "tool": tool_name,
-                                        "error": content,
-                                    })
-                                    _logger.warning(
-                                        "MCP tool '%s' execution error: %s",
-                                        tool_name, content[:200],
-                                    )
-                                else:
-                                    events.append({
-                                        "type": "tool_result",
-                                        "tool": tool_name,
-                                        "result": content,
-                                    })
-                            elif (
-                                node_name == "call_model"
-                                and hasattr(msg, "content")
-                                and msg.content
-                                and not getattr(msg, "tool_calls", None)
-                            ):
+            client = MultiServerMCPClient(server_config)
+            tools = await asyncio.wait_for(
+                client.get_tools(), timeout=self._MCP_TIMEOUT,
+            )
+            _logger.info(
+                "MCP tools from server: %s",
+                [t.name for t in tools],
+            )
+            tools = [t for t in tools if t.name in enabled_names]
+            _logger.info(
+                "MCP tools after filter (enabled_names=%s): %s",
+                enabled_names, [t.name for t in tools],
+            )
+            if not tools:
+                result = self.llm.invoke(messages)
+                events.append({"type": "text_chunk", "content": result.content})
+                return events
+            graph = self._build_agent_graph(tools)
+            async for chunk in graph.astream(
+                {"messages": messages},
+                {"recursion_limit": self._RECURSION_LIMIT},
+                stream_mode="updates",
+            ):
+                for node_name, node_output in chunk.items():
+                    for msg in node_output.get("messages", []):
+                        if (
+                            hasattr(msg, "tool_calls")
+                            and msg.tool_calls
+                        ):
+                            for tc in msg.tool_calls:
+                                _logger.info(
+                                    "LLM tool_call: name=%s, args=%s",
+                                    tc["name"], tc.get("args", {}),
+                                )
                                 events.append({
-                                    "type": "text_chunk",
-                                    "content": msg.content,
+                                    "type": "tool_call",
+                                    "tool": tc["name"],
+                                    "args": tc.get("args", {}),
                                 })
+                        elif node_name == "tools" and hasattr(msg, "content"):
+                            content = str(msg.content)
+                            tool_name = getattr(msg, "name", "unknown")
+                            # Detect tool execution errors
+                            is_error = getattr(msg, "status", None) == "error"
+                            if is_error:
+                                events.append({
+                                    "type": "tool_error",
+                                    "tool": tool_name,
+                                    "error": content,
+                                })
+                                _logger.warning(
+                                    "MCP tool '%s' execution error: %s",
+                                    tool_name, content[:200],
+                                )
+                            else:
+                                events.append({
+                                    "type": "tool_result",
+                                    "tool": tool_name,
+                                    "result": content,
+                                })
+                        elif (
+                            node_name == "call_model"
+                            and hasattr(msg, "content")
+                            and msg.content
+                            and not getattr(msg, "tool_calls", None)
+                        ):
+                            events.append({
+                                "type": "text_chunk",
+                                "content": msg.content,
+                            })
         except asyncio.TimeoutError:
             _logger.warning("MCP tool stream timed out after %ss", self._MCP_TIMEOUT)
             raise
@@ -359,9 +376,29 @@ class AIClient:
         from langgraph.prebuilt import ToolNode, tools_condition
 
         llm_with_tools = self.llm.bind_tools(tools)
+        valid_tool_names = {t.name for t in tools}
 
         def call_model(state):
-            return {"messages": [llm_with_tools.invoke(state["messages"])]}
+            result = llm_with_tools.invoke(state["messages"])
+            # Normalize tool call names: vibeproxy
+            # (https://github.com/automazeio/vibeproxy) adds a "proxy_"
+            # prefix to tool call names in its response.  Strip it so
+            # ToolNode can find the correct tool.
+            if hasattr(result, "tool_calls") and result.tool_calls:
+                for tc in result.tool_calls:
+                    name = tc.get("name", "")
+                    if name not in valid_tool_names:
+                        # Try stripping common prefixes
+                        for prefix in ("proxy_",):
+                            stripped = name.removeprefix(prefix)
+                            if stripped in valid_tool_names:
+                                tc["name"] = stripped
+                                _logger.info(
+                                    "Normalized tool name: %s -> %s",
+                                    name, stripped,
+                                )
+                                break
+            return {"messages": [result]}
 
         builder = StateGraph(MessagesState)
         builder.add_node("call_model", call_model)
@@ -369,7 +406,7 @@ class AIClient:
         builder.add_edge(START, "call_model")
         builder.add_conditional_edges("call_model", tools_condition)
         builder.add_edge("tools", "call_model")
-        return builder.compile(recursion_limit=self._RECURSION_LIMIT)
+        return builder.compile()
 
     # -------------------- completions --------------------
 
