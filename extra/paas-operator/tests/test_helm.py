@@ -270,3 +270,57 @@ class TestKubernetesService:
                 memory_limit="4Gi",
                 storage_limit="20Gi",
             )
+
+    @patch("subprocess.run")
+    def test_apply_manifest(self, mock_run, k8s_service):
+        """Test apply a K8s manifest via kubectl apply."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "kind": "Service",
+                "metadata": {"name": "test-mcp", "namespace": "paas-ws-test"},
+            }),
+            stderr="",
+        )
+
+        manifest = {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": "test-mcp",
+                "namespace": "paas-ws-test",
+            },
+            "spec": {
+                "type": "ClusterIP",
+                "ports": [{"port": 3000, "targetPort": 3000}],
+            },
+        }
+
+        result = k8s_service.apply_manifest(manifest)
+
+        assert result["kind"] == "Service"
+        assert result["metadata"]["name"] == "test-mcp"
+        # Verify kubectl apply was called
+        mock_run.assert_called_once()
+        cmd_args = mock_run.call_args[0][0]
+        assert "apply" in cmd_args
+        assert "-f" in cmd_args
+
+    @patch("subprocess.run")
+    def test_delete_service(self, mock_run, k8s_service):
+        """Test delete a K8s Service."""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        result = k8s_service.delete_service("paas-ws-test", "test-mcp")
+
+        assert result is True
+        cmd_args = mock_run.call_args[0][0]
+        assert "delete" in cmd_args
+        assert "service" in cmd_args
+        assert "test-mcp" in cmd_args
+        assert "--ignore-not-found" in cmd_args
+
+    def test_delete_service_invalid_namespace(self, k8s_service):
+        """Test delete service with invalid namespace."""
+        with pytest.raises(ValueError):
+            k8s_service.delete_service("invalid", "test-mcp")

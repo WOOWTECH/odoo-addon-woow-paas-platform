@@ -207,6 +207,21 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
             # Log but don't fail - release is already uninstalled
             logger.warning(f"Failed to delete Cloudflare route: {e.message}")
 
+        # Delete MCP sidecar Cloudflare route and K8s Service if they exist
+        try:
+            mcp_subdomain = (subdomain or cloudflare_service.generate_subdomain(namespace, name)) + "-mcp"
+            await cloudflare_service.delete_route(mcp_subdomain)
+            logger.info(f"Deleted MCP sidecar Cloudflare route for {mcp_subdomain}")
+        except CloudflareException as e:
+            logger.warning(f"Failed to delete MCP sidecar Cloudflare route: {e.message}")
+
+        try:
+            mcp_service_name = f"{name}-mcp"
+            k8s_service.delete_service(namespace, mcp_service_name)
+            logger.info(f"Deleted MCP sidecar K8s Service {mcp_service_name}")
+        except Exception as e:
+            logger.warning(f"Failed to delete MCP sidecar K8s Service: {e}")
+
         return result
 
     except ValueError as e:
@@ -373,13 +388,17 @@ async def patch_sidecar(
     into the deployment's pod spec. This is useful when the Helm chart does
     not natively support sidecar/extra containers.
 
+    After patching the deployment, this endpoint also:
+    1. Creates a ClusterIP K8s Service for the sidecar port (e.g., {release}-mcp)
+    2. Creates a Cloudflare Tunnel route so the sidecar is externally reachable
+
     Args:
         namespace: Release namespace
         name: Release name (used to find the deployment if deployment_name not provided)
         request: Sidecar container specification
 
     Returns:
-        Confirmation of the sidecar patch
+        Confirmation of the sidecar patch including MCP endpoint URL
 
     Raises:
         HTTPException: If patching fails
@@ -435,11 +454,29 @@ async def patch_sidecar(
             f"with sidecar container {request.container.name}"
         )
 
+        # Create K8s Service and Cloudflare route for the sidecar
+        mcp_service_name = None
+        mcp_endpoint_url = None
+        mcp_internal_url = None
+
+        sidecar_port = _get_sidecar_port(request)
+        if sidecar_port:
+            mcp_service_name, mcp_internal_url, mcp_endpoint_url = (
+                await _create_sidecar_service_and_route(
+                    namespace=namespace,
+                    release_name=name,
+                    sidecar_port=sidecar_port,
+                )
+            )
+
         return SidecarPatchResponse(
             message=f"Sidecar container '{request.container.name}' added to deployment '{deployment_name}'",
             deployment=deployment_name,
             namespace=namespace,
             container_name=request.container.name,
+            mcp_service_name=mcp_service_name,
+            mcp_endpoint_url=mcp_endpoint_url,
+            mcp_internal_url=mcp_internal_url,
         )
 
     except ValueError as e:
@@ -453,6 +490,134 @@ async def patch_sidecar(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to patch deployment with sidecar. Check operator logs for details.",
         )
+
+
+# Helper functions for sidecar service and route creation
+
+
+def _get_sidecar_port(request: SidecarPatchRequest) -> Optional[int]:
+    """Extract the sidecar container port from the patch request.
+
+    Args:
+        request: Sidecar patch request
+
+    Returns:
+        First container port number, or None if no ports defined
+    """
+    if not request.container.ports:
+        return None
+    for port_spec in request.container.ports:
+        port = port_spec.get("containerPort")
+        if port:
+            return port
+    return None
+
+
+async def _create_sidecar_service_and_route(
+    namespace: str,
+    release_name: str,
+    sidecar_port: int,
+) -> tuple:
+    """Create a K8s ClusterIP Service and Cloudflare route for the MCP sidecar.
+
+    This function:
+    1. Creates a ClusterIP K8s Service named {release_name}-mcp targeting the sidecar port
+    2. Creates a Cloudflare Tunnel route for external access
+
+    Service creation failure does NOT propagate - the sidecar patch is already done.
+
+    Args:
+        namespace: Kubernetes namespace
+        release_name: Helm release name
+        sidecar_port: Port the sidecar listens on
+
+    Returns:
+        Tuple of (mcp_service_name, mcp_internal_url, mcp_endpoint_url)
+        Any value may be None if the corresponding operation failed.
+    """
+    mcp_service_name = f"{release_name}-mcp"
+    mcp_internal_url = None
+    mcp_endpoint_url = None
+
+    # Step 1: Create ClusterIP Service for the sidecar
+    service_manifest = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": mcp_service_name,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/instance": release_name,
+                "app.kubernetes.io/component": "mcp-sidecar",
+            },
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {
+                "app.kubernetes.io/instance": release_name,
+            },
+            "ports": [
+                {
+                    "port": sidecar_port,
+                    "targetPort": sidecar_port,
+                    "protocol": "TCP",
+                    "name": "mcp",
+                },
+            ],
+        },
+    }
+
+    try:
+        k8s_service.apply_manifest(service_manifest)
+        mcp_internal_url = (
+            f"http://{mcp_service_name}.{namespace}.svc.cluster.local:{sidecar_port}"
+        )
+        logger.info(
+            f"Created K8s Service {mcp_service_name} in {namespace} "
+            f"targeting port {sidecar_port}"
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to create K8s Service for sidecar: {e}. "
+            "Sidecar patch was successful but service is not exposed."
+        )
+        return mcp_service_name, None, None
+
+    # Step 2: Create Cloudflare route for external access
+    if cloudflare_service.enabled:
+        try:
+            # Generate subdomain: {original-subdomain}-mcp
+            base_subdomain = cloudflare_service.generate_subdomain(namespace, release_name)
+            mcp_subdomain = f"{base_subdomain}-mcp"
+
+            service_url = cloudflare_service.generate_service_url(
+                namespace=namespace,
+                service_name=mcp_service_name,
+                port=sidecar_port,
+            )
+
+            await cloudflare_service.create_route(
+                subdomain=mcp_subdomain,
+                service_url=service_url,
+            )
+
+            mcp_hostname = f"{mcp_subdomain}.{settings.cloudflare_domain}"
+            mcp_endpoint_url = f"https://{mcp_hostname}/mcp"
+            logger.info(
+                f"Created Cloudflare route for MCP sidecar: {mcp_hostname} -> {service_url}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to create Cloudflare route for MCP sidecar: {e}. "
+                "MCP sidecar is only reachable via internal K8s URL or port-forward."
+            )
+    else:
+        logger.info(
+            "Cloudflare disabled. MCP sidecar reachable via internal URL or port-forward: "
+            f"kubectl port-forward -n {namespace} svc/{mcp_service_name} {sidecar_port}:{sidecar_port}"
+        )
+
+    return mcp_service_name, mcp_internal_url, mcp_endpoint_url
 
 
 # Helper functions for Cloudflare integration
