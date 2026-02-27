@@ -88,6 +88,12 @@ class McpServer(models.Model):
         string='State Message',
         readonly=True,
     )
+    auto_created = fields.Boolean(
+        string='Auto Created',
+        default=False,
+        readonly=True,
+        help='Automatically created by the system during cloud service deployment',
+    )
 
     @api.depends('tool_ids')
     def _compute_tool_count(self):

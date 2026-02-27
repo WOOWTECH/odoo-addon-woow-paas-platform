@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Cloud App Template Form View -->
+    <record id="view_cloud_app_template_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.cloud_app_template.form</field>
+        <field name="model">woow_paas_platform.cloud_app_template</field>
+        <field name="arch" type="xml">
+            <form string="Cloud App Template">
+                <sheet>
+                    <field name="icon" widget="image" class="oe_avatar"/>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="Application Name"/>
+                        </h1>
+                        <field name="slug" placeholder="app-slug"/>
+                    </div>
+                    <group>
+                        <group string="Basic Info">
+                            <field name="category"/>
+                            <field name="description" placeholder="Short description"/>
+                            <field name="tags" placeholder='["tag1", "tag2"]'/>
+                            <field name="monthly_price"/>
+                            <field name="documentation_url" widget="url"/>
+                        </group>
+                        <group string="Service Configuration">
+                            <field name="default_port"/>
+                            <field name="ingress_enabled"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Helm Chart" name="helm_chart">
+                            <group>
+                                <group string="Repository">
+                                    <field name="helm_repo_url"/>
+                                    <field name="helm_chart_name"/>
+                                    <field name="helm_chart_version"/>
+                                </group>
+                                <group string="Resources">
+                                    <field name="min_vcpu"/>
+                                    <field name="min_ram_gb"/>
+                                    <field name="min_storage_gb"/>
+                                </group>
+                            </group>
+                            <group string="Helm Values">
+                                <field name="helm_default_values" nolabel="1"
+                                       placeholder='{"key": "value"}'/>
+                            </group>
+                            <group string="Helm Value Specs">
+                                <field name="helm_value_specs" nolabel="1"
+                                       placeholder="JSON schema for configurable values"/>
+                            </group>
+                        </page>
+                        <page string="Description" name="description">
+                            <field name="full_description" nolabel="1"
+                                   placeholder="Detailed description with features and use cases"/>
+                        </page>
+                        <page string="MCP Sidecar" name="mcp_sidecar">
+                            <group>
+                                <field name="mcp_enabled"/>
+                            </group>
+                            <group invisible="not mcp_enabled">
+                                <group string="Sidecar Image">
+                                    <field name="mcp_sidecar_image"
+                                           placeholder="ghcr.io/czlonkowski/n8n-mcp:latest"
+                                           required="mcp_enabled"/>
+                                    <field name="mcp_sidecar_port"/>
+                                </group>
+                                <group string="MCP Protocol">
+                                    <field name="mcp_transport"/>
+                                    <field name="mcp_endpoint_path"/>
+                                </group>
+                            </group>
+                            <group string="Environment Variables"
+                                   invisible="not mcp_enabled">
+                                <field name="mcp_sidecar_env" nolabel="1"
+                                       placeholder='{"MCP_MODE": "http", "CUSTOM_VAR": "value"}'/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Cloud App Template List View -->
+    <record id="view_cloud_app_template_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.cloud_app_template.list</field>
+        <field name="model">woow_paas_platform.cloud_app_template</field>
+        <field name="arch" type="xml">
+            <list string="Cloud App Templates">
+                <field name="name"/>
+                <field name="slug"/>
+                <field name="category"/>
+                <field name="monthly_price"/>
+                <field name="helm_chart_name"/>
+                <field name="helm_chart_version"/>
+                <field name="mcp_enabled"/>
+                <field name="is_active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Cloud App Template Action -->
+    <record id="action_cloud_app_template" model="ir.actions.act_window">
+        <field name="name">Cloud App Templates</field>
+        <field name="res_model">woow_paas_platform.cloud_app_template</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first Cloud App Template
+            </p>
+            <p>
+                Cloud App Templates define application blueprints for deploying services via Helm.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu under Woow PaaS -->
+    <menuitem
+        id="menu_cloud_app_templates"
+        name="Cloud App Templates"
+        parent="menu_woow_paas_platform_root"
+        action="action_cloud_app_template"
+        sequence="40"/>
+</odoo>
