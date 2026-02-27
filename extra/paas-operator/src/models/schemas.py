@@ -234,6 +234,15 @@ class SidecarPatchResponse(BaseModel):
     deployment: str
     namespace: str
     container_name: str
+    mcp_service_name: Optional[str] = Field(
+        None, description="Name of the K8s Service created for the sidecar"
+    )
+    mcp_endpoint_url: Optional[str] = Field(
+        None, description="Public URL to reach the MCP sidecar endpoint (via Cloudflare)"
+    )
+    mcp_internal_url: Optional[str] = Field(
+        None, description="Internal K8s URL for the MCP sidecar service"
+    )
 
 
 class ErrorResponse(BaseModel):

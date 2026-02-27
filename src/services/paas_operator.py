@@ -423,6 +423,10 @@ class PaaSOperatorClient:
     ) -> Dict[str, Any]:
         """Patch a release's deployment with a sidecar container.
 
+        After patching, the operator also creates a ClusterIP K8s Service
+        and a Cloudflare Tunnel route for the sidecar, making its MCP
+        endpoint externally reachable.
+
         Args:
             namespace: Release namespace
             release_name: Release name
@@ -430,7 +434,9 @@ class PaaSOperatorClient:
                 'container' key with name, image, ports, env, resources, probes
 
         Returns:
-            Patch confirmation with deployment and container info
+            Patch confirmation with deployment and container info.
+            Includes 'mcp_endpoint_url' (public URL), 'mcp_internal_url'
+            (K8s internal URL), and 'mcp_service_name' if service was created.
 
         Raises:
             PaaSOperatorError: If patching fails
@@ -480,3 +486,57 @@ def get_paas_operator_client(env) -> Optional[PaaSOperatorClient]:
         return None
 
     return PaaSOperatorClient(base_url=base_url, api_key=api_key)
+
+
+def get_mcp_endpoint_url(
+    env,
+    sidecar_response: Optional[Dict[str, Any]] = None,
+    subdomain: Optional[str] = None,
+    namespace: Optional[str] = None,
+    release_name: Optional[str] = None,
+    endpoint_path: str = '/mcp',
+) -> Optional[str]:
+    """Construct the MCP endpoint URL for a cloud service's sidecar.
+
+    Priority order:
+    1. Use mcp_endpoint_url from sidecar patch response (operator-provided, includes Cloudflare route)
+    2. Build from subdomain + PaaS domain setting (Cloudflare convention: {subdomain}-mcp.{domain})
+    3. Use mcp_internal_url from sidecar patch response (K8s internal, only works in-cluster)
+
+    For local development, users can override via port-forward:
+        kubectl port-forward -n {namespace} svc/{release}-mcp {port}:{port}
+
+    Args:
+        env: Odoo environment
+        sidecar_response: Response dict from PaaSOperatorClient.patch_sidecar()
+        subdomain: Service subdomain (from CloudService record)
+        namespace: K8s namespace (for fallback internal URL)
+        release_name: Helm release name (for fallback internal URL)
+        endpoint_path: MCP endpoint path (default '/mcp')
+
+    Returns:
+        MCP endpoint URL or None if cannot be determined
+    """
+    # 1. Try operator-provided public URL
+    if sidecar_response and sidecar_response.get('mcp_endpoint_url'):
+        return sidecar_response['mcp_endpoint_url']
+
+    # 2. Build from subdomain + PaaS domain
+    IrConfigParameter = env['ir.config_parameter'].sudo()
+    paas_domain = IrConfigParameter.get_param('woow_paas_platform.paas_domain', '')
+
+    if subdomain and paas_domain:
+        mcp_hostname = f"{subdomain}-mcp.{paas_domain}"
+        return f"https://{mcp_hostname}{endpoint_path}"
+
+    # 3. Try internal URL from sidecar response
+    if sidecar_response and sidecar_response.get('mcp_internal_url'):
+        internal_url = sidecar_response['mcp_internal_url'].rstrip('/')
+        return f"{internal_url}{endpoint_path}"
+
+    _logger.warning(
+        "Cannot determine MCP endpoint URL for release %s in %s. "
+        "Use port-forward for local access.",
+        release_name, namespace,
+    )
+    return None
