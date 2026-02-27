@@ -1707,6 +1707,16 @@ class PaasController(Controller):
                         'helm_revision': helm_revision,
                         'error_message': False,
                     })
+
+                    # Auto-create MCP Server when transitioning to running
+                    if original_state != 'running':
+                        try:
+                            self._auto_create_mcp_server(service)
+                        except Exception as e:
+                            _logger.warning(
+                                "Auto-create MCP server failed for service %s: %s",
+                                service.name, e,
+                            )
                 # else: still deploying/waiting for pods
 
             elif release_status == 'failed':
@@ -1733,6 +1743,97 @@ class PaasController(Controller):
 
         except Exception as e:
             _logger.warning("Error polling service status: %s", str(e))
+
+    def _auto_create_mcp_server(self, service: Any) -> None:
+        """Auto-create MCP Server record for a cloud service with MCP enabled.
+
+        Called when a service transitions to 'running' state. Creates a
+        user-scope MCP Server record linked to the cloud service and
+        triggers tool discovery.
+
+        Idempotent: skips creation if an auto-created record already exists.
+        """
+        template = service.template_id
+        if not template.mcp_enabled or not template.mcp_sidecar_image:
+            return
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+
+        # Check if already exists (avoid duplicates on re-deploy/upgrade)
+        existing = McpServer.search([
+            ('cloud_service_id', '=', service.id),
+            ('auto_created', '=', True),
+        ], limit=1)
+        if existing:
+            _logger.debug(
+                "MCP Server already exists for service %s (id=%s), skipping auto-create",
+                service.name, existing.id,
+            )
+            return
+
+        # Build MCP endpoint URL
+        mcp_url = self._build_mcp_endpoint_url(service, template)
+
+        # Create MCP Server record
+        server = McpServer.create({
+            'name': f"{service.name} MCP",
+            'url': mcp_url,
+            'transport': template.mcp_transport or 'streamable_http',
+            'scope': 'user',
+            'cloud_service_id': service.id,
+            'auto_created': True,
+            'api_key': service.mcp_auth_token,
+            'description': f"Auto-created MCP server for {service.name}",
+        })
+
+        _logger.info(
+            "Auto-created MCP Server '%s' (id=%s) for cloud service '%s'",
+            server.name, server.id, service.name,
+        )
+
+        # Try to sync tools (don't block status update on failure)
+        try:
+            server.action_sync_tools()
+        except Exception as e:
+            _logger.warning(
+                "MCP tool sync failed for service %s: %s", service.name, e,
+            )
+
+    def _build_mcp_endpoint_url(self, service: Any, template: Any) -> str:
+        """Build the MCP endpoint URL for a cloud service sidecar.
+
+        Constructs the URL using the service's subdomain and the PaaS
+        domain from system configuration. Falls back to a Kubernetes
+        internal service URL when no subdomain is available.
+
+        Returns:
+            str: The full MCP endpoint URL.
+        """
+        endpoint_path = template.mcp_endpoint_path or '/mcp'
+        sidecar_port = template.mcp_sidecar_port or 3001
+
+        # Prefer Kubernetes internal service URL (most reliable).
+        # The Cloudflare tunnel only routes to the main application port,
+        # not the sidecar port, so external URL via subdomain won't work
+        # for the MCP sidecar without additional Ingress configuration.
+        # Pattern: http://{release}-mcp.{namespace}.svc.cluster.local:{port}{path}
+        if service.helm_release_name and service.helm_namespace:
+            return (
+                f"http://{service.helm_release_name}-mcp"
+                f".{service.helm_namespace}.svc.cluster.local"
+                f":{sidecar_port}{endpoint_path}"
+            )
+
+        # Fallback: construct from subdomain (user can update later)
+        if service.subdomain:
+            IrConfigParameter = request.env['ir.config_parameter'].sudo()
+            paas_domain = IrConfigParameter.get_param(
+                'woow_paas_platform.paas_domain', 'woowtech.io',
+            )
+            return f"https://{service.subdomain}.{paas_domain}{endpoint_path}"
+
+        # Last resort: placeholder that the user must update
+        return f"http://localhost:{sidecar_port}{endpoint_path}"
 
     def _format_service(self, service: Any, include_details: bool = False) -> dict[str, Any]:
         """Format a service record for API response."""
