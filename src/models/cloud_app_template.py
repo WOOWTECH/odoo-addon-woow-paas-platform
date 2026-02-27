@@ -109,6 +109,37 @@ class CloudAppTemplate(models.Model):
         help='Minimum storage in GB required',
     )
 
+    # MCP Sidecar Configuration
+    mcp_enabled = fields.Boolean(
+        string='Enable MCP Sidecar',
+        default=False,
+        help='Enable MCP sidecar container for this application template',
+    )
+    mcp_sidecar_image = fields.Char(
+        string='MCP Sidecar Image',
+        help='Docker image for the MCP sidecar container (e.g., ghcr.io/czlonkowski/n8n-mcp:latest)',
+    )
+    mcp_sidecar_port = fields.Integer(
+        string='MCP Sidecar Port',
+        default=3001,
+        help='Port the MCP sidecar listens on',
+    )
+    mcp_transport = fields.Selection(
+        selection=[('sse', 'SSE'), ('streamable_http', 'Streamable HTTP')],
+        string='MCP Transport',
+        default='streamable_http',
+        help='MCP transport protocol for sidecar communication',
+    )
+    mcp_endpoint_path = fields.Char(
+        string='MCP Endpoint Path',
+        default='/mcp',
+        help='URL path for the MCP endpoint on the sidecar',
+    )
+    mcp_sidecar_env = fields.Text(
+        string='MCP Sidecar Environment',
+        help='JSON object of environment variables for the MCP sidecar container',
+    )
+
     # Status
     is_active = fields.Boolean(
         string='Active',
