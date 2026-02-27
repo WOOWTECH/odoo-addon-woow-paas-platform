@@ -741,6 +741,57 @@ class KubernetesService:
         result = self._run_command(args)
         return json.loads(result.stdout)
 
+    def apply_manifest(self, manifest: dict) -> Dict[str, Any]:
+        """Apply a Kubernetes manifest via kubectl apply.
+
+        Args:
+            manifest: Kubernetes resource manifest dict
+
+        Returns:
+            Applied resource info
+
+        Raises:
+            KubectlException: If apply fails
+        """
+        import yaml
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(manifest, f)
+            manifest_file = f.name
+
+        try:
+            result = self._run_command(["apply", "-f", manifest_file, "--output", "json"])
+            return json.loads(result.stdout)
+        finally:
+            Path(manifest_file).unlink(missing_ok=True)
+
+    def delete_service(self, namespace: str, service_name: str) -> bool:
+        """Delete a Kubernetes Service.
+
+        Args:
+            namespace: Namespace name
+            service_name: Name of the service to delete
+
+        Returns:
+            True if deleted, False if not found
+
+        Raises:
+            KubectlException: If deletion fails (other than not found)
+        """
+        validate_namespace(namespace)
+
+        try:
+            self._run_command([
+                "delete", "service", service_name,
+                "--namespace", namespace,
+                "--ignore-not-found",
+            ])
+            return True
+        except KubectlException as e:
+            if "not found" in e.stderr.lower():
+                return False
+            raise
+
     @staticmethod
     def _calculate_age(created_timestamp: str) -> str:
         """Calculate age from creation timestamp."""
