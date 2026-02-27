@@ -1,5 +1,6 @@
 """API endpoints for Helm release management."""
 import asyncio
+import json
 import logging
 from typing import Dict, List, Optional
 
@@ -14,9 +15,11 @@ from src.models.schemas import (
     ReleaseStatusResponse,
     ReleaseUpgradeRequest,
     RouteInfo,
+    SidecarPatchRequest,
+    SidecarPatchResponse,
 )
 from src.services.cloudflare import CloudflareException, CloudflareService
-from src.services.helm import HelmException, HelmService, KubernetesService
+from src.services.helm import HelmException, HelmService, KubectlException, KubernetesService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/releases", tags=["releases"])
@@ -351,6 +354,104 @@ async def get_release_status(namespace: str, name: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get release status. Check operator logs for details.",
+        )
+
+
+@router.post(
+    "/{namespace}/{name}/sidecar",
+    response_model=SidecarPatchResponse,
+    summary="Patch deployment with sidecar container",
+)
+async def patch_sidecar(
+    namespace: str,
+    name: str,
+    request: SidecarPatchRequest,
+):
+    """Patch a release's deployment to add a sidecar container.
+
+    This endpoint uses kubectl JSON patch to inject an additional container
+    into the deployment's pod spec. This is useful when the Helm chart does
+    not natively support sidecar/extra containers.
+
+    Args:
+        namespace: Release namespace
+        name: Release name (used to find the deployment if deployment_name not provided)
+        request: Sidecar container specification
+
+    Returns:
+        Confirmation of the sidecar patch
+
+    Raises:
+        HTTPException: If patching fails
+    """
+    try:
+        # Determine which deployment to patch
+        deployment_name = request.deployment_name
+        if not deployment_name:
+            # Auto-detect deployment from release label
+            deployments = k8s_service.get_deployments(
+                namespace=namespace,
+                label_selector=f"app.kubernetes.io/instance={name}",
+            )
+            if not deployments:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No deployments found for release {name} in namespace {namespace}",
+                )
+            deployment_name = deployments[0]["name"]
+
+        # Build the sidecar container spec for JSON patch
+        container_spec = {
+            "name": request.container.name,
+            "image": request.container.image,
+        }
+        if request.container.ports:
+            container_spec["ports"] = request.container.ports
+        if request.container.env:
+            container_spec["env"] = request.container.env
+        if request.container.resources:
+            container_spec["resources"] = request.container.resources
+        if request.container.liveness_probe:
+            container_spec["livenessProbe"] = request.container.liveness_probe
+        if request.container.readiness_probe:
+            container_spec["readinessProbe"] = request.container.readiness_probe
+
+        # Build JSON patch to add container to pod spec
+        patch = json.dumps([{
+            "op": "add",
+            "path": "/spec/template/spec/containers/-",
+            "value": container_spec,
+        }])
+
+        k8s_service.patch_deployment(
+            namespace=namespace,
+            deployment_name=deployment_name,
+            patch=patch,
+            patch_type="json",
+        )
+
+        logger.info(
+            f"Patched deployment {deployment_name} in {namespace} "
+            f"with sidecar container {request.container.name}"
+        )
+
+        return SidecarPatchResponse(
+            message=f"Sidecar container '{request.container.name}' added to deployment '{deployment_name}'",
+            deployment=deployment_name,
+            namespace=namespace,
+            container_name=request.container.name,
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except KubectlException as e:
+        logger.error(f"kubectl patch failed: {e.message}\nStderr: {e.stderr}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to patch deployment with sidecar. Check operator logs for details.",
         )
 
 

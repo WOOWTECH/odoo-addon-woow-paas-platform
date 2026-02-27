@@ -664,6 +664,83 @@ class KubernetesService:
 
         return services
 
+    def get_deployments(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get deployments in a namespace.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Optional label selector
+
+        Returns:
+            List of deployment information dicts
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get",
+            "deployments",
+            "--namespace",
+            namespace,
+            "--output",
+            "json",
+        ]
+
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
+        deployments_data = json.loads(result.stdout)
+
+        deployments = []
+        for deploy in deployments_data.get("items", []):
+            metadata = deploy.get("metadata", {})
+            deployments.append({
+                "name": metadata.get("name", ""),
+                "namespace": namespace,
+            })
+
+        return deployments
+
+    def patch_deployment(
+        self,
+        namespace: str,
+        deployment_name: str,
+        patch: str,
+        patch_type: str = "json",
+    ) -> Dict[str, Any]:
+        """Patch a Kubernetes deployment.
+
+        Args:
+            namespace: Namespace name
+            deployment_name: Name of the deployment to patch
+            patch: JSON patch string
+            patch_type: Patch type ('json', 'merge', or 'strategic')
+
+        Returns:
+            Patched deployment info
+
+        Raises:
+            KubectlException: If patching fails
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "patch",
+            "deployment",
+            deployment_name,
+            "--namespace",
+            namespace,
+            f"--type={patch_type}",
+            f"--patch={patch}",
+            "--output",
+            "json",
+        ]
+
+        result = self._run_command(args)
+        return json.loads(result.stdout)
+
     @staticmethod
     def _calculate_age(created_timestamp: str) -> str:
         """Calculate age from creation timestamp."""

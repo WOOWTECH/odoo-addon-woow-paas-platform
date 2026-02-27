@@ -187,6 +187,55 @@ class HealthResponse(BaseModel):
     helm_version: Optional[str] = None
 
 
+class SidecarContainer(BaseModel):
+    """Sidecar container specification for deployment patching."""
+
+    name: str = Field(..., description="Container name")
+    image: str = Field(..., description="Container image")
+    ports: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Container ports"
+    )
+    env: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Environment variables"
+    )
+    resources: Optional[Dict[str, Any]] = Field(
+        default=None, description="Resource requests/limits"
+    )
+    liveness_probe: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="livenessProbe",
+        description="Liveness probe configuration",
+    )
+    readiness_probe: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="readinessProbe",
+        description="Readiness probe configuration",
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+class SidecarPatchRequest(BaseModel):
+    """Request to patch a deployment with a sidecar container."""
+
+    deployment_name: Optional[str] = Field(
+        None,
+        description="Deployment name to patch (auto-detected from release if not provided)",
+    )
+    container: SidecarContainer = Field(
+        ..., description="Sidecar container specification"
+    )
+
+
+class SidecarPatchResponse(BaseModel):
+    """Response from sidecar patch operation."""
+
+    message: str
+    deployment: str
+    namespace: str
+    container_name: str
+
+
 class ErrorResponse(BaseModel):
     """Error response."""
 

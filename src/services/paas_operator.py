@@ -415,6 +415,33 @@ class PaaSOperatorClient:
             f'/api/releases/{namespace}/{release_name}/revisions',
         )
 
+    def patch_sidecar(
+        self,
+        namespace: str,
+        release_name: str,
+        sidecar_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Patch a release's deployment with a sidecar container.
+
+        Args:
+            namespace: Release namespace
+            release_name: Release name
+            sidecar_config: Sidecar container specification dict containing
+                'container' key with name, image, ports, env, resources, probes
+
+        Returns:
+            Patch confirmation with deployment and container info
+
+        Raises:
+            PaaSOperatorError: If patching fails
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/sidecar',
+            data=sidecar_config,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def get_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
         """Get detailed status of a release including pod information.
 
