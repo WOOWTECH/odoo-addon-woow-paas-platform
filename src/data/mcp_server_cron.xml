@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Cron: Retry MCP tool sync for auto-created servers -->
+        <record id="ir_cron_retry_mcp_sync" model="ir.cron">
+            <field name="name">MCP Server: Retry Tool Sync</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_retry_mcp_sync()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="numbercall">-1</field>
+            <field name="active" eval="True"/>
+            <field name="doall" eval="False"/>
+        </record>
+    </data>
+</odoo>
