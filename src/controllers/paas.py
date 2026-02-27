@@ -1791,13 +1791,9 @@ class PaasController(Controller):
             server.name, server.id, service.name,
         )
 
-        # Try to sync tools (don't block status update on failure)
-        try:
-            server.action_sync_tools()
-        except Exception as e:
-            _logger.warning(
-                "MCP tool sync failed for service %s: %s", service.name, e,
-            )
+        # Try to sync tools using safe method (keeps state as 'draft' on
+        # failure so the cron retry mechanism can pick it up later).
+        server.action_sync_tools_safe()
 
     def _build_mcp_endpoint_url(self, service: Any, template: Any) -> str:
         """Build the MCP endpoint URL for a cloud service sidecar.

@@ -94,6 +94,12 @@ class McpServer(models.Model):
         readonly=True,
         help='Automatically created by the system during cloud service deployment',
     )
+    sync_retry_count = fields.Integer(
+        string='Sync Retry Count',
+        default=0,
+        readonly=True,
+        help='Number of sync retry attempts for auto-created servers',
+    )
 
     @api.depends('tool_ids')
     def _compute_tool_count(self):
@@ -129,6 +135,7 @@ class McpServer(models.Model):
                 'state': 'connected',
                 'state_message': False,
                 'last_sync': fields.Datetime.now(),
+                'sync_retry_count': 0,
             })
             return result
         except Exception as e:
@@ -137,6 +144,82 @@ class McpServer(models.Model):
                 'state': 'error',
                 'state_message': str(e),
             })
+
+    def action_sync_tools_safe(self):
+        """Sync tools without setting error state on failure.
+
+        Used by auto-created MCP servers where the sidecar may not be
+        ready yet.  Keeps state as 'draft' on failure so the cron retry
+        mechanism can pick it up later.
+
+        Returns:
+            bool: True if sync succeeded, False otherwise.
+        """
+        self.ensure_one()
+        try:
+            asyncio.run(self._async_sync_tools())
+            self.write({
+                'state': 'connected',
+                'state_message': False,
+                'last_sync': fields.Datetime.now(),
+                'sync_retry_count': 0,
+            })
+            return True
+        except Exception as e:
+            _logger.info(
+                "MCP sync (safe) not ready for %s (attempt %d): %s",
+                self.name, self.sync_retry_count + 1, e,
+            )
+            self.write({
+                'sync_retry_count': self.sync_retry_count + 1,
+                'state_message': f"Waiting for sidecar (attempt {self.sync_retry_count + 1}): {e}",
+            })
+            return False
+
+    @api.model
+    def _cron_retry_mcp_sync(self):
+        """Cron job: retry tool sync for auto-created MCP servers in draft state.
+
+        Finds auto-created servers still in 'draft' state and retries
+        tool discovery.  After MAX_SYNC_RETRIES (3) failed attempts the
+        server is moved to 'error' state with a descriptive message.
+        """
+        MAX_SYNC_RETRIES = 3
+
+        servers = self.sudo().search([
+            ('auto_created', '=', True),
+            ('state', '=', 'draft'),
+        ])
+
+        if not servers:
+            return
+
+        _logger.info(
+            "MCP sync retry cron: found %d auto-created server(s) pending sync",
+            len(servers),
+        )
+
+        for server in servers:
+            if server.sync_retry_count >= MAX_SYNC_RETRIES:
+                server.write({
+                    'state': 'error',
+                    'state_message': (
+                        f"MCP sidecar sync failed after {MAX_SYNC_RETRIES} attempts. "
+                        "The sidecar may not be running. "
+                        "Use the Cloud Service settings page to manually re-sync."
+                    ),
+                })
+                _logger.warning(
+                    "MCP Server '%s' (id=%s) exceeded max retries (%d), marking as error",
+                    server.name, server.id, MAX_SYNC_RETRIES,
+                )
+                continue
+
+            _logger.info(
+                "Retrying MCP sync for '%s' (id=%s, attempt %d/%d)",
+                server.name, server.id, server.sync_retry_count + 1, MAX_SYNC_RETRIES,
+            )
+            server.action_sync_tools_safe()
 
     async def _async_sync_tools(self):
         """Async: connect to MCP server and discover tools."""

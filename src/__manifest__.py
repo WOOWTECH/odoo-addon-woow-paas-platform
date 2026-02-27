@@ -16,6 +16,7 @@
         'data/cloud_app_templates.xml',
         'views/menu.xml',
         'data/ai_assistant_data.xml',
+        'data/mcp_server_cron.xml',
         'views/project_task_views.xml',
         'views/ai_config_views.xml',
         'views/cloud_app_template_views.xml',
