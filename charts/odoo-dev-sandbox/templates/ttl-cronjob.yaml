@@ -37,7 +37,7 @@ subjects:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "odoo-dev-sandbox.fullname" . }}-ttl-check
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-ttl
   namespace: {{ include "odoo-dev-sandbox.namespace" . }}
   labels:
     {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}

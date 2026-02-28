@@ -108,7 +108,8 @@ if ! command -v helm >/dev/null 2>&1; then
 fi
 
 HELM_VERSION=$(helm version --short 2>/dev/null | head -1)
-if [[ ! "$HELM_VERSION" =~ ^v3 ]]; then
+HELM_MAJOR=$(echo "$HELM_VERSION" | grep -oE '^v[0-9]+' | tr -d 'v')
+if [[ -z "$HELM_MAJOR" ]] || [[ "$HELM_MAJOR" -lt 3 ]]; then
     echo -e "${RED}Helm 3+ is required. Current version: ${HELM_VERSION}${NC}" >&2
     exit 1
 fi
@@ -241,7 +242,10 @@ echo ""
 # --- 等待 Pod 就緒 ---
 echo -e "${BLUE}Waiting for pods to be ready...${NC}"
 
-FULLNAME="${SLUG}-odoo-dev-sandbox"
+# Discover actual resource names from K8s (fullname may be truncated by Helm)
+ODOO_DEPLOY=$(kubectl get deploy -n "$NAMESPACE" -l "app.kubernetes.io/instance=$SLUG,app.kubernetes.io/component=odoo" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+PG_STATEFULSET=$(kubectl get statefulset -n "$NAMESPACE" -l "app.kubernetes.io/instance=$SLUG,app.kubernetes.io/component=postgres" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+NGINX_SVC=$(kubectl get svc -n "$NAMESPACE" -l "app.kubernetes.io/instance=$SLUG,app.kubernetes.io/component=nginx" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
 if ! kubectl wait --for=condition=ready pod \
     -l "app.kubernetes.io/instance=$SLUG" \
@@ -264,7 +268,7 @@ echo ""
 # --- 檢查並初始化資料庫 ---
 echo -e "${BLUE}Checking database...${NC}"
 
-DB_EXISTS=$(kubectl exec -n "$NAMESPACE" "statefulset/${FULLNAME}-postgres" -- \
+DB_EXISTS=$(kubectl exec -n "$NAMESPACE" "statefulset/${PG_STATEFULSET}" -- \
     psql -U odoo -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" 2>/dev/null || echo "")
 
 if [ "$DB_EXISTS" != "1" ]; then
@@ -285,7 +289,7 @@ if [ "$DB_EXISTS" != "1" ]; then
 
     echo -e "  ${BLUE}Installing modules:${NC} ${MODULES}"
 
-    if kubectl exec -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" -- \
+    if kubectl exec -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" -- \
         odoo -d "$DB_NAME" -i "$MODULES" --stop-after-init --without-demo=all --load-language=zh_TW 2>&1 \
         | grep -E "(Loading|Installing|init db|error|Error)" | head -20; then
         echo -e "${GREEN}Database initialized successfully.${NC}"
@@ -295,8 +299,8 @@ if [ "$DB_EXISTS" != "1" ]; then
 
     # Restart odoo after init (--stop-after-init stops the process)
     echo -e "${BLUE}Restarting Odoo...${NC}"
-    kubectl rollout restart -n "$NAMESPACE" "deploy/${FULLNAME}-odoo"
-    kubectl rollout status -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" --timeout=120s 2>/dev/null || true
+    kubectl rollout restart -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}"
+    kubectl rollout status -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" --timeout=120s 2>/dev/null || true
 else
     echo -e "${GREEN}Database '$DB_NAME' already exists.${NC}"
 fi
@@ -315,12 +319,12 @@ echo -e "  ${BLUE}TTL:${NC}        $TTL"
 echo -e "  ${BLUE}Mode:${NC}       $MODE"
 echo ""
 echo -e "${BLUE}Access:${NC}"
-echo -e "  kubectl port-forward -n $NAMESPACE svc/${FULLNAME}-nginx 8080:80"
+echo -e "  kubectl port-forward -n $NAMESPACE svc/${NGINX_SVC} 8080:80"
 echo -e "  Then open: ${YELLOW}http://localhost:8080${NC}"
 echo -e "  Login: ${YELLOW}admin / admin${NC}"
 echo ""
 echo -e "${BLUE}Commands:${NC}"
 echo -e "  Status:   ${YELLOW}kubectl get pods -n $NAMESPACE${NC}"
-echo -e "  Logs:     ${YELLOW}kubectl logs -n $NAMESPACE deploy/${FULLNAME}-odoo -f${NC}"
+echo -e "  Logs:     ${YELLOW}kubectl logs -n $NAMESPACE deploy/${ODOO_DEPLOY} -f${NC}"
 echo -e "  Destroy:  ${YELLOW}./scripts/k8s-sandbox-destroy.sh $SLUG${NC}"
 echo ""
