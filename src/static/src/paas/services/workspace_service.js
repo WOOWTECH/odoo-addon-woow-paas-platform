@@ -342,6 +342,157 @@ export const workspaceService = reactive({
         }
     },
 
+    // -------------------------------------------------------------------------
+    // Smart Home Methods
+    // -------------------------------------------------------------------------
+
+    /**
+     * Fetch all smart homes for a workspace
+     * @param {number} workspaceId - Target workspace ID
+     * @returns {Promise<ApiResponse<Object[]>>}
+     */
+    async getSmartHomes(workspaceId) {
+        this.operationLoading.getSmartHomes = true;
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes`, {
+                action: "list",
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.getSmartHomes = false;
+        }
+    },
+
+    /**
+     * Create a new smart home
+     * @param {number} workspaceId - Target workspace ID
+     * @param {Object} data - Smart home creation data
+     * @param {string} data.name - Smart home name
+     * @param {number} [data.ha_port=8123] - Home Assistant port
+     * @returns {Promise<ApiResponse<Object>>}
+     */
+    async createSmartHome(workspaceId, data) {
+        this.operationLoading.createSmartHome = true;
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes`, {
+                action: "create",
+                name: data.name,
+                ha_port: data.ha_port || 8123,
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.createSmartHome = false;
+        }
+    },
+
+    /**
+     * Get a single smart home by ID
+     * @param {number} workspaceId - Target workspace ID
+     * @param {number} homeId - Smart home ID
+     * @returns {Promise<ApiResponse<Object>>}
+     */
+    async getSmartHome(workspaceId, homeId) {
+        this.operationLoading.getSmartHome = true;
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes/${homeId}`, {
+                action: "get",
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.getSmartHome = false;
+        }
+    },
+
+    /**
+     * Delete a smart home
+     * @param {number} workspaceId - Target workspace ID
+     * @param {number} homeId - Smart home ID
+     * @returns {Promise<ApiResponse<void>>}
+     */
+    async deleteSmartHome(workspaceId, homeId) {
+        this.operationLoading.deleteSmartHome = true;
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes/${homeId}`, {
+                action: "delete",
+            });
+            if (result.success) {
+                return { success: true };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.deleteSmartHome = false;
+        }
+    },
+
+    /**
+     * Provision a smart home (set up tunnel)
+     * @param {number} workspaceId - Target workspace ID
+     * @param {number} homeId - Smart home ID
+     * @returns {Promise<ApiResponse<Object>>}
+     */
+    async provisionSmartHome(workspaceId, homeId) {
+        this.operationLoading.provisionSmartHome = true;
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes/${homeId}`, {
+                action: "provision",
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.provisionSmartHome = false;
+        }
+    },
+
+    /**
+     * Refresh smart home status
+     * @param {number} workspaceId - Target workspace ID
+     * @param {number} homeId - Smart home ID
+     * @returns {Promise<ApiResponse<Object>>}
+     */
+    async refreshSmartHomeStatus(workspaceId, homeId) {
+        this.operationLoading.refreshSmartHomeStatus = true;
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes/${homeId}`, {
+                action: "refresh_status",
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.refreshSmartHomeStatus = false;
+        }
+    },
+
     /**
      * Check if a specific operation is loading
      * @param {string} operation - Operation name

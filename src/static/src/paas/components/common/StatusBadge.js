@@ -54,6 +54,21 @@ export class StatusBadge extends Component {
                 colorClass: "o_woow_status_deleting",
                 showSpinner: true,
             },
+            connected: {
+                label: "Connected",
+                colorClass: "o_woow_status_running",
+                showSpinner: false,
+            },
+            disconnected: {
+                label: "Disconnected",
+                colorClass: "o_woow_status_pending",
+                showSpinner: false,
+            },
+            provisioning: {
+                label: "Provisioning",
+                colorClass: "o_woow_status_deploying",
+                showSpinner: true,
+            },
         };
 
         return configs[this.props.status] || {

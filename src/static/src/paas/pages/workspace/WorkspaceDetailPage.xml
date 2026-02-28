@@ -141,6 +141,63 @@
                     </t>
                 </section>
 
+                <!-- Smart Home Section -->
+                <section class="o_woow_smart_homes_section">
+                    <div class="o_woow_smart_homes_section_header">
+                        <h2>Smart Home</h2>
+                        <WoowButton
+                            variant="'primary'"
+                            size="'md'"
+                            onClick.bind="openCreateSmartHomeModal">
+                            <WoowIcon name="'add'" size="18"/>
+                            Add Smart Home
+                        </WoowButton>
+                    </div>
+
+                    <!-- Loading Smart Homes -->
+                    <t t-if="state.loadingSmartHomes and !hasSmartHomes">
+                        <div class="o_woow_services_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <p>Loading smart homes...</p>
+                        </div>
+                    </t>
+
+                    <!-- Empty State -->
+                    <t t-elif="!hasSmartHomes and !state.loadingSmartHomes">
+                        <div class="o_woow_smart_homes_empty">
+                            <WoowIcon name="'home_iot_device'" size="48"/>
+                            <h3>Connect Your Home Assistant</h3>
+                            <p>Set up a secure tunnel to access your Home Assistant from anywhere.</p>
+                            <WoowButton
+                                variant="'primary'"
+                                size="'md'"
+                                onClick.bind="openCreateSmartHomeModal">
+                                <WoowIcon name="'add'" size="18"/>
+                                Add Smart Home
+                            </WoowButton>
+                        </div>
+                    </t>
+
+                    <!-- Smart Home Grid -->
+                    <t t-if="hasSmartHomes">
+                        <div class="o_woow_smart_homes_grid">
+                            <t t-foreach="state.smartHomes" t-as="home" t-key="home.id">
+                                <SmartHomeCard
+                                    home="home"
+                                    domain="state.domain"
+                                    onSelect="() => this.goToSmartHome(home.id)"/>
+                            </t>
+                        </div>
+                    </t>
+                </section>
+
+                <!-- Create Smart Home Modal -->
+                <CreateSmartHomeModal
+                    t-if="state.showCreateSmartHomeModal"
+                    workspaceId="props.workspaceId"
+                    onClose.bind="closeCreateSmartHomeModal"
+                    onCreated.bind="onSmartHomeCreated"/>
+
                 <!-- Get Started Section (Service Types) -->
                 <WoowCard shadow="true" class="'o_woow_get_started'">
                     <div class="o_woow_get_started_header">
@@ -159,10 +216,18 @@
                                 </div>
                                 <h3><t t-esc="service.name"/></h3>
                                 <p><t t-esc="service.description"/></p>
-                                <WoowButton variant="'primary'" size="'sm'" onClick.bind="goToMarketplace">
-                                    Get Started
-                                    <WoowIcon name="'arrow_forward'" size="16"/>
-                                </WoowButton>
+                                <t t-if="service.action === 'smarthome'">
+                                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateSmartHomeModal">
+                                        Get Started
+                                        <WoowIcon name="'arrow_forward'" size="16"/>
+                                    </WoowButton>
+                                </t>
+                                <t t-else="">
+                                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="goToMarketplace">
+                                        Get Started
+                                        <WoowIcon name="'arrow_forward'" size="16"/>
+                                    </WoowButton>
+                                </t>
                             </div>
                         </t>
                     </div>

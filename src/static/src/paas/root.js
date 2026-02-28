@@ -16,6 +16,7 @@ import { SupportTasksPage } from "./pages/support-tasks/SupportTasksPage";
 import { TaskDetailPage } from "./pages/task-detail/TaskDetailPage";
 import { AiChatPage } from "./pages/ai-chat/AiChatPage";
 import { ProjectKanbanPage } from "./pages/project-kanban/ProjectKanbanPage";
+import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -35,6 +36,7 @@ export class Root extends Component {
         TaskDetailPage,
         AiChatPage,
         ProjectKanbanPage,
+        SmartHomeDetailPage,
         EmptyState,
     };
     static props = {};
@@ -74,5 +76,9 @@ export class Root extends Component {
 
     get conversationId() {
         return this.router.params.conversationId ? parseInt(this.router.params.conversationId, 10) : null;
+    }
+
+    get homeId() {
+        return this.router.params.homeId ? parseInt(this.router.params.homeId, 10) : null;
     }
 }

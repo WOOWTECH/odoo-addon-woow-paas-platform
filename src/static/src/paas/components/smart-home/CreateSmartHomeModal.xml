@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.CreateSmartHomeModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>
+                        <t t-if="state.step === 'form'">Add Smart Home</t>
+                        <t t-elif="state.step === 'provisioning'">Provisioning...</t>
+                        <t t-else="">Setup Complete</t>
+                    </h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.loading or state.provisioning">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <!-- Form Step -->
+                    <t t-if="state.step === 'form'">
+                        <div class="o_woow_form_group">
+                            <label for="smarthome_name">Name</label>
+                            <input
+                                type="text"
+                                id="smarthome_name"
+                                class="o_woow_input"
+                                placeholder="e.g., My Home Assistant"
+                                t-att-value="state.name"
+                                t-on-input="onNameInput"
+                                t-att-disabled="state.loading"
+                            />
+                        </div>
+
+                        <div class="o_woow_form_group">
+                            <label for="smarthome_port">HA Port</label>
+                            <input
+                                type="number"
+                                id="smarthome_port"
+                                class="o_woow_input"
+                                placeholder="8123"
+                                t-att-value="state.haPort"
+                                t-on-input="onPortInput"
+                                t-att-disabled="state.loading"
+                                min="1"
+                                max="65535"
+                            />
+                            <small class="o_woow_form_hint">
+                                Default Home Assistant port is 8123
+                            </small>
+                        </div>
+
+                        <div t-if="state.error" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.error"/>
+                        </div>
+                    </t>
+
+                    <!-- Provisioning Step -->
+                    <t t-elif="state.step === 'provisioning' or state.step === 'done'">
+                        <div class="o_woow_provision_progress">
+                            <div class="o_woow_provision_icon">
+                                <t t-if="state.step === 'done'">
+                                    <WoowIcon name="'check_circle'" size="48"/>
+                                </t>
+                                <t t-else="">
+                                    <WoowIcon name="'sync'" size="48" class="'o_woow_spin'"/>
+                                </t>
+                            </div>
+                            <h3 t-if="state.step === 'done'">Smart Home Ready</h3>
+                            <h3 t-else="">Setting up your Smart Home...</h3>
+                            <p t-if="state.step === 'done'">
+                                Your smart home tunnel has been configured successfully.
+                            </p>
+                            <p t-else="">
+                                Creating tunnel and configuring secure access. This may take a moment.
+                            </p>
+                            <div class="o_woow_progress_bar">
+                                <div
+                                    class="o_woow_progress_fill"
+                                    t-attf-style="width: {{ state.provisionProgress }}%"/>
+                            </div>
+                        </div>
+
+                        <div t-if="state.error" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.error"/>
+                        </div>
+                    </t>
+                </div>
+
+                <div class="o_woow_modal_footer" t-if="state.step === 'form'">
+                    <WoowButton
+                        variant="'ghost'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.loading">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton
+                        variant="'primary'"
+                        size="'md'"
+                        onClick.bind="onSubmit"
+                        disabled="state.loading">
+                        <t t-if="state.loading">
+                            <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                            Creating...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'home_iot_device'" size="18"/>
+                            Create Smart Home
+                        </t>
+                    </WoowButton>
+                </div>
+
+                <div class="o_woow_modal_footer" t-if="state.step === 'done'">
+                    <WoowButton
+                        variant="'primary'"
+                        size="'md'"
+                        onClick="props.onClose">
+                        Done
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

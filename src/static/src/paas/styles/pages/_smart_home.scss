@@ -1,0 +1,487 @@
+// =============================================================================
+// Smart Home Styles
+// =============================================================================
+
+// variables loaded via manifest
+
+// -----------------------------------------------------------------------------
+// Smart Home Card
+// -----------------------------------------------------------------------------
+
+.o_woow_smart_home_card {
+    background: $woow-card-light;
+    border-radius: $woow-radius-lg;
+    border: 1px solid $woow-border-light;
+    padding: 1rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+
+    &:hover {
+        transform: translateY(-2px);
+        box-shadow: $woow-shadow-soft;
+        border-color: rgba(249, 115, 22, 0.3);
+    }
+
+    &.o_woow_smart_home_card_error {
+        border-color: rgba(239, 68, 68, 0.3);
+        background: rgba(239, 68, 68, 0.02);
+    }
+}
+
+.o_woow_smart_home_card_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.o_woow_smart_home_icon {
+    width: 44px;
+    height: 44px;
+    border-radius: $woow-radius-default;
+    background: rgba(249, 115, 22, 0.1);
+    color: #f97316;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.o_woow_smart_home_card_body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.o_woow_smart_home_name_row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.o_woow_smart_home_dot {
+    width: 8px;
+    height: 8px;
+    border-radius: $woow-radius-full;
+    flex-shrink: 0;
+
+    &.o_woow_smart_home_dot_green {
+        background: #22c55e;
+        box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+    }
+
+    &.o_woow_smart_home_dot_gray {
+        background: #9ca3af;
+    }
+
+    &.o_woow_smart_home_dot_red {
+        background: #ef4444;
+        box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+    }
+}
+
+.o_woow_smart_home_name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    margin: 0;
+}
+
+.o_woow_smart_home_url {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    color: $woow-primary;
+    text-decoration: none;
+    margin-top: 0.25rem;
+
+    &:hover {
+        text-decoration: underline;
+    }
+}
+
+.o_woow_smart_home_error {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    color: #ef4444;
+    margin-top: 0.25rem;
+    line-height: 1.3;
+
+    .material-symbols-rounded {
+        flex-shrink: 0;
+        margin-top: 0.0625rem;
+    }
+
+    span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+    }
+}
+
+.o_woow_smart_home_card_actions {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: auto;
+    padding-top: 0.5rem;
+    border-top: 1px solid $woow-border-light;
+}
+
+// -----------------------------------------------------------------------------
+// Smart Home Section (on WorkspaceDetailPage)
+// -----------------------------------------------------------------------------
+
+.o_woow_smart_homes_section {
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+}
+
+.o_woow_smart_homes_section_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+
+    h2 {
+        margin: 0;
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+    }
+}
+
+.o_woow_smart_homes_grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+
+    @media (max-width: 640px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_smart_homes_empty {
+    text-align: center;
+    padding: 3rem 2rem;
+    background: $woow-card-light;
+    border-radius: $woow-radius-lg;
+    border: 2px dashed $woow-border-light;
+
+    h3 {
+        margin: 1rem 0 0.5rem;
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+        margin-bottom: 1.5rem;
+        max-width: 400px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .material-symbols-rounded {
+        color: $woow-text-secondary;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Smart Home Detail Page
+// -----------------------------------------------------------------------------
+
+.o_woow_smart_home_detail {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.o_woow_smart_home_detail_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+    gap: 1rem;
+
+    @media (max-width: 768px) {
+        flex-direction: column;
+    }
+}
+
+.o_woow_smart_home_detail_info {
+    display: flex;
+    gap: 1rem;
+}
+
+.o_woow_smart_home_detail_icon {
+    width: 56px;
+    height: 56px;
+    border-radius: $woow-radius-lg;
+    background: rgba(249, 115, 22, 0.1);
+    color: #f97316;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.o_woow_smart_home_detail_title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.25rem;
+
+    h1 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: $woow-text-primary;
+        margin: 0;
+    }
+}
+
+.o_woow_smart_home_route_url {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.875rem;
+    color: $woow-primary;
+    text-decoration: none;
+    margin-top: 0.25rem;
+
+    &:hover {
+        text-decoration: underline;
+    }
+}
+
+.o_woow_smart_home_detail_actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+// -----------------------------------------------------------------------------
+// Tunnel Info Panel
+// -----------------------------------------------------------------------------
+
+.o_woow_tunnel_info_card {
+    margin-bottom: 1.5rem;
+}
+
+.o_woow_tunnel_info_header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    color: $woow-primary;
+
+    h2 {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 0;
+    }
+}
+
+.o_woow_tunnel_info_grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+
+    @media (max-width: 768px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.o_woow_tunnel_info_item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    padding: 0.75rem;
+    background: $woow-background-light;
+    border-radius: $woow-radius-default;
+}
+
+.o_woow_tunnel_info_label {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: $woow-text-secondary;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.o_woow_tunnel_info_value {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: $woow-text-primary;
+    word-break: break-all;
+
+    a {
+        color: $woow-primary;
+        text-decoration: none;
+
+        &:hover {
+            text-decoration: underline;
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Connection Guide
+// -----------------------------------------------------------------------------
+
+.o_woow_connection_guide {
+    margin-bottom: 1.5rem;
+}
+
+.o_woow_connection_guide_header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    color: $woow-primary;
+
+    h2 {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 0;
+    }
+}
+
+.o_woow_connection_guide_content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.o_woow_guide_step {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.o_woow_guide_step_number {
+    width: 32px;
+    height: 32px;
+    border-radius: $woow-radius-full;
+    background: rgba($woow-primary, 0.1);
+    color: $woow-primary;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.875rem;
+    flex-shrink: 0;
+}
+
+.o_woow_guide_step_content {
+    h4 {
+        font-size: 0.9375rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 0 0 0.25rem;
+    }
+
+    p {
+        font-size: 0.875rem;
+        color: $woow-text-secondary;
+        margin: 0;
+        line-height: 1.5;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Create Smart Home Modal - Provisioning Progress
+// -----------------------------------------------------------------------------
+
+.o_woow_provision_progress {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 1.5rem 0;
+}
+
+.o_woow_provision_icon {
+    margin-bottom: 1rem;
+
+    .material-symbols-rounded {
+        color: $woow-primary;
+    }
+}
+
+.o_woow_provision_progress h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    margin: 0 0 0.5rem;
+}
+
+.o_woow_provision_progress p {
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+    margin: 0 0 1.5rem;
+}
+
+.o_woow_progress_bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: $woow-radius-full;
+    overflow: hidden;
+}
+
+.o_woow_progress_fill {
+    height: 100%;
+    background: $woow-primary;
+    border-radius: $woow-radius-full;
+    transition: width 0.5s ease;
+}
+
+// -----------------------------------------------------------------------------
+// Form Hint
+// -----------------------------------------------------------------------------
+
+.o_woow_form_hint {
+    display: block;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    margin-top: 0.375rem;
+}
+
+// -----------------------------------------------------------------------------
+// Delete Warning (shared pattern, scoped for clarity)
+// -----------------------------------------------------------------------------
+
+.o_woow_delete_warning {
+    text-align: center;
+    padding: 1rem 0;
+    color: $woow-text-secondary;
+
+    .material-symbols-rounded {
+        color: #f97316;
+    }
+
+    p {
+        margin: 0.75rem 0;
+        color: $woow-text-primary;
+    }
+}
+
+.o_woow_delete_hint {
+    font-size: 0.875rem;
+    color: $woow-text-secondary !important;
+}
+
+.o_woow_confirm_input {
+    margin-top: 1rem;
+}

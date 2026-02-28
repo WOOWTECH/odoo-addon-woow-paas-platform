@@ -7,6 +7,7 @@ const routes = [
     { path: "workspaces", name: "Workspaces", routeName: "workspaces" },
     { path: "workspace/:id", name: "Workspace Detail", routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
     { path: "workspace/:id/team", name: "Workspace Team", routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },
+    { path: "workspace/:id/smarthome/:homeId", name: "Smart Home Detail", routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)$/ },
     { path: "workspace/:id/services/marketplace", name: "App Marketplace", routeName: "marketplace", pattern: /^workspace\/(\d+)\/services\/marketplace$/ },
     { path: "workspace/:id/services/configure/:templateId", name: "Configure Service", routeName: "configure", pattern: /^workspace\/(\d+)\/services\/configure\/(\d+)$/ },
     { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration)$/ },
@@ -61,6 +62,8 @@ export const router = reactive({
                             if (match[3]) {
                                 this.params.tab = match[3];
                             }
+                        } else if (route.routeName === 'smarthome-detail') {
+                            this.params.homeId = match[2];
                         }
                     }
                     // For AI routes, map the first capture to the correct param name
