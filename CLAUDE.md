@@ -90,28 +90,28 @@ pytest tests/ -v --cov=src
 
 ```bash
 # 為當前 branch 建立沙盒
-./scripts/k8s-sandbox-create.sh
+./.claude/skills/k8s-dev-sandbox/scripts/create.sh
 
 # 列出所有活躍的沙盒
-./scripts/k8s-sandbox-list.sh
+./.claude/skills/k8s-dev-sandbox/scripts/list.sh
 
 # 檢查沙盒狀態
-./scripts/k8s-sandbox-status.sh <sandbox-name>
+./.claude/skills/k8s-dev-sandbox/scripts/status.sh <sandbox-name>
 
 # 查看日誌
-./scripts/k8s-sandbox-logs.sh <sandbox-name> [--service odoo|postgres|nginx] [--follow]
+./.claude/skills/k8s-dev-sandbox/scripts/logs.sh <sandbox-name> [--service odoo|postgres|nginx] [--follow]
 
 # 在沙盒中執行測試
-./scripts/k8s-sandbox-test.sh <sandbox-name> [--module <module>]
+./.claude/skills/k8s-dev-sandbox/scripts/test.sh <sandbox-name> [--module <module>]
 
 # 延長沙盒 TTL
-./scripts/k8s-sandbox-extend.sh <sandbox-name> [--ttl 336h]
+./.claude/skills/k8s-dev-sandbox/scripts/extend.sh <sandbox-name> [--ttl 336h]
 
 # 銷毀沙盒
-./scripts/k8s-sandbox-destroy.sh <sandbox-name>
+./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh <sandbox-name>
 
 # 建構 CI 映像
-./scripts/k8s-sandbox-build.sh [--registry <registry>] [--push]
+./.claude/skills/k8s-dev-sandbox/scripts/build.sh [--registry <registry>] [--push]
 ```
 
 或使用 Claude Code skill：`/k8s-dev-sandbox <command>`
@@ -217,15 +217,11 @@ woow_paas_platform/
 │   │   └── templates/          # K8s resource templates
 │   ├── Dockerfile
 │   └── requirements.txt
-├── scripts/                      # Development scripts
-│   ├── k8s-sandbox-create.sh    # 建立 K8s 沙盒環境
-│   ├── k8s-sandbox-destroy.sh   # 銷毀沙盒環境
-│   ├── k8s-sandbox-list.sh      # 列出所有沙盒
-│   ├── k8s-sandbox-status.sh    # 檢查沙盒狀態
-│   ├── k8s-sandbox-logs.sh      # 查看沙盒日誌
-│   ├── k8s-sandbox-test.sh      # 在沙盒中執行測試
-│   ├── k8s-sandbox-extend.sh    # 延長沙盒 TTL
-│   └── k8s-sandbox-build.sh     # 建構 CI 映像
+├── scripts/                      # Development scripts (worktree 相關)
+│   ├── start-dev.sh             # 啟動開發環境
+│   ├── test-addon.sh            # 執行測試
+│   ├── setup-worktree-env.sh    # 設定 worktree 環境變數
+│   └── cleanup-worktree.sh      # 清理環境
 ├── charts/
 │   └── odoo-dev-sandbox/         # K8s 沙盒 Helm chart
 │       ├── Chart.yaml
@@ -252,6 +248,18 @@ woow_paas_platform/
 │   ├── development/             # Developer guides
 │   └── spec/                    # Feature specifications
 └── .claude/                      # Claude Code PM configuration
+    └── skills/
+        └── k8s-dev-sandbox/      # K8s 沙盒 Skill
+            ├── SKILL.md          # Skill 定義
+            └── scripts/          # 沙盒管理腳本
+                ├── create.sh     # 建立沙盒
+                ├── destroy.sh    # 銷毀沙盒
+                ├── list.sh       # 列出所有沙盒
+                ├── status.sh     # 檢查狀態
+                ├── logs.sh       # 查看日誌
+                ├── extend.sh     # 延長 TTL
+                ├── test.sh       # 執行測試
+                └── build.sh      # 建構 CI 映像
 ```
 
 ### Standalone OWL Application (`/woow`)

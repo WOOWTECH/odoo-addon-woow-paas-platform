@@ -4,7 +4,7 @@
 # 在 Kubernetes 沙盒環境中執行 Odoo 測試套件
 #
 # Usage:
-#   scripts/k8s-sandbox-test.sh [NAME] [OPTIONS]
+#   .claude/skills/k8s-dev-sandbox/scripts/test.sh [NAME] [OPTIONS]
 #
 # Arguments:
 #   NAME                Sandbox name (slug). If not provided, auto-detect from current branch.
@@ -15,10 +15,10 @@
 #   -h, --help          Show usage
 #
 # Examples:
-#   scripts/k8s-sandbox-test.sh
-#   scripts/k8s-sandbox-test.sh epic-smarthome
-#   scripts/k8s-sandbox-test.sh --module sale_management
-#   scripts/k8s-sandbox-test.sh epic-smarthome --module woow_paas_platform --keep-on-fail
+#   .claude/skills/k8s-dev-sandbox/scripts/test.sh
+#   .claude/skills/k8s-dev-sandbox/scripts/test.sh epic-smarthome
+#   .claude/skills/k8s-dev-sandbox/scripts/test.sh --module sale_management
+#   .claude/skills/k8s-dev-sandbox/scripts/test.sh epic-smarthome --module woow_paas_platform --keep-on-fail
 
 set -euo pipefail
 
@@ -31,7 +31,7 @@ NC='\033[0m' # No Color
 
 # --- 取得專案根目錄 ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # --- 預設值 ---
 SLUG=""
@@ -112,7 +112,7 @@ fi
 # --- 檢查 namespace 是否存在 ---
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo -e "${RED}Namespace '$NAMESPACE' does not exist. Is the sandbox running?${NC}" >&2
-    echo -e "${YELLOW}Create one with: ./scripts/k8s-sandbox-create.sh${NC}" >&2
+    echo -e "${YELLOW}Create one with: "${SCRIPT_DIR}/create.sh"${NC}" >&2
     exit 2
 fi
 
@@ -185,11 +185,11 @@ else
     if [ "$KEEP_ON_FAIL" = true ]; then
         echo ""
         echo -e "${YELLOW}Extending sandbox TTL by 24h for debugging...${NC}"
-        if [ -x "${SCRIPT_DIR}/k8s-sandbox-extend.sh" ]; then
-            "${SCRIPT_DIR}/k8s-sandbox-extend.sh" "$SLUG" --ttl 24h
+        if [ -x "${SCRIPT_DIR}/extend.sh" ]; then
+            "${SCRIPT_DIR}/extend.sh" "$SLUG" --ttl 24h
             echo -e "${YELLOW}⚠️  Tests failed. Sandbox TTL extended by 24h for debugging.${NC}"
         else
-            echo -e "${YELLOW}⚠️  k8s-sandbox-extend.sh not found. Manually extend TTL if needed.${NC}"
+            echo -e "${YELLOW}⚠️  extend.sh not found. Manually extend TTL if needed.${NC}"
         fi
     fi
 

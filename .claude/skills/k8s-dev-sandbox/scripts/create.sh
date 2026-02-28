@@ -4,7 +4,7 @@
 # 在 Kubernetes 中建立 Odoo 開發沙盒環境
 #
 # Usage:
-#   scripts/k8s-sandbox-create.sh [OPTIONS]
+#   .claude/skills/k8s-dev-sandbox/scripts/create.sh [OPTIONS]
 #
 # Options:
 #   --branch <name>     Override branch slug (default: auto-detect from git)
@@ -15,9 +15,9 @@
 #   -h, --help          Show usage
 #
 # Examples:
-#   scripts/k8s-sandbox-create.sh
-#   scripts/k8s-sandbox-create.sh --branch feature-login --ttl 48h
-#   scripts/k8s-sandbox-create.sh --image woow-odoo-dev:main-abc1234
+#   .claude/skills/k8s-dev-sandbox/scripts/create.sh
+#   .claude/skills/k8s-dev-sandbox/scripts/create.sh --branch feature-login --ttl 48h
+#   .claude/skills/k8s-dev-sandbox/scripts/create.sh --image woow-odoo-dev:main-abc1234
 
 set -euo pipefail
 
@@ -30,7 +30,7 @@ NC='\033[0m' # No Color
 
 # --- 取得專案根目錄 ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # --- 預設值 ---
 BRANCH_OVERRIDE=""
@@ -326,5 +326,5 @@ echo ""
 echo -e "${BLUE}Commands:${NC}"
 echo -e "  Status:   ${YELLOW}kubectl get pods -n $NAMESPACE${NC}"
 echo -e "  Logs:     ${YELLOW}kubectl logs -n $NAMESPACE deploy/${ODOO_DEPLOY} -f${NC}"
-echo -e "  Destroy:  ${YELLOW}./scripts/k8s-sandbox-destroy.sh $SLUG${NC}"
+echo -e "  Destroy:  ${YELLOW}\"${SCRIPT_DIR}/destroy.sh\" $SLUG${NC}"
 echo ""

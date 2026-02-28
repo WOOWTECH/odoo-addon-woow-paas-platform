@@ -4,7 +4,7 @@
 # 延長 Kubernetes 中 Odoo 開發沙盒的存活時間
 #
 # Usage:
-#   scripts/k8s-sandbox-extend.sh [NAME] [OPTIONS]
+#   .claude/skills/k8s-dev-sandbox/scripts/extend.sh [NAME] [OPTIONS]
 #
 # Arguments:
 #   NAME                Sandbox name (slug). If not provided, auto-detect from current branch.
@@ -14,9 +14,9 @@
 #   -h, --help          Show usage
 #
 # Examples:
-#   scripts/k8s-sandbox-extend.sh --ttl 48h
-#   scripts/k8s-sandbox-extend.sh epic-smarthome --ttl 168h
-#   scripts/k8s-sandbox-extend.sh --ttl 0
+#   .claude/skills/k8s-dev-sandbox/scripts/extend.sh --ttl 48h
+#   .claude/skills/k8s-dev-sandbox/scripts/extend.sh epic-smarthome --ttl 168h
+#   .claude/skills/k8s-dev-sandbox/scripts/extend.sh --ttl 0
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ NC='\033[0m' # No Color
 
 # --- 取得專案根目錄 ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # --- 預設值 ---
 SLUG=""
@@ -109,7 +109,7 @@ fi
 # --- 檢查 namespace 是否存在 ---
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo -e "${RED}Namespace '$NAMESPACE' does not exist.${NC}" >&2
-    echo -e "${YELLOW}Create a sandbox first: ./scripts/k8s-sandbox-create.sh${NC}" >&2
+    echo -e "${YELLOW}Create a sandbox first: "${SCRIPT_DIR}/create.sh"${NC}" >&2
     exit 1
 fi
 

@@ -4,7 +4,7 @@
 # 銷毀 Kubernetes 中的 Odoo 開發沙盒環境
 #
 # Usage:
-#   scripts/k8s-sandbox-destroy.sh [NAME] [OPTIONS]
+#   .claude/skills/k8s-dev-sandbox/scripts/destroy.sh [NAME] [OPTIONS]
 #
 # Arguments:
 #   NAME                Sandbox name (slug). If not provided, auto-detect from current branch.
@@ -14,9 +14,9 @@
 #   -h, --help          Show usage
 #
 # Examples:
-#   scripts/k8s-sandbox-destroy.sh
-#   scripts/k8s-sandbox-destroy.sh epic-smarthome
-#   scripts/k8s-sandbox-destroy.sh epic-smarthome --force
+#   .claude/skills/k8s-dev-sandbox/scripts/destroy.sh
+#   .claude/skills/k8s-dev-sandbox/scripts/destroy.sh epic-smarthome
+#   .claude/skills/k8s-dev-sandbox/scripts/destroy.sh epic-smarthome --force
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ NC='\033[0m' # No Color
 
 # --- 取得專案根目錄 ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # --- 預設值 ---
 SLUG=""

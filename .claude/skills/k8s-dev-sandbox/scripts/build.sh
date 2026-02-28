@@ -3,7 +3,7 @@
 # Build the development Docker image for CI/CD sandbox deployments.
 #
 # Usage:
-#   scripts/k8s-sandbox-build.sh [--registry REGISTRY] [--push]
+#   .claude/skills/k8s-dev-sandbox/scripts/build.sh [--registry REGISTRY] [--push]
 #
 # Options:
 #   --registry REGISTRY  Registry prefix (e.g., registry.example.com/)
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # --- Defaults ---
 REGISTRY=""

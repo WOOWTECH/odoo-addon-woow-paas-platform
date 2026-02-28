@@ -4,13 +4,13 @@
 # 列出所有 Kubernetes 開發沙盒環境
 #
 # Usage:
-#   scripts/k8s-sandbox-list.sh [OPTIONS]
+#   .claude/skills/k8s-dev-sandbox/scripts/list.sh [OPTIONS]
 #
 # Options:
 #   -h, --help          Show usage
 #
 # Examples:
-#   scripts/k8s-sandbox-list.sh
+#   .claude/skills/k8s-dev-sandbox/scripts/list.sh
 
 set -euo pipefail
 

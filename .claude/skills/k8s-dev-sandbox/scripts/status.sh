@@ -4,7 +4,7 @@
 # 顯示指定 Kubernetes 開發沙盒的詳細狀態
 #
 # Usage:
-#   scripts/k8s-sandbox-status.sh [NAME] [OPTIONS]
+#   .claude/skills/k8s-dev-sandbox/scripts/status.sh [NAME] [OPTIONS]
 #
 # Arguments:
 #   NAME                Sandbox name (slug). If not provided, auto-detect from current branch.
@@ -13,8 +13,8 @@
 #   -h, --help          Show usage
 #
 # Examples:
-#   scripts/k8s-sandbox-status.sh
-#   scripts/k8s-sandbox-status.sh epic-smarthome
+#   .claude/skills/k8s-dev-sandbox/scripts/status.sh
+#   .claude/skills/k8s-dev-sandbox/scripts/status.sh epic-smarthome
 
 set -euo pipefail
 
@@ -27,7 +27,7 @@ NC='\033[0m' # No Color
 
 # --- 取得專案根目錄 ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # --- 預設值 ---
 SLUG=""
@@ -99,7 +99,7 @@ fi
 # --- 檢查 namespace 是否存在 ---
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo -e "${RED}Namespace '$NAMESPACE' does not exist.${NC}" >&2
-    echo -e "${YELLOW}Use scripts/k8s-sandbox-list.sh to see active sandboxes.${NC}" >&2
+    echo -e "${YELLOW}Use "${SCRIPT_DIR}/list.sh" to see active sandboxes.${NC}" >&2
     exit 1
 fi
 
@@ -290,6 +290,6 @@ echo -e "  kubectl port-forward -n $NAMESPACE svc/${FULLNAME}-nginx 8080:80"
 echo -e "  Then open: ${YELLOW}http://localhost:8080${NC}"
 echo ""
 echo -e "${BLUE}Commands:${NC}"
-echo -e "  Logs:     ${YELLOW}./scripts/k8s-sandbox-logs.sh $SLUG${NC}"
-echo -e "  Destroy:  ${YELLOW}./scripts/k8s-sandbox-destroy.sh $SLUG${NC}"
+echo -e "  Logs:     ${YELLOW}"${SCRIPT_DIR}/logs.sh" $SLUG${NC}"
+echo -e "  Destroy:  ${YELLOW}"${SCRIPT_DIR}/destroy.sh" $SLUG${NC}"
 echo ""
