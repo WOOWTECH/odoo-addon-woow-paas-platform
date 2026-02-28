@@ -27,6 +27,15 @@ odoo:
   devMode: true
   # Admin master password
   adminPassword: admin
+  # Extra Python packages to install at container startup (for extra-addons dependencies)
+  extraPipPackages:
+    - packaging
+    - "mistune>=3.0.0"
+    - "markdownify>=0.11.0"
+    - "pydantic>=2.0.0,<2.11.0"
+    - "docstring_parser>=0.15"
+    - "fastembed>=0.5.0,<=0.5.1"
+    - "openai>=1.0.0"
   # Addons path inside container
   addonsPath: /mnt/extra-addons,/mnt/extra-addons-ext
   # Resource limits
@@ -60,8 +69,8 @@ odoo:
 postgres:
   enabled: true
   image:
-    repository: postgres
-    tag: "15"
+    repository: pgvector/pgvector
+    tag: "pg15"
     pullPolicy: IfNotPresent
   # Database name (auto-generated from branch if empty)
   database: ""

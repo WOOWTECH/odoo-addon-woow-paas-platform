@@ -22,6 +22,13 @@ spec:
         - name: odoo
           image: "{{ .Values.odoo.image.repository }}:{{ .Values.odoo.image.tag }}"
           imagePullPolicy: {{ .Values.odoo.image.pullPolicy }}
+          {{- if .Values.odoo.extraPipPackages }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip3 install --break-system-packages{{- range .Values.odoo.extraPipPackages }} '{{ . }}'{{- end }} 2>/dev/null && \
+              exec odoo{{ if .Values.odoo.devMode }} --dev reload,qweb,xml{{ end }} -c /etc/odoo/odoo.conf
+          {{- else }}
           command: ["odoo"]
           args:
             {{- if .Values.odoo.devMode }}
@@ -30,6 +37,7 @@ spec:
             {{- end }}
             - "-c"
             - "/etc/odoo/odoo.conf"
+          {{- end }}
           ports:
             - name: http
               containerPort: 8069
