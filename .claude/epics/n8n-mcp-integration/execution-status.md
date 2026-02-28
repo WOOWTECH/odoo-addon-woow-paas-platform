@@ -6,10 +6,10 @@ branch: epic/n8n-mcp-integration
 # Execution Status
 
 ## Active Agents
-- Agent-7: Issue #111 (Health check and sync retry) - Started 2026-02-28
+- (none)
 
 ## Queued Issues
-- #112 - End-to-end test (waiting for #111)
+- (none)
 
 ## Completed
 - #105 - Verify n8n Helm chart and API Key ✅
@@ -18,3 +18,7 @@ branch: epic/n8n-mcp-integration
 - #108 - Update n8n template with MCP sidecar configuration ✅
 - #109 - Auto-create MCP Server record on deployment completion ✅
 - #110 - Handle MCP sidecar endpoint accessibility ✅
+- #111 - Add MCP sidecar health check and sync retry mechanism ✅
+- #112 - End-to-end integration tests ✅
+
+All 8 tasks complete. Epic ready for review and merge.
