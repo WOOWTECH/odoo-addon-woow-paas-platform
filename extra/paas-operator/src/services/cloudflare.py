@@ -1,6 +1,8 @@
-"""Cloudflare Tunnel API client for managing ingress routes."""
+"""Cloudflare Tunnel API client for managing ingress routes and tunnel lifecycle."""
+import base64
 import logging
-from typing import List, Optional
+import secrets
+from typing import Any, Dict, List, Optional
 
 import httpx
 from pydantic import BaseModel
@@ -81,6 +83,31 @@ class CloudflareService:
     def _tunnel_cname_target(self) -> str:
         """Get the CNAME target for the tunnel."""
         return f"{self.tunnel_id}.cfargotunnel.com"
+
+    def _tunnels_url(self, tunnel_id: Optional[str] = None) -> str:
+        """Get the tunnels API URL for a specific or all tunnels.
+
+        Args:
+            tunnel_id: Optional tunnel ID for a specific tunnel.
+
+        Returns:
+            Cloudflare API URL for tunnel operations.
+        """
+        base = f"{self.BASE_URL}/accounts/{self.account_id}/cfd_tunnel"
+        if tunnel_id:
+            return f"{base}/{tunnel_id}"
+        return base
+
+    def _tunnel_cname_target_for(self, tunnel_id: str) -> str:
+        """Get the CNAME target for a specific tunnel.
+
+        Args:
+            tunnel_id: The tunnel ID.
+
+        Returns:
+            CNAME target string for the tunnel.
+        """
+        return f"{tunnel_id}.cfargotunnel.com"
 
     # ==================== DNS Record Management ====================
 
@@ -173,6 +200,74 @@ class CloudflareService:
 
             logger.info(f"DNS record created: {hostname}")
             return True
+
+    async def create_dns_record_for_tunnel(
+        self, subdomain: str, tunnel_id: str
+    ) -> Optional[str]:
+        """Create a CNAME DNS record pointing to a specific tunnel.
+
+        Args:
+            subdomain: Subdomain to create (e.g., 'myapp' for myapp.domain.com)
+            tunnel_id: The tunnel ID to point the CNAME at.
+
+        Returns:
+            DNS record ID if created, None if DNS is disabled.
+
+        Raises:
+            CloudflareException: If DNS record creation fails.
+        """
+        if not self.dns_enabled:
+            logger.info(
+                f"DNS management disabled, skipping DNS record for {subdomain}"
+            )
+            return None
+
+        hostname = f"{subdomain}.{self.domain}"
+        cname_target = self._tunnel_cname_target_for(tunnel_id)
+
+        # Check if record already exists
+        existing = await self.get_dns_record(hostname)
+        if existing:
+            logger.info(f"DNS record for {hostname} already exists")
+            if existing.get("content") != cname_target:
+                await self._update_dns_record(existing["id"], hostname)
+            return existing["id"]
+
+        logger.info(f"Creating DNS record: {hostname} -> {cname_target}")
+
+        payload = {
+            "type": "CNAME",
+            "name": subdomain,
+            "content": cname_target,
+            "ttl": 1,
+            "proxied": True,
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self._dns_records_url,
+                headers=self._headers,
+                json=payload,
+                timeout=30.0,
+            )
+
+            if response.status_code not in (200, 201):
+                logger.error(f"Failed to create DNS record: {response.status_code}")
+                logger.debug(f"Response details: {response.text}")
+                raise CloudflareException(
+                    f"Failed to create DNS record: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            record_id = data.get("result", {}).get("id")
+            logger.info(f"DNS record created: {hostname} (ID: {record_id})")
+            return record_id
 
     async def _update_dns_record(self, record_id: str, hostname: str) -> bool:
         """Update an existing DNS record.
@@ -499,3 +594,324 @@ class CloudflareService:
             Internal service URL.
         """
         return f"http://{service_name}.{namespace}.svc.cluster.local:{port}"
+
+    # ==================== Dedicated Tunnel Lifecycle ====================
+
+    async def create_tunnel(self, name: str) -> Dict[str, Any]:
+        """Create a new Cloudflare Tunnel.
+
+        Args:
+            name: Name for the new tunnel.
+
+        Returns:
+            Dict with tunnel_id and tunnel_name.
+
+        Raises:
+            CloudflareException: If tunnel creation fails.
+        """
+        tunnel_secret = base64.b64encode(secrets.token_bytes(32)).decode("utf-8")
+
+        payload = {
+            "name": name,
+            "tunnel_secret": tunnel_secret,
+        }
+
+        logger.info(f"Creating Cloudflare Tunnel: {name}")
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self._tunnels_url(),
+                headers=self._headers,
+                json=payload,
+                timeout=30.0,
+            )
+
+            if response.status_code not in (200, 201):
+                logger.error(
+                    f"Failed to create tunnel: {response.status_code} - {response.text}"
+                )
+                raise CloudflareException(
+                    f"Failed to create tunnel: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            result = data.get("result", {})
+            tunnel_id = result.get("id", "")
+            tunnel_name = result.get("name", name)
+
+            logger.info(f"Tunnel created: {tunnel_name} (ID: {tunnel_id})")
+
+            return {
+                "tunnel_id": tunnel_id,
+                "tunnel_name": tunnel_name,
+            }
+
+    async def get_tunnel_token(self, tunnel_id: str) -> str:
+        """Get the token for an existing Cloudflare Tunnel.
+
+        The token is a JWT generated by Cloudflare that contains the tunnel_id
+        and secret. It is used by cloudflared to authenticate with the tunnel.
+
+        Args:
+            tunnel_id: The tunnel ID.
+
+        Returns:
+            Tunnel token string.
+
+        Raises:
+            CloudflareException: If token retrieval fails.
+        """
+        url = f"{self._tunnels_url(tunnel_id)}/token"
+
+        logger.info(f"Getting token for tunnel: {tunnel_id}")
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                headers=self._headers,
+                timeout=30.0,
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Failed to get tunnel token: {response.status_code} - {response.text}"
+                )
+                raise CloudflareException(
+                    f"Failed to get tunnel token: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            token = data.get("result", "")
+            logger.info(f"Token retrieved for tunnel: {tunnel_id}")
+            return token
+
+    async def configure_tunnel(
+        self, tunnel_id: str, hostname: str, service_url: str
+    ) -> None:
+        """Set the ingress configuration for a dedicated tunnel.
+
+        Configures the tunnel with a single hostname rule pointing to the
+        specified service URL, plus a catch-all 404 rule.
+
+        Args:
+            tunnel_id: The tunnel ID.
+            hostname: Public hostname (e.g., 'myapp.domain.com').
+            service_url: Backend service URL (e.g., 'http://localhost:8123').
+
+        Raises:
+            CloudflareException: If configuration update fails.
+        """
+        url = f"{self._tunnels_url(tunnel_id)}/configurations"
+
+        ingress_rules = [
+            {"hostname": hostname, "service": service_url},
+            {"service": "http_status:404"},
+        ]
+
+        payload = {"config": {"ingress": ingress_rules}}
+
+        logger.info(
+            f"Configuring tunnel {tunnel_id}: {hostname} -> {service_url}"
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                url,
+                headers=self._headers,
+                json=payload,
+                timeout=30.0,
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Failed to configure tunnel: {response.status_code} - {response.text}"
+                )
+                raise CloudflareException(
+                    f"Failed to configure tunnel: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            logger.info(f"Tunnel {tunnel_id} configured successfully")
+
+    async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
+        """Get the status and connection info for a Cloudflare Tunnel.
+
+        Args:
+            tunnel_id: The tunnel ID.
+
+        Returns:
+            Dict with tunnel status, name, connections, and created_at.
+
+        Raises:
+            CloudflareException: If status retrieval fails.
+        """
+        url = self._tunnels_url(tunnel_id)
+
+        logger.info(f"Getting status for tunnel: {tunnel_id}")
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                headers=self._headers,
+                timeout=30.0,
+            )
+
+            if response.status_code == 404:
+                raise CloudflareException(
+                    f"Tunnel {tunnel_id} not found",
+                    status_code=404,
+                )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Failed to get tunnel status: {response.status_code} - {response.text}"
+                )
+                raise CloudflareException(
+                    f"Failed to get tunnel status: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            result = data.get("result", {})
+
+            # Extract connection details
+            connections = []
+            for conn in result.get("connections", []):
+                connections.append(
+                    {
+                        "connector_id": conn.get("id", ""),
+                        "type": conn.get("type", ""),
+                        "origin_ip": conn.get("origin_ip", ""),
+                        "opened_at": conn.get("opened_at", ""),
+                    }
+                )
+
+            return {
+                "tunnel_id": result.get("id", tunnel_id),
+                "name": result.get("name", ""),
+                "status": result.get("status", "unknown"),
+                "connections": connections,
+                "created_at": result.get("created_at"),
+            }
+
+    async def delete_tunnel(self, tunnel_id: str) -> None:
+        """Delete a Cloudflare Tunnel and clean up associated DNS records.
+
+        Attempts to clean up DNS records associated with the tunnel before
+        deleting it. Uses cascade=true to also remove tunnel connections.
+
+        Args:
+            tunnel_id: The tunnel ID to delete.
+
+        Raises:
+            CloudflareException: If tunnel deletion fails.
+        """
+        logger.info(f"Deleting tunnel: {tunnel_id}")
+
+        # Try to clean up DNS records pointing to this tunnel
+        if self.dns_enabled:
+            cname_target = self._tunnel_cname_target_for(tunnel_id)
+            try:
+                await self._cleanup_dns_for_tunnel(cname_target)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to clean up DNS records for tunnel {tunnel_id}: {e}"
+                )
+                # Continue with tunnel deletion even if DNS cleanup fails
+
+        # Delete the tunnel with cascade to clean up connections
+        url = self._tunnels_url(tunnel_id)
+
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                url,
+                headers=self._headers,
+                params={"cascade": "true"},
+                timeout=30.0,
+            )
+
+            if response.status_code == 404:
+                logger.warning(f"Tunnel {tunnel_id} not found, nothing to delete")
+                return
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Failed to delete tunnel: {response.status_code} - {response.text}"
+                )
+                raise CloudflareException(
+                    f"Failed to delete tunnel: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            logger.info(f"Tunnel {tunnel_id} deleted successfully")
+
+    async def _cleanup_dns_for_tunnel(self, cname_target: str) -> None:
+        """Remove DNS records that point to a specific tunnel CNAME target.
+
+        Args:
+            cname_target: The CNAME target to search for (e.g., '<tunnel_id>.cfargotunnel.com').
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                self._dns_records_url,
+                headers=self._headers,
+                params={"type": "CNAME", "content": cname_target},
+                timeout=30.0,
+            )
+
+            if response.status_code != 200:
+                logger.warning(
+                    f"Failed to list DNS records for cleanup: {response.status_code}"
+                )
+                return
+
+            data = response.json()
+            records = data.get("result", [])
+
+            for record in records:
+                record_id = record.get("id")
+                record_name = record.get("name", "unknown")
+                logger.info(f"Cleaning up DNS record: {record_name} (ID: {record_id})")
+
+                delete_response = await client.delete(
+                    f"{self._dns_records_url}/{record_id}",
+                    headers=self._headers,
+                    timeout=30.0,
+                )
+
+                if delete_response.status_code == 200:
+                    logger.info(f"DNS record {record_name} deleted")
+                else:
+                    logger.warning(
+                        f"Failed to delete DNS record {record_name}: "
+                        f"{delete_response.status_code}"
+                    )

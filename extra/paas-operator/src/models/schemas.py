@@ -101,6 +101,23 @@ class NamespaceCreateRequest(BaseModel):
     storage_limit: str = Field(default="20Gi", description="Storage limit")
 
 
+class TunnelCreateRequest(BaseModel):
+    """Request to create a new dedicated Cloudflare Tunnel."""
+
+    name: str = Field(
+        ...,
+        description="Tunnel name (e.g., 'smarthome-livingroom')",
+    )
+    hostname: str = Field(
+        ...,
+        description="Public hostname for the tunnel (e.g., 'ha.example.com')",
+    )
+    service_url: str = Field(
+        default="http://localhost:8123",
+        description="Backend service URL the tunnel forwards to",
+    )
+
+
 # Response Models
 
 
@@ -177,6 +194,48 @@ class NamespaceInfo(BaseModel):
     status: str
     created: str
     labels: Optional[Dict[str, str]] = None
+
+
+class TunnelConnectionInfo(BaseModel):
+    """Connection details for a Cloudflare Tunnel connector."""
+
+    connector_id: str = Field(..., description="Connector ID")
+    type: str = Field(default="", description="Connection type")
+    origin_ip: str = Field(default="", description="Origin IP address")
+    opened_at: str = Field(default="", description="Connection opened timestamp")
+
+
+class TunnelCreateResponse(BaseModel):
+    """Response after creating a dedicated Cloudflare Tunnel."""
+
+    tunnel_id: str = Field(..., description="Cloudflare Tunnel ID")
+    tunnel_name: str = Field(..., description="Tunnel name")
+    tunnel_token: str = Field(..., description="Tunnel token for cloudflared")
+    hostname: str = Field(..., description="Configured public hostname")
+    dns_record_id: Optional[str] = Field(
+        None, description="DNS record ID if created"
+    )
+
+
+class TunnelStatusResponse(BaseModel):
+    """Status information for a Cloudflare Tunnel."""
+
+    tunnel_id: str = Field(..., description="Cloudflare Tunnel ID")
+    name: str = Field(..., description="Tunnel name")
+    status: str = Field(..., description="Tunnel status (e.g., 'healthy', 'inactive')")
+    connections: List[TunnelConnectionInfo] = Field(
+        default_factory=list, description="Active tunnel connections"
+    )
+    created_at: Optional[str] = Field(
+        None, description="Tunnel creation timestamp"
+    )
+
+
+class TunnelTokenResponse(BaseModel):
+    """Response containing a tunnel token."""
+
+    tunnel_id: str = Field(..., description="Cloudflare Tunnel ID")
+    token: str = Field(..., description="Tunnel token for cloudflared")
 
 
 class HealthResponse(BaseModel):
