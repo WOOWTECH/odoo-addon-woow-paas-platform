@@ -7,3 +7,7 @@ access_ai_provider_user,woow_paas_platform.ai_provider.user,model_woow_paas_plat
 access_ai_provider_admin,woow_paas_platform.ai_provider.admin,model_woow_paas_platform_ai_provider,base.group_system,1,1,1,1
 access_ai_agent_user,woow_paas_platform.ai_agent.user,model_woow_paas_platform_ai_agent,base.group_user,1,0,0,0
 access_ai_agent_admin,woow_paas_platform.ai_agent.admin,model_woow_paas_platform_ai_agent,base.group_system,1,1,1,1
+access_oauth_client_user,woow_paas_platform.oauth_client.user,model_woow_paas_platform_oauth_client,base.group_user,1,0,0,0
+access_oauth_client_admin,woow_paas_platform.oauth_client.admin,model_woow_paas_platform_oauth_client,base.group_system,1,1,1,1
+access_oauth_token_admin,woow_paas_platform.oauth_token.admin,model_woow_paas_platform_oauth_token,base.group_system,1,1,1,1
+access_oauth_code_admin,woow_paas_platform.oauth_code.admin,model_woow_paas_platform_oauth_code,base.group_system,1,1,1,1

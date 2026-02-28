@@ -21,6 +21,8 @@
         'views/project_task_views.xml',
         'views/res_config_settings_views.xml',
         'views/paas_app.xml',
+        'views/oauth2_templates.xml',
+        'views/oauth_client_views.xml',
     ],
     'assets': {
         'web.assets_backend': [

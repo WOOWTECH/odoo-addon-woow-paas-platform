@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- OAuth Client Tree View -->
+    <record id="view_oauth_client_tree" model="ir.ui.view">
+        <field name="name">woow_paas_platform.oauth_client.tree</field>
+        <field name="model">woow_paas_platform.oauth_client</field>
+        <field name="arch" type="xml">
+            <list string="OAuth Clients" decoration-muted="not is_active">
+                <field name="name"/>
+                <field name="client_id"/>
+                <field name="scopes"/>
+                <field name="grant_types"/>
+                <field name="is_active"/>
+                <field name="create_date"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- OAuth Client Form View -->
+    <record id="view_oauth_client_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.oauth_client.form</field>
+        <field name="model">woow_paas_platform.oauth_client</field>
+        <field name="arch" type="xml">
+            <form string="OAuth Client">
+                <header>
+                    <button name="action_regenerate_secret"
+                            type="object"
+                            string="Regenerate Secret"
+                            class="btn-secondary"
+                            icon="fa-refresh"
+                            confirm="This will invalidate the current client secret. Continue?"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box"/>
+                    <widget name="web_ribbon" title="Inactive"
+                            invisible="is_active"/>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="Application Name"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Client Credentials">
+                            <field name="client_id"/>
+                            <field name="is_active"/>
+                        </group>
+                        <group string="OAuth Configuration">
+                            <field name="grant_types"
+                                   placeholder="authorization_code,refresh_token"/>
+                            <field name="scopes"
+                                   placeholder="smarthome:read smarthome:tunnel workspace:read"/>
+                        </group>
+                    </group>
+                    <group string="Redirect URIs">
+                        <field name="redirect_uris" nolabel="1"
+                               placeholder="https://example.com/oauth/callback&#10;http://localhost:8123/auth/external/callback"
+                               widget="text"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- OAuth Client Action -->
+    <record id="action_oauth_client" model="ir.actions.act_window">
+        <field name="name">OAuth Clients</field>
+        <field name="res_model">woow_paas_platform.oauth_client</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Register an OAuth Client
+            </p>
+            <p>
+                Create OAuth 2.0 client applications that can request access
+                to user accounts via the authorization flow.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu Item under Woow PaaS root -->
+    <menuitem
+        id="menu_oauth_client"
+        name="OAuth Clients"
+        parent="menu_woow_paas_platform_root"
+        action="action_oauth_client"
+        sequence="50"/>
+</odoo>
