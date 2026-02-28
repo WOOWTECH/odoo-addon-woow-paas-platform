@@ -18,7 +18,7 @@ Phase 1: Foundation      [████████] 100%
 Phase 2: OWL App Shell   [████████] 100%
 Phase 3: Core Models     [████████] 100%  ✓ Complete (Workspace + WorkspaceAccess)
 Phase 4: Cloud Services  [████████] 100%  ✓ Complete (Templates + Services + Operator)
-Phase 5: Integrations    [        ]   0%
+Phase 5: Integrations    [████░░░░]  50%  K8s Dev Sandbox
 ```
 
 ### Cloud Services (New!)
@@ -83,6 +83,38 @@ pytest tests/ -v --cov=src
 詳細說明請參考下方 [Worktree Development](#worktree-development) 章節。
 
 **Test URL**: http://localhost (NOT :8069, to enable websocket)
+
+### K8s Dev Sandbox
+
+部署獨立的開發沙盒環境到 Kubernetes：
+
+```bash
+# 為當前 branch 建立沙盒
+./scripts/k8s-sandbox-create.sh
+
+# 列出所有活躍的沙盒
+./scripts/k8s-sandbox-list.sh
+
+# 檢查沙盒狀態
+./scripts/k8s-sandbox-status.sh <sandbox-name>
+
+# 查看日誌
+./scripts/k8s-sandbox-logs.sh <sandbox-name> [--service odoo|postgres|nginx] [--follow]
+
+# 在沙盒中執行測試
+./scripts/k8s-sandbox-test.sh <sandbox-name> [--module <module>]
+
+# 延長沙盒 TTL
+./scripts/k8s-sandbox-extend.sh <sandbox-name> [--ttl 336h]
+
+# 銷毀沙盒
+./scripts/k8s-sandbox-destroy.sh <sandbox-name>
+
+# 建構 CI 映像
+./scripts/k8s-sandbox-build.sh [--registry <registry>] [--push]
+```
+
+或使用 Claude Code skill：`/k8s-dev-sandbox <command>`
 
 ### PaaS Operator Local Development
 
@@ -186,6 +218,35 @@ woow_paas_platform/
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── scripts/                      # Development scripts
+│   ├── k8s-sandbox-create.sh    # 建立 K8s 沙盒環境
+│   ├── k8s-sandbox-destroy.sh   # 銷毀沙盒環境
+│   ├── k8s-sandbox-list.sh      # 列出所有沙盒
+│   ├── k8s-sandbox-status.sh    # 檢查沙盒狀態
+│   ├── k8s-sandbox-logs.sh      # 查看沙盒日誌
+│   ├── k8s-sandbox-test.sh      # 在沙盒中執行測試
+│   ├── k8s-sandbox-extend.sh    # 延長沙盒 TTL
+│   └── k8s-sandbox-build.sh     # 建構 CI 映像
+├── charts/
+│   └── odoo-dev-sandbox/         # K8s 沙盒 Helm chart
+│       ├── Chart.yaml
+│       ├── values.yaml           # 預設值
+│       ├── values-local.yaml     # K3s 本機覆蓋值
+│       ├── values-ci.yaml        # CI/CD 覆蓋值
+│       └── templates/            # K8s 資源模板
+│           ├── _helpers.tpl
+│           ├── namespace.yaml
+│           ├── secrets.yaml
+│           ├── odoo-configmap.yaml
+│           ├── odoo-deployment.yaml
+│           ├── odoo-service.yaml
+│           ├── postgres-statefulset.yaml
+│           ├── postgres-service.yaml
+│           ├── nginx-*.yaml
+│           ├── ingress.yaml
+│           ├── network-policy.yaml
+│           ├── resource-quota.yaml
+│           ├── pgadmin-deployment.yaml
+│           └── ttl-cronjob.yaml
 ├── docs/                         # Documentation
 │   ├── deployment/              # K8s setup, troubleshooting
 │   ├── development/             # Developer guides
@@ -236,6 +297,38 @@ Root (router logic)
         ├── WorkspaceTeamPage
         └── EmptyState
 ```
+
+### K8s Dev Sandbox
+
+透過 Helm 部署獨立的 Odoo 開發環境到 Kubernetes。
+
+**Architecture**:
+```
+┌─────────────────────────────┐
+│   K8s Namespace              │
+│   (dev-sandbox-{branch})     │
+│                              │
+│  ┌──────┐  ┌──────┐        │
+│  │ Odoo │  │  PG  │        │
+│  │ :8069│  │ :5432│        │
+│  └──┬───┘  └──────┘        │
+│     │                       │
+│  ┌──┴───┐  ┌──────┐        │
+│  │Nginx │  │PgAdmin│(opt)  │
+│  │ :80  │  │ :5050 │       │
+│  └──────┘  └───────┘       │
+└─────────────────────────────┘
+```
+
+**兩種模式**：
+- **Local 模式**：使用 hostPath mount 實現即時程式碼編輯
+- **CI 模式**：程式碼打包進 Docker 映像
+
+**主要功能**：
+- 每個 branch 獨立的 namespace 隔離
+- TTL 自動清理（預設 7 天）
+- ResourceQuota 與 NetworkPolicy 限制
+- 自動化模組安裝
 
 ### Odoo Module Patterns
 
