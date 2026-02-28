@@ -1,0 +1,116 @@
+{{- if ne (.Values.sandbox.ttl | toString) "0" }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-ttl
+  namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-ttl
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-ttl
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-ttl
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "odoo-dev-sandbox.fullname" . }}-ttl
+    namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-ttl-check
+  namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+spec:
+  schedule: "0 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "odoo-dev-sandbox.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: ttl-check
+        spec:
+          serviceAccountName: {{ include "odoo-dev-sandbox.fullname" . }}-ttl
+          restartPolicy: Never
+          containers:
+            - name: ttl-check
+              image: bitnami/kubectl:latest
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  NAMESPACE="{{ include "odoo-dev-sandbox.namespace" . }}"
+                  echo "Checking TTL for namespace: $NAMESPACE"
+
+                  EXPIRES=$(kubectl get namespace "$NAMESPACE" \
+                    -o jsonpath='{.metadata.annotations.sandbox\.woow\.tw/expires}' 2>/dev/null || echo "")
+
+                  if [ -z "$EXPIRES" ]; then
+                    echo "No expires annotation found, skipping cleanup"
+                    exit 0
+                  fi
+
+                  if [ "$EXPIRES" = "never" ]; then
+                    echo "TTL set to never, skipping cleanup"
+                    exit 0
+                  fi
+
+                  # Convert expires to epoch (ISO 8601 format)
+                  # Try GNU date first, then BSD date
+                  EXPIRES_EPOCH=$(date -d "$EXPIRES" +%s 2>/dev/null || \
+                    date -jf "%Y-%m-%dT%H:%M:%SZ" "$EXPIRES" +%s 2>/dev/null || echo "")
+
+                  if [ -z "$EXPIRES_EPOCH" ]; then
+                    echo "ERROR: Cannot parse expires annotation: $EXPIRES"
+                    exit 1
+                  fi
+
+                  NOW_EPOCH=$(date +%s)
+                  REMAINING=$((EXPIRES_EPOCH - NOW_EPOCH))
+
+                  # Warning threshold: 1 day = 86400 seconds
+                  if [ "$REMAINING" -gt 0 ] && [ "$REMAINING" -le 86400 ]; then
+                    HOURS=$((REMAINING / 3600))
+                    echo "WARNING: Sandbox $NAMESPACE expires in less than 24 hours (${HOURS}h remaining)"
+                  fi
+
+                  if [ "$REMAINING" -le 0 ]; then
+                    echo "Sandbox $NAMESPACE has expired (expires=$EXPIRES), cleaning up..."
+                    kubectl delete namespace "$NAMESPACE"
+                    echo "Namespace $NAMESPACE deleted"
+                  else
+                    HOURS=$((REMAINING / 3600))
+                    echo "Sandbox $NAMESPACE has ${HOURS}h remaining (expires=$EXPIRES)"
+                  fi
+{{- end }}
