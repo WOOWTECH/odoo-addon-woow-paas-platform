@@ -448,6 +448,39 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def init_n8n(
+        self,
+        namespace: str,
+        release_name: str,
+        owner_email: str,
+        owner_password: str,
+    ) -> Dict[str, Any]:
+        """Initialize n8n instance after deployment.
+
+        Triggers owner setup and API key generation on the PaaS Operator.
+
+        Args:
+            namespace: K8s namespace
+            release_name: Helm release name
+            owner_email: Email for n8n owner user
+            owner_password: Password for n8n owner user
+
+        Returns:
+            Dict with success, api_key, owner_email
+
+        Raises:
+            PaaSOperatorError: If initialization fails
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/init/n8n',
+            data={
+                'owner_email': owner_email,
+                'owner_password': owner_password,
+            },
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def get_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
         """Get detailed status of a release including pod information.
 

@@ -245,6 +245,29 @@ class SidecarPatchResponse(BaseModel):
     )
 
 
+class N8nInitRequest(BaseModel):
+    """Request to initialize an n8n instance after deployment."""
+
+    owner_email: str = Field(
+        default="admin@woow.cloud",
+        description="Email for the n8n owner user",
+    )
+    owner_password: str = Field(
+        ...,
+        description="Password for the n8n owner user",
+    )
+
+
+class N8nInitResponse(BaseModel):
+    """Response from n8n initialization."""
+
+    success: bool
+    api_key: Optional[str] = Field(None, description="Generated n8n API key (JWT)")
+    owner_email: Optional[str] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
 class ErrorResponse(BaseModel):
     """Error response."""
 

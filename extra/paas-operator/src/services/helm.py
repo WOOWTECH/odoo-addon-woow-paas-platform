@@ -792,6 +792,216 @@ class KubernetesService:
                 return False
             raise
 
+    def get_pod_name(self, namespace: str, label_selector: str) -> str:
+        """Get the first pod name matching a label selector.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Label selector (e.g., 'app.kubernetes.io/name=n8n')
+
+        Returns:
+            Pod name
+
+        Raises:
+            KubectlException: If no pods found or command fails
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "pods",
+            "--namespace", namespace,
+            "--selector", label_selector,
+            "--output", "jsonpath={.items[0].metadata.name}",
+        ]
+
+        result = self._run_command(args)
+        pod_name = result.stdout.strip()
+        if not pod_name:
+            raise KubectlException(
+                message=f"No pods found matching selector '{label_selector}'",
+                command=" ".join(args),
+                stderr="",
+            )
+        return pod_name
+
+    def exec_in_pod(
+        self,
+        namespace: str,
+        pod_name: str,
+        container: str,
+        command: List[str],
+        timeout: int = 30,
+    ) -> subprocess.CompletedProcess:
+        """Execute a command in a pod container.
+
+        Args:
+            namespace: Namespace name
+            pod_name: Pod name
+            container: Container name
+            command: Command to execute
+            timeout: Timeout in seconds
+
+        Returns:
+            CompletedProcess object
+
+        Raises:
+            KubectlException: If command fails
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "exec", pod_name,
+            "--namespace", namespace,
+            "--container", container,
+            "--",
+        ] + command
+
+        cmd = [self.kubectl_bin] + args
+        logger.info(f"Executing: {' '.join(cmd)}")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+
+            if result.returncode != 0:
+                raise KubectlException(
+                    message=f"kubectl exec failed with code {result.returncode}",
+                    command=" ".join(cmd),
+                    stderr=result.stderr,
+                )
+
+            return result
+
+        except subprocess.TimeoutExpired as e:
+            raise KubectlException(
+                message=f"kubectl exec timed out after {timeout}s",
+                command=" ".join(cmd),
+                stderr=str(e),
+            )
+
+    def patch_secret(
+        self,
+        namespace: str,
+        secret_name: str,
+        data: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """Patch a Kubernetes Secret with new data.
+
+        Args:
+            namespace: Namespace name
+            secret_name: Secret name
+            data: Dict of key -> base64-encoded value
+
+        Returns:
+            Patched secret info
+        """
+        validate_namespace(namespace)
+
+        import base64
+
+        patch_data = {
+            "data": {
+                k: base64.b64encode(v.encode()).decode() if not self._is_base64(v) else v
+                for k, v in data.items()
+            }
+        }
+
+        args = [
+            "patch", "secret", secret_name,
+            "--namespace", namespace,
+            "--type=merge",
+            f"--patch={json.dumps(patch_data)}",
+        ]
+
+        result = self._run_command(args)
+        return {"message": f"Secret {secret_name} patched"}
+
+    @staticmethod
+    def _is_base64(s: str) -> bool:
+        """Check if a string is already base64-encoded."""
+        import base64
+        try:
+            decoded = base64.b64decode(s, validate=True)
+            return base64.b64encode(decoded).decode() == s
+        except Exception:
+            return False
+
+    def patch_container_env(
+        self,
+        namespace: str,
+        deployment_name: str,
+        container_index: int,
+        env_name: str,
+        value: str,
+    ) -> Dict[str, Any]:
+        """Patch a specific environment variable in a deployment container.
+
+        Uses JSON patch to update or add an env var by finding its index,
+        or appending if it doesn't exist.
+
+        Args:
+            namespace: Namespace name
+            deployment_name: Deployment name
+            container_index: Index of the container in the pod spec
+            env_name: Environment variable name
+            value: New value
+
+        Returns:
+            Patch result
+        """
+        validate_namespace(namespace)
+
+        # First, get the current env vars to find the index
+        args = [
+            "get", "deployment", deployment_name,
+            "--namespace", namespace,
+            "--output", f"jsonpath={{.spec.template.spec.containers[{container_index}].env}}",
+        ]
+
+        result = self._run_command(args)
+        env_list = json.loads(result.stdout) if result.stdout.strip() else []
+
+        # Find existing env var index
+        env_index = None
+        for i, env in enumerate(env_list):
+            if env.get("name") == env_name:
+                env_index = i
+                break
+
+        if env_index is not None:
+            # Update existing
+            patch = json.dumps([{
+                "op": "replace",
+                "path": f"/spec/template/spec/containers/{container_index}/env/{env_index}/value",
+                "value": value,
+            }])
+        else:
+            # Add new env var
+            if env_list:
+                patch = json.dumps([{
+                    "op": "add",
+                    "path": f"/spec/template/spec/containers/{container_index}/env/-",
+                    "value": {"name": env_name, "value": value},
+                }])
+            else:
+                patch = json.dumps([{
+                    "op": "add",
+                    "path": f"/spec/template/spec/containers/{container_index}/env",
+                    "value": [{"name": env_name, "value": value}],
+                }])
+
+        return self.patch_deployment(
+            namespace=namespace,
+            deployment_name=deployment_name,
+            patch=patch,
+            patch_type="json",
+        )
+
     @staticmethod
     def _calculate_age(created_timestamp: str) -> str:
         """Calculate age from creation timestamp."""

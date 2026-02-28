@@ -148,6 +148,22 @@ class CloudAppTemplate(models.Model):
              'MCP sidecar (as env var).',
     )
 
+    # Post-Deploy Initialization
+    post_deploy_init_type = fields.Selection(
+        selection=[
+            ('none', 'None'),
+            ('n8n', 'n8n (Owner Setup + API Key)'),
+        ],
+        string='Post-Deploy Init Type',
+        default='none',
+        help='Type of post-deployment initialization to run automatically',
+    )
+    post_deploy_init_email = fields.Char(
+        string='Init Owner Email',
+        default='admin@woow.cloud',
+        help='Default email for the application owner user created during init',
+    )
+
     # Status
     is_active = fields.Boolean(
         string='Active',

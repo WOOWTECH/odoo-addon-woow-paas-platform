@@ -97,7 +97,7 @@ export class ServiceDetailPage extends Component {
     }
 
     startPollingIfNeeded() {
-        const pendingStates = ["deploying", "upgrading", "deleting"];
+        const pendingStates = ["deploying", "initializing", "upgrading", "deleting"];
         if (this.state.service && pendingStates.includes(this.state.service.state)) {
             this.stopPolling(); // Clear any existing interval
             this.pollingInterval = setInterval(() => this.loadService(), 5000);
@@ -132,7 +132,7 @@ export class ServiceDetailPage extends Component {
 
     get canPerformActions() {
         // Disable actions when service is in transitional state
-        const disabledStates = ["deploying", "upgrading", "deleting", "pending"];
+        const disabledStates = ["deploying", "initializing", "upgrading", "deleting", "pending"];
         return this.service && !disabledStates.includes(this.service.state);
     }
 

@@ -81,7 +81,7 @@ export class WorkspaceDetailPage extends Component {
 
     startServicesPolling() {
         const hasPending = this.state.services.some(s =>
-            ["deploying", "upgrading", "deleting", "pending"].includes(s.state)
+            ["deploying", "initializing", "upgrading", "deleting", "pending"].includes(s.state)
         );
 
         if (hasPending && !this.servicesPollingInterval) {
@@ -90,7 +90,7 @@ export class WorkspaceDetailPage extends Component {
                 this.state.services = cloudService.services;
 
                 const stillPending = this.state.services.some(s =>
-                    ["deploying", "upgrading", "deleting", "pending"].includes(s.state)
+                    ["deploying", "initializing", "upgrading", "deleting", "pending"].includes(s.state)
                 );
 
                 if (!stillPending) {
