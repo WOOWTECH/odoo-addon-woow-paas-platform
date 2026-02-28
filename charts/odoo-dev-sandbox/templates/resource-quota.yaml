@@ -1,0 +1,14 @@
+{{- if .Values.resourceQuota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-quota
+  namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+spec:
+  hard:
+    limits.cpu: {{ .Values.resourceQuota.cpu | quote }}
+    limits.memory: {{ .Values.resourceQuota.memory | quote }}
+    requests.storage: {{ .Values.resourceQuota.storage | quote }}
+{{- end }}

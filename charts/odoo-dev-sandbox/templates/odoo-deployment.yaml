@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-odoo
+  namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: odoo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "odoo-dev-sandbox.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: odoo
+  template:
+    metadata:
+      labels:
+        {{- include "odoo-dev-sandbox.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: odoo
+    spec:
+      containers:
+        - name: odoo
+          image: "{{ .Values.odoo.image.repository }}:{{ .Values.odoo.image.tag }}"
+          imagePullPolicy: {{ .Values.odoo.image.pullPolicy }}
+          command: ["odoo"]
+          args:
+            {{- if .Values.odoo.devMode }}
+            - "--dev"
+            - "reload,qweb,xml"
+            {{- end }}
+            - "-c"
+            - "/etc/odoo/odoo.conf"
+          ports:
+            - name: http
+              containerPort: 8069
+              protocol: TCP
+            - name: longpolling
+              containerPort: 8072
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: postgres-password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: postgres-database
+          volumeMounts:
+            - name: odoo-config
+              mountPath: /etc/odoo/odoo.conf
+              subPath: odoo.conf
+              readOnly: true
+            {{- if eq .Values.sandbox.mode "local" }}
+            - name: extra-addons
+              mountPath: /mnt/extra-addons
+            {{- if .Values.codeMount.extraAddonsHostPath }}
+            - name: extra-addons-ext
+              mountPath: /mnt/extra-addons-ext
+            {{- end }}
+            {{- end }}
+          {{- with .Values.odoo.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.odoo.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.odoo.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: odoo-config
+          configMap:
+            name: {{ include "odoo-dev-sandbox.fullname" . }}-odoo-config
+        {{- if eq .Values.sandbox.mode "local" }}
+        - name: extra-addons
+          hostPath:
+            path: {{ .Values.codeMount.hostPath }}
+            type: Directory
+        {{- if .Values.codeMount.extraAddonsHostPath }}
+        - name: extra-addons-ext
+          hostPath:
+            path: {{ .Values.codeMount.extraAddonsHostPath }}
+            type: Directory
+        {{- end }}
+        {{- end }}

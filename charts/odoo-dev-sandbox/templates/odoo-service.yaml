@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-odoo
+  namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: odoo
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8069
+      targetPort: http
+      protocol: TCP
+    - name: longpolling
+      port: 8072
+      targetPort: longpolling
+      protocol: TCP
+  selector:
+    {{- include "odoo-dev-sandbox.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: odoo
