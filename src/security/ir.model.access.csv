@@ -11,3 +11,5 @@ access_oauth_client_user,woow_paas_platform.oauth_client.user,model_woow_paas_pl
 access_oauth_client_admin,woow_paas_platform.oauth_client.admin,model_woow_paas_platform_oauth_client,base.group_system,1,1,1,1
 access_oauth_token_admin,woow_paas_platform.oauth_token.admin,model_woow_paas_platform_oauth_token,base.group_system,1,1,1,1
 access_oauth_code_admin,woow_paas_platform.oauth_code.admin,model_woow_paas_platform_oauth_code,base.group_system,1,1,1,1
+access_smart_home_user,woow_paas_platform.smart_home.user,model_woow_paas_platform_smart_home,base.group_user,1,1,1,0
+access_smart_home_admin,woow_paas_platform.smart_home.admin,model_woow_paas_platform_smart_home,base.group_system,1,1,1,1
