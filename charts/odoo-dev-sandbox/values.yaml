@@ -116,6 +116,12 @@ ingress:
   className: traefik
   domain: dev.woow.tw
   annotations: {}
+  # TLS configuration (optional)
+  # tls:
+  #   - secretName: dev-woow-tw-tls
+  #     hosts:
+  #       - "*.dev.woow.tw"
+  tls: []
 
 # --- Code mount (local mode) ---
 codeMount:

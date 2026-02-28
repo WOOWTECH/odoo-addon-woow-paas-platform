@@ -1,0 +1,76 @@
+{{- if .Values.nginx.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-nginx
+  namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+data:
+  nginx.conf: |
+    worker_processes auto;
+    pid /tmp/nginx.pid;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include       /etc/nginx/mime.types;
+        default_type  application/octet-stream;
+
+        sendfile    on;
+        tcp_nopush  on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+
+        # Gzip compression
+        gzip on;
+        gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+        gzip_min_length 1000;
+
+        # Upstream: Odoo web
+        upstream odoo {
+            server {{ include "odoo-dev-sandbox.fullname" . }}-odoo:8069;
+        }
+
+        # Upstream: Odoo longpolling / websocket
+        upstream odoo-longpolling {
+            server {{ include "odoo-dev-sandbox.fullname" . }}-odoo:8072;
+        }
+
+        server {
+            listen 80;
+            server_name _;
+
+            proxy_read_timeout 720s;
+            proxy_connect_timeout 720s;
+            proxy_send_timeout 720s;
+
+            client_max_body_size 200m;
+
+            # WebSocket endpoint
+            location /websocket {
+                proxy_pass http://odoo-longpolling;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # All other requests
+            location / {
+                proxy_pass http://odoo;
+                proxy_http_version 1.1;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+        }
+    }
+{{- end }}
