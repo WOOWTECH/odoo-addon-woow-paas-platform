@@ -162,6 +162,7 @@
     "N8N_API_URL": "http://localhost:5678",
     "PORT": "3000"
 }</field>
+            <field name="mcp_api_key_helm_path">main.secret.N8N_API_KEY</field>
         </record>
     </data>
 </odoo>

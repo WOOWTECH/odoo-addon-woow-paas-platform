@@ -139,6 +139,14 @@ class CloudAppTemplate(models.Model):
         string='MCP Sidecar Environment',
         help='JSON object of environment variables for the MCP sidecar container',
     )
+    mcp_api_key_helm_path = fields.Char(
+        string='MCP API Key Helm Path',
+        help='Dot-path in Helm values where the auto-generated API key should be set '
+             '(e.g., main.secret.N8N_API_KEY). The last segment is used as the env var '
+             'name for the MCP sidecar. When set, a unique API key is generated per '
+             'service and injected into both the main container (via Helm) and the '
+             'MCP sidecar (as env var).',
+    )
 
     # Status
     is_active = fields.Boolean(
