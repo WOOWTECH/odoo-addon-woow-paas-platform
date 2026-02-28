@@ -1,0 +1,145 @@
+# Default values for odoo-dev-sandbox
+
+# --- Sandbox Configuration ---
+sandbox:
+  # Deployment mode: "local" (hostPath mount) or "ci" (code baked into image)
+  mode: local
+  # Time-to-live before auto-cleanup (e.g., "168h" = 7 days, "0" = never)
+  ttl: "168h"
+  # Git branch slug (used for namespace naming)
+  branch: ""
+  # Labels applied to the sandbox namespace
+  labels:
+    sandbox.woow.tw/managed: "true"
+
+# --- Namespace ---
+namespace:
+  # If empty, computed as "dev-sandbox-{branch}"
+  name: ""
+
+# --- Odoo ---
+odoo:
+  image:
+    repository: odoo
+    tag: "18.0"
+    pullPolicy: IfNotPresent
+  # Enable Odoo dev mode (reload,qweb,xml)
+  devMode: true
+  # Admin master password
+  adminPassword: admin
+  # Addons path inside container
+  addonsPath: /mnt/extra-addons,/mnt/extra-addons-ext
+  # Resource limits
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2
+      memory: 2Gi
+  # Readiness probe
+  readinessProbe:
+    httpGet:
+      path: /web/login
+      port: 8069
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 12
+  # Liveness probe
+  livenessProbe:
+    httpGet:
+      path: /web/login
+      port: 8069
+    initialDelaySeconds: 120
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+# --- PostgreSQL ---
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "15"
+    pullPolicy: IfNotPresent
+  # Database name (auto-generated from branch if empty)
+  database: ""
+  user: odoo
+  password: odoo
+  storage:
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+
+# --- Nginx ---
+nginx:
+  enabled: true
+  image:
+    repository: nginx
+    tag: alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# --- PgAdmin (optional) ---
+pgadmin:
+  enabled: false
+  image:
+    repository: dpage/pgadmin4
+    tag: latest
+    pullPolicy: IfNotPresent
+  defaultEmail: admin@woow.com
+  defaultPassword: admin
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# --- Ingress ---
+ingress:
+  enabled: false
+  className: traefik
+  domain: dev.woow.tw
+  annotations: {}
+
+# --- Code mount (local mode) ---
+codeMount:
+  # Absolute path on the host to the worktree src/ directory
+  hostPath: ""
+  # Absolute path on the host to extra-addons directory
+  extraAddonsHostPath: ""
+
+# --- Resource Quota ---
+resourceQuota:
+  enabled: true
+  cpu: "4"
+  memory: 4Gi
+  storage: 10Gi
+
+# --- Network Policy ---
+networkPolicy:
+  enabled: true
+
+# --- Secret Management ---
+secrets:
+  # Use an existing K8s secret instead of creating one
+  existingSecret: ""
+
+# --- Common overrides ---
+nameOverride: ""
+fullnameOverride: ""
