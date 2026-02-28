@@ -1171,7 +1171,7 @@ class PaasController(Controller):
             _logger.warning("Invalid helm_value_specs for template %s", template.name)
             return {}
 
-    def _build_mcp_sidecar_config(self, template: Any, auth_token: str) -> dict[str, Any]:
+    def _build_mcp_sidecar_config(self, template: Any, auth_token: str, api_key: str | None = None) -> dict[str, Any]:
         """Build MCP sidecar container config for PaaS Operator patch endpoint.
 
         Constructs the sidecar container spec from the template's MCP fields,
@@ -1181,6 +1181,7 @@ class PaasController(Controller):
         Args:
             template: CloudAppTemplate record with MCP fields
             auth_token: Generated AUTH_TOKEN for sidecar authentication
+            api_key: Optional API key for the main application (e.g., N8N_API_KEY)
 
         Returns:
             Dict matching the SidecarPatchRequest schema expected by PaaS Operator
@@ -1195,6 +1196,11 @@ class PaasController(Controller):
             {'name': 'PORT', 'value': str(sidecar_port)},
         ]
 
+        # Inject auto-generated API key for the main application
+        if api_key and template.mcp_api_key_helm_path:
+            env_name = template.mcp_api_key_helm_path.rsplit('.', 1)[-1]
+            env_vars.append({'name': env_name, 'value': api_key})
+
         # Merge custom env vars from template (if any)
         if template.mcp_sidecar_env:
             try:
@@ -1202,6 +1208,8 @@ class PaasController(Controller):
                 # custom_env is a dict like {"KEY": "VALUE"}
                 # Required keys that should not be overridden
                 reserved_keys = {'MCP_MODE', 'AUTH_TOKEN', 'PORT', 'N8N_API_URL'}
+                if api_key and template.mcp_api_key_helm_path:
+                    reserved_keys.add(template.mcp_api_key_helm_path.rsplit('.', 1)[-1])
                 for key, value in custom_env.items():
                     if key not in reserved_keys:
                         env_vars.append({'name': key, 'value': str(value)})
@@ -1338,6 +1346,16 @@ class PaasController(Controller):
         nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
 
+        # Generate per-service API key for MCP sidecar ↔ main container communication
+        mcp_api_key = None
+        if template.mcp_enabled and template.mcp_api_key_helm_path:
+            mcp_api_key = str(uuid.uuid4())
+            # Inject into Helm values at the configured dot-path
+            api_key_nested = self._unflatten_dotpath_keys(
+                {template.mcp_api_key_helm_path: mcp_api_key}
+            )
+            merged_values = self._deep_merge(merged_values, api_key_nested)
+
         try:
             # Create service record in pending state
             service = CloudService.create({
@@ -1436,7 +1454,7 @@ class PaasController(Controller):
                 # After Helm install, patch sidecar if MCP enabled
                 if template.mcp_enabled and template.mcp_sidecar_image:
                     mcp_auth_token = str(uuid.uuid4())
-                    sidecar_config = self._build_mcp_sidecar_config(template, mcp_auth_token)
+                    sidecar_config = self._build_mcp_sidecar_config(template, mcp_auth_token, mcp_api_key)
                     try:
                         client.patch_sidecar(
                             namespace=helm_namespace,
