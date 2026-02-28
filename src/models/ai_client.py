@@ -226,7 +226,7 @@ class AIClient:
 
     # MCP agent timeout (seconds) to prevent hanging on unreachable servers
     _MCP_TIMEOUT = 60
-    _RECURSION_LIMIT = 5
+    _RECURSION_LIMIT = 20
 
     async def _async_agent_invoke(self, messages, server_config, enabled_names):
         """Build LangGraph agent, invoke, and return final text.
