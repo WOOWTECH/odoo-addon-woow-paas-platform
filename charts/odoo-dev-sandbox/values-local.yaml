@@ -1,0 +1,14 @@
+# K3s local development overrides
+# Usage: helm install ... -f values.yaml -f values-local.yaml
+
+sandbox:
+  mode: local
+
+ingress:
+  enabled: false
+
+pgadmin:
+  enabled: false
+
+networkPolicy:
+  enabled: false
