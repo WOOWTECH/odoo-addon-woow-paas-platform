@@ -60,6 +60,7 @@ class CloudService(models.Model):
         selection=[
             ('pending', 'Pending'),
             ('deploying', 'Deploying'),
+            ('initializing', 'Initializing'),
             ('running', 'Running'),
             ('error', 'Error'),
             ('upgrading', 'Upgrading'),
@@ -72,6 +73,17 @@ class CloudService(models.Model):
     error_message = fields.Text(
         string='Error Message',
         help='Error details if deployment failed',
+    )
+
+    # Post-deploy initialization tracking
+    init_retries = fields.Integer(
+        string='Init Retries',
+        default=0,
+        help='Number of post-deploy initialization attempts',
+    )
+    init_error = fields.Text(
+        string='Init Error',
+        help='Last error from post-deploy initialization',
     )
 
     # Network

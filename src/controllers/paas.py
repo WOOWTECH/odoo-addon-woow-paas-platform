@@ -1720,21 +1720,42 @@ class PaasController(Controller):
                 ) if pods else True
 
                 if all_ready:
-                    service.write({
-                        'state': 'running',
-                        'helm_revision': helm_revision,
-                        'error_message': False,
-                    })
+                    template = service.template_id
+                    needs_init = (
+                        template.post_deploy_init_type
+                        and template.post_deploy_init_type != 'none'
+                    )
 
-                    # Auto-create MCP Server when transitioning to running
-                    if original_state != 'running':
-                        try:
-                            self._auto_create_mcp_server(service)
-                        except Exception as e:
-                            _logger.warning(
-                                "Auto-create MCP server failed for service %s: %s",
-                                service.name, e,
-                            )
+                    if needs_init and original_state == 'deploying':
+                        # Pods ready but need post-deploy init → transition to initializing
+                        service.write({
+                            'state': 'initializing',
+                            'helm_revision': helm_revision,
+                            'error_message': False,
+                        })
+                        self._run_post_deploy_init(service)
+
+                    elif needs_init and original_state == 'initializing':
+                        # Already initializing, retry if needed
+                        self._run_post_deploy_init(service)
+
+                    else:
+                        # No init needed or already done → running
+                        service.write({
+                            'state': 'running',
+                            'helm_revision': helm_revision,
+                            'error_message': False,
+                        })
+
+                        # Auto-create MCP Server when transitioning to running
+                        if original_state != 'running':
+                            try:
+                                self._auto_create_mcp_server(service)
+                            except Exception as e:
+                                _logger.warning(
+                                    "Auto-create MCP server failed for service %s: %s",
+                                    service.name, e,
+                                )
                 # else: still deploying/waiting for pods
 
             elif release_status == 'failed':
@@ -1761,6 +1782,87 @@ class PaasController(Controller):
 
         except Exception as e:
             _logger.warning("Error polling service status: %s", str(e))
+
+    def _run_post_deploy_init(self, service: Any) -> None:
+        """Execute post-deploy initialization for a service.
+
+        Called when pods are ready but the application needs initialization
+        (e.g., n8n owner setup + API key generation).
+
+        On success: transitions to 'running' and auto-creates MCP server.
+        On failure: increments retry counter; after 5 retries → 'error' state.
+        """
+        template = service.template_id
+
+        if template.post_deploy_init_type == 'n8n':
+            client = get_paas_operator_client(request.env)
+            if not client:
+                _logger.warning("PaaS Operator not configured, cannot initialize n8n")
+                return
+
+            password = str(uuid.uuid4())
+
+            try:
+                result = client.init_n8n(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                    owner_email=template.post_deploy_init_email or 'admin@woow.cloud',
+                    owner_password=password,
+                )
+
+                if result.get('success'):
+                    real_api_key = result['api_key']
+                    service.write({
+                        'mcp_auth_token': real_api_key,
+                        'state': 'running',
+                        'init_retries': 0,
+                        'init_error': False,
+                    })
+                    _logger.info(
+                        "n8n init succeeded for service %s, API key updated",
+                        service.name,
+                    )
+                    try:
+                        self._auto_create_mcp_server(service)
+                    except Exception as e:
+                        _logger.warning(
+                            "Auto-create MCP server failed for service %s: %s",
+                            service.name, e,
+                        )
+                else:
+                    retries = (service.init_retries or 0) + 1
+                    error_msg = result.get('error', 'Unknown error')
+                    vals = {
+                        'init_retries': retries,
+                        'init_error': error_msg,
+                    }
+                    if retries >= 5:
+                        vals.update({
+                            'state': 'error',
+                            'error_message': f'n8n initialization failed after {retries} retries: {error_msg}',
+                        })
+                    service.write(vals)
+                    _logger.warning(
+                        "n8n init attempt %d failed for service %s: %s",
+                        retries, service.name, error_msg,
+                    )
+
+            except Exception as e:
+                retries = (service.init_retries or 0) + 1
+                vals = {
+                    'init_retries': retries,
+                    'init_error': str(e),
+                }
+                if retries >= 5:
+                    vals.update({
+                        'state': 'error',
+                        'error_message': f'n8n initialization failed: {str(e)}',
+                    })
+                service.write(vals)
+                _logger.warning(
+                    "n8n init exception (attempt %d) for service %s: %s",
+                    retries, service.name, e,
+                )
 
     def _auto_create_mcp_server(self, service: Any) -> None:
         """Auto-create MCP Server record for a cloud service with MCP enabled.

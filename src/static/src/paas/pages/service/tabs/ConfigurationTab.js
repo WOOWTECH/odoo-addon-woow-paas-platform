@@ -54,7 +54,7 @@ export class ConfigurationTab extends Component {
     }
 
     get canEdit() {
-        const disabledStates = ["deploying", "upgrading", "deleting", "pending"];
+        const disabledStates = ["deploying", "initializing", "upgrading", "deleting", "pending"];
         return !disabledStates.includes(this.props.service.state);
     }
 

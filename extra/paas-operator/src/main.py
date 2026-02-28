@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api import namespaces, releases, routes, tunnels
+from src.api import init, namespaces, releases, routes, tunnels
 from src.config import settings
 from src.models.schemas import ErrorResponse, HealthResponse
 from src.services.helm import HelmService
@@ -150,6 +150,7 @@ app.include_router(releases.router)
 app.include_router(namespaces.router)
 app.include_router(routes.router)
 app.include_router(tunnels.router)
+app.include_router(init.router)
 
 
 # Root endpoint
