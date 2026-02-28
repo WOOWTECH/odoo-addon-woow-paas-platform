@@ -177,7 +177,7 @@ class AIClient:
         if not mcp_tools:
             return self.chat_completion(messages)
         server_config = _build_mcp_server_config(mcp_tools)
-        enabled_names = {t.name for t in mcp_tools}
+        enabled_names = _build_prefixed_enabled_names(mcp_tools)
         try:
             return asyncio.run(
                 self._async_agent_invoke(messages, server_config, enabled_names)
@@ -211,7 +211,7 @@ class AIClient:
             return
 
         server_config = _build_mcp_server_config(mcp_tools)
-        enabled_names = {t.name for t in mcp_tools}
+        enabled_names = _build_prefixed_enabled_names(mcp_tools)
         try:
             events = asyncio.run(
                 self._async_agent_stream(messages, server_config, enabled_names)
@@ -237,7 +237,7 @@ class AIClient:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         try:
-            client = MultiServerMCPClient(server_config)
+            client = MultiServerMCPClient(server_config, tool_name_prefix=True)
             tools = await asyncio.wait_for(
                 client.get_tools(), timeout=self._MCP_TIMEOUT,
             )
@@ -279,7 +279,7 @@ class AIClient:
 
         events = []
         try:
-            client = MultiServerMCPClient(server_config)
+            client = MultiServerMCPClient(server_config, tool_name_prefix=True)
             tools = await asyncio.wait_for(
                 client.get_tools(), timeout=self._MCP_TIMEOUT,
             )
@@ -453,17 +453,39 @@ class AIClient:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _make_server_key(server):
+    """Build a clean, unique key for MultiServerMCPClient config dict.
+
+    Uses ``s{id}`` format (e.g. ``s42``) to guarantee uniqueness even when
+    multiple MCP servers share the same display name.
+    """
+    return f"s{server.id}"
+
+
+def _build_prefixed_enabled_names(mcp_tools):
+    """Build set of prefixed tool names matching ``tool_name_prefix=True`` output.
+
+    When ``MultiServerMCPClient`` is created with ``tool_name_prefix=True``,
+    each tool name is prefixed with ``{server_key}_``.  This function
+    pre-computes the same prefixed names so we can filter tools correctly.
+    """
+    return {f"{_make_server_key(t.server_id)}_{t.name}" for t in mcp_tools}
+
+
 def _build_mcp_server_config(mcp_tools):
     """Build MultiServerMCPClient config from an Odoo mcp_tool recordset.
 
-    Groups tools by their server and returns a dict keyed by server name,
-    with each value being the server's connection config.
+    Groups tools by their server and returns a dict keyed by a unique
+    server key (``s{id}``), with each value being the server's connection
+    config.  Using the record ID as key avoids collisions when two servers
+    share the same display name.
     """
     servers = {}
     for tool in mcp_tools:
         server = tool.server_id
-        if server.name not in servers:
-            servers[server.name] = server._get_mcp_client_config()
+        key = _make_server_key(server)
+        if key not in servers:
+            servers[key] = server._get_mcp_client_config()
     return servers
 
 

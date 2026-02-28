@@ -430,7 +430,7 @@ class AiAssistantController(Controller):
         # (ORM cursor may not be valid inside the streaming generator).
         # Combine system-scope tools from the assistant and user-scope tools
         # from the cloud service linked to this channel's task/project.
-        from ..models.ai_client import _build_mcp_server_config
+        from ..models.ai_client import _build_mcp_server_config, _build_prefixed_enabled_names
         mcp_tools = assistant.get_enabled_mcp_tools()
 
         # Also gather user-scope MCP tools from the cloud service
@@ -442,7 +442,7 @@ class AiAssistantController(Controller):
         mcp_tool_names = None
         if mcp_tools:
             mcp_server_config = _build_mcp_server_config(mcp_tools)
-            mcp_tool_names = {t.name for t in mcp_tools}
+            mcp_tool_names = _build_prefixed_enabled_names(mcp_tools)
 
         def generate():
             full_response = ''
