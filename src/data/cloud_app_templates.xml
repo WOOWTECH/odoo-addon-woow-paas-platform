@@ -69,18 +69,6 @@
             <field name="min_storage_gb">5</field>
 
             <field name="is_active" eval="True" />
-
-            <!-- MCP Sidecar Configuration -->
-            <field name="mcp_enabled" eval="True"/>
-            <field name="mcp_sidecar_image">ghcr.io/czlonkowski/n8n-mcp:v2.35.5</field>
-            <field name="mcp_sidecar_port">3000</field>
-            <field name="mcp_transport">streamable_http</field>
-            <field name="mcp_endpoint_path">/mcp</field>
-            <field name="mcp_sidecar_env">{
-    "MCP_MODE": "http",
-    "N8N_API_URL": "http://localhost:5678",
-    "PORT": "3000"
-}</field>
         </record>
 
         <!-- Redis Cache -->
@@ -158,6 +146,22 @@
             <field name="min_storage_gb">10</field>
 
             <field name="is_active" eval="True" />
+        </record>
+    </data>
+
+    <!-- MCP configuration updates - noupdate=0 to ensure upgrades apply these values -->
+    <data noupdate="0">
+        <record id="cloud_app_n8n" model="woow_paas_platform.cloud_app_template">
+            <field name="mcp_enabled" eval="True"/>
+            <field name="mcp_sidecar_image">ghcr.io/czlonkowski/n8n-mcp:v2.35.5</field>
+            <field name="mcp_sidecar_port">3000</field>
+            <field name="mcp_transport">streamable_http</field>
+            <field name="mcp_endpoint_path">/mcp</field>
+            <field name="mcp_sidecar_env">{
+    "MCP_MODE": "http",
+    "N8N_API_URL": "http://localhost:5678",
+    "PORT": "3000"
+}</field>
         </record>
     </data>
 </odoo>
