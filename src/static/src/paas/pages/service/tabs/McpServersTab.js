@@ -171,4 +171,18 @@ export class McpServersTab extends Component {
         };
         return map[state] || 'pending';
     }
+
+    // Handler factories for template onClick props (OWL props can't use `this`)
+    getTestHandler(server) {
+        return () => this.testServer(server);
+    }
+    getSyncHandler(server) {
+        return () => this.syncServer(server);
+    }
+    getEditHandler(server) {
+        return () => this.showEditForm(server);
+    }
+    getDeleteHandler(server) {
+        return () => this.deleteServer(server);
+    }
 }
