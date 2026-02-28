@@ -12,7 +12,7 @@ metadata:
     sandbox.woow.tw/ttl: {{ .Values.sandbox.ttl | quote }}
     sandbox.woow.tw/mode: {{ .Values.sandbox.mode | quote }}
     sandbox.woow.tw/created: {{ now | date "2006-01-02T15:04:05Z" | quote }}
-    {{- if ne .Values.sandbox.ttl "0" }}
+    {{- if ne (.Values.sandbox.ttl | toString) "0" }}
     sandbox.woow.tw/expires: {{ now | dateModify .Values.sandbox.ttl | date "2006-01-02T15:04:05Z" | quote }}
     {{- else }}
     sandbox.woow.tw/expires: "never"
