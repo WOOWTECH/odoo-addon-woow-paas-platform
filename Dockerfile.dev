@@ -1,0 +1,10 @@
+FROM odoo:18.0
+
+USER root
+
+COPY src/ /mnt/extra-addons/woow_paas_platform/
+COPY extra/extra-addons/ /mnt/extra-addons-ext/
+
+RUN chown -R odoo:odoo /mnt/extra-addons /mnt/extra-addons-ext
+
+USER odoo
