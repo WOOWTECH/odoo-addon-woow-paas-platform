@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-15T09:39:26Z
-version: 1.4
+last_updated: 2026-03-01T14:27:01Z
+version: 1.5
 author: Claude Code PM System
 ---
 
@@ -76,9 +76,33 @@ Woow PaaS Platform is an Odoo 18 addon module providing the foundation for a mul
    - Project Kanban 頁面
    - Module hooks (`hooks.py`) + 2 database migrations
 
+10. **Smart Home HA Integration** ✅ Complete
+    - Smart Home model（Cloudflare Tunnel 生命週期管理）
+    - `action_provision()` / `action_delete()` / `action_refresh_status()`
+    - Cloudflare Tunnel 資訊（tunnel_id, tunnel_token, subdomain, route, connector）
+    - PaaS Operator Tunnel API（create/get/delete/token endpoints）
+
+11. **OAuth 2.0 系統** ✅ Complete
+    - OAuthClient model（client credentials, redirect URIs）
+    - OAuthToken model（access/refresh tokens, scopes, expiry）
+    - OAuthAuthorizationCode model（PKCE support）
+    - Token validation（has_scope, is_access_token_valid, revoke）
+
+12. **HA API Endpoints** ✅ Complete
+    - `GET /api/ha/workspaces` - 使用者可存取的 workspace 列表
+    - `GET /api/ha/workspaces/<id>/smarthomes` - workspace 內的 smart home 列表
+    - `GET /api/ha/smarthomes/<id>/tunnel-token` - 取得 Cloudflare Tunnel Token
+    - Bearer token 認證（OAuth 2.0 access token）
+    - Scope-based 權限控制（smarthome:read, smarthome:tunnel, workspace:read）
+
+13. **K8s Dev Sandbox** ✅ Complete
+    - Helm chart `odoo-dev-sandbox`（Odoo + PostgreSQL + Nginx）
+    - Management scripts（create, destroy, list, status, logs, test, build）
+    - extra-addons hostPath 掛載支援
+    - pip install 等待機制（避免 DB init race condition）
+
 ### Not Yet Implemented
 - External integrations (Phase 5)
-- Unit tests
 - Multi-tenant logic
 - Dark mode theme
 
@@ -116,6 +140,7 @@ Phase 3: Core Models     [████████] 100%  ✓ Complete (Workspac
 Phase 4: Cloud Services  [████████] 100%  ✓ Complete (Templates + Services + Operator)
 Phase 4b: Config Restrict[████████] 100%  ✓ Complete (Helm value whitelist)
 Phase 4c: AI Assistant   [██████  ]  75%  🔄 In Progress
+Phase 4d: Smart Home HA  [████████] 100%  ✓ Complete (Smart Home + OAuth2 + HA API)
 Phase 5: Integrations    [        ]   0%
 ```
 
@@ -143,6 +168,7 @@ Settings → General Settings → Woow PaaS
 ```
 
 ## Update History
+- 2026-03-01: Added Smart Home HA Integration, OAuth 2.0, HA API, K8s Dev Sandbox features
 - 2026-02-15: Added AI Assistant feature, Cloud Service Config Restriction, version bump to 18.0.1.0.2
 - 2026-02-08: Phase 3 & 4 complete, added Cloud Services feature
 - 2026-02-01: Added Workspace management (Phase 3 in progress)
