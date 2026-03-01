@@ -1,3 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_sf_delivery_cargo,access_sf_delivery_cargo,model_sf_delivery_cargo,,1,1,1,1
-access_sf_delivery_mommy_sf_template, access_sf_delivery_mommy_sf_template,model_mommy_sf_template,,1,1,1,1
