@@ -70,7 +70,7 @@ spec:
               readOnly: true
             {{- if eq .Values.sandbox.mode "local" }}
             - name: extra-addons
-              mountPath: /mnt/extra-addons
+              mountPath: /mnt/extra-addons/{{ .Values.codeMount.moduleName }}
             {{- if .Values.codeMount.extraAddonsHostPath }}
             - name: extra-addons-ext
               mountPath: /mnt/extra-addons-ext

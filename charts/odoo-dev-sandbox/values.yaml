@@ -134,6 +134,8 @@ ingress:
 codeMount:
   # Absolute path on the host to the worktree src/ directory
   hostPath: ""
+  # Odoo module name (used as subdirectory under /mnt/extra-addons/)
+  moduleName: woow_paas_platform
   # Absolute path on the host to extra-addons directory
   extraAddonsHostPath: ""
 
