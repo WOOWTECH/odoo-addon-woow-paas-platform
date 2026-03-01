@@ -2,6 +2,9 @@
 
 Handles automated owner setup and API key generation for newly deployed
 n8n instances so MCP sidecar can connect immediately.
+
+Uses Node.js (available in n8n container) for HTTP requests since wget
+has encoding issues with n8n's body parser.
 """
 import json
 import logging
@@ -25,6 +28,47 @@ class N8nInitError(Exception):
         super().__init__(message)
 
 
+def _build_node_http_script(
+    method: str,
+    path: str,
+    body: Optional[dict] = None,
+    headers: Optional[Dict[str, str]] = None,
+    capture_headers: bool = False,
+) -> str:
+    """Build a Node.js one-liner for making HTTP requests to localhost:5678.
+
+    Returns a script that outputs JSON: {"status": <code>, "body": <string>, "headers": {...}}
+    """
+    extra_headers = ""
+    if headers:
+        for k, v in headers.items():
+            extra_headers += f',"{k}":"{v}"'
+
+    data_str = json.dumps(body) if body else ""
+    data_line = f'const d={json.dumps(data_str)};' if body else 'const d="";'
+
+    content_length = ""
+    if body:
+        content_length = ',"Content-Length":Buffer.byteLength(d)'
+
+    header_capture = ""
+    if capture_headers:
+        header_capture = ',headers:JSON.stringify(res.headers)'
+
+    return (
+        f'const http=require("http");'
+        f'{data_line}'
+        f'const req=http.request({{hostname:"localhost",port:5678,path:"{path}",'
+        f'method:"{method}",headers:{{"Content-Type":"application/json"{content_length}{extra_headers}}}}},'
+        f'res=>{{let b="";res.on("data",c=>b+=c);'
+        f'res.on("end",()=>console.log(JSON.stringify({{status:res.statusCode,body:b{header_capture}}})));'
+        f'}});'
+        f'req.on("error",e=>console.log(JSON.stringify({{status:0,body:e.message}})));'
+        f'{"req.write(d);" if body else ""}'
+        f'req.end();'
+    )
+
+
 class N8nInitService:
     """Handles n8n post-deploy initialization.
 
@@ -40,6 +84,40 @@ class N8nInitService:
     def __init__(self, k8s_service: Optional[KubernetesService] = None):
         self.k8s = k8s_service or KubernetesService()
 
+    def _node_request(
+        self,
+        namespace: str,
+        pod_name: str,
+        container: str,
+        method: str,
+        path: str,
+        body: Optional[dict] = None,
+        headers: Optional[Dict[str, str]] = None,
+        capture_headers: bool = False,
+        timeout: int = 15,
+    ) -> dict:
+        """Execute an HTTP request inside the n8n container using Node.js.
+
+        Returns:
+            dict with 'status' (int), 'body' (str), optionally 'headers' (dict)
+        """
+        script = _build_node_http_script(method, path, body, headers, capture_headers)
+
+        result = self.k8s.exec_in_pod(
+            namespace=namespace,
+            pod_name=pod_name,
+            container=container,
+            command=["node", "-e", script],
+            timeout=timeout,
+        )
+
+        output = result.stdout.strip()
+        if not output:
+            raise N8nInitError(f"Empty response from node script", step="node_request")
+
+        resp = json.loads(output)
+        return resp
+
     def initialize(
         self,
         namespace: str,
@@ -47,26 +125,12 @@ class N8nInitService:
         owner_email: str,
         owner_password: str,
     ) -> Dict:
-        """Complete n8n initialization sequence.
-
-        Args:
-            namespace: K8s namespace
-            release_name: Helm release name
-            owner_email: Email for the owner user
-            owner_password: Password for the owner user
-
-        Returns:
-            dict with api_key, owner_email, success
-
-        Raises:
-            N8nInitError: If any step fails
-        """
+        """Complete n8n initialization sequence."""
         logger.info(
             "Starting n8n initialization for %s/%s",
             namespace, release_name,
         )
 
-        # Find the n8n pod
         pod_name = self._get_n8n_pod(namespace, release_name)
         container = "n8n"
 
@@ -77,7 +141,6 @@ class N8nInitService:
         if self._is_owner_setup_done(namespace, pod_name, container):
             logger.info("n8n owner already set up, skipping setup step")
         else:
-            # Create owner user
             self._setup_owner(namespace, pod_name, container, owner_email, owner_password)
 
         # Step 3: Login to get auth cookie
@@ -86,22 +149,24 @@ class N8nInitService:
         # Step 4: Create API key
         api_key = self._create_api_key(namespace, pod_name, container, cookie)
 
-        # Step 5: Update K8s Secret
-        secret_name = f"{release_name}-n8n-secret"
-        try:
-            self.k8s.patch_secret(
-                namespace=namespace,
-                secret_name=secret_name,
-                data={"N8N_API_KEY": api_key},
-            )
-            logger.info("Updated K8s Secret %s with real API key", secret_name)
-        except KubectlException as e:
-            logger.warning("Failed to patch K8s Secret %s: %s (non-fatal)", secret_name, e)
+        # Step 5: Update K8s Secret with real API key
+        secret_name = self._find_secret(namespace, release_name)
+        if secret_name:
+            try:
+                self.k8s.patch_secret(
+                    namespace=namespace,
+                    secret_name=secret_name,
+                    data={"N8N_API_KEY": api_key},
+                )
+                logger.info("Updated K8s Secret %s with real API key", secret_name)
+            except KubectlException as e:
+                logger.warning("Failed to patch K8s Secret %s: %s (non-fatal)", secret_name, e)
+        else:
+            logger.warning("No secret found for release %s, skipping secret update", release_name)
 
-        # Step 6: Patch sidecar env with real API key
-        deployment_name = self._find_deployment(namespace, release_name)
-        if deployment_name:
-            self._patch_sidecar_env(namespace, deployment_name, "N8N_API_KEY", api_key)
+        # Note: Skipping sidecar env patch to avoid deployment restart which
+        # would wipe n8n's ephemeral data (owner + API key). The Secret is
+        # updated above; sidecar picks up the key on next manual pod restart.
 
         logger.info("n8n initialization complete for %s/%s", namespace, release_name)
 
@@ -113,7 +178,6 @@ class N8nInitService:
 
     def _get_n8n_pod(self, namespace: str, release_name: str) -> str:
         """Find the n8n pod name."""
-        # Try common label selectors
         selectors = [
             f"app.kubernetes.io/instance={release_name},app.kubernetes.io/name=n8n",
             f"app.kubernetes.io/instance={release_name}",
@@ -136,20 +200,15 @@ class N8nInitService:
 
         for attempt in range(MAX_READY_RETRIES):
             try:
-                result = self.k8s.exec_in_pod(
-                    namespace=namespace,
-                    pod_name=pod_name,
-                    container=container,
-                    command=[
-                        "curl", "-sf",
-                        "http://localhost:5678/rest/settings",
-                    ],
+                resp = self._node_request(
+                    namespace, pod_name, container,
+                    "GET", "/rest/settings",
                     timeout=10,
                 )
-                if result.returncode == 0 and result.stdout.strip():
+                if resp.get("status") == 200 and resp.get("body"):
                     logger.info("n8n API is ready (attempt %d)", attempt + 1)
                     return
-            except KubectlException:
+            except (KubectlException, N8nInitError, json.JSONDecodeError):
                 pass
 
             if attempt < MAX_READY_RETRIES - 1:
@@ -164,18 +223,16 @@ class N8nInitService:
     def _is_owner_setup_done(self, namespace: str, pod_name: str, container: str) -> bool:
         """Check if n8n owner is already set up."""
         try:
-            result = self.k8s.exec_in_pod(
-                namespace=namespace,
-                pod_name=pod_name,
-                container=container,
-                command=[
-                    "curl", "-sf",
-                    "http://localhost:5678/rest/settings",
-                ],
-                timeout=10,
+            resp = self._node_request(
+                namespace, pod_name, container,
+                "GET", "/rest/settings",
             )
-            settings = json.loads(result.stdout)
-            return not settings.get("showSetupOnFirstLoad", True)
+            if resp.get("status") != 200:
+                return False
+            settings = json.loads(resp["body"])
+            data = settings.get("data", settings)
+            user_mgmt = data.get("userManagement", {})
+            return not user_mgmt.get("showSetupOnFirstLoad", True)
         except Exception:
             return False
 
@@ -190,32 +247,29 @@ class N8nInitService:
         """Create the owner user via n8n REST API."""
         logger.info("Setting up n8n owner: %s", email)
 
-        payload = json.dumps({
-            "email": email,
-            "password": password,
-            "firstName": "Admin",
-            "lastName": "User",
-        })
-
         try:
-            result = self.k8s.exec_in_pod(
-                namespace=namespace,
-                pod_name=pod_name,
-                container=container,
-                command=[
-                    "curl", "-sf",
-                    "-X", "POST",
-                    "-H", "Content-Type: application/json",
-                    "-d", payload,
-                    "http://localhost:5678/rest/owner/setup",
-                ],
-                timeout=15,
+            resp = self._node_request(
+                namespace, pod_name, container,
+                "POST", "/rest/owner/setup",
+                body={
+                    "email": email,
+                    "password": password,
+                    "firstName": "Admin",
+                    "lastName": "User",
+                },
             )
 
-            response = json.loads(result.stdout)
-            if "id" not in response:
+            if resp.get("status") != 200:
                 raise N8nInitError(
-                    f"Owner setup response missing user id: {result.stdout[:200]}",
+                    f"Owner setup returned HTTP {resp.get('status')}: {resp.get('body', '')[:200]}",
+                    step="setup_owner",
+                )
+
+            response = json.loads(resp["body"])
+            user_data = response.get("data", response)
+            if "id" not in user_data:
+                raise N8nInitError(
+                    f"Owner setup response missing user id: {resp['body'][:200]}",
                     step="setup_owner",
                 )
 
@@ -238,40 +292,41 @@ class N8nInitService:
         """Login to n8n and return the auth cookie."""
         logger.info("Logging in to n8n as %s", email)
 
-        payload = json.dumps({
-            "email": email,
-            "password": password,
-        })
-
         try:
-            result = self.k8s.exec_in_pod(
-                namespace=namespace,
-                pod_name=pod_name,
-                container=container,
-                command=[
-                    "curl", "-sf",
-                    "-X", "POST",
-                    "-H", "Content-Type: application/json",
-                    "-d", payload,
-                    "-D", "-",
-                    "http://localhost:5678/rest/login",
-                ],
-                timeout=10,
+            resp = self._node_request(
+                namespace, pod_name, container,
+                "POST", "/rest/login",
+                body={"emailOrLdapLoginId": email, "password": password},
+                capture_headers=True,
             )
 
-            # Extract Set-Cookie header from response headers
-            output = result.stdout
-            cookie = ""
-            for line in output.split("\n"):
-                if line.lower().startswith("set-cookie:"):
-                    # Extract just the cookie value (before first ;)
-                    cookie_part = line.split(":", 1)[1].strip()
-                    cookie = cookie_part.split(";")[0].strip()
-                    break
+            if resp.get("status") != 200:
+                raise N8nInitError(
+                    f"Login returned HTTP {resp.get('status')}: {resp.get('body', '')[:200]}",
+                    step="login",
+                )
+
+            # Parse headers to find set-cookie
+            headers_str = resp.get("headers", "{}")
+            headers = json.loads(headers_str) if isinstance(headers_str, str) else headers_str
+
+            set_cookie = headers.get("set-cookie", "")
+            if not set_cookie:
+                raise N8nInitError(
+                    f"Login succeeded but no set-cookie header found",
+                    step="login",
+                )
+
+            # set-cookie can be a string or array; take the first cookie
+            if isinstance(set_cookie, list):
+                set_cookie = set_cookie[0]
+
+            # Extract "name=value" part before first ";"
+            cookie = set_cookie.split(";")[0].strip()
 
             if not cookie:
                 raise N8nInitError(
-                    "Login succeeded but no cookie returned",
+                    "Login succeeded but cookie value is empty",
                     step="login",
                 )
 
@@ -284,6 +339,35 @@ class N8nInitService:
                 step="login",
             )
 
+    def _get_api_key_scopes(
+        self,
+        namespace: str,
+        pod_name: str,
+        container: str,
+        cookie: str,
+    ) -> list:
+        """Get available API key scopes from n8n."""
+        try:
+            resp = self._node_request(
+                namespace, pod_name, container,
+                "GET", "/rest/api-keys/scopes",
+                headers={"Cookie": cookie},
+            )
+            if resp.get("status") == 200:
+                response = json.loads(resp["body"])
+                scopes = response.get("data", response)
+                if isinstance(scopes, list):
+                    return scopes
+        except Exception:
+            pass
+        # Fallback: common n8n scopes (must match /rest/api-keys/scopes output)
+        return [
+            "workflow:list", "workflow:read", "workflow:create",
+            "workflow:update", "workflow:delete",
+            "workflow:activate", "workflow:deactivate",
+            "execution:read", "execution:list",
+        ]
+
     def _create_api_key(
         self,
         namespace: str,
@@ -295,29 +379,32 @@ class N8nInitService:
         logger.info("Creating n8n API key")
 
         try:
-            result = self.k8s.exec_in_pod(
-                namespace=namespace,
-                pod_name=pod_name,
-                container=container,
-                command=[
-                    "curl", "-sf",
-                    "-X", "POST",
-                    "-H", "Content-Type: application/json",
-                    "-H", f"Cookie: {cookie}",
-                    "-d", "{}",
-                    "http://localhost:5678/rest/api-keys",
-                ],
-                timeout=10,
+            # First, discover available scopes
+            scopes = self._get_api_key_scopes(namespace, pod_name, container, cookie)
+            logger.info("Available API key scopes: %s", scopes)
+
+            resp = self._node_request(
+                namespace, pod_name, container,
+                "POST", "/rest/api-keys",
+                # expiresAt=null means no expiration; use far-future timestamp if null not accepted
+                body={"label": "mcp-sidecar", "scopes": scopes, "expiresAt": 4102444800},
+                headers={"Cookie": cookie},
             )
 
-            response = json.loads(result.stdout)
+            if resp.get("status") != 200:
+                raise N8nInitError(
+                    f"API key creation returned HTTP {resp.get('status')}: {resp.get('body', '')[:200]}",
+                    step="create_api_key",
+                )
 
-            # Response could be the key object directly or wrapped in data
-            api_key = response.get("apiKey") or response.get("data", {}).get("apiKey")
+            response = json.loads(resp["body"])
+            data = response.get("data", response)
+            # n8n returns full key in 'rawApiKey', 'apiKey' is masked
+            api_key = data.get("rawApiKey") or data.get("apiKey") if isinstance(data, dict) else None
 
             if not api_key:
                 raise N8nInitError(
-                    f"API key creation response missing apiKey: {result.stdout[:200]}",
+                    f"API key creation response missing rawApiKey: {resp['body'][:200]}",
                     step="create_api_key",
                 )
 
@@ -329,6 +416,28 @@ class N8nInitService:
                 f"Failed to create API key: {e.stderr}",
                 step="create_api_key",
             )
+
+    def _find_secret(self, namespace: str, release_name: str) -> Optional[str]:
+        """Find the secret name for the release by label selector."""
+        try:
+            result = self.k8s._run_command([
+                "get", "secrets",
+                "--namespace", namespace,
+                "-l", f"app.kubernetes.io/instance={release_name}",
+                "--output", "jsonpath={.items[*].metadata.name}",
+            ])
+            secret_names = result.stdout.strip().split()
+            # Prefer secrets with 'app-secret' or 'secret' in name, skip helm release secrets
+            for name in secret_names:
+                if "app-secret" in name or (name.endswith("-secret") and "helm" not in name):
+                    return name
+            # Fallback: first non-helm secret
+            for name in secret_names:
+                if "sh.helm.release" not in name:
+                    return name
+        except KubectlException:
+            pass
+        return None
 
     def _find_deployment(self, namespace: str, release_name: str) -> Optional[str]:
         """Find the deployment name for the release."""
@@ -353,7 +462,6 @@ class N8nInitService:
         """Patch the MCP sidecar container's env with the real API key."""
         logger.info("Patching sidecar env %s in deployment %s", env_name, deployment_name)
 
-        # Find the mcp-sidecar container index
         try:
             result = self.k8s._run_command([
                 "get", "deployment", deployment_name,

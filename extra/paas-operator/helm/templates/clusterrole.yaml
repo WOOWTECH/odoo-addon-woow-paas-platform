@@ -21,6 +21,7 @@ rules:
       - "persistentvolumeclaims"
       - "pods"
       - "pods/log"
+      - "pods/exec"
       - "events"
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 

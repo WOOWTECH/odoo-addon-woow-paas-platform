@@ -1504,7 +1504,7 @@ class PaasController(Controller):
     def _get_service(self, service: Any) -> dict[str, Any]:
         """Get service details, updating status from operator if needed."""
         # Check if we need to poll operator for status
-        if service.state in ['deploying', 'upgrading']:
+        if service.state in ['deploying', 'upgrading', 'initializing']:
             self._update_service_status(service)
 
         return {
@@ -1800,7 +1800,8 @@ class PaasController(Controller):
                 _logger.warning("PaaS Operator not configured, cannot initialize n8n")
                 return
 
-            password = str(uuid.uuid4())
+            # n8n requires at least 1 uppercase letter in password
+            password = 'W' + str(uuid.uuid4()).upper()
 
             try:
                 result = client.init_n8n(
