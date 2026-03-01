@@ -21,15 +21,12 @@ class TestHAApiBase(TransactionCase):
         self.OAuthClient = self.env['woow_paas_platform.oauth_client']
         self.OAuthToken = self.env['woow_paas_platform.oauth_token']
 
-        self.user = self.env.ref('base.user_admin')
+        # Use self.env.user (superuser in TransactionCase) to match
+        # Workspace.create() which sets owner_id = self.env.user
+        self.user = self.env.user
 
-        # Create workspace + access
+        # Create workspace (auto-creates owner access for self.env.user)
         self.workspace = self.Workspace.create({'name': 'HA Test Workspace'})
-        self.WorkspaceAccess.create({
-            'workspace_id': self.workspace.id,
-            'user_id': self.user.id,
-            'role': 'owner',
-        })
 
         # Create smart home
         self.home = self.SmartHome.create({
@@ -100,10 +97,13 @@ class TestHAApiAccessControl(TestHAApiBase):
 
     def test_no_workspace_access(self):
         """Test that user without access cannot see workspace."""
-        other_workspace = self.Workspace.create({'name': 'Other WS'})
-        access = self.WorkspaceAccess.search([
-            ('user_id', '=', self.user.id),
-            ('workspace_id', '=', other_workspace.id),
+        other_user = self.env['res.users'].create({
+            'name': 'No Access User',
+            'login': 'no_access_test@example.com',
+        })
+        access = self.WorkspaceAccess.sudo().search([
+            ('user_id', '=', other_user.id),
+            ('workspace_id', '=', self.workspace.id),
         ], limit=1)
         self.assertFalse(access.exists())
 
@@ -186,11 +186,11 @@ class TestHAApiData(TestHAApiBase):
 
 
 class TestHAApiIntegration(TestHAApiBase):
-    """Integration tests for the full Smart Home → Tunnel Token flow."""
+    """Integration tests for the full Smart Home -> Tunnel Token flow."""
 
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_create_provision_get_token_flow(self, mock_get_client):
-        """Test complete flow: create → provision → get token."""
+        """Test complete flow: create -> provision -> get token."""
         mock_client = MagicMock()
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-flow-123',
@@ -231,7 +231,7 @@ class TestHAApiIntegration(TestHAApiBase):
 
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_create_provision_delete_flow(self, mock_get_client):
-        """Test full lifecycle: create → provision → delete."""
+        """Test full lifecycle: create -> provision -> delete."""
         mock_client = MagicMock()
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-lifecycle',
