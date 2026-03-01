@@ -16,7 +16,7 @@ data:
     db_port = 5432
     db_user = {{ .Values.postgres.user }}
     db_password = {{ .Values.postgres.password }}
-    db_name = False
+    db_name = {{ include "odoo-dev-sandbox.dbName" . }}
     db_template = template0
     db_maxconn = 64
 

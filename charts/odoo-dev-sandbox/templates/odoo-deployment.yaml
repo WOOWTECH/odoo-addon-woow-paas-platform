@@ -8,6 +8,8 @@ metadata:
     app.kubernetes.io/component: odoo
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "odoo-dev-sandbox.selectorLabels" . | nindent 6 }}

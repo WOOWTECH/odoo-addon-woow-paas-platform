@@ -265,14 +265,36 @@ fi
 
 echo ""
 
+# --- 等待 Odoo pod 就緒（DB init 需要 pip packages 已安裝）---
+echo -e "${BLUE}Waiting for Odoo pod to be ready (pip install + startup)...${NC}"
+ODOO_READY=false
+for i in $(seq 1 60); do
+    if kubectl wait --for=condition=ready pod \
+        -l "app.kubernetes.io/instance=$SLUG,app.kubernetes.io/component=odoo" \
+        -n "$NAMESPACE" --timeout=10s 2>/dev/null; then
+        ODOO_READY=true
+        break
+    fi
+    if (( i % 6 == 0 )); then
+        echo -e "  Still waiting... (${i}0s elapsed)"
+    fi
+done
+
+if [ "$ODOO_READY" != "true" ]; then
+    echo -e "${YELLOW}Odoo pod not ready after 600s. DB init may fail.${NC}"
+fi
+
 # --- 檢查並初始化資料庫 ---
 echo -e "${BLUE}Checking database...${NC}"
 
-DB_EXISTS=$(kubectl exec -n "$NAMESPACE" "statefulset/${PG_STATEFULSET}" -- \
-    psql -U odoo -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" 2>/dev/null || echo "")
+# Check if Odoo has been initialized (ir_module_module table exists),
+# not just if the database exists (PostgreSQL may have auto-created it via POSTGRES_DB)
+ODOO_INITIALIZED=$(kubectl exec -n "$NAMESPACE" "statefulset/${PG_STATEFULSET}" -- \
+    psql -U odoo -d "$DB_NAME" -tAc \
+    "SELECT 1 FROM information_schema.tables WHERE table_name='ir_module_module'" 2>/dev/null || echo "")
 
-if [ "$DB_EXISTS" != "1" ]; then
-    echo -e "${YELLOW}Database '$DB_NAME' does not exist. Initializing Odoo...${NC}"
+if [ "$ODOO_INITIALIZED" != "1" ]; then
+    echo -e "${YELLOW}Database '$DB_NAME' not initialized. Initializing Odoo...${NC}"
     echo -e "${YELLOW}(First-time setup takes 1-3 minutes, please wait)${NC}"
 
     # Scan for extra addons modules
@@ -302,7 +324,7 @@ if [ "$DB_EXISTS" != "1" ]; then
     kubectl rollout restart -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}"
     kubectl rollout status -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" --timeout=120s 2>/dev/null || true
 else
-    echo -e "${GREEN}Database '$DB_NAME' already exists.${NC}"
+    echo -e "${GREEN}Database '$DB_NAME' already initialized.${NC}"
 fi
 
 echo ""
