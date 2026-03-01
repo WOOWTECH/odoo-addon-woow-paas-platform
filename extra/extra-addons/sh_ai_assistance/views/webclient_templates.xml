@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<odoo>
-    <!-- Override webclient_bootstrap to add o_dark class when dark mode is active -->
-    <template id="webclient_bootstrap" inherit_id="web.webclient_bootstrap">
-        <xpath expr="//t[@t-set='body_classname']" position="replace">
-            <t t-set="body_classname" t-value="'o_web_client' + (' o_dark' if color_scheme == 'dark' else '')"/>
-        </xpath>
-    </template>
-</odoo>
