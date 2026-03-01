@@ -1,9 +1,10 @@
-import hashlib
 import logging
-import secrets
+import uuid
 
 from odoo import fields, models
 from odoo.exceptions import UserError
+
+from ..services.naming import make_smarthome_subdomain
 
 from ..services.paas_operator import (
     get_paas_operator_client,
@@ -32,6 +33,14 @@ class SmartHome(models.Model):
         string='Name',
         required=True,
         help='User-defined name for this smart home',
+    )
+    reference_id = fields.Char(
+        string='Reference ID',
+        required=True,
+        copy=False,
+        index=True,
+        default=lambda self: str(uuid.uuid4()),
+        help='Unique reference ID for hash-based naming',
     )
     workspace_id = fields.Many2one(
         comodel_name='woow_paas_platform.workspace',
@@ -108,8 +117,7 @@ class SmartHome(models.Model):
         """Generate a unique subdomain for this smart home."""
         workspace = self.workspace_id
         slug = workspace.slug if hasattr(workspace, 'slug') else workspace.name.lower().replace(' ', '-')
-        suffix = secrets.token_hex(4)
-        return f"sh-{slug}-{suffix}"
+        return make_smarthome_subdomain(slug, self.reference_id, self.name)
 
     def _get_paas_domain(self):
         """Get PaaS domain from system settings."""
@@ -132,7 +140,7 @@ class SmartHome(models.Model):
 
             # Create tunnel via operator
             result = client.create_tunnel(
-                name=f"smarthome-{subdomain}",
+                name=subdomain,
                 hostname=hostname,
                 service_url=f"http://localhost:{self.ha_port}",
             )
