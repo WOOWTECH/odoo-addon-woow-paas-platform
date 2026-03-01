@@ -35,7 +35,7 @@ class TestHAApiBase(TransactionCase):
             'state': 'active',
             'tunnel_id': 'tun-test-123',
             'tunnel_token': 'tok-secret-abc',
-            'subdomain': 'sh-test-xyz',
+            'subdomain': 'paas-sm-a1b2c3d4-e5f6g7h8',
             'tunnel_status': 'connected',
         })
 
@@ -135,7 +135,7 @@ class TestHAApiData(TestHAApiBase):
         self.assertEqual(data['name'], 'Test HA')
         self.assertEqual(data['state'], 'active')
         self.assertEqual(data['tunnel_id'], 'tun-test-123')
-        self.assertEqual(data['subdomain'], 'sh-test-xyz')
+        self.assertEqual(data['subdomain'], 'paas-sm-a1b2c3d4-e5f6g7h8')
         self.assertEqual(data['tunnel_status'], 'connected')
 
     def test_tunnel_token_data(self):

@@ -52,8 +52,8 @@ class TestSmartHome(TransactionCase):
             'workspace_id': self.workspace.id,
         })
         subdomain = home._generate_subdomain()
-        self.assertTrue(subdomain.startswith('sh-'))
-        self.assertGreater(len(subdomain), 5)
+        self.assertTrue(subdomain.startswith('paas-sm-'))
+        self.assertGreater(len(subdomain), 10)
 
     def test_to_dict(self):
         """Test serialization to dict."""

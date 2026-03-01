@@ -102,7 +102,7 @@ class TestCloudAPI(HttpCase):
             'name': 'Detail Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
-            'helm_namespace': 'paas-ws-1',
+            'helm_namespace': 'paas-ws-a1b2c3d4',
             'helm_release_name': 'test-release',
         })
 

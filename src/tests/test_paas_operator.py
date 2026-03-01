@@ -81,7 +81,7 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_request.return_value = mock_response
 
         result = self.client.create_namespace(
-            namespace='paas-ws-123',
+            namespace='paas-ws-a1b2c3d4',
             cpu_limit='2',
             memory_limit='4Gi',
             storage_limit='20Gi',
@@ -99,20 +99,20 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_response.status_code = 201
         mock_response.content = json.dumps({
             'name': 'test-release',
-            'namespace': 'paas-ws-123',
+            'namespace': 'paas-ws-a1b2c3d4',
             'revision': 1,
             'status': 'deployed',
         }).encode()
         mock_response.json.return_value = {
             'name': 'test-release',
-            'namespace': 'paas-ws-123',
+            'namespace': 'paas-ws-a1b2c3d4',
             'revision': 1,
             'status': 'deployed',
         }
         mock_request.return_value = mock_response
 
         result = self.client.install_release(
-            namespace='paas-ws-123',
+            namespace='paas-ws-a1b2c3d4',
             release_name='test-release',
             chart='nginx',
             version='15.0.0',
@@ -132,19 +132,19 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_response.status_code = 200
         mock_response.content = json.dumps({
             'name': 'test-release',
-            'namespace': 'paas-ws-123',
+            'namespace': 'paas-ws-a1b2c3d4',
             'revision': 2,
             'status': 'deployed',
         }).encode()
         mock_response.json.return_value = {
             'name': 'test-release',
-            'namespace': 'paas-ws-123',
+            'namespace': 'paas-ws-a1b2c3d4',
             'revision': 2,
             'status': 'deployed',
         }
         mock_request.return_value = mock_response
 
-        result = self.client.get_release('paas-ws-123', 'test-release')
+        result = self.client.get_release('paas-ws-a1b2c3d4', 'test-release')
 
         self.assertEqual(result['name'], 'test-release')
         self.assertEqual(result['revision'], 2)
@@ -167,7 +167,7 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_request.return_value = mock_response
 
         result = self.client.upgrade_release(
-            namespace='paas-ws-123',
+            namespace='paas-ws-a1b2c3d4',
             release_name='test-release',
             values={'replicaCount': 5},
             version='16.0.0',
@@ -186,7 +186,7 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_response.json.return_value = {'message': 'Release uninstalled'}
         mock_request.return_value = mock_response
 
-        result = self.client.uninstall_release('paas-ws-123', 'test-release')
+        result = self.client.uninstall_release('paas-ws-a1b2c3d4', 'test-release')
 
         self.assertIn('message', result)
         call_kwargs = mock_request.call_args
@@ -202,7 +202,7 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_request.return_value = mock_response
 
         result = self.client.rollback_release(
-            namespace='paas-ws-123',
+            namespace='paas-ws-a1b2c3d4',
             release_name='test-release',
             revision=1,
         )
@@ -231,7 +231,7 @@ class TestPaaSOperatorClient(TransactionCase):
         }
         mock_request.return_value = mock_response
 
-        result = self.client.get_revisions('paas-ws-123', 'test-release')
+        result = self.client.get_revisions('paas-ws-a1b2c3d4', 'test-release')
 
         self.assertEqual(len(result['revisions']), 2)
 
@@ -250,7 +250,7 @@ class TestPaaSOperatorClient(TransactionCase):
         }
         mock_request.return_value = mock_response
 
-        result = self.client.get_status('paas-ws-123', 'test-release')
+        result = self.client.get_status('paas-ws-a1b2c3d4', 'test-release')
 
         self.assertEqual(result['release']['status'], 'deployed')
         self.assertEqual(len(result['pods']), 1)
@@ -278,7 +278,7 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_request.return_value = mock_response
 
         with self.assertRaises(self.PaaSOperatorAPIError) as context:
-            self.client.get_release('paas-ws-123', 'missing')
+            self.client.get_release('paas-ws-a1b2c3d4', 'missing')
 
         self.assertEqual(context.exception.status_code, 404)
 
