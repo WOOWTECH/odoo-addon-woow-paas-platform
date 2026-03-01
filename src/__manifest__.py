@@ -9,7 +9,7 @@
     ''',
     'author': 'Woow',
     'website': '',
-    'depends': ['base', 'web', 'project', 'mail', 'bus', 'odoo_ai_assistant_chatgpt_connector'],
+    'depends': ['base', 'web', 'project', 'mail', 'bus', 'ai_base_gt', 'odoo_ai_assistant_chatgpt_connector'],
     'data': [
         'security/ir.model.access.csv',
         'security/ir_rules.xml',
