@@ -55,10 +55,12 @@ odoo:
     timeoutSeconds: 5
     failureThreshold: 12
   # Liveness probe (TCP: more robust for dev sandbox with pip install at startup)
+  # NOTE: fastembed + onnxruntime dependencies are large (~200MB+), pip install
+  # can take 5-10 min on slow networks. Set initialDelaySeconds accordingly.
   livenessProbe:
     tcpSocket:
       port: 8069
-    initialDelaySeconds: 180
+    initialDelaySeconds: 600
     periodSeconds: 30
     timeoutSeconds: 5
     failureThreshold: 3
