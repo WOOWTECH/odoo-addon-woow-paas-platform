@@ -297,6 +297,31 @@ if [ "$ODOO_INITIALIZED" != "1" ]; then
     echo -e "${YELLOW}Database '$DB_NAME' not initialized. Initializing Odoo...${NC}"
     echo -e "${YELLOW}(First-time setup takes 1-3 minutes, please wait)${NC}"
 
+    # Wait for container's pip install to complete before DB init.
+    # The container entrypoint runs: pip3 install ... && exec odoo ...
+    # If Odoo is not yet listening, pip may still be running.
+    echo -e "  ${BLUE}Waiting for pip install to complete in container...${NC}"
+    PIP_READY=false
+    for i in $(seq 1 90); do
+        if kubectl exec -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" -- \
+            python3 -c "import packaging" 2>/dev/null; then
+            PIP_READY=true
+            break
+        fi
+        if (( i % 10 == 0 )); then
+            echo -e "  Still waiting for pip... (${i}0s elapsed)"
+        fi
+        sleep 10
+    done
+
+    if [ "$PIP_READY" != "true" ]; then
+        echo -e "${YELLOW}pip install not complete after 900s. Installing critical packages manually...${NC}"
+        kubectl exec -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" -- \
+            pip3 install --break-system-packages packaging 'mistune>=3.0.0' 'markdownify>=0.11.0' 'pydantic>=2.0.0,<2.11.0' 'docstring_parser>=0.15' 2>/dev/null || true
+    else
+        echo -e "  ${GREEN}pip packages ready.${NC}"
+    fi
+
     # Scan for extra addons modules
     MODULES="base,web,woow_paas_platform"
     EXTRA_ADDONS_DIR="${PROJECT_ROOT}/extra/extra-addons"
