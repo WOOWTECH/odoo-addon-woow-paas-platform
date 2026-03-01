@@ -103,7 +103,7 @@ class TestCloudService(TransactionCase):
         })
 
         self.assertEqual(service.helm_release_name, 'test-release')
-        self.assertEqual(service.helm_namespace, 'paas-ws-1')
+        self.assertEqual(service.helm_namespace, 'paas-ws-a1b2c3d4')
         self.assertEqual(service.helm_revision, 1)
         self.assertIn('replicas', service.helm_values)
 
