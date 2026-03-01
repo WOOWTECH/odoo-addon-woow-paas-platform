@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="sh_ai_assistance.AiTypingIndicatorTemplate">
+        <div class="ai-chat-message ai-message">
+            <!-- Avatar with pulse animation -->
+            <img class="ai-message-avatar ai-avatar-thinking"
+                 t-att-src="avatarUrl"
+                 t-att-alt="modelName"/>
+
+            <!-- Enhanced typing content -->
+            <div class="ai-message-content">
+                <!-- Header matching our message style -->
+                <div class="ai-message-header">
+                    <span class="ai-message-author" t-esc="modelName"/>
+                    <span class="ai-message-time">thinking...</span>
+                </div>
+
+                <!-- Enhanced typing bubble -->
+                <div class="ai-message-bubble ai-thinking-bubble" t-att-data-provider="providerClass">
+                    <!-- Main thinking animation -->
+                    <div class="ai-thinking-container">
+                        <!-- AI Brain with particles -->
+                        <div class="ai-brain-container">
+                            <i class="fa fa-brain ai-brain-icon"></i>
+                            <div class="ai-brain-particles">
+                                <span class="particle"></span>
+                                <span class="particle"></span>
+                                <span class="particle"></span>
+                            </div>
+                        </div>
+
+                        <!-- Dynamic thinking text -->
+                        <div class="ai-thinking-content">
+                            <span class="ai-thinking-text">Analyzing your request</span>
+                            <div class="ai-thinking-dots">
+                                <span class="dot"></span>
+                                <span class="dot"></span>
+                                <span class="dot"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Enhanced progress wave -->
+                    <div class="ai-thinking-progress">
+                        <div class="ai-progress-wave">
+                            <div class="ai-wave-fill"></div>
+                            <div class="ai-wave-glow"></div>
+                        </div>
+                    </div>
+
+                    <!-- Processing stages text -->
+                    <div class="ai-processing-stages">
+                        <span class="stage active">Understanding...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

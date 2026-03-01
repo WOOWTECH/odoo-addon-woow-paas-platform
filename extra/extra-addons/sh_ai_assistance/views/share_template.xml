@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="share_page_template" name="Shared AI Chat Session">
+        <t t-call="web.layout">
+            <t t-call-assets="web.assets_frontend"/>
+
+            <!-- Full Page Wrapper -->
+            <div class="o_sh_ai_assistance_share_page">
+
+                <!-- HEADER (Matches ai_chat_main.xml structure) -->
+                <div class="ai-chat-header">
+                    <div class="header-content">
+                        <div class="session-info">
+                            <div class="session-title-group">
+                                <h6 class="session-title">
+                                    <t t-esc="session_name"/>
+                                </h6>
+                            </div>
+                            <div class="message-count">
+                                <t t-esc="len(messages)"/> messages
+                            </div>
+                        </div>
+
+                        <!-- Read-only badge instead of model selector -->
+                        <div class="model-selector">
+                             <span class="badge rounded-pill bg-primary" style="font-size: small;">
+                                Shared Snapshot
+                             </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CHAT CONTENT (Matches ai_chat_content.xml structure) -->
+                <div class="o-ai-ChatContent">
+                    <div class="messages-area-container">
+                        <div class="o-ai-ChatMessages" id="shared-chat-history">
+                            
+                            <t t-foreach="messages" t-as="message">
+                                
+                                <!-- Determine Message Class -->
+                                <t t-set="msg_class" t-value="''"/>
+                                <t t-if="message['author'] == 'user'">
+                                    <t t-set="msg_class" t-value="'user-message'"/>
+                                </t>
+                                <t t-elif="message.get('type') == 'error'">
+                                    <t t-set="msg_class" t-value="'error-message'"/>
+                                </t>
+
+                                <!-- MESSAGE BLOCK (Matches chat_message.xml structure) -->
+                                <div t-attf-class="ai-chat-message #{msg_class}">
+                                    
+                                    <!-- Avatar -->
+                                    <img class="ai-message-avatar"
+                                         t-att-src="message['avatar_url']"
+                                         alt="Avatar"/>
+
+                                    <!-- Content -->
+                                    <div class="ai-message-content">
+                                        
+                                        <!-- Header -->
+                                        <div class="ai-message-header">
+                                            <span class="ai-message-author">
+                                                <t t-esc="'You' if message['author'] == 'user' else 'AI Assistant'"/>
+                                            </span>
+                                            <span class="ai-message-time">
+                                                <t t-esc="message['create_date']"/>
+                                            </span>
+                                        </div>
+
+                                        <!-- Bubble -->
+                                        <div class="ai-message-bubble">
+                                            <!-- Use t-out for rich content/HTML/Markdown rendering -->
+                                            <t t-out="message['content']"/>
+                                        </div>
+
+                                    </div>
+                                </div>
+
+                            </t>
+
+                            <!-- End of History Marker -->
+                            <div class="text-center text-muted small mt-4 mb-2">
+                                <i class="fa fa-circle text-muted" style="font-size: 4px; vertical-align: middle;"></i>
+                                <span class="mx-2">End of shared conversation</span>
+                                <i class="fa fa-circle text-muted" style="font-size: 4px; vertical-align: middle;"></i>
+                            </div>
+
+                        </div>
+                    </div>
+                    
+                    <!-- Footer -->
+                    <div class="o-ai-ChatFooter py-2 border-top text-center text-muted small bg-white">
+                        Powered by Odoo AI Assistance
+                    </div>
+
+                </div>
+            </div>
+
+        </t>
+    </template>
+</odoo>

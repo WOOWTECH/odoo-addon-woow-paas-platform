@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="sh_ai_assistance.ChatMessageTemplate">
+        <!-- Clean modern chat message -->
+        <div class="ai-chat-message" t-att-class="props.message.message_type + '-message'">
+            <!-- Avatar -->
+            <img class="ai-message-avatar"
+                 t-att-src="avatarUrl"
+                 t-att-alt="authorName"/>
+
+            <!-- Content -->
+            <div class="ai-message-content">
+                <!-- Header with name and time -->
+                <div class="ai-message-header">
+                    <span class="ai-message-author" t-esc="authorName"/>
+                    <span class="ai-message-time" t-att-title="fullTimestamp">
+                        <t t-esc="formattedTime"/>
+                    </span>
+                </div>
+
+                <!-- Clean message bubble -->
+                <div class="ai-message-bubble">
+                    <t t-if="props.message.message_type === 'assistant'">
+                        <div t-out="richContent"/>
+
+                        <!-- Action Icons Row -->
+                        <div class="ai-action-icons mt-2" style="display: flex; align-items: center; gap: 10px;">
+                            <!-- Debug Button (only visible in debug mode AND for admin users) -->
+                            <t t-if="isDebugMode and isAdmin">
+                                <button class="btn btn-sm ai-debug-toggle"
+                                        t-on-click="toggleDebugInfo"
+                                        title="Show executed domain (debug mode)">
+                                    <i class="fa fa-bug me-1"/>
+                                    <span t-if="!state.showDebugInfo">Show Query</span>
+                                    <span t-else="">Hide Query</span>
+                                </button>
+                            </t>
+
+                            <!-- View Icons -->
+                            <t t-if="props.message.action_data">
+                                <!-- List View Icon -->
+                                <div class="ai-icon-with-label" style="display: flex; flex-direction: column; align-items: center; cursor: pointer;"
+                                     t-on-click="() => this.onOpenView('list')">
+                                    <img src="/sh_ai_assistance/static/img/icons/list.png"
+                                         alt="List"
+                                         title="List View"
+                                         style="width: 24px; height: 24px; opacity: 0.8; transition: opacity 0.2s;"
+                                         onmouseover="this.style.opacity='1'"
+                                         onmouseout="this.style.opacity='0.8'"/>
+                                    <small class="text-muted" style="font-size: 10px; margin-top: 2px;">List</small>
+                                </div>
+
+                                <!-- Kanban View Icon -->
+                                <div class="ai-icon-with-label" style="display: flex; flex-direction: column; align-items: center; cursor: pointer;"
+                                     t-on-click="() => this.onOpenView('kanban')">
+                                    <img src="/sh_ai_assistance/static/img/icons/kanban.png"
+                                         alt="Kanban"
+                                         title="Kanban View"
+                                         style="width: 24px; height: 24px; opacity: 0.8; transition: opacity 0.2s;"
+                                         onmouseover="this.style.opacity='1'"
+                                         onmouseout="this.style.opacity='0.8'"/>
+                                    <small class="text-muted" style="font-size: 10px; margin-top: 2px;">Kanban</small>
+                                </div>
+
+                                <!-- Graph View Icon -->
+                                <div class="ai-icon-with-label" style="display: flex; flex-direction: column; align-items: center; cursor: pointer;"
+                                     t-on-click="() => this.onOpenView('graph')">
+                                    <img src="/sh_ai_assistance/static/img/icons/bar-graph.png"
+                                         alt="Graph"
+                                         title="Graph View"
+                                         style="width: 24px; height: 24px; opacity: 0.8; transition: opacity 0.2s;"
+                                         onmouseover="this.style.opacity='1'"
+                                         onmouseout="this.style.opacity='0.8'"/>
+                                    <small class="text-muted" style="font-size: 10px; margin-top: 2px;">Graph</small>
+                                </div>
+
+                                <!-- Pivot View Icon -->
+                                <div class="ai-icon-with-label" style="display: flex; flex-direction: column; align-items: center; cursor: pointer;"
+                                     t-on-click="() => this.onOpenView('pivot')">
+                                    <img src="/sh_ai_assistance/static/img/icons/pivot.png"
+                                         alt="Pivot"
+                                         title="Pivot View"
+                                         style="width: 24px; height: 24px; opacity: 0.8; transition: opacity 0.2s;"
+                                         onmouseover="this.style.opacity='1'"
+                                         onmouseout="this.style.opacity='0.8'"/>
+                                    <small class="text-muted" style="font-size: 10px; margin-top: 2px;">Pivot</small>
+                                </div>
+                            </t>
+                        </div>
+
+                        <!-- Debug Info Panel (toggleable, only for admin users) -->
+                        <t t-if="isDebugMode and isAdmin">
+                            <div t-if="state.showDebugInfo" class="ai-debug-panel mt-2">
+                                <div class="ai-debug-header">
+                                    <strong>Executed Query</strong>
+                                </div>
+                                <div class="ai-debug-content">
+                                    <div class="mb-2">
+                                        <span class="text-muted">Model:</span>
+                                        <code class="ms-2" t-esc="debugModel"/>
+                                    </div>
+                                    <div class="mb-2">
+                                        <span class="text-muted">Group By:</span>
+                                        <code class="ms-2" t-esc="debugGroupBy"/>
+                                    </div>
+                                    <div class="mb-2">
+                                        <span class="text-muted">Operation:</span>
+                                        <code class="ms-2" t-esc="debugOperation"/>
+                                    </div>
+                                    
+                                    <div class="mb-2">
+                                        <span class="text-muted">Domain:</span>
+                                        <pre class="ai-debug-code mb-0"><code t-esc="debugDomainFormatted"/></pre>
+                                    </div>
+                                    <div t-if="debugFields.length > 0">
+                                        <span class="text-muted">Fields:</span>
+                                        <pre class="ai-debug-code mb-0"><code t-esc="debugFieldsFormatted"/></pre>
+                                    </div>
+                                </div>
+
+                                <!-- Usage Statistics Section -->
+                                <div class="ai-debug-header border-top pt-2 mt-2">
+                                    <strong>Usage Statistics</strong>
+                                </div>
+                                <div class="ai-debug-content">
+                                    <div class="d-flex flex-wrap gap-2 py-2">
+                                        <!-- Token Badges -->
+                                        <div class="badge rounded-pill bg-info-light text-info border">
+                                            <i class="fa fa-key me-1"/> Tokens: <t t-esc="usagePromptTokens"/> (in) / <t t-esc="usageCompletionTokens"/> (out)
+                                        </div>
+                                        <div class="badge rounded-pill bg-primary-light text-primary border">
+                                            <i class="fa fa-calculator me-1"/> Total: <t t-esc="usageTotalTokens"/>
+                                        </div>
+                                        <!-- Time & Tools Badges -->
+                                        <div class="badge rounded-pill bg-warning-light text-warning border">
+                                            <i class="fa fa-wrench me-1"/> Tools: <t t-esc="toolCallCount"/>
+                                        </div>
+                                        <div class="badge rounded-pill bg-success-light text-success border">
+                                            <i class="fa fa-clock-o me-1"/> Time: <t t-esc="executionTime"/>s
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </t>
+                    </t>
+                    <t t-else="">
+                        <t t-esc="props.message.content"/>
+                    </t>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>
