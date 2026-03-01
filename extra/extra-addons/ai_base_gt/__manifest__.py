@@ -22,7 +22,6 @@ Can use other AI models like ChatGPT, Gemini, Claude, etc through connector modu
             'pyyaml>=6.0',
             'pydantic>=2.0.0,<2.11.0',
             'docstring_parser>=0.15',
-            'fastembed>=0.5.0,<=0.5.1',
         ],
     },
     'data': [
