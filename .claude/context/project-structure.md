@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-15T09:39:26Z
-version: 1.5
+last_updated: 2026-03-01T14:30:52Z
+version: 1.6
 author: Claude Code PM System
 ---
 
@@ -20,7 +20,10 @@ woow_paas_platform/
 │   ├── controllers/             # HTTP routes (JSON API)
 │   │   ├── __init__.py
 │   │   ├── paas.py              # /woow endpoint + workspace/cloud/members API routes
-│   │   └── ai_assistant.py      # AI assistant API endpoints
+│   │   ├── ai_assistant.py      # AI assistant API endpoints
+│   │   ├── ha_api.py            # HA API endpoints (Bearer token auth)
+│   │   ├── oauth2.py            # OAuth 2.0 authorization endpoints
+│   │   └── smart_home.py        # Smart Home management API
 │   │
 │   ├── models/                  # Business logic layer
 │   │   ├── __init__.py          # Model imports
@@ -32,6 +35,10 @@ woow_paas_platform/
 │   │   ├── ai_agent.py                  # AI Agent model
 │   │   ├── ai_client.py                 # AI Client (API integration)
 │   │   ├── ai_provider.py               # AI Provider model
+│   │   ├── smart_home.py                # Smart Home model (Cloudflare Tunnel)
+│   │   ├── oauth_client.py              # OAuth Client model
+│   │   ├── oauth_token.py               # OAuth Token model
+│   │   ├── oauth_code.py                # OAuth Authorization Code model
 │   │   ├── discuss_channel.py           # Discuss channel extensions
 │   │   ├── project_project.py           # Project model extensions
 │   │   └── project_task.py              # Project task model extensions
@@ -51,7 +58,10 @@ woow_paas_platform/
 │   │   ├── test_cloud_app_template.py
 │   │   ├── test_cloud_service.py
 │   │   ├── test_cloud_api.py
-│   │   └── test_paas_operator.py
+│   │   ├── test_paas_operator.py
+│   │   ├── test_smart_home.py         # Smart Home model tests (15)
+│   │   ├── test_oauth2.py             # OAuth 2.0 tests (14)
+│   │   └── test_ha_api.py             # HA API tests (12)
 │   │
 │   ├── data/                    # Default data files
 │   │   └── cloud_app_templates.xml  # Default app templates
@@ -103,6 +113,7 @@ woow_paas_platform/
 │           │   │   ├── support-projects/ # SupportProjectsPage
 │           │   │   ├── support-tasks/    # SupportTasksPage
 │           │   │   ├── task-detail/      # TaskDetailPage
+│           │   │   ├── smart-home/      # SmartHomePage
 │           │   │   └── empty/            # EmptyState
 │           │   ├── services/
 │           │   │   ├── workspace_service.js  # Workspace API client
@@ -145,12 +156,25 @@ woow_paas_platform/
 │   │   │   └── namespaces.py    # Namespace management
 │   │   ├── services/
 │   │   │   └── helm.py          # Helm CLI wrapper
-│   │   └── models/
-│   │       └── schemas.py       # Pydantic models
+│   │   ├── models/
+│   │   │   └── schemas.py       # Pydantic models
+│   │   └── api/
+│   │       ├── releases.py      # Helm release operations
+│   │       ├── namespaces.py    # Namespace management
+│   │       ├── routes.py        # Cloudflare DNS route operations
+│   │       └── tunnels.py       # Cloudflare Tunnel CRUD API
 │   ├── tests/                   # Operator unit tests
 │   ├── helm/                    # Helm chart for K8s deployment
 │   ├── Dockerfile
 │   └── requirements.txt
+│
+├── charts/                      # Helm charts
+│   └── odoo-dev-sandbox/        # K8s dev sandbox chart
+│       ├── Chart.yaml
+│       ├── values.yaml
+│       ├── values-local.yaml    # K3s local overrides
+│       ├── values-ci.yaml       # CI/CD overrides
+│       └── templates/           # K8s resource templates
 │
 ├── docs/                        # Documentation
 │   ├── deployment/              # K8s setup, troubleshooting
@@ -198,6 +222,9 @@ woow_paas_platform/
 ### Controllers (`src/controllers/`)
 - `paas.py` handles workspace, cloud services, members routes
 - `ai_assistant.py` handles AI assistant API routes
+- `ha_api.py` handles HA API endpoints (Bearer token auth)
+- `oauth2.py` handles OAuth 2.0 authorization endpoints
+- `smart_home.py` handles Smart Home management API
 - Using `type="json"` for Odoo 18 JSON responses
 - Imported via `src/controllers/__init__.py`
 
@@ -211,7 +238,7 @@ woow_paas_platform/
   - `lib/` - Third-party libraries (marked.js, DOMPurify)
   - `services/` - API client services + utilities (workspace, cloud, AI, support, rpc, markdown, sanitize)
   - `components/` - UI components (modal, marketplace, common, config, service-card, ai-chat, ai-mention)
-  - `pages/` - Page components (dashboard, workspace, marketplace, service, configure, ai-assistant, ai-chat, project-kanban, support-projects, support-tasks, task-detail, empty)
+  - `pages/` - Page components (dashboard, workspace, marketplace, service, configure, ai-assistant, ai-chat, project-kanban, support-projects, support-tasks, task-detail, smart-home, empty)
 - `scss/` - Backend stylesheets
 - `components/` - Backend OWL components (future)
 - `services/` - JS services (future)
@@ -224,6 +251,9 @@ woow_paas_platform/
 | `src/hooks.py` | Module hooks (post_init, uninstall) |
 | `src/controllers/paas.py` | `/woow` endpoint + workspace/cloud/members API routes |
 | `src/controllers/ai_assistant.py` | AI assistant API endpoints |
+| `src/controllers/ha_api.py` | HA API (Bearer token auth) |
+| `src/controllers/oauth2.py` | OAuth 2.0 authorization |
+| `src/controllers/smart_home.py` | Smart Home management API |
 | `src/models/workspace.py` | Workspace model with CRUD |
 | `src/models/workspace_access.py` | Workspace member access control |
 | `src/models/cloud_app_template.py` | Application marketplace templates |
@@ -231,6 +261,10 @@ woow_paas_platform/
 | `src/models/ai_agent.py` | AI Agent model |
 | `src/models/ai_provider.py` | AI Provider model |
 | `src/models/ai_client.py` | AI Client API integration |
+| `src/models/smart_home.py` | Smart Home (Cloudflare Tunnel) |
+| `src/models/oauth_client.py` | OAuth Client model |
+| `src/models/oauth_token.py` | OAuth Token model |
+| `src/models/oauth_code.py` | OAuth Authorization Code model |
 | `src/services/paas_operator.py` | HTTP client for PaaS Operator |
 | `src/static/src/paas/services/cloud_service.js` | Frontend cloud services API client |
 | `src/static/src/paas/services/ai_service.js` | Frontend AI assistant API client |
@@ -241,6 +275,7 @@ woow_paas_platform/
 | `src/security/ir.model.access.csv` | CRUD permissions per model |
 
 ## Update History
+- 2026-03-01: Added Smart Home HA Integration (controllers: ha_api, oauth2, smart_home; models: smart_home, oauth_client/token/code; tests: 3 suites; pages: smart-home; paas-operator: tunnels/routes API; charts/odoo-dev-sandbox)
 - 2026-02-15: Added AI Assistant feature (models, controller, pages, components, services, lib/), migrations/, hooks.py, .serena/, docs/testing/
 - 2026-02-08: Full frontend structure update - added marketplace, service, configure pages; new component groups; removed hash.js, paas_operator_client.py, cloud_services.py controller
 - 2026-02-08: Added extra/paas-operator/, cloud models, cloud_service.js, expanded docs/
