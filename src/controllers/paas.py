@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import traceback
@@ -1090,13 +1089,11 @@ class PaasController(Controller):
 
         # Always generate reference_id server-side (never accept from frontend)
         reference_id = str(uuid.uuid4())
-        # Generate subdomain with salted hash: paas-{ws_id}-{hash(reference_id + name)[:8]}
-        # Using reference_id as salt prevents subdomain guessing from service name alone
-        salted_input = reference_id + name
-        name_hash = hashlib.md5(salted_input.encode()).hexdigest()[:8]
-        subdomain = f"paas-{workspace.id}-{name_hash}"
+        # Generate hash-based names for cross-sandbox uniqueness
+        from ..services.naming import make_namespace, make_service_subdomain
+        subdomain = make_service_subdomain(workspace.slug, reference_id, name)
         helm_release_name = f"svc-{reference_id[:8]}"
-        helm_namespace = f"paas-ws-{workspace.id}"
+        helm_namespace = make_namespace(workspace.slug)
 
         # Filter user values to only allowed keys, then merge with defaults
         # Note: silently filter on create (frontend may send defaults alongside user values)
