@@ -298,7 +298,7 @@ if [ "$ODOO_INITIALIZED" != "1" ]; then
     echo -e "${YELLOW}(First-time setup takes 1-3 minutes, please wait)${NC}"
 
     # Scan for extra addons modules
-    MODULES="base,woow_paas_platform"
+    MODULES="base,web,woow_paas_platform"
     EXTRA_ADDONS_DIR="${PROJECT_ROOT}/extra/extra-addons"
     if [ -d "$EXTRA_ADDONS_DIR" ]; then
         for dir in "$EXTRA_ADDONS_DIR"/*/; do
