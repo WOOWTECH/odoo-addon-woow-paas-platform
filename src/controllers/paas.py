@@ -1811,7 +1811,7 @@ class PaasController(Controller):
                 if result.get('success'):
                     real_api_key = result['api_key']
                     service.write({
-                        'mcp_auth_token': real_api_key,
+                        'n8n_api_key': real_api_key,
                         'state': 'running',
                         'init_retries': 0,
                         'init_error': False,
@@ -1982,5 +1982,13 @@ class PaasController(Controller):
                 'allocated_storage_gb': service.allocated_storage_gb,
                 'last_upgraded_at': service.last_upgraded_at.isoformat() if service.last_upgraded_at else None,
             })
+
+            # Expose n8n login credentials if applicable
+            template = service.template_id
+            if template.post_deploy_init_type == 'n8n' and template.post_deploy_init_email:
+                data['n8n_credentials'] = {
+                    'email': template.post_deploy_init_email,
+                    'info': 'Password was auto-generated during deployment. Check service logs or redeploy to reset.',
+                }
 
         return data

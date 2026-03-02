@@ -181,10 +181,10 @@ class McpServer(models.Model):
         """Cron job: retry tool sync for auto-created MCP servers in draft state.
 
         Finds auto-created servers still in 'draft' state and retries
-        tool discovery.  After MAX_SYNC_RETRIES (3) failed attempts the
+        tool discovery.  After MAX_SYNC_RETRIES (10) failed attempts the
         server is moved to 'error' state with a descriptive message.
         """
-        MAX_SYNC_RETRIES = 3
+        MAX_SYNC_RETRIES = 10
 
         servers = self.sudo().search([
             ('auto_created', '=', True),
