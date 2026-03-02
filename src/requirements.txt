@@ -1,3 +1,19 @@
-# Woow PaaS Platform - LangChain Dependencies
+# woow_paas_platform core
 langchain-openai>=0.3.0
 langchain-core>=0.3.0
+langchain-mcp-adapters>=0.2.0,<0.3.0
+langgraph>=0.2.0
+
+# extra-addons: ai_base_gt
+packaging
+mistune>=3.0.0
+markdownify>=0.11.0
+pydantic>=2.0.0,<2.13.0
+docstring_parser>=0.15
+pyyaml>=6.0
+
+# extra-addons: odoo_ai_assistant_chatgpt_connector
+openai>=1.0.0
+
+# optional: AI embedding (fastembed pulls onnxruntime ~200MB, adds 5-10 min)
+fastembed>=0.5.0,<=0.5.1
