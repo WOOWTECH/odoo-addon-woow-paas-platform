@@ -55,8 +55,9 @@
             'woow_paas_platform/static/src/paas/**/*.xml',
         ],
     },
-    # Note: Python dependencies (langchain-openai, langchain-core) are auto-installed by pre_init_hook
-    # Do not use external_dependencies as it blocks installation before hook runs
+    # Note: Python dependencies are defined in requirements.txt (single source of truth).
+    # pre_init_hook reads requirements.txt and auto-installs missing packages.
+    # Helm chart and Dockerfile.dev also read from the same file.
     'pre_init_hook': 'pre_init_hook',
     'installable': True,
     'application': True,
