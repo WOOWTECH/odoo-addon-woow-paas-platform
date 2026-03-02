@@ -159,6 +159,12 @@ class CloudService(models.Model):
         groups='base.group_system',
         help='Authentication token for the MCP sidecar, auto-generated during deployment',
     )
+    n8n_api_key = fields.Char(
+        string='N8N API Key',
+        readonly=True,
+        groups='base.group_system',
+        help='API key for n8n instance, generated during post-deploy init',
+    )
 
     # Timestamps
     deployed_at = fields.Datetime(

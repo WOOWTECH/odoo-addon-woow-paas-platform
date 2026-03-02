@@ -164,9 +164,23 @@ class N8nInitService:
         else:
             logger.warning("No secret found for release %s, skipping secret update", release_name)
 
-        # Note: Skipping sidecar env patch to avoid deployment restart which
-        # would wipe n8n's ephemeral data (owner + API key). The Secret is
-        # updated above; sidecar picks up the key on next manual pod restart.
+        # Step 6: Patch sidecar env with real API key
+        # Now safe because PVC persists n8n data across pod restarts
+        sidecar_patched = False
+        deployment_name = self._find_deployment(namespace, release_name)
+        if deployment_name:
+            try:
+                self._patch_sidecar_env(
+                    namespace=namespace,
+                    deployment_name=deployment_name,
+                    env_name="N8N_API_KEY",
+                    value=api_key,
+                )
+                sidecar_patched = True
+            except Exception as e:
+                logger.warning("Failed to patch sidecar env: %s (non-fatal)", e)
+        else:
+            logger.warning("No deployment found for release %s, skipping sidecar patch", release_name)
 
         logger.info("n8n initialization complete for %s/%s", namespace, release_name)
 
@@ -174,6 +188,7 @@ class N8nInitService:
             "success": True,
             "api_key": api_key,
             "owner_email": owner_email,
+            "sidecar_patched": sidecar_patched,
         }
 
     def _get_n8n_pod(self, namespace: str, release_name: str) -> str:
