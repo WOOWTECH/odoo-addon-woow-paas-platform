@@ -71,11 +71,15 @@ resources:
 helm repo add cloudflare https://cloudflare.github.io/helm-charts
 helm repo update
 
-# 安裝
-helm install cloudflare-tunnel cloudflare/cloudflare-tunnel-remote \
-  --namespace cloudflare-system \
-  --values extra/cloudflare/cloudflare-values.yml
+# 安裝（透過 post-renderer 套用 http2 + liveness probe 修正）
+./extra/cloudflare/post-renderer/render.sh install
 ```
+
+> **說明**：部署腳本會自動執行 `helm template` → `kustomize patch` → `kubectl apply`。
+> Patch 內容（`post-renderer/patch-deployment.yaml`）：
+>
+> - 強制使用 `--protocol http2`（避免 Docker Desktop QUIC/UDP 問題）
+> - 放寬 livenessProbe（`failureThreshold: 5`, `initialDelaySeconds: 30`）
 
 ### Step 4：驗證部署
 
@@ -91,7 +95,8 @@ kubectl logs -n cloudflare-system -l app.kubernetes.io/name=cloudflare-tunnel-re
 
 ```
 INF Starting tunnel tunnelID=xxx
-INF Registered tunnel connection connIndex=0 location=tpe01 protocol=quic
+INF Initial protocol http2
+INF Registered tunnel connection connIndex=0 location=tpe01 protocol=http2
 ```
 
 ## 設定路由
@@ -131,9 +136,7 @@ POST /api/releases
 ### 升級
 
 ```bash
-helm upgrade cloudflare-tunnel cloudflare/cloudflare-tunnel-remote \
-  --namespace cloudflare-system \
-  --values extra/cloudflare/cloudflare-values.yml
+./extra/cloudflare/post-renderer/render.sh upgrade
 ```
 
 ### 解除安裝
@@ -155,10 +158,17 @@ kubectl logs -n cloudflare-system -l app.kubernetes.io/name=cloudflare-tunnel-re
 
 ## 故障排除
 
-### Tunnel 無法連線
+### Tunnel 無法連線（CrashLoopBackOff）
 
-1. 檢查 token 是否正確
-2. 檢查網路是否能連到 Cloudflare
+常見原因及解法：
+
+**QUIC 逾時（Docker Desktop）**：Docker Desktop 的 UDP 支援不佳，導致 QUIC 連線失敗。
+部署腳本已預設使用 `--protocol http2` 避免此問題。
+
+**Liveness Probe 過於激進**：官方 chart 預設 `failureThreshold: 1`，Tunnel 還沒連上就被殺。
+部署腳本已將 `failureThreshold` 調整為 5。
+
+**Token 錯誤**：
 
 ```bash
 kubectl exec -n cloudflare-system -it <pod-name> -- curl -I https://api.cloudflare.com
