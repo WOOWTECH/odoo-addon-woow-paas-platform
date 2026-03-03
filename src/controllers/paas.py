@@ -1170,17 +1170,30 @@ class PaasController(Controller):
             _logger.warning("Invalid helm_value_specs for template %s", template.name)
             return {}
 
-    def _build_mcp_sidecar_config(self, template: Any, auth_token: str, api_key: str | None = None) -> dict[str, Any]:
+    def _build_mcp_sidecar_config(
+        self,
+        template: Any,
+        auth_token: str,
+        api_key: str | None = None,
+        helm_release_name: str | None = None,
+    ) -> dict[str, Any]:
         """Build MCP sidecar container config for PaaS Operator patch endpoint.
 
         Constructs the sidecar container spec from the template's MCP fields,
         merging any custom environment variables from `template.mcp_sidecar_env`
         with the required environment variables.
 
+        When helm_release_name is provided and the template has mcp_api_key_helm_path,
+        the API key env var uses valueFrom.secretKeyRef so the sidecar reads the key
+        from the K8s Secret. This ensures pod restarts always pick up the latest key.
+
         Args:
             template: CloudAppTemplate record with MCP fields
             auth_token: Generated AUTH_TOKEN for sidecar authentication
-            api_key: Optional API key for the main application (e.g., N8N_API_KEY)
+            api_key: Optional API key for the main application (e.g., N8N_API_KEY).
+                     Used as plain value fallback when helm_release_name is not provided.
+            helm_release_name: Helm release name, used to derive K8s Secret name
+                              for secretKeyRef-based env vars.
 
         Returns:
             Dict matching the SidecarPatchRequest schema expected by PaaS Operator
@@ -1195,10 +1208,27 @@ class PaasController(Controller):
             {'name': 'PORT', 'value': str(sidecar_port)},
         ]
 
-        # Inject auto-generated API key for the main application
-        if api_key and template.mcp_api_key_helm_path:
+        # Inject API key for the main application via secretKeyRef (preferred)
+        # or plain value (fallback). secretKeyRef ensures the sidecar always
+        # picks up the latest key from the K8s Secret after pod restarts.
+        if template.mcp_api_key_helm_path:
             env_name = template.mcp_api_key_helm_path.rsplit('.', 1)[-1]
-            env_vars.append({'name': env_name, 'value': api_key})
+            if helm_release_name:
+                # Derive K8s Secret name from Helm release + chart convention
+                # n8n chart creates: {release}-n8n-app-secret
+                secret_name = f'{helm_release_name}-n8n-app-secret'
+                env_vars.append({
+                    'name': env_name,
+                    'valueFrom': {
+                        'secretKeyRef': {
+                            'name': secret_name,
+                            'key': env_name,
+                        }
+                    }
+                })
+            elif api_key:
+                # Fallback: plain value (used when helm_release_name unknown)
+                env_vars.append({'name': env_name, 'value': api_key})
 
         # Merge custom env vars from template (if any)
         if template.mcp_sidecar_env:
@@ -1207,7 +1237,7 @@ class PaasController(Controller):
                 # custom_env is a dict like {"KEY": "VALUE"}
                 # Required keys that should not be overridden
                 reserved_keys = {'MCP_MODE', 'AUTH_TOKEN', 'PORT', 'N8N_API_URL'}
-                if api_key and template.mcp_api_key_helm_path:
+                if template.mcp_api_key_helm_path:
                     reserved_keys.add(template.mcp_api_key_helm_path.rsplit('.', 1)[-1])
                 for key, value in custom_env.items():
                     if key not in reserved_keys:
@@ -1340,7 +1370,29 @@ class PaasController(Controller):
         # Note: silently filter on create (frontend may send defaults alongside user values)
         default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
         filtered_user_values, _rejected = self._filter_allowed_helm_values(values, template)
-        nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
+
+        # Extract _init.* keys (not Helm values, used for post-deploy init)
+        init_params = {}
+        helm_only_values = {}
+        for key, val in filtered_user_values.items():
+            if key.startswith('_init.'):
+                init_params[key[len('_init.'):]] = val
+            else:
+                helm_only_values[key] = val
+
+        # Validate n8n password if template requires init
+        if template.post_deploy_init_type == 'n8n':
+            pwd = init_params.get('owner_password', '')
+            if len(pwd) < 8:
+                return {'success': False, 'error': 'Password must be at least 8 characters'}
+            if not any(c.isupper() for c in pwd):
+                return {'success': False, 'error': 'Password must contain at least one uppercase letter'}
+            if not any(c.islower() for c in pwd):
+                return {'success': False, 'error': 'Password must contain at least one lowercase letter'}
+            if not any(c.isdigit() for c in pwd):
+                return {'success': False, 'error': 'Password must contain at least one number'}
+
+        nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
 
         # Generate per-service API key for MCP sidecar ↔ main container communication
@@ -1355,7 +1407,7 @@ class PaasController(Controller):
 
         try:
             # Create service record in pending state
-            service = CloudService.create({
+            service_vals = {
                 'workspace_id': workspace.id,
                 'template_id': template.id,
                 'name': name,
@@ -1370,7 +1422,14 @@ class PaasController(Controller):
                 'allocated_vcpu': template.min_vcpu,
                 'allocated_ram_gb': template.min_ram_gb,
                 'allocated_storage_gb': template.min_storage_gb,
-            })
+            }
+            # Store init params for post-deploy initialization
+            if init_params.get('owner_email'):
+                service_vals['n8n_owner_email'] = init_params['owner_email']
+            if init_params.get('owner_password'):
+                service_vals['n8n_owner_password'] = init_params['owner_password']
+
+            service = CloudService.create(service_vals)
 
             # Get PaaS Operator client
             client = get_paas_operator_client(request.env)
@@ -1451,7 +1510,10 @@ class PaasController(Controller):
                 # After Helm install, patch sidecar if MCP enabled
                 if template.mcp_enabled and template.mcp_sidecar_image:
                     mcp_auth_token = str(uuid.uuid4())
-                    sidecar_config = self._build_mcp_sidecar_config(template, mcp_auth_token, mcp_api_key)
+                    sidecar_config = self._build_mcp_sidecar_config(
+                        template, mcp_auth_token, mcp_api_key,
+                        helm_release_name=helm_release_name,
+                    )
                     try:
                         client.patch_sidecar(
                             namespace=helm_namespace,
@@ -1797,15 +1859,18 @@ class PaasController(Controller):
                 _logger.warning("PaaS Operator not configured, cannot initialize n8n")
                 return
 
-            # n8n requires at least 1 uppercase letter in password
-            password = 'W' + str(uuid.uuid4()).upper()
+            owner_email = service.n8n_owner_email or template.post_deploy_init_email or 'admin@woow.cloud'
+            owner_password = service.n8n_owner_password
+            if not owner_password:
+                # Fallback for services created before this feature
+                owner_password = 'W' + str(uuid.uuid4()).upper()
 
             try:
                 result = client.init_n8n(
                     namespace=service.helm_namespace,
                     release_name=service.helm_release_name,
-                    owner_email=template.post_deploy_init_email or 'admin@woow.cloud',
-                    owner_password=password,
+                    owner_email=owner_email,
+                    owner_password=owner_password,
                 )
 
                 if result.get('success'):

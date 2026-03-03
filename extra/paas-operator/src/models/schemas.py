@@ -323,7 +323,7 @@ class N8nInitResponse(BaseModel):
     success: bool
     api_key: Optional[str] = Field(None, description="Generated n8n API key (JWT)")
     owner_email: Optional[str] = None
-    sidecar_patched: bool = Field(default=False, description="Whether the MCP sidecar env was patched with the API key")
+    pod_restarted: bool = Field(default=False, description="Whether the deployment was restarted to pick up the new API key")
     message: Optional[str] = None
     error: Optional[str] = None
 

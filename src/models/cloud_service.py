@@ -165,6 +165,16 @@ class CloudService(models.Model):
         groups='base.group_system',
         help='API key for n8n instance, generated during post-deploy init',
     )
+    n8n_owner_email = fields.Char(
+        string='N8N Owner Email',
+        readonly=True,
+        groups='base.group_system',
+    )
+    n8n_owner_password = fields.Char(
+        string='N8N Owner Password',
+        readonly=True,
+        groups='base.group_system',
+    )
 
     # Timestamps
     deployed_at = fields.Datetime(

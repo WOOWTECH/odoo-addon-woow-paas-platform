@@ -56,10 +56,10 @@
                 {"config": {"GENERIC_TIMEZONE": "Asia/Taipei", "N8N_LOG_LEVEL": "info",
                 "N8N_PUBLIC_API_ENABLED": "true"},
                 "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
-                "1000m", "memory": "1Gi"}}},
-                "persistence": {"enabled": true, "size": "2Gi"},
+                "1000m", "memory": "1Gi"}},
+                "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"}},
                 "updateStrategy": {"type": "Recreate"}}</field>
-            <field name="helm_value_specs">{"required": [], "optional": [{"key": "config.database.type", "label": "Database Type", "type": "select", "default": "sqlite", "options": ["sqlite", "postgres"]}, {"key": "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select", "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai", "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]}, {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select", "default": "info", "options": ["info", "warn", "error", "debug"]}]}</field>
+            <field name="helm_value_specs">{"required": [{"key": "_init.owner_email", "label": "n8n Admin Email", "type": "text", "placeholder": "you@example.com", "description": "n8n 管理員登入 Email"}, {"key": "_init.owner_password", "label": "n8n Admin Password", "type": "password", "description": "至少 8 字元，需含大小寫字母與數字"}], "optional": [{"key": "config.database.type", "label": "Database Type", "type": "select", "default": "sqlite", "options": ["sqlite", "postgres"]}, {"key": "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select", "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai", "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]}, {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select", "default": "info", "options": ["info", "warn", "error", "debug"]}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5678</field>
@@ -167,6 +167,15 @@
             <field name="mcp_api_key_helm_path">main.secret.N8N_API_KEY</field>
             <field name="post_deploy_init_type">n8n</field>
             <field name="post_deploy_init_email">admin@woow.cloud</field>
+            <!-- Helm values must be in noupdate=0 to fix deprecated Basic Auth settings -->
+            <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main":
+                {"config": {"GENERIC_TIMEZONE": "Asia/Taipei", "N8N_LOG_LEVEL": "info",
+                "N8N_PUBLIC_API_ENABLED": "true"},
+                "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
+                "1000m", "memory": "1Gi"}},
+                "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"}},
+                "updateStrategy": {"type": "Recreate"}}</field>
+            <field name="helm_value_specs">{"required": [{"key": "_init.owner_email", "label": "n8n Admin Email", "type": "text", "placeholder": "you@example.com", "description": "n8n 管理員登入 Email"}, {"key": "_init.owner_password", "label": "n8n Admin Password", "type": "password", "description": "至少 8 字元，需含大小寫字母與數字"}], "optional": [{"key": "config.database.type", "label": "Database Type", "type": "select", "default": "sqlite", "options": ["sqlite", "postgres"]}, {"key": "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select", "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai", "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]}, {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select", "default": "info", "options": ["info", "warn", "error", "debug"]}]}</field>
         </record>
     </data>
 </odoo>

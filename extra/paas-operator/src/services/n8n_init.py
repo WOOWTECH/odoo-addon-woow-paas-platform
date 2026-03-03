@@ -78,7 +78,7 @@ class N8nInitService:
     3. Login to get auth cookie
     4. Create API key via /rest/api-keys
     5. Update K8s Secret with real API key
-    6. Patch sidecar container env with real API key
+    6. Rollout restart deployment so sidecar picks up the new key via secretKeyRef
     """
 
     def __init__(self, k8s_service: Optional[KubernetesService] = None):
@@ -164,23 +164,23 @@ class N8nInitService:
         else:
             logger.warning("No secret found for release %s, skipping secret update", release_name)
 
-        # Step 6: Patch sidecar env with real API key
-        # Now safe because PVC persists n8n data across pod restarts
-        sidecar_patched = False
+        # Step 6: Rollout restart to pick up real API key from Secret
+        # The sidecar reads N8N_API_KEY via secretKeyRef, so a restart
+        # makes it load the updated Secret value. PVC persists n8n data.
+        pod_restarted = False
         deployment_name = self._find_deployment(namespace, release_name)
         if deployment_name:
             try:
-                self._patch_sidecar_env(
+                self.k8s.rollout_restart_deployment(
                     namespace=namespace,
                     deployment_name=deployment_name,
-                    env_name="N8N_API_KEY",
-                    value=api_key,
                 )
-                sidecar_patched = True
+                pod_restarted = True
+                logger.info("Triggered rollout restart for %s", deployment_name)
             except Exception as e:
-                logger.warning("Failed to patch sidecar env: %s (non-fatal)", e)
+                logger.warning("Failed to rollout restart %s: %s (non-fatal)", deployment_name, e)
         else:
-            logger.warning("No deployment found for release %s, skipping sidecar patch", release_name)
+            logger.warning("No deployment found for release %s, skipping restart", release_name)
 
         logger.info("n8n initialization complete for %s/%s", namespace, release_name)
 
@@ -188,7 +188,7 @@ class N8nInitService:
             "success": True,
             "api_key": api_key,
             "owner_email": owner_email,
-            "sidecar_patched": sidecar_patched,
+            "pod_restarted": pod_restarted,
         }
 
     def _get_n8n_pod(self, namespace: str, release_name: str) -> str:
@@ -467,43 +467,3 @@ class N8nInitService:
             pass
         return None
 
-    def _patch_sidecar_env(
-        self,
-        namespace: str,
-        deployment_name: str,
-        env_name: str,
-        value: str,
-    ) -> None:
-        """Patch the MCP sidecar container's env with the real API key."""
-        logger.info("Patching sidecar env %s in deployment %s", env_name, deployment_name)
-
-        try:
-            result = self.k8s._run_command([
-                "get", "deployment", deployment_name,
-                "--namespace", namespace,
-                "--output", "jsonpath={.spec.template.spec.containers[*].name}",
-            ])
-
-            container_names = result.stdout.strip().split()
-            sidecar_index = None
-            for i, name in enumerate(container_names):
-                if name == "mcp-sidecar":
-                    sidecar_index = i
-                    break
-
-            if sidecar_index is None:
-                logger.warning("mcp-sidecar container not found in %s", deployment_name)
-                return
-
-            self.k8s.patch_container_env(
-                namespace=namespace,
-                deployment_name=deployment_name,
-                container_index=sidecar_index,
-                env_name=env_name,
-                value=value,
-            )
-
-            logger.info("Sidecar env %s patched successfully", env_name)
-
-        except KubectlException as e:
-            logger.warning("Failed to patch sidecar env: %s (non-fatal)", e)
