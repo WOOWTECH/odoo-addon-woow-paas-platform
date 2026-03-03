@@ -53,6 +53,7 @@ async def init_n8n(
             success=True,
             api_key=result["api_key"],
             owner_email=result["owner_email"],
+            pod_restarted=result.get("pod_restarted", False),
             message="n8n initialization complete",
         )
 

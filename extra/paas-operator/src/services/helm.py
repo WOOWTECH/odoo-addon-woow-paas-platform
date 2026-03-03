@@ -1002,6 +1002,30 @@ class KubernetesService:
             patch_type="json",
         )
 
+    def rollout_restart_deployment(
+        self,
+        namespace: str,
+        deployment_name: str,
+    ) -> None:
+        """Perform a rolling restart of a deployment.
+
+        This triggers a new rollout by patching the pod template annotation
+        with the current timestamp, causing K8s to recreate all pods.
+
+        Args:
+            namespace: Namespace name
+            deployment_name: Deployment name
+
+        Raises:
+            KubectlException: If rollout restart fails
+        """
+        validate_namespace(namespace)
+        self._run_command([
+            "rollout", "restart",
+            f"deployment/{deployment_name}",
+            "--namespace", namespace,
+        ])
+
     @staticmethod
     def _calculate_age(created_timestamp: str) -> str:
         """Calculate age from creation timestamp."""
