@@ -251,7 +251,7 @@ class OAuth2Controller(Controller):
             params = {'error': 'access_denied', 'error_description': 'User denied access'}
             if state:
                 params['state'] = state
-            return request.redirect(_build_redirect_uri(redirect_uri, params))
+            return request.redirect(_build_redirect_uri(redirect_uri, params), local=False)
 
         # User approved - generate authorization code
         now = http.request.env.cr.now()
@@ -279,7 +279,7 @@ class OAuth2Controller(Controller):
             client.name, request.env.user.login,
         )
 
-        return request.redirect(_build_redirect_uri(redirect_uri, params))
+        return request.redirect(_build_redirect_uri(redirect_uri, params), local=False)
 
     # ==================== Token Endpoint ====================
 
