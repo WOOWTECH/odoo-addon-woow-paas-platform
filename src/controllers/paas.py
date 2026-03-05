@@ -1170,6 +1170,33 @@ class PaasController(Controller):
             _logger.warning("Invalid helm_value_specs for template %s", template.name)
             return {}
 
+    @staticmethod
+    def _sanitize_helm_values(values: dict, template: Any) -> dict:
+        """Remove secret values from helm_values before exposing in API responses.
+
+        Replaces values under 'secret' keys with masked versions to prevent
+        leaking credentials (e.g., N8N_API_KEY) through the service API.
+        """
+        if not values:
+            return values
+
+        def _mask_secrets(d: dict, depth: int = 0) -> dict:
+            result = {}
+            for key, val in d.items():
+                if key == 'secret' and isinstance(val, dict):
+                    # Mask all values under 'secret' keys
+                    result[key] = {
+                        k: f'{str(v)[:8]}...' if v and len(str(v)) > 8 else '***'
+                        for k, v in val.items()
+                    }
+                elif isinstance(val, dict) and depth < 5:
+                    result[key] = _mask_secrets(val, depth + 1)
+                else:
+                    result[key] = val
+            return result
+
+        return _mask_secrets(values)
+
     def _build_mcp_sidecar_config(
         self,
         template: Any,
@@ -1875,14 +1902,26 @@ class PaasController(Controller):
 
                 if result.get('success'):
                     real_api_key = result['api_key']
-                    service.write({
+                    # Update helm_values to replace the UUID placeholder with the real API key
+                    update_vals = {
                         'n8n_api_key': real_api_key,
                         'state': 'running',
                         'init_retries': 0,
                         'init_error': False,
-                    })
+                    }
+                    if template.mcp_api_key_helm_path and service.helm_values:
+                        try:
+                            current_values = json.loads(service.helm_values)
+                            api_key_nested = self._unflatten_dotpath_keys(
+                                {template.mcp_api_key_helm_path: real_api_key}
+                            )
+                            updated_values = self._deep_merge(current_values, api_key_nested)
+                            update_vals['helm_values'] = json.dumps(updated_values)
+                        except (json.JSONDecodeError, TypeError):
+                            _logger.warning("Failed to update helm_values with real API key for service %s", service.name)
+                    service.write(update_vals)
                     _logger.info(
-                        "n8n init succeeded for service %s, API key updated",
+                        "n8n init succeeded for service %s, API key and helm_values updated",
                         service.name,
                     )
                     try:
@@ -2040,7 +2079,10 @@ class PaasController(Controller):
                 'helm_namespace': service.helm_namespace,
                 'helm_release_name': service.helm_release_name,
                 'helm_chart_version': service.helm_chart_version,
-                'helm_values': json.loads(service.helm_values) if service.helm_values else {},
+                'helm_values': self._sanitize_helm_values(
+                    json.loads(service.helm_values) if service.helm_values else {},
+                    service.template_id,
+                ),
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,
