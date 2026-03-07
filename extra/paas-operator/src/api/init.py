@@ -49,12 +49,14 @@ async def init_n8n(
             owner_password=request.owner_password,
         )
 
+        is_success = result.get("success", True)
         return N8nInitResponse(
-            success=True,
+            success=is_success,
             api_key=result["api_key"],
             owner_email=result["owner_email"],
+            secret_patched=result.get("secret_patched", False),
             pod_restarted=result.get("pod_restarted", False),
-            message="n8n initialization complete",
+            message="n8n initialization complete" if is_success else "n8n API key created but K8s Secret update failed",
         )
 
     except N8nInitError as e:
