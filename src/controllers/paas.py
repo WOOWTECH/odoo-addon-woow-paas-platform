@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import traceback
 import uuid
 from datetime import datetime
@@ -1234,6 +1235,10 @@ class PaasController(Controller):
             {'name': 'AUTH_TOKEN', 'value': auth_token},
             {'name': 'N8N_API_URL', 'value': f'http://localhost:{template.default_port}'},
             {'name': 'PORT', 'value': str(sidecar_port)},
+            # Raise the default rate limit (20 req/15min) which is too low
+            # for LangGraph agents that issue many tool calls per conversation.
+            {'name': 'AUTH_RATE_LIMIT_MAX', 'value': '500'},
+            {'name': 'AUTH_RATE_LIMIT_WINDOW', 'value': '900000'},
         ]
 
         # Inject API key for the main application via secretKeyRef (preferred)
@@ -1358,9 +1363,21 @@ class PaasController(Controller):
             ('workspace_id', '=', workspace.id),
         ])
 
-        data = []
+        # Update status for services in transitional states
+        transitional_states = ('deploying', 'initializing', 'upgrading', 'deleting')
         for svc in services:
-            data.append(self._format_service(svc))
+            if svc.state in transitional_states:
+                try:
+                    self._update_service_status(svc)
+                except Exception as e:
+                    _logger.warning("Failed to update status for service %s: %s", svc.name, e)
+
+        # Re-read after status updates
+        services = CloudService.search([
+            ('workspace_id', '=', workspace.id),
+        ])
+
+        data = [self._format_service(svc) for svc in services]
 
         return {
             'success': True,
@@ -1461,32 +1478,89 @@ class PaasController(Controller):
 
             service = CloudService.create(service_vals)
 
-            # Get PaaS Operator client
-            client = get_paas_operator_client(request.env)
+            # Build expose configuration before spawning background thread
+            expose_config = None
+            if template.ingress_enabled:
+                expose_config = {
+                    'enabled': True,
+                    'subdomain': subdomain,
+                }
+
+            # Return immediately with pending state; deploy in background
+            service_data = self._format_service(service)
+
+            deploy_args = {
+                'db_name': request.env.cr.dbname,
+                'uid': request.env.uid,
+                'service_id': service.id,
+                'workspace_id': workspace.id,
+                'helm_namespace': helm_namespace,
+                'helm_release_name': helm_release_name,
+                'template_id': template.id,
+                'merged_values': merged_values,
+                'expose_config': expose_config,
+                'mcp_api_key': mcp_api_key,
+            }
+            thread = threading.Thread(
+                target=self._deploy_service_background,
+                args=(deploy_args,),
+                daemon=True,
+            )
+            thread.start()
+
+            return {
+                'success': True,
+                'data': service_data,
+            }
+
+        except Exception as e:
+            _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
+            return {'success': False, 'error': 'An error occurred while creating the service.'}
+
+    def _deploy_service_background(self, args: dict) -> None:
+        """Background thread: namespace creation + helm install + sidecar patch.
+
+        Runs outside the HTTP request lifecycle with its own DB cursor.
+        """
+        import odoo
+
+        _logger.info("Background deploy thread started for service %s", args.get('service_id'))
+
+        db_name = args['db_name']
+        registry = odoo.registry(db_name)
+        cr = registry.cursor()
+        try:
+            env = odoo.api.Environment(cr, args['uid'], {})
+            CloudService = env['woow_paas_platform.cloud_service']
+            service = CloudService.browse(args['service_id'])
+            if not service.exists():
+                return
+
+            template = env['woow_paas_platform.cloud_app_template'].browse(args['template_id'])
+            client = get_paas_operator_client(env)
             if not client:
                 service.write({
                     'state': 'error',
                     'error_message': 'PaaS Operator not configured. Contact administrator.',
                 })
-                return {
-                    'success': True,
-                    'data': self._format_service(service),
-                    'warning': 'PaaS Operator not configured',
-                }
+                cr.commit()
+                return
+
+            helm_namespace = args['helm_namespace']
+            helm_release_name = args['helm_release_name']
+            merged_values = args['merged_values']
+            expose_config = args['expose_config']
+            mcp_api_key = args['mcp_api_key']
 
             try:
                 # Create namespace if needed
-                # Calculate total resource needs for ALL services in this workspace
-                # Include all states except 'deleting' to account for deployed/pending resources
                 all_services = CloudService.search([
-                    ('workspace_id', '=', workspace.id),
+                    ('workspace_id', '=', args['workspace_id']),
                     ('state', '!=', 'deleting'),
                 ])
                 total_vcpu = sum(s.allocated_vcpu for s in all_services)
                 total_ram = sum(s.allocated_ram_gb for s in all_services)
                 total_storage = sum(s.allocated_storage_gb for s in all_services)
-                # Each Helm chart may create additional PVCs (e.g. PostgreSQL sub-chart)
-                # Use 3x headroom to account for sub-chart PVCs and overhead
                 try:
                     client.create_namespace(
                         namespace=helm_namespace,
@@ -1495,37 +1569,20 @@ class PaasController(Controller):
                         storage_limit=f"{max(total_storage * 3, 100)}Gi",
                     )
                 except PaaSOperatorError as e:
-                    # Namespace might already exist (409), which is fine
                     if e.status_code != 409:
                         _logger.error("Namespace creation failed: %s", str(e))
                         service.write({
                             'state': 'error',
                             'error_message': f'Failed to create namespace: {e.detail or e.message}',
                         })
-                        return {
-                            'success': True,
-                            'data': self._format_service(service),
-                            'warning': 'Namespace creation failed',
-                        }
-
-                # Build expose configuration for Cloudflare Tunnel
-                expose_config = None
-                _logger.info(
-                    "Template %s (id=%d): ingress_enabled=%s, default_port=%s",
-                    template.name, template.id, template.ingress_enabled, template.default_port
-                )
-                if template.ingress_enabled:
-                    # Note: Don't pass service_port - let PaaS Operator auto-detect
-                    # from K8s Service (which may map port 80 -> container port)
-                    expose_config = {
-                        'enabled': True,
-                        'subdomain': subdomain,
-                    }
-                    _logger.info("Built expose_config: %s", expose_config)
-                else:
-                    _logger.info("Skipping expose_config: ingress_enabled is False")
+                        cr.commit()
+                        return
 
                 # Install Helm release
+                _logger.info(
+                    "Template %s (id=%d): ingress_enabled=%s, expose_config=%s",
+                    template.name, template.id, template.ingress_enabled, expose_config,
+                )
                 release_info = client.install_release(
                     namespace=helm_namespace,
                     release_name=helm_release_name,
@@ -1533,7 +1590,7 @@ class PaasController(Controller):
                     repo_url=template.helm_repo_url,
                     version=template.helm_chart_version,
                     values=merged_values,
-                    create_namespace=True,  # Let operator handle namespace if needed
+                    create_namespace=True,
                     expose=expose_config,
                 )
 
@@ -1550,7 +1607,6 @@ class PaasController(Controller):
                             release_name=helm_release_name,
                             sidecar_config=sidecar_config,
                         )
-                        # Store auth_token in service for later MCP Server creation
                         service.write({'mcp_auth_token': mcp_auth_token})
                         _logger.info(
                             "MCP sidecar patched for service %s (release=%s)",
@@ -1558,7 +1614,6 @@ class PaasController(Controller):
                         )
                     except PaaSOperatorError as e:
                         _logger.warning("Failed to patch MCP sidecar: %s", e)
-                        # Don't fail the deployment, sidecar is optional
 
                 # Update service state
                 service.write({
@@ -1566,29 +1621,33 @@ class PaasController(Controller):
                     'helm_revision': release_info.get('revision', 1),
                     'deployed_at': datetime.now(),
                 })
+                cr.commit()
 
             except PaaSOperatorConnectionError as e:
                 _logger.error("Operator connection error: %s", str(e))
+                cr.rollback()
                 service.write({
                     'state': 'error',
                     'error_message': 'Unable to connect to deployment service. Please try again later.',
                 })
+                cr.commit()
 
             except PaaSOperatorError as e:
                 _logger.error("Operator error during deployment: %s", str(e))
+                cr.rollback()
                 service.write({
                     'state': 'error',
                     'error_message': f'Deployment failed: {e.detail or e.message}',
                 })
-
-            return {
-                'success': True,
-                'data': self._format_service(service),
-            }
+                cr.commit()
 
         except Exception as e:
-            _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'An error occurred while creating the service.'}
+            _logger.exception(
+                "Background deploy error for service %s: %s",
+                args.get('service_id'), e,
+            )
+        finally:
+            cr.close()
 
     def _get_service(self, service: Any) -> dict[str, Any]:
         """Get service details, updating status from operator if needed."""
@@ -1905,6 +1964,15 @@ class PaasController(Controller):
 
                 if result.get('success'):
                     real_api_key = result['api_key']
+
+                    # Check if sidecar was properly restarted
+                    if not result.get('pod_restarted'):
+                        _logger.warning(
+                            "n8n init for service %s: API key updated in Secret but pod was NOT restarted. "
+                            "MCP sidecar may still use the old placeholder key until next pod restart.",
+                            service.name,
+                        )
+
                     # Update helm_values to replace the UUID placeholder with the real API key
                     update_vals = {
                         'n8n_api_key': real_api_key,

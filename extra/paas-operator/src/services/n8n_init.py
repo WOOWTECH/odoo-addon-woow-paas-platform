@@ -150,6 +150,8 @@ class N8nInitService:
         api_key = self._create_api_key(namespace, pod_name, container, cookie)
 
         # Step 5: Update K8s Secret with real API key
+        # This is critical — without it, the sidecar keeps the placeholder key.
+        secret_patched = False
         secret_name = self._find_secret(namespace, release_name)
         if secret_name:
             try:
@@ -158,11 +160,26 @@ class N8nInitService:
                     secret_name=secret_name,
                     data={"N8N_API_KEY": api_key},
                 )
+                secret_patched = True
                 logger.info("Updated K8s Secret %s with real API key", secret_name)
             except KubectlException as e:
-                logger.warning("Failed to patch K8s Secret %s: %s (non-fatal)", secret_name, e)
+                logger.error("Failed to patch K8s Secret %s: %s", secret_name, e)
+                return {
+                    "success": False,
+                    "api_key": api_key,
+                    "owner_email": owner_email,
+                    "secret_patched": False,
+                    "pod_restarted": False,
+                }
         else:
-            logger.warning("No secret found for release %s, skipping secret update", release_name)
+            logger.error("No secret found for release %s, cannot update API key", release_name)
+            return {
+                "success": False,
+                "api_key": api_key,
+                "owner_email": owner_email,
+                "secret_patched": False,
+                "pod_restarted": False,
+            }
 
         # Step 6: Rollout restart to pick up real API key from Secret
         # The sidecar reads N8N_API_KEY via secretKeyRef, so a restart
@@ -170,15 +187,22 @@ class N8nInitService:
         pod_restarted = False
         deployment_name = self._find_deployment(namespace, release_name)
         if deployment_name:
-            try:
-                self.k8s.rollout_restart_deployment(
-                    namespace=namespace,
-                    deployment_name=deployment_name,
-                )
-                pod_restarted = True
-                logger.info("Triggered rollout restart for %s", deployment_name)
-            except Exception as e:
-                logger.warning("Failed to rollout restart %s: %s (non-fatal)", deployment_name, e)
+            for attempt in range(3):
+                try:
+                    self.k8s.rollout_restart_deployment(
+                        namespace=namespace,
+                        deployment_name=deployment_name,
+                    )
+                    pod_restarted = True
+                    logger.info("Triggered rollout restart for %s", deployment_name)
+                    break
+                except Exception as e:
+                    logger.warning(
+                        "Restart attempt %d/3 failed for %s: %s",
+                        attempt + 1, deployment_name, e,
+                    )
+                    if attempt < 2:
+                        time.sleep(5)
         else:
             logger.warning("No deployment found for release %s, skipping restart", release_name)
 
@@ -188,6 +212,7 @@ class N8nInitService:
             "success": True,
             "api_key": api_key,
             "owner_email": owner_email,
+            "secret_patched": secret_patched,
             "pod_restarted": pod_restarted,
         }
 
