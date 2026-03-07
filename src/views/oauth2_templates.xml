@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- OAuth 2.0 Authorization Page -->
+    <template id="oauth2_authorize" name="OAuth 2.0 Authorization">
+        <html>
+            <head>
+                <meta charset="utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <title>Authorize - Woow PaaS</title>
+                <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body {
+                        font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+                        background: #f5f7fa;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        min-height: 100vh;
+                        color: #1a1a2e;
+                    }
+                    .oauth-card {
+                        background: #fff;
+                        border-radius: 16px;
+                        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+                        padding: 40px;
+                        max-width: 440px;
+                        width: 100%;
+                        margin: 20px;
+                    }
+                    .oauth-logo {
+                        text-align: center;
+                        margin-bottom: 24px;
+                    }
+                    .oauth-logo span {
+                        font-size: 28px;
+                        font-weight: 700;
+                        color: #6366f1;
+                    }
+                    .oauth-title {
+                        font-size: 18px;
+                        font-weight: 600;
+                        text-align: center;
+                        margin-bottom: 8px;
+                        line-height: 1.4;
+                    }
+                    .oauth-client-name {
+                        color: #6366f1;
+                        font-weight: 700;
+                    }
+                    .oauth-subtitle {
+                        font-size: 14px;
+                        color: #6b7280;
+                        text-align: center;
+                        margin-bottom: 24px;
+                    }
+                    .oauth-scopes {
+                        background: #f9fafb;
+                        border: 1px solid #e5e7eb;
+                        border-radius: 12px;
+                        padding: 16px;
+                        margin-bottom: 24px;
+                    }
+                    .oauth-scopes-title {
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #6b7280;
+                        text-transform: uppercase;
+                        letter-spacing: 0.05em;
+                        margin-bottom: 12px;
+                    }
+                    .oauth-scope-item {
+                        display: flex;
+                        align-items: center;
+                        padding: 8px 0;
+                        font-size: 14px;
+                    }
+                    .oauth-scope-item:not(:last-child) {
+                        border-bottom: 1px solid #e5e7eb;
+                    }
+                    .oauth-scope-icon {
+                        width: 20px;
+                        height: 20px;
+                        margin-right: 12px;
+                        color: #6366f1;
+                        flex-shrink: 0;
+                    }
+                    .oauth-scope-name {
+                        font-weight: 500;
+                    }
+                    .oauth-actions {
+                        display: flex;
+                        gap: 12px;
+                    }
+                    .oauth-btn {
+                        flex: 1;
+                        padding: 12px 24px;
+                        border-radius: 10px;
+                        font-size: 15px;
+                        font-weight: 600;
+                        border: none;
+                        cursor: pointer;
+                        transition: all 0.15s ease;
+                        font-family: inherit;
+                    }
+                    .oauth-btn-deny {
+                        background: #f3f4f6;
+                        color: #4b5563;
+                    }
+                    .oauth-btn-deny:hover {
+                        background: #e5e7eb;
+                    }
+                    .oauth-btn-allow {
+                        background: #6366f1;
+                        color: #fff;
+                    }
+                    .oauth-btn-allow:hover {
+                        background: #4f46e5;
+                    }
+                    .oauth-user-info {
+                        text-align: center;
+                        font-size: 13px;
+                        color: #9ca3af;
+                        margin-top: 16px;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="oauth-card">
+                    <div class="oauth-logo">
+                        <span>Woow PaaS</span>
+                    </div>
+
+                    <div class="oauth-title">
+                        <span class="oauth-client-name"><t t-esc="client_name"/></span>
+                        wants to access your account
+                    </div>
+
+                    <div class="oauth-subtitle">
+                        This application will be able to:
+                    </div>
+
+                    <div class="oauth-scopes">
+                        <div class="oauth-scopes-title">Requested Permissions</div>
+                        <t t-foreach="scopes" t-as="s">
+                            <div class="oauth-scope-item">
+                                <svg class="oauth-scope-icon" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                                </svg>
+                                <span class="oauth-scope-name"><t t-esc="s['description']"/></span>
+                            </div>
+                        </t>
+                    </div>
+
+                    <form method="POST" action="/oauth2/authorize">
+                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token(None)"/>
+                        <input type="hidden" name="client_id" t-att-value="client_id"/>
+                        <input type="hidden" name="redirect_uri" t-att-value="redirect_uri"/>
+                        <input type="hidden" name="scope" t-att-value="scope"/>
+                        <input type="hidden" name="state" t-att-value="state"/>
+                        <input type="hidden" name="response_type" t-att-value="response_type"/>
+                        <input type="hidden" name="code_challenge" t-att-value="code_challenge"/>
+                        <input type="hidden" name="code_challenge_method" t-att-value="code_challenge_method"/>
+
+                        <div class="oauth-actions">
+                            <button type="submit" name="deny" value="1" class="oauth-btn oauth-btn-deny">
+                                Deny
+                            </button>
+                            <button type="submit" name="approve" value="1" class="oauth-btn oauth-btn-allow">
+                                Allow
+                            </button>
+                        </div>
+                    </form>
+
+                    <div class="oauth-user-info">
+                        Signed in as <t t-esc="request.env.user.login"/>
+                    </div>
+                </div>
+            </body>
+        </html>
+    </template>
+
+    <!-- OAuth 2.0 Error Page -->
+    <template id="oauth2_error" name="OAuth 2.0 Error">
+        <html>
+            <head>
+                <meta charset="utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <title>Authorization Error - Woow PaaS</title>
+                <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body {
+                        font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+                        background: #f5f7fa;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        min-height: 100vh;
+                        color: #1a1a2e;
+                    }
+                    .error-card {
+                        background: #fff;
+                        border-radius: 16px;
+                        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+                        padding: 40px;
+                        max-width: 440px;
+                        width: 100%;
+                        margin: 20px;
+                        text-align: center;
+                    }
+                    .error-icon {
+                        font-size: 48px;
+                        margin-bottom: 16px;
+                    }
+                    .error-title {
+                        font-size: 20px;
+                        font-weight: 700;
+                        color: #dc2626;
+                        margin-bottom: 12px;
+                    }
+                    .error-message {
+                        font-size: 15px;
+                        color: #6b7280;
+                        line-height: 1.5;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="error-card">
+                    <div class="error-icon">&#9888;</div>
+                    <div class="error-title"><t t-esc="error_title"/></div>
+                    <div class="error-message"><t t-esc="error_message"/></div>
+                </div>
+            </body>
+        </html>
+    </template>
+</odoo>

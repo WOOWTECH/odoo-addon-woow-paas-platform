@@ -24,6 +24,7 @@
 
     // 通用工具
     "editorconfig.editorconfig",
-    "gruntfuggly.todo-tree"
+    "gruntfuggly.todo-tree",
+    "bloop.vibe-kanban"
   ]
 }

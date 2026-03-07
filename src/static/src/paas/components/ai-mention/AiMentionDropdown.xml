@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AiMentionDropdown">
+        <div t-if="props.visible" class="o_woow_mention_dropdown">
+            <div class="o_woow_mention_dropdown__header">
+                <span class="o_woow_mention_dropdown__title">AI Agents</span>
+            </div>
+            <ul class="o_woow_mention_dropdown__list" t-if="filteredAgents.length">
+                <li t-foreach="filteredAgents" t-as="agent" t-key="agent.id"
+                    t-att-class="'o_woow_mention_dropdown__item' + (agent_index === state.selectedIndex ? ' o_woow_mention_dropdown__item--selected' : '')"
+                    t-on-click="() => this.selectAgent(agent)"
+                    t-on-mouseenter="() => this.state.selectedIndex = agent_index">
+                    <span class="o_woow_mention_dropdown__avatar"
+                          t-att-style="'background-color: ' + (agent.avatar_color || '#875A7B')">
+                        <t t-esc="getInitial(agent)"/>
+                    </span>
+                    <div class="o_woow_mention_dropdown__info">
+                        <span class="o_woow_mention_dropdown__name">
+                            <t t-esc="agent.agent_display_name || agent.name"/>
+                        </span>
+                        <span class="o_woow_mention_dropdown__desc" t-if="agent.provider_name">
+                            <t t-esc="agent.provider_name"/>
+                        </span>
+                    </div>
+                </li>
+            </ul>
+            <div t-else="" class="o_woow_mention_dropdown__empty">
+                No agents found
+            </div>
+        </div>
+    </t>
+</templates>

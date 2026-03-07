@@ -1,0 +1,16 @@
+apiVersion: v2
+name: odoo-dev-sandbox
+description: Odoo 18 development sandbox for Kubernetes (K3s/K8s)
+type: application
+version: 0.1.0
+appVersion: "18.0"
+keywords:
+  - odoo
+  - sandbox
+  - development
+  - kubernetes
+maintainers:
+  - name: WOOW
+home: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform
+sources:
+  - https://github.com/WOOWTECH/odoo-addon-woow-paas-platform

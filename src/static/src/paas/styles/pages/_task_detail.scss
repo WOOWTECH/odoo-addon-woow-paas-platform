@@ -1,0 +1,448 @@
+// =============================================================================
+// Task Detail Page
+// =============================================================================
+// Prefix: .o_woow_td_ (task detail)
+
+.o_woow_td_page {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+// -----------------------------------------------------------------------------
+// Header
+// -----------------------------------------------------------------------------
+
+.o_woow_td_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1.5rem;
+    gap: 1rem;
+}
+
+.o_woow_td_header_left {
+    flex: 1;
+
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: $woow-text-primary;
+        margin-bottom: 0.5rem;
+        line-height: 1.3;
+    }
+}
+
+.o_woow_td_header_meta {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+// -----------------------------------------------------------------------------
+// Status Badges
+// -----------------------------------------------------------------------------
+
+.o_woow_td_status {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.625rem;
+    border-radius: $woow-radius-full;
+    display: inline-block;
+
+    &.o_woow_td_status--info {
+        background: rgba($woow-primary, 0.1);
+        color: $woow-primary;
+    }
+
+    &.o_woow_td_status--warning {
+        background: rgba(245, 158, 11, 0.1);
+        color: #d97706;
+    }
+
+    &.o_woow_td_status--success {
+        background: rgba(34, 197, 94, 0.1);
+        color: #16a34a;
+    }
+
+    &.o_woow_td_status--muted {
+        background: rgba(100, 116, 139, 0.1);
+        color: #64748b;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Priority Stars (reuse existing star classes)
+// -----------------------------------------------------------------------------
+
+.o_woow_td_priority {
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+}
+
+// -----------------------------------------------------------------------------
+// Info Panel
+// -----------------------------------------------------------------------------
+
+.o_woow_td_info_card {
+    margin-bottom: 1.5rem;
+}
+
+.o_woow_td_info {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.25rem;
+    padding: 0.25rem 0;
+}
+
+.o_woow_td_info_item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    color: $woow-text-secondary;
+}
+
+.o_woow_td_info_detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.o_woow_td_info_label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: $woow-text-secondary;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+.o_woow_td_info_value {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: $woow-text-primary;
+}
+
+// -----------------------------------------------------------------------------
+// Tab Bar
+// -----------------------------------------------------------------------------
+
+.o_woow_td_tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid $woow-border-light;
+    margin-bottom: 1.5rem;
+}
+
+.o_woow_td_tab {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-family: $woow-font-body;
+    color: $woow-text-secondary;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    margin-bottom: -1px;
+
+    &:hover {
+        color: $woow-text-primary;
+    }
+
+    &.o_woow_td_tab--active {
+        color: $woow-primary;
+        border-bottom-color: $woow-primary;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tab Content
+// -----------------------------------------------------------------------------
+
+.o_woow_td_content {
+    min-height: 300px;
+}
+
+// -- Description Tab --
+
+.o_woow_td_description {
+    padding: 0.5rem 0;
+}
+
+.o_woow_td_description_body {
+    font-size: 0.9375rem;
+    line-height: 1.7;
+    color: $woow-text-primary;
+
+    h1, h2, h3, h4, h5, h6 {
+        margin-top: 1.5rem;
+        margin-bottom: 0.75rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+    }
+
+    p {
+        margin-bottom: 0.75rem;
+    }
+
+    ul, ol {
+        padding-left: 1.5rem;
+        margin-bottom: 0.75rem;
+    }
+
+    a {
+        color: $woow-primary;
+        text-decoration: none;
+
+        &:hover {
+            text-decoration: underline;
+        }
+    }
+
+    code {
+        background: $woow-background-light;
+        padding: 0.125rem 0.375rem;
+        border-radius: 4px;
+        font-size: 0.85em;
+    }
+
+    pre {
+        background: $woow-background-light;
+        padding: 1rem;
+        border-radius: $woow-radius-default;
+        overflow-x: auto;
+        margin-bottom: 1rem;
+
+        code {
+            background: none;
+            padding: 0;
+        }
+    }
+
+    img {
+        max-width: 100%;
+        height: auto;
+        border-radius: $woow-radius-default;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 1rem;
+
+        th, td {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid $woow-border-light;
+            text-align: left;
+        }
+
+        th {
+            background: $woow-background-light;
+            font-weight: 600;
+        }
+    }
+}
+
+.o_woow_td_description_empty {
+    text-align: center;
+    padding: 3rem 2rem;
+    color: $woow-text-secondary;
+
+    p {
+        margin-top: 0.75rem;
+    }
+}
+
+// -- Sub-tasks Tab --
+
+.o_woow_td_subtasks {
+    padding: 0.5rem 0;
+}
+
+.o_woow_td_subtask_table {
+    width: 100%;
+    border-collapse: collapse;
+
+    th {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: $woow-text-secondary;
+        text-transform: uppercase;
+        letter-spacing: 0.025em;
+        padding: 0.625rem 0.75rem;
+        border-bottom: 1px solid $woow-border-light;
+        text-align: left;
+    }
+
+    td {
+        padding: 0.75rem;
+        border-bottom: 1px solid $woow-border-light;
+        font-size: 0.875rem;
+        color: $woow-text-primary;
+        vertical-align: middle;
+    }
+
+    tr:last-child td {
+        border-bottom: none;
+    }
+
+    tr:hover td {
+        background: $woow-background-light;
+    }
+}
+
+.o_woow_td_subtask_name {
+    font-weight: 500;
+}
+
+.o_woow_td_unassigned {
+    color: $woow-text-secondary;
+}
+
+.o_woow_td_subtasks_empty {
+    text-align: center;
+    padding: 3rem 2rem;
+    color: $woow-text-secondary;
+
+    p {
+        margin-top: 0.75rem;
+    }
+}
+
+// -- Chat Tab --
+
+.o_woow_td_chat {
+    display: flex;
+    flex-direction: column;
+    min-height: 500px;
+}
+
+.o_woow_td_chat_controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0.75rem 0;
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid $woow-border-light;
+}
+
+.o_woow_td_chat_toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    cursor: pointer;
+    user-select: none;
+
+    input[type="checkbox"] {
+        display: none;
+    }
+}
+
+.o_woow_td_toggle_slider {
+    width: 36px;
+    height: 20px;
+    border-radius: $woow-radius-full;
+    background: #d1d5db;
+    position: relative;
+    transition: background 0.2s ease;
+
+    &::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: white;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+        transition: transform 0.2s ease;
+    }
+
+    input:checked + & {
+        background: $woow-primary;
+
+        &::after {
+            transform: translateX(16px);
+        }
+    }
+}
+
+.o_woow_td_toggle_label {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $woow-text-secondary;
+}
+
+.o_woow_td_chat_container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 450px;
+}
+
+.o_woow_td_enable_chat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 4rem 2rem;
+    color: $woow-text-secondary;
+    flex: 1;
+
+    h3 {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 1rem 0 0.5rem;
+    }
+
+    p {
+        max-width: 400px;
+        margin-bottom: 1.5rem;
+        line-height: 1.5;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Responsive
+// -----------------------------------------------------------------------------
+
+@media (max-width: 1024px) {
+    .o_woow_td_info {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 640px) {
+    .o_woow_td_info {
+        grid-template-columns: 1fr;
+    }
+
+    .o_woow_td_header_left h1 {
+        font-size: 1.375rem;
+    }
+
+    .o_woow_td_tabs {
+        overflow-x: auto;
+
+        &::-webkit-scrollbar {
+            display: none;
+        }
+    }
+
+    .o_woow_td_tab {
+        white-space: nowrap;
+    }
+
+    .o_woow_td_subtask_table {
+        display: block;
+        overflow-x: auto;
+    }
+}

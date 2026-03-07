@@ -10,6 +10,13 @@ import { WorkspaceTeamPage } from "./pages/workspace/WorkspaceTeamPage";
 import { AppMarketplacePage } from "./pages/marketplace/AppMarketplacePage";
 import { AppConfigurationPage } from "./pages/configure/AppConfigurationPage";
 import { ServiceDetailPage } from "./pages/service/ServiceDetailPage";
+import { AiAssistantPage } from "./pages/ai-assistant/AiAssistantPage";
+import { SupportProjectsPage } from "./pages/support-projects/SupportProjectsPage";
+import { SupportTasksPage } from "./pages/support-tasks/SupportTasksPage";
+import { TaskDetailPage } from "./pages/task-detail/TaskDetailPage";
+import { AiChatPage } from "./pages/ai-chat/AiChatPage";
+import { ProjectKanbanPage } from "./pages/project-kanban/ProjectKanbanPage";
+import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -23,6 +30,13 @@ export class Root extends Component {
         AppMarketplacePage,
         AppConfigurationPage,
         ServiceDetailPage,
+        AiAssistantPage,
+        SupportProjectsPage,
+        SupportTasksPage,
+        TaskDetailPage,
+        AiChatPage,
+        ProjectKanbanPage,
+        SmartHomeDetailPage,
         EmptyState,
     };
     static props = {};
@@ -50,5 +64,21 @@ export class Root extends Component {
 
     get serviceTab() {
         return this.router.params.tab || 'overview';
+    }
+
+    get projectId() {
+        return this.router.params.id ? parseInt(this.router.params.id, 10) : null;
+    }
+
+    get taskId() {
+        return this.router.params.taskId ? parseInt(this.router.params.taskId, 10) : null;
+    }
+
+    get conversationId() {
+        return this.router.params.conversationId ? parseInt(this.router.params.conversationId, 10) : null;
+    }
+
+    get homeId() {
+        return this.router.params.homeId ? parseInt(this.router.params.homeId, 10) : null;
     }
 }

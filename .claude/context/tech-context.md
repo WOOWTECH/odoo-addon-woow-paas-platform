@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-08T01:39:42Z
-version: 1.4
+last_updated: 2026-03-01T14:27:01Z
+version: 1.6
 author: Claude Code PM System
 ---
 
@@ -20,15 +20,19 @@ author: Claude Code PM System
 - **XML** - View and template definitions
 - **Google Fonts** - Manrope, Outfit typography
 - **Material Symbols** - Icon font
+- **marked.js** - Markdown to HTML parser (bundled in `lib/`)
+- **DOMPurify** - HTML sanitization library (bundled in `lib/`)
 
 ### PaaS Operator Service
 - **FastAPI** - Async Python web framework for operator API
 - **Helm 3.13+** - Kubernetes package manager
 - **kubectl 1.28+** - Kubernetes CLI
 - **Pydantic** - Data validation for API schemas
+- **Cloudflare API** - Tunnel management (create, delete, DNS routes)
 
 ### Development Tools
 - **Claude Code PM** - Project management system
+- **Serena** - IDE-integrated code intelligence (`.serena/`)
 - **Git** - Version control
 - **Docker** - Development environment
 - **pytest** - PaaS Operator testing
@@ -51,12 +55,18 @@ author: Claude Code PM System
 | Google Fonts | Manrope (body), Outfit (headings) |
 | Material Symbols | Outlined icons |
 
+### Bundled Libraries (`static/src/paas/lib/`)
+| Library | Purpose |
+|---------|---------|
+| marked.min.js | Markdown → HTML parsing |
+| purify.min.js | DOMPurify HTML sanitization |
+
 ## Module Metadata
 
 ```python
 {
     'name': 'Woow PaaS Platform',
-    'version': '18.0.1.0.0',
+    'version': '18.0.1.0.2',
     'category': 'WOOW',
     'license': 'LGPL-3',
     'application': True,
@@ -184,6 +194,13 @@ docker compose logs -f web
 | OverviewTab | `pages/service/tabs/` | Service overview tab |
 | ConfigurationTab | `pages/service/tabs/` | Service configuration tab |
 | AppConfigurationPage | `pages/configure/` | App deployment configuration |
+| AiAssistantPage | `pages/ai-assistant/` | AI assistant main page |
+| AiChatPage | `pages/ai-chat/` | AI chat conversation page |
+| ProjectKanbanPage | `pages/project-kanban/` | Project kanban board |
+| SupportProjectsPage | `pages/support-projects/` | Support projects list |
+| SupportTasksPage | `pages/support-tasks/` | Support tasks list |
+| TaskDetailPage | `pages/task-detail/` | Task detail view |
+| SmartHomePage | `pages/smart-home/` | Smart Home management page |
 | EmptyState | `pages/empty/` | Placeholder page |
 
 ### Modal Components
@@ -194,6 +211,8 @@ docker compose logs -f web
 | DeleteServiceModal | `components/modal/` | Service deletion confirmation |
 | RollbackModal | `components/modal/` | Service rollback dialog |
 | EditDomainModal | `components/modal/` | Edit service domain dialog |
+| CreateProjectModal | `components/modal/` | Create support project dialog |
+| CreateTaskModal | `components/modal/` | Create support task dialog |
 
 ### Feature Components
 | Component | Location | Purpose |
@@ -203,12 +222,19 @@ docker compose logs -f web
 | StatusBadge | `components/common/` | Service status indicator |
 | HelmValueForm | `components/config/` | Helm values editor |
 | ServiceCard | `components/service-card/` | Service instance card |
+| AiChat | `components/ai-chat/` | AI chat UI component |
+| AiMentionDropdown | `components/ai-mention/` | AI mention dropdown |
 
 ### Service Components
 | Service | Location | Purpose |
 |---------|----------|---------|
 | workspace_service | `services/` | Workspace API client |
 | cloud_service | `services/` | Cloud services API client |
+| ai_service | `services/` | AI assistant API client |
+| support_service | `services/` | Support/project API client |
+| rpc | `services/` | RPC utility |
+| markdown_parser | `services/` | Markdown parsing service |
+| html_sanitize | `services/` | HTML sanitization service |
 | utils | `services/` | Shared utility functions |
 
 ## API Patterns
@@ -243,7 +269,24 @@ def api_workspace_detail(self, workspace_id, action='get', **kw):
 Odoo (Frontend) ──HTTP──▶ PaaS Operator (FastAPI) ──Helm──▶ Kubernetes
 ```
 
+### Smart Home / Cloudflare Tunnel Architecture
+```
+HA Component ──OAuth2──▶ Odoo (HA API) ──HTTP──▶ PaaS Operator ──CF API──▶ Cloudflare Tunnel
+```
+
+### Test Suites
+| Suite | Test Count | File |
+|-------|-----------|------|
+| Smart Home | 15 | `src/tests/test_smart_home.py` |
+| OAuth 2.0 | 14 | `src/tests/test_oauth2.py` |
+| HA API | 12 | `src/tests/test_ha_api.py` |
+| Cloud Service | 36 | `src/tests/test_cloud_service.py` |
+| Cloud API | 26 | `src/tests/test_cloud_api.py` |
+| PaaS Operator | 18 | `src/tests/test_paas_operator.py` |
+
 ## Update History
+- 2026-03-01: Added Smart Home page, Cloudflare Tunnel architecture, test suites inventory, Cloudflare API dependency
+- 2026-02-15: Added AI Assistant components (pages, services, libs), Serena integration, version bump, bundled libraries
 - 2026-02-08: Full component inventory update - added marketplace, service, configure pages; modal, feature component groups; utils service
 - 2026-02-08: Updated API patterns for RESTful refactor, added cloud service components
 - 2026-02-01: Added new page components, modal components, services, API patterns

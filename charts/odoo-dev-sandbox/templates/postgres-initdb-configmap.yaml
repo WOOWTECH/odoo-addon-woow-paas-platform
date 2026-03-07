@@ -1,0 +1,20 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-postgres-initdb
+  namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+data:
+  create-odoo-db.sh: |
+    #!/bin/bash
+    # Create the default "odoo" database if it doesn't exist.
+    # Odoo uses this database for listing available databases when db_name is not set.
+    set -e
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres <<-EOSQL
+      SELECT 'CREATE DATABASE odoo OWNER $POSTGRES_USER'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'odoo')\gexec
+    EOSQL
+{{- end }}

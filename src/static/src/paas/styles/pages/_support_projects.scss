@@ -1,0 +1,478 @@
+// =============================================================================
+// Support Projects Page
+// =============================================================================
+// variables loaded via manifest
+
+.o_woow_sp {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+// -----------------------------------------------------------------------------
+// Page Header
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 1.5rem;
+}
+
+.o_woow_sp_header_left {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.o_woow_sp_back_btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    color: $woow-text-secondary;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 4px;
+
+    &:hover {
+        color: $woow-text-primary;
+        border-color: rgba($woow-primary, 0.3);
+        background: rgba($woow-primary, 0.05);
+    }
+}
+
+.o_woow_sp_header_text {
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+        color: $woow-text-primary;
+    }
+
+    p {
+        color: $woow-text-secondary;
+        margin: 0;
+        font-size: 0.875rem;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Toolbar
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.o_woow_sp_search {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    flex: 1;
+    min-width: 200px;
+    max-width: 400px;
+    color: $woow-text-secondary;
+    transition: border-color 0.2s;
+
+    &:focus-within {
+        border-color: $woow-primary;
+        box-shadow: 0 0 0 3px rgba($woow-primary, 0.1);
+    }
+
+    input {
+        border: none;
+        outline: none;
+        background: transparent;
+        font-size: 0.875rem;
+        color: $woow-text-primary;
+        width: 100%;
+
+        &::placeholder {
+            color: $woow-text-secondary;
+        }
+    }
+}
+
+.o_woow_sp_filters {
+    display: flex;
+    gap: 0.25rem;
+    background: rgba(0, 0, 0, 0.03);
+    padding: 0.25rem;
+    border-radius: $woow-radius-default;
+}
+
+.o_woow_sp_filter_btn {
+    padding: 0.375rem 0.75rem;
+    border: none;
+    border-radius: calc(#{$woow-radius-default} - 2px);
+    background: transparent;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $woow-text-secondary;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+
+    &:hover {
+        color: $woow-text-primary;
+        background: rgba(0, 0, 0, 0.04);
+    }
+
+    &.o_woow_sp_filter_active {
+        background: $woow-card-light;
+        color: $woow-primary;
+        box-shadow: $woow-shadow-card;
+    }
+}
+
+.o_woow_sp_view_toggle {
+    display: flex;
+    gap: 0.25rem;
+    background: rgba(0, 0, 0, 0.03);
+    padding: 0.25rem;
+    border-radius: $woow-radius-default;
+}
+
+.o_woow_sp_toggle_btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: calc(#{$woow-radius-default} - 2px);
+    background: transparent;
+    color: $woow-text-secondary;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+        color: $woow-text-primary;
+        background: rgba(0, 0, 0, 0.04);
+    }
+
+    &.o_woow_sp_toggle_active {
+        background: $woow-card-light;
+        color: $woow-primary;
+        box-shadow: $woow-shadow-card;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Projects Grid
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+
+    @media (max-width: 1024px) {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    @media (max-width: 640px) {
+        grid-template-columns: 1fr;
+    }
+
+    &.o_woow_sp_grid_list {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Project Card
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_card {
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+        border-color: rgba($woow-primary, 0.3);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.08);
+    }
+}
+
+.o_woow_sp_card_body {
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+
+    .o_woow_sp_grid_list & {
+        flex-direction: row;
+        align-items: center;
+        gap: 1.5rem;
+    }
+}
+
+.o_woow_sp_card_top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+
+    .o_woow_sp_grid_list & {
+        flex: 1;
+        min-width: 0;
+    }
+}
+
+.o_woow_sp_card_title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    margin: 0;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.o_woow_sp_card_desc {
+    font-size: 0.8125rem;
+    color: $woow-text-secondary;
+    line-height: 1.5;
+    margin: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+
+    .o_woow_sp_grid_list & {
+        display: none;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Status Badges
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: 0.1875rem 0.5rem;
+    border-radius: $woow-radius-full;
+    white-space: nowrap;
+    flex-shrink: 0;
+
+    &.o_woow_sp_badge_active {
+        background: rgba(34, 197, 94, 0.1);
+        color: #16a34a;
+    }
+
+    &.o_woow_sp_badge_completed {
+        background: rgba($woow-primary, 0.1);
+        color: $woow-primary;
+    }
+
+    &.o_woow_sp_badge_onhold {
+        background: rgba(245, 158, 11, 0.1);
+        color: #d97706;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Meta Info
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_card_meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+
+    .o_woow_sp_grid_list & {
+        flex-direction: row;
+        gap: 1.5rem;
+    }
+}
+
+.o_woow_sp_meta_item {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.8125rem;
+    color: $woow-text-secondary;
+}
+
+.o_woow_sp_meta_sub {
+    opacity: 0.7;
+    font-size: 0.75rem;
+}
+
+.o_woow_sp_card_workspace {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    opacity: 0.8;
+}
+
+// -----------------------------------------------------------------------------
+// Team Avatars
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_card_team {
+    margin-top: auto;
+    padding-top: 0.5rem;
+
+    .o_woow_sp_grid_list & {
+        margin-top: 0;
+        padding-top: 0;
+        flex-shrink: 0;
+    }
+}
+
+.o_woow_sp_avatar_group {
+    display: flex;
+    align-items: center;
+}
+
+.o_woow_sp_avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: #fff;
+    border: 2px solid $woow-card-light;
+    margin-left: -6px;
+    position: relative;
+
+    &:first-child {
+        margin-left: 0;
+    }
+
+    &.o_woow_sp_avatar_extra {
+        background: rgba(0, 0, 0, 0.06);
+        color: $woow-text-secondary;
+        font-size: 0.5625rem;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Loading Skeleton
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_card_skeleton {
+    pointer-events: none;
+}
+
+.o_woow_sp_skeleton_line {
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.06);
+    animation: woow-sp-pulse 1.5s ease-in-out infinite;
+}
+
+.o_woow_sp_skeleton_title {
+    width: 70%;
+    height: 20px;
+    margin-bottom: 0.5rem;
+}
+
+.o_woow_sp_skeleton_badge {
+    width: 60px;
+    height: 18px;
+    margin-bottom: 0.75rem;
+}
+
+.o_woow_sp_skeleton_meta {
+    width: 50%;
+    height: 14px;
+    margin-bottom: 0.375rem;
+}
+
+.o_woow_sp_skeleton_avatars {
+    display: flex;
+    gap: 4px;
+    margin-top: 0.5rem;
+}
+
+.o_woow_sp_skeleton_avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.06);
+    animation: woow-sp-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes woow-sp-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.7; }
+}
+
+// -----------------------------------------------------------------------------
+// Empty State
+// -----------------------------------------------------------------------------
+
+.o_woow_sp_empty {
+    display: flex;
+    justify-content: center;
+    padding: 2rem 0;
+}
+
+.o_woow_sp_empty_card {
+    max-width: 480px;
+    width: 100%;
+}
+
+.o_woow_sp_empty_content {
+    padding: 2rem;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.o_woow_sp_empty_icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: $woow-text-secondary;
+    margin-bottom: 0.5rem;
+}
+
+.o_woow_sp_empty_content {
+    h3 {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+        margin: 0;
+    }
+
+    p {
+        font-size: 0.875rem;
+        color: $woow-text-secondary;
+        line-height: 1.5;
+        margin: 0;
+        max-width: 320px;
+    }
+}

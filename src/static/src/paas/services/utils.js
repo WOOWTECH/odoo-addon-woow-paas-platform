@@ -56,3 +56,13 @@ export function getInitials(name) {
     if (!name) return "?";
     return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
 }
+
+/**
+ * Get priority star states for a 3-star display
+ * @param {string|number} priority - Priority value ('0'-'3')
+ * @returns {boolean[]} Array of 3 booleans indicating filled stars
+ */
+export function getPriorityStars(priority) {
+    const level = parseInt(priority, 10) || 0;
+    return [level >= 1, level >= 2, level >= 3];
+}

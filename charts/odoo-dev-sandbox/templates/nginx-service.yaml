@@ -1,0 +1,20 @@
+{{- if .Values.nginx.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "odoo-dev-sandbox.fullname" . }}-nginx
+  namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  labels:
+    {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+  selector:
+    {{- include "odoo-dev-sandbox.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+{{- end }}

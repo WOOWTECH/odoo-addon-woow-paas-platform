@@ -16,6 +16,8 @@ services:
       - ./config/odoo:/etc/odoo
       # Custom addons - mount src directory as the addon
       - ./src:/mnt/extra-addons/woow_paas_platform
+      # Extra addons (third-party modules)
+      - ./extra/extra-addons:/mnt/extra-addons-ext
       # Odoo data persistence
       - odoo-data:/var/lib/odoo
     environment:

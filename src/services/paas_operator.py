@@ -434,6 +434,86 @@ class PaaSOperatorClient:
         )
 
 
+    # ==================== Tunnel Operations ====================
+
+    def create_tunnel(
+        self,
+        name: str,
+        hostname: str,
+        service_url: str = 'http://localhost:8123',
+    ) -> Dict[str, Any]:
+        """Create a dedicated Cloudflare Tunnel.
+
+        Args:
+            name: Tunnel name
+            hostname: Public hostname (e.g., 'sh-myworkspace.woowtech.io')
+            service_url: Local service URL to tunnel to (default: HA port)
+
+        Returns:
+            Tunnel info including tunnel_id, tunnel_name, tunnel_token, hostname
+
+        Raises:
+            PaaSOperatorError: If tunnel creation fails
+        """
+        data = {
+            'name': name,
+            'hostname': hostname,
+            'service_url': service_url,
+        }
+        return self._request(
+            'POST',
+            '/api/tunnels',
+            data=data,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
+        """Get tunnel connection status.
+
+        Args:
+            tunnel_id: Cloudflare Tunnel ID
+
+        Returns:
+            Tunnel status including connections info
+
+        Raises:
+            PaaSOperatorError: If status retrieval fails
+        """
+        return self._request('GET', f'/api/tunnels/{tunnel_id}')
+
+    def get_tunnel_token(self, tunnel_id: str) -> Dict[str, Any]:
+        """Get tunnel token for cloudflared.
+
+        Args:
+            tunnel_id: Cloudflare Tunnel ID
+
+        Returns:
+            Dict with tunnel_id and token
+
+        Raises:
+            PaaSOperatorError: If token retrieval fails
+        """
+        return self._request('GET', f'/api/tunnels/{tunnel_id}/token')
+
+    def delete_tunnel(self, tunnel_id: str) -> Dict[str, Any]:
+        """Delete a dedicated Cloudflare Tunnel.
+
+        Args:
+            tunnel_id: Cloudflare Tunnel ID
+
+        Returns:
+            Deletion confirmation
+
+        Raises:
+            PaaSOperatorError: If deletion fails
+        """
+        return self._request(
+            'DELETE',
+            f'/api/tunnels/{tunnel_id}',
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+
 def get_paas_operator_client(env) -> Optional[PaaSOperatorClient]:
     """Get a configured PaaS Operator client from Odoo settings.
 

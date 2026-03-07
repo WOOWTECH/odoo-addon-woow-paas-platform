@@ -4,6 +4,8 @@ import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { ServiceCard } from "../../components/service-card/ServiceCard";
+import { SmartHomeCard } from "../../components/smart-home/SmartHomeCard";
+import { CreateSmartHomeModal } from "../../components/smart-home/CreateSmartHomeModal";
 import { workspaceService } from "../../services/workspace_service";
 import { cloudService, getDomain } from "../../services/cloud_service";
 import { router } from "../../core/router";
@@ -11,7 +13,7 @@ import { getRoleBadgeClass, formatDate } from "../../services/utils";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
-    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard };
+    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal };
     static props = {
         workspaceId: { type: Number },
     };
@@ -25,9 +27,14 @@ export class WorkspaceDetailPage extends Component {
             loadingServices: true,
             servicesError: null,
             domain: "woowtech.io",
+            smartHomes: [],
+            loadingSmartHomes: true,
+            smartHomesError: null,
+            showCreateSmartHomeModal: false,
         });
         this.router = useState(router);
         this.servicesPollingInterval = null;
+        this.smartHomesPollingInterval = null;
 
         onWillStart(async () => {
             this.state.domain = await getDomain();
@@ -39,19 +46,23 @@ export class WorkspaceDetailPage extends Component {
 
         onWillUnmount(() => {
             this.stopServicesPolling();
+            this.stopSmartHomesPolling();
         });
     }
 
     async loadData() {
         this.state.loading = true;
         this.state.loadingServices = true;
+        this.state.loadingSmartHomes = true;
         this.state.error = null;
         this.state.servicesError = null;
+        this.state.smartHomesError = null;
 
-        // Load workspace and services in parallel
-        const [workspaceResult, servicesResult] = await Promise.all([
+        // Load workspace, services, and smart homes in parallel
+        const [workspaceResult, servicesResult, smartHomesResult] = await Promise.all([
             workspaceService.getWorkspace(this.props.workspaceId),
             this.fetchServices(),
+            this.fetchSmartHomes(),
         ]);
 
         if (workspaceResult.success) {
@@ -62,9 +73,11 @@ export class WorkspaceDetailPage extends Component {
 
         this.state.loading = false;
         this.state.loadingServices = false;
+        this.state.loadingSmartHomes = false;
 
-        // Start polling if there are pending services
+        // Start polling if there are pending services or smart homes
         this.startServicesPolling();
+        this.startSmartHomesPolling();
     }
 
     async fetchServices() {
@@ -105,6 +118,74 @@ export class WorkspaceDetailPage extends Component {
             clearInterval(this.servicesPollingInterval);
             this.servicesPollingInterval = null;
         }
+    }
+
+    // Smart Home methods
+    async fetchSmartHomes() {
+        try {
+            const result = await workspaceService.getSmartHomes(this.props.workspaceId);
+            if (result.success) {
+                this.state.smartHomes = result.data;
+                this.state.smartHomesError = null;
+                return { success: true };
+            } else {
+                this.state.smartHomesError = result.error;
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            this.state.smartHomesError = err.message;
+            return { success: false, error: err.message };
+        }
+    }
+
+    startSmartHomesPolling() {
+        const hasPending = this.state.smartHomes.some(h =>
+            ["provisioning", "deleting"].includes(h.state)
+        );
+
+        if (hasPending && !this.smartHomesPollingInterval) {
+            this.smartHomesPollingInterval = setInterval(async () => {
+                await this.fetchSmartHomes();
+
+                const stillPending = this.state.smartHomes.some(h =>
+                    ["provisioning", "deleting"].includes(h.state)
+                );
+
+                if (!stillPending) {
+                    this.stopSmartHomesPolling();
+                }
+            }, 5000);
+        }
+    }
+
+    stopSmartHomesPolling() {
+        if (this.smartHomesPollingInterval) {
+            clearInterval(this.smartHomesPollingInterval);
+            this.smartHomesPollingInterval = null;
+        }
+    }
+
+    get hasSmartHomes() {
+        return this.state.smartHomes && this.state.smartHomes.length > 0;
+    }
+
+    openCreateSmartHomeModal() {
+        this.state.showCreateSmartHomeModal = true;
+    }
+
+    closeCreateSmartHomeModal() {
+        this.state.showCreateSmartHomeModal = false;
+    }
+
+    async onSmartHomeCreated(homeData) {
+        this.state.showCreateSmartHomeModal = false;
+        // Refresh smart homes list
+        await this.fetchSmartHomes();
+        this.startSmartHomesPolling();
+    }
+
+    goToSmartHome(homeId) {
+        this.router.navigate(`workspace/${this.props.workspaceId}/smarthome/${homeId}`);
     }
 
     get workspace() {
@@ -170,18 +251,21 @@ export class WorkspaceDetailPage extends Component {
             description: "Deploy Docker apps with one click.",
             icon: "cloud",
             color: "blue",
+            action: "marketplace",
         },
         {
             name: "Security Access",
             description: "Setup Zero Trust Tunnels.",
             icon: "security",
             color: "emerald",
+            action: "marketplace",
         },
         {
             name: "Smart Home",
             description: "Connect Home Assistant.",
             icon: "home_iot_device",
             color: "orange",
+            action: "smarthome",
         },
     ];
 }

@@ -7,10 +7,17 @@ const routes = [
     { path: "workspaces", name: "Workspaces", routeName: "workspaces" },
     { path: "workspace/:id", name: "Workspace Detail", routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
     { path: "workspace/:id/team", name: "Workspace Team", routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },
+    { path: "workspace/:id/smarthome/:homeId", name: "Smart Home Detail", routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)$/ },
     { path: "workspace/:id/services/marketplace", name: "App Marketplace", routeName: "marketplace", pattern: /^workspace\/(\d+)\/services\/marketplace$/ },
     { path: "workspace/:id/services/configure/:templateId", name: "Configure Service", routeName: "configure", pattern: /^workspace\/(\d+)\/services\/configure\/(\d+)$/ },
     { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration)$/ },
     { path: "workspace/:id/services/:serviceId", name: "Service Detail", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
+    { path: "ai-assistant", name: "AI Assistant", routeName: "ai-assistant" },
+    { path: "ai-assistant/projects/:id", name: "Project Kanban", routeName: "ai-project-kanban", pattern: /^ai-assistant\/projects\/(\d+)$/ },
+    { path: "ai-assistant/projects", name: "Support Projects", routeName: "ai-projects" },
+    { path: "ai-assistant/tasks/:taskId", name: "Task Detail", routeName: "ai-task-detail", pattern: /^ai-assistant\/tasks\/(\d+)$/ },
+    { path: "ai-assistant/tasks", name: "Support Tasks", routeName: "ai-tasks" },
+    { path: "ai-assistant/chat/:conversationId", name: "AI Chat", routeName: "ai-chat", pattern: /^ai-assistant\/chat\/(\d+)$/ },
     { path: "deployments", name: "Deployments", routeName: "deployments" },
     { path: "billing", name: "Billing", routeName: "billing" },
     { path: "settings", name: "Settings", routeName: "settings" },
@@ -21,7 +28,11 @@ export const router = reactive({
     params: {},
     routes,
 
+    _initialized: false,
+
     init() {
+        if (this._initialized) return;
+        this._initialized = true;
         this.parseRoute();
         window.addEventListener("hashchange", () => {
             this.parseRoute();
@@ -51,7 +62,17 @@ export const router = reactive({
                             if (match[3]) {
                                 this.params.tab = match[3];
                             }
+                        } else if (route.routeName === 'smarthome-detail') {
+                            this.params.homeId = match[2];
                         }
+                    }
+                    // For AI routes, map the first capture to the correct param name
+                    if (route.routeName === 'ai-task-detail') {
+                        this.params.taskId = match[1];
+                    } else if (route.routeName === 'ai-chat') {
+                        this.params.conversationId = match[1];
+                    } else if (route.routeName === 'ai-project-kanban') {
+                        this.params.id = match[1];
                     }
                     return;
                 }
