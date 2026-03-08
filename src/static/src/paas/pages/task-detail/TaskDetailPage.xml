@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.TaskDetailPage">
+        <div class="o_woow_td_page">
+            <!-- Loading State -->
+            <t t-if="state.loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading task...</p>
+                </div>
+            </t>
+
+            <!-- Error State -->
+            <t t-elif="state.error">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'error'" size="48"/>
+                    <h2>Unable to load task</h2>
+                    <p t-esc="state.error"/>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Tasks
+                    </WoowButton>
+                </div>
+            </t>
+
+            <!-- Task Content -->
+            <t t-elif="state.task">
+                <!-- Breadcrumb -->
+                <div class="o_woow_breadcrumb">
+                    <button class="o_woow_back_btn" t-on-click="goBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_parent">AI Tasks</span>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_current" t-esc="state.task.name"/>
+                </div>
+
+                <!-- Header -->
+                <div class="o_woow_td_header">
+                    <div class="o_woow_td_header_left">
+                        <h1 t-esc="state.task.name"/>
+                        <div class="o_woow_td_header_meta">
+                            <span t-att-class="'o_woow_td_status ' + getStatusClass(state.task.stage_name)"
+                                  t-esc="state.task.stage_name"/>
+                            <div class="o_woow_td_priority">
+                                <t t-foreach="getPriorityStars(state.task.priority)" t-as="filled" t-key="filled_index">
+                                    <WoowIcon t-if="filled" name="'star'" size="16" filled="true" class="'o_woow_star_filled'"/>
+                                    <WoowIcon t-else="" name="'star'" size="16" class="'o_woow_star_empty'"/>
+                                </t>
+                            </div>
+                            <span class="o_woow_task_id_badge">#<t t-esc="state.task.id"/></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Info Panel -->
+                <WoowCard class="'o_woow_td_info_card'">
+                    <div class="o_woow_td_info">
+                        <div class="o_woow_td_info_item">
+                            <WoowIcon name="'folder_open'" size="18"/>
+                            <div class="o_woow_td_info_detail">
+                                <span class="o_woow_td_info_label">Project</span>
+                                <span class="o_woow_td_info_value" t-esc="state.task.project_name or 'Unassigned'"/>
+                            </div>
+                        </div>
+                        <div class="o_woow_td_info_item">
+                            <WoowIcon name="'person'" size="18"/>
+                            <div class="o_woow_td_info_detail">
+                                <span class="o_woow_td_info_label">Assignee</span>
+                                <span class="o_woow_td_info_value">
+                                    <t t-if="state.task.user_name" t-esc="state.task.user_name"/>
+                                    <t t-else="">Unassigned</t>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="o_woow_td_info_item">
+                            <WoowIcon name="'event'" size="18"/>
+                            <div class="o_woow_td_info_detail">
+                                <span class="o_woow_td_info_label">Deadline</span>
+                                <span class="o_woow_td_info_value">
+                                    <t t-if="state.task.date_deadline" t-esc="formatDate(state.task.date_deadline)"/>
+                                    <t t-else="">No deadline</t>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="o_woow_td_info_item">
+                            <WoowIcon name="'schedule'" size="18"/>
+                            <div class="o_woow_td_info_detail">
+                                <span class="o_woow_td_info_label">Created</span>
+                                <span class="o_woow_td_info_value" t-esc="formatDate(state.task.created_date)"/>
+                            </div>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Tab Bar -->
+                <div class="o_woow_td_tabs">
+                    <button t-att-class="'o_woow_td_tab' + (state.activeTab === 'description' ? ' o_woow_td_tab--active' : '')"
+                            t-on-click="() => this.setTab('description')">
+                        <WoowIcon name="'description'" size="18"/>
+                        Description
+                    </button>
+                    <button t-att-class="'o_woow_td_tab' + (state.activeTab === 'subtasks' ? ' o_woow_td_tab--active' : '')"
+                            t-on-click="() => this.setTab('subtasks')">
+                        <WoowIcon name="'checklist'" size="18"/>
+                        Sub-tasks
+                    </button>
+                    <button t-att-class="'o_woow_td_tab' + (state.activeTab === 'chat' ? ' o_woow_td_tab--active' : '')"
+                            t-on-click="() => this.setTab('chat')">
+                        <WoowIcon name="'chat'" size="18"/>
+                        Chat
+                    </button>
+                </div>
+
+                <!-- Tab Content -->
+                <div class="o_woow_td_content">
+                    <!-- Description Tab -->
+                    <t t-if="state.activeTab === 'description'">
+                        <div class="o_woow_td_description">
+                            <t t-if="state.task.description">
+                                <div class="o_woow_td_description_body" t-out="state.task.description"/>
+                            </t>
+                            <t t-else="">
+                                <div class="o_woow_td_description_empty">
+                                    <WoowIcon name="'article'" size="40"/>
+                                    <p>No description provided for this task.</p>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+
+                    <!-- Sub-tasks Tab -->
+                    <t t-if="state.activeTab === 'subtasks'">
+                        <div class="o_woow_td_subtasks">
+                            <t t-if="state.task.child_ids and state.task.child_ids.length">
+                                <table class="o_woow_td_subtask_table">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Assignee</th>
+                                            <th>Deadline</th>
+                                            <th>Stage</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <t t-foreach="state.task.child_ids" t-as="sub" t-key="sub.id">
+                                            <tr>
+                                                <td class="o_woow_td_subtask_name" t-esc="sub.name"/>
+                                                <td>
+                                                    <t t-if="sub.user_name">
+                                                        <span class="o_woow_avatar_sm" t-esc="getInitials(sub.user_name)"
+                                                              t-att-title="sub.user_name"/>
+                                                    </t>
+                                                    <t t-else="">
+                                                        <span class="o_woow_td_unassigned">--</span>
+                                                    </t>
+                                                </td>
+                                                <td>
+                                                    <t t-if="sub.date_deadline" t-esc="formatDate(sub.date_deadline)"/>
+                                                    <t t-else="">--</t>
+                                                </td>
+                                                <td>
+                                                    <span class="o_woow_stage_badge" t-esc="sub.stage_name"/>
+                                                </td>
+                                            </tr>
+                                        </t>
+                                    </tbody>
+                                </table>
+                            </t>
+                            <t t-else="">
+                                <div class="o_woow_td_subtasks_empty">
+                                    <WoowIcon name="'checklist'" size="40"/>
+                                    <p>No sub-tasks for this task.</p>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+
+                    <!-- Chat Tab -->
+                    <t t-if="state.activeTab === 'chat'">
+                        <div class="o_woow_td_chat">
+                            <!-- Chat is fully active -->
+                            <t t-if="state.task.channel_id">
+                                <div class="o_woow_td_chat_controls">
+                                    <label class="o_woow_td_chat_toggle">
+                                        <input type="checkbox"
+                                               t-att-checked="state.task.ai_auto_reply"
+                                               t-on-change="toggleAutoReply"/>
+                                        <span class="o_woow_td_toggle_slider"/>
+                                        <span class="o_woow_td_toggle_label">AI Auto-Reply</span>
+                                    </label>
+                                </div>
+                                <div class="o_woow_td_chat_container">
+                                    <AiChat channelId="state.task.channel_id"
+                                            autoReply="state.task.ai_auto_reply"/>
+                                </div>
+                            </t>
+                            <!-- Chat enabled but no channel yet -->
+                            <t t-elif="state.task.chat_enabled">
+                                <div class="o_woow_td_enable_chat">
+                                    <WoowIcon name="'forum'" size="48"/>
+                                    <h3>Chat Enabled</h3>
+                                    <p>The chat channel will be created when the first message is sent.</p>
+                                </div>
+                            </t>
+                            <!-- Chat not enabled -->
+                            <t t-else="">
+                                <div class="o_woow_td_enable_chat">
+                                    <WoowIcon name="'chat_bubble'" size="48"/>
+                                    <h3>Chat is not enabled</h3>
+                                    <p>Enable chat to start a conversation with the AI assistant about this task.</p>
+                                    <WoowButton variant="'primary'" size="'md'" onClick.bind="enableChat">
+                                        <WoowIcon name="'chat'" size="18"/>
+                                        Enable Chat
+                                    </WoowButton>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

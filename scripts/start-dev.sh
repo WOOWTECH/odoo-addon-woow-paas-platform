@@ -174,10 +174,23 @@ else
         echo -e "${YELLOW}📦 資料庫不存在，正在建立並安裝模組...${NC}"
         echo -e "${YELLOW}   （首次啟動需要 1-3 分鐘，請耐心等候）${NC}"
 
-        # 使用 Odoo CLI 初始化資料庫並安裝 base + woow_paas_platform
+        # 自動偵測 extra/extra-addons 中的模組
+        INSTALL_MODULES="base,woow_paas_platform"
+        EXTRA_ADDONS_DIR="$PROJECT_ROOT/extra/extra-addons"
+        if [ -d "$EXTRA_ADDONS_DIR" ]; then
+            for dir in "$EXTRA_ADDONS_DIR"/*/; do
+                module_name=$(basename "$dir")
+                if [[ "$module_name" != .* ]] && [ -f "$dir/__manifest__.py" ]; then
+                    INSTALL_MODULES="${INSTALL_MODULES},${module_name}"
+                fi
+            done
+        fi
+        echo -e "  ${BLUE}安裝模組：${NC} ${INSTALL_MODULES}"
+
+        # 使用 Odoo CLI 初始化資料庫並安裝所有偵測到的模組
         if docker compose exec -T web odoo \
             -d "$DB_NAME" \
-            -i base,woow_paas_platform \
+            -i "$INSTALL_MODULES" \
             --stop-after-init \
             --without-demo=all \
             --load-language=zh_TW 2>&1 | tee /tmp/odoo_init.log | grep -E "(Loading|Installing|init db|error|Error)" | head -20; then

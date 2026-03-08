@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- AI Provider Tree View -->
+    <record id="view_ai_provider_tree" model="ir.ui.view">
+        <field name="name">woow_paas_platform.ai_provider.tree</field>
+        <field name="model">woow_paas_platform.ai_provider</field>
+        <field name="arch" type="xml">
+            <list string="AI Providers">
+                <field name="name"/>
+                <field name="api_base_url"/>
+                <field name="model_name"/>
+                <field name="max_tokens"/>
+                <field name="temperature"/>
+                <field name="is_active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- AI Provider Form View -->
+    <record id="view_ai_provider_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.ai_provider.form</field>
+        <field name="model">woow_paas_platform.ai_provider</field>
+        <field name="arch" type="xml">
+            <form string="AI Provider">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="Provider Name"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Connection">
+                            <field name="api_base_url" placeholder="https://api.openai.com/v1"/>
+                            <field name="api_key" password="True"/>
+                            <field name="model_name" placeholder="gpt-4o"/>
+                        </group>
+                        <group string="Parameters">
+                            <field name="max_tokens"/>
+                            <field name="temperature"/>
+                            <field name="is_active"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- AI Provider Action -->
+    <record id="action_ai_provider" model="ir.actions.act_window">
+        <field name="name">AI Providers</field>
+        <field name="res_model">woow_paas_platform.ai_provider</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Add an AI Provider
+            </p>
+            <p>
+                Configure OpenAI-compatible API providers for AI assistant features.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu Item -->
+    <menuitem
+        id="menu_ai_provider"
+        name="AI Providers"
+        parent="menu_woow_paas_platform_root"
+        action="action_ai_provider"
+        sequence="30"/>
+</odoo>

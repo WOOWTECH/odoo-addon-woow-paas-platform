@@ -1,0 +1,56 @@
+// AI Chat Full Page styles
+.o_woow_chat_page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+
+    &__header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--woow-border, #e5e7eb);
+        background: var(--woow-card-light, #ffffff);
+        flex-shrink: 0;
+
+        .o_woow_back_btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            cursor: pointer;
+            color: var(--woow-text-secondary, #6b7280);
+            transition: all 0.2s;
+
+            &:hover {
+                background: var(--woow-bg-hover, #f3f4f6);
+                color: var(--woow-text-primary, #111827);
+            }
+        }
+    }
+
+    &__title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        h2 {
+            margin: 0;
+            font-size: 1.125rem;
+            font-weight: 600;
+            font-family: var(--woow-font-heading, 'Outfit', sans-serif);
+        }
+    }
+
+    &__body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+}

@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-08T00:35:24Z
-version: 1.1
+last_updated: 2026-02-15T09:39:26Z
+version: 1.2
 author: Claude Code PM System
 ---
 
@@ -79,6 +79,9 @@ Customers manage their subscription plans and billing.
 | Workspace management | Complete |
 | Cloud Services (Templates + Deploy) | Complete |
 | PaaS Operator (Helm wrapper) | Complete |
+| Cloud Service Config Restriction | Complete |
+| AI Assistant (Agent + Chat) | In Progress |
+| Support Projects / Tasks | In Progress |
 | External integrations | Not started |
 | Billing integration | Not started |
 

@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AiAssistantPage">
+        <div class="o_woow_ai_assistant">
+            <!-- Page Header -->
+            <div class="o_woow_ai_header">
+                <div class="o_woow_ai_header_text">
+                    <h1>AI Assistant</h1>
+                    <p>Manage support projects, tasks, and AI-powered conversations.</p>
+                </div>
+            </div>
+
+            <!-- Stats Overview Cards -->
+            <div class="o_woow_ai_stats_grid">
+                <!-- Total Tasks -->
+                <WoowCard shadow="true" class="'o_woow_ai_stat_card'">
+                    <div class="o_woow_ai_stat_content">
+                        <div class="o_woow_ai_stat_icon o_woow_ai_stat_icon_blue">
+                            <WoowIcon name="'task_alt'" size="24"/>
+                        </div>
+                        <div class="o_woow_ai_stat_info">
+                            <span class="o_woow_ai_stat_label">Total Tasks</span>
+                            <t t-if="isStatsLoading">
+                                <span class="o_woow_ai_stat_value o_woow_ai_stat_loading">--</span>
+                            </t>
+                            <t t-else="">
+                                <span class="o_woow_ai_stat_value"><t t-esc="stats.total"/></span>
+                            </t>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Active Tasks -->
+                <WoowCard shadow="true" class="'o_woow_ai_stat_card'">
+                    <div class="o_woow_ai_stat_content">
+                        <div class="o_woow_ai_stat_icon o_woow_ai_stat_icon_green">
+                            <WoowIcon name="'pending_actions'" size="24"/>
+                        </div>
+                        <div class="o_woow_ai_stat_info">
+                            <span class="o_woow_ai_stat_label">Active</span>
+                            <t t-if="isStatsLoading">
+                                <span class="o_woow_ai_stat_value o_woow_ai_stat_loading">--</span>
+                            </t>
+                            <t t-else="">
+                                <span class="o_woow_ai_stat_value"><t t-esc="stats.active"/></span>
+                            </t>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Completion Rate -->
+                <WoowCard shadow="true" class="'o_woow_ai_stat_card'">
+                    <div class="o_woow_ai_stat_content">
+                        <div class="o_woow_ai_stat_icon o_woow_ai_stat_icon_purple">
+                            <WoowIcon name="'donut_large'" size="24"/>
+                        </div>
+                        <div class="o_woow_ai_stat_info">
+                            <span class="o_woow_ai_stat_label">Completion</span>
+                            <t t-if="isStatsLoading">
+                                <span class="o_woow_ai_stat_value o_woow_ai_stat_loading">--</span>
+                            </t>
+                            <t t-else="">
+                                <span class="o_woow_ai_stat_value"><t t-esc="stats.completion"/>%</span>
+                            </t>
+                        </div>
+                    </div>
+                </WoowCard>
+            </div>
+
+            <!-- Navigation Cards Grid -->
+            <div class="o_woow_ai_nav_grid">
+                <!-- Support Projects Card -->
+                <WoowCard shadow="true" class="'o_woow_ai_nav_card'">
+                    <div class="o_woow_ai_nav_card_header">
+                        <div class="o_woow_ai_nav_icon o_woow_ai_nav_icon_blue">
+                            <WoowIcon name="'folder_open'" size="28"/>
+                        </div>
+                        <h3>Support Projects</h3>
+                    </div>
+                    <p class="o_woow_ai_nav_desc">
+                        Browse and manage support projects across your workspaces. Create new projects and track progress.
+                    </p>
+                    <div class="o_woow_ai_nav_footer">
+                        <WoowButton variant="'primary'" size="'sm'" onClick.bind="navigateToProjects">
+                            View Projects
+                        </WoowButton>
+                    </div>
+                </WoowCard>
+
+                <!-- My Support Tasks Card -->
+                <WoowCard shadow="true" class="'o_woow_ai_nav_card'">
+                    <div class="o_woow_ai_nav_card_header">
+                        <div class="o_woow_ai_nav_icon o_woow_ai_nav_icon_green">
+                            <WoowIcon name="'assignment'" size="28"/>
+                        </div>
+                        <h3>My Support Tasks</h3>
+                    </div>
+                    <p class="o_woow_ai_nav_desc">
+                        View and manage your assigned tasks. Track task status with Kanban boards and collaborate with AI.
+                    </p>
+                    <div class="o_woow_ai_nav_footer">
+                        <WoowButton variant="'primary'" size="'sm'" onClick.bind="navigateToTasks">
+                            View Tasks
+                        </WoowButton>
+                    </div>
+                </WoowCard>
+
+                <!-- AI Connection Status Card -->
+                <WoowCard shadow="true" class="'o_woow_ai_nav_card o_woow_ai_connection_card'">
+                    <div class="o_woow_ai_nav_card_header">
+                        <div t-att-class="'o_woow_ai_nav_icon ' + (connection.connected ? 'o_woow_ai_nav_icon_green' : 'o_woow_ai_nav_icon_gray')">
+                            <WoowIcon name="'smart_toy'" size="28"/>
+                        </div>
+                        <h3>AI Connection</h3>
+                    </div>
+                    <t t-if="isConnectionLoading">
+                        <p class="o_woow_ai_nav_desc o_woow_ai_stat_loading">
+                            Checking connection status...
+                        </p>
+                    </t>
+                    <t t-else="">
+                        <div class="o_woow_ai_connection_status">
+                            <div class="o_woow_ai_status_row">
+                                <span class="o_woow_ai_status_label">Status</span>
+                                <span t-att-class="'o_woow_ai_status_badge ' + (connection.connected ? 'o_woow_ai_status_connected' : 'o_woow_ai_status_disconnected')">
+                                    <t t-if="connection.connected">Connected</t>
+                                    <t t-else="">Not Connected</t>
+                                </span>
+                            </div>
+                            <t t-if="connection.connected">
+                                <div class="o_woow_ai_status_row">
+                                    <span class="o_woow_ai_status_label">Provider</span>
+                                    <span class="o_woow_ai_status_value"><t t-esc="connection.provider_name"/></span>
+                                </div>
+                                <div class="o_woow_ai_status_row">
+                                    <span class="o_woow_ai_status_label">Model</span>
+                                    <span class="o_woow_ai_status_value"><t t-esc="connection.model_name"/></span>
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <p class="o_woow_ai_nav_desc">
+                                    Configure an AI provider in Settings to enable AI-powered conversations.
+                                </p>
+                            </t>
+                        </div>
+                    </t>
+                </WoowCard>
+            </div>
+        </div>
+    </t>
+</templates>

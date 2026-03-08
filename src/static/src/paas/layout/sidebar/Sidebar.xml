@@ -10,7 +10,7 @@
             </div>
             <nav class="o_woow_sidebar_nav">
                 <t t-foreach="navItems" t-as="item" t-key="item.path">
-                    <a t-att-class="'o_woow_nav_item ' + (props.router.current === item.path ? 'active' : '')"
+                    <a t-att-class="'o_woow_nav_item ' + (isActive(item) ? 'active' : '')"
                        t-on-click="() => props.router.navigate(item.path)">
                         <span class="material-symbols-outlined"><t t-esc="item.icon"/></span>
                         <span><t t-esc="item.name"/></span>

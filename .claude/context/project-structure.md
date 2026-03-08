@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-08T01:39:42Z
-version: 1.4
+last_updated: 2026-02-15T09:39:26Z
+version: 1.5
 author: Claude Code PM System
 ---
 
@@ -12,24 +12,39 @@ author: Claude Code PM System
 ```
 woow_paas_platform/
 ├── src/                         # Odoo module source code
-│   ├── __init__.py              # Package initializer - imports models, controllers
+│   ├── __init__.py              # Package initializer - imports models, controllers, hooks
 │   ├── __manifest__.py          # Odoo module manifest (metadata, deps, assets)
+│   ├── hooks.py                 # Odoo module hooks (post_init, uninstall)
+│   ├── requirements.txt         # Python external dependencies
 │   │
 │   ├── controllers/             # HTTP routes (JSON API)
 │   │   ├── __init__.py
-│   │   └── paas.py              # /woow endpoint + all API routes (workspace, cloud, members)
+│   │   ├── paas.py              # /woow endpoint + workspace/cloud/members API routes
+│   │   └── ai_assistant.py      # AI assistant API endpoints
 │   │
 │   ├── models/                  # Business logic layer
 │   │   ├── __init__.py          # Model imports
-│   │   ├── res_config_settings.py       # PaaS Operator configuration
+│   │   ├── res_config_settings.py       # PaaS Operator + AI configuration
 │   │   ├── workspace.py                 # Workspace model
 │   │   ├── workspace_access.py          # Workspace access/member model
 │   │   ├── cloud_app_template.py        # Application marketplace templates
-│   │   └── cloud_service.py             # Deployed service instances
+│   │   ├── cloud_service.py             # Deployed service instances
+│   │   ├── ai_agent.py                  # AI Agent model
+│   │   ├── ai_client.py                 # AI Client (API integration)
+│   │   ├── ai_provider.py               # AI Provider model
+│   │   ├── discuss_channel.py           # Discuss channel extensions
+│   │   ├── project_project.py           # Project model extensions
+│   │   └── project_task.py              # Project task model extensions
 │   │
 │   ├── services/                # Python service layer (non-ORM)
 │   │   ├── __init__.py
 │   │   └── paas_operator.py     # HTTP client for PaaS Operator
+│   │
+│   ├── migrations/              # Database migrations
+│   │   ├── 18.0.1.0.1/
+│   │   │   └── post-migrate.py  # Migration to v1.0.1
+│   │   └── 18.0.1.0.2/
+│   │       └── post-migrate.py  # Migration to v1.0.2
 │   │
 │   ├── tests/                   # Odoo module tests
 │   │   ├── __init__.py
@@ -58,29 +73,45 @@ woow_paas_platform/
 │           │   ├── root.js/xml  # Root component + router
 │           │   ├── core/
 │           │   │   └── router.js  # Hash-based router service
+│           │   ├── lib/           # Third-party libraries
+│           │   │   ├── marked.min.js   # Markdown parser
+│           │   │   └── purify.min.js   # DOMPurify HTML sanitizer
 │           │   ├── layout/
 │           │   │   ├── app_shell/  # AppShell.js/xml
 │           │   │   ├── sidebar/    # Sidebar.js/xml
 │           │   │   └── header/     # Header.js/xml
 │           │   ├── components/
-│           │   │   ├── icon/       # WoowIcon.js/xml
-│           │   │   ├── card/       # WoowCard.js/xml
-│           │   │   ├── button/     # WoowButton.js/xml
-│           │   │   ├── modal/      # CreateWorkspaceModal, InviteMemberModal, DeleteServiceModal, RollbackModal, EditDomainModal
+│           │   │   ├── icon/       # WoowIcon
+│           │   │   ├── card/       # WoowCard
+│           │   │   ├── button/     # WoowButton
+│           │   │   ├── modal/      # CreateWorkspaceModal, InviteMemberModal, DeleteServiceModal, RollbackModal, EditDomainModal, CreateProjectModal, CreateTaskModal
 │           │   │   ├── marketplace/  # AppCard, CategoryFilter
 │           │   │   ├── common/     # StatusBadge
 │           │   │   ├── config/     # HelmValueForm
-│           │   │   └── service-card/  # ServiceCard
+│           │   │   ├── service-card/  # ServiceCard
+│           │   │   ├── ai-chat/    # AiChat (chat UI component)
+│           │   │   └── ai-mention/ # AiMentionDropdown
 │           │   ├── pages/
-│           │   │   ├── dashboard/    # DashboardPage
-│           │   │   ├── workspace/    # WorkspaceListPage, WorkspaceDetailPage, WorkspaceTeamPage
-│           │   │   ├── marketplace/  # AppMarketplacePage
-│           │   │   ├── service/      # ServiceDetailPage + tabs/ (OverviewTab, ConfigurationTab)
-│           │   │   ├── configure/    # AppConfigurationPage
-│           │   │   └── empty/        # EmptyState
+│           │   │   ├── dashboard/        # DashboardPage
+│           │   │   ├── workspace/        # WorkspaceListPage, WorkspaceDetailPage, WorkspaceTeamPage
+│           │   │   ├── marketplace/      # AppMarketplacePage
+│           │   │   ├── service/          # ServiceDetailPage + tabs/ (OverviewTab, ConfigurationTab)
+│           │   │   ├── configure/        # AppConfigurationPage
+│           │   │   ├── ai-assistant/     # AiAssistantPage
+│           │   │   ├── ai-chat/          # AiChatPage
+│           │   │   ├── project-kanban/   # ProjectKanbanPage
+│           │   │   ├── support-projects/ # SupportProjectsPage
+│           │   │   ├── support-tasks/    # SupportTasksPage
+│           │   │   ├── task-detail/      # TaskDetailPage
+│           │   │   └── empty/            # EmptyState
 │           │   ├── services/
 │           │   │   ├── workspace_service.js  # Workspace API client
 │           │   │   ├── cloud_service.js      # Cloud services API client
+│           │   │   ├── ai_service.js         # AI assistant API client
+│           │   │   ├── support_service.js    # Support/project API client
+│           │   │   ├── rpc.js                # RPC utility
+│           │   │   ├── html_sanitize.js      # HTML sanitization service
+│           │   │   ├── markdown_parser.js    # Markdown parsing service
 │           │   │   └── utils.js              # Shared utility functions
 │           │   └── styles/
 │           │       ├── 00_variables.scss
@@ -124,9 +155,14 @@ woow_paas_platform/
 ├── docs/                        # Documentation
 │   ├── deployment/              # K8s setup, troubleshooting
 │   ├── development/             # Developer guides
+│   ├── testing/                 # Testing guides (AI chat E2E)
 │   └── spec/                    # Feature specifications
 │
 ├── CLAUDE.md                    # Claude Code development guide
+│
+├── .serena/                     # Serena IDE integration
+│   ├── project.yml              # Project configuration
+│   └── memories/                # Serena knowledge base
 │
 └── .claude/                     # Claude Code PM configuration
     ├── agents/                  # Custom agent definitions
@@ -160,7 +196,8 @@ woow_paas_platform/
 - TransientModel for settings, AbstractModel for mixins
 
 ### Controllers (`src/controllers/`)
-- Single controller `paas.py` handles all routes (workspace, cloud services, members)
+- `paas.py` handles workspace, cloud services, members routes
+- `ai_assistant.py` handles AI assistant API routes
 - Using `type="json"` for Odoo 18 JSON responses
 - Imported via `src/controllers/__init__.py`
 
@@ -171,9 +208,10 @@ woow_paas_platform/
 
 ### Frontend (`src/static/src/`)
 - `paas/` - Standalone OWL application
-  - `services/` - API client services + utilities
-  - `components/` - UI components (modal, marketplace, common, config, service-card)
-  - `pages/` - Page components (dashboard, workspace, marketplace, service, configure, empty)
+  - `lib/` - Third-party libraries (marked.js, DOMPurify)
+  - `services/` - API client services + utilities (workspace, cloud, AI, support, rpc, markdown, sanitize)
+  - `components/` - UI components (modal, marketplace, common, config, service-card, ai-chat, ai-mention)
+  - `pages/` - Page components (dashboard, workspace, marketplace, service, configure, ai-assistant, ai-chat, project-kanban, support-projects, support-tasks, task-detail, empty)
 - `scss/` - Backend stylesheets
 - `components/` - Backend OWL components (future)
 - `services/` - JS services (future)
@@ -183,13 +221,19 @@ woow_paas_platform/
 | File | Purpose |
 |------|---------|
 | `src/__manifest__.py` | Module metadata, version, dependencies, assets |
-| `src/controllers/paas.py` | `/woow` endpoint + all API routes (workspace, cloud, members) |
+| `src/hooks.py` | Module hooks (post_init, uninstall) |
+| `src/controllers/paas.py` | `/woow` endpoint + workspace/cloud/members API routes |
+| `src/controllers/ai_assistant.py` | AI assistant API endpoints |
 | `src/models/workspace.py` | Workspace model with CRUD |
 | `src/models/workspace_access.py` | Workspace member access control |
 | `src/models/cloud_app_template.py` | Application marketplace templates |
 | `src/models/cloud_service.py` | Deployed service instances |
+| `src/models/ai_agent.py` | AI Agent model |
+| `src/models/ai_provider.py` | AI Provider model |
+| `src/models/ai_client.py` | AI Client API integration |
 | `src/services/paas_operator.py` | HTTP client for PaaS Operator |
 | `src/static/src/paas/services/cloud_service.js` | Frontend cloud services API client |
+| `src/static/src/paas/services/ai_service.js` | Frontend AI assistant API client |
 | `extra/paas-operator/src/main.py` | PaaS Operator FastAPI app |
 | `src/views/paas_app.xml` | QWeb template for standalone app |
 | `src/static/src/paas/root.js` | OWL app root + router |
@@ -197,6 +241,7 @@ woow_paas_platform/
 | `src/security/ir.model.access.csv` | CRUD permissions per model |
 
 ## Update History
+- 2026-02-15: Added AI Assistant feature (models, controller, pages, components, services, lib/), migrations/, hooks.py, .serena/, docs/testing/
 - 2026-02-08: Full frontend structure update - added marketplace, service, configure pages; new component groups; removed hash.js, paas_operator_client.py, cloud_services.py controller
 - 2026-02-08: Added extra/paas-operator/, cloud models, cloud_service.js, expanded docs/
 - 2026-02-01: Updated for src/ directory structure, added models and services

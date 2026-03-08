@@ -3,26 +3,23 @@ import { Component, useState } from "@odoo/owl";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
+import { HelmValueForm } from "../../../components/config/HelmValueForm";
 import { cloudService } from "../../../services/cloud_service";
 
 /**
  * ConfigurationTab Component
  *
  * Displays and allows editing of Helm values for a cloud service.
- * Features:
- * - Display current Helm values in a read-only view
- * - Edit mode for modifying values
- * - Save button to trigger upgrade API
- * - Shows upgrade progress
+ * Uses HelmValueForm for structured editing based on template specs.
  *
  * Props:
- *   - service (Object): Service data object with helm_values
+ *   - service (Object): Service data object with helm_values and template.helm_value_specs
  *   - workspaceId (number): Workspace ID for API calls
  *   - onSave (Function): Callback when configuration is saved
  */
 export class ConfigurationTab extends Component {
     static template = "woow_paas_platform.ConfigurationTab";
-    static components = { WoowCard, WoowIcon, WoowButton };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm };
     static props = {
         service: { type: Object },
         workspaceId: { type: Number },
@@ -34,7 +31,9 @@ export class ConfigurationTab extends Component {
             editing: false,
             saving: false,
             error: null,
-            editedValues: null,
+            editedValues: {},
+            showAdvanced: false,
+            errors: {},
         });
     }
 
@@ -42,124 +41,123 @@ export class ConfigurationTab extends Component {
         return this.props.service.helm_values || {};
     }
 
-    get valuesJson() {
-        return JSON.stringify(this.currentValues, null, 2);
+    get helmValueSpecs() {
+        return this.props.service.template?.helm_value_specs || { required: [], optional: [] };
     }
 
-    get editedValuesJson() {
-        if (this.state.editedValues === null) {
-            return this.valuesJson;
-        }
-        return this.state.editedValues;
+    get allSpecs() {
+        return [...(this.helmValueSpecs.required || []), ...(this.helmValueSpecs.optional || [])];
     }
 
-    get hasChanges() {
-        if (this.state.editedValues === null) return false;
-        return this.state.editedValues !== this.valuesJson;
+    get hasOptionalSettings() {
+        return (this.helmValueSpecs.optional || []).length > 0;
     }
 
     get canEdit() {
-        // Disable editing when service is in transitional state
         const disabledStates = ["deploying", "upgrading", "deleting", "pending"];
         return !disabledStates.includes(this.props.service.state);
     }
 
+    getSpecValue(spec) {
+        const values = this.currentValues;
+        // Try flat key first (backward compatibility)
+        const flatValue = values[spec.key];
+        if (flatValue !== undefined) return flatValue;
+        // Try nested lookup via dot-path
+        const parts = spec.key.split('.');
+        if (parts.length > 1) {
+            let value = values;
+            for (const part of parts) {
+                if (value === undefined || value === null || typeof value !== 'object') {
+                    value = undefined;
+                    break;
+                }
+                value = value[part];
+            }
+            if (value !== undefined) return value;
+        }
+        return spec.default !== undefined ? spec.default : "";
+    }
+
+    formatSpecValue(spec) {
+        const value = this.getSpecValue(spec);
+        if (spec.type === "password") return "********";
+        if (spec.type === "boolean") return value ? "Enabled" : "Disabled";
+        if (value === null || value === undefined) return "-";
+        return String(value);
+    }
+
     startEditing() {
+        const values = {};
+        for (const spec of this.allSpecs) {
+            values[spec.key] = this.getSpecValue(spec);
+        }
+        this.state.editedValues = values;
         this.state.editing = true;
-        this.state.editedValues = this.valuesJson;
         this.state.error = null;
+        this.state.errors = {};
     }
 
     cancelEditing() {
         this.state.editing = false;
-        this.state.editedValues = null;
+        this.state.editedValues = {};
         this.state.error = null;
+        this.state.errors = {};
+        this.state.showAdvanced = false;
     }
 
-    onValuesChange(ev) {
-        this.state.editedValues = ev.target.value;
-        this.state.error = null;
+    onHelmValueUpdate(key, value) {
+        this.state.editedValues = { ...this.state.editedValues, [key]: value };
+        if (this.state.errors[key]) {
+            const newErrors = { ...this.state.errors };
+            delete newErrors[key];
+            this.state.errors = newErrors;
+        }
+    }
+
+    toggleAdvanced() {
+        this.state.showAdvanced = !this.state.showAdvanced;
+    }
+
+    validateForm() {
+        const errors = {};
+        for (const spec of (this.helmValueSpecs.required || [])) {
+            const value = this.state.editedValues[spec.key];
+            if (value === undefined || value === null || value === "") {
+                errors[spec.key] = `${spec.label || spec.key} is required`;
+            }
+        }
+        this.state.errors = errors;
+        return Object.keys(errors).length === 0;
     }
 
     async saveChanges() {
-        // Validate JSON
-        let parsedValues;
-        try {
-            parsedValues = JSON.parse(this.state.editedValues);
-        } catch (e) {
-            this.state.error = "Invalid JSON format. Please check your configuration.";
-            return;
-        }
+        if (!this.validateForm()) return;
 
         this.state.saving = true;
         this.state.error = null;
 
-        // Call API to update service
-        const result = await cloudService.updateService(
-            this.props.workspaceId,
-            this.props.service.id,
-            parsedValues
-        );
+        try {
+            const result = await cloudService.updateService(
+                this.props.workspaceId,
+                this.props.service.id,
+                this.state.editedValues
+            );
 
-        if (result.success) {
-            this.state.editing = false;
-            this.state.editedValues = null;
-            if (this.props.onSave) {
-                this.props.onSave(parsedValues);
-            }
-        } else {
-            this.state.error = result.error || "Failed to update configuration";
-        }
-
-        this.state.saving = false;
-    }
-
-    formatKey(key) {
-        // Convert camelCase or snake_case to Title Case
-        return key
-            .replace(/([A-Z])/g, " $1")
-            .replace(/_/g, " ")
-            .replace(/^./, (str) => str.toUpperCase())
-            .trim();
-    }
-
-    isObject(value) {
-        return typeof value === "object" && value !== null && !Array.isArray(value);
-    }
-
-    isArray(value) {
-        return Array.isArray(value);
-    }
-
-    formatValue(value) {
-        if (value === null || value === undefined) return "null";
-        if (typeof value === "boolean") return value ? "true" : "false";
-        if (typeof value === "number") return String(value);
-        if (typeof value === "string") return value;
-        return JSON.stringify(value);
-    }
-
-    get flattenedValues() {
-        // Flatten nested objects for display
-        const result = [];
-        const flatten = (obj, prefix = "") => {
-            for (const [key, value] of Object.entries(obj)) {
-                const fullKey = prefix ? `${prefix}.${key}` : key;
-                if (this.isObject(value) && Object.keys(value).length > 0) {
-                    flatten(value, fullKey);
-                } else {
-                    result.push({
-                        key: fullKey,
-                        label: this.formatKey(key),
-                        value: this.formatValue(value),
-                        isSecret: key.toLowerCase().includes("password") ||
-                                  key.toLowerCase().includes("secret") ||
-                                  key.toLowerCase().includes("key"),
-                    });
+            if (result.success) {
+                this.state.editing = false;
+                this.state.editedValues = {};
+                this.state.showAdvanced = false;
+                if (this.props.onSave) {
+                    this.props.onSave(result.data);
                 }
+            } else {
+                this.state.error = result.error || "Failed to update configuration";
             }
-        };
-        flatten(this.currentValues);
-        return result;
+        } catch (err) {
+            this.state.error = err.message || "Failed to update configuration";
+        } finally {
+            this.state.saving = false;
+        }
     }
 }
