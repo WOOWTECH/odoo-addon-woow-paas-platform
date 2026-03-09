@@ -1,6 +1,6 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-03-01T14:27:01Z
+last_updated: 2026-02-26T15:29:18Z
 version: 1.4
 author: Claude Code PM System
 ---
@@ -229,73 +229,52 @@ helm_value_specs = fields.Text()  # JSON defining allowed keys + types + default
 
 Frontend `HelmValueForm` component renders form inputs based on specs, and backend silently filters unauthorized keys on creation/update.
 
-## OAuth 2.0 Bearer Token Authentication Pattern
+## AI Integration Pattern (ai_base_gt)
 
-HA API 使用 OAuth 2.0 Bearer Token 進行認證：
-
-```python
-# controllers/ha_api.py
-def _validate_bearer_token(self, required_scope):
-    auth_header = request.httprequest.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
-        return None, {'error': 'missing_token'}
-    token_str = auth_header[7:]
-    token = request.env['woow_paas_platform.oauth_token'].sudo().search([
-        ('access_token', '=', token_str),
-        ('is_revoked', '=', False),
-    ], limit=1)
-    if not token.is_access_token_valid():
-        return None, {'error': 'invalid_token'}
-    if not token.has_scope(required_scope):
-        return None, {'error': 'insufficient_scope'}
-    return token, None
-```
-
-**Key concepts:**
-- Token model 提供 `has_scope()`, `is_access_token_valid()`, `revoke()` 方法
-- Scope-based 權限：`smarthome:read`, `smarthome:tunnel`, `workspace:read`
-- Token 有 expiry 和 revoked 狀態檢查
-
-## Smart Home Provisioning Pattern
-
-Smart Home 透過 PaaS Operator 管理 Cloudflare Tunnel 生命週期：
+混合架構：使用 `ai_base_gt` 的 Odoo 層管理配置和助手身份，保留 LangChain 做 AI 呼叫。
 
 ```python
-# models/smart_home.py
-def action_provision(self):
-    client = get_paas_operator_client(self.env)
-    subdomain = self._generate_subdomain()
-    result = client.create_tunnel(
-        tunnel_name=f'smarthome-{subdomain}',
-        subdomain=subdomain,
-        domain=self._get_paas_domain(),
-    )
-    self.write({
-        'state': 'active',
-        'tunnel_id': result['tunnel_id'],
-        'tunnel_token': result['tunnel_token'],
-        'subdomain': subdomain,
-        'tunnel_route': f"https://{subdomain}.{domain}",
-    })
+# ai_client.py - Factory method pattern
+class AiClient:
+    @classmethod
+    def from_assistant(cls, assistant_record):
+        """Build client from ai.assistant record."""
+        config = assistant_record.ai_config_id
+        return cls(
+            api_key=config.api_key,
+            model=config.model_id,
+            base_url=config.api_base_url,
+            system_prompt=assistant_record.system_prompt,
+        )
 ```
 
-**State machine:** `pending` → `active` → (error/deleted)
+Key models from `ai_base_gt`:
+- `ai.config` — API provider 設定（key, model, base_url, type）
+- `ai.assistant` — 助手定義（system prompt, linked config）
 
-## Cloudflare Tunnel API Pattern (PaaS Operator)
+## Lazy Loading Pattern (Heavy Libraries)
 
-PaaS Operator 提供 RESTful tunnel API：
+大型 JS library 放在 `static/lib/`（非 `static/src/paas/`）避免被 `__manifest__.py` glob 自動打包：
 
+```javascript
+// mermaid_loader.js
+class MermaidLoader {
+    async load() {
+        if (window.mermaid) return;
+        return new Promise((resolve) => {
+            const script = document.createElement('script');
+            script.src = '/woow_paas_platform/static/lib/mermaid/mermaid.min.js';
+            script.onload = () => resolve();
+            document.head.appendChild(script);
+        });
+    }
+}
 ```
-POST   /api/tunnels          - Create tunnel (name, subdomain, domain)
-GET    /api/tunnels/{id}     - Get tunnel status (connections, uptime)
-GET    /api/tunnels/{id}/token - Get tunnel token for cloudflared
-DELETE /api/tunnels/{id}     - Delete tunnel and DNS routes
-```
 
-Controller 透過 `PaasOperatorClient.create_tunnel()` 等方法呼叫。
+適用於：mermaid.js (~2MB) 等按需載入的資源。
 
 ## Update History
-- 2026-03-01: Added OAuth 2.0, Smart Home provisioning, and Cloudflare Tunnel API patterns
+- 2026-02-26: Added AI integration pattern (ai_base_gt), lazy loading pattern (mermaid)
 - 2026-02-15: Added module hooks, migration, and helm value restriction patterns
 - 2026-02-08: Updated external service pattern from ORM model to standalone service class
 - 2026-02-08: Added RESTful API endpoint pattern and external service integration pattern

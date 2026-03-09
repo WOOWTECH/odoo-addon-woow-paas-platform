@@ -1,6 +1,6 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-03-01T14:27:01Z
+last_updated: 2026-02-26T15:29:18Z
 version: 1.6
 author: Claude Code PM System
 ---
@@ -22,13 +22,13 @@ author: Claude Code PM System
 - **Material Symbols** - Icon font
 - **marked.js** - Markdown to HTML parser (bundled in `lib/`)
 - **DOMPurify** - HTML sanitization library (bundled in `lib/`)
+- **mermaid.js** - Diagram/chart rendering (~2MB, lazy loaded from `static/lib/mermaid/`)
 
 ### PaaS Operator Service
 - **FastAPI** - Async Python web framework for operator API
 - **Helm 3.13+** - Kubernetes package manager
 - **kubectl 1.28+** - Kubernetes CLI
 - **Pydantic** - Data validation for API schemas
-- **Cloudflare API** - Tunnel management (create, delete, DNS routes)
 
 ### Development Tools
 - **Claude Code PM** - Project management system
@@ -41,13 +41,14 @@ author: Claude Code PM System
 
 ### Odoo Module Dependencies
 ```python
-'depends': ['base', 'web']
+'depends': ['base', 'web', 'ai_base_gt']
 ```
 
 | Module | Purpose |
 |--------|---------|
 | `base` | Core Odoo functionality, models, access control |
 | `web` | Web client, assets, OWL framework |
+| `ai_base_gt` | AI configuration (`ai.config`), assistant (`ai.assistant`), thread management |
 
 ### External Dependencies (CDN)
 | Resource | Purpose |
@@ -60,6 +61,11 @@ author: Claude Code PM System
 |---------|---------|
 | marked.min.js | Markdown → HTML parsing |
 | purify.min.js | DOMPurify HTML sanitization |
+
+### Lazy-Loaded Libraries (`static/lib/`)
+| Library | Purpose |
+|---------|---------|
+| mermaid/mermaid.min.js | Mermaid diagram rendering (~2MB, loaded on demand via dynamic script tag) |
 
 ## Module Metadata
 
@@ -200,7 +206,6 @@ docker compose logs -f web
 | SupportProjectsPage | `pages/support-projects/` | Support projects list |
 | SupportTasksPage | `pages/support-tasks/` | Support tasks list |
 | TaskDetailPage | `pages/task-detail/` | Task detail view |
-| SmartHomePage | `pages/smart-home/` | Smart Home management page |
 | EmptyState | `pages/empty/` | Placeholder page |
 
 ### Modal Components
@@ -269,23 +274,8 @@ def api_workspace_detail(self, workspace_id, action='get', **kw):
 Odoo (Frontend) ──HTTP──▶ PaaS Operator (FastAPI) ──Helm──▶ Kubernetes
 ```
 
-### Smart Home / Cloudflare Tunnel Architecture
-```
-HA Component ──OAuth2──▶ Odoo (HA API) ──HTTP──▶ PaaS Operator ──CF API──▶ Cloudflare Tunnel
-```
-
-### Test Suites
-| Suite | Test Count | File |
-|-------|-----------|------|
-| Smart Home | 15 | `src/tests/test_smart_home.py` |
-| OAuth 2.0 | 14 | `src/tests/test_oauth2.py` |
-| HA API | 12 | `src/tests/test_ha_api.py` |
-| Cloud Service | 36 | `src/tests/test_cloud_service.py` |
-| Cloud API | 26 | `src/tests/test_cloud_api.py` |
-| PaaS Operator | 18 | `src/tests/test_paas_operator.py` |
-
 ## Update History
-- 2026-03-01: Added Smart Home page, Cloudflare Tunnel architecture, test suites inventory, Cloudflare API dependency
+- 2026-02-26: Added mermaid.js (lazy-loaded), ai_base_gt dependency, OpenAI Compatible provider
 - 2026-02-15: Added AI Assistant components (pages, services, libs), Serena integration, version bump, bundled libraries
 - 2026-02-08: Full component inventory update - added marketplace, service, configure pages; modal, feature component groups; utils service
 - 2026-02-08: Updated API patterns for RESTful refactor, added cloud service components

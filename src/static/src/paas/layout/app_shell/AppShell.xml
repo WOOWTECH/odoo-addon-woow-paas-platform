@@ -9,6 +9,7 @@
                     <t t-slot="default"/>
                 </div>
             </main>
+            <BottomNav router="props.router"/>
         </div>
     </t>
 </templates>

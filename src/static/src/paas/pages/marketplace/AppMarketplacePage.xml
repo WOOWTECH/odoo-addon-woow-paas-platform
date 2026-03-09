@@ -8,7 +8,7 @@
                     <WoowIcon name="'arrow_back'" size="20"/>
                 </button>
                 <span class="o_woow_breadcrumb_sep">/</span>
-                <span class="o_woow_breadcrumb_parent">Workspace</span>
+                <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack">Workspace</span>
                 <span class="o_woow_breadcrumb_sep">/</span>
                 <span class="o_woow_breadcrumb_current">App Marketplace</span>
             </div>

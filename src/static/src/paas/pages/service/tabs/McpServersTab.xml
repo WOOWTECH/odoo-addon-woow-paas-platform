@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.McpServersTab">
+        <div class="o_woow_mcp_tab">
+            <!-- Header -->
+            <div class="o_woow_mcp_tab__header">
+                <div>
+                    <h3>MCP Servers</h3>
+                    <p class="o_woow_mcp_tab__subtitle">
+                        Connect external tool servers to enable AI tool calling for this service.
+                    </p>
+                </div>
+                <WoowButton variant="'primary'" size="'md'" onClick.bind="showAddForm">
+                    <WoowIcon name="'add'" size="18"/>
+                    Add Server
+                </WoowButton>
+            </div>
+
+            <!-- Add/Edit Form -->
+            <WoowCard t-if="state.showForm" class="'o_woow_mcp_form_card'">
+                <div class="o_woow_mcp_form">
+                    <h4 t-if="state.editingServer">Edit MCP Server</h4>
+                    <h4 t-else="">Add MCP Server</h4>
+
+                    <div t-if="state.formError" class="o_woow_mcp_form__error">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.formError"/>
+                    </div>
+
+                    <div class="o_woow_mcp_form__field">
+                        <label>Name *</label>
+                        <input type="text" t-att-value="state.form.name"
+                               t-on-input="(ev) => this.onFormInput('name', ev)"
+                               placeholder="e.g. My MCP Server"/>
+                    </div>
+                    <div class="o_woow_mcp_form__field">
+                        <label>Endpoint URL *</label>
+                        <input type="text" t-att-value="state.form.url"
+                               t-on-input="(ev) => this.onFormInput('url', ev)"
+                               placeholder="https://mcp.example.com/sse"/>
+                    </div>
+                    <div class="o_woow_mcp_form__row">
+                        <div class="o_woow_mcp_form__field">
+                            <label>Transport</label>
+                            <select t-on-change="(ev) => this.onFormInput('transport', ev)">
+                                <option value="sse" t-att-selected="state.form.transport === 'sse'">SSE</option>
+                                <option value="streamable_http" t-att-selected="state.form.transport === 'streamable_http'">Streamable HTTP</option>
+                            </select>
+                        </div>
+                        <div class="o_woow_mcp_form__field">
+                            <label>API Key</label>
+                            <input type="password" t-att-value="state.form.api_key"
+                                   t-on-input="(ev) => this.onFormInput('api_key', ev)"
+                                   placeholder="Optional"/>
+                        </div>
+                    </div>
+                    <div class="o_woow_mcp_form__field">
+                        <label>Description</label>
+                        <textarea t-att-value="state.form.description"
+                                  t-on-input="(ev) => this.onFormInput('description', ev)"
+                                  placeholder="What does this MCP server provide?"
+                                  rows="2"/>
+                    </div>
+                    <div class="o_woow_mcp_form__actions">
+                        <WoowButton variant="'ghost'" size="'sm'" onClick.bind="hideForm">
+                            Cancel
+                        </WoowButton>
+                        <WoowButton variant="'primary'" size="'sm'" onClick.bind="saveServer"
+                                    disabled="state.saving">
+                            <t t-if="state.saving">Saving...</t>
+                            <t t-elif="state.editingServer">Update</t>
+                            <t t-else="">Create</t>
+                        </WoowButton>
+                    </div>
+                </div>
+            </WoowCard>
+
+            <!-- Loading -->
+            <div t-if="state.loading" class="o_woow_mcp_tab__loading">
+                <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                <span>Loading MCP servers...</span>
+            </div>
+
+            <!-- Error -->
+            <div t-elif="state.error" class="o_woow_mcp_tab__error">
+                <WoowIcon name="'error'" size="20"/>
+                <span t-esc="state.error"/>
+            </div>
+
+            <!-- Empty State -->
+            <WoowCard t-elif="!state.servers.length and !state.showForm" class="'o_woow_mcp_empty'">
+                <div class="o_woow_mcp_empty__content">
+                    <WoowIcon name="'extension'" size="48"/>
+                    <h4>No MCP Servers</h4>
+                    <p>Add an MCP server to enable AI tool calling capabilities for this service.</p>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="showAddForm">
+                        <WoowIcon name="'add'" size="18"/>
+                        Add Your First Server
+                    </WoowButton>
+                </div>
+            </WoowCard>
+
+            <!-- Server List -->
+            <t t-else="">
+                <t t-foreach="state.servers" t-as="server" t-key="server.id">
+                    <WoowCard class="'o_woow_mcp_server_card'">
+                        <div class="o_woow_mcp_server">
+                            <div class="o_woow_mcp_server__info">
+                                <div class="o_woow_mcp_server__name_row">
+                                    <WoowIcon name="'dns'" size="20"/>
+                                    <span class="o_woow_mcp_server__name" t-esc="server.name"/>
+                                    <StatusBadge status="getStateBadge(server.state)"/>
+                                </div>
+                                <div class="o_woow_mcp_server__url" t-esc="server.url"/>
+                                <div t-if="server.description" class="o_woow_mcp_server__desc" t-esc="server.description"/>
+                                <div class="o_woow_mcp_server__meta">
+                                    <span class="o_woow_mcp_server__transport">
+                                        <t t-esc="server.transport === 'sse' ? 'SSE' : 'Streamable HTTP'"/>
+                                    </span>
+                                    <span class="o_woow_mcp_server__tools">
+                                        <WoowIcon name="'build'" size="14"/>
+                                        <t t-esc="server.tool_count"/> tools
+                                    </span>
+                                    <span t-if="server.last_sync" class="o_woow_mcp_server__sync_time">
+                                        Last synced: <t t-esc="server.last_sync"/>
+                                    </span>
+                                </div>
+                                <!-- Tool list -->
+                                <div t-if="server.tools and server.tools.length" class="o_woow_mcp_server__tool_list">
+                                    <t t-foreach="server.tools" t-as="tool" t-key="tool.id">
+                                        <span class="o_woow_mcp_server__tool_tag" t-esc="tool.name" t-att-title="tool.description"/>
+                                    </t>
+                                </div>
+                            </div>
+                            <div class="o_woow_mcp_server__actions">
+                                <WoowButton variant="'ghost'" size="'sm'" onClick="() => this.testServer(server)"
+                                            disabled="server._testing"
+                                            title="Test Connection">
+                                    <WoowIcon name="'power'" size="16"/>
+                                </WoowButton>
+                                <WoowButton variant="'ghost'" size="'sm'" onClick="() => this.syncServer(server)"
+                                            disabled="server._syncing"
+                                            title="Sync Tools">
+                                    <WoowIcon name="'sync'" size="16"/>
+                                </WoowButton>
+                                <WoowButton variant="'ghost'" size="'sm'" onClick="() => this.showEditForm(server)"
+                                            title="Edit">
+                                    <WoowIcon name="'edit'" size="16"/>
+                                </WoowButton>
+                                <WoowButton variant="'ghost'" size="'sm'" onClick="() => this.deleteServer(server)"
+                                            title="Delete">
+                                    <WoowIcon name="'delete'" size="16"/>
+                                </WoowButton>
+                            </div>
+                        </div>
+                        <!-- Error message -->
+                        <div t-if="server.state === 'error' and server.state_message" class="o_woow_mcp_server__error">
+                            <WoowIcon name="'warning'" size="14"/>
+                            <span t-esc="server.state_message"/>
+                        </div>
+                    </WoowCard>
+                </t>
+            </t>
+        </div>
+    </t>
+</templates>

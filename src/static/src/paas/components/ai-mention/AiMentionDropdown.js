@@ -6,13 +6,13 @@ import { Component, useState } from "@odoo/owl";
  * AiMentionDropdown
  *
  * Dropdown component that appears when the user types '@' in the chat
- * input area. Displays a filterable list of available AI agents and
+ * input area. Displays a filterable list of available AI assistants and
  * supports keyboard navigation (ArrowUp/ArrowDown/Enter/Escape).
  */
 export class AiMentionDropdown extends Component {
     static template = "woow_paas_platform.AiMentionDropdown";
     static props = {
-        agents: { type: Array },
+        assistants: { type: Array },
         visible: { type: Boolean },
         query: { type: String, optional: true },
         onSelect: { type: Function },
@@ -26,18 +26,17 @@ export class AiMentionDropdown extends Component {
     }
 
     /**
-     * Filter agents by the current query string.
-     * @returns {Array} Filtered list of agents
+     * Filter assistants by the current query string.
+     * @returns {Array} Filtered list of assistants
      */
-    get filteredAgents() {
+    get filteredAssistants() {
         const query = (this.props.query || "").toLowerCase().trim();
         if (!query) {
-            return this.props.agents;
+            return this.props.assistants;
         }
-        return this.props.agents.filter((agent) => {
-            const displayName = (agent.agent_display_name || agent.name || "").toLowerCase();
-            const name = (agent.name || "").toLowerCase();
-            return displayName.includes(query) || name.includes(query);
+        return this.props.assistants.filter((assistant) => {
+            const name = (assistant.name || "").toLowerCase();
+            return name.includes(query);
         });
     }
 
@@ -46,24 +45,24 @@ export class AiMentionDropdown extends Component {
      * @param {KeyboardEvent} ev
      */
     handleKeydown(ev) {
-        const agents = this.filteredAgents;
-        if (!agents.length) {
+        const assistants = this.filteredAssistants;
+        if (!assistants.length) {
             return;
         }
 
         switch (ev.key) {
             case "ArrowDown":
                 ev.preventDefault();
-                this.state.selectedIndex = (this.state.selectedIndex + 1) % agents.length;
+                this.state.selectedIndex = (this.state.selectedIndex + 1) % assistants.length;
                 break;
             case "ArrowUp":
                 ev.preventDefault();
                 this.state.selectedIndex =
-                    (this.state.selectedIndex - 1 + agents.length) % agents.length;
+                    (this.state.selectedIndex - 1 + assistants.length) % assistants.length;
                 break;
             case "Enter":
                 ev.preventDefault();
-                this.selectAgent(agents[this.state.selectedIndex]);
+                this.selectAssistant(assistants[this.state.selectedIndex]);
                 break;
             case "Escape":
                 ev.preventDefault();
@@ -75,21 +74,21 @@ export class AiMentionDropdown extends Component {
     }
 
     /**
-     * Select an agent and notify the parent component.
-     * @param {Object} agent - The selected agent record
+     * Select an assistant and notify the parent component.
+     * @param {Object} assistant - The selected assistant record
      */
-    selectAgent(agent) {
+    selectAssistant(assistant) {
         this.state.selectedIndex = 0;
-        this.props.onSelect(agent);
+        this.props.onSelect(assistant);
     }
 
     /**
-     * Get the initial letter for the agent avatar.
-     * @param {Object} agent
+     * Get the initial letter for the assistant avatar.
+     * @param {Object} assistant
      * @returns {string} Single uppercase character
      */
-    getInitial(agent) {
-        const name = agent.agent_display_name || agent.name || "?";
+    getInitial(assistant) {
+        const name = assistant.name || "?";
         return name.charAt(0).toUpperCase();
     }
 }

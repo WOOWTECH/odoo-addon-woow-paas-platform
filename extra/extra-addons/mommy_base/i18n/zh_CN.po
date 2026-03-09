@@ -1,0 +1,729 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* mommy_base
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 17.0+e\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-08-27 12:23+0000\n"
+"PO-Revision-Date: 2024-08-27 20:24+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: zh\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: \n"
+"X-Generator: Poedit 3.1.1\n"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.styles_company_report
+msgid ""
+".page {\n"
+"                    font-size:"
+msgstr ""
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Account"
+msgstr "帐户"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Account extension powered by OdooMommy"
+msgstr "由 OdooMommy 提供的账户扩展"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/js/relation_fields.js:0
+#, python-format
+msgid "Add"
+msgstr "添加"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_baidu_map
+#: model_terms:ir.ui.view,arch_db:mommy_base.baidu_map_settings
+msgid "Baidu Map"
+msgstr "百度地图"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_baidu_nlp
+msgid "Baidu NLP"
+msgstr "百度NLP"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Baidu NLP Address"
+msgstr "百度NLP地址解析"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_base
+msgid "Base"
+msgstr "基数"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.view_pops_up_confirm_form
+msgid "Cancel"
+msgstr "取消"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_res_company
+msgid "Companies"
+msgstr "公司"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_partner__external_company_details
+#: model:ir.model.fields,field_description:mommy_base.field_res_users__external_company_details
+msgid "Company Details"
+msgstr "公司详细信息"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_base_document_layout
+msgid "Company Document Layout"
+msgstr "公司单据布局"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_ir_property
+msgid "Company Property"
+msgstr "公司属性"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_partner__external_report_header
+#: model:ir.model.fields,field_description:mommy_base.field_res_users__external_report_header
+msgid "Company Tagline"
+msgstr "公司标语"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.shpping_setting
+msgid "Compute shipping costs and ship with KDN"
+msgstr "使用快递鸟集成发货服务"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.shpping_setting
+msgid "Compute shipping costs and ship with SF"
+msgstr "使用顺丰速运进行发货"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.shpping_setting
+msgid "Compute shipping costs and ship with YTO"
+msgstr "使用圆通速递进行发货"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.shpping_setting
+msgid "Compute shipping costs and ship with YunEx"
+msgstr "使用云途物流发货"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_res_config_settings
+msgid "Config Settings"
+msgstr "配置设置"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.view_pops_up_confirm_form
+msgid "Confirm"
+msgstr "确认"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_res_partner
+msgid "Contact"
+msgstr "联系人"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Contacts"
+msgstr "联系人"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/js/fields/many2x.js:0
+#, python-format
+msgid "Create \"%s\""
+msgstr "创建\"%s\""
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/js/fields/many2x.js:0
+#, python-format
+msgid "Create and edit..."
+msgstr "创建和编辑..."
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__create_uid
+msgid "Created by"
+msgstr "创建者"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__create_date
+msgid "Created on"
+msgstr "创建于"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_base_document_layout__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_ir_actions_report__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_ir_model__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_ir_property__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_ir_sequence__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_mail_thread__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_base__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_res_company__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_res_partner__current_company
+#: model:ir.model.fields,field_description:mommy_base.field_res_users__current_company
+msgid "Current Company"
+msgstr "当前公司"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Customized Your Odoo"
+msgstr "个性化Odoo"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Delivery"
+msgstr "送货"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_ir_model__disable_quick_create
+msgid "Disable Quick C&E"
+msgstr "禁用快速创建"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__mommy_disable_quick_create
+msgid "Disable Quick Create & Edit"
+msgstr "禁用快速创建和编辑"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__mommy_database_manager
+msgid "Disable database manager & powered by odoo"
+msgstr "禁用数据库管理和Powered by Odoo"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__display_name
+msgid "Display Name"
+msgstr "显示名称"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_partner__external_layout_id
+#: model:ir.model.fields,field_description:mommy_base.field_res_users__external_layout_id
+msgid "Document Template"
+msgstr "文件模板"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/xml/menu.xml:0
+#, python-format
+msgid "Documentation"
+msgstr "文档"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_mail_thread
+msgid "Email Thread"
+msgstr "邮件会话"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.purchase_advance_payment_settings
+msgid "Enable advance payment options on purchase order."
+msgstr "启用采购订单高级支付"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_hr_expense
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Expense"
+msgstr "费用"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Extension for internal company rules"
+msgstr "公司内部规则的扩展"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "External Workflow"
+msgstr "附加工作流"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_ir_model__filter_read
+msgid "Filter Read"
+msgstr "过滤器 阅读"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_base_document_layout__mommy_report_font_size
+#: model:ir.model.fields,field_description:mommy_base.field_res_company__mommy_report_font_size
+msgid "Font Size(px)"
+msgstr "字体大小"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_partner__external_report_footer
+#: model:ir.model.fields,field_description:mommy_base.field_res_users__external_report_footer
+msgid "Footer"
+msgstr "页脚"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "HR Expense"
+msgstr "费用"
+
+#. module: mommy_base
+#: model:ir.model.fields.selection,name:mommy_base.selection__ir_property__type__html
+msgid "Html"
+msgstr "HTML"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__id
+msgid "ID"
+msgstr ""
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_inter_company
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Internal Company Rules"
+msgstr "公司内部规则"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_delivery_kdniao
+msgid "KDN Connector"
+msgstr "快递鸟"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.shpping_setting
+msgid "KDN Integration"
+msgstr "快递鸟集成"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__write_uid
+msgid "Last Updated by"
+msgstr "最后修改者"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__write_date
+msgid "Last Updated on"
+msgstr "最后更新于"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/xml/menu.xml:0
+#, python-format
+msgid "Log out"
+msgstr "登出"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Login Page Setting"
+msgstr "登录页面设置"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__content
+msgid "Message Content"
+msgstr "内容"
+
+#. module: mommy_base
+#. odoo-python
+#: code:addons/mommy_base/models/base.py:0
+#, python-format
+msgid "Model: %s has no valid action for this operation."
+msgstr "模型:%s对于此操作缺少有效的动作"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_ir_model
+msgid "Models"
+msgstr "模型"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_pos_payment_alipay
+msgid "Module Mommy Pos Payment Alipay"
+msgstr "Pos支付宝"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_pos_payment_wechatpy
+msgid "Module Mommy Pos Payment Wechatpy"
+msgstr "Pos微信支付"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Mommy"
+msgstr "欧姆"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_account
+msgid "Mommy Account"
+msgstr "财务"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_delivery
+msgid "Mommy Delivery"
+msgstr "欧姆送货模块"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_payment
+msgid "Mommy Payment"
+msgstr "支付"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Mommy Payments Extensions"
+msgstr "支付拓展"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_pos
+msgid "Mommy Pos Features"
+msgstr "POS特性"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_purchase_stock
+msgid "Mommy Purchase Feature"
+msgstr "高级支付"
+
+#. module: mommy_base
+#: model:ir.model.fields.selection,name:mommy_base.selection__ir_sequence__range_type__month
+msgid "Month"
+msgstr "月"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/xml/menu.xml:0
+#, python-format
+msgid "My Odoo.com account"
+msgstr "我的Odoo账户"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/js/fields/many2x.js:0
+#, python-format
+msgid "No records"
+msgstr "没有记录"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.customize_window_form_view
+msgid "OK"
+msgstr ""
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mail_notification_layout
+#: model_terms:ir.ui.view,arch_db:mommy_base.mail_notification_light
+msgid "Odoo"
+msgstr ""
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_mommy_base
+msgid "Odoo Mommy Settings"
+msgstr "欧姆设置"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Payments"
+msgstr "支付"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Personal Center Setting"
+msgstr "个人中心设置"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Point of Sale"
+msgstr "销售点"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Point of Sales"
+msgstr "销售点"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_portal
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Portal"
+msgstr "门户"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Portal Extension"
+msgstr "门户扩展"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_portal_sale
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Portal Sale"
+msgstr "门户销售"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Portal Sales Extension"
+msgstr "门户销售拓展"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Pos Features"
+msgstr "POS特性"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mail_notification_layout
+#: model_terms:ir.ui.view,arch_db:mommy_base.mail_notification_light
+msgid "Powered by"
+msgstr "技术支持："
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/xml/menu.xml:0
+#, python-format
+msgid "Preferences"
+msgstr "首选项"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__quick_edit
+msgid "Quick Editable"
+msgstr "启用快速编辑"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.view_res_partner_form
+msgid "Report"
+msgstr "报表"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_ir_actions_report
+msgid "Report Action"
+msgstr "报告操作"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.shpping_setting
+msgid "SF Express"
+msgstr "顺丰速运"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_delivery_sf
+msgid "SF Express Connector"
+msgstr "顺丰速运"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Sale Features"
+msgstr "销售特性"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_sale_stock
+msgid "Sale Stock"
+msgstr "销售和仓库"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Sales"
+msgstr "销售"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Sales Delivery"
+msgstr "销售送货"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_sale_delivery
+msgid "Sales Delivery Extension"
+msgstr "销售送货扩展"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_sale
+msgid "Sales Extension"
+msgstr "销售拓展"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Sales Stock"
+msgstr "销售和仓库"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/js/fields/many2x.js:0
+#, python-format
+msgid "Search More..."
+msgstr "搜索更多..."
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_ir_sequence
+msgid "Sequence"
+msgstr "序列"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__mommy_show_document
+msgid "Show Documents"
+msgstr "显示文档"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__mommy_show_odoo_account
+msgid "Show Odoo Account"
+msgstr "显示我的Odoo账号"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__mommy_show_brand
+msgid "Show Odoo Brand"
+msgstr "显示我的Odoo品牌"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__mommy_show_shortcuts
+msgid "Show Shortcuts"
+msgstr "显示快捷方式"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__mommy_show_support
+msgid "Show Support"
+msgstr "显示支持"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/js/fields/many2x.js:0
+#, python-format
+msgid "Start typing..."
+msgstr "开始输入…"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Stock Features"
+msgstr "库存特性"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_ir_sequence__range_type
+msgid "Subsequence Range"
+msgstr "子序列范围"
+
+#. module: mommy_base
+#. odoo-javascript
+#: code:addons/mommy_base/static/src/xml/menu.xml:0
+#, python-format
+msgid "Support"
+msgstr "支持"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__mommy_title
+msgid "System Title"
+msgstr "系统标题"
+
+#. module: mommy_base
+#. odoo-python
+#: code:addons/mommy_base/models/base.py:0
+#, python-format
+msgid "This field was restricted to unique, value %s already existed!"
+msgstr "该字段具有唯一性限制，值%s已经存在!"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.customize_window_form_view
+msgid "Tip Message"
+msgstr "提示信息"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_mommy_message_popsup__name
+msgid "Title"
+msgstr "标题"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_ir_model__track
+msgid "Track All"
+msgstr "跟踪所有"
+
+#. module: mommy_base
+#: model:ir.model.fields,help:mommy_base.field_ir_model__track
+msgid "Track all fields changes and displaying on chatter?"
+msgstr "跟踪所有字段并显示在对话历史中?"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_ir_property__type
+msgid "Type"
+msgstr "类型"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mail_notification_layout
+#: model_terms:ir.ui.view,arch_db:mommy_base.mail_notification_light
+msgid "Unfollow"
+msgstr "取消关注"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_res_users
+msgid "User"
+msgstr "用户"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.baidu_map_settings
+msgid "Using baidu map to replace google & mapbox in china mainland."
+msgstr "在中国大陆使用百度地图替代谷歌地图"
+
+#. module: mommy_base
+#: model:ir.model.fields.selection,name:mommy_base.selection__ir_sequence__range_type__week
+msgid "Week"
+msgstr "周"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_wework
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "Wework"
+msgstr "企业微信"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_delivery_yto
+#: model_terms:ir.ui.view,arch_db:mommy_base.shpping_setting
+msgid "YTO Express"
+msgstr "圆通速递"
+
+#. module: mommy_base
+#: model:ir.model.fields.selection,name:mommy_base.selection__ir_sequence__range_type__year
+msgid "Year"
+msgstr "年"
+
+#. module: mommy_base
+#: model:ir.model.fields,field_description:mommy_base.field_res_config_settings__module_mommy_delivery_yunex
+msgid "YunEx Connector"
+msgstr "云途物流"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.shpping_setting
+msgid "YunEx Integration"
+msgstr "云途物流"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "delivery extension"
+msgstr "送货扩展"
+
+#. module: mommy_base
+#: model:ir.model,name:mommy_base.model_mommy_message_popsup
+msgid "mommy message"
+msgstr "欧姆消息"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "mommy sale extension"
+msgstr "欧姆销售拓展"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "mommy sale stock extension"
+msgstr "销售-库存扩展"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.view_pops_up_confirm_form
+msgid "or"
+msgstr "或"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.view_pops_up_confirm_form
+msgid "pops up"
+msgstr "弹窗"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.styles_company_report
+msgid ""
+"px;\n"
+"                }"
+msgstr ""
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "sale delivery extension"
+msgstr "销售送货扩展"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "using baidu nlp to auto parse the address."
+msgstr "使用百度NLP自动解析地址"
+
+#. module: mommy_base
+#: model_terms:ir.ui.view,arch_db:mommy_base.mommy_res_config_settings
+msgid "using wework to handler the workflow."
+msgstr "使用企业微信处理工作流"

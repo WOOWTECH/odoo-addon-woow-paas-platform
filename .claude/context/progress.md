@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-03-01T14:30:52Z
-version: 1.7
+last_updated: 2026-02-26T15:29:18Z
+version: 1.6
 author: Claude Code PM System
 ---
 
@@ -9,59 +9,88 @@ author: Claude Code PM System
 
 ## Current Status
 
-**Branch:** epic/smarthome-integration-ha
-**State:** Smart Home HA Integration 功能開發完成，E2E 測試通過，clean working tree
+**Branch:** alpha/ai-assistant
+**State:** 所有 13 個 epic 已完成，AI Chat Mermaid 渲染已整合，clean working tree（僅有 PM sync 變更）
 
 ## Recent Work
 
 ### Latest Commits
-- `fd73766` docs: update context files for Smart Home HA Integration completion
-- `0f81715` chore: add epic execution status and remove broken symlink
-- `0336094` chore: sync local task status with GitHub (cloud-services-mvp #9, #10, #12)
-- `66e279a` fix: wait for pip install completion before DB init in sandbox creation
-- `6a9cadb` fix: correct HA API test user identity to match workspace owner
-- `fa754d4` fix: mount src/ to correct Odoo module subdirectory in sandbox
-- `3267595` test: add Smart Home, OAuth 2.0, and HA API test suites (#120)
-- `ccc3ece` fix: include web module in sandbox default install list
+- `adcf3f7` fix: defer mermaid rendering until AI streaming completes to prevent jitter
+- `6541df7` chore: normalize skill name fields to use kebab-case identifiers
+- `1b3d9a1` fix: use TextDecoder for base64 mermaid content to support UTF-8
+- `014356c` feat: add mermaid source code toggle and fix AI message HTML encoding
+- `96b9730` chore: mark all epic tasks as completed
+- `c9e83f2` feat: add mermaid error handling and loading states (Issue #95)
+- `659672b` feat: integrate mermaid rendering in AiChat with SSE support (Issue #93)
+- `f7b4135` feat: add mermaid code block detection in markdown parser (Issue #92)
+- `5c29d85` feat: add interactive mermaid container with zoom/pan (Issue #94)
+- `c1cd87f` feat: add mermaid.js lazy loader service (Issue #91)
 
-### Current Sprint
+### Completed Since Last Update (2026-02-15)
 
-**Epic: Smart Home HA Integration** ✅ Complete
-- Smart Home model（Cloudflare Tunnel 整合、provision/delete 生命週期）
-- OAuth 2.0 系統（Client, Token, AuthorizationCode models）
-- HA API endpoints（workspace 列表、smart home 列表、tunnel token）
-- E2E 測試通過：117/121（4 個 pre-existing cloud_api failures）
-- 新測試套件：Smart Home (15) + OAuth2 (14) + HA API (12) = 41 tests
-- paas-operator Cloudflare Tunnel API（create/get/delete/token）
-- K8s dev sandbox 改善（pip-wait、extra-addons support）
+**Epic: n8n Config Restriction** ✅ Complete
+- n8n template 的 `helm_value_specs` 定義
+- Basic auth 強制啟用、時區/log level 選填欄位
+- Dot-path key 相容性驗證
+
+**Epic: AI Assistant Refactor** ✅ Complete
+- 用 `ai_base_gt` 的 `ai.config` + `ai.assistant` 取代自建 `ai_provider` + `ai_agent`
+- `ai_client.py` 改用 `from_assistant()` factory method
+- Controller + discuss_channel.py 重構
+- 保留 LangChain 做 AI 呼叫（streaming、多 provider）
+
+**Epic: OpenAI Compatible Provider** ✅ Complete
+- `ai.config` 新增 "OpenAI Compatible" type 選項
+- Form view 加入 `api_base_url` 欄位
+
+**Epic: Project-Cloud Service Binding** ✅ Complete
+- `project.project` 關聯從 `workspace_id` 改為 `cloud_service_id`
+- AI system prompt 注入 Cloud Service context
+- CreateProjectModal 從 Cloud Service 詳情頁建立
+
+**Epic: Navbar Fix and Responsive** ✅ Complete
+- Header breadcrumb 動態路徑 + 可點擊導航
+- 6 個子頁面 breadcrumb parent 可點擊
+- Responsive CSS 修復
+
+**Epic: AI Chat Mermaid Rendering** ✅ Complete
+- Mermaid.js lazy loader（dynamic script tag, ~2MB）
+- Markdown parser mermaid code block 偵測
+- AiChat 整合 mermaid 渲染 + SSE 串流支援
+- 互動式容器（zoom/pan）+ 原始碼切換
+- 錯誤處理 + Loading 狀態
 
 **累計完成：**
 1. Workspace model + WorkspaceAccess model（Phase 3 ✅）
 2. Cloud App Template + Cloud Service models（Phase 4 ✅）
-3. PaaS Operator service（FastAPI wrapper for Helm + Cloudflare Tunnel API）
+3. PaaS Operator service（FastAPI wrapper for Helm）
 4. Cloud Service Config Restriction（helm value 白名單 ✅）
-5. AI Assistant 基礎架構（models + controllers + UI）
-6. Smart Home + OAuth 2.0 + HA API（Phase 4d ✅）
-7. K8s Dev Sandbox Helm chart + management scripts
-8. Module version 升級至 18.0.1.0.2（含 2 次 migration）
-9. Serena 整合（project config + memories）
+5. AI Assistant 完整功能（models + controllers + UI ✅）
+6. n8n Config Restriction ✅
+7. AI Assistant Refactor（`ai_base_gt` 整合 ✅）
+8. OpenAI Compatible Provider ✅
+9. Project-Cloud Service Binding ✅
+10. Navbar Fix and Responsive ✅
+11. AI Chat Mermaid Rendering ✅
+12. Module version 升級至 18.0.1.0.2（含 2 次 migration）
+13. Serena 整合（project config + memories）
 
 ## Outstanding Changes
 
 ```
-(clean working tree)
+M .claude/epics/ai-chat-mermaid-rendering/ (PM sync updates)
 ```
 
 ## Immediate Next Steps
 
-1. 合併 Smart Home HA Integration 到 main（PR review）
-2. Phase 5: External integrations
-3. 修復 4 個 pre-existing cloud_api test failures
-4. E2E testing with real Kubernetes cluster
+1. Phase 5: External integrations
+2. Unit tests for all models
+3. E2E testing with real Kubernetes cluster
+4. Dark mode theme
 
 ## Technical Debt
 
-- 4 pre-existing test failures in `test_helm_values_filtering*` (cloud_api)
+- Need unit tests for all models (Workspace, CloudAppTemplate, CloudService, AI models)
 - Frontend error handling improvements
 - API rate limiting
 
@@ -70,8 +99,7 @@ author: Claude Code PM System
 - None currently
 
 ## Update History
-- 2026-03-01: Added latest context docs commit, minor version bump
-- 2026-03-01: Updated for Smart Home HA Integration completion, branch change to epic/smarthome-integration-ha, E2E test results
+- 2026-02-26: All 13 epics completed. Added mermaid rendering, navbar fix, AI refactor, project-cloud binding, n8n config, OpenAI compatible provider
 - 2026-02-15: Updated for AI Assistant feature, Cloud Service Config Restriction merge, branch change to alpha/ai-assistant
 - 2026-02-08: Updated latest commits (fetch rename, hash removal, reference_id refactor)
 - 2026-02-08: Updated for API refactor completion, Phase 4 complete

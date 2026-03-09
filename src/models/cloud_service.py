@@ -125,6 +125,21 @@ class CloudService(models.Model):
         help='Storage in GB allocated to this service',
     )
 
+    # Support Project
+    project_ids = fields.One2many(
+        comodel_name='project.project',
+        inverse_name='cloud_service_id',
+        string='Support Projects',
+    )
+
+    # User MCP Servers
+    user_mcp_server_ids = fields.One2many(
+        comodel_name='woow_paas_platform.mcp_server',
+        inverse_name='cloud_service_id',
+        string='MCP Servers',
+        domain=[('scope', '=', 'user')],
+    )
+
     # Timestamps
     deployed_at = fields.Datetime(
         string='Deployed At',

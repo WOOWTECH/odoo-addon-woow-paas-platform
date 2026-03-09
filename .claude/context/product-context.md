@@ -1,6 +1,6 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-03-01T14:30:52Z
+last_updated: 2026-02-26T15:29:18Z
 version: 1.3
 author: Claude Code PM System
 ---
@@ -80,12 +80,13 @@ Customers manage their subscription plans and billing.
 | Cloud Services (Templates + Deploy) | Complete |
 | PaaS Operator (Helm wrapper) | Complete |
 | Cloud Service Config Restriction | Complete |
-| AI Assistant (Agent + Chat) | In Progress |
-| Support Projects / Tasks | In Progress |
-| Smart Home HA Integration | Complete |
-| OAuth 2.0 System | Complete |
-| HA API Endpoints | Complete |
-| K8s Dev Sandbox | Complete |
+| AI Assistant (Agent + Chat) | Complete |
+| AI Refactor (ai_base_gt) | Complete |
+| OpenAI Compatible Provider | Complete |
+| Support Projects / Tasks | Complete |
+| Project-Cloud Service Binding | Complete |
+| Navbar Fix + Responsive | Complete |
+| Mermaid Diagram Rendering | Complete |
 | External integrations | Not started |
 | Billing integration | Not started |
 

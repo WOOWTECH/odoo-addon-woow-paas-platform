@@ -48,5 +48,16 @@
             <field name="perm_create" eval="True"/>
             <field name="perm_unlink" eval="False"/>
         </record>
+        <!-- Project: Users can access projects bound to cloud services in their workspaces -->
+        <record id="project_rule_workspace_member" model="ir.rule">
+            <field name="name">Project: workspace member access via cloud service</field>
+            <field name="model_id" ref="project.model_project_project"/>
+            <field name="domain_force">['|', ('cloud_service_id', '=', False), ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
     </data>
 </odoo>

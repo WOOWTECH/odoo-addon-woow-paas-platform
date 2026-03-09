@@ -39,20 +39,18 @@
                         </setting>
                     </block>
                     <block title="AI Assistant Configuration" name="ai_assistant">
-                        <setting string="Default AI Provider"
-                                 help="Select the default AI provider for AI assistant features. Providers can be managed via the AI Providers menu.">
+                        <setting string="AI Configuration"
+                                 help="Select the AI configuration and assistant for AI features.">
                             <div class="content-group">
                                 <div class="row mt16">
-                                    <label for="woow_ai_provider_id" class="col-lg-3 o_light_label"/>
-                                    <field name="woow_ai_provider_id"
+                                    <label for="woow_ai_config_id" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_ai_config_id"
                                            class="col-lg-6"/>
                                 </div>
-                                <div class="mt8">
-                                    <button name="%(action_ai_provider)d"
-                                            type="action"
-                                            string="Manage AI Providers"
-                                            class="btn-link"
-                                            icon="fa-external-link"/>
+                                <div class="row mt8">
+                                    <label for="woow_ai_assistant_id" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_ai_assistant_id"
+                                           class="col-lg-6"/>
                                 </div>
                                 <div class="mt8">
                                     <button name="action_test_ai_connection"
@@ -60,6 +58,20 @@
                                             string="Test Connection"
                                             class="btn-secondary"
                                             icon="fa-plug"/>
+                                </div>
+                            </div>
+                        </setting>
+                    </block>
+                    <block title="MCP Servers" name="mcp_servers">
+                        <setting string="MCP Server Management"
+                                 help="Manage MCP (Model Context Protocol) servers that provide external tools for AI Assistants.">
+                            <div class="content-group">
+                                <div class="mt8">
+                                    <button name="%(action_mcp_server)d"
+                                            type="action"
+                                            string="Manage MCP Servers"
+                                            class="btn-link"
+                                            icon="fa-arrow-right"/>
                                 </div>
                             </div>
                         </setting>

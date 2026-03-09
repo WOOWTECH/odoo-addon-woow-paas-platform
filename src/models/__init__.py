@@ -3,8 +3,7 @@ from . import workspace
 from . import workspace_access
 from . import cloud_app_template
 from . import cloud_service
-from . import ai_provider
-from . import ai_agent
+from . import ai_config
 from . import project_project
 from . import project_task
 from . import discuss_channel
@@ -12,3 +11,6 @@ from . import oauth_client
 from . import oauth_token
 from . import oauth_code
 from . import smart_home
+from . import ai_assistant
+from . import mcp_server
+from . import mcp_tool
