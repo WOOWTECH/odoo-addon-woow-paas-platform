@@ -37,6 +37,7 @@
                         />
                     </div>
 
+                    <!-- Workspace Dropdown (always shown) -->
                     <div class="o_woow_form_group">
                         <label for="project_workspace">Workspace</label>
                         <t t-if="state.workspacesLoading">
@@ -56,6 +57,36 @@
                                 <option value="">Select a workspace...</option>
                                 <t t-foreach="state.workspaces" t-as="ws" t-key="ws.id">
                                     <option t-att-value="ws.id" t-att-selected="ws.id === state.workspaceId" t-esc="ws.name"/>
+                                </t>
+                            </select>
+                        </t>
+                    </div>
+
+                    <!-- Cloud Service Dropdown (shown after workspace selected) -->
+                    <div t-if="state.workspaceId" class="o_woow_form_group">
+                        <label for="project_cloud_service">Cloud Service</label>
+                        <t t-if="state.cloudServicesLoading">
+                            <div class="o_woow_input o_woow_select_loading">
+                                <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                                <span>Loading services...</span>
+                            </div>
+                        </t>
+                        <t t-elif="state.cloudServices.length === 0">
+                            <div class="o_woow_input o_woow_select_empty">
+                                No available services in this workspace
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <select
+                                id="project_cloud_service"
+                                class="o_woow_input o_woow_select"
+                                t-att-value="state.cloudServiceId"
+                                t-on-change="onCloudServiceChange"
+                                t-att-disabled="state.loading"
+                            >
+                                <option value="">Select a cloud service...</option>
+                                <t t-foreach="state.cloudServices" t-as="svc" t-key="svc.id">
+                                    <option t-att-value="svc.id" t-att-selected="svc.id === state.cloudServiceId" t-esc="svc.name"/>
                                 </t>
                             </select>
                         </t>

@@ -1,0 +1,81 @@
+/* AI Chat App Layout */
+
+.o-ai-Chat {
+    /* Ensure full viewport height and proper flexbox */
+    height: 100vh;
+    max-height: 100vh;
+    min-height: 100vh;
+    display: flex;
+    overflow: hidden;
+    /* Prevent body scroll */
+}
+
+.o-ai-ChatSidebar {
+    /* Sidebar should be fixed width and full height */
+    flex: 0 0 260px;
+    /* Don't grow or shrink */
+    min-width: 260px;
+    max-width: 260px;
+    height: 100%;
+    overflow-y: auto;
+    transition: all 0.3s ease;
+
+    &.collapsed {
+        flex: 0 0 60px;
+        min-width: 60px;
+        max-width: 60px;
+    }
+}
+
+/* Main content area */
+.o-ai-Chat>.flex-grow-1 {
+    /* Main content should take remaining space */
+    flex: 1 1 0%;
+    min-width: 0;
+    /* Allow shrinking */
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+/* Loading overlay */
+.o-ai-Chat .position-absolute {
+    /* Ensure loading overlay covers the right area */
+    position: absolute !important;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+}
+
+/* Responsive behavior */
+@media screen and (max-width: 768px) {
+    .o-ai-ChatSidebar {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        z-index: 100;
+        background: white;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+
+        &.collapsed {
+            transform: translateX(-100%);
+        }
+    }
+
+    .o-ai-Chat>.flex-grow-1 {
+        margin-left: 0;
+        width: 100%;
+    }
+}
+
+/* Ensure proper height inheritance */
+.o-ai-Chat,
+.o-ai-Chat .d-flex,
+.o-ai-Chat .flex-grow-1 {
+    min-height: 0;
+    /* Critical for flexbox height calculations */
+}

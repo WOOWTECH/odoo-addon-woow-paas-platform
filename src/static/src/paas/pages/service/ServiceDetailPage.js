@@ -6,10 +6,13 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { OverviewTab } from "./tabs/OverviewTab";
 import { ConfigurationTab } from "./tabs/ConfigurationTab";
+import { McpServersTab } from "./tabs/McpServersTab";
 import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
+import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { cloudService } from "../../services/cloud_service";
+import { supportService } from "../../services/support_service";
 import { router } from "../../core/router";
 
 /**
@@ -36,9 +39,11 @@ export class ServiceDetailPage extends Component {
         StatusBadge,
         OverviewTab,
         ConfigurationTab,
+        McpServersTab,
         DeleteServiceModal,
         RollbackModal,
         EditDomainModal,
+        CreateProjectModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -55,12 +60,16 @@ export class ServiceDetailPage extends Component {
             showDeleteModal: false,
             showRollbackModal: false,
             showDomainModal: false,
+            showCreateProjectModal: false,
+            supportProject: null,
+            supportProjectLoading: false,
         });
         this.router = useState(router);
         this.pollingInterval = null;
 
         onMounted(() => {
             this.loadService();
+            this.loadSupportProject();
         });
 
         onWillUnmount(() => {
@@ -125,6 +134,41 @@ export class ServiceDetailPage extends Component {
         // Disable actions when service is in transitional state
         const disabledStates = ["deploying", "upgrading", "deleting", "pending"];
         return this.service && !disabledStates.includes(this.service.state);
+    }
+
+    // Support Project
+    async loadSupportProject() {
+        this.state.supportProjectLoading = true;
+        try {
+            const result = await supportService.fetchProjectForService(this.props.serviceId);
+            if (result.success && result.data) {
+                this.state.supportProject = result.data;
+            }
+        } catch {
+            // No project yet, that's fine
+        } finally {
+            this.state.supportProjectLoading = false;
+        }
+    }
+
+    openSupportProject() {
+        if (this.state.supportProject) {
+            this.router.navigate(`ai-assistant/projects/${this.state.supportProject.id}`);
+        }
+    }
+
+    showCreateProject() {
+        this.state.showCreateProjectModal = true;
+    }
+
+    hideCreateProject() {
+        this.state.showCreateProjectModal = false;
+    }
+
+    onProjectCreated(project) {
+        this.state.showCreateProjectModal = false;
+        this.state.supportProject = project;
+        this.router.navigate(`ai-assistant/projects/${project.id}`);
     }
 
     // Navigation

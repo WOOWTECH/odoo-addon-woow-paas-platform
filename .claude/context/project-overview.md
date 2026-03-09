@@ -1,7 +1,7 @@
 ---
 created: 2026-01-13T17:24:23Z
-last_updated: 2026-02-15T09:39:26Z
-version: 1.4
+last_updated: 2026-02-26T15:29:18Z
+version: 1.5
 author: Claude Code PM System
 ---
 
@@ -66,15 +66,31 @@ Woow PaaS Platform is an Odoo 18 addon module providing the foundation for a mul
    - HelmValueForm 元件取代 textarea
    - 靜默過濾未授權 keys
 
-9. **AI Assistant** 🔄 In Progress
-   - AI Agent / AI Provider / AI Client models
-   - AI Assistant controller + API endpoints
+9. **AI Assistant** ✅ Complete
+   - AI models refactored to use `ai_base_gt` (`ai.config` + `ai.assistant`)
+   - LangChain AI client with `from_assistant()` factory method
+   - AI Assistant controller + API endpoints + SSE streaming
    - AiAssistantPage / AiChatPage 前端頁面
    - AiChat / AiMentionDropdown 元件
    - Markdown parsing (marked.js) + HTML sanitization (DOMPurify)
    - Support projects / tasks 管理頁面
    - Project Kanban 頁面
    - Module hooks (`hooks.py`) + 2 database migrations
+   - OpenAI Compatible provider type 支援
+
+10. **Project-Cloud Service Binding** ✅ Complete
+    - Project 關聯從 Workspace 改為 Cloud Service（1:1 對應）
+    - AI system prompt 注入 Cloud Service context
+
+11. **Navbar Fix and Responsive** ✅ Complete
+    - Header + 子頁面 breadcrumb 可點擊導航
+    - Responsive CSS 修復
+
+12. **AI Chat Mermaid Rendering** ✅ Complete
+    - Mermaid.js lazy loading（~2MB, dynamic script tag）
+    - Markdown parser mermaid code block 偵測
+    - 互動式 SVG 圖表（zoom/pan + 原始碼切換）
+    - SSE 串流中 mermaid block 完整性追蹤
 
 ### Not Yet Implemented
 - External integrations (Phase 5)
@@ -115,7 +131,8 @@ Phase 2: OWL App Shell   [████████] 100%
 Phase 3: Core Models     [████████] 100%  ✓ Complete (Workspace + WorkspaceAccess)
 Phase 4: Cloud Services  [████████] 100%  ✓ Complete (Templates + Services + Operator)
 Phase 4b: Config Restrict[████████] 100%  ✓ Complete (Helm value whitelist)
-Phase 4c: AI Assistant   [██████  ]  75%  🔄 In Progress
+Phase 4c: AI Assistant   [████████] 100%  ✓ Complete (Chat + Mermaid + Refactor)
+Phase 4d: UI Polish      [████████] 100%  ✓ Complete (Navbar + Responsive)
 Phase 5: Integrations    [        ]   0%
 ```
 
@@ -143,6 +160,7 @@ Settings → General Settings → Woow PaaS
 ```
 
 ## Update History
+- 2026-02-26: All phases through 4d complete. AI Assistant fully done (refactored to ai_base_gt, mermaid rendering, OpenAI compatible). Added navbar fix, project-cloud binding.
 - 2026-02-15: Added AI Assistant feature, Cloud Service Config Restriction, version bump to 18.0.1.0.2
 - 2026-02-08: Phase 3 & 4 complete, added Cloud Services feature
 - 2026-02-01: Added Workspace management (Phase 3 in progress)

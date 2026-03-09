@@ -6,11 +6,27 @@ import { markup } from "@odoo/owl";
  * Configure marked.js with secure defaults
  */
 if (window.marked) {
+    const renderer = {
+        code(code, language) {
+            if (language === "mermaid") {
+                const encoded = btoa(unescape(encodeURIComponent(code)));
+                const escaped = code
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+                return `<div class="o_woow_mermaid" data-mermaid="${encoded}"><pre><code>${escaped}</code></pre></div>`;
+            }
+            // Non-mermaid: return false to use marked's default renderer
+            return false;
+        },
+    };
+
     window.marked.use({
         gfm: true,              // GitHub Flavored Markdown
         breaks: true,           // Single line breaks become <br>
         headerIds: false,       // Don't generate header IDs
         mangle: false,          // Don't mangle email addresses
+        renderer,
     });
 }
 
@@ -66,7 +82,7 @@ export function parseMarkdown(markdown) {
             "table", "thead", "tbody", "tr", "th", "td",
             "hr", "del", "span", "div",
         ],
-        ALLOWED_ATTR: ["href", "target", "rel", "class"],
+        ALLOWED_ATTR: ["href", "target", "rel", "class", "data-mermaid", "data-processed"],
     });
 
     return markup(cleanHtml);

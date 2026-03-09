@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="sh_ai_assistance.AiChatSidebarTemplate">
+        <div class="h-100 d-flex flex-column bg-white"
+             t-att-class="props.isCollapsed ? 'collapsed' : ''">
+
+            <!-- Sidebar Header -->
+            <div class="px-3 py-4 sidebar-header">
+                <div class="d-flex align-items-center justify-content-between">
+                    <t t-if="!props.isCollapsed">
+                        <h5 class="mb-0 fw-bold text-dark">Chats</h5>
+                    </t>
+                    <button class="btn btn-link p-1 text-muted"
+                            t-on-click="onToggleSidebarClick"
+                            title="Toggle Sidebar">
+                        <i t-att-class="props.isCollapsed ? 'fa fa-chevron-right' : 'fa fa-chevron-left'"
+                           style="font-size: 16px;"/>
+                    </button>
+                </div>
+            </div>
+
+            <t t-if="!props.isCollapsed">
+                <!-- New Conversation Button & Import -->
+                <div class="px-3 mb-3 d-flex flex-column gap-2">
+                    <div t-att-title="newChatButtonTooltip" class="d-inline-block w-100">
+                        <button class="btn w-100 d-flex align-items-center justify-content-center py-2 rounded-3"
+                                t-att-class="shouldDisableNewChat ? 'btn-outline-secondary' : 'btn-outline-primary'"
+                                t-att-disabled="shouldDisableNewChat"
+                                t-on-click="onNewChatClick">
+                            <i t-att-class="props.isLoading ? 'fa fa-spinner fa-spin me-2' : 'fa fa-plus me-2'"/>
+                            <span t-if="!shouldDisableNewChat">Start New Conversation</span>
+                            <span t-elif="props.isLoading">Creating...</span>
+                            <span t-else="">Chat Open</span>
+                        </button>
+                    </div>
+                    
+                </div>
+
+                <!-- Sessions List -->
+                <div class="flex-grow-1 overflow-auto">
+                    <t t-if="props.sessions.length === 0">
+                        <div class="px-3 py-5 text-center text-muted">
+                            <i class="fa fa-comments-o fa-2x mb-3" style="opacity: 0.3;"/>
+                            <div class="small">No conversations yet</div>
+                            <div class="small text-muted">Start chatting to see your history</div>
+                        </div>
+                    </t>
+
+                    <div class="px-3">
+                        <t t-foreach="props.sessions" t-as="session" t-key="session.id">
+                            <div class="session-item mb-2 px-3 py-2 cursor-pointer position-relative d-flex align-items-center"
+                                 style="border-radius: 8px;"
+                                 t-att-class="isCurrentSession(session.access_token) ? 'active-session' : 'inactive-session'"
+                                 t-on-click="() => this.onSessionClick(session.access_token)"
+                                 t-on-mouseenter="() => this.onSessionMouseEnter(session.access_token)"
+                                 t-on-mouseleave="() => this.onSessionMouseLeave()">
+
+                                <!-- Session Content -->
+                                <div class="flex-grow-1 me-2" style="min-width: 0; overflow: hidden;">
+                                    <!-- Session Name with LLM Info -->
+                                    <div class="d-flex align-items-center mb-1">
+                                        <!-- LLM Icon -->
+                                        <div class="me-2 flex-shrink-0" t-if="session.llm_details">
+                                            <img t-if="session.llm_details.image"
+                                                 t-att-src="'/web/image/sh.ai.llm/' + session.llm_details.id + '/image'"
+                                                 style="width: 16px; height: 16px; border-radius: 3px; object-fit: cover;"
+                                                 t-att-alt="session.llm_details.name"/>
+                                            <i t-else="" class="fa fa-robot text-muted" style="font-size: 14px;"/>
+                                        </div>
+
+                                        <!-- Session Name -->
+                                        <div class="fw-medium session-name-text flex-grow-1"
+                                             style="font-size: 14px; min-width: 0;">
+                                            <t t-esc="session.name"/>
+                                        </div>
+                                    </div>
+
+                                    <!-- LLM Provider Name and Date -->
+                                    <div class="d-flex align-items-center justify-content-between">
+                                        <div class="text-muted small text-truncate" style="flex: 1; min-width: 0;">
+                                            <span t-if="session.llm_details">
+                                                <t t-esc="session.llm_details.sh_company"/> •
+                                            </span>
+                                            <t t-esc="formatDate(session.last_message_date)"/>
+                                        </div>
+                                        <div class="text-muted small flex-shrink-0" t-if="session.message_count > 0">
+                                            <i class="fa fa-comment-o me-1" style="font-size: 10px;"/>
+                                            <t t-esc="session.message_count"/>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Action Buttons (visible on hover) -->
+                                <div class="session-actions flex-shrink-0"
+                                     t-att-class="isSessionHovered(session.access_token) ? 'd-flex' : 'd-none'"
+                                     style="align-items: center;">
+
+                                    <!-- Delete Button -->
+                                    <button class="btn btn-sm p-1"
+                                            style="border: none; background: transparent; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;"
+                                            t-on-click="(event) => this.onDeleteClick(event, session.access_token)"
+                                            title="Delete Chat">
+                                        <i class="fa fa-trash" style="font-size: 12px; color: #dc3545;"/>
+                                    </button>
+                                </div>
+
+                            </div>
+                        </t>
+                    </div>
+                </div>
+            </t>
+
+            <!-- Import Chat Button at Bottom -->
+            <div class="px-3 py-3 border-top bg-light">
+                <button class="btn btn-primary w-100 d-flex align-items-center justify-content-center py-2 rounded-3 shadow-sm"
+                        style="font-weight: 500;"
+                        t-on-click="onImportChatClick">
+                    <i class="fa fa-download me-2" style="font-size: 14px;"/>
+                    <span>Import Chat</span>
+                </button>
+                <input type="file" 
+                        t-ref="importFileInput" 
+                        class="d-none" 
+                        accept=".json" 
+                        t-on-change="onFileSelected"/>
+            </div>
+            <!-- Collapsed state - minimal -->
+            <t t-if="props.isCollapsed">
+                <div class="d-flex flex-column align-items-center py-3">
+                    <!-- Show session count indicator -->
+                    <div class="text-muted small text-center" t-if="props.sessions.length > 0">
+                        <i class="fa fa-comments-o"/>
+                        <div style="font-size: 10px; margin-top: 2px;">
+                            <t t-esc="props.sessions.length"/>
+                        </div>
+                    </div>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

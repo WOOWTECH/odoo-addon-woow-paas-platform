@@ -1,5 +1,5 @@
 ---
-name: Setup End-to-End Worktree Development
+name: setup-end-to-end
 description: Complete guide for setting up worktree development environment and testing Odoo addons
 usage: |
   Use this skill when:

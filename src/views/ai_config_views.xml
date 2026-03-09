@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_ai_config_form_inherit_woow" model="ir.ui.view">
+        <field name="name">ai.config.form.inherit.woow</field>
+        <field name="model">ai.config</field>
+        <field name="inherit_id" ref="ai_base_gt.view_ai_config_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='api_key']" position="after">
+                <field name="api_base_url"
+                       invisible="type != 'openai_compatible'"
+                       placeholder="https://api.openai.com/v1"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

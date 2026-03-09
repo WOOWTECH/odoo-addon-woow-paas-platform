@@ -4,9 +4,11 @@ This module wraps ``langchain-openai``'s :class:`ChatOpenAI` to provide a
 simple interface for chat completions (both synchronous and streaming)
 against any OpenAI-compatible API endpoint.
 
-The public interface is intentionally kept identical to the previous
-hand-rolled HTTP client so that callers do not need any changes.
+Supports optional MCP tool calling via ``langchain-mcp-adapters`` and
+LangGraph's ``StateGraph`` with ``ToolNode``.
 """
+import asyncio
+import json
 import logging
 from typing import Generator, List, Optional
 
@@ -91,6 +93,38 @@ class AIClient:
             temperature=temperature,
         )
 
+    @classmethod
+    def from_assistant(cls, assistant):
+        """Create an AIClient from an ``ai.assistant`` record.
+
+        Reads configuration from ``assistant.config_id`` (an ``ai.config``
+        record) and builds a LangChain client.  The ``api_base_url`` field
+        comes from our custom extension of ``ai.config``.
+
+        Args:
+            assistant: An ``ai.assistant`` Odoo recordset (single record).
+
+        Returns:
+            A configured :class:`AIClient` instance.
+
+        Raises:
+            AIClientError: If the assistant has no configuration or is missing
+                a required API key.
+        """
+        config = assistant.sudo().config_id
+        if not config:
+            raise AIClientError("AI assistant has no configuration")
+        api_key = config.api_key
+        if not api_key:
+            raise AIClientError("AI configuration is missing an API key")
+        return cls(
+            api_base_url=config.api_base_url or 'https://api.openai.com/v1',
+            api_key=api_key,
+            model_name=config.model or 'gpt-4o-mini',
+            max_tokens=config.max_tokens or 4096,
+            temperature=config.temperature if config.temperature is not None else 0.7,
+        )
+
     # -------------------- message helpers --------------------
 
     def build_messages(
@@ -118,6 +152,261 @@ class AIClient:
 
         messages.append(HumanMessage(content=user_message))
         return messages
+
+    # -------------------- completions --------------------
+
+    # -------------------- tool calling --------------------
+
+    def chat_completion_with_tools(
+        self,
+        messages: list,
+        mcp_tools=None,
+    ) -> str:
+        """Chat completion with optional MCP tool calling.
+
+        Uses LangGraph agent to handle the tool-call loop. Falls back to
+        plain ``chat_completion`` when no tools are provided or on failure.
+
+        Args:
+            messages: LangChain message list.
+            mcp_tools: Odoo recordset of ``woow_paas_platform.mcp_tool``.
+
+        Returns:
+            The final assistant response text.
+        """
+        if not mcp_tools:
+            return self.chat_completion(messages)
+        server_config = _build_mcp_server_config(mcp_tools)
+        enabled_names = {t.name for t in mcp_tools}
+        try:
+            return asyncio.run(
+                self._async_agent_invoke(messages, server_config, enabled_names)
+            )
+        except Exception as exc:
+            _logger.warning("Tool calling failed, falling back to text-only: %s", exc)
+            return self.chat_completion(messages)
+
+    def chat_completion_stream_with_tools(
+        self,
+        messages: list,
+        mcp_tools=None,
+    ) -> Generator[dict, None, None]:
+        """Streaming chat completion with optional MCP tool calling.
+
+        Yields event dicts with ``type`` key:
+
+        - ``{"type": "text_chunk", "content": "..."}``
+        - ``{"type": "tool_call", "tool": "name", "args": {...}}``
+        - ``{"type": "tool_result", "tool": "name", "result": "..."}``
+
+        Falls back to text-only streaming when no tools or on failure.
+
+        Args:
+            messages: LangChain message list.
+            mcp_tools: Odoo recordset of ``woow_paas_platform.mcp_tool``.
+        """
+        if not mcp_tools:
+            for chunk in self.chat_completion_stream(messages):
+                yield {"type": "text_chunk", "content": chunk}
+            return
+
+        server_config = _build_mcp_server_config(mcp_tools)
+        enabled_names = {t.name for t in mcp_tools}
+        try:
+            events = asyncio.run(
+                self._async_agent_stream(messages, server_config, enabled_names)
+            )
+            yield from events
+        except Exception as exc:
+            _logger.warning(
+                "Tool calling stream failed, falling back to text-only: %s", exc
+            )
+            for chunk in self.chat_completion_stream(messages):
+                yield {"type": "text_chunk", "content": chunk}
+
+    # MCP agent timeout (seconds) to prevent hanging on unreachable servers
+    _MCP_TIMEOUT = 60
+    _RECURSION_LIMIT = 5
+
+    async def _async_agent_invoke(self, messages, server_config, enabled_names):
+        """Build LangGraph agent, invoke, and return final text.
+
+        Handles connection failures, timeouts, and recursion limits gracefully
+        by falling back to plain chat completion.
+        """
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        try:
+            client = MultiServerMCPClient(server_config)
+            tools = await asyncio.wait_for(
+                client.get_tools(), timeout=self._MCP_TIMEOUT,
+            )
+            tools = [t for t in tools if t.name in enabled_names]
+            if not tools:
+                result = self.llm.invoke(messages)
+                return result.content
+            graph = self._build_agent_graph(tools)
+            result = await asyncio.wait_for(
+                graph.ainvoke(
+                    {"messages": messages},
+                    {"recursion_limit": self._RECURSION_LIMIT},
+                ),
+                timeout=self._MCP_TIMEOUT,
+            )
+            return result["messages"][-1].content
+        except asyncio.TimeoutError:
+            _logger.warning("MCP tool calling timed out after %ss", self._MCP_TIMEOUT)
+            raise
+        except Exception as exc:
+            exc_type = type(exc).__name__
+            if "GraphRecursionError" in exc_type or "RecursionError" in exc_type:
+                _logger.warning(
+                    "MCP tool calling hit recursion limit (%s iterations)",
+                    self._RECURSION_LIMIT,
+                )
+            else:
+                _logger.warning("MCP agent invoke failed (%s): %s", exc_type, exc)
+            raise
+
+    async def _async_agent_stream(self, messages, server_config, enabled_names):
+        """Build LangGraph agent, stream updates, return event list.
+
+        Handles connection failures, timeouts, and recursion limits gracefully.
+        On tool execution errors, emits ``tool_error`` events so the frontend
+        can display error states.
+        """
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        events = []
+        try:
+            client = MultiServerMCPClient(server_config)
+            tools = await asyncio.wait_for(
+                client.get_tools(), timeout=self._MCP_TIMEOUT,
+            )
+            _logger.info(
+                "MCP tools from server: %s",
+                [t.name for t in tools],
+            )
+            tools = [t for t in tools if t.name in enabled_names]
+            _logger.info(
+                "MCP tools after filter (enabled_names=%s): %s",
+                enabled_names, [t.name for t in tools],
+            )
+            if not tools:
+                result = self.llm.invoke(messages)
+                events.append({"type": "text_chunk", "content": result.content})
+                return events
+            graph = self._build_agent_graph(tools)
+            async for chunk in graph.astream(
+                {"messages": messages},
+                {"recursion_limit": self._RECURSION_LIMIT},
+                stream_mode="updates",
+            ):
+                for node_name, node_output in chunk.items():
+                    for msg in node_output.get("messages", []):
+                        if (
+                            hasattr(msg, "tool_calls")
+                            and msg.tool_calls
+                        ):
+                            for tc in msg.tool_calls:
+                                _logger.info(
+                                    "LLM tool_call: name=%s, args=%s",
+                                    tc["name"], tc.get("args", {}),
+                                )
+                                events.append({
+                                    "type": "tool_call",
+                                    "tool": tc["name"],
+                                    "args": tc.get("args", {}),
+                                })
+                        elif node_name == "tools" and hasattr(msg, "content"):
+                            content = str(msg.content)
+                            tool_name = getattr(msg, "name", "unknown")
+                            # Detect tool execution errors
+                            is_error = getattr(msg, "status", None) == "error"
+                            if is_error:
+                                events.append({
+                                    "type": "tool_error",
+                                    "tool": tool_name,
+                                    "error": content,
+                                })
+                                _logger.warning(
+                                    "MCP tool '%s' execution error: %s",
+                                    tool_name, content[:200],
+                                )
+                            else:
+                                events.append({
+                                    "type": "tool_result",
+                                    "tool": tool_name,
+                                    "result": content,
+                                })
+                        elif (
+                            node_name == "call_model"
+                            and hasattr(msg, "content")
+                            and msg.content
+                            and not getattr(msg, "tool_calls", None)
+                        ):
+                            events.append({
+                                "type": "text_chunk",
+                                "content": msg.content,
+                            })
+        except asyncio.TimeoutError:
+            _logger.warning("MCP tool stream timed out after %ss", self._MCP_TIMEOUT)
+            raise
+        except Exception as exc:
+            exc_type = type(exc).__name__
+            if "GraphRecursionError" in exc_type or "RecursionError" in exc_type:
+                _logger.warning(
+                    "MCP tool stream hit recursion limit (%s iterations)",
+                    self._RECURSION_LIMIT,
+                )
+                # Emit a system notification so the frontend knows
+                events.append({
+                    "type": "text_chunk",
+                    "content": "\n\n⚠️ Tool calling reached the maximum iteration limit. "
+                               "Providing the best answer based on results gathered so far.\n",
+                })
+                return events
+            _logger.warning("MCP agent stream failed (%s): %s", exc_type, exc)
+            raise
+        return events
+
+    def _build_agent_graph(self, tools):
+        """Build a LangGraph StateGraph with ToolNode for tool calling."""
+        from langgraph.graph import START, MessagesState, StateGraph
+        from langgraph.prebuilt import ToolNode, tools_condition
+
+        llm_with_tools = self.llm.bind_tools(tools)
+        valid_tool_names = {t.name for t in tools}
+
+        def call_model(state):
+            result = llm_with_tools.invoke(state["messages"])
+            # Normalize tool call names: vibeproxy
+            # (https://github.com/automazeio/vibeproxy) adds a "proxy_"
+            # prefix to tool call names in its response.  Strip it so
+            # ToolNode can find the correct tool.
+            if hasattr(result, "tool_calls") and result.tool_calls:
+                for tc in result.tool_calls:
+                    name = tc.get("name", "")
+                    if name not in valid_tool_names:
+                        # Try stripping common prefixes
+                        for prefix in ("proxy_",):
+                            stripped = name.removeprefix(prefix)
+                            if stripped in valid_tool_names:
+                                tc["name"] = stripped
+                                _logger.info(
+                                    "Normalized tool name: %s -> %s",
+                                    name, stripped,
+                                )
+                                break
+            return {"messages": [result]}
+
+        builder = StateGraph(MessagesState)
+        builder.add_node("call_model", call_model)
+        builder.add_node("tools", ToolNode(tools))
+        builder.add_edge(START, "call_model")
+        builder.add_conditional_edges("call_model", tools_condition)
+        builder.add_edge("tools", "call_model")
+        return builder.compile()
 
     # -------------------- completions --------------------
 
@@ -158,6 +447,24 @@ class AIClient:
                     yield chunk.content
         except Exception as exc:
             raise _translate_exception(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _build_mcp_server_config(mcp_tools):
+    """Build MultiServerMCPClient config from an Odoo mcp_tool recordset.
+
+    Groups tools by their server and returns a dict keyed by server name,
+    with each value being the server's connection config.
+    """
+    servers = {}
+    for tool in mcp_tools:
+        server = tool.server_id
+        if server.name not in servers:
+            servers[server.name] = server._get_mcp_client_config()
+    return servers
 
 
 # ---------------------------------------------------------------------------
