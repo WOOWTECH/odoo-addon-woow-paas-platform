@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.SmartHomeDetailPage">
+        <div class="o_woow_smart_home_detail">
+            <!-- Loading State -->
+            <t t-if="state.loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading smart home...</p>
+                </div>
+            </t>
+
+            <!-- Error State -->
+            <t t-elif="state.error">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'error'" size="48"/>
+                    <h2>Unable to load smart home</h2>
+                    <p t-esc="state.error"/>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Workspace
+                    </WoowButton>
+                </div>
+            </t>
+
+            <!-- Smart Home Content -->
+            <t t-elif="home">
+                <!-- Breadcrumb / Back Navigation -->
+                <div class="o_woow_breadcrumb">
+                    <button class="o_woow_back_btn" t-on-click="goBack">
+                        <WoowIcon name="'arrow_back'" size="20"/>
+                    </button>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_parent">Workspace</span>
+                    <span class="o_woow_breadcrumb_sep">/</span>
+                    <span class="o_woow_breadcrumb_current" t-esc="home.name"/>
+                </div>
+
+                <!-- Header Section -->
+                <div class="o_woow_smart_home_detail_header">
+                    <div class="o_woow_smart_home_detail_info">
+                        <div class="o_woow_smart_home_detail_icon">
+                            <WoowIcon name="'home_iot_device'" size="28"/>
+                        </div>
+                        <div>
+                            <div class="o_woow_smart_home_detail_title">
+                                <h1 t-esc="home.name"/>
+                                <StatusBadge status="home.state" size="'md'"/>
+                            </div>
+                            <t t-if="displayUrl">
+                                <a
+                                    t-att-href="routeUrl"
+                                    target="_blank"
+                                    class="o_woow_smart_home_route_url">
+                                    <WoowIcon name="'link'" size="14"/>
+                                    <span t-esc="displayUrl"/>
+                                </a>
+                            </t>
+                        </div>
+                    </div>
+                    <div class="o_woow_smart_home_detail_actions">
+                        <WoowButton
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="refreshStatus"
+                            disabled="state.refreshing">
+                            <t t-if="state.refreshing">
+                                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            </t>
+                            <t t-else="">
+                                <WoowIcon name="'refresh'" size="18"/>
+                            </t>
+                            Refresh
+                        </WoowButton>
+                        <WoowButton
+                            variant="'danger'"
+                            size="'md'"
+                            onClick.bind="showDeleteConfirm">
+                            <WoowIcon name="'delete'" size="18"/>
+                            Delete
+                        </WoowButton>
+                    </div>
+                </div>
+
+                <!-- Tunnel Info Panel -->
+                <WoowCard shadow="true" class="'o_woow_tunnel_info_card'">
+                    <div class="o_woow_tunnel_info_header">
+                        <WoowIcon name="'vpn_key'" size="24"/>
+                        <h2>Tunnel Information</h2>
+                    </div>
+                    <div class="o_woow_tunnel_info_grid">
+                        <t t-foreach="tunnelInfo" t-as="item" t-key="item.label">
+                            <div class="o_woow_tunnel_info_item">
+                                <div class="o_woow_tunnel_info_label">
+                                    <WoowIcon name="item.icon" size="16"/>
+                                    <span t-esc="item.label"/>
+                                </div>
+                                <div class="o_woow_tunnel_info_value">
+                                    <t t-if="item.isUrl">
+                                        <a t-att-href="routeUrl" target="_blank" t-esc="item.value"/>
+                                    </t>
+                                    <t t-else="">
+                                        <span t-esc="item.value"/>
+                                    </t>
+                                </div>
+                            </div>
+                        </t>
+                    </div>
+                </WoowCard>
+
+                <!-- Connection Guide Section -->
+                <WoowCard shadow="true" class="'o_woow_connection_guide'">
+                    <div class="o_woow_connection_guide_header">
+                        <WoowIcon name="'help'" size="24"/>
+                        <h2>Connection Guide</h2>
+                    </div>
+                    <div class="o_woow_connection_guide_content">
+                        <div class="o_woow_guide_step">
+                            <div class="o_woow_guide_step_number">1</div>
+                            <div class="o_woow_guide_step_content">
+                                <h4>Install the Connector</h4>
+                                <p>Download and install the Woow Connector on your Home Assistant device.</p>
+                            </div>
+                        </div>
+                        <div class="o_woow_guide_step">
+                            <div class="o_woow_guide_step_number">2</div>
+                            <div class="o_woow_guide_step_content">
+                                <h4>Configure the Tunnel</h4>
+                                <p>Enter the Tunnel ID and credentials from above into the connector settings.</p>
+                            </div>
+                        </div>
+                        <div class="o_woow_guide_step">
+                            <div class="o_woow_guide_step_number">3</div>
+                            <div class="o_woow_guide_step_content">
+                                <h4>Access Remotely</h4>
+                                <p>Once connected, access your Home Assistant from anywhere via the route URL above.</p>
+                            </div>
+                        </div>
+                    </div>
+                </WoowCard>
+            </t>
+
+            <!-- Delete Confirmation Modal -->
+            <t t-if="state.showDeleteConfirm">
+                <div class="o_woow_modal_backdrop" t-on-click="onDeleteBackdropClick">
+                    <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                        <div class="o_woow_modal_header">
+                            <h2>Delete Smart Home</h2>
+                            <button
+                                class="o_woow_modal_close"
+                                t-on-click="hideDeleteConfirm"
+                                t-att-disabled="state.deleting">
+                                <WoowIcon name="'close'" size="20"/>
+                            </button>
+                        </div>
+
+                        <div class="o_woow_modal_body">
+                            <div class="o_woow_delete_warning">
+                                <WoowIcon name="'warning'" size="48"/>
+                                <p>Are you sure you want to delete <strong t-esc="home.name"/>?</p>
+                                <p class="o_woow_delete_hint">
+                                    This will remove the tunnel configuration and all associated data.
+                                    This action cannot be undone.
+                                </p>
+                            </div>
+
+                            <div class="o_woow_form_group o_woow_confirm_input">
+                                <label for="confirm_delete_name">
+                                    Type <strong t-esc="home.name"/> to confirm
+                                </label>
+                                <input
+                                    type="text"
+                                    id="confirm_delete_name"
+                                    class="o_woow_input"
+                                    t-att-placeholder="home.name"
+                                    t-att-value="state.confirmName"
+                                    t-on-input="onConfirmNameInput"
+                                    t-att-disabled="state.deleting"
+                                    autocomplete="off"
+                                />
+                            </div>
+
+                            <div t-if="state.deleteError" class="o_woow_error_message">
+                                <WoowIcon name="'error'" size="16"/>
+                                <span t-esc="state.deleteError"/>
+                            </div>
+                        </div>
+
+                        <div class="o_woow_modal_footer">
+                            <WoowButton
+                                variant="'secondary'"
+                                size="'md'"
+                                onClick.bind="hideDeleteConfirm"
+                                disabled="state.deleting">
+                                Cancel
+                            </WoowButton>
+                            <WoowButton
+                                variant="'danger'"
+                                size="'md'"
+                                onClick.bind="onDeleteConfirm"
+                                disabled="!canDelete or state.deleting">
+                                <t t-if="state.deleting">
+                                    <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                                    Deleting...
+                                </t>
+                                <t t-else="">
+                                    <WoowIcon name="'delete'" size="18"/>
+                                    Delete Smart Home
+                                </t>
+                            </WoowButton>
+                        </div>
+                    </div>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

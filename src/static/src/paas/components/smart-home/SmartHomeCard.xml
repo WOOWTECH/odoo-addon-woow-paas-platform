@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.SmartHomeCard">
+        <div t-att-class="cardClass" t-on-click="onClick">
+            <!-- Card Header with Icon and Status -->
+            <div class="o_woow_smart_home_card_header">
+                <div class="o_woow_smart_home_icon">
+                    <WoowIcon name="'home_iot_device'" size="28"/>
+                </div>
+                <StatusBadge status="props.home.state" size="'sm'"/>
+            </div>
+
+            <!-- Card Body with Name and Status Dot -->
+            <div class="o_woow_smart_home_card_body">
+                <div class="o_woow_smart_home_name_row">
+                    <span t-att-class="statusDotClass"/>
+                    <h3 class="o_woow_smart_home_name" t-esc="props.home.name"/>
+                </div>
+                <t t-if="displayUrl">
+                    <a
+                        t-att-href="subdomainUrl"
+                        target="_blank"
+                        class="o_woow_smart_home_url"
+                        t-on-click="onUrlClick">
+                        <WoowIcon name="'link'" size="14"/>
+                        <span t-esc="displayUrl"/>
+                    </a>
+                </t>
+                <t t-if="props.home.state === 'error' and props.home.error_message">
+                    <div class="o_woow_smart_home_error">
+                        <WoowIcon name="'error'" size="14"/>
+                        <span t-esc="props.home.error_message"/>
+                    </div>
+                </t>
+            </div>
+
+            <!-- Card Actions -->
+            <div class="o_woow_smart_home_card_actions">
+                <WoowButton
+                    variant="'ghost'"
+                    size="'sm'"
+                    onClick.bind="onClick">
+                    <WoowIcon name="'settings'" size="18"/>
+                </WoowButton>
+            </div>
+        </div>
+    </t>
+</templates>

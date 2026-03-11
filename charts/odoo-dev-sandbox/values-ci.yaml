@@ -1,0 +1,20 @@
+# CI/CD mode overrides
+# Usage: helm install ... -f values.yaml -f values-ci.yaml
+
+sandbox:
+  mode: ci
+
+odoo:
+  image:
+    repository: woow-odoo-dev
+    tag: latest
+  devMode: false
+
+ingress:
+  enabled: false
+
+pgadmin:
+  enabled: false
+
+networkPolicy:
+  enabled: true

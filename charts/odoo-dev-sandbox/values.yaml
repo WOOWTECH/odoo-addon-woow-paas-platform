@@ -1,0 +1,162 @@
+# Default values for odoo-dev-sandbox
+
+# --- Sandbox Configuration ---
+sandbox:
+  # Deployment mode: "local" (hostPath mount) or "ci" (code baked into image)
+  mode: local
+  # Time-to-live before auto-cleanup (e.g., "168h" = 7 days, "0" = never)
+  ttl: "168h"
+  # Git branch slug (used for namespace naming)
+  branch: ""
+  # Labels applied to the sandbox namespace
+  labels:
+    sandbox.woow.tw/managed: "true"
+
+# --- Namespace ---
+namespace:
+  # If empty, computed as "dev-sandbox-{branch}"
+  name: ""
+
+# --- Odoo ---
+odoo:
+  image:
+    repository: odoo
+    tag: "18.0"
+    pullPolicy: IfNotPresent
+  # Enable Odoo dev mode (reload,qweb,xml)
+  devMode: true
+  # Admin master password
+  adminPassword: admin
+  # Extra Python packages to install at container startup (for extra-addons dependencies)
+  extraPipPackages:
+    - packaging
+    - "mistune>=3.0.0"
+    - "markdownify>=0.11.0"
+    - "pydantic>=2.0.0,<2.11.0"
+    - "docstring_parser>=0.15"
+    - "fastembed>=0.5.0,<=0.5.1"
+    - "openai>=1.0.0"
+  # Addons path inside container
+  addonsPath: /mnt/extra-addons,/mnt/extra-addons-ext
+  # Resource limits
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2
+      memory: 2Gi
+  # Readiness probe (TCP to avoid circular dependency with DB init)
+  readinessProbe:
+    tcpSocket:
+      port: 8069
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 12
+  # Liveness probe (TCP: more robust for dev sandbox with pip install at startup)
+  # NOTE: fastembed + onnxruntime dependencies are large (~200MB+), pip install
+  # can take 5-10 min on slow networks. Set initialDelaySeconds accordingly.
+  livenessProbe:
+    tcpSocket:
+      port: 8069
+    initialDelaySeconds: 600
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+# --- PostgreSQL ---
+postgres:
+  enabled: true
+  image:
+    repository: pgvector/pgvector
+    tag: "pg15"
+    pullPolicy: IfNotPresent
+  # Database name (auto-generated from branch if empty)
+  database: ""
+  user: odoo
+  password: odoo
+  storage:
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+
+# --- Nginx ---
+nginx:
+  enabled: true
+  image:
+    repository: nginx
+    tag: alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# --- PgAdmin (optional) ---
+pgadmin:
+  enabled: false
+  image:
+    repository: dpage/pgadmin4
+    tag: latest
+    pullPolicy: IfNotPresent
+  defaultEmail: admin@woow.com
+  defaultPassword: admin
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# --- Ingress ---
+ingress:
+  enabled: false
+  className: traefik
+  domain: dev.woow.tw
+  annotations: {}
+  # TLS configuration (optional)
+  # tls:
+  #   - secretName: dev-woow-tw-tls
+  #     hosts:
+  #       - "*.dev.woow.tw"
+  tls: []
+
+# --- Code mount (local mode) ---
+codeMount:
+  # Absolute path on the host to the worktree src/ directory
+  hostPath: ""
+  # Odoo module name (used as subdirectory under /mnt/extra-addons/)
+  moduleName: woow_paas_platform
+  # Absolute path on the host to extra-addons directory
+  extraAddonsHostPath: ""
+
+# --- Resource Quota ---
+resourceQuota:
+  enabled: true
+  cpu: "4"
+  memory: 4Gi
+  storage: 10Gi
+
+# --- Network Policy ---
+networkPolicy:
+  enabled: true
+
+# --- Secret Management ---
+secrets:
+  # Use an existing K8s secret instead of creating one
+  existingSecret: ""
+
+# --- Common overrides ---
+nameOverride: ""
+fullnameOverride: ""

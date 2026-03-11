@@ -1,14 +1,21 @@
-from fastembed import TextEmbedding
-import numpy as np
-import psycopg2.extensions
+try:
+    from fastembed import TextEmbedding
+except ImportError:
+    TextEmbedding = None
+try:
+    import numpy as np
+    import psycopg2.extensions
+except ImportError:
+    np = None
 from odoo import fields, models, api
 from odoo.tools import ormcache, groupby
 
 # Register the vector type with psycopg2
-def adapt_numpy_array(numpy_array):
-    return psycopg2.extensions.adapt(','.join(map(str, numpy_array.flatten()))).getquoted()
+if np is not None:
+    def adapt_numpy_array(numpy_array):
+        return psycopg2.extensions.adapt(','.join(map(str, numpy_array.flatten()))).getquoted()
 
-psycopg2.extensions.register_adapter(np.ndarray, adapt_numpy_array)
+    psycopg2.extensions.register_adapter(np.ndarray, adapt_numpy_array)
 
 
 class AiDataItem(models.Model):
@@ -32,7 +39,16 @@ class AiDataItem(models.Model):
     def init(self):
         """Initialize pgvector when installing the module"""
         super().init()
-        self._init_pgvector()
+        try:
+            self.env.cr.execute("SAVEPOINT pgvector_init")
+            self._init_pgvector()
+            self.env.cr.execute("RELEASE SAVEPOINT pgvector_init")
+        except Exception:
+            self.env.cr.execute("ROLLBACK TO SAVEPOINT pgvector_init")
+            import logging
+            logging.getLogger(__name__).warning(
+                "pgvector extension not available - vector search disabled"
+            )
 
     @api.model
     def _init_pgvector(self):
