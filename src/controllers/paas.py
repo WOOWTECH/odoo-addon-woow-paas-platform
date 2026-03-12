@@ -1945,7 +1945,7 @@ class PaasController(Controller):
                 _logger.warning("PaaS Operator not configured, cannot initialize n8n")
                 return
 
-            owner_email = service.n8n_owner_email or template.post_deploy_init_email or 'admin@woow.cloud'
+            owner_email = service.n8n_owner_email or template.post_deploy_init_email or 'admin@woowtech.io'
             owner_password = service.n8n_owner_password
             if not owner_password:
                 # Fallback for services created before this feature
