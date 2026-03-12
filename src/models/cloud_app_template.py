@@ -160,7 +160,7 @@ class CloudAppTemplate(models.Model):
     )
     post_deploy_init_email = fields.Char(
         string='Init Owner Email',
-        default='admin@woow.cloud',
+        default='admin@woowtech.io',
         help='Default email for the application owner user created during init',
     )
 

@@ -308,7 +308,7 @@ class N8nInitRequest(BaseModel):
     """Request to initialize an n8n instance after deployment."""
 
     owner_email: str = Field(
-        default="admin@woow.cloud",
+        default="admin@woowtech.io",
         description="Email for the n8n owner user",
     )
     owner_password: str = Field(
