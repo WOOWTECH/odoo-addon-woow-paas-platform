@@ -245,6 +245,111 @@ class TestReleaseEndpoints:
         assert data["pods"][0]["phase"] == "Running"
 
 
+class TestSidecarEndpoints:
+    """Test sidecar patch endpoints."""
+
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
+    def test_patch_sidecar_creates_service(self, mock_k8s, mock_cf, client):
+        """Test that sidecar patch creates K8s Service and returns MCP URLs."""
+        mock_k8s.get_deployments.return_value = [
+            {"name": "n8n-deploy", "namespace": "paas-ws-test"}
+        ]
+        mock_k8s.patch_deployment.return_value = {}
+        mock_k8s.apply_manifest.return_value = {}
+        mock_cf.enabled = False
+
+        response = client.post(
+            "/api/releases/paas-ws-test/test-n8n/sidecar",
+            json={
+                "container": {
+                    "name": "n8n-mcp",
+                    "image": "ghcr.io/czlonkowski/n8n-mcp:latest",
+                    "ports": [{"containerPort": 3000, "protocol": "TCP"}],
+                    "env": [
+                        {"name": "MCP_MODE", "value": "http"},
+                        {"name": "AUTH_TOKEN", "value": "test-token"},
+                    ],
+                }
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["container_name"] == "n8n-mcp"
+        assert data["mcp_service_name"] == "test-n8n-mcp"
+        assert data["mcp_internal_url"] == (
+            "http://test-n8n-mcp.paas-ws-test.svc.cluster.local:3000"
+        )
+        # No Cloudflare URL since it's disabled
+        assert data["mcp_endpoint_url"] is None
+
+        # Verify K8s Service manifest was applied
+        mock_k8s.apply_manifest.assert_called_once()
+        manifest = mock_k8s.apply_manifest.call_args[0][0]
+        assert manifest["kind"] == "Service"
+        assert manifest["metadata"]["name"] == "test-n8n-mcp"
+        assert manifest["spec"]["ports"][0]["port"] == 3000
+
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
+    def test_patch_sidecar_no_ports(self, mock_k8s, mock_cf, client):
+        """Test sidecar patch without ports skips service creation."""
+        mock_k8s.get_deployments.return_value = [
+            {"name": "n8n-deploy", "namespace": "paas-ws-test"}
+        ]
+        mock_k8s.patch_deployment.return_value = {}
+        mock_cf.enabled = False
+
+        response = client.post(
+            "/api/releases/paas-ws-test/test-n8n/sidecar",
+            json={
+                "container": {
+                    "name": "helper",
+                    "image": "busybox:latest",
+                }
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["mcp_service_name"] is None
+        assert data["mcp_endpoint_url"] is None
+        assert data["mcp_internal_url"] is None
+        mock_k8s.apply_manifest.assert_not_called()
+
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
+    def test_patch_sidecar_service_creation_failure_non_fatal(self, mock_k8s, mock_cf, client):
+        """Test that K8s Service creation failure doesn't fail the sidecar patch."""
+        mock_k8s.get_deployments.return_value = [
+            {"name": "n8n-deploy", "namespace": "paas-ws-test"}
+        ]
+        mock_k8s.patch_deployment.return_value = {}
+        mock_k8s.apply_manifest.side_effect = Exception("apply failed")
+        mock_cf.enabled = False
+
+        response = client.post(
+            "/api/releases/paas-ws-test/test-n8n/sidecar",
+            json={
+                "container": {
+                    "name": "n8n-mcp",
+                    "image": "ghcr.io/czlonkowski/n8n-mcp:latest",
+                    "ports": [{"containerPort": 3000}],
+                }
+            },
+        )
+
+        # Sidecar patch itself succeeded
+        assert response.status_code == 200
+        data = response.json()
+        assert data["container_name"] == "n8n-mcp"
+        assert data["mcp_service_name"] == "test-n8n-mcp"
+        # But URLs are None since service creation failed
+        assert data["mcp_internal_url"] is None
+        assert data["mcp_endpoint_url"] is None
+
+
 class TestNamespaceEndpoints:
     """Test namespace management endpoints."""
 

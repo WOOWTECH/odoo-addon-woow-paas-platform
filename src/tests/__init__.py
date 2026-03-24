@@ -7,3 +7,4 @@ from . import test_smart_home
 from . import test_oauth2
 from . import test_ha_api
 from . import test_naming
+from . import test_mcp_integration

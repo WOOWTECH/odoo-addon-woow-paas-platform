@@ -9,15 +9,17 @@
     ''',
     'author': 'Woow',
     'website': '',
-    'depends': ['base', 'web', 'project', 'mail', 'bus', 'odoo_ai_assistant_chatgpt_connector'],
+    'depends': ['base', 'web', 'project', 'mail', 'bus', 'ai_base_gt', 'odoo_ai_assistant_chatgpt_connector'],
     'data': [
         'security/ir.model.access.csv',
         'security/ir_rules.xml',
         'data/cloud_app_templates.xml',
         'views/menu.xml',
         'data/ai_assistant_data.xml',
+        'data/mcp_server_cron.xml',
         'views/project_task_views.xml',
         'views/ai_config_views.xml',
+        'views/cloud_app_template_views.xml',
         'views/mcp_server_views.xml',
         'views/ai_assistant_views.xml',
         'views/res_config_settings_views.xml',
@@ -53,8 +55,9 @@
             'woow_paas_platform/static/src/paas/**/*.xml',
         ],
     },
-    # Note: Python dependencies (langchain-openai, langchain-core) are auto-installed by pre_init_hook
-    # Do not use external_dependencies as it blocks installation before hook runs
+    # Note: Python dependencies are defined in requirements.txt (single source of truth).
+    # pre_init_hook reads requirements.txt and auto-installs missing packages.
+    # Helm chart and Dockerfile.dev also read from the same file.
     'pre_init_hook': 'pre_init_hook',
     'installable': True,
     'application': True,

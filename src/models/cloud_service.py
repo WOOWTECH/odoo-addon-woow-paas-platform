@@ -60,6 +60,7 @@ class CloudService(models.Model):
         selection=[
             ('pending', 'Pending'),
             ('deploying', 'Deploying'),
+            ('initializing', 'Initializing'),
             ('running', 'Running'),
             ('error', 'Error'),
             ('upgrading', 'Upgrading'),
@@ -72,6 +73,17 @@ class CloudService(models.Model):
     error_message = fields.Text(
         string='Error Message',
         help='Error details if deployment failed',
+    )
+
+    # Post-deploy initialization tracking
+    init_retries = fields.Integer(
+        string='Init Retries',
+        default=0,
+        help='Number of post-deploy initialization attempts',
+    )
+    init_error = fields.Text(
+        string='Init Error',
+        help='Last error from post-deploy initialization',
     )
 
     # Network
@@ -138,6 +150,30 @@ class CloudService(models.Model):
         inverse_name='cloud_service_id',
         string='MCP Servers',
         domain=[('scope', '=', 'user')],
+    )
+
+    # MCP Sidecar
+    mcp_auth_token = fields.Char(
+        string='MCP Auth Token',
+        readonly=True,
+        groups='base.group_system',
+        help='Authentication token for the MCP sidecar, auto-generated during deployment',
+    )
+    n8n_api_key = fields.Char(
+        string='N8N API Key',
+        readonly=True,
+        groups='base.group_system',
+        help='API key for n8n instance, generated during post-deploy init',
+    )
+    n8n_owner_email = fields.Char(
+        string='N8N Owner Email',
+        readonly=True,
+        groups='base.group_system',
+    )
+    n8n_owner_password = fields.Char(
+        string='N8N Owner Password',
+        readonly=True,
+        groups='base.group_system',
     )
 
     # Timestamps

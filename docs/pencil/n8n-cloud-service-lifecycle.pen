@@ -1,0 +1,3837 @@
+{
+  "version": "2.8",
+  "children": [
+    {
+      "type": "frame",
+      "id": "DpeUI",
+      "x": 0,
+      "y": 0,
+      "name": "01 Cover",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": 100,
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "ErQBk",
+          "name": "label1",
+          "fill": "#22C55E",
+          "content": "// WOOW_PAAS_PLATFORM",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 14,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "dPqjV",
+          "name": "title1",
+          "fill": "#F4F4F5",
+          "content": "n8n Cloud Service",
+          "lineHeight": 0.9,
+          "fontFamily": "Space Grotesk",
+          "fontSize": 120,
+          "fontWeight": "700",
+          "letterSpacing": -2
+        },
+        {
+          "type": "text",
+          "id": "P73Np",
+          "name": "title1b",
+          "fill": "#22C55E",
+          "content": "生命週期",
+          "lineHeight": 1,
+          "fontFamily": "Space Grotesk",
+          "fontSize": 96,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "rectangle",
+          "cornerRadius": 2,
+          "id": "IfVeY",
+          "name": "divider1",
+          "fill": "#F59E0B",
+          "width": 120,
+          "height": 4
+        },
+        {
+          "type": "text",
+          "id": "zXIIt",
+          "name": "sub1",
+          "fill": "#71717A",
+          "content": "從使用者點擊部署到外部可存取的 FQDN — 完整技術解析",
+          "lineHeight": 1.4,
+          "fontFamily": "Inter",
+          "fontSize": 28
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "9kSkb",
+      "x": 2020,
+      "y": 0,
+      "name": "02 Architecture Overview",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "Zzxmp",
+          "name": "lbl2",
+          "fill": "#71717A",
+          "content": "// 01_ARCHITECTURE_OVERVIEW",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "5bc9l",
+          "name": "ttl2",
+          "fill": "#F4F4F5",
+          "content": "三層架構概覽",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 64,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "text",
+          "id": "4U7B8",
+          "name": "sub2",
+          "fill": "#71717A",
+          "content": "Odoo Frontend → PaaS Operator → Kubernetes Cluster",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 16,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "pTTkW",
+          "name": "archRow",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 40,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "V82LD",
+              "name": "box1",
+              "width": 460,
+              "height": 520,
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 32,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "DEEzO",
+                  "name": "ico1",
+                  "width": 48,
+                  "height": 48,
+                  "iconFontName": "monitor",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "text",
+                  "id": "IdrgM",
+                  "name": "bt1",
+                  "fill": "#F4F4F5",
+                  "content": "Odoo Frontend",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 28,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "R9Gfp",
+                  "name": "bd1",
+                  "fill": "#71717A",
+                  "textGrowth": "fixed-width",
+                  "width": 360,
+                  "content": "OWL 應用程式 + Controller API",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 16
+                },
+                {
+                  "type": "rectangle",
+                  "id": "S8NaD",
+                  "name": "sep1",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "gleCl",
+                  "name": "det1a",
+                  "fill": "#52525B",
+                  "content": "• cloud_services.py Controller",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "mMpQa",
+                  "name": "det1b",
+                  "fill": "#52525B",
+                  "content": "• cloud_service.py Model",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "M1eQh",
+                  "name": "det1c",
+                  "fill": "#52525B",
+                  "content": "• paas_operator_client.py",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "yLIs2",
+                  "name": "det1d",
+                  "fill": "#52525B",
+                  "content": "• Marketplace OWL Components",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "WyK4Y",
+              "name": "box2",
+              "width": 460,
+              "height": 520,
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#22C55E"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 32,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "WnUT9",
+                  "name": "ico2",
+                  "width": 48,
+                  "height": 48,
+                  "iconFontName": "server",
+                  "iconFontFamily": "lucide",
+                  "fill": "#F59E0B"
+                },
+                {
+                  "type": "text",
+                  "id": "3HLa5",
+                  "name": "bt2",
+                  "fill": "#F4F4F5",
+                  "content": "PaaS Operator",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 28,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "568FZ",
+                  "name": "bd2",
+                  "fill": "#71717A",
+                  "textGrowth": "fixed-width",
+                  "width": 360,
+                  "content": "FastAPI Service — Helm CLI Wrapper",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 16
+                },
+                {
+                  "type": "rectangle",
+                  "id": "pRRrf",
+                  "name": "sep2",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "mdVyo",
+                  "name": "det2a",
+                  "fill": "#52525B",
+                  "content": "• releases.py — Helm 操作",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "Efuqy",
+                  "name": "det2b",
+                  "fill": "#52525B",
+                  "content": "• namespaces.py — NS 管理",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "S1Gtf",
+                  "name": "det2c",
+                  "fill": "#52525B",
+                  "content": "• helm.py — CLI 封裝",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "cUFLY",
+                  "name": "det2d",
+                  "fill": "#52525B",
+                  "content": "• API Key 認證中介層",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "KcVNd",
+              "name": "box3",
+              "width": 460,
+              "height": 520,
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 32,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "c8lPs",
+                  "name": "ico3",
+                  "width": 48,
+                  "height": 48,
+                  "iconFontName": "cloud",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "text",
+                  "id": "XNEpH",
+                  "name": "bt3",
+                  "fill": "#F4F4F5",
+                  "content": "Kubernetes",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 28,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "khIfx",
+                  "name": "bd3",
+                  "fill": "#71717A",
+                  "textGrowth": "fixed-width",
+                  "width": 360,
+                  "content": "K8s Cluster + Cloudflare Tunnel",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 16
+                },
+                {
+                  "type": "rectangle",
+                  "id": "nhSNh",
+                  "name": "sep3",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "rB3xP",
+                  "name": "det3a",
+                  "fill": "#52525B",
+                  "content": "• n8n Pod + MCP Sidecar",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "z90EN",
+                  "name": "det3b",
+                  "fill": "#52525B",
+                  "content": "• Cloudflare Tunnel Ingress",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "fjROo",
+                  "name": "det3c",
+                  "fill": "#52525B",
+                  "content": "• PVC 持久化儲存",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "l5E0V",
+                  "name": "det3d",
+                  "fill": "#52525B",
+                  "content": "• Secrets & ConfigMaps",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "gpeHJ",
+      "x": 4040,
+      "y": 0,
+      "name": "03 Creation Flow",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "0k7gI",
+          "name": "lbl3",
+          "fill": "#71717A",
+          "content": "// 02_CREATION_FLOW",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "dBKVF",
+          "name": "ttl3",
+          "fill": "#F4F4F5",
+          "content": "建立流程全覽",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 64,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "text",
+          "id": "u3S7V",
+          "name": "sub3",
+          "fill": "#71717A",
+          "content": "六個階段 — 從 HTTP Request 到完整運行的 n8n 服務",
+          "fontFamily": "Inter",
+          "fontSize": 22
+        },
+        {
+          "type": "frame",
+          "id": "x842r",
+          "name": "phaseRow",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 20,
+          "justifyContent": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "cQO8O",
+              "name": "p1",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                24,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "9ytGC",
+                  "name": "p1n",
+                  "fill": "#22C55E",
+                  "content": "01",
+                  "lineHeight": 0.9,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 40,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "2EulH",
+                  "name": "p1t",
+                  "fill": "#F4F4F5",
+                  "content": "前端請求",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "Lnehk",
+                  "name": "p1d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "驗證 → Subdomain 產生 → DB 記錄建立 → 背景 Thread 啟動",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yR3Tt",
+              "name": "p2",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                24,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "yWeJZ",
+                  "name": "p2n",
+                  "fill": "#22C55E",
+                  "content": "02",
+                  "lineHeight": 0.9,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 40,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "wBEZN",
+                  "name": "p2t",
+                  "fill": "#F4F4F5",
+                  "content": "Namespace",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "Y0lsH",
+                  "name": "p2d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "PaaS Operator 建立 K8s Namespace 以隔離服務資源",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "kgUOP",
+              "name": "p3",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#F59E0B"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                24,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "oTng7",
+                  "name": "p3n",
+                  "fill": "#F59E0B",
+                  "content": "03",
+                  "lineHeight": 0.9,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 40,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "adWag",
+                  "name": "p3t",
+                  "fill": "#F4F4F5",
+                  "content": "Helm Install",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "HxxiV",
+                  "name": "p3d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "執行 helm install 部署 n8n Chart + Cloudflare Tunnel CNAME",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "8bf99",
+              "name": "p4",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                24,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "naaVA",
+                  "name": "p4n",
+                  "fill": "#22C55E",
+                  "content": "04",
+                  "lineHeight": 0.9,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 40,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "XqWAO",
+                  "name": "p4t",
+                  "fill": "#F4F4F5",
+                  "content": "MCP Sidecar",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "F3lxp",
+                  "name": "p4d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "kubectl patch 注入 MCP Sidecar 容器 + 建立獨立 Cloudflare Route",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "dRQ42",
+              "name": "p5",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                24,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "UeIUJ",
+                  "name": "p5n",
+                  "fill": "#22C55E",
+                  "content": "05",
+                  "lineHeight": 0.9,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 40,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "37fGw",
+                  "name": "p5t",
+                  "fill": "#F4F4F5",
+                  "content": "Init & Key",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "NrAFn",
+                  "name": "p5d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "n8n Owner Setup → API Key 產生 → K8s Secret 更新 → Pod Restart",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "fpU0X",
+              "name": "p6",
+              "width": "fill_container",
+              "fill": "#232529",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#22C55E"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                24,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "qTQMH",
+                  "name": "p6n",
+                  "fill": "#22C55E",
+                  "content": "06",
+                  "lineHeight": 0.9,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 40,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "UIDxm",
+                  "name": "p6t",
+                  "fill": "#F4F4F5",
+                  "content": "MCP 註冊",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "v5FTn",
+                  "name": "p6d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "McpServer 記錄建立 → Tool 發現 → Cron 重試機制 → 服務就緒",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "VJMid",
+      "x": 6060,
+      "y": 0,
+      "name": "04 Phase 1 - Request",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "MZ7xY",
+          "name": "lbl4",
+          "fill": "#71717A",
+          "content": "// PHASE_01",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "zgljF",
+          "name": "ttl4",
+          "fill": "#F4F4F5",
+          "content": "前端請求與資料庫記錄",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 56,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "frame",
+          "id": "XWxap",
+          "name": "row4",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 40,
+          "children": [
+            {
+              "type": "frame",
+              "id": "IoIY7",
+              "name": "left4",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "deDvy",
+                  "name": "cb1",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "aA3CB",
+                      "name": "cb1h",
+                      "fill": "#22C55E",
+                      "content": "POST /api/cloud-services/{workspace_id}/services",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 14,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "wWwZq",
+                      "name": "cb1d",
+                      "fill": "#71717A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "使用者從 Marketplace 點擊「部署」，前端發送 HTTP POST 請求到 Odoo Controller",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 16
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Pd03P",
+                  "name": "cb2",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "A6k65",
+                      "name": "cb2h",
+                      "fill": "#F59E0B",
+                      "content": "// SUBDOMAIN_GENERATION",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 11,
+                      "fontWeight": "600",
+                      "letterSpacing": 2
+                    },
+                    {
+                      "type": "text",
+                      "id": "RY345",
+                      "name": "cb2d",
+                      "fill": "#52525B",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "格式：{service_name}-{workspace_id}.woow.tw\n自動產生唯一的 release name 供 Helm 使用\n確保符合 DNS 命名規則（63 字元限制）",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "AhGWd",
+                  "name": "cb3",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Wg1wm",
+                      "name": "cb3h",
+                      "fill": "#F59E0B",
+                      "content": "// DB_RECORD",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 11,
+                      "fontWeight": "600",
+                      "letterSpacing": 2
+                    },
+                    {
+                      "type": "text",
+                      "id": "WKeCP",
+                      "name": "cb3d",
+                      "fill": "#52525B",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "建立 CloudService 記錄\n狀態設為 deploying\n注入 placeholder API Key\n啟動背景 Thread 執行後續部署",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 13
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mm8te",
+              "name": "right4",
+              "width": 680,
+              "height": "fill_container",
+              "fill": "#232529",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 28,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "RjkTC",
+                  "name": "r4h",
+                  "fill": "#22C55E",
+                  "content": "// CODE_FLOW",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "Nnpka",
+                  "name": "r4c",
+                  "fill": "#71717A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "# cloud_services.py\n@http.route('/api/cloud-services/\n  <int:workspace_id>/services',\n  type='json', auth='user',\n  methods=['POST'])\ndef deploy_service(self, workspace_id,\n  **kwargs):\n\n  template = request.env[\n    'woow_paas_platform.cloud_app_template'\n  ].browse(template_id)\n\n  service = request.env[\n    'woow_paas_platform.cloud_service'\n  ].create({\n    'name': service_name,\n    'workspace_id': workspace_id,\n    'template_id': template.id,\n    'state': 'deploying',\n  })\n\n  # 背景 Thread 執行部署\n  thread = threading.Thread(\n    target=service._deploy_async\n  )\n  thread.start()",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 13
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "fO82f",
+      "x": 0,
+      "y": 1180,
+      "name": "05 Phase 2 - Namespace",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "fBL8K",
+          "name": "lbl5",
+          "fill": "#71717A",
+          "content": "// PHASE_02",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "nslYS",
+          "name": "ttl5",
+          "fill": "#F4F4F5",
+          "content": "Namespace 建立與資源隔離",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 56,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "frame",
+          "id": "REyeW",
+          "name": "row5",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 40,
+          "children": [
+            {
+              "type": "frame",
+              "id": "9Nfo3",
+              "name": "left5",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "J68ut",
+                  "name": "seq1",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 16,
+                  "padding": 20,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Ufqra",
+                      "name": "sn1",
+                      "fill": "#22C55E",
+                      "content": "1",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 28,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "7jVbE",
+                      "name": "st1",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "nJbUI",
+                          "name": "st1t",
+                          "fill": "#F4F4F5",
+                          "content": "Odoo → PaaS Operator",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 18,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "z7Aqu",
+                          "name": "st1d",
+                          "fill": "#52525B",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "POST /api/v1/namespaces — 建立以 workspace ID 命名的 namespace",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "x6YYU",
+                  "name": "seq2",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 16,
+                  "padding": 20,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "VtDU1",
+                      "name": "sn2",
+                      "fill": "#22C55E",
+                      "content": "2",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 28,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ienyo",
+                      "name": "st2",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Q07Oj",
+                          "name": "st2t",
+                          "fill": "#F4F4F5",
+                          "content": "PaaS Operator → K8s API",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 18,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "AgFxx",
+                          "name": "st2d",
+                          "fill": "#52525B",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "kubectl create namespace — 建立隔離的 K8s namespace 用於部署 n8n",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "YcAIj",
+                  "name": "seq3",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 16,
+                  "padding": 20,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "1q9Pq",
+                      "name": "sn3",
+                      "fill": "#22C55E",
+                      "content": "3",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 28,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Q5f9q",
+                      "name": "st3",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "FZ28H",
+                          "name": "st3t",
+                          "fill": "#F4F4F5",
+                          "content": "回傳確認",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 18,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "tyo9S",
+                          "name": "st3d",
+                          "fill": "#52525B",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Namespace 建立成功後回傳狀態，Odoo 更新 CloudService state",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "b05pJ",
+              "name": "right5",
+              "width": 560,
+              "height": "fill_container",
+              "fill": "#232529",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 20,
+              "padding": 28,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "YNL25",
+                  "name": "r5h",
+                  "fill": "#22C55E",
+                  "content": "// NAMESPACE_STRUCTURE",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "jh8H7",
+                  "name": "nsbox",
+                  "width": 420,
+                  "fill": "#16171B",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#22C55E"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "mIbvm",
+                      "name": "nslbl",
+                      "fill": "#22C55E",
+                      "content": "namespace: ws-{workspace_id}",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "tiJM9",
+                      "name": "nssep",
+                      "fill": "#2A2B30",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "2frvF",
+                      "name": "nsi1",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "vHeoG",
+                          "name": "nsi1i",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "box",
+                          "iconFontFamily": "lucide",
+                          "fill": "#F59E0B"
+                        },
+                        {
+                          "type": "text",
+                          "id": "t99kr",
+                          "name": "nsi1t",
+                          "fill": "#71717A",
+                          "content": "n8n Deployment + MCP Sidecar",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "8sg3R",
+                      "name": "nsi2",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "Gsqlm",
+                          "name": "nsi2i",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "database",
+                          "iconFontFamily": "lucide",
+                          "fill": "#F59E0B"
+                        },
+                        {
+                          "type": "text",
+                          "id": "tP46I",
+                          "name": "nsi2t",
+                          "fill": "#71717A",
+                          "content": "PersistentVolumeClaim (PVC)",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "3SmCH",
+                      "name": "nsi3",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "ClZbJ",
+                          "name": "nsi3i",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "lock",
+                          "iconFontFamily": "lucide",
+                          "fill": "#F59E0B"
+                        },
+                        {
+                          "type": "text",
+                          "id": "r0JpT",
+                          "name": "nsi3t",
+                          "fill": "#71717A",
+                          "content": "Secrets & ConfigMaps",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "uH6vY",
+                      "name": "nsi4",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "pNXbf",
+                          "name": "nsi4i",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "globe",
+                          "iconFontFamily": "lucide",
+                          "fill": "#F59E0B"
+                        },
+                        {
+                          "type": "text",
+                          "id": "YbuMT",
+                          "name": "nsi4t",
+                          "fill": "#71717A",
+                          "content": "Service (ClusterIP)",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "74Ak2",
+      "x": 2020,
+      "y": 1180,
+      "name": "06 Phase 3 - Helm Install",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "6SkHB",
+          "name": "lbl6",
+          "fill": "#71717A",
+          "content": "// PHASE_03",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "gBBqy",
+          "name": "ttl6",
+          "fill": "#F4F4F5",
+          "content": "Helm Install & Cloudflare Tunnel",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 56,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "text",
+          "id": "ErYNF",
+          "name": "sub6",
+          "fill": "#F59E0B",
+          "content": "核心部署階段 — 產生可從外部存取的 FQDN URL",
+          "fontFamily": "Inter",
+          "fontSize": 20
+        },
+        {
+          "type": "frame",
+          "id": "6f9OQ",
+          "name": "row6",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 32,
+          "children": [
+            {
+              "type": "frame",
+              "id": "ACbwS",
+              "name": "col6a",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "246ju",
+                  "name": "h6a",
+                  "fill": "#22C55E",
+                  "content": "// HELM_INSTALL",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "AwJgD",
+                  "name": "c6a1",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "jXiuE",
+                      "name": "c6a1t",
+                      "fill": "#22C55E",
+                      "content": "helm install {release} n8n-chart",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 14,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "XaGRQ",
+                      "name": "c6a1d",
+                      "fill": "#52525B",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "PaaS Operator 執行 helm install\n傳入 helm_values 包含：\n• n8n 映像版本與資源限制\n• PostgreSQL 內建資料庫\n• Cloudflare Tunnel Connector\n• PVC 持久化儲存設定",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 12
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "XYMRD",
+                  "name": "h6b",
+                  "fill": "#F59E0B",
+                  "content": "// RESOURCES_CREATED",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "wsGmK",
+                  "name": "c6b1",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "QTMSd",
+                      "name": "c6b1a",
+                      "fill": "#22C55E",
+                      "content": "✓ n8n Deployment (1 replica)",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "P5igN",
+                      "name": "c6b1b",
+                      "fill": "#22C55E",
+                      "content": "✓ ClusterIP Service (:5678)",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "YIKjf",
+                      "name": "c6b1c",
+                      "fill": "#22C55E",
+                      "content": "✓ PVC for /home/node/.n8n",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "B0hff",
+                      "name": "c6b1d",
+                      "fill": "#22C55E",
+                      "content": "✓ Cloudflare Tunnel Connector Pod",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "axuVh",
+              "name": "col6b",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "uHyL0",
+                  "name": "h6c",
+                  "fill": "#22C55E",
+                  "content": "// CLOUDFLARE_FQDN",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "E1dba",
+                  "name": "cfbox",
+                  "width": "fill_container",
+                  "fill": "#232529",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#F59E0B"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "MoZj0",
+                      "name": "cft",
+                      "fill": "#F4F4F5",
+                      "content": "FQDN 建立流程",
+                      "fontFamily": "Space Grotesk",
+                      "fontSize": 22,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "TYYix",
+                      "name": "cfsep",
+                      "fill": "#2A2B30",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "FJr6s",
+                      "name": "cfs1",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "47FdT",
+                          "name": "cfs1n",
+                          "fill": "#F59E0B",
+                          "content": "→",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 16,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "1nwQ3",
+                          "name": "cfs1t",
+                          "fill": "#71717A",
+                          "content": "Cloudflare API 建立 Tunnel Ingress Rule",
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "67HZh",
+                      "name": "cfs2",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "NapQJ",
+                          "name": "cfs2n",
+                          "fill": "#F59E0B",
+                          "content": "→",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 16,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "mO22X",
+                          "name": "cfs2t",
+                          "fill": "#71717A",
+                          "content": "建立 DNS CNAME 記錄",
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "mClgc",
+                      "name": "cfs3",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "pRhML",
+                          "name": "cfs3n",
+                          "fill": "#F59E0B",
+                          "content": "→",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 16,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "xlg4E",
+                          "name": "cfs3t",
+                          "fill": "#71717A",
+                          "content": "指向 Tunnel UUID.cfargotunnel.com",
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "T4dUO",
+                      "name": "cfurl",
+                      "width": "fill_container",
+                      "fill": "#16171B",
+                      "cornerRadius": 4,
+                      "layout": "vertical",
+                      "padding": 16,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "SgX7s",
+                          "name": "cfurlt",
+                          "fill": "#22C55E",
+                          "content": "https://{name}-{ws_id}.woow.tw",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 20,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "QvzEo",
+                          "name": "cfurlsub",
+                          "fill": "#52525B",
+                          "content": "外部可直接存取的 n8n 服務 URL",
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "G17Hw",
+      "x": 4040,
+      "y": 1180,
+      "name": "07 Phase 4 - MCP Sidecar",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "Tls0a",
+          "name": "lbl7",
+          "fill": "#71717A",
+          "content": "// PHASE_04",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "RJOY8",
+          "name": "ttl7",
+          "fill": "#F4F4F5",
+          "content": "MCP Sidecar 注入",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 56,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "text",
+          "id": "rKMel",
+          "name": "sub7",
+          "fill": "#71717A",
+          "content": "透過 kubectl patch 動態注入 MCP Sidecar 容器到 n8n Pod",
+          "fontFamily": "Inter",
+          "fontSize": 20
+        },
+        {
+          "type": "frame",
+          "id": "awCzV",
+          "name": "row7",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 32,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Zh5fQ",
+              "name": "podBox",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#22C55E"
+              },
+              "layout": "vertical",
+              "gap": 20,
+              "padding": 28,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "VX6sD",
+                  "name": "podLbl",
+                  "fill": "#22C55E",
+                  "content": "// POD_ARCHITECTURE",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "0gtqe",
+                  "name": "podTitle",
+                  "fill": "#F4F4F5",
+                  "content": "n8n Pod (After Patch)",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 28,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "kmhxY",
+                  "name": "podSep",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "W7ELa",
+                  "name": "contRow",
+                  "width": "fill_container",
+                  "gap": 20,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "s83gD",
+                      "name": "cont1",
+                      "width": "fill_container",
+                      "fill": "#232529",
+                      "cornerRadius": 4,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2B30"
+                      },
+                      "layout": "vertical",
+                      "gap": 10,
+                      "padding": 20,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "ynIPY",
+                          "name": "c1ico",
+                          "width": 36,
+                          "height": 36,
+                          "iconFontName": "workflow",
+                          "iconFontFamily": "lucide",
+                          "fill": "#F59E0B"
+                        },
+                        {
+                          "type": "text",
+                          "id": "telWc",
+                          "name": "c1t",
+                          "fill": "#F4F4F5",
+                          "content": "n8n Container",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 18,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "s19kn",
+                          "name": "c1p",
+                          "fill": "#22C55E",
+                          "content": "Port: 5678",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "text",
+                          "id": "xj3TA",
+                          "name": "c1d",
+                          "fill": "#52525B",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "主要工作流程引擎\n處理自動化任務",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "Inter",
+                          "fontSize": 13
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "0vDs8",
+                      "name": "cont2",
+                      "width": "fill_container",
+                      "fill": "#232529",
+                      "cornerRadius": 4,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#22C55E"
+                      },
+                      "layout": "vertical",
+                      "gap": 10,
+                      "padding": 20,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "tbYv1",
+                          "name": "c2ico",
+                          "width": 36,
+                          "height": 36,
+                          "iconFontName": "plug",
+                          "iconFontFamily": "lucide",
+                          "fill": "#22C55E"
+                        },
+                        {
+                          "type": "text",
+                          "id": "lYbqL",
+                          "name": "c2t",
+                          "fill": "#F4F4F5",
+                          "content": "MCP Sidecar",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 18,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "A9oGS",
+                          "name": "c2p",
+                          "fill": "#22C55E",
+                          "content": "Port: 3000",
+                          "fontFamily": "Roboto Mono",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "text",
+                          "id": "SHgx4",
+                          "name": "c2d",
+                          "fill": "#52525B",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "n8n MCP Server\n透過 API 暴露 n8n Tools",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "Inter",
+                          "fontSize": 13
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "t1Zgg",
+              "name": "patchCol",
+              "width": 680,
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "K4ZeM",
+                  "name": "patchLbl",
+                  "fill": "#F59E0B",
+                  "content": "// KUBECTL_PATCH_STEPS",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "esyTQ",
+                  "name": "ps1",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": 16,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "yAt56",
+                      "name": "ps1n",
+                      "fill": "#22C55E",
+                      "content": "1",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 20,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "oPpzv",
+                      "name": "ps1t",
+                      "fill": "#71717A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "JSON Patch 注入 MCP container 到 Deployment spec",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "6aKLL",
+                  "name": "ps2",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": 16,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "jEJ3g",
+                      "name": "ps2n",
+                      "fill": "#22C55E",
+                      "content": "2",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 20,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "piomh",
+                      "name": "ps2t",
+                      "fill": "#71717A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "建立 MCP Service (ClusterIP :3000)",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "vtKGV",
+                  "name": "ps3",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": 16,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "AqI13",
+                      "name": "ps3n",
+                      "fill": "#22C55E",
+                      "content": "3",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 20,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Az88i",
+                      "name": "ps3t",
+                      "fill": "#71717A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Cloudflare API 建立 MCP 專屬 Tunnel Route",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "YgTHr",
+                  "name": "ps4",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": 16,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "m8Yu3",
+                      "name": "ps4n",
+                      "fill": "#22C55E",
+                      "content": "4",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 20,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "wsa3H",
+                      "name": "ps4t",
+                      "fill": "#71717A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "建立 MCP DNS CNAME (mcp-{name}.woow.tw)",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "TLM9E",
+                  "name": "mcpUrl",
+                  "width": "fill_container",
+                  "fill": "#232529",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#22C55E"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 20,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "lTRXc",
+                      "name": "mcpUrlT",
+                      "fill": "#71717A",
+                      "content": "MCP Endpoint",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 11,
+                      "fontWeight": "600",
+                      "letterSpacing": 2
+                    },
+                    {
+                      "type": "text",
+                      "id": "2gg4u",
+                      "name": "mcpUrlV",
+                      "fill": "#22C55E",
+                      "content": "https://mcp-{name}-{ws_id}.woow.tw",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 18,
+                      "fontWeight": "700"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "aqeJC",
+      "x": 6060,
+      "y": 1180,
+      "name": "08 Phase 5 - Init & Key",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "4Npor",
+          "name": "lbl8",
+          "fill": "#71717A",
+          "content": "// PHASE_05",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "GMJZj",
+          "name": "ttl8",
+          "fill": "#F4F4F5",
+          "content": "n8n 初始化與 API Key 同步",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 56,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "text",
+          "id": "HwEr7",
+          "name": "sub8",
+          "fill": "#F59E0B",
+          "content": "三階段 API Key 同步機制：Placeholder → Real Key → Pod Restart",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 14,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "NNqv1",
+          "name": "row8",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "gNPBr",
+              "name": "stg1",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "8qZsi",
+                  "name": "stg1h",
+                  "fill": "#F59E0B",
+                  "content": "STAGE 1",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "700",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "gV7SR",
+                  "name": "stg1t",
+                  "fill": "#F4F4F5",
+                  "content": "Owner Setup",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "vAbQB",
+                  "name": "stg1sep",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "smySo",
+                  "name": "stg1d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "• 等待 n8n Pod Ready\n• kubectl exec 執行 Node.js\n• 建立 Owner 帳號\n  (email + password)\n• 設定初始 credentials",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "WWEwq",
+              "name": "stg2",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#22C55E"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "fycIC",
+                  "name": "stg2h",
+                  "fill": "#22C55E",
+                  "content": "STAGE 2",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "700",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "HQ1Ml",
+                  "name": "stg2t",
+                  "fill": "#F4F4F5",
+                  "content": "API Key 產生",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "nKz40",
+                  "name": "stg2sep",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "sZC9i",
+                  "name": "stg2d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "• kubectl exec 呼叫\n  n8n API Key 產生\n• 取得真正的 API Key\n• 更新 K8s Secret\n• 更新 Odoo DB 記錄\n• helm_values 同步",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "2Rp8T",
+              "name": "stg3",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ilxj3",
+                  "name": "stg3h",
+                  "fill": "#F59E0B",
+                  "content": "STAGE 3",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "700",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "Pq5JB",
+                  "name": "stg3t",
+                  "fill": "#F4F4F5",
+                  "content": "Pod Restart",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "XoT96",
+                  "name": "stg3sep",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "CtLfu",
+                  "name": "stg3d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "• kubectl rollout restart\n• MCP Sidecar 讀取新 Key\n• Sidecar 使用真實 Key\n  連接 n8n API\n• 驗證連線成功\n• 狀態更新為 running",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "mkk98",
+      "x": 0,
+      "y": 2360,
+      "name": "09 Phase 6 - MCP Register",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "qB072",
+          "name": "lbl9",
+          "fill": "#71717A",
+          "content": "// PHASE_06",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "H433N",
+          "name": "ttl9",
+          "fill": "#F4F4F5",
+          "content": "MCP Server 註冊與 Tool 發現",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 56,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "frame",
+          "id": "X3B6e",
+          "name": "row9",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 32,
+          "children": [
+            {
+              "type": "frame",
+              "id": "MiLOQ",
+              "name": "left9",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "UXcUo",
+                  "name": "l9h",
+                  "fill": "#22C55E",
+                  "content": "// MCP_SERVER_LIFECYCLE",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "E3B8h",
+                  "name": "ms1",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 16,
+                  "padding": 20,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "SFEyu",
+                      "name": "ms1i",
+                      "width": 28,
+                      "height": 28,
+                      "iconFontName": "database",
+                      "iconFontFamily": "lucide",
+                      "fill": "#22C55E"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "BgXZz",
+                      "name": "ms1c",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "xwplh",
+                          "name": "ms1t",
+                          "fill": "#F4F4F5",
+                          "content": "建立 McpServer 記錄",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 18,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "b0pp4",
+                          "name": "ms1d",
+                          "fill": "#52525B",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "在 Odoo 中自動建立 MCP Server 記錄，關聯到 CloudService",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Ip5b3",
+                  "name": "ms2",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 16,
+                  "padding": 20,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "BPYcA",
+                      "name": "ms2i",
+                      "width": 28,
+                      "height": 28,
+                      "iconFontName": "search",
+                      "iconFontFamily": "lucide",
+                      "fill": "#F59E0B"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "jsUIN",
+                      "name": "ms2c",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "MQ7VR",
+                          "name": "ms2t",
+                          "fill": "#F4F4F5",
+                          "content": "Tool 發現",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 18,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "1SImS",
+                          "name": "ms2d",
+                          "fill": "#52525B",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "呼叫 MCP Sidecar /tools 端點，發現所有可用的 n8n Tools",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ZMyTG",
+                  "name": "ms3",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 16,
+                  "padding": 20,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "AhCNu",
+                      "name": "ms3i",
+                      "width": 28,
+                      "height": 28,
+                      "iconFontName": "refresh-cw",
+                      "iconFontFamily": "lucide",
+                      "fill": "#22C55E"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Qt63w",
+                      "name": "ms3c",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "TzA1x",
+                          "name": "ms3t",
+                          "fill": "#F4F4F5",
+                          "content": "Cron 重試機制",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 18,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "mwdJi",
+                          "name": "ms3d",
+                          "fill": "#52525B",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "若 Tool 發現失敗，Cron Job 定期重試直到成功註冊",
+                          "lineHeight": 1.4,
+                          "fontFamily": "Inter",
+                          "fontSize": 14
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "1YwD7",
+              "name": "right9",
+              "width": 600,
+              "height": "fill_container",
+              "fill": "#232529",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 28,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "5cCY9",
+                  "name": "r9h",
+                  "fill": "#22C55E",
+                  "content": "// DISCOVERED_TOOLS",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "AwBaX",
+                  "name": "r9t",
+                  "fill": "#F4F4F5",
+                  "content": "n8n MCP Tools 範例",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "yzabu",
+                  "name": "r9sep",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "GWTez",
+                  "name": "tl1",
+                  "fill": "#22C55E",
+                  "content": "✓ workflow_list",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "tF8Tc",
+                  "name": "tl1d",
+                  "fill": "#52525B",
+                  "content": "  列出所有工作流程",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "yfWNg",
+                  "name": "tl2",
+                  "fill": "#22C55E",
+                  "content": "✓ workflow_create",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "LnSmU",
+                  "name": "tl2d",
+                  "fill": "#52525B",
+                  "content": "  建立新工作流程",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "ldSBj",
+                  "name": "tl3",
+                  "fill": "#22C55E",
+                  "content": "✓ workflow_execute",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "UgkZT",
+                  "name": "tl3d",
+                  "fill": "#52525B",
+                  "content": "  執行指定工作流程",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "iXfcO",
+                  "name": "tl4",
+                  "fill": "#F59E0B",
+                  "content": "✓ credential_list",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "eFjaO",
+                  "name": "tl4d",
+                  "fill": "#52525B",
+                  "content": "  列出所有憑證",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "scW6E",
+                  "name": "tl5",
+                  "fill": "#F59E0B",
+                  "content": "✓ execution_list",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "yXYn3",
+                  "name": "tl5d",
+                  "fill": "#52525B",
+                  "content": "  列出執行歷史",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "eX4PX",
+                  "name": "r9note",
+                  "fill": "#71717A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Tools 透過 MCP Protocol 暴露\n可被 Claude / AI Agent 直接呼叫",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "a81ze",
+      "x": 2020,
+      "y": 2360,
+      "name": "10 Network Topology",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "ZeCtC",
+          "name": "lbl10",
+          "fill": "#71717A",
+          "content": "// NETWORK_TOPOLOGY",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "o1llJ",
+          "name": "ttl10",
+          "fill": "#F4F4F5",
+          "content": "網路拓撲與 FQDN 路由",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 56,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "text",
+          "id": "bOASf",
+          "name": "sub10",
+          "fill": "#71717A",
+          "content": "從外部 DNS 查詢到 Pod 內部服務的完整路徑",
+          "fontFamily": "Inter",
+          "fontSize": 20
+        },
+        {
+          "type": "frame",
+          "id": "g8xD8",
+          "name": "netRow",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 24,
+          "justifyContent": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "7S6FR",
+              "name": "n1",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#F59E0B"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 24,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "H5uZL",
+                  "name": "n1i",
+                  "width": 40,
+                  "height": 40,
+                  "iconFontName": "globe",
+                  "iconFontFamily": "lucide",
+                  "fill": "#F59E0B"
+                },
+                {
+                  "type": "text",
+                  "id": "F0Rsh",
+                  "name": "n1t",
+                  "fill": "#F4F4F5",
+                  "content": "DNS",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "BvlWS",
+                  "name": "n1s",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "ROsW5",
+                  "name": "n1d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "n8n-ws1.woow.tw\n  → CNAME\nmcp-n8n-ws1.woow.tw\n  → CNAME",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "bEycL",
+              "name": "n2",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#22C55E"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 24,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "OqOXX",
+                  "name": "n2i",
+                  "width": 40,
+                  "height": 40,
+                  "iconFontName": "shield",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "text",
+                  "id": "e9nQx",
+                  "name": "n2t",
+                  "fill": "#F4F4F5",
+                  "content": "Cloudflare Tunnel",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "9FKKq",
+                  "name": "n2s",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "FTrOY",
+                  "name": "n2d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Tunnel Connector Pod\n  ↓ Ingress Rule\n路由到 K8s Service\n  (n8n :5678)\n  (mcp :3000)",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yic4b",
+              "name": "n3",
+              "width": "fill_container",
+              "fill": "#1E2026",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2B30"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 24,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "gLcnU",
+                  "name": "n3i",
+                  "width": 40,
+                  "height": 40,
+                  "iconFontName": "network",
+                  "iconFontFamily": "lucide",
+                  "fill": "#F59E0B"
+                },
+                {
+                  "type": "text",
+                  "id": "8V3Hn",
+                  "name": "n3t",
+                  "fill": "#F4F4F5",
+                  "content": "K8s Service",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "UsFUB",
+                  "name": "n3s",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "ORrPM",
+                  "name": "n3d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "ClusterIP Services\n  n8n-svc → :5678\n  mcp-svc → :3000\n內部負載均衡",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "NtxO5",
+              "name": "n4",
+              "width": "fill_container",
+              "fill": "#232529",
+              "cornerRadius": 4,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#22C55E"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 24,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "dfg2a",
+                  "name": "n4i",
+                  "width": 40,
+                  "height": 40,
+                  "iconFontName": "box",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "text",
+                  "id": "u1dU7",
+                  "name": "n4t",
+                  "fill": "#F4F4F5",
+                  "content": "Pod",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 22,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "3DVUz",
+                  "name": "n4s",
+                  "fill": "#2A2B30",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "zrb6o",
+                  "name": "n4d",
+                  "fill": "#52525B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "n8n Container\n  localhost:5678\nMCP Sidecar\n  localhost:3000\n共享 Network NS",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "RFqs2",
+      "x": 4040,
+      "y": 2360,
+      "name": "11 State Machine",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": [
+        80,
+        100
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "34HyT",
+          "name": "lbl11",
+          "fill": "#71717A",
+          "content": "// STATE_MACHINE",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "6GJUc",
+          "name": "ttl11",
+          "fill": "#F4F4F5",
+          "content": "CloudService 狀態機",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 56,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "text",
+          "id": "O2cix",
+          "name": "sub11",
+          "fill": "#71717A",
+          "content": "服務生命週期的所有可能狀態與轉換",
+          "fontFamily": "Inter",
+          "fontSize": 20
+        },
+        {
+          "type": "frame",
+          "id": "KypC8",
+          "name": "stateRow",
+          "width": "fill_container",
+          "height": "fill_container",
+          "gap": 32,
+          "children": [
+            {
+              "type": "frame",
+              "id": "RJusp",
+              "name": "stLeft",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "XEyG4",
+                  "name": "stH",
+                  "fill": "#22C55E",
+                  "content": "// HAPPY_PATH",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "3CNRX",
+                  "name": "s1",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "cornerRadius": 100,
+                      "id": "cgcXH",
+                      "name": "s1d",
+                      "fill": "#52525B",
+                      "width": 12,
+                      "height": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "L7nEN",
+                      "name": "s1t",
+                      "fill": "#71717A",
+                      "content": "draft",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "u7aT5",
+                      "name": "s1a",
+                      "fill": "#52525B",
+                      "content": "→  使用者建立服務",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "CNdBw",
+                  "name": "s2",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#F59E0B"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "cornerRadius": 100,
+                      "id": "JltiO",
+                      "name": "s2d",
+                      "fill": "#F59E0B",
+                      "width": 12,
+                      "height": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "t4Etw",
+                      "name": "s2t",
+                      "fill": "#F59E0B",
+                      "content": "deploying",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "KknqT",
+                      "name": "s2a",
+                      "fill": "#52525B",
+                      "content": "→  Phase 1-5 進行中",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ssTut",
+                  "name": "s3",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#F59E0B"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "cornerRadius": 100,
+                      "id": "tmyyk",
+                      "name": "s3d",
+                      "fill": "#F59E0B",
+                      "width": 12,
+                      "height": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "rSCUU",
+                      "name": "s3t",
+                      "fill": "#F59E0B",
+                      "content": "initializing",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "HFFz4",
+                      "name": "s3a",
+                      "fill": "#52525B",
+                      "content": "→  n8n Owner Setup + API Key",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "5cdrN",
+                  "name": "s4",
+                  "width": "fill_container",
+                  "fill": "#232529",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#22C55E"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "cornerRadius": 100,
+                      "id": "oWxab",
+                      "name": "s4d",
+                      "fill": "#22C55E",
+                      "width": 12,
+                      "height": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "3umBe",
+                      "name": "s4t",
+                      "fill": "#22C55E",
+                      "content": "running",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "bhbtu",
+                      "name": "s4a",
+                      "fill": "#71717A",
+                      "content": "→  服務正常運行",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "j9xao",
+              "name": "stRight",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "CzMQA",
+                  "name": "stEh",
+                  "fill": "#F59E0B",
+                  "content": "// ERROR_AND_LIFECYCLE",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "ER8Vz",
+                  "name": "se1",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "cornerRadius": 100,
+                      "id": "iAOI1",
+                      "name": "se1d",
+                      "fill": "#EF4444",
+                      "width": 12,
+                      "height": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "Hngvk",
+                      "name": "se1t",
+                      "fill": "#EF4444",
+                      "content": "error",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "59Cx5",
+                      "name": "se1a",
+                      "fill": "#52525B",
+                      "content": "→  部署或初始化失敗",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "qBGCf",
+                  "name": "se2",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "cornerRadius": 100,
+                      "id": "bd2bE",
+                      "name": "se2d",
+                      "fill": "#71717A",
+                      "width": 12,
+                      "height": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "2wBZY",
+                      "name": "se2t",
+                      "fill": "#71717A",
+                      "content": "stopped",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "feOK4",
+                      "name": "se2a",
+                      "fill": "#52525B",
+                      "content": "→  使用者手動停止",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "r46KI",
+                  "name": "se3",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "cornerRadius": 100,
+                      "id": "Qrll1",
+                      "name": "se3d",
+                      "fill": "#F59E0B",
+                      "width": 12,
+                      "height": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "z7hbc",
+                      "name": "se3t",
+                      "fill": "#F59E0B",
+                      "content": "deleting",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "E3tiy",
+                      "name": "se3a",
+                      "fill": "#52525B",
+                      "content": "→  Helm uninstall 進行中",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "1DfgA",
+                  "name": "se4",
+                  "width": "fill_container",
+                  "fill": "#1E2026",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2B30"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "cornerRadius": 100,
+                      "id": "wpGUE",
+                      "name": "se4d",
+                      "fill": "#3F3F46",
+                      "width": 12,
+                      "height": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "x14Sv",
+                      "name": "se4t",
+                      "fill": "#3F3F46",
+                      "content": "deleted",
+                      "fontFamily": "Roboto Mono",
+                      "fontSize": 16,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "JAUn6",
+                      "name": "se4a",
+                      "fill": "#52525B",
+                      "content": "→  資源已完全清理",
+                      "fontFamily": "Inter",
+                      "fontSize": 14
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "h3CIW",
+      "x": 6060,
+      "y": 2360,
+      "name": "12 Closing",
+      "width": 1920,
+      "height": 1080,
+      "fill": "#16171B",
+      "layout": "vertical",
+      "padding": 100,
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "6lQl7",
+          "name": "clbl",
+          "fill": "#22C55E",
+          "content": "// END",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 14,
+          "fontWeight": "600",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "dkMtn",
+          "name": "cttl",
+          "fill": "#F4F4F5",
+          "content": "完整生命週期",
+          "lineHeight": 0.9,
+          "fontFamily": "Space Grotesk",
+          "fontSize": 96,
+          "fontWeight": "700",
+          "letterSpacing": -2
+        },
+        {
+          "type": "text",
+          "id": "AvaAd",
+          "name": "cttl2",
+          "fill": "#22C55E",
+          "content": "一鍵部署完成",
+          "lineHeight": 1,
+          "fontFamily": "Space Grotesk",
+          "fontSize": 80,
+          "fontWeight": "700",
+          "letterSpacing": -1
+        },
+        {
+          "type": "rectangle",
+          "cornerRadius": 2,
+          "id": "8Up6K",
+          "name": "cdiv",
+          "fill": "#F59E0B",
+          "width": 120,
+          "height": 4
+        },
+        {
+          "type": "frame",
+          "id": "zF0L4",
+          "name": "csumRow",
+          "gap": 48,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "9lTgt",
+              "name": "cs1",
+              "layout": "vertical",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "XPrcz",
+                  "name": "cs1n",
+                  "fill": "#22C55E",
+                  "content": "6",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 48,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "7GoZ4",
+                  "name": "cs1l",
+                  "fill": "#71717A",
+                  "content": "PHASES",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "SgxG2",
+              "name": "cs2",
+              "layout": "vertical",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pcKRg",
+                  "name": "cs2n",
+                  "fill": "#F59E0B",
+                  "content": "2",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 48,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "RULyT",
+                  "name": "cs2l",
+                  "fill": "#71717A",
+                  "content": "FQDN URLs",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "pK6xe",
+              "name": "cs3",
+              "layout": "vertical",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Qji55",
+                  "name": "cs3n",
+                  "fill": "#22C55E",
+                  "content": "∞",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 48,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "pf7lf",
+                  "name": "cs3l",
+                  "fill": "#71717A",
+                  "content": "MCP TOOLS",
+                  "fontFamily": "Roboto Mono",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "fCvzO",
+          "name": "cfooter",
+          "fill": "#3F3F46",
+          "content": "woow_paas_platform  ·  Powered by Helm + Cloudflare + MCP",
+          "fontFamily": "Roboto Mono",
+          "fontSize": 14
+        }
+      ]
+    }
+  ]
+}

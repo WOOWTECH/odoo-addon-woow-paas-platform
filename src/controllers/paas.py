@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import traceback
 import uuid
 from datetime import datetime
@@ -1170,6 +1171,135 @@ class PaasController(Controller):
             _logger.warning("Invalid helm_value_specs for template %s", template.name)
             return {}
 
+    @staticmethod
+    def _sanitize_helm_values(values: dict, template: Any) -> dict:
+        """Remove secret values from helm_values before exposing in API responses.
+
+        Replaces values under 'secret' keys with masked versions to prevent
+        leaking credentials (e.g., N8N_API_KEY) through the service API.
+        """
+        if not values:
+            return values
+
+        def _mask_secrets(d: dict, depth: int = 0) -> dict:
+            result = {}
+            for key, val in d.items():
+                if key == 'secret' and isinstance(val, dict):
+                    # Mask all values under 'secret' keys
+                    result[key] = {
+                        k: f'{str(v)[:8]}...' if v and len(str(v)) > 8 else '***'
+                        for k, v in val.items()
+                    }
+                elif isinstance(val, dict) and depth < 5:
+                    result[key] = _mask_secrets(val, depth + 1)
+                else:
+                    result[key] = val
+            return result
+
+        return _mask_secrets(values)
+
+    def _build_mcp_sidecar_config(
+        self,
+        template: Any,
+        auth_token: str,
+        api_key: str | None = None,
+        helm_release_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Build MCP sidecar container config for PaaS Operator patch endpoint.
+
+        Constructs the sidecar container spec from the template's MCP fields,
+        merging any custom environment variables from `template.mcp_sidecar_env`
+        with the required environment variables.
+
+        When helm_release_name is provided and the template has mcp_api_key_helm_path,
+        the API key env var uses valueFrom.secretKeyRef so the sidecar reads the key
+        from the K8s Secret. This ensures pod restarts always pick up the latest key.
+
+        Args:
+            template: CloudAppTemplate record with MCP fields
+            auth_token: Generated AUTH_TOKEN for sidecar authentication
+            api_key: Optional API key for the main application (e.g., N8N_API_KEY).
+                     Used as plain value fallback when helm_release_name is not provided.
+            helm_release_name: Helm release name, used to derive K8s Secret name
+                              for secretKeyRef-based env vars.
+
+        Returns:
+            Dict matching the SidecarPatchRequest schema expected by PaaS Operator
+        """
+        sidecar_port = template.mcp_sidecar_port or 3000
+
+        # Required env vars for the MCP sidecar
+        env_vars = [
+            {'name': 'MCP_MODE', 'value': 'http'},
+            {'name': 'AUTH_TOKEN', 'value': auth_token},
+            {'name': 'N8N_API_URL', 'value': f'http://localhost:{template.default_port}'},
+            {'name': 'PORT', 'value': str(sidecar_port)},
+            # Raise the default rate limit (20 req/15min) which is too low
+            # for LangGraph agents that issue many tool calls per conversation.
+            {'name': 'AUTH_RATE_LIMIT_MAX', 'value': '500'},
+            {'name': 'AUTH_RATE_LIMIT_WINDOW', 'value': '900000'},
+        ]
+
+        # Inject API key for the main application via secretKeyRef (preferred)
+        # or plain value (fallback). secretKeyRef ensures the sidecar always
+        # picks up the latest key from the K8s Secret after pod restarts.
+        if template.mcp_api_key_helm_path:
+            env_name = template.mcp_api_key_helm_path.rsplit('.', 1)[-1]
+            if helm_release_name:
+                # Derive K8s Secret name from Helm release + chart convention
+                # n8n chart creates: {release}-n8n-app-secret
+                secret_name = f'{helm_release_name}-n8n-app-secret'
+                env_vars.append({
+                    'name': env_name,
+                    'valueFrom': {
+                        'secretKeyRef': {
+                            'name': secret_name,
+                            'key': env_name,
+                        }
+                    }
+                })
+            elif api_key:
+                # Fallback: plain value (used when helm_release_name unknown)
+                env_vars.append({'name': env_name, 'value': api_key})
+
+        # Merge custom env vars from template (if any)
+        if template.mcp_sidecar_env:
+            try:
+                custom_env = json.loads(template.mcp_sidecar_env)
+                # custom_env is a dict like {"KEY": "VALUE"}
+                # Required keys that should not be overridden
+                reserved_keys = {'MCP_MODE', 'AUTH_TOKEN', 'PORT', 'N8N_API_URL'}
+                if template.mcp_api_key_helm_path:
+                    reserved_keys.add(template.mcp_api_key_helm_path.rsplit('.', 1)[-1])
+                for key, value in custom_env.items():
+                    if key not in reserved_keys:
+                        env_vars.append({'name': key, 'value': str(value)})
+            except (json.JSONDecodeError, TypeError):
+                _logger.warning("Invalid MCP sidecar env JSON in template %s", template.name)
+
+        container_spec = {
+            'name': 'mcp-sidecar',
+            'image': template.mcp_sidecar_image,
+            'ports': [{'containerPort': sidecar_port}],
+            'env': env_vars,
+            'resources': {
+                'requests': {'memory': '128Mi', 'cpu': '100m'},
+                'limits': {'memory': '256Mi', 'cpu': '200m'},
+            },
+            'livenessProbe': {
+                'httpGet': {'path': '/health', 'port': sidecar_port},
+                'initialDelaySeconds': 15,
+                'periodSeconds': 30,
+            },
+            'readinessProbe': {
+                'httpGet': {'path': '/health', 'port': sidecar_port},
+                'initialDelaySeconds': 10,
+                'periodSeconds': 10,
+            },
+        }
+
+        return {'container': container_spec}
+
     def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> tuple[dict[str, Any], list[str]]:
         """
         Filter Helm values to only include keys allowed by template's value_specs.
@@ -1232,9 +1362,21 @@ class PaasController(Controller):
             ('workspace_id', '=', workspace.id),
         ])
 
-        data = []
+        # Update status for services in transitional states
+        transitional_states = ('deploying', 'initializing', 'upgrading', 'deleting')
         for svc in services:
-            data.append(self._format_service(svc))
+            if svc.state in transitional_states:
+                try:
+                    self._update_service_status(svc)
+                except Exception as e:
+                    _logger.warning("Failed to update status for service %s: %s", svc.name, e)
+
+        # Re-read after status updates
+        services = CloudService.search([
+            ('workspace_id', '=', workspace.id),
+        ])
+
+        data = [self._format_service(svc) for svc in services]
 
         return {
             'success': True,
@@ -1272,12 +1414,44 @@ class PaasController(Controller):
         # Note: silently filter on create (frontend may send defaults alongside user values)
         default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
         filtered_user_values, _rejected = self._filter_allowed_helm_values(values, template)
-        nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
+
+        # Extract _init.* keys (not Helm values, used for post-deploy init)
+        init_params = {}
+        helm_only_values = {}
+        for key, val in filtered_user_values.items():
+            if key.startswith('_init.'):
+                init_params[key[len('_init.'):]] = val
+            else:
+                helm_only_values[key] = val
+
+        # Validate n8n password if template requires init
+        if template.post_deploy_init_type == 'n8n':
+            pwd = init_params.get('owner_password', '')
+            if len(pwd) < 8:
+                return {'success': False, 'error': 'Password must be at least 8 characters'}
+            if not any(c.isupper() for c in pwd):
+                return {'success': False, 'error': 'Password must contain at least one uppercase letter'}
+            if not any(c.islower() for c in pwd):
+                return {'success': False, 'error': 'Password must contain at least one lowercase letter'}
+            if not any(c.isdigit() for c in pwd):
+                return {'success': False, 'error': 'Password must contain at least one number'}
+
+        nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
+
+        # Generate per-service API key for MCP sidecar ↔ main container communication
+        mcp_api_key = None
+        if template.mcp_enabled and template.mcp_api_key_helm_path:
+            mcp_api_key = str(uuid.uuid4())
+            # Inject into Helm values at the configured dot-path
+            api_key_nested = self._unflatten_dotpath_keys(
+                {template.mcp_api_key_helm_path: mcp_api_key}
+            )
+            merged_values = self._deep_merge(merged_values, api_key_nested)
 
         try:
             # Create service record in pending state
-            service = CloudService.create({
+            service_vals = {
                 'workspace_id': workspace.id,
                 'template_id': template.id,
                 'name': name,
@@ -1292,34 +1466,98 @@ class PaasController(Controller):
                 'allocated_vcpu': template.min_vcpu,
                 'allocated_ram_gb': template.min_ram_gb,
                 'allocated_storage_gb': template.min_storage_gb,
-            })
+            }
+            # Store init params for post-deploy initialization
+            if init_params.get('owner_email'):
+                service_vals['n8n_owner_email'] = init_params['owner_email']
+            if init_params.get('owner_password'):
+                service_vals['n8n_owner_password'] = init_params['owner_password']
 
-            # Get PaaS Operator client
-            client = get_paas_operator_client(request.env)
+            service = CloudService.create(service_vals)
+
+            # Build expose configuration before spawning background thread
+            expose_config = None
+            if template.ingress_enabled:
+                expose_config = {
+                    'enabled': True,
+                    'subdomain': subdomain,
+                }
+
+            # Return immediately with pending state; deploy in background
+            service_data = self._format_service(service)
+
+            deploy_args = {
+                'db_name': request.env.cr.dbname,
+                'uid': request.env.uid,
+                'service_id': service.id,
+                'workspace_id': workspace.id,
+                'helm_namespace': helm_namespace,
+                'helm_release_name': helm_release_name,
+                'template_id': template.id,
+                'merged_values': merged_values,
+                'expose_config': expose_config,
+                'mcp_api_key': mcp_api_key,
+            }
+            thread = threading.Thread(
+                target=self._deploy_service_background,
+                args=(deploy_args,),
+                daemon=True,
+            )
+            thread.start()
+
+            return {
+                'success': True,
+                'data': service_data,
+            }
+
+        except Exception as e:
+            _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
+            return {'success': False, 'error': 'An error occurred while creating the service.'}
+
+    def _deploy_service_background(self, args: dict) -> None:
+        """Background thread: namespace creation + helm install + sidecar patch.
+
+        Runs outside the HTTP request lifecycle with its own DB cursor.
+        """
+        import odoo
+
+        _logger.info("Background deploy thread started for service %s", args.get('service_id'))
+
+        db_name = args['db_name']
+        registry = odoo.registry(db_name)
+        cr = registry.cursor()
+        try:
+            env = odoo.api.Environment(cr, args['uid'], {})
+            CloudService = env['woow_paas_platform.cloud_service']
+            service = CloudService.browse(args['service_id'])
+            if not service.exists():
+                return
+
+            template = env['woow_paas_platform.cloud_app_template'].browse(args['template_id'])
+            client = get_paas_operator_client(env)
             if not client:
                 service.write({
                     'state': 'error',
                     'error_message': 'PaaS Operator not configured. Contact administrator.',
                 })
-                return {
-                    'success': True,
-                    'data': self._format_service(service),
-                    'warning': 'PaaS Operator not configured',
-                }
+                cr.commit()
+                return
+
+            helm_namespace = args['helm_namespace']
+            helm_release_name = args['helm_release_name']
+            merged_values = args['merged_values']
+            expose_config = args['expose_config']
+            mcp_api_key = args['mcp_api_key']
 
             try:
                 # Create namespace if needed
-                # Calculate total resource needs for ALL services in this workspace
-                # Include all states except 'deleting' to account for deployed/pending resources
                 all_services = CloudService.search([
-                    ('workspace_id', '=', workspace.id),
+                    ('workspace_id', '=', args['workspace_id']),
                     ('state', '!=', 'deleting'),
                 ])
                 total_vcpu = sum(s.allocated_vcpu for s in all_services)
                 total_ram = sum(s.allocated_ram_gb for s in all_services)
                 total_storage = sum(s.allocated_storage_gb for s in all_services)
-                # Each Helm chart may create additional PVCs (e.g. PostgreSQL sub-chart)
-                # Use 3x headroom to account for sub-chart PVCs and overhead
                 try:
                     client.create_namespace(
                         namespace=helm_namespace,
@@ -1328,37 +1566,20 @@ class PaasController(Controller):
                         storage_limit=f"{max(total_storage * 3, 100)}Gi",
                     )
                 except PaaSOperatorError as e:
-                    # Namespace might already exist (409), which is fine
                     if e.status_code != 409:
                         _logger.error("Namespace creation failed: %s", str(e))
                         service.write({
                             'state': 'error',
                             'error_message': f'Failed to create namespace: {e.detail or e.message}',
                         })
-                        return {
-                            'success': True,
-                            'data': self._format_service(service),
-                            'warning': 'Namespace creation failed',
-                        }
-
-                # Build expose configuration for Cloudflare Tunnel
-                expose_config = None
-                _logger.info(
-                    "Template %s (id=%d): ingress_enabled=%s, default_port=%s",
-                    template.name, template.id, template.ingress_enabled, template.default_port
-                )
-                if template.ingress_enabled:
-                    # Note: Don't pass service_port - let PaaS Operator auto-detect
-                    # from K8s Service (which may map port 80 -> container port)
-                    expose_config = {
-                        'enabled': True,
-                        'subdomain': subdomain,
-                    }
-                    _logger.info("Built expose_config: %s", expose_config)
-                else:
-                    _logger.info("Skipping expose_config: ingress_enabled is False")
+                        cr.commit()
+                        return
 
                 # Install Helm release
+                _logger.info(
+                    "Template %s (id=%d): ingress_enabled=%s, expose_config=%s",
+                    template.name, template.id, template.ingress_enabled, expose_config,
+                )
                 release_info = client.install_release(
                     namespace=helm_namespace,
                     release_name=helm_release_name,
@@ -1366,9 +1587,30 @@ class PaasController(Controller):
                     repo_url=template.helm_repo_url,
                     version=template.helm_chart_version,
                     values=merged_values,
-                    create_namespace=True,  # Let operator handle namespace if needed
+                    create_namespace=True,
                     expose=expose_config,
                 )
+
+                # After Helm install, patch sidecar if MCP enabled
+                if template.mcp_enabled and template.mcp_sidecar_image:
+                    mcp_auth_token = str(uuid.uuid4())
+                    sidecar_config = self._build_mcp_sidecar_config(
+                        template, mcp_auth_token, mcp_api_key,
+                        helm_release_name=helm_release_name,
+                    )
+                    try:
+                        client.patch_sidecar(
+                            namespace=helm_namespace,
+                            release_name=helm_release_name,
+                            sidecar_config=sidecar_config,
+                        )
+                        service.write({'mcp_auth_token': mcp_auth_token})
+                        _logger.info(
+                            "MCP sidecar patched for service %s (release=%s)",
+                            service.name, helm_release_name,
+                        )
+                    except PaaSOperatorError as e:
+                        _logger.warning("Failed to patch MCP sidecar: %s", e)
 
                 # Update service state
                 service.write({
@@ -1376,34 +1618,38 @@ class PaasController(Controller):
                     'helm_revision': release_info.get('revision', 1),
                     'deployed_at': datetime.now(),
                 })
+                cr.commit()
 
             except PaaSOperatorConnectionError as e:
                 _logger.error("Operator connection error: %s", str(e))
+                cr.rollback()
                 service.write({
                     'state': 'error',
                     'error_message': 'Unable to connect to deployment service. Please try again later.',
                 })
+                cr.commit()
 
             except PaaSOperatorError as e:
                 _logger.error("Operator error during deployment: %s", str(e))
+                cr.rollback()
                 service.write({
                     'state': 'error',
                     'error_message': f'Deployment failed: {e.detail or e.message}',
                 })
-
-            return {
-                'success': True,
-                'data': self._format_service(service),
-            }
+                cr.commit()
 
         except Exception as e:
-            _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'An error occurred while creating the service.'}
+            _logger.exception(
+                "Background deploy error for service %s: %s",
+                args.get('service_id'), e,
+            )
+        finally:
+            cr.close()
 
     def _get_service(self, service: Any) -> dict[str, Any]:
         """Get service details, updating status from operator if needed."""
         # Check if we need to poll operator for status
-        if service.state in ['deploying', 'upgrading']:
+        if service.state in ['deploying', 'upgrading', 'initializing']:
             self._update_service_status(service)
 
         return {
@@ -1619,11 +1865,42 @@ class PaasController(Controller):
                 ) if pods else True
 
                 if all_ready:
-                    service.write({
-                        'state': 'running',
-                        'helm_revision': helm_revision,
-                        'error_message': False,
-                    })
+                    template = service.template_id
+                    needs_init = (
+                        template.post_deploy_init_type
+                        and template.post_deploy_init_type != 'none'
+                    )
+
+                    if needs_init and original_state == 'deploying':
+                        # Pods ready but need post-deploy init → transition to initializing
+                        service.write({
+                            'state': 'initializing',
+                            'helm_revision': helm_revision,
+                            'error_message': False,
+                        })
+                        self._run_post_deploy_init(service)
+
+                    elif needs_init and original_state == 'initializing':
+                        # Already initializing, retry if needed
+                        self._run_post_deploy_init(service)
+
+                    else:
+                        # No init needed or already done → running
+                        service.write({
+                            'state': 'running',
+                            'helm_revision': helm_revision,
+                            'error_message': False,
+                        })
+
+                        # Auto-create MCP Server when transitioning to running
+                        if original_state != 'running':
+                            try:
+                                self._auto_create_mcp_server(service)
+                            except Exception as e:
+                                _logger.warning(
+                                    "Auto-create MCP server failed for service %s: %s",
+                                    service.name, e,
+                                )
                 # else: still deploying/waiting for pods
 
             elif release_status == 'failed':
@@ -1651,6 +1928,199 @@ class PaasController(Controller):
         except Exception as e:
             _logger.warning("Error polling service status: %s", str(e))
 
+    def _run_post_deploy_init(self, service: Any) -> None:
+        """Execute post-deploy initialization for a service.
+
+        Called when pods are ready but the application needs initialization
+        (e.g., n8n owner setup + API key generation).
+
+        On success: transitions to 'running' and auto-creates MCP server.
+        On failure: increments retry counter; after 5 retries → 'error' state.
+        """
+        template = service.template_id
+
+        if template.post_deploy_init_type == 'n8n':
+            client = get_paas_operator_client(request.env)
+            if not client:
+                _logger.warning("PaaS Operator not configured, cannot initialize n8n")
+                return
+
+            owner_email = service.n8n_owner_email or template.post_deploy_init_email or 'admin@woowtech.io'
+            owner_password = service.n8n_owner_password
+            if not owner_password:
+                # Fallback for services created before this feature
+                owner_password = 'W' + str(uuid.uuid4()).upper()
+
+            try:
+                result = client.init_n8n(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                    owner_email=owner_email,
+                    owner_password=owner_password,
+                )
+
+                if result.get('success'):
+                    real_api_key = result['api_key']
+
+                    # Check if sidecar was properly restarted
+                    if not result.get('pod_restarted'):
+                        _logger.warning(
+                            "n8n init for service %s: API key updated in Secret but pod was NOT restarted. "
+                            "MCP sidecar may still use the old placeholder key until next pod restart.",
+                            service.name,
+                        )
+
+                    # Update helm_values to replace the UUID placeholder with the real API key
+                    update_vals = {
+                        'n8n_api_key': real_api_key,
+                        'state': 'running',
+                        'init_retries': 0,
+                        'init_error': False,
+                    }
+                    if template.mcp_api_key_helm_path and service.helm_values:
+                        try:
+                            current_values = json.loads(service.helm_values)
+                            api_key_nested = self._unflatten_dotpath_keys(
+                                {template.mcp_api_key_helm_path: real_api_key}
+                            )
+                            updated_values = self._deep_merge(current_values, api_key_nested)
+                            update_vals['helm_values'] = json.dumps(updated_values)
+                        except (json.JSONDecodeError, TypeError):
+                            _logger.warning("Failed to update helm_values with real API key for service %s", service.name)
+                    service.write(update_vals)
+                    _logger.info(
+                        "n8n init succeeded for service %s, API key and helm_values updated",
+                        service.name,
+                    )
+                    try:
+                        self._auto_create_mcp_server(service)
+                    except Exception as e:
+                        _logger.warning(
+                            "Auto-create MCP server failed for service %s: %s",
+                            service.name, e,
+                        )
+                else:
+                    retries = (service.init_retries or 0) + 1
+                    error_msg = result.get('error', 'Unknown error')
+                    vals = {
+                        'init_retries': retries,
+                        'init_error': error_msg,
+                    }
+                    if retries >= 5:
+                        vals.update({
+                            'state': 'error',
+                            'error_message': f'n8n initialization failed after {retries} retries: {error_msg}',
+                        })
+                    service.write(vals)
+                    _logger.warning(
+                        "n8n init attempt %d failed for service %s: %s",
+                        retries, service.name, error_msg,
+                    )
+
+            except Exception as e:
+                retries = (service.init_retries or 0) + 1
+                vals = {
+                    'init_retries': retries,
+                    'init_error': str(e),
+                }
+                if retries >= 5:
+                    vals.update({
+                        'state': 'error',
+                        'error_message': f'n8n initialization failed: {str(e)}',
+                    })
+                service.write(vals)
+                _logger.warning(
+                    "n8n init exception (attempt %d) for service %s: %s",
+                    retries, service.name, e,
+                )
+
+    def _auto_create_mcp_server(self, service: Any) -> None:
+        """Auto-create MCP Server record for a cloud service with MCP enabled.
+
+        Called when a service transitions to 'running' state. Creates a
+        user-scope MCP Server record linked to the cloud service and
+        triggers tool discovery.
+
+        Idempotent: skips creation if an auto-created record already exists.
+        """
+        template = service.template_id
+        if not template.mcp_enabled or not template.mcp_sidecar_image:
+            return
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+
+        # Check if already exists (avoid duplicates on re-deploy/upgrade)
+        existing = McpServer.search([
+            ('cloud_service_id', '=', service.id),
+            ('auto_created', '=', True),
+        ], limit=1)
+        if existing:
+            _logger.debug(
+                "MCP Server already exists for service %s (id=%s), skipping auto-create",
+                service.name, existing.id,
+            )
+            return
+
+        # Build MCP endpoint URL
+        mcp_url = self._build_mcp_endpoint_url(service, template)
+
+        # Create MCP Server record
+        server = McpServer.create({
+            'name': f"{service.name} MCP",
+            'url': mcp_url,
+            'transport': template.mcp_transport or 'streamable_http',
+            'scope': 'user',
+            'cloud_service_id': service.id,
+            'auto_created': True,
+            'api_key': service.mcp_auth_token,
+            'description': f"Auto-created MCP server for {service.name}",
+        })
+
+        _logger.info(
+            "Auto-created MCP Server '%s' (id=%s) for cloud service '%s'",
+            server.name, server.id, service.name,
+        )
+
+        # Try to sync tools using safe method (keeps state as 'draft' on
+        # failure so the cron retry mechanism can pick it up later).
+        server.action_sync_tools_safe()
+
+    def _build_mcp_endpoint_url(self, service: Any, template: Any) -> str:
+        """Build the MCP endpoint URL for a cloud service sidecar.
+
+        Constructs the URL using the service's subdomain and the PaaS
+        domain from system configuration. Falls back to a Kubernetes
+        internal service URL when no subdomain is available.
+
+        Returns:
+            str: The full MCP endpoint URL.
+        """
+        endpoint_path = template.mcp_endpoint_path or '/mcp'
+        sidecar_port = template.mcp_sidecar_port or 3001
+
+        # Prefer Kubernetes internal service URL (most reliable).
+        # The Cloudflare tunnel only routes to the main application port,
+        # not the sidecar port, so external URL via subdomain won't work
+        # for the MCP sidecar without additional Ingress configuration.
+        # Pattern: http://{release}-mcp.{namespace}.svc.cluster.local:{port}{path}
+        if service.helm_release_name and service.helm_namespace:
+            return (
+                f"http://{service.helm_release_name}-mcp"
+                f".{service.helm_namespace}.svc.cluster.local"
+                f":{sidecar_port}{endpoint_path}"
+            )
+
+        # Fallback: construct from subdomain (user can update later)
+        if service.subdomain:
+            IrConfigParameter = request.env['ir.config_parameter'].sudo()
+            paas_domain = IrConfigParameter.get_param(
+                'woow_paas_platform.paas_domain', 'woowtech.io',
+            )
+            return f"https://{service.subdomain}.{paas_domain}{endpoint_path}"
+
+        # Last resort: placeholder that the user must update
+        return f"http://localhost:{sidecar_port}{endpoint_path}"
+
     def _format_service(self, service: Any, include_details: bool = False) -> dict[str, Any]:
         """Format a service record for API response."""
         data = {
@@ -1677,12 +2147,23 @@ class PaasController(Controller):
                 'helm_namespace': service.helm_namespace,
                 'helm_release_name': service.helm_release_name,
                 'helm_chart_version': service.helm_chart_version,
-                'helm_values': json.loads(service.helm_values) if service.helm_values else {},
+                'helm_values': self._sanitize_helm_values(
+                    json.loads(service.helm_values) if service.helm_values else {},
+                    service.template_id,
+                ),
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,
                 'allocated_storage_gb': service.allocated_storage_gb,
                 'last_upgraded_at': service.last_upgraded_at.isoformat() if service.last_upgraded_at else None,
             })
+
+            # Expose n8n login credentials if applicable
+            template = service.template_id
+            if template.post_deploy_init_type == 'n8n' and template.post_deploy_init_email:
+                data['n8n_credentials'] = {
+                    'email': template.post_deploy_init_email,
+                    'info': 'Password was auto-generated during deployment. Check service logs or redeploy to reset.',
+                }
 
         return data

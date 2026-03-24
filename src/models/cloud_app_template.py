@@ -109,6 +109,61 @@ class CloudAppTemplate(models.Model):
         help='Minimum storage in GB required',
     )
 
+    # MCP Sidecar Configuration
+    mcp_enabled = fields.Boolean(
+        string='Enable MCP Sidecar',
+        default=False,
+        help='Enable MCP sidecar container for this application template',
+    )
+    mcp_sidecar_image = fields.Char(
+        string='MCP Sidecar Image',
+        help='Docker image for the MCP sidecar container (e.g., ghcr.io/czlonkowski/n8n-mcp:latest)',
+    )
+    mcp_sidecar_port = fields.Integer(
+        string='MCP Sidecar Port',
+        default=3001,
+        help='Port the MCP sidecar listens on',
+    )
+    mcp_transport = fields.Selection(
+        selection=[('sse', 'SSE'), ('streamable_http', 'Streamable HTTP')],
+        string='MCP Transport',
+        default='streamable_http',
+        help='MCP transport protocol for sidecar communication',
+    )
+    mcp_endpoint_path = fields.Char(
+        string='MCP Endpoint Path',
+        default='/mcp',
+        help='URL path for the MCP endpoint on the sidecar',
+    )
+    mcp_sidecar_env = fields.Text(
+        string='MCP Sidecar Environment',
+        help='JSON object of environment variables for the MCP sidecar container',
+    )
+    mcp_api_key_helm_path = fields.Char(
+        string='MCP API Key Helm Path',
+        help='Dot-path in Helm values where the auto-generated API key should be set '
+             '(e.g., main.secret.N8N_API_KEY). The last segment is used as the env var '
+             'name for the MCP sidecar. When set, a unique API key is generated per '
+             'service and injected into both the main container (via Helm) and the '
+             'MCP sidecar (as env var).',
+    )
+
+    # Post-Deploy Initialization
+    post_deploy_init_type = fields.Selection(
+        selection=[
+            ('none', 'None'),
+            ('n8n', 'n8n (Owner Setup + API Key)'),
+        ],
+        string='Post-Deploy Init Type',
+        default='none',
+        help='Type of post-deployment initialization to run automatically',
+    )
+    post_deploy_init_email = fields.Char(
+        string='Init Owner Email',
+        default='admin@woowtech.io',
+        help='Default email for the application owner user created during init',
+    )
+
     # Status
     is_active = fields.Boolean(
         string='Active',

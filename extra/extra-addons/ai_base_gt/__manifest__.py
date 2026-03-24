@@ -20,7 +20,7 @@ Can use other AI models like ChatGPT, Gemini, Claude, etc through connector modu
             'mistune>=3.0.0',
             'markdownify>=0.11.0',
             'pyyaml>=6.0',
-            'pydantic>=2.0.0,<2.11.0',
+            'pydantic>=2.0.0,<2.13.0',
             'docstring_parser>=0.15',
         ],
     },

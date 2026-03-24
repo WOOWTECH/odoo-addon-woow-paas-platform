@@ -24,11 +24,15 @@ spec:
         - name: odoo
           image: "{{ .Values.odoo.image.repository }}:{{ .Values.odoo.image.tag }}"
           imagePullPolicy: {{ .Values.odoo.image.pullPolicy }}
-          {{- if .Values.odoo.extraPipPackages }}
+          {{- if or .Values.odoo.extraPipRequirementsFile .Values.odoo.extraPipPackages }}
           command: ["/bin/bash", "-c"]
           args:
             - |
+              {{- if .Values.odoo.extraPipRequirementsFile }}
+              pip3 install --break-system-packages --no-cache-dir -r '{{ .Values.odoo.extraPipRequirementsFile }}' 2>/dev/null && \
+              {{- else }}
               pip3 install --break-system-packages{{- range .Values.odoo.extraPipPackages }} '{{ . }}'{{- end }} 2>/dev/null && \
+              {{- end }}
               exec odoo{{ if .Values.odoo.devMode }} --dev reload,qweb,xml{{ end }} -c /etc/odoo/odoo.conf
           {{- else }}
           command: ["odoo"]

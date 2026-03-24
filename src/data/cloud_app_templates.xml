@@ -21,7 +21,9 @@
             <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"},
                 "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits":
                 {"cpu": "2000m", "memory": "2Gi"}}}}</field>
-            <field name="helm_value_specs">{"required": [{"key": "auth.username", "label": "Database Username", "type": "text", "default": "woow"}, {"key": "auth.database", "label": "Database Name", "type": "text", "default": "woowdb"}], "optional": []}</field>
+            <field name="helm_value_specs">{"required": [{"key": "auth.username", "label": "Database
+                Username", "type": "text", "default": "woow"}, {"key": "auth.database", "label":
+                "Database Name", "type": "text", "default": "woowdb"}], "optional": []}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5432</field>
@@ -54,10 +56,22 @@
             <field name="helm_chart_version"></field>
             <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main":
                 {"config": {"GENERIC_TIMEZONE": "Asia/Taipei", "N8N_LOG_LEVEL": "info",
-                "N8N_BASIC_AUTH_ACTIVE": "true"}, "secret": {"N8N_BASIC_AUTH_USER": "admin"},
+                "N8N_PUBLIC_API_ENABLED": "true"},
                 "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
-                "1000m", "memory": "1Gi"}}}}</field>
-            <field name="helm_value_specs">{"required": [{"key": "main.secret.N8N_BASIC_AUTH_USER", "label": "Basic Auth Username", "type": "text", "default": "admin"}, {"key": "main.secret.N8N_BASIC_AUTH_PASSWORD", "label": "Basic Auth Password", "type": "password"}], "optional": [{"key": "config.database.type", "label": "Database Type", "type": "select", "default": "sqlite", "options": ["sqlite", "postgres"]}, {"key": "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select", "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai", "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]}, {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select", "default": "info", "options": ["info", "warn", "error", "debug"]}]}</field>
+                "1000m", "memory": "1Gi"}},
+                "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"}},
+                "updateStrategy": {"type": "Recreate"}}</field>
+            <field name="helm_value_specs">{"required": [{"key": "_init.owner_email", "label": "n8n
+                Admin Email", "type": "text", "placeholder": "you@example.com", "description": "n8n
+                管理員登入 Email"}, {"key": "_init.owner_password", "label": "n8n Admin Password",
+                "type": "password", "description": "至少 8 字元，需含大小寫字母與數字"}], "optional": [{"key":
+                "config.database.type", "label": "Database Type", "type": "select", "default":
+                "sqlite", "options": ["sqlite", "postgres"]}, {"key":
+                "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select", "default":
+                "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai",
+                "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London",
+                "UTC"]}, {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type":
+                "select", "default": "info", "options": ["info", "warn", "error", "debug"]}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5678</field>
@@ -91,7 +105,9 @@
             <field name="helm_default_values">{"architecture": "standalone", "master": {"resources":
                 {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory":
                 "512Mi"}}}}</field>
-            <field name="helm_value_specs">{"required": [], "optional": [{"key": "architecture", "label": "Architecture", "type": "select", "default": "standalone", "options": ["standalone", "replication"]}]}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [{"key": "architecture",
+                "label": "Architecture", "type": "select", "default": "standalone", "options":
+                ["standalone", "replication"]}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">6379</field>
@@ -131,10 +147,15 @@
                 {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}},
                 "postgresql": {"enabled": true, "architecture": "standalone", "auth": {"username":
                 "bn_odoo", "database": "bitnami_odoo"}, "image": {"registry":
-                "docker.io", "repository": "bitnamilegacy/postgresql", "tag": "17.6.0-debian-12-r4"}},
+                "docker.io", "repository": "bitnamilegacy/postgresql", "tag":
+                "17.6.0-debian-12-r4"}},
                 "persistence": {"enabled": true, "size": "10Gi"},
                 "updateStrategy": {"type": "Recreate"}}</field>
-            <field name="helm_value_specs">{"required": [{"key": "odooEmail", "label": "Administrator Email", "type": "text", "default": "user@example.com"}, {"key": "odooPassword", "label": "Administrator Password", "type": "password"}], "optional": [{"key": "loadDemoData", "label": "Load Demo Data", "type": "boolean", "default": false}]}</field>
+            <field name="helm_value_specs">{"required": [{"key": "odooEmail", "label":
+                "Administrator Email", "type": "text", "default": "user@example.com"}, {"key":
+                "odooPassword", "label": "Administrator Password", "type": "password"}], "optional":
+                [{"key": "loadDemoData", "label": "Load Demo Data", "type": "boolean", "default":
+                false}]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">8069</field>
@@ -146,6 +167,44 @@
             <field name="min_storage_gb">10</field>
 
             <field name="is_active" eval="True" />
+        </record>
+    </data>
+
+    <!-- MCP configuration updates - noupdate=0 to ensure upgrades apply these values -->
+    <data noupdate="0">
+        <record id="cloud_app_n8n" model="woow_paas_platform.cloud_app_template">
+            <field name="mcp_enabled" eval="True" />
+            <field name="mcp_sidecar_image">ghcr.io/czlonkowski/n8n-mcp:latest</field>
+            <field name="mcp_sidecar_port">3000</field>
+            <field name="mcp_transport">streamable_http</field>
+            <field name="mcp_endpoint_path">/mcp</field>
+            <field name="mcp_sidecar_env">{
+                "MCP_MODE": "http",
+                "N8N_API_URL": "http://localhost:5678",
+                "PORT": "3000"
+                }</field>
+            <field name="mcp_api_key_helm_path">main.secret.N8N_API_KEY</field>
+            <field name="post_deploy_init_type">n8n</field>
+            <field name="post_deploy_init_email">admin@woowtech.io</field>
+            <!-- Helm values must be in noupdate=0 to fix deprecated Basic Auth settings -->
+            <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main":
+                {"config": {"GENERIC_TIMEZONE": "Asia/Taipei", "N8N_LOG_LEVEL": "info",
+                "N8N_PUBLIC_API_ENABLED": "true"},
+                "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
+                "1000m", "memory": "1Gi"}},
+                "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"}},
+                "updateStrategy": {"type": "Recreate"}}</field>
+            <field name="helm_value_specs">{"required": [{"key": "_init.owner_email", "label": "n8n
+                Admin Email", "type": "text", "placeholder": "you@example.com", "description": "n8n
+                管理員登入 Email"}, {"key": "_init.owner_password", "label": "n8n Admin Password",
+                "type": "password", "description": "至少 8 字元，需含大小寫字母與數字"}], "optional": [{"key":
+                "config.database.type", "label": "Database Type", "type": "select", "default":
+                "sqlite", "options": ["sqlite", "postgres"]}, {"key":
+                "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select", "default":
+                "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai",
+                "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London",
+                "UTC"]}, {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type":
+                "select", "default": "info", "options": ["info", "warn", "error", "debug"]}]}</field>
         </record>
     </data>
 </odoo>

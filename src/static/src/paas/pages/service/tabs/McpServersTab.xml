@@ -133,22 +133,18 @@
                                 </div>
                             </div>
                             <div class="o_woow_mcp_server__actions">
-                                <WoowButton variant="'ghost'" size="'sm'" onClick="() => this.testServer(server)"
-                                            disabled="server._testing"
-                                            title="Test Connection">
+                                <WoowButton variant="'ghost'" size="'sm'" onClick="getTestHandler(server)"
+                                            disabled="server._testing">
                                     <WoowIcon name="'power'" size="16"/>
                                 </WoowButton>
-                                <WoowButton variant="'ghost'" size="'sm'" onClick="() => this.syncServer(server)"
-                                            disabled="server._syncing"
-                                            title="Sync Tools">
+                                <WoowButton variant="'ghost'" size="'sm'" onClick="getSyncHandler(server)"
+                                            disabled="server._syncing">
                                     <WoowIcon name="'sync'" size="16"/>
                                 </WoowButton>
-                                <WoowButton variant="'ghost'" size="'sm'" onClick="() => this.showEditForm(server)"
-                                            title="Edit">
+                                <WoowButton variant="'ghost'" size="'sm'" onClick="getEditHandler(server)">
                                     <WoowIcon name="'edit'" size="16"/>
                                 </WoowButton>
-                                <WoowButton variant="'ghost'" size="'sm'" onClick="() => this.deleteServer(server)"
-                                            title="Delete">
+                                <WoowButton variant="'ghost'" size="'sm'" onClick="getDeleteHandler(server)">
                                     <WoowIcon name="'delete'" size="16"/>
                                 </WoowButton>
                             </div>

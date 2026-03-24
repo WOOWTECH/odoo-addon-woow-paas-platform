@@ -27,15 +27,11 @@ odoo:
   devMode: true
   # Admin master password
   adminPassword: admin
-  # Extra Python packages to install at container startup (for extra-addons dependencies)
-  extraPipPackages:
-    - packaging
-    - "mistune>=3.0.0"
-    - "markdownify>=0.11.0"
-    - "pydantic>=2.0.0,<2.11.0"
-    - "docstring_parser>=0.15"
-    - "fastembed>=0.5.0,<=0.5.1"
-    - "openai>=1.0.0"
+  # Install Python packages from requirements.txt at container startup (single source of truth)
+  # Path inside the container to a pip requirements file
+  extraPipRequirementsFile: /mnt/extra-addons/woow_paas_platform/requirements.txt
+  # Fallback: list individual packages (used only when extraPipRequirementsFile is empty)
+  extraPipPackages: []
   # Addons path inside container
   addonsPath: /mnt/extra-addons,/mnt/extra-addons-ext
   # Resource limits

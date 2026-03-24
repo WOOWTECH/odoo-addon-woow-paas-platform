@@ -34,6 +34,11 @@ export class StatusBadge extends Component {
                 colorClass: "o_woow_status_deploying",
                 showSpinner: true,
             },
+            initializing: {
+                label: "Initializing",
+                colorClass: "o_woow_status_deploying",
+                showSpinner: true,
+            },
             upgrading: {
                 label: "Upgrading",
                 colorClass: "o_woow_status_upgrading",
