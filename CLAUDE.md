@@ -363,6 +363,11 @@ class ResConfigSettings(models.TransientModel):
 
 ## Code Style Guide
 
+### Indentation
+
+- JavaScript / OWL / XML / SCSS: 2 spaces
+- Python: 4 spaces (PEP 8)
+
 ### Python
 
 ```python
