@@ -1,0 +1,54 @@
+name: Build and Push paas-operator Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (e.g. 0.1.0)"
+        required: true
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "extra/paas-operator/**"
+    tags:
+      - "operator-v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "IMAGE_TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
+          elif echo "$GITHUB_REF" | grep -q 'refs/tags/operator-v'; then
+            TAG="${GITHUB_REF#refs/tags/operator-v}"
+            echo "IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
+          else
+            SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+            echo "IMAGE_TAG=${SHORT_SHA}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Login to JCR (internal)
+        run: |
+          echo "${{ secrets.JCR_PASSWORD }}" | \
+            docker login artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local \
+              -u "${{ secrets.JCR_USERNAME }}" --password-stdin
+
+      - name: Build and tag image
+        working-directory: extra/paas-operator
+        run: |
+          docker build \
+            -t artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local/woow-paas-docker-local/paas-operator:${IMAGE_TAG} \
+            -t artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local/woow-paas-docker-local/paas-operator:latest \
+            .
+
+      - name: Push image
+        run: |
+          docker push artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local/woow-paas-docker-local/paas-operator:${IMAGE_TAG}
+          docker push artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local/woow-paas-docker-local/paas-operator:latest
