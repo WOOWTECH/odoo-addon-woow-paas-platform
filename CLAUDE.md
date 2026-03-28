@@ -186,19 +186,19 @@ git commit -m "release: 18.0.1.0.5"
 git push
 
 # 3. 打 tag 並 push（自動觸發 paas-odoo-ci build）
-git tag v1.0.5
-git push origin v1.0.5
+git tag v18.0.1.0.5
+git push origin v18.0.1.0.5
 ```
 
 **Tag 命名規則：**
 
-| 項目                              | 格式                           | 範例           |
-| --------------------------------- | ------------------------------ | -------------- |
-| Addon version (`__manifest__.py`) | `18.0.{major}.{minor}.{patch}` | `18.0.1.0.5`  |
-| Git tag (woow_paas_platform)      | `v{major}.{minor}.{patch}`     | `v1.0.5`       |
-| paas-odoo image tag               | `YYYYMMDD.HHmm`（自動產生）    | `20260328.1430` |
+| 項目                              | 格式                                     | 範例             |
+| --------------------------------- | ---------------------------------------- | ---------------- |
+| Addon version (`__manifest__.py`) | `{odoo_version}.{major}.{minor}.{patch}` | `18.0.1.0.5`    |
+| Git tag (woow_paas_platform)      | `v{完整 version}`                         | `v18.0.1.0.5`   |
+| paas-odoo image tag               | `YYYYMMDD.HHmm`（自動產生）               | `20260328.1430`  |
 
-> **Note**: paas-odoo image tag 使用時間戳而非 addon 版號，因為 paas-odoo 是多個 addon 的組合打包，不應綁定單一 addon 的版本。
+> **Note**: Git tag 直接使用 `__manifest__.py` 的完整版號加 `v` 前綴，不做拆解。paas-odoo image tag 使用時間戳，因為它是多個 addon 的組合打包，不應綁定單一 addon 的版本。
 
 **前置條件：**
 
