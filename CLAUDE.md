@@ -26,12 +26,14 @@ Phase 5: Integrations    [████░░░░]  50%  K8s Dev Sandbox
 The module now includes a complete Cloud Services feature that allows users to deploy containerized applications via Kubernetes and Helm.
 
 **Key Components**:
+
 - **CloudAppTemplate** model - Application marketplace templates (AnythingLLM, n8n, PostgreSQL, etc.)
 - **CloudService** model - Deployed service instances with lifecycle management
 - **PaaS Operator Service** - FastAPI service at `extra/paas-operator/` that wraps Helm CLI operations
 - **Marketplace UI** - OWL components for browsing and deploying applications
 
 **Architecture**:
+
 ```
 ┌─────────────┐      ┌──────────────┐      ┌──────────────┐
 │   Odoo      │─────▶│ PaaS Operator│─────▶│ Kubernetes   │
@@ -135,6 +137,7 @@ kubectl get secret -n paas-system paas-operator-secret -o jsonpath='{.data.api-k
 ```
 
 **Odoo Configuration (Settings → Woow PaaS):**
+
 - **PaaS Operator URL**: `http://localhost:8000` (本機 Odoo) 或 `http://host.docker.internal:8000` (Docker Odoo)
 - **PaaS Operator API Key**: (value from secret above)
 
@@ -144,10 +147,10 @@ kubectl get secret -n paas-system paas-operator-secret -o jsonpath='{.data.api-k
 
 當 Odoo 運行在 Docker 容器中時，容器內的 `localhost` 指向容器本身，而非宿主機。因此需要使用 `host.docker.internal` 來連接宿主機上的 port-forward：
 
-| Odoo 運行環境 | PaaS Operator URL |
-|--------------|-------------------|
-| 本機直接運行 | `http://localhost:8000` |
-| Docker 容器 | `http://host.docker.internal:8000` |
+| Odoo 運行環境 | PaaS Operator URL                  |
+| ------------- | ---------------------------------- |
+| 本機直接運行  | `http://localhost:8000`            |
+| Docker 容器   | `http://host.docker.internal:8000` |
 
 ```bash
 # 確認 port-forward 正在運行
@@ -156,6 +159,50 @@ kubectl port-forward -n paas-system svc/paas-operator 8000:80
 # 從 Docker 容器內測試連線
 docker exec -it <odoo-container> curl http://host.docker.internal:8000/health
 ```
+
+### Release & Build paas-odoo Image
+
+發版時會自動觸發 `paas-odoo-ci` repo 打包含有最新 addon 的 Odoo Docker image。
+
+**Cross-repo CI 流程：**
+
+```
+woow_paas_platform (push v* tag)
+  → .gitea/workflows/trigger-odoo-build.yml
+    → Gitea API dispatch
+      → paas-odoo-ci/.gitea/workflows/build-image.yml
+        → clone addon at tag → build & push paas-odoo image
+```
+
+**發版步驟：**
+
+```bash
+# 1. 更新版本號 src/__manifest__.py 中的 version
+#    格式: 18.0.{major}.{minor}.{patch}
+
+# 2. Commit & push
+git add src/__manifest__.py
+git commit -m "release: 18.0.1.0.5"
+git push
+
+# 3. 打 tag 並 push（自動觸發 paas-odoo-ci build）
+git tag v1.0.5
+git push origin v1.0.5
+```
+
+**Tag 命名規則：**
+
+| 項目                              | 格式                           | 範例           |
+| --------------------------------- | ------------------------------ | -------------- |
+| Addon version (`__manifest__.py`) | `18.0.{major}.{minor}.{patch}` | `18.0.1.0.5`  |
+| Git tag (woow_paas_platform)      | `v{major}.{minor}.{patch}`     | `v1.0.5`       |
+| paas-odoo image tag               | `YYYYMMDD.HHmm`（自動產生）    | `20260328.1430` |
+
+> **Note**: paas-odoo image tag 使用時間戳而非 addon 版號，因為 paas-odoo 是多個 addon 的組合打包，不應綁定單一 addon 的版本。
+
+**前置條件：**
+
+`woow_paas_platform` repo 的 Gitea Settings → Actions → Secrets 需設定 `CI_GITEA_TOKEN`，該 token 的擁有者須同時具備 `odoo-addons` 和 `woow-paas` org 的 Write 權限（scope: `repository: Read and Write`）。
 
 ## Architecture
 
@@ -311,6 +358,7 @@ Root (router logic)
 透過 Helm 部署獨立的 Odoo 開發環境到 Kubernetes。
 
 **Architecture**:
+
 ```
 ┌─────────────────────────────┐
 │   K8s Namespace              │
@@ -329,10 +377,12 @@ Root (router logic)
 ```
 
 **兩種模式**：
+
 - **Local 模式**：使用 hostPath mount 實現即時程式碼編輯
 - **CI 模式**：程式碼打包進 Docker 映像
 
 **主要功能**：
+
 - 每個 branch 獨立的 namespace 隔離
 - TTL 自動清理（預設 7 天）
 - ResourceQuota 與 NetworkPolicy 限制
@@ -436,11 +486,13 @@ export class SubscriptionCard extends Component {
 ## Dependencies
 
 ### Odoo Module
+
 - Base Odoo modules: `base`, `web`
 - Odoo version: 18.0
 - External fonts: Google Fonts (Manrope, Outfit), Material Symbols
 
 ### PaaS Operator Service
+
 - Python 3.11+
 - FastAPI
 - Helm 3.13+
@@ -448,6 +500,7 @@ export class SubscriptionCard extends Component {
 - Kubernetes cluster access
 
 ### Deployment
+
 - Kubernetes 1.28+ (K3s recommended for self-hosted)
 - PostgreSQL 14+ (for Odoo)
 - Cloudflare DNS (or custom domain for Ingress)
@@ -474,19 +527,19 @@ This project uses Claude Code PM (`.claude/` directory) for project management.
 
 The `.claude/rules/` directory contains coding standards and operation patterns that are automatically loaded by Claude Code PM:
 
-| Rule File | Description |
-|-----------|-------------|
-| `datetime.md` | ISO 8601 datetime format standards for frontmatter |
-| `frontmatter-operations.md` | YAML frontmatter reading/updating patterns |
-| `github-operations.md` | GitHub CLI patterns and repository protection |
-| `standard-patterns.md` | Core validation, output, and error handling patterns |
-| `strip-frontmatter.md` | Removing frontmatter before GitHub sync |
-| `path-standards.md` | Relative path usage for portability and privacy |
-| `worktree-operations.md` | Git worktree creation and management |
-| `branch-operations.md` | Git branch workflows |
-| `agent-coordination.md` | Multi-agent parallel execution rules |
-| `test-execution.md` | Test runner patterns |
-| `use-ast-grep.md` | AST-based code search and refactoring |
+| Rule File                   | Description                                          |
+| --------------------------- | ---------------------------------------------------- |
+| `datetime.md`               | ISO 8601 datetime format standards for frontmatter   |
+| `frontmatter-operations.md` | YAML frontmatter reading/updating patterns           |
+| `github-operations.md`      | GitHub CLI patterns and repository protection        |
+| `standard-patterns.md`      | Core validation, output, and error handling patterns |
+| `strip-frontmatter.md`      | Removing frontmatter before GitHub sync              |
+| `path-standards.md`         | Relative path usage for portability and privacy      |
+| `worktree-operations.md`    | Git worktree creation and management                 |
+| `branch-operations.md`      | Git branch workflows                                 |
+| `agent-coordination.md`     | Multi-agent parallel execution rules                 |
+| `test-execution.md`         | Test runner patterns                                 |
+| `use-ast-grep.md`           | AST-based code search and refactoring                |
 
 ## Worktree Development
 
@@ -508,6 +561,7 @@ cd ../woow_paas_platform.worktrees/epic-feature
 ### 環境配置
 
 每個 worktree 會自動配置：
+
 - **唯一的 port**（8069 + 目錄 hash）- 避免衝突
 - **獨立的資料庫名稱**（`woow_<branch>`）- 資料隔離
 - **獨立的 Docker 容器**（基於 `COMPOSE_PROJECT_NAME`）
@@ -571,6 +625,7 @@ docker compose -f docker-compose.shared-db.yml up -d
 ### VS Code 本機開發
 
 使用本機 VS Code（不使用 Dev Container）：
+
 - 每個 worktree 可以開啟獨立的 VS Code 視窗
 - Odoo 服務運行在 Docker 容器中
 - 支援遠端調試（Python debugger attach to container）
