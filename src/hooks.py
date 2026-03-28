@@ -117,3 +117,19 @@ def pre_init_hook(env):
     before module installation.
     """
     _check_python_dependencies()
+
+
+_CONFIG_PARAMETERS = [
+    'woow_paas_platform.operator_url',
+    'woow_paas_platform.operator_api_key',
+    'woow_paas_platform.paas_domain',
+    'woow_paas_platform.default_ai_config_id',
+    'woow_paas_platform.default_ai_assistant_id',
+]
+
+
+def uninstall_hook(env):
+    """Remove ir.config_parameter records created by this module."""
+    env['ir.config_parameter'].search([
+        ('key', 'in', _CONFIG_PARAMETERS),
+    ]).unlink()

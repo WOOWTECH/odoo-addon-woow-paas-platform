@@ -361,6 +361,19 @@ class ResConfigSettings(models.TransientModel):
     # Add fields with config_parameter for system settings
 ```
 
+**使用 `config_parameter` 時的卸載清理：**
+
+Odoo 卸載 addon 時**不會**自動清除 `ir.config_parameter` 記錄。若欄位使用了 `config_parameter`，必須同步更新 `src/hooks.py` 中的 `_CONFIG_PARAMETERS` 列表，確保卸載時能正確清理。
+
+```python
+# src/hooks.py
+_CONFIG_PARAMETERS = [
+    'woow_paas_platform.operator_url',
+    'woow_paas_platform.operator_api_key',
+    # 新增 config_parameter 時，務必加到這裡
+]
+```
+
 ## Code Style Guide
 
 ### Indentation
