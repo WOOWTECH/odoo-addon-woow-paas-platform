@@ -176,9 +176,13 @@ woow_paas_platform (push v* tag)
 
 **發版步驟：**
 
+使用 Claude Code 可直接執行 `/woow:deploy`，會自動讀取版號、檢查 tag、確認後打 tag 並 push。
+
+手動發版：
+
 ```bash
 # 1. 更新版本號 src/__manifest__.py 中的 version
-#    格式: 18.0.{major}.{minor}.{patch}
+#    格式: {odoo_version}.{major}.{minor}.{patch}
 
 # 2. Commit & push
 git add src/__manifest__.py
