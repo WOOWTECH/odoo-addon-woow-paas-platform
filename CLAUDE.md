@@ -208,6 +208,77 @@ git push origin v18.0.1.0.5
 
 `woow_paas_platform` repo 的 Gitea Settings → Actions → Secrets 需設定 `CI_GITEA_TOKEN`，該 token 的擁有者須同時具備 `odoo-addons` 和 `woow-paas` org 的 Write 權限（scope: `repository: Read and Write`）。
 
+### Deploy Staging (deploy-stg)
+
+部署 staging 環境到 K8s dev sandbox。完整流程為：觸發 CI 建置 `paas-odoo-stg` image → 輪詢 registry 等待完成 → 呼叫 `create.sh` 部署 sandbox。
+
+**前置條件：**
+
+```bash
+# 設定 Gitea Token（需有 repo + packages 權限）
+export GITEA_TOKEN="your-gitea-personal-access-token"
+
+# （選填）JFrog JCR 認證，若 registry 查詢需要認證
+export JCR_USER="admin"
+export JCR_PASS="your-password"
+```
+
+**使用方式：**
+
+```bash
+# 方法 1：使用 Claude Code skill（推薦）
+/deploy-stg                          # 使用最新 git tag 部署
+/deploy-stg v18.0.1.0.5              # 指定 addon ref
+/deploy-stg --slug stg-test          # 自訂 sandbox 名稱（namespace: dev-sandbox-stg-test）
+
+# 方法 2：直接執行腳本
+./.claude/skills/deploy-stg/scripts/deploy-stg.sh
+./.claude/skills/deploy-stg/scripts/deploy-stg.sh v18.0.1.0.5 --slug stg
+```
+
+**跳過 CI 建置（用已存在的 image）：**
+
+```bash
+# 直接指定完整 image
+/deploy-stg --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:stg-20260329.1500
+
+# 或用現有 tag，只做 registry 輪詢 + 部署
+./.claude/skills/deploy-stg/scripts/deploy-stg.sh --skip-build --tag stg-20260329.1500
+```
+
+**驗證與管理：**
+
+```bash
+# 查看 staging pod 狀態
+kubectl get pods -n dev-sandbox-stg
+
+# 查看日誌
+./.claude/skills/k8s-dev-sandbox/scripts/logs.sh stg --service odoo --follow
+
+# 銷毀 staging
+/k8s-dev-sandbox destroy stg
+```
+
+**CI 流程圖：**
+
+```
+deploy-stg.sh
+  → POST git-prod.woowtech.io/.../dispatches
+    → paas-odoo-ci: build-image.yml (image_name=paas-odoo-stg)
+      → push jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:{tag}
+  → poll registry (30s interval, 15min timeout)
+  → create.sh --branch stg --image {full_image}
+    → helm install → dev-sandbox-stg namespace
+```
+
+**Image 命名規則：**
+
+| 項目 | 格式 | 範例 |
+|------|------|------|
+| STG image repo | `woow-paas-docker-local/paas-odoo-stg` | - |
+| STG image tag | `stg-YYYYMMDD.HHMM` | `stg-20260329.1500` |
+| Sandbox namespace | `dev-sandbox-{slug}` | `dev-sandbox-stg` |
+
 ## Architecture
 
 ### Directory Structure
@@ -300,6 +371,10 @@ woow_paas_platform/
 │   └── spec/                    # Feature specifications
 └── .claude/                      # Claude Code PM configuration
     └── skills/
+        ├── deploy-stg/           # Staging 部署 Skill
+        │   ├── SKILL.md          # Skill 定義
+        │   └── scripts/
+        │       └── deploy-stg.sh # 觸發 CI → 輪詢 registry → 部署 sandbox
         └── k8s-dev-sandbox/      # K8s 沙盒 Skill
             ├── SKILL.md          # Skill 定義
             └── scripts/          # 沙盒管理腳本
