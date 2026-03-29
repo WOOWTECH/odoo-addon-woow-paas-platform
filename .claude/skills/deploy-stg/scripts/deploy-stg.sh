@@ -16,7 +16,6 @@
 #   -h, --help            Show usage
 #
 # Environment:
-#   GITEA_TOKEN   (required) Gitea Personal Access Token
 #   JCR_USER      (optional) JFrog JCR username for registry auth
 #   JCR_PASS      (optional) JFrog JCR password for registry auth
 #
@@ -42,7 +41,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 # --- Configuration ---
 GITEA_URL="https://git-prod.woowtech.io"
 CI_REPO="woow-paas/paas-odoo-ci"
-CI_WORKFLOW="build-image.yml"
+CI_REPO_PATH="${CI_REPO_PATH:-$(cd "${PROJECT_ROOT}/../../woow-paas-repo/paas-odoo-ci" 2>/dev/null && pwd || echo "")}"
 REGISTRY_URL="https://jcr-prod.woowtech.io"
 IMAGE_PATH="woow-paas-docker-local/paas-odoo-stg"
 REGISTRY_HOST="jcr-prod.woowtech.io"
@@ -101,18 +100,18 @@ done
 # --- Prerequisites ---
 echo -e "${BLUE}Checking prerequisites...${NC}"
 
-for cmd in curl jq kubectl helm; do
+for cmd in curl jq kubectl helm git; do
     if ! command -v "$cmd" &>/dev/null; then
         echo -e "${RED}Missing required tool: ${cmd}${NC}" >&2
         exit 1
     fi
 done
 
-# If using an explicit image, no need for GITEA_TOKEN
+# Check CI repo exists locally
 if [ -z "$IMAGE_OVERRIDE" ] && [ "$SKIP_BUILD" = false ]; then
-    if [ -z "${GITEA_TOKEN:-}" ]; then
-        echo -e "${RED}Error: GITEA_TOKEN environment variable is not set.${NC}" >&2
-        echo -e "Get a token from: ${GITEA_URL}/user/settings/applications" >&2
+    if [ ! -d "$CI_REPO_PATH/.git" ]; then
+        echo -e "${RED}Error: CI repo not found at ${CI_REPO_PATH}${NC}" >&2
+        echo -e "Clone it: git clone ${GITEA_URL}/${CI_REPO}.git ${CI_REPO_PATH}" >&2
         exit 1
     fi
 fi
@@ -151,27 +150,24 @@ echo -e "  ${BLUE}Image Tag:${NC}  $IMAGE_TAG"
 echo -e "  ${BLUE}Full Image:${NC} $FULL_IMAGE"
 echo -e "  ${BLUE}Slug:${NC}       $SLUG"
 echo -e "  ${BLUE}Namespace:${NC}  dev-sandbox-${SLUG}"
-echo -e "  ${BLUE}CI Repo:${NC}    $CI_REPO"
-echo -e "  ${BLUE}Workflow:${NC}   $CI_WORKFLOW"
+echo -e "  ${BLUE}CI Repo:${NC}    $CI_REPO_PATH"
+echo -e "  ${BLUE}Trigger:${NC}   git tag ${IMAGE_TAG} + push"
 echo ""
 
-# --- Trigger CI build ---
+# --- Trigger CI build via git tag ---
 if [ "$SKIP_BUILD" = false ]; then
-    echo -e "${BLUE}Triggering CI build...${NC}"
+    echo -e "${BLUE}Triggering CI build via git tag...${NC}"
 
-    HTTP_CODE=$(curl -s -o /tmp/deploy-stg-response.txt -w "%{http_code}" -X POST \
-        "${GITEA_URL}/api/v1/repos/${CI_REPO}/actions/workflows/${CI_WORKFLOW}/dispatches" \
-        -H "Authorization: token ${GITEA_TOKEN}" \
-        -H "Content-Type: application/json" \
-        -d "{\"ref\": \"main\", \"inputs\": {\"tag\": \"${IMAGE_TAG}\", \"addon_ref\": \"${ADDON_REF}\", \"image_name\": \"paas-odoo-stg\"}}")
+    # Push tag to paas-odoo-ci repo (triggers stg-* workflow)
+    git -C "$CI_REPO_PATH" fetch origin main --quiet
+    git -C "$CI_REPO_PATH" tag -f "$IMAGE_TAG" origin/main
+    git -C "$CI_REPO_PATH" push origin "$IMAGE_TAG" --force 2>/dev/null
 
-    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-        echo -e "${GREEN}CI build triggered successfully${NC}"
-        echo -e "  image_tag=${IMAGE_TAG}, addon_ref=${ADDON_REF}"
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}CI build triggered: tag ${IMAGE_TAG} pushed${NC}"
         echo -e "  Monitor: ${GITEA_URL}/${CI_REPO}/actions"
     else
-        echo -e "${RED}Failed to trigger CI build (HTTP ${HTTP_CODE})${NC}" >&2
-        cat /tmp/deploy-stg-response.txt >&2
+        echo -e "${RED}Failed to push tag ${IMAGE_TAG}${NC}" >&2
         exit 1
     fi
 else

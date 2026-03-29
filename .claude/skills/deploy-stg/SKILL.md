@@ -26,10 +26,10 @@ usage: |
 
 ## 前置條件
 
-- `GITEA_TOKEN` 環境變數已設定（Gitea Personal Access Token，需有 repo + packages 權限）
+- `paas-odoo-ci` repo 已 clone 到本機（預設從 PROJECT_ROOT 推算，或設 `CI_REPO_PATH` 環境變數指定）
 - `kubectl` 已連線到目標 K8s cluster
 - `helm` 3.13+ 已安裝
-- `curl` 和 `jq` 已安裝
+- `curl`、`jq`、`git` 已安裝
 
 ## 執行流程
 
@@ -37,14 +37,14 @@ usage: |
 
 ```bash
 # 檢查必要工具
-for cmd in curl jq kubectl helm; do
+for cmd in curl jq kubectl helm git; do
   command -v "$cmd" >/dev/null || { echo "Missing: $cmd"; exit 1; }
 done
 
-# 檢查 GITEA_TOKEN
-if [ -z "${GITEA_TOKEN:-}" ]; then
-  echo "Error: GITEA_TOKEN environment variable is not set."
-  echo "Get a token from: https://git-prod.woowtech.io/user/settings/applications"
+# 檢查 CI repo 存在
+CI_REPO_PATH="${CI_REPO_PATH:-$(cd "$PROJECT_ROOT/../../woow-paas-repo/paas-odoo-ci" && pwd)}"
+if [ ! -d "$CI_REPO_PATH/.git" ]; then
+  echo "Error: CI repo not found at $CI_REPO_PATH"
   exit 1
 fi
 ```
@@ -73,33 +73,28 @@ Deploy Staging Configuration:
   Image Tag:  ${IMAGE_TAG}
   Slug:       ${SLUG}
   Namespace:  dev-sandbox-${SLUG}
-  Gitea Repo: woow-paas/paas-odoo-ci
-  Workflow:   build-image.yml
+  CI Repo:    /Users/eugene/Documents/woow/woow-paas-repo/paas-odoo-ci
+  Trigger:    git tag ${IMAGE_TAG} + push
 ```
 
-### Step 4: 觸發 CI Build
+### Step 4: 觸發 CI Build（via git tag）
 
 若使用者指定 `--skip-build` 或 `--image`，跳過此步驟。
 
+透過在 `paas-odoo-ci` repo push `stg-*` tag 觸發 Gitea CI workflow：
+
 ```bash
-GITEA_URL="https://git-prod.woowtech.io"
-REPO="woow-paas/paas-odoo-ci"
-WORKFLOW="build-image.yml"
+CI_REPO_PATH="${CI_REPO_PATH:-$(cd "$PROJECT_ROOT/../../woow-paas-repo/paas-odoo-ci" && pwd)}"
 
-HTTP_CODE=$(curl -s -o /tmp/deploy-stg-response.txt -w "%{http_code}" -X POST \
-  "${GITEA_URL}/api/v1/repos/${REPO}/actions/workflows/${WORKFLOW}/dispatches" \
-  -H "Authorization: token ${GITEA_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "{\"ref\": \"main\", \"inputs\": {\"tag\": \"${IMAGE_TAG}\", \"addon_ref\": \"${ADDON_REF}\", \"image_name\": \"paas-odoo-stg\"}}")
+git -C "$CI_REPO_PATH" fetch origin main --quiet
+git -C "$CI_REPO_PATH" tag -f "$IMAGE_TAG" origin/main
+git -C "$CI_REPO_PATH" push origin "$IMAGE_TAG" --force
 
-if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-  echo "Triggered CI build: image_tag=${IMAGE_TAG}, addon_ref=${ADDON_REF}"
-else
-  echo "Failed to trigger CI (HTTP ${HTTP_CODE})"
-  cat /tmp/deploy-stg-response.txt
-  exit 1
-fi
+echo "CI build triggered: tag ${IMAGE_TAG} pushed"
+echo "Monitor: https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions"
 ```
+
+CI workflow 偵測到 `stg-*` tag 後自動 build `paas-odoo-stg` image。
 
 ### Step 5: 等待 Image 建置完成
 
@@ -198,7 +193,7 @@ say -r 180 "主人，staging 環境部署完成了"
 
 | 問題 | 可能原因 | 解決方式 |
 |------|----------|----------|
-| CI 觸發失敗 (401/403) | GITEA_TOKEN 無效或權限不足 | 重新產生 token，確認有 repo 權限 |
+| git push tag 失敗 | CI repo 未 clone 或 remote 設定錯誤 | 確認 `paas-odoo-ci` repo 路徑和 git remote |
 | Image 輪詢 timeout | CI build 失敗或時間過長 | 到 Gitea UI 檢查 workflow run 狀態 |
 | Registry 查詢 401 | JCR 需認證 | 設定 `JCR_USER` / `JCR_PASS` 環境變數 |
 | Helm install 失敗 | kubectl 未連線或權限不足 | 確認 kubeconfig 和 RBAC |
