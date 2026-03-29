@@ -227,9 +227,9 @@ export JCR_PASS="your-password"
 
 ```bash
 # 方法 1：使用 Claude Code skill（推薦）
-/deploy-stg                          # 使用最新 git tag 部署
-/deploy-stg v18.0.1.0.5              # 指定 addon ref
-/deploy-stg --slug stg-test          # 自訂 sandbox 名稱（namespace: dev-sandbox-stg-test）
+/woow:deploy-stg                         # 使用最新 git tag 部署
+/woow:deploy-stg v18.0.1.0.5             # 指定 addon ref
+/woow:deploy-stg --slug stg-test         # 自訂 sandbox 名稱（namespace: dev-sandbox-stg-test）
 
 # 方法 2：直接執行腳本
 ./.claude/skills/deploy-stg/scripts/deploy-stg.sh
@@ -240,7 +240,7 @@ export JCR_PASS="your-password"
 
 ```bash
 # 直接指定完整 image
-/deploy-stg --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:stg-20260329.1500
+/woow:deploy-stg --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:stg-20260329.1500
 
 # 或用現有 tag，只做 registry 輪詢 + 部署
 ./.claude/skills/deploy-stg/scripts/deploy-stg.sh --skip-build --tag stg-20260329.1500

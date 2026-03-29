@@ -1,5 +1,5 @@
 ---
-name: deploy-stg
+name: woow:deploy-stg
 description: Deploy a staging paas-odoo instance. Triggers CI to build a staging image, waits for completion, then deploys to a K8s dev sandbox.
 usage: |
   Use when:
@@ -7,7 +7,7 @@ usage: |
   (2) User wants to trigger a CI build and deploy to sandbox
   (3) User says "deploy stg", "staging", "部署 STG", "建 staging"
 
-  Invoke with: /deploy-stg [addon_ref] [--slug <name>] [--skip-build] [--image <full-image>]
+  Invoke with: /woow:deploy-stg [addon_ref] [--slug <name>] [--skip-build] [--image <full-image>]
   Keywords: deploy, stg, staging, CI, build, sandbox, 部署, 測試環境
 ---
 
@@ -179,16 +179,16 @@ say -r 180 "主人，staging 環境部署完成了"
 
 ```bash
 # 使用最新 tag 部署（最常見）
-/deploy-stg
+/woow:deploy-stg
 
 # 指定 addon ref
-/deploy-stg v18.0.1.0.5
+/woow:deploy-stg v18.0.1.0.5
 
 # 自訂 slug（namespace 為 dev-sandbox-stg-test）
-/deploy-stg --slug stg-test
+/woow:deploy-stg --slug stg-test
 
 # 跳過建置，用已存在的 image
-/deploy-stg --skip-build --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:stg-20260329.1400
+/woow:deploy-stg --skip-build --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:stg-20260329.1400
 
 # 銷毀 staging sandbox
 /k8s-dev-sandbox destroy stg
