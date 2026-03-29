@@ -374,7 +374,7 @@ woow_paas_platform/
         ├── deploy-stg/           # Staging 部署 Skill
         │   ├── SKILL.md          # Skill 定義
         │   └── scripts/
-        │       └── deploy-stg.sh # 觸發 CI → 輪詢 registry → 部署 sandbox
+        │       └── deploy-stg.sh # Gitea API 觸發 CI → 輪詢 CI 狀態 → 部署 sandbox
         └── k8s-dev-sandbox/      # K8s 沙盒 Skill
             ├── SKILL.md          # Skill 定義
             └── scripts/          # 沙盒管理腳本
