@@ -9,21 +9,20 @@
 # Options:
 #   --slug <name>         Sandbox slug (default: stg)
 #   --image <full-image>  Skip CI build, use existing image (format: registry/repo:tag)
-#   --skip-build          Skip CI build, poll registry for existing image
-#   --tag <tag>           Override image tag (default: stg-YYYYMMDD.HHMM)
+#   --skip-build          Skip CI build, only poll CI status for existing tag
+#   --tag <tag>           Override git tag (default: stg-YYYYMMDD.HHMM, docker tag auto-derived)
 #   --timeout <seconds>   Build wait timeout (default: 900 = 15 min)
 #   --interval <seconds>  Poll interval (default: 30)
 #   -h, --help            Show usage
 #
 # Environment:
-#   JCR_USER      (optional) JFrog JCR username for registry auth
-#   JCR_PASS      (optional) JFrog JCR password for registry auth
+#   GITEA_TOKEN   (required) Gitea personal access token (scopes: repo, write:packages)
 #
 # Examples:
 #   .claude/skills/deploy-stg/scripts/deploy-stg.sh
 #   .claude/skills/deploy-stg/scripts/deploy-stg.sh v18.0.1.0.5
 #   .claude/skills/deploy-stg/scripts/deploy-stg.sh --slug stg-test
-#   .claude/skills/deploy-stg/scripts/deploy-stg.sh --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:stg-20260329.1400
+#   .claude/skills/deploy-stg/scripts/deploy-stg.sh --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:20260329.1400
 
 set -euo pipefail
 
@@ -41,16 +40,14 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 # --- Configuration ---
 GITEA_URL="https://git-prod.woowtech.io"
 CI_REPO="woow-paas/paas-odoo-ci"
-CI_REPO_PATH="${CI_REPO_PATH:-$(cd "${PROJECT_ROOT}/../../woow-paas-repo/paas-odoo-ci" 2>/dev/null && pwd || echo "")}"
-REGISTRY_URL="https://jcr-prod.woowtech.io"
-IMAGE_PATH="woow-paas-docker-local/paas-odoo-stg"
 REGISTRY_HOST="jcr-prod.woowtech.io"
+IMAGE_PATH="woow-paas-docker-local/paas-odoo-stg"
 
 # --- Defaults ---
 SLUG="stg"
 ADDON_REF=""
 IMAGE_OVERRIDE=""
-IMAGE_TAG_OVERRIDE=""
+GIT_TAG_OVERRIDE=""
 SKIP_BUILD=false
 POLL_TIMEOUT=900
 POLL_INTERVAL=30
@@ -71,7 +68,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --tag)
-            IMAGE_TAG_OVERRIDE="$2"
+            GIT_TAG_OVERRIDE="$2"
             shift 2
             ;;
         --timeout)
@@ -107,13 +104,12 @@ for cmd in curl jq kubectl helm git; do
     fi
 done
 
-# Check CI repo exists locally
-if [ -z "$IMAGE_OVERRIDE" ] && [ "$SKIP_BUILD" = false ]; then
-    if [ ! -d "$CI_REPO_PATH/.git" ]; then
-        echo -e "${RED}Error: CI repo not found at ${CI_REPO_PATH}${NC}" >&2
-        echo -e "Clone it: git clone ${GITEA_URL}/${CI_REPO}.git ${CI_REPO_PATH}" >&2
-        exit 1
-    fi
+# Check GITEA_TOKEN (not needed for --image override)
+if [ -z "$IMAGE_OVERRIDE" ] && [ -z "${GITEA_TOKEN:-}" ]; then
+    echo -e "${RED}Error: GITEA_TOKEN is not set${NC}" >&2
+    echo -e "Generate one: Gitea UI → Settings → Applications → Generate New Token" >&2
+    echo -e "Required scopes: repo, write:packages" >&2
+    exit 1
 fi
 
 # --- Resolve addon ref ---
@@ -123,14 +119,16 @@ if [ -z "$ADDON_REF" ]; then
     ADDON_REF=$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
 fi
 
-# --- Resolve image tag ---
-if [ -n "$IMAGE_TAG_OVERRIDE" ]; then
-    IMAGE_TAG="$IMAGE_TAG_OVERRIDE"
+# --- Resolve git tag and docker tag ---
+if [ -n "$GIT_TAG_OVERRIDE" ]; then
+    GIT_TAG="$GIT_TAG_OVERRIDE"
 else
-    IMAGE_TAG="stg-$(date -u +'%Y%m%d.%H%M')"
+    GIT_TAG="stg-$(date -u +'%Y%m%d.%H%M')"
 fi
 
-FULL_IMAGE="${REGISTRY_HOST}/${IMAGE_PATH}:${IMAGE_TAG}"
+# Docker image tag = git tag with stg- prefix stripped
+DOCKER_TAG="${GIT_TAG#stg-}"
+FULL_IMAGE="${REGISTRY_HOST}/${IMAGE_PATH}:${DOCKER_TAG}"
 
 # --- Handle --image override (skip everything, go straight to deploy) ---
 if [ -n "$IMAGE_OVERRIDE" ]; then
@@ -145,70 +143,109 @@ fi
 # --- Display configuration ---
 echo ""
 echo -e "${BLUE}Deploy Staging Configuration:${NC}"
-echo -e "  ${BLUE}Addon Ref:${NC}  $ADDON_REF"
-echo -e "  ${BLUE}Image Tag:${NC}  $IMAGE_TAG"
-echo -e "  ${BLUE}Full Image:${NC} $FULL_IMAGE"
-echo -e "  ${BLUE}Slug:${NC}       $SLUG"
-echo -e "  ${BLUE}Namespace:${NC}  dev-sandbox-${SLUG}"
-echo -e "  ${BLUE}CI Repo:${NC}    $CI_REPO_PATH"
-echo -e "  ${BLUE}Trigger:${NC}   git tag ${IMAGE_TAG} + push"
+echo -e "  ${BLUE}Addon Ref:${NC}    $ADDON_REF"
+echo -e "  ${BLUE}Git Tag:${NC}      $GIT_TAG"
+echo -e "  ${BLUE}Docker Tag:${NC}   $DOCKER_TAG"
+echo -e "  ${BLUE}Full Image:${NC}   $FULL_IMAGE"
+echo -e "  ${BLUE}Slug:${NC}         $SLUG"
+echo -e "  ${BLUE}Namespace:${NC}    dev-sandbox-${SLUG}"
+echo -e "  ${BLUE}Trigger:${NC}      Gitea API create tag ${GIT_TAG}"
 echo ""
 
-# --- Trigger CI build via git tag ---
+# --- Trigger CI build via Gitea API ---
 if [ "$SKIP_BUILD" = false ]; then
-    echo -e "${BLUE}Triggering CI build via git tag...${NC}"
+    echo -e "${BLUE}Triggering CI build via Gitea API...${NC}"
 
-    # Push tag to paas-odoo-ci repo (triggers stg-* workflow)
-    git -C "$CI_REPO_PATH" fetch origin main --quiet
-    git -C "$CI_REPO_PATH" tag -f "$IMAGE_TAG" origin/main
-    git -C "$CI_REPO_PATH" push origin "$IMAGE_TAG" --force 2>/dev/null
+    # Get main branch latest commit SHA
+    BRANCH_RESP=$(curl -s -H "Authorization: token ${GITEA_TOKEN}" \
+        "${GITEA_URL}/api/v1/repos/${CI_REPO}/branches/main")
+    MAIN_SHA=$(echo "$BRANCH_RESP" | jq -r '.commit.id // empty')
 
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}CI build triggered: tag ${IMAGE_TAG} pushed${NC}"
-        echo -e "  Monitor: ${GITEA_URL}/${CI_REPO}/actions"
-    else
-        echo -e "${RED}Failed to push tag ${IMAGE_TAG}${NC}" >&2
+    if [ -z "$MAIN_SHA" ]; then
+        echo -e "${RED}Error: Failed to get main branch SHA${NC}" >&2
+        echo "$BRANCH_RESP" | jq . 2>/dev/null || echo "$BRANCH_RESP" >&2
         exit 1
     fi
+
+    echo -e "  Main branch SHA: ${MAIN_SHA:0:12}"
+
+    # Create tag on CI repo
+    TAG_RESP=$(curl -s -X POST -H "Authorization: token ${GITEA_TOKEN}" \
+        -H "Content-Type: application/json" \
+        "${GITEA_URL}/api/v1/repos/${CI_REPO}/tags" \
+        -d "{\"tag_name\": \"${GIT_TAG}\", \"target\": \"${MAIN_SHA}\"}")
+    TAG_NAME=$(echo "$TAG_RESP" | jq -r '.name // empty')
+
+    if [ -z "$TAG_NAME" ]; then
+        # Check if tag already exists (409 conflict)
+        ERR_MSG=$(echo "$TAG_RESP" | jq -r '.message // empty')
+        if echo "$ERR_MSG" | grep -qi "exist"; then
+            echo -e "${YELLOW}Tag ${GIT_TAG} already exists, proceeding to poll CI status...${NC}"
+        else
+            echo -e "${RED}Error: Failed to create tag ${GIT_TAG}${NC}" >&2
+            echo "$TAG_RESP" | jq . 2>/dev/null || echo "$TAG_RESP" >&2
+            exit 1
+        fi
+    else
+        echo -e "${GREEN}CI build triggered: tag ${TAG_NAME} created${NC}"
+    fi
+
+    echo -e "  Monitor: ${GITEA_URL}/${CI_REPO}/actions"
 else
     echo -e "${YELLOW}Skipping CI build (--skip-build)${NC}"
 fi
 
-# --- Poll registry for image ---
+# --- Poll CI status via Gitea API ---
 echo ""
-echo -e "${BLUE}Waiting for image to be available in registry...${NC}"
-echo -e "  Image: ${IMAGE_PATH}:${IMAGE_TAG}"
+echo -e "${BLUE}Waiting for CI to complete...${NC}"
+echo -e "  Git Tag: ${GIT_TAG}"
 echo -e "  Timeout: ${POLL_TIMEOUT}s (poll every ${POLL_INTERVAL}s)"
 echo ""
 
 MAX_ATTEMPTS=$(( POLL_TIMEOUT / POLL_INTERVAL ))
-IMAGE_READY=false
-
-# Build registry auth header
-REGISTRY_AUTH_ARGS=""
-if [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
-    REGISTRY_AUTH_ARGS="-u ${JCR_USER}:${JCR_PASS}"
-fi
+CI_DONE=false
 
 for i in $(seq 1 "$MAX_ATTEMPTS"); do
-    HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
-        ${REGISTRY_AUTH_ARGS} \
-        "${REGISTRY_URL}/v2/${IMAGE_PATH}/manifests/${IMAGE_TAG}" \
-        -H "Accept: application/vnd.docker.distribution.manifest.v2+json" 2>/dev/null || echo "000")
+    # Query action tasks, filter by head_branch matching our tag
+    TASKS_RESP=$(curl -s -H "Authorization: token ${GITEA_TOKEN}" \
+        "${GITEA_URL}/api/v1/repos/${CI_REPO}/actions/tasks?limit=10")
 
-    if [ "$HTTP" = "200" ]; then
-        echo -e "${GREEN}Image is ready! (attempt ${i}/${MAX_ATTEMPTS})${NC}"
-        IMAGE_READY=true
+    # Extract statuses of all tasks matching our tag
+    STATUSES=$(echo "$TASKS_RESP" | jq -r \
+        ".workflow_runs // [] | map(select(.head_branch == \"${GIT_TAG}\")) | .[].status" 2>/dev/null)
+
+    ELAPSED=$(( i * POLL_INTERVAL ))
+
+    if [ -z "$STATUSES" ]; then
+        echo -e "  [${ELAPSED}s/${POLL_TIMEOUT}s] CI run not found yet, waiting ${POLL_INTERVAL}s..."
+        sleep "$POLL_INTERVAL"
+        continue
+    fi
+
+    # Check for failure/cancelled in any task
+    if echo "$STATUSES" | grep -qE '^(failure|cancelled)$'; then
+        FAILED_STATUS=$(echo "$STATUSES" | grep -E '^(failure|cancelled)$' | head -1)
+        echo -e "${RED}CI failed (status: ${FAILED_STATUS})${NC}" >&2
+        echo -e "Check: ${GITEA_URL}/${CI_REPO}/actions" >&2
+        exit 1
+    fi
+
+    # Check if all tasks are successful
+    NON_SUCCESS=$(echo "$STATUSES" | grep -v '^success$' || true)
+    if [ -z "$NON_SUCCESS" ]; then
+        echo -e "${GREEN}CI completed successfully! (attempt ${i}/${MAX_ATTEMPTS})${NC}"
+        CI_DONE=true
         break
     fi
 
-    ELAPSED=$(( i * POLL_INTERVAL ))
-    echo -e "  [${ELAPSED}s/${POLL_TIMEOUT}s] Not ready (HTTP ${HTTP}), waiting ${POLL_INTERVAL}s..."
+    # Still in progress
+    CURRENT=$(echo "$STATUSES" | head -1)
+    echo -e "  [${ELAPSED}s/${POLL_TIMEOUT}s] CI status: ${CURRENT}, waiting ${POLL_INTERVAL}s..."
     sleep "$POLL_INTERVAL"
 done
 
-if [ "$IMAGE_READY" = false ]; then
-    echo -e "${RED}Timeout: image not found after ${POLL_TIMEOUT}s${NC}" >&2
+if [ "$CI_DONE" = false ]; then
+    echo -e "${RED}Timeout: CI not completed after ${POLL_TIMEOUT}s${NC}" >&2
     echo -e "Check CI status: ${GITEA_URL}/${CI_REPO}/actions" >&2
     exit 1
 fi

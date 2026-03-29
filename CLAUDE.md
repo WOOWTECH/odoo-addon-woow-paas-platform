@@ -210,18 +210,16 @@ git push origin v18.0.1.0.5
 
 ### Deploy Staging (deploy-stg)
 
-部署 staging 環境到 K8s dev sandbox。完整流程為：觸發 CI 建置 `paas-odoo-stg` image → 輪詢 registry 等待完成 → 呼叫 `create.sh` 部署 sandbox。
+部署 staging 環境到 K8s dev sandbox。完整流程為：Gitea API 建立 tag 觸發 CI → 輪詢 CI 狀態等待完成 → 呼叫 `create.sh` 部署 sandbox。
 
 **前置條件：**
 
 ```bash
-# 設定 Gitea Token（需有 repo + packages 權限）
+# 設定 Gitea Token（需有 repo + write:packages scope）
 export GITEA_TOKEN="your-gitea-personal-access-token"
-
-# （選填）JFrog JCR 認證，若 registry 查詢需要認證
-export JCR_USER="admin"
-export JCR_PASS="your-password"
 ```
+
+> Token 產生方式：Gitea UI → Settings → Applications → Generate New Token
 
 **使用方式：**
 
@@ -239,10 +237,10 @@ export JCR_PASS="your-password"
 **跳過 CI 建置（用已存在的 image）：**
 
 ```bash
-# 直接指定完整 image
-/woow:deploy-stg --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:stg-20260329.1500
+# 直接指定完整 image（docker tag 格式，不含 stg- 前綴）
+/woow:deploy-stg --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:20260329.1500
 
-# 或用現有 tag，只做 registry 輪詢 + 部署
+# 跳過建立 tag，僅輪詢已存在 git tag 的 CI 狀態 + 部署
 ./.claude/skills/deploy-stg/scripts/deploy-stg.sh --skip-build --tag stg-20260329.1500
 ```
 
@@ -263,10 +261,11 @@ kubectl get pods -n dev-sandbox-stg
 
 ```
 deploy-stg.sh
-  → POST git-prod.woowtech.io/.../dispatches
-    → paas-odoo-ci: build-image.yml (image_name=paas-odoo-stg)
-      → push jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:{tag}
-  → poll registry (30s interval, 15min timeout)
+  → Gitea API: GET .../branches/main → commit SHA
+  → Gitea API: POST .../tags → create stg-* git tag
+    → paas-odoo-ci: build-image.yml (triggered by stg-* tag)
+      → push jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:{docker_tag}
+  → Gitea API: GET .../actions/tasks → poll CI status (30s interval, 15min timeout)
   → create.sh --branch stg --image {full_image}
     → helm install → dev-sandbox-stg namespace
 ```
@@ -276,7 +275,8 @@ deploy-stg.sh
 | 項目 | 格式 | 範例 |
 |------|------|------|
 | STG image repo | `woow-paas-docker-local/paas-odoo-stg` | - |
-| STG image tag | `stg-YYYYMMDD.HHMM` | `stg-20260329.1500` |
+| Git tag（觸發 CI） | `stg-YYYYMMDD.HHMM` | `stg-20260329.1500` |
+| Docker image tag | `YYYYMMDD.HHMM`（CI strip `stg-`） | `20260329.1500` |
 | Sandbox namespace | `dev-sandbox-{slug}` | `dev-sandbox-stg` |
 
 ## Architecture
