@@ -41,7 +41,7 @@ odoo:
       memory: 1Gi
     limits:
       cpu: 2
-      memory: 2Gi
+      memory: 4Gi
   # Readiness probe (TCP to avoid circular dependency with DB init)
   readinessProbe:
     tcpSocket:
