@@ -119,13 +119,9 @@ pgadmin:
 ingress:
   enabled: false
   className: traefik
+  # Domain pattern: {sandbox-name}.woowtech.io
   domain: woowtech.io
   annotations: {}
-  # TLS configuration (optional)
-  # tls:
-  #   - secretName: dev-woow-tw-tls
-  #     hosts:
-  #       - "*.woowtech.io"
   tls: []
 
 # --- Code mount (local mode) ---

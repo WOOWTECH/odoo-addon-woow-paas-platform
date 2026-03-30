@@ -56,6 +56,7 @@ cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/create.sh <args
 - `--mode <mode>` - 覆蓋 sandbox 模式：local / ci-local / stg
 - `--values <file>` - 額外的 Helm values 檔案
 - `--pgadmin` - 啟用 PgAdmin
+- `--ingress` - 啟用 Ingress（`{slug}.woowtech.io`）
 
 #### `destroy <name>` - 銷毀沙盒
 

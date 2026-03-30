@@ -13,6 +13,7 @@
 #   --mode <mode>       Override sandbox mode: local, ci-local, stg (default: auto)
 #   --values <file>     Additional Helm values file
 #   --pgadmin           Enable PgAdmin
+#   --ingress           Enable Ingress ({slug}.woowtech.io)
 #   -h, --help          Show usage
 #
 # Examples:
@@ -41,6 +42,7 @@ IMAGE_TAG=""
 MODE_OVERRIDE=""
 EXTRA_VALUES=""
 PGADMIN=false
+INGRESS=false
 
 # --- 解析參數 ---
 while [[ $# -gt 0 ]]; do
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
             PGADMIN=true
             shift
             ;;
+        --ingress)
+            INGRESS=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -81,6 +87,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --mode <mode>       Override sandbox mode: local, ci-local, stg (default: auto)"
             echo "  --values <file>     Additional Helm values file"
             echo "  --pgadmin           Enable PgAdmin"
+            echo "  --ingress           Enable Ingress ({slug}.woowtech.io)"
             echo "  -h, --help          Show usage"
             echo ""
             echo "Examples:"
@@ -187,6 +194,10 @@ if [ "$PGADMIN" = true ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set pgadmin.enabled=true"
 fi
 
+if [ "$INGRESS" = true ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --set ingress.enabled=true --set ingress.domain=woowtech.io"
+fi
+
 if [ -n "$EXTRA_VALUES" ]; then
     if [ ! -f "$EXTRA_VALUES" ]; then
         echo -e "${RED}Values file not found: ${EXTRA_VALUES}${NC}" >&2
@@ -205,6 +216,9 @@ echo -e "  ${BLUE}TTL:${NC}        $TTL"
 echo -e "  ${BLUE}Mode:${NC}       $MODE"
 if [ "$PGADMIN" = true ]; then
     echo -e "  ${BLUE}PgAdmin:${NC}    enabled"
+fi
+if [ "$INGRESS" = true ]; then
+    echo -e "  ${BLUE}Ingress:${NC}    ${SLUG}.woowtech.io"
 fi
 echo ""
 

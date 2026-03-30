@@ -10,6 +10,7 @@
 #   --slug <name>         Sandbox slug (default: stg)
 #   --image <full-image>  Skip CI build, use existing image (format: registry/repo:tag)
 #   --skip-build          Skip CI build, only poll CI status for existing tag
+#   --ingress             Enable Ingress ({slug}.woowtech.io)
 #   --tag <tag>           Override git tag (default: stg-YYYYMMDD.HHMM, docker tag auto-derived)
 #   --timeout <seconds>   Build wait timeout (default: 900 = 15 min)
 #   --interval <seconds>  Poll interval (default: 30)
@@ -49,6 +50,7 @@ ADDON_REF=""
 IMAGE_OVERRIDE=""
 GIT_TAG_OVERRIDE=""
 SKIP_BUILD=false
+INGRESS=false
 POLL_TIMEOUT=900
 POLL_INTERVAL=30
 
@@ -65,6 +67,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-build)
             SKIP_BUILD=true
+            shift
+            ;;
+        --ingress)
+            INGRESS=true
             shift
             ;;
         --tag)
@@ -135,10 +141,11 @@ if [ -n "$IMAGE_OVERRIDE" ]; then
     FULL_IMAGE="$IMAGE_OVERRIDE"
     echo -e "${BLUE}Using provided image: ${FULL_IMAGE}${NC}"
     # Jump to deploy
-    exec bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" \
-        --branch "$SLUG" \
-        --image "$FULL_IMAGE" \
-        --mode stg
+    CREATE_ARGS=(--branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
+    if [ "$INGRESS" = true ]; then
+        CREATE_ARGS+=(--ingress)
+    fi
+    exec bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" "${CREATE_ARGS[@]}"
 fi
 
 # --- Display configuration ---
@@ -255,10 +262,11 @@ fi
 echo ""
 echo -e "${BLUE}Deploying to sandbox...${NC}"
 
-bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" \
-    --branch "$SLUG" \
-    --image "$FULL_IMAGE" \
-    --mode stg
+CREATE_ARGS=(--branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
+if [ "$INGRESS" = true ]; then
+    CREATE_ARGS+=(--ingress)
+fi
+bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" "${CREATE_ARGS[@]}"
 
 # --- Verify ---
 NAMESPACE="dev-sandbox-${SLUG}"

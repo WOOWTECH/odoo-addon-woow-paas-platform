@@ -23,6 +23,7 @@ usage: |
 | `--slug <name>` | 否 | `stg` | Sandbox 識別名稱，namespace = `dev-sandbox-{slug}` |
 | `--skip-build` | 否 | - | 跳過建立 tag，僅輪詢已存在 tag 的 CI 狀態 |
 | `--image <full>` | 否 | - | 直接指定完整 image（跳過 CI 建置），格式: `registry/repo:tag` |
+| `--ingress` | 否 | - | 啟用 Ingress（`{slug}.woowtech.io`） |
 
 ## 前置條件
 
