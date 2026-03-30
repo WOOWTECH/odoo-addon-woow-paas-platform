@@ -357,7 +357,7 @@ if [ "$ODOO_INITIALIZED" != "1" ]; then
     echo -e "  ${BLUE}Installing modules:${NC} ${MODULES}"
 
     if kubectl exec -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" -- \
-        odoo -d "$DB_NAME" -i "$MODULES" --stop-after-init --without-demo=all --load-language=zh_TW 2>&1 \
+        odoo -c /etc/odoo/odoo.conf -d "$DB_NAME" -i "$MODULES" --stop-after-init --without-demo=all --load-language=zh_TW 2>&1 \
         | grep -E "(Loading|Installing|init db|error|Error)" | head -20; then
         echo -e "${GREEN}Database initialized successfully.${NC}"
     else
