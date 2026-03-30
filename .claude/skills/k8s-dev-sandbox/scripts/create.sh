@@ -178,6 +178,11 @@ if [ -n "$IMAGE_TAG" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set odoo.image.repository=$IMAGE_REPO --set odoo.image.tag=$IMAGE_TAG_ONLY"
 fi
 
+# STG mode: pass registry credentials if available
+if [ "$MODE" = "stg" ] && [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --set registry.server=jcr-prod.woowtech.io --set registry.username=${JCR_USER} --set registry.password=${JCR_PASS}"
+fi
+
 if [ "$PGADMIN" = true ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set pgadmin.enabled=true"
 fi

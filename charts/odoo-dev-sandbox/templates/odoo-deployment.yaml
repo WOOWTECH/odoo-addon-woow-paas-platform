@@ -20,6 +20,10 @@ spec:
         {{- include "odoo-dev-sandbox.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: odoo
     spec:
+      {{- if eq .Values.sandbox.mode "stg" }}
+      imagePullSecrets:
+        - name: jfrog-registry
+      {{- end }}
       containers:
         - name: odoo
           image: "{{ .Values.odoo.image.repository }}:{{ .Values.odoo.image.tag }}"

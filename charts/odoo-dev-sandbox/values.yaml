@@ -153,6 +153,15 @@ secrets:
   # Use an existing K8s secret instead of creating one
   existingSecret: ""
 
+# --- Registry credentials (stg mode) ---
+registry:
+  # Docker registry server
+  server: ""
+  # Username for docker login
+  username: ""
+  # Password for docker login
+  password: ""
+
 # --- Common overrides ---
 nameOverride: ""
 fullnameOverride: ""
