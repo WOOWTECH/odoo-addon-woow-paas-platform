@@ -9,7 +9,8 @@
 # Options:
 #   --branch <name>     Override branch slug (default: auto-detect from git)
 #   --ttl <duration>    Override TTL (default: 168h = 7 days)
-#   --image <tag>       Use CI mode with specified image tag
+#   --image <tag>       Use custom image (implies ci-local mode unless --mode is set)
+#   --mode <mode>       Override sandbox mode: local, ci-local, stg (default: auto)
 #   --values <file>     Additional Helm values file
 #   --pgadmin           Enable PgAdmin
 #   -h, --help          Show usage
@@ -18,6 +19,7 @@
 #   .claude/skills/k8s-dev-sandbox/scripts/create.sh
 #   .claude/skills/k8s-dev-sandbox/scripts/create.sh --branch feature-login --ttl 48h
 #   .claude/skills/k8s-dev-sandbox/scripts/create.sh --image woow-odoo-dev:main-abc1234
+#   .claude/skills/k8s-dev-sandbox/scripts/create.sh --image registry/repo:tag --mode stg
 
 set -euo pipefail
 
@@ -36,6 +38,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 BRANCH_OVERRIDE=""
 TTL="168h"
 IMAGE_TAG=""
+MODE_OVERRIDE=""
 EXTRA_VALUES=""
 PGADMIN=false
 
@@ -54,6 +57,10 @@ while [[ $# -gt 0 ]]; do
             IMAGE_TAG="$2"
             shift 2
             ;;
+        --mode)
+            MODE_OVERRIDE="$2"
+            shift 2
+            ;;
         --values)
             EXTRA_VALUES="$2"
             shift 2
@@ -70,7 +77,8 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --branch <name>     Override branch slug (default: auto-detect from git)"
             echo "  --ttl <duration>    Override TTL (default: 168h = 7 days)"
-            echo "  --image <tag>       Use CI mode with specified image tag"
+            echo "  --image <tag>       Use custom image (implies ci-local mode unless --mode is set)"
+            echo "  --mode <mode>       Override sandbox mode: local, ci-local, stg (default: auto)"
             echo "  --values <file>     Additional Helm values file"
             echo "  --pgadmin           Enable PgAdmin"
             echo "  -h, --help          Show usage"
@@ -79,6 +87,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0"
             echo "  $0 --branch feature-login --ttl 48h"
             echo "  $0 --image woow-odoo-dev:main-abc1234"
+            echo "  $0 --image registry/repo:tag --mode stg"
             exit 0
             ;;
         *)
@@ -147,11 +156,17 @@ NAMESPACE="dev-sandbox-${SLUG}"
 DB_NAME="woow_$(echo "$SLUG" | sed 's/-/_/g')"
 
 # --- 決定模式 ---
-MODE="local"
+# Priority: --mode > --image (implies ci-local) > default (local)
+if [ -n "$MODE_OVERRIDE" ]; then
+    MODE="$MODE_OVERRIDE"
+elif [ -n "$IMAGE_TAG" ]; then
+    MODE="ci-local"
+else
+    MODE="local"
+fi
 EXTRA_ARGS=""
 
 if [ -n "$IMAGE_TAG" ]; then
-    MODE="ci"
     # Parse repository:tag
     if [[ "$IMAGE_TAG" == *:* ]]; then
         IMAGE_REPO="${IMAGE_TAG%%:*}"

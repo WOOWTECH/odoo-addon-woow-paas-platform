@@ -21,7 +21,11 @@ data:
     db_maxconn = 64
 
     ; Addons path
+    {{- if eq .Values.sandbox.mode "stg" }}
+    addons_path = /opt/bitnami/odoo/custom-addons
+    {{- else }}
     addons_path = {{ .Values.odoo.addonsPath }}
+    {{- end }}
 
     ; Server settings
     http_port = 8069

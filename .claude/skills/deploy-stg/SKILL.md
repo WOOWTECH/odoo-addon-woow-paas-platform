@@ -144,12 +144,13 @@ FULL_IMAGE="jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:${DOCKER_T
 
 bash .claude/skills/k8s-dev-sandbox/scripts/create.sh \
   --branch "${SLUG}" \
-  --image "${FULL_IMAGE}"
+  --image "${FULL_IMAGE}" \
+  --mode stg
 ```
 
 這會：
 - 建立 namespace `dev-sandbox-${SLUG}`
-- 以 CI 模式（非 hostPath）部署 Odoo
+- 以 STG 模式部署 Odoo（addons 路徑：`/opt/bitnami/odoo/custom-addons/`）
 - 套用 NetworkPolicy 和 ResourceQuota
 
 ### Step 7: 驗證部署

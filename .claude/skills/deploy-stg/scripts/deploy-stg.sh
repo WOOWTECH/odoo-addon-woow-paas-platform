@@ -137,7 +137,8 @@ if [ -n "$IMAGE_OVERRIDE" ]; then
     # Jump to deploy
     exec bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" \
         --branch "$SLUG" \
-        --image "$FULL_IMAGE"
+        --image "$FULL_IMAGE" \
+        --mode stg
 fi
 
 # --- Display configuration ---
@@ -256,7 +257,8 @@ echo -e "${BLUE}Deploying to sandbox...${NC}"
 
 bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" \
     --branch "$SLUG" \
-    --image "$FULL_IMAGE"
+    --image "$FULL_IMAGE" \
+    --mode stg
 
 # --- Verify ---
 NAMESPACE="dev-sandbox-${SLUG}"

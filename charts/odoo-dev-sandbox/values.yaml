@@ -2,7 +2,7 @@
 
 # --- Sandbox Configuration ---
 sandbox:
-  # Deployment mode: "local" (hostPath mount) or "ci" (code baked into image)
+  # Deployment mode: "local" (hostPath mount), "ci-local" (CI image, local addons path), "stg" (STG image, baked addons)
   mode: local
   # Time-to-live before auto-cleanup (e.g., "168h" = 7 days, "0" = never)
   ttl: "168h"

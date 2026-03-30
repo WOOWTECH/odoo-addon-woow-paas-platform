@@ -52,7 +52,8 @@ cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/create.sh <args
 
 - `--branch <name>` - 覆蓋分支 slug（預設從 git 自動偵測）
 - `--ttl <duration>` - 覆蓋 TTL（預設 168h = 7 天）
-- `--image <tag>` - 使用 CI 模式與指定映像 tag
+- `--image <tag>` - 使用自訂映像（預設 ci-local 模式，除非搭配 `--mode`）
+- `--mode <mode>` - 覆蓋 sandbox 模式：local / ci-local / stg
 - `--values <file>` - 額外的 Helm values 檔案
 - `--pgadmin` - 啟用 PgAdmin
 

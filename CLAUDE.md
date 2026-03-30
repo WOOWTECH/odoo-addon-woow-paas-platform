@@ -458,7 +458,8 @@ Root (router logic)
 **兩種模式**：
 
 - **Local 模式**：使用 hostPath mount 實現即時程式碼編輯
-- **CI 模式**：程式碼打包進 Docker 映像
+- **CI-Local 模式**：程式碼打包進 CI image，addons 路徑同 local（`/mnt/extra-addons/`）
+- **STG 模式**：程式碼打包進 Bitnami image，addons 路徑為 `/opt/bitnami/odoo/custom-addons/`
 
 **主要功能**：
 

@@ -36,7 +36,7 @@ github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/117
 ```yaml
 # values.yaml 關鍵配置
 sandbox:
-  mode: local          # local | ci
+  mode: local          # local | ci-local | stg
   ttl: "168h"          # 7 天
   branch: ""           # 自動偵測
 
@@ -59,7 +59,8 @@ pgadmin:
 ```
 
 **Local mode**：hostPath 掛載 worktree `src/` → Pod `/mnt/extra-addons/woow_paas_platform`
-**CI mode**：自定義 image 包含 addon 程式碼
+**CI-Local mode**：自定義 image 包含 addon 程式碼（addons 路徑同 local）
+**STG mode**：Bitnami image 包含 addon 程式碼（addons 路徑為 `/opt/bitnami/odoo/custom-addons/`）
 
 ### Shell Scripts（`scripts/k8s-sandbox-*.sh`）
 

@@ -29,7 +29,11 @@ spec:
           args:
             - |
               {{- if .Values.odoo.extraPipRequirementsFile }}
+              {{- if eq .Values.sandbox.mode "stg" }}
+              pip3 install --break-system-packages --no-cache-dir -r '/opt/bitnami/odoo/custom-addons/woow_paas_platform/requirements.txt' 2>/dev/null && \
+              {{- else }}
               pip3 install --break-system-packages --no-cache-dir -r '{{ .Values.odoo.extraPipRequirementsFile }}' 2>/dev/null && \
+              {{- end }}
               {{- else }}
               pip3 install --break-system-packages{{- range .Values.odoo.extraPipPackages }} '{{ . }}'{{- end }} 2>/dev/null && \
               {{- end }}
