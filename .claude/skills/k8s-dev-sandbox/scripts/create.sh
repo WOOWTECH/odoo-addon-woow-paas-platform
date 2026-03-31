@@ -190,6 +190,11 @@ if [ "$MODE" = "stg" ] && [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set registry.server=jcr-prod.woowtech.io --set registry.username=${JCR_USER} --set registry.password=${JCR_PASS}"
 fi
 
+# STG mode: allow egress to paas-operator namespace
+if [ "$MODE" = "stg" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowEgressToNamespaces[0]=paas-stg-system"
+fi
+
 if [ "$PGADMIN" = true ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set pgadmin.enabled=true"
 fi

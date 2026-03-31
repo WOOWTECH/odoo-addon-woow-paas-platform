@@ -143,6 +143,11 @@ resourceQuota:
 # --- Network Policy ---
 networkPolicy:
   enabled: true
+  # Allow egress to specific namespaces (e.g., paas-operator namespace)
+  allowEgressToNamespaces: []
+  # Example for STG mode:
+  # allowEgressToNamespaces:
+  #   - paas-stg-system
 
 # --- Secret Management ---
 secrets:
