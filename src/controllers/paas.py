@@ -1487,6 +1487,7 @@ class PaasController(Controller):
             service_data = self._format_service(service)
 
             deploy_args = {
+                'registry': request.env.registry,
                 'db_name': request.env.cr.dbname,
                 'uid': request.env.uid,
                 'service_id': service.id,
@@ -1518,13 +1519,13 @@ class PaasController(Controller):
         """Background thread: namespace creation + helm install + sidecar patch.
 
         Runs outside the HTTP request lifecycle with its own DB cursor.
+        Uses a pre-fetched registry reference to avoid odoo.registry() lock contention.
         """
         import odoo
 
         _logger.info("Background deploy thread started for service %s", args.get('service_id'))
 
-        db_name = args['db_name']
-        registry = odoo.registry(db_name)
+        registry = args['registry']
         cr = registry.cursor()
         try:
             env = odoo.api.Environment(cr, args['uid'], {})
