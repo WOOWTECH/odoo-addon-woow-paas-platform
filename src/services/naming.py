@@ -11,9 +11,9 @@ def generate_resource_hash(reference_id: str, name: str) -> str:
     return hashlib.md5((reference_id + name).encode()).hexdigest()[:8]
 
 
-def make_namespace(slug: str) -> str:
-    """Generate K8s namespace name: paas-ws-{ws_hash}."""
-    return f"paas-ws-{generate_ws_hash(slug)}"
+def make_namespace(slug: str, prefix: str = 'paas-ws-') -> str:
+    """Generate K8s namespace name: {prefix}{ws_hash}."""
+    return f"{prefix}{generate_ws_hash(slug)}"
 
 
 def make_service_subdomain(slug: str, reference_id: str, name: str) -> str:

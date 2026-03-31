@@ -1406,9 +1406,12 @@ class PaasController(Controller):
         reference_id = str(uuid.uuid4())
         # Generate hash-based names for cross-sandbox uniqueness
         from ..services.naming import make_namespace, make_service_subdomain
+        ns_prefix = request.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.namespace_prefix', 'paas-ws-'
+        )
         subdomain = make_service_subdomain(workspace.slug, reference_id, name)
         helm_release_name = f"svc-{reference_id[:8]}"
-        helm_namespace = make_namespace(workspace.slug)
+        helm_namespace = make_namespace(workspace.slug, prefix=ns_prefix)
 
         # Filter user values to only allowed keys, then merge with defaults
         # Note: silently filter on create (frontend may send defaults alongside user values)

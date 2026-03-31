@@ -24,6 +24,14 @@ class ResConfigSettings(models.TransientModel):
         help='Base domain for deployed services (e.g., woowtech.io)',
     )
 
+    # Namespace Prefix
+    woow_paas_namespace_prefix = fields.Char(
+        string='Namespace Prefix',
+        config_parameter='woow_paas_platform.namespace_prefix',
+        default='paas-ws-',
+        help='Prefix for Kubernetes namespaces created by PaaS (e.g., paas-ws- or paas-ws-stg-)',
+    )
+
     # AI Configuration (using ai_base_gt models)
     woow_ai_config_id = fields.Many2one(
         'ai.config',
