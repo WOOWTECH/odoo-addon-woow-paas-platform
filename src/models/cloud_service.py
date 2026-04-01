@@ -239,6 +239,7 @@ class CloudService(models.Model):
         )
 
         _logger.info("Deploying service %s (id=%s)", self.name, self.id)
+        self.write({'state': 'deploying'})
 
         client = get_paas_operator_client(self.env)
         if not client:
@@ -316,14 +317,13 @@ class CloudService(models.Model):
                 except PaaSOperatorError as e:
                     _logger.warning("Failed to patch MCP sidecar: %s", e)
 
-            # Success → deploying
+            # Helm install done — update release info and clean up deploy params
             self.write({
-                'state': 'deploying',
                 'helm_revision': release_info.get('revision', 1),
                 'deployed_at': fields.Datetime.now(),
-                'deploy_params': False,  # clean up
+                'deploy_params': False,
             })
-            _logger.info("Service %s (id=%s) → deploying", self.name, self.id)
+            _logger.info("Service %s (id=%s) helm install complete", self.name, self.id)
 
         except PaaSOperatorConnectionError as e:
             _logger.error("Operator connection error: %s", e)
