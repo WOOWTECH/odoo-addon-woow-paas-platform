@@ -1522,14 +1522,15 @@ class PaasController(Controller):
         """Background thread: namespace creation + helm install + sidecar patch.
 
         Runs outside the HTTP request lifecycle with its own DB cursor.
-        Uses a pre-fetched registry reference to avoid odoo.registry() lock contention.
+        Uses odoo.sql_db.db_connect() to avoid registry/cursor lock contention
+        that occurs when calling registry.cursor() from a background thread.
         """
         import odoo
 
         _logger.info("Background deploy thread started for service %s", args.get('service_id'))
 
-        registry = args['registry']
-        cr = registry.cursor()
+        db = odoo.sql_db.db_connect(args['db_name'])
+        cr = db.cursor()
         try:
             env = odoo.api.Environment(cr, args['uid'], {})
             CloudService = env['woow_paas_platform.cloud_service']
