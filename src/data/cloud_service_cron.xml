@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Cron: Deploy pending cloud services -->
+        <record id="ir_cron_deploy_cloud_services" model="ir.cron">
+            <field name="name">Cloud Service: Deploy Pending</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_process_pending_deploys()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

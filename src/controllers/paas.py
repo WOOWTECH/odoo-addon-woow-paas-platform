@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import traceback
 import uuid
 from datetime import datetime
@@ -1198,107 +1197,7 @@ class PaasController(Controller):
 
         return _mask_secrets(values)
 
-    def _build_mcp_sidecar_config(
-        self,
-        template: Any,
-        auth_token: str,
-        api_key: str | None = None,
-        helm_release_name: str | None = None,
-    ) -> dict[str, Any]:
-        """Build MCP sidecar container config for PaaS Operator patch endpoint.
-
-        Constructs the sidecar container spec from the template's MCP fields,
-        merging any custom environment variables from `template.mcp_sidecar_env`
-        with the required environment variables.
-
-        When helm_release_name is provided and the template has mcp_api_key_helm_path,
-        the API key env var uses valueFrom.secretKeyRef so the sidecar reads the key
-        from the K8s Secret. This ensures pod restarts always pick up the latest key.
-
-        Args:
-            template: CloudAppTemplate record with MCP fields
-            auth_token: Generated AUTH_TOKEN for sidecar authentication
-            api_key: Optional API key for the main application (e.g., N8N_API_KEY).
-                     Used as plain value fallback when helm_release_name is not provided.
-            helm_release_name: Helm release name, used to derive K8s Secret name
-                              for secretKeyRef-based env vars.
-
-        Returns:
-            Dict matching the SidecarPatchRequest schema expected by PaaS Operator
-        """
-        sidecar_port = template.mcp_sidecar_port or 3000
-
-        # Required env vars for the MCP sidecar
-        env_vars = [
-            {'name': 'MCP_MODE', 'value': 'http'},
-            {'name': 'AUTH_TOKEN', 'value': auth_token},
-            {'name': 'N8N_API_URL', 'value': f'http://localhost:{template.default_port}'},
-            {'name': 'PORT', 'value': str(sidecar_port)},
-            # Raise the default rate limit (20 req/15min) which is too low
-            # for LangGraph agents that issue many tool calls per conversation.
-            {'name': 'AUTH_RATE_LIMIT_MAX', 'value': '500'},
-            {'name': 'AUTH_RATE_LIMIT_WINDOW', 'value': '900000'},
-        ]
-
-        # Inject API key for the main application via secretKeyRef (preferred)
-        # or plain value (fallback). secretKeyRef ensures the sidecar always
-        # picks up the latest key from the K8s Secret after pod restarts.
-        if template.mcp_api_key_helm_path:
-            env_name = template.mcp_api_key_helm_path.rsplit('.', 1)[-1]
-            if helm_release_name:
-                # Derive K8s Secret name from Helm release + chart convention
-                # n8n chart creates: {release}-n8n-app-secret
-                secret_name = f'{helm_release_name}-n8n-app-secret'
-                env_vars.append({
-                    'name': env_name,
-                    'valueFrom': {
-                        'secretKeyRef': {
-                            'name': secret_name,
-                            'key': env_name,
-                        }
-                    }
-                })
-            elif api_key:
-                # Fallback: plain value (used when helm_release_name unknown)
-                env_vars.append({'name': env_name, 'value': api_key})
-
-        # Merge custom env vars from template (if any)
-        if template.mcp_sidecar_env:
-            try:
-                custom_env = json.loads(template.mcp_sidecar_env)
-                # custom_env is a dict like {"KEY": "VALUE"}
-                # Required keys that should not be overridden
-                reserved_keys = {'MCP_MODE', 'AUTH_TOKEN', 'PORT', 'N8N_API_URL'}
-                if template.mcp_api_key_helm_path:
-                    reserved_keys.add(template.mcp_api_key_helm_path.rsplit('.', 1)[-1])
-                for key, value in custom_env.items():
-                    if key not in reserved_keys:
-                        env_vars.append({'name': key, 'value': str(value)})
-            except (json.JSONDecodeError, TypeError):
-                _logger.warning("Invalid MCP sidecar env JSON in template %s", template.name)
-
-        container_spec = {
-            'name': 'mcp-sidecar',
-            'image': template.mcp_sidecar_image,
-            'ports': [{'containerPort': sidecar_port}],
-            'env': env_vars,
-            'resources': {
-                'requests': {'memory': '128Mi', 'cpu': '100m'},
-                'limits': {'memory': '256Mi', 'cpu': '200m'},
-            },
-            'livenessProbe': {
-                'httpGet': {'path': '/health', 'port': sidecar_port},
-                'initialDelaySeconds': 15,
-                'periodSeconds': 30,
-            },
-            'readinessProbe': {
-                'httpGet': {'path': '/health', 'port': sidecar_port},
-                'initialDelaySeconds': 10,
-                'periodSeconds': 10,
-            },
-        }
-
-        return {'container': container_spec}
+    # _build_mcp_sidecar_config moved to CloudService model
 
     def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> tuple[dict[str, Any], list[str]]:
         """
@@ -1486,170 +1385,35 @@ class PaasController(Controller):
                     'subdomain': subdomain,
                 }
 
-            # Return immediately with pending state; deploy in background
-            service_data = self._format_service(service)
+            # Store deploy params and trigger cron for background deployment
+            deploy_params = {}
+            if expose_config:
+                deploy_params['expose_config'] = expose_config
+            if mcp_api_key:
+                deploy_params['mcp_api_key'] = mcp_api_key
+            if deploy_params:
+                service.write({'deploy_params': json.dumps(deploy_params)})
 
-            deploy_args = {
-                'registry': request.env.registry,
-                'db_name': request.env.cr.dbname,
-                'uid': request.env.uid,
-                'service_id': service.id,
-                'workspace_id': workspace.id,
-                'helm_namespace': helm_namespace,
-                'helm_release_name': helm_release_name,
-                'template_id': template.id,
-                'merged_values': merged_values,
-                'expose_config': expose_config,
-                'mcp_api_key': mcp_api_key,
-            }
-            thread = threading.Thread(
-                target=self._deploy_service_background,
-                args=(deploy_args,),
-                daemon=True,
+            # Trigger the deploy cron to pick up this service ASAP
+            cron = request.env.ref(
+                'woow_paas_platform.ir_cron_deploy_cloud_services',
+                raise_if_not_found=False,
             )
-            thread.start()
+            if cron:
+                cron._trigger()
 
             return {
                 'success': True,
-                'data': service_data,
+                'data': self._format_service(service),
             }
 
         except Exception as e:
             _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while creating the service.'}
 
-    def _deploy_service_background(self, args: dict) -> None:
-        """Background thread: namespace creation + helm install + sidecar patch.
-
-        Runs outside the HTTP request lifecycle with its own DB cursor.
-        Uses odoo.sql_db.db_connect() to avoid registry/cursor lock contention
-        that occurs when calling registry.cursor() from a background thread.
-        """
-        import odoo
-
-        _logger.info("Background deploy thread started for service %s", args.get('service_id'))
-
-        db = odoo.sql_db.db_connect(args['db_name'])
-        cr = db.cursor()
-        try:
-            env = odoo.api.Environment(cr, args['uid'], {})
-            CloudService = env['woow_paas_platform.cloud_service']
-            service = CloudService.browse(args['service_id'])
-            if not service.exists():
-                return
-
-            template = env['woow_paas_platform.cloud_app_template'].browse(args['template_id'])
-            client = get_paas_operator_client(env)
-            if not client:
-                service.write({
-                    'state': 'error',
-                    'error_message': 'PaaS Operator not configured. Contact administrator.',
-                })
-                cr.commit()
-                return
-
-            helm_namespace = args['helm_namespace']
-            helm_release_name = args['helm_release_name']
-            merged_values = args['merged_values']
-            expose_config = args['expose_config']
-            mcp_api_key = args['mcp_api_key']
-
-            try:
-                # Create namespace if needed
-                all_services = CloudService.search([
-                    ('workspace_id', '=', args['workspace_id']),
-                    ('state', '!=', 'deleting'),
-                ])
-                total_vcpu = sum(s.allocated_vcpu for s in all_services)
-                total_ram = sum(s.allocated_ram_gb for s in all_services)
-                total_storage = sum(s.allocated_storage_gb for s in all_services)
-                try:
-                    client.create_namespace(
-                        namespace=helm_namespace,
-                        cpu_limit=str(max(total_vcpu * 3, 8)),
-                        memory_limit=f"{max(int(total_ram * 3), 8)}Gi",
-                        storage_limit=f"{max(total_storage * 3, 100)}Gi",
-                    )
-                except PaaSOperatorError as e:
-                    if e.status_code != 409:
-                        _logger.error("Namespace creation failed: %s", str(e))
-                        service.write({
-                            'state': 'error',
-                            'error_message': f'Failed to create namespace: {e.detail or e.message}',
-                        })
-                        cr.commit()
-                        return
-
-                # Install Helm release
-                _logger.info(
-                    "Template %s (id=%d): ingress_enabled=%s, expose_config=%s",
-                    template.name, template.id, template.ingress_enabled, expose_config,
-                )
-                release_info = client.install_release(
-                    namespace=helm_namespace,
-                    release_name=helm_release_name,
-                    chart=template.helm_chart_name,
-                    repo_url=template.helm_repo_url,
-                    version=template.helm_chart_version,
-                    values=merged_values,
-                    create_namespace=True,
-                    expose=expose_config,
-                )
-
-                # After Helm install, patch sidecar if MCP enabled
-                if template.mcp_enabled and template.mcp_sidecar_image:
-                    mcp_auth_token = str(uuid.uuid4())
-                    sidecar_config = self._build_mcp_sidecar_config(
-                        template, mcp_auth_token, mcp_api_key,
-                        helm_release_name=helm_release_name,
-                    )
-                    try:
-                        client.patch_sidecar(
-                            namespace=helm_namespace,
-                            release_name=helm_release_name,
-                            sidecar_config=sidecar_config,
-                        )
-                        service.write({'mcp_auth_token': mcp_auth_token})
-                        _logger.info(
-                            "MCP sidecar patched for service %s (release=%s)",
-                            service.name, helm_release_name,
-                        )
-                    except PaaSOperatorError as e:
-                        _logger.warning("Failed to patch MCP sidecar: %s", e)
-
-                # Update service state
-                service.write({
-                    'state': 'deploying',
-                    'helm_revision': release_info.get('revision', 1),
-                    'deployed_at': datetime.now(),
-                })
-                cr.commit()
-
-            except PaaSOperatorConnectionError as e:
-                _logger.error("Operator connection error: %s", str(e))
-                cr.rollback()
-                service.write({
-                    'state': 'error',
-                    'error_message': 'Unable to connect to deployment service. Please try again later.',
-                })
-                cr.commit()
-
-            except PaaSOperatorError as e:
-                _logger.error("Operator error during deployment: %s", str(e))
-                cr.rollback()
-                service.write({
-                    'state': 'error',
-                    'error_message': f'Deployment failed: {e.detail or e.message}',
-                })
-                cr.commit()
-
-        except Exception as e:
-            _logger.exception(
-                "Background deploy error for service %s: %s",
-                args.get('service_id'), e,
-            )
-        finally:
-            cr.close()
+    # _deploy_service_background removed — deployment is now handled by
+    # ir.cron (CloudService._cron_process_pending_deploys) to avoid
+    # ConnectionPool lock contention in Odoo 18 workers=0 mode.
 
     def _get_service(self, service: Any) -> dict[str, Any]:
         """Get service details, updating status from operator if needed."""
