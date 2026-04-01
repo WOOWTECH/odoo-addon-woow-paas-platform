@@ -2,8 +2,6 @@ import json
 import logging
 import uuid
 
-from datetime import datetime
-
 from odoo import api, fields, models
 
 _logger = logging.getLogger(__name__)
@@ -195,6 +193,7 @@ class CloudService(models.Model):
     # Deploy metadata (JSON blob consumed by _execute_deploy cron)
     deploy_params = fields.Text(
         string='Deploy Params',
+        groups='base.group_system',
         help='JSON parameters for pending deployment (expose_config, mcp_api_key, etc.)',
     )
 
@@ -204,23 +203,31 @@ class CloudService(models.Model):
 
     @api.model
     def _cron_process_pending_deploys(self):
-        """Called by ir.cron to deploy services still in 'pending' state."""
-        pending = self.search([('state', '=', 'pending')], limit=5)
-        for service in pending:
-            try:
-                service._execute_deploy()
-                self.env.cr.commit()
-            except Exception:
-                self.env.cr.rollback()
-                _logger.exception(
-                    "Deploy failed for service %s (id=%s)",
-                    service.name, service.id,
-                )
-                service.write({
-                    'state': 'error',
-                    'error_message': 'Unexpected error during deployment. Check server logs.',
-                })
-                self.env.cr.commit()
+        """Called by ir.cron to deploy services still in 'pending' state.
+
+        Processes one service per cron run to let Odoo manage the transaction.
+        If more pending services remain, re-triggers the cron for immediate pickup.
+        """
+        service = self.search([('state', '=', 'pending')], limit=1)
+        if not service:
+            return
+
+        try:
+            service._execute_deploy()
+        except Exception:
+            _logger.exception(
+                "Deploy failed for service %s (id=%s)",
+                service.name, service.id,
+            )
+            service.write({
+                'state': 'error',
+                'error_message': 'Unexpected error during deployment. Check server logs.',
+            })
+
+        # If more pending services exist, re-trigger for next run
+        remaining = self.search_count([('state', '=', 'pending')])
+        if remaining:
+            self.env.ref('woow_paas_platform.ir_cron_deploy_cloud_services')._trigger()
 
     def _execute_deploy(self):
         """Execute the actual deployment for a single pending service."""
@@ -396,5 +403,4 @@ class CloudService(models.Model):
                     'periodSeconds': 10,
                 },
             },
-            'service_port': sidecar_port,
         }
