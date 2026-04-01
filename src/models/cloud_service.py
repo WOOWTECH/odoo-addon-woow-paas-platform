@@ -1,6 +1,12 @@
+import json
+import logging
 import uuid
 
-from odoo import fields, models
+from datetime import datetime
+
+from odoo import api, fields, models
+
+_logger = logging.getLogger(__name__)
 
 
 class CloudService(models.Model):
@@ -185,3 +191,210 @@ class CloudService(models.Model):
         string='Last Upgraded At',
         help='Timestamp of the most recent upgrade',
     )
+
+    # Deploy metadata (JSON blob consumed by _execute_deploy cron)
+    deploy_params = fields.Text(
+        string='Deploy Params',
+        help='JSON parameters for pending deployment (expose_config, mcp_api_key, etc.)',
+    )
+
+    # ------------------------------------------------------------------ #
+    #  Cron: process pending deployments                                  #
+    # ------------------------------------------------------------------ #
+
+    @api.model
+    def _cron_process_pending_deploys(self):
+        """Called by ir.cron to deploy services still in 'pending' state."""
+        pending = self.search([('state', '=', 'pending')], limit=5)
+        for service in pending:
+            try:
+                service._execute_deploy()
+                self.env.cr.commit()
+            except Exception:
+                self.env.cr.rollback()
+                _logger.exception(
+                    "Deploy failed for service %s (id=%s)",
+                    service.name, service.id,
+                )
+                service.write({
+                    'state': 'error',
+                    'error_message': 'Unexpected error during deployment. Check server logs.',
+                })
+                self.env.cr.commit()
+
+    def _execute_deploy(self):
+        """Execute the actual deployment for a single pending service."""
+        self.ensure_one()
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorError,
+            PaaSOperatorConnectionError,
+        )
+
+        _logger.info("Deploying service %s (id=%s)", self.name, self.id)
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            self.write({
+                'state': 'error',
+                'error_message': 'PaaS Operator not configured. Contact administrator.',
+            })
+            return
+
+        template = self.template_id
+        helm_namespace = self.helm_namespace
+        helm_release_name = self.helm_release_name
+        merged_values = json.loads(self.helm_values) if self.helm_values else {}
+
+        # Recover deploy params stored at creation time
+        params = json.loads(self.deploy_params) if self.deploy_params else {}
+        expose_config = params.get('expose_config')
+        mcp_api_key = params.get('mcp_api_key')
+
+        try:
+            # Create namespace (409 = already exists, OK)
+            all_services = self.search([
+                ('workspace_id', '=', self.workspace_id.id),
+                ('state', '!=', 'deleting'),
+            ])
+            total_vcpu = sum(s.allocated_vcpu for s in all_services)
+            total_ram = sum(s.allocated_ram_gb for s in all_services)
+            total_storage = sum(s.allocated_storage_gb for s in all_services)
+            try:
+                client.create_namespace(
+                    namespace=helm_namespace,
+                    cpu_limit=str(max(total_vcpu * 3, 8)),
+                    memory_limit=f"{max(int(total_ram * 3), 8)}Gi",
+                    storage_limit=f"{max(total_storage * 3, 100)}Gi",
+                )
+            except PaaSOperatorError as e:
+                if e.status_code != 409:
+                    self.write({
+                        'state': 'error',
+                        'error_message': f'Failed to create namespace: {e.detail or e.message}',
+                    })
+                    return
+
+            # Install Helm release
+            _logger.info(
+                "Helm install: %s in %s (chart=%s, expose=%s)",
+                helm_release_name, helm_namespace, template.helm_chart_name, expose_config,
+            )
+            release_info = client.install_release(
+                namespace=helm_namespace,
+                release_name=helm_release_name,
+                chart=template.helm_chart_name,
+                repo_url=template.helm_repo_url,
+                version=template.helm_chart_version,
+                values=merged_values,
+                create_namespace=True,
+                expose=expose_config,
+            )
+
+            # Patch MCP sidecar if enabled
+            if template.mcp_enabled and template.mcp_sidecar_image:
+                mcp_auth_token = str(uuid.uuid4())
+                sidecar_config = self._build_mcp_sidecar_config(
+                    template, mcp_auth_token, mcp_api_key,
+                    helm_release_name=helm_release_name,
+                )
+                try:
+                    client.patch_sidecar(
+                        namespace=helm_namespace,
+                        release_name=helm_release_name,
+                        sidecar_config=sidecar_config,
+                    )
+                    self.write({'mcp_auth_token': mcp_auth_token})
+                    _logger.info("MCP sidecar patched for %s", self.name)
+                except PaaSOperatorError as e:
+                    _logger.warning("Failed to patch MCP sidecar: %s", e)
+
+            # Success → deploying
+            self.write({
+                'state': 'deploying',
+                'helm_revision': release_info.get('revision', 1),
+                'deployed_at': fields.Datetime.now(),
+                'deploy_params': False,  # clean up
+            })
+            _logger.info("Service %s (id=%s) → deploying", self.name, self.id)
+
+        except PaaSOperatorConnectionError as e:
+            _logger.error("Operator connection error: %s", e)
+            self.write({
+                'state': 'error',
+                'error_message': 'Unable to connect to deployment service. Please try again later.',
+            })
+
+        except PaaSOperatorError as e:
+            _logger.error("Operator error: %s", e)
+            self.write({
+                'state': 'error',
+                'error_message': f'Deployment failed: {e.detail or e.message}',
+            })
+
+    def _build_mcp_sidecar_config(
+        self, template, auth_token, api_key=None, helm_release_name=None,
+    ):
+        """Build MCP sidecar container config for PaaS Operator patch endpoint."""
+        sidecar_port = template.mcp_sidecar_port or 3000
+
+        env_vars = [
+            {'name': 'MCP_MODE', 'value': 'http'},
+            {'name': 'AUTH_TOKEN', 'value': auth_token},
+            {'name': 'N8N_API_URL', 'value': f'http://localhost:{template.default_port}'},
+            {'name': 'PORT', 'value': str(sidecar_port)},
+            {'name': 'AUTH_RATE_LIMIT_MAX', 'value': '500'},
+            {'name': 'AUTH_RATE_LIMIT_WINDOW', 'value': '900000'},
+        ]
+
+        if template.mcp_api_key_helm_path:
+            env_name = template.mcp_api_key_helm_path.rsplit('.', 1)[-1]
+            if helm_release_name:
+                secret_name = f'{helm_release_name}-n8n-app-secret'
+                env_vars.append({
+                    'name': env_name,
+                    'valueFrom': {
+                        'secretKeyRef': {
+                            'name': secret_name,
+                            'key': env_name,
+                        }
+                    }
+                })
+            elif api_key:
+                env_vars.append({'name': env_name, 'value': api_key})
+
+        if template.mcp_sidecar_env:
+            try:
+                custom_env = json.loads(template.mcp_sidecar_env)
+                reserved_keys = {'MCP_MODE', 'AUTH_TOKEN', 'PORT', 'N8N_API_URL'}
+                if template.mcp_api_key_helm_path:
+                    reserved_keys.add(template.mcp_api_key_helm_path.rsplit('.', 1)[-1])
+                for key, value in custom_env.items():
+                    if key not in reserved_keys:
+                        env_vars.append({'name': key, 'value': str(value)})
+            except (json.JSONDecodeError, TypeError):
+                _logger.warning("Invalid MCP sidecar env JSON in template %s", template.name)
+
+        return {
+            'container': {
+                'name': 'mcp-sidecar',
+                'image': template.mcp_sidecar_image,
+                'ports': [{'containerPort': sidecar_port}],
+                'env': env_vars,
+                'resources': {
+                    'requests': {'memory': '128Mi', 'cpu': '100m'},
+                    'limits': {'memory': '256Mi', 'cpu': '200m'},
+                },
+                'livenessProbe': {
+                    'httpGet': {'path': '/health', 'port': sidecar_port},
+                    'initialDelaySeconds': 15,
+                    'periodSeconds': 30,
+                },
+                'readinessProbe': {
+                    'httpGet': {'path': '/health', 'port': sidecar_port},
+                    'initialDelaySeconds': 10,
+                    'periodSeconds': 10,
+                },
+            },
+            'service_port': sidecar_port,
+        }
