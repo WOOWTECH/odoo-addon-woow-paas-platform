@@ -1352,7 +1352,7 @@ class PaasController(Controller):
             merged_values = self._deep_merge(merged_values, api_key_nested)
 
         try:
-            # Create service record in pending state
+            # Create service record in pending state (cron picks up 'pending')
             service_vals = {
                 'workspace_id': workspace.id,
                 'template_id': template.id,
@@ -1892,10 +1892,14 @@ class PaasController(Controller):
 
     def _format_service(self, service: Any, include_details: bool = False) -> dict[str, Any]:
         """Format a service record for API response."""
+        # Map 'pending' to 'deploying' for UI — pending is an internal
+        # state used by the cron as a pick-up lock; users should see 'deploying'.
+        ui_state = 'deploying' if service.state == 'pending' else service.state
+
         data = {
             'id': service.id,
             'name': service.name,
-            'state': service.state,
+            'state': ui_state,
             'subdomain': service.subdomain or '',
             'custom_domain': service.custom_domain or '',
             'error_message': service.error_message or '',
