@@ -143,6 +143,11 @@ resourceQuota:
 # --- Network Policy ---
 networkPolicy:
   enabled: true
+  # Allow ingress from specific namespaces (e.g., cloudflare tunnel namespace)
+  allowIngressFromNamespaces: []
+  # Example for STG mode:
+  # allowIngressFromNamespaces:
+  #   - paas-stg-cloudflare-system
   # Allow egress to specific namespaces (e.g., paas-operator namespace)
   allowEgressToNamespaces: []
   # Example for STG mode:

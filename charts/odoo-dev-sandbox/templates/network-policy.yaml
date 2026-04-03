@@ -38,6 +38,13 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ingress-nginx
+    {{- range .Values.networkPolicy.allowIngressFromNamespaces }}
+    # Allow ingress from namespace: {{ . }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+    {{- end }}
   egress:
     # Allow DNS resolution (UDP + TCP on port 53)
     - to:
