@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = ""  # Comma-separated list of allowed origins, empty = block all external
 
+    # PVC Lifecycle
+    pvc_grace_period_days: int = 7  # Days before orphaned PVCs are deleted
+
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
     cloudflare_api_token: str = ""  # API token with Cloudflare Tunnel:Edit and DNS:Edit permission

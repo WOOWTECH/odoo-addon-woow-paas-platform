@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
@@ -196,6 +197,26 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
     try:
         result = helm_service.uninstall(namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
+
+        # Label orphaned PVCs for deferred cleanup
+        try:
+            remaining_pvcs = k8s_service.list_pvcs(namespace)
+            if remaining_pvcs:
+                now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                labels = {
+                    "paas.woowtech.io/orphaned-at": now_iso,
+                    "paas.woowtech.io/release-name": name,
+                    "paas.woowtech.io/grace-period-days": str(
+                        settings.pvc_grace_period_days
+                    ),
+                }
+                k8s_service.label_pvcs(namespace, remaining_pvcs, labels)
+                logger.info(
+                    f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace}: "
+                    f"{remaining_pvcs}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to label orphaned PVCs in {namespace}: {e}")
 
         # Delete Cloudflare Tunnel route if exists
         try:

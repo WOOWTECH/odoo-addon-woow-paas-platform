@@ -254,6 +254,15 @@ class CloudService(models.Model):
         helm_release_name = self.helm_release_name
         merged_values = json.loads(self.helm_values) if self.helm_values else {}
 
+        # Inject StorageClass for PVC lifecycle management
+        storage_class = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.storage_class_name', 'longhorn-delete'
+        )
+        if storage_class:
+            merged_values = self._inject_storage_class(
+                merged_values, template.slug, storage_class,
+            )
+
         # Recover deploy params stored at creation time
         params = json.loads(self.deploy_params) if self.deploy_params else {}
         expose_config = params.get('expose_config')
@@ -338,6 +347,49 @@ class CloudService(models.Model):
                 'state': 'error',
                 'error_message': f'Deployment failed: {e.detail or e.message}',
             })
+
+    @staticmethod
+    def _inject_storage_class(values, template_slug, storage_class):
+        """Inject StorageClass into helm values for PVC lifecycle management.
+
+        Different Helm charts use different value paths for storageClass.
+        This method sets the correct paths based on the template slug.
+
+        Args:
+            values: Helm values dict (will be modified in-place and returned)
+            template_slug: Template identifier (e.g., 'odoo', 'postgresql')
+            storage_class: StorageClass name to inject
+
+        Returns:
+            Modified values dict
+        """
+        # Mapping of template slug to storageClass value paths
+        path_map = {
+            'odoo': [
+                ('persistence', 'storageClass'),
+                ('postgresql', 'primary', 'persistence', 'storageClass'),
+            ],
+            'postgresql': [
+                ('primary', 'persistence', 'storageClass'),
+            ],
+            'n8n': [
+                ('persistence', 'storageClass'),
+            ],
+            'redis': [
+                ('master', 'persistence', 'storageClass'),
+                ('replica', 'persistence', 'storageClass'),
+            ],
+        }
+
+        paths = path_map.get(template_slug, [('persistence', 'storageClass')])
+
+        for path in paths:
+            d = values
+            for key in path[:-1]:
+                d = d.setdefault(key, {})
+            d[path[-1]] = storage_class
+
+        return values
 
     def _build_mcp_sidecar_config(
         self, template, auth_token, api_key=None, helm_release_name=None,

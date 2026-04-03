@@ -792,6 +792,52 @@ class KubernetesService:
                 return False
             raise
 
+    def list_pvcs(self, namespace: str) -> List[str]:
+        """List PVC names in a namespace.
+
+        Args:
+            namespace: Namespace name
+
+        Returns:
+            List of PVC names
+        """
+        validate_namespace(namespace)
+
+        result = self._run_command([
+            "get", "pvc",
+            "--namespace", namespace,
+            "-o", "jsonpath={.items[*].metadata.name}",
+        ])
+
+        output = result.stdout.strip()
+        if not output:
+            return []
+        return output.split()
+
+    def label_pvcs(
+        self, namespace: str, pvc_names: List[str], labels: Dict[str, str]
+    ) -> None:
+        """Add labels to PVCs.
+
+        Args:
+            namespace: Namespace name
+            pvc_names: List of PVC names to label
+            labels: Dict of label key-value pairs
+        """
+        validate_namespace(namespace)
+
+        label_args = [f"{k}={v}" for k, v in labels.items()]
+
+        for pvc_name in pvc_names:
+            try:
+                self._run_command([
+                    "label", "pvc", pvc_name,
+                    "--namespace", namespace,
+                    "--overwrite",
+                ] + label_args)
+            except KubectlException as e:
+                logger.warning(f"Failed to label PVC {pvc_name}: {e.stderr}")
+
     def get_pod_name(self, namespace: str, label_selector: str) -> str:
         """Get the first pod name matching a label selector.
 

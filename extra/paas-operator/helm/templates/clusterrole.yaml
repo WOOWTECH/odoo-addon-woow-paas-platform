@@ -64,6 +64,11 @@ rules:
     resources: ["jobs", "cronjobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
+  # Persistent Volumes (cluster-scoped, for PVC cleanup CronJob)
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "patch", "delete"]
+
   # Storage
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]

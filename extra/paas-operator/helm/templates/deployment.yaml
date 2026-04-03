@@ -52,6 +52,8 @@ spec:
               value: {{ .Values.config.helmBinary | quote }}
             - name: HELM_TIMEOUT
               value: {{ .Values.config.helmTimeout | quote }}
+            - name: PVC_GRACE_PERIOD_DAYS
+              value: {{ .Values.config.pvcGracePeriodDays | quote }}
             {{- if .Values.cloudflare.enabled }}
             - name: CLOUDFLARE_ENABLED
               value: "true"
