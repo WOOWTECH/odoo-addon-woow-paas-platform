@@ -61,6 +61,22 @@ if [ -z "${GITEA_TOKEN:-}" ]; then
 fi
 ```
 
+### Step 1.5: 檢查未 push 的 commit
+
+CI 從 remote clone 程式碼，本機未 push 的 commit 不會被包含在 image 中。必須在觸發 CI 前檢查。
+
+```bash
+# 檢查當前 branch 是否有未 push 的 commit
+AHEAD=$(git rev-list --count @{upstream}..HEAD 2>/dev/null || echo "0")
+if [ "$AHEAD" -gt 0 ]; then
+  echo "⚠️  本機有 ${AHEAD} 個未 push 的 commit："
+  git log --oneline @{upstream}..HEAD
+  echo ""
+  echo "CI 會 clone remote 程式碼，這些 commit 不會被包含在 image 中。"
+  # 提示使用者先 push，或由 Claude 自動 push 後繼續
+fi
+```
+
 ### Step 2: 解析參數
 
 ```bash
