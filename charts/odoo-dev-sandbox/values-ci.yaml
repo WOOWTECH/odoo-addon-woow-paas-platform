@@ -18,3 +18,7 @@ pgadmin:
 
 networkPolicy:
   enabled: true
+  allowIngressFromNamespaces:
+    - paas-stg-cloudflare-system
+  allowEgressToNamespaces:
+    - paas-stg-system

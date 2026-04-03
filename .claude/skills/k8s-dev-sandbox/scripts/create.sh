@@ -190,8 +190,9 @@ if [ "$MODE" = "stg" ] && [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set registry.server=jcr-prod.woowtech.io --set registry.username=${JCR_USER} --set registry.password=${JCR_PASS}"
 fi
 
-# STG mode: allow egress to paas-operator namespace
+# STG mode: allow cloudflare tunnel ingress + egress to paas-operator
 if [ "$MODE" = "stg" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowIngressFromNamespaces[0]=paas-stg-cloudflare-system"
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowEgressToNamespaces[0]=paas-stg-system"
 fi
 
