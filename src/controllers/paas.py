@@ -1338,8 +1338,20 @@ class PaasController(Controller):
             if not any(c.isdigit() for c in pwd):
                 return {'success': False, 'error': 'Password must contain at least one number'}
 
+        # Validate Odoo administrator password
+        if template.slug == 'odoo':
+            pwd = helm_only_values.get('odooPassword', '')
+            if not pwd or len(pwd) < 8:
+                return {'success': False, 'error': 'Administrator password must be at least 8 characters'}
+
         nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
+        _logger.info(
+            "Merged helm values keys for service '%s' (template: %s): %s",
+            name,
+            template.name,
+            sorted(merged_values.keys()),
+        )
 
         # Generate per-service API key for MCP sidecar ↔ main container communication
         mcp_api_key = None

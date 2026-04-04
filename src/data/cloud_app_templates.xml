@@ -170,6 +170,55 @@
         </record>
     </data>
 
+    <!-- Odoo updates - noupdate=0 to ensure upgrades apply changes -->
+    <data noupdate="0">
+        <record id="cloud_app_odoo" model="woow_paas_platform.cloud_app_template">
+            <!-- helm_value_specs: SMTP fields added to optional section -->
+            <field name="helm_value_specs">{"required": [
+                {"key": "odooEmail", "label": "Administrator Email", "type": "text",
+                    "default": "user@example.com",
+                    "description": "Login email for Odoo administrator"},
+                {"key": "odooPassword", "label": "Administrator Password", "type": "password",
+                    "description": "Minimum 8 characters"}
+            ], "optional": [
+                {"key": "loadDemoData", "label": "Load Demo Data", "type": "boolean",
+                    "default": false},
+                {"key": "smtpHost", "label": "SMTP Server", "type": "text",
+                    "placeholder": "smtp.gmail.com",
+                    "description": "SMTP mail server hostname"},
+                {"key": "smtpPort", "label": "SMTP Port", "type": "text",
+                    "default": "587"},
+                {"key": "smtpUser", "label": "SMTP Username", "type": "text",
+                    "placeholder": "user@gmail.com"},
+                {"key": "smtpPassword", "label": "SMTP Password", "type": "password"},
+                {"key": "smtpProtocol", "label": "SMTP Protocol", "type": "select",
+                    "options": ["starttls", "ssl", "none"], "default": "starttls",
+                    "description": "Email encryption protocol"}
+            ]}</field>
+            <!-- helm_default_values: customPostInitScripts for:
+                 1) fix-admin-credentials.sh - hash password with pbkdf2_sha512
+                    (Bitnami writes plaintext; login stays as email per user choice)
+                 2) odoo-conf-system.sh - inject proxy_mode=True, list_db=False -->
+            <field name="helm_default_values">{"global": {"security": {"allowInsecureImages": true}},
+                "image": {"registry": "docker.io", "repository": "bitnamilegacy/odoo",
+                "tag": "18.0.20250805-debian-12-r9"}, "odooEmail": "user@example.com",
+                "odooSkipInstall": false, "loadDemoData": false,
+                "service": {"type": "ClusterIP"},
+                "resources": {"requests": {"cpu": "200m", "memory": "512Mi"},
+                "limits": {"cpu": "2000m", "memory": "2Gi"}},
+                "postgresql": {"enabled": true, "architecture": "standalone",
+                "auth": {"username": "bn_odoo", "database": "bitnami_odoo"},
+                "image": {"registry": "docker.io", "repository": "bitnamilegacy/postgresql",
+                "tag": "17.6.0-debian-12-r4"}},
+                "persistence": {"enabled": true, "size": "10Gi"},
+                "updateStrategy": {"type": "Recreate"},
+                "customPostInitScripts": {
+                "fix-admin-credentials.sh": "#!/bin/bash\nset -eo pipefail\necho '[fix-admin-credentials] Hashing Odoo admin password with pbkdf2_sha512'\n[ -z \"${ODOO_PASSWORD:-}\" ] \u0026\u0026 echo 'WARN: ODOO_PASSWORD not set, skipping' \u0026\u0026 exit 0\npython3 -c \"\nimport os, sys\ntry:\n    from passlib.context import CryptContext\n    import psycopg2\n    ctx = CryptContext(schemes=['pbkdf2_sha512'])\n    hashed = ctx.hash(os.environ['ODOO_PASSWORD'])\n    conn = psycopg2.connect(\n        host=os.environ['ODOO_DATABASE_HOST'],\n        port=int(os.environ.get('ODOO_DATABASE_PORT_NUMBER', '5432')),\n        user=os.environ['ODOO_DATABASE_USER'],\n        password=os.environ['ODOO_DATABASE_PASSWORD'],\n        dbname=os.environ['ODOO_DATABASE_NAME'])\n    cur = conn.cursor()\n    cur.execute('UPDATE res_users SET password=%s WHERE id=2', (hashed,))\n    conn.commit()\n    cur.close()\n    conn.close()\n    print('[fix-admin-credentials] Password hashed successfully')\nexcept Exception as e:\n    print(f'[fix-admin-credentials] ERROR: {e}', file=sys.stderr)\n    sys.exit(1)\n\"\n",
+                "odoo-conf-system.sh": "#!/bin/bash\nset -eo pipefail\nCONF=/opt/bitnami/odoo/conf/odoo.conf\necho '[odoo-conf-system] Injecting system-level odoo.conf settings'\n[ ! -f \"$CONF\" ] \u0026\u0026 echo \"WARN: $CONF not found, skipping\" \u0026\u0026 exit 0\ngrep -q '^proxy_mode' \"$CONF\" || echo 'proxy_mode = True' >> \"$CONF\"\ngrep -q '^list_db' \"$CONF\" || echo 'list_db = False' >> \"$CONF\"\necho '[odoo-conf-system] Settings injected'\n"
+                }}</field>
+        </record>
+    </data>
+
     <!-- MCP configuration updates - noupdate=0 to ensure upgrades apply these values -->
     <data noupdate="0">
         <record id="cloud_app_n8n" model="woow_paas_platform.cloud_app_template">
