@@ -156,6 +156,32 @@ export const cloudService = reactive({
         this.domain = config.domain;
     },
 
+    /** @type {Array} */
+    odooAddons: [],
+
+    /**
+     * Fetch available Odoo addons
+     * @param {number|null} templateId - Filter by template
+     * @param {string|null} category - Filter by category
+     * @returns {Promise<void>}
+     */
+    async fetchOdooAddons(templateId = null, category = null) {
+        this.operationLoading.fetchOdooAddons = true;
+        try {
+            const params = {};
+            if (templateId) params.template_id = templateId;
+            if (category) params.category = category;
+            const result = await jsonRpc("/api/cloud/odoo-addons", params);
+            if (result.success) {
+                this.odooAddons = result.data;
+            }
+        } catch (err) {
+            console.warn("Failed to fetch Odoo addons:", err);
+        } finally {
+            this.operationLoading.fetchOdooAddons = false;
+        }
+    },
+
     /**
      * Fetch all available templates
      * @param {string|null} category - Filter by category
@@ -245,6 +271,9 @@ export const cloudService = reactive({
                 name: payload.name,
                 values: payload.values || {},
             };
+            if (payload.odoo_addon_ids) {
+                params.odoo_addon_ids = payload.odoo_addon_ids;
+            }
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/services`, params);
             if (result.success) {
                 this.services = [result.data, ...this.services];

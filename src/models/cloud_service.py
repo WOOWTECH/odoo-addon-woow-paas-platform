@@ -190,6 +190,16 @@ class CloudService(models.Model):
         help='Timestamp of the most recent upgrade',
     )
 
+    # Odoo Addons
+    odoo_addon_ids = fields.Many2many(
+        comodel_name='woow_paas_platform.cloud_odoo_addon',
+        relation='cloud_service_odoo_addon_rel',
+        column1='service_id',
+        column2='addon_id',
+        string='Odoo Addons',
+        help='Odoo addons selected for this service',
+    )
+
     # Deploy metadata (JSON blob consumed by _execute_deploy cron)
     deploy_params = fields.Text(
         string='Deploy Params',
@@ -262,6 +272,21 @@ class CloudService(models.Model):
             merged_values = self._inject_storage_class(
                 merged_values, template.slug, storage_class,
             )
+
+        # Inject Odoo addon selection (initContainer + addons_path)
+        if self.odoo_addon_ids and template.slug == 'odoo':
+            image_vals = merged_values.get('image', {})
+            registry = image_vals.get('registry', 'docker.io')
+            repo = image_vals.get('repository', '')
+            tag = image_vals.get('tag', 'latest')
+            image_ref = f"{registry}/{repo}:{tag}"
+            addon_values = self._build_odoo_addon_helm_values(image_ref)
+            # Deep-merge addon values into merged_values
+            for key, val in addon_values.items():
+                if key in merged_values and isinstance(merged_values[key], dict) and isinstance(val, dict):
+                    merged_values[key].update(val)
+                else:
+                    merged_values[key] = val
 
         # Recover deploy params stored at creation time
         params = json.loads(self.deploy_params) if self.deploy_params else {}
@@ -347,6 +372,75 @@ class CloudService(models.Model):
                 'state': 'error',
                 'error_message': f'Deployment failed: {e.detail or e.message}',
             })
+
+    def _build_odoo_addon_helm_values(self, image_ref):
+        """Build Helm values for Odoo addon selection via initContainer.
+
+        Args:
+            image_ref: Full image reference (e.g., registry/repo:tag)
+                       used for the initContainer (same as main container).
+
+        Returns:
+            Dict of Helm values to deep-merge, or empty dict if no addons.
+        """
+        if not self.odoo_addon_ids:
+            return {}
+
+        # Separate addons by source type
+        copy_addons = []  # need initContainer copy from /all-addons/
+        for addon in self.odoo_addon_ids:
+            if addon.source_type in ('third_party', 'custom'):
+                copy_addons.append(addon.technical_name)
+
+        values = {}
+        selected_addons_path = '/opt/bitnami/odoo/selected-addons'
+
+        if copy_addons:
+            addon_list = ' '.join(copy_addons)
+            values['initContainers'] = [{
+                'name': 'addon-selector',
+                'image': image_ref,
+                'imagePullPolicy': 'IfNotPresent',
+                'command': ['/bin/bash', '-c'],
+                'args': [
+                    f'echo "[addon-selector] Copying addons..."\n'
+                    f'for addon in {addon_list}; do\n'
+                    f'  if [ -d "/all-addons/$addon" ]; then\n'
+                    f'    cp -r "/all-addons/$addon" /mnt/selected-addons/\n'
+                    f'    echo "  + $addon"\n'
+                    f'  else\n'
+                    f'    echo "  ! $addon not found"\n'
+                    f'  fi\n'
+                    f'done\n'
+                    f'CONF=/bitnami/odoo/conf/odoo.conf\n'
+                    f'if [ -f "$CONF" ] && ! grep -q "selected-addons" "$CONF"; then\n'
+                    f'  sed -i "s|^addons_path.*|&,{selected_addons_path}|" "$CONF"\n'
+                    f'  echo "[addon-selector] Updated addons_path"\n'
+                    f'fi\n'
+                    f'echo "[addon-selector] Done"',
+                ],
+                'volumeMounts': [
+                    {'name': 'selected-addons', 'mountPath': '/mnt/selected-addons'},
+                    {'name': 'odoo-data', 'mountPath': '/bitnami/odoo'},
+                ],
+            }]
+            values['extraVolumes'] = [{'name': 'selected-addons', 'emptyDir': {}}]
+            values['extraVolumeMounts'] = [
+                {'name': 'selected-addons', 'mountPath': selected_addons_path},
+            ]
+
+        # Fallback for first boot (odoo.conf doesn't exist yet in initContainer)
+        addons_path_script = (
+            f'#!/bin/bash\n'
+            f'CONF=/opt/bitnami/odoo/conf/odoo.conf\n'
+            f'if [ -f "$CONF" ] && ! grep -q "selected-addons" "$CONF"; then\n'
+            f'  sed -i "s|^addons_path.*|&,{selected_addons_path}|" "$CONF"\n'
+            f'fi'
+        )
+        values.setdefault('customPostInitScripts', {})
+        values['customPostInitScripts']['00-addons-path.sh'] = addons_path_script
+
+        return values
 
     @staticmethod
     def _inject_storage_class(values, template_slug, storage_class):

@@ -175,6 +175,26 @@
                     </WoowCard>
                 </t>
 
+                <!-- Odoo Addon Selection (only for Odoo templates) -->
+                <t t-if="isOdooTemplate">
+                    <WoowCard shadow="true" class="'o_woow_configure_section'">
+                        <div class="o_woow_section_header">
+                            <WoowIcon name="'extension'" size="24"/>
+                            <div>
+                                <h2>Addons</h2>
+                                <p>Select Odoo addons to include in your service</p>
+                            </div>
+                        </div>
+                        <div class="o_woow_section_body">
+                            <OdooAddonSelector
+                                templateId="props.templateId"
+                                selectedIds="state.selectedAddonIds"
+                                onSelectionChange.bind="onAddonSelectionChange"
+                            />
+                        </div>
+                    </WoowCard>
+                </t>
+
                 <!-- Launch Error -->
                 <t t-if="state.launchError">
                     <div class="o_woow_error_message">

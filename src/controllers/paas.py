@@ -777,10 +777,43 @@ class PaasController(Controller):
             data['full_description'] = template.full_description or ''
         return data
 
+    # ==================== Odoo Addons API ====================
+
+    @route("/api/cloud/odoo-addons", auth="user", methods=["POST"], type="json")
+    def api_odoo_addons(self, template_id: int | None = None, category: str | None = None, **kw: Any) -> dict[str, Any]:
+        """List available Odoo addons, optionally filtered by template or category."""
+        CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+
+        domain = [('active', '=', True)]
+        if template_id:
+            domain.append(('template_ids', 'in', [template_id]))
+        if category:
+            domain.append(('category', '=', category))
+
+        addons = CloudOdooAddon.search(domain)
+        data = []
+        for addon in addons:
+            data.append({
+                'id': addon.id,
+                'name': addon.name,
+                'technical_name': addon.technical_name,
+                'description': addon.description or '',
+                'category': addon.category or 'other',
+                'icon': addon.icon or '',
+                'source_type': addon.source_type,
+                'is_default': addon.is_default,
+                'depends_on': [
+                    {'id': d.id, 'technical_name': d.technical_name}
+                    for d in addon.depends_on
+                ],
+            })
+
+        return {'success': True, 'data': data, 'count': len(data)}
+
     # ==================== Cloud Services API ====================
 
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
-    def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, **kw: Any) -> dict[str, Any]:
+    def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
         """
         Handle cloud service operations for a workspace.
 
@@ -815,12 +848,12 @@ class PaasController(Controller):
             # Only admin/owner can create services
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._create_service(workspace, template_id, name, values)
+            return self._create_service(workspace, template_id, name, values, odoo_addon_ids)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
-    def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, **kw: Any) -> dict[str, Any]:
+    def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
         """
         Handle operations on a specific cloud service.
 
@@ -859,7 +892,7 @@ class PaasController(Controller):
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._update_service(service, values, version)
+            return self._update_service(service, values, version, odoo_addon_ids)
         elif action == 'delete':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
@@ -1283,7 +1316,7 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None) -> dict[str, Any]:
+    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
         if not template_id:
             return {'success': False, 'error': 'Template ID is required'}
@@ -1387,6 +1420,23 @@ class PaasController(Controller):
             if init_params.get('owner_password'):
                 service_vals['n8n_owner_password'] = init_params['owner_password']
 
+            # Resolve Odoo addon selection (with dependency expansion)
+            resolved_addon_ids = []
+            if odoo_addon_ids and template.slug == 'odoo':
+                CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+                selected = CloudOdooAddon.browse(odoo_addon_ids).filtered('active')
+                # Expand dependencies recursively
+                all_addons = selected
+                queue = list(selected)
+                while queue:
+                    addon = queue.pop(0)
+                    for dep in addon.depends_on:
+                        if dep not in all_addons:
+                            all_addons |= dep
+                            queue.append(dep)
+                resolved_addon_ids = all_addons.ids
+                service_vals['odoo_addon_ids'] = [(6, 0, resolved_addon_ids)]
+
             service = CloudService.create(service_vals)
 
             # Build expose configuration before spawning background thread
@@ -1438,7 +1488,7 @@ class PaasController(Controller):
             'data': self._format_service(service, include_details=True),
         }
 
-    def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None) -> dict[str, Any]:
+    def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
         """Update/upgrade a service."""
         if service.state in ['pending', 'deleting', 'error']:
             return {'success': False, 'error': f'Cannot update service in {service.state} state'}
@@ -1448,6 +1498,21 @@ class PaasController(Controller):
             return {'success': False, 'error': 'PaaS Operator not configured'}
 
         try:
+            # Update Odoo addon selection if provided
+            if odoo_addon_ids is not None and service.template_id.slug == 'odoo':
+                CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+                selected = CloudOdooAddon.browse(odoo_addon_ids).filtered('active')
+                # Expand dependencies
+                all_addons = selected
+                queue = list(selected)
+                while queue:
+                    addon = queue.pop(0)
+                    for dep in addon.depends_on:
+                        if dep not in all_addons:
+                            all_addons |= dep
+                            queue.append(dep)
+                service.write({'odoo_addon_ids': [(6, 0, all_addons.ids)]})
+
             # Filter user values to only allowed keys, reject unauthorized
             existing_values = json.loads(service.helm_values) if service.helm_values else {}
             filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
@@ -1925,6 +1990,10 @@ class PaasController(Controller):
             'helm_revision': service.helm_revision,
             'created_date': service.create_date.isoformat() if service.create_date else None,
             'deployed_at': service.deployed_at.isoformat() if service.deployed_at else None,
+            'odoo_addons': [
+                {'id': a.id, 'name': a.name, 'technical_name': a.technical_name}
+                for a in service.odoo_addon_ids
+            ] if service.odoo_addon_ids else [],
         }
 
         if include_details:

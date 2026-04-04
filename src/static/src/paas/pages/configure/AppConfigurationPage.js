@@ -4,6 +4,7 @@ import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { HelmValueForm } from "../../components/config/HelmValueForm";
+import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddonSelector";
 import { cloudService } from "../../services/cloud_service";
 import { router } from "../../core/router";
 
@@ -13,7 +14,7 @@ import { router } from "../../core/router";
  */
 export class AppConfigurationPage extends Component {
     static template = "woow_paas_platform.AppConfigurationPage";
-    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector };
     static props = {
         workspaceId: { type: Number },
         templateId: { type: Number },
@@ -27,6 +28,7 @@ export class AppConfigurationPage extends Component {
             // Form state
             name: '',
             helmValues: {},
+            selectedAddonIds: [],
             showAdvanced: false,
             // Validation errors
             errors: {},
@@ -100,6 +102,10 @@ export class AppConfigurationPage extends Component {
         return this.template?.helm_value_specs || { required: [], optional: [] };
     }
 
+    get isOdooTemplate() {
+        return this.template?.slug === 'odoo';
+    }
+
     get hasOptionalSettings() {
         return (this.helmValueSpecs.optional || []).length > 0;
     }
@@ -134,6 +140,10 @@ export class AppConfigurationPage extends Component {
      * Handle service name input change
      * @param {Event} event
      */
+    onAddonSelectionChange(addonIds) {
+        this.state.selectedAddonIds = addonIds;
+    }
+
     onNameChange(event) {
         const value = event.target.value;
         this.state.name = value;
@@ -225,11 +235,15 @@ export class AppConfigurationPage extends Component {
         this.state.launchError = null;
 
         try {
-            const result = await cloudService.createService(this.props.workspaceId, {
+            const payload = {
                 template_id: this.props.templateId,
                 name: this.state.name.trim(),
                 values: this.state.helmValues,
-            });
+            };
+            if (this.isOdooTemplate && this.state.selectedAddonIds.length) {
+                payload.odoo_addon_ids = this.state.selectedAddonIds;
+            }
+            const result = await cloudService.createService(this.props.workspaceId, payload);
 
             if (result.success) {
                 // Navigate to service detail page
