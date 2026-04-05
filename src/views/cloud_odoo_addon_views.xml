@@ -55,6 +55,9 @@
         <field name="model">woow_paas_platform.cloud_odoo_addon</field>
         <field name="arch" type="xml">
             <list string="Cloud Odoo Addons" decoration-muted="not active">
+                <header>
+                    <button name="sync_from_catalog" type="object" string="Sync Odoo Addons" class="btn-primary"/>
+                </header>
                 <field name="name"/>
                 <field name="technical_name"/>
                 <field name="category"/>

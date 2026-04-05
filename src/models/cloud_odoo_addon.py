@@ -180,4 +180,13 @@ class CloudOdooAddon(models.Model):
             "Addon catalog sync: %d created, %d updated, %d deactivated, %d total",
             created, updated, deactivated, total,
         )
-        return {'created': created, 'updated': updated, 'deactivated': deactivated, 'total': total}
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Sync Complete',
+                'message': f'{created} created, {updated} updated, {deactivated} deactivated ({total} total)',
+                'type': 'success',
+                'sticky': False,
+            },
+        }
