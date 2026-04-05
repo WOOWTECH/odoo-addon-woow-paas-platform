@@ -419,6 +419,10 @@ class CloudService(models.Model):
                     f'fi\n'
                     f'echo "[addon-selector] Done"',
                 ],
+                'resources': {
+                    'requests': {'cpu': '100m', 'memory': '128Mi'},
+                    'limits': {'cpu': '500m', 'memory': '256Mi'},
+                },
                 'volumeMounts': [
                     {'name': 'selected-addons', 'mountPath': '/mnt/selected-addons'},
                     {'name': 'odoo-data', 'mountPath': '/bitnami/odoo'},
