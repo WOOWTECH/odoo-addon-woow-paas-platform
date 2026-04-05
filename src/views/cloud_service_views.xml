@@ -40,7 +40,7 @@
                                 </group>
                             </group>
                             <group string="Helm Values">
-                                <field name="helm_values" nolabel="1"/>
+                                <field name="helm_values" nolabel="1" readonly="1"/>
                             </group>
                         </page>
                         <page string="Resources" name="resources">
