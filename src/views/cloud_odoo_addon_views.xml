@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Cloud Odoo Addon Form View -->
+    <record id="view_cloud_odoo_addon_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.cloud_odoo_addon.form</field>
+        <field name="model">woow_paas_platform.cloud_odoo_addon</field>
+        <field name="arch" type="xml">
+            <form string="Cloud Odoo Addon">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="Addon Name"/>
+                        </h1>
+                        <field name="technical_name" placeholder="technical_name"/>
+                    </div>
+                    <group>
+                        <group string="Basic Info">
+                            <field name="category"/>
+                            <field name="source_type"/>
+                            <field name="icon"/>
+                            <field name="description"/>
+                        </group>
+                        <group string="Configuration">
+                            <field name="is_default"/>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Dependencies" name="dependencies">
+                            <field name="depends_on">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="technical_name"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Compatible Templates" name="templates">
+                            <field name="template_ids">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="slug"/>
+                                    <field name="category"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Cloud Odoo Addon List View -->
+    <record id="view_cloud_odoo_addon_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.cloud_odoo_addon.list</field>
+        <field name="model">woow_paas_platform.cloud_odoo_addon</field>
+        <field name="arch" type="xml">
+            <list string="Cloud Odoo Addons">
+                <field name="name"/>
+                <field name="technical_name"/>
+                <field name="category"/>
+                <field name="source_type"/>
+                <field name="is_default"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Cloud Odoo Addon Action -->
+    <record id="action_cloud_odoo_addon" model="ir.actions.act_window">
+        <field name="name">Odoo Addons</field>
+        <field name="res_model">woow_paas_platform.cloud_odoo_addon</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No Odoo addons found
+            </p>
+            <p>
+                Odoo addons are synced automatically from the addon catalog.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu under Cloud -->
+    <menuitem
+        id="menu_cloud_odoo_addons"
+        name="Odoo Addons"
+        parent="menu_cloud"
+        action="action_cloud_odoo_addon"
+        sequence="30"/>
+</odoo>
