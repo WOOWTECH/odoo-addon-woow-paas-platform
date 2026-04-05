@@ -153,6 +153,16 @@ class CloudOdooAddon(models.Model):
                 self.create(vals)
                 created += 1
 
+        # Deactivate addons not in catalog
+        catalog_names = list(catalog.keys())
+        stale = self.with_context(active_test=False).search([
+            ('technical_name', 'not in', catalog_names),
+        ])
+        deactivated = 0
+        if stale:
+            stale.write({'active': False})
+            deactivated = len(stale)
+
         # Resolve depends_on after all records exist
         for technical_name, meta in catalog.items():
             depends = meta.get('depends', [])
@@ -167,7 +177,7 @@ class CloudOdooAddon(models.Model):
 
         total = self.search_count([])
         _logger.info(
-            "Addon catalog sync: %d created, %d updated, %d total",
-            created, updated, total,
+            "Addon catalog sync: %d created, %d updated, %d deactivated, %d total",
+            created, updated, deactivated, total,
         )
-        return {'created': created, 'updated': updated, 'total': total}
+        return {'created': created, 'updated': updated, 'deactivated': deactivated, 'total': total}
