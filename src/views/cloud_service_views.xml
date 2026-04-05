@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Cloud Service Form View -->
+    <record id="view_cloud_service_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.cloud_service.form</field>
+        <field name="model">woow_paas_platform.cloud_service</field>
+        <field name="arch" type="xml">
+            <form string="Cloud Service">
+                <header>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="pending,deploying,running"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="Service Name"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Basic Info">
+                            <field name="workspace_id"/>
+                            <field name="template_id"/>
+                            <field name="reference_id"/>
+                            <field name="subdomain"/>
+                            <field name="custom_domain"/>
+                        </group>
+                        <group string="Timestamps">
+                            <field name="deployed_at"/>
+                            <field name="last_upgraded_at"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Helm Config" name="helm">
+                            <group>
+                                <group>
+                                    <field name="helm_release_name"/>
+                                    <field name="helm_namespace"/>
+                                    <field name="helm_revision"/>
+                                    <field name="helm_chart_version"/>
+                                </group>
+                            </group>
+                            <group string="Helm Values">
+                                <field name="helm_values" nolabel="1"/>
+                            </group>
+                        </page>
+                        <page string="Resources" name="resources">
+                            <group>
+                                <group>
+                                    <field name="allocated_vcpu"/>
+                                    <field name="allocated_ram_gb"/>
+                                    <field name="allocated_storage_gb"/>
+                                </group>
+                            </group>
+                        </page>
+                        <page string="Odoo Addons" name="odoo_addons">
+                            <field name="odoo_addon_ids">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="technical_name"/>
+                                    <field name="category"/>
+                                    <field name="source_type"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Errors" name="errors"
+                              invisible="not error_message and not init_error">
+                            <group>
+                                <field name="error_message"/>
+                                <field name="init_error"/>
+                                <field name="init_retries"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Cloud Service List View -->
+    <record id="view_cloud_service_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.cloud_service.list</field>
+        <field name="model">woow_paas_platform.cloud_service</field>
+        <field name="arch" type="xml">
+            <list string="Cloud Services">
+                <field name="name"/>
+                <field name="workspace_id"/>
+                <field name="template_id"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'running'"
+                       decoration-info="state in ('pending', 'deploying', 'initializing', 'upgrading')"
+                       decoration-danger="state == 'error'"
+                       decoration-warning="state == 'deleting'"/>
+                <field name="subdomain"/>
+                <field name="helm_namespace"/>
+                <field name="deployed_at"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Cloud Service Action -->
+    <record id="action_cloud_service" model="ir.actions.act_window">
+        <field name="name">Services</field>
+        <field name="res_model">woow_paas_platform.cloud_service</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No cloud services deployed yet
+            </p>
+            <p>
+                Cloud services are deployed from application templates via the marketplace.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu under Cloud -->
+    <menuitem
+        id="menu_cloud_services"
+        name="Services"
+        parent="menu_cloud"
+        action="action_cloud_service"
+        sequence="20"/>
+</odoo>
