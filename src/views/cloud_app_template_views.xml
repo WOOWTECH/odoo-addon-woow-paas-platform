@@ -118,8 +118,8 @@
     <!-- Menu under Woow PaaS -->
     <menuitem
         id="menu_cloud_app_templates"
-        name="Cloud App Templates"
-        parent="menu_woow_paas_platform_root"
+        name="Templates"
+        parent="menu_cloud"
         action="action_cloud_app_template"
-        sequence="40"/>
+        sequence="10"/>
 </odoo>
