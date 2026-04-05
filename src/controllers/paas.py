@@ -779,6 +779,14 @@ class PaasController(Controller):
 
     # ==================== Odoo Addons API ====================
 
+    @route("/api/cloud/odoo-addons/sync", auth="user", methods=["POST"], type="json")
+    def api_odoo_addons_sync(self, **kw: Any) -> dict[str, Any]:
+        """Sync addon records from catalog.json (admin only)."""
+        if not request.env.user.has_group('base.group_system'):
+            return {'success': False, 'error': 'Admin access required'}
+        result = request.env['woow_paas_platform.cloud_odoo_addon'].sync_from_catalog()
+        return {'success': True, 'data': result}
+
     @route("/api/cloud/odoo-addons", auth="user", methods=["POST"], type="json")
     def api_odoo_addons(self, template_id: int | None = None, category: str | None = None, **kw: Any) -> dict[str, Any]:
         """List available Odoo addons, optionally filtered by template or category."""

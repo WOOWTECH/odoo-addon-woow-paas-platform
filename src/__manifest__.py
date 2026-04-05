@@ -13,7 +13,6 @@
     "data": [
         "security/ir.model.access.csv",
         "security/ir_rules.xml",
-        "data/cloud_odoo_addons.xml",
         "data/cloud_app_templates.xml",
         "views/menu.xml",
         "data/ai_assistant_data.xml",

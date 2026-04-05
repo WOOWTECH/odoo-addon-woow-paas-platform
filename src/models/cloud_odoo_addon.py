@@ -1,4 +1,33 @@
-from odoo import fields, models
+import json
+import logging
+import os
+
+from odoo import api, fields, models
+
+_logger = logging.getLogger(__name__)
+
+CATALOG_PATH = '/all-addons/catalog.json'
+
+# Map Odoo addon categories to our selection values
+_CATEGORY_MAP = {
+    'Accounting': 'accounting',
+    'Accounting/Localizations': 'accounting',
+    'CRM': 'crm',
+    'Sales': 'sales',
+    'Sales/Sales': 'sales',
+    'eCommerce': 'ecommerce',
+    'Human Resources': 'hr',
+    'Human Resources/Recruitment': 'hr',
+    'Inventory': 'inventory',
+    'Inventory/Inventory': 'inventory',
+    'Manufacturing': 'manufacturing',
+    'Marketing': 'marketing',
+    'Productivity': 'productivity',
+    'Project': 'project',
+    'Website': 'website',
+    'Extra Tools': 'other',
+    'Hidden': 'other',
+}
 
 
 class CloudOdooAddon(models.Model):
@@ -81,3 +110,64 @@ class CloudOdooAddon(models.Model):
         string='Active',
         default=True,
     )
+
+    @api.model
+    def sync_from_catalog(self, catalog_path=None):
+        """Sync CloudOdooAddon records from addon-catalog.json.
+
+        Reads the catalog file (baked into the Docker image at build time)
+        and creates or updates addon records accordingly.
+
+        Args:
+            catalog_path: Override path for testing. Defaults to CATALOG_PATH.
+
+        Returns:
+            dict with created/updated/total counts.
+        """
+        path = catalog_path or CATALOG_PATH
+        if not os.path.isfile(path):
+            _logger.info("Addon catalog not found at %s, skipping sync", path)
+            return {'created': 0, 'updated': 0, 'total': 0}
+
+        with open(path) as f:
+            catalog = json.load(f)
+
+        created = 0
+        updated = 0
+
+        for technical_name, meta in catalog.items():
+            existing = self.search([('technical_name', '=', technical_name)], limit=1)
+            category = _CATEGORY_MAP.get(meta.get('category', ''), 'other')
+            vals = {
+                'name': meta.get('name', technical_name),
+                'technical_name': technical_name,
+                'description': meta.get('summary', ''),
+                'category': category,
+                'source_type': 'third_party',
+            }
+
+            if existing:
+                existing.write(vals)
+                updated += 1
+            else:
+                self.create(vals)
+                created += 1
+
+        # Resolve depends_on after all records exist
+        for technical_name, meta in catalog.items():
+            depends = meta.get('depends', [])
+            if not depends:
+                continue
+            addon = self.search([('technical_name', '=', technical_name)], limit=1)
+            if not addon:
+                continue
+            dep_records = self.search([('technical_name', 'in', depends)])
+            if dep_records:
+                addon.write({'depends_on': [(6, 0, dep_records.ids)]})
+
+        total = self.search_count([])
+        _logger.info(
+            "Addon catalog sync: %d created, %d updated, %d total",
+            created, updated, total,
+        )
+        return {'created': created, 'updated': updated, 'total': total}
