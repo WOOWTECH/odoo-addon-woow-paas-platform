@@ -6,4 +6,11 @@
         name="Woow PaaS"
         sequence="100"
         web_icon="woow_paas_platform,static/description/icon.png"/>
+
+    <!-- Cloud 子選單群組 -->
+    <menuitem
+        id="menu_cloud"
+        name="Cloud"
+        parent="menu_woow_paas_platform_root"
+        sequence="30"/>
 </odoo>

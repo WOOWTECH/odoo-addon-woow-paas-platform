@@ -21,6 +21,8 @@
         "views/project_task_views.xml",
         "views/ai_config_views.xml",
         "views/cloud_app_template_views.xml",
+        "views/cloud_service_views.xml",
+        "views/cloud_odoo_addon_views.xml",
         "views/mcp_server_views.xml",
         "views/ai_assistant_views.xml",
         "views/res_config_settings_views.xml",
