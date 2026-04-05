@@ -140,8 +140,9 @@
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/odoo</field>
             <field name="helm_chart_version"></field>
             <field name="helm_default_values">{"global": {"security": {"allowInsecureImages":
-                true}}, "image": {"registry": "docker.io", "repository":
-                "artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local/woow-paas-docker-local/cloud-odoo",
+                true}}, "image": {"registry":
+                "artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local",
+                "repository": "woow-paas-docker-local/cloud-odoo",
                 "tag": "cloud-v20260404.1645"}, "odooEmail": "user@example.com",
                 "odooSkipInstall": false,
                 "loadDemoData": false, "service": {"type": "ClusterIP"}, "resources": {"requests":
