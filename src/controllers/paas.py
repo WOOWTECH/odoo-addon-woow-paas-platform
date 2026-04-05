@@ -794,7 +794,13 @@ class PaasController(Controller):
 
         domain = [('active', '=', True)]
         if template_id:
-            domain.append(('template_ids', 'in', [template_id]))
+            # Show addons linked to this template OR addons with no template restriction
+            domain = [
+                ('active', '=', True),
+                '|',
+                ('template_ids', 'in', [template_id]),
+                ('template_ids', '=', False),
+            ]
         if category:
             domain.append(('category', '=', category))
 
