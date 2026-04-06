@@ -56,7 +56,7 @@
         <field name="arch" type="xml">
             <list string="Cloud Odoo Addons" decoration-muted="not active">
                 <header>
-                    <button name="sync_from_catalog" type="object" string="Sync Odoo Addons" class="btn-primary"/>
+                    <button name="sync_from_catalog" type="object" string="Sync Odoo Addons" display="always" icon="fa-refresh"/>
                 </header>
                 <field name="name"/>
                 <field name="technical_name"/>
