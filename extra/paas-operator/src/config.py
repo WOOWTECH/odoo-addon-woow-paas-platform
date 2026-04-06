@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # PVC Lifecycle
     pvc_grace_period_days: int = 7  # Days before orphaned PVCs are deleted
 
+    # Private Registry (for tenant namespace imagePullSecrets)
+    registry_server: str = ""
+    registry_username: str = ""
+    registry_password: str = ""
+    registry_secret_name: str = "paas-registry"
+
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
     cloudflare_api_token: str = ""  # API token with Cloudflare Tunnel:Edit and DNS:Edit permission

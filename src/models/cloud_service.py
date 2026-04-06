@@ -273,6 +273,15 @@ class CloudService(models.Model):
                 merged_values, template.slug, storage_class,
             )
 
+        # Inject imagePullSecrets for private registry access
+        registry_secret = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.registry_secret_name', 'paas-registry'
+        )
+        if registry_secret:
+            merged_values = self._inject_image_pull_secrets(
+                merged_values, registry_secret,
+            )
+
         # Inject Odoo addon selection (initContainer + addons_path)
         if self.odoo_addon_ids and template.slug == 'odoo':
             image_vals = merged_values.get('image', {})
@@ -487,6 +496,27 @@ class CloudService(models.Model):
                 d = d.setdefault(key, {})
             d[path[-1]] = storage_class
 
+        return values
+
+    @staticmethod
+    def _inject_image_pull_secrets(values, secret_name):
+        """Inject imagePullSecrets into helm values for private registry access.
+
+        Uses global.imagePullSecrets which is supported by all Bitnami charts
+        and propagates to all containers including initContainers.
+
+        Args:
+            values: Helm values dict (modified in-place and returned)
+            secret_name: Name of the dockerconfigjson K8s Secret
+
+        Returns:
+            Modified values dict
+        """
+        values.setdefault('global', {})
+        existing = values['global'].get('imagePullSecrets', [])
+        if secret_name not in existing:
+            existing.append(secret_name)
+        values['global']['imagePullSecrets'] = existing
         return values
 
     def _build_mcp_sidecar_config(

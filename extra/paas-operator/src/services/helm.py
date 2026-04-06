@@ -1,4 +1,5 @@
 """Helm CLI wrapper service."""
+import base64
 import json
 import logging
 import subprocess
@@ -609,7 +610,70 @@ class KubernetesService:
         finally:
             Path(quota_file).unlink(missing_ok=True)
 
+        self.ensure_registry_secret(name)
+
         return {"message": f"Namespace {name} created with quota"}
+
+    def ensure_registry_secret(self, namespace: str) -> Optional[str]:
+        """Create/update a dockerconfigjson secret for private registry access.
+
+        Reads registry credentials from settings. If not configured, skips.
+        Uses kubectl apply so it's idempotent.
+
+        Args:
+            namespace: Target namespace
+
+        Returns:
+            Secret name if created, None if registry not configured
+        """
+        if not settings.registry_server or not settings.registry_username:
+            return None
+
+        import yaml
+
+        auth_raw = f"{settings.registry_username}:{settings.registry_password}"
+        auth_b64 = base64.b64encode(auth_raw.encode()).decode()
+        docker_config = json.dumps({
+            "auths": {
+                settings.registry_server: {
+                    "username": settings.registry_username,
+                    "password": settings.registry_password,
+                    "auth": auth_b64,
+                }
+            }
+        })
+        docker_config_b64 = base64.b64encode(docker_config.encode()).decode()
+
+        secret_manifest = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": settings.registry_secret_name,
+                "namespace": namespace,
+            },
+            "type": "kubernetes.io/dockerconfigjson",
+            "data": {
+                ".dockerconfigjson": docker_config_b64,
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            yaml.safe_dump(secret_manifest, f)
+            secret_file = f.name
+
+        try:
+            self._run_command(["apply", "-f", secret_file])
+            logger.info(
+                "Registry secret '%s' ensured in namespace '%s'",
+                settings.registry_secret_name,
+                namespace,
+            )
+        finally:
+            Path(secret_file).unlink(missing_ok=True)
+
+        return settings.registry_secret_name
 
     def get_services(
         self, namespace: str, label_selector: Optional[str] = None
