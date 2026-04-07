@@ -329,6 +329,16 @@ class N8nInitResponse(BaseModel):
     error: Optional[str] = None
 
 
+class OdooInitResponse(BaseModel):
+    """Response from Odoo module list initialization."""
+
+    success: bool
+    modules_added: int = Field(default=0, description="Number of new modules discovered")
+    modules_updated: int = Field(default=0, description="Number of existing modules updated")
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
 class ErrorResponse(BaseModel):
     """Error response."""
 

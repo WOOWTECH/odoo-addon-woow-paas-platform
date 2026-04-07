@@ -3,15 +3,17 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
-from src.models.schemas import N8nInitRequest, N8nInitResponse
+from src.models.schemas import N8nInitRequest, N8nInitResponse, OdooInitResponse
 from src.services.helm import KubernetesService
 from src.services.n8n_init import N8nInitError, N8nInitService
+from src.services.odoo_init import OdooInitError, OdooInitService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/releases", tags=["init"])
 
 k8s_service = KubernetesService()
 n8n_init_service = N8nInitService(k8s_service=k8s_service)
+odoo_init_service = OdooInitService(k8s_service=k8s_service)
 
 
 @router.post(
@@ -72,4 +74,54 @@ async def init_n8n(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"n8n initialization failed: {str(e)}",
+        )
+
+
+@router.post(
+    "/{namespace}/{release_name}/init/odoo",
+    response_model=OdooInitResponse,
+    summary="Initialize Odoo module list",
+    description="Trigger Odoo module list update to discover newly deployed addons",
+)
+async def init_odoo(namespace: str, release_name: str):
+    """Initialize Odoo module list after deployment.
+
+    This endpoint:
+    1. Finds the Odoo pod in the namespace
+    2. Waits for Odoo HTTP service to be ready
+    3. Executes ir.module.module.update_list() via direct ORM access
+
+    Args:
+        namespace: K8s namespace where Odoo is deployed
+        release_name: Helm release name
+
+    Returns:
+        Initialization result with module counts
+    """
+    try:
+        result = odoo_init_service.initialize(
+            namespace=namespace,
+            release_name=release_name,
+        )
+
+        return OdooInitResponse(
+            success=result["success"],
+            modules_added=result.get("modules_added", 0),
+            modules_updated=result.get("modules_updated", 0),
+            message=result.get("message", "Odoo module list updated"),
+        )
+
+    except OdooInitError as e:
+        logger.error("Odoo init failed at step '%s': %s", e.step, str(e))
+        return OdooInitResponse(
+            success=False,
+            error=f"[{e.step}] {str(e)}",
+            message=f"Odoo initialization failed at step: {e.step}",
+        )
+
+    except Exception as e:
+        logger.exception("Unexpected error during Odoo initialization")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Odoo initialization failed: {str(e)}",
         )
