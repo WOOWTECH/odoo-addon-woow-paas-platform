@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { OverviewTab } from "./tabs/OverviewTab";
 import { ConfigurationTab } from "./tabs/ConfigurationTab";
+import { AddonsTab } from "./tabs/AddonsTab";
 import { McpServersTab } from "./tabs/McpServersTab";
 import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
@@ -39,6 +40,7 @@ export class ServiceDetailPage extends Component {
         StatusBadge,
         OverviewTab,
         ConfigurationTab,
+        AddonsTab,
         McpServersTab,
         DeleteServiceModal,
         RollbackModal,
@@ -134,6 +136,10 @@ export class ServiceDetailPage extends Component {
         // Disable actions when service is in transitional state
         const disabledStates = ["deploying", "initializing", "upgrading", "deleting", "pending"];
         return this.service && !disabledStates.includes(this.service.state);
+    }
+
+    get isOdooService() {
+        return this.service?.template?.slug === 'odoo';
     }
 
     // Support Project

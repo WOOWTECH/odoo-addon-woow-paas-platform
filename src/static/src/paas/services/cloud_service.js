@@ -349,6 +349,37 @@ export const cloudService = reactive({
     },
 
     /**
+     * Update Odoo addon selection for a service
+     * @param {number} workspaceId - Workspace ID
+     * @param {number} serviceId - Service ID
+     * @param {number[]} odooAddonIds - Selected addon IDs
+     * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
+     */
+    async updateServiceAddons(workspaceId, serviceId, odooAddonIds) {
+        this.operationLoading.updateServiceAddons = true;
+        try {
+            const params = {
+                action: "update",
+                odoo_addon_ids: odooAddonIds,
+            };
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}`, params);
+            if (result.success) {
+                const index = this.services.findIndex(s => s.id === serviceId);
+                if (index !== -1) {
+                    this.services[index] = { ...this.services[index], ...result.data };
+                }
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.updateServiceAddons = false;
+        }
+    },
+
+    /**
      * Delete a service
      * @param {number} workspaceId - Workspace ID
      * @param {number} serviceId - Service ID

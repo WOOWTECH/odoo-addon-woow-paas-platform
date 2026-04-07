@@ -132,6 +132,13 @@
                         Configuration
                     </button>
                     <button
+                        t-if="isOdooService"
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'addons'}"
+                        t-on-click="() => this.setTab('addons')">
+                        <WoowIcon name="'inventory_2'" size="18"/>
+                        Addons
+                    </button>
+                    <button
                         t-att-class="{'o_woow_tab': true, 'active': currentTab === 'mcp-servers'}"
                         t-on-click="() => this.setTab('mcp-servers')">
                         <WoowIcon name="'extension'" size="18"/>
@@ -146,6 +153,11 @@
                         service="service"/>
                     <ConfigurationTab
                         t-if="currentTab === 'configuration'"
+                        service="service"
+                        workspaceId="props.workspaceId"
+                        onSave.bind="handleConfigSave"/>
+                    <AddonsTab
+                        t-if="currentTab === 'addons'"
                         service="service"
                         workspaceId="props.workspaceId"
                         onSave.bind="handleConfigSave"/>
