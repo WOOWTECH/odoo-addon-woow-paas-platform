@@ -210,16 +210,15 @@ git push origin v18.0.1.0.5
 
 ### Deploy Staging (deploy-stg)
 
-部署 staging 環境到 K8s dev sandbox。完整流程為：Gitea API 建立 tag 觸發 CI → 輪詢 CI 狀態等待完成 → 呼叫 `create.sh` 部署 sandbox。
+部署 staging 環境到 K8s dev sandbox。完整流程為：`tea` CLI 建立 tag 觸發 CI → 輪詢 CI 狀態等待完成 → 呼叫 `create.sh` 部署 sandbox。
 
 **前置條件：**
 
 ```bash
-# 設定 Gitea Token（需有 repo + write:packages scope）
-export GITEA_TOKEN="your-gitea-personal-access-token"
+# 設定 tea login（需有 repo + write:packages scope）
+# Token 產生方式：Gitea UI → Settings → Applications → Generate New Token
+tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>
 ```
-
-> Token 產生方式：Gitea UI → Settings → Applications → Generate New Token
 
 **使用方式：**
 
@@ -374,7 +373,7 @@ woow_paas_platform/
         ├── deploy-stg/           # Staging 部署 Skill
         │   ├── SKILL.md          # Skill 定義
         │   └── scripts/
-        │       └── deploy-stg.sh # Gitea API 觸發 CI → 輪詢 CI 狀態 → 部署 sandbox
+        │       └── deploy-stg.sh # tea CLI 觸發 CI → 輪詢 CI 狀態 → 部署 sandbox
         └── k8s-dev-sandbox/      # K8s 沙盒 Skill
             ├── SKILL.md          # Skill 定義
             └── scripts/          # 沙盒管理腳本
