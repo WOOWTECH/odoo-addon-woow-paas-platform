@@ -481,6 +481,32 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def init_odoo(
+        self,
+        namespace: str,
+        release_name: str,
+    ) -> Dict[str, Any]:
+        """Initialize Odoo module list after deployment.
+
+        Triggers module list update so newly deployed addons are discoverable
+        in the Odoo Apps interface without manual intervention.
+
+        Args:
+            namespace: K8s namespace
+            release_name: Helm release name
+
+        Returns:
+            Dict with success, modules_added, modules_updated
+
+        Raises:
+            PaaSOperatorError: If initialization fails
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/init/odoo',
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def get_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
         """Get detailed status of a release including pod information.
 

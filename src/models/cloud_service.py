@@ -89,6 +89,11 @@ class CloudService(models.Model):
         string='Init Error',
         help='Last error from post-deploy initialization',
     )
+    addon_update_pending = fields.Boolean(
+        string='Addon Update Pending',
+        default=False,
+        help='Whether addon selection changed during last upgrade and needs post-deploy init',
+    )
 
     # Network
     subdomain = fields.Char(

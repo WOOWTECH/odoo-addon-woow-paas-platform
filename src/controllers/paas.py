@@ -1513,7 +1513,9 @@ class PaasController(Controller):
 
         try:
             # Update Odoo addon selection if provided
+            addon_changed = False
             if odoo_addon_ids is not None and service.template_id.slug == 'odoo':
+                old_addon_ids = set(service.odoo_addon_ids.ids)
                 CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
                 selected = CloudOdooAddon.browse(odoo_addon_ids).filtered('active')
                 # Expand dependencies
@@ -1526,6 +1528,7 @@ class PaasController(Controller):
                             all_addons |= dep
                             queue.append(dep)
                 service.write({'odoo_addon_ids': [(6, 0, all_addons.ids)]})
+                addon_changed = set(all_addons.ids) != old_addon_ids
 
             # Filter user values to only allowed keys, reject unauthorized
             existing_values = json.loads(service.helm_values) if service.helm_values else {}
@@ -1534,6 +1537,16 @@ class PaasController(Controller):
                 return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)
+
+            # Rebuild addon initContainer helm values when addon selection changed
+            if addon_changed and service.odoo_addon_ids:
+                image_vals = merged_values.get('image', {})
+                registry = image_vals.get('registry', '')
+                repo = image_vals.get('repository', '')
+                tag = image_vals.get('tag', 'latest')
+                image_ref = f"{registry}/{repo}:{tag}" if registry else f"{repo}:{tag}"
+                addon_values = service._build_odoo_addon_helm_values(image_ref)
+                merged_values = self._deep_merge(merged_values, addon_values)
 
             # Upgrade release
             release_info = client.upgrade_release(
@@ -1551,6 +1564,7 @@ class PaasController(Controller):
                 'helm_chart_version': version or service.helm_chart_version,
                 'last_upgraded_at': datetime.now(),
                 'error_message': False,
+                'addon_update_pending': addon_changed,
             })
 
             return {
@@ -1744,6 +1758,17 @@ class PaasController(Controller):
                         # Already initializing, retry if needed
                         self._run_post_deploy_init(service)
 
+                    elif needs_init and original_state == 'upgrading' and service.addon_update_pending:
+                        # Addon selection changed during upgrade → need module list refresh
+                        service.write({
+                            'state': 'initializing',
+                            'helm_revision': helm_revision,
+                            'error_message': False,
+                            'init_retries': 0,
+                            'init_error': False,
+                        })
+                        self._run_post_deploy_init(service)
+
                     else:
                         # No init needed or already done → running
                         service.write({
@@ -1894,6 +1919,73 @@ class PaasController(Controller):
                     retries, service.name, e,
                 )
 
+        elif template.post_deploy_init_type == 'odoo':
+            client = get_paas_operator_client(request.env)
+            if not client:
+                _logger.warning("PaaS Operator not configured, cannot initialize Odoo module list")
+                return
+
+            try:
+                result = client.init_odoo(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                )
+
+                if result.get('success'):
+                    service.write({
+                        'state': 'running',
+                        'init_retries': 0,
+                        'init_error': False,
+                        'addon_update_pending': False,
+                    })
+                    _logger.info(
+                        "Odoo init succeeded for service %s: added=%d, updated=%d",
+                        service.name,
+                        result.get('modules_added', 0),
+                        result.get('modules_updated', 0),
+                    )
+                    try:
+                        self._auto_create_mcp_server(service)
+                    except Exception as e:
+                        _logger.warning(
+                            "Auto-create MCP server failed for service %s: %s",
+                            service.name, e,
+                        )
+                else:
+                    retries = (service.init_retries or 0) + 1
+                    error_msg = result.get('error', 'Unknown error')
+                    vals = {
+                        'init_retries': retries,
+                        'init_error': error_msg,
+                    }
+                    if retries >= 5:
+                        vals.update({
+                            'state': 'error',
+                            'error_message': f'Odoo initialization failed after {retries} retries: {error_msg}',
+                        })
+                    service.write(vals)
+                    _logger.warning(
+                        "Odoo init attempt %d failed for service %s: %s",
+                        retries, service.name, error_msg,
+                    )
+
+            except Exception as e:
+                retries = (service.init_retries or 0) + 1
+                vals = {
+                    'init_retries': retries,
+                    'init_error': str(e),
+                }
+                if retries >= 5:
+                    vals.update({
+                        'state': 'error',
+                        'error_message': f'Odoo initialization failed: {str(e)}',
+                    })
+                service.write(vals)
+                _logger.warning(
+                    "Odoo init exception (attempt %d) for service %s: %s",
+                    retries, service.name, e,
+                )
+
     def _auto_create_mcp_server(self, service: Any) -> None:
         """Auto-create MCP Server record for a cloud service with MCP enabled.
 
@@ -1998,6 +2090,7 @@ class PaasController(Controller):
             'template': {
                 'id': service.template_id.id,
                 'name': service.template_id.name,
+                'slug': service.template_id.slug or '',
                 'category': service.template_id.category,
                 'helm_value_specs': self._parse_helm_value_specs(service.template_id),
             },

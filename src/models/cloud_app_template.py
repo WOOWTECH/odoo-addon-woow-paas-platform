@@ -153,6 +153,7 @@ class CloudAppTemplate(models.Model):
         selection=[
             ('none', 'None'),
             ('n8n', 'n8n (Owner Setup + API Key)'),
+            ('odoo', 'Odoo (Update Module List)'),
         ],
         string='Post-Deploy Init Type',
         default='none',

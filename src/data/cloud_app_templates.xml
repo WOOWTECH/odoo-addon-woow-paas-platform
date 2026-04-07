@@ -191,6 +191,9 @@
             <field name="min_ram_gb">2.0</field>
             <field name="min_storage_gb">10</field>
 
+            <!-- Post-Deploy Init: auto-refresh module list after deployment -->
+            <field name="post_deploy_init_type">odoo</field>
+
             <field name="is_active" eval="True" />
         </record>
     </data>
