@@ -194,6 +194,8 @@ fi
 if [ "$MODE" = "stg" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowIngressFromNamespaces[0]=paas-stg-cloudflare-system"
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowEgressToNamespaces[0]=paas-stg-system"
+    EXTRA_ARGS="$EXTRA_ARGS --set odoo.filestore.persistence.storageClass=longhorn-delete"
+    EXTRA_ARGS="$EXTRA_ARGS --set postgres.storage.storageClass=longhorn-delete"
 fi
 
 if [ "$PGADMIN" = true ]; then
