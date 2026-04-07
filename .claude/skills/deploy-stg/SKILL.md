@@ -13,7 +13,7 @@ usage: |
 
 # Deploy Staging (paas-odoo)
 
-透過 Gitea API 建立 tag 觸發 CI 建置 paas-odoo staging image，輪詢 CI 狀態等待建置完成後，部署到 K8s dev sandbox。
+透過 `tea` CLI 建立 tag 觸發 CI 建置 paas-odoo staging image，輪詢 CI 狀態等待建置完成後，部署到 K8s dev sandbox。
 
 ## 參數
 
@@ -27,21 +27,17 @@ usage: |
 
 ## 前置條件
 
-- `GITEA_TOKEN` 環境變數已設定（Gitea personal access token，需要 `repo` 和 `write:packages` scope）
+- `tea` CLI 已安裝並設定 login（`tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>`）
 - `kubectl` 已連線到目標 K8s cluster
 - `helm` 3.13+ 已安裝
-- `curl`、`jq`、`git` 已安裝
+- `jq`、`git` 已安裝
 
-**產生 GITEA_TOKEN：**
-
-Gitea UI → 右上角頭像 → Settings → Applications → Manage Access Tokens → Generate New Token
-
-需要的 scope：
-- `repo`：讀寫 repo（建立 tag）
-- `write:packages`：若 CI 需要 push image
+**設定 tea login：**
 
 ```bash
-export GITEA_TOKEN="your-gitea-personal-access-token"
+# 產生 Gitea token: Gitea UI → Settings → Applications → Generate New Token
+# scope: repo (讀寫 repo), write:packages (push image)
+tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>
 ```
 
 ## 執行流程
@@ -50,13 +46,14 @@ export GITEA_TOKEN="your-gitea-personal-access-token"
 
 ```bash
 # 檢查必要工具
-for cmd in curl jq kubectl helm git; do
+for cmd in tea jq kubectl helm git; do
   command -v "$cmd" >/dev/null || { echo "Missing: $cmd"; exit 1; }
 done
 
-# 檢查 GITEA_TOKEN
-if [ -z "${GITEA_TOKEN:-}" ]; then
-  echo "Error: GITEA_TOKEN is not set"
+# 檢查 tea login
+if ! tea login list &>/dev/null; then
+  echo "Error: No tea login configured"
+  echo "Run: tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>"
   exit 1
 fi
 ```
@@ -108,25 +105,21 @@ Deploy Staging Configuration:
   Trigger:      Gitea API create tag ${GIT_TAG}
 ```
 
-### Step 4: 觸發 CI Build（via Gitea API）
+### Step 4: 觸發 CI Build（via tea CLI）
 
 若使用者指定 `--skip-build` 或 `--image`，跳過此步驟。
 
-透過 Gitea API 在 `paas-odoo-ci` repo 建立 `stg-*` tag 觸發 CI workflow：
+透過 `tea api` 在 `paas-odoo-ci` repo 建立 `stg-*` tag 觸發 CI workflow：
 
 ```bash
-GITEA_URL="https://git-prod.woowtech.io"
 CI_REPO="woow-paas/paas-odoo-ci"
 
 # 取得 main branch 最新 commit SHA
-MAIN_SHA=$(curl -s -H "Authorization: token ${GITEA_TOKEN}" \
-  "${GITEA_URL}/api/v1/repos/${CI_REPO}/branches/main" | jq -r '.commit.id')
+MAIN_SHA=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/branches/main" | jq -r '.commit.id')
 
 # 建立 tag
-curl -s -X POST -H "Authorization: token ${GITEA_TOKEN}" \
-  -H "Content-Type: application/json" \
-  "${GITEA_URL}/api/v1/repos/${CI_REPO}/tags" \
-  -d "{\"tag_name\": \"${GIT_TAG}\", \"target\": \"${MAIN_SHA}\"}"
+tea api -X POST -r "${CI_REPO}" "repos/{owner}/{repo}/tags" \
+  -f "tag_name=${GIT_TAG}" -f "target=${MAIN_SHA}"
 
 echo "CI build triggered: tag ${GIT_TAG} created"
 echo "Monitor: https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions"
@@ -134,14 +127,13 @@ echo "Monitor: https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions"
 
 CI workflow 偵測到 `stg-*` tag 後自動 build `paas-odoo-stg` image。
 
-### Step 5: 等待 CI 完成（via Gitea API）
+### Step 5: 等待 CI 完成（via tea CLI）
 
 輪詢 Gitea Actions API 檢查 CI 任務狀態。每 30 秒檢查一次，最多等待 15 分鐘。
 
 ```bash
 # 查詢 CI 任務狀態（篩選 head_branch 匹配 GIT_TAG）
-STATUSES=$(curl -s -H "Authorization: token ${GITEA_TOKEN}" \
-  "${GITEA_URL}/api/v1/repos/${CI_REPO}/actions/tasks?limit=10" | \
+STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10" | \
   jq -r ".workflow_runs[] | select(.head_branch == \"${GIT_TAG}\") | .status")
 
 # 判斷邏輯：
@@ -216,8 +208,8 @@ say -r 180 "主人，staging 環境部署完成了"
 
 | 問題 | 可能原因 | 解決方式 |
 |------|----------|----------|
-| `GITEA_TOKEN is not set` | 未設定環境變數 | `export GITEA_TOKEN="your-token"`（Gitea → Settings → Applications） |
-| 建立 tag 失敗（API 回傳錯誤） | Token 權限不足或 repo 不存在 | 確認 token 有 `repo` scope，確認 CI_REPO 路徑正確 |
+| `No tea login configured` | 未設定 tea login | `tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>` |
+| 建立 tag 失敗（tea api 回傳錯誤） | Token 權限不足或 repo 不存在 | 確認 token 有 `repo` scope，確認 CI_REPO 路徑正確 |
 | Tag already exists | 同名 tag 已存在 | 使用 `--tag` 指定不同名稱，或手動到 Gitea 刪除舊 tag |
 | CI run not found（持續等待） | CI workflow 未被觸發 | 到 Gitea UI 檢查 workflow 設定是否正確匹配 `stg-*` tag |
 | CI status: failure | CI build 失敗 | 到 Gitea UI 檢查 workflow run 日誌 |

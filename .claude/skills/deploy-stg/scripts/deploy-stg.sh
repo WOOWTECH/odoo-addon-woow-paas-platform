@@ -16,8 +16,9 @@
 #   --interval <seconds>  Poll interval (default: 30)
 #   -h, --help            Show usage
 #
-# Environment:
-#   GITEA_TOKEN   (required) Gitea personal access token (scopes: repo, write:packages)
+# Prerequisites:
+#   tea CLI with login configured for git-prod.woowtech.io
+#   (run: tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>)
 #
 # Examples:
 #   .claude/skills/deploy-stg/scripts/deploy-stg.sh
@@ -103,19 +104,20 @@ done
 # --- Prerequisites ---
 echo -e "${BLUE}Checking prerequisites...${NC}"
 
-for cmd in curl jq kubectl helm git; do
+for cmd in tea jq kubectl helm git; do
     if ! command -v "$cmd" &>/dev/null; then
         echo -e "${RED}Missing required tool: ${cmd}${NC}" >&2
         exit 1
     fi
 done
 
-# Check GITEA_TOKEN (not needed for --image override)
-if [ -z "$IMAGE_OVERRIDE" ] && [ -z "${GITEA_TOKEN:-}" ]; then
-    echo -e "${RED}Error: GITEA_TOKEN is not set${NC}" >&2
-    echo -e "Generate one: Gitea UI → Settings → Applications → Generate New Token" >&2
-    echo -e "Required scopes: repo, write:packages" >&2
-    exit 1
+# Check tea login (not needed for --image override)
+if [ -z "$IMAGE_OVERRIDE" ]; then
+    if ! tea login list &>/dev/null; then
+        echo -e "${RED}Error: No tea login configured for git-prod.woowtech.io${NC}" >&2
+        echo -e "Run: tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>" >&2
+        exit 1
+    fi
 fi
 
 # --- Resolve addon ref ---
@@ -165,12 +167,15 @@ if [ "$SKIP_BUILD" = false ]; then
     echo -e "${BLUE}Triggering CI build via Gitea API...${NC}"
 
     # Get main branch latest commit SHA
-    BRANCH_RESP=$(curl -s -H "Authorization: token ${GITEA_TOKEN}" \
-        "${GITEA_URL}/api/v1/repos/${CI_REPO}/branches/main")
+    if ! BRANCH_RESP=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/branches/main" 2>&1); then
+        echo -e "${RED}Error: Failed to get main branch info${NC}" >&2
+        echo "$BRANCH_RESP" >&2
+        exit 1
+    fi
     MAIN_SHA=$(echo "$BRANCH_RESP" | jq -r '.commit.id // empty')
 
     if [ -z "$MAIN_SHA" ]; then
-        echo -e "${RED}Error: Failed to get main branch SHA${NC}" >&2
+        echo -e "${RED}Error: Failed to parse main branch SHA${NC}" >&2
         echo "$BRANCH_RESP" | jq . 2>/dev/null || echo "$BRANCH_RESP" >&2
         exit 1
     fi
@@ -178,20 +183,17 @@ if [ "$SKIP_BUILD" = false ]; then
     echo -e "  Main branch SHA: ${MAIN_SHA:0:12}"
 
     # Create tag on CI repo
-    TAG_RESP=$(curl -s -X POST -H "Authorization: token ${GITEA_TOKEN}" \
-        -H "Content-Type: application/json" \
-        "${GITEA_URL}/api/v1/repos/${CI_REPO}/tags" \
-        -d "{\"tag_name\": \"${GIT_TAG}\", \"target\": \"${MAIN_SHA}\"}")
-    TAG_NAME=$(echo "$TAG_RESP" | jq -r '.name // empty')
+    TAG_RESP=$(tea api -X POST -r "${CI_REPO}" "repos/{owner}/{repo}/tags" \
+        -f "tag_name=${GIT_TAG}" -f "target=${MAIN_SHA}" 2>&1) || true
+    TAG_NAME=$(echo "$TAG_RESP" | jq -r '.name // empty' 2>/dev/null)
 
     if [ -z "$TAG_NAME" ]; then
         # Check if tag already exists (409 conflict)
-        ERR_MSG=$(echo "$TAG_RESP" | jq -r '.message // empty')
-        if echo "$ERR_MSG" | grep -qi "exist"; then
+        if echo "$TAG_RESP" | grep -qi "exist"; then
             echo -e "${YELLOW}Tag ${GIT_TAG} already exists, proceeding to poll CI status...${NC}"
         else
             echo -e "${RED}Error: Failed to create tag ${GIT_TAG}${NC}" >&2
-            echo "$TAG_RESP" | jq . 2>/dev/null || echo "$TAG_RESP" >&2
+            echo "$TAG_RESP" >&2
             exit 1
         fi
     else
@@ -215,8 +217,7 @@ CI_DONE=false
 
 for i in $(seq 1 "$MAX_ATTEMPTS"); do
     # Query action tasks, filter by head_branch matching our tag
-    TASKS_RESP=$(curl -s -H "Authorization: token ${GITEA_TOKEN}" \
-        "${GITEA_URL}/api/v1/repos/${CI_REPO}/actions/tasks?limit=10")
+    TASKS_RESP=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10" 2>/dev/null || echo "{}")
 
     # Extract statuses of all tasks matching our tag
     STATUSES=$(echo "$TASKS_RESP" | jq -r \
