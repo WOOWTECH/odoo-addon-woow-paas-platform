@@ -34,6 +34,12 @@ odoo:
   extraPipPackages: []
   # Addons path inside container
   addonsPath: /mnt/extra-addons,/mnt/extra-addons-ext
+  # Filestore persistence (recommended for stg mode)
+  filestore:
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: ""
   # Resource limits
   resources:
     requests:

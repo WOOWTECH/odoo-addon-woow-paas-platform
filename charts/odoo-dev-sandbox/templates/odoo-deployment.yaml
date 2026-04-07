@@ -80,6 +80,14 @@ spec:
               mountPath: /etc/odoo/odoo.conf
               subPath: odoo.conf
               readOnly: true
+            {{- if .Values.odoo.filestore.persistence.enabled }}
+            - name: odoo-filestore
+              {{- if eq .Values.sandbox.mode "stg" }}
+              mountPath: /root/.local/share/Odoo
+              {{- else }}
+              mountPath: /var/lib/odoo
+              {{- end }}
+            {{- end }}
             {{- if eq .Values.sandbox.mode "local" }}
             - name: extra-addons
               mountPath: /mnt/extra-addons/{{ .Values.codeMount.moduleName }}
@@ -104,6 +112,11 @@ spec:
         - name: odoo-config
           configMap:
             name: {{ include "odoo-dev-sandbox.fullname" . }}-odoo-config
+        {{- if .Values.odoo.filestore.persistence.enabled }}
+        - name: odoo-filestore
+          persistentVolumeClaim:
+            claimName: {{ include "odoo-dev-sandbox.fullname" . }}-odoo-filestore
+        {{- end }}
         {{- if eq .Values.sandbox.mode "local" }}
         - name: extra-addons
           hostPath:
