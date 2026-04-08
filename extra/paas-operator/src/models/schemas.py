@@ -339,6 +339,44 @@ class OdooInitResponse(BaseModel):
     error: Optional[str] = None
 
 
+# --- Odoo Module Management ---
+
+
+class OdooModuleStatesRequest(BaseModel):
+    """Request to query Odoo module installation states."""
+
+    module_names: List[str] = Field(..., description="List of module technical names to check")
+
+
+class OdooModuleStateInfo(BaseModel):
+    """Installation state and reverse dependencies for a single module."""
+
+    state: str = Field(..., description="Module state: installed, uninstalled, uninstallable, etc.")
+    dependents: List[str] = Field(default_factory=list, description="Installed modules that depend on this one")
+
+
+class OdooModuleStatesResponse(BaseModel):
+    """Response with module states."""
+
+    success: bool
+    modules: Dict[str, OdooModuleStateInfo] = Field(default_factory=dict)
+    error: Optional[str] = None
+
+
+class OdooUninstallModulesRequest(BaseModel):
+    """Request to uninstall Odoo modules."""
+
+    module_names: List[str] = Field(..., description="Module technical names to uninstall")
+
+
+class OdooUninstallModulesResponse(BaseModel):
+    """Response from module uninstallation."""
+
+    success: bool
+    uninstalled: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
 class ErrorResponse(BaseModel):
     """Error response."""
 

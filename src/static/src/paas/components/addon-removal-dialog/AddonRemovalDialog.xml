@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AddonRemovalDialog">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_addon_removal_dialog" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <WoowIcon t-if="props.mode === 'blocked'" name="'block'" size="24"/>
+                    <WoowIcon t-else="" name="'warning'" size="24"/>
+                    <h3 t-if="props.mode === 'blocked'">Cannot Remove Addon</h3>
+                    <h3 t-else="">Addon Is Active in Odoo</h3>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <t t-if="props.mode === 'blocked'">
+                        <p class="o_woow_dialog_desc">
+                            The following addon(s) cannot be removed because other installed modules depend on them:
+                        </p>
+                        <div class="o_woow_blocked_list">
+                            <t t-foreach="blockedModules" t-as="mod" t-key="mod.name">
+                                <div class="o_woow_blocked_item">
+                                    <strong t-esc="mod.name"/>
+                                    <span> is required by: </span>
+                                    <span class="o_woow_dep_names" t-esc="mod.dependents.join(', ')"/>
+                                </div>
+                            </t>
+                        </div>
+                        <p class="o_woow_dialog_hint">
+                            Please uninstall the dependent modules first, either from this panel or directly in Odoo.
+                        </p>
+                    </t>
+
+                    <t t-else="">
+                        <p class="o_woow_dialog_desc">
+                            The following addon(s) are currently active (installed) in your Odoo instance:
+                        </p>
+                        <div class="o_woow_installed_list">
+                            <t t-foreach="installedModules" t-as="mod" t-key="mod.name">
+                                <div class="o_woow_installed_item">
+                                    <WoowIcon name="'extension'" size="18"/>
+                                    <span t-esc="mod.name"/>
+                                </div>
+                            </t>
+                        </div>
+                        <p class="o_woow_dialog_hint">
+                            Force uninstalling will remove all related data (menus, views, settings) from Odoo. This cannot be undone.
+                        </p>
+                        <div t-if="state.error" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="18"/>
+                            <span t-esc="state.error"/>
+                        </div>
+                    </t>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <t t-if="props.mode === 'blocked'">
+                        <WoowButton variant="'primary'" size="'md'" onClick="props.onClose">
+                            OK
+                        </WoowButton>
+                    </t>
+                    <t t-else="">
+                        <WoowButton
+                            t-if="props.odooAppsUrl"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="openOdooApps">
+                            <WoowIcon name="'open_in_new'" size="18"/>
+                            Open Odoo Apps
+                        </WoowButton>
+                        <WoowButton
+                            variant="'danger'"
+                            size="'md'"
+                            onClick.bind="onForceUninstall"
+                            disabled="state.uninstalling">
+                            <t t-if="state.uninstalling">
+                                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                                Uninstalling...
+                            </t>
+                            <t t-else="">
+                                <WoowIcon name="'delete'" size="18"/>
+                                Force Uninstall &amp; Remove
+                            </t>
+                        </WoowButton>
+                        <WoowButton
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick="props.onClose"
+                            disabled="state.uninstalling">
+                            Cancel
+                        </WoowButton>
+                    </t>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

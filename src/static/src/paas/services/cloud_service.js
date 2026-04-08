@@ -380,6 +380,38 @@ export const cloudService = reactive({
     },
 
     /**
+     * Check if removed addons can be safely deselected
+     * @param {number} serviceId - Service ID
+     * @param {number[]} removedAddonIds - Addon IDs being removed
+     * @returns {Promise<{success: boolean, modules?: Object, error?: string}>}
+     */
+    async checkAddonRemoval(serviceId, removedAddonIds) {
+        try {
+            return await jsonRpc(`/api/cloud-services/services/${serviceId}/check-addon-removal`, {
+                removed_addon_ids: removedAddonIds,
+            });
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    },
+
+    /**
+     * Uninstall Odoo modules before removing addons
+     * @param {number} serviceId - Service ID
+     * @param {string[]} addonTechnicalNames - Module technical names to uninstall
+     * @returns {Promise<{success: boolean, uninstalled?: string[], error?: string}>}
+     */
+    async uninstallServiceAddons(serviceId, addonTechnicalNames) {
+        try {
+            return await jsonRpc(`/api/cloud-services/services/${serviceId}/uninstall-addons`, {
+                addon_technical_names: addonTechnicalNames,
+            });
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    },
+
+    /**
      * Delete a service
      * @param {number} workspaceId - Workspace ID
      * @param {number} serviceId - Service ID

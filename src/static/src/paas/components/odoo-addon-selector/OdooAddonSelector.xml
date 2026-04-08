@@ -38,6 +38,8 @@
                         <div class="o_woow_addon_selector__checkbox">
                             <input type="checkbox"
                                 t-att-checked="isSelected(addon.id)"
+                                t-att-disabled="isRequiredByOthers(addon.id)"
+                                t-att-title="getRequiredByTooltip(addon.id)"
                                 t-on-click.stop="() => this.toggleAddon(addon.id)"/>
                         </div>
                         <div class="o_woow_addon_selector__info">
