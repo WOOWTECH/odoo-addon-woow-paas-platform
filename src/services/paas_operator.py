@@ -507,6 +507,51 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def get_odoo_module_states(
+        self,
+        namespace: str,
+        release_name: str,
+        module_names: list[str],
+    ) -> Dict[str, Any]:
+        """Query Odoo module installation states.
+
+        Args:
+            namespace: K8s namespace
+            release_name: Helm release name
+            module_names: Module technical names to query
+
+        Returns:
+            Dict with 'success' and 'modules' mapping name -> {state, dependents}
+        """
+        return self._request(
+            'POST',
+            f'/api/odoo/{namespace}/{release_name}/module-states',
+            data={'module_names': module_names},
+        )
+
+    def uninstall_odoo_modules(
+        self,
+        namespace: str,
+        release_name: str,
+        module_names: list[str],
+    ) -> Dict[str, Any]:
+        """Uninstall modules in target Odoo instance.
+
+        Args:
+            namespace: K8s namespace
+            release_name: Helm release name
+            module_names: Module technical names to uninstall
+
+        Returns:
+            Dict with 'success' and 'uninstalled' list
+        """
+        return self._request(
+            'POST',
+            f'/api/odoo/{namespace}/{release_name}/uninstall-modules',
+            data={'module_names': module_names},
+            timeout=180,
+        )
+
     def get_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
         """Get detailed status of a release including pod information.
 
