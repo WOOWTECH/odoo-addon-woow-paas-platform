@@ -460,6 +460,30 @@ class CloudService(models.Model):
 
         return values
 
+    def _remove_addon_helm_values(self, values):
+        """Remove only addon-selector related entries from helm values.
+
+        Used when all addons are deselected. Precisely removes addon-specific
+        items without affecting other extraVolumes/initContainers.
+        """
+        if 'initContainers' in values:
+            values['initContainers'] = [
+                c for c in values['initContainers']
+                if c.get('name') != 'addon-selector'
+            ]
+        if 'extraVolumes' in values:
+            values['extraVolumes'] = [
+                v for v in values['extraVolumes']
+                if v.get('name') != 'selected-addons'
+            ]
+        if 'extraVolumeMounts' in values:
+            values['extraVolumeMounts'] = [
+                m for m in values['extraVolumeMounts']
+                if m.get('name') != 'selected-addons'
+            ]
+        if 'customPostInitScripts' in values:
+            values['customPostInitScripts'].pop('00-addons-path.sh', None)
+
     @staticmethod
     def _inject_storage_class(values, template_slug, storage_class):
         """Inject StorageClass into helm values for PVC lifecycle management.

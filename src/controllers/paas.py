@@ -1633,15 +1633,19 @@ class PaasController(Controller):
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)
 
-            # Rebuild addon initContainer helm values when addon selection changed
-            if addon_changed and service.odoo_addon_ids:
-                image_vals = merged_values.get('image', {})
-                registry = image_vals.get('registry', '')
-                repo = image_vals.get('repository', '')
-                tag = image_vals.get('tag', 'latest')
-                image_ref = f"{registry}/{repo}:{tag}" if registry else f"{repo}:{tag}"
-                addon_values = service._build_odoo_addon_helm_values(image_ref)
-                merged_values = self._deep_merge(merged_values, addon_values)
+            # Rebuild or remove addon initContainer helm values when addon selection changed
+            if addon_changed:
+                if service.odoo_addon_ids:
+                    image_vals = merged_values.get('image', {})
+                    registry = image_vals.get('registry', '')
+                    repo = image_vals.get('repository', '')
+                    tag = image_vals.get('tag', 'latest')
+                    image_ref = f"{registry}/{repo}:{tag}" if registry else f"{repo}:{tag}"
+                    addon_values = service._build_odoo_addon_helm_values(image_ref)
+                    merged_values = self._deep_merge(merged_values, addon_values)
+                else:
+                    # All addons deselected — remove addon-specific helm values
+                    service._remove_addon_helm_values(merged_values)
 
             # Upgrade release
             release_info = client.upgrade_release(
