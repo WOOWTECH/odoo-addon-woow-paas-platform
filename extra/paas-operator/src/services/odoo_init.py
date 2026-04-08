@@ -80,17 +80,19 @@ class OdooInitService:
 
         logger.info(
             "Odoo module list initialization complete for %s/%s: "
-            "added=%d, updated=%d",
+            "added=%d, updated=%d, stale_cleaned=%d",
             namespace,
             release_name,
             result.get("added", 0),
             result.get("updated", 0),
+            result.get("cleaned", 0),
         )
 
         return {
             "success": True,
             "modules_added": result.get("added", 0),
             "modules_updated": result.get("updated", 0),
+            "modules_cleaned": result.get("cleaned", 0),
             "message": "Module list updated successfully",
         }
 
@@ -219,16 +221,23 @@ class OdooInitService:
     def _update_module_list(
         self, namespace: str, pod_name: str, container: str
     ) -> dict:
-        """Execute module list update via direct ORM access.
+        """Execute module list update and stale record cleanup via direct ORM.
 
         Runs a Python script inside the Odoo container that:
         1. Parses odoo.conf to get the database name
         2. Opens a registry cursor as SUPERUSER_ID
         3. Calls ir.module.module.update_list()
-        4. Commits the transaction
+        4. Removes stale module records (state=uninstalled, files not on disk)
+        5. Commits the transaction
 
-        This approach bypasses XML-RPC authentication entirely, avoiding
-        issues with admin passwords or API keys.
+        Odoo's update_list() never deletes module records for addons that are
+        no longer on the filesystem (known behavior since Odoo 8, see
+        github.com/odoo/odoo/issues/1677). Step 4 cleans up these stale
+        records so deselected addons disappear from the Apps list.
+
+        Only records with state='uninstalled' are removed (safe — no DB
+        artifacts). Installed modules are left alone for the pre-check
+        uninstall flow to handle.
 
         Args:
             namespace: Kubernetes namespace.
@@ -236,7 +245,7 @@ class OdooInitService:
             container: Name of the Odoo container.
 
         Returns:
-            Dict with keys: success, added, updated.
+            Dict with keys: success, added, updated, cleaned.
 
         Raises:
             OdooInitError: If the module list update fails.
@@ -244,7 +253,7 @@ class OdooInitService:
         logger.info("Updating Odoo module list via direct ORM access...")
 
         update_script = (
-            "import odoo, json, sys\n"
+            "import odoo, json, sys, os\n"
             "try:\n"
             "    odoo.tools.config.parse_config("
             "['-c', '/opt/bitnami/odoo/conf/odoo.conf', '--no-http'])\n"
@@ -257,11 +266,27 @@ class OdooInitService:
             "    with registry.cursor() as cr:\n"
             "        env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})\n"
             "        result = env['ir.module.module'].update_list()\n"
-            "        cr.commit()\n"
             "        added = result[0] if isinstance(result, (list, tuple)) else 0\n"
             "        updated = result[1] if isinstance(result, (list, tuple)) else 0\n"
+            "        # Cleanup stale uninstalled module records not on disk\n"
+            "        addons_path = odoo.tools.config['addons_path'].split(',')\n"
+            "        on_disk = set()\n"
+            "        for p in addons_path:\n"
+            "            p = p.strip()\n"
+            "            if os.path.isdir(p):\n"
+            "                on_disk.update(d for d in os.listdir(p)"
+            " if os.path.isdir(os.path.join(p, d)))\n"
+            "        stale = env['ir.module.module'].search([\n"
+            "            ('state', '=', 'uninstalled'),\n"
+            "            ('name', 'not in', list(on_disk)),\n"
+            "            ('name', '!=', 'base'),\n"
+            "        ])\n"
+            "        cleaned = len(stale)\n"
+            "        if stale:\n"
+            "            stale.unlink()\n"
+            "        cr.commit()\n"
             '        print(json.dumps({"success": True, '
-            '"added": added, "updated": updated}))\n'
+            '"added": added, "updated": updated, "cleaned": cleaned}))\n'
             "except Exception as e:\n"
             '    print(json.dumps({"success": False, "error": str(e)}))\n'
             "    sys.exit(1)\n"
@@ -310,9 +335,10 @@ class OdooInitService:
             )
 
         logger.info(
-            "Module list update complete: %d added, %d updated",
+            "Module list update complete: %d added, %d updated, %d stale cleaned",
             data.get("added", 0),
             data.get("updated", 0),
+            data.get("cleaned", 0),
         )
 
         return data
