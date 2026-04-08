@@ -1,0 +1,43 @@
+.o_woow_addon_removal_dialog {
+  max-width: 520px;
+
+  .o_woow_modal_header {
+    h3 {
+      color: var(--woow-warning, #f59e0b);
+    }
+  }
+
+  .o_woow_dialog_desc {
+    margin-bottom: 12px;
+    color: var(--woow-text-secondary);
+  }
+
+  .o_woow_dialog_hint {
+    margin-top: 12px;
+    font-size: 0.85rem;
+    color: var(--woow-text-muted);
+  }
+
+  .o_woow_blocked_list,
+  .o_woow_installed_list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    background: var(--woow-bg-subtle, rgba(0, 0, 0, 0.03));
+    border-radius: 8px;
+  }
+
+  .o_woow_blocked_item {
+    .o_woow_dep_names {
+      color: var(--woow-danger, #ef4444);
+      font-weight: 500;
+    }
+  }
+
+  .o_woow_installed_item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+}
