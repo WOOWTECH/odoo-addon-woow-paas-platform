@@ -7,6 +7,11 @@
         <field name="arch" type="xml">
             <form string="Cloud Service">
                 <header>
+                    <button name="action_redeploy" type="object"
+                            string="Redeploy" icon="fa-refresh"
+                            confirm="This will uninstall the existing release and deploy from scratch. Continue?"
+                            class="oe_highlight"
+                            invisible="state in ('pending', 'deploying', 'deleting')"/>
                     <field name="state" widget="statusbar"
                            statusbar_visible="pending,deploying,running"/>
                 </header>
@@ -93,6 +98,9 @@
                 <field name="subdomain"/>
                 <field name="helm_namespace"/>
                 <field name="deployed_at"/>
+                <button name="action_redeploy" type="object"
+                        string="Redeploy" icon="fa-refresh"
+                        confirm="This will uninstall the existing release and deploy from scratch. Continue?"/>
             </list>
         </field>
     </record>

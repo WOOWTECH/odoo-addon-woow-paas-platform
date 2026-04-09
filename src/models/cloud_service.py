@@ -213,6 +213,66 @@ class CloudService(models.Model):
     )
 
     # ------------------------------------------------------------------ #
+    #  Actions                                                            #
+    # ------------------------------------------------------------------ #
+
+    def action_redeploy(self):
+        """Uninstall existing release and re-deploy from scratch.
+
+        Rebuilds deploy_params from current service data (subdomain, template
+        settings) so the deploy cron can run the full flow again.
+        """
+        self.ensure_one()
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorError,
+        )
+
+        # Uninstall existing Helm release (best-effort; may not exist yet)
+        if self.helm_release_name and self.helm_namespace:
+            client = get_paas_operator_client(self.env)
+            if client:
+                try:
+                    client.uninstall_release(
+                        namespace=self.helm_namespace,
+                        release_name=self.helm_release_name,
+                        subdomain=self.subdomain,
+                    )
+                except PaaSOperatorError:
+                    _logger.info(
+                        "No existing release to uninstall for %s (may not exist yet)",
+                        self.name,
+                    )
+
+        # Rebuild deploy_params from existing service data
+        deploy_params = {}
+        template = self.template_id
+        if template.ingress_enabled and self.subdomain:
+            deploy_params['expose_config'] = {
+                'enabled': True,
+                'subdomain': self.subdomain,
+            }
+
+        # Reset state and trigger re-deploy
+        self.write({
+            'state': 'pending',
+            'error_message': False,
+            'init_error': False,
+            'init_retries': 0,
+            'deploy_params': json.dumps(deploy_params) if deploy_params else False,
+        })
+
+        # Trigger deploy cron
+        cron = self.env.ref(
+            'woow_paas_platform.ir_cron_deploy_cloud_services',
+            raise_if_not_found=False,
+        )
+        if cron:
+            cron._trigger()
+
+        return True
+
+    # ------------------------------------------------------------------ #
     #  Cron: process pending deployments                                  #
     # ------------------------------------------------------------------ #
 
