@@ -1,4 +1,4 @@
-"""API endpoints for Odoo module state queries and uninstallation."""
+"""API endpoints for Odoo module state queries."""
 import logging
 
 from fastapi import APIRouter, HTTPException, status
@@ -7,8 +7,6 @@ from src.models.schemas import (
     OdooModuleStatesRequest,
     OdooModuleStatesResponse,
     OdooModuleStateInfo,
-    OdooUninstallModulesRequest,
-    OdooUninstallModulesResponse,
 )
 from src.services.helm import KubernetesService
 from src.services.odoo_module import OdooModuleError, OdooModuleService
@@ -72,54 +70,4 @@ async def get_module_states(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Module state query failed: {str(e)}",
-        )
-
-
-@router.post(
-    "/{namespace}/{release_name}/uninstall-modules",
-    response_model=OdooUninstallModulesResponse,
-    summary="Uninstall Odoo modules",
-    description="Uninstall specified Odoo modules via button_immediate_uninstall()",
-)
-async def uninstall_modules(
-    namespace: str,
-    release_name: str,
-    request: OdooUninstallModulesRequest,
-):
-    """Uninstall Odoo modules from a running instance.
-
-    Args:
-        namespace: K8s namespace where Odoo is deployed
-        release_name: Helm release name
-        request: List of module technical names to uninstall
-
-    Returns:
-        Uninstallation result with list of uninstalled modules
-    """
-    try:
-        uninstalled = odoo_module_service.uninstall_modules(
-            namespace=namespace,
-            release_name=release_name,
-            module_names=request.module_names,
-        )
-
-        return OdooUninstallModulesResponse(
-            success=True,
-            uninstalled=uninstalled,
-        )
-
-    except OdooModuleError as e:
-        logger.error(
-            "Module uninstall failed at step '%s': %s", e.step, str(e)
-        )
-        return OdooUninstallModulesResponse(
-            success=False,
-            error=f"[{e.step}] {str(e)}",
-        )
-
-    except Exception as e:
-        logger.exception("Unexpected error uninstalling modules")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Module uninstall failed: {str(e)}",
         )

@@ -396,22 +396,6 @@ export const cloudService = reactive({
     },
 
     /**
-     * Uninstall Odoo modules before removing addons
-     * @param {number} serviceId - Service ID
-     * @param {string[]} addonTechnicalNames - Module technical names to uninstall
-     * @returns {Promise<{success: boolean, uninstalled?: string[], error?: string}>}
-     */
-    async uninstallServiceAddons(serviceId, addonTechnicalNames) {
-        try {
-            return await jsonRpc(`/api/cloud-services/services/${serviceId}/uninstall-addons`, {
-                addon_technical_names: addonTechnicalNames,
-            });
-        } catch (err) {
-            return { success: false, error: err.message };
-        }
-    },
-
-    /**
      * Delete a service
      * @param {number} workspaceId - Workspace ID
      * @param {number} serviceId - Service ID

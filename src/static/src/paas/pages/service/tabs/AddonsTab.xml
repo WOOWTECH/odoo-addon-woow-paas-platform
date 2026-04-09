@@ -30,8 +30,12 @@
                             variant="'primary'"
                             size="'md'"
                             onClick.bind="saveAddons"
-                            disabled="!hasChanges or state.saving">
-                            <t t-if="state.saving">
+                            disabled="!hasChanges or state.saving or state.checking">
+                            <t t-if="state.checking">
+                                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                                Checking...
+                            </t>
+                            <t t-elif="state.saving">
                                 <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
                                 Saving...
                             </t>
@@ -105,6 +109,12 @@
                     </div>
                 </WoowCard>
             </t>
+            <!-- Addon Removal Dialog -->
+            <AddonRemovalDialog
+                t-if="state.showDialog"
+                modules="state.dialogModules"
+                odooAppsUrl="odooAppsUrl"
+                onClose.bind="closeDialog"/>
         </div>
     </t>
 </templates>

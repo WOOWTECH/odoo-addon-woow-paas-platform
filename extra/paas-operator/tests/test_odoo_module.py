@@ -1,4 +1,4 @@
-"""Tests for Odoo module state and uninstall endpoints and service."""
+"""Tests for Odoo module state query endpoints and service."""
 import json
 from unittest.mock import MagicMock, patch
 
@@ -90,45 +90,6 @@ class TestModuleStatesEndpoint:
         assert "Cannot find Odoo pod" in data["error"]
 
 
-class TestUninstallModulesEndpoint:
-    """Test POST /{namespace}/{release_name}/uninstall-modules endpoint."""
-
-    @patch("src.api.odoo_modules.odoo_module_service")
-    def test_uninstall_success(self, mock_service, client):
-        """Test successful module uninstallation."""
-        mock_service.uninstall_modules.return_value = ["sale", "stock"]
-
-        response = client.post(
-            "/api/odoo/paas-ws-test/my-odoo/uninstall-modules",
-            json={"module_names": ["sale", "stock"]},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert "sale" in data["uninstalled"]
-        assert "stock" in data["uninstalled"]
-
-    @patch("src.api.odoo_modules.odoo_module_service")
-    def test_uninstall_dependency_conflict(self, mock_service, client):
-        """Test that OdooModuleError from dependency conflict returns error message."""
-        mock_service.uninstall_modules.side_effect = OdooModuleError(
-            "Failed to uninstall base: dependent modules exist",
-            step="uninstall_modules",
-        )
-
-        response = client.post(
-            "/api/odoo/paas-ws-test/my-odoo/uninstall-modules",
-            json={"module_names": ["base"]},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is False
-        assert "uninstall_modules" in data["error"]
-        assert "dependent modules exist" in data["error"]
-
-
 class TestOdooModuleService:
     """Test OdooModuleService business logic."""
 
@@ -139,9 +100,7 @@ class TestOdooModuleService:
     def test_get_module_states_parses_output(self):
         """Test that get_module_states correctly parses kubectl exec JSON output."""
         mock_k8s = MagicMock()
-        # get_pod_name returns a pod name
         mock_k8s.get_pod_name.return_value = "my-odoo-pod-abc123"
-        # exec_in_pod returns JSON output on stdout
         json_output = json.dumps({
             "success": True,
             "modules": {
@@ -162,25 +121,6 @@ class TestOdooModuleService:
         assert result["modules"]["sale"]["state"] == "installed"
         assert "pos_sale" in result["modules"]["sale"]["dependents"]
         assert result["modules"]["purchase"]["dependents"] == []
-
-    def test_uninstall_modules_returns_list(self):
-        """Test that uninstall_modules returns list of uninstalled module names."""
-        mock_k8s = MagicMock()
-        mock_k8s.get_pod_name.return_value = "my-odoo-pod-abc123"
-        json_output = json.dumps({
-            "success": True,
-            "uninstalled": ["sale", "stock"],
-        })
-        mock_k8s.exec_in_pod.return_value = MagicMock(stdout=json_output)
-
-        service = self._make_service(mock_k8s)
-        result = service.uninstall_modules(
-            namespace="paas-ws-test",
-            release_name="my-odoo",
-            module_names=["sale", "stock"],
-        )
-
-        assert result == ["sale", "stock"]
 
     def test_raises_on_pod_not_found(self):
         """Test that KubectlException from get_pod_name raises OdooModuleError."""

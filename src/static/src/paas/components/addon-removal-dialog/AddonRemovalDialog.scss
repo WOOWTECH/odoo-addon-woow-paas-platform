@@ -18,7 +18,6 @@
     color: var(--woow-text-muted);
   }
 
-  .o_woow_blocked_list,
   .o_woow_installed_list {
     display: flex;
     flex-direction: column;
@@ -28,16 +27,14 @@
     border-radius: 8px;
   }
 
-  .o_woow_blocked_item {
-    .o_woow_dep_names {
-      color: var(--woow-danger, #ef4444);
-      font-weight: 500;
-    }
-  }
-
   .o_woow_installed_item {
     display: flex;
     align-items: center;
     gap: 8px;
+
+    .o_woow_dep_names {
+      font-size: 0.85rem;
+      color: var(--woow-text-muted);
+    }
   }
 }

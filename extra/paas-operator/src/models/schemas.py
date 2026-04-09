@@ -363,18 +363,6 @@ class OdooModuleStatesResponse(BaseModel):
     error: Optional[str] = None
 
 
-class OdooUninstallModulesRequest(BaseModel):
-    """Request to uninstall Odoo modules."""
-
-    module_names: List[str] = Field(..., description="Module technical names to uninstall")
-
-
-class OdooUninstallModulesResponse(BaseModel):
-    """Response from module uninstallation."""
-
-    success: bool
-    uninstalled: List[str] = Field(default_factory=list)
-    error: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):

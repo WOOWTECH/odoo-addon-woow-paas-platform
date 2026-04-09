@@ -1048,46 +1048,6 @@ class PaasController(Controller):
 
         return {'success': True, 'modules': modules}
 
-    @route(
-        '/api/cloud-services/services/<int:service_id>/uninstall-addons',
-        type='json', auth='user', methods=['POST'],
-    )
-    def api_uninstall_addons(self, service_id):
-        """Uninstall Odoo modules before removing addons."""
-        params = request.get_json_data()
-        addon_technical_names = params.get('addon_technical_names', [])
-
-        if not addon_technical_names:
-            return {'success': True, 'uninstalled': []}
-
-        service = request.env['woow_paas_platform.cloud_service'].browse(service_id)
-        if not service.exists():
-            return {'success': False, 'error': 'Service not found'}
-
-        if service.state != 'running':
-            return {'success': False, 'error': f'Service must be running to uninstall modules (current: {service.state})'}
-
-        client = get_paas_operator_client(request.env)
-        if not client:
-            return {'success': False, 'error': 'PaaS Operator not configured'}
-
-        try:
-            result = client.uninstall_odoo_modules(
-                namespace=service.helm_namespace,
-                release_name=service.helm_release_name,
-                module_names=addon_technical_names,
-            )
-        except Exception as e:
-            return {'success': False, 'error': f'Failed to uninstall modules: {e}'}
-
-        if not result.get('success'):
-            return {'success': False, 'error': result.get('error', 'Unknown error')}
-
-        return {
-            'success': True,
-            'uninstalled': result.get('uninstalled', []),
-        }
-
     # ==================== MCP Server API (per-service) ====================
 
     @route(

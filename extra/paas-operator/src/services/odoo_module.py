@@ -1,12 +1,12 @@
 """Odoo module management service.
 
-Provides operations for querying Odoo module installation states and
-performing module uninstallation via kubectl exec into Odoo containers.
+Provides operations for querying Odoo module installation states
+via kubectl exec into Odoo containers.
 
 Uses direct ORM access inside the container (same pattern as odoo_init.py):
 - Parses odoo.conf to get the database name
 - Opens a registry cursor as SUPERUSER_ID
-- Queries / mutates ir.module.module records
+- Queries ir.module.module records
 - Outputs JSON on the last line for parsing
 """
 
@@ -20,9 +20,6 @@ logger = logging.getLogger(__name__)
 # Timeout for querying module states (lightweight read)
 MODULE_QUERY_TIMEOUT = 30
 
-# Timeout for uninstalling modules (may trigger ORM hooks, migrations, etc.)
-MODULE_UNINSTALL_TIMEOUT = 120
-
 
 class OdooModuleError(Exception):
     """Raised when an Odoo module operation fails."""
@@ -33,7 +30,7 @@ class OdooModuleError(Exception):
 
 
 class OdooModuleService:
-    """Handles Odoo module state queries and uninstallation.
+    """Handles Odoo module state queries.
 
     All operations execute Python scripts inside the Odoo container
     via kubectl exec, using direct ORM access with SUPERUSER_ID.
@@ -182,102 +179,6 @@ class OdooModuleService:
             ) from e
 
         return self._parse_json_output(result.stdout, step="query_modules")
-
-    def uninstall_modules(
-        self,
-        namespace: str,
-        release_name: str,
-        module_names: list[str],
-    ) -> list[str]:
-        """Uninstall Odoo modules via button_immediate_uninstall().
-
-        Runs a Python script inside the Odoo container that:
-        1. Parses odoo.conf to get the database name
-        2. Opens a registry cursor as SUPERUSER_ID
-        3. For each module, calls button_immediate_uninstall()
-        4. Commits on success, rolls back on failure
-
-        Args:
-            namespace: Kubernetes namespace.
-            release_name: Helm release name.
-            module_names: List of module technical names to uninstall.
-
-        Returns:
-            List of successfully uninstalled module names.
-
-        Raises:
-            OdooModuleError: If the uninstall operation fails.
-        """
-        logger.info(
-            "Uninstalling modules %s in %s/%s",
-            module_names,
-            namespace,
-            release_name,
-        )
-
-        pod_name, container = self._get_odoo_pod(namespace, release_name)
-
-        modules_json = json.dumps(module_names)
-        uninstall_script = (
-            "import odoo, json, sys\n"
-            "try:\n"
-            "    odoo.tools.config.parse_config("
-            "['-c', '/opt/bitnami/odoo/conf/odoo.conf', '--no-http'])\n"
-            "    db_name = odoo.tools.config['db_name']\n"
-            "    if not db_name:\n"
-            '        print(json.dumps({"success": False, '
-            '"error": "No db_name found in odoo.conf"}))\n'
-            "        sys.exit(1)\n"
-            "    registry = odoo.registry(db_name)\n"
-            "    with registry.cursor() as cr:\n"
-            "        env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})\n"
-            f"        module_names = {modules_json}\n"
-            "        Module = env['ir.module.module']\n"
-            "        uninstalled = []\n"
-            "        for name in module_names:\n"
-            "            mod = Module.search([('name', '=', name), ('state', '=', 'installed')], limit=1)\n"
-            "            if not mod:\n"
-            "                continue\n"
-            "            try:\n"
-            "                mod.button_immediate_uninstall()\n"
-            "                uninstalled.append(name)\n"
-            "            except Exception as e:\n"
-            "                cr.rollback()\n"
-            '                print(json.dumps({"success": False, '
-            '"uninstalled": uninstalled, '
-            '"error": f"Failed to uninstall {name}: {e}"}))\n'
-            "                sys.exit(1)\n"
-            "        cr.commit()\n"
-            '        print(json.dumps({"success": True, "uninstalled": uninstalled}))\n'
-            "except Exception as e:\n"
-            '    print(json.dumps({"success": False, "uninstalled": [], "error": str(e)}))\n'
-            "    sys.exit(1)\n"
-        )
-
-        command = [
-            "/opt/bitnami/odoo/venv/bin/python3",
-            "-c",
-            uninstall_script,
-        ]
-
-        try:
-            result = self.k8s.exec_in_pod(
-                namespace=namespace,
-                pod_name=pod_name,
-                container=container,
-                command=command,
-                timeout=MODULE_UNINSTALL_TIMEOUT,
-            )
-        except KubectlException as e:
-            raise OdooModuleError(
-                f"Failed to execute module uninstall: {e}",
-                step="uninstall_modules",
-            ) from e
-
-        data = self._parse_json_output(
-            result.stdout, step="uninstall_modules"
-        )
-        return data.get("uninstalled", [])
 
     @staticmethod
     def _parse_json_output(output: str, step: str) -> dict:
