@@ -1790,12 +1790,17 @@ class PaasController(Controller):
 
             # Determine new state based on release status and pod status
             if release_status == 'deployed':
-                # Check if all pods are ready
+                # Filter to Running-phase pods only — after helm upgrade,
+                # old pods may be Terminating (phase=Succeeded/Failed) and
+                # would cause the readiness check to fail permanently.
+                active_pods = [
+                    p for p in pods if p.get('phase') == 'Running'
+                ]
                 all_ready = all(
-                    pod.get('phase') == 'Running' and '/' in pod.get('ready', '0/0')
+                    '/' in pod.get('ready', '0/0')
                     and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
-                    for pod in pods
-                ) if pods else True
+                    for pod in active_pods
+                ) if active_pods else (not pods)
 
                 if all_ready:
                     template = service.template_id

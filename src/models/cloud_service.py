@@ -8,6 +8,37 @@ from odoo.exceptions import UserError
 _logger = logging.getLogger(__name__)
 
 
+def _unflatten_dotpath_keys(flat_dict):
+    """Convert flat dot-path keys to nested dict.
+
+    Example: {"a.b.c": 1} → {"a": {"b": {"c": 1}}}
+    """
+    result = {}
+    for key, value in flat_dict.items():
+        parts = key.split('.')
+        if len(parts) == 1:
+            result[key] = value
+            continue
+        d = result
+        for part in parts[:-1]:
+            if part not in d or not isinstance(d[part], dict):
+                d[part] = {}
+            d = d[part]
+        d[parts[-1]] = value
+    return result
+
+
+def _deep_merge(base, override):
+    """Deep merge override into base. Override values win."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 class CloudService(models.Model):
     _name = 'woow_paas_platform.cloud_service'
     _description = 'Cloud Service Instance'
@@ -264,7 +295,7 @@ class CloudService(models.Model):
                     f"Upgrade failed: {e.detail or e.message}"
                 ) from e
 
-            # Set to 'deploying' so the frontend polling handles
+            # Set to 'deploying' — cron + frontend polling will handle
             # the rest (pod readiness check → init → running)
             self.write({
                 'state': 'deploying',
@@ -273,6 +304,13 @@ class CloudService(models.Model):
                 'init_retries': 0,
                 'helm_revision': release_info.get('revision', self.helm_revision),
             })
+            # Trigger cron so state transitions without frontend polling
+            cron = self.env.ref(
+                'woow_paas_platform.ir_cron_check_deploying_services',
+                raise_if_not_found=False,
+            )
+            if cron:
+                cron._trigger()
         else:
             # No release yet — do a full fresh deploy via cron
             deploy_params = {}
@@ -701,3 +739,293 @@ class CloudService(models.Model):
                 },
             },
         }
+
+    # ------------------------------------------------------------------ #
+    #  Cron: check deploying / upgrading / initializing services         #
+    # ------------------------------------------------------------------ #
+
+    @api.model
+    def _cron_check_deploying_services(self):
+        """Poll operator for services in transitional states.
+
+        This cron ensures deploying → running transitions happen even without
+        frontend polling (e.g. when redeploy is triggered from backend views).
+        """
+        services = self.search([
+            ('state', 'in', ['deploying', 'upgrading', 'initializing']),
+        ])
+        if not services:
+            return
+
+        from ..services.paas_operator import get_paas_operator_client
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return
+
+        for service in services:
+            try:
+                service._poll_and_update_status(client)
+            except Exception:
+                _logger.exception(
+                    "Error checking status for service %s (id=%s)",
+                    service.name, service.id,
+                )
+
+    def _poll_and_update_status(self, client):
+        """Poll operator and transition state for a single service.
+
+        Mirrors the logic in PaasController._update_service_status but works
+        in model context (usable from cron without HTTP request).
+        """
+        self.ensure_one()
+        from ..services.paas_operator import PaaSOperatorError
+
+        original_state = self.state
+
+        try:
+            status = client.get_status(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+            )
+        except PaaSOperatorError as e:
+            if e.status_code == 404 and self.state == 'deleting':
+                self.unlink()
+            else:
+                _logger.warning("Error polling status for %s: %s", self.name, e)
+            return
+        except Exception as e:
+            _logger.warning("Error polling status for %s: %s", self.name, e)
+            return
+
+        release = status.get('release', {})
+        pods = status.get('pods', [])
+        release_status = release.get('status', '')
+        helm_revision = release.get('revision', self.helm_revision)
+
+        # Re-fetch for optimistic locking
+        service = self.browse(self.id)
+        if not service.exists() or service.state != original_state:
+            return
+
+        if release_status == 'deployed':
+            # Only Running-phase pods — terminators would block readiness forever
+            active_pods = [p for p in pods if p.get('phase') == 'Running']
+            all_ready = all(
+                '/' in pod.get('ready', '0/0')
+                and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
+                for pod in active_pods
+            ) if active_pods else (not pods)
+
+            if all_ready:
+                template = service.template_id
+                needs_init = (
+                    template.post_deploy_init_type
+                    and template.post_deploy_init_type != 'none'
+                )
+
+                if needs_init and original_state == 'deploying':
+                    service.write({
+                        'state': 'initializing',
+                        'helm_revision': helm_revision,
+                        'error_message': False,
+                    })
+                    service._model_run_post_deploy_init(client)
+
+                elif needs_init and original_state == 'initializing':
+                    service._model_run_post_deploy_init(client)
+
+                elif needs_init and original_state == 'upgrading' and service.addon_update_pending:
+                    service.write({
+                        'state': 'initializing',
+                        'helm_revision': helm_revision,
+                        'error_message': False,
+                        'init_retries': 0,
+                        'init_error': False,
+                    })
+                    service._model_run_post_deploy_init(client)
+
+                else:
+                    service.write({
+                        'state': 'running',
+                        'helm_revision': helm_revision,
+                        'error_message': False,
+                    })
+                    if original_state != 'running':
+                        service._model_auto_create_mcp_server()
+
+        elif release_status == 'failed':
+            service.write({
+                'state': 'error',
+                'helm_revision': helm_revision,
+                'error_message': release.get('description', 'Deployment failed'),
+            })
+
+    # ------------------------------------------------------------------ #
+    #  Post-deploy init (model context)                                  #
+    # ------------------------------------------------------------------ #
+
+    def _model_run_post_deploy_init(self, client):
+        """Execute post-deploy initialization in model context (for cron).
+
+        Handles n8n owner setup + API key, and Odoo module list refresh.
+        """
+        self.ensure_one()
+        template = self.template_id
+
+        if template.post_deploy_init_type == 'n8n':
+            self._model_init_n8n(client)
+        elif template.post_deploy_init_type == 'odoo':
+            self._model_init_odoo(client)
+
+    def _model_init_n8n(self, client):
+        """n8n post-deploy init: owner setup + API key generation."""
+        self.ensure_one()
+        template = self.template_id
+
+        owner_email = self.n8n_owner_email or template.post_deploy_init_email or 'admin@woowtech.io'
+        owner_password = self.n8n_owner_password
+        if not owner_password:
+            owner_password = 'W' + str(uuid.uuid4()).upper()
+
+        try:
+            result = client.init_n8n(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+                owner_email=owner_email,
+                owner_password=owner_password,
+            )
+
+            if result.get('success'):
+                real_api_key = result['api_key']
+                update_vals = {
+                    'n8n_api_key': real_api_key,
+                    'state': 'running',
+                    'init_retries': 0,
+                    'init_error': False,
+                }
+                if template.mcp_api_key_helm_path and self.helm_values:
+                    try:
+                        current_values = json.loads(self.helm_values)
+                        api_key_nested = _unflatten_dotpath_keys(
+                            {template.mcp_api_key_helm_path: real_api_key}
+                        )
+                        updated_values = _deep_merge(current_values, api_key_nested)
+                        update_vals['helm_values'] = json.dumps(updated_values)
+                    except (json.JSONDecodeError, TypeError):
+                        _logger.warning("Failed to update helm_values with real API key for service %s", self.name)
+                self.write(update_vals)
+                _logger.info("n8n init succeeded for service %s (via cron)", self.name)
+                try:
+                    self._model_auto_create_mcp_server()
+                except Exception as e:
+                    _logger.warning("Auto-create MCP server failed for %s: %s", self.name, e)
+            else:
+                self._record_init_failure(result.get('error', 'Unknown error'))
+
+        except Exception as e:
+            self._record_init_failure(str(e))
+
+    def _model_init_odoo(self, client):
+        """Odoo post-deploy init: module list refresh."""
+        self.ensure_one()
+        try:
+            result = client.init_odoo(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+            )
+            if result.get('success'):
+                self.write({
+                    'state': 'running',
+                    'init_retries': 0,
+                    'init_error': False,
+                    'addon_update_pending': False,
+                })
+                _logger.info("Odoo init succeeded for service %s (via cron)", self.name)
+                try:
+                    self._model_auto_create_mcp_server()
+                except Exception as e:
+                    _logger.warning("Auto-create MCP server failed for %s: %s", self.name, e)
+            else:
+                self._record_init_failure(result.get('error', 'Unknown error'))
+        except Exception as e:
+            self._record_init_failure(str(e))
+
+    def _record_init_failure(self, error_msg):
+        """Record a post-deploy init failure, moving to error after 5 retries."""
+        retries = (self.init_retries or 0) + 1
+        vals = {
+            'init_retries': retries,
+            'init_error': error_msg,
+        }
+        if retries >= 5:
+            vals.update({
+                'state': 'error',
+                'error_message': f'Initialization failed after {retries} retries: {error_msg}',
+            })
+        self.write(vals)
+        _logger.warning(
+            "Init attempt %d failed for service %s: %s",
+            retries, self.name, error_msg,
+        )
+
+    # ------------------------------------------------------------------ #
+    #  MCP auto-create (model context)                                   #
+    # ------------------------------------------------------------------ #
+
+    def _model_auto_create_mcp_server(self):
+        """Auto-create MCP Server when transitioning to running (model context)."""
+        self.ensure_one()
+        template = self.template_id
+        if not template.mcp_enabled or not template.mcp_sidecar_image:
+            return
+
+        McpServer = self.env['woow_paas_platform.mcp_server'].sudo()
+        existing = McpServer.search([
+            ('cloud_service_id', '=', self.id),
+            ('auto_created', '=', True),
+        ], limit=1)
+        if existing:
+            return
+
+        mcp_url = self._model_build_mcp_endpoint_url()
+
+        server = McpServer.create({
+            'name': f"{self.name} MCP",
+            'url': mcp_url,
+            'transport': template.mcp_transport or 'streamable_http',
+            'scope': 'user',
+            'cloud_service_id': self.id,
+            'auto_created': True,
+            'api_key': self.mcp_auth_token,
+            'description': f"Auto-created MCP server for {self.name}",
+        })
+
+        _logger.info(
+            "Auto-created MCP Server '%s' (id=%s) for cloud service '%s' (via cron)",
+            server.name, server.id, self.name,
+        )
+        server.action_sync_tools_safe()
+
+    def _model_build_mcp_endpoint_url(self):
+        """Build MCP endpoint URL (model context, no request needed)."""
+        self.ensure_one()
+        template = self.template_id
+        endpoint_path = template.mcp_endpoint_path or '/mcp'
+        sidecar_port = template.mcp_sidecar_port or 3001
+
+        if self.helm_release_name and self.helm_namespace:
+            return (
+                f"http://{self.helm_release_name}-mcp"
+                f".{self.helm_namespace}.svc.cluster.local"
+                f":{sidecar_port}{endpoint_path}"
+            )
+
+        if self.subdomain:
+            IrConfigParameter = self.env['ir.config_parameter'].sudo()
+            paas_domain = IrConfigParameter.get_param(
+                'woow_paas_platform.paas_domain', 'woowtech.io',
+            )
+            return f"https://{self.subdomain}.{paas_domain}{endpoint_path}"
+
+        return f"http://localhost:{sidecar_port}{endpoint_path}"
