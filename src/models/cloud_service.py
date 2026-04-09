@@ -3,6 +3,7 @@ import logging
 import uuid
 
 from odoo import api, fields, models
+from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
@@ -217,10 +218,11 @@ class CloudService(models.Model):
     # ------------------------------------------------------------------ #
 
     def action_redeploy(self):
-        """Uninstall existing release and re-deploy from scratch.
+        """Re-deploy the service, preserving existing data.
 
-        Rebuilds deploy_params from current service data (subdomain, template
-        settings) so the deploy cron can run the full flow again.
+        If the Helm release already exists, performs a helm upgrade
+        (data-safe — PVCs are preserved). If no release exists yet
+        (e.g. initial deploy failed), resets to pending for a fresh install.
         """
         self.ensure_one()
         from ..services.paas_operator import (
@@ -228,47 +230,73 @@ class CloudService(models.Model):
             PaaSOperatorError,
         )
 
-        # Uninstall existing Helm release (best-effort; may not exist yet)
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError("PaaS Operator not configured. Contact administrator.")
+
+        # Check whether a Helm release already exists
+        release_exists = False
         if self.helm_release_name and self.helm_namespace:
-            client = get_paas_operator_client(self.env)
-            if client:
-                try:
-                    client.uninstall_release(
-                        namespace=self.helm_namespace,
-                        release_name=self.helm_release_name,
-                        subdomain=self.subdomain,
-                    )
-                except PaaSOperatorError:
-                    _logger.info(
-                        "No existing release to uninstall for %s (may not exist yet)",
-                        self.name,
-                    )
+            try:
+                client.get_release(
+                    namespace=self.helm_namespace,
+                    release_name=self.helm_release_name,
+                )
+                release_exists = True
+            except PaaSOperatorError:
+                release_exists = False
 
-        # Rebuild deploy_params from existing service data
-        deploy_params = {}
-        template = self.template_id
-        if template.ingress_enabled and self.subdomain:
-            deploy_params['expose_config'] = {
-                'enabled': True,
-                'subdomain': self.subdomain,
-            }
+        if release_exists:
+            # Upgrade in-place — preserves PVCs and data
+            template = self.template_id
+            values = json.loads(self.helm_values) if self.helm_values else None
+            try:
+                release_info = client.upgrade_release(
+                    namespace=self.helm_namespace,
+                    release_name=self.helm_release_name,
+                    chart=template.helm_chart_name,
+                    version=template.helm_chart_version,
+                    values=values,
+                    reuse_values=True,
+                )
+            except PaaSOperatorError as e:
+                raise UserError(
+                    f"Upgrade failed: {e.detail or e.message}"
+                ) from e
 
-        # Reset state and trigger re-deploy
-        self.write({
-            'state': 'pending',
-            'error_message': False,
-            'init_error': False,
-            'init_retries': 0,
-            'deploy_params': json.dumps(deploy_params) if deploy_params else False,
-        })
+            # Set to 'deploying' so the frontend polling handles
+            # the rest (pod readiness check → init → running)
+            self.write({
+                'state': 'deploying',
+                'error_message': False,
+                'init_error': False,
+                'init_retries': 0,
+                'helm_revision': release_info.get('revision', self.helm_revision),
+            })
+        else:
+            # No release yet — do a full fresh deploy via cron
+            deploy_params = {}
+            template = self.template_id
+            if template.ingress_enabled and self.subdomain:
+                deploy_params['expose_config'] = {
+                    'enabled': True,
+                    'subdomain': self.subdomain,
+                }
 
-        # Trigger deploy cron
-        cron = self.env.ref(
-            'woow_paas_platform.ir_cron_deploy_cloud_services',
-            raise_if_not_found=False,
-        )
-        if cron:
-            cron._trigger()
+            self.write({
+                'state': 'pending',
+                'error_message': False,
+                'init_error': False,
+                'init_retries': 0,
+                'deploy_params': json.dumps(deploy_params) if deploy_params else False,
+            })
+
+            cron = self.env.ref(
+                'woow_paas_platform.ir_cron_deploy_cloud_services',
+                raise_if_not_found=False,
+            )
+            if cron:
+                cron._trigger()
 
         return True
 
