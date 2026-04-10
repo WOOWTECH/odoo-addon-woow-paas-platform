@@ -1019,7 +1019,7 @@ class PaasController(Controller):
             return {'success': False, 'error': 'PaaS Operator not configured'}
 
         CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
-        addons = CloudOdooAddon.browse(removed_addon_ids).filtered('active')
+        addons = CloudOdooAddon.browse(removed_addon_ids).exists()
         if not addons:
             return {'success': True, 'modules': {}}
 
@@ -1584,6 +1584,38 @@ class PaasController(Controller):
                             queue.append(dep)
                 service.write({'odoo_addon_ids': [(6, 0, all_addons.ids)]})
                 addon_changed = set(all_addons.ids) != old_addon_ids
+
+                # Server-side validation: block removal of installed modules
+                removed_ids = old_addon_ids - set(all_addons.ids)
+                if removed_ids and service.state == 'running':
+                    removed_addons = CloudOdooAddon.browse(list(removed_ids)).exists()
+                    if removed_addons:
+                        tech_names = [a.technical_name for a in removed_addons]
+                        try:
+                            check_result = client.get_odoo_module_states(
+                                namespace=service.helm_namespace,
+                                release_name=service.helm_release_name,
+                                module_names=tech_names,
+                            )
+                            if check_result.get('success'):
+                                safe_states = {'uninstalled', 'uninstallable', 'not_found'}
+                                for name, info in check_result.get('modules', {}).items():
+                                    if info.get('state') not in safe_states:
+                                        # Rollback the addon write
+                                        service.write({'odoo_addon_ids': [(6, 0, list(old_addon_ids))]})
+                                        return {
+                                            'success': False,
+                                            'error': f"Cannot remove '{name}': module is {info.get('state')} in Odoo. "
+                                                     f"Please deactivate it in Odoo first.",
+                                        }
+                        except Exception as e:
+                            # Fail-closed: rollback and reject
+                            service.write({'odoo_addon_ids': [(6, 0, list(old_addon_ids))]})
+                            _logger.warning("Failed to verify module states for addon removal: %s", e)
+                            return {
+                                'success': False,
+                                'error': 'Cannot verify module states. Please try again later.',
+                            }
 
             # Filter user values to only allowed keys, reject unauthorized
             existing_values = json.loads(service.helm_values) if service.helm_values else {}

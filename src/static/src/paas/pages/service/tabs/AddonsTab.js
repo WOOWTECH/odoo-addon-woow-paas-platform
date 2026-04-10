@@ -105,9 +105,10 @@ export class AddonsTab extends Component {
       }
 
       const modules = result.modules || {};
-      const hasInstalled = Object.values(modules).some(m => m.state === 'installed');
+      const SAFE_TO_REMOVE = new Set(['uninstalled', 'uninstallable', 'not_found']);
+      const hasActive = Object.values(modules).some(m => !SAFE_TO_REMOVE.has(m.state));
 
-      if (!hasInstalled) {
+      if (!hasActive) {
         return this._doUpdateAddons();
       }
 
