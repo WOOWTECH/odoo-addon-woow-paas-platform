@@ -527,6 +527,7 @@ class PaaSOperatorClient:
             'POST',
             f'/api/odoo/{namespace}/{release_name}/module-states',
             data={'module_names': module_names},
+            timeout=150,
         )
 
 

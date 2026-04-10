@@ -389,7 +389,7 @@ export const cloudService = reactive({
         try {
             return await jsonRpc(`/api/cloud-services/services/${serviceId}/check-addon-removal`, {
                 removed_addon_ids: removedAddonIds,
-            });
+            }, 180000);
         } catch (err) {
             return { success: false, error: err.message };
         }

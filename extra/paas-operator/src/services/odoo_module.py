@@ -17,8 +17,8 @@ from src.services.helm import KubectlException, KubernetesService
 
 logger = logging.getLogger(__name__)
 
-# Timeout for querying module states (lightweight read)
-MODULE_QUERY_TIMEOUT = 30
+# Timeout for querying module states via kubectl exec
+MODULE_QUERY_TIMEOUT = 120
 
 
 class OdooModuleError(Exception):
