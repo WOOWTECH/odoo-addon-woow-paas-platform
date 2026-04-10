@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import traceback
 import uuid
 from datetime import datetime
@@ -1639,36 +1640,70 @@ class PaasController(Controller):
                     # All addons deselected — remove addon-specific helm values
                     service._remove_addon_helm_values(merged_values)
 
-            # Upgrade release
-            release_info = client.upgrade_release(
+            # Transition to upgrading BEFORE calling operator so the
+            # frontend gets an immediate response with state='upgrading'.
+            service.write({
+                'state': 'upgrading',
+                'helm_values': json.dumps(merged_values),
+                'helm_chart_version': version or service.helm_chart_version,
+                'last_upgraded_at': datetime.now(),
+                'error_message': False,
+                'addon_update_pending': addon_changed,
+            })
+            response_data = self._format_service(service)
+
+            # Capture values for the background thread (no ORM access).
+            db_name = request.env.cr.dbname
+            service_id = service.id
+            upgrade_kwargs = dict(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
                 chart=service.template_id.helm_chart_name,
                 values=merged_values,
                 version=version,
             )
+            operator_url = client.base_url
+            operator_api_key = client._session.headers.get('X-API-Key', '')
 
-            service.write({
-                'state': 'upgrading',
-                'helm_values': json.dumps(merged_values),
-                'helm_revision': release_info.get('revision', service.helm_revision + 1),
-                'helm_chart_version': version or service.helm_chart_version,
-                'last_upgraded_at': datetime.now(),
-                'error_message': False,
-                'addon_update_pending': addon_changed,
-            })
+            def _bg_upgrade():
+                """Run helm upgrade in a background thread with its own cursor."""
+                import odoo
+                from ..services.paas_operator import PaaSOperatorClient
+                bg_client = PaaSOperatorClient(operator_url, operator_api_key)
+                try:
+                    release_info = bg_client.upgrade_release(**upgrade_kwargs)
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        svc = env['woow_paas_platform.cloud_service'].browse(service_id)
+                        if svc.exists() and svc.state == 'upgrading':
+                            svc.write({
+                                'helm_revision': release_info.get('revision', svc.helm_revision + 1),
+                            })
+                except Exception as exc:
+                    _logger.error("Background upgrade failed for service %s: %s", service_id, exc)
+                    try:
+                        with odoo.registry(db_name).cursor() as cr:
+                            env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                            svc = env['woow_paas_platform.cloud_service'].browse(service_id)
+                            if svc.exists() and svc.state == 'upgrading':
+                                detail = getattr(exc, 'detail', None) or str(exc)
+                                svc.write({
+                                    'state': 'error',
+                                    'error_message': f'Upgrade failed: {detail}',
+                                })
+                    except Exception:
+                        _logger.exception("Failed to write error state for service %s", service_id)
+
+            thread = threading.Thread(target=_bg_upgrade, daemon=True)
+            thread.start()
 
             return {
                 'success': True,
-                'data': self._format_service(service),
+                'data': response_data,
             }
 
         except PaaSOperatorConnectionError:
             return {'success': False, 'error': 'Unable to connect to deployment service'}
-
-        except PaaSOperatorError as e:
-            _logger.error("Operator error during upgrade: %s", str(e))
-            return {'success': False, 'error': f'Upgrade failed: {e.detail or e.message}'}
 
     def _delete_service(self, service: Any) -> dict[str, Any]:
         """Delete/uninstall a service."""
