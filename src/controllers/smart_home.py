@@ -95,6 +95,68 @@ class SmartHomeController(Controller):
             return {"success": False, "error": f"Unknown action: {action}"}
 
     @route(
+        "/api/workspaces/<int:workspace_id>/smarthomes/<int:smarthome_id>/change-plan",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_smarthome_change_plan(
+        self,
+        workspace_id: int,
+        smarthome_id: int,
+        plan_id: int | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Change subscription plan for a smart home."""
+        if not plan_id:
+            return {"success": False, "error": "plan_id is required"}
+
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return {"success": False, "error": "Workspace not found or access denied"}
+
+        smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
+        if not smarthome:
+            return {"success": False, "error": "Smart home not found"}
+
+        Plan = request.env["sh.subscription.plan"]
+        plan = Plan.browse(plan_id)
+        if not plan.exists():
+            return {"success": False, "error": "Plan not found"}
+
+        old_sub = smarthome.subscription_id
+        if not old_sub or old_sub.state != "in_progress":
+            return {"success": False, "error": "No active subscription"}
+
+        from odoo import fields as odoo_fields
+
+        total_days = (old_sub.sh_end_date - old_sub.sh_start_date).days or 1
+        remaining_days = max(0, (old_sub.sh_end_date - odoo_fields.Date.today()).days)
+        refund = round(old_sub.sh_plan_price * remaining_days / total_days, 2)
+
+        partner = old_sub.sh_partner_id
+
+        if refund > 0:
+            partner.sudo().add_wallet_points(
+                amount=refund,
+                description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
+            )
+
+        old_sub.sudo().write({
+            "state": "close",
+            "sh_reason": "Plan changed to: %s" % plan.name,
+        })
+
+        smarthome._create_and_confirm_subscription(partner, plan)
+
+        return {
+            "success": True,
+            "data": {
+                "refund_amount": refund,
+                "new_plan": plan.name,
+                "subscription": smarthome._get_subscription_info(),
+            },
+        }
+
+    @route(
         "/api/smart-home/plans",
         auth="user", methods=["POST"], type="json",
     )
