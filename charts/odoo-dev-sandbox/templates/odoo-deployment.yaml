@@ -41,13 +41,17 @@ spec:
               {{- else }}
               pip3 install --break-system-packages{{- range .Values.odoo.extraPipPackages }} '{{ . }}'{{- end }} 2>/dev/null && \
               {{- end }}
-              exec odoo{{ if .Values.odoo.devMode }} --dev reload,qweb,xml{{ end }} -c /etc/odoo/odoo.conf
+              exec odoo{{ if .Values.odoo.devMode }} --dev reload,qweb,xml{{ end }}{{ if .Values.odoo.initModules }} -i {{ .Values.odoo.initModules }}{{ end }} -c /etc/odoo/odoo.conf
           {{- else }}
           command: ["odoo"]
           args:
             {{- if .Values.odoo.devMode }}
             - "--dev"
             - "reload,qweb,xml"
+            {{- end }}
+            {{- if .Values.odoo.initModules }}
+            - "-i"
+            - {{ .Values.odoo.initModules | quote }}
             {{- end }}
             - "-c"
             - "/etc/odoo/odoo.conf"

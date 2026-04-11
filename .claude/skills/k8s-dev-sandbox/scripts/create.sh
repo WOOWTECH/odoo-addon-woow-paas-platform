@@ -258,6 +258,13 @@ HELM_INSTALL_ARGS=(
     --set "sandbox.mode=$MODE"
 )
 
+# STG 模式：首次部署需安裝 web module（base 自動初始化但 web 不會）
+if [ "$MODE" = "stg" ]; then
+    HELM_INSTALL_ARGS+=(
+        --set "odoo.initModules=web"
+    )
+fi
+
 # Local 模式需要掛載 hostPath
 if [ "$MODE" = "local" ]; then
     SRC_PATH="${PROJECT_ROOT}/src"
