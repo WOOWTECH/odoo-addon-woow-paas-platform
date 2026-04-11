@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.6",
+    "version": "18.0.1.0.7",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -9,11 +9,18 @@
     """,
     "author": "Woow",
     "website": "",
-    "depends": ["base", "web", "project", "mail", "bus", "ai_base_gt", "odoo_ai_assistant_chatgpt_connector"],
+    "depends": [
+        "base", "web", "project", "mail", "bus",
+        "ai_base_gt", "odoo_ai_assistant_chatgpt_connector",
+        "sh_subscription",
+        "sh_subscription_wallet",
+    ],
     "data": [
         "security/ir.model.access.csv",
         "security/ir_rules.xml",
         "data/cloud_app_templates.xml",
+        "data/subscription_products.xml",
+        "data/subscription_template_links.xml",
         "views/menu.xml",
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
@@ -26,6 +33,7 @@
         "views/mcp_server_views.xml",
         "views/ai_assistant_views.xml",
         "views/res_config_settings_views.xml",
+        "data/subscription_lifecycle_cron.xml",
         "views/paas_app.xml",
         "views/oauth2_templates.xml",
         "views/oauth_client_views.xml",

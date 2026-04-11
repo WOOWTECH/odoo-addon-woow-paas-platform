@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- noupdate=0: keep links current on module upgrade -->
+    <data noupdate="0">
+
+        <!-- Link cloud_app_templates to their subscription plans -->
+
+        <record id="cloud_app_n8n" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_n8n_monthly'), ref('plan_n8n_yearly')])]"/>
+        </record>
+
+        <record id="cloud_app_postgresql" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_postgresql_monthly'), ref('plan_postgresql_yearly')])]"/>
+        </record>
+
+        <record id="cloud_app_odoo" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_odoo_monthly'), ref('plan_odoo_yearly')])]"/>
+        </record>
+
+        <!-- AnythingLLM template does not exist yet; plans will be linked when created -->
+        <!-- Smart Home plans are used directly by SmartHome model, not via template -->
+
+    </data>
+</odoo>
