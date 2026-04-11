@@ -73,7 +73,6 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
  * @property {string} description - Short description
  * @property {string} category - Template category
  * @property {string[]} tags - Template tags
- * @property {number} monthly_price - Monthly price in USD
  * @property {string} documentation_url - Documentation URL
  * @property {number} default_port - Default service port
  * @property {boolean} ingress_enabled - Whether ingress is enabled

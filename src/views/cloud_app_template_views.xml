@@ -19,7 +19,6 @@
                             <field name="category"/>
                             <field name="description" placeholder="Short description"/>
                             <field name="tags" placeholder='["tag1", "tag2"]'/>
-                            <field name="monthly_price"/>
                             <field name="documentation_url" widget="url"/>
                         </group>
                         <group string="Service Configuration">
@@ -91,7 +90,6 @@
                 <field name="name"/>
                 <field name="slug"/>
                 <field name="category"/>
-                <field name="monthly_price"/>
                 <field name="helm_chart_name"/>
                 <field name="helm_chart_version"/>
                 <field name="mcp_enabled"/>

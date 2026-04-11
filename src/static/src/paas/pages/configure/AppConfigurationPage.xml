@@ -52,7 +52,7 @@
                                 </span>
                                 <span class="o_woow_template_price">
                                     <WoowIcon name="'payments'" size="14"/>
-                                    $<t t-esc="template.monthly_price"/>/month
+                                    Free
                                 </span>
                                 <span class="o_woow_template_resources">
                                     <WoowIcon name="'memory'" size="14"/>

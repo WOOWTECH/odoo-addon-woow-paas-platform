@@ -763,7 +763,6 @@ class PaasController(Controller):
             'description': template.description or '',
             'category': template.category,
             'tags': json.loads(template.tags) if template.tags else [],
-            'monthly_price': template.monthly_price,
             'documentation_url': template.documentation_url or '',
             'default_port': template.default_port,
             'ingress_enabled': template.ingress_enabled,
