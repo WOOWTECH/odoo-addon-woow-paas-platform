@@ -43,6 +43,13 @@ odoo:
       enabled: true
       size: 2Gi
       storageClass: ""
+  # Odoo internal process limits (only effective when workers > 0)
+  # Set to 0 to disable (let K8s resource limits control instead)
+  processLimits:
+    memoryHard: 2684354560
+    memorySoft: 2147483648
+    timeCpu: 600
+    timeReal: 1200
   # Resource limits
   resources:
     requests:

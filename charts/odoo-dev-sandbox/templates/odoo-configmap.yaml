@@ -35,17 +35,10 @@ data:
     ; Performance settings
     workers = 0
     max_cron_threads = 1
-    {{- if eq .Values.sandbox.mode "stg" }}
-    limit_memory_hard = 4294967296
-    limit_memory_soft = 3221225472
-    limit_time_cpu = 1800
-    limit_time_real = 3600
-    {{- else }}
-    limit_memory_hard = 2684354560
-    limit_memory_soft = 2147483648
-    limit_time_cpu = 600
-    limit_time_real = 1200
-    {{- end }}
+    limit_memory_hard = {{ .Values.odoo.processLimits.memoryHard }}
+    limit_memory_soft = {{ .Values.odoo.processLimits.memorySoft }}
+    limit_time_cpu = {{ .Values.odoo.processLimits.timeCpu }}
+    limit_time_real = {{ .Values.odoo.processLimits.timeReal }}
 
     ; Logging
     log_level = info
