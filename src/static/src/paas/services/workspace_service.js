@@ -347,6 +347,23 @@ export const workspaceService = reactive({
     // -------------------------------------------------------------------------
 
     /**
+     * Fetch available Smart Home subscription plans
+     * @returns {Promise<Array>} List of plans
+     */
+    async fetchSmartHomePlans() {
+        try {
+            const result = await jsonRpc("/api/smart-home/plans", {});
+            if (result.success) {
+                return result.data;
+            }
+            return [];
+        } catch (err) {
+            console.warn("Failed to fetch smart home plans:", err);
+            return [];
+        }
+    },
+
+    /**
      * Fetch all smart homes for a workspace
      * @param {number} workspaceId - Target workspace ID
      * @returns {Promise<ApiResponse<Object[]>>}
@@ -384,6 +401,7 @@ export const workspaceService = reactive({
                 action: "create",
                 name: data.name,
                 ha_port: data.ha_port || 8123,
+                plan_id: data.plan_id,
             });
             if (result.success) {
                 return { success: true, data: result.data };

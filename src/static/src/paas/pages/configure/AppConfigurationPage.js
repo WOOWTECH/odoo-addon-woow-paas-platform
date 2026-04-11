@@ -5,6 +5,7 @@ import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { HelmValueForm } from "../../components/config/HelmValueForm";
 import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddonSelector";
+import { PlanSelector } from "../../components/subscription/PlanSelector";
 import { cloudService } from "../../services/cloud_service";
 import { router } from "../../core/router";
 
@@ -14,7 +15,7 @@ import { router } from "../../core/router";
  */
 export class AppConfigurationPage extends Component {
     static template = "woow_paas_platform.AppConfigurationPage";
-    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector };
     static props = {
         workspaceId: { type: Number },
         templateId: { type: Number },
@@ -30,6 +31,9 @@ export class AppConfigurationPage extends Component {
             helmValues: {},
             selectedAddonIds: [],
             showAdvanced: false,
+            // Subscription plan
+            plans: [],
+            selectedPlanId: null,
             // Validation errors
             errors: {},
             // Launch state
@@ -56,6 +60,12 @@ export class AppConfigurationPage extends Component {
             this.state.template = result.data;
             // Initialize helm values with defaults
             this.initializeHelmValues(result.data);
+            // Load available subscription plans
+            const plans = await cloudService.fetchPlans(this.props.templateId);
+            this.state.plans = plans;
+            if (plans.length > 0) {
+                this.state.selectedPlanId = plans[0].id;
+            }
         } else {
             this.state.error = result.error || "Failed to load template";
         }
@@ -212,6 +222,11 @@ export class AppConfigurationPage extends Component {
             }
         }
 
+        // Validate plan selection
+        if (!this.state.selectedPlanId) {
+            errors.plan = 'Please select a subscription plan';
+        }
+
         this.state.errors = errors;
         return Object.keys(errors).length === 0;
     }
@@ -219,6 +234,10 @@ export class AppConfigurationPage extends Component {
     /**
      * Handle cancel button click
      */
+    onPlanSelect(planId) {
+        this.state.selectedPlanId = planId;
+    }
+
     onCancel() {
         this.router.navigate(`workspace/${this.props.workspaceId}/marketplace`);
     }
@@ -239,6 +258,7 @@ export class AppConfigurationPage extends Component {
                 template_id: this.props.templateId,
                 name: this.state.name.trim(),
                 values: this.state.helmValues,
+                plan_id: this.state.selectedPlanId,
             };
             if (this.isOdooTemplate && this.state.selectedAddonIds.length) {
                 payload.odoo_addon_ids = this.state.selectedAddonIds;

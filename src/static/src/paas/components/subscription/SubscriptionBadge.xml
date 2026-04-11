@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.SubscriptionBadge">
+    <span t-if="props.subscription"
+          t-attf-class="o_woow_sub_badge {{badgeClass}}">
+      <t t-esc="label"/>
+    </span>
+  </t>
+</templates>

@@ -8,6 +8,7 @@
                     <WoowIcon name="'home_iot_device'" size="28"/>
                 </div>
                 <StatusBadge status="props.home.state" size="'sm'"/>
+                <SubscriptionBadge subscription="props.home.subscription"/>
             </div>
 
             <!-- Card Body with Name and Status Dot -->
