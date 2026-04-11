@@ -68,7 +68,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         Subscription = self.env['sh.subscription.subscription']
 
         # sh_subscription_plan_id is on product.template; find product via template
-        product_tmpl = self.env['product.template'].search([
+        product_tmpl = self.env['product.template'].sudo().search([
             ('sh_product_subscribe', '=', True),
             ('sh_subscription_plan_id', '=', plan.id),
         ], limit=1)
@@ -202,7 +202,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     def _get_subscription_info(self):
         """Return subscription data dict for API responses."""
         self.ensure_one()
-        sub = self.subscription_id
+        sub = self.sudo().subscription_id
         if not sub:
             return None
         return {

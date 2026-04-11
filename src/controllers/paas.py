@@ -836,7 +836,7 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Template not found'}
 
         plans = []
-        for plan in template.subscription_plan_ids:
+        for plan in template.sudo().subscription_plan_ids:
             plans.append({
                 'id': plan.id,
                 'name': plan.name,
@@ -866,12 +866,12 @@ class PaasController(Controller):
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {'success': False, 'error': 'Admin access required'}
 
-        Plan = request.env['sh.subscription.plan']
+        Plan = request.env['sh.subscription.plan'].sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {'success': False, 'error': 'Plan not found'}
 
-        old_sub = service.subscription_id
+        old_sub = service.sudo().subscription_id
         if not old_sub or old_sub.state != 'in_progress':
             return {'success': False, 'error': 'No active subscription'}
 
@@ -1496,12 +1496,12 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Template not found'}
 
         # Validate subscription plan
-        Plan = request.env['sh.subscription.plan']
+        Plan = request.env['sh.subscription.plan'].sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {'success': False, 'error': 'Subscription plan not found'}
         # Verify plan belongs to this template
-        if template.subscription_plan_ids and plan not in template.subscription_plan_ids:
+        if template.sudo().subscription_plan_ids and plan not in template.sudo().subscription_plan_ids:
             return {'success': False, 'error': 'Plan not available for this template'}
 
         # Always generate reference_id server-side (never accept from frontend)
