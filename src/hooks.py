@@ -126,6 +126,8 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.default_ai_config_id',
     'woow_paas_platform.default_ai_assistant_id',
     'woow_paas_platform.namespace_prefix',
+    'woow_paas_platform.grace_period_days',
+    'woow_paas_platform.cleanup_after_months',
 ]
 
 

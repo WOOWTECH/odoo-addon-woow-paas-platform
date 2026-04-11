@@ -46,10 +46,16 @@ class CloudAppTemplate(models.Model):
         string='Tags',
         help='JSON array of tags (e.g., ["postgresql", "database", "sql"])',
     )
-    monthly_price = fields.Float(
-        string='Monthly Price',
-        help='Base monthly price in USD',
+    # Subscription plans available for this template
+    subscription_plan_ids = fields.Many2many(
+        'sh.subscription.plan',
+        'woow_template_plan_rel',
+        'template_id',
+        'plan_id',
+        string='Subscription Plans',
+        help='Available subscription plans for this template',
     )
+
     documentation_url = fields.Char(
         string='Documentation URL',
         help='Link to official documentation',

@@ -17,6 +17,7 @@ _logger = logging.getLogger(__name__)
 
 class SmartHome(models.Model):
     _name = 'woow_paas_platform.smart_home'
+    _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
     _description = 'Smart Home Instance'
     _order = 'create_date desc'
 
@@ -57,11 +58,17 @@ class SmartHome(models.Model):
             ('provisioning', 'Provisioning'),
             ('active', 'Active'),
             ('error', 'Error'),
+            ('suspended', 'Suspended'),
             ('deleting', 'Deleting'),
         ],
         string='State',
         default='pending',
         required=True,
+    )
+
+    # Store original service_url for resume after suspend
+    original_service_url = fields.Char(
+        help='Original service URL before suspension, used for resume',
     )
     error_message = fields.Text(
         string='Error Message',
@@ -250,4 +257,77 @@ class SmartHome(models.Model):
             'error_message': self.error_message or '',
             'deployed_at': self.deployed_at.isoformat() if self.deployed_at else '',
             'created_at': self.create_date.isoformat() if self.create_date else '',
+            'subscription': self._get_subscription_info(),
         }
+
+    # ------------------------------------------------------------------ #
+    #  Subscription lifecycle: suspend / resume / cleanup                #
+    # ------------------------------------------------------------------ #
+
+    def _do_suspend(self):
+        """Update tunnel ingress to return 503."""
+        self.ensure_one()
+        if self.state == 'suspended':
+            return
+
+        if self.tunnel_id:
+            try:
+                client = self._get_operator_client()
+                hostname = f"{self.subdomain}.{self._get_paas_domain()}"
+                client.configure_tunnel(
+                    self.tunnel_id,
+                    hostname=hostname,
+                    service_url="http_status:503",
+                )
+            except Exception as e:
+                _logger.warning(
+                    "Failed to suspend tunnel for smart home %s: %s",
+                    self.name, e,
+                )
+
+        self.write({
+            'original_service_url': f"http://localhost:{self.ha_port}",
+            'pre_suspend_state': self.state if self.state in ('active', 'error') else 'active',
+            'state': 'suspended',
+        })
+
+    def _do_resume(self):
+        """Restore tunnel ingress to original service URL."""
+        self.ensure_one()
+        if self.state != 'suspended':
+            return
+
+        service_url = self.original_service_url or f"http://localhost:{self.ha_port}"
+        if self.tunnel_id:
+            try:
+                client = self._get_operator_client()
+                hostname = f"{self.subdomain}.{self._get_paas_domain()}"
+                client.configure_tunnel(
+                    self.tunnel_id,
+                    hostname=hostname,
+                    service_url=service_url,
+                )
+            except Exception as e:
+                _logger.warning(
+                    "Failed to resume tunnel for smart home %s: %s",
+                    self.name, e,
+                )
+
+        restore_state = self.pre_suspend_state or 'active'
+        self.write({
+            'state': restore_state,
+            'pre_suspend_state': False,
+        })
+
+    def _do_cleanup(self):
+        """Delete tunnel permanently."""
+        self.ensure_one()
+        if self.tunnel_id:
+            try:
+                client = self._get_operator_client()
+                client.delete_tunnel(self.tunnel_id)
+            except Exception as e:
+                _logger.warning(
+                    "Cleanup failed for smart home %s: %s", self.name, e,
+                )
+        self.write({'state': 'deleting'})

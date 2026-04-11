@@ -44,6 +44,28 @@
                             </div>
                         </setting>
                     </block>
+                    <block title="Subscription Lifecycle" name="subscription_lifecycle">
+                        <setting string="Grace Period"
+                                 help="Days after subscription expiry before service gets suspended.">
+                            <div class="content-group">
+                                <div class="row mt16">
+                                    <label for="woow_subscription_grace_days" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_subscription_grace_days" class="col-lg-2"/>
+                                    <span class="col-lg-3 text-muted">days</span>
+                                </div>
+                            </div>
+                        </setting>
+                        <setting string="Auto Cleanup"
+                                 help="Months after cancellation before permanently removing services.">
+                            <div class="content-group">
+                                <div class="row mt16">
+                                    <label for="woow_subscription_cleanup_months" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_subscription_cleanup_months" class="col-lg-2"/>
+                                    <span class="col-lg-3 text-muted">months</span>
+                                </div>
+                            </div>
+                        </setting>
+                    </block>
                     <block title="AI Assistant Configuration" name="ai_assistant">
                         <setting string="AI Configuration"
                                  help="Select the AI configuration and assistant for AI features.">
