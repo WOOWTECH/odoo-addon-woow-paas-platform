@@ -394,7 +394,7 @@ class PaaSOperatorClient:
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/scale',
-            params={'replicas': replicas},
+            data={'replicas': replicas},
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
@@ -687,7 +687,7 @@ class PaaSOperatorClient:
         return self._request(
             'PUT',
             f'/api/tunnels/{tunnel_id}/config',
-            json=data,
+            data=data,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
