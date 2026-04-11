@@ -33,10 +33,9 @@ class SubscriptionLifecycleCron(models.AbstractModel):
             entities = Model.search([('subscription_id', '!=', False)])
             for entity in entities:
                 try:
-                    self._enforce_single(entity, grace_days, cleanup_months, today)
-                    self.env.cr.commit()
+                    with self.env.cr.savepoint():
+                        self._enforce_single(entity, grace_days, cleanup_months, today)
                 except Exception:
-                    self.env.cr.rollback()
                     _logger.exception(
                         "Subscription enforcement failed for %s (id=%s)",
                         entity._name, entity.id,
