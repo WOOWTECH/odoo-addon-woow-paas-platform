@@ -1101,6 +1101,11 @@ class PaasController(Controller):
         if not service.exists():
             return {'success': False, 'error': 'Service not found'}
 
+        workspace = service.workspace_id
+        access = workspace.check_user_access(request.env.user)
+        if not access:
+            return {'success': False, 'error': 'Access denied'}
+
         if service.state != 'running':
             return {'success': False, 'error': f'Service must be running to check module states (current: {service.state})'}
 
