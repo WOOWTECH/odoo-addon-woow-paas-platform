@@ -128,6 +128,8 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.namespace_prefix',
     'woow_paas_platform.grace_period_days',
     'woow_paas_platform.cleanup_after_months',
+    'woow_paas_platform.storage_class_name',
+    'woow_paas_platform.registry_secret_name',
 ]
 
 

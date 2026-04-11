@@ -153,10 +153,11 @@ class CloudOdooAddon(models.Model):
                 self.create(vals)
                 created += 1
 
-        # Deactivate addons not in catalog
+        # Deactivate third-party addons not in catalog (preserve custom addons)
         catalog_names = list(catalog.keys())
         stale = self.with_context(active_test=False).search([
             ('technical_name', 'not in', catalog_names),
+            ('source_type', '=', 'third_party'),
         ])
         deactivated = 0
         if stale:

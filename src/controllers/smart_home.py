@@ -126,6 +126,9 @@ class SmartHomeController(Controller):
         if not old_sub or old_sub.state != "in_progress":
             return {"success": False, "error": "No active subscription"}
 
+        if not old_sub.sh_end_date or not old_sub.sh_start_date:
+            return {"success": False, "error": "Subscription dates are incomplete"}
+
         from odoo import fields as odoo_fields
 
         total_days = (old_sub.sh_end_date - old_sub.sh_start_date).days or 1
@@ -246,8 +249,8 @@ class SmartHomeController(Controller):
             smarthome._create_and_confirm_subscription(partner, plan)
             return {"success": True, "data": smarthome.to_dict()}
         except Exception as e:
-            _logger.error("Failed to create smart home: %s", e)
-            return {"success": False, "error": str(e)}
+            _logger.exception("Failed to create smart home: %s", e)
+            return {"success": False, "error": "Failed to create smart home. Please try again."}
 
     def _delete_smarthome(self, smarthome) -> dict[str, Any]:
         """Delete a smart home and its tunnel."""

@@ -875,6 +875,9 @@ class PaasController(Controller):
         if not old_sub or old_sub.state != 'in_progress':
             return {'success': False, 'error': 'No active subscription'}
 
+        if not old_sub.sh_end_date or not old_sub.sh_start_date:
+            return {'success': False, 'error': 'Subscription dates are incomplete'}
+
         # Calculate refund
         total_days = (old_sub.sh_end_date - old_sub.sh_start_date).days or 1
         remaining_days = max(0, (old_sub.sh_end_date - fields.Date.today()).days)
