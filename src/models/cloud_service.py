@@ -1054,6 +1054,8 @@ class CloudService(models.Model):
                 _logger.warning(
                     "Failed to scale down service %s: %s", self.name, e,
                 )
+                self.write({'state': 'error', 'error_message': f'Suspend failed: {e}'})
+                return
 
         self.write({
             'pre_suspend_state': self.state if self.state in ('running', 'error') else 'running',
@@ -1078,6 +1080,8 @@ class CloudService(models.Model):
                 _logger.warning(
                     "Failed to scale up service %s: %s", self.name, e,
                 )
+                self.write({'state': 'error', 'error_message': f'Resume failed: {e}'})
+                return
 
         restore_state = self.pre_suspend_state or 'running'
         self.write({

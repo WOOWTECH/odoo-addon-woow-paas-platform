@@ -284,6 +284,8 @@ class SmartHome(models.Model):
                     "Failed to suspend tunnel for smart home %s: %s",
                     self.name, e,
                 )
+                self.write({'state': 'error'})
+                return
 
         self.write({
             'original_service_url': f"http://localhost:{self.ha_port}",
@@ -312,6 +314,8 @@ class SmartHome(models.Model):
                     "Failed to resume tunnel for smart home %s: %s",
                     self.name, e,
                 )
+                self.write({'state': 'error'})
+                return
 
         restore_state = self.pre_suspend_state or 'active'
         self.write({
