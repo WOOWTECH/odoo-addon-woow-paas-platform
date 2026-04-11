@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Form View -->
+        <record id="res_config_settings_view_form" model="ir.ui.view">
+            <field name="name">res.config.settings</field>
+            <field name="model">res.config.settings</field>
+            <field name="inherit_id" ref="sale.res_config_settings_view_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//app[@name='sale_management']" position="inside">
+                    <block title="Subscription" id="sh_subscription_setting_container" name="sh_subscription_setting_container" groups="sh_subscription.group_manager_sh_subscription">
+                        <setting >
+                            <field name="sh_invoice_generated" class="oe_inline" required="True"/>
+                        </setting>
+                        <setting>
+                            <field name="sh_renewal_days" class="oe_inline" required="True" />
+                        </setting>
+                        <setting>
+                            <field name="sh_trial_period_setting" class="oe_inline"  />
+                        </setting>
+                        <setting>
+                            <field name="sh_journal_id" class="oe_inline" required="True" />
+                        </setting>
+                        <setting>
+                            <field name="sh_default_attribute_id" class="oe_inline"  />
+                        </setting>  
+                        <setting>
+                            <field name="sh_invoice_email" class="oe_inline" required="1" />
+                        </setting>
+                        <setting invisible="sh_invoice_generated!='paid'">
+                            <field name="sh_paid_subscription_journal"   required="sh_invoice_generated=='paid'" />
+                        </setting>
+                    </block>
+                </xpath> 
+            </field>
+        </record>
+    
+
+    </data>
+</odoo>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- Attribute -->
+        <record id="product_attribute_subscription" model="product.attribute">
+            <field name="name">Subscription</field>
+            <field name="sequence">99</field>
+        </record>
+
+        <!-- Attribute Value -->
+        <record id="product_attribute_subscription_value_daily" model="product.attribute.value">
+            <field name="name">Daily</field>
+            <field name="attribute_id" ref="product_attribute_subscription"/>
+            <field name="sequence">1</field>
+        </record>
+         <record id="product_attribute_subscription_value_weekly" model="product.attribute.value">
+            <field name="name">Weekly</field>
+            <field name="attribute_id" ref="product_attribute_subscription"/>
+            <field name="sequence">2</field>
+        </record>
+         <record id="product_attribute_subscription_value_monthly" model="product.attribute.value">
+            <field name="name">Monthly</field>
+            <field name="attribute_id" ref="product_attribute_subscription"/>
+            <field name="sequence">3</field>
+        </record>
+         <record id="product_attribute_subscription_value_yearly" model="product.attribute.value">
+            <field name="name">Yearly</field>
+            <field name="attribute_id" ref="product_attribute_subscription"/>
+            <field name="sequence">4</field>
+        </record>
+     </data>
+</odoo>

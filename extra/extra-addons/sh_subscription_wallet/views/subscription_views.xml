@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- 擴展訂閱表單視圖，顯示客戶信用卡綁定資訊 -->
+        <record id="sh_subscription_subscription_form_view_wallet" model="ir.ui.view">
+            <field name="name">sh.subscription.subscription.form.wallet</field>
+            <field name="model">sh.subscription.subscription</field>
+            <field name="inherit_id" ref="sh_subscription.sh_subscription_subscription_form_view"/>
+            <field name="arch" type="xml">
+                <!-- 在 Payment Information 的 group 後面新增信用卡綁定資訊區塊 -->
+                <xpath expr="//group[@name='payment']" position="after">
+                    <group string="信用卡綁定資訊" name="credit_card_info">
+                        <group>
+                            <field name="partner_has_credit_card" invisible="1"/>
+                            <field name="partner_card_last4" readonly="1"/>
+                            <field name="partner_card_expiry" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="partner_card_bound_date" readonly="1"/>
+                            <field name="plan_require_credit_card" readonly="1"/>
+                        </group>
+                    </group>
+                </xpath>
+            </field>
+        </record>
+    </data>
+</odoo>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+        <record id="sh_subscription_cancle_view" model="ir.ui.view">
+            <field name="name">Cancle/Close Wizard</field>
+            <field name="model">sh.subscription.cancle.wizard</field>
+            <field name="arch" type="xml">
+                <form string="Reason">
+                    <h1 class="text-primary">Reason</h1>
+                    <group>
+                        <field name="sh_subscription_reason_id" />
+
+                    </group>
+                    <field name="sh_description" placeholder="Please mention your reason why you do this."/>
+                    <footer>
+                        <button string="Cancel/Close Now" name="sh_subscription_cancle_now" type="object" class="btn-primary" />
+                        <button string="Cancel" class="btn-secondary" special="cancel"/>
+                    </footer>
+                </form>
+            </field>
+        </record>
+
+        <record id="sh_subscription_cancle_wizard_action" model="ir.actions.act_window">
+            <field name="name">Cancle/Close Wizard</field>
+            <field name="type">ir.actions.act_window</field>
+            <field name="res_model">sh.subscription.cancle.wizard</field>
+            <field name="view_mode">form</field>
+            <field name="target">new</field>
+
+        </record>
+
+</odoo>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Form View -->
+        <record id="sh_sale_order_view_form" model="ir.ui.view">
+            <field name="name">sale.order</field>
+            <field name="model">sale.order</field>
+            <field name="inherit_id" ref="sale.view_order_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='order_line']" position="before">
+                    <button string="Add Subscription Product" type="action" name="sh_subscription.sh_subscription_product_wizard_action" class="oe_highlight" invisible="state not in ('draft','sent')"  groups="sh_subscription.group_user_sh_subscription"/>
+                </xpath>
+                <xpath expr="//div[@name='button_box']" position="inside">
+                    <button class="oe_inline oe_stat_button" name="sh_action_view_subscription_sale_order" type="object" icon="fa-strikethrough" groups="sh_subscription.group_user_sh_subscription" >
+                        <field string="Subscription" name="sh_subscription_count" widget="statinfo"/>
+                    </button>
+                </xpath>
+            </field>
+        </record>
+    </data>
+</odoo>

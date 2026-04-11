@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+	<record id="sh_subscription_customer_email" model="mail.template">
+		<field name="name">Subscription is active</field>
+	    <field name="model_id" ref="sh_subscription.model_sh_subscription_subscription" />
+	    <field name="email_from">{{object.sh_company_id.partner_id.email_formatted}}</field>
+	    <field name="subject">{{object.sh_company_id.name}} Your Subscription (Ref {{object.name or 'n/a'}}) is {{object._subscription_email_subject()}}</field>
+	    <field name="partner_to">{{ object.sh_partner_id.id }}</field>
+	    <field name="auto_delete" eval="False" />
+	    <field name="body_html" type="html">
+	      <div style="margin: 0px; padding: 0px;">
+	        <table border="0" width="100%" cellpadding="0" bgcolor="#ededed" style="padding: 20px; background-color: #ededed; border-collapse:separate;">
+	          <tbody>
+	
+	            <!-- HEADER -->
+	            <tr>
+	              <td align="center" style="min-width: 590px;">
+	                <table width="590" border="0" cellpadding="0" bgcolor="#875A7B" style="min-width: 590px; background-color: rgb(135,90,123); padding: 20px; border-collapse:separate;">
+	                  <tr>
+	                    <td valign="middle">
+	                      <span style="font-size:20px; color:white; font-weight: bold;">
+	                        <strong>
+	                          
+	                          <t t-out="object.name" />
+	                          
+	                        </strong>
+	                      </span>
+	                    </td>
+	                    <td valign="middle" align="right">
+	                      <img src="/logo.png?company={{object.sh_company_id.id}}" style="padding: 0px; margin: 0px; height: auto; width: 80px;" alt="{{object.sh_company_id.name}}" />
+	                    </td>
+	                  </tr>
+	                </table>
+	              </td>
+	            </tr>
+	
+	            <!-- CONTENT -->
+	            <tr>
+	              <td align="center" style="min-width: 590px;">
+	                <table width="590" border="0" cellpadding="0" bgcolor="#ffffff" style="min-width: 590px; background-color: rgb(255, 255, 255); padding: 20px; border-collapse:separate;">
+	                  <tbody>
+	                    <td valign="top" style="font-family:Arial,Helvetica,sans-serif; color: #555; font-size: 14px;">
+	                      <p style="margin: 0px; padding: 0px; font-size: 13px;">
+	                        Dear
+	                        <b><t t-out="object.sh_partner_id.name" /></b>
+	                        <br />
+	                        <br />
+	                        <t t-if="object.state == 'in_progress' and object.sh_renewed == True">
+								<!-- <t t-if="object.sh_renewed == True"> -->
+									Your subscription <b><t t-out="object.name" /></b> is renewed.
+								<!-- </t> -->
+							</t>
+							<t t-elif="object.state == 'in_progress'">
+								Your subscription <b><t t-out="object.name" /></b> is activated.
+							</t>
+		                    
+		                    <t t-if="object.state == 'renewed'">
+		                        Your subscription <b><t t-out="object.name" /></b> has been renewed.
+		                    </t>
+		                    <t t-if="object.state == 'expire'">
+		                        Your subscription <b><t t-out="object.name" /></b> has been expired.
+		                    </t>
+		                    <t t-if="object.state == 'cancel'">
+		                        Your subscription <b><t t-out="object.name" /></b> has been cancelled.
+		                    </t>
+		                    <t t-if="object.state == 'close'">
+		                        Your subscription <b><t t-out="object.name" /></b> has been closed.
+		                    </t>
+		                    <br />
+		                    <br />
+		                    <t t-if="object.sh_end_date">
+		                    	Your plan will expire on <b><t t-out="object.sh_end_date" /></b>
+		                    </t>
+	                        <br/>
+	                        <br/>
+	                        If you have any questions then feel free to contact us.
+	                        <br/>
+	                        Thank you...
+	                      </p>
+	                    </td>
+	                  </tbody>
+	                </table>
+	              </td>
+	            </tr>
+	
+	            <!-- FOOTER -->
+	            <tr>
+	              <td align="center" style="min-width: 590px;">
+	                <table width="590" border="0" cellpadding="0" bgcolor="#875A7B" style="min-width: 590px; background-color: rgb(135,90,123); padding: 20px; border-collapse:separate;">
+	                  <tr>
+	                    <td valign="middle" align="left" style="color: #fff; padding-top: 10px; padding-bottom: 10px; font-size: 12px;">
+	                      <t t-out="object.sh_company_id.name" />
+	                      <br />
+	                      <t t-out="object.sh_company_id.phone or ''" />
+	                    </td>
+	                    <td valign="middle" align="right" style="color: #fff; padding-top: 10px; padding-bottom: 10px; font-size: 12px;">
+	                      <t t-if="object.sh_company_id.email">
+	                        <a t-attf-href="mailto:{{ object.sh_company_id.email }}" style="text-decoration:none; color: white;"><t t-out="object.sh_company_id.email" /></a>
+	                        <br />
+	                      </t>
+	                      <t t-if="object.sh_company_id.website">
+	                        <a t-attf-href="{{object.sh_company_id.website}}" style="text-decoration:none; color: white;">
+	                          <t t-out="object.sh_company_id.website" />
+	                        </a>
+	                      </t>
+	                    </td>
+	                  </tr>
+	                </table>
+	              </td>
+	            </tr>
+	          </tbody>
+	        </table>
+	      </div>
+	    </field>
+	</record>
+	<record id="sh_subscription_customer_email_expire_notify" model="mail.template">
+		<field name="name">Subscription is about to expire</field>
+	    <field name="model_id" ref="sh_subscription.model_sh_subscription_subscription" />
+	    <field name="email_from">{{object.sh_company_id.partner_id.email_formatted}}</field>
+	    <field name="subject">{{object.sh_company_id.name}} Your Subscription (Ref {{object.name or 'n/a'}}) is about to expire</field>
+	    <field name="partner_to">{{ object.sh_partner_id.id }}</field>
+	    <field name="auto_delete" eval="False" />
+	    <field name="body_html" type="html">
+	      <div style="margin: 0px; padding: 0px;">
+	        <table border="0" width="100%" cellpadding="0" bgcolor="#ededed" style="padding: 20px; background-color: #ededed; border-collapse:separate;">
+	          <tbody>
+	
+	            <!-- HEADER -->
+	            <tr>
+	              <td align="center" style="min-width: 590px;">
+	                <table width="590" border="0" cellpadding="0" bgcolor="#875A7B" style="min-width: 590px; background-color: rgb(135,90,123); padding: 20px; border-collapse:separate;">
+	                  <tr>
+	                    <td valign="middle">
+	                      <span style="font-size:20px; color:white; font-weight: bold;">
+	                        <strong>
+	                          
+	                          <t t-out="object.name" />
+	                          
+	                        </strong>
+	                      </span>
+	                    </td>
+	                    <td valign="middle" align="right">
+	                      <img src="/logo.png?company={{object.sh_company_id.id}}" style="padding: 0px; margin: 0px; height: auto; width: 80px;" alt="{{object.sh_company_id.name}}" />
+	                    </td>
+	                  </tr>
+	                </table>
+	              </td>
+	            </tr>
+	
+	            <!-- CONTENT -->
+	            <tr>
+	              <td align="center" style="min-width: 590px;">
+	                <table width="590" border="0" cellpadding="0" bgcolor="#ffffff" style="min-width: 590px; background-color: rgb(255, 255, 255); padding: 20px; border-collapse:separate;">
+	                  <tbody>
+	                    <td valign="top" style="font-family:Arial,Helvetica,sans-serif; color: #555; font-size: 14px;">
+	                      <p style="margin: 0px; padding: 0px; font-size: 13px;">
+	                        Dear
+	                        <b><t t-out="object.sh_partner_id.name" /></b>
+	                        <br />
+	                        <br />
+	                        Your Subscription <b><t t-out="object.name" /></b> Will be expired in Expire Soon...
+	                        <br/>
+	                        <br/>
+	                        Last Date of your subscription is <b><t t-out="object.sh_end_date"/></b>
+	                        
+	                        <br/>
+	                        <br/>
+	                        Please renew your subscription as soon as possible.
+	                        <br/>
+	                        <br/>
+	                        If you have any questions then feel free to contact us.
+	                        <br/>
+	                        Thank you...
+	                      </p>
+	                    </td>
+	                  </tbody>
+	                </table>
+	              </td>
+	            </tr>
+	
+	            <!-- FOOTER -->
+	            <tr>
+	              <td align="center" style="min-width: 590px;">
+	                <table width="590" border="0" cellpadding="0" bgcolor="#875A7B" style="min-width: 590px; background-color: rgb(135,90,123); padding: 20px; border-collapse:separate;">
+	                  <tr>
+	                    <td valign="middle" align="left" style="color: #fff; padding-top: 10px; padding-bottom: 10px; font-size: 12px;">
+	                      <t t-out="object.sh_company_id.name" />
+	                      <br />
+	                      <t t-out="object.sh_company_id.phone or ''" />
+	                    </td>
+	                    <td valign="middle" align="right" style="color: #fff; padding-top: 10px; padding-bottom: 10px; font-size: 12px;">
+	                      <t t-if="object.sh_company_id.email">
+	                        <a t-attf-href="mailto:{{ object.sh_company_id.email }}" style="text-decoration:none; color: white;"><t t-out="object.sh_company_id.email" /></a>
+	                        <br />
+	                      </t>
+	                      <t t-if="object.sh_company_id.website">
+	                        <a t-attf-href="{{object.sh_company_id.website}}" style="text-decoration:none; color: white;">
+	                          <t t-out="object.sh_company_id.website" />
+	                        </a>
+	                      </t>
+	                    </td>
+	                  </tr>
+	                </table>
+	              </td>
+	            </tr>
+	          </tbody>
+	        </table>
+	      </div>
+	    </field>
+	</record>
+</odoo>

@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <!-- Search view -->
+    <record id="sh_subscription_plan_search_view" model="ir.ui.view">
+        <field name="name">Subscription Plans</field>
+        <field name="model">sh.subscription.plan</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="sh_duration"/>
+                <field name="sh_plan_price"/>
+                <field name="sh_description"/>
+                <field name="sh_no_of_billing_cycle"/>
+                <field name="sh_billing_day_of_the_month"/>
+                <filter string="Plan Price" domain="[('sh_plan_price', '>', 1000)]" help="Plan price Greter than 5" name="Plan Price"/>
+                <filter string="Plan Trial Period" domain="[('sh_trial', '=', True)]" help="Plan with Trial Period" name="sh_trial"/>
+                <filter string="Plan Free Trial For Month" domain="[('sh_free_trial_for_current_month', '=', True)]" help="Plan with Free Trial For Month" name="sh_free_trial_for_current_month"/>
+                <filter string="Plan Start Immediately" domain="[('sh_start_immediately', '=', True)]" help="Plan Start Immediately" name="sh_start_immediately"/>
+                <filter string="Plan Never Expire" domain="[('sh_never_expire', '=', True)]" help="Plan Never Expire" name="sh_never_expire"/>
+                <group  expand='0' string='Group by...'>
+                    <filter string='name' name="name" domain="[]" context="{'group_by' : 'name'}"/>
+                    <filter string='duration' name="sh_duration" domain="[]" context="{'group_by' : 'sh_duration'}"/>
+                    <filter string='Trial Period' name="sh_trial" domain="[]" context="{'group_by' : 'sh_trial'}"/>
+                     <filter string='Trial Period Unit' name="sh_trial_unit" domain="[]" context="{'group_by' : 'sh_trial_unit'}"/>
+                    <filter string='Free for Current Month' name="sh_free_trial_for_current_month" domain="[]" context="{'group_by' : 'sh_free_trial_for_current_month'}"/>
+                    <filter string='Start Immediately' name="sh_start_immediately" domain="[]" context="{'group_by' : 'sh_start_immediately'}"/>
+                    <filter string='Never Expire' name="sh_never_expire" domain="[]" context="{'group_by' : 'sh_never_expire'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    
+   <!-- Form View -->
+    <record id="sh_subscription_plan_form_view" model="ir.ui.view">
+        <field name="name">Subscription Plans</field>
+        <field name="model">sh.subscription.plan</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="toggle_active" type="object" class="oe_stat_button" icon="fa-archive">
+                            <field name="active" widget="boolean_button" options="{&quot;terminology&quot;: &quot;archive&quot;}"/>
+                        </button>
+                        <button name="action_view_subscription"
+                            type="object"
+                            class="oe_stat_button"
+                            icon="fa-strikethrough" invisible="sh_subscription_count==0"  >
+                            <field name="sh_subscription_count" widget="statinfo" string="Subscriptions"/>
+                        </button>
+                        <button name="action_view_product"
+                            type="object"
+                            class="oe_stat_button"
+                            icon="fa-product-hunt" invisible="sh_product_count==0"  >
+                            <field name="sh_product_count" widget="statinfo" string="Product"/>
+                        </button>
+                    </div>
+                    
+                    <div class="oe_title">
+                        <label class="oe_edit_only" for="name" string="Plan Name"/>
+                        <h1><field name="name" placeholder="Enter Your Name...."/></h1>
+                    </div>
+                    <group name="info" string="Plan Information">
+                        <group>
+                            <label for="sh_duration" string="Duration"  invisible="sh_never_expire" />
+                            <div name="sh_duration" invisible="sh_never_expire">
+                                <span><field name="sh_duration" class="oe_inline" nolabel="1"/></span>
+                                <span><field name="sh_unit" class="oe_inline" nolabel="1"/></span>
+                            </div>
+                            <field name="sh_never_expire"/>
+                            
+                            <field name="sh_trial"/>
+                            <label for="sh_trial_duration" string="Trial duration" invisible="not sh_trial" required="sh_trial"   />
+                            <div name="sh_trial_duration" invisible="not sh_trial">
+                                <span><field name="sh_trial_duration" class="oe_inline" nolabel="1" required="sh_trial" /></span>
+                                <span><field name="sh_trial_unit" class="oe_inline" nolabel="1" required="sh_trial" /></span>
+                            </div>
+                            <field name="sh_is_close_by_customer"/>
+                        </group>
+                        <group>
+                            <field name="sh_company_id" groups="base.group_multi_company" invisible="1"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="sh_plan_price" widget="monetary" options="{'currency_field': 'currency_id', 'field_digits': True}"/>
+                            <field name="sh_no_of_billing_cycle"  invisible="sh_never_expire"  required="not sh_never_expire"  />
+                            <field name="sh_start_immediately"/>
+                            <field name="sh_free_trial_for_current_month" invisible="sh_unit!='month'"  />
+                            <field name="sh_billing_day_of_the_month"   invisible="not sh_free_trial_for_current_month" required="sh_free_trial_for_current_month" />
+                            <field name="sh_reminder" widget="many2many_tags"/>
+                        </group>
+                    </group>
+                    <group name="product" string="Product Related Detail">
+                        <field name="sh_override_product" />
+                    </group>
+                    <group name="plan_description" string="Description">
+                    </group>
+                    <field name="sh_description" nolabel="1"/>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+       <!-- List view -->
+    
+    <record id="sh_subscription_plan_tree_view" model="ir.ui.view">
+        <field name="name">Subscription Plans</field>
+        <field name="model">sh.subscription.plan</field>
+        <field name="arch" type="xml">
+            <list>
+
+                <field name="name"/>
+                <field name="sh_duration" optional="show"/>
+                <field name="sh_unit" optional="show"/>
+                <field name="sh_start_immediately" optional="hide"/>
+                <field name="sh_billing_day_of_the_month" optional="hide"/>
+                <field name="sh_never_expire" optional="hide"/>
+                <field name="sh_plan_price" optional="show" widget="monetary"/>
+                <field name="sh_no_of_billing_cycle" optional="hide"/>
+                <field name="sh_trial" optional="hide"/>
+                <field name="currency_id" invisible="1"/>
+                <field name="sh_override_product" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+   
+    <!-- Kanban view -->
+    <record id="sh_subscription_plan_kanban_view" model="ir.ui.view">
+        <field name="name">Subscription Plans</field>
+        <field name="model">sh.subscription.plan</field>
+        <field name="arch" type="xml">
+                   <kanban>
+                   <field name="color"/>
+                   <field name="currency_id" invisible="1"/>
+                    <templates>
+                        <t t-name="kanban-box">
+                            
+                            <div t-attf-class="oe_kanban_color_#{kanban_getcolor(record.color.raw_value)} oe_kanban_card oe_kanban_global_click">
+                                <div class="oe_kanban_content oe_kanban_details">
+                                    <div style=""><b><field name="name"/> [ <field name="sh_duration"/> <field name="sh_unit"/> ]</b></div>
+                                </div>
+                                <div class="o_kanban_record_bottom">
+                                    <div class="oe_kanban_bottom_left text-muted">
+                                        <div title="Price">
+                                            <b style="color: black;">Price: </b>
+                                                <field name="sh_plan_price" widget="monetary" />
+                                        </div>
+                                    </div>
+                                    <div class="oe_kanban_bottom_right" title="Order Status">
+                                        <a name="action_view_subscription" type="object" class="" string="Subscription"><field string="Subscriptions" name="sh_subscription_count"/> Subscriptions</a>
+                                    </div>
+                                </div>
+                                <div class="o_kanban_record_bottom">
+                                    <div class="oe_kanban_bottom_left text-muted">
+                                        <!-- <t t-if="record.sh_no_of_billing_cycle.raw_value"> -->
+                                         <div title="Number Of Billing Cycles">
+                                             <b style="color: black;">Number Of Billing Cycles: </b>
+                                                <field name="sh_no_of_billing_cycle"/>
+                                        </div>
+                                        <!-- </t> -->
+                                    </div>
+                                    <div class="oe_kanban_bottom_right">
+                                    </div>
+                                </div>
+                                <div class="o_kanban_record_bottom">
+                                    <div class="oe_kanban_bottom_left text-muted">
+                                        <t t-if="record.sh_trial_duration.raw_value">
+                                            <div title="Trial Period">
+                                                <b style="color: black;">Trial Period: </b>
+                                                    <field name="sh_trial_duration"/> <field name="sh_trial_unit"/>
+                                            </div>
+                                        </t>
+                                    </div>
+                                    <div class="oe_kanban_bottom_right">
+                                    </div>
+                                </div>
+                            </div>
+                        </t>
+                    </templates>
+                </kanban>
+        </field>
+    </record>
+        
+
+    <!-- Action -->
+   
+    <record id="sh_subscription_plan_action" model="ir.actions.act_window">
+        <field name="name">Subscription Plans</field>
+        <field name="res_model">sh.subscription.plan</field>
+        <field name="view_mode">kanban,list,form</field>
+    </record>
+    
+    <!-- Menu  -->
+    <menuitem id="sh_subscription_main_menu"
+            parent="sale.menu_sale_config"
+            groups="sh_subscription.group_manager_sh_subscription"
+            sequence="3"
+            name="Subscription Information"/>
+    <menuitem id="sh_subscription_plan_menu"
+            name="Subscription Plans"
+            parent="sh_subscription.sh_subscription_main_menu"
+            action="sh_subscription_plan_action"
+            sequence="10"/>
+    
+    
+    </data>
+</odoo>

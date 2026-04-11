@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- 客戶表單 - 新增錢包頁籤 -->
+    <record id="view_partner_form_wallet" model="ir.ui.view">
+        <field name="name">res.partner.form.wallet</field>
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@name='sales_purchases']" position="after">
+                <page string="錢包" name="wallet">
+                    <group>
+                        <group string="點數餘額">
+                            <field name="wallet_balance" widget="monetary"/>
+                            <field name="wallet_transaction_count"/>
+                            <button name="action_view_wallet_transactions"
+                                    string="查看交易記錄"
+                                    type="object"
+                                    class="oe_link"
+                                    icon="fa-list"/>
+                        </group>
+                        <group string="信用卡綁定">
+                            <field name="ecpay_card_last4" readonly="1"/>
+                            <field name="ecpay_card_expiry" readonly="1"/>
+                            <field name="ecpay_card_bound_date" readonly="1"/>
+                            <field name="ecpay_card_token" invisible="1"/>
+                            <button name="action_unbind_credit_card"
+                                    string="解除綁定"
+                                    type="object"
+                                    class="btn-secondary"
+                                    invisible="not ecpay_card_token"
+                                    confirm="確定要解除信用卡綁定嗎？"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+        <record id="sh_subscription_renewed_view" model="ir.ui.view">
+            <field name="name">Renewed Reason Wizard</field>
+            <field name="model">sh.subscription.renewed.wizard</field>
+            <field name="arch" type="xml">
+                <form string="Reason">
+                    <h1 class="text-primary">Message</h1>
+                    <h2>Subscription Renewed.</h2>
+                    <footer>
+                        <button string="Ok" name="sh_subscription_close_renewed" type="object" class="btn-primary" />
+                        <button string="Close" class="btn-primary" special="cancel"/>
+                    </footer>
+                </form>
+            </field>
+        </record>
+
+        <record id="sh_subscription_renewed_wizard_action" model="ir.actions.act_window">
+            <field name="name">Renewed Reason Wizard</field>
+            <field name="type">ir.actions.act_window</field>
+            <field name="res_model">sh.subscription.renewed.wizard</field>
+            <field name="view_mode">form</field>
+            <field name="target">new</field>
+
+        </record>
+
+</odoo>
