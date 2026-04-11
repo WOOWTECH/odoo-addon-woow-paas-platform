@@ -4,6 +4,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: {{ include "odoo-dev-sandbox.fullname" . }}-odoo-filestore
   namespace: {{ include "odoo-dev-sandbox.namespace" . }}
+  annotations:
+    "helm.sh/resource-policy": keep
   labels:
     {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
     app.kubernetes.io/component: odoo

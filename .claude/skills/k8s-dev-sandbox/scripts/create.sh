@@ -185,9 +185,17 @@ if [ -n "$IMAGE_TAG" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set odoo.image.repository=$IMAGE_REPO --set odoo.image.tag=$IMAGE_TAG_ONLY"
 fi
 
-# STG mode: pass registry credentials if available
+# STG mode: pass registry credentials via temp file to avoid shell history exposure
 if [ "$MODE" = "stg" ] && [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
-    EXTRA_ARGS="$EXTRA_ARGS --set registry.server=jcr-prod.woowtech.io --set registry.username=${JCR_USER} --set registry.password=${JCR_PASS}"
+    _REGISTRY_VALUES=$(mktemp)
+    trap "rm -f $_REGISTRY_VALUES" EXIT
+    cat > "$_REGISTRY_VALUES" <<REGEOF
+registry:
+  server: jcr-prod.woowtech.io
+  username: "${JCR_USER}"
+  password: "${JCR_PASS}"
+REGEOF
+    EXTRA_ARGS="$EXTRA_ARGS -f $_REGISTRY_VALUES"
 fi
 
 # STG mode: allow cloudflare tunnel ingress + egress to paas-operator
