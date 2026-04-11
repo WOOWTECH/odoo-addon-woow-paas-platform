@@ -240,6 +240,7 @@
                         variant="'primary'"
                         size="'lg'"
                         onClick.bind="onLaunch"
+                        disabled="state.launching"
                     >
                         <t t-if="state.launching">
                             <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>

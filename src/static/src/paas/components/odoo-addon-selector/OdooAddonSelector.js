@@ -22,8 +22,11 @@ export class OdooAddonSelector extends Component {
 
     async loadAddons() {
         this.state.loading = true;
-        await cloudService.fetchOdooAddons(this.props.templateId);
-        this.state.loading = false;
+        try {
+            await cloudService.fetchOdooAddons(this.props.templateId);
+        } finally {
+            this.state.loading = false;
+        }
     }
 
     get addons() {

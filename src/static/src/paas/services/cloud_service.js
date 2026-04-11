@@ -114,7 +114,7 @@ export async function getConfig() {
             return _configCache;
         }
     } catch (err) {
-        console.warn("Failed to fetch config, using defaults:", err);
+        console.error("Failed to fetch config, using defaults:", err);
     }
     // Return default config
     return { domain: "woowtech.io" };
@@ -159,12 +159,6 @@ export const cloudService = reactive({
     odooAddons: [],
 
     /**
-     * Fetch available Odoo addons
-     * @param {number|null} templateId - Filter by template
-     * @param {string|null} category - Filter by category
-     * @returns {Promise<void>}
-     */
-    /**
      * Fetch available subscription plans for a template
      * @param {number} templateId - Template ID
      * @returns {Promise<Array>} List of plans
@@ -175,9 +169,10 @@ export const cloudService = reactive({
             if (result.success) {
                 return result.data;
             }
+            console.error("Failed to fetch plans:", result.error);
             return [];
         } catch (err) {
-            console.warn("Failed to fetch plans:", err);
+            console.error("Failed to fetch plans:", err);
             return [];
         }
     },
