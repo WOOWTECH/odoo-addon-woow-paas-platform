@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config import settings
 from src.models.schemas import (
@@ -91,7 +91,7 @@ async def create_release(request: ReleaseCreateRequest):
     response_model=ReleaseInfo,
     summary="Get release information",
 )
-async def get_release(namespace: str, name: str):
+def get_release(namespace: str, name: str):
     """Get detailed information about a Helm release.
 
     Args:
@@ -131,7 +131,7 @@ async def get_release(namespace: str, name: str):
     response_model=ReleaseInfo,
     summary="Upgrade a Helm release",
 )
-async def upgrade_release(
+def upgrade_release(
     namespace: str,
     name: str,
     request: ReleaseUpgradeRequest,
@@ -269,7 +269,7 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
     response_model=Dict[str, str],
     summary="Rollback a Helm release",
 )
-async def rollback_release(
+def rollback_release(
     namespace: str,
     name: str,
     request: ReleaseRollbackRequest,
@@ -310,7 +310,7 @@ async def rollback_release(
     response_model=ReleaseRevisionsResponse,
     summary="Get release revision history",
 )
-async def get_release_revisions(namespace: str, name: str):
+def get_release_revisions(namespace: str, name: str):
     """Get the revision history of a Helm release.
 
     Args:
@@ -345,7 +345,7 @@ async def get_release_revisions(namespace: str, name: str):
     response_model=ReleaseStatusResponse,
     summary="Get release and pod status",
 )
-async def get_release_status(namespace: str, name: str):
+def get_release_status(namespace: str, name: str):
     """Get detailed status including pod information.
 
     Args:
@@ -398,7 +398,7 @@ async def get_release_status(namespace: str, name: str):
     response_model=Dict[str, str],
     summary="Scale a release's deployments",
 )
-async def scale_release(namespace: str, name: str, replicas: int = 0):
+def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge=0, le=10)):
     """Scale all deployments in a Helm release.
 
     Used for subscription suspend (replicas=0) and resume (replicas=1).

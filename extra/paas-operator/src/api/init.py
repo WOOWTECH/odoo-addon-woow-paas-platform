@@ -22,7 +22,7 @@ odoo_init_service = OdooInitService(k8s_service=k8s_service)
     summary="Initialize n8n instance",
     description="Complete n8n post-deploy initialization: owner setup + API key generation",
 )
-async def init_n8n(
+def init_n8n(
     namespace: str,
     release_name: str,
     request: N8nInitRequest,
@@ -83,7 +83,7 @@ async def init_n8n(
     summary="Initialize Odoo module list",
     description="Trigger Odoo module list update to discover newly deployed addons",
 )
-async def init_odoo(namespace: str, release_name: str):
+def init_odoo(namespace: str, release_name: str):
     """Initialize Odoo module list after deployment.
 
     This endpoint:

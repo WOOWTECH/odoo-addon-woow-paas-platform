@@ -24,7 +24,7 @@ odoo_module_service = OdooModuleService(k8s_service=k8s_service)
     summary="Query Odoo module states",
     description="Get installation states and reverse dependencies for specified modules",
 )
-async def get_module_states(
+def get_module_states(
     namespace: str,
     release_name: str,
     request: OdooModuleStatesRequest,

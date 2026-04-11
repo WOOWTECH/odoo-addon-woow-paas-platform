@@ -12,6 +12,7 @@ Uses direct ORM access inside the container (same pattern as odoo_init.py):
 
 import json
 import logging
+import re
 
 from src.services.helm import KubectlException, KubernetesService
 
@@ -111,6 +112,13 @@ class OdooModuleService:
         Raises:
             OdooModuleError: If the query fails.
         """
+        _MODULE_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+        for name in module_names:
+            if not _MODULE_NAME_RE.match(name):
+                raise OdooModuleError(
+                    f"Invalid module name: {name}", step="validate",
+                )
+
         logger.info(
             "Querying module states for %s in %s/%s",
             module_names,
