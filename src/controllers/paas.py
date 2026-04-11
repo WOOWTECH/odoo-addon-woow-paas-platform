@@ -827,6 +827,29 @@ class PaasController(Controller):
 
     # ==================== Cloud Services API ====================
 
+    @route("/api/cloud-services/templates/<int:template_id>/plans", auth="user", methods=["POST"], type="json")
+    def api_template_plans(self, template_id: int, **kw: Any) -> dict[str, Any]:
+        """Get available subscription plans for a template."""
+        CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
+        template = CloudAppTemplate.browse(template_id)
+        if not template.exists() or not template.is_active:
+            return {'success': False, 'error': 'Template not found'}
+
+        plans = []
+        for plan in template.subscription_plan_ids:
+            plans.append({
+                'id': plan.id,
+                'name': plan.name,
+                'price': plan.sh_plan_price,
+                'duration': plan.sh_duration,
+                'unit': plan.sh_unit,
+                'has_trial': plan.sh_trial,
+                'trial_duration': plan.sh_trial_duration if plan.sh_trial else 0,
+                'trial_unit': plan.sh_trial_unit if plan.sh_trial else None,
+            })
+
+        return {'success': True, 'data': plans}
+
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
     def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
         """
@@ -863,7 +886,8 @@ class PaasController(Controller):
             # Only admin/owner can create services
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._create_service(workspace, template_id, name, values, odoo_addon_ids)
+            plan_id = kw.get('plan_id')
+            return self._create_service(workspace, template_id, name, values, odoo_addon_ids, plan_id=plan_id)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
@@ -907,10 +931,18 @@ class PaasController(Controller):
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
+            try:
+                service._check_operation_allowed(operation='write')
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
             return self._update_service(service, values, version, odoo_addon_ids)
         elif action == 'delete':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
+            try:
+                service._check_operation_allowed(operation='write')
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
             return self._delete_service(service)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
@@ -1386,12 +1418,14 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
+    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
         if not template_id:
             return {'success': False, 'error': 'Template ID is required'}
         if not name:
             return {'success': False, 'error': 'Service name is required'}
+        if not plan_id:
+            return {'success': False, 'error': 'Subscription plan is required'}
 
         name = name.strip()
         if not name:
@@ -1403,6 +1437,15 @@ class PaasController(Controller):
         template = CloudAppTemplate.browse(template_id)
         if not template.exists() or not template.is_active:
             return {'success': False, 'error': 'Template not found'}
+
+        # Validate subscription plan
+        Plan = request.env['sh.subscription.plan']
+        plan = Plan.browse(plan_id)
+        if not plan.exists():
+            return {'success': False, 'error': 'Subscription plan not found'}
+        # Verify plan belongs to this template
+        if template.subscription_plan_ids and plan not in template.subscription_plan_ids:
+            return {'success': False, 'error': 'Plan not available for this template'}
 
         # Always generate reference_id server-side (never accept from frontend)
         reference_id = str(uuid.uuid4())
@@ -1508,6 +1551,10 @@ class PaasController(Controller):
                 service_vals['odoo_addon_ids'] = [(6, 0, resolved_addon_ids)]
 
             service = CloudService.create(service_vals)
+
+            # Create subscription for this service
+            partner = workspace.owner_id.partner_id
+            service._create_and_confirm_subscription(partner, plan)
 
             # Build expose configuration before spawning background thread
             expose_config = None
@@ -2232,6 +2279,7 @@ class PaasController(Controller):
                 {'id': a.id, 'name': a.name, 'technical_name': a.technical_name}
                 for a in service.odoo_addon_ids
             ] if service.odoo_addon_ids else [],
+            'subscription': service._get_subscription_info(),
         }
 
         if include_details:
