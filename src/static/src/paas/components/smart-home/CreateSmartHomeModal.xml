@@ -51,6 +51,12 @@
                             </small>
                         </div>
 
+                        <PlanSelector
+                            plans="state.plans"
+                            selectedPlanId="state.selectedPlanId"
+                            onSelect.bind="onPlanSelect"
+                        />
+
                         <div t-if="state.error" class="o_woow_error_message">
                             <WoowIcon name="'error'" size="16"/>
                             <span t-esc="state.error"/>

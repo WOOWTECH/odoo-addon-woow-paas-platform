@@ -46,6 +46,20 @@ class ResConfigSettings(models.TransientModel):
         help='Default AI assistant for automatic replies',
     )
 
+    # Subscription Lifecycle Settings
+    woow_subscription_grace_days = fields.Integer(
+        string='Subscription Grace Period (Days)',
+        config_parameter='woow_paas_platform.grace_period_days',
+        default=7,
+        help='Days after subscription expiry before service suspension',
+    )
+    woow_subscription_cleanup_months = fields.Integer(
+        string='Auto Cleanup After (Months)',
+        config_parameter='woow_paas_platform.cleanup_after_months',
+        default=6,
+        help='Months after cancellation before permanent service removal',
+    )
+
     def action_test_ai_connection(self):
         """Test connection to the configured AI assistant."""
         self.ensure_one()

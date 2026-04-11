@@ -1,6 +1,7 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
 import { StatusBadge } from "../common/StatusBadge";
+import { SubscriptionBadge } from "../subscription/SubscriptionBadge";
 import { WoowIcon } from "../icon/WoowIcon";
 import { WoowButton } from "../button/WoowButton";
 
@@ -24,7 +25,7 @@ import { WoowButton } from "../button/WoowButton";
  */
 export class SmartHomeCard extends Component {
     static template = "woow_paas_platform.SmartHomeCard";
-    static components = { StatusBadge, WoowIcon, WoowButton };
+    static components = { StatusBadge, SubscriptionBadge, WoowIcon, WoowButton };
     static props = {
         home: { type: Object },
         domain: { type: String, optional: true },

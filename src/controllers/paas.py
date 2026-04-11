@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from odoo import fields
 from odoo.http import request, route, Controller
 
 from ..models.workspace_access import (
@@ -827,6 +828,86 @@ class PaasController(Controller):
 
     # ==================== Cloud Services API ====================
 
+    @route("/api/cloud-services/templates/<int:template_id>/plans", auth="user", methods=["POST"], type="json")
+    def api_template_plans(self, template_id: int, **kw: Any) -> dict[str, Any]:
+        """Get available subscription plans for a template."""
+        CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
+        template = CloudAppTemplate.browse(template_id)
+        if not template.exists() or not template.is_active:
+            return {'success': False, 'error': 'Template not found'}
+
+        plans = []
+        for plan in template.subscription_plan_ids:
+            plans.append({
+                'id': plan.id,
+                'name': plan.name,
+                'price': plan.sh_plan_price,
+                'duration': plan.sh_duration,
+                'unit': plan.sh_unit,
+                'has_trial': plan.sh_trial,
+                'trial_duration': plan.sh_trial_duration if plan.sh_trial else 0,
+                'trial_unit': plan.sh_trial_unit if plan.sh_trial else None,
+            })
+
+        return {'success': True, 'data': plans}
+
+    @route("/api/cloud-services/services/<int:service_id>/change-plan", auth="user", methods=["POST"], type="json")
+    def api_service_change_plan(self, service_id: int, plan_id: int | None = None, **kw: Any) -> dict[str, Any]:
+        """Change subscription plan for a cloud service."""
+        if not plan_id:
+            return {'success': False, 'error': 'plan_id is required'}
+
+        CloudService = request.env['woow_paas_platform.cloud_service']
+        service = CloudService.browse(service_id)
+        if not service.exists():
+            return {'success': False, 'error': 'Service not found'}
+
+        workspace = service.workspace_id
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {'success': False, 'error': 'Admin access required'}
+
+        Plan = request.env['sh.subscription.plan']
+        plan = Plan.browse(plan_id)
+        if not plan.exists():
+            return {'success': False, 'error': 'Plan not found'}
+
+        old_sub = service.subscription_id
+        if not old_sub or old_sub.state != 'in_progress':
+            return {'success': False, 'error': 'No active subscription'}
+
+        # Calculate refund
+        total_days = (old_sub.sh_end_date - old_sub.sh_start_date).days or 1
+        remaining_days = max(0, (old_sub.sh_end_date - fields.Date.today()).days)
+        refund = round(old_sub.sh_plan_price * remaining_days / total_days, 2)
+
+        partner = old_sub.sh_partner_id
+
+        # Refund unused points
+        if refund > 0:
+            partner.sudo().add_wallet_points(
+                amount=refund,
+                description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
+            )
+
+        # Close old subscription
+        old_sub.sudo().write({
+            'state': 'close',
+            'sh_reason': 'Plan changed to: %s' % plan.name,
+        })
+
+        # Create new subscription
+        service._create_and_confirm_subscription(partner, plan)
+
+        return {
+            'success': True,
+            'data': {
+                'refund_amount': refund,
+                'new_plan': plan.name,
+                'subscription': service._get_subscription_info(),
+            },
+        }
+
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
     def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
         """
@@ -863,7 +944,8 @@ class PaasController(Controller):
             # Only admin/owner can create services
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._create_service(workspace, template_id, name, values, odoo_addon_ids)
+            plan_id = kw.get('plan_id')
+            return self._create_service(workspace, template_id, name, values, odoo_addon_ids, plan_id=plan_id)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
@@ -907,10 +989,18 @@ class PaasController(Controller):
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
+            try:
+                service._check_operation_allowed(operation='write')
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
             return self._update_service(service, values, version, odoo_addon_ids)
         elif action == 'delete':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
+            try:
+                service._check_operation_allowed(operation='write')
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
             return self._delete_service(service)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
@@ -1386,12 +1476,14 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
+    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
         if not template_id:
             return {'success': False, 'error': 'Template ID is required'}
         if not name:
             return {'success': False, 'error': 'Service name is required'}
+        if not plan_id:
+            return {'success': False, 'error': 'Subscription plan is required'}
 
         name = name.strip()
         if not name:
@@ -1403,6 +1495,15 @@ class PaasController(Controller):
         template = CloudAppTemplate.browse(template_id)
         if not template.exists() or not template.is_active:
             return {'success': False, 'error': 'Template not found'}
+
+        # Validate subscription plan
+        Plan = request.env['sh.subscription.plan']
+        plan = Plan.browse(plan_id)
+        if not plan.exists():
+            return {'success': False, 'error': 'Subscription plan not found'}
+        # Verify plan belongs to this template
+        if template.subscription_plan_ids and plan not in template.subscription_plan_ids:
+            return {'success': False, 'error': 'Plan not available for this template'}
 
         # Always generate reference_id server-side (never accept from frontend)
         reference_id = str(uuid.uuid4())
@@ -1508,6 +1609,10 @@ class PaasController(Controller):
                 service_vals['odoo_addon_ids'] = [(6, 0, resolved_addon_ids)]
 
             service = CloudService.create(service_vals)
+
+            # Create subscription for this service
+            partner = workspace.owner_id.partner_id
+            service._create_and_confirm_subscription(partner, plan)
 
             # Build expose configuration before spawning background thread
             expose_config = None
@@ -2232,6 +2337,7 @@ class PaasController(Controller):
                 {'id': a.id, 'name': a.name, 'technical_name': a.technical_name}
                 for a in service.odoo_addon_ids
             ] if service.odoo_addon_ids else [],
+            'subscription': service._get_subscription_info(),
         }
 
         if include_details:

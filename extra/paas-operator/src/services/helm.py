@@ -805,6 +805,35 @@ class KubernetesService:
         result = self._run_command(args)
         return json.loads(result.stdout)
 
+    def scale_deployment(
+        self,
+        namespace: str,
+        deployment_name: str,
+        replicas: int,
+    ) -> None:
+        """Scale a Kubernetes deployment to the given replica count.
+
+        Args:
+            namespace: Namespace name
+            deployment_name: Name of the deployment to scale
+            replicas: Target replica count
+
+        Raises:
+            KubectlException: If scaling fails
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "scale",
+            "deployment",
+            deployment_name,
+            "--namespace",
+            namespace,
+            f"--replicas={replicas}",
+        ]
+
+        self._run_command(args)
+
     def apply_manifest(self, manifest: dict) -> Dict[str, Any]:
         """Apply a Kubernetes manifest via kubectl apply.
 

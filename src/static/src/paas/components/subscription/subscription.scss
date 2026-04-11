@@ -1,0 +1,134 @@
+// Subscription Badge
+.o_woow_sub_badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+
+  &--active {
+    background: rgba(#22c55e, 0.12);
+    color: #16a34a;
+  }
+
+  &--trial {
+    background: rgba(#3b82f6, 0.12);
+    color: #2563eb;
+  }
+
+  &--expired {
+    background: rgba(#f59e0b, 0.12);
+    color: #d97706;
+  }
+
+  &--cancelled {
+    background: rgba(#ef4444, 0.12);
+    color: #dc2626;
+  }
+
+  &--default {
+    background: rgba(#6b7280, 0.12);
+    color: #6b7280;
+  }
+}
+
+// Plan Selector
+.o_woow_plan_selector {
+  margin: 16px 0;
+
+  &__label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--woow-text-secondary, #6b7280);
+    margin-bottom: 8px;
+  }
+
+  &__cards {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  &__empty {
+    font-size: 13px;
+    color: var(--woow-text-tertiary, #9ca3af);
+    padding: 12px;
+  }
+}
+
+.o_woow_plan_card {
+  flex: 1;
+  min-width: 140px;
+  max-width: 200px;
+  padding: 14px 16px;
+  border: 2px solid var(--woow-border, #e5e7eb);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: var(--woow-surface, #fff);
+
+  &:hover {
+    border-color: var(--woow-primary, #6366f1);
+    background: rgba(#6366f1, 0.03);
+  }
+
+  &--selected {
+    border-color: var(--woow-primary, #6366f1);
+    background: rgba(#6366f1, 0.06);
+    box-shadow: 0 0 0 1px var(--woow-primary, #6366f1);
+  }
+
+  &__name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--woow-text-primary, #111827);
+    margin-bottom: 4px;
+  }
+
+  &__price {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--woow-primary, #6366f1);
+    margin-bottom: 4px;
+  }
+
+  &__trial {
+    font-size: 11px;
+    color: var(--woow-text-secondary, #6b7280);
+  }
+}
+
+// Subscription Info Banner (grace period / suspended)
+.o_woow_sub_banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+
+  &--warning {
+    background: rgba(#f59e0b, 0.08);
+    border: 1px solid rgba(#f59e0b, 0.2);
+    color: #92400e;
+  }
+
+  &--error {
+    background: rgba(#ef4444, 0.08);
+    border: 1px solid rgba(#ef4444, 0.2);
+    color: #991b1b;
+  }
+
+  &__text {
+    flex: 1;
+  }
+
+  &__action {
+    margin-left: 12px;
+    flex-shrink: 0;
+  }
+}

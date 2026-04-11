@@ -370,6 +370,34 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def scale_release(
+        self,
+        release_name: str,
+        namespace: str,
+        replicas: int = 0,
+    ) -> Dict[str, str]:
+        """Scale a Helm release's deployments.
+
+        Used for subscription suspend (replicas=0) and resume (replicas=1).
+
+        Args:
+            release_name: Release name
+            namespace: Release namespace
+            replicas: Target replica count
+
+        Returns:
+            Scale confirmation
+
+        Raises:
+            PaaSOperatorError: If scaling fails
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/scale',
+            params={'replicas': replicas},
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def rollback_release(
         self,
         namespace: str,
@@ -627,6 +655,39 @@ class PaaSOperatorClient:
         return self._request(
             'DELETE',
             f'/api/tunnels/{tunnel_id}',
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def configure_tunnel(
+        self,
+        tunnel_id: str,
+        hostname: str,
+        service_url: str,
+    ) -> Dict[str, Any]:
+        """Update a tunnel's ingress configuration.
+
+        Used for subscription suspend (service_url="http_status:503")
+        and resume (service_url="http://localhost:PORT").
+
+        Args:
+            tunnel_id: Cloudflare Tunnel ID
+            hostname: Public hostname (e.g., ha-xxx.woowtech.io)
+            service_url: Target service URL or http_status:503
+
+        Returns:
+            Configuration confirmation
+
+        Raises:
+            PaaSOperatorError: If configuration fails
+        """
+        data = {
+            'hostname': hostname,
+            'service_url': service_url,
+        }
+        return self._request(
+            'PUT',
+            f'/api/tunnels/{tunnel_id}/config',
+            json=data,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 

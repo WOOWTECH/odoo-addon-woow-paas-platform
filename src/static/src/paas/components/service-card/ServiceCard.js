@@ -1,6 +1,7 @@
 /** @odoo-module **/
 import { Component, useState, onWillStart } from "@odoo/owl";
 import { StatusBadge } from "../common/StatusBadge";
+import { SubscriptionBadge } from "../subscription/SubscriptionBadge";
 import { WoowIcon } from "../icon/WoowIcon";
 import { WoowButton } from "../button/WoowButton";
 import { getDomain } from "../../services/cloud_service";
@@ -18,7 +19,7 @@ import { getDomain } from "../../services/cloud_service";
  */
 export class ServiceCard extends Component {
     static template = "woow_paas_platform.ServiceCard";
-    static components = { StatusBadge, WoowIcon, WoowButton };
+    static components = { StatusBadge, SubscriptionBadge, WoowIcon, WoowButton };
     static props = {
         service: { type: Object },
         onOpen: { type: Function, optional: true },

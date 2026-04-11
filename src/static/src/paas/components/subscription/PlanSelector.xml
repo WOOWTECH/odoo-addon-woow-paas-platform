@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.PlanSelector">
+    <div class="o_woow_plan_selector">
+      <div class="o_woow_plan_selector__label">Select a plan:</div>
+      <div class="o_woow_plan_selector__cards">
+        <t t-foreach="props.plans" t-as="plan" t-key="plan.id">
+          <div t-attf-class="o_woow_plan_card {{isSelected(plan) ? 'o_woow_plan_card--selected' : ''}}"
+               t-on-click="() => this.onPlanClick(plan)">
+            <div class="o_woow_plan_card__name" t-esc="plan.name"/>
+            <div class="o_woow_plan_card__price" t-esc="formatPrice(plan)"/>
+            <div t-if="plan.has_trial"
+                 class="o_woow_plan_card__trial" t-esc="formatTrial(plan)"/>
+          </div>
+        </t>
+      </div>
+      <div t-if="!props.plans.length" class="o_woow_plan_selector__empty">
+        No plans available
+      </div>
+    </div>
+  </t>
+</templates>

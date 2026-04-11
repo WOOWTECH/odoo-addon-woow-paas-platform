@@ -98,6 +98,30 @@
                     </div>
                 </WoowCard>
 
+                <!-- Subscription Plan Section -->
+                <WoowCard shadow="true" class="'o_woow_configure_section'">
+                    <div class="o_woow_section_header">
+                        <WoowIcon name="'credit_card'" size="24"/>
+                        <div>
+                            <h2>Subscription Plan</h2>
+                            <p>Choose a billing plan for this service</p>
+                        </div>
+                    </div>
+                    <div class="o_woow_section_body">
+                        <PlanSelector
+                            plans="state.plans"
+                            selectedPlanId="state.selectedPlanId"
+                            onSelect.bind="onPlanSelect"
+                        />
+                        <t t-if="state.errors.plan">
+                            <p class="o_woow_field_error">
+                                <WoowIcon name="'error'" size="14"/>
+                                <t t-esc="state.errors.plan"/>
+                            </p>
+                        </t>
+                    </div>
+                </WoowCard>
+
                 <!-- Network & Domain Section -->
                 <WoowCard shadow="true" class="'o_woow_configure_section'">
                     <div class="o_woow_section_header">

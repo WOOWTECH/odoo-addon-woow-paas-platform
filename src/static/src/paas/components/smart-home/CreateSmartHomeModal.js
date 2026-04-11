@@ -2,6 +2,7 @@
 import { Component, useState } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
+import { PlanSelector } from "../subscription/PlanSelector";
 import { workspaceService } from "../../services/workspace_service";
 
 /**
@@ -17,7 +18,7 @@ import { workspaceService } from "../../services/workspace_service";
  */
 export class CreateSmartHomeModal extends Component {
     static template = "woow_paas_platform.CreateSmartHomeModal";
-    static components = { WoowButton, WoowIcon };
+    static components = { WoowButton, WoowIcon, PlanSelector };
     static props = {
         workspaceId: { type: Number },
         onClose: { type: Function },
@@ -28,12 +29,28 @@ export class CreateSmartHomeModal extends Component {
         this.state = useState({
             name: "",
             haPort: "8123",
+            plans: [],
+            selectedPlanId: null,
             loading: false,
             provisioning: false,
             error: null,
             step: "form", // "form" | "provisioning" | "done"
             provisionProgress: 0,
         });
+
+        this.loadPlans();
+    }
+
+    async loadPlans() {
+        const plans = await workspaceService.fetchSmartHomePlans();
+        this.state.plans = plans;
+        if (plans.length > 0) {
+            this.state.selectedPlanId = plans[0].id;
+        }
+    }
+
+    onPlanSelect(planId) {
+        this.state.selectedPlanId = planId;
     }
 
     onNameInput(ev) {
@@ -65,6 +82,11 @@ export class CreateSmartHomeModal extends Component {
             return;
         }
 
+        if (!this.state.selectedPlanId) {
+            this.state.error = "Please select a subscription plan";
+            return;
+        }
+
         this.state.loading = true;
         this.state.error = null;
 
@@ -72,6 +94,7 @@ export class CreateSmartHomeModal extends Component {
         const createResult = await workspaceService.createSmartHome(this.props.workspaceId, {
             name,
             ha_port: port,
+            plan_id: this.state.selectedPlanId,
         });
 
         if (!createResult.success) {

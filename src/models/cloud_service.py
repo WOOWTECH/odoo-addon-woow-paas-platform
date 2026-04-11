@@ -41,6 +41,7 @@ def _deep_merge(base, override):
 
 class CloudService(models.Model):
     _name = 'woow_paas_platform.cloud_service'
+    _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
     _description = 'Cloud Service Instance'
     _order = 'create_date desc'
 
@@ -100,6 +101,7 @@ class CloudService(models.Model):
             ('running', 'Running'),
             ('error', 'Error'),
             ('upgrading', 'Upgrading'),
+            ('suspended', 'Suspended'),
             ('deleting', 'Deleting'),
         ],
         string='State',
@@ -1029,3 +1031,74 @@ class CloudService(models.Model):
             return f"https://{self.subdomain}.{paas_domain}{endpoint_path}"
 
         return f"http://localhost:{sidecar_port}{endpoint_path}"
+
+    # ------------------------------------------------------------------ #
+    #  Subscription lifecycle: suspend / resume / cleanup                #
+    # ------------------------------------------------------------------ #
+
+    def _do_suspend(self):
+        """Scale down Helm release to 0 replicas."""
+        self.ensure_one()
+        if self.state == 'suspended':
+            return
+
+        from ..services.paas_operator import get_paas_operator_client
+
+        client = get_paas_operator_client(self.env)
+        if client and self.helm_release_name and self.helm_namespace:
+            try:
+                client.scale_release(
+                    self.helm_release_name, self.helm_namespace, replicas=0,
+                )
+            except Exception as e:
+                _logger.warning(
+                    "Failed to scale down service %s: %s", self.name, e,
+                )
+
+        self.write({
+            'pre_suspend_state': self.state if self.state in ('running', 'error') else 'running',
+            'state': 'suspended',
+        })
+
+    def _do_resume(self):
+        """Scale up Helm release to restore replicas."""
+        self.ensure_one()
+        if self.state != 'suspended':
+            return
+
+        from ..services.paas_operator import get_paas_operator_client
+
+        client = get_paas_operator_client(self.env)
+        if client and self.helm_release_name and self.helm_namespace:
+            try:
+                client.scale_release(
+                    self.helm_release_name, self.helm_namespace, replicas=1,
+                )
+            except Exception as e:
+                _logger.warning(
+                    "Failed to scale up service %s: %s", self.name, e,
+                )
+
+        restore_state = self.pre_suspend_state or 'running'
+        self.write({
+            'state': restore_state,
+            'pre_suspend_state': False,
+        })
+
+    def _do_cleanup(self):
+        """Helm uninstall — permanently remove the service."""
+        self.ensure_one()
+
+        from ..services.paas_operator import get_paas_operator_client
+
+        client = get_paas_operator_client(self.env)
+        if client and self.helm_release_name and self.helm_namespace:
+            try:
+                client.uninstall_release(
+                    self.helm_release_name, self.helm_namespace,
+                )
+            except Exception as e:
+                _logger.warning(
+                    "Cleanup failed for service %s: %s", self.name, e,
+                )
+        self.write({'state': 'deleting'})

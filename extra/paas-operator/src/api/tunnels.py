@@ -194,6 +194,56 @@ async def get_tunnel_token(tunnel_id: str):
         )
 
 
+@router.put(
+    "/{tunnel_id}/config",
+    summary="Update tunnel ingress configuration",
+)
+async def update_tunnel_config(tunnel_id: str, hostname: str, service_url: str):
+    """Update a tunnel's ingress rules.
+
+    Used for subscription suspend (service_url="http_status:503")
+    and resume (service_url="http://localhost:PORT").
+
+    Args:
+        tunnel_id: The Cloudflare Tunnel ID.
+        hostname: Public hostname (e.g., ha-xxx.woowtech.io).
+        service_url: Target service URL or "http_status:503".
+
+    Returns:
+        Configuration confirmation message.
+
+    Raises:
+        HTTPException: If configuration update fails.
+    """
+    if not cloudflare_service.api_token or not cloudflare_service.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cloudflare API token and account ID are required",
+        )
+
+    try:
+        await cloudflare_service.configure_tunnel(
+            tunnel_id=tunnel_id,
+            hostname=hostname,
+            service_url=service_url,
+        )
+        logger.info(
+            f"Updated tunnel {tunnel_id} config: {hostname} -> {service_url}"
+        )
+        return {
+            "message": f"Tunnel {tunnel_id} configuration updated",
+            "hostname": hostname,
+            "service_url": service_url,
+        }
+
+    except CloudflareException as e:
+        logger.error(f"Failed to update tunnel config: {e.message}")
+        raise HTTPException(
+            status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update tunnel configuration: {e.message}",
+        )
+
+
 @router.delete(
     "/{tunnel_id}",
     summary="Delete a tunnel",

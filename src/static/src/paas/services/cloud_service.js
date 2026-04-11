@@ -165,6 +165,47 @@ export const cloudService = reactive({
      * @param {string|null} category - Filter by category
      * @returns {Promise<void>}
      */
+    /**
+     * Fetch available subscription plans for a template
+     * @param {number} templateId - Template ID
+     * @returns {Promise<Array>} List of plans
+     */
+    async fetchPlans(templateId) {
+        try {
+            const result = await jsonRpc(`/api/cloud-services/templates/${templateId}/plans`, {});
+            if (result.success) {
+                return result.data;
+            }
+            return [];
+        } catch (err) {
+            console.warn("Failed to fetch plans:", err);
+            return [];
+        }
+    },
+
+    /**
+     * Change subscription plan for a service
+     * @param {number} serviceId - Service ID
+     * @param {number} planId - New plan ID
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async changePlan(serviceId, planId) {
+        this.operationLoading.changePlan = true;
+        try {
+            const result = await jsonRpc(`/api/cloud-services/services/${serviceId}/change-plan`, {
+                plan_id: planId,
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.changePlan = false;
+        }
+    },
+
     async fetchOdooAddons(templateId = null, category = null) {
         this.operationLoading.fetchOdooAddons = true;
         try {
@@ -270,6 +311,7 @@ export const cloudService = reactive({
                 template_id: payload.template_id,
                 name: payload.name,
                 values: payload.values || {},
+                plan_id: payload.plan_id,
             };
             if (payload.odoo_addon_ids) {
                 params.odoo_addon_ids = payload.odoo_addon_ids;

@@ -394,6 +394,64 @@ async def get_release_status(namespace: str, name: str):
 
 
 @router.post(
+    "/{namespace}/{name}/scale",
+    response_model=Dict[str, str],
+    summary="Scale a release's deployments",
+)
+async def scale_release(namespace: str, name: str, replicas: int = 0):
+    """Scale all deployments in a Helm release.
+
+    Used for subscription suspend (replicas=0) and resume (replicas=1).
+
+    Args:
+        namespace: Release namespace
+        name: Release name
+        replicas: Target replica count (0 to suspend, 1+ to resume)
+
+    Returns:
+        Confirmation message
+
+    Raises:
+        HTTPException: If scaling fails
+    """
+    try:
+        # Find deployments belonging to this release
+        deployments = k8s_service.get_deployments(
+            namespace=namespace,
+            label_selector=f"app.kubernetes.io/instance={name}",
+        )
+        if not deployments:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No deployments found for release {name} in namespace {namespace}",
+            )
+
+        scaled = []
+        for dep in deployments:
+            dep_name = dep["name"]
+            k8s_service.scale_deployment(namespace, dep_name, replicas)
+            scaled.append(dep_name)
+            logger.info(f"Scaled deployment {dep_name} in {namespace} to {replicas} replicas")
+
+        return {
+            "message": f"Scaled {len(scaled)} deployment(s) to {replicas} replicas",
+            "deployments": ", ".join(scaled),
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except KubectlException as e:
+        logger.error(f"kubectl scale failed: {e.message}\nStderr: {e.stderr}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to scale deployment. Check operator logs for details.",
+        )
+
+
+@router.post(
     "/{namespace}/{name}/sidecar",
     response_model=SidecarPatchResponse,
     summary="Patch deployment with sidecar container",
