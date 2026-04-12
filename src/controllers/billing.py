@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from odoo import fields
 from odoo.http import request, route, Controller
 
 _logger = logging.getLogger(__name__)
@@ -36,5 +37,288 @@ class BillingController(Controller):
                 'card_bound': partner.has_bound_credit_card(),
                 'card_last4': partner.ecpay_card_last4 or '',
                 'card_expiry': partner.ecpay_card_expiry or '',
+            },
+        }
+
+    # ==================== Invoice API ====================
+
+    def _invoice_status_label(self, invoice):
+        """Compute a human-readable status label for an invoice.
+
+        Mapping:
+            - draft  → invoice not yet posted
+            - paid   → fully paid
+            - overdue → posted, not paid, past due date
+            - waiting → posted, awaiting payment
+        """
+        if invoice.state == 'draft':
+            return 'draft'
+        if invoice.payment_state == 'paid':
+            return 'paid'
+        if invoice.invoice_date_due and invoice.invoice_date_due < fields.Date.today():
+            return 'overdue'
+        return 'waiting'
+
+    def _serialize_invoice(self, invoice):
+        """Return a compact dict for invoice list items."""
+        return {
+            'id': invoice.id,
+            'name': invoice.name or '',
+            'invoice_date': invoice.invoice_date.isoformat() if invoice.invoice_date else None,
+            'invoice_date_due': invoice.invoice_date_due.isoformat() if invoice.invoice_date_due else None,
+            'amount_total': invoice.amount_total,
+            'amount_residual': invoice.amount_residual,
+            'state': invoice.state,
+            'payment_state': invoice.payment_state or '',
+            'status_label': self._invoice_status_label(invoice),
+        }
+
+    @route("/api/billing/invoices", auth="user", methods=["POST"], type="json")
+    def api_invoices(
+        self,
+        page: int = 1,
+        limit: int = 10,
+        sort_by: str = 'invoice_date',
+        sort_order: str = 'desc',
+        status: str | None = None,
+        **kw,
+    ) -> dict[str, Any]:
+        """List current user's invoices with pagination and optional status filter.
+
+        Args:
+            page: Page number (1-based).
+            limit: Items per page (max 50).
+            sort_by: Field to sort by (invoice_date | amount_total).
+            sort_order: 'asc' or 'desc'.
+            status: Optional filter – 'draft', 'waiting', 'paid', 'overdue'.
+
+        Returns:
+            dict with success, data (list), total, page, limit.
+        """
+        partner = request.env.user.partner_id
+        Move = request.env['account.move'].sudo()
+
+        domain = [
+            ('partner_id', '=', partner.id),
+            ('move_type', '=', 'out_invoice'),
+        ]
+
+        today = fields.Date.today()
+        if status == 'draft':
+            domain.append(('state', '=', 'draft'))
+        elif status == 'waiting':
+            domain += [
+                ('state', '=', 'posted'),
+                ('payment_state', 'in', ('not_paid', 'partial')),
+                '|',
+                ('invoice_date_due', '=', False),
+                ('invoice_date_due', '>=', today),
+            ]
+        elif status == 'paid':
+            domain.append(('payment_state', '=', 'paid'))
+        elif status == 'overdue':
+            domain += [
+                ('state', '=', 'posted'),
+                ('payment_state', '!=', 'paid'),
+                ('invoice_date_due', '<', today),
+            ]
+
+        # Sanitise sort parameters
+        allowed_sort_fields = {'invoice_date', 'amount_total'}
+        if sort_by not in allowed_sort_fields:
+            sort_by = 'invoice_date'
+        if sort_order not in ('asc', 'desc'):
+            sort_order = 'desc'
+        order = f'{sort_by} {sort_order}'
+
+        # Clamp limit
+        limit = max(1, min(int(limit), 50))
+        page = max(1, int(page))
+        offset = (page - 1) * limit
+
+        total = Move.search_count(domain)
+        invoices = Move.search(domain, order=order, limit=limit, offset=offset)
+
+        return {
+            'success': True,
+            'data': [self._serialize_invoice(inv) for inv in invoices],
+            'total': total,
+            'page': page,
+            'limit': limit,
+        }
+
+    @route("/api/billing/invoices/<int:invoice_id>", auth="user", methods=["POST"], type="json")
+    def api_invoice_detail(self, invoice_id: int, **kw) -> dict[str, Any]:
+        """Get full detail of a single invoice.
+
+        Returns invoice header, line items, partner/company info,
+        and optional subscription reference.
+        """
+        partner = request.env.user.partner_id
+        invoice = request.env['account.move'].sudo().browse(invoice_id)
+
+        if not invoice.exists() or invoice.partner_id != partner:
+            return {'success': False, 'error': 'Invoice not found'}
+
+        # Line items (skip section/note display lines)
+        lines = []
+        for line in invoice.invoice_line_ids.filtered(lambda l: l.display_type not in ('line_section', 'line_note')):
+            lines.append({
+                'product_name': line.product_id.display_name if line.product_id else (line.name or ''),
+                'quantity': line.quantity,
+                'price_unit': line.price_unit,
+                'tax_names': ', '.join(line.tax_ids.mapped('name')) if line.tax_ids else '',
+                'price_subtotal': line.price_subtotal,
+            })
+
+        # Partner address
+        p = invoice.partner_id
+        partner_address = {
+            'name': p.name or '',
+            'street': p.street or '',
+            'city': p.city or '',
+            'zip': p.zip or '',
+            'country': p.country_id.name if p.country_id else '',
+        }
+
+        # Company address
+        c = invoice.company_id.partner_id if invoice.company_id else None
+        company_info = {}
+        if c:
+            company_info = {
+                'name': invoice.company_id.name or '',
+                'street': c.street or '',
+                'city': c.city or '',
+                'zip': c.zip or '',
+                'country': c.country_id.name if c.country_id else '',
+            }
+
+        # Subscription reference (sh_subscription_id added by sh_subscription module)
+        subscription_ref = None
+        if hasattr(invoice, 'sh_subscription_id') and invoice.sh_subscription_id:
+            subscription_ref = invoice.sh_subscription_id.name
+
+        return {
+            'success': True,
+            'data': {
+                'id': invoice.id,
+                'name': invoice.name or '',
+                'state': invoice.state,
+                'payment_state': invoice.payment_state or '',
+                'status_label': self._invoice_status_label(invoice),
+                'invoice_date': invoice.invoice_date.isoformat() if invoice.invoice_date else None,
+                'invoice_date_due': invoice.invoice_date_due.isoformat() if invoice.invoice_date_due else None,
+                'amount_untaxed': invoice.amount_untaxed,
+                'amount_tax': invoice.amount_tax,
+                'amount_total': invoice.amount_total,
+                'amount_residual': invoice.amount_residual,
+                'partner': partner_address,
+                'company': company_info,
+                'lines': lines,
+                'subscription_ref': subscription_ref,
+            },
+        }
+
+    @route("/api/billing/invoices/<int:invoice_id>/pay", auth="user", methods=["POST"], type="json")
+    def api_invoice_pay(self, invoice_id: int, **kw) -> dict[str, Any]:
+        """Pay an invoice using the current user's wallet balance.
+
+        Flow:
+            1. Validate invoice belongs to user and is payable.
+            2. Check wallet balance >= amount_residual.
+            3. Post invoice if still in draft.
+            4. Deduct wallet points.
+            5. Create payment and reconcile with invoice.
+
+        Returns:
+            dict with new_balance and invoice_status on success.
+        """
+        partner = request.env.user.partner_id.sudo()
+        invoice = request.env['account.move'].sudo().browse(invoice_id)
+
+        if not invoice.exists() or invoice.partner_id != partner:
+            return {'success': False, 'error': 'Invoice not found'}
+
+        # Must be posted (or draft that we can post) and not yet fully paid
+        if invoice.state not in ('draft', 'posted'):
+            return {'success': False, 'error': 'Invoice is not payable'}
+        if invoice.payment_state == 'paid':
+            return {'success': False, 'error': 'Invoice is already paid'}
+
+        amount = invoice.amount_residual
+        if invoice.state == 'draft':
+            # amount_residual is 0 for draft; use amount_total instead
+            amount = invoice.amount_total
+
+        balance = partner.wallet_balance
+        if balance < amount:
+            return {
+                'success': False,
+                'error': 'Insufficient credits',
+                'data': {
+                    'balance': balance,
+                    'required': amount,
+                },
+            }
+
+        # Post the invoice first if it is a draft
+        if invoice.state == 'draft':
+            invoice.action_post()
+
+        # Deduct wallet
+        deducted = partner.deduct_wallet_points(amount, f"Invoice payment: {invoice.name}")
+        if deducted <= 0:
+            return {
+                'success': False,
+                'error': 'Wallet deduction failed',
+            }
+
+        # Create payment and reconcile (same pattern as sh_subscription 'paid' mode)
+        company = invoice.company_id.sudo()
+        journal = company.sh_paid_subscription_journal
+        if not journal:
+            # Fallback: find first bank/cash journal
+            journal = request.env['account.journal'].sudo().search([
+                ('company_id', '=', company.id),
+                ('type', 'in', ('bank', 'cash')),
+            ], limit=1)
+        if not journal:
+            _logger.error("No payment journal found for company %s", company.name)
+            return {'success': False, 'error': 'Payment journal not configured'}
+
+        payment_method_line = journal.inbound_payment_method_line_ids[:1]
+        payment = request.env['account.payment'].sudo().create({
+            'journal_id': journal.id,
+            'amount': amount,
+            'payment_type': 'inbound',
+            'payment_method_line_id': payment_method_line.id if payment_method_line else False,
+            'partner_type': 'customer',
+            'partner_id': partner.id,
+        })
+        payment.action_post()
+
+        # Reconcile payment with invoice
+        receivable_lines = invoice.line_ids.filtered(
+            lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
+        )
+        payment_lines = payment.move_id.line_ids.filtered(
+            lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
+        )
+        if receivable_lines and payment_lines:
+            (receivable_lines + payment_lines).reconcile()
+
+        # Refresh to get updated state
+        invoice.invalidate_recordset(['payment_state', 'amount_residual'])
+
+        _logger.info(
+            "Wallet payment for invoice %s: amount=%s, partner=%s",
+            invoice.name, amount, partner.id,
+        )
+
+        return {
+            'success': True,
+            'data': {
+                'new_balance': partner.wallet_balance,
+                'invoice_status': self._invoice_status_label(invoice),
             },
         }
