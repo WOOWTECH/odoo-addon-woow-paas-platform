@@ -9,7 +9,11 @@ export class Sidebar extends Component {
         { path: "dashboard", name: "Dashboard", icon: "dashboard" },
         { path: "workspaces", name: "Workspaces", icon: "workspaces" },
         { path: "ai-assistant", name: "AI Assistant", icon: "smart_toy" },
+        { section: "Finance" },
         { path: "billing", name: "Billing", icon: "payments" },
+        { path: "billing/invoices", name: "Invoices", icon: "receipt_long" },
+        { path: "billing/topup", name: "Top-up Store", icon: "storefront" },
+        { section: "System" },
         { path: "settings", name: "Settings", icon: "settings" },
     ];
 
@@ -29,7 +33,27 @@ export class Sidebar extends Component {
                 || current === "ai-chat"
                 || current === "ai-project-kanban";
         }
+        if (item.path === "billing") {
+            return current === "billing"
+                || current === "billing-topup"
+                || current === "billing-invoices"
+                || current === "billing-invoice-detail"
+                || current === "billing-subscriptions"
+                || current === "billing-payment-methods"
+                || current === "billing-transactions";
+        }
+        if (item.path === "billing/invoices") {
+            return current === "billing-invoices"
+                || current === "billing-invoice-detail";
+        }
+        if (item.path === "billing/topup") {
+            return current === "billing-topup";
+        }
         return current === item.path;
+    }
+
+    isSection(item) {
+        return !!item.section;
     }
 
     logout() {
