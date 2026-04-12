@@ -1,0 +1,202 @@
+// =============================================================================
+// Transaction List Page Styles
+// =============================================================================
+
+.o_woow_transaction_list {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+// Page Header
+.o_woow_transaction_header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 1rem;
+
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    margin: 0;
+  }
+}
+
+.o_woow_transaction_breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.8rem;
+  color: $woow-text-secondary;
+
+  .o_woow_breadcrumb_link {
+    color: $woow-text-secondary;
+    text-decoration: none;
+
+    &:hover {
+      color: $woow-primary;
+      text-decoration: underline;
+    }
+  }
+
+  .o_woow_breadcrumb_current {
+    color: $woow-text-primary;
+    font-weight: 500;
+  }
+}
+
+.o_woow_transaction_subtitle {
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+  margin: 0.25rem 0 0;
+}
+
+// Transaction Rows
+.o_woow_transaction_rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.o_woow_transaction_row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.875rem 1rem;
+  background: $woow-card-light;
+  border: 1px solid $woow-border-light;
+  border-radius: $woow-radius-default;
+  margin-bottom: -1px;
+  transition: all 0.15s ease;
+
+  &:first-child {
+    border-top-left-radius: $woow-radius-default;
+    border-top-right-radius: $woow-radius-default;
+  }
+
+  &:last-child {
+    border-bottom-left-radius: $woow-radius-default;
+    border-bottom-right-radius: $woow-radius-default;
+    margin-bottom: 0;
+  }
+
+  &:hover {
+    background: rgba($woow-primary, 0.02);
+  }
+}
+
+// Transaction Icon Circle
+.o_woow_txn_icon_circle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.o_woow_txn_blue {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
+
+.o_woow_txn_purple {
+  background: rgba(139, 92, 246, 0.1);
+  color: #8b5cf6;
+}
+
+.o_woow_txn_gray {
+  background: rgba(107, 114, 128, 0.1);
+  color: #6b7280;
+}
+
+// Transaction Details (middle)
+.o_woow_txn_details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.o_woow_txn_description {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: $woow-text-primary;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.o_woow_txn_date {
+  font-size: 0.75rem;
+  color: $woow-text-secondary;
+}
+
+// Transaction Amounts (right)
+.o_woow_txn_amounts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.125rem;
+  flex-shrink: 0;
+}
+
+.o_woow_txn_amount {
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.o_woow_txn_amount_credit {
+  color: #3b82f6;
+}
+
+.o_woow_txn_amount_debit {
+  color: #6b7280;
+}
+
+.o_woow_txn_balance_after {
+  font-size: 0.7rem;
+  color: $woow-text-secondary;
+}
+
+// Pagination (reuses page_btn styles from InvoiceListPage)
+.o_woow_transaction_pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.o_woow_transaction_pagination_info {
+  font-size: 0.8rem;
+  color: $woow-text-secondary;
+}
+
+.o_woow_transaction_pagination_buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+// Empty state
+.o_woow_transaction_empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 3rem 1rem;
+  color: $woow-text-secondary;
+  text-align: center;
+
+  p {
+    margin: 0;
+    font-size: 0.875rem;
+  }
+}

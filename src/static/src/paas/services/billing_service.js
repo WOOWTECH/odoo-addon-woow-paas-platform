@@ -116,6 +116,13 @@ export const billingService = reactive({
     subscriptionDetail: null,
 
     /** @type {Array<Object>} */
+    transactions: [],
+    /** @type {number} */
+    transactionsTotal: 0,
+    /** @type {boolean} */
+    transactionsLoading: false,
+
+    /** @type {Array<Object>} */
     topupPlans: [],
     /** @type {boolean} */
     topupPlansLoading: false,
@@ -141,6 +148,29 @@ export const billingService = reactive({
             console.error("Failed to fetch subscriptions:", err);
         } finally {
             this.subscriptionsLoading = false;
+        }
+    },
+
+    /**
+     * Fetch paginated transaction list
+     * @param {number} [page=1] - Page number
+     * @param {number} [limit=20] - Items per page
+     * @returns {Promise<void>}
+     */
+    async fetchTransactions(page = 1, limit = 20) {
+        this.transactionsLoading = true;
+        try {
+            const result = await jsonRpc("/api/billing/transactions", { page, limit });
+            if (result.success) {
+                this.transactions = result.data ?? [];
+                this.transactionsTotal = result.total ?? 0;
+            } else {
+                console.error("Failed to fetch transactions:", result.error);
+            }
+        } catch (err) {
+            console.error("Failed to fetch transactions:", err);
+        } finally {
+            this.transactionsLoading = false;
         }
     },
 

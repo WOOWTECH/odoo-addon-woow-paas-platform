@@ -3,6 +3,7 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
+import { CreditHistoryModal } from "../../components/modal/CreditHistoryModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
 
@@ -23,11 +24,14 @@ const SUB_STATE_MAP = {
 
 export class BillingOverviewPage extends Component {
   static template = "woow_paas_platform.BillingOverviewPage";
-  static components = { WoowCard, WoowIcon, WoowButton };
+  static components = { WoowCard, WoowIcon, WoowButton, CreditHistoryModal };
 
   setup() {
     this.billing = useState(billingService);
     this.router = useState(router);
+    this.state = useState({
+      showCreditHistoryModal: false,
+    });
 
     onMounted(() => {
       this.loadWallet();
@@ -134,6 +138,14 @@ export class BillingOverviewPage extends Component {
       return `Visa •••• ${w.cardLast4}`;
     }
     return "No card bound";
+  }
+
+  showCreditHistory() {
+    this.state.showCreditHistoryModal = true;
+  }
+
+  hideCreditHistory() {
+    this.state.showCreditHistoryModal = false;
   }
 
   goToTopup() {

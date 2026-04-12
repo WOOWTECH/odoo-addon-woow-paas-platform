@@ -87,6 +87,21 @@
   margin: 0;
 }
 
+.o_woow_billing_view_history_link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: $woow-primary;
+  cursor: pointer;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
 .o_woow_billing_credit_action {
   flex-shrink: 0;
 }

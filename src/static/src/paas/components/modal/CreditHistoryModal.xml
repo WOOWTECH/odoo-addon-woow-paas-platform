@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.CreditHistoryModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_md" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Credit Point History</h2>
+                    <button class="o_woow_modal_close" t-on-click="props.onClose">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <!-- Current Balance Header -->
+                    <div class="o_woow_credit_history_balance">
+                        <div class="o_woow_credit_history_balance_info">
+                            <span class="o_woow_credit_history_balance_label">Current Balance</span>
+                            <span class="o_woow_credit_history_balance_value">
+                                <t t-esc="formattedBalance"/>
+                                <span class="o_woow_credit_history_balance_unit">Points</span>
+                            </span>
+                        </div>
+                        <WoowButton variant="'primary'" size="'sm'" onClick.bind="goToTopup">
+                            <WoowIcon name="'add'" size="16"/>
+                            Add Funds
+                        </WoowButton>
+                    </div>
+
+                    <!-- Loading State -->
+                    <t t-if="loading">
+                        <div class="o_woow_credit_history_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <span>Loading transactions...</span>
+                        </div>
+                    </t>
+
+                    <!-- Empty State -->
+                    <t t-elif="transactions.length === 0">
+                        <div class="o_woow_credit_history_empty">
+                            <p>No transactions yet.</p>
+                        </div>
+                    </t>
+
+                    <!-- Transaction List -->
+                    <t t-else="">
+                        <div class="o_woow_credit_history_list">
+                            <t t-foreach="transactions" t-as="txn" t-key="txn.id">
+                                <div class="o_woow_credit_history_row">
+                                    <!-- Icon -->
+                                    <div t-attf-class="o_woow_txn_icon_circle o_woow_txn_icon_circle_sm {{ getTxnColorClass(txn) }}">
+                                        <WoowIcon t-att-name="getTxnIcon(txn)" size="16"/>
+                                    </div>
+
+                                    <!-- Description + Date -->
+                                    <div class="o_woow_credit_history_details">
+                                        <span class="o_woow_credit_history_desc" t-esc="txn.description || txn.name || '-'"/>
+                                        <span class="o_woow_credit_history_date" t-esc="formatDate(txn.date)"/>
+                                    </div>
+
+                                    <!-- Amount + Balance After -->
+                                    <div class="o_woow_credit_history_amounts">
+                                        <span t-attf-class="o_woow_txn_amount {{ getAmountClass(txn) }}"
+                                              t-esc="formatAmount(txn)"/>
+                                        <t t-if="txn.balance_after != null">
+                                            <span class="o_woow_txn_balance_after" t-esc="formatBalance(txn)"/>
+                                        </t>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton variant="'secondary'" size="'md'" onClick.bind="goToAllTransactions">
+                        View All Transactions
+                        <WoowIcon name="'arrow_forward'" size="16"/>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

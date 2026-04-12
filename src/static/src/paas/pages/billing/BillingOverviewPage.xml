@@ -32,6 +32,10 @@
                                 <span class="o_woow_billing_unit">Points</span>
                             </div>
                             <p class="o_woow_billing_rate">Conversion Rate: 1 Point = NT$ 1</p>
+                            <a class="o_woow_billing_view_history_link" t-on-click.prevent="showCreditHistory">
+                                <WoowIcon name="'history'" size="14"/>
+                                View History
+                            </a>
                         </div>
                         <div class="o_woow_billing_credit_action">
                             <WoowButton variant="'primary'" size="'md'" onClick.bind="goToTopup">
@@ -185,6 +189,11 @@
                         </div>
                     </WoowCard>
                 </div>
+            </t>
+
+            <!-- Credit History Modal -->
+            <t t-if="state.showCreditHistoryModal">
+                <CreditHistoryModal onClose.bind="hideCreditHistory"/>
             </t>
         </div>
     </t>

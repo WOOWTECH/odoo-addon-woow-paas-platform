@@ -12,6 +12,50 @@ _logger = logging.getLogger(__name__)
 class BillingController(Controller):
     _name = 'woow_paas_platform.billing'
 
+    # ==================== Transaction API ====================
+
+    @route("/api/billing/transactions", auth="user", methods=["POST"], type="json")
+    def api_transactions(self, page: int = 1, limit: int = 20, **kw) -> dict[str, Any]:
+        """List current user's wallet transactions with pagination.
+
+        Args:
+            page: Page number (1-based).
+            limit: Items per page (max 50).
+
+        Returns:
+            dict with success, data (list), total, page, limit.
+        """
+        partner = request.env.user.partner_id
+        Transaction = request.env['wallet.transaction'].sudo()
+
+        domain = [('partner_id', '=', partner.id)]
+
+        limit = max(1, min(int(limit), 50))
+        page = max(1, int(page))
+        offset = (page - 1) * limit
+
+        total = Transaction.search_count(domain)
+        transactions = Transaction.search(domain, order='create_date desc, id desc', limit=limit, offset=offset)
+
+        data = []
+        for txn in transactions:
+            data.append({
+                'id': txn.id,
+                'date': txn.create_date.isoformat() if txn.create_date else None,
+                'description': txn.description or txn.name or '',
+                'transaction_type': 'credit' if txn.amount >= 0 else 'debit',
+                'amount': txn.amount,
+                'balance_after': txn.balance_after,
+            })
+
+        return {
+            'success': True,
+            'data': data,
+            'total': total,
+            'page': page,
+            'limit': limit,
+        }
+
     # ==================== Wallet API ====================
 
     @route("/api/billing/wallet", auth="user", methods=["POST"], type="json")
@@ -583,7 +627,8 @@ class BillingController(Controller):
         if balance < amount:
             return {
                 'success': False,
-                'error': 'Insufficient credits',
+                'error': f'Insufficient credits. Your balance is {balance:.0f} pts but {amount:.0f} pts is required.',
+                'code': 'insufficient_balance',
                 'data': {
                     'balance': balance,
                     'required': amount,

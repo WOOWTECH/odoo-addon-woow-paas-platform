@@ -43,7 +43,17 @@ class ShSubscriptionFix(models.Model):
             if delta:
                 subscription.sh_date_of_next_payment += delta
 
-            subscription._handle_invoice_creation(invoice_id)
+            # Check wallet balance before posting/paying the invoice
+            partner = subscription.sh_partner_id
+            if partner.wallet_balance >= invoice_id.amount_total:
+                subscription._handle_invoice_creation(invoice_id)
+            else:
+                _logger.warning(
+                    "Insufficient wallet balance for subscription %s: "
+                    "balance=%.2f, required=%.2f — invoice %s left unpaid",
+                    subscription.name, partner.wallet_balance,
+                    invoice_id.amount_total, invoice_id.name,
+                )
 
             try:
                 pdf_content, _content_type = self.env['ir.actions.report'].sudo()._render_qweb_pdf(
