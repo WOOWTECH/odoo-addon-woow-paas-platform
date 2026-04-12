@@ -81,23 +81,15 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         # Get the first variant of this template
         product = product_tmpl.product_variant_id
 
-        # Ensure subscription journal is configured on the company
-        # (sh_subscription uses sh_journal_id for invoice creation)
+        # Validate subscription journal is configured
+        # (sh_subscription uses company.sh_journal_id for invoice creation;
+        #  post_init_hook sets a default, admin can override in Settings → Woow PaaS)
         company = self.env.company.sudo()
         if not company.sh_journal_id:
-            sale_journal = self.env['account.journal'].sudo().search([
-                ('company_id', '=', company.id),
-                ('type', '=', 'sale'),
-            ], limit=1)
-            if not sale_journal:
-                raise UserError(
-                    "No sales journal found. Please configure a sales journal "
-                    "in Accounting settings before creating subscriptions."
-                )
-            company.sh_journal_id = sale_journal
-            _logger.info(
-                "Auto-configured subscription journal: %s (id=%s)",
-                sale_journal.name, sale_journal.id,
+            raise UserError(
+                "Subscription journal is not configured. "
+                "Please go to Settings → Woow PaaS → Subscription Lifecycle "
+                "and select a journal."
             )
 
         sub_vals = {

@@ -70,6 +70,7 @@
     # pre_init_hook reads requirements.txt and auto-installs missing packages.
     # Helm chart and Dockerfile.dev also read from the same file.
     "pre_init_hook": "pre_init_hook",
+    "post_init_hook": "post_init_hook",
     "uninstall_hook": "uninstall_hook",
     "installable": True,
     "application": True,

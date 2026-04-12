@@ -46,6 +46,16 @@ class ResConfigSettings(models.TransientModel):
         help='Default AI assistant for automatic replies',
     )
 
+    # Subscription Billing
+    woow_subscription_journal_id = fields.Many2one(
+        'account.journal',
+        related='company_id.sh_journal_id',
+        readonly=False,
+        string='Subscription Journal',
+        help='Accounting journal used for subscription invoices. '
+             'Must be a Sales type journal.',
+    )
+
     # Subscription Lifecycle Settings
     woow_subscription_grace_days = fields.Integer(
         string='Subscription Grace Period (Days)',

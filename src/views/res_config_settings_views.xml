@@ -45,6 +45,17 @@
                         </setting>
                     </block>
                     <block title="Subscription Lifecycle" name="subscription_lifecycle">
+                        <setting string="Subscription Journal"
+                                 help="Accounting journal used for subscription invoices.">
+                            <div class="content-group">
+                                <div class="row mt16">
+                                    <label for="woow_subscription_journal_id" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_subscription_journal_id"
+                                           domain="[('type', '=', 'sale'), ('company_id', '=', company_id)]"
+                                           class="col-lg-6"/>
+                                </div>
+                            </div>
+                        </setting>
                         <setting string="Grace Period"
                                  help="Days after subscription expiry before service gets suspended.">
                             <div class="content-group">

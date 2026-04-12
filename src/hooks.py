@@ -133,6 +133,25 @@ _CONFIG_PARAMETERS = [
 ]
 
 
+def post_init_hook(env):
+    """Ensure subscription journal is configured on the main company."""
+    company = env.ref('base.main_company', raise_if_not_found=False)
+    if not company:
+        return
+    if company.sh_journal_id:
+        _logger.info("Subscription journal already configured: %s", company.sh_journal_id.name)
+        return
+    sale_journal = env['account.journal'].search([
+        ('company_id', '=', company.id),
+        ('type', '=', 'sale'),
+    ], limit=1)
+    if sale_journal:
+        company.sh_journal_id = sale_journal
+        _logger.info("Auto-configured subscription journal: %s (id=%s)", sale_journal.name, sale_journal.id)
+    else:
+        _logger.warning("No sales journal found for company %s — subscription invoices will fail", company.name)
+
+
 def uninstall_hook(env):
     """Remove ir.config_parameter records created by this module."""
     env['ir.config_parameter'].search([
