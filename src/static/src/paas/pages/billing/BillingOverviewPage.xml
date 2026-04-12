@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.BillingOverviewPage">
+        <div class="o_woow_billing_overview">
+            <!-- Page Header -->
+            <div class="o_woow_billing_header">
+                <div class="o_woow_billing_title">
+                    <h1>Account Overview</h1>
+                    <p>Manage your subscription, credits, and payment details.</p>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading billing information...</p>
+                </div>
+            </t>
+
+            <t t-else="">
+                <!-- Credit Balance Card -->
+                <WoowCard shadow="true" class="'o_woow_billing_credit_card'">
+                    <div class="o_woow_billing_credit_content">
+                        <div class="o_woow_billing_credit_info">
+                            <div class="o_woow_billing_credit_label">
+                                <WoowIcon name="'account_balance_wallet'" size="24"/>
+                                <span>Credit Balance</span>
+                            </div>
+                            <div class="o_woow_billing_credit_amount">
+                                <span class="o_woow_billing_balance" t-esc="formattedBalance"/>
+                                <span class="o_woow_billing_unit">Points</span>
+                            </div>
+                            <p class="o_woow_billing_rate">Conversion Rate: 1 Point = NT$ 1</p>
+                        </div>
+                        <div class="o_woow_billing_credit_action">
+                            <WoowButton variant="'primary'" size="'md'" onClick.bind="goToTopup">
+                                <WoowIcon name="'add'" size="18"/>
+                                Top-up
+                            </WoowButton>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Subscription &amp; Payment Card -->
+                <WoowCard shadow="true" class="'o_woow_billing_subscription_card'">
+                    <div class="o_woow_card_header">
+                        <WoowIcon name="'credit_card'" size="22"/>
+                        <h3>Subscription &amp; Payment</h3>
+                    </div>
+                    <div class="o_woow_billing_subscription_body">
+                        <p class="o_woow_billing_placeholder">Your subscriptions will appear here.</p>
+                        <p class="o_woow_billing_hint">
+                            To change your payment method or view invoices, visit the Billing pages.
+                        </p>
+                    </div>
+                </WoowCard>
+
+                <!-- Bottom 2-column Grid -->
+                <div class="o_woow_billing_summary_grid">
+                    <!-- About WoowTech Card -->
+                    <WoowCard shadow="true" class="'o_woow_billing_about_card'">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'groups'" size="22"/>
+                            <h3>About WoowTech</h3>
+                        </div>
+                        <p class="o_woow_billing_about_text">
+                            WoowTech provides cloud infrastructure and smart home integration
+                            solutions. We help businesses and individuals deploy, manage, and
+                            scale their digital services with ease.
+                        </p>
+                    </WoowCard>
+
+                    <!-- Stay Connected / Billing Support Card -->
+                    <WoowCard shadow="true" class="'o_woow_billing_support_card'">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'contact_support'" size="22"/>
+                            <h3>Billing Support</h3>
+                        </div>
+                        <div class="o_woow_billing_support_body">
+                            <div class="o_woow_billing_support_item">
+                                <WoowIcon name="'mail'" size="18"/>
+                                <a href="mailto:support@woowtech.io">support@woowtech.io</a>
+                            </div>
+                            <div class="o_woow_billing_support_item">
+                                <WoowIcon name="'phone'" size="18"/>
+                                <a href="tel:+886227001234">+886-2-2700-1234</a>
+                            </div>
+                        </div>
+                    </WoowCard>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

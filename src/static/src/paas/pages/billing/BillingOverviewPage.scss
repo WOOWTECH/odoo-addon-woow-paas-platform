@@ -1,0 +1,160 @@
+// =============================================================================
+// Billing Overview Page Styles
+// =============================================================================
+
+.o_woow_billing_overview {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+// Page Header
+.o_woow_billing_header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    margin: 0 0 0.25rem;
+  }
+
+  p {
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+    margin: 0;
+  }
+}
+
+// Credit Balance Card
+.o_woow_billing_credit_card {
+  padding: 1.5rem !important;
+}
+
+.o_woow_billing_credit_content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1.5rem;
+
+  @media (max-width: 640px) {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.o_woow_billing_credit_info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.o_woow_billing_credit_label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.o_woow_billing_credit_amount {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.o_woow_billing_balance {
+  font-size: 2.25rem;
+  font-weight: 700;
+  color: $woow-text-primary;
+  line-height: 1;
+}
+
+.o_woow_billing_unit {
+  font-size: 1rem;
+  color: $woow-text-secondary;
+  font-weight: 500;
+}
+
+.o_woow_billing_rate {
+  font-size: 0.8rem;
+  color: $woow-text-secondary;
+  margin: 0;
+}
+
+.o_woow_billing_credit_action {
+  flex-shrink: 0;
+}
+
+// Subscription & Payment Card
+.o_woow_billing_subscription_card {
+  padding: 1.5rem !important;
+}
+
+.o_woow_billing_subscription_body {
+  padding-left: 0.25rem;
+}
+
+.o_woow_billing_placeholder {
+  color: $woow-text-primary;
+  font-size: 0.875rem;
+  margin: 0 0 0.5rem;
+}
+
+.o_woow_billing_hint {
+  color: $woow-text-secondary;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+// Bottom 2-column grid
+.o_woow_billing_summary_grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.o_woow_billing_about_card,
+.o_woow_billing_support_card {
+  padding: 1.5rem !important;
+}
+
+.o_woow_billing_about_text {
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+// Support links
+.o_woow_billing_support_body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.o_woow_billing_support_item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: $woow-text-secondary;
+
+  a {
+    color: $woow-primary;
+    text-decoration: none;
+    font-size: 0.875rem;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}

@@ -17,6 +17,7 @@ import { TaskDetailPage } from "./pages/task-detail/TaskDetailPage";
 import { AiChatPage } from "./pages/ai-chat/AiChatPage";
 import { ProjectKanbanPage } from "./pages/project-kanban/ProjectKanbanPage";
 import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
+import { BillingOverviewPage } from "./pages/billing/BillingOverviewPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -37,6 +38,7 @@ export class Root extends Component {
         AiChatPage,
         ProjectKanbanPage,
         SmartHomeDetailPage,
+        BillingOverviewPage,
         EmptyState,
     };
     static props = {};
