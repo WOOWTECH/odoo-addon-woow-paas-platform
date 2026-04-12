@@ -1,5 +1,7 @@
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
+
+from dateutil.relativedelta import relativedelta
 
 from odoo import api, fields, models
 from odoo.exceptions import UserError
@@ -99,10 +101,38 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             'sh_source': 'manual',
         }
         subscription = Subscription.sudo().create(sub_vals)
-        # Trigger onchanges to populate dates, prices, trial settings
+
+        # Trigger onchanges to populate recurrence, prices, and dates.
+        # Order matters: plan → product → trial dates → end date.
         subscription._onchange_sh_subscription_plan_id()
+        subscription._onchange_sh_product_id()
         subscription._onchange_sh_trial_subcription_start_date()
         subscription._onchange_sh_trial_subcription_end_date()
+
+        # sh_subscription deduplicates trials per partner+plan+product:
+        # if the same user already has a subscription with the same plan,
+        # onchanges disable trial and set start_date=today (immediate billing).
+        # PaaS treats each service independently — force trial from plan.
+        if plan.sh_trial and not subscription.sh_trial:
+            subscription.sh_trial = True
+            subscription.sh_trial_duration = plan.sh_trial_duration
+            subscription.sh_trial_unit = plan.sh_trial_unit
+            trial_delta = {
+                'day': relativedelta(days=plan.sh_trial_duration),
+                'week': relativedelta(weeks=plan.sh_trial_duration),
+                'month': relativedelta(months=plan.sh_trial_duration),
+                'year': relativedelta(years=plan.sh_trial_duration),
+            }.get(plan.sh_trial_unit, relativedelta())
+            trial_end = date.today() + trial_delta - relativedelta(days=1)
+            subscription.sh_trial_end_date = trial_end
+            subscription.sh_start_date = trial_end + relativedelta(days=1)
+            subscription.sh_date_of_next_payment = subscription.sh_start_date
+            _logger.info(
+                "Forced trial for subscription %s: %s days, billing starts %s",
+                subscription.name, plan.sh_trial_duration,
+                subscription.sh_start_date,
+            )
+
         # Confirm → in_progress (starts trial if configured)
         subscription.sh_subscription_confirm()
 
