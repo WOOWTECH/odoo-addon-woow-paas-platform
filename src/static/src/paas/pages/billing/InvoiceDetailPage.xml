@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.InvoiceDetailPage">
+        <div class="o_woow_invoice_detail">
+            <!-- Breadcrumb -->
+            <div class="o_woow_invoice_breadcrumb">
+                <a href="#/dashboard" class="o_woow_breadcrumb_link">Home</a>
+                <WoowIcon name="'chevron_right'" size="16"/>
+                <a href="#/billing" class="o_woow_breadcrumb_link">Billing</a>
+                <WoowIcon name="'chevron_right'" size="16"/>
+                <a href="#/billing/invoices" class="o_woow_breadcrumb_link">Invoices</a>
+                <WoowIcon name="'chevron_right'" size="16"/>
+                <span class="o_woow_breadcrumb_current" t-esc="invoice ? (invoice.name || invoice.number || 'Detail') : 'Detail'"/>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading invoice...</p>
+                </div>
+            </t>
+
+            <t t-elif="!invoice">
+                <div class="o_woow_invoice_empty">
+                    <WoowIcon name="'error_outline'" size="48"/>
+                    <p>Invoice not found.</p>
+                    <WoowButton variant="'secondary'" size="'sm'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Invoices
+                    </WoowButton>
+                </div>
+            </t>
+
+            <t t-else="">
+                <div class="o_woow_invoice_detail_layout">
+                    <!-- Left Sidebar -->
+                    <div class="o_woow_invoice_sidebar">
+                        <WoowCard shadow="true" class="'o_woow_invoice_sidebar_card'">
+                            <div class="o_woow_invoice_sidebar_amount">
+                                <span class="o_woow_invoice_sidebar_label">Total Amount</span>
+                                <span class="o_woow_invoice_sidebar_value">
+                                    <t t-esc="formatAmount(invoice.amount_total)"/>
+                                </span>
+                                <span class="o_woow_invoice_sidebar_unit">Points</span>
+                            </div>
+
+                            <span t-attf-class="o_woow_invoice_due_badge {{ dueLabelClass }}">
+                                <t t-esc="dueLabel"/>
+                            </span>
+
+                            <div class="o_woow_invoice_sidebar_actions">
+                                <t t-if="canPay">
+                                    <WoowButton variant="'primary'" size="'md'" onClick.bind="showPayDialog" class="'o_woow_full_width'">
+                                        <WoowIcon name="'payment'" size="18"/>
+                                        Pay Now
+                                    </WoowButton>
+                                </t>
+                                <a t-att-href="downloadUrl" target="_blank" class="o_woow_invoice_download_btn">
+                                    <WoowIcon name="'download'" size="18"/>
+                                    Download PDF
+                                </a>
+                            </div>
+                        </WoowCard>
+                    </div>
+
+                    <!-- Main Content -->
+                    <div class="o_woow_invoice_main">
+                        <WoowCard shadow="true" class="'o_woow_invoice_content_card'">
+                            <!-- Company / Customer Header -->
+                            <div class="o_woow_invoice_parties">
+                                <div class="o_woow_invoice_party">
+                                    <h4>From</h4>
+                                    <p class="o_woow_invoice_company_name">
+                                        <t t-esc="invoice.company and invoice.company.name or 'WoowTech'"/>
+                                    </p>
+                                </div>
+                                <div class="o_woow_invoice_party o_woow_invoice_party_right">
+                                    <h4>Invoice To</h4>
+                                    <p class="o_woow_invoice_customer_name">
+                                        <t t-esc="invoice.partner and invoice.partner.name or '-'"/>
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Invoice Meta -->
+                            <div class="o_woow_invoice_meta">
+                                <div class="o_woow_invoice_meta_row">
+                                    <span class="o_woow_invoice_meta_label">Invoice #</span>
+                                    <span class="o_woow_invoice_meta_value">
+                                        <t t-esc="invoice.name || invoice.number || '-'"/>
+                                    </span>
+                                </div>
+                                <div class="o_woow_invoice_meta_row">
+                                    <span class="o_woow_invoice_meta_label">Status</span>
+                                    <span t-attf-class="o_woow_invoice_badge {{ statusClass }}">
+                                        <span class="o_woow_invoice_badge_dot"/>
+                                        <t t-esc="statusInfo.label"/>
+                                    </span>
+                                </div>
+                                <div class="o_woow_invoice_meta_row">
+                                    <span class="o_woow_invoice_meta_label">Invoice Date</span>
+                                    <span class="o_woow_invoice_meta_value" t-esc="formatDate(invoice.invoice_date)"/>
+                                </div>
+                                <div class="o_woow_invoice_meta_row">
+                                    <span class="o_woow_invoice_meta_label">Due Date</span>
+                                    <span class="o_woow_invoice_meta_value" t-esc="formatDate(invoice.invoice_date_due)"/>
+                                </div>
+                            </div>
+
+                            <!-- Line Items Table -->
+                            <div class="o_woow_invoice_lines_section">
+                                <h3>Line Items</h3>
+                                <div class="o_woow_invoice_lines_table">
+                                    <div class="o_woow_invoice_lines_header">
+                                        <div class="o_woow_line_col o_woow_line_desc">Description</div>
+                                        <div class="o_woow_line_col o_woow_line_qty">Qty</div>
+                                        <div class="o_woow_line_col o_woow_line_price">Unit Price</div>
+                                        <div class="o_woow_line_col o_woow_line_tax">Taxes</div>
+                                        <div class="o_woow_line_col o_woow_line_amount">Amount</div>
+                                    </div>
+                                    <t t-foreach="lines" t-as="line" t-key="line_index">
+                                        <div class="o_woow_invoice_lines_row">
+                                            <div class="o_woow_line_col o_woow_line_desc" t-esc="line.product_name || '-'"/>
+                                            <div class="o_woow_line_col o_woow_line_qty">
+                                                <span class="o_woow_line_mobile_label">Qty: </span>
+                                                <t t-esc="line.quantity ?? 1"/>
+                                            </div>
+                                            <div class="o_woow_line_col o_woow_line_price">
+                                                <span class="o_woow_line_mobile_label">Price: </span>
+                                                <t t-esc="formatAmountDecimal(line.price_unit)"/>
+                                            </div>
+                                            <div class="o_woow_line_col o_woow_line_tax">
+                                                <span class="o_woow_line_mobile_label">Tax: </span>
+                                                <t t-esc="line.tax_names || '-'"/>
+                                            </div>
+                                            <div class="o_woow_line_col o_woow_line_amount">
+                                                <span class="o_woow_line_mobile_label">Amount: </span>
+                                                <strong t-esc="formatAmountDecimal(line.price_subtotal)"/>
+                                            </div>
+                                        </div>
+                                    </t>
+                                </div>
+                            </div>
+
+                            <!-- Summary -->
+                            <div class="o_woow_invoice_summary">
+                                <div class="o_woow_invoice_summary_row">
+                                    <span>Untaxed Amount</span>
+                                    <span t-esc="formatAmountDecimal(invoice.amount_untaxed)"/>
+                                </div>
+                                <div class="o_woow_invoice_summary_row">
+                                    <span>Taxes</span>
+                                    <span t-esc="formatAmountDecimal(invoice.amount_tax)"/>
+                                </div>
+                                <div class="o_woow_invoice_summary_row o_woow_invoice_summary_total">
+                                    <span>Total</span>
+                                    <span t-esc="formatAmountDecimal(invoice.amount_total)"/> pts
+                                </div>
+                            </div>
+                        </WoowCard>
+                    </div>
+                </div>
+            </t>
+
+            <!-- Pay Invoice Modal -->
+            <t t-if="state.showPayModal and invoice">
+                <PayInvoiceModal
+                    invoice="invoice"
+                    onClose.bind="hidePayDialog"
+                    onPaid.bind="onPayComplete"/>
+            </t>
+        </div>
+    </t>
+</templates>

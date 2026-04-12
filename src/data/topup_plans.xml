@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <record id="topup_plan_50" model="woow_paas_platform.topup_plan">
+            <field name="name">NT$ 50 Credits</field>
+            <field name="amount">50</field>
+            <field name="credits">50</field>
+            <field name="bonus">0</field>
+            <field name="icon">toll</field>
+            <field name="category">all</field>
+            <field name="sequence">10</field>
+        </record>
+        <record id="topup_plan_100" model="woow_paas_platform.topup_plan">
+            <field name="name">NT$ 100 Credits</field>
+            <field name="amount">100</field>
+            <field name="credits">100</field>
+            <field name="bonus">5</field>
+            <field name="label">BEST VALUE</field>
+            <field name="icon">monetization_on</field>
+            <field name="category">recommended</field>
+            <field name="sequence">20</field>
+        </record>
+        <record id="topup_plan_500" model="woow_paas_platform.topup_plan">
+            <field name="name">NT$ 500 Credits</field>
+            <field name="amount">500</field>
+            <field name="credits">500</field>
+            <field name="bonus">30</field>
+            <field name="icon">account_balance_wallet</field>
+            <field name="category">large_volume</field>
+            <field name="sequence">30</field>
+        </record>
+        <record id="topup_plan_1000" model="woow_paas_platform.topup_plan">
+            <field name="name">NT$ 1000 Credits</field>
+            <field name="amount">1000</field>
+            <field name="credits">1000</field>
+            <field name="bonus">100</field>
+            <field name="icon">diamond</field>
+            <field name="category">large_volume</field>
+            <field name="sequence">40</field>
+        </record>
+    </data>
+</odoo>

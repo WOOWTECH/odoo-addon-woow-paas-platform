@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.SubscriptionListPage">
+        <div class="o_woow_subscription_list">
+            <!-- Page Header -->
+            <div class="o_woow_sub_header">
+                <div class="o_woow_sub_title_area">
+                    <div class="o_woow_sub_breadcrumb">
+                        <a href="#/dashboard" class="o_woow_breadcrumb_link">Home</a>
+                        <WoowIcon name="'chevron_right'" size="16"/>
+                        <a href="#/billing" class="o_woow_breadcrumb_link">Billing</a>
+                        <WoowIcon name="'chevron_right'" size="16"/>
+                        <span class="o_woow_breadcrumb_current">Subscriptions</span>
+                    </div>
+                    <h1>Subscription Management</h1>
+                    <p class="o_woow_sub_subtitle">Manage your active subscriptions and view past plans.</p>
+                </div>
+                <div class="o_woow_sub_header_action">
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goToMarketplace">
+                        <WoowIcon name="'add'" size="18"/>
+                        New Subscription
+                    </WoowButton>
+                </div>
+            </div>
+
+            <!-- Filter Tabs -->
+            <div class="o_woow_sub_filter_tabs">
+                <t t-foreach="filterTabs" t-as="tab" t-key="tab.key">
+                    <button
+                        t-attf-class="o_woow_sub_tab {{ state.filter === tab.key ? 'o_woow_sub_tab_active' : '' }}"
+                        t-on-click="() => this.onFilterChange(tab.key)">
+                        <t t-esc="tab.label"/>
+                    </button>
+                </t>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading subscriptions...</p>
+                </div>
+            </t>
+
+            <t t-else="">
+                <!-- Empty State -->
+                <t t-if="subscriptions.length === 0">
+                    <div class="o_woow_sub_empty">
+                        <WoowIcon name="'loyalty'" size="48"/>
+                        <p>No subscriptions found.</p>
+                    </div>
+                </t>
+
+                <t t-else="">
+                    <!-- Subscription Cards -->
+                    <div class="o_woow_sub_cards">
+                        <t t-foreach="subscriptions" t-as="sub" t-key="sub.id">
+                            <div class="o_woow_sub_card">
+                                <div class="o_woow_sub_card_left">
+                                    <div class="o_woow_sub_card_icon">
+                                        <WoowIcon name="getSubIcon(sub)" size="22"/>
+                                    </div>
+                                    <div class="o_woow_sub_card_info">
+                                        <span class="o_woow_sub_card_id" t-esc="sub.name"/>
+                                        <span class="o_woow_sub_card_plan" t-esc="sub.plan_name"/>
+                                        <t t-if="sub.service_name">
+                                            <span class="o_woow_sub_card_service">
+                                                <WoowIcon name="'cloud'" size="14"/>
+                                                <t t-esc="sub.service_name"/>
+                                            </span>
+                                        </t>
+                                    </div>
+                                </div>
+                                <div class="o_woow_sub_card_middle">
+                                    <t t-if="isActive(sub)">
+                                        <span class="o_woow_sub_card_date_label">Start Date</span>
+                                        <span class="o_woow_sub_card_date" t-esc="formatDate(sub.start_date)"/>
+                                    </t>
+                                    <t t-else="">
+                                        <span class="o_woow_sub_card_date_label">End Date</span>
+                                        <span class="o_woow_sub_card_date" t-esc="formatDate(sub.end_date)"/>
+                                    </t>
+                                </div>
+                                <div class="o_woow_sub_card_right">
+                                    <span t-attf-class="o_woow_sub_badge {{ getStateClass(sub) }}">
+                                        <span class="o_woow_sub_badge_dot"/>
+                                        <t t-esc="getStateLabel(sub)"/>
+                                    </span>
+                                    <div class="o_woow_sub_card_actions">
+                                        <WoowButton
+                                            variant="'secondary'"
+                                            size="'sm'"
+                                            onClick="(ev) => this.showManage(ev, sub)">
+                                            Manage
+                                        </WoowButton>
+                                        <t t-if="isActive(sub)">
+                                            <WoowButton
+                                                variant="'ghost'"
+                                                size="'sm'"
+                                                onClick="(ev) => this.showCancel(ev, sub)">
+                                                <span class="o_woow_sub_close_text">Close</span>
+                                            </WoowButton>
+                                        </t>
+                                    </div>
+                                </div>
+                            </div>
+                        </t>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="o_woow_sub_pagination">
+                        <span class="o_woow_sub_pagination_info">
+                            Showing <t t-esc="showingFrom"/>-<t t-esc="showingTo"/> of <t t-esc="totalSubscriptions"/> subscriptions
+                        </span>
+                        <div class="o_woow_sub_pagination_buttons">
+                            <button
+                                class="o_woow_page_btn"
+                                t-att-disabled="currentPage === 1"
+                                t-on-click="() => this.goToPage(currentPage - 1)">
+                                <WoowIcon name="'chevron_left'" size="18"/>
+                            </button>
+                            <t t-foreach="pageNumbers" t-as="p" t-key="p">
+                                <button
+                                    t-attf-class="o_woow_page_btn {{ p === currentPage ? 'o_woow_page_btn_active' : '' }}"
+                                    t-on-click="() => this.goToPage(p)">
+                                    <t t-esc="p"/>
+                                </button>
+                            </t>
+                            <button
+                                class="o_woow_page_btn"
+                                t-att-disabled="currentPage === totalPages"
+                                t-on-click="() => this.goToPage(currentPage + 1)">
+                                <WoowIcon name="'chevron_right'" size="18"/>
+                            </button>
+                        </div>
+                    </div>
+                </t>
+            </t>
+
+            <!-- Cancel Subscription Modal -->
+            <t t-if="state.showCancelModal and state.selectedSubscription">
+                <CancelSubscriptionModal
+                    subscription="state.selectedSubscription"
+                    onClose.bind="hideCancelModal"
+                    onCancelled.bind="onCancelled"/>
+            </t>
+
+            <!-- Subscribed Services Modal -->
+            <t t-if="state.showServicesModal and state.selectedSubscription">
+                <SubscribedServicesModal
+                    subscription="state.selectedSubscription"
+                    onClose.bind="hideServicesModal"/>
+            </t>
+        </div>
+    </t>
+</templates>

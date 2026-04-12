@@ -246,6 +246,17 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
 
         today = fields.Date.today()
 
+        # Check wallet balance before proceeding
+        partner = sub.sh_partner_id
+        plan_price = sub.sh_plan_price
+        if partner.wallet_balance < plan_price:
+            raise UserError(
+                "Insufficient wallet balance to skip trial. "
+                "Current balance: %.2f, required: %.2f. "
+                "Please top up your wallet first."
+                % (partner.wallet_balance, plan_price)
+            )
+
         # End trial and set billing to start today
         sub.write({
             'sh_trial': False,

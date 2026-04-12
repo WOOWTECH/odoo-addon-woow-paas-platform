@@ -1,0 +1,66 @@
+/** @odoo-module **/
+import { Component } from "@odoo/owl";
+import { WoowButton } from "../button/WoowButton";
+import { WoowIcon } from "../icon/WoowIcon";
+import { billingService } from "../../services/billing_service";
+
+/**
+ * TopupSuccessModal Component
+ *
+ * Displays a success confirmation after a wallet top-up.
+ *
+ * Props:
+ *   - data (Object): { credits_added, bonus, new_balance }
+ *   - onClose (Function): Called when Done is clicked
+ */
+export class TopupSuccessModal extends Component {
+  static template = "woow_paas_platform.TopupSuccessModal";
+  static components = { WoowButton, WoowIcon };
+  static props = {
+    data: { type: Object },
+    onClose: { type: Function },
+  };
+
+  get creditsAdded() {
+    return this.props.data.credits_added ?? 0;
+  }
+
+  get bonus() {
+    return this.props.data.bonus ?? 0;
+  }
+
+  get totalAdded() {
+    return this.creditsAdded + this.bonus;
+  }
+
+  get newBalance() {
+    return this.props.data.new_balance ?? 0;
+  }
+
+  get formattedCredits() {
+    return this.creditsAdded.toLocaleString();
+  }
+
+  get formattedTotal() {
+    return this.totalAdded.toLocaleString();
+  }
+
+  get formattedBalance() {
+    return this.newBalance.toLocaleString();
+  }
+
+  get hasBonus() {
+    return this.bonus > 0;
+  }
+
+  onBackdropClick(ev) {
+    if (ev.target === ev.currentTarget) {
+      this.onDone();
+    }
+  }
+
+  async onDone() {
+    await billingService.fetchWallet();
+    this.props.onClose();
+  }
+}

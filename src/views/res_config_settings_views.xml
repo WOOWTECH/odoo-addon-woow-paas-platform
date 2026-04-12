@@ -77,6 +77,20 @@
                             </div>
                         </setting>
                     </block>
+                    <block title="Credit Top-up Plans" name="topup_plans">
+                        <setting string="Top-up Plans"
+                                 help="Configure credit top-up packages available in the store.">
+                            <div class="content-group">
+                                <div class="mt8">
+                                    <button name="%(action_topup_plan)d"
+                                            type="action"
+                                            string="Manage Top-up Plans"
+                                            class="btn-link"
+                                            icon="fa-arrow-right"/>
+                                </div>
+                            </div>
+                        </setting>
+                    </block>
                     <block title="AI Assistant Configuration" name="ai_assistant">
                         <setting string="AI Configuration"
                                  help="Select the AI configuration and assistant for AI features.">

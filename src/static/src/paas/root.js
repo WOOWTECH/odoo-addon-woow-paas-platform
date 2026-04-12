@@ -17,6 +17,12 @@ import { TaskDetailPage } from "./pages/task-detail/TaskDetailPage";
 import { AiChatPage } from "./pages/ai-chat/AiChatPage";
 import { ProjectKanbanPage } from "./pages/project-kanban/ProjectKanbanPage";
 import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
+import { BillingOverviewPage } from "./pages/billing/BillingOverviewPage";
+import { InvoiceListPage } from "./pages/billing/InvoiceListPage";
+import { InvoiceDetailPage } from "./pages/billing/InvoiceDetailPage";
+import { TopupStorePage } from "./pages/billing/TopupStorePage";
+import { SubscriptionListPage } from "./pages/billing/SubscriptionListPage";
+import { TransactionListPage } from "./pages/billing/TransactionListPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -37,6 +43,12 @@ export class Root extends Component {
         AiChatPage,
         ProjectKanbanPage,
         SmartHomeDetailPage,
+        BillingOverviewPage,
+        InvoiceListPage,
+        InvoiceDetailPage,
+        TopupStorePage,
+        SubscriptionListPage,
+        TransactionListPage,
         EmptyState,
     };
     static props = {};
@@ -80,5 +92,9 @@ export class Root extends Component {
 
     get homeId() {
         return this.router.params.homeId ? parseInt(this.router.params.homeId, 10) : null;
+    }
+
+    get invoiceId() {
+        return parseInt(this.router.params?.id) || 0;
     }
 }

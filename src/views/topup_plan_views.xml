@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Top-up Plan Form View -->
+    <record id="view_topup_plan_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.topup_plan.form</field>
+        <field name="model">woow_paas_platform.topup_plan</field>
+        <field name="arch" type="xml">
+            <form string="Top-up Plan">
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <field name="active" widget="boolean_button"
+                               options='{"terminology": "archive"}'/>
+                    </div>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="Plan Name"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Pricing">
+                            <field name="amount"/>
+                            <field name="credits"/>
+                            <field name="bonus"/>
+                        </group>
+                        <group string="Display">
+                            <field name="label" placeholder="e.g. BEST VALUE"/>
+                            <field name="icon" placeholder="Material icon name"/>
+                            <field name="category"/>
+                            <field name="sequence"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Top-up Plan List View -->
+    <record id="view_topup_plan_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.topup_plan.list</field>
+        <field name="model">woow_paas_platform.topup_plan</field>
+        <field name="arch" type="xml">
+            <list string="Top-up Plans">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="amount"/>
+                <field name="credits"/>
+                <field name="bonus"/>
+                <field name="label"/>
+                <field name="category"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Top-up Plan Action -->
+    <record id="action_topup_plan" model="ir.actions.act_window">
+        <field name="name">Top-up Plans</field>
+        <field name="res_model">woow_paas_platform.topup_plan</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first Top-up Plan
+            </p>
+            <p>
+                Top-up Plans define credit packages available for purchase in the store.
+            </p>
+        </field>
+    </record>
+</odoo>

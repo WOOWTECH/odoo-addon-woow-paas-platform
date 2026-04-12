@@ -20,6 +20,12 @@ const routes = [
     { path: "ai-assistant/chat/:conversationId", name: "AI Chat", routeName: "ai-chat", pattern: /^ai-assistant\/chat\/(\d+)$/ },
     { path: "deployments", name: "Deployments", routeName: "deployments" },
     { path: "billing", name: "Billing", routeName: "billing" },
+    { path: "billing/topup", name: "Top-up Store", routeName: "billing-topup" },
+    { path: "billing/invoices", name: "Invoices", routeName: "billing-invoices" },
+    { path: "billing/invoices/:id", name: "Invoice Detail", routeName: "billing-invoice-detail", pattern: /^billing\/invoices\/(\d+)$/ },
+    { path: "billing/subscriptions", name: "Subscriptions", routeName: "billing-subscriptions" },
+    { path: "billing/payment-methods", name: "Payment Methods", routeName: "billing-payment-methods" },
+    { path: "billing/transactions", name: "Transactions", routeName: "billing-transactions" },
     { path: "settings", name: "Settings", routeName: "settings" },
 ];
 
