@@ -40,6 +40,114 @@ class BillingController(Controller):
             },
         }
 
+    # ==================== Payment Method API ====================
+
+    @route("/api/billing/payment-methods", auth="user", methods=["POST"], type="json")
+    def api_payment_methods(self, **kw) -> dict[str, Any]:
+        """
+        List current user's bound payment methods.
+
+        Currently supports a single ECPay card binding per partner.
+        Returns the bound card as a one-item list, or an empty list.
+
+        Returns:
+            dict: { success, data: [{ id, type, last4, expiry, is_default, bound_date }] }
+        """
+        partner = request.env.user.partner_id.sudo()
+
+        methods = []
+        if partner.has_bound_credit_card():
+            methods.append({
+                'id': 'ecpay_default',
+                'type': 'visa',
+                'last4': partner.ecpay_card_last4 or '',
+                'expiry': partner.ecpay_card_expiry or '',
+                'is_default': True,
+                'bound_date': partner.ecpay_card_bound_date.isoformat() if partner.ecpay_card_bound_date else None,
+            })
+
+        return {
+            'success': True,
+            'data': methods,
+        }
+
+    @route("/api/billing/payment-methods/add", auth="user", methods=["POST"], type="json")
+    def api_payment_method_add(
+        self,
+        card_number: str | None = None,
+        expiry: str | None = None,
+        cvc: str | None = None,
+        cardholder_name: str | None = None,
+        **kw,
+    ) -> dict[str, Any]:
+        """
+        Add/bind a credit card (placeholder).
+
+        Actual ECPay tokenization API integration will be implemented separately.
+        For now, returns an error indicating ECPay portal is required.
+
+        Args:
+            card_number: Card number.
+            expiry: Expiry date (MM/YY).
+            cvc: CVC code.
+            cardholder_name: Name on card.
+
+        Returns:
+            dict with success=False and instruction to use ECPay portal.
+        """
+        return {
+            'success': False,
+            'error': 'Card binding requires ECPay integration. Please contact support.',
+            'code': 'ecpay_required',
+        }
+
+    @route("/api/billing/payment-methods/<string:method_id>/delete", auth="user", methods=["POST"], type="json")
+    def api_payment_method_delete(self, method_id: str, **kw) -> dict[str, Any]:
+        """
+        Unbind a payment method (credit card).
+
+        Clears the partner's ECPay card fields.
+
+        Args:
+            method_id: Payment method identifier (e.g. 'ecpay_default').
+
+        Returns:
+            dict: { success: true }
+        """
+        partner = request.env.user.partner_id.sudo()
+
+        if method_id != 'ecpay_default':
+            return {'success': False, 'error': 'Payment method not found'}
+
+        if not partner.has_bound_credit_card():
+            return {'success': False, 'error': 'No card is currently bound'}
+
+        partner.write({
+            'ecpay_card_token': False,
+            'ecpay_card_last4': False,
+            'ecpay_card_expiry': False,
+            'ecpay_card_bound_date': False,
+        })
+
+        _logger.info("Payment method unbound: partner=%s", partner.id)
+
+        return {'success': True}
+
+    @route("/api/billing/payment-methods/<string:method_id>/set-default", auth="user", methods=["POST"], type="json")
+    def api_payment_method_set_default(self, method_id: str, **kw) -> dict[str, Any]:
+        """
+        Set a payment method as default.
+
+        Since only one card is supported, this is a no-op.
+
+        Args:
+            method_id: Payment method identifier.
+
+        Returns:
+            dict: { success: true }
+        """
+        return {'success': True}
+
     # ==================== Top-up API ====================
 
     @route("/api/billing/wallet/topup-plans", auth="user", methods=["POST"], type="json")

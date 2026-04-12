@@ -88,6 +88,11 @@ export const billingService = reactive({
     /** @type {boolean} */
     walletLoading: false,
 
+    /** @type {Array<Object>} Payment methods list */
+    paymentMethods: [],
+    /** @type {boolean} */
+    paymentMethodsLoading: false,
+
     /** @type {Array<Object>} */
     invoices: [],
     /** @type {Object|null} */
@@ -105,6 +110,79 @@ export const billingService = reactive({
     topupPlans: [],
     /** @type {boolean} */
     topupPlansLoading: false,
+
+    /**
+     * Fetch bound payment methods
+     * @returns {Promise<void>}
+     */
+    async fetchPaymentMethods() {
+        this.paymentMethodsLoading = true;
+        try {
+            const result = await jsonRpc("/api/billing/payment-methods", {});
+            if (result.success) {
+                this.paymentMethods = result.data ?? [];
+            } else {
+                console.error("Failed to fetch payment methods:", result.error);
+            }
+        } catch (err) {
+            console.error("Failed to fetch payment methods:", err);
+        } finally {
+            this.paymentMethodsLoading = false;
+        }
+    },
+
+    /**
+     * Add/bind a new payment method (credit card)
+     * @param {Object} cardData - { card_number, expiry, cvc, cardholder_name }
+     * @returns {Promise<{success: boolean, error?: string, code?: string}>}
+     */
+    async addPaymentMethod(cardData) {
+        try {
+            const result = await jsonRpc("/api/billing/payment-methods/add", cardData);
+            if (result.success) {
+                await this.fetchPaymentMethods();
+                return { success: true };
+            }
+            return { success: false, error: result.error || "Failed to add card", code: result.code };
+        } catch (err) {
+            return { success: false, error: err.message || "Failed to add card" };
+        }
+    },
+
+    /**
+     * Delete/unbind a payment method
+     * @param {string} id - Payment method ID
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async deletePaymentMethod(id) {
+        try {
+            const result = await jsonRpc(`/api/billing/payment-methods/${id}/delete`, {});
+            if (result.success) {
+                await this.fetchPaymentMethods();
+                return { success: true };
+            }
+            return { success: false, error: result.error || "Failed to delete card" };
+        } catch (err) {
+            return { success: false, error: err.message || "Failed to delete card" };
+        }
+    },
+
+    /**
+     * Set a payment method as default
+     * @param {string} id - Payment method ID
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async setDefaultPaymentMethod(id) {
+        try {
+            const result = await jsonRpc(`/api/billing/payment-methods/${id}/set-default`, {});
+            if (result.success) {
+                return { success: true };
+            }
+            return { success: false, error: result.error || "Failed to set default" };
+        } catch (err) {
+            return { success: false, error: err.message || "Failed to set default" };
+        }
+    },
 
     /**
      * Fetch wallet information
