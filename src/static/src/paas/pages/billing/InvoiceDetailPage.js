@@ -6,13 +6,12 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { PayInvoiceModal } from "../../components/modal/PayInvoiceModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
-
-const STATUS_MAP = {
-  draft: { label: "Draft", color: "gray" },
-  waiting: { label: "Waiting for Payment", color: "blue" },
-  paid: { label: "Paid", color: "green" },
-  overdue: { label: "Overdue", color: "red" },
-};
+import {
+  formatDate,
+  formatAmount,
+  formatAmountDecimal,
+  INVOICE_STATUS_MAP,
+} from "../../utils/billing_helpers";
 
 export class InvoiceDetailPage extends Component {
   static template = "woow_paas_platform.InvoiceDetailPage";
@@ -43,9 +42,9 @@ export class InvoiceDetailPage extends Component {
   }
 
   get statusInfo() {
-    if (!this.invoice) return STATUS_MAP.draft;
+    if (!this.invoice) return INVOICE_STATUS_MAP.draft;
     const status = this.invoice.status_label || "draft";
-    return STATUS_MAP[status] || STATUS_MAP.draft;
+    return INVOICE_STATUS_MAP[status] || INVOICE_STATUS_MAP.draft;
   }
 
   get statusClass() {
@@ -94,31 +93,15 @@ export class InvoiceDetailPage extends Component {
   }
 
   formatAmount(amount) {
-    return (amount ?? 0).toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
+    return formatAmount(amount);
   }
 
   formatAmountDecimal(amount) {
-    return (amount ?? 0).toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+    return formatAmountDecimal(amount);
   }
 
   formatDate(dateStr) {
-    if (!dateStr) return "-";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatDate(dateStr);
   }
 
   showPayDialog() {

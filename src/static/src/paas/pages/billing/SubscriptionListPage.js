@@ -7,6 +7,7 @@ import { CancelSubscriptionModal } from "../../components/modal/CancelSubscripti
 import { SubscribedServicesModal } from "../../components/modal/SubscribedServicesModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
+import { formatDate, formatAmount, computePageNumbers } from "../../utils/billing_helpers";
 
 const ITEMS_PER_PAGE = 10;
 
@@ -88,21 +89,7 @@ export class SubscriptionListPage extends Component {
   }
 
   get pageNumbers() {
-    const pages = [];
-    const total = this.totalPages;
-    const current = this.currentPage;
-    const maxVisible = 5;
-
-    let start = Math.max(1, current - Math.floor(maxVisible / 2));
-    let end = Math.min(total, start + maxVisible - 1);
-    if (end - start + 1 < maxVisible) {
-      start = Math.max(1, end - maxVisible + 1);
-    }
-
-    for (let i = start; i <= end; i++) {
-      pages.push(i);
-    }
-    return pages;
+    return computePageNumbers(this.currentPage, this.totalPages);
   }
 
   get filterTabs() {
@@ -133,24 +120,11 @@ export class SubscriptionListPage extends Component {
   }
 
   formatDate(dateStr) {
-    if (!dateStr) return "-";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatDate(dateStr);
   }
 
   formatPrice(price) {
-    return (price ?? 0).toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
+    return formatAmount(price);
   }
 
   onFilterChange(filterKey) {

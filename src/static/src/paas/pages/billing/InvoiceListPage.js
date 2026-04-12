@@ -6,15 +6,14 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { PayInvoiceModal } from "../../components/modal/PayInvoiceModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
+import {
+  formatDate,
+  formatAmount,
+  getInvoiceStatusInfo,
+  computePageNumbers,
+} from "../../utils/billing_helpers";
 
 const ITEMS_PER_PAGE = 10;
-
-const STATUS_MAP = {
-  draft: { label: "Draft", color: "gray" },
-  waiting: { label: "Waiting for Payment", color: "blue" },
-  paid: { label: "Paid", color: "green" },
-  overdue: { label: "Overdue", color: "red" },
-};
 
 export class InvoiceListPage extends Component {
   static template = "woow_paas_platform.InvoiceListPage";
@@ -76,26 +75,11 @@ export class InvoiceListPage extends Component {
   }
 
   get pageNumbers() {
-    const pages = [];
-    const total = this.totalPages;
-    const current = this.currentPage;
-    const maxVisible = 5;
-
-    let start = Math.max(1, current - Math.floor(maxVisible / 2));
-    let end = Math.min(total, start + maxVisible - 1);
-    if (end - start + 1 < maxVisible) {
-      start = Math.max(1, end - maxVisible + 1);
-    }
-
-    for (let i = start; i <= end; i++) {
-      pages.push(i);
-    }
-    return pages;
+    return computePageNumbers(this.currentPage, this.totalPages);
   }
 
   getStatusInfo(invoice) {
-    const status = invoice.status_label || "draft";
-    return STATUS_MAP[status] || STATUS_MAP.draft;
+    return getInvoiceStatusInfo(invoice);
   }
 
   getStatusLabel(invoice) {
@@ -112,24 +96,11 @@ export class InvoiceListPage extends Component {
   }
 
   formatAmount(amount) {
-    return (amount ?? 0).toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
+    return formatAmount(amount);
   }
 
   formatDate(dateStr) {
-    if (!dateStr) return "-";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatDate(dateStr);
   }
 
   onSortChange(ev) {

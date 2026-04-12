@@ -4,22 +4,11 @@ import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
-
-/**
- * Determine transaction display properties.
- */
-function getTxnDisplay(txn) {
-  const desc = (txn.description || "").toLowerCase();
-  const isPromotion = desc.includes("promotion") || desc.includes("bonus");
-
-  if (txn.amount >= 0) {
-    if (isPromotion) {
-      return { icon: "redeem", colorClass: "o_woow_txn_purple", sign: "+" };
-    }
-    return { icon: "account_balance_wallet", colorClass: "o_woow_txn_blue", sign: "+" };
-  }
-  return { icon: "arrow_outward", colorClass: "o_woow_txn_gray", sign: "" };
-}
+import {
+  formatDateTimeShort,
+  formatAmountDecimal,
+  getTxnDisplay,
+} from "../../utils/billing_helpers";
 
 /**
  * CreditHistoryModal Component
@@ -69,10 +58,7 @@ export class CreditHistoryModal extends Component {
   formatAmount(txn) {
     const display = getTxnDisplay(txn);
     const abs = Math.abs(txn.amount ?? 0);
-    const formatted = abs.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+    const formatted = formatAmountDecimal(abs);
     return `${display.sign}$${formatted}`;
   }
 
@@ -82,25 +68,11 @@ export class CreditHistoryModal extends Component {
 
   formatBalance(txn) {
     if (txn.balance_after == null) return "";
-    return txn.balance_after.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+    return formatAmountDecimal(txn.balance_after);
   }
 
   formatDate(dateStr) {
-    if (!dateStr) return "-";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatDateTimeShort(dateStr);
   }
 
   onBackdropClick(ev) {

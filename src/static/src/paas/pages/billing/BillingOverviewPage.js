@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { CreditHistoryModal } from "../../components/modal/CreditHistoryModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
+import { formatDate, formatAmount } from "../../utils/billing_helpers";
 
 const STATUS_MAP = {
   draft: { label: "Draft", color: "gray" },
@@ -86,24 +87,11 @@ export class BillingOverviewPage extends Component {
   }
 
   formatDate(dateStr) {
-    if (!dateStr) return "-";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatDate(dateStr);
   }
 
   formatAmount(amount) {
-    return (amount ?? 0).toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
+    return formatAmount(amount);
   }
 
   get subscriptionsLoading() {

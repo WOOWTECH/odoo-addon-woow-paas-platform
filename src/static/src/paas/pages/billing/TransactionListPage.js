@@ -4,27 +4,14 @@ import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
+import {
+  formatDateTime,
+  formatAmountDecimal,
+  getTxnDisplay,
+  computePageNumbers,
+} from "../../utils/billing_helpers";
 
 const ITEMS_PER_PAGE = 20;
-
-/**
- * Determine transaction display properties based on amount and description.
- *
- * @param {Object} txn - Transaction object
- * @returns {{ icon: string, colorClass: string, sign: string }}
- */
-function getTxnDisplay(txn) {
-  const desc = (txn.description || "").toLowerCase();
-  const isPromotion = desc.includes("promotion") || desc.includes("bonus");
-
-  if (txn.amount >= 0) {
-    if (isPromotion) {
-      return { icon: "redeem", colorClass: "o_woow_txn_purple", sign: "+" };
-    }
-    return { icon: "account_balance_wallet", colorClass: "o_woow_txn_blue", sign: "+" };
-  }
-  return { icon: "arrow_outward", colorClass: "o_woow_txn_gray", sign: "" };
-}
 
 export class TransactionListPage extends Component {
   static template = "woow_paas_platform.TransactionListPage";
@@ -74,21 +61,7 @@ export class TransactionListPage extends Component {
   }
 
   get pageNumbers() {
-    const pages = [];
-    const total = this.totalPages;
-    const current = this.currentPage;
-    const maxVisible = 5;
-
-    let start = Math.max(1, current - Math.floor(maxVisible / 2));
-    let end = Math.min(total, start + maxVisible - 1);
-    if (end - start + 1 < maxVisible) {
-      start = Math.max(1, end - maxVisible + 1);
-    }
-
-    for (let i = start; i <= end; i++) {
-      pages.push(i);
-    }
-    return pages;
+    return computePageNumbers(this.currentPage, this.totalPages);
   }
 
   getTxnIcon(txn) {
@@ -102,10 +75,7 @@ export class TransactionListPage extends Component {
   formatAmount(txn) {
     const display = getTxnDisplay(txn);
     const abs = Math.abs(txn.amount ?? 0);
-    const formatted = abs.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+    const formatted = formatAmountDecimal(abs);
     return `${display.sign}$${formatted}`;
   }
 
@@ -115,26 +85,11 @@ export class TransactionListPage extends Component {
 
   formatBalance(txn) {
     if (txn.balance_after == null) return "";
-    return txn.balance_after.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+    return formatAmountDecimal(txn.balance_after);
   }
 
   formatDate(dateStr) {
-    if (!dateStr) return "-";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatDateTime(dateStr);
   }
 
   goToPage(page) {
