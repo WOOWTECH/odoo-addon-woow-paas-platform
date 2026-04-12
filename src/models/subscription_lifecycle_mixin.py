@@ -221,6 +221,70 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             )
 
     # ----------------------------------------------------------------
+    # Skip trial
+    # ----------------------------------------------------------------
+
+    def _skip_trial(self):
+        """Skip the trial period and start paid billing immediately.
+
+        Creates the first invoice and advances the next payment date
+        by one billing cycle.
+
+        Returns:
+            dict with invoice info
+        Raises:
+            UserError if not in trial
+        """
+        self.ensure_one()
+        sub = self.sudo().subscription_id
+        if not sub:
+            raise UserError("No subscription linked to this service.")
+        if sub.state != 'in_progress':
+            raise UserError("Subscription is not active.")
+        if not sub.sh_trial:
+            raise UserError("Subscription is not in trial period.")
+
+        today = fields.Date.today()
+
+        # End trial and set billing to start today
+        sub.write({
+            'sh_trial': False,
+            'sh_trial_end_date': today - relativedelta(days=1),
+            'sh_start_date': today,
+            'sh_date_of_next_payment': today,
+        })
+
+        # Generate and create invoice
+        invoice_vals = sub._generate_invoice_vals()
+        invoice = self.env['account.move'].sudo().create(invoice_vals)
+        sub.compute_view_invoice()
+
+        # Advance next payment by one billing cycle
+        unit_deltas = {
+            'day': relativedelta(days=sub.sh_recurrency),
+            'week': relativedelta(weeks=sub.sh_recurrency),
+            'month': relativedelta(months=sub.sh_recurrency),
+            'year': relativedelta(years=sub.sh_recurrency),
+        }
+        delta = unit_deltas.get(sub.sh_unit)
+        if delta:
+            sub.sh_date_of_next_payment = today + delta
+
+        # Post/pay invoice based on company settings
+        sub._handle_invoice_creation(invoice)
+
+        _logger.info(
+            "Trial skipped for %s (subscription %s): invoice %s amount=%s, next_payment=%s",
+            self.display_name, sub.name, invoice.name,
+            invoice.amount_total, sub.sh_date_of_next_payment,
+        )
+
+        return {
+            'invoice_id': invoice.id,
+            'amount': invoice.amount_total,
+        }
+
+    # ----------------------------------------------------------------
     # Suspend / Resume / Cleanup (abstract — implemented by subclass)
     # ----------------------------------------------------------------
 

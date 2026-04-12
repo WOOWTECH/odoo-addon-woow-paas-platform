@@ -910,6 +910,33 @@ class PaasController(Controller):
             },
         }
 
+    @route("/api/cloud-services/services/<int:service_id>/skip-trial", auth="user", methods=["POST"], type="json")
+    def api_service_skip_trial(self, service_id: int, **kw: Any) -> dict[str, Any]:
+        """Skip trial period and start paid billing immediately."""
+        CloudService = request.env['woow_paas_platform.cloud_service']
+        service = CloudService.browse(service_id)
+        if not service.exists():
+            return {'success': False, 'error': 'Service not found'}
+
+        workspace = service.workspace_id
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {'success': False, 'error': 'Admin access required'}
+
+        try:
+            invoice_info = service._skip_trial()
+        except Exception as e:
+            _logger.error("Error skipping trial for service %s: %s", service_id, e)
+            return {'success': False, 'error': str(e)}
+
+        return {
+            'success': True,
+            'data': {
+                'invoice': invoice_info,
+                'subscription': service._get_subscription_info(),
+            },
+        }
+
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
     def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
         """

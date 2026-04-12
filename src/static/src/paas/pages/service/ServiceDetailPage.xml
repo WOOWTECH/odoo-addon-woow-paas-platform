@@ -86,6 +86,15 @@
                             Open Web UI
                         </WoowButton>
                         <WoowButton
+                            t-if="service.subscription and service.subscription.is_trial"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showSkipTrial"
+                            disabled="!canPerformActions">
+                            <WoowIcon name="'skip_next'" size="18"/>
+                            Skip Trial
+                        </WoowButton>
+                        <WoowButton
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="showDomainModal"
@@ -181,6 +190,13 @@
                 service="serviceForModal"
                 onClose.bind="hideRollback"
                 onRollback.bind="onRollbackComplete"/>
+
+            <!-- Skip Trial Modal -->
+            <SkipTrialModal
+                t-if="state.showSkipTrialModal and serviceForModal"
+                service="serviceForModal"
+                onClose.bind="hideSkipTrial"
+                onSkipped.bind="onTrialSkipped"/>
 
             <!-- Edit Domain Modal -->
             <EditDomainModal

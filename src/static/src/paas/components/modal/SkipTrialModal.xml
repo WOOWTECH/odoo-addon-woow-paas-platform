@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.SkipTrialModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Skip Trial Period</h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.skipping">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <div class="o_woow_delete_warning">
+                        <WoowIcon name="'info'" size="48"/>
+                        <p>Skip the free trial for <strong t-esc="props.service.name"/>?</p>
+                        <p class="o_woow_delete_hint">
+                            Your trial ends on <strong t-esc="trialEndDate"/>.
+                            Skipping will:
+                        </p>
+                        <ul style="text-align: left; margin: 0 auto; display: inline-block;">
+                            <li>End your free trial immediately</li>
+                            <li>Generate your first invoice of <strong><t t-esc="planPrice"/> pts</strong></li>
+                            <li>Start regular monthly billing today</li>
+                        </ul>
+                    </div>
+
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.skipping">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton
+                        variant="'primary'"
+                        size="'md'"
+                        onClick.bind="onConfirm"
+                        disabled="state.skipping">
+                        <t t-if="state.skipping">
+                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            Processing...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'skip_next'" size="18"/>
+                            Skip Trial &amp; Start Billing
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

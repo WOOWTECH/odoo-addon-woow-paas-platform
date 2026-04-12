@@ -200,6 +200,26 @@ export const cloudService = reactive({
         }
     },
 
+    /**
+     * Skip trial period and start paid billing immediately.
+     * @param {number} serviceId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async skipTrial(serviceId) {
+        this.operationLoading.skipTrial = true;
+        try {
+            const result = await jsonRpc(`/api/cloud-services/services/${serviceId}/skip-trial`, {});
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.skipTrial = false;
+        }
+    },
+
     async fetchOdooAddons(templateId = null, category = null) {
         this.operationLoading.fetchOdooAddons = true;
         try {

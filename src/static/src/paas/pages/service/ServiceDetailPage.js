@@ -10,6 +10,7 @@ import { AddonsTab } from "./tabs/AddonsTab";
 import { McpServersTab } from "./tabs/McpServersTab";
 import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
+import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { cloudService } from "../../services/cloud_service";
@@ -44,6 +45,7 @@ export class ServiceDetailPage extends Component {
         McpServersTab,
         DeleteServiceModal,
         RollbackModal,
+        SkipTrialModal,
         EditDomainModal,
         CreateProjectModal,
     };
@@ -61,6 +63,7 @@ export class ServiceDetailPage extends Component {
             currentTab: this.props.initialTab || "overview",
             showDeleteModal: false,
             showRollbackModal: false,
+            showSkipTrialModal: false,
             showDomainModal: false,
             showCreateProjectModal: false,
             supportProject: null,
@@ -221,6 +224,20 @@ export class ServiceDetailPage extends Component {
 
     onRollbackComplete() {
         this.hideRollback();
+        this.loadService();
+    }
+
+    // Skip Trial Modal
+    showSkipTrial() {
+        this.state.showSkipTrialModal = true;
+    }
+
+    hideSkipTrial() {
+        this.state.showSkipTrialModal = false;
+    }
+
+    onTrialSkipped() {
+        this.hideSkipTrial();
         this.loadService();
     }
 
