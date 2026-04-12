@@ -72,13 +72,13 @@
                                 <div class="o_woow_invoice_party">
                                     <h4>From</h4>
                                     <p class="o_woow_invoice_company_name">
-                                        <t t-esc="invoice.company_name || 'WoowTech'"/>
+                                        <t t-esc="invoice.company and invoice.company.name or 'WoowTech'"/>
                                     </p>
                                 </div>
                                 <div class="o_woow_invoice_party o_woow_invoice_party_right">
                                     <h4>Invoice To</h4>
                                     <p class="o_woow_invoice_customer_name">
-                                        <t t-esc="invoice.partner_name || '-'"/>
+                                        <t t-esc="invoice.partner and invoice.partner.name or '-'"/>
                                     </p>
                                 </div>
                             </div>
@@ -121,7 +121,7 @@
                                     </div>
                                     <t t-foreach="lines" t-as="line" t-key="line_index">
                                         <div class="o_woow_invoice_lines_row">
-                                            <div class="o_woow_line_col o_woow_line_desc" t-esc="line.name || '-'"/>
+                                            <div class="o_woow_line_col o_woow_line_desc" t-esc="line.product_name || '-'"/>
                                             <div class="o_woow_line_col o_woow_line_qty">
                                                 <span class="o_woow_line_mobile_label">Qty: </span>
                                                 <t t-esc="line.quantity ?? 1"/>
@@ -132,7 +132,7 @@
                                             </div>
                                             <div class="o_woow_line_col o_woow_line_tax">
                                                 <span class="o_woow_line_mobile_label">Tax: </span>
-                                                <t t-esc="formatAmountDecimal(line.tax_amount || 0)"/>
+                                                <t t-esc="line.tax_names || '-'"/>
                                             </div>
                                             <div class="o_woow_line_col o_woow_line_amount">
                                                 <span class="o_woow_line_mobile_label">Amount: </span>

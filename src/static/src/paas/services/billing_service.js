@@ -330,8 +330,8 @@ export const billingService = reactive({
             }
             const result = await jsonRpc("/api/billing/invoices", params);
             if (result.success) {
-                this.invoices = result.data?.invoices ?? [];
-                this.invoicesTotal = result.data?.total ?? 0;
+                this.invoices = result.data ?? [];
+                this.invoicesTotal = result.total ?? 0;
                 this.invoicesPage = page;
             } else {
                 console.error("Failed to fetch invoices:", result.error);

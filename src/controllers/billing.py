@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from typing import Any
 
 from odoo import fields
@@ -166,12 +167,16 @@ class BillingController(Controller):
         if not partner.has_bound_credit_card():
             return {'success': False, 'error': 'No card is currently bound'}
 
-        partner.write({
-            'ecpay_card_token': False,
-            'ecpay_card_last4': False,
-            'ecpay_card_expiry': False,
-            'ecpay_card_bound_date': False,
-        })
+        try:
+            partner.write({
+                'ecpay_card_token': False,
+                'ecpay_card_last4': False,
+                'ecpay_card_expiry': False,
+                'ecpay_card_bound_date': False,
+            })
+        except Exception as e:
+            _logger.error("Error unbinding payment method: %s\n%s", str(e), traceback.format_exc())
+            return {'success': False, 'error': 'Failed to remove payment method. Please try again.'}
 
         _logger.info("Payment method unbound: partner=%s", partner.id)
 
@@ -255,9 +260,22 @@ class BillingController(Controller):
                 'code': 'no_card',
             }
 
-        # Add wallet points (skip actual ECPay charge for now)
-        total_credits = plan.credits + plan.bonus
-        partner.add_wallet_points(total_credits, f"Top-up: {plan.name}")
+        # Guard: actual payment processing not yet implemented
+        ICP = request.env['ir.config_parameter'].sudo()
+        if not ICP.get_param('woow_paas_platform.topup_payment_enabled', False):
+            return {
+                'success': False,
+                'error': 'Credit top-up is not yet available. Payment processing is being configured.',
+                'code': 'payment_not_configured',
+            }
+
+        try:
+            # Add wallet points (skip actual ECPay charge for now)
+            total_credits = plan.credits + plan.bonus
+            partner.add_wallet_points(total_credits, f"Top-up: {plan.name}")
+        except Exception as e:
+            _logger.error("Error during wallet top-up: %s\n%s", str(e), traceback.format_exc())
+            return {'success': False, 'error': 'Top-up failed. Please try again.'}
 
         _logger.info(
             "Wallet top-up: plan=%s, credits=%s, bonus=%s, partner=%s",
@@ -404,7 +422,11 @@ class BillingController(Controller):
         if sub.state not in ('in_progress',):
             return {'success': False, 'error': 'Only active subscriptions can be cancelled'}
 
-        sub.write({'state': 'close'})
+        try:
+            sub.write({'state': 'close'})
+        except Exception as e:
+            _logger.error("Error cancelling subscription: %s\n%s", str(e), traceback.format_exc())
+            return {'success': False, 'error': 'Cancellation failed. Please try again.'}
 
         _logger.info(
             "Subscription cancelled: id=%s, partner=%s, reason=%s",
@@ -635,54 +657,60 @@ class BillingController(Controller):
                 },
             }
 
-        # Post the invoice first if it is a draft
-        if invoice.state == 'draft':
-            invoice.action_post()
+        try:
+            # Deduct wallet FIRST (before posting) to avoid race condition
+            # where invoice is posted but wallet deduction fails
+            deducted = partner.deduct_wallet_points(amount, f"Invoice payment: {invoice.name}")
+            if deducted <= 0:
+                return {
+                    'success': False,
+                    'error': 'Wallet deduction failed',
+                }
 
-        # Deduct wallet
-        deducted = partner.deduct_wallet_points(amount, f"Invoice payment: {invoice.name}")
-        if deducted <= 0:
-            return {
-                'success': False,
-                'error': 'Wallet deduction failed',
-            }
+            # Post the invoice after successful wallet deduction
+            if invoice.state == 'draft':
+                invoice.action_post()
 
-        # Create payment and reconcile (same pattern as sh_subscription 'paid' mode)
-        company = invoice.company_id.sudo()
-        journal = company.sh_paid_subscription_journal
-        if not journal:
-            # Fallback: find first bank/cash journal
-            journal = request.env['account.journal'].sudo().search([
-                ('company_id', '=', company.id),
-                ('type', 'in', ('bank', 'cash')),
-            ], limit=1)
-        if not journal:
-            _logger.error("No payment journal found for company %s", company.name)
-            return {'success': False, 'error': 'Payment journal not configured'}
+            # Create payment and reconcile (same pattern as sh_subscription 'paid' mode)
+            company = invoice.company_id.sudo()
+            journal = company.sh_paid_subscription_journal
+            if not journal:
+                # Fallback: find first bank/cash journal
+                journal = request.env['account.journal'].sudo().search([
+                    ('company_id', '=', company.id),
+                    ('type', 'in', ('bank', 'cash')),
+                ], limit=1)
+            if not journal:
+                _logger.error("No payment journal found for company %s", company.name)
+                return {'success': False, 'error': 'Payment journal not configured'}
 
-        payment_method_line = journal.inbound_payment_method_line_ids[:1]
-        payment = request.env['account.payment'].sudo().create({
-            'journal_id': journal.id,
-            'amount': amount,
-            'payment_type': 'inbound',
-            'payment_method_line_id': payment_method_line.id if payment_method_line else False,
-            'partner_type': 'customer',
-            'partner_id': partner.id,
-        })
-        payment.action_post()
+            payment_method_line = journal.inbound_payment_method_line_ids[:1]
+            payment = request.env['account.payment'].sudo().create({
+                'journal_id': journal.id,
+                'amount': amount,
+                'payment_type': 'inbound',
+                'payment_method_line_id': payment_method_line.id if payment_method_line else False,
+                'partner_type': 'customer',
+                'partner_id': partner.id,
+            })
+            payment.action_post()
 
-        # Reconcile payment with invoice
-        receivable_lines = invoice.line_ids.filtered(
-            lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
-        )
-        payment_lines = payment.move_id.line_ids.filtered(
-            lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
-        )
-        if receivable_lines and payment_lines:
-            (receivable_lines + payment_lines).reconcile()
+            # Reconcile payment with invoice
+            receivable_lines = invoice.line_ids.filtered(
+                lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
+            )
+            payment_lines = payment.move_id.line_ids.filtered(
+                lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
+            )
+            if receivable_lines and payment_lines:
+                (receivable_lines + payment_lines).reconcile()
 
-        # Refresh to get updated state
-        invoice.invalidate_recordset(['payment_state', 'amount_residual'])
+            # Refresh to get updated state
+            invoice.invalidate_recordset(['payment_state', 'amount_residual'])
+
+        except Exception as e:
+            _logger.error("Error processing invoice payment: %s\n%s", str(e), traceback.format_exc())
+            return {'success': False, 'error': 'Payment processing failed.'}
 
         _logger.info(
             "Wallet payment for invoice %s: amount=%s, partner=%s",

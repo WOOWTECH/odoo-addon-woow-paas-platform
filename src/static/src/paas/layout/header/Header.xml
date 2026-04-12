@@ -30,7 +30,7 @@
                         <t t-else="" t-esc="formattedBalance"/>
                     </span>
                     <button class="o_woow_credits_add"
-                            t-on-click="() => this.props.router.navigate('billing-topup')">
+                            t-on-click="() => this.props.router.navigate('billing/topup')">
                         <span class="material-symbols-outlined">add</span>
                     </button>
                 </div>

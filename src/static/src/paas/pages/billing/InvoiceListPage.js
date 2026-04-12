@@ -11,7 +11,7 @@ const ITEMS_PER_PAGE = 10;
 
 const STATUS_MAP = {
   draft: { label: "Draft", color: "gray" },
-  posted: { label: "Waiting for Payment", color: "blue" },
+  waiting: { label: "Waiting for Payment", color: "blue" },
   paid: { label: "Paid", color: "green" },
   overdue: { label: "Overdue", color: "red" },
 };
@@ -94,7 +94,7 @@ export class InvoiceListPage extends Component {
   }
 
   getStatusInfo(invoice) {
-    const status = invoice.payment_state || invoice.state || "draft";
+    const status = invoice.status_label || "draft";
     return STATUS_MAP[status] || STATUS_MAP.draft;
   }
 
@@ -107,8 +107,8 @@ export class InvoiceListPage extends Component {
   }
 
   canPay(invoice) {
-    const status = invoice.payment_state || invoice.state || "draft";
-    return status === "posted" || status === "overdue";
+    const status = invoice.status_label || "draft";
+    return status === "waiting" || status === "overdue";
   }
 
   formatAmount(amount) {

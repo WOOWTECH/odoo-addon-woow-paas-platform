@@ -9,7 +9,7 @@ import { router } from "../../core/router";
 
 const STATUS_MAP = {
   draft: { label: "Draft", color: "gray" },
-  posted: { label: "Waiting for Payment", color: "blue" },
+  waiting: { label: "Waiting for Payment", color: "blue" },
   paid: { label: "Paid", color: "green" },
   overdue: { label: "Overdue", color: "red" },
 };
@@ -44,7 +44,7 @@ export class InvoiceDetailPage extends Component {
 
   get statusInfo() {
     if (!this.invoice) return STATUS_MAP.draft;
-    const status = this.invoice.payment_state || this.invoice.state || "draft";
+    const status = this.invoice.status_label || "draft";
     return STATUS_MAP[status] || STATUS_MAP.draft;
   }
 
@@ -54,13 +54,13 @@ export class InvoiceDetailPage extends Component {
 
   get canPay() {
     if (!this.invoice) return false;
-    const status = this.invoice.payment_state || this.invoice.state || "draft";
-    return status === "posted" || status === "overdue";
+    const status = this.invoice.status_label || "draft";
+    return status === "waiting" || status === "overdue";
   }
 
   get dueLabel() {
     if (!this.invoice) return "";
-    const status = this.invoice.payment_state || this.invoice.state || "draft";
+    const status = this.invoice.status_label || "draft";
     if (status === "paid") return "Paid";
     if (status === "overdue") return "Overdue";
     if (!this.invoice.invoice_date_due) return "";
@@ -78,7 +78,7 @@ export class InvoiceDetailPage extends Component {
 
   get dueLabelClass() {
     if (!this.invoice) return "";
-    const status = this.invoice.payment_state || this.invoice.state || "draft";
+    const status = this.invoice.status_label || "draft";
     if (status === "paid") return "o_woow_due_paid";
     if (status === "overdue") return "o_woow_due_overdue";
     return "o_woow_due_pending";
@@ -90,7 +90,7 @@ export class InvoiceDetailPage extends Component {
   }
 
   get lines() {
-    return this.invoice?.invoice_lines || [];
+    return this.invoice?.lines || [];
   }
 
   formatAmount(amount) {
