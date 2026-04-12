@@ -32,9 +32,10 @@ odoo:
   extraPipRequirementsFile: /mnt/extra-addons/woow_paas_platform/requirements.txt
   # Fallback: list individual packages (used only when extraPipRequirementsFile is empty)
   extraPipPackages: []
-  # Modules to install on first startup (comma-separated, e.g. "web,woow_paas_platform")
-  # Empty string means Odoo decides (only base auto-initializes)
-  initModules: ""
+  # Modules to update on startup (comma-separated, e.g. "web,woow_paas_platform")
+  # Uses -u (update) which is idempotent and safe for restarts.
+  # Empty string means no explicit module update (Odoo starts normally).
+  updateModules: ""
   # Addons path inside container
   addonsPath: /mnt/extra-addons,/mnt/extra-addons-ext
   # Filestore persistence (recommended for stg mode)

@@ -266,10 +266,12 @@ HELM_INSTALL_ARGS=(
     --set "sandbox.mode=$MODE"
 )
 
-# STG 模式：首次部署需安裝 web module（base 自動初始化但 web 不會）
+# STG 模式：首次部署需更新 web module（base 自動初始化但 web 不會）
+# 使用 -u (update) 而非 -i (init)，確保 base.latest_version 正確寫入，
+# 且 cron 不會因 init 模式被阻擋
 if [ "$MODE" = "stg" ]; then
     HELM_INSTALL_ARGS+=(
-        --set "odoo.initModules=web"
+        --set "odoo.updateModules=web"
     )
 fi
 
