@@ -1,3 +1,4 @@
+from . import sh_subscription_fix
 from . import subscription_lifecycle_mixin
 from . import subscription_lifecycle_cron
 from . import res_config_settings
