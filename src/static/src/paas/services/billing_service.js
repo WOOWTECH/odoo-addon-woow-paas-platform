@@ -107,9 +107,82 @@ export const billingService = reactive({
     invoiceDetailLoading: false,
 
     /** @type {Array<Object>} */
+    subscriptions: [],
+    /** @type {number} */
+    subscriptionsTotal: 0,
+    /** @type {boolean} */
+    subscriptionsLoading: false,
+    /** @type {Object|null} */
+    subscriptionDetail: null,
+
+    /** @type {Array<Object>} */
     topupPlans: [],
     /** @type {boolean} */
     topupPlansLoading: false,
+
+    /**
+     * Fetch paginated subscription list
+     * @param {string} [filter='active'] - Filter: 'active', 'past', or 'all'
+     * @param {number} [page=1] - Page number
+     * @param {number} [limit=10] - Items per page
+     * @returns {Promise<void>}
+     */
+    async fetchSubscriptions(filter = "active", page = 1, limit = 10) {
+        this.subscriptionsLoading = true;
+        try {
+            const result = await jsonRpc("/api/billing/subscriptions", { filter, page, limit });
+            if (result.success) {
+                this.subscriptions = result.data ?? [];
+                this.subscriptionsTotal = result.total ?? 0;
+            } else {
+                console.error("Failed to fetch subscriptions:", result.error);
+            }
+        } catch (err) {
+            console.error("Failed to fetch subscriptions:", err);
+        } finally {
+            this.subscriptionsLoading = false;
+        }
+    },
+
+    /**
+     * Fetch single subscription detail (with services)
+     * @param {number} id - Subscription ID
+     * @returns {Promise<void>}
+     */
+    async fetchSubscription(id) {
+        try {
+            const result = await jsonRpc(`/api/billing/subscriptions/${id}`, {});
+            if (result.success) {
+                this.subscriptionDetail = result.data ?? null;
+            } else {
+                console.error("Failed to fetch subscription:", result.error);
+            }
+        } catch (err) {
+            console.error("Failed to fetch subscription:", err);
+        }
+    },
+
+    /**
+     * Cancel a subscription
+     * @param {number} id - Subscription ID
+     * @param {string} [reason=''] - Cancellation reason
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async cancelSubscription(id, reason = "") {
+        try {
+            const params = {};
+            if (reason) {
+                params.reason = reason;
+            }
+            const result = await jsonRpc(`/api/billing/subscriptions/${id}/cancel`, params);
+            if (result.success) {
+                return { success: true };
+            }
+            return { success: false, error: result.error || "Cancellation failed" };
+        } catch (err) {
+            return { success: false, error: err.message || "Cancellation failed" };
+        }
+    },
 
     /**
      * Fetch bound payment methods

@@ -58,6 +58,9 @@
             <t t-elif="router.current === 'billing-invoice-detail'">
                 <InvoiceDetailPage invoiceId="invoiceId"/>
             </t>
+            <t t-elif="router.current === 'billing-subscriptions'">
+                <SubscriptionListPage/>
+            </t>
             <t t-else="">
                 <EmptyState/>
             </t>

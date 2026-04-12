@@ -13,6 +13,14 @@ const STATUS_MAP = {
   overdue: { label: "Overdue", color: "red" },
 };
 
+const SUB_STATE_MAP = {
+  in_progress: { label: "In Progress", color: "green" },
+  draft: { label: "Draft", color: "gray" },
+  expire: { label: "Expired", color: "gray" },
+  close: { label: "Cancelled", color: "gray" },
+  cancel: { label: "Cancelled", color: "gray" },
+};
+
 export class BillingOverviewPage extends Component {
   static template = "woow_paas_platform.BillingOverviewPage";
   static components = { WoowCard, WoowIcon, WoowButton };
@@ -24,6 +32,7 @@ export class BillingOverviewPage extends Component {
     onMounted(() => {
       this.loadWallet();
       billingService.fetchInvoices(1, 3);
+      billingService.fetchSubscriptions("active", 1, 3);
     });
   }
 
@@ -91,6 +100,40 @@ export class BillingOverviewPage extends Component {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     });
+  }
+
+  get subscriptionsLoading() {
+    return this.billing.subscriptionsLoading;
+  }
+
+  get activeSubscriptions() {
+    return this.billing.subscriptions;
+  }
+
+  get hasSubscriptions() {
+    return this.activeSubscriptions.length > 0;
+  }
+
+  getSubStateInfo(sub) {
+    return SUB_STATE_MAP[sub.state] || SUB_STATE_MAP.draft;
+  }
+
+  getSubStateLabel(sub) {
+    if (sub.is_trial) return "Trial";
+    return this.getSubStateInfo(sub).label;
+  }
+
+  getSubStateClass(sub) {
+    if (sub.is_trial) return "o_woow_sub_status_blue";
+    return `o_woow_sub_status_${this.getSubStateInfo(sub).color}`;
+  }
+
+  getPaymentMethodLabel() {
+    const w = this.billing.wallet;
+    if (w.cardBound && w.cardLast4) {
+      return `Visa •••• ${w.cardLast4}`;
+    }
+    return "No card bound";
   }
 
   goToTopup() {

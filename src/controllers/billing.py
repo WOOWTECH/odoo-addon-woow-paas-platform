@@ -229,6 +229,146 @@ class BillingController(Controller):
             },
         }
 
+    # ==================== Subscription API ====================
+
+    def _serialize_subscription(self, sub):
+        """Return a compact dict for subscription list items."""
+        # Recurrency label
+        unit_labels = {
+            'day': 'Daily',
+            'week': 'Weekly',
+            'month': 'Monthly',
+            'year': 'Yearly',
+        }
+        recurrency_label = unit_labels.get(sub.sh_unit, '')
+        if sub.sh_recurrency and sub.sh_recurrency > 1:
+            recurrency_label = f"Every {sub.sh_recurrency} {sub.sh_unit}s"
+
+        # Linked cloud service name (if any)
+        CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
+        linked_service = CloudService.search([('subscription_id', '=', sub.id)], limit=1)
+        service_name = linked_service.name if linked_service else None
+
+        return {
+            'id': sub.id,
+            'name': sub.name or '',
+            'state': sub.state,
+            'plan_name': sub.sh_subscription_plan_id.name if sub.sh_subscription_plan_id else '',
+            'plan_price': sub.sh_plan_price,
+            'start_date': sub.sh_start_date.isoformat() if sub.sh_start_date else None,
+            'end_date': sub.sh_end_date.isoformat() if sub.sh_end_date else None,
+            'next_payment': sub.sh_date_of_next_payment.isoformat() if sub.sh_date_of_next_payment else None,
+            'is_trial': sub.sh_trial,
+            'trial_end_date': sub.sh_trial_end_date.isoformat() if sub.sh_trial_end_date else None,
+            'recurrency_label': recurrency_label,
+            'service_name': service_name,
+        }
+
+    @route("/api/billing/subscriptions", auth="user", methods=["POST"], type="json")
+    def api_subscriptions(self, filter: str = 'active', page: int = 1, limit: int = 10, **kw) -> dict[str, Any]:
+        """List current user's subscriptions with pagination and optional filter.
+
+        Args:
+            filter: 'active', 'past', or 'all'.
+            page: Page number (1-based).
+            limit: Items per page (max 50).
+
+        Returns:
+            dict with success, data (list), total, page, limit.
+        """
+        partner = request.env.user.partner_id
+        Subscription = request.env['sh.subscription.subscription'].sudo()
+
+        domain = [('sh_partner_id', '=', partner.id)]
+
+        if filter == 'active':
+            domain.append(('state', 'in', ('in_progress',)))
+        elif filter == 'past':
+            domain.append(('state', 'in', ('expire', 'close', 'cancel')))
+        # 'all' → no state filter
+
+        limit = max(1, min(int(limit), 50))
+        page = max(1, int(page))
+        offset = (page - 1) * limit
+
+        total = Subscription.search_count(domain)
+        subscriptions = Subscription.search(domain, order='create_date desc', limit=limit, offset=offset)
+
+        return {
+            'success': True,
+            'data': [self._serialize_subscription(sub) for sub in subscriptions],
+            'total': total,
+            'page': page,
+            'limit': limit,
+        }
+
+    @route("/api/billing/subscriptions/<int:subscription_id>", auth="user", methods=["POST"], type="json")
+    def api_subscription_detail(self, subscription_id: int, **kw) -> dict[str, Any]:
+        """Get full detail of a single subscription and its associated services.
+
+        Returns:
+            dict with subscription detail and linked cloud services.
+        """
+        partner = request.env.user.partner_id
+        sub = request.env['sh.subscription.subscription'].sudo().browse(subscription_id)
+
+        if not sub.exists() or sub.sh_partner_id != partner:
+            return {'success': False, 'error': 'Subscription not found'}
+
+        # Associated cloud services
+        CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
+        services = CloudService.search([('subscription_id', '=', sub.id)])
+
+        service_list = []
+        for svc in services:
+            template_name = ''
+            if svc.template_id:
+                template_name = svc.template_id.name or ''
+            service_list.append({
+                'id': svc.id,
+                'name': svc.name or '',
+                'state': svc.state,
+                'subdomain': svc.subdomain or '',
+                'template_name': template_name,
+            })
+
+        data = self._serialize_subscription(sub)
+        data['services'] = service_list
+
+        return {
+            'success': True,
+            'data': data,
+        }
+
+    @route("/api/billing/subscriptions/<int:subscription_id>/cancel", auth="user", methods=["POST"], type="json")
+    def api_subscription_cancel(self, subscription_id: int, reason: str | None = None, **kw) -> dict[str, Any]:
+        """Cancel a subscription.
+
+        Args:
+            subscription_id: Subscription ID.
+            reason: Optional cancellation reason.
+
+        Returns:
+            dict with success=True on success.
+        """
+        partner = request.env.user.partner_id
+        sub = request.env['sh.subscription.subscription'].sudo().browse(subscription_id)
+
+        if not sub.exists() or sub.sh_partner_id != partner:
+            return {'success': False, 'error': 'Subscription not found'}
+
+        if sub.state not in ('in_progress',):
+            return {'success': False, 'error': 'Only active subscriptions can be cancelled'}
+
+        sub.write({'state': 'close'})
+
+        _logger.info(
+            "Subscription cancelled: id=%s, partner=%s, reason=%s",
+            sub.id, partner.id, reason or '(none)',
+        )
+
+        return {'success': True}
+
     # ==================== Invoice API ====================
 
     def _invoice_status_label(self, invoice):

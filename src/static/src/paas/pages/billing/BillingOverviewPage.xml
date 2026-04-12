@@ -44,16 +44,58 @@
 
                 <!-- Subscription &amp; Payment Card -->
                 <WoowCard shadow="true" class="'o_woow_billing_subscription_card'">
-                    <div class="o_woow_card_header">
-                        <WoowIcon name="'credit_card'" size="22"/>
-                        <h3>Subscription &amp; Payment</h3>
+                    <div class="o_woow_billing_sub_section_header">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'credit_card'" size="22"/>
+                            <h3>Subscription &amp; Payment</h3>
+                        </div>
+                        <a href="#/billing/subscriptions" class="o_woow_billing_view_all_link">
+                            View All
+                            <WoowIcon name="'arrow_forward'" size="16"/>
+                        </a>
                     </div>
-                    <div class="o_woow_billing_subscription_body">
-                        <p class="o_woow_billing_placeholder">Your subscriptions will appear here.</p>
-                        <p class="o_woow_billing_hint">
-                            To change your payment method or view invoices, visit the Billing pages.
-                        </p>
-                    </div>
+
+                    <t t-if="subscriptionsLoading">
+                        <div class="o_woow_billing_recent_invoices_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <span>Loading subscriptions...</span>
+                        </div>
+                    </t>
+
+                    <t t-elif="!hasSubscriptions">
+                        <div class="o_woow_billing_subscription_body">
+                            <p class="o_woow_billing_placeholder">No active subscriptions.</p>
+                            <p class="o_woow_billing_hint">
+                                Visit the marketplace to deploy services and start a subscription.
+                            </p>
+                        </div>
+                    </t>
+
+                    <t t-else="">
+                        <div class="o_woow_billing_sub_list">
+                            <t t-foreach="activeSubscriptions" t-as="sub" t-key="sub.id">
+                                <div class="o_woow_billing_sub_row"
+                                     t-on-click="() => this.goToSubscriptions()">
+                                    <div class="o_woow_billing_sub_info">
+                                        <div class="o_woow_billing_sub_name">
+                                            <WoowIcon name="'diamond'" size="18"/>
+                                            <div class="o_woow_billing_sub_name_text">
+                                                <span class="o_woow_billing_sub_id" t-esc="sub.name"/>
+                                                <span class="o_woow_billing_sub_plan" t-esc="sub.plan_name"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="o_woow_billing_sub_right">
+                                        <span t-attf-class="o_woow_sub_badge {{ getSubStateClass(sub) }}">
+                                            <span class="o_woow_sub_badge_dot"/>
+                                            <t t-esc="getSubStateLabel(sub)"/>
+                                        </span>
+                                        <span class="o_woow_billing_sub_payment" t-esc="getPaymentMethodLabel()"/>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
                 </WoowCard>
 
                 <!-- Recent Invoices Section -->

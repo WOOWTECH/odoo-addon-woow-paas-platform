@@ -247,6 +247,14 @@
     margin: 1rem;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
     animation: slideUp 0.3s ease;
+
+    &.o_woow_modal_sm {
+        max-width: 400px;
+    }
+
+    &.o_woow_modal_md {
+        max-width: 560px;
+    }
 }
 
 .o_woow_modal_header {

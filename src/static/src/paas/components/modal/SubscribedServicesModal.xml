@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.SubscribedServicesModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_md" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Current Subscribed Services</h2>
+                    <button class="o_woow_modal_close" t-on-click="props.onClose">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <!-- Loading -->
+                    <t t-if="state.loading">
+                        <div class="o_woow_svc_modal_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <span>Loading services...</span>
+                        </div>
+                    </t>
+
+                    <t t-else="">
+                        <!-- Summary Header -->
+                        <div class="o_woow_svc_modal_summary">
+                            <div class="o_woow_svc_modal_summary_left">
+                                <span class="o_woow_svc_modal_plan_name" t-esc="planName"/>
+                                <span class="o_woow_svc_modal_plan_recurrency" t-esc="recurrencyLabel"/>
+                            </div>
+                            <div class="o_woow_svc_modal_summary_right">
+                                <span class="o_woow_svc_modal_price">
+                                    <t t-esc="planPrice"/> pts
+                                </span>
+                                <span class="o_woow_svc_modal_price_period">/ month</span>
+                            </div>
+                        </div>
+
+                        <!-- Service List -->
+                        <t t-if="services.length === 0">
+                            <div class="o_woow_svc_modal_empty">
+                                <WoowIcon name="'cloud_off'" size="36"/>
+                                <p>No services linked to this subscription.</p>
+                            </div>
+                        </t>
+
+                        <t t-else="">
+                            <div class="o_woow_svc_modal_list">
+                                <t t-foreach="services" t-as="svc" t-key="svc.id">
+                                    <div class="o_woow_svc_modal_item">
+                                        <div class="o_woow_svc_modal_item_left">
+                                            <div class="o_woow_svc_modal_item_icon">
+                                                <WoowIcon name="getServiceIcon(svc)" size="20"/>
+                                            </div>
+                                            <div class="o_woow_svc_modal_item_info">
+                                                <span class="o_woow_svc_modal_item_name" t-esc="svc.name"/>
+                                                <span class="o_woow_svc_modal_item_template" t-esc="svc.template_name"/>
+                                            </div>
+                                        </div>
+                                        <div class="o_woow_svc_modal_item_right">
+                                            <span t-attf-class="o_woow_svc_modal_badge {{ getServiceStateClass(svc) }}">
+                                                <span class="o_woow_svc_modal_badge_dot"/>
+                                                <t t-esc="getServiceStateLabel(svc)"/>
+                                            </span>
+                                        </div>
+                                    </div>
+                                </t>
+                            </div>
+                        </t>
+                    </t>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose">
+                        Close
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>
