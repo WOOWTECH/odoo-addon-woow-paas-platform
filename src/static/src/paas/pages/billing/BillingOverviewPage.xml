@@ -56,6 +56,60 @@
                     </div>
                 </WoowCard>
 
+                <!-- Recent Invoices Section -->
+                <WoowCard shadow="true" class="'o_woow_billing_recent_invoices_card'">
+                    <div class="o_woow_billing_recent_invoices_header">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'receipt_long'" size="22"/>
+                            <h3>Recent Invoices</h3>
+                        </div>
+                        <a href="#/billing/invoices" class="o_woow_billing_view_all_link">
+                            View All
+                            <WoowIcon name="'arrow_forward'" size="16"/>
+                        </a>
+                    </div>
+
+                    <t t-if="invoicesLoading">
+                        <div class="o_woow_billing_recent_invoices_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <span>Loading invoices...</span>
+                        </div>
+                    </t>
+
+                    <t t-elif="recentInvoices.length === 0">
+                        <div class="o_woow_billing_recent_invoices_empty">
+                            <p>No invoices yet.</p>
+                        </div>
+                    </t>
+
+                    <t t-else="">
+                        <div class="o_woow_billing_recent_invoices_list">
+                            <t t-foreach="recentInvoices" t-as="invoice" t-key="invoice.id">
+                                <div class="o_woow_billing_recent_invoice_row"
+                                     t-on-click="() => this.goToInvoiceDetail(invoice.id)">
+                                    <div class="o_woow_billing_recent_invoice_info">
+                                        <div class="o_woow_billing_recent_invoice_name">
+                                            <WoowIcon name="'description'" size="18"/>
+                                            <span t-esc="invoice.name || invoice.number || '-'"/>
+                                        </div>
+                                        <span class="o_woow_billing_recent_invoice_date"
+                                              t-esc="formatDate(invoice.invoice_date)"/>
+                                    </div>
+                                    <div class="o_woow_billing_recent_invoice_right">
+                                        <span class="o_woow_billing_recent_invoice_amount">
+                                            <t t-esc="formatAmount(invoice.amount_total)"/> pts
+                                        </span>
+                                        <span t-attf-class="o_woow_invoice_badge {{ getStatusClass(invoice) }}">
+                                            <span class="o_woow_invoice_badge_dot"/>
+                                            <t t-esc="getStatusLabel(invoice)"/>
+                                        </span>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+                </WoowCard>
+
                 <!-- Bottom 2-column Grid -->
                 <div class="o_woow_billing_summary_grid">
                     <!-- About WoowTech Card -->

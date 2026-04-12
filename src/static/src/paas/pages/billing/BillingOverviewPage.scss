@@ -112,6 +112,115 @@
   margin: 0;
 }
 
+// Recent Invoices Card
+.o_woow_billing_recent_invoices_card {
+  padding: 1.5rem !important;
+}
+
+.o_woow_billing_recent_invoices_header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+
+  .o_woow_card_header {
+    margin-bottom: 0;
+  }
+}
+
+.o_woow_billing_view_all_link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: $woow-primary;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.o_woow_billing_recent_invoices_loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem 1rem;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+}
+
+.o_woow_billing_recent_invoices_empty {
+  padding: 2rem 1rem;
+  text-align: center;
+
+  p {
+    margin: 0;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+  }
+}
+
+.o_woow_billing_recent_invoices_list {
+  display: flex;
+  flex-direction: column;
+}
+
+.o_woow_billing_recent_invoice_row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0.5rem;
+  border-top: 1px solid $woow-border-light;
+  cursor: pointer;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: rgba($woow-primary, 0.04);
+  }
+
+  &:first-child {
+    border-top: none;
+  }
+}
+
+.o_woow_billing_recent_invoice_info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.o_woow_billing_recent_invoice_name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: $woow-primary;
+}
+
+.o_woow_billing_recent_invoice_date {
+  font-size: 0.75rem;
+  color: $woow-text-secondary;
+  padding-left: 1.625rem; // align with name text (icon 18px + gap 0.5rem)
+}
+
+.o_woow_billing_recent_invoice_right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.o_woow_billing_recent_invoice_amount {
+  font-weight: 700;
+  font-size: 0.875rem;
+  color: $woow-text-primary;
+  white-space: nowrap;
+}
+
 // Bottom 2-column grid
 .o_woow_billing_summary_grid {
   display: grid;
