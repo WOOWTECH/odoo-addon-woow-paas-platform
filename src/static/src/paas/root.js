@@ -18,6 +18,8 @@ import { AiChatPage } from "./pages/ai-chat/AiChatPage";
 import { ProjectKanbanPage } from "./pages/project-kanban/ProjectKanbanPage";
 import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
 import { BillingOverviewPage } from "./pages/billing/BillingOverviewPage";
+import { InvoiceListPage } from "./pages/billing/InvoiceListPage";
+import { InvoiceDetailPage } from "./pages/billing/InvoiceDetailPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -39,6 +41,8 @@ export class Root extends Component {
         ProjectKanbanPage,
         SmartHomeDetailPage,
         BillingOverviewPage,
+        InvoiceListPage,
+        InvoiceDetailPage,
         EmptyState,
     };
     static props = {};
@@ -82,5 +86,9 @@ export class Root extends Component {
 
     get homeId() {
         return this.router.params.homeId ? parseInt(this.router.params.homeId, 10) : null;
+    }
+
+    get invoiceId() {
+        return parseInt(this.router.params?.id) || 0;
     }
 }

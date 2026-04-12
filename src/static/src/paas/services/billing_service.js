@@ -88,6 +88,19 @@ export const billingService = reactive({
     /** @type {boolean} */
     walletLoading: false,
 
+    /** @type {Array<Object>} */
+    invoices: [],
+    /** @type {Object|null} */
+    invoiceDetail: null,
+    /** @type {number} */
+    invoicesTotal: 0,
+    /** @type {number} */
+    invoicesPage: 1,
+    /** @type {boolean} */
+    invoicesLoading: false,
+    /** @type {boolean} */
+    invoiceDetailLoading: false,
+
     /**
      * Fetch wallet information
      * @returns {Promise<void>}
@@ -110,6 +123,75 @@ export const billingService = reactive({
             console.error("Failed to fetch wallet:", err);
         } finally {
             this.walletLoading = false;
+        }
+    },
+
+    /**
+     * Fetch paginated invoice list
+     * @param {number} [page=1] - Page number
+     * @param {number} [limit=10] - Items per page
+     * @param {string} [sortBy='invoice_date'] - Sort field
+     * @param {string} [sortOrder='desc'] - Sort direction
+     * @param {string|null} [status=null] - Filter by status
+     * @returns {Promise<void>}
+     */
+    async fetchInvoices(page = 1, limit = 10, sortBy = "invoice_date", sortOrder = "desc", status = null) {
+        this.invoicesLoading = true;
+        try {
+            const params = { page, limit, sort_by: sortBy, sort_order: sortOrder };
+            if (status) {
+                params.status = status;
+            }
+            const result = await jsonRpc("/api/billing/invoices", params);
+            if (result.success) {
+                this.invoices = result.data?.invoices ?? [];
+                this.invoicesTotal = result.data?.total ?? 0;
+                this.invoicesPage = page;
+            } else {
+                console.error("Failed to fetch invoices:", result.error);
+            }
+        } catch (err) {
+            console.error("Failed to fetch invoices:", err);
+        } finally {
+            this.invoicesLoading = false;
+        }
+    },
+
+    /**
+     * Fetch single invoice detail
+     * @param {number} id - Invoice ID
+     * @returns {Promise<void>}
+     */
+    async fetchInvoice(id) {
+        this.invoiceDetailLoading = true;
+        try {
+            const result = await jsonRpc(`/api/billing/invoices/${id}`, {});
+            if (result.success) {
+                this.invoiceDetail = result.data ?? null;
+            } else {
+                console.error("Failed to fetch invoice:", result.error);
+            }
+        } catch (err) {
+            console.error("Failed to fetch invoice:", err);
+        } finally {
+            this.invoiceDetailLoading = false;
+        }
+    },
+
+    /**
+     * Pay an invoice using wallet balance
+     * @param {number} id - Invoice ID
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async payInvoice(id) {
+        try {
+            const result = await jsonRpc(`/api/billing/invoices/${id}/pay`, {});
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error || "Payment failed" };
+        } catch (err) {
+            return { success: false, error: err.message || "Payment failed" };
         }
     },
 });
