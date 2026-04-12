@@ -1,5 +1,6 @@
 /** @odoo-module **/
-import { Component } from "@odoo/owl";
+import { Component, onMounted } from "@odoo/owl";
+import { billingService } from "../../services/billing_service";
 
 const WORKSPACE_ROUTES = [
     "workspace-detail", "workspace-team", "marketplace", "configure", "service-detail",
@@ -11,6 +12,21 @@ const AI_ROUTES = [
 export class Header extends Component {
     static template = "woow_paas_platform.Header";
     static props = { router: Object };
+
+    setup() {
+        this.billingService = billingService;
+        onMounted(() => {
+            billingService.fetchWallet();
+        });
+    }
+
+    get walletBalance() {
+        return billingService.wallet.balance;
+    }
+
+    get formattedBalance() {
+        return `$${this.walletBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
 
     get breadcrumbItems() {
         const route = this.props.router.current;

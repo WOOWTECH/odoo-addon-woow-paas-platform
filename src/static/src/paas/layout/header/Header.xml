@@ -25,8 +25,12 @@
                 <div class="o_woow_credits_badge">
                     <span class="material-symbols-outlined">payments</span>
                     <span class="o_woow_credits_label">CREDITS</span>
-                    <span class="o_woow_credits_amount">$2,450.00</span>
-                    <button class="o_woow_credits_add">
+                    <span class="o_woow_credits_amount">
+                        <t t-if="billingService.walletLoading">...</t>
+                        <t t-else="" t-esc="formattedBalance"/>
+                    </span>
+                    <button class="o_woow_credits_add"
+                            t-on-click="() => this.props.router.navigate('billing-topup')">
                         <span class="material-symbols-outlined">add</span>
                     </button>
                 </div>
