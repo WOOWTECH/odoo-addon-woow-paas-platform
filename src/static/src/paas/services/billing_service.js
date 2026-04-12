@@ -101,6 +101,11 @@ export const billingService = reactive({
     /** @type {boolean} */
     invoiceDetailLoading: false,
 
+    /** @type {Array<Object>} */
+    topupPlans: [],
+    /** @type {boolean} */
+    topupPlansLoading: false,
+
     /**
      * Fetch wallet information
      * @returns {Promise<void>}
@@ -192,6 +197,48 @@ export const billingService = reactive({
             return { success: false, error: result.error || "Payment failed" };
         } catch (err) {
             return { success: false, error: err.message || "Payment failed" };
+        }
+    },
+
+    /**
+     * Fetch available top-up plans
+     * @param {string|null} [category=null] - Optional category filter
+     * @returns {Promise<void>}
+     */
+    async fetchTopupPlans(category = null) {
+        this.topupPlansLoading = true;
+        try {
+            const params = {};
+            if (category) {
+                params.category = category;
+            }
+            const result = await jsonRpc("/api/billing/wallet/topup-plans", params);
+            if (result.success) {
+                this.topupPlans = result.data ?? [];
+            } else {
+                console.error("Failed to fetch topup plans:", result.error);
+            }
+        } catch (err) {
+            console.error("Failed to fetch topup plans:", err);
+        } finally {
+            this.topupPlansLoading = false;
+        }
+    },
+
+    /**
+     * Purchase a top-up plan
+     * @param {number} planId - Top-up plan ID
+     * @returns {Promise<{success: boolean, data?: Object, error?: string, code?: string}>}
+     */
+    async topup(planId) {
+        try {
+            const result = await jsonRpc("/api/billing/wallet/topup", { plan_id: planId });
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error || "Top-up failed", code: result.code };
+        } catch (err) {
+            return { success: false, error: err.message || "Top-up failed" };
         }
     },
 });

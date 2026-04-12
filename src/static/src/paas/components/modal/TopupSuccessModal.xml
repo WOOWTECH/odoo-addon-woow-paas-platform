@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.TopupSuccessModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                <div class="o_woow_modal_body o_woow_topup_success_body">
+                    <!-- Success Icon -->
+                    <div class="o_woow_topup_success_icon">
+                        <WoowIcon name="'check_circle'" size="64"/>
+                    </div>
+
+                    <!-- Title -->
+                    <h2 class="o_woow_topup_success_title">Pre-payment Successful</h2>
+
+                    <!-- Message -->
+                    <p class="o_woow_topup_success_message">
+                        Your pre-payment has been processed, and
+                        <strong><t t-esc="formattedTotal"/> credits</strong>
+                        have been added to your account.
+                    </p>
+
+                    <t t-if="hasBonus">
+                        <p class="o_woow_topup_success_bonus">
+                            Includes <strong><t t-esc="bonus"/> bonus points</strong> — enjoy!
+                        </p>
+                    </t>
+
+                    <!-- New Balance -->
+                    <div class="o_woow_topup_success_balance">
+                        <span class="o_woow_topup_success_balance_label">New Balance</span>
+                        <span class="o_woow_topup_success_balance_value">
+                            <t t-esc="formattedBalance"/> pts
+                        </span>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer o_woow_topup_success_footer">
+                    <WoowButton
+                        variant="'primary'"
+                        size="'md'"
+                        onClick.bind="onDone">
+                        Done
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.TopupStorePage">
+        <div class="o_woow_topup_store">
+            <!-- Breadcrumb + Header -->
+            <div class="o_woow_topup_header">
+                <div class="o_woow_topup_title_area">
+                    <div class="o_woow_topup_breadcrumb">
+                        <a href="#/dashboard" class="o_woow_breadcrumb_link">Home</a>
+                        <WoowIcon name="'chevron_right'" size="16"/>
+                        <a href="#/billing" class="o_woow_breadcrumb_link">Billing</a>
+                        <WoowIcon name="'chevron_right'" size="16"/>
+                        <span class="o_woow_breadcrumb_current">Top-up Store</span>
+                    </div>
+                    <h1>Top-up Store</h1>
+                </div>
+            </div>
+
+            <!-- Balance Bar -->
+            <WoowCard shadow="true" class="'o_woow_topup_balance_bar'">
+                <div class="o_woow_topup_balance_content">
+                    <div class="o_woow_topup_balance_info">
+                        <WoowIcon name="'account_balance_wallet'" size="24"/>
+                        <span class="o_woow_topup_balance_label">Current Balance</span>
+                    </div>
+                    <div class="o_woow_topup_balance_amount">
+                        <span class="o_woow_topup_balance_value" t-esc="formattedBalance"/>
+                        <span class="o_woow_topup_balance_unit">Points</span>
+                    </div>
+                </div>
+            </WoowCard>
+
+            <!-- Category Tabs -->
+            <div class="o_woow_topup_tabs">
+                <t t-foreach="categoryTabs" t-as="tab" t-key="tab.key || 'all'">
+                    <button
+                        t-attf-class="o_woow_topup_tab {{ isCategoryActive(tab.key) ? 'o_woow_topup_tab_active' : '' }}"
+                        t-on-click="() => this.onCategoryChange(tab.key)">
+                        <t t-esc="tab.label"/>
+                    </button>
+                </t>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading plans...</p>
+                </div>
+            </t>
+
+            <t t-else="">
+                <!-- Empty State -->
+                <t t-if="plans.length === 0">
+                    <div class="o_woow_topup_empty">
+                        <WoowIcon name="'toll'" size="48"/>
+                        <p>No top-up plans available for this category.</p>
+                    </div>
+                </t>
+
+                <t t-else="">
+                    <!-- Plan Cards Grid -->
+                    <div class="o_woow_topup_grid">
+                        <t t-foreach="plans" t-as="plan" t-key="plan.id">
+                            <div class="o_woow_topup_plan_card">
+                                <!-- Badge -->
+                                <t t-if="plan.label">
+                                    <div class="o_woow_topup_plan_badge">
+                                        <t t-esc="plan.label"/>
+                                    </div>
+                                </t>
+
+                                <!-- Icon -->
+                                <div class="o_woow_topup_plan_icon">
+                                    <WoowIcon name="plan.icon || 'toll'" size="32"/>
+                                </div>
+
+                                <!-- Credits -->
+                                <div class="o_woow_topup_plan_credits">
+                                    <span class="o_woow_topup_plan_credits_value" t-esc="formatAmount(plan.credits)"/>
+                                    <span class="o_woow_topup_plan_credits_label">Credits</span>
+                                </div>
+
+                                <!-- Bonus Tag -->
+                                <div class="o_woow_topup_plan_bonus">
+                                    <t t-if="plan.bonus > 0">
+                                        <span class="o_woow_topup_plan_bonus_tag">
+                                            +<t t-esc="formatAmount(plan.bonus)"/> Bonus Points
+                                        </span>
+                                    </t>
+                                    <t t-else="">
+                                        <span class="o_woow_topup_plan_bonus_tag o_woow_topup_plan_bonus_neutral">
+                                            No expiration
+                                        </span>
+                                    </t>
+                                </div>
+
+                                <!-- Price -->
+                                <div class="o_woow_topup_plan_price">
+                                    $<t t-esc="formatAmount(plan.amount)"/>
+                                </div>
+
+                                <!-- Purchase Button -->
+                                <WoowButton
+                                    variant="'primary'"
+                                    size="'md'"
+                                    class="'o_woow_topup_plan_btn'"
+                                    onClick="() => this.onPurchaseClick(plan)">
+                                    Purchase
+                                </WoowButton>
+                            </div>
+                        </t>
+                    </div>
+                </t>
+            </t>
+
+            <!-- Bottom 2-column Info Grid -->
+            <div class="o_woow_topup_info_grid">
+                <!-- About Credit Points Card -->
+                <WoowCard shadow="true" class="'o_woow_topup_about_card'">
+                    <div class="o_woow_card_header">
+                        <WoowIcon name="'info'" size="22"/>
+                        <h3>About Credit Points</h3>
+                    </div>
+                    <p class="o_woow_topup_about_text">
+                        Credit points are used to pay for cloud services, subscriptions,
+                        and other platform features. Points never expire and can be used
+                        across all WoowTech services. Conversion rate: 1 Point = NT$ 1.
+                    </p>
+                </WoowCard>
+
+                <!-- Billing Support Card -->
+                <WoowCard shadow="true" class="'o_woow_topup_support_card'">
+                    <div class="o_woow_card_header">
+                        <WoowIcon name="'contact_support'" size="22"/>
+                        <h3>Billing Support</h3>
+                    </div>
+                    <div class="o_woow_topup_support_body">
+                        <div class="o_woow_topup_support_item">
+                            <WoowIcon name="'chat'" size="18"/>
+                            <a href="#" class="o_woow_topup_support_link">Live Chat</a>
+                        </div>
+                        <div class="o_woow_topup_support_item">
+                            <WoowIcon name="'mail'" size="18"/>
+                            <a href="mailto:support@woowtech.io">support@woowtech.io</a>
+                        </div>
+                    </div>
+                </WoowCard>
+            </div>
+
+            <!-- Add Funds Modal -->
+            <t t-if="state.showAddFundsModal and state.selectedPlan">
+                <AddFundsModal
+                    plan="state.selectedPlan"
+                    onClose.bind="onAddFundsClose"
+                    onSuccess.bind="onAddFundsSuccess"/>
+            </t>
+
+            <!-- Topup Success Modal -->
+            <t t-if="state.showSuccessModal and state.successData">
+                <TopupSuccessModal
+                    data="state.successData"
+                    onClose.bind="onSuccessClose"/>
+            </t>
+        </div>
+    </t>
+</templates>

@@ -49,6 +49,9 @@
             <t t-elif="router.current === 'billing'">
                 <BillingOverviewPage/>
             </t>
+            <t t-elif="router.current === 'billing-topup'">
+                <TopupStorePage/>
+            </t>
             <t t-elif="router.current === 'billing-invoices'">
                 <InvoiceListPage/>
             </t>

@@ -40,6 +40,87 @@ class BillingController(Controller):
             },
         }
 
+    # ==================== Top-up API ====================
+
+    @route("/api/billing/wallet/topup-plans", auth="user", methods=["POST"], type="json")
+    def api_topup_plans(self, category: str | None = None, **kw) -> dict[str, Any]:
+        """List available credit top-up plans.
+
+        Args:
+            category: Optional filter by category ('recommended', 'large_volume').
+
+        Returns:
+            dict with success and data (list of plan dicts).
+        """
+        Plan = request.env['woow_paas_platform.topup_plan'].sudo()
+
+        domain = [('active', '=', True)]
+        if category:
+            domain.append(('category', '=', category))
+
+        plans = Plan.search(domain, order='sequence, id')
+
+        return {
+            'success': True,
+            'data': [{
+                'id': p.id,
+                'name': p.name,
+                'amount': p.amount,
+                'credits': p.credits,
+                'bonus': p.bonus,
+                'label': p.label or '',
+                'icon': p.icon or 'toll',
+                'category': p.category or 'all',
+            } for p in plans],
+        }
+
+    @route("/api/billing/wallet/topup", auth="user", methods=["POST"], type="json")
+    def api_topup(self, plan_id: int | None = None, **kw) -> dict[str, Any]:
+        """Top up wallet credits using a selected plan.
+
+        Args:
+            plan_id: ID of the top-up plan to purchase.
+
+        Returns:
+            dict with credits_added, bonus, and new_balance on success.
+        """
+        if not plan_id:
+            return {'success': False, 'error': 'plan_id is required'}
+
+        Plan = request.env['woow_paas_platform.topup_plan'].sudo()
+        plan = Plan.browse(int(plan_id))
+
+        if not plan.exists() or not plan.active:
+            return {'success': False, 'error': 'Plan not found or inactive'}
+
+        partner = request.env.user.partner_id.sudo()
+
+        # Verify payment method is configured
+        if not partner.has_bound_credit_card():
+            return {
+                'success': False,
+                'error': 'No payment method configured',
+                'code': 'no_card',
+            }
+
+        # Add wallet points (skip actual ECPay charge for now)
+        total_credits = plan.credits + plan.bonus
+        partner.add_wallet_points(total_credits, f"Top-up: {plan.name}")
+
+        _logger.info(
+            "Wallet top-up: plan=%s, credits=%s, bonus=%s, partner=%s",
+            plan.name, plan.credits, plan.bonus, partner.id,
+        )
+
+        return {
+            'success': True,
+            'data': {
+                'credits_added': plan.credits,
+                'bonus': plan.bonus,
+                'new_balance': partner.wallet_balance,
+            },
+        }
+
     # ==================== Invoice API ====================
 
     def _invoice_status_label(self, invoice):

@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AddFundsModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Add Funds</h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.processing">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <!-- Amount Display -->
+                    <div class="o_woow_addfunds_amount_section">
+                        <span class="o_woow_addfunds_amount_prefix">$</span>
+                        <span class="o_woow_addfunds_amount_value" t-esc="formattedAmount"/>
+                    </div>
+
+                    <!-- Plan Summary -->
+                    <div class="o_woow_addfunds_info">
+                        <div class="o_woow_addfunds_row">
+                            <span class="o_woow_addfunds_label">Plan</span>
+                            <span class="o_woow_addfunds_value" t-esc="plan.name"/>
+                        </div>
+                        <div class="o_woow_addfunds_row">
+                            <span class="o_woow_addfunds_label">Credits</span>
+                            <span class="o_woow_addfunds_value">
+                                <t t-esc="formattedTotalCredits"/> pts
+                                <t t-if="plan.bonus > 0">
+                                    <span class="o_woow_addfunds_bonus_note">
+                                        (incl. <t t-esc="plan.bonus"/> bonus)
+                                    </span>
+                                </t>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Payment Method -->
+                    <div class="o_woow_addfunds_payment_section">
+                        <span class="o_woow_addfunds_section_title">Payment Method</span>
+                        <t t-if="hasCard">
+                            <div class="o_woow_addfunds_card_row">
+                                <div class="o_woow_addfunds_card_info">
+                                    <WoowIcon name="'credit_card'" size="20"/>
+                                    <span t-esc="cardDisplay"/>
+                                </div>
+                                <t t-if="cardExpiry">
+                                    <span class="o_woow_addfunds_card_expiry" t-esc="cardExpiry"/>
+                                </t>
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <div class="o_woow_addfunds_no_card">
+                                <WoowIcon name="'warning'" size="20"/>
+                                <span>Please add a payment method first</span>
+                            </div>
+                        </t>
+                    </div>
+
+                    <!-- Total -->
+                    <div class="o_woow_addfunds_total">
+                        <span class="o_woow_addfunds_total_label">Total to pay</span>
+                        <span class="o_woow_addfunds_total_value">
+                            $<t t-esc="formattedAmount"/>
+                        </span>
+                    </div>
+
+                    <!-- Error -->
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.processing">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton
+                        variant="'primary'"
+                        size="'md'"
+                        onClick.bind="onConfirm"
+                        disabled="!hasCard or state.processing">
+                        <t t-if="state.processing">
+                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            Processing...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'payment'" size="18"/>
+                            Pre-pay &amp; Get Credits
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

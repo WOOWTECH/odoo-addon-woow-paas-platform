@@ -20,6 +20,7 @@ import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
 import { BillingOverviewPage } from "./pages/billing/BillingOverviewPage";
 import { InvoiceListPage } from "./pages/billing/InvoiceListPage";
 import { InvoiceDetailPage } from "./pages/billing/InvoiceDetailPage";
+import { TopupStorePage } from "./pages/billing/TopupStorePage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -43,6 +44,7 @@ export class Root extends Component {
         BillingOverviewPage,
         InvoiceListPage,
         InvoiceDetailPage,
+        TopupStorePage,
         EmptyState,
     };
     static props = {};
