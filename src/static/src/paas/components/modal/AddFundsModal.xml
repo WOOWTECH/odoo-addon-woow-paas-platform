@@ -54,9 +54,11 @@
                             </div>
                         </t>
                         <t t-else="">
-                            <div class="o_woow_addfunds_no_card">
+                            <div class="o_woow_addfunds_no_card"
+                                 style="cursor: pointer;"
+                                 t-on-click="goToPaymentMethods">
                                 <WoowIcon name="'warning'" size="20"/>
-                                <span>Please add a payment method first</span>
+                                <span style="text-decoration: underline;">Please add a payment method first</span>
                             </div>
                         </t>
                     </div>
