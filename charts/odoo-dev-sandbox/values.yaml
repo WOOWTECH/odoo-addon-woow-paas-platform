@@ -44,11 +44,15 @@ odoo:
       enabled: true
       size: 2Gi
       storageClass: ""
-  # Odoo internal process limits (only effective when workers > 0)
-  # Set to 0 to disable (let K8s resource limits control instead)
+  # Odoo internal process limits
+  # These control virtual memory (VmSize), NOT physical memory (RSS).
+  # AI libraries (onnxruntime, fastembed, numpy) reserve large virtual
+  # address space via mmap. If memoryHard < VmSize, thread creation
+  # (clone syscall) fails with "can't start new thread".
+  # Keep memoryHard >= container memory limit to avoid false positives.
   processLimits:
-    memoryHard: 2684354560
-    memorySoft: 2147483648
+    memoryHard: 6442450944   # 6 GB
+    memorySoft: 4294967296   # 4 GB
     timeCpu: 600
     timeReal: 1200
   # Resource limits
@@ -68,8 +72,8 @@ odoo:
     timeoutSeconds: 5
     failureThreshold: 12
   # Liveness probe (TCP: more robust for dev sandbox with pip install at startup)
-  # NOTE: fastembed + onnxruntime dependencies are large (~200MB+), pip install
-  # can take 5-10 min on slow networks. Set initialDelaySeconds accordingly.
+  # NOTE: Local/CI-local modes run pip install at startup (fastembed + onnxruntime
+  # ~200MB+, can take 5-10 min). STG mode skips pip (baked into image).
   livenessProbe:
     tcpSocket:
       port: 8069
@@ -154,7 +158,7 @@ codeMount:
 resourceQuota:
   enabled: true
   cpu: "4"
-  memory: 4Gi
+  memory: 8Gi
   storage: 10Gi
 
 # --- Network Policy ---
