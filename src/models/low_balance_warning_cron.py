@@ -1,4 +1,9 @@
-"""Cron: warn users before subscription renewal if wallet balance is low."""
+"""Cron: warn users before subscription renewal if wallet balance is low.
+
+TODO(phase-1 follow-up): add integration test that seeds an
+sh.subscription.subscription with sh_date_of_next_payment within
+WARNING_WINDOW_DAYS and asserts dedup via woow_last_low_balance_warned_for.
+"""
 import logging
 from datetime import timedelta
 
@@ -19,7 +24,7 @@ class LowBalanceWarningCron(models.AbstractModel):
 
         For each subscription whose partner's wallet balance is below
         the plan price, send a single warning email per renewal cycle.
-        Dedup via `sh.subscription.subscription.paas_last_low_balance_warned_for`.
+        Dedup via `sh.subscription.subscription.woow_last_low_balance_warned_for`.
         """
         today = fields.Date.today()
         cutoff = today + timedelta(days=self.WARNING_WINDOW_DAYS)
@@ -57,7 +62,7 @@ class LowBalanceWarningCron(models.AbstractModel):
         next_payment = subscription.sh_date_of_next_payment
         if not next_payment:
             return
-        last_warned = subscription.paas_last_low_balance_warned_for
+        last_warned = subscription.woow_last_low_balance_warned_for
         if last_warned and last_warned == next_payment:
             return
 
@@ -90,7 +95,7 @@ class LowBalanceWarningCron(models.AbstractModel):
             email_layout_xmlid='mail.mail_notification_light',
         )
         # Persist dedup marker
-        subscription.write({'paas_last_low_balance_warned_for': next_payment})
+        subscription.write({'woow_last_low_balance_warned_for': next_payment})
         _logger.info(
             "Pre-renewal warning queued for partner %s, renewal %s, "
             "price=%.2f, balance=%.2f",
