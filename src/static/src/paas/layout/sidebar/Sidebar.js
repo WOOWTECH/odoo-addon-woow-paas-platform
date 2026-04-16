@@ -39,7 +39,6 @@ export class Sidebar extends Component {
                 || current === "billing-invoices"
                 || current === "billing-invoice-detail"
                 || current === "billing-subscriptions"
-                || current === "billing-payment-methods"
                 || current === "billing-transactions";
         }
         if (item.path === "billing/invoices") {
