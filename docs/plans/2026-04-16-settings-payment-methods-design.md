@@ -51,7 +51,18 @@
 
 ---
 
-## Phase 1：Settings 入口頁 + 低餘額通知（現在實作）
+## Phase 1：Settings 入口頁 + 低餘額通知（✅ 已完成 — shipped 2026-04-16）
+
+> 實作 PR：commits `4a36c8c..16c9d9a` on `develop`。執行計畫見 [`docs/plans/2026-04-16-settings-phase1-implementation.md`](./2026-04-16-settings-phase1-implementation.md)。
+>
+> 已交付：
+> - 移除 `#/billing/payment-methods` 路由（含 AddFundsModal 死連結清理）
+> - 新增 Settings 入口頁（`#/settings`），含 Phase 2 Payment Methods 佔位卡片
+> - Mail template `mail_template_low_balance` + 扣款失敗時觸發通知
+> - 每日 pre-renewal 警示 cron（3 天前檢查餘額，以 `woow_last_low_balance_warned_for` 去重）
+> - BillingOverview 低餘額警示 banner，CTA 連到 Top-up Store
+>
+> Phase 2 起始點見本文件下半部。
 
 ### 範圍
 
