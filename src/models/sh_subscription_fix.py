@@ -54,6 +54,7 @@ class ShSubscriptionFix(models.Model):
                     subscription.name, partner.wallet_balance,
                     invoice_id.amount_total, invoice_id.name,
                 )
+                self._notify_low_balance(partner, invoice_id)
 
             try:
                 pdf_content, _content_type = self.env['ir.actions.report'].sudo()._render_qweb_pdf(
@@ -78,4 +79,39 @@ class ShSubscriptionFix(models.Model):
                 "Auto-invoice created for subscription %s (amount=%s, next=%s)",
                 subscription.name, invoice_id.amount_total,
                 subscription.sh_date_of_next_payment,
+            )
+
+    @api.model
+    def _notify_low_balance(self, partner, invoice):
+        """Send a low-wallet-balance email to the partner.
+
+        Called when an auto-invoice cannot be paid because wallet balance
+        is insufficient.
+        """
+        template = self.env.ref(
+            'woow_paas_platform.mail_template_low_balance',
+            raise_if_not_found=False,
+        )
+        if not template:
+            _logger.warning("mail_template_low_balance not found; skip notification")
+            return
+
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url', '')
+        ctx = {
+            'invoice_name': invoice.name or '',
+            'amount_text': '%.2f' % invoice.amount_total,
+            'balance_text': '%.2f' % partner.wallet_balance,
+            'topup_url': '%s/woow#/billing/topup' % base_url.rstrip('/'),
+        }
+        try:
+            template.with_context(**ctx).send_mail(
+                partner.id,
+                force_send=False,
+                email_layout_xmlid='mail.mail_notification_light',
+            )
+            _logger.info("Low-balance notification queued for partner %s", partner.id)
+        except Exception:
+            _logger.exception(
+                "Failed to queue low-balance notification for partner %s",
+                partner.id,
             )
