@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.SettingsPage">
+        <div class="o_woow_settings_page">
+            <div class="o_woow_settings_header">
+                <h1>Settings</h1>
+                <p>Manage your account preferences and configuration.</p>
+            </div>
+
+            <div class="o_woow_settings_cards">
+                <WoowCard shadow="true" class="'o_woow_settings_card o_woow_settings_card_disabled'">
+                    <div class="o_woow_settings_card_body">
+                        <div class="o_woow_settings_card_icon">
+                            <WoowIcon name="'credit_card'" size="32"/>
+                        </div>
+                        <div class="o_woow_settings_card_text">
+                            <div class="o_woow_settings_card_title_row">
+                                <h3>Payment Methods</h3>
+                                <span class="o_woow_settings_badge">Coming Soon</span>
+                            </div>
+                            <p>Bind credit cards so your wallet can auto-topup when the balance runs low.</p>
+                        </div>
+                    </div>
+                </WoowCard>
+            </div>
+        </div>
+    </t>
+</templates>

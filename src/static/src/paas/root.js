@@ -23,6 +23,7 @@ import { InvoiceDetailPage } from "./pages/billing/InvoiceDetailPage";
 import { TopupStorePage } from "./pages/billing/TopupStorePage";
 import { SubscriptionListPage } from "./pages/billing/SubscriptionListPage";
 import { TransactionListPage } from "./pages/billing/TransactionListPage";
+import { SettingsPage } from "./pages/settings/SettingsPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -49,6 +50,7 @@ export class Root extends Component {
         TopupStorePage,
         SubscriptionListPage,
         TransactionListPage,
+        SettingsPage,
         EmptyState,
     };
     static props = {};
