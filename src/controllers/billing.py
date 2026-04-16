@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
 from odoo import fields
@@ -448,7 +448,7 @@ class BillingController(Controller):
                 - shortfall (float): max(0, total_needed - wallet_balance)
         """
         partner = request.env.user.partner_id
-        today = date.today()
+        today = fields.Date.today()
         cutoff = today + timedelta(days=3)
 
         subs = request.env['sh.subscription.subscription'].sudo().search([

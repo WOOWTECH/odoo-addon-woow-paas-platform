@@ -6,7 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { CreditHistoryModal } from "../../components/modal/CreditHistoryModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
-import { formatDate, formatAmount } from "../../utils/billing_helpers";
+import { formatDate, formatAmount, formatAmountDecimal } from "../../utils/billing_helpers";
 
 const STATUS_MAP = {
   draft: { label: "Draft", color: "gray" },
@@ -93,6 +93,10 @@ export class BillingOverviewPage extends Component {
 
   formatAmount(amount) {
     return formatAmount(amount);
+  }
+
+  formatAmountDecimal(amount) {
+    return formatAmountDecimal(amount);
   }
 
   get subscriptionsLoading() {

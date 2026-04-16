@@ -307,6 +307,8 @@ export const billingService = reactive({
                     upcoming: result.data.upcoming ?? [],
                     shortfall: result.data.shortfall ?? 0,
                 };
+            } else {
+                console.error("Failed to fetch upcoming renewals:", result.error);
             }
         } catch (err) {
             console.error("Failed to fetch upcoming renewals:", err);
