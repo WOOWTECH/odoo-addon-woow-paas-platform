@@ -38,6 +38,7 @@ export class BillingOverviewPage extends Component {
       this.loadWallet();
       billingService.fetchInvoices(1, 3);
       billingService.fetchSubscriptions("active", 1, 3);
+      billingService.fetchUpcomingRenewals();
     });
   }
 
@@ -126,6 +127,14 @@ export class BillingOverviewPage extends Component {
       return `Visa •••• ${w.cardLast4}`;
     }
     return "No card bound";
+  }
+
+  get hasLowBalanceWarning() {
+    return this.billing.upcomingRenewals.has_low_balance;
+  }
+
+  get lowBalanceShortfall() {
+    return this.billing.upcomingRenewals.shortfall;
   }
 
   showCreditHistory() {

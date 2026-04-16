@@ -127,6 +127,13 @@ export const billingService = reactive({
     /** @type {boolean} */
     topupPlansLoading: false,
 
+    /** @type {{ has_low_balance: boolean, upcoming: Array, shortfall: number }} */
+    upcomingRenewals: {
+        has_low_balance: false,
+        upcoming: [],
+        shortfall: 0,
+    },
+
     /**
      * Fetch paginated subscription list
      * @param {string} [filter='active'] - Filter: 'active', 'past', or 'all'
@@ -284,6 +291,25 @@ export const billingService = reactive({
             return { success: false, error: result.error || "Failed to set default" };
         } catch (err) {
             return { success: false, error: err.message || "Failed to set default" };
+        }
+    },
+
+    /**
+     * Fetch upcoming renewals in the next 3 days.
+     * @returns {Promise<void>}
+     */
+    async fetchUpcomingRenewals() {
+        try {
+            const result = await jsonRpc("/api/billing/upcoming-renewals", {});
+            if (result.success) {
+                this.upcomingRenewals = {
+                    has_low_balance: result.data.has_low_balance,
+                    upcoming: result.data.upcoming ?? [],
+                    shortfall: result.data.shortfall ?? 0,
+                };
+            }
+        } catch (err) {
+            console.error("Failed to fetch upcoming renewals:", err);
         }
     },
 

@@ -19,6 +19,30 @@
             </t>
 
             <t t-else="">
+                <!-- Low-balance Renewal Banner -->
+                <t t-if="hasLowBalanceWarning">
+                    <WoowCard shadow="true" class="'o_woow_billing_low_balance_banner'">
+                        <div class="o_woow_low_balance_content">
+                            <WoowIcon name="'warning'" size="28"/>
+                            <div class="o_woow_low_balance_text">
+                                <h3>Wallet balance is too low for upcoming renewal</h3>
+                                <p>
+                                    You need at least
+                                    <strong><t t-esc="lowBalanceShortfall.toFixed(2)"/></strong>
+                                    more to cover subscriptions renewing in the next 3 days.
+                                    Top up now to avoid service interruption.
+                                </p>
+                            </div>
+                            <WoowButton
+                                variant="'primary'"
+                                size="'md'"
+                                onClick="() => this.goToTopup()">
+                                Top up now
+                            </WoowButton>
+                        </div>
+                    </WoowCard>
+                </t>
+
                 <!-- Credit Balance Card -->
                 <WoowCard shadow="true" class="'o_woow_billing_credit_card'">
                     <div class="o_woow_billing_credit_content">
