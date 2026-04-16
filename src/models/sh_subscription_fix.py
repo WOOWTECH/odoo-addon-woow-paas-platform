@@ -4,6 +4,7 @@ import logging
 from dateutil.relativedelta import relativedelta
 
 from odoo import api, fields, models
+from odoo.tools.misc import formatLang
 
 _logger = logging.getLogger(__name__)
 
@@ -97,10 +98,17 @@ class ShSubscriptionFix(models.Model):
             return
 
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url', '')
+        amount_text = formatLang(
+            self.env, invoice.amount_total, currency_obj=invoice.currency_id,
+        )
+        balance_text = formatLang(
+            self.env, partner.wallet_balance,
+            currency_obj=partner.company_id.currency_id,
+        )
         ctx = {
             'invoice_name': invoice.name or '',
-            'amount_text': '%.2f' % invoice.amount_total,
-            'balance_text': '%.2f' % partner.wallet_balance,
+            'amount_text': amount_text,
+            'balance_text': balance_text,
             'topup_url': '%s/woow#/billing/topup' % base_url.rstrip('/'),
         }
         try:

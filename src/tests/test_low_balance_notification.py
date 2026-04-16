@@ -1,6 +1,4 @@
 """Tests for low balance notification during subscription auto-invoice."""
-from unittest.mock import patch
-
 from odoo.tests.common import TransactionCase
 
 
@@ -44,3 +42,23 @@ class TestLowBalanceNotification(TransactionCase):
             ('subject', 'ilike', 'top up'),
         ])
         self.assertTrue(mails, "A top-up notification email should have been queued")
+
+    def test_insufficient_balance_triggers_notify_via_auto_invoice(self):
+        """Regression guard: _sh_create_auto_invoice must call _notify_low_balance.
+
+        Guards against regressions where the call site in
+        sh_subscription_fix._sh_create_auto_invoice is accidentally removed.
+        Uses a source-level assertion because Odoo ORM is hard to mock
+        without a full subscription setup.
+        """
+        import inspect
+        from odoo.addons.woow_paas_platform.models.sh_subscription_fix import (
+            ShSubscriptionFix,
+        )
+        source = inspect.getsource(ShSubscriptionFix._sh_create_auto_invoice)
+        self.assertIn(
+            '_notify_low_balance',
+            source,
+            "_sh_create_auto_invoice must still call _notify_low_balance "
+            "in the insufficient-balance branch."
+        )
