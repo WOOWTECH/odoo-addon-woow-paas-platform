@@ -64,6 +64,9 @@
             <t t-elif="router.current === 'billing-transactions'">
                 <TransactionListPage/>
             </t>
+            <t t-elif="router.current === 'settings'">
+                <SettingsPage/>
+            </t>
             <t t-else="">
                 <EmptyState/>
             </t>

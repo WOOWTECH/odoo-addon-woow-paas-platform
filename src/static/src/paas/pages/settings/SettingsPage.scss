@@ -1,0 +1,91 @@
+// =============================================================================
+// Settings Page Styles
+// =============================================================================
+
+.o_woow_settings_page {
+  padding: 24px 32px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.o_woow_settings_header {
+  margin-bottom: 24px;
+
+  h1 {
+    font-size: 28px;
+    font-weight: 600;
+    color: $woow-text-primary;
+    margin: 0 0 8px 0;
+  }
+
+  p {
+    color: $woow-text-secondary;
+    margin: 0;
+  }
+}
+
+.o_woow_settings_cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.o_woow_settings_card {
+  &_body {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 20px;
+  }
+
+  &_icon {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    background: rgba($woow-primary, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: $woow-primary;
+  }
+
+  &_text {
+    flex: 1;
+
+    h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: $woow-text-primary;
+    }
+
+    p {
+      margin: 4px 0 0 0;
+      color: $woow-text-secondary;
+      font-size: 14px;
+    }
+  }
+
+  &_title_row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &_disabled {
+    opacity: 0.7;
+    pointer-events: none;
+  }
+}
+
+.o_woow_settings_badge {
+  padding: 2px 8px;
+  border-radius: $woow-radius-full;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}

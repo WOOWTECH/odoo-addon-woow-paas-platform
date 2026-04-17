@@ -24,7 +24,6 @@ const routes = [
     { path: "billing/invoices", name: "Invoices", routeName: "billing-invoices" },
     { path: "billing/invoices/:id", name: "Invoice Detail", routeName: "billing-invoice-detail", pattern: /^billing\/invoices\/(\d+)$/ },
     { path: "billing/subscriptions", name: "Subscriptions", routeName: "billing-subscriptions" },
-    { path: "billing/payment-methods", name: "Payment Methods", routeName: "billing-payment-methods" },
     { path: "billing/transactions", name: "Transactions", routeName: "billing-transactions" },
     { path: "settings", name: "Settings", routeName: "settings" },
 ];

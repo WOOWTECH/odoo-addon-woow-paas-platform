@@ -9,3 +9,4 @@ from . import test_ha_api
 from . import test_naming
 from . import test_mcp_integration
 from . import test_subscription_lifecycle
+from . import test_low_balance_notification

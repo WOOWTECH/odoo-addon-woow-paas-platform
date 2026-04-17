@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <data noupdate="1">
+        <record id="mail_template_low_balance" model="mail.template">
+            <field name="name">PaaS: Low Wallet Balance Notification</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">Action needed: Please top up your wallet</field>
+            <field name="email_from">{{ object.company_id.email_formatted or user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="body_html" type="html">
+                <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                    <p>Hi <t t-out="object.name"/>,</p>
+                    <p>
+                        Your subscription invoice
+                        <strong t-out="ctx.get('invoice_name', '')"/>
+                        of
+                        <strong t-out="ctx.get('amount_text', '')"/>
+                        could not be paid because your wallet balance is insufficient.
+                    </p>
+                    <p>Current wallet balance: <strong t-out="ctx.get('balance_text', '')"/></p>
+                    <p>
+                        Please top up your wallet to keep your service active.
+                        You have a grace period before the service is suspended.
+                    </p>
+                    <p>
+                        <a t-att-href="ctx.get('topup_url', '#')"
+                           style="display:inline-block;background:#6366f1;color:#ffffff;padding:10px 16px;text-decoration:none;border-radius:6px;font-weight:600;">
+                            Top up now
+                        </a>
+                    </p>
+                    <p style="color:#6b7280;font-size:12px;">
+                        Thank you for using WoowTech PaaS.
+                    </p>
+                </div>
+            </field>
+            <field name="auto_delete" eval="True"/>
+        </record>
+    </data>
+</odoo>

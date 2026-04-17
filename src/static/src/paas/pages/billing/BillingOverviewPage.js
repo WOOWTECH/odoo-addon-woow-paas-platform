@@ -6,7 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { CreditHistoryModal } from "../../components/modal/CreditHistoryModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
-import { formatDate, formatAmount } from "../../utils/billing_helpers";
+import { formatDate, formatAmount, formatAmountDecimal } from "../../utils/billing_helpers";
 
 const STATUS_MAP = {
   draft: { label: "Draft", color: "gray" },
@@ -38,6 +38,7 @@ export class BillingOverviewPage extends Component {
       this.loadWallet();
       billingService.fetchInvoices(1, 3);
       billingService.fetchSubscriptions("active", 1, 3);
+      billingService.fetchUpcomingRenewals();
     });
   }
 
@@ -94,6 +95,10 @@ export class BillingOverviewPage extends Component {
     return formatAmount(amount);
   }
 
+  formatAmountDecimal(amount) {
+    return formatAmountDecimal(amount);
+  }
+
   get subscriptionsLoading() {
     return this.billing.subscriptionsLoading;
   }
@@ -126,6 +131,14 @@ export class BillingOverviewPage extends Component {
       return `Visa •••• ${w.cardLast4}`;
     }
     return "No card bound";
+  }
+
+  get hasLowBalanceWarning() {
+    return this.billing.upcomingRenewals.has_low_balance;
+  }
+
+  get lowBalanceShortfall() {
+    return this.billing.upcomingRenewals.shortfall;
   }
 
   showCreditHistory() {

@@ -3,7 +3,6 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
-import { router } from "../../core/router";
 
 /**
  * AddFundsModal Component
@@ -73,11 +72,6 @@ export class AddFundsModal extends Component {
     if (ev.target === ev.currentTarget && !this.state.processing) {
       this.props.onClose();
     }
-  }
-
-  goToPaymentMethods() {
-    this.props.onClose();
-    router.navigate("billing/payment-methods");
   }
 
   async onConfirm() {

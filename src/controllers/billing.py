@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from datetime import timedelta
 from typing import Any
 
 from odoo import fields
@@ -434,6 +435,50 @@ class BillingController(Controller):
         )
 
         return {'success': True}
+
+    @route("/api/billing/upcoming-renewals", auth="user", methods=["POST"], type="json")
+    def api_upcoming_renewals(self, **kw) -> dict[str, Any]:
+        """Return subscriptions renewing within 3 days with low-balance status.
+
+        Returns:
+            dict with:
+                - has_low_balance (bool): wallet balance < total needed
+                - upcoming (list): each item has
+                    subscription_id, plan_name, amount, renewal_date, sufficient
+                - shortfall (float): max(0, total_needed - wallet_balance)
+        """
+        partner = request.env.user.partner_id
+        today = fields.Date.today()
+        cutoff = today + timedelta(days=3)
+
+        subs = request.env['sh.subscription.subscription'].sudo().search([
+            ('sh_partner_id', '=', partner.id),
+            ('state', '=', 'in_progress'),
+            ('sh_date_of_next_payment', '>=', today),
+            ('sh_date_of_next_payment', '<=', cutoff),
+        ])
+
+        upcoming = []
+        total_needed = 0.0
+        for sub in subs:
+            amount = sub.sh_plan_price or 0.0
+            total_needed += amount
+            upcoming.append({
+                'subscription_id': sub.id,
+                'plan_name': sub.sh_subscription_plan_id.name if sub.sh_subscription_plan_id else '',
+                'amount': amount,
+                'renewal_date': sub.sh_date_of_next_payment.isoformat() if sub.sh_date_of_next_payment else None,
+                'sufficient': partner.wallet_balance >= amount,
+            })
+
+        return {
+            'success': True,
+            'data': {
+                'has_low_balance': partner.wallet_balance < total_needed,
+                'upcoming': upcoming,
+                'shortfall': max(0.0, total_needed - partner.wallet_balance),
+            },
+        }
 
     # ==================== Invoice API ====================
 

@@ -407,3 +407,39 @@
     }
   }
 }
+
+// Low-balance Renewal Banner
+.o_woow_billing_low_balance_banner {
+  margin-bottom: 1rem;
+  background: #fef3c7 !important; // TODO(phase-2): lift to $woow-warning-bg
+  border: 1px solid #fcd34d;
+
+  .o_woow_low_balance_content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+
+    > span.material-symbols-outlined {
+      color: #92400e; // TODO(phase-2): lift to $woow-warning-fg
+      flex-shrink: 0;
+    }
+  }
+
+  .o_woow_low_balance_text {
+    flex: 1;
+
+    h3 {
+      margin: 0 0 0.25rem 0;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: #92400e;
+    }
+
+    p {
+      margin: 0;
+      font-size: 0.8125rem;
+      color: $woow-text-primary;
+    }
+  }
+}
