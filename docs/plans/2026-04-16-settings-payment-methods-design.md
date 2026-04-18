@@ -134,7 +134,36 @@ Grace period 到期 cron → 檢查是否已補值成功
 
 ---
 
-## Phase 2：ECPG 綁卡 + 自動扣款（未來實作）
+## Phase 2：ECPG 綁卡 + 自動扣款（進行中）
+
+> **更新 2026-04-19**：ecpay agent 已完成 `payment_ecpay_ecpg` addon（branch `feat/ecpg-phase3-subscription`），已整合進 `paas-odoo-ci` commit `f32c677`。Phase 2 分拆為 2a + 2b 兩個 PR。
+>
+> ### Phase 2a — Payment Methods UI（先做）
+> - OWL `#/settings/payment-methods` 列表頁 + `#/settings/payment-methods/add` 綁卡子頁
+> - 後端 `/api/billing/payment-methods/*` wrapper（直接 import `payment_ecpay_ecpg.sdk.ecpg_client.ECPGClient`）
+> - 啟用 SettingsPage 的 Payment Methods 卡片
+> - ManagePaymentMethodsModal 接回 BillingOverview 當快速入口
+>
+> ### Phase 2b — Auto-topup 整合（Phase 2a 穩定後）
+> - 訂閱扣款失敗 fallback：先嘗試從綁定卡片扣款補值
+> - `_attempt_auto_topup` 掛在 `_sh_create_auto_invoice` 的不足分支
+> - `_notify_low_balance` 只在 auto-topup 也失敗才觸發
+> - 3DS 情境下 auto-topup 會 fail（無使用者互動），屬預期行為 → 改發 notify
+>
+> ### Phase 2 設計決策
+> - **(B) 卡片表單位置**：獨立 sub-page `#/settings/payment-methods/add`（Modal 放不下 ECPay SDK 強制的 `<div id="ECPayPayment">` 卡片表單）
+> - **(X) 3DS 處理**：整頁 redirect，綁定完成後 ECPay 的 `OrderResultURL` 帶 URL query 參數導回 `/woow#/settings/payment-methods?bind_status=ok&trade_no=...`，OWL 偵測後 refresh 卡片列表
+> - **(R) API 層級**：在 `woow_paas_platform` 包一層 `/api/billing/payment-methods/*` wrapper，**直接 import `ECPGClient`（不透過 HTTP）**，這樣可以自訂 `ReturnURL`/`OrderResultURL` 讓使用者 3DS 完成後回到 OWL 而非 ecpay portal
+> - **SDK 載入**：在 `AddPaymentMethodPage` 的 `setup()` 動態注入 3 支 `<script>`（jQuery → node-forge → `sdk-1.0.0.js`），不加進全域 `assets_paas`（綁卡低頻）
+>
+> ### Phase 2a 執行計畫
+> 詳細 task 清單見 [`docs/plans/2026-04-19-settings-phase2a-implementation.md`](./2026-04-19-settings-phase2a-implementation.md)（待建立）。
+
+---
+
+## Phase 2 原始設計（保留供參考）
+
+> 以下為 2026-04-16 初版 Phase 2 設計。實際執行時 ecpay agent 的 `payment_ecpay_ecpg` addon 已提供現成 SDK + API，所以我們不需要從零寫 `ECPGAesService` / `ECPGClient`，只需做 wrapper 層。本節保留作為設計思路參考。
 
 ### 前置條件
 
