@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
+import { loadJS } from "@web/core/assets";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
@@ -16,21 +17,10 @@ const SDK_SCRIPTS = [
     "https://ecpg.ecpay.com.tw/Scripts/sdk-1.0.0.js",
 ];
 
-/**
- * Inject <script> tags sequentially (ECPay SDK requires strict load order).
- * @returns {Promise<void>}
- */
 async function loadEcpaySdk() {
+    // Sequential await preserves required load order (ECPay SDK requirement).
     for (const url of SDK_SCRIPTS) {
-        if (document.querySelector(`script[src="${url}"]`)) continue;
-        await new Promise((resolve, reject) => {
-            const s = document.createElement("script");
-            s.src = url;
-            s.async = false;
-            s.onload = resolve;
-            s.onerror = () => reject(new Error(`Failed to load ${url}`));
-            document.head.appendChild(s);
-        });
+        await loadJS(url);
     }
     if (typeof window.ECPay === "undefined") {
         throw new Error("ECPay SDK did not expose window.ECPay after load");
@@ -52,17 +42,15 @@ export class AddPaymentMethodPage extends Component {
 
         onMounted(async () => {
             try {
-                // Step 1: load SDK scripts
-                await loadEcpaySdk();
-
-                // Step 2: ask backend for a Token
-                const prep = await billingService.preparePaymentMethodBind();
+                const [, prep] = await Promise.all([
+                    loadEcpaySdk(),
+                    billingService.preparePaymentMethodBind(),
+                ]);
                 if (!prep.success) {
                     throw new Error(prep.error || "Prepare bind failed");
                 }
                 this.state.bindContext = prep.data;
 
-                // Step 3: initialize SDK env + render card form into #ECPayPayment
                 const envi = prep.data.sandbox ? "Stage" : "Prod";
                 await new Promise((resolve, reject) => {
                     window.ECPay.initialize(envi, 1, (errMsg) => {
@@ -101,7 +89,6 @@ export class AddPaymentMethodPage extends Component {
         this.state.error = null;
 
         try {
-            // Get BindCardPayToken from SDK
             const payToken = await new Promise((resolve, reject) => {
                 window.ECPay.getBindCardPayToken((result, errMsg) => {
                     if (errMsg) return reject(new Error("PayToken failed: " + errMsg));
@@ -111,7 +98,6 @@ export class AddPaymentMethodPage extends Component {
                 });
             });
 
-            // Send to backend
             const ctx = this.state.bindContext;
             const result = await billingService.createPaymentMethodBind({
                 member_id: ctx.member_id,
@@ -122,7 +108,6 @@ export class AddPaymentMethodPage extends Component {
                 throw new Error(result.error || "Bind rejected");
             }
 
-            // Handle 3DS redirect
             if (result.data.three_d_url) {
                 window.location.href = result.data.three_d_url;
                 return; // page unloads

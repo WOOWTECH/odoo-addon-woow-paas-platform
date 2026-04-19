@@ -221,24 +221,32 @@ export const billingService = reactive({
         }
     },
 
+    /** @type {Promise<void>|null} */
+    _fetchPaymentMethodsPromise: null,
+
     /**
-     * Fetch bound payment methods
+     * Fetch bound payment methods. In-flight calls are deduplicated.
      * @returns {Promise<void>}
      */
     async fetchPaymentMethods() {
-        this.paymentMethodsLoading = true;
-        try {
-            const result = await jsonRpc("/api/billing/payment-methods", {});
-            if (result.success) {
-                this.paymentMethods = result.data ?? [];
-            } else {
-                console.error("Failed to fetch payment methods:", result.error);
+        if (this._fetchPaymentMethodsPromise) return this._fetchPaymentMethodsPromise;
+        this._fetchPaymentMethodsPromise = (async () => {
+            this.paymentMethodsLoading = true;
+            try {
+                const result = await jsonRpc("/api/billing/payment-methods", {});
+                if (result.success) {
+                    this.paymentMethods = result.data ?? [];
+                } else {
+                    console.error("Failed to fetch payment methods:", result.error);
+                }
+            } catch (err) {
+                console.error("Failed to fetch payment methods:", err);
+            } finally {
+                this.paymentMethodsLoading = false;
+                this._fetchPaymentMethodsPromise = null;
             }
-        } catch (err) {
-            console.error("Failed to fetch payment methods:", err);
-        } finally {
-            this.paymentMethodsLoading = false;
-        }
+        })();
+        return this._fetchPaymentMethodsPromise;
     },
 
     /**
@@ -302,6 +310,7 @@ export const billingService = reactive({
         try {
             const result = await jsonRpc(`/api/billing/payment-methods/${id}/set-default`, {});
             if (result.success) {
+                await this.fetchPaymentMethods();
                 return { success: true };
             }
             return { success: false, error: result.error || "Failed to set default" };

@@ -66,9 +66,7 @@ export class PaymentMethodsListPage extends Component {
         this.state.settingDefault = tokenId;
         this.state.error = null;
         const result = await billingService.setDefaultPaymentMethod(tokenId);
-        if (result.success) {
-            await billingService.fetchPaymentMethods();
-        } else {
+        if (!result.success) {
             this.state.error = result.error || "Set default failed";
         }
         this.state.settingDefault = null;
