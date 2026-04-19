@@ -154,7 +154,16 @@ Grace period 到期 cron → 檢查是否已補值成功
 > - `payment_ecpay_ecpg` 加入 `__manifest__.py` depends
 > - ECPay MerchantTradeDate 使用 UTC+8
 >
-> ### Phase 2b — Auto-topup 整合（進行中）
+> ### Phase 2b — Auto-topup 整合（✅ 已完成 — shipped 2026-04-19）
+>
+> 實作 commits：`da3a54a..2082a40` on `feat/settings-phase2a-payment-methods`。執行計畫見 [`docs/plans/2026-04-19-settings-phase2b-implementation.md`](./2026-04-19-settings-phase2b-implementation.md)。
+>
+> 已交付：
+> - `_attempt_auto_topup(partner, shortfall)` helper on `sh.subscription.subscription`（via `ShSubscriptionFix` inherit）
+> - 掛到 `_sh_create_auto_invoice` 不足分支：先 auto-topup，成功則續扣訂閱費；失敗保留 `_notify_low_balance`
+> - 8 個失敗路徑覆蓋（no_shortfall / no_token / provider_not_enabled / currency_not_configured / 3ds_required / failed state / sdk_error / ok）
+> - 4 個新測試：happy path + 3 failure branches + 2 source-assertion regression guards
+> - Dead code 清理：`AddCardModal.{js,xml,scss}` 和 `CardAddedSuccessModal.{js,xml,scss}` 刪除
 >
 > **更新 2026-04-19**：範圍與設計決策確認。
 >
