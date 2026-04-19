@@ -146,6 +146,10 @@ class BillingController(Controller):
                 partner.company_id or request.env.company
             ).sudo().property_payment_token_id
             default_token_id = default_token.id if default_token else False
+        # Community Odoo lacks the Enterprise field — fall back to the latest
+        # token so auto-topup matches what's marked default in the UI.
+        if tokens and not default_token_id:
+            default_token_id = tokens.sorted('id', reverse=True)[0].id
 
         def _format_expire(raw):
             # ECPay's ecpg_card_expire is stored as YYMM (e.g. '2812' = Dec 2028).

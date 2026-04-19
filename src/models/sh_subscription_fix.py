@@ -186,12 +186,27 @@ class ShSubscriptionFix(models.Model):
         # covers the invoice even if the shortfall has a fractional TWD component.
         charge_amount = int(math.ceil(shortfall))
 
-        if 'property_payment_token_id' not in partner._fields:
-            return False, TOPUP_NO_TOKEN
-
-        token = partner.with_company(
-            partner.company_id or self.env.company
-        ).sudo().property_payment_token_id
+        # Default-token preference: Odoo Enterprise's account_payment adds a
+        # company-dependent `property_payment_token_id` on res.partner. On
+        # community installs that field is absent, so we fall back to the most
+        # recently created active ECPG-bound token for this partner. The
+        # set-default UI is a no-op without the Enterprise field — that is a
+        # known limitation tracked separately for Phase 2c.
+        token = self.env['payment.token'].sudo()
+        if 'property_payment_token_id' in partner._fields:
+            token = partner.with_company(
+                partner.company_id or self.env.company
+            ).sudo().property_payment_token_id
+        if not token or not token.active or not token.ecpg_bindcard_id:
+            token = self.env['payment.token'].sudo().search(
+                [
+                    ('partner_id', '=', partner.id),
+                    ('active', '=', True),
+                    ('ecpg_bindcard_id', '!=', False),
+                ],
+                order='id desc',
+                limit=1,
+            )
 
         if not token or not token.active or not token.ecpg_bindcard_id:
             return False, TOPUP_NO_TOKEN
