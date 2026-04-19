@@ -187,6 +187,7 @@ Grace period 到期 cron → 檢查是否已補值成功
 > - 卡片到期前 30 天提醒（`ecpg_card_expire` 欄位）
 > - GetMemberBindCard reconcile（催回遺失的 bind callback）
 > - Design system 元件抽取（breadcrumb / banner）
+> - **`/woow#/settings/profile` 個人資料頁面** — 讓使用者自助編輯 phone/email/name（目前只能由管理員進 Odoo 後台改，但 PaaS 使用者通常沒 backend 存取權）。2026-04-19 發現：Mitchell Admin 的預設 phone `+1 555-555-5555` 讓 ECPay 拒綁卡，`_sanitize_phone_for_ecpay` helper 暫時把非數字剝掉，但根治要讓使用者自己能改
 >
 > 執行計畫：見 [`docs/plans/2026-04-19-settings-phase2b-implementation.md`](./2026-04-19-settings-phase2b-implementation.md)（即將建立）。
 >

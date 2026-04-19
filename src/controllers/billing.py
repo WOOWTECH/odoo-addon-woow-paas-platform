@@ -23,6 +23,19 @@ ERR_NOT_FOUND = 'not_found'
 ERR_NOT_OWNER = 'not_owner'
 
 
+def _sanitize_phone_for_ecpay(raw):
+    """Strip non-digits from a phone string for ECPay.
+
+    ECPay's ConsumerInfo.Phone rejects '+', '-', spaces, parentheses.
+    Returns digits-only string, or '' if the result is too short to be
+    a plausible phone number (ECPay's Phone field is optional).
+    """
+    if not raw:
+        return ''
+    digits = ''.join(c for c in raw if c.isdigit())
+    return digits if len(digits) >= 7 else ''
+
+
 class BillingController(Controller):
     _name = 'woow_paas_platform.billing'
 
@@ -184,7 +197,7 @@ class BillingController(Controller):
         consumer_info = {
             'MerchantMemberID': member_id,
             'Email': partner.email or '',
-            'Phone': partner.phone or '',
+            'Phone': _sanitize_phone_for_ecpay(partner.phone),
             'Name': partner.name or '',
             'CountryCode': '158',
         }

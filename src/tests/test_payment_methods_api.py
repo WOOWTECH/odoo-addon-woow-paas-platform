@@ -1,7 +1,31 @@
 """Tests for /api/billing/payment-methods/* wrapper endpoints."""
 from unittest.mock import patch
 
-from odoo.tests.common import HttpCase
+from odoo.tests.common import HttpCase, TransactionCase
+
+from odoo.addons.woow_paas_platform.controllers.billing import (
+    _sanitize_phone_for_ecpay,
+)
+
+
+class TestSanitizePhoneForEcpay(TransactionCase):
+    """Unit tests for the phone sanitization helper."""
+
+    def test_strips_plus_dash_space_parens(self):
+        self.assertEqual(_sanitize_phone_for_ecpay('+1 555-555-5555'), '15555555555')
+        self.assertEqual(_sanitize_phone_for_ecpay('(02) 2655-1775'), '0226551775')
+
+    def test_returns_empty_for_none_or_blank(self):
+        self.assertEqual(_sanitize_phone_for_ecpay(None), '')
+        self.assertEqual(_sanitize_phone_for_ecpay(''), '')
+        self.assertEqual(_sanitize_phone_for_ecpay('   '), '')
+
+    def test_returns_empty_when_too_few_digits(self):
+        # Less than 7 digits is unlikely to be a real phone; prefer empty.
+        self.assertEqual(_sanitize_phone_for_ecpay('ext. 123'), '')
+
+    def test_preserves_plausible_taiwan_mobile(self):
+        self.assertEqual(_sanitize_phone_for_ecpay('0912-345-678'), '0912345678')
 
 
 class TestPaymentMethodsApi(HttpCase):
