@@ -242,20 +242,36 @@ export const billingService = reactive({
     },
 
     /**
-     * Add/bind a new payment method (credit card)
-     * @param {Object} cardData - { card_number, expiry, cvc, cardholder_name }
-     * @returns {Promise<{success: boolean, error?: string, code?: string}>}
+     * Step 1 of ECPG binding flow. Returns ECPay Token + member_id + trade_no.
+     * @returns {Promise<{success: boolean, data?: Object, error?: string, code?: string}>}
      */
-    async addPaymentMethod(cardData) {
+    async preparePaymentMethodBind() {
         try {
-            const result = await jsonRpc("/api/billing/payment-methods/add", cardData);
+            const result = await jsonRpc("/api/billing/payment-methods/prepare-bind", {});
             if (result.success) {
-                await this.fetchPaymentMethods();
-                return { success: true };
+                return { success: true, data: result.data };
             }
-            return { success: false, error: result.error || "Failed to add card", code: result.code };
+            return { success: false, error: result.error, code: result.code };
         } catch (err) {
-            return { success: false, error: err.message || "Failed to add card" };
+            return { success: false, error: err.message || "Prepare bind failed" };
+        }
+    },
+
+    /**
+     * Step 2 of ECPG binding flow. Consumes BindCardPayToken from the JS SDK.
+     * Returns { three_d_url, bind_card_id }. Frontend must redirect if three_d_url is non-empty.
+     * @param {Object} payload - { member_id, trade_no, bind_card_pay_token }
+     * @returns {Promise<{success: boolean, data?: Object, error?: string, code?: string}>}
+     */
+    async createPaymentMethodBind(payload) {
+        try {
+            const result = await jsonRpc("/api/billing/payment-methods/create-bind", payload);
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error, code: result.code };
+        } catch (err) {
+            return { success: false, error: err.message || "Create bind failed" };
         }
     },
 
