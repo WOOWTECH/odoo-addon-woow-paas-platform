@@ -203,6 +203,74 @@ class BillingController(Controller):
             },
         }
 
+    @route("/api/billing/payment-methods/create-bind", auth="user", methods=["POST"], type="json")
+    def api_payment_method_create_bind(
+        self,
+        member_id: str | None = None,
+        trade_no: str | None = None,
+        bind_card_pay_token: str | None = None,
+        **kw,
+    ) -> dict[str, Any]:
+        """Step 2 of ECPG binding flow.
+
+        Consumes the BindCardPayToken issued by the ECPay JS SDK and returns
+        ThreeDURL (if 3DS is required) so the frontend can redirect the browser.
+        """
+        from odoo.addons.payment_ecpay_ecpg.sdk.ecpg_client import ECPGClient, ECPGError
+
+        if not (member_id and trade_no and bind_card_pay_token):
+            return {
+                'success': False,
+                'error': 'Missing member_id, trade_no, or bind_card_pay_token',
+                'code': 'missing_params',
+            }
+
+        provider = _find_ecpg_provider(request.env)
+        if not provider:
+            return {
+                'success': False,
+                'error': 'No ECPay provider with ECPG enabled',
+                'code': 'provider_not_found',
+            }
+
+        partner = request.env.user.partner_id
+        expected = provider._ecpg_build_member_id(partner)
+        if member_id != expected:
+            return {
+                'success': False,
+                'error': 'member_id does not match current session',
+                'code': 'member_id_mismatch',
+            }
+
+        client = ECPGClient(
+            provider.MerchantID, provider.HashKey, provider.HashIV,
+            sandbox=(provider.state != 'enabled'),
+        )
+        try:
+            result = client.create_bind_card(
+                member_id=member_id,
+                bind_card_pay_token=bind_card_pay_token,
+            )
+        except ECPGError as e:
+            _logger.exception('ECPG create_bind failed: %s', e)
+            return {'success': False, 'error': str(e), 'code': 'sdk_error'}
+
+        if result.get('RtnCode') != 1:
+            return {
+                'success': False,
+                'error': result.get('RtnMsg') or 'ECPay rejected binding',
+                'code': 'ecpay_rejected',
+            }
+
+        three_d_info = result.get('ThreeDInfo') or {}
+        return {
+            'success': True,
+            'data': {
+                'three_d_url': three_d_info.get('ThreeDURL') or '',
+                'bind_card_id': result.get('BindCardID') or '',
+            },
+        }
+
     @route("/api/billing/payment-methods/<string:method_id>/delete", auth="user", methods=["POST"], type="json")
     def api_payment_method_delete(self, method_id: str, **kw) -> dict[str, Any]:
         """
