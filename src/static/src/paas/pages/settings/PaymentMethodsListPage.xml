@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.PaymentMethodsListPage">
+        <div class="o_woow_payment_methods_page">
+            <div class="o_woow_page_header">
+                <div class="o_woow_breadcrumb">
+                    <a href="#/settings">Settings</a>
+                    <span class="o_woow_breadcrumb_sep">›</span>
+                    <span>Payment Methods</span>
+                </div>
+                <h1>Payment Methods</h1>
+                <p>Manage credit cards that auto-topup your wallet when balance runs low.</p>
+            </div>
+
+            <t t-if="state.bindSuccess">
+                <div class="o_woow_success_banner" role="alert">
+                    <WoowIcon name="'check_circle'" size="24"/>
+                    <span>Card bound successfully.</span>
+                    <button class="o_woow_success_close" t-on-click="dismissBindSuccess">
+                        <WoowIcon name="'close'" size="16"/>
+                    </button>
+                </div>
+            </t>
+
+            <t t-if="state.error">
+                <div class="o_woow_error_banner" role="alert">
+                    <WoowIcon name="'error'" size="20"/>
+                    <span t-esc="state.error"/>
+                </div>
+            </t>
+
+            <t t-if="isLoading">
+                <div class="o_woow_loading">Loading payment methods…</div>
+            </t>
+
+            <t t-else="">
+                <t t-if="cards.length === 0">
+                    <WoowCard shadow="true" class="'o_woow_payment_methods_empty'">
+                        <div class="o_woow_empty_body">
+                            <WoowIcon name="'credit_card_off'" size="48"/>
+                            <h3>No cards bound yet</h3>
+                            <p>Add a credit card to enable auto-topup for subscription renewals.</p>
+                            <WoowButton variant="'primary'" size="'md'" onClick.bind="goToAdd">
+                                + Add Payment Method
+                            </WoowButton>
+                        </div>
+                    </WoowCard>
+                </t>
+
+                <t t-else="">
+                    <div class="o_woow_payment_methods_list">
+                        <t t-foreach="cards" t-as="card" t-key="card.id">
+                            <WoowCard shadow="true" class="'o_woow_payment_method_card'">
+                                <div class="o_woow_card_body">
+                                    <div class="o_woow_card_info">
+                                        <WoowIcon name="'credit_card'" size="28"/>
+                                        <div class="o_woow_card_meta">
+                                            <div class="o_woow_card_number">
+                                                •••• <t t-esc="card.last4"/>
+                                            </div>
+                                            <div class="o_woow_card_details">
+                                                <span t-esc="card.bank"/>
+                                                <span t-if="card.expire">• Exp <t t-esc="card.expire"/></span>
+                                                <span t-if="card.is_default" class="o_woow_default_badge">Default</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="o_woow_card_actions">
+                                        <WoowButton
+                                            t-if="!card.is_default"
+                                            variant="'secondary'"
+                                            size="'sm'"
+                                            disabled="state.settingDefault === card.id"
+                                            onClick="() => this.onSetDefault(card.id)">
+                                            Set Default
+                                        </WoowButton>
+                                        <WoowButton
+                                            variant="'danger'"
+                                            size="'sm'"
+                                            disabled="state.deleting === card.id"
+                                            onClick="() => this.onDelete(card.id)">
+                                            Remove
+                                        </WoowButton>
+                                    </div>
+                                </div>
+                            </WoowCard>
+                        </t>
+                    </div>
+
+                    <div class="o_woow_payment_methods_add">
+                        <WoowButton variant="'primary'" size="'md'" onClick.bind="goToAdd">
+                            + Add Another Card
+                        </WoowButton>
+                    </div>
+                </t>
+            </t>
+        </div>
+    </t>
+</templates>

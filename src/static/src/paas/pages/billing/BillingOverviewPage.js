@@ -4,6 +4,7 @@ import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { CreditHistoryModal } from "../../components/modal/CreditHistoryModal";
+import { ManagePaymentMethodsModal } from "../../components/modal/ManagePaymentMethodsModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
 import { formatDate, formatAmount, formatAmountDecimal } from "../../utils/billing_helpers";
@@ -25,13 +26,14 @@ const SUB_STATE_MAP = {
 
 export class BillingOverviewPage extends Component {
   static template = "woow_paas_platform.BillingOverviewPage";
-  static components = { WoowCard, WoowIcon, WoowButton, CreditHistoryModal };
+  static components = { WoowCard, WoowIcon, WoowButton, CreditHistoryModal, ManagePaymentMethodsModal };
 
   setup() {
     this.billing = useState(billingService);
     this.router = useState(router);
     this.state = useState({
       showCreditHistoryModal: false,
+      showManagePaymentMethods: false,
     });
 
     onMounted(() => {
@@ -147,6 +149,18 @@ export class BillingOverviewPage extends Component {
 
   hideCreditHistory() {
     this.state.showCreditHistoryModal = false;
+  }
+
+  openManagePaymentMethods() {
+    this.state.showManagePaymentMethods = true;
+  }
+
+  closeManagePaymentMethods() {
+    this.state.showManagePaymentMethods = false;
+  }
+
+  onPaymentMethodsUpdated() {
+    billingService.fetchWallet();
   }
 
   goToTopup() {

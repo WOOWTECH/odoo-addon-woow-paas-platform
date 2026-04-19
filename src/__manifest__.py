@@ -14,6 +14,7 @@
         "ai_base_gt", "odoo_ai_assistant_chatgpt_connector",
         "sh_subscription",
         "sh_subscription_wallet",
+        "payment_ecpay_ecpg",
     ],
     "data": [
         "security/ir.model.access.csv",

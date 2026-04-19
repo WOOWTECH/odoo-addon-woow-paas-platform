@@ -67,6 +67,12 @@
             <t t-elif="router.current === 'settings'">
                 <SettingsPage/>
             </t>
+            <t t-elif="router.current === 'settings-payment-methods'">
+                <PaymentMethodsListPage/>
+            </t>
+            <t t-elif="router.current === 'settings-payment-methods-add'">
+                <AddPaymentMethodPage/>
+            </t>
             <t t-else="">
                 <EmptyState/>
             </t>

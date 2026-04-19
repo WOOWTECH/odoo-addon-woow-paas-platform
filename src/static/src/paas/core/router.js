@@ -26,6 +26,8 @@ const routes = [
     { path: "billing/subscriptions", name: "Subscriptions", routeName: "billing-subscriptions" },
     { path: "billing/transactions", name: "Transactions", routeName: "billing-transactions" },
     { path: "settings", name: "Settings", routeName: "settings" },
+    { path: "settings/payment-methods", name: "Payment Methods", routeName: "settings-payment-methods" },
+    { path: "settings/payment-methods/add", name: "Add Payment Method", routeName: "settings-payment-methods-add" },
 ];
 
 export const router = reactive({
@@ -48,13 +50,23 @@ export const router = reactive({
     },
 
     parseRoute() {
-        const hash = window.location.hash.slice(2); // Remove "#/"
+        // Strip "#/" and split off query string — routing is path-based, but
+        // query params (e.g. ?bind_status=ok) are preserved in this.params.query.
+        const raw = window.location.hash.slice(2);
+        const qIdx = raw.indexOf("?");
+        const path = qIdx === -1 ? raw : raw.slice(0, qIdx);
+        const queryStr = qIdx === -1 ? "" : raw.slice(qIdx + 1);
+
         this.params = {};
+        if (queryStr) {
+            const usp = new URLSearchParams(queryStr);
+            this.params.query = Object.fromEntries(usp.entries());
+        }
 
         // Check for pattern-based routes first (more specific patterns)
         for (const route of routes) {
             if (route.pattern) {
-                const match = hash.match(route.pattern);
+                const match = path.match(route.pattern);
                 if (match) {
                     this.current = route.routeName;
                     this.params.id = match[1];
@@ -84,8 +96,8 @@ export const router = reactive({
             }
         }
 
-        // Fall back to exact match
-        const route = routes.find(r => r.path === hash);
+        // Fall back to exact path match (query-stripped)
+        const route = routes.find(r => r.path === path);
         this.current = route ? route.routeName : "dashboard";
     },
 

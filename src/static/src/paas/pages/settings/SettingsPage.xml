@@ -8,17 +8,20 @@
             </div>
 
             <div class="o_woow_settings_cards">
-                <WoowCard shadow="true" class="'o_woow_settings_card o_woow_settings_card_disabled'">
-                    <div class="o_woow_settings_card_body">
+                <WoowCard shadow="true" class="'o_woow_settings_card'">
+                    <div class="o_woow_settings_card_body"
+                         t-on-click="goToPaymentMethods">
                         <div class="o_woow_settings_card_icon">
                             <WoowIcon name="'credit_card'" size="32"/>
                         </div>
                         <div class="o_woow_settings_card_text">
                             <div class="o_woow_settings_card_title_row">
                                 <h3>Payment Methods</h3>
-                                <span class="o_woow_settings_badge">Coming Soon</span>
                             </div>
-                            <p>Bind credit cards so your wallet can auto-topup when the balance runs low.</p>
+                            <p>Manage credit cards that auto-topup your wallet when balance runs low.</p>
+                        </div>
+                        <div class="o_woow_settings_card_arrow">
+                            <WoowIcon name="'chevron_right'" size="24"/>
                         </div>
                     </div>
                 </WoowCard>

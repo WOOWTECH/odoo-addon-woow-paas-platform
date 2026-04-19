@@ -77,10 +77,18 @@
                             <WoowIcon name="'credit_card'" size="22"/>
                             <h3>Subscription &amp; Payment</h3>
                         </div>
-                        <a href="#/billing/subscriptions" class="o_woow_billing_view_all_link">
-                            View All
-                            <WoowIcon name="'arrow_forward'" size="16"/>
-                        </a>
+                        <div class="o_woow_billing_sub_header_actions">
+                            <WoowButton
+                                variant="'link'"
+                                size="'sm'"
+                                onClick.bind="openManagePaymentMethods">
+                                Manage
+                            </WoowButton>
+                            <a href="#/billing/subscriptions" class="o_woow_billing_view_all_link">
+                                View All
+                                <WoowIcon name="'arrow_forward'" size="16"/>
+                            </a>
+                        </div>
                     </div>
 
                     <t t-if="subscriptionsLoading">
@@ -218,6 +226,13 @@
             <!-- Credit History Modal -->
             <t t-if="state.showCreditHistoryModal">
                 <CreditHistoryModal onClose.bind="hideCreditHistory"/>
+            </t>
+
+            <!-- Manage Payment Methods Modal -->
+            <t t-if="state.showManagePaymentMethods">
+                <ManagePaymentMethodsModal
+                    onClose.bind="closeManagePaymentMethods"
+                    onUpdated.bind="onPaymentMethodsUpdated"/>
             </t>
         </div>
     </t>

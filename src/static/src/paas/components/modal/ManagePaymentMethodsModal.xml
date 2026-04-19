@@ -29,7 +29,7 @@
                             <div class="o_woow_manage_pm_card o_woow_manage_pm_card_active">
                                 <div class="o_woow_manage_pm_card_left">
                                     <span class="o_woow_manage_pm_type_badge">
-                                        <t t-esc="defaultMethod.type === 'visa' ? 'VISA' : defaultMethod.type.toUpperCase()"/>
+                                        <t t-esc="defaultMethod.type === 'credit_card' ? 'CARD' : (defaultMethod.type || '').toUpperCase()"/>
                                     </span>
                                     <span class="o_woow_manage_pm_card_number">
                                         <![CDATA[•••• ]]><t t-esc="defaultMethod.last4"/>
@@ -55,7 +55,7 @@
                                 <div class="o_woow_manage_pm_card">
                                     <div class="o_woow_manage_pm_card_left">
                                         <span class="o_woow_manage_pm_type_badge">
-                                            <t t-esc="method.type === 'visa' ? 'VISA' : method.type.toUpperCase()"/>
+                                            <t t-esc="method.type === 'credit_card' ? 'CARD' : (method.type || '').toUpperCase()"/>
                                         </span>
                                         <span class="o_woow_manage_pm_card_number">
                                             <![CDATA[•••• ]]><t t-esc="method.last4"/>
@@ -107,19 +107,5 @@
                 </div>
             </div>
         </div>
-
-        <!-- Add Card Sub-Modal -->
-        <t t-if="state.showAddCardModal">
-            <AddCardModal
-                onClose.bind="onAddCardClose"
-                onAdded.bind="onCardAdded"/>
-        </t>
-
-        <!-- Card Added Success Sub-Modal -->
-        <t t-if="state.showCardAddedSuccess">
-            <CardAddedSuccessModal
-                cardInfo="state.showCardAddedSuccess"
-                onClose.bind="onCardAddedSuccessClose"/>
-        </t>
     </t>
 </templates>

@@ -24,6 +24,8 @@ import { TopupStorePage } from "./pages/billing/TopupStorePage";
 import { SubscriptionListPage } from "./pages/billing/SubscriptionListPage";
 import { TransactionListPage } from "./pages/billing/TransactionListPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
+import { PaymentMethodsListPage } from "./pages/settings/PaymentMethodsListPage";
+import { AddPaymentMethodPage } from "./pages/settings/AddPaymentMethodPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 
 export class Root extends Component {
@@ -51,6 +53,8 @@ export class Root extends Component {
         SubscriptionListPage,
         TransactionListPage,
         SettingsPage,
+        PaymentMethodsListPage,
+        AddPaymentMethodPage,
         EmptyState,
     };
     static props = {};

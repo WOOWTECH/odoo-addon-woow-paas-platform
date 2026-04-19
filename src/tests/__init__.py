@@ -10,3 +10,4 @@ from . import test_naming
 from . import test_mcp_integration
 from . import test_subscription_lifecycle
 from . import test_low_balance_notification
+from . import test_payment_methods_api

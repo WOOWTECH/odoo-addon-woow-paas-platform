@@ -1,0 +1,85 @@
+.o_woow_add_payment_method_page {
+    padding: 1.5rem 2rem;
+    max-width: 48rem;
+    margin: 0 auto;
+
+    .o_woow_page_header {
+        margin-bottom: 1.5rem;
+
+        .o_woow_breadcrumb {
+            font-size: 0.8125rem;
+            color: $woow-text-secondary;
+            margin-bottom: 0.5rem;
+
+            a {
+                color: $woow-text-secondary;
+                text-decoration: none;
+                &:hover { color: $woow-primary; }
+            }
+            .o_woow_breadcrumb_sep { margin: 0 0.5rem; opacity: 0.6; }
+        }
+        h1 {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin: 0 0 0.5rem 0;
+            color: $woow-text-primary;
+        }
+        p { margin: 0; color: $woow-text-secondary; }
+    }
+}
+
+.o_woow_add_card_container {
+    .o_woow_add_card_body {
+        padding: 1.5rem;
+    }
+}
+
+.o_woow_sdk_container {
+    min-height: 24rem;
+    margin-bottom: 1rem;
+}
+
+.o_woow_add_loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 3rem;
+    color: $woow-text-secondary;
+}
+
+.o_woow_add_error {
+    display: flex;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    border-radius: 0.5rem;
+    color: #991b1b;
+    margin-bottom: 1rem;
+
+    .o_woow_add_error_text {
+        flex: 1;
+        strong { display: block; margin-bottom: 0.25rem; }
+        p { margin: 0; font-size: 0.875rem; }
+    }
+}
+
+.o_woow_inline_error {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    border-radius: 0.375rem;
+    color: #991b1b;
+    font-size: 0.875rem;
+    margin-bottom: 1rem;
+}
+
+.o_woow_add_actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+}

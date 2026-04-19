@@ -221,41 +221,65 @@ export const billingService = reactive({
         }
     },
 
+    /** @type {Promise<void>|null} */
+    _fetchPaymentMethodsPromise: null,
+
     /**
-     * Fetch bound payment methods
+     * Fetch bound payment methods. In-flight calls are deduplicated.
      * @returns {Promise<void>}
      */
     async fetchPaymentMethods() {
-        this.paymentMethodsLoading = true;
-        try {
-            const result = await jsonRpc("/api/billing/payment-methods", {});
-            if (result.success) {
-                this.paymentMethods = result.data ?? [];
-            } else {
-                console.error("Failed to fetch payment methods:", result.error);
+        if (this._fetchPaymentMethodsPromise) return this._fetchPaymentMethodsPromise;
+        this._fetchPaymentMethodsPromise = (async () => {
+            this.paymentMethodsLoading = true;
+            try {
+                const result = await jsonRpc("/api/billing/payment-methods", {});
+                if (result.success) {
+                    this.paymentMethods = result.data ?? [];
+                } else {
+                    console.error("Failed to fetch payment methods:", result.error);
+                }
+            } catch (err) {
+                console.error("Failed to fetch payment methods:", err);
+            } finally {
+                this.paymentMethodsLoading = false;
+                this._fetchPaymentMethodsPromise = null;
             }
+        })();
+        return this._fetchPaymentMethodsPromise;
+    },
+
+    /**
+     * Step 1 of ECPG binding flow. Returns ECPay Token + member_id + trade_no.
+     * @returns {Promise<{success: boolean, data?: Object, error?: string, code?: string}>}
+     */
+    async preparePaymentMethodBind() {
+        try {
+            const result = await jsonRpc("/api/billing/payment-methods/prepare-bind", {});
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error, code: result.code };
         } catch (err) {
-            console.error("Failed to fetch payment methods:", err);
-        } finally {
-            this.paymentMethodsLoading = false;
+            return { success: false, error: err.message || "Prepare bind failed" };
         }
     },
 
     /**
-     * Add/bind a new payment method (credit card)
-     * @param {Object} cardData - { card_number, expiry, cvc, cardholder_name }
-     * @returns {Promise<{success: boolean, error?: string, code?: string}>}
+     * Step 2 of ECPG binding flow. Consumes BindCardPayToken from the JS SDK.
+     * Returns { three_d_url, bind_card_id }. Frontend must redirect if three_d_url is non-empty.
+     * @param {Object} payload - { member_id, trade_no, bind_card_pay_token }
+     * @returns {Promise<{success: boolean, data?: Object, error?: string, code?: string}>}
      */
-    async addPaymentMethod(cardData) {
+    async createPaymentMethodBind(payload) {
         try {
-            const result = await jsonRpc("/api/billing/payment-methods/add", cardData);
+            const result = await jsonRpc("/api/billing/payment-methods/create-bind", payload);
             if (result.success) {
-                await this.fetchPaymentMethods();
-                return { success: true };
+                return { success: true, data: result.data };
             }
-            return { success: false, error: result.error || "Failed to add card", code: result.code };
+            return { success: false, error: result.error, code: result.code };
         } catch (err) {
-            return { success: false, error: err.message || "Failed to add card" };
+            return { success: false, error: err.message || "Create bind failed" };
         }
     },
 
@@ -286,6 +310,7 @@ export const billingService = reactive({
         try {
             const result = await jsonRpc(`/api/billing/payment-methods/${id}/set-default`, {});
             if (result.success) {
+                await this.fetchPaymentMethods();
                 return { success: true };
             }
             return { success: false, error: result.error || "Failed to set default" };

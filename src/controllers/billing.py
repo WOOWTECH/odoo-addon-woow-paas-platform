@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from odoo import fields
@@ -10,9 +10,38 @@ from odoo.http import request, route, Controller
 
 _logger = logging.getLogger(__name__)
 
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+# Error codes returned by /api/billing/payment-methods/* endpoints.
+# Stable contract for frontend error handling.
+ERR_PROVIDER_NOT_FOUND = 'provider_not_found'
+ERR_SDK = 'sdk_error'
+ERR_ECPAY_REJECTED = 'ecpay_rejected'
+ERR_MISSING_PARAMS = 'missing_params'
+ERR_MEMBER_MISMATCH = 'member_id_mismatch'
+ERR_NOT_FOUND = 'not_found'
+ERR_NOT_OWNER = 'not_owner'
+
 
 class BillingController(Controller):
     _name = 'woow_paas_platform.billing'
+
+    # ==================== Internal helpers ====================
+
+    def _find_ecpg_provider(self):
+        """Return the first ECPay provider with enable_ecpg=True, or empty recordset."""
+        return request.env['payment.provider'].sudo().search(
+            [('code', '=', 'ECPay'), ('enable_ecpg', '=', True)], limit=1,
+        )
+
+    def _get_owned_token(self, method_id):
+        """Return (token, None) if current user owns a valid ECPG token, or (None, error_dict)."""
+        token = request.env['payment.token'].sudo().browse(method_id)
+        if not token.exists() or not token.ecpg_bindcard_id:
+            return None, {'success': False, 'error': 'Token not found', 'code': ERR_NOT_FOUND}
+        if token.partner_id != request.env.user.partner_id:
+            return None, {'success': False, 'error': 'Not owner', 'code': ERR_NOT_OWNER}
+        return token, None
 
     # ==================== Transaction API ====================
 
@@ -90,112 +119,207 @@ class BillingController(Controller):
 
     @route("/api/billing/payment-methods", auth="user", methods=["POST"], type="json")
     def api_payment_methods(self, **kw) -> dict[str, Any]:
-        """
-        List current user's bound payment methods.
+        """List the current user's ECPG-bound cards (reads payment.token locally)."""
+        partner = request.env.user.partner_id
+        tokens = request.env['payment.token'].sudo().search([
+            ('partner_id', '=', partner.id),
+            ('ecpg_bindcard_id', '!=', False),
+            ('active', '=', True),
+        ])
+        default_token_id = False
+        if tokens and 'property_payment_token_id' in partner._fields:
+            default_token = partner.with_company(
+                partner.company_id or request.env.company
+            ).sudo().property_payment_token_id
+            default_token_id = default_token.id if default_token else False
 
-        Currently supports a single ECPay card binding per partner.
-        Returns the bound card as a one-item list, or an empty list.
-
-        Returns:
-            dict: { success, data: [{ id, type, last4, expiry, is_default, bound_date }] }
-        """
-        partner = request.env.user.partner_id.sudo()
-
-        methods = []
-        if partner.has_bound_credit_card():
-            methods.append({
-                'id': 'ecpay_default',
-                'type': 'visa',
-                'last4': partner.ecpay_card_last4 or '',
-                'expiry': partner.ecpay_card_expiry or '',
-                'is_default': True,
-                'bound_date': partner.ecpay_card_bound_date.isoformat() if partner.ecpay_card_bound_date else None,
-            })
+        def _format_expire(raw):
+            # ECPay's ecpg_card_expire is stored as YYMM (e.g. '2812' = Dec 2028).
+            # Render as MM/YY for users.
+            if not raw or len(raw) != 4:
+                return raw or ''
+            return f"{raw[2:]}/{raw[:2]}"
 
         return {
             'success': True,
-            'data': methods,
+            'data': [{
+                'id': t.id,
+                'last4': (t.payment_details or '').replace('*', '').strip(),
+                'expire': _format_expire(t.ecpg_card_expire or ''),
+                'bank': t.ecpg_issuing_bank or '',
+                'type': 'credit_card',
+                'is_default': t.id == default_token_id,
+            } for t in tokens],
         }
 
-    @route("/api/billing/payment-methods/add", auth="user", methods=["POST"], type="json")
-    def api_payment_method_add(
+    @route("/api/billing/payment-methods/prepare-bind", auth="user", methods=["POST"], type="json")
+    def api_payment_method_prepare_bind(self, **kw) -> dict[str, Any]:
+        """Step 1 of ECPG binding flow: obtain a Token for the JS SDK.
+
+        3DS OrderResultURL is set to our OWL Payment Methods page so the user lands
+        on `#/settings/payment-methods?bind_status=ok&trade_no=...` after ECPay
+        completes the binding.
+        """
+        from odoo.addons.payment_ecpay_ecpg.sdk.ecpg_client import ECPGClient, ECPGError
+
+        provider = self._find_ecpg_provider()
+        if not provider:
+            return {
+                'success': False,
+                'error': 'No ECPay provider with ECPG enabled',
+                'code': ERR_PROVIDER_NOT_FOUND,
+            }
+
+        partner = request.env.user.partner_id
+        member_id = provider._ecpg_build_member_id(partner)
+        trade_no = request.env['payment.transaction']._ecpg_build_bind_trade_no()
+
+        client = ECPGClient(
+            provider.MerchantID, provider.HashKey, provider.HashIV,
+            sandbox=(provider.state != 'enabled'),
+        )
+        # Use web.base.url so ECPay always gets https:// even when behind TLS proxy.
+        base = (request.env['ir.config_parameter'].sudo().get_param('web.base.url')
+                or request.httprequest.url_root).rstrip('/')
+        consumer_info = {
+            'MerchantMemberID': member_id,
+            'Email': partner.email or '',
+            'Phone': partner.phone or '',
+            'Name': partner.name or '',
+            'CountryCode': '158',
+        }
+        order_info = {
+            'MerchantTradeDate': datetime.now(TAIPEI_TZ).strftime('%Y/%m/%d %H:%M:%S'),
+            'MerchantTradeNo': trade_no,
+            'TotalAmount': '5',
+            'TradeDesc': '綁卡驗證',
+            'ItemName': '綁卡',
+            # Reuse ecpay addon's existing callback that persists payment.token for us
+            'ReturnURL': f'{base}/payment/ecpg/bind_callback',
+        }
+        try:
+            result = client.get_token_by_binding_card(
+                consumer_info=consumer_info,
+                order_info=order_info,
+                order_result_url=(
+                    f'{base}/woow#/settings/payment-methods'
+                    f'?bind_status=ok&trade_no={trade_no}'
+                ),
+            )
+        except ECPGError as e:
+            _logger.exception('ECPG prepare_bind failed: %s', e)
+            return {'success': False, 'error': str(e), 'code': ERR_SDK}
+
+        if result.get('RtnCode') != 1 or not result.get('Token'):
+            return {
+                'success': False,
+                'error': result.get('RtnMsg') or 'Unknown ECPay error',
+                'code': ERR_ECPAY_REJECTED,
+            }
+
+        return {
+            'success': True,
+            'data': {
+                'token': result['Token'],
+                'expire_date': result.get('TokenExpireDate'),
+                'member_id': member_id,
+                'trade_no': trade_no,
+                'merchant_id': provider.MerchantID,
+                'sandbox': provider.state != 'enabled',
+            },
+        }
+
+    @route("/api/billing/payment-methods/create-bind", auth="user", methods=["POST"], type="json")
+    def api_payment_method_create_bind(
         self,
-        card_number: str | None = None,
-        expiry: str | None = None,
-        cvc: str | None = None,
-        cardholder_name: str | None = None,
+        member_id: str | None = None,
+        trade_no: str | None = None,
+        bind_card_pay_token: str | None = None,
         **kw,
     ) -> dict[str, Any]:
+        """Step 2 of ECPG binding flow.
+
+        Consumes the BindCardPayToken issued by the ECPay JS SDK and returns
+        ThreeDURL (if 3DS is required) so the frontend can redirect the browser.
         """
-        Add/bind a credit card (placeholder).
+        from odoo.addons.payment_ecpay_ecpg.sdk.ecpg_client import ECPGClient, ECPGError
 
-        Actual ECPay tokenization API integration will be implemented separately.
-        For now, returns an error indicating ECPay portal is required.
+        if not (member_id and trade_no and bind_card_pay_token):
+            return {
+                'success': False,
+                'error': 'Missing member_id, trade_no, or bind_card_pay_token',
+                'code': ERR_MISSING_PARAMS,
+            }
 
-        Args:
-            card_number: Card number.
-            expiry: Expiry date (MM/YY).
-            cvc: CVC code.
-            cardholder_name: Name on card.
+        provider = self._find_ecpg_provider()
+        if not provider:
+            return {
+                'success': False,
+                'error': 'No ECPay provider with ECPG enabled',
+                'code': ERR_PROVIDER_NOT_FOUND,
+            }
 
-        Returns:
-            dict with success=False and instruction to use ECPay portal.
-        """
+        partner = request.env.user.partner_id
+        expected = provider._ecpg_build_member_id(partner)
+        if member_id != expected:
+            return {
+                'success': False,
+                'error': 'member_id does not match current session',
+                'code': ERR_MEMBER_MISMATCH,
+            }
+
+        client = ECPGClient(
+            provider.MerchantID, provider.HashKey, provider.HashIV,
+            sandbox=(provider.state != 'enabled'),
+        )
+        try:
+            result = client.create_bind_card(
+                member_id=member_id,
+                bind_card_pay_token=bind_card_pay_token,
+            )
+        except ECPGError as e:
+            _logger.exception('ECPG create_bind failed: %s', e)
+            return {'success': False, 'error': str(e), 'code': ERR_SDK}
+
+        if result.get('RtnCode') != 1:
+            return {
+                'success': False,
+                'error': result.get('RtnMsg') or 'ECPay rejected binding',
+                'code': ERR_ECPAY_REJECTED,
+            }
+
+        three_d_info = result.get('ThreeDInfo') or {}
         return {
-            'success': False,
-            'error': 'Card binding requires ECPay integration. Please contact support.',
-            'code': 'ecpay_required',
+            'success': True,
+            'data': {
+                'three_d_url': three_d_info.get('ThreeDURL') or '',
+                'bind_card_id': result.get('BindCardID') or '',
+            },
         }
 
-    @route("/api/billing/payment-methods/<string:method_id>/delete", auth="user", methods=["POST"], type="json")
-    def api_payment_method_delete(self, method_id: str, **kw) -> dict[str, Any]:
-        """
-        Unbind a payment method (credit card).
-
-        Clears the partner's ECPay card fields.
-
-        Args:
-            method_id: Payment method identifier (e.g. 'ecpay_default').
-
-        Returns:
-            dict: { success: true }
-        """
-        partner = request.env.user.partner_id.sudo()
-
-        if method_id != 'ecpay_default':
-            return {'success': False, 'error': 'Payment method not found'}
-
-        if not partner.has_bound_credit_card():
-            return {'success': False, 'error': 'No card is currently bound'}
-
-        try:
-            partner.write({
-                'ecpay_card_token': False,
-                'ecpay_card_last4': False,
-                'ecpay_card_expiry': False,
-                'ecpay_card_bound_date': False,
-            })
-        except Exception as e:
-            _logger.error("Error unbinding payment method: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'Failed to remove payment method. Please try again.'}
-
-        _logger.info("Payment method unbound: partner=%s", partner.id)
-
+    @route("/api/billing/payment-methods/<int:method_id>/delete",
+           auth="user", methods=["POST"], type="json")
+    def api_payment_method_delete(self, method_id: int, **kw) -> dict[str, Any]:
+        """Archive a bound card. Triggers ecpay addon's _handle_archiving override
+        which calls DeleteMemberBindCard automatically."""
+        token, err = self._get_owned_token(method_id)
+        if err:
+            return err
+        token.active = False
         return {'success': True}
 
-    @route("/api/billing/payment-methods/<string:method_id>/set-default", auth="user", methods=["POST"], type="json")
-    def api_payment_method_set_default(self, method_id: str, **kw) -> dict[str, Any]:
-        """
-        Set a payment method as default.
-
-        Since only one card is supported, this is a no-op.
-
-        Args:
-            method_id: Payment method identifier.
-
-        Returns:
-            dict: { success: true }
-        """
+    @route("/api/billing/payment-methods/<int:method_id>/set-default",
+           auth="user", methods=["POST"], type="json")
+    def api_payment_method_set_default(self, method_id: int, **kw) -> dict[str, Any]:
+        """Set this card as the partner's default payment token."""
+        token, err = self._get_owned_token(method_id)
+        if err:
+            return err
+        partner = token.partner_id
+        if 'property_payment_token_id' in partner._fields:
+            partner.with_company(
+                partner.company_id or request.env.company
+            ).sudo().property_payment_token_id = token
         return {'success': True}
 
     # ==================== Top-up API ====================
