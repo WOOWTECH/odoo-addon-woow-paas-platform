@@ -154,11 +154,41 @@ Grace period 到期 cron → 檢查是否已補值成功
 > - `payment_ecpay_ecpg` 加入 `__manifest__.py` depends
 > - ECPay MerchantTradeDate 使用 UTC+8
 >
-> ### Phase 2b — Auto-topup 整合（Phase 2a 穩定後）
-> - 訂閱扣款失敗 fallback：先嘗試從綁定卡片扣款補值
-> - `_attempt_auto_topup` 掛在 `_sh_create_auto_invoice` 的不足分支
-> - `_notify_low_balance` 只在 auto-topup 也失敗才觸發
-> - 3DS 情境下 auto-topup 會 fail（無使用者互動），屬預期行為 → 改發 notify
+> ### Phase 2b — Auto-topup 整合（✅ 已完成 — shipped 2026-04-19）
+>
+> 實作 commits：`da3a54a..2082a40` on `feat/settings-phase2a-payment-methods`。執行計畫見 [`docs/plans/2026-04-19-settings-phase2b-implementation.md`](./2026-04-19-settings-phase2b-implementation.md)。
+>
+> 已交付：
+> - `_attempt_auto_topup(partner, shortfall)` helper on `sh.subscription.subscription`（via `ShSubscriptionFix` inherit）
+> - 掛到 `_sh_create_auto_invoice` 不足分支：先 auto-topup，成功則續扣訂閱費；失敗保留 `_notify_low_balance`
+> - 8 個失敗路徑覆蓋（no_shortfall / no_token / provider_not_enabled / currency_not_configured / 3ds_required / failed state / sdk_error / ok）
+> - 4 個新測試：happy path + 3 failure branches + 2 source-assertion regression guards
+> - Dead code 清理：`AddCardModal.{js,xml,scss}` 和 `CardAddedSuccessModal.{js,xml,scss}` 刪除
+>
+> **更新 2026-04-19**：範圍與設計決策確認。
+>
+> 核心：訂閱扣款失敗 fallback，先嘗試從綁定卡片扣款補值。
+>
+> **設計決策**：
+> - **(A) 金額策略** — 精準扣差額（訂閱費 − 餘額 = 應扣金額）
+> - **(X) 發動方式** — 同步 inline：訂閱 cron 發現餘額不足時當場呼叫 `charge_with_token`，成功則補值後立刻完成訂閱扣款
+> - **(P) 卡片選擇** — `property_payment_token_id`（Phase 2a 已建立的預設卡機制）
+> - **(M) 3DS 處理** — `charge_with_token` 回 `redirect_3ds` 視為失敗，改走低餘額通知（cron 環境無人可過 3DS）
+>
+> **實作範圍**：
+> - `_attempt_auto_topup(partner, shortfall)` helper on `sh.subscription.subscription`
+> - 掛到 `_sh_create_auto_invoice` 的 `balance < amount_total` 分支：先 auto-topup，成功則支付發票；失敗則保留現有 `_notify_low_balance` 通知
+> - 錢包交易記錄（auto-topup 明細納入 billing.transaction）
+> - 用 `payment.transaction` record 追蹤 ECPay 扣款（不用自建 model）
+> - Dead code 清理：刪除 `AddCardModal.{js,xml,scss}` 和 `CardAddedSuccessModal.{js,xml,scss}`（Phase 2a 的 full page flow 已取代）
+>
+> **留給未來（Phase 2c 或獨立 PR）**：
+> - 預設卡片被刪除後 `property_payment_token_id` 自動清空
+> - 卡片到期前 30 天提醒（`ecpg_card_expire` 欄位）
+> - GetMemberBindCard reconcile（催回遺失的 bind callback）
+> - Design system 元件抽取（breadcrumb / banner）
+>
+> 執行計畫：見 [`docs/plans/2026-04-19-settings-phase2b-implementation.md`](./2026-04-19-settings-phase2b-implementation.md)（即將建立）。
 >
 > ### Phase 2 設計決策
 > - **(B) 卡片表單位置**：獨立 sub-page `#/settings/payment-methods/add`（Modal 放不下 ECPay SDK 強制的 `<div id="ECPayPayment">` 卡片表單）
