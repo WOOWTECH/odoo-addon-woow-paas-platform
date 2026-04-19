@@ -127,7 +127,7 @@ class BillingController(Controller):
             ('active', '=', True),
         ])
         default_token_id = False
-        if 'property_payment_token_id' in partner._fields:
+        if tokens and 'property_payment_token_id' in partner._fields:
             default_token = partner.with_company(
                 partner.company_id or request.env.company
             ).sudo().property_payment_token_id

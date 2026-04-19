@@ -10,7 +10,6 @@
             <div class="o_woow_settings_cards">
                 <WoowCard shadow="true" class="'o_woow_settings_card'">
                     <div class="o_woow_settings_card_body"
-                         style="cursor: pointer;"
                          t-on-click="goToPaymentMethods">
                         <div class="o_woow_settings_card_icon">
                             <WoowIcon name="'credit_card'" size="32"/>
