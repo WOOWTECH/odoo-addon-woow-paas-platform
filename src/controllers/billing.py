@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import logging
 import traceback
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from odoo import fields
 from odoo.http import request, route, Controller
 
 _logger = logging.getLogger(__name__)
+
+
+def _find_ecpg_provider(env):
+    """Return the first ECPay provider with enable_ecpg=True, or an empty recordset."""
+    return env['payment.provider'].sudo().search(
+        [('code', '=', 'ECPay'), ('enable_ecpg', '=', True)], limit=1,
+    )
 
 
 class BillingController(Controller):
@@ -117,34 +124,81 @@ class BillingController(Controller):
             'data': methods,
         }
 
-    @route("/api/billing/payment-methods/add", auth="user", methods=["POST"], type="json")
-    def api_payment_method_add(
-        self,
-        card_number: str | None = None,
-        expiry: str | None = None,
-        cvc: str | None = None,
-        cardholder_name: str | None = None,
-        **kw,
-    ) -> dict[str, Any]:
+    @route("/api/billing/payment-methods/prepare-bind", auth="user", methods=["POST"], type="json")
+    def api_payment_method_prepare_bind(self, **kw) -> dict[str, Any]:
+        """Step 1 of ECPG binding flow: obtain a Token for the JS SDK.
+
+        3DS OrderResultURL is set to our OWL Payment Methods page so the user lands
+        on `#/settings/payment-methods?bind_status=ok&trade_no=...` after ECPay
+        completes the binding.
         """
-        Add/bind a credit card (placeholder).
+        from odoo.addons.payment_ecpay_ecpg.sdk.ecpg_client import ECPGClient, ECPGError
 
-        Actual ECPay tokenization API integration will be implemented separately.
-        For now, returns an error indicating ECPay portal is required.
+        provider = _find_ecpg_provider(request.env)
+        if not provider:
+            return {
+                'success': False,
+                'error': 'No ECPay provider with ECPG enabled',
+                'code': 'provider_not_found',
+            }
 
-        Args:
-            card_number: Card number.
-            expiry: Expiry date (MM/YY).
-            cvc: CVC code.
-            cardholder_name: Name on card.
+        partner = request.env.user.partner_id
+        member_id = provider._ecpg_build_member_id(partner)
+        trade_no = request.env['payment.transaction']._ecpg_build_bind_trade_no()
 
-        Returns:
-            dict with success=False and instruction to use ECPay portal.
-        """
+        client = ECPGClient(
+            provider.MerchantID, provider.HashKey, provider.HashIV,
+            sandbox=(provider.state != 'enabled'),
+        )
+        # Use web.base.url so ECPay always gets https:// even when behind TLS proxy.
+        base = (request.env['ir.config_parameter'].sudo().get_param('web.base.url')
+                or request.httprequest.url_root).rstrip('/')
+        consumer_info = {
+            'MerchantMemberID': member_id,
+            'Email': partner.email or '',
+            'Phone': partner.phone or '',
+            'Name': partner.name or '',
+            'CountryCode': '158',
+        }
+        order_info = {
+            'MerchantTradeDate': datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+            'MerchantTradeNo': trade_no,
+            'TotalAmount': '5',
+            'TradeDesc': '綁卡驗證',
+            'ItemName': '綁卡',
+            # Reuse ecpay addon's existing callback that persists payment.token for us
+            'ReturnURL': f'{base}/payment/ecpg/bind_callback',
+        }
+        try:
+            result = client.get_token_by_binding_card(
+                consumer_info=consumer_info,
+                order_info=order_info,
+                order_result_url=(
+                    f'{base}/woow#/settings/payment-methods'
+                    f'?bind_status=ok&trade_no={trade_no}'
+                ),
+            )
+        except ECPGError as e:
+            _logger.exception('ECPG prepare_bind failed: %s', e)
+            return {'success': False, 'error': str(e), 'code': 'sdk_error'}
+
+        if result.get('RtnCode') != 1 or not result.get('Token'):
+            return {
+                'success': False,
+                'error': result.get('RtnMsg') or 'Unknown ECPay error',
+                'code': 'ecpay_rejected',
+            }
+
         return {
-            'success': False,
-            'error': 'Card binding requires ECPay integration. Please contact support.',
-            'code': 'ecpay_required',
+            'success': True,
+            'data': {
+                'token': result['Token'],
+                'expire_date': result.get('TokenExpireDate'),
+                'member_id': member_id,
+                'trade_no': trade_no,
+                'merchant_id': provider.MerchantID,
+                'sandbox': provider.state != 'enabled',
+            },
         }
 
     @route("/api/billing/payment-methods/<string:method_id>/delete", auth="user", methods=["POST"], type="json")
