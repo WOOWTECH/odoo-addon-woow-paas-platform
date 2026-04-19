@@ -8,12 +8,17 @@ import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
 
 /**
- * SDK script URLs. Order matters: jquery → node-forge → ecpay sdk.
- * These are ECPay's canonical CDN URLs (see payment_ecpay_ecpg/views/payment_ecpg_templates.xml).
+ * SDK script URLs. Order matters: jquery → ecpay sdk.
+ *
+ * We deliberately do NOT pre-load node-forge from CDN, even though ECPay's
+ * docs and payment_ecpg_templates.xml suggest it. When forge is already on
+ * window, sdk-1.0.0.js skips loading its own forge-0.10.0.min.js and ends up
+ * calling its closure variable `i` as a function before any code path has
+ * assigned it — throwing "TypeError: i is not a function" inside `ECP.initialize`.
+ * Letting the SDK self-load its bundled forge avoids the bug entirely.
  */
 const SDK_SCRIPTS = [
     "https://code.jquery.com/jquery-3.7.1.min.js",
-    "https://cdn.jsdelivr.net/npm/node-forge@0.7.0/dist/forge.min.js",
     "https://ecpg.ecpay.com.tw/Scripts/sdk-1.0.0.js",
 ];
 
