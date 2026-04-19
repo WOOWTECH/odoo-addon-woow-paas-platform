@@ -11,7 +11,7 @@
                     <span>Add</span>
                 </div>
                 <h1>Add Payment Method</h1>
-                <p>Enter your card details. 3D Secure verification may be required.</p>
+                <p>Enter your card details. ECPay will place a temporary NT$5 authorization hold for verification (automatically refunded). 3D Secure verification may be required.</p>
             </div>
 
             <WoowCard shadow="true" class="'o_woow_add_card_container'">

@@ -26,12 +26,13 @@ export class PaymentMethodsListPage extends Component {
         });
 
         onMounted(async () => {
-            // Detect post-3DS redirect
-            const hash = window.location.hash;
-            if (hash.includes("bind_status=ok")) {
+            // Detect post-3DS redirect via router query params
+            const q = this.router.params.query || {};
+            if (q.bind_status === "ok") {
                 this.state.bindSuccess = true;
-                // Clean the query so reload doesn't retrigger
-                const cleanHash = hash.split("?")[0];
+                // Clean the query so reload doesn't retrigger.
+                // Hash path without query: "#/settings/payment-methods"
+                const cleanHash = window.location.hash.split("?")[0];
                 window.history.replaceState(null, "", cleanHash);
             }
             await billingService.fetchPaymentMethods();
