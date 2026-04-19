@@ -12,16 +12,36 @@ _logger = logging.getLogger(__name__)
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
-
-def _find_ecpg_provider(env):
-    """Return the first ECPay provider with enable_ecpg=True, or an empty recordset."""
-    return env['payment.provider'].sudo().search(
-        [('code', '=', 'ECPay'), ('enable_ecpg', '=', True)], limit=1,
-    )
+# Error codes returned by /api/billing/payment-methods/* endpoints.
+# Stable contract for frontend error handling.
+ERR_PROVIDER_NOT_FOUND = 'provider_not_found'
+ERR_SDK = 'sdk_error'
+ERR_ECPAY_REJECTED = 'ecpay_rejected'
+ERR_MISSING_PARAMS = 'missing_params'
+ERR_MEMBER_MISMATCH = 'member_id_mismatch'
+ERR_NOT_FOUND = 'not_found'
+ERR_NOT_OWNER = 'not_owner'
 
 
 class BillingController(Controller):
     _name = 'woow_paas_platform.billing'
+
+    # ==================== Internal helpers ====================
+
+    def _find_ecpg_provider(self):
+        """Return the first ECPay provider with enable_ecpg=True, or empty recordset."""
+        return request.env['payment.provider'].sudo().search(
+            [('code', '=', 'ECPay'), ('enable_ecpg', '=', True)], limit=1,
+        )
+
+    def _get_owned_token(self, method_id):
+        """Return (token, None) if current user owns a valid ECPG token, or (None, error_dict)."""
+        token = request.env['payment.token'].sudo().browse(method_id)
+        if not token.exists() or not token.ecpg_bindcard_id:
+            return None, {'success': False, 'error': 'Token not found', 'code': ERR_NOT_FOUND}
+        if token.partner_id != request.env.user.partner_id:
+            return None, {'success': False, 'error': 'Not owner', 'code': ERR_NOT_OWNER}
+        return token, None
 
     # ==================== Transaction API ====================
 
@@ -114,10 +134,11 @@ class BillingController(Controller):
             default_token_id = default_token.id if default_token else False
 
         def _format_expire(raw):
-            # ECPay's ecpg_card_expire is MMYY (e.g. '1226' = Dec 2026)
+            # ECPay's ecpg_card_expire is stored as YYMM (e.g. '2812' = Dec 2028).
+            # Render as MM/YY for users.
             if not raw or len(raw) != 4:
                 return raw or ''
-            return f"{raw[:2]}/{raw[2:]}"
+            return f"{raw[2:]}/{raw[:2]}"
 
         return {
             'success': True,
@@ -141,12 +162,12 @@ class BillingController(Controller):
         """
         from odoo.addons.payment_ecpay_ecpg.sdk.ecpg_client import ECPGClient, ECPGError
 
-        provider = _find_ecpg_provider(request.env)
+        provider = self._find_ecpg_provider()
         if not provider:
             return {
                 'success': False,
                 'error': 'No ECPay provider with ECPG enabled',
-                'code': 'provider_not_found',
+                'code': ERR_PROVIDER_NOT_FOUND,
             }
 
         partner = request.env.user.partner_id
@@ -187,13 +208,13 @@ class BillingController(Controller):
             )
         except ECPGError as e:
             _logger.exception('ECPG prepare_bind failed: %s', e)
-            return {'success': False, 'error': str(e), 'code': 'sdk_error'}
+            return {'success': False, 'error': str(e), 'code': ERR_SDK}
 
         if result.get('RtnCode') != 1 or not result.get('Token'):
             return {
                 'success': False,
                 'error': result.get('RtnMsg') or 'Unknown ECPay error',
-                'code': 'ecpay_rejected',
+                'code': ERR_ECPAY_REJECTED,
             }
 
         return {
@@ -227,15 +248,15 @@ class BillingController(Controller):
             return {
                 'success': False,
                 'error': 'Missing member_id, trade_no, or bind_card_pay_token',
-                'code': 'missing_params',
+                'code': ERR_MISSING_PARAMS,
             }
 
-        provider = _find_ecpg_provider(request.env)
+        provider = self._find_ecpg_provider()
         if not provider:
             return {
                 'success': False,
                 'error': 'No ECPay provider with ECPG enabled',
-                'code': 'provider_not_found',
+                'code': ERR_PROVIDER_NOT_FOUND,
             }
 
         partner = request.env.user.partner_id
@@ -244,7 +265,7 @@ class BillingController(Controller):
             return {
                 'success': False,
                 'error': 'member_id does not match current session',
-                'code': 'member_id_mismatch',
+                'code': ERR_MEMBER_MISMATCH,
             }
 
         client = ECPGClient(
@@ -258,13 +279,13 @@ class BillingController(Controller):
             )
         except ECPGError as e:
             _logger.exception('ECPG create_bind failed: %s', e)
-            return {'success': False, 'error': str(e), 'code': 'sdk_error'}
+            return {'success': False, 'error': str(e), 'code': ERR_SDK}
 
         if result.get('RtnCode') != 1:
             return {
                 'success': False,
                 'error': result.get('RtnMsg') or 'ECPay rejected binding',
-                'code': 'ecpay_rejected',
+                'code': ERR_ECPAY_REJECTED,
             }
 
         three_d_info = result.get('ThreeDInfo') or {}
@@ -281,11 +302,9 @@ class BillingController(Controller):
     def api_payment_method_delete(self, method_id: int, **kw) -> dict[str, Any]:
         """Archive a bound card. Triggers ecpay addon's _handle_archiving override
         which calls DeleteMemberBindCard automatically."""
-        token = request.env['payment.token'].sudo().browse(method_id)
-        if not token.exists() or not token.ecpg_bindcard_id:
-            return {'success': False, 'error': 'Token not found', 'code': 'not_found'}
-        if token.partner_id != request.env.user.partner_id:
-            return {'success': False, 'error': 'Not owner', 'code': 'not_owner'}
+        token, err = self._get_owned_token(method_id)
+        if err:
+            return err
         token.active = False
         return {'success': True}
 
@@ -293,11 +312,9 @@ class BillingController(Controller):
            auth="user", methods=["POST"], type="json")
     def api_payment_method_set_default(self, method_id: int, **kw) -> dict[str, Any]:
         """Set this card as the partner's default payment token."""
-        token = request.env['payment.token'].sudo().browse(method_id)
-        if not token.exists() or not token.ecpg_bindcard_id:
-            return {'success': False, 'error': 'Token not found', 'code': 'not_found'}
-        if token.partner_id != request.env.user.partner_id:
-            return {'success': False, 'error': 'Not owner', 'code': 'not_owner'}
+        token, err = self._get_owned_token(method_id)
+        if err:
+            return err
         partner = token.partner_id
         if 'property_payment_token_id' in partner._fields:
             partner.with_company(

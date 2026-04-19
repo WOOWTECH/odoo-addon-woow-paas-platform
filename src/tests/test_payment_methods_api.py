@@ -120,7 +120,7 @@ class TestPaymentMethodsApi(HttpCase):
             'provider_ref': 'BC_TEST_1',
             'ecpg_bindcard_id': 'BC_TEST_1',
             'ecpg_member_id': 'M_1',
-            'ecpg_card_expire': '1226',
+            'ecpg_card_expire': '2612',  # YYMM (matches ecpay callback: f"{yy}{mm}")
             'ecpg_issuing_bank': 'TEST BANK',
         })
         response = self.url_open(
