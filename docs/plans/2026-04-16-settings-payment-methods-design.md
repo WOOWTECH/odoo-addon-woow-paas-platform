@@ -138,11 +138,21 @@ Grace period 到期 cron → 檢查是否已補值成功
 
 > **更新 2026-04-19**：ecpay agent 已完成 `payment_ecpay_ecpg` addon（branch `feat/ecpg-phase3-subscription`），已整合進 `paas-odoo-ci` commit `f32c677`。Phase 2 分拆為 2a + 2b 兩個 PR。
 >
-> ### Phase 2a — Payment Methods UI（先做）
+> ### Phase 2a — Payment Methods UI（✅ 已完成 — shipped 2026-04-19）
+>
+> 實作 PR：commits `dc86e75..d232037` on `develop`。執行計畫見 [`docs/plans/2026-04-18-settings-phase2a-implementation.md`](./2026-04-18-settings-phase2a-implementation.md)。
+>
+> 已交付：
 > - OWL `#/settings/payment-methods` 列表頁 + `#/settings/payment-methods/add` 綁卡子頁
 > - 後端 `/api/billing/payment-methods/*` wrapper（直接 import `payment_ecpay_ecpg.sdk.ecpg_client.ECPGClient`）
+>   - `prepare-bind` — 取得 ECPay Token（OrderResultURL 導回 OWL）
+>   - `create-bind` — 消費 BindCardPayToken，回 ThreeDURL
+>   - `list` / `delete` / `set-default` — 基於 `payment.token`
+> - 前端 ECPay JS SDK 動態載入（jQuery → node-forge → sdk-1.0.0.js）
 > - 啟用 SettingsPage 的 Payment Methods 卡片
 > - ManagePaymentMethodsModal 接回 BillingOverview 當快速入口
+> - `payment_ecpay_ecpg` 加入 `__manifest__.py` depends
+> - ECPay MerchantTradeDate 使用 UTC+8
 >
 > ### Phase 2b — Auto-topup 整合（Phase 2a 穩定後）
 > - 訂閱扣款失敗 fallback：先嘗試從綁定卡片扣款補值
