@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -255,15 +256,43 @@ class BillingController(Controller):
     def api_payment_method_bind_result(self, trade_no, **kw):
         """Browser-facing OrderResultURL landing for the ECPG bind 3DS flow.
 
-        ECPay redirects the user's browser here with a form POST after 3DS.
-        We don't parse the encrypted ResultData (the S2S /payment/ecpg/bind_callback
-        already persists the payment.token); we just bounce the browser into the
-        OWL SPA at #/settings/payment-methods?bind_status=ok.
+        ECPay redirects the user's browser here via a cross-site form POST after
+        3DS. Two things to handle carefully:
+
+        1) Persist the token. The S2S `/payment/ecpg/bind_callback` is a separate
+           server-to-server POST from ECPay that may or may not fire reliably on
+           sandbox. We re-use the official `_handle_bind_callback` helper here so
+           the payment.token row exists by the time the user lands back in the SPA.
+           Idempotency in the helper handles double-creation if the S2S fires too.
+
+        2) Don't 303 to `/woow`. The browser's POST to this endpoint is cross-site,
+           so SameSite=Lax cookies are stripped. A server 303 chains the cross-site
+           context into the GET, so cookies still aren't sent and `/woow` (auth=user)
+           bounces to /web/login. Instead, return a tiny same-origin HTML page that
+           uses a JS top-level navigation — that GET is treated as same-origin so
+           Lax cookies are sent and the SPA loads with the user's session intact.
         """
+        try:
+            from odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback import (
+                ECPGCallback,
+            )
+            ECPGCallback()._handle_bind_callback(kw)
+        except Exception:
+            _logger.exception('bind-result: error persisting bind for trade_no=%s', trade_no)
+
         base = (request.env['ir.config_parameter'].sudo().get_param('web.base.url')
                 or request.httprequest.url_root).rstrip('/')
         target = f'{base}/woow#/settings/payment-methods?bind_status=ok&trade_no={trade_no}'
-        return request.redirect(target, code=303, local=False)
+        # JS redirect avoids the cross-site POST → 303 → cookie-strip pitfall.
+        html = (
+            '<!doctype html><html><head><meta charset="utf-8"><title>綁定完成</title>'
+            f'<meta http-equiv="refresh" content="0;url={target}">'
+            f'<script>window.location.replace({json.dumps(target)});</script>'
+            '</head><body>綁定完成，正在返回…</body></html>'
+        )
+        return request.make_response(
+            html, headers=[('Content-Type', 'text/html; charset=utf-8')],
+        )
 
     @route("/api/billing/payment-methods/create-bind", auth="user", methods=["POST"], type="json")
     def api_payment_method_create_bind(
