@@ -106,3 +106,61 @@ class TestPaymentMethodsApi(HttpCase):
         body = response.json()['result']
         self.assertFalse(body['success'])
         self.assertEqual(body.get('code'), 'member_id_mismatch')
+
+    def test_list_cards_returns_payment_tokens(self):
+        """List cards reads from payment.token with ecpg_bindcard_id set."""
+        payment_method = self.env.ref(
+            'payment.payment_method_card', raise_if_not_found=False,
+        ) or self.env.ref('payment.payment_method_unknown')
+        token = self.env['payment.token'].sudo().create({
+            'provider_id': self.provider.id,
+            'partner_id': self.env.user.partner_id.id,
+            'payment_method_id': payment_method.id,
+            'payment_details': '**** **** **** 4242',
+            'provider_ref': 'BC_TEST_1',
+            'ecpg_bindcard_id': 'BC_TEST_1',
+            'ecpg_member_id': 'M_1',
+            'ecpg_card_expire': '1226',
+            'ecpg_issuing_bank': 'TEST BANK',
+        })
+        response = self.url_open(
+            '/api/billing/payment-methods',
+            data='{"jsonrpc":"2.0","method":"call","params":{}}',
+            headers={'Content-Type': 'application/json'},
+        )
+        body = response.json()['result']
+        self.assertTrue(body['success'])
+        ids = [c['id'] for c in body['data']]
+        self.assertIn(token.id, ids)
+        entry = next(c for c in body['data'] if c['id'] == token.id)
+        self.assertEqual(entry['last4'], '4242')
+        self.assertEqual(entry['expire'], '12/26')  # formatted MM/YY
+        self.assertEqual(entry['bank'], 'TEST BANK')
+
+    def test_delete_archives_token(self):
+        """Delete archives the payment.token (active=False), triggering ECPay delete via hook."""
+        payment_method = self.env.ref(
+            'payment.payment_method_card', raise_if_not_found=False,
+        ) or self.env.ref('payment.payment_method_unknown')
+        token = self.env['payment.token'].sudo().create({
+            'provider_id': self.provider.id,
+            'partner_id': self.env.user.partner_id.id,
+            'payment_method_id': payment_method.id,
+            'payment_details': '**** **** **** 4242',
+            'provider_ref': 'BC_TO_DELETE',
+            'ecpg_bindcard_id': 'BC_TO_DELETE',
+            'ecpg_member_id': 'M_1',
+        })
+        with patch(
+            'odoo.addons.payment_ecpay_ecpg.sdk.ecpg_client.ECPGClient.delete_member_bind_card',
+            return_value={'RtnCode': 1},
+        ):
+            response = self.url_open(
+                f'/api/billing/payment-methods/{token.id}/delete',
+                data='{"jsonrpc":"2.0","method":"call","params":{}}',
+                headers={'Content-Type': 'application/json'},
+            )
+        body = response.json()['result']
+        self.assertTrue(body['success'])
+        token.invalidate_recordset()
+        self.assertFalse(token.active)

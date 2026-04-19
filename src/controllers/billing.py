@@ -99,31 +99,36 @@ class BillingController(Controller):
 
     @route("/api/billing/payment-methods", auth="user", methods=["POST"], type="json")
     def api_payment_methods(self, **kw) -> dict[str, Any]:
-        """
-        List current user's bound payment methods.
+        """List the current user's ECPG-bound cards (reads payment.token locally)."""
+        partner = request.env.user.partner_id
+        tokens = request.env['payment.token'].sudo().search([
+            ('partner_id', '=', partner.id),
+            ('ecpg_bindcard_id', '!=', False),
+            ('active', '=', True),
+        ])
+        default_token_id = False
+        if 'property_payment_token_id' in partner._fields:
+            default_token = partner.with_company(
+                partner.company_id or request.env.company
+            ).sudo().property_payment_token_id
+            default_token_id = default_token.id if default_token else False
 
-        Currently supports a single ECPay card binding per partner.
-        Returns the bound card as a one-item list, or an empty list.
-
-        Returns:
-            dict: { success, data: [{ id, type, last4, expiry, is_default, bound_date }] }
-        """
-        partner = request.env.user.partner_id.sudo()
-
-        methods = []
-        if partner.has_bound_credit_card():
-            methods.append({
-                'id': 'ecpay_default',
-                'type': 'visa',
-                'last4': partner.ecpay_card_last4 or '',
-                'expiry': partner.ecpay_card_expiry or '',
-                'is_default': True,
-                'bound_date': partner.ecpay_card_bound_date.isoformat() if partner.ecpay_card_bound_date else None,
-            })
+        def _format_expire(raw):
+            # ECPay's ecpg_card_expire is MMYY (e.g. '1226' = Dec 2026)
+            if not raw or len(raw) != 4:
+                return raw or ''
+            return f"{raw[:2]}/{raw[2:]}"
 
         return {
             'success': True,
-            'data': methods,
+            'data': [{
+                'id': t.id,
+                'last4': (t.payment_details or '').replace('*', '').strip(),
+                'expire': _format_expire(t.ecpg_card_expire or ''),
+                'bank': t.ecpg_issuing_bank or '',
+                'type': 'credit_card',
+                'is_default': t.id == default_token_id,
+            } for t in tokens],
         }
 
     @route("/api/billing/payment-methods/prepare-bind", auth="user", methods=["POST"], type="json")
@@ -271,55 +276,33 @@ class BillingController(Controller):
             },
         }
 
-    @route("/api/billing/payment-methods/<string:method_id>/delete", auth="user", methods=["POST"], type="json")
-    def api_payment_method_delete(self, method_id: str, **kw) -> dict[str, Any]:
-        """
-        Unbind a payment method (credit card).
-
-        Clears the partner's ECPay card fields.
-
-        Args:
-            method_id: Payment method identifier (e.g. 'ecpay_default').
-
-        Returns:
-            dict: { success: true }
-        """
-        partner = request.env.user.partner_id.sudo()
-
-        if method_id != 'ecpay_default':
-            return {'success': False, 'error': 'Payment method not found'}
-
-        if not partner.has_bound_credit_card():
-            return {'success': False, 'error': 'No card is currently bound'}
-
-        try:
-            partner.write({
-                'ecpay_card_token': False,
-                'ecpay_card_last4': False,
-                'ecpay_card_expiry': False,
-                'ecpay_card_bound_date': False,
-            })
-        except Exception as e:
-            _logger.error("Error unbinding payment method: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'Failed to remove payment method. Please try again.'}
-
-        _logger.info("Payment method unbound: partner=%s", partner.id)
-
+    @route("/api/billing/payment-methods/<int:method_id>/delete",
+           auth="user", methods=["POST"], type="json")
+    def api_payment_method_delete(self, method_id: int, **kw) -> dict[str, Any]:
+        """Archive a bound card. Triggers ecpay addon's _handle_archiving override
+        which calls DeleteMemberBindCard automatically."""
+        token = request.env['payment.token'].sudo().browse(method_id)
+        if not token.exists() or not token.ecpg_bindcard_id:
+            return {'success': False, 'error': 'Token not found', 'code': 'not_found'}
+        if token.partner_id != request.env.user.partner_id:
+            return {'success': False, 'error': 'Not owner', 'code': 'not_owner'}
+        token.active = False
         return {'success': True}
 
-    @route("/api/billing/payment-methods/<string:method_id>/set-default", auth="user", methods=["POST"], type="json")
-    def api_payment_method_set_default(self, method_id: str, **kw) -> dict[str, Any]:
-        """
-        Set a payment method as default.
-
-        Since only one card is supported, this is a no-op.
-
-        Args:
-            method_id: Payment method identifier.
-
-        Returns:
-            dict: { success: true }
-        """
+    @route("/api/billing/payment-methods/<int:method_id>/set-default",
+           auth="user", methods=["POST"], type="json")
+    def api_payment_method_set_default(self, method_id: int, **kw) -> dict[str, Any]:
+        """Set this card as the partner's default payment token."""
+        token = request.env['payment.token'].sudo().browse(method_id)
+        if not token.exists() or not token.ecpg_bindcard_id:
+            return {'success': False, 'error': 'Token not found', 'code': 'not_found'}
+        if token.partner_id != request.env.user.partner_id:
+            return {'success': False, 'error': 'Not owner', 'code': 'not_owner'}
+        partner = token.partner_id
+        if 'property_payment_token_id' in partner._fields:
+            partner.with_company(
+                partner.company_id or request.env.company
+            ).sudo().property_payment_token_id = token
         return {'success': True}
 
     # ==================== Top-up API ====================
