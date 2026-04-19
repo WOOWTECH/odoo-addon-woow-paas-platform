@@ -1,5 +1,6 @@
 import base64
 import logging
+import uuid
 
 from dateutil.relativedelta import relativedelta
 
@@ -30,68 +31,75 @@ class ShSubscriptionFix(models.Model):
             if subscription.sh_date_of_next_payment != fields.Date.today():
                 continue
 
-            invoice_vals = subscription._generate_invoice_vals()
-            invoice_id = self.env['account.move'].sudo().create(invoice_vals)
-            subscription.compute_view_invoice()
-
-            unit_deltas = {
-                'day': relativedelta(days=subscription.sh_recurrency),
-                'week': relativedelta(weeks=subscription.sh_recurrency),
-                'month': relativedelta(months=subscription.sh_recurrency),
-                'year': relativedelta(years=subscription.sh_recurrency),
-            }
-            delta = unit_deltas.get(subscription.sh_unit)
-            if delta:
-                subscription.sh_date_of_next_payment += delta
-
-            # Check wallet balance before posting/paying the invoice
-            partner = subscription.sh_partner_id
-            if partner.wallet_balance >= invoice_id.amount_total:
-                subscription._handle_invoice_creation(invoice_id)
-            else:
-                shortfall = invoice_id.amount_total - partner.wallet_balance
-                topup_ok, topup_msg = self._attempt_auto_topup(partner, shortfall)
-                if topup_ok:
-                    _logger.info(
-                        'Auto-topup covered shortfall=%.2f for subscription %s; '
-                        'proceeding with invoice %s',
-                        shortfall, subscription.name, invoice_id.name,
-                    )
-                    subscription._handle_invoice_creation(invoice_id)
-                else:
-                    _logger.warning(
-                        "Insufficient wallet balance for subscription %s and "
-                        "auto-topup failed (%s): balance=%.2f, required=%.2f — "
-                        "invoice %s left unpaid",
-                        subscription.name, topup_msg, partner.wallet_balance,
-                        invoice_id.amount_total, invoice_id.name,
-                    )
-                    self._notify_low_balance(partner, invoice_id)
-
             try:
-                pdf_content, _content_type = self.env['ir.actions.report'].sudo()._render_qweb_pdf(
-                    'account.account_invoices', invoice_id.id
-                )
-                attachment_id = self.env['ir.attachment'].sudo().create({
-                    'name': 'Subscription Invoice',
-                    'type': 'binary',
-                    'datas': base64.b64encode(pdf_content),
-                    'mimetype': 'application/pdf',
-                    'res_id': invoice_id.id,
-                    'res_model': 'account.move',
-                })
-                subscription._sh_send_subscription_email(attachment_id)
-            except Exception:
-                _logger.warning(
-                    "Failed to generate/send invoice PDF for subscription %s",
-                    subscription.name, exc_info=True,
-                )
+                with self.env.cr.savepoint():
+                    invoice_vals = subscription._generate_invoice_vals()
+                    invoice_id = self.env['account.move'].sudo().create(invoice_vals)
+                    subscription.compute_view_invoice()
 
-            _logger.info(
-                "Auto-invoice created for subscription %s (amount=%s, next=%s)",
-                subscription.name, invoice_id.amount_total,
-                subscription.sh_date_of_next_payment,
-            )
+                    unit_deltas = {
+                        'day': relativedelta(days=subscription.sh_recurrency),
+                        'week': relativedelta(weeks=subscription.sh_recurrency),
+                        'month': relativedelta(months=subscription.sh_recurrency),
+                        'year': relativedelta(years=subscription.sh_recurrency),
+                    }
+                    delta = unit_deltas.get(subscription.sh_unit)
+                    if delta:
+                        subscription.sh_date_of_next_payment += delta
+
+                    # Check wallet balance before posting/paying the invoice
+                    partner = subscription.sh_partner_id
+                    if partner.wallet_balance >= invoice_id.amount_total:
+                        subscription._handle_invoice_creation(invoice_id)
+                    else:
+                        shortfall = invoice_id.amount_total - partner.wallet_balance
+                        topup_ok, topup_msg = self._attempt_auto_topup(partner, shortfall)
+                        if topup_ok:
+                            _logger.info(
+                                'Auto-topup covered shortfall=%.2f for subscription %s; '
+                                'proceeding with invoice %s',
+                                shortfall, subscription.name, invoice_id.name,
+                            )
+                            subscription._handle_invoice_creation(invoice_id)
+                        else:
+                            _logger.warning(
+                                "Insufficient wallet balance for subscription %s and "
+                                "auto-topup failed (%s): balance=%.2f, required=%.2f — "
+                                "invoice %s left unpaid",
+                                subscription.name, topup_msg, partner.wallet_balance,
+                                invoice_id.amount_total, invoice_id.name,
+                            )
+                            self._notify_low_balance(partner, invoice_id)
+
+                    try:
+                        pdf_content, _content_type = self.env['ir.actions.report'].sudo()._render_qweb_pdf(
+                            'account.account_invoices', invoice_id.id
+                        )
+                        attachment_id = self.env['ir.attachment'].sudo().create({
+                            'name': 'Subscription Invoice',
+                            'type': 'binary',
+                            'datas': base64.b64encode(pdf_content),
+                            'mimetype': 'application/pdf',
+                            'res_id': invoice_id.id,
+                            'res_model': 'account.move',
+                        })
+                        subscription._sh_send_subscription_email(attachment_id)
+                    except Exception:
+                        _logger.warning(
+                            "Failed to generate/send invoice PDF for subscription %s",
+                            subscription.name, exc_info=True,
+                        )
+
+                    _logger.info(
+                        "Auto-invoice created for subscription %s (amount=%s, next=%s)",
+                        subscription.name, invoice_id.amount_total,
+                        subscription.sh_date_of_next_payment,
+                    )
+            except Exception:
+                _logger.exception(
+                    'Auto-invoice failed for subscription %s; continuing',
+                    subscription.name,
+                )
 
     @api.model
     def _notify_low_balance(self, partner, invoice):
@@ -152,6 +160,8 @@ class ShSubscriptionFix(models.Model):
             (False, '3ds_required')— ECPG returned ThreeDURL; cron cannot complete 3DS
             (False, '<state>')     — payment.transaction ended in a non-done state
             (False, 'sdk_error')   — unexpected exception from _send_payment_request
+            (False, 'wallet_credit_failed') — ECPay charged but wallet credit failed;
+                                              MANUAL RECONCILIATION REQUIRED
         """
         if shortfall <= 0:
             return False, 'no_shortfall'
@@ -176,7 +186,11 @@ class ShSubscriptionFix(models.Model):
         if not currency:
             return False, 'currency_not_configured'
 
-        reference = f'AUTOTOPUP-{partner.id}-{fields.Datetime.now().strftime("%Y%m%d%H%M%S")}'
+        reference = (
+            f'AUTOTOPUP-{partner.id}-'
+            f'{fields.Datetime.now().strftime("%Y%m%d%H%M%S")}-'
+            f'{uuid.uuid4().hex[:6]}'
+        )
         tx = self.env['payment.transaction'].sudo().create({
             'provider_id': provider.id,
             'payment_method_id': token.payment_method_id.id,
@@ -185,6 +199,7 @@ class ShSubscriptionFix(models.Model):
             'currency_id': currency.id,
             'partner_id': partner.id,
             'token_id': token.id,
+            'operation': 'offline',
         })
 
         try:
@@ -204,11 +219,29 @@ class ShSubscriptionFix(models.Model):
             )
             return False, tx.state
 
-        partner.sudo().add_wallet_points(
-            float(shortfall),
-            description='Auto top-up for subscription renewal',
-            payment_transaction=tx,
-        )
+        # ECPay has already charged the card. A subsequent failure during
+        # add_wallet_points must NOT propagate — otherwise the outer cron
+        # transaction rolls back, the payment.transaction row disappears, and
+        # the next cron tick will charge the card AGAIN.
+        #
+        # We catch any wallet-credit failure, log it as a critical operational
+        # event (manual reconciliation required), and return a dedicated
+        # failure code so the caller does not retry this run.
+        try:
+            partner.sudo().add_wallet_points(
+                float(shortfall),
+                description='Auto top-up for subscription renewal',
+                payment_transaction=tx,
+            )
+        except Exception:
+            _logger.exception(
+                'CRITICAL: auto-topup charged at ECPay (tx=%s, amount=%.2f) '
+                'but wallet credit failed; manual reconciliation required '
+                '(partner=%s)',
+                tx.reference, shortfall, partner.id,
+            )
+            return False, 'wallet_credit_failed'
+
         _logger.info(
             'Auto-topup succeeded: partner=%s amount=%.2f tx=%s',
             partner.id, shortfall, tx.reference,
