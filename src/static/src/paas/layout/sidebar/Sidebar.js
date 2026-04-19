@@ -48,6 +48,11 @@ export class Sidebar extends Component {
         if (item.path === "billing/topup") {
             return current === "billing-topup";
         }
+        if (item.path === "settings") {
+            return current === "settings"
+                || current === "settings-payment-methods"
+                || current === "settings-payment-methods-add";
+        }
         return current === item.path;
     }
 
