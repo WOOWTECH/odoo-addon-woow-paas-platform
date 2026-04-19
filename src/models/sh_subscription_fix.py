@@ -1,11 +1,22 @@
 import base64
 import logging
+import math
 import uuid
 
 from dateutil.relativedelta import relativedelta
 
 from odoo import api, fields, models
 from odoo.tools.misc import formatLang
+
+# Return codes from _attempt_auto_topup.
+TOPUP_OK = 'ok'
+TOPUP_NO_SHORTFALL = 'no_shortfall'
+TOPUP_NO_TOKEN = 'no_token'
+TOPUP_PROVIDER_NOT_ENABLED = 'provider_not_enabled'
+TOPUP_CURRENCY_NOT_CONFIGURED = 'currency_not_configured'
+TOPUP_3DS_REQUIRED = '3ds_required'
+TOPUP_SDK_ERROR = 'sdk_error'
+TOPUP_WALLET_CREDIT_FAILED = 'wallet_credit_failed'
 
 _logger = logging.getLogger(__name__)
 
@@ -164,38 +175,41 @@ class ShSubscriptionFix(models.Model):
                                               MANUAL RECONCILIATION REQUIRED
         """
         if shortfall <= 0:
-            return False, 'no_shortfall'
+            return False, TOPUP_NO_SHORTFALL
+
+        # ECPay requires TotalAmount as a positive integer TWD. Ceil so the wallet
+        # covers the invoice even if the shortfall has a fractional TWD component.
+        charge_amount = int(math.ceil(shortfall))
 
         if 'property_payment_token_id' not in partner._fields:
-            return False, 'no_token'
+            return False, TOPUP_NO_TOKEN
 
         token = partner.with_company(
             partner.company_id or self.env.company
         ).sudo().property_payment_token_id
 
         if not token or not token.active or not token.ecpg_bindcard_id:
-            return False, 'no_token'
+            return False, TOPUP_NO_TOKEN
 
         provider = token.provider_id
         if not provider or not getattr(provider, 'enable_ecpg', False):
-            return False, 'provider_not_enabled'
+            return False, TOPUP_PROVIDER_NOT_ENABLED
 
         currency = provider.main_currency_id or self.env.ref(
             'base.TWD', raise_if_not_found=False,
         )
         if not currency:
-            return False, 'currency_not_configured'
+            return False, TOPUP_CURRENCY_NOT_CONFIGURED
 
-        reference = (
-            f'AUTOTOPUP-{partner.id}-'
-            f'{fields.Datetime.now().strftime("%Y%m%d%H%M%S")}-'
-            f'{uuid.uuid4().hex[:6]}'
-        )
+        # 20-char limit: put the unique portion first (uuid) so ecpay's
+        # _ecpg_build_merchant_trade_no truncation preserves uniqueness.
+        # Matches upstream's BIND{uuid16} pattern.
+        reference = f'TOPUP{uuid.uuid4().hex[:15].upper()}'
         tx = self.env['payment.transaction'].sudo().create({
             'provider_id': provider.id,
             'payment_method_id': token.payment_method_id.id,
             'reference': reference,
-            'amount': float(shortfall),
+            'amount': float(charge_amount),
             'currency_id': currency.id,
             'partner_id': partner.id,
             'token_id': token.id,
@@ -206,12 +220,12 @@ class ShSubscriptionFix(models.Model):
             result = tx._send_payment_request()
         except Exception as e:
             _logger.exception('Auto-topup send_payment_request failed: %s', e)
-            return False, 'sdk_error'
+            return False, TOPUP_SDK_ERROR
 
         # 3DS redirect — cron cannot drive it. Treat as failure.
         if isinstance(result, dict) and result.get('redirect_url'):
             _logger.info('Auto-topup requires 3DS for partner=%s; aborting', partner.id)
-            return False, '3ds_required'
+            return False, TOPUP_3DS_REQUIRED
 
         if tx.state != 'done':
             _logger.warning(
@@ -229,21 +243,21 @@ class ShSubscriptionFix(models.Model):
         # failure code so the caller does not retry this run.
         try:
             partner.sudo().add_wallet_points(
-                float(shortfall),
+                float(charge_amount),
                 description='Auto top-up for subscription renewal',
                 payment_transaction=tx,
             )
         except Exception:
             _logger.exception(
-                'CRITICAL: auto-topup charged at ECPay (tx=%s, amount=%.2f) '
+                'CRITICAL: auto-topup charged at ECPay (tx=%s, charge_amount=%.2f) '
                 'but wallet credit failed; manual reconciliation required '
                 '(partner=%s)',
-                tx.reference, shortfall, partner.id,
+                tx.reference, charge_amount, partner.id,
             )
-            return False, 'wallet_credit_failed'
+            return False, TOPUP_WALLET_CREDIT_FAILED
 
         _logger.info(
-            'Auto-topup succeeded: partner=%s amount=%.2f tx=%s',
-            partner.id, shortfall, tx.reference,
+            'Auto-topup succeeded: partner=%s charge_amount=%.2f tx=%s',
+            partner.id, charge_amount, tx.reference,
         )
-        return True, 'ok'
+        return True, TOPUP_OK
