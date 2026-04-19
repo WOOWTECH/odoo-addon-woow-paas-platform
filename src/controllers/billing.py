@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from odoo import fields
 from odoo.http import request, route, Controller
 
 _logger = logging.getLogger(__name__)
+
+TAIPEI_TZ = timezone(timedelta(hours=8))
 
 
 def _find_ecpg_provider(env):
@@ -161,7 +163,7 @@ class BillingController(Controller):
             'CountryCode': '158',
         }
         order_info = {
-            'MerchantTradeDate': datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+            'MerchantTradeDate': datetime.now(TAIPEI_TZ).strftime('%Y/%m/%d %H:%M:%S'),
             'MerchantTradeNo': trade_no,
             'TotalAmount': '5',
             'TradeDesc': '綁卡驗證',

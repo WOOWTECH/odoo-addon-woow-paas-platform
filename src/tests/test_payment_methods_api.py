@@ -45,8 +45,10 @@ class TestPaymentMethodsApi(HttpCase):
         self.assertIn('trade_no', body['data'])
         self.assertEqual(body['data']['merchant_id'], '3002607')
         self.assertTrue(body['data']['sandbox'])
+        mock_get_token.assert_called_once()
         kwargs = mock_get_token.call_args.kwargs
         self.assertIn('/woow#/settings/payment-methods', kwargs['order_result_url'])
+        self.assertIn(f'trade_no={body["data"]["trade_no"]}', kwargs['order_result_url'])
 
     def test_prepare_bind_no_provider_returns_error(self):
         self.provider.enable_ecpg = False
