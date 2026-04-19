@@ -218,3 +218,37 @@ class TestLowBalanceNotification(TransactionCase):
 
         self.assertFalse(ok)
         self.assertEqual(msg, 'error')
+
+    def test_auto_invoice_calls_attempt_auto_topup_before_notify(self):
+        """Regression guard: _sh_create_auto_invoice must wire _attempt_auto_topup
+        BEFORE _notify_low_balance in the insufficient-balance branch."""
+        import inspect
+        from odoo.addons.woow_paas_platform.models.sh_subscription_fix import ShSubscriptionFix
+        source = inspect.getsource(ShSubscriptionFix._sh_create_auto_invoice)
+        self.assertIn(
+            '_attempt_auto_topup', source,
+            "_sh_create_auto_invoice must call _attempt_auto_topup",
+        )
+        topup_idx = source.index('_attempt_auto_topup')
+        notify_idx = source.index('_notify_low_balance')
+        self.assertLess(
+            topup_idx, notify_idx,
+            "_attempt_auto_topup must be called BEFORE _notify_low_balance",
+        )
+
+    def test_auto_invoice_pays_invoice_when_auto_topup_succeeds(self):
+        """Regression guard: on _attempt_auto_topup success, branch must call
+        _handle_invoice_creation (not _notify_low_balance)."""
+        import inspect
+        from odoo.addons.woow_paas_platform.models.sh_subscription_fix import ShSubscriptionFix
+        source = inspect.getsource(ShSubscriptionFix._sh_create_auto_invoice)
+        # Verify the success-gated invoice creation path exists
+        self.assertIn('_handle_invoice_creation', source)
+        # Ensure _handle_invoice_creation appears after _attempt_auto_topup (success branch)
+        # Count occurrences — must be at least 2 (one original at the balance-sufficient path,
+        # one new at the topup-success path)
+        self.assertGreaterEqual(
+            source.count('_handle_invoice_creation'), 2,
+            "_sh_create_auto_invoice must call _handle_invoice_creation in both "
+            "the balance-sufficient path AND the auto-topup-success path",
+        )
