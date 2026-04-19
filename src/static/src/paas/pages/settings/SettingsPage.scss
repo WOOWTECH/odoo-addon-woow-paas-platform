@@ -77,6 +77,15 @@
     opacity: 0.7;
     pointer-events: none;
   }
+
+  &_arrow {
+    margin-left: auto;
+    color: $woow-text-secondary;
+  }
+
+  &:hover {
+    background: rgba($woow-primary, 0.03);
+  }
 }
 
 .o_woow_settings_badge {
