@@ -214,9 +214,12 @@ class BillingController(Controller):
             result = client.get_token_by_binding_card(
                 consumer_info=consumer_info,
                 order_info=order_info,
+                # ECPay POSTs (not GETs) to OrderResultURL after 3DS, so it must
+                # accept POST without CSRF. Our /woow shell doesn't, hence a
+                # dedicated bouncer at /api/billing/payment-methods/bind-result/<trade_no>
+                # that 303-redirects the browser into the SPA hash route.
                 order_result_url=(
-                    f'{base}/woow#/settings/payment-methods'
-                    f'?bind_status=ok&trade_no={trade_no}'
+                    f'{base}/api/billing/payment-methods/bind-result/{trade_no}'
                 ),
             )
         except ECPGError as e:
@@ -241,6 +244,26 @@ class BillingController(Controller):
                 'sandbox': provider.state != 'enabled',
             },
         }
+
+    @route(
+        "/api/billing/payment-methods/bind-result/<string:trade_no>",
+        auth="public",
+        type="http",
+        methods=["GET", "POST"],
+        csrf=False,
+    )
+    def api_payment_method_bind_result(self, trade_no, **kw):
+        """Browser-facing OrderResultURL landing for the ECPG bind 3DS flow.
+
+        ECPay redirects the user's browser here with a form POST after 3DS.
+        We don't parse the encrypted ResultData (the S2S /payment/ecpg/bind_callback
+        already persists the payment.token); we just bounce the browser into the
+        OWL SPA at #/settings/payment-methods?bind_status=ok.
+        """
+        base = (request.env['ir.config_parameter'].sudo().get_param('web.base.url')
+                or request.httprequest.url_root).rstrip('/')
+        target = f'{base}/woow#/settings/payment-methods?bind_status=ok&trade_no={trade_no}'
+        return request.redirect(target, code=303, local=False)
 
     @route("/api/billing/payment-methods/create-bind", auth="user", methods=["POST"], type="json")
     def api_payment_method_create_bind(

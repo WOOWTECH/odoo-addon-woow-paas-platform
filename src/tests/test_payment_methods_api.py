@@ -71,8 +71,13 @@ class TestPaymentMethodsApi(HttpCase):
         self.assertTrue(body['data']['sandbox'])
         mock_get_token.assert_called_once()
         kwargs = mock_get_token.call_args.kwargs
-        self.assertIn('/woow#/settings/payment-methods', kwargs['order_result_url'])
-        self.assertIn(f'trade_no={body["data"]["trade_no"]}', kwargs['order_result_url'])
+        # OrderResultURL must point at our bind-result bouncer (which 303's into
+        # the OWL SPA hash route) — ECPay POSTs here so the SPA shell can't accept.
+        self.assertIn('/api/billing/payment-methods/bind-result/', kwargs['order_result_url'])
+        self.assertTrue(
+            kwargs['order_result_url'].endswith(body['data']['trade_no']),
+            f"trade_no should be the path tail, got {kwargs['order_result_url']!r}",
+        )
 
     def test_prepare_bind_no_provider_returns_error(self):
         self.provider.enable_ecpg = False
