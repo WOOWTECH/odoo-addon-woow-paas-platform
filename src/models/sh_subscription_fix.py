@@ -123,3 +123,83 @@ class ShSubscriptionFix(models.Model):
                 "Failed to queue low-balance notification for partner %s",
                 partner.id,
             )
+
+    @api.model
+    def _attempt_auto_topup(self, partner, shortfall):
+        """Charge the partner's default bound card to top up the wallet.
+
+        Args:
+            partner: res.partner record
+            shortfall: float amount needed (TWD)
+
+        Returns:
+            (True, 'ok')           — charge succeeded, wallet credited
+            (False, 'no_shortfall')— shortfall <= 0
+            (False, 'no_token')    — partner has no usable default ECPG token
+            (False, 'provider_not_enabled') — token's provider does not have enable_ecpg
+            (False, 'currency_not_configured') — neither provider nor TWD available
+            (False, '3ds_required')— ECPG returned ThreeDURL; cron cannot complete 3DS
+            (False, '<state>')     — payment.transaction ended in a non-done state
+            (False, 'sdk_error')   — unexpected exception from _send_payment_request
+        """
+        if shortfall <= 0:
+            return False, 'no_shortfall'
+
+        if 'property_payment_token_id' not in partner._fields:
+            return False, 'no_token'
+
+        token = partner.with_company(
+            partner.company_id or self.env.company
+        ).sudo().property_payment_token_id
+
+        if not token or not token.active or not token.ecpg_bindcard_id:
+            return False, 'no_token'
+
+        provider = token.provider_id
+        if not provider or not getattr(provider, 'enable_ecpg', False):
+            return False, 'provider_not_enabled'
+
+        currency = provider.main_currency_id or self.env.ref(
+            'base.TWD', raise_if_not_found=False,
+        )
+        if not currency:
+            return False, 'currency_not_configured'
+
+        reference = f'AUTOTOPUP-{partner.id}-{fields.Datetime.now().strftime("%Y%m%d%H%M%S")}'
+        tx = self.env['payment.transaction'].sudo().create({
+            'provider_id': provider.id,
+            'payment_method_id': token.payment_method_id.id,
+            'reference': reference,
+            'amount': float(shortfall),
+            'currency_id': currency.id,
+            'partner_id': partner.id,
+            'token_id': token.id,
+        })
+
+        try:
+            result = tx._send_payment_request()
+        except Exception as e:
+            _logger.exception('Auto-topup send_payment_request failed: %s', e)
+            return False, 'sdk_error'
+
+        # 3DS redirect — cron cannot drive it. Treat as failure.
+        if isinstance(result, dict) and result.get('redirect_url'):
+            _logger.info('Auto-topup requires 3DS for partner=%s; aborting', partner.id)
+            return False, '3ds_required'
+
+        if tx.state != 'done':
+            _logger.warning(
+                'Auto-topup transaction %s ended in state=%s', tx.reference, tx.state,
+            )
+            return False, tx.state
+
+        partner.sudo().add_wallet_points(
+            float(shortfall),
+            description='Auto top-up for subscription renewal',
+            payment_transaction=tx,
+        )
+        _logger.info(
+            'Auto-topup succeeded: partner=%s amount=%.2f tx=%s',
+            partner.id, shortfall, tx.reference,
+        )
+        return True, 'ok'
