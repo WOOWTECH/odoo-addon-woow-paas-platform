@@ -12,6 +12,40 @@ class TestLowBalanceNotification(TransactionCase):
             'wallet_balance': 100.0,
         })
 
+    def _setup_ecpg_token(self, bindcard_id):
+        """Provision an ECPG-ready provider + token for self.partner and set default.
+
+        Returns: (provider, token) or calls self.skipTest if no ECPay provider exists.
+        """
+        provider = self.env['payment.provider'].sudo().search(
+            [('code', '=', 'ECPay')], limit=1,
+        )
+        if not provider:
+            self.skipTest("ECPay provider not configured in this DB")
+        provider.write({
+            'enable_ecpg': True,
+            'MerchantID': '3002607',
+            'HashKey': 'pwFHCqoQZGmho4w6',
+            'HashIV': 'EkRm7iFT261dpevs',
+            'state': 'test',
+        })
+        payment_method = self.env.ref(
+            'payment.payment_method_card', raise_if_not_found=False,
+        ) or self.env.ref('payment.payment_method_unknown')
+        token = self.env['payment.token'].sudo().create({
+            'provider_id': provider.id,
+            'partner_id': self.partner.id,
+            'payment_method_id': payment_method.id,
+            'payment_details': '**** **** **** ' + bindcard_id[-4:],
+            'provider_ref': bindcard_id,
+            'ecpg_bindcard_id': bindcard_id,
+            'ecpg_member_id': str(self.partner.id),
+        })
+        if 'property_payment_token_id' in self.partner._fields:
+            self.partner.with_company(self.partner.company_id or self.env.company) \
+                        .sudo().property_payment_token_id = token
+        return provider, token
+
     def test_notification_sent_when_insufficient_balance(self):
         """When auto-invoice finds insufficient balance, email must be sent."""
         Subscription = self.env['sh.subscription.subscription']
@@ -67,35 +101,7 @@ class TestLowBalanceNotification(TransactionCase):
         """When ECPG charge succeeds, helper credits the wallet and returns (True, 'ok')."""
         from unittest.mock import patch
 
-        partner = self.partner
-        provider = self.env['payment.provider'].sudo().search(
-            [('code', '=', 'ECPay')], limit=1,
-        )
-        if not provider:
-            self.skipTest("ECPay provider not configured in this DB")
-        provider.write({
-            'enable_ecpg': True,
-            'MerchantID': '3002607',
-            'HashKey': 'pwFHCqoQZGmho4w6',
-            'HashIV': 'EkRm7iFT261dpevs',
-            'state': 'test',
-        })
-
-        payment_method = self.env.ref(
-            'payment.payment_method_card', raise_if_not_found=False,
-        ) or self.env.ref('payment.payment_method_unknown')
-        token = self.env['payment.token'].sudo().create({
-            'provider_id': provider.id,
-            'partner_id': partner.id,
-            'payment_method_id': payment_method.id,
-            'payment_details': '**** **** **** 4242',
-            'provider_ref': 'BC_AUTOTOPUP',
-            'ecpg_bindcard_id': 'BC_AUTOTOPUP',
-            'ecpg_member_id': str(partner.id),
-        })
-        if 'property_payment_token_id' in partner._fields:
-            partner.with_company(partner.company_id or self.env.company) \
-                   .sudo().property_payment_token_id = token
+        provider, token = self._setup_ecpg_token('BC_AUTOTOPUP')
 
         def _fake_send(self_tx):
             self_tx.state = 'done'
@@ -103,22 +109,21 @@ class TestLowBalanceNotification(TransactionCase):
             return None
 
         Subscription = self.env['sh.subscription.subscription']
-        before_balance = partner.wallet_balance
+        before_balance = self.partner.wallet_balance
 
         with patch.object(
             type(self.env['payment.transaction']),
             '_send_payment_request', _fake_send,
         ):
-            ok, msg = Subscription._attempt_auto_topup(partner, 400.0)
+            ok, msg = Subscription._attempt_auto_topup(self.partner, 400.0)
 
         self.assertTrue(ok, f"Expected success, got ({ok}, {msg})")
         self.assertEqual(msg, 'ok')
-        partner.invalidate_recordset()
-        self.assertEqual(partner.wallet_balance, before_balance + 400.0)
+        self.partner.invalidate_recordset()
+        self.assertEqual(self.partner.wallet_balance, before_balance + 400.0)
 
-        # Verify a wallet.transaction row was created (add_wallet_points side effect)
         tx_rows = self.env['wallet.transaction'].sudo().search([
-            ('partner_id', '=', partner.id),
+            ('partner_id', '=', self.partner.id),
             ('transaction_type', '=', 'topup'),
         ], order='id desc', limit=1)
         self.assertTrue(tx_rows, "Expected a wallet.transaction row for auto-topup")
@@ -136,74 +141,30 @@ class TestLowBalanceNotification(TransactionCase):
         """ECPG charge that needs 3DS → (False, '3ds_required'), no wallet change."""
         from unittest.mock import patch
 
-        partner = self.partner
-        provider = self.env['payment.provider'].sudo().search(
-            [('code', '=', 'ECPay')], limit=1,
-        )
-        if not provider:
-            self.skipTest("ECPay provider not configured in this DB")
-        provider.write({'enable_ecpg': True, 'state': 'test'})
-
-        payment_method = self.env.ref(
-            'payment.payment_method_card', raise_if_not_found=False,
-        ) or self.env.ref('payment.payment_method_unknown')
-        token = self.env['payment.token'].sudo().create({
-            'provider_id': provider.id,
-            'partner_id': partner.id,
-            'payment_method_id': payment_method.id,
-            'payment_details': '**** **** **** 1111',
-            'provider_ref': 'BC_3DS',
-            'ecpg_bindcard_id': 'BC_3DS',
-            'ecpg_member_id': str(partner.id),
-        })
-        if 'property_payment_token_id' in partner._fields:
-            partner.with_company(partner.company_id or self.env.company) \
-                   .sudo().property_payment_token_id = token
+        provider, token = self._setup_ecpg_token('BC_3DS')
 
         def _fake_send_3ds(self_tx):
             # Simulate ECPG override returning a redirect dict for 3DS.
             return {'redirect_url': 'https://3ds.example/verify'}
 
-        before = partner.wallet_balance
+        before = self.partner.wallet_balance
         with patch.object(
             type(self.env['payment.transaction']),
             '_send_payment_request', _fake_send_3ds,
         ):
             Subscription = self.env['sh.subscription.subscription']
-            ok, msg = Subscription._attempt_auto_topup(partner, 400.0)
+            ok, msg = Subscription._attempt_auto_topup(self.partner, 400.0)
 
         self.assertFalse(ok)
         self.assertEqual(msg, '3ds_required')
-        partner.invalidate_recordset()
-        self.assertEqual(partner.wallet_balance, before, "Wallet must be unchanged on 3DS")
+        self.partner.invalidate_recordset()
+        self.assertEqual(self.partner.wallet_balance, before, "Wallet must be unchanged on 3DS")
 
     def test_attempt_auto_topup_returns_failure_state_when_ecpg_errors(self):
         """When _send_payment_request leaves tx.state != 'done', return (False, state)."""
         from unittest.mock import patch
 
-        partner = self.partner
-        provider = self.env['payment.provider'].sudo().search(
-            [('code', '=', 'ECPay')], limit=1,
-        )
-        if not provider:
-            self.skipTest("ECPay provider not configured in this DB")
-        provider.write({'enable_ecpg': True, 'state': 'test'})
-
-        payment_method = self.env.ref(
-            'payment.payment_method_card', raise_if_not_found=False,
-        ) or self.env.ref('payment.payment_method_unknown')
-        token = self.env['payment.token'].sudo().create({
-            'provider_id': provider.id,
-            'partner_id': partner.id,
-            'payment_method_id': payment_method.id,
-            'payment_details': '**** **** **** 2222',
-            'provider_ref': 'BC_FAIL',
-            'ecpg_bindcard_id': 'BC_FAIL',
-            'ecpg_member_id': str(partner.id),
-        })
-        if 'property_payment_token_id' in partner._fields:
-            partner.with_company(partner.company_id or self.env.company) \
-                   .sudo().property_payment_token_id = token
+        provider, token = self._setup_ecpg_token('BC_FAIL')
 
         def _fake_send_error(self_tx):
             self_tx.state = 'error'
@@ -214,7 +175,7 @@ class TestLowBalanceNotification(TransactionCase):
             '_send_payment_request', _fake_send_error,
         ):
             Subscription = self.env['sh.subscription.subscription']
-            ok, msg = Subscription._attempt_auto_topup(partner, 400.0)
+            ok, msg = Subscription._attempt_auto_topup(self.partner, 400.0)
 
         self.assertFalse(ok)
         self.assertEqual(msg, 'error')
