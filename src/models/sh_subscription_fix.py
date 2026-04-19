@@ -80,7 +80,12 @@ class ShSubscriptionFix(models.Model):
                                 subscription.name, topup_msg, partner.wallet_balance,
                                 invoice_id.amount_total, invoice_id.name,
                             )
-                            self._notify_low_balance(partner, invoice_id)
+                            # Dedup: reuse the pre-renewal warning field so a partner who
+                            # already received today's warning doesn't get a second email.
+                            today = fields.Date.today()
+                            if subscription.woow_last_low_balance_warned_for != today:
+                                self._notify_low_balance(partner, invoice_id)
+                                subscription.write({'woow_last_low_balance_warned_for': today})
 
                     try:
                         pdf_content, _content_type = self.env['ir.actions.report'].sudo()._render_qweb_pdf(
