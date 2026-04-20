@@ -67,6 +67,9 @@
             <t t-elif="router.current === 'settings'">
                 <SettingsPage/>
             </t>
+            <t t-elif="router.current === 'settings-profile'">
+                <ProfilePage/>
+            </t>
             <t t-elif="router.current === 'settings-payment-methods'">
                 <PaymentMethodsListPage/>
             </t>

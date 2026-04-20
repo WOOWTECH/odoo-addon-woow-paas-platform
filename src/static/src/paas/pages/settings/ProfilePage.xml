@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ProfilePage">
+        <div class="o_woow_profile_page">
+            <div class="o_woow_page_header">
+                <div class="o_woow_breadcrumb">
+                    <a href="#/settings">Settings</a>
+                    <span class="o_woow_breadcrumb_sep">›</span>
+                    <span>Profile</span>
+                </div>
+                <h1>Profile</h1>
+                <p>Edit your name, email, and phone number.</p>
+            </div>
+
+            <t t-if="state.saveSuccess">
+                <div class="o_woow_success_banner" role="alert">
+                    <WoowIcon name="'check_circle'" size="24"/>
+                    <span>Profile saved.</span>
+                </div>
+            </t>
+
+            <t t-if="state.serverError">
+                <div class="o_woow_error_banner" role="alert">
+                    <WoowIcon name="'error'" size="20"/>
+                    <span t-esc="state.serverError"/>
+                </div>
+            </t>
+
+            <t t-if="isLoading">
+                <div class="o_woow_loading">Loading profile…</div>
+            </t>
+
+            <t t-else="">
+                <WoowCard shadow="true" class="'o_woow_profile_card'">
+                    <div class="o_woow_profile_header">
+                        <div class="o_woow_profile_avatar">
+                            <img t-if="avatarUrl" t-att-src="avatarUrl" alt=""/>
+                        </div>
+                        <div class="o_woow_profile_name" t-esc="displayName"/>
+                    </div>
+
+                    <div class="o_woow_profile_form">
+                        <div class="o_woow_field">
+                            <label for="profile_name">Name</label>
+                            <input id="profile_name" type="text"
+                                   t-model="state.form.name"
+                                   t-att-class="state.fieldErrors.name ? 'o_woow_input_error' : ''"/>
+                            <t t-if="state.fieldErrors.name">
+                                <div class="o_woow_field_error" t-esc="state.fieldErrors.name"/>
+                            </t>
+                        </div>
+
+                        <div class="o_woow_field">
+                            <label for="profile_email">Email</label>
+                            <input id="profile_email" type="email"
+                                   t-model="state.form.email"
+                                   t-att-class="state.fieldErrors.email ? 'o_woow_input_error' : ''"/>
+                            <t t-if="state.fieldErrors.email">
+                                <div class="o_woow_field_error" t-esc="state.fieldErrors.email"/>
+                            </t>
+                        </div>
+
+                        <div class="o_woow_field">
+                            <label for="profile_phone">Phone</label>
+                            <input id="profile_phone" type="tel"
+                                   t-model="state.form.phone"/>
+                            <div class="o_woow_field_hint">
+                                Any format accepted. ECPay binding will auto-strip spaces and dashes.
+                            </div>
+                        </div>
+
+                        <div class="o_woow_profile_actions">
+                            <WoowButton variant="'secondary'" size="'md'" onClick.bind="onCancel"
+                                        disabled="state.saving">
+                                Cancel
+                            </WoowButton>
+                            <WoowButton variant="'primary'" size="'md'" onClick.bind="onSave"
+                                        disabled="state.saving">
+                                <t t-if="state.saving">Saving…</t>
+                                <t t-else="">Save</t>
+                            </WoowButton>
+                        </div>
+                    </div>
+                </WoowCard>
+            </t>
+        </div>
+    </t>
+</templates>
