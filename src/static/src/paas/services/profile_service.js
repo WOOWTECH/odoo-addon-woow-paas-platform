@@ -44,21 +44,26 @@ export const profileService = reactive({
     partner: null,        // {id, name, email, phone, avatar_url} or null
     loading: false,
     saving: false,
+    _fetchPromise: null,
     error: null,
 
     async fetch() {
-        if (this.loading) return;
-        this.loading = true;
-        this.error = null;
-        try {
-            const result = await jsonRpc("/api/me", {});
-            if (!result.success) throw new Error(result.error || "Failed to load profile");
-            this.partner = result.data;
-        } catch (err) {
-            this.error = err.message || String(err);
-        } finally {
-            this.loading = false;
-        }
+        if (this._fetchPromise) return this._fetchPromise;
+        this._fetchPromise = (async () => {
+            this.loading = true;
+            this.error = null;
+            try {
+                const result = await jsonRpc("/api/me", {});
+                if (!result.success) throw new Error(result.error || "Failed to load profile");
+                this.partner = result.data;
+            } catch (err) {
+                this.error = err.message || String(err);
+            } finally {
+                this.loading = false;
+                this._fetchPromise = null;
+            }
+        })();
+        return this._fetchPromise;
     },
 
     async update(patch) {
