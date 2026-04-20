@@ -12,7 +12,13 @@ _logger = logging.getLogger(__name__)
 ERR_NAME_REQUIRED = 'name_required'
 ERR_INVALID_EMAIL = 'invalid_email'
 
-# Accepts typical emails; keeps it simple (RFC 5322 is intentionally wider).
+# Accepts typical public emails. Intentionally stricter than RFC 5322:
+#   - requires at least one dot after @ (rejects "user@localhost" and
+#     bare-intranet addresses — acceptable because this is an end-user
+#     billing/notification field, not a deliverability-critical route).
+#   - TLD must be ASCII letters only, 2+ chars (rejects IDN TLDs like .中国).
+# If future requirements need intranet/IDN support, swap in a library.
+# No ReDoS risk: single quantifier per character class, linear backtracking.
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 
@@ -53,11 +59,25 @@ class ProfileController(Controller):
         phone: str | None = None,
         **kw,
     ) -> dict[str, Any]:
-        """Update the current user's partner name/email/phone.
+        """Update the current user's partner name/email/phone (full replace).
 
-        Only these three fields are accepted. All other kwargs (including
-        any `partner_id` a caller might supply) are ignored — writes always
-        target `request.env.user.partner_id`.
+        Contract: this is NOT a patch. All three fields are written on every
+        call; callers must re-send existing values they want preserved.
+
+        Per-field semantics:
+            name:  required, non-blank after strip(); whitespace-only → rejected
+                   with code 'name_required'.
+            email: optional. Empty, None, or whitespace-only → cleared (stored
+                   as False). Non-blank → validated against EMAIL_RE;
+                   malformed → 'invalid_email'.
+            phone: optional. Empty, None, or whitespace-only → cleared (stored
+                   as False). Any non-blank string is accepted as-is (the
+                   ECPay integration sanitizes at send time — see
+                   _sanitize_phone_for_ecpay in billing.py).
+
+        Security: all other kwargs (including any `partner_id` a caller might
+        supply) are ignored — writes always target
+        `request.env.user.partner_id`.
         """
         partner = self._me_guard()
 

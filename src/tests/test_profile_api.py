@@ -82,3 +82,35 @@ class TestProfileApi(HttpCase):
                          "Endpoint must ignore partner_id from body")
         self.partner.invalidate_recordset()
         self.assertEqual(self.partner.name, 'Hijacked')
+
+    def test_update_partial_payload_clears_omitted_fields(self):
+        """Document full-replace contract: omitted fields are cleared, not preserved.
+
+        Pre-populate email/phone, then send an update with only `name`.
+        Expected: email and phone become False (cleared).
+        """
+        self.partner.sudo().write({
+            'email': 'before@example.com',
+            'phone': '+886-900-000-000',
+        })
+        response = self._post('/api/me/update', '{"name":"Just Name"}')
+        body = response.json()['result']
+        self.assertTrue(body['success'], f"Unexpected: {body}")
+        self.partner.invalidate_recordset()
+        self.assertEqual(self.partner.name, 'Just Name')
+        self.assertFalse(self.partner.email,
+                         "Full-replace semantics: omitted email must be cleared")
+        self.assertFalse(self.partner.phone,
+                         "Full-replace semantics: omitted phone must be cleared")
+
+    def test_update_phone_whitespace_clears_value(self):
+        """Document phone semantics: whitespace-only = clear (like empty string)."""
+        self.partner.sudo().write({'phone': '+886-900-000-000'})
+        response = self._post(
+            '/api/me/update', '{"name":"OK","phone":"   "}',
+        )
+        body = response.json()['result']
+        self.assertTrue(body['success'], f"Unexpected: {body}")
+        self.partner.invalidate_recordset()
+        self.assertFalse(self.partner.phone,
+                         "Whitespace-only phone must be cleared (stored as False)")
