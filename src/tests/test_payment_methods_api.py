@@ -193,3 +193,42 @@ class TestPaymentMethodsApi(HttpCase):
         self.assertTrue(body['success'])
         token.invalidate_recordset()
         self.assertFalse(token.active)
+
+    def test_bouncer_does_not_overwrite_session_cookie(self):
+        """Bouncer at /api/billing/payment-methods/bind-result/<trade_no> must
+        NOT set a new session_id cookie on its response.
+
+        Why: ECPay POSTs cross-site to this URL after 3DS. SameSite=Lax strips
+        the user's session_id from the request, so Odoo's default behavior is
+        to mint a new anonymous session and Set-Cookie it back — overwriting
+        the user's authenticated session_id in their browser. We use
+        save_session=False on the route to prevent this. Upstream pattern:
+        payment_mollie.mollie_return_from_checkout / payment_aps.aps_return_from_checkout.
+        """
+        import requests
+        url = (
+            f"{self.base_url()}"
+            "/api/billing/payment-methods/bind-result/TEST_NO_SESSION"
+        )
+        with patch(
+            'odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback.'
+            'ECPGCallback._handle_bind_callback',
+            return_value=None,
+        ):
+            # Fresh requests.post() (not self.url_open) to isolate from
+            # self.opener's authenticated cookies — simulates ECPay's
+            # cookieless cross-site POST.
+            response = requests.post(
+                url,
+                data={'RtnCode': '1', 'RtnMsg': 'OK'},
+                allow_redirects=False,
+                timeout=10,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(
+            'session_id', response.cookies,
+            f"Bouncer must not Set-Cookie session_id "
+            f"(got: {dict(response.cookies)})",
+        )
+        # Sanity: bouncer still serves the HTML+JS redirect page
+        self.assertIn('window.location.replace', response.text)

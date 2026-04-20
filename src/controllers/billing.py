@@ -256,6 +256,7 @@ class BillingController(Controller):
         type="http",
         methods=["GET", "POST"],
         csrf=False,
+        save_session=False,
     )
     def api_payment_method_bind_result(self, trade_no, **kw):
         """Browser-facing OrderResultURL landing for the ECPG bind 3DS flow.
@@ -275,6 +276,16 @@ class BillingController(Controller):
            bounces to /web/login. Instead, return a tiny same-origin HTML page that
            uses a JS top-level navigation — that GET is treated as same-origin so
            Lax cookies are sent and the SPA loads with the user's session intact.
+
+        3) `save_session=False`. Even with the JS redirect above, Odoo still mints
+           an anonymous session for this `auth='public'` endpoint (because the
+           incoming POST carries no session_id cookie) and its `_save_session`
+           post-dispatch hook sets `Set-Cookie: session_id=<anon_sid>` on the
+           response — which overwrites the user's authenticated cookie in the
+           browser. `save_session=False` short-circuits `_save_session`, keeping
+           the user's session_id intact. Upstream Odoo uses the same flag on
+           `payment_mollie.mollie_return_from_checkout` and
+           `payment_aps.aps_return_from_checkout` for the identical reason.
         """
         try:
             from odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback import (
