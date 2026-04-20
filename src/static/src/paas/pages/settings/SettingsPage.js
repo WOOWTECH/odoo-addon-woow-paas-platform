@@ -16,4 +16,8 @@ export class SettingsPage extends Component {
     goToPaymentMethods() {
         this.router.navigate("settings/payment-methods");
     }
+
+    goToProfile() {
+        this.router.navigate("settings/profile");
+    }
 }

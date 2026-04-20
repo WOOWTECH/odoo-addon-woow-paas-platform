@@ -44,10 +44,12 @@
                 <!-- 使用者資訊 -->
                 <div class="o_woow_user_header">
                     <div class="o_woow_user_text">
-                        <span class="o_woow_user_name">Sarah Wilson</span>
-                        <span class="o_woow_user_plan">PRO PLAN</span>
+                        <span class="o_woow_user_name" t-esc="partnerName"/>
                     </div>
-                    <div class="o_woow_avatar_header">SW</div>
+                    <div class="o_woow_avatar_header">
+                        <img t-if="avatarUrl" t-att-src="avatarUrl" alt=""/>
+                        <t t-else="" t-esc="initials"/>
+                    </div>
                 </div>
             </div>
         </header>

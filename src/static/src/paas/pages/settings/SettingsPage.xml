@@ -10,6 +10,23 @@
             <div class="o_woow_settings_cards">
                 <WoowCard shadow="true" class="'o_woow_settings_card'">
                     <div class="o_woow_settings_card_body"
+                         t-on-click="goToProfile">
+                        <div class="o_woow_settings_card_icon">
+                            <WoowIcon name="'person'" size="32"/>
+                        </div>
+                        <div class="o_woow_settings_card_text">
+                            <div class="o_woow_settings_card_title_row">
+                                <h3>Profile</h3>
+                            </div>
+                            <p>Edit your name, email, and phone number.</p>
+                        </div>
+                        <div class="o_woow_settings_card_arrow">
+                            <WoowIcon name="'chevron_right'" size="24"/>
+                        </div>
+                    </div>
+                </WoowCard>
+                <WoowCard shadow="true" class="'o_woow_settings_card'">
+                    <div class="o_woow_settings_card_body"
                          t-on-click="goToPaymentMethods">
                         <div class="o_woow_settings_card_icon">
                             <WoowIcon name="'credit_card'" size="32"/>
