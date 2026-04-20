@@ -45,6 +45,12 @@ class TestPaymentMethodsApi(HttpCase):
             'state': 'test',
         })
         self.authenticate('admin', 'admin')
+        # self.env.user defaults to __system__ (partner id=2 OdooBot) in HttpCase,
+        # but authenticate() made the HTTP session authenticate as admin (partner id=3).
+        # Tests must use admin's partner when creating records referenced by the HTTP
+        # endpoints, otherwise the endpoint's request.env.user.partner_id filter won't
+        # match the fixture data.
+        self.partner = self.env.ref('base.partner_admin')
 
     def test_prepare_bind_returns_token(self):
         fake_result = {
@@ -97,8 +103,7 @@ class TestPaymentMethodsApi(HttpCase):
             'BindCardID': 'BC12345',
             'ThreeDInfo': {'ThreeDURL': 'https://3ds.example/verify?id=xyz'},
         }
-        partner = self.env.user.partner_id
-        member_id = self.provider._ecpg_build_member_id(partner)
+        member_id = self.provider._ecpg_build_member_id(self.partner)
         with patch(
             'odoo.addons.payment_ecpay_ecpg.sdk.ecpg_client.ECPGClient.create_bind_card',
             return_value=fake_result,
@@ -143,7 +148,7 @@ class TestPaymentMethodsApi(HttpCase):
         ) or self.env.ref('payment.payment_method_unknown')
         token = self.env['payment.token'].sudo().create({
             'provider_id': self.provider.id,
-            'partner_id': self.env.user.partner_id.id,
+            'partner_id': self.partner.id,
             'payment_method_id': payment_method.id,
             'payment_details': '**** **** **** 4242',
             'provider_ref': 'BC_TEST_1',
@@ -173,7 +178,7 @@ class TestPaymentMethodsApi(HttpCase):
         ) or self.env.ref('payment.payment_method_unknown')
         token = self.env['payment.token'].sudo().create({
             'provider_id': self.provider.id,
-            'partner_id': self.env.user.partner_id.id,
+            'partner_id': self.partner.id,
             'payment_method_id': payment_method.id,
             'payment_details': '**** **** **** 4242',
             'provider_ref': 'BC_TO_DELETE',
