@@ -43,6 +43,7 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
 export const profileService = reactive({
     partner: null,        // {id, name, email, phone, avatar_url} or null
     loading: false,
+    saving: false,
     error: null,
 
     async fetch() {
@@ -61,7 +62,10 @@ export const profileService = reactive({
     },
 
     async update(patch) {
-        this.loading = true;
+        if (this.saving) {
+            return { success: false, error: "Update already in progress" };
+        }
+        this.saving = true;
         this.error = null;
         try {
             const result = await jsonRpc("/api/me/update", patch);
@@ -76,7 +80,7 @@ export const profileService = reactive({
             this.error = msg;
             return { success: false, error: msg };
         } finally {
-            this.loading = false;
+            this.saving = false;
         }
     },
 });

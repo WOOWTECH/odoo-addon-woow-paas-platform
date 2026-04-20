@@ -1,10 +1,9 @@
 /** @odoo-module **/
-import { Component, useState, onMounted } from "@odoo/owl";
+import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { profileService } from "../../services/profile_service";
-import { router } from "../../core/router";
 
 const EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/;
 
@@ -14,7 +13,6 @@ export class ProfilePage extends Component {
     static props = {};
 
     setup() {
-        this.router = router;
         this.profile = useState(profileService);
         this.state = useState({
             form: { name: "", email: "", phone: "" },
@@ -23,12 +21,20 @@ export class ProfilePage extends Component {
             saveSuccess: false,
             serverError: null,
         });
+        this._saveSuccessTimer = null;
 
         onMounted(async () => {
             if (!this.profile.partner) {
                 await profileService.fetch();
             }
             this._resetFormFromService();
+        });
+
+        onWillUnmount(() => {
+            if (this._saveSuccessTimer) {
+                clearTimeout(this._saveSuccessTimer);
+                this._saveSuccessTimer = null;
+            }
         });
     }
 
@@ -82,7 +88,11 @@ export class ProfilePage extends Component {
         if (result.success) {
             this._resetFormFromService();
             this.state.saveSuccess = true;
-            setTimeout(() => { this.state.saveSuccess = false; }, 3000);
+            if (this._saveSuccessTimer) clearTimeout(this._saveSuccessTimer);
+            this._saveSuccessTimer = setTimeout(() => {
+                this.state.saveSuccess = false;
+                this._saveSuccessTimer = null;
+            }, 3000);
         } else if (result.code === "name_required") {
             this.state.fieldErrors = { name: result.error };
         } else if (result.code === "invalid_email") {
@@ -94,9 +104,5 @@ export class ProfilePage extends Component {
 
     onCancel() {
         this._resetFormFromService();
-    }
-
-    goBack() {
-        this.router.navigate("settings");
     }
 }

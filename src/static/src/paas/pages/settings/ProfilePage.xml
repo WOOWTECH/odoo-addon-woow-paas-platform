@@ -44,9 +44,11 @@
                             <label for="profile_name">Name</label>
                             <input id="profile_name" type="text"
                                    t-model="state.form.name"
+                                   t-att-aria-describedby="state.fieldErrors.name ? 'profile_name_error' : undefined"
                                    t-att-class="state.fieldErrors.name ? 'o_woow_input_error' : ''"/>
                             <t t-if="state.fieldErrors.name">
-                                <div class="o_woow_field_error" t-esc="state.fieldErrors.name"/>
+                                <div id="profile_name_error" class="o_woow_field_error" role="alert"
+                                     t-esc="state.fieldErrors.name"/>
                             </t>
                         </div>
 
@@ -54,9 +56,11 @@
                             <label for="profile_email">Email</label>
                             <input id="profile_email" type="email"
                                    t-model="state.form.email"
+                                   t-att-aria-describedby="state.fieldErrors.email ? 'profile_email_error' : undefined"
                                    t-att-class="state.fieldErrors.email ? 'o_woow_input_error' : ''"/>
                             <t t-if="state.fieldErrors.email">
-                                <div class="o_woow_field_error" t-esc="state.fieldErrors.email"/>
+                                <div id="profile_email_error" class="o_woow_field_error" role="alert"
+                                     t-esc="state.fieldErrors.email"/>
                             </t>
                         </div>
 
