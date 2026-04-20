@@ -39,7 +39,7 @@
 | 3 | ~~Set Default UI badge~~ ✅ **OBSOLETE — no change needed** | On 2026-04-20 re-verified on staging (`paas-odoo-stg:20260420.0638`) that `PaymentMethodsListPage.xml:64,70` already gates `Default` badge on `t-if="card.is_default"` and hides `Set Default` button on `t-if="!card.is_default"` — conditions were correct from commit `13d63a2` onward. Combined with the backend fallback landed in `984af0e`, the admin's default card correctly renders the badge and suppresses the button. The original row reflected a stale pre-fallback observation; no frontend change required. |
 | 4 | ~~upstream `payment_ecpay_ecpg`: phone sanitization in `_send_payment_request`~~ ✅ **FIXED** | Forwarded to ecpay agent → upstream commit `38fcf13` extracted shared `sdk/utils.sanitize_phone_for_ecpay`. paas-odoo-ci synced (commit `8be9603`) and built as `paas-odoo-stg:20260420.0419`. Re-tested on staging with `partner.phone='+886-912-345-678'`: TX 19 `TOPUPC511D1713E80453` state=`done`, wallet credited 574 — **workaround no longer required**. |
 | 5 | `_handle_invoice_creation` doesn't pay from wallet | After successful auto-topup, wallet has 574 but new invoice stays `payment_state=not_paid`. The `sh_subscription_wallet` mixin has its own deduct flow but isn't wired to invoice posting. Out of Phase 2b scope but blocks the "complete" subscription flow. |
-| 6 | `/woow#/settings/profile` profile page | Users currently can't edit phone (or anything else) from the SPA. Demo data partner has `+1 555-555-5555` which needs sanitization for ECPay; users should be able to fix this themselves. |
+| 6 | ~~`/woow#/settings/profile` profile page~~ ✅ **FIXED** | Delivered a `/settings/profile` SPA page where the logged-in user can edit name/email/phone, rewired the Header to consume `profileService` so it displays real partner data (replacing the hardcoded "Sarah Wilson" + "PRO PLAN" placeholder), and added a Profile card to Settings above Payment Methods. Primary commits: `61ccd41` (`/api/me` GET/update endpoints + HttpCase tests), `3bf0bf8` (full-replace contract + 2 edge-case tests), `f89491d` (ProfilePage + profileService wired to `/api/me`), `f46f133` (code-review refactor), `e6d2945` (Header reads real partner; Profile card in Settings), `876cdcd` (dedup concurrent `fetch()` via `_fetchPromise`), `0ec2789` (constrain Header avatar img + drop orphan `user_plan` rule). Released as `v18.0.1.0.9` → `v18.0.1.0.10` (the latter carrying the avatar CSS fix from `0ec2789`). Verified on staging image `paas-odoo-stg:20260420.2251`: all 9 E2E checks passed — login OK, Header shows `Administrator` reactively updating after name edit, Settings renders Profile card above Payment Methods, `#/settings/profile` pre-fills from partner, invalid-email + empty-name show inline validation without hitting server, valid save round-trips through `/api/me` and DB write verified via `SELECT id, name, email, phone FROM res_partner WHERE id=3;` → `3 \| Administrator \| admin@example.com \| +886-912-345-678`. Design: `docs/plans/2026-04-20-settings-profile-design.md`; Plan: `docs/plans/2026-04-20-settings-profile-implementation.md`. Regression test: `TestProfileApi` (9 HttpCase tests in `src/tests/test_profile_api.py`), all green on fresh DB. |
 
 ## Verification Approach
 
@@ -132,24 +132,8 @@ mixin 的 deduct 流程。會跨兩個 upstream addon — 若需要改
 ecpay_odoo18 / sh_subscription 系列，再透過 maestri 派工。
 ```
 
-### #6 — `/woow#/settings/profile` 個人資料頁面
+### ~~#6 — `/woow#/settings/profile` 個人資料頁面~~ (completed, no pickup)
 
-```
-接手 Phase 2c #6：建立 settings profile 頁面讓使用者編輯
-phone / email / name 等個人資料。
-
-背景：docs/plans/2026-04-19-e2e-test-results.md Phase 2c row #6。
-
-需求：使用者要能在 SPA 內修改 partner.phone（避免 ECPay
-phone 格式問題卡住自己），以及其他個人資料欄位。
-
-請用 brainstorming → writing-plans → frontend-design 流程：
-1. brainstorm：要編輯哪些欄位？要不要 email 確認？頭像？
-2. plan：路由、API、OWL component 結構
-3. 實作
-
-關鍵檔可參考：
-- 路由：src/static/src/paas/core/router.js
-- 既有 settings 頁：src/static/src/paas/pages/settings/
-- API pattern：src/controllers/billing.py 的其他 endpoint
-```
+Shipped on 2026-04-21 as release `v18.0.1.0.10`. See Phase 2c row #6
+above for the commits/image tag. Follow-ups (if any) should be new
+sections.
