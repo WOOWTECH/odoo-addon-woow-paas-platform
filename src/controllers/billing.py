@@ -57,6 +57,68 @@ class BillingController(Controller):
             return None, {'success': False, 'error': 'Not owner', 'code': ERR_NOT_OWNER}
         return token, None
 
+    def _get_partner_ecpg_tokens(self, partner):
+        """Return active ECPG-bound payment tokens for a partner."""
+        return request.env['payment.token'].sudo().search([
+            ('partner_id', '=', partner.id),
+            ('ecpg_bindcard_id', '!=', False),
+            ('active', '=', True),
+        ])
+
+    def _get_default_ecpg_token(self, partner, tokens=None):
+        """Return the default ECPG token for a partner, or empty recordset.
+
+        Prefers Enterprise's property_payment_token_id; otherwise falls back
+        to the most recently created token so auto-topup matches what the
+        Payment Methods UI marks as Default.
+        """
+        Token = request.env['payment.token']
+        if tokens is None:
+            tokens = self._get_partner_ecpg_tokens(partner)
+        if not tokens:
+            return Token
+        default_token = Token
+        if 'property_payment_token_id' in partner._fields:
+            candidate = partner.with_company(
+                partner.company_id or request.env.company
+            ).sudo().property_payment_token_id
+            if candidate and candidate in tokens:
+                default_token = candidate
+        if not default_token:
+            default_token = tokens.sorted('id', reverse=True)[0]
+        return default_token
+
+    def _format_ecpg_expire(self, raw):
+        # ECPay stores ecpg_card_expire as YYMM (e.g. '2812' = Dec 2028).
+        if not raw or len(raw) != 4:
+            return raw or ''
+        return f"{raw[2:]}/{raw[:2]}"
+
+    def _get_primary_card_info(self, partner):
+        """Return primary bound-card info for a partner.
+
+        Prefers ECPG payment.token (multi-card system, matches Payment Methods
+        page). Falls back to legacy sh_subscription_wallet partner fields so
+        old data keeps working.
+        """
+        default_token = self._get_default_ecpg_token(partner)
+        if default_token:
+            last4 = (default_token.payment_details or '').replace('*', '').strip()
+            return {
+                'bound': True,
+                'last4': last4,
+                'expiry': self._format_ecpg_expire(default_token.ecpg_card_expire or ''),
+                'bank': default_token.ecpg_issuing_bank or '',
+            }
+        if partner.has_bound_credit_card():
+            return {
+                'bound': True,
+                'last4': partner.ecpay_card_last4 or '',
+                'expiry': partner.ecpay_card_expiry or '',
+                'bank': '',
+            }
+        return {'bound': False, 'last4': '', 'expiry': '', 'bank': ''}
+
     # ==================== Transaction API ====================
 
     @route("/api/billing/transactions", auth="user", methods=["POST"], type="json")
@@ -116,16 +178,19 @@ class BillingController(Controller):
                     - card_bound (bool): Whether a credit card is bound
                     - card_last4 (str): Last 4 digits of bound card
                     - card_expiry (str): Card expiry date (MM/YY)
+                    - card_bank (str): Issuing bank of bound card
         """
         partner = request.env.user.partner_id.sudo()
+        card = self._get_primary_card_info(partner)
 
         return {
             'success': True,
             'data': {
                 'balance': partner.wallet_balance,
-                'card_bound': partner.has_bound_credit_card(),
-                'card_last4': partner.ecpay_card_last4 or '',
-                'card_expiry': partner.ecpay_card_expiry or '',
+                'card_bound': card['bound'],
+                'card_last4': card['last4'],
+                'card_expiry': card['expiry'],
+                'card_bank': card['bank'],
             },
         }
 
@@ -135,35 +200,16 @@ class BillingController(Controller):
     def api_payment_methods(self, **kw) -> dict[str, Any]:
         """List the current user's ECPG-bound cards (reads payment.token locally)."""
         partner = request.env.user.partner_id
-        tokens = request.env['payment.token'].sudo().search([
-            ('partner_id', '=', partner.id),
-            ('ecpg_bindcard_id', '!=', False),
-            ('active', '=', True),
-        ])
-        default_token_id = False
-        if tokens and 'property_payment_token_id' in partner._fields:
-            default_token = partner.with_company(
-                partner.company_id or request.env.company
-            ).sudo().property_payment_token_id
-            default_token_id = default_token.id if default_token else False
-        # Community Odoo lacks the Enterprise field — fall back to the latest
-        # token so auto-topup matches what's marked default in the UI.
-        if tokens and not default_token_id:
-            default_token_id = tokens.sorted('id', reverse=True)[0].id
-
-        def _format_expire(raw):
-            # ECPay's ecpg_card_expire is stored as YYMM (e.g. '2812' = Dec 2028).
-            # Render as MM/YY for users.
-            if not raw or len(raw) != 4:
-                return raw or ''
-            return f"{raw[2:]}/{raw[:2]}"
+        tokens = self._get_partner_ecpg_tokens(partner)
+        default_token = self._get_default_ecpg_token(partner, tokens=tokens)
+        default_token_id = default_token.id if default_token else False
 
         return {
             'success': True,
             'data': [{
                 'id': t.id,
                 'last4': (t.payment_details or '').replace('*', '').strip(),
-                'expire': _format_expire(t.ecpg_card_expire or ''),
+                'expire': self._format_ecpg_expire(t.ecpg_card_expire or ''),
                 'bank': t.ecpg_issuing_bank or '',
                 'type': 'credit_card',
                 'is_default': t.id == default_token_id,
@@ -457,8 +503,9 @@ class BillingController(Controller):
 
         partner = request.env.user.partner_id.sudo()
 
-        # Verify payment method is configured
-        if not partner.has_bound_credit_card():
+        # Verify payment method is configured (covers both legacy ecpay_card_token
+        # and ECPG payment.token entries — matches wallet endpoint semantics).
+        if not self._get_primary_card_info(partner)['bound']:
             return {
                 'success': False,
                 'error': 'No payment method configured',

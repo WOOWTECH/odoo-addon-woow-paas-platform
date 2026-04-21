@@ -56,8 +56,15 @@
                         <t t-else="">
                             <div class="o_woow_addfunds_no_card">
                                 <WoowIcon name="'warning'" size="20"/>
-                                <span>Credit top-up is coming soon. Please contact support if you need credits.</span>
+                                <span>Please add a payment method before topping up.</span>
                             </div>
+                            <WoowButton
+                                variant="'secondary'"
+                                size="'sm'"
+                                onClick.bind="onAddPaymentMethod">
+                                <WoowIcon name="'add'" size="16"/>
+                                Add Payment Method
+                            </WoowButton>
                         </t>
                     </div>
 

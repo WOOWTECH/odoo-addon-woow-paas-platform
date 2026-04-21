@@ -71,6 +71,7 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
  * @property {boolean} cardBound - Whether a payment card is bound
  * @property {string} cardLast4 - Last 4 digits of bound card
  * @property {string} cardExpiry - Card expiry date
+ * @property {string} cardBank - Issuing bank of bound card
  */
 
 /**
@@ -84,6 +85,7 @@ export const billingService = reactive({
         cardBound: false,
         cardLast4: "",
         cardExpiry: "",
+        cardBank: "",
     },
     /** @type {boolean} */
     walletLoading: false,
@@ -354,6 +356,7 @@ export const billingService = reactive({
                     cardBound: result.data.card_bound ?? false,
                     cardLast4: result.data.card_last4 ?? "",
                     cardExpiry: result.data.card_expiry ?? "",
+                    cardBank: result.data.card_bank ?? "",
                 };
             } else {
                 console.error("Failed to fetch wallet:", result.error);

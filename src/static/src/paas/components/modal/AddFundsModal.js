@@ -3,6 +3,7 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
+import { router } from "../../core/router";
 
 /**
  * AddFundsModal Component
@@ -61,7 +62,8 @@ export class AddFundsModal extends Component {
 
   get cardDisplay() {
     if (!this.hasCard) return "";
-    return `Visa \u2022\u2022\u2022\u2022 ${this.billing.wallet.cardLast4}`;
+    const bank = this.billing.wallet.cardBank || "Card";
+    return `${bank} \u2022\u2022\u2022\u2022 ${this.billing.wallet.cardLast4}`;
   }
 
   get cardExpiry() {
@@ -72,6 +74,11 @@ export class AddFundsModal extends Component {
     if (ev.target === ev.currentTarget && !this.state.processing) {
       this.props.onClose();
     }
+  }
+
+  onAddPaymentMethod() {
+    this.props.onClose();
+    router.navigate("settings/payment-methods/add");
   }
 
   async onConfirm() {
