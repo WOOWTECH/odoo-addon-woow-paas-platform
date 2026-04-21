@@ -1,3 +1,4 @@
+from . import account_move
 from . import sh_subscription_fix
 from . import sh_subscription_warning_field
 from . import subscription_lifecycle_mixin
