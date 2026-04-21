@@ -88,13 +88,16 @@ class WalletTopup(models.Model):
     _name = 'woow.wallet.topup'
     _description = 'Wallet Top-up Order'
     _order = 'create_date desc, id desc'
+    # credits/bonus use `Float` to match `topup_plan.credits/bonus` and the
+    # `wallet.transaction.amount` contract; this prevents silent truncation
+    # when promotional plans hand out fractional credits.
 
     partner_id = fields.Many2one('res.partner', required=True, index=True, ondelete='restrict')
     plan_id = fields.Many2one('woow_paas_platform.topup_plan', required=True, ondelete='restrict')
 
     amount = fields.Monetary(required=True)
-    credits = fields.Integer(required=True)
-    bonus = fields.Integer(default=0)
+    credits = fields.Float(required=True)
+    bonus = fields.Float(default=0)
     currency_id = fields.Many2one('res.currency', required=True)
 
     state = fields.Selection([

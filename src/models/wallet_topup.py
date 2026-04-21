@@ -1,4 +1,4 @@
-from odoo import api, fields, models
+from odoo import fields, models
 
 
 class WalletTopup(models.Model):
@@ -10,8 +10,8 @@ class WalletTopup(models.Model):
     plan_id = fields.Many2one('woow_paas_platform.topup_plan', required=True, ondelete='restrict')
 
     amount = fields.Monetary(required=True)
-    credits = fields.Integer(required=True)
-    bonus = fields.Integer(default=0)
+    credits = fields.Float(required=True)
+    bonus = fields.Float(default=0)
     currency_id = fields.Many2one('res.currency', required=True)
 
     state = fields.Selection([
