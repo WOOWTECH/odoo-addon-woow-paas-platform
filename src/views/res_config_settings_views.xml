@@ -78,6 +78,10 @@
                         </setting>
                     </block>
                     <block title="Credit Top-up Plans" name="topup_plans">
+                        <setting string="Enable Top-up Payment"
+                                 help="Allow users to actually charge a payment method when buying top-up plans. Disable to block the checkout call while payment processing is still being configured.">
+                            <field name="woow_topup_payment_enabled"/>
+                        </setting>
                         <setting string="Top-up Plans"
                                  help="Configure credit top-up packages available in the store.">
                             <div class="content-group">

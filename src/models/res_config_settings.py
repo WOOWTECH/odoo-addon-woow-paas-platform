@@ -56,6 +56,16 @@ class ResConfigSettings(models.TransientModel):
              'Must be a Sales type journal.',
     )
 
+    # Credit Top-up
+    woow_topup_payment_enabled = fields.Boolean(
+        string='Enable Credit Top-up Payment',
+        config_parameter='woow_paas_platform.topup_payment_enabled',
+        default=False,
+        help='Allow users to actually charge a payment method when buying '
+             'top-up plans. Disable to block the checkout call while payment '
+             'processing is still being configured.',
+    )
+
     # Subscription Lifecycle Settings
     woow_subscription_grace_days = fields.Integer(
         string='Subscription Grace Period (Days)',
