@@ -586,6 +586,30 @@ class BillingController(Controller):
         """
         return None
 
+    @route("/api/billing/topup/<int:topup_id>/status",
+           auth="user", methods=["POST"], type="json")
+    def api_topup_status(self, topup_id, **kw) -> dict[str, Any]:
+        """Return the current state of a top-up order owned by the caller.
+
+        Used by the frontend after the 3DS redirect returns. Owner-only;
+        non-owners get a ``not_found`` code to avoid leaking existence.
+        """
+        partner = request.env.user.partner_id
+        topup = request.env['woow.wallet.topup'].sudo().browse(topup_id)
+        if not topup.exists() or topup.partner_id.id != partner.id:
+            return {'success': False, 'error': 'Not found', 'code': 'not_found'}
+        return {'success': True, 'data': {
+            'topup_id': topup.id,
+            'state': topup.state,
+            'amount': topup.amount,
+            'credits': topup.credits,
+            'bonus': topup.bonus,
+            'new_balance': partner.wallet_balance,
+            'failure_code': topup.failure_code or '',
+            'failure_message': topup.failure_message or '',
+            'plan_name': topup.plan_id.name,
+        }}
+
     # ==================== Subscription API ====================
 
     def _serialize_subscription(self, sub):

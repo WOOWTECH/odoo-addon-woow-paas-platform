@@ -20,3 +20,4 @@ from . import test_wallet_topup_classify_failure
 from . import test_wallet_topup_payment_hooks
 from . import test_payment_transaction_overrides
 from . import test_topup_controller
+from . import test_topup_status
