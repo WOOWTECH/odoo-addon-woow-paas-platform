@@ -15,3 +15,4 @@ from . import test_payment_methods_api
 from . import test_profile_api
 from . import test_wallet_topup_model
 from . import test_payment_transaction_fields
+from . import test_payment_token_charge
