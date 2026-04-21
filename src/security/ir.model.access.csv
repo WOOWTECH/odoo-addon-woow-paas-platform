@@ -19,3 +19,5 @@ access_subscription_lifecycle_cron_admin,woow_paas_platform.subscription_lifecyc
 access_change_plan_wizard_user,woow_paas_platform.change_plan_wizard.user,model_woow_paas_platform_change_plan_wizard,base.group_user,1,1,1,0
 access_topup_plan_user,woow_paas_platform.topup_plan.user,model_woow_paas_platform_topup_plan,base.group_user,1,0,0,0
 access_topup_plan_admin,woow_paas_platform.topup_plan.admin,model_woow_paas_platform_topup_plan,base.group_system,1,1,1,1
+access_woow_wallet_topup_user,woow.wallet.topup.user,model_woow_wallet_topup,base.group_user,1,1,1,0
+access_woow_wallet_topup_manager,woow.wallet.topup.manager,model_woow_wallet_topup,base.group_system,1,1,1,1

@@ -13,3 +13,4 @@ from . import test_subscription_lifecycle
 from . import test_low_balance_notification
 from . import test_payment_methods_api
 from . import test_profile_api
+from . import test_wallet_topup_model

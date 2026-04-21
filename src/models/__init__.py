@@ -22,3 +22,4 @@ from . import ai_assistant
 from . import mcp_server
 from . import mcp_tool
 from . import topup_plan
+from . import wallet_topup
