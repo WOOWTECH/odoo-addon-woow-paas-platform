@@ -39,6 +39,7 @@
         "data/subscription_lifecycle_cron.xml",
         "data/mail_templates.xml",
         "data/low_balance_warning_cron.xml",
+        "data/cron_topup.xml",
         "views/paas_app.xml",
         "views/oauth2_templates.xml",
         "views/oauth_client_views.xml",

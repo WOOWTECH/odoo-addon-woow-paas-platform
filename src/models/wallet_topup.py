@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from odoo import api, fields, models
 
 
@@ -89,3 +91,37 @@ class WalletTopup(models.Model):
             'failure_message': message,
             'failure_code': self._classify_failure(message),
         })
+
+    _CLEANUP_GRACE_MIN = 30
+    _CLEANUP_HARD_CANCEL_MIN = 60
+
+    @api.model
+    def _cron_cleanup_pending_topups(self):
+        """Reconcile pending topups whose callback was missed / dropped.
+
+        - tx already done → credit (catch-up).
+        - tx error/cancel → mark topup failed.
+        - tx still pending > HARD_CANCEL_MIN → cancel tx + mark topup cancelled.
+        """
+        now = fields.Datetime.now()
+        grace = now - timedelta(minutes=self._CLEANUP_GRACE_MIN)
+        hard = now - timedelta(minutes=self._CLEANUP_HARD_CANCEL_MIN)
+        stuck = self.sudo().search([
+            ('state', '=', 'pending'),
+            ('create_date', '<', grace),
+        ])
+        for topup in stuck:
+            tx = topup.payment_transaction_id
+            if not tx:
+                topup.write({'state': 'cancelled'})
+                continue
+            if tx.state == 'done':
+                topup._on_payment_done(tx)
+            elif tx.state in ('error', 'cancel'):
+                topup._on_payment_failed(tx)
+            elif tx.state in ('draft', 'pending') and topup.create_date < hard:
+                try:
+                    tx._set_canceled("Timed out waiting for 3DS confirmation")
+                except Exception:
+                    pass
+                topup.write({'state': 'cancelled'})
