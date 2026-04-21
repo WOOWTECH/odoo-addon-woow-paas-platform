@@ -1,4 +1,4 @@
-from odoo import fields, models
+from odoo import api, fields, models
 
 
 class WalletTopup(models.Model):
@@ -40,3 +40,20 @@ class WalletTopup(models.Model):
     invoice_lovecode = fields.Char()
     invoice_account_move_id = fields.Many2one('account.move', readonly=True)
     invoice_issued_at = fields.Datetime(readonly=True)
+
+    _FAILURE_KEYWORDS = (
+        ('card_declined', ('declined', 'decline', '10100248')),
+        ('limit_exceeded', ('limit', 'insufficient', '10100058')),
+        ('duplicate_transaction', ('duplicate', '10100073')),
+    )
+
+    @api.model
+    def _classify_failure(self, message):
+        """Map a free-text ECPay error message to a stable internal code."""
+        if not message:
+            return 'generic'
+        low = message.lower()
+        for code, keywords in self._FAILURE_KEYWORDS:
+            if any(k in low for k in keywords):
+                return code
+        return 'generic'
