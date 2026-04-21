@@ -483,65 +483,108 @@ class BillingController(Controller):
         }
 
     @route("/api/billing/wallet/topup", auth="user", methods=["POST"], type="json")
-    def api_topup(self, plan_id: int | None = None, **kw) -> dict[str, Any]:
-        """Top up wallet credits using a selected plan.
+    def api_topup(self, plan_id: int | None = None,
+                  invoice_intent: dict | None = None, **kw) -> dict[str, Any]:
+        """Start a top-up charge.
 
-        Args:
-            plan_id: ID of the top-up plan to purchase.
-
-        Returns:
-            dict with credits_added, bonus, and new_balance on success.
+        Returns success payload with either a freshly started flow
+        ``{topup_id, redirect_url, state}`` or — if the partner already has a
+        pending topup — the existing record ``{topup_id, redirect_url, resumed}``.
+        Errors carry a stable ``code`` string.
         """
-        if not plan_id:
-            return {'success': False, 'error': 'plan_id is required'}
-
-        Plan = request.env['woow_paas_platform.topup_plan'].sudo()
-        plan = Plan.browse(int(plan_id))
-
-        if not plan.exists() or not plan.active:
-            return {'success': False, 'error': 'Plan not found or inactive'}
-
-        partner = request.env.user.partner_id.sudo()
-
-        # Verify payment method is configured (covers both legacy ecpay_card_token
-        # and ECPG payment.token entries — matches wallet endpoint semantics).
-        if not self._get_primary_card_info(partner)['bound']:
-            return {
-                'success': False,
-                'error': 'No payment method configured',
-                'code': 'no_card',
-            }
-
-        # Guard: actual payment processing not yet implemented
         ICP = request.env['ir.config_parameter'].sudo()
         if not ICP.get_param('woow_paas_platform.topup_payment_enabled', False):
             return {
                 'success': False,
-                'error': 'Credit top-up is not yet available. Payment processing is being configured.',
+                'error': 'Credit top-up is not yet available.',
                 'code': 'payment_not_configured',
             }
 
+        if not plan_id:
+            return {'success': False, 'error': 'plan_id is required',
+                    'code': 'missing_params'}
+
+        Plan = request.env['woow_paas_platform.topup_plan'].sudo()
+        plan = Plan.browse(int(plan_id))
+        if not plan.exists() or not plan.active:
+            return {'success': False, 'error': 'Plan not found or inactive',
+                    'code': 'plan_not_found'}
+
+        partner = request.env.user.partner_id.sudo()
+        if not self._get_primary_card_info(partner)['bound']:
+            return {'success': False, 'error': 'No payment method configured',
+                    'code': 'no_card'}
+
+        Topup = request.env['woow.wallet.topup'].sudo()
+        existing = Topup.search([
+            ('partner_id', '=', partner.id),
+            ('state', '=', 'pending'),
+        ], limit=1)
+        if existing:
+            return {'success': True, 'data': {
+                'topup_id': existing.id,
+                'redirect_url': self._resume_3ds_url(existing),
+                'resumed': True,
+                'state': existing.state,
+            }}
+
+        token = self._get_default_ecpg_token(partner)
+        if not token:
+            return {'success': False, 'error': 'No payment method configured',
+                    'code': 'no_card'}
+
+        invoice_vals = self._build_invoice_intent_vals(invoice_intent or {})
+        topup = Topup.create({
+            'partner_id': partner.id,
+            'plan_id': plan.id,
+            'amount': plan.amount,
+            'credits': plan.credits,
+            'bonus': plan.bonus,
+            'currency_id': (plan.currency_id or request.env.company.currency_id).id,
+            'state': 'draft',
+            **invoice_vals,
+        })
+
         try:
-            # Add wallet points (skip actual ECPay charge for now)
-            total_credits = plan.credits + plan.bonus
-            partner.add_wallet_points(total_credits, f"Top-up: {plan.name}")
+            result = token._charge(
+                amount=plan.amount,
+                reference=f"TOPUP{topup.id}",
+                currency_id=topup.currency_id.id,
+                purpose_field='woow_topup_id',
+                purpose_id=topup.id,
+            )
         except Exception as e:
-            _logger.error("Error during wallet top-up: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'Top-up failed. Please try again.'}
+            _logger.exception("Topup charge failed for partner %s", partner.id)
+            topup.write({'state': 'failed', 'failure_code': 'sdk_error',
+                         'failure_message': str(e)[:200]})
+            return {'success': False, 'error': 'Payment service unavailable',
+                    'code': 'sdk_error'}
 
-        _logger.info(
-            "Wallet top-up: plan=%s, credits=%s, bonus=%s, partner=%s",
-            plan.name, plan.credits, plan.bonus, partner.id,
-        )
+        tx = result['tx']
+        topup.write({
+            'payment_transaction_id': tx.id,
+            'state': 'pending' if result['state'] in ('draft', 'pending') else result['state'],
+        })
 
-        return {
-            'success': True,
-            'data': {
-                'credits_added': plan.credits,
-                'bonus': plan.bonus,
-                'new_balance': partner.wallet_balance,
-            },
-        }
+        return {'success': True, 'data': {
+            'topup_id': topup.id,
+            'redirect_url': result['redirect_url'],
+            'state': topup.state,
+        }}
+
+    def _build_invoice_intent_vals(self, intent):
+        """Whitelist invoice fields we persist on the topup order."""
+        allowed = ('invoice_carrier_type', 'invoice_carrier', 'invoice_tax_id',
+                   'invoice_title', 'invoice_lovecode')
+        return {k: intent[k] for k in allowed if intent.get(k)}
+
+    def _resume_3ds_url(self, topup):
+        """Return the most recent ThreeDURL for a pending topup, if still valid.
+
+        Phase 1 returns None; the frontend surfaces an "awaiting confirmation"
+        message. Phase 2 can query ECPay to refresh the 3DS URL if supported.
+        """
+        return None
 
     # ==================== Subscription API ====================
 
