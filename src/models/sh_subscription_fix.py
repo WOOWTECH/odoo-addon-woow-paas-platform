@@ -159,6 +159,27 @@ class ShSubscriptionFix(models.Model):
                 partner.id,
             )
 
+    def _handle_invoice_creation(self, invoice_id):
+        """Override upstream: when wallet can cover, post + pay from wallet.
+
+        Upstream's two modes (``sh_invoice_generated='post'`` posts only,
+        ``='paid'`` posts + creates a dummy inbound payment) both leave the
+        wallet untouched. For our platform the wallet IS the payment source,
+        so we bypass both modes and call ``account.move._pay_from_wallet``
+        when the balance can cover — decrementing the wallet, creating a
+        real ``account.payment``, and reconciling.
+
+        Defensive ``super()`` fallback handles the (should-not-happen) case
+        where the caller didn't pre-check balance; the normal cron path via
+        ``_sh_create_auto_invoice`` guarantees sufficiency before this runs.
+        """
+        partner = self.sh_partner_id
+        amount = invoice_id.amount_total or 0
+        if partner and amount > 0 and partner.wallet_balance >= amount:
+            invoice_id._pay_from_wallet(subscription=self)
+            return
+        return super()._handle_invoice_creation(invoice_id)
+
     @api.model
     def _attempt_auto_topup(self, partner, shortfall):
         """Charge the partner's default bound card to top up the wallet.

@@ -867,33 +867,24 @@ class BillingController(Controller):
     def api_invoice_pay(self, invoice_id: int, **kw) -> dict[str, Any]:
         """Pay an invoice using the current user's wallet balance.
 
-        Flow:
-            1. Validate invoice belongs to user and is payable.
-            2. Check wallet balance >= amount_residual.
-            3. Post invoice if still in draft.
-            4. Deduct wallet points.
-            5. Create payment and reconcile with invoice.
-
-        Returns:
-            dict with new_balance and invoice_status on success.
+        Thin wrapper around ``account.move._pay_from_wallet`` — this endpoint
+        owns ownership + balance validation and error-code mapping for the
+        frontend; the deduct + post + reconcile sequence lives on the model
+        so the subscription cron can reuse it (Phase 2c #5).
         """
+        from odoo.exceptions import UserError
+
         partner = request.env.user.partner_id.sudo()
         invoice = request.env['account.move'].sudo().browse(invoice_id)
 
         if not invoice.exists() or invoice.partner_id != partner:
             return {'success': False, 'error': 'Invoice not found'}
-
-        # Must be posted (or draft that we can post) and not yet fully paid
         if invoice.state not in ('draft', 'posted'):
             return {'success': False, 'error': 'Invoice is not payable'}
         if invoice.payment_state == 'paid':
             return {'success': False, 'error': 'Invoice is already paid'}
 
-        amount = invoice.amount_residual
-        if invoice.state == 'draft':
-            # amount_residual is 0 for draft; use amount_total instead
-            amount = invoice.amount_total
-
+        amount = invoice.amount_total if invoice.state == 'draft' else invoice.amount_residual
         balance = partner.wallet_balance
         if balance < amount:
             return {
@@ -907,64 +898,12 @@ class BillingController(Controller):
             }
 
         try:
-            # Deduct wallet FIRST (before posting) to avoid race condition
-            # where invoice is posted but wallet deduction fails
-            deducted = partner.deduct_wallet_points(amount, f"Invoice payment: {invoice.name}")
-            if deducted <= 0:
-                return {
-                    'success': False,
-                    'error': 'Wallet deduction failed',
-                }
-
-            # Post the invoice after successful wallet deduction
-            if invoice.state == 'draft':
-                invoice.action_post()
-
-            # Create payment and reconcile (same pattern as sh_subscription 'paid' mode)
-            company = invoice.company_id.sudo()
-            journal = company.sh_paid_subscription_journal
-            if not journal:
-                # Fallback: find first bank/cash journal
-                journal = request.env['account.journal'].sudo().search([
-                    ('company_id', '=', company.id),
-                    ('type', 'in', ('bank', 'cash')),
-                ], limit=1)
-            if not journal:
-                _logger.error("No payment journal found for company %s", company.name)
-                return {'success': False, 'error': 'Payment journal not configured'}
-
-            payment_method_line = journal.inbound_payment_method_line_ids[:1]
-            payment = request.env['account.payment'].sudo().create({
-                'journal_id': journal.id,
-                'amount': amount,
-                'payment_type': 'inbound',
-                'payment_method_line_id': payment_method_line.id if payment_method_line else False,
-                'partner_type': 'customer',
-                'partner_id': partner.id,
-            })
-            payment.action_post()
-
-            # Reconcile payment with invoice
-            receivable_lines = invoice.line_ids.filtered(
-                lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
-            )
-            payment_lines = payment.move_id.line_ids.filtered(
-                lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
-            )
-            if receivable_lines and payment_lines:
-                (receivable_lines + payment_lines).reconcile()
-
-            # Refresh to get updated state
-            invoice.invalidate_recordset(['payment_state', 'amount_residual'])
-
+            invoice._pay_from_wallet()
+        except UserError as e:
+            return {'success': False, 'error': str(e)}
         except Exception as e:
             _logger.error("Error processing invoice payment: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'Payment processing failed.'}
-
-        _logger.info(
-            "Wallet payment for invoice %s: amount=%s, partner=%s",
-            invoice.name, amount, partner.id,
-        )
 
         return {
             'success': True,
