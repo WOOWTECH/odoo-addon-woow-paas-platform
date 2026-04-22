@@ -8,6 +8,7 @@ from typing import Any
 
 from odoo import fields
 from odoo.http import request, route, Controller
+from odoo.tools import str2bool
 
 _logger = logging.getLogger(__name__)
 
@@ -493,7 +494,10 @@ class BillingController(Controller):
         Errors carry a stable ``code`` string.
         """
         ICP = request.env['ir.config_parameter'].sudo()
-        if not ICP.get_param('woow_paas_platform.topup_payment_enabled', False):
+        topup_enabled = str2bool(
+            ICP.get_param('woow_paas_platform.topup_payment_enabled', 'False')
+        )
+        if not topup_enabled:
             return {
                 'success': False,
                 'error': 'Credit top-up is not yet available.',
