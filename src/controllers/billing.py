@@ -540,7 +540,7 @@ class BillingController(Controller):
             'amount': plan.amount,
             'credits': plan.credits,
             'bonus': plan.bonus,
-            'currency_id': (plan.currency_id or request.env.company.currency_id).id,
+            'currency_id': request.env.company.currency_id.id,
             'state': 'draft',
             **invoice_vals,
         })

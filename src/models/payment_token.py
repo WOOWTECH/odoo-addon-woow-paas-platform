@@ -32,6 +32,7 @@ class PaymentToken(models.Model):
 
         vals = {
             'provider_id': self.provider_id.id,
+            'payment_method_id': self.payment_method_id.id,
             'partner_id': self.partner_id.id,
             'amount': amount,
             'currency_id': currency_id,
