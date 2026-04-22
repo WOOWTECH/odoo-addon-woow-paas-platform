@@ -19,6 +19,7 @@ class TestPaymentTokenCharge(TransactionCase):
             'partner_id': self.partner.id,
             'payment_details': '**** 4242',
             'ecpg_bindcard_id': 'STUB_BIND_ID',
+            'provider_ref': 'STUB_BIND_ID',
             'ecpg_card_expire': '2812',
         })
 

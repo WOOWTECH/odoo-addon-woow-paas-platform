@@ -24,6 +24,7 @@ class TestTopupController(HttpCase):
             'partner_id': self.user.partner_id.id,
             'payment_details': '**** 4242',
             'ecpg_bindcard_id': 'STUB_BIND',
+            'provider_ref': 'STUB_BIND',
             'ecpg_card_expire': '2812',
         })
         self.plan = self.env['woow_paas_platform.topup_plan'].create({

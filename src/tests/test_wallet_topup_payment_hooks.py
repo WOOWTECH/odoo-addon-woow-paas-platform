@@ -63,15 +63,18 @@ class TestTopupPaymentHooks(TransactionCase):
     def test_on_payment_done_credits_wallet_and_flips_state(self):
         starting = self.partner.wallet_balance
         self.topup._on_payment_done(self.tx)
+        self.partner.invalidate_recordset(['wallet_balance'])
         self.assertEqual(self.topup.state, 'done')
         self.assertTrue(self.topup.wallet_transaction_id)
         self.assertAlmostEqual(self.partner.wallet_balance - starting, 200.0)
 
     def test_on_payment_done_is_idempotent(self):
         self.topup._on_payment_done(self.tx)
+        self.partner.invalidate_recordset(['wallet_balance'])
         first_wtx = self.topup.wallet_transaction_id
         first_balance = self.partner.wallet_balance
         self.topup._on_payment_done(self.tx)  # replay
+        self.partner.invalidate_recordset(['wallet_balance'])
         self.assertEqual(self.topup.wallet_transaction_id, first_wtx)
         self.assertEqual(self.partner.wallet_balance, first_balance)
 
