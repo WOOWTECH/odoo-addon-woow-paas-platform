@@ -11,12 +11,7 @@ class TestTopupCron(TransactionCase):
             [('code', '=', 'ECPay')], limit=1)
         if not self.provider:
             self.skipTest("ECPay provider not installed")
-        self.payment_method = self.env.ref(
-            'payment.payment_method_unknown', raise_if_not_found=False,
-        )
-        if not self.payment_method:
-            self.payment_method = self.env['payment.method'].search([], limit=1)
-        self.payment_method.sudo().active = True
+        self.payment_method = self._ensure_active_payment_method()
         self.plan = self.env['woow_paas_platform.topup_plan'].create({
             'name': 'Cron', 'amount': 100, 'credits': 100, 'active': True,
         })
@@ -73,3 +68,28 @@ class TestTopupCron(TransactionCase):
         self.env['woow.wallet.topup']._cron_cleanup_pending_topups()
         topup.invalidate_recordset()
         self.assertEqual(topup.state, 'cancelled')
+
+    def _ensure_active_payment_method(self):
+        """Return an active payment method usable by the ECPay provider.
+
+        Odoo 18 refuses to activate a payment.method via ORM unless a provider
+        already supports it. The ECPay provider is pre-seeded with the 'ecpay'
+        method; prefer that. If it's inactive, flip `active` via raw SQL to
+        bypass the admin-facing guard (safe in a test db).
+        """
+        method = self.provider.payment_method_ids[:1]
+        if not method:
+            method = self.env['payment.method'].search(
+                [('code', '=', 'ecpay')], limit=1,
+            )
+        if not method:
+            method = self.env.ref(
+                'payment.payment_method_unknown', raise_if_not_found=False,
+            ) or self.env['payment.method'].search([], limit=1)
+        if method and not method.active:
+            self.env.cr.execute(
+                "UPDATE payment_method SET active = TRUE WHERE id = %s",
+                [method.id],
+            )
+            method.invalidate_recordset(['active'])
+        return method
