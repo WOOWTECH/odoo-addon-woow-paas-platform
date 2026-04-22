@@ -1,3 +1,5 @@
+import json as json_lib
+
 from odoo.tests.common import HttpCase, tagged
 
 
@@ -22,10 +24,13 @@ class TestTopupStatusEndpoint(HttpCase):
         self.authenticate('stat', 'stat')
 
     def _get(self, topup_id):
-        return self.url_open(
+        response = self.url_open(
             f'/api/billing/topup/{topup_id}/status',
-            json={'params': {}},
-        ).json()
+            data=json_lib.dumps({'params': {}}),
+            headers={'Content-Type': 'application/json'},
+            timeout=30,
+        )
+        return response.json()
 
     def test_owner_reads_status(self):
         r = self._get(self.topup.id)['result']

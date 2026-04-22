@@ -12,8 +12,15 @@ class TestPaymentTokenCharge(TransactionCase):
         if not self.provider:
             self.skipTest("ECPay provider not installed")
         self.provider.write({'state': 'test'})
+        self.payment_method = self.env.ref(
+            'payment.payment_method_unknown', raise_if_not_found=False,
+        )
+        if not self.payment_method:
+            self.payment_method = self.env['payment.method'].search([], limit=1)
+        self.payment_method.sudo().active = True
         self.token = self.env['payment.token'].sudo().create({
             'provider_id': self.provider.id,
+            'payment_method_id': self.payment_method.id,
             'partner_id': self.partner.id,
             'payment_details': '**** 4242',
             'ecpg_bindcard_id': 'STUB_BIND_ID',

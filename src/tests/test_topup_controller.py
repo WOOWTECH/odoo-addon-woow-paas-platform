@@ -1,4 +1,6 @@
+import json as json_lib
 from unittest.mock import patch
+
 from odoo.tests.common import HttpCase, tagged
 
 
@@ -11,12 +13,19 @@ class TestTopupController(HttpCase):
         if not self.provider:
             self.skipTest("ECPay provider not installed")
         self.provider.write({'state': 'test'})
+        self.payment_method = self.env.ref(
+            'payment.payment_method_unknown', raise_if_not_found=False,
+        )
+        if not self.payment_method:
+            self.payment_method = self.env['payment.method'].search([], limit=1)
+        self.payment_method.sudo().active = True
         self.user = self.env['res.users'].create({
             'name': 'Topup Tester', 'login': 'topup_test', 'password': 'topup_test',
             'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
         })
         self.token = self.env['payment.token'].sudo().create({
             'provider_id': self.provider.id,
+            'payment_method_id': self.payment_method.id,
             'partner_id': self.user.partner_id.id,
             'payment_details': '**** 4242',
             'ecpg_bindcard_id': 'STUB_BIND',
@@ -31,7 +40,13 @@ class TestTopupController(HttpCase):
         self.authenticate('topup_test', 'topup_test')
 
     def _post(self, path, payload):
-        return self.url_open(path, json={'params': payload}).json()
+        response = self.url_open(
+            path,
+            data=json_lib.dumps({'params': payload}),
+            headers={'Content-Type': 'application/json'},
+            timeout=30,
+        )
+        return response.json()
 
     def test_happy_path_returns_redirect_url(self):
         stub_tx = self.env['payment.transaction'].sudo().create({
