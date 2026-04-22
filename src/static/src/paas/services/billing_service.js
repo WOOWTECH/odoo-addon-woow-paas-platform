@@ -462,20 +462,25 @@ export const billingService = reactive({
         }
     },
 
-    /**
-     * Purchase a top-up plan
-     * @param {number} planId - Top-up plan ID
-     * @returns {Promise<{success: boolean, data?: Object, error?: string, code?: string}>}
-     */
-    async topup(planId) {
+    async topup(planId, invoiceIntent = null) {
         try {
-            const result = await jsonRpc("/api/billing/wallet/topup", { plan_id: planId });
-            if (result.success) {
-                return { success: true, data: result.data };
-            }
-            return { success: false, error: result.error || "Top-up failed", code: result.code };
+            const result = await jsonRpc("/api/billing/wallet/topup", {
+                plan_id: planId,
+                invoice_intent: invoiceIntent,
+            });
+            return result;
         } catch (err) {
-            return { success: false, error: err.message || "Top-up failed" };
+            console.error("topup call failed", err);
+            return { success: false, error: String(err), code: 'sdk_error' };
+        }
+    },
+
+    async getTopupStatus(topupId) {
+        try {
+            return await jsonRpc(`/api/billing/topup/${topupId}/status`, {});
+        } catch (err) {
+            console.error("getTopupStatus failed", err);
+            return { success: false, error: String(err), code: 'sdk_error' };
         }
     },
 });
