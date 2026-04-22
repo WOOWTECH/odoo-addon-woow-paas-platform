@@ -2,6 +2,16 @@
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.TopupStorePage">
         <div class="o_woow_topup_store">
+            <t t-if="state.globalError">
+                <div class="o_woow_topup_global_error">
+                    <WoowIcon name="'error'" size="20"/>
+                    <span t-esc="state.globalError"/>
+                    <button class="o_woow_topup_dismiss"
+                            t-on-click="() => (state.globalError = null)">
+                        ×
+                    </button>
+                </div>
+            </t>
             <!-- Breadcrumb + Header -->
             <div class="o_woow_topup_header">
                 <div class="o_woow_topup_title_area">
