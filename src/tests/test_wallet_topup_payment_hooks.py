@@ -5,6 +5,12 @@ class TestTopupPaymentHooks(TransactionCase):
     def setUp(self):
         super().setUp()
         self.partner = self.env['res.partner'].create({'name': 'TopupUser'})
+        self.payment_method = self.env.ref(
+            'payment.payment_method_unknown', raise_if_not_found=False,
+        )
+        if not self.payment_method:
+            self.payment_method = self.env['payment.method'].search([], limit=1)
+        self.payment_method.sudo().active = True
         self.plan = self.env['woow_paas_platform.topup_plan'].create({
             'name': 'P1', 'amount': 200, 'credits': 180, 'bonus': 20, 'active': True,
         })
@@ -19,6 +25,7 @@ class TestTopupPaymentHooks(TransactionCase):
         })
         self.tx = self.env['payment.transaction'].sudo().create({
             'provider_id': self._get_provider().id,
+            'payment_method_id': self.payment_method.id,
             'partner_id': self.partner.id,
             'amount': 200,
             'currency_id': self.env.company.currency_id.id,

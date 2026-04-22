@@ -51,6 +51,7 @@ class TestTopupController(HttpCase):
     def test_happy_path_returns_redirect_url(self):
         stub_tx = self.env['payment.transaction'].sudo().create({
             'provider_id': self.provider.id,
+            'payment_method_id': self.payment_method.id,
             'partner_id': self.user.partner_id.id,
             'amount': 500,
             'currency_id': self.env.company.currency_id.id,
@@ -99,6 +100,7 @@ class TestTopupController(HttpCase):
     def test_duplicate_pending_returns_existing_topup(self):
         first_tx = self.env['payment.transaction'].sudo().create({
             'provider_id': self.provider.id,
+            'payment_method_id': self.payment_method.id,
             'partner_id': self.user.partner_id.id,
             'amount': 500,
             'currency_id': self.env.company.currency_id.id,

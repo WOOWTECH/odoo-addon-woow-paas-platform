@@ -11,6 +11,12 @@ class TestTopupCron(TransactionCase):
             [('code', '=', 'ECPay')], limit=1)
         if not self.provider:
             self.skipTest("ECPay provider not installed")
+        self.payment_method = self.env.ref(
+            'payment.payment_method_unknown', raise_if_not_found=False,
+        )
+        if not self.payment_method:
+            self.payment_method = self.env['payment.method'].search([], limit=1)
+        self.payment_method.sudo().active = True
         self.plan = self.env['woow_paas_platform.topup_plan'].create({
             'name': 'Cron', 'amount': 100, 'credits': 100, 'active': True,
         })
@@ -18,6 +24,7 @@ class TestTopupCron(TransactionCase):
     def _make_pending_topup(self, tx_state='pending', age_minutes=35):
         tx = self.env['payment.transaction'].sudo().create({
             'provider_id': self.provider.id,
+            'payment_method_id': self.payment_method.id,
             'partner_id': self.partner.id,
             'amount': 100,
             'currency_id': self.env.company.currency_id.id,
