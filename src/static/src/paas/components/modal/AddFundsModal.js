@@ -3,6 +3,7 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
+import { translateTopupError } from "../../services/topup_errors";
 import { router } from "../../core/router";
 
 /**
@@ -83,18 +84,21 @@ export class AddFundsModal extends Component {
 
   async onConfirm() {
     if (this.state.processing || !this.hasCard) return;
-
     this.state.processing = true;
     this.state.error = null;
 
     const result = await billingService.topup(this.plan.id);
-
-    if (result.success) {
-      await billingService.fetchWallet();
-      this.props.onSuccess(result.data);
-    } else {
-      this.state.error = result.error || "Top-up failed";
+    if (!result.success) {
+      this.state.error = translateTopupError(result.error, result.code);
       this.state.processing = false;
+      return;
     }
+    if (result.data && result.data.redirect_url) {
+      window.location.href = result.data.redirect_url;
+      return;  // Browser is leaving; no further UI work
+    }
+    // Rare: server says state=done without 3DS (non-3DS ECPay path)
+    await billingService.fetchWallet();
+    this.props.onSuccess(result.data);
   }
 }
