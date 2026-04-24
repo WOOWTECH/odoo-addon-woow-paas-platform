@@ -30,14 +30,28 @@ class AccountMove(models.Model):
         self.ensure_one()
         partner = self.partner_id.sudo()
         amount = self.amount_total if self.state == 'draft' else self.amount_residual
+        _logger.info(
+            "[INV] _pay_from_wallet entry invoice=%s name=%s state=%s partner=%s amount=%s balance=%s sub=%s",
+            self.id, self.name, self.state, partner.id, amount,
+            partner.wallet_balance,
+            subscription.id if subscription else None,
+        )
         if amount <= 0:
+            _logger.info(
+                "[INV] _pay_from_wallet nothing_to_pay invoice=%s", self.id,
+            )
             raise UserError(_("Nothing to pay for invoice %s.", self.name or ""))
         if partner.wallet_balance < amount:
+            _logger.info(
+                "[INV] _pay_from_wallet insufficient invoice=%s need=%s have=%s",
+                self.id, amount, partner.wallet_balance,
+            )
             raise UserError(_("Insufficient wallet balance."))
 
         # Post first so the sequence assigns self.name before the wallet
         # transaction records it in its description.
         if self.state == 'draft':
+            _logger.info("[INV] _pay_from_wallet posting draft invoice=%s", self.id)
             self.action_post()
 
         description = (
@@ -46,6 +60,10 @@ class AccountMove(models.Model):
         )
         deducted = partner.deduct_wallet_points(
             amount, description, subscription=subscription,
+        )
+        _logger.info(
+            "[INV] _pay_from_wallet deducted invoice=%s requested=%s got=%s",
+            self.id, amount, deducted,
         )
         if deducted <= 0:
             raise UserError(_("Wallet deduction failed."))
@@ -61,6 +79,10 @@ class AccountMove(models.Model):
                 limit=1,
             )
         if not journal:
+            _logger.warning(
+                "[INV] _pay_from_wallet no journal invoice=%s company=%s",
+                self.id, company.id,
+            )
             raise UserError(_("No payment journal configured for company %s.", company.name))
 
         payment_method_line = journal.inbound_payment_method_line_ids[:1]
@@ -73,6 +95,10 @@ class AccountMove(models.Model):
             'partner_id': partner.id,
         })
         payment.action_post()
+        _logger.info(
+            "[INV] _pay_from_wallet payment created invoice=%s payment=%s journal=%s",
+            self.id, payment.id, journal.id,
+        )
 
         receivable_lines = self.line_ids.filtered(
             lambda l: l.account_id.account_type == 'asset_receivable' and not l.reconciled
@@ -82,10 +108,19 @@ class AccountMove(models.Model):
         )
         if receivable_lines and payment_lines:
             (receivable_lines + payment_lines).reconcile()
+            _logger.info(
+                "[INV] _pay_from_wallet reconciled invoice=%s inv_lines=%s pay_lines=%s",
+                self.id, len(receivable_lines), len(payment_lines),
+            )
+        else:
+            _logger.warning(
+                "[INV] _pay_from_wallet reconcile skipped invoice=%s inv_lines=%s pay_lines=%s",
+                self.id, len(receivable_lines), len(payment_lines),
+            )
 
         self.invalidate_recordset(['payment_state', 'amount_residual'])
         _logger.info(
-            "Wallet payment for invoice %s: amount=%s, partner=%s",
-            self.name, amount, partner.id,
+            "[INV] _pay_from_wallet done invoice=%s name=%s amount=%s partner=%s",
+            self.id, self.name, amount, partner.id,
         )
         return True

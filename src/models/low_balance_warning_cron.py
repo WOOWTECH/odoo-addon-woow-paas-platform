@@ -36,8 +36,8 @@ class LowBalanceWarningCron(models.AbstractModel):
             ('sh_date_of_next_payment', '<=', cutoff),
         ])
         _logger.info(
-            "Low-balance pre-renewal check: %d subscriptions in window",
-            len(subs),
+            "[LOW_BAL] pre-renewal check today=%s cutoff=%s subs_in_window=%s",
+            today, cutoff, len(subs),
         )
         for sub in subs:
             try:
@@ -45,7 +45,7 @@ class LowBalanceWarningCron(models.AbstractModel):
                     self._warn_if_needed(sub)
             except Exception:
                 _logger.exception(
-                    "Low-balance warning failed for subscription %s", sub.id,
+                    "[LOW_BAL] warning failed for subscription %s", sub.id,
                 )
 
     def _warn_if_needed(self, subscription):
@@ -55,6 +55,11 @@ class LowBalanceWarningCron(models.AbstractModel):
         price = subscription.sh_plan_price or 0.0
         if price <= 0:
             return
+        _logger.info(
+            "[LOW_BAL] eval sub=%s partner=%s price=%s balance=%s next=%s",
+            subscription.id, partner.id, price, partner.wallet_balance,
+            subscription.sh_date_of_next_payment,
+        )
         if partner.wallet_balance >= price:
             return
 
@@ -97,7 +102,6 @@ class LowBalanceWarningCron(models.AbstractModel):
         # Persist dedup marker
         subscription.write({'woow_last_low_balance_warned_for': next_payment})
         _logger.info(
-            "Pre-renewal warning queued for partner %s, renewal %s, "
-            "price=%.2f, balance=%.2f",
-            partner.id, next_payment, price, partner.wallet_balance,
+            "[LOW_BAL] warning queued partner=%s sub=%s renewal=%s price=%.2f balance=%.2f",
+            partner.id, subscription.id, next_payment, price, partner.wallet_balance,
         )

@@ -1,6 +1,9 @@
+import logging
 from datetime import timedelta
 
 from odoo import api, fields, models
+
+_logger = logging.getLogger(__name__)
 
 
 class WalletTopup(models.Model):
@@ -66,11 +69,24 @@ class WalletTopup(models.Model):
         Idempotent: replaying with the same tx is a no-op.
         """
         self.ensure_one()
+        _logger.info(
+            "[TOPUP] _on_payment_done entry topup=%s state=%s tx=%s tx_state=%s",
+            self.id, self.state, tx.id, tx.state,
+        )
         if self.state == 'done' or self.wallet_transaction_id:
+            _logger.info(
+                "[TOPUP] _on_payment_done skip already done topup=%s wallet_tx=%s",
+                self.id, self.wallet_transaction_id.id if self.wallet_transaction_id else None,
+            )
             return
         description = f"Top-up: {self.plan_id.name}"
+        total_credits = self.credits + self.bonus
+        _logger.info(
+            "[TOPUP] crediting wallet topup=%s partner=%s credits=%s+bonus=%s total=%s",
+            self.id, self.partner_id.id, self.credits, self.bonus, total_credits,
+        )
         self.partner_id.add_wallet_points(
-            self.credits + self.bonus,
+            total_credits,
             description=description,
             payment_transaction=tx,
         )
@@ -79,18 +95,35 @@ class WalletTopup(models.Model):
             ('transaction_type', '=', 'topup'),
         ], limit=1)
         self.write({'state': 'done', 'wallet_transaction_id': wtx.id})
+        _logger.info(
+            "[TOPUP] _on_payment_done complete topup=%s wallet_tx=%s new_state=done",
+            self.id, wtx.id,
+        )
 
     def _on_payment_failed(self, tx):
         """Record failure details when the linked payment transaction fails."""
         self.ensure_one()
+        _logger.info(
+            "[TOPUP] _on_payment_failed entry topup=%s state=%s tx=%s tx_state=%s msg=%r",
+            self.id, self.state, tx.id, tx.state, (tx.state_message or '')[:200],
+        )
         if self.state in ('done', 'failed'):
+            _logger.info(
+                "[TOPUP] _on_payment_failed skip terminal state topup=%s state=%s",
+                self.id, self.state,
+            )
             return
         message = tx.state_message or ''
+        code = self._classify_failure(message)
         self.write({
             'state': 'failed',
             'failure_message': message,
-            'failure_code': self._classify_failure(message),
+            'failure_code': code,
         })
+        _logger.info(
+            "[TOPUP] _on_payment_failed complete topup=%s code=%s",
+            self.id, code,
+        )
 
     _CLEANUP_GRACE_MIN = 30
     _CLEANUP_HARD_CANCEL_MIN = 60
@@ -110,18 +143,42 @@ class WalletTopup(models.Model):
             ('state', '=', 'pending'),
             ('create_date', '<', grace),
         ])
+        if stuck:
+            _logger.info(
+                "[TOPUP] cron cleanup scanning %s stuck pending topups ids=%s",
+                len(stuck), stuck.ids,
+            )
         for topup in stuck:
             tx = topup.payment_transaction_id
             if not tx:
+                _logger.info(
+                    "[TOPUP] cron cleanup no tx → cancelled topup=%s",
+                    topup.id,
+                )
                 topup.write({'state': 'cancelled'})
                 continue
             if tx.state == 'done':
+                _logger.info(
+                    "[TOPUP] cron cleanup tx done → catch-up credit topup=%s tx=%s",
+                    topup.id, tx.id,
+                )
                 topup._on_payment_done(tx)
             elif tx.state in ('error', 'cancel'):
+                _logger.info(
+                    "[TOPUP] cron cleanup tx %s → failed topup=%s tx=%s",
+                    tx.state, topup.id, tx.id,
+                )
                 topup._on_payment_failed(tx)
             elif tx.state in ('draft', 'pending') and topup.create_date < hard:
+                _logger.info(
+                    "[TOPUP] cron cleanup hard-cancel stuck 3DS topup=%s tx=%s tx_state=%s",
+                    topup.id, tx.id, tx.state,
+                )
                 try:
                     tx._set_canceled("Timed out waiting for 3DS confirmation")
                 except Exception:
-                    pass
+                    _logger.exception(
+                        "[TOPUP] cron cleanup _set_canceled failed topup=%s tx=%s",
+                        topup.id, tx.id,
+                    )
                 topup.write({'state': 'cancelled'})

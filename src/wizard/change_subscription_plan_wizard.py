@@ -69,6 +69,12 @@ class ChangeSubscriptionPlanWizard(models.TransientModel):
         self.ensure_one()
         entity = self._get_entity()
         old_sub = self._get_subscription()
+        _logger.info(
+            "[PLAN_CHG] action_change_plan entry entity=%s:%s old_sub=%s new_plan=%s refund=%s",
+            entity._name if entity else None, entity.id if entity else None,
+            old_sub.id if old_sub else None,
+            self.new_plan_id.id, self.refund_amount,
+        )
 
         if not entity or not old_sub:
             raise UserError("No active subscription found.")
@@ -88,8 +94,9 @@ class ChangeSubscriptionPlanWizard(models.TransientModel):
                 ),
             )
             _logger.info(
-                "Refunded %.2f points to partner %s for plan change",
-                self.refund_amount, partner.name,
+                "[PLAN_CHG] refund partner=%s amount=%.2f old=%s new=%s",
+                partner.id, self.refund_amount,
+                self.current_plan_id.name, self.new_plan_id.name,
             )
 
         # 2. Close old subscription
@@ -97,15 +104,19 @@ class ChangeSubscriptionPlanWizard(models.TransientModel):
             'state': 'close',
             'sh_reason': 'Plan changed to: %s' % self.new_plan_id.name,
         })
+        _logger.info(
+            "[PLAN_CHG] closed old subscription=%s", old_sub.id,
+        )
 
         # 3. Create new subscription with new plan
         entity._create_and_confirm_subscription(partner, self.new_plan_id)
 
         _logger.info(
-            "Plan changed for %s id=%s: %s -> %s (refund=%.2f)",
+            "[PLAN_CHG] done entity=%s:%s %s→%s refund=%.2f new_sub=%s",
             entity._name, entity.id,
             self.current_plan_id.name, self.new_plan_id.name,
             self.refund_amount,
+            entity.subscription_id.id if entity.subscription_id else None,
         )
 
         return {'type': 'ir.actions.act_window_close'}

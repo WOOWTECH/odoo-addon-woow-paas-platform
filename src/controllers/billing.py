@@ -238,6 +238,10 @@ class BillingController(Controller):
         partner = request.env.user.partner_id
         member_id = provider._ecpg_build_member_id(partner)
         trade_no = request.env['payment.transaction']._ecpg_build_bind_trade_no()
+        _logger.info(
+            "[BIND] prepare_bind partner=%s member=%s trade_no=%s sandbox=%s",
+            partner.id, member_id, trade_no, provider.state != 'enabled',
+        )
 
         client = ECPGClient(
             provider.MerchantID, provider.HashKey, provider.HashIV,
@@ -279,12 +283,20 @@ class BillingController(Controller):
             return {'success': False, 'error': str(e), 'code': ERR_SDK}
 
         if result.get('RtnCode') != 1 or not result.get('Token'):
+            _logger.warning(
+                "[BIND] prepare_bind ECPay rejected partner=%s trade_no=%s rtn=%s msg=%r",
+                partner.id, trade_no, result.get('RtnCode'), result.get('RtnMsg'),
+            )
             return {
                 'success': False,
                 'error': result.get('RtnMsg') or 'Unknown ECPay error',
                 'code': ERR_ECPAY_REJECTED,
             }
 
+        _logger.info(
+            "[BIND] prepare_bind ok partner=%s trade_no=%s token_len=%s",
+            partner.id, trade_no, len(result['Token']),
+        )
         return {
             'success': True,
             'data': {
@@ -334,11 +346,19 @@ class BillingController(Controller):
            `payment_mollie.mollie_return_from_checkout` and
            `payment_aps.aps_return_from_checkout` for the identical reason.
         """
+        _logger.info(
+            "[BIND] bind-result landing trade_no=%s kw_keys=%s",
+            trade_no, list(kw.keys()),
+        )
         try:
             from odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback import (
                 ECPGCallback,
             )
             ECPGCallback()._handle_bind_callback(kw)
+            _logger.info(
+                "[BIND] bind-result _handle_bind_callback ok trade_no=%s",
+                trade_no,
+            )
         except Exception:
             _logger.exception('bind-result: error persisting bind for trade_no=%s', trade_no)
 
@@ -389,12 +409,20 @@ class BillingController(Controller):
         partner = request.env.user.partner_id
         expected = provider._ecpg_build_member_id(partner)
         if member_id != expected:
+            _logger.warning(
+                "[BIND] create_bind member_id mismatch partner=%s expected=%s got=%s",
+                partner.id, expected, member_id,
+            )
             return {
                 'success': False,
                 'error': 'member_id does not match current session',
                 'code': ERR_MEMBER_MISMATCH,
             }
 
+        _logger.info(
+            "[BIND] create_bind partner=%s member=%s trade_no=%s",
+            partner.id, member_id, trade_no,
+        )
         client = ECPGClient(
             provider.MerchantID, provider.HashKey, provider.HashIV,
             sandbox=(provider.state != 'enabled'),
@@ -409,6 +437,10 @@ class BillingController(Controller):
             return {'success': False, 'error': str(e), 'code': ERR_SDK}
 
         if result.get('RtnCode') != 1:
+            _logger.warning(
+                "[BIND] create_bind ECPay rejected partner=%s trade_no=%s rtn=%s msg=%r",
+                partner.id, trade_no, result.get('RtnCode'), result.get('RtnMsg'),
+            )
             return {
                 'success': False,
                 'error': result.get('RtnMsg') or 'ECPay rejected binding',
@@ -416,11 +448,17 @@ class BillingController(Controller):
             }
 
         three_d_info = result.get('ThreeDInfo') or {}
+        three_d_url = three_d_info.get('ThreeDURL') or ''
+        bind_card_id = result.get('BindCardID') or ''
+        _logger.info(
+            "[BIND] create_bind ok partner=%s trade_no=%s has_3ds=%s bind_card_id=%s",
+            partner.id, trade_no, bool(three_d_url), bind_card_id,
+        )
         return {
             'success': True,
             'data': {
-                'three_d_url': three_d_info.get('ThreeDURL') or '',
-                'bind_card_id': result.get('BindCardID') or '',
+                'three_d_url': three_d_url,
+                'bind_card_id': bind_card_id,
             },
         }
 
@@ -431,7 +469,15 @@ class BillingController(Controller):
         which calls DeleteMemberBindCard automatically."""
         token, err = self._get_owned_token(method_id)
         if err:
+            _logger.info(
+                "[BIND] delete_token rejected method=%s err=%s",
+                method_id, err.get('code'),
+            )
             return err
+        _logger.info(
+            "[BIND] delete_token method=%s partner=%s provider=%s",
+            method_id, token.partner_id.id, token.provider_id.code,
+        )
         token.active = False
         return {'success': True}
 
@@ -441,8 +487,16 @@ class BillingController(Controller):
         """Set this card as the partner's default payment token."""
         token, err = self._get_owned_token(method_id)
         if err:
+            _logger.info(
+                "[BIND] set_default rejected method=%s err=%s",
+                method_id, err.get('code'),
+            )
             return err
         partner = token.partner_id
+        _logger.info(
+            "[BIND] set_default method=%s partner=%s",
+            method_id, partner.id,
+        )
         if 'property_payment_token_id' in partner._fields:
             partner.with_company(
                 partner.company_id or request.env.company
@@ -515,7 +569,12 @@ class BillingController(Controller):
                     'code': 'plan_not_found'}
 
         partner = request.env.user.partner_id.sudo()
+        _logger.info(
+            "[TOPUP] api_topup entry partner=%s plan=%s amount=%s credits=%s bonus=%s",
+            partner.id, plan.id, plan.amount, plan.credits, plan.bonus,
+        )
         if not self._get_primary_card_info(partner)['bound']:
+            _logger.info("[TOPUP] api_topup no_card partner=%s", partner.id)
             return {'success': False, 'error': 'No payment method configured',
                     'code': 'no_card'}
 
@@ -525,6 +584,10 @@ class BillingController(Controller):
             ('state', '=', 'pending'),
         ], limit=1)
         if existing:
+            _logger.info(
+                "[TOPUP] api_topup resume existing topup=%s partner=%s",
+                existing.id, partner.id,
+            )
             return {'success': True, 'data': {
                 'topup_id': existing.id,
                 'redirect_url': self._resume_3ds_url(existing),
@@ -534,6 +597,9 @@ class BillingController(Controller):
 
         token = self._get_default_ecpg_token(partner)
         if not token:
+            _logger.info(
+                "[TOPUP] api_topup no ECPG token partner=%s", partner.id,
+            )
             return {'success': False, 'error': 'No payment method configured',
                     'code': 'no_card'}
 
@@ -548,6 +614,10 @@ class BillingController(Controller):
             'state': 'draft',
             **invoice_vals,
         })
+        _logger.info(
+            "[TOPUP] draft created topup=%s partner=%s token=%s",
+            topup.id, partner.id, token.id,
+        )
 
         try:
             result = token._charge(
@@ -558,17 +628,26 @@ class BillingController(Controller):
                 purpose_id=topup.id,
             )
         except Exception as e:
-            _logger.exception("Topup charge failed for partner %s", partner.id)
+            _logger.exception(
+                "[TOPUP] charge exception topup=%s partner=%s",
+                topup.id, partner.id,
+            )
             topup.write({'state': 'failed', 'failure_code': 'sdk_error',
                          'failure_message': str(e)[:200]})
             return {'success': False, 'error': 'Payment service unavailable',
                     'code': 'sdk_error'}
 
         tx = result['tx']
+        new_state = 'pending' if result['state'] in ('draft', 'pending') else result['state']
         topup.write({
             'payment_transaction_id': tx.id,
-            'state': 'pending' if result['state'] in ('draft', 'pending') else result['state'],
+            'state': new_state,
         })
+        _logger.info(
+            "[TOPUP] charge returned topup=%s tx=%s tx_state=%s topup_state=%s has_redirect=%s",
+            topup.id, tx.id, result['state'], new_state,
+            bool(result.get('redirect_url')),
+        )
 
         return {'success': True, 'data': {
             'topup_id': topup.id,
@@ -601,7 +680,16 @@ class BillingController(Controller):
         partner = request.env.user.partner_id
         topup = request.env['woow.wallet.topup'].sudo().browse(topup_id)
         if not topup.exists() or topup.partner_id.id != partner.id:
+            _logger.info(
+                "[TOPUP] status not_found topup=%s requester_partner=%s",
+                topup_id, partner.id,
+            )
             return {'success': False, 'error': 'Not found', 'code': 'not_found'}
+        _logger.info(
+            "[TOPUP] status topup=%s partner=%s state=%s tx=%s",
+            topup.id, partner.id, topup.state,
+            topup.payment_transaction_id.id if topup.payment_transaction_id else None,
+        )
         return {'success': True, 'data': {
             'topup_id': topup.id,
             'state': topup.state,
@@ -738,21 +826,34 @@ class BillingController(Controller):
         """
         partner = request.env.user.partner_id
         sub = request.env['sh.subscription.subscription'].sudo().browse(subscription_id)
+        _logger.info(
+            "[SUB] cancel request subscription=%s partner=%s reason=%r",
+            subscription_id, partner.id, (reason or '')[:100],
+        )
 
         if not sub.exists() or sub.sh_partner_id != partner:
+            _logger.info(
+                "[SUB] cancel not_found subscription=%s partner=%s",
+                subscription_id, partner.id,
+            )
             return {'success': False, 'error': 'Subscription not found'}
 
         if sub.state not in ('in_progress',):
+            _logger.info(
+                "[SUB] cancel state_reject subscription=%s state=%s",
+                sub.id, sub.state,
+            )
             return {'success': False, 'error': 'Only active subscriptions can be cancelled'}
 
         try:
             sub.write({'state': 'close'})
         except Exception as e:
-            _logger.error("Error cancelling subscription: %s\n%s", str(e), traceback.format_exc())
+            _logger.error("[SUB] cancel error subscription=%s: %s\n%s",
+                          sub.id, str(e), traceback.format_exc())
             return {'success': False, 'error': 'Cancellation failed. Please try again.'}
 
         _logger.info(
-            "Subscription cancelled: id=%s, partner=%s, reason=%s",
+            "[SUB] cancelled subscription=%s partner=%s reason=%s",
             sub.id, partner.id, reason or '(none)',
         )
 
@@ -994,17 +1095,41 @@ class BillingController(Controller):
 
         partner = request.env.user.partner_id.sudo()
         invoice = request.env['account.move'].sudo().browse(invoice_id)
+        _logger.info(
+            "[INV] pay_from_wallet request invoice=%s partner=%s",
+            invoice_id, partner.id,
+        )
 
         if not invoice.exists() or invoice.partner_id != partner:
+            _logger.info(
+                "[INV] pay not_found invoice=%s partner=%s",
+                invoice_id, partner.id,
+            )
             return {'success': False, 'error': 'Invoice not found'}
         if invoice.state not in ('draft', 'posted'):
+            _logger.info(
+                "[INV] pay state_reject invoice=%s state=%s",
+                invoice.id, invoice.state,
+            )
             return {'success': False, 'error': 'Invoice is not payable'}
         if invoice.payment_state == 'paid':
+            _logger.info(
+                "[INV] pay already_paid invoice=%s",
+                invoice.id,
+            )
             return {'success': False, 'error': 'Invoice is already paid'}
 
         amount = invoice.amount_total if invoice.state == 'draft' else invoice.amount_residual
         balance = partner.wallet_balance
+        _logger.info(
+            "[INV] pay amount=%s balance=%s invoice=%s state=%s payment_state=%s",
+            amount, balance, invoice.id, invoice.state, invoice.payment_state,
+        )
         if balance < amount:
+            _logger.info(
+                "[INV] pay insufficient_balance invoice=%s needed=%s have=%s",
+                invoice.id, amount, balance,
+            )
             return {
                 'success': False,
                 'error': f'Insufficient credits. Your balance is {balance:.0f} pts but {amount:.0f} pts is required.',
@@ -1018,11 +1143,20 @@ class BillingController(Controller):
         try:
             invoice._pay_from_wallet()
         except UserError as e:
+            _logger.info(
+                "[INV] pay UserError invoice=%s err=%s",
+                invoice.id, str(e)[:200],
+            )
             return {'success': False, 'error': str(e)}
         except Exception as e:
-            _logger.error("Error processing invoice payment: %s\n%s", str(e), traceback.format_exc())
+            _logger.error("[INV] pay error invoice=%s: %s\n%s",
+                          invoice.id, str(e), traceback.format_exc())
             return {'success': False, 'error': 'Payment processing failed.'}
 
+        _logger.info(
+            "[INV] pay ok invoice=%s new_balance=%s",
+            invoice.id, partner.wallet_balance,
+        )
         return {
             'success': True,
             'data': {

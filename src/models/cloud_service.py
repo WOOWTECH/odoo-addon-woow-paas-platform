@@ -1039,6 +1039,11 @@ class CloudService(models.Model):
     def _do_suspend(self):
         """Scale down Helm release to 0 replicas."""
         self.ensure_one()
+        _logger.info(
+            "[CLOUD_SVC] _do_suspend service=%s name=%s state=%s sub=%s",
+            self.id, self.name, self.state,
+            self.subscription_id.id if self.subscription_id else None,
+        )
         if self.state == 'suspended':
             return
 
@@ -1050,9 +1055,14 @@ class CloudService(models.Model):
                 client.scale_release(
                     self.helm_release_name, self.helm_namespace, replicas=0,
                 )
+                _logger.info(
+                    "[CLOUD_SVC] _do_suspend scaled to 0 service=%s release=%s ns=%s",
+                    self.id, self.helm_release_name, self.helm_namespace,
+                )
             except Exception as e:
                 _logger.warning(
-                    "Failed to scale down service %s: %s", self.name, e,
+                    "[CLOUD_SVC] _do_suspend scale failed service=%s: %s",
+                    self.id, e,
                 )
                 self.write({'state': 'error', 'error_message': f'Suspend failed: {e}'})
                 return
@@ -1061,10 +1071,15 @@ class CloudService(models.Model):
             'pre_suspend_state': self.state if self.state in ('running', 'error') else 'running',
             'state': 'suspended',
         })
+        _logger.info("[CLOUD_SVC] _do_suspend done service=%s new_state=suspended", self.id)
 
     def _do_resume(self):
         """Scale up Helm release to restore replicas."""
         self.ensure_one()
+        _logger.info(
+            "[CLOUD_SVC] _do_resume service=%s name=%s state=%s pre_suspend=%s",
+            self.id, self.name, self.state, self.pre_suspend_state,
+        )
         if self.state != 'suspended':
             return
 
@@ -1076,9 +1091,14 @@ class CloudService(models.Model):
                 client.scale_release(
                     self.helm_release_name, self.helm_namespace, replicas=1,
                 )
+                _logger.info(
+                    "[CLOUD_SVC] _do_resume scaled to 1 service=%s release=%s ns=%s",
+                    self.id, self.helm_release_name, self.helm_namespace,
+                )
             except Exception as e:
                 _logger.warning(
-                    "Failed to scale up service %s: %s", self.name, e,
+                    "[CLOUD_SVC] _do_resume scale failed service=%s: %s",
+                    self.id, e,
                 )
                 self.write({'state': 'error', 'error_message': f'Resume failed: {e}'})
                 return
@@ -1088,10 +1108,18 @@ class CloudService(models.Model):
             'state': restore_state,
             'pre_suspend_state': False,
         })
+        _logger.info(
+            "[CLOUD_SVC] _do_resume done service=%s new_state=%s",
+            self.id, restore_state,
+        )
 
     def _do_cleanup(self):
         """Helm uninstall — permanently remove the service."""
         self.ensure_one()
+        _logger.info(
+            "[CLOUD_SVC] _do_cleanup service=%s name=%s release=%s ns=%s",
+            self.id, self.name, self.helm_release_name, self.helm_namespace,
+        )
 
         from ..services.paas_operator import get_paas_operator_client
 
@@ -1101,8 +1129,13 @@ class CloudService(models.Model):
                 client.uninstall_release(
                     self.helm_release_name, self.helm_namespace,
                 )
+                _logger.info(
+                    "[CLOUD_SVC] _do_cleanup helm uninstalled service=%s",
+                    self.id,
+                )
             except Exception as e:
                 _logger.warning(
-                    "Cleanup failed for service %s: %s", self.name, e,
+                    "[CLOUD_SVC] _do_cleanup failed service=%s: %s",
+                    self.id, e,
                 )
         self.write({'state': 'deleting'})

@@ -38,15 +38,32 @@ class ShSubscriptionFix(models.Model):
         subscriptions = self.env['sh.subscription.subscription'].sudo().search([
             ('state', '=', 'in_progress'),
         ])
+        today = fields.Date.today()
+        due_today = [s for s in subscriptions if s.sh_date_of_next_payment == today]
+        _logger.info(
+            "[SUB_FIX] _sh_create_auto_invoice scan total_active=%s due_today=%s",
+            len(subscriptions), len(due_today),
+        )
         for subscription in subscriptions:
             if subscription.sh_date_of_next_payment != fields.Date.today():
                 continue
 
+            _logger.info(
+                "[SUB_FIX] auto_invoice start sub=%s partner=%s price=%s balance=%s",
+                subscription.id,
+                subscription.sh_partner_id.id,
+                subscription.sh_plan_price,
+                subscription.sh_partner_id.wallet_balance,
+            )
             try:
                 with self.env.cr.savepoint():
                     invoice_vals = subscription._generate_invoice_vals()
                     invoice_id = self.env['account.move'].sudo().create(invoice_vals)
                     subscription.compute_view_invoice()
+                    _logger.info(
+                        "[SUB_FIX] auto_invoice created sub=%s invoice=%s amount=%s",
+                        subscription.id, invoice_id.id, invoice_id.amount_total,
+                    )
 
                     unit_deltas = {
                         'day': relativedelta(days=subscription.sh_recurrency),
@@ -175,9 +192,23 @@ class ShSubscriptionFix(models.Model):
         """
         partner = self.sh_partner_id
         amount = invoice_id.amount_total or 0
+        _logger.info(
+            "[SUB_FIX] _handle_invoice_creation sub=%s invoice=%s amount=%s partner=%s balance=%s",
+            self.id, invoice_id.id, amount,
+            partner.id if partner else None,
+            partner.wallet_balance if partner else None,
+        )
         if partner and amount > 0 and partner.wallet_balance >= amount:
+            _logger.info(
+                "[SUB_FIX] _handle_invoice_creation pay from wallet sub=%s invoice=%s",
+                self.id, invoice_id.id,
+            )
             invoice_id._pay_from_wallet(subscription=self)
             return
+        _logger.info(
+            "[SUB_FIX] _handle_invoice_creation fallback super sub=%s invoice=%s",
+            self.id, invoice_id.id,
+        )
         return super()._handle_invoice_creation(invoice_id)
 
     @api.model
@@ -200,6 +231,10 @@ class ShSubscriptionFix(models.Model):
             (False, 'wallet_credit_failed') — ECPay charged but wallet credit failed;
                                               MANUAL RECONCILIATION REQUIRED
         """
+        _logger.info(
+            "[AUTO_TOPUP] _attempt_auto_topup partner=%s shortfall=%s",
+            partner.id, shortfall,
+        )
         if shortfall <= 0:
             return False, TOPUP_NO_SHORTFALL
 
@@ -230,10 +265,17 @@ class ShSubscriptionFix(models.Model):
             )
 
         if not token or not token.active or not token.ecpg_bindcard_id:
+            _logger.info(
+                "[AUTO_TOPUP] no usable token partner=%s", partner.id,
+            )
             return False, TOPUP_NO_TOKEN
 
         provider = token.provider_id
         if not provider or not getattr(provider, 'enable_ecpg', False):
+            _logger.info(
+                "[AUTO_TOPUP] provider not ECPG partner=%s token=%s provider=%s",
+                partner.id, token.id, provider.code if provider else None,
+            )
             return False, TOPUP_PROVIDER_NOT_ENABLED
 
         currency = provider.main_currency_id or self.env.ref(
@@ -256,21 +298,32 @@ class ShSubscriptionFix(models.Model):
             'token_id': token.id,
             'operation': 'offline',
         })
+        _logger.info(
+            "[AUTO_TOPUP] tx created partner=%s tx=%s ref=%s amount=%s token=%s",
+            partner.id, tx.id, reference, charge_amount, token.id,
+        )
 
         try:
             result = tx._send_payment_request()
         except Exception as e:
-            _logger.exception('Auto-topup send_payment_request failed: %s', e)
+            _logger.exception(
+                '[AUTO_TOPUP] send_payment_request failed partner=%s tx=%s: %s',
+                partner.id, tx.id, e,
+            )
             return False, TOPUP_SDK_ERROR
 
         # 3DS redirect — cron cannot drive it. Treat as failure.
         if isinstance(result, dict) and result.get('redirect_url'):
-            _logger.info('Auto-topup requires 3DS for partner=%s; aborting', partner.id)
+            _logger.info(
+                '[AUTO_TOPUP] 3DS required partner=%s tx=%s; aborting',
+                partner.id, tx.id,
+            )
             return False, TOPUP_3DS_REQUIRED
 
         if tx.state != 'done':
             _logger.warning(
-                'Auto-topup transaction %s ended in state=%s', tx.reference, tx.state,
+                '[AUTO_TOPUP] tx not done partner=%s tx=%s state=%s',
+                partner.id, tx.id, tx.state,
             )
             return False, tx.state
 
@@ -298,7 +351,7 @@ class ShSubscriptionFix(models.Model):
             return False, TOPUP_WALLET_CREDIT_FAILED
 
         _logger.info(
-            'Auto-topup succeeded: partner=%s charge_amount=%.2f tx=%s',
-            partner.id, charge_amount, tx.reference,
+            '[AUTO_TOPUP] succeeded partner=%s charge_amount=%.2f tx=%s new_balance=%s',
+            partner.id, charge_amount, tx.reference, partner.wallet_balance,
         )
         return True, TOPUP_OK

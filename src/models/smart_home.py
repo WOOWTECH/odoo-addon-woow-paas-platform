@@ -267,6 +267,11 @@ class SmartHome(models.Model):
     def _do_suspend(self):
         """Update tunnel ingress to return 503."""
         self.ensure_one()
+        _logger.info(
+            "[SH] _do_suspend sh=%s name=%s state=%s sub=%s",
+            self.id, self.name, self.state,
+            self.subscription_id.id if self.subscription_id else None,
+        )
         if self.state == 'suspended':
             return
 
@@ -279,10 +284,14 @@ class SmartHome(models.Model):
                     hostname=hostname,
                     service_url="http_status:503",
                 )
+                _logger.info(
+                    "[SH] _do_suspend tunnel 503 sh=%s tunnel=%s",
+                    self.id, self.tunnel_id,
+                )
             except Exception as e:
                 _logger.warning(
-                    "Failed to suspend tunnel for smart home %s: %s",
-                    self.name, e,
+                    "[SH] _do_suspend tunnel failed sh=%s: %s",
+                    self.id, e,
                 )
                 self.write({'state': 'error'})
                 return
@@ -292,10 +301,15 @@ class SmartHome(models.Model):
             'pre_suspend_state': self.state if self.state in ('active', 'error') else 'active',
             'state': 'suspended',
         })
+        _logger.info("[SH] _do_suspend done sh=%s new_state=suspended", self.id)
 
     def _do_resume(self):
         """Restore tunnel ingress to original service URL."""
         self.ensure_one()
+        _logger.info(
+            "[SH] _do_resume sh=%s name=%s state=%s pre_suspend=%s",
+            self.id, self.name, self.state, self.pre_suspend_state,
+        )
         if self.state != 'suspended':
             return
 
@@ -309,10 +323,14 @@ class SmartHome(models.Model):
                     hostname=hostname,
                     service_url=service_url,
                 )
+                _logger.info(
+                    "[SH] _do_resume tunnel restored sh=%s tunnel=%s",
+                    self.id, self.tunnel_id,
+                )
             except Exception as e:
                 _logger.warning(
-                    "Failed to resume tunnel for smart home %s: %s",
-                    self.name, e,
+                    "[SH] _do_resume tunnel failed sh=%s: %s",
+                    self.id, e,
                 )
                 self.write({'state': 'error'})
                 return
@@ -322,16 +340,28 @@ class SmartHome(models.Model):
             'state': restore_state,
             'pre_suspend_state': False,
         })
+        _logger.info(
+            "[SH] _do_resume done sh=%s new_state=%s",
+            self.id, restore_state,
+        )
 
     def _do_cleanup(self):
         """Delete tunnel permanently."""
         self.ensure_one()
+        _logger.info(
+            "[SH] _do_cleanup sh=%s name=%s tunnel=%s",
+            self.id, self.name, self.tunnel_id,
+        )
         if self.tunnel_id:
             try:
                 client = self._get_operator_client()
                 client.delete_tunnel(self.tunnel_id)
+                _logger.info(
+                    "[SH] _do_cleanup tunnel deleted sh=%s tunnel=%s",
+                    self.id, self.tunnel_id,
+                )
             except Exception as e:
                 _logger.warning(
-                    "Cleanup failed for smart home %s: %s", self.name, e,
+                    "[SH] _do_cleanup failed sh=%s: %s", self.id, e,
                 )
         self.write({'state': 'deleting'})

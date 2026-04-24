@@ -872,6 +872,10 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Plan not found'}
 
         old_sub = service.sudo().subscription_id
+        _logger.info(
+            "[CLOUD_SVC] change_plan request service=%s new_plan=%s old_sub=%s",
+            service_id, plan_id, old_sub.id if old_sub else None,
+        )
         if not old_sub or old_sub.state != 'in_progress':
             return {'success': False, 'error': 'No active subscription'}
 
@@ -884,12 +888,21 @@ class PaasController(Controller):
         refund = round(old_sub.sh_plan_price * remaining_days / total_days, 2)
 
         partner = old_sub.sh_partner_id
+        _logger.info(
+            "[CLOUD_SVC] change_plan refund calc service=%s total_days=%s remaining=%s price=%s refund=%s partner=%s",
+            service_id, total_days, remaining_days,
+            old_sub.sh_plan_price, refund, partner.id,
+        )
 
         # Refund unused points
         if refund > 0:
             partner.sudo().add_wallet_points(
                 amount=refund,
                 description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
+            )
+            _logger.info(
+                "[CLOUD_SVC] change_plan refund credited service=%s partner=%s amount=%s",
+                service_id, partner.id, refund,
             )
 
         # Close old subscription
@@ -900,6 +913,11 @@ class PaasController(Controller):
 
         # Create new subscription
         service._create_and_confirm_subscription(partner, plan)
+        _logger.info(
+            "[CLOUD_SVC] change_plan done service=%s old_sub=%s new_sub=%s",
+            service_id, old_sub.id,
+            service.subscription_id.id if service.subscription_id else None,
+        )
 
         return {
             'success': True,
@@ -1646,6 +1664,10 @@ class PaasController(Controller):
 
             # Create subscription for this service
             partner = workspace.owner_id.partner_id
+            _logger.info(
+                "[CLOUD_SVC] deploy_service created service=%s workspace=%s template=%s partner=%s plan=%s",
+                service.id, workspace.id, template.id, partner.id, plan.id,
+            )
             service._create_and_confirm_subscription(partner, plan)
 
             # Build expose configuration before spawning background thread

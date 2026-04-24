@@ -123,6 +123,11 @@ class SmartHomeController(Controller):
             return {"success": False, "error": "Plan not found"}
 
         old_sub = smarthome.subscription_id
+        _logger.info(
+            "[SH] change_plan request workspace=%s sh=%s new_plan=%s old_sub=%s",
+            workspace_id, smarthome_id, plan_id,
+            old_sub.id if old_sub else None,
+        )
         if not old_sub or old_sub.state != "in_progress":
             return {"success": False, "error": "No active subscription"}
 
@@ -136,11 +141,20 @@ class SmartHomeController(Controller):
         refund = round(old_sub.sh_plan_price * remaining_days / total_days, 2)
 
         partner = old_sub.sh_partner_id
+        _logger.info(
+            "[SH] change_plan refund calc sh=%s total_days=%s remaining=%s price=%s refund=%s partner=%s",
+            smarthome_id, total_days, remaining_days,
+            old_sub.sh_plan_price, refund, partner.id,
+        )
 
         if refund > 0:
             partner.sudo().add_wallet_points(
                 amount=refund,
                 description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
+            )
+            _logger.info(
+                "[SH] change_plan refund credited sh=%s partner=%s amount=%s",
+                smarthome_id, partner.id, refund,
             )
 
         old_sub.sudo().write({
@@ -149,6 +163,11 @@ class SmartHomeController(Controller):
         })
 
         smarthome._create_and_confirm_subscription(partner, plan)
+        _logger.info(
+            "[SH] change_plan done sh=%s old_sub=%s new_sub=%s",
+            smarthome_id, old_sub.id,
+            smarthome.subscription_id.id if smarthome.subscription_id else None,
+        )
 
         return {
             "success": True,
@@ -246,10 +265,14 @@ class SmartHomeController(Controller):
             smarthome = SmartHome.create(vals)
             # Create subscription
             partner = workspace.owner_id.partner_id
+            _logger.info(
+                "[SH] create_smarthome sh=%s workspace=%s partner=%s plan=%s",
+                smarthome.id, workspace.id, partner.id, plan.id,
+            )
             smarthome._create_and_confirm_subscription(partner, plan)
             return {"success": True, "data": smarthome.to_dict()}
         except Exception as e:
-            _logger.exception("Failed to create smart home: %s", e)
+            _logger.exception("[SH] Failed to create smart home: %s", e)
             return {"success": False, "error": "Failed to create smart home. Please try again."}
 
     def _delete_smarthome(self, smarthome) -> dict[str, Any]:

@@ -67,6 +67,10 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             sh.subscription.subscription record
         """
         self.ensure_one()
+        _logger.info(
+            "[SUB_MIXIN] _create_and_confirm_subscription entry entity=%s:%s partner=%s plan=%s",
+            self._name, self.id, partner.id, plan.id,
+        )
         Subscription = self.env['sh.subscription.subscription']
 
         # sh_subscription_plan_id is on product.template; find product via template
@@ -138,8 +142,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
 
         self.write({'subscription_id': subscription.id})
         _logger.info(
-            "Created subscription %s (plan=%s) for %s id=%s",
-            subscription.name, plan.name, self._name, self.id,
+            "[SUB_MIXIN] created subscription=%s name=%s plan=%s entity=%s:%s trial=%s",
+            subscription.id, subscription.name, plan.name,
+            self._name, self.id, subscription.sh_trial,
         )
         return subscription
 
@@ -237,6 +242,10 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         """
         self.ensure_one()
         sub = self.sudo().subscription_id
+        _logger.info(
+            "[SUB_MIXIN] _skip_trial entry entity=%s:%s sub=%s",
+            self._name, self.id, sub.id if sub else None,
+        )
         if not sub:
             raise UserError("No subscription linked to this service.")
         if sub.state != 'in_progress':
@@ -249,6 +258,10 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         # Check wallet balance before proceeding
         partner = sub.sh_partner_id
         plan_price = sub.sh_plan_price
+        _logger.info(
+            "[SUB_MIXIN] _skip_trial balance check sub=%s partner=%s price=%s balance=%s",
+            sub.id, partner.id, plan_price, partner.wallet_balance,
+        )
         if partner.wallet_balance < plan_price:
             raise UserError(
                 "Insufficient wallet balance to skip trial. "
@@ -269,6 +282,10 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         invoice_vals = sub._generate_invoice_vals()
         invoice = self.env['account.move'].sudo().create(invoice_vals)
         sub.compute_view_invoice()
+        _logger.info(
+            "[SUB_MIXIN] _skip_trial invoice created sub=%s invoice=%s amount=%s",
+            sub.id, invoice.id, invoice.amount_total,
+        )
 
         # Advance next payment by one billing cycle
         unit_deltas = {
@@ -285,8 +302,8 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         sub._handle_invoice_creation(invoice)
 
         _logger.info(
-            "Trial skipped for %s (subscription %s): invoice %s amount=%s, next_payment=%s",
-            self.display_name, sub.name, invoice.name,
+            "[SUB_MIXIN] _skip_trial done entity=%s:%s sub=%s invoice=%s amount=%s next_payment=%s",
+            self._name, self.id, sub.id, invoice.name,
             invoice.amount_total, sub.sh_date_of_next_payment,
         )
 

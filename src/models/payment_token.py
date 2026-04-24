@@ -1,4 +1,8 @@
+import logging
+
 from odoo import models
+
+_logger = logging.getLogger(__name__)
 
 
 class PaymentToken(models.Model):
@@ -43,11 +47,33 @@ class PaymentToken(models.Model):
         if purpose_field and purpose_id and purpose_field in Tx._fields:
             vals[purpose_field] = purpose_id
 
+        _logger.info(
+            "[PAY_TOKEN] _charge start token=%s partner=%s amount=%s ref=%s purpose=%s:%s provider=%s",
+            self.id, self.partner_id.id, amount, reference,
+            purpose_field, purpose_id, self.provider_id.code,
+        )
         tx = Tx.create(vals)
-        send_result = tx._send_payment_request()
+        _logger.info(
+            "[PAY_TOKEN] tx created token=%s tx=%s ref=%s initial_state=%s",
+            self.id, tx.id, reference, tx.state,
+        )
+
+        try:
+            send_result = tx._send_payment_request()
+        except Exception:
+            _logger.exception(
+                "[PAY_TOKEN] _send_payment_request exception token=%s tx=%s",
+                self.id, tx.id,
+            )
+            raise
 
         redirect_url = None
         if isinstance(send_result, dict):
             redirect_url = send_result.get('redirect_url')
 
+        _logger.info(
+            "[PAY_TOKEN] _charge done token=%s tx=%s final_state=%s has_redirect=%s send_result_type=%s",
+            self.id, tx.id, tx.state, bool(redirect_url),
+            type(send_result).__name__,
+        )
         return {'tx': tx, 'redirect_url': redirect_url, 'state': tx.state}
