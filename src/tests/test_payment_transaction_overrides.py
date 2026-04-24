@@ -35,6 +35,16 @@ class TestPaymentTransactionOverrides(TransactionCase):
         self.topup.invalidate_recordset()
         self.assertEqual(self.topup.state, 'done')
 
+    def test_set_done_triggers_credit_when_topup_still_draft(self):
+        """Race: _charge calls _set_done synchronously before api_topup
+        has promoted topup.state from 'draft' to 'pending'. The override
+        must still credit the wallet."""
+        self.topup.state = 'draft'
+        self.tx._set_done()
+        self.topup.invalidate_recordset()
+        self.assertEqual(self.topup.state, 'done')
+        self.assertTrue(self.topup.wallet_transaction_id)
+
     def test_set_done_no_op_without_topup_link(self):
         tx2 = self.env['payment.transaction'].sudo().create({
             'provider_id': self.provider.id,
