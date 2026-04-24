@@ -43,7 +43,12 @@ export class TopupStorePage extends Component {
       if (result && result.success) {
         const data = result.data;
         if (data.state === 'done') {
-          this.state.successData = data;
+          this.state.successData = {
+            topup_id: data.topup_id,
+            credits_added: data.credits,
+            bonus: data.bonus,
+            new_balance: data.new_balance,
+          };
           this.state.showSuccessModal = true;
           await billingService.fetchWallet();
         } else if (data.state === 'failed') {

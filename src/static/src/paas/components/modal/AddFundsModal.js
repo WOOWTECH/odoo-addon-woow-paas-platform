@@ -97,8 +97,22 @@ export class AddFundsModal extends Component {
       window.location.href = result.data.redirect_url;
       return;  // Browser is leaving; no further UI work
     }
-    // Rare: server says state=done without 3DS (non-3DS ECPay path)
+    // Synchronous done (non-3DS path). Fetch full topup status so the
+    // success modal receives credits_added / bonus / new_balance.
+    const topupId = result.data?.topup_id;
+    let successPayload = result.data;
+    if (topupId) {
+      const status = await billingService.getTopupStatus(topupId);
+      if (status?.success) {
+        successPayload = {
+          topup_id: status.data.topup_id,
+          credits_added: status.data.credits,
+          bonus: status.data.bonus,
+          new_balance: status.data.new_balance,
+        };
+      }
+    }
     await billingService.fetchWallet();
-    this.props.onSuccess(result.data);
+    this.props.onSuccess(successPayload);
   }
 }
