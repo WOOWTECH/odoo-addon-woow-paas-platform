@@ -1127,7 +1127,7 @@ class CloudService(models.Model):
         if client and self.helm_release_name and self.helm_namespace:
             try:
                 client.uninstall_release(
-                    self.helm_release_name, self.helm_namespace,
+                    self.helm_namespace, self.helm_release_name,
                 )
                 _logger.info(
                     "[CLOUD_SVC] _do_cleanup helm uninstalled service=%s",
