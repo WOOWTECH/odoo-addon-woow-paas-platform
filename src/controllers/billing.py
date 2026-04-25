@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import traceback
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -619,10 +620,19 @@ class BillingController(Controller):
             topup.id, partner.id, token.id,
         )
 
+        # ECPay's MerchantTradeNo must be globally unique under the same
+        # MerchantID, so a sequential id-based ref (e.g. "TOPUP1") collides
+        # in the shared sandbox MerchantID and would also collide on prod
+        # after any DB restore. Mirror the auto-topup convention from
+        # sh_subscription_fix.py: 5-char "TOPUP" + 15-char uuid hex = 20
+        # chars (the ECPay limit), with the uuid first so any truncation
+        # inside ecpay_addon's _ecpg_build_merchant_trade_no preserves
+        # uniqueness.
+        reference = f"TOPUP{uuid.uuid4().hex[:15].upper()}"
         try:
             result = token._charge(
                 amount=plan.amount,
-                reference=f"TOPUP{topup.id}",
+                reference=reference,
                 currency_id=topup.currency_id.id,
                 purpose_field='woow_topup_id',
                 purpose_id=topup.id,
