@@ -111,6 +111,45 @@ for cmd in tea jq kubectl helm git; do
     fi
 done
 
+# --- Helper: seed web.base.url + freeze for HTTPS ECPay callbacks ---
+#
+# A fresh sandbox DB has no web.base.url, so Odoo defaults to the request
+# host without a scheme — leaking out as `http://stg.woowtech.io/...` in
+# any URL we hand to ECPay (notably the bind/topup OrderResultURL). When
+# ECPay's HTTPS 3DS page POSTs back, Chrome blocks the cross-scheme form
+# as Mixed Content and the user sees "your data isn't protected" before
+# they can return. Setting `web.base.url.freeze=True` also stops Odoo
+# from rewriting the value on the first authenticated request.
+#
+# This is idempotent (ON CONFLICT DO UPDATE) and safe to run every deploy.
+# We rollout-restart Odoo afterwards because `ir.config_parameter` is
+# cached in-process; SQL upserts don't invalidate it.
+init_odoo_system_params() {
+    local slug="$1"
+    local namespace="dev-sandbox-${slug}"
+    local pg_pod="${slug}-odoo-dev-sandbox-postgres-0"
+    local odoo_deploy="${slug}-odoo-dev-sandbox-odoo"
+    local db_name="woow_${slug}"
+    local hostname="${slug}.woowtech.io"
+
+    echo ""
+    echo -e "${BLUE}Initializing Odoo system parameters (web.base.url=https://${hostname})...${NC}"
+
+    kubectl wait --for=condition=ready "pod/${pg_pod}" -n "$namespace" --timeout=120s
+
+    kubectl exec -n "$namespace" "$pg_pod" -- psql -U odoo -d "$db_name" -v ON_ERROR_STOP=1 <<SQL
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+VALUES
+  ('web.base.url', 'https://${hostname}', 1, NOW(), 1, NOW()),
+  ('web.base.url.freeze', 'True', 1, NOW(), 1, NOW())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
+SQL
+
+    echo -e "${BLUE}Restarting Odoo to invalidate ir.config_parameter cache...${NC}"
+    kubectl rollout restart deployment -n "$namespace" "$odoo_deploy"
+    kubectl rollout status deployment -n "$namespace" "$odoo_deploy" --timeout=180s
+}
+
 # Check tea login (not needed for --image override)
 if [ -z "$IMAGE_OVERRIDE" ]; then
     if ! tea login list &>/dev/null; then
@@ -147,7 +186,9 @@ if [ -n "$IMAGE_OVERRIDE" ]; then
     if [ "$INGRESS" = true ]; then
         CREATE_ARGS+=(--ingress)
     fi
-    exec bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" "${CREATE_ARGS[@]}"
+    bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" "${CREATE_ARGS[@]}"
+    init_odoo_system_params "$SLUG"
+    exit 0
 fi
 
 # --- Display configuration ---
@@ -268,6 +309,9 @@ if [ "$INGRESS" = true ]; then
     CREATE_ARGS+=(--ingress)
 fi
 bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" "${CREATE_ARGS[@]}"
+
+# --- Initialize Odoo system parameters (web.base.url + freeze) ---
+init_odoo_system_params "$SLUG"
 
 # --- Verify ---
 NAMESPACE="dev-sandbox-${SLUG}"

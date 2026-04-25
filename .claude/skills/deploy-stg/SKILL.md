@@ -162,7 +162,27 @@ bash .claude/skills/k8s-dev-sandbox/scripts/create.sh \
 - 以 STG 模式部署 Odoo（addons 路徑：`/opt/bitnami/odoo/custom-addons/`）
 - 套用 NetworkPolicy 和 ResourceQuota
 
-### Step 7: 驗證部署
+### Step 7: 初始化 Odoo 系統參數
+
+新建的 sandbox DB 沒有 `web.base.url`，Odoo 會用 request host 但不帶 scheme，導致丟給 ECPay 的 OrderResultURL 變成 `http://...`。3DS 完成後 ECPay 從 HTTPS 頁面 POST 回我們的 HTTP endpoint，Chrome 會擋 Mixed Content（顯示「你要提交的資訊未受到保護」），使用者就無法完成綁卡或加值。
+
+`init_odoo_system_params` 自動跑：
+
+```bash
+# Upsert: 即使 SQL 改了 ir_config_parameter，Odoo 仍會 in-process cache 舊值
+INSERT INTO ir_config_parameter (key, value, ...)
+VALUES
+  ('web.base.url', 'https://${SLUG}.woowtech.io', ...),
+  ('web.base.url.freeze', 'True', ...)
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, ...;
+
+# Restart Odoo 讓 cache 失效
+kubectl rollout restart deployment -n "${NAMESPACE}" "${SLUG}-odoo-dev-sandbox-odoo"
+```
+
+`web.base.url.freeze=True` 防止 Odoo 在第一次 authenticated request 時把這個值改回去（Odoo 預設行為是 freeze=False 時會自動更新）。
+
+### Step 8: 驗證部署
 
 ```bash
 NAMESPACE="dev-sandbox-${SLUG}"
@@ -176,7 +196,7 @@ echo "  Namespace: ${NAMESPACE}"
 echo "  Image:     ${FULL_IMAGE}"
 ```
 
-### Step 8: 完成通知
+### Step 9: 完成通知
 
 ```bash
 say -r 180 "主人，staging 環境部署完成了"
