@@ -1,4 +1,6 @@
 """Tests for Cloud Service model."""
+from unittest.mock import MagicMock, patch
+
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import ValidationError
 
@@ -261,3 +263,37 @@ class TestCloudService(TransactionCase):
         ])
         self.assertGreaterEqual(len(services_t1), 1)
         self.assertTrue(all(s.template_id.id == self.template.id for s in services_t1))
+
+    def test_do_cleanup_calls_uninstall_with_namespace_first(self):
+        """Regression: BUG-4.
+
+        paas_operator.PaasOperatorClient.uninstall_release(namespace,
+        release_name) takes namespace first; scale_release(release_name,
+        namespace) takes release first. _do_cleanup used to call
+        uninstall_release with the same (release, namespace) order as the
+        sibling scale calls — paas-operator then rejected the request as
+        the release name didn't match its namespace prefix, leaving the
+        helm release + namespace orphaned in K8s.
+
+        Mock the paas-operator client and assert the exact positional
+        argument order, since this is precisely what the bug confused.
+        """
+        service = self.Service.create({
+            'name': 'Cleanup Probe',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_release_name': 'svc-deadbeef',
+            'helm_namespace': 'paas-ws-stg-cafef00d',
+        })
+        mock_client = MagicMock()
+        with patch(
+            'odoo.addons.woow_paas_platform.services.paas_operator'
+            '.get_paas_operator_client',
+            return_value=mock_client,
+        ):
+            service._do_cleanup()
+
+        mock_client.uninstall_release.assert_called_once_with(
+            'paas-ws-stg-cafef00d', 'svc-deadbeef',
+        )
+        self.assertEqual(service.state, 'deleting')

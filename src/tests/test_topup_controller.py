@@ -122,6 +122,57 @@ class TestTopupController(HttpCase):
         self.assertEqual(second['data']['topup_id'], first['data']['topup_id'])
         self.assertTrue(second['data'].get('resumed'))
 
+    def test_sync_ecpay_reject_preserves_topup_record(self):
+        """Regression: BUG-1.
+
+        When ECPay synchronously rejects a card charge, _send_payment_request
+        leaves the payment.transaction in state 'error' (or 'cancel'). The
+        controller previously tried to write that raw value back to
+        topup.state — but those aren't valid woow.wallet.topup.state values,
+        so ValueError rolled back the entire request, including the topup
+        INSERT. The fix is to only promote topup.state to 'pending' when the
+        tx is still in flight; the _set_done/_set_error overrides handle
+        terminal states. This test guards the boundary: even if _charge
+        returns state='error', the topup record must persist (so the user
+        can see a failure record) and the response must be a clean JSON
+        result instead of a 500.
+        """
+        rejected_tx = self.env['payment.transaction'].sudo().create({
+            'provider_id': self.provider.id,
+            'payment_method_id': self.payment_method.id,
+            'partner_id': self.user.partner_id.id,
+            'amount': 500,
+            'currency_id': self.env.company.currency_id.id,
+            'reference': 'REJECTED1',
+            'state': 'error',
+        })
+        with patch(
+            'odoo.addons.woow_paas_platform.models.payment_token.PaymentToken._charge',
+            return_value={
+                'tx': rejected_tx,
+                'redirect_url': None,
+                'state': 'error',
+            },
+        ):
+            result = self._post(
+                '/api/billing/wallet/topup', {'plan_id': self.plan.id},
+            )['result']
+
+        # Response must be a successful JSON envelope (no 500). Whether
+        # success=True or False is implementation detail; what matters is
+        # that the topup record survives so we can audit the failure.
+        self.assertIn('data', result)
+        topup_id = result['data']['topup_id']
+        topup = self.env['woow.wallet.topup'].browse(topup_id)
+        self.assertTrue(topup.exists(),
+                        "Topup record was rolled back by ValueError")
+        # State must be one of the valid Selection options — never 'error'.
+        self.assertIn(
+            topup.state,
+            ('draft', 'pending', 'failed'),
+            "topup.state was written with a payment.transaction value",
+        )
+
     def _ensure_active_payment_method(self):
         """Return an active payment method usable by the ECPay provider.
 

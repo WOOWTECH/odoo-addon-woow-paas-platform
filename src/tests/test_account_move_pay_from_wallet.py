@@ -73,6 +73,29 @@ class TestPayFromWallet(TransactionCase):
         self.assertAlmostEqual(
             self.partner.wallet_balance, balance_before - 250.0, places=2,
         )
+
+    def test_pay_from_wallet_invalidates_balance_cache(self):
+        """Regression: BUG-2.
+
+        partner.wallet_balance is a non-stored compute backed by
+        loyalty.card.points. _pay_from_wallet -> deduct_wallet_points
+        mutates loyalty.card.points but the recordset cache from before
+        the call still holds the pre-deduction value. Without the model
+        invalidating the cache, callers that re-read balance in the same
+        request (e.g. api_invoice_pay returning new_balance to the
+        frontend) lie about the post-payment balance. This test reads
+        balance straight after _pay_from_wallet without an explicit
+        invalidate — the model is responsible for dropping its own cache.
+        """
+        invoice = self._make_invoice(80.0)
+        self._credit_wallet(120.0)
+        balance_before = self.partner.wallet_balance
+        invoice._pay_from_wallet()
+        # No invalidate_recordset here — the fix in _pay_from_wallet does it.
+        self.assertAlmostEqual(
+            self.partner.wallet_balance, balance_before - 80.0, places=2,
+            msg="wallet_balance still cached at pre-deduction value",
+        )
         tx = self.env['wallet.transaction'].sudo().search(
             [('partner_id', '=', self.partner.id)], order='id desc', limit=1,
         )
