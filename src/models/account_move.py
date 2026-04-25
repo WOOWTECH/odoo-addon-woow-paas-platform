@@ -61,6 +61,10 @@ class AccountMove(models.Model):
         deducted = partner.deduct_wallet_points(
             amount, description, subscription=subscription,
         )
+        # Drop the partner.wallet_balance cache so any caller that re-reads it
+        # in the same request (controllers building responses, the renewal cron
+        # processing the next subscription) gets the post-deduction value.
+        partner.invalidate_recordset(['wallet_balance'])
         _logger.info(
             "[INV] _pay_from_wallet deducted invoice=%s requested=%s got=%s",
             self.id, amount, deducted,

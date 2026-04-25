@@ -350,6 +350,12 @@ class ShSubscriptionFix(models.Model):
             )
             return False, TOPUP_WALLET_CREDIT_FAILED
 
+        # Invalidate the non-stored compute so the caller's subsequent
+        # `_handle_invoice_creation` (which re-reads partner.wallet_balance to
+        # decide pay-from-wallet vs fallback) sees the post-credit balance.
+        # Without this, the cron charges the user's card AND leaves the
+        # invoice unpaid because it reads the pre-credit cached balance.
+        partner.invalidate_recordset(['wallet_balance'])
         _logger.info(
             '[AUTO_TOPUP] succeeded partner=%s charge_amount=%.2f tx=%s new_balance=%s',
             partner.id, charge_amount, tx.reference, partner.wallet_balance,

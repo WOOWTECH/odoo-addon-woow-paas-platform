@@ -648,14 +648,23 @@ class BillingController(Controller):
                     'code': 'sdk_error'}
 
         tx = result['tx']
-        new_state = 'pending' if result['state'] in ('draft', 'pending') else result['state']
-        topup.write({
-            'payment_transaction_id': tx.id,
-            'state': new_state,
-        })
+        # When _send_payment_request returns synchronously with a terminal
+        # tx state ('done'/'error'/'cancel'), the _set_done/_set_error
+        # overrides on payment.transaction have already driven the linked
+        # topup to 'done'/'failed' via _on_payment_done/_on_payment_failed.
+        # Don't re-write topup.state with the raw tx state here — 'error'
+        # and 'cancel' are not valid woow.wallet.topup.state values, so
+        # writing them raises ValueError and rolls back the entire request
+        # (topup INSERT included), losing the failure record entirely.
+        update_vals = {'payment_transaction_id': tx.id}
+        if result['state'] in ('draft', 'pending'):
+            update_vals['state'] = 'pending'
+        topup.write(update_vals)
+        # Re-read to reflect any state set by the synchronous callback.
+        topup.invalidate_recordset(['state'])
         _logger.info(
             "[TOPUP] charge returned topup=%s tx=%s tx_state=%s topup_state=%s has_redirect=%s",
-            topup.id, tx.id, result['state'], new_state,
+            topup.id, tx.id, result['state'], topup.state,
             bool(result.get('redirect_url')),
         )
 
@@ -1163,6 +1172,11 @@ class BillingController(Controller):
                           invoice.id, str(e), traceback.format_exc())
             return {'success': False, 'error': 'Payment processing failed.'}
 
+        # _pay_from_wallet → deduct_wallet_points → loyalty.card.points changes,
+        # but partner.wallet_balance is a non-stored compute; the recordset
+        # cache from the start of this request still holds the pre-deduction
+        # value. Invalidate so the response carries the post-payment balance.
+        partner.invalidate_recordset(['wallet_balance'])
         _logger.info(
             "[INV] pay ok invoice=%s new_balance=%s",
             invoice.id, partner.wallet_balance,

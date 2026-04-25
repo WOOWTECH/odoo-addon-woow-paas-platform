@@ -900,6 +900,7 @@ class PaasController(Controller):
                 amount=refund,
                 description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
             )
+            partner.invalidate_recordset(['wallet_balance'])
             _logger.info(
                 "[CLOUD_SVC] change_plan refund credited service=%s partner=%s amount=%s",
                 service_id, partner.id, refund,

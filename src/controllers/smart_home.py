@@ -152,6 +152,7 @@ class SmartHomeController(Controller):
                 amount=refund,
                 description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
             )
+            partner.invalidate_recordset(['wallet_balance'])
             _logger.info(
                 "[SH] change_plan refund credited sh=%s partner=%s amount=%s",
                 smarthome_id, partner.id, refund,

@@ -90,6 +90,12 @@ class WalletTopup(models.Model):
             description=description,
             payment_transaction=tx,
         )
+        # add_wallet_points writes loyalty.card.points, but partner.wallet_balance
+        # is a non-stored compute that won't recompute until cache is dropped.
+        # When this runs in a synchronous _send_payment_request callback, any
+        # subsequent reader in the same request would otherwise see the
+        # pre-credit balance.
+        self.partner_id.invalidate_recordset(['wallet_balance'])
         wtx = self.env['wallet.transaction'].search([
             ('payment_transaction_id', '=', tx.id),
             ('transaction_type', '=', 'topup'),

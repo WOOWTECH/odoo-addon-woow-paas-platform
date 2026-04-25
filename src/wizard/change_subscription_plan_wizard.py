@@ -93,6 +93,7 @@ class ChangeSubscriptionPlanWizard(models.TransientModel):
                     self.current_plan_id.name, self.new_plan_id.name,
                 ),
             )
+            partner.invalidate_recordset(['wallet_balance'])
             _logger.info(
                 "[PLAN_CHG] refund partner=%s amount=%.2f old=%s new=%s",
                 partner.id, self.refund_amount,
