@@ -35,15 +35,6 @@ via `pytest.ini`).
 to start when helm is missing. Linux CI installs helm at `/usr/local/bin/`
 so it picks up the default; on macOS Homebrew puts it at `/opt/homebrew/`.
 
-## Running in CI
-
-`.gitea/workflows/operator-integration-test.yml` provisions a kind cluster
-on each PR that touches `extra/paas-operator/**`, then runs:
-
-```bash
-pytest -m integration tests/integration/ -v
-```
-
 ## Test isolation
 
 Each test gets its own namespace (`paas-ws-test-op-{uuid8}`) created and torn
