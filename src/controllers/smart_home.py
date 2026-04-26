@@ -134,16 +134,12 @@ class SmartHomeController(Controller):
         if not old_sub.sh_end_date or not old_sub.sh_start_date:
             return {"success": False, "error": "Subscription dates are incomplete"}
 
-        from odoo import fields as odoo_fields
-
-        total_days = (old_sub.sh_end_date - old_sub.sh_start_date).days or 1
-        remaining_days = max(0, (old_sub.sh_end_date - odoo_fields.Date.today()).days)
-        refund = round(old_sub.sh_plan_price * remaining_days / total_days, 2)
+        refund = old_sub._compute_unused_refund()
 
         partner = old_sub.sh_partner_id
         _logger.info(
-            "[SH] change_plan refund calc sh=%s total_days=%s remaining=%s price=%s refund=%s partner=%s",
-            smarthome_id, total_days, remaining_days,
+            "[SH] change_plan refund calc sh=%s start=%s end=%s price=%s refund=%s partner=%s",
+            smarthome_id, old_sub.sh_start_date, old_sub.sh_end_date,
             old_sub.sh_plan_price, refund, partner.id,
         )
 

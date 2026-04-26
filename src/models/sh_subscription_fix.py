@@ -33,6 +33,25 @@ class ShSubscriptionFix(models.Model):
     """
     _inherit = 'sh.subscription.subscription'
 
+    def _compute_unused_refund(self):
+        """Pro-rata refund for the unused portion of the current paid cycle.
+
+        Returns 0 when the customer has not yet paid for the current cycle
+        (today < sh_start_date — still in trial, or sub not yet started).
+        Without this guard the formula
+        ``price * (end - today) / (end - start)`` overshoots when today is
+        before start, producing refund > price (BUG-5).
+        """
+        self.ensure_one()
+        if not self.sh_end_date or not self.sh_start_date:
+            return 0
+        today = fields.Date.today()
+        if today < self.sh_start_date:
+            return 0
+        total_days = (self.sh_end_date - self.sh_start_date).days or 1
+        remaining_days = max(0, (self.sh_end_date - today).days)
+        return round(self.sh_plan_price * remaining_days / total_days, 2)
+
     @api.model
     def _sh_create_auto_invoice(self):
         subscriptions = self.env['sh.subscription.subscription'].sudo().search([

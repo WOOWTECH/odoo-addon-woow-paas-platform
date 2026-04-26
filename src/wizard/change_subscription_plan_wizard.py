@@ -48,14 +48,7 @@ class ChangeSubscriptionPlanWizard(models.TransientModel):
     def _compute_refund(self):
         for wizard in self:
             sub = wizard._get_subscription()
-            if not sub or not sub.sh_end_date or not sub.sh_start_date:
-                wizard.refund_amount = 0
-                continue
-            total_days = (sub.sh_end_date - sub.sh_start_date).days or 1
-            remaining_days = max(0, (sub.sh_end_date - fields.Date.today()).days)
-            wizard.refund_amount = round(
-                sub.sh_plan_price * remaining_days / total_days, 2
-            )
+            wizard.refund_amount = sub._compute_unused_refund() if sub else 0
 
     def _get_entity(self):
         return self.cloud_service_id or self.smart_home_id
