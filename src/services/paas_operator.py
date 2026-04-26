@@ -86,6 +86,7 @@ class PaaSOperatorClient:
         method: str,
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> Dict[str, Any]:
         """Make an HTTP request to the PaaS Operator API.
@@ -94,6 +95,7 @@ class PaaSOperatorClient:
             method: HTTP method (GET, POST, PATCH, DELETE)
             endpoint: API endpoint (e.g., '/api/releases')
             data: Request body data (for POST, PATCH)
+            params: URL query string parameters
             timeout: Request timeout in seconds
 
         Returns:
@@ -112,6 +114,7 @@ class PaaSOperatorClient:
                 method=method,
                 url=url,
                 json=data if data else None,
+                params=params if params else None,
                 timeout=timeout,
             )
 
@@ -391,10 +394,12 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If scaling fails
         """
+        # Operator reads `replicas` as a Query parameter, not request body.
+        # Send via URL query string to match the server-side contract.
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/scale',
-            data={'replicas': replicas},
+            params={'replicas': replicas},
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
