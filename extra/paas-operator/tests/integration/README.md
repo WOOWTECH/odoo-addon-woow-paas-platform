@@ -17,8 +17,36 @@ mock layer hides exactly the boundary that drifts.
 
 ## Running locally
 
+### macOS quickstart
+
 ```bash
-# Against any reachable cluster (helm binary path varies by OS)
+cd extra/paas-operator
+
+# Pick a cluster context (once per shell)
+kubectl config use-context docker-desktop   # or your woow-k3s context
+
+# First time only: install Python deps
+pip install -r requirements.txt
+
+# Run
+HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
+```
+
+7 tests, ~10 s on a clean cluster. The `app_client` fixture sets `API_KEY=""`
+and `NAMESPACE_PREFIX="paas-ws-test-op-"` automatically — no need to export.
+
+Cluster choice:
+
+| Cluster         | Notes                                                          |
+| --------------- | -------------------------------------------------------------- |
+| docker-desktop  | Recommended for dev; fully isolated from shared infra.         |
+| woow-k3s        | Cross-env validation; tests create/delete unique namespaces.   |
+| kind (ephemeral)| `kind create cluster --name op-int` then run; delete after.    |
+
+### Generic invocation
+
+```bash
+# Any reachable cluster
 HELM_BINARY=$(which helm) KUBECONFIG=~/.kube/config \
     pytest -m integration tests/integration/
 
@@ -32,8 +60,8 @@ for a default `pytest` run, which also defaults to `-m "not integration"`
 via `pytest.ini`).
 
 `HELM_BINARY` is required because the operator's FastAPI lifespan refuses
-to start when helm is missing. Linux CI installs helm at `/usr/local/bin/`
-so it picks up the default; on macOS Homebrew puts it at `/opt/homebrew/`.
+to start when helm is missing. macOS Homebrew puts helm at
+`/opt/homebrew/bin/`, so the default `/usr/local/bin/helm` is wrong there.
 
 ## Test isolation
 

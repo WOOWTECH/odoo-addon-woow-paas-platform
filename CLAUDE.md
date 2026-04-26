@@ -62,10 +62,36 @@ The module now includes a complete Cloud Services feature that allows users to d
 # Odoo module tests
 ./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init
 
-# PaaS Operator tests
+# PaaS Operator unit tests (mocked k8s, default pytest skips -m integration)
 cd extra/paas-operator
 pytest tests/ -v --cov=src
 ```
+
+#### PaaS Operator Integration Tests (real K8s)
+
+Catch contract drift that unit-test mocks hide (BUG-7/8/9 class — workload-type, HTTP
+contract, RBAC). **No CI runner** — these must run locally before merging changes under
+`extra/paas-operator/`.
+
+```bash
+cd extra/paas-operator
+
+# Pick a cluster context (docker-desktop for dev, woow-k3s for cross-env validation)
+kubectl config use-context docker-desktop
+
+# First time only: install deps
+pip install -r requirements.txt
+
+# Run (~10s on a clean cluster, 7 tests)
+HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
+```
+
+| 變數 | 為什麼 |
+|------|-------|
+| `HELM_BINARY` | macOS Homebrew 把 helm 放在 `/opt/homebrew/bin/`，operator 預設找 `/usr/local/bin/helm`，沒給就 lifespan startup 失敗 |
+| `API_KEY` / `NAMESPACE_PREFIX` | 不用設，`app_client` fixture 自動 set（`""` + `"paas-ws-test-op-"`） |
+
+Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正常 teardown 會刪；中斷或 cleanup 失敗會留下，需要時手動 `kubectl delete ns paas-ws-test-op-<x>`。詳細請見 `extra/paas-operator/tests/integration/README.md`。
 
 ### Docker Development (Recommended)
 
