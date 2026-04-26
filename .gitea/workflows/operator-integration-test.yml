@@ -1,0 +1,82 @@
+name: paas-operator Integration Tests
+
+# Spins up a kind cluster and runs the operator's integration tests against
+# it. Catches client/server contract drift (BUG-8 class), missing workload
+# kinds (BUG-7 class) and — when chart RBAC is applied — RBAC subresource
+# gaps (BUG-9 class). See extra/paas-operator/tests/integration/README.md.
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "extra/paas-operator/**"
+  pull_request:
+    paths:
+      - "extra/paas-operator/**"
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: extra/paas-operator/requirements.txt
+
+      - name: Install Python deps
+        working-directory: extra/paas-operator
+        run: pip install -r requirements.txt
+
+      - name: Install kubectl
+        run: |
+          curl -fsSLo /usr/local/bin/kubectl \
+            "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl"
+          chmod +x /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Install kind
+        run: |
+          curl -fsSLo /usr/local/bin/kind \
+            "https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64"
+          chmod +x /usr/local/bin/kind
+          kind version
+
+      - name: Install helm
+        run: |
+          # The operator's lifespan startup hard-fails without helm available
+          # at settings.helm_binary (default /usr/local/bin/helm).
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
+
+      - name: Create kind cluster
+        run: |
+          kind create cluster --name op-int --wait 90s
+          kubectl cluster-info
+
+      - name: Run integration tests
+        working-directory: extra/paas-operator
+        env:
+          API_KEY: ""
+          NAMESPACE_PREFIX: "paas-ws-int-"
+        run: |
+          pytest -m integration tests/integration/ -v --tb=short
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl get ns
+          kubectl get all --all-namespaces || true
+
+      - name: Tear down kind cluster
+        if: always()
+        run: kind delete cluster --name op-int || true
