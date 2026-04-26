@@ -2,7 +2,7 @@
 
 期間：2026-04-24 ～ 2026-04-26（四輪 + T19 實作）
 
-最終 image：
+最終 image（build 結果，cluster 現況見 § 9）：
 - paas-odoo (stg): `paas-odoo-stg:20260426.1146`（含 T19）
 - paas-odoo (prod): `paas-odoo:20260426.1204`（v18.0.1.0.13，含 T19）
 - paas-operator (stg+prod): `paas-operator:20260426.0534`
@@ -220,11 +220,10 @@ E2E 驗 4 個 invariants：
 
 ## 4. 測試結果
 
-### 4.1 第一輪：T01–T13、T17（金流主流程 + 2 cycle）
+**第一輪 T01–T13 + T17**（金流主流程 + 2 cycle）：詳見 § 2 BUG-1/2/3/4 的 V01–V04 驗證 + T17 連續 2 cycle 都過。
+**第四輪 T19 e2e**：見 § 3「Test 結果」。
 
-詳見 BUG-1/2/3/4 的 V01–V04 驗證 + T17 連續 2 cycle 都過。
-
-### 4.2 第二輪殘留事項：T18–T25
+### 4.1 第二輪殘留事項：T18–T25
 
 | # | 任務 | 結果 | 重點 |
 |---|------|------|------|
@@ -237,7 +236,7 @@ E2E 驗 4 個 invariants：
 | T24 | `[TOPUP]` cron cleanup | ✅ 5/5 | A) no_tx→cancelled  B) tx done→catch-up +50  C) tx error→failed  D) >60min→hard-cancel  E) <30min→不動 |
 | T25 | `[PLAN_CHG]` wizard | ✅ | wizard.action_change_plan() 4 個 log 都觸發 |
 
-### 4.3 第三輪：T22 Phase B（real K8s）+ T26 + A
+### 4.2 第三輪：T22 Phase B（real K8s）+ T26 + A
 
 #### T22 Phase B — real K8s scale_release E2E
 
@@ -274,10 +273,6 @@ curl -X POST .../api/workspaces/17/smarthomes/9/change-plan \
 → trial 期間 `refund_amount: 0`，wallet 不被 credit；DB 一致（舊 sub close、新 sub in_progress）
 → paid mid-cycle 反向驗 refund=666.67 = 1000×20/30 ✅
 
-### 4.4 第四輪：T19 e2e
-
-見 § 3「Test 結果」。
-
 ---
 
 ## 5. 部署狀態（最終）
@@ -308,10 +303,10 @@ curl -X POST .../api/workspaces/17/smarthomes/9/change-plan \
 
 | Repo | Agent | 變更 | Key Commits |
 |------|-------|------|-------------|
-| **woow_paas_platform** | paas-platform (本 agent) | BUG-1/2/3/4/5/6/8 + T19 + tests + skill | `217ba17` (T19), tag `v18.0.1.0.13` |
-| **woow_paas_platform/extra/paas-operator** | paas-platform | BUG-7 fix（StatefulSet 支援）+ unit tests + integration tests | `03e39e3`, `fe8f821`，image `20260426.0534` |
-| **woow-paas-charts** | paas-charts (woow-op 委派) | BUG-9 chart RBAC fix + bump 0.1.8 | `cd72e7d` |
-| **paas-app-bundle-cd** | paas-cd (woow-op 委派) | fleet bundle bump 0.1.8 + stg/prod operator + prod paas-odoo image bumps | `71e3f1d`, `3014ae5`, `8e0028f`, `7bdae99` |
+| **woow_paas_platform** (src/) | paas-platform | BUG-1/2/3/4/5/8（code）+ BUG-6（build-operator skill，無 code）+ T19 + 5 regression tests | `217ba17` (T19), tag `v18.0.1.0.13` |
+| **woow_paas_platform/extra/paas-operator** | paas-platform | BUG-7 (StatefulSet scale) + unit + integration tests | `03e39e3`, `fe8f821`，image `20260426.0534` |
+| **woow-paas-charts** | paas-charts (via woow-op) | BUG-9 (chart RBAC) + bump 0.1.8 | `cd72e7d` |
+| **paas-app-bundle-cd** | paas-cd (via woow-op) | Fleet bundle 0.1.8 + stg/prod operator + prod paas-odoo image bumps | `71e3f1d`, `3014ae5`, `8e0028f`, `7bdae99` |
 
 **跨 agent 觀察**：
 - `paas-cd` agent 沒直接連線，全程透過 `maestri ask "woow-op"` 中介（woow-op 主責 woow-machines-operator，但「可協助」其他 repo）
@@ -326,16 +321,17 @@ curl -X POST .../api/workspaces/17/smarthomes/9/change-plan \
 - 7 個 test 用 kind / 既有 K8s + httpx 走真實 endpoint
 - 涵蓋：Deployment / StatefulSet / Mixed / 404 邊界 / BUG-8 contract pin（query string vs body）
 - 預設 `pytest -m "not integration"` 不跑（不影響 dev）；本機 opt-in `pytest -m integration tests/integration/`
-- 無 CI runner（須 reachable K8s cluster；docker-desktop / woow-k3s / kind 均可，見 `extra/paas-operator/tests/integration/README.md`）
 
 **設計目的**：擋未來再有 BUG-7/8/9 這類 client/server contract drift 或 workload-type 缺漏。本機驗 9.68 秒、7/7 pass。
+
+**無 CI runner**：須 reachable K8s cluster（docker-desktop / woow-k3s / kind），由 dev 在本機 opt-in 執行；CI workflow 已於 commit `61f8064` 移除（runner 持續 timeout，本機跑反而穩）。
 
 ---
 
 ## 8. 教訓 / lessons learned
 
 1. **對外部 service 的整合測試一定要至少一條真打 endpoint 的 path**。BUG-7/8/9 都是純 unit test 抓不到的（mock 雙方互相符合，但跟現實不符）。已開 operator integration test 套件。
-2. **Deploy 流程要跟 source code 同步**（BUG-6）。每次合 paas-operator PR 要記得 build + bump fleet values；future work：CI auto-deploy。
+2. **Deploy 流程要跟 source code 同步**（BUG-6）。每次合 paas-operator PR 要記得 build + bump fleet values。決議不做 CI auto-deploy（責任在 fleet bundle / helm chart 側，非 CI 範疇）。
 3. **State machine 守衛要連 cron filter 一起改**（T19 Decision 1）。原 spec 的 `next_payment 不推進` 與 cron `==` filter 衝突，會讓 sub 卡死；必須一起改成 `<= today`。
 4. **Cache invalidation 是 ORM 容易踩的坑**（BUG-2/3）。non-stored compute（`partner.wallet_balance` 走 loyalty card points）改完 underlying source 後 recordset cache 不會自動 refresh，要 `invalidate_recordset(['field'])`。
 5. **參數順序統一**（BUG-4）。同一群 helper（`scale_release`、`uninstall_release`）參數順序不一致會踩。
@@ -361,8 +357,6 @@ curl -X POST .../api/workspaces/17/smarthomes/9/change-plan \
 | 項目 | 位置 | 優先 |
 |------|------|------|
 | Prod 觀察 T19 在實際 tenant 場景的行為 | prod 等首個 tenant onboarding | 中 |
-| paas-operator PR merge 後自動 build + 更新 staging | CI workflow | 中 — 防 BUG-6 重現 |
-| ~~處理 pre-existing test 失敗~~ ✅ done 2026-04-26（commit `11a812f`，見 § 11）| `tests/` | — |
 | T19 後續：suspend 後 re-subscribe 重接既有 K8s 資源 | `models/sh_subscription_fix.py` + marketplace flow | 低 — 6 個月 cleanup window 內可手動處理 |
 
 可繼續：T19 在 prod 等 tenant onboarding 自動生效；其他 backlog 項目可由下個 session 接手。
