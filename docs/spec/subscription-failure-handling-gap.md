@@ -62,9 +62,18 @@ no upstream edit needed.
 
 | # | Question | Decision | Rationale |
 |---|---|---|---|
-| 1 | Guard the cycle advance? | **Yes** — only advance `sh_date_of_next_payment` on success. Failed cron also skips creating a duplicate invoice if an unpaid one already exists for the current period. | Without the guard each cycle produces another stale unpaid invoice on top of the previous one; AR ledger gets noisy fast. The guard turns "1 invoice + N retries" into the cleaner shape, and threshold semantics become "consecutive retry failures" (≈ days of dunning, given the daily cron). |
+| 1 | Guard the cycle advance? | **Yes** — only advance `sh_date_of_next_payment` on success. Failed cron also skips creating a duplicate invoice if an unpaid one already exists for the current period. | Without the guard each cycle produces another stale unpaid invoice on top of the previous one; AR ledger gets noisy fast. The guard collapses "1 invoice + N retries" into the cleaner shape and removes the late-payment ambiguity (see Decision 4). |
 | 2 | Email template at cancel? | **New** template `mail_template_subscription_cancelled` (separate from `mail_template_low_balance`). Different copy ("repeated payment failures → service cancelled"). Use a **new** dedup field `woow_cancellation_notified` so we never spam if a state transition retriggers. | Customer-facing finality is a different message from "your wallet is low"; sharing one template would overload its meaning. |
-| 3 | `threshold = 0` semantics | **Disabled** (current behaviour: keep retrying forever, no cancel). | More useful for test/staging deployments that don't want dunning side effects; "infinite" is the same as "very large", which is already expressible via a big number. |
+| 3 | `threshold = 0` semantics | **Disabled** (no auto-cancel; sub stays `in_progress` forever). | More useful for test/staging deployments that don't want dunning side effects; "infinite" is the same as "very large", which is already expressible via a big number. |
+| 4 | Recovery model: catch-up vs. forgiveness vs. hard-cancel | **Hard-cancel (Option C)** — short grace period (default 6 days), then auto-cancel; no in-place late recovery. To return to service, the customer creates a fresh subscription. K8s data is preserved by `_do_suspend` for `cleanup_after_months` (default 6 months) so a re-subscribe can re-link existing storage. | Catch-up billing is operationally complex and surprises customers with bulk charges. Forgiveness leaks revenue (free service during the grace period). Hard-cancel matches modern SaaS norms (Stripe / AWS / GCP all do ~7–14d grace then suspend), keeps the model simple, and re-uses already-verified suspend/cleanup machinery. |
+
+### Closed gap from earlier draft (cron filter)
+
+Earlier drafts left the cron's due-day filter as `sh_date_of_next_payment ==
+today`. With Decision 1 (no advance on failure), that filter would only
+fire once on Day 0 and then skip the sub forever. Implementation must
+broaden the filter to **`<=`** so a stuck due-date keeps re-entering the
+loop until either resolution (paid) or auto-cancel.
 
 ## Proposed Implementation
 
@@ -93,18 +102,30 @@ woow_cancellation_notified = fields.Boolean(
 ### Threshold (config_parameter)
 
 ```
-woow_paas_platform.max_consecutive_payment_failures = 6  # default
+woow_paas_platform.max_consecutive_payment_failures = 6  # default; ≈ 6 days
+                                                          # of daily-cron retries
                                                           # 0 disables (no auto-cancel)
 ```
 
+The unit is **cron ticks** (≈ days, since the cron is daily). 6 is a common
+SaaS dunning window; ops can tune via `ir_config_parameter` per environment
+without code change.
+
 ### Cron logic change (`_sh_create_auto_invoice`)
+
+Top-level filter must broaden the due-day check (see "Closed gap" above):
+
+```python
+subscriptions = env['sh.subscription.subscription'].sudo().search([
+    ('state', '=', 'in_progress'),
+    ('sh_date_of_next_payment', '<=', fields.Date.today()),
+])
+```
 
 Pseudocode for the per-subscription block:
 
 ```python
 today = fields.Date.today()
-if subscription.sh_date_of_next_payment != today:
-    continue
 
 # Decision 1: re-use the existing unpaid invoice instead of creating a
 # duplicate when a previous tick already produced one for this cycle.
@@ -171,17 +192,35 @@ and queues it, mirroring `_notify_low_balance` (already in
 ### Side effects (already covered by existing crons)
 
 Once `state='cancel'`, no further work is needed in `_sh_create_auto_invoice`
-(the search filter is `state='in_progress'`). The existing
+(the search filter remains `state='in_progress'`). The existing
 `subscription_lifecycle_cron._enforce_single` chain takes over:
 
 | Trigger | Action | Cron |
 |---|---|---|
 | `state=cancel` detected | `_do_suspend` (scale K8s pods to 0) | next `subscription_lifecycle_cron` run |
-| `cancel_date` > `cleanup_after_months` (default 6) | `_do_cleanup` (helm uninstall, release K8s resources) | same cron, later |
+| `cancel_date` > `cleanup_after_months` (default 6 months) | `_do_cleanup` (helm uninstall, release K8s resources) | same cron, later |
 
 So T19 only adds the **transition into `cancel`** plus the cancellation
 email. Suspend + cleanup are already verified end-to-end (T22 Phase B,
 2026-04-26).
+
+### Recovery story (Decision 4 follow-through)
+
+Hard-cancel means there is **no in-place resume** once a sub is cancelled.
+A customer who fixed their card after auto-cancel must:
+
+1. Open a new subscription via the marketplace flow
+   (`/api/.../cloud-services` POST) — same UX as a first-time signup.
+2. Reattach to the existing K8s release if it is still around
+   (`cancel_date` not yet past `cleanup_after_months`). The reattach is
+   intentionally out of scope for T19 v1; the data is preserved for up to
+   6 months by `_do_cleanup`'s timer, so a manual operator action or a
+   future "re-link existing release on re-subscribe" feature is feasible
+   without code change in T19.
+
+Communicating this to customers is the job of the cancellation email
+(template added by Decision 2): it should call out the 6-month preservation
+window and the path back to service.
 
 ## Implementation effort breakdown
 
@@ -219,6 +258,8 @@ Daily cron + threshold=6 ⇒ ~6 daily retries before cancel.
 | **T19c** | N consecutive failures → cancel + email + suspend | run cron 6× empty across 6 days | `state=cancel`, `woow_cancellation_notified=True`, exactly 1 invoice (still unpaid), 1 cancellation email queued; next `subscription_lifecycle_cron` triggers `_do_suspend` |
 | **T19d** | Per-sub scope (failures don't bleed across subs) | one partner, two subs A (failing) + B (paying), 6 cycles | only A cancels with notification; B stays `in_progress` with `failures=0` |
 | **T19e** | `threshold=0` disables auto-cancel | set param to 0, run cron 10× empty | `state` remains `in_progress`, counter still increments (informational), no cancellation email |
+| **T19f** | Decision 4 — no in-place recovery after cancel | once T19c has cancelled, top up wallet and run cron | `state` remains `cancel`; no new invoice; no payment; cron's `state='in_progress'` filter excludes the sub |
+| **T19g** | Cron filter must reprocess past-due (`<= today`) subs | manually set `next_payment = today - 3` and run cron | sub still gets processed (existing-unpaid reuse + retry); without the `<=` fix this would be a no-op |
 
 ## Recommendation
 
@@ -229,3 +270,8 @@ unbounded retry behaviour silently bleeds compute and skews ARR reporting.
 When implementing, the existing `subscription_lifecycle_cron` is the
 contract — T19 only needs to flip state to `cancel` and queue one email;
 the rest of the suspend/cleanup machinery is already verified end-to-end.
+
+The hard-cancel model (Decision 4) intentionally postpones a "re-link
+existing release on re-subscribe" feature. As long as the cancellation
+email tells the customer about the 6-month preservation window, that
+feature can land later without breaking T19's contract.
