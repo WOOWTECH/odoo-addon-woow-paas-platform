@@ -1,4 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_wallet_transaction_user,wallet.transaction.user,model_wallet_transaction,base.group_user,1,0,0,0
-access_wallet_transaction_manager,wallet.transaction.manager,model_wallet_transaction,base.group_system,1,1,1,1
-access_wallet_transaction_portal,wallet.transaction.portal,model_wallet_transaction,base.group_portal,1,0,0,0

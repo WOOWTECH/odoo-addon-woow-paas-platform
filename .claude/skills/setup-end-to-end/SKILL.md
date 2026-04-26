@@ -88,7 +88,7 @@ cd ../woow_paas_platform.worktrees/<feature-name>
 4. 等待 Odoo 服務就緒
 5. **自動建立資料庫並安裝模組**（首次啟動）：
    - `base` + `woow_paas_platform`（核心模組）
-   - 自動掃描 `extra/extra-addons/` 下所有包含 `__manifest__.py` 的模組並一起安裝
+   - 自動掃描 `paas-odoo-ci/addons/`（由 `PAAS_CI_ADDONS_PATH` env var 指定，預設 `../../../woow-paas-repo/paas-odoo-ci/addons`）下所有 `__manifest__.py` 模組並一起安裝
 6. 顯示訪問 URL
 
 **預期輸出範例**：
@@ -131,7 +131,7 @@ docker compose logs -f web
 
 - 資料庫已自動建立（名稱依據 branch，如 `woow_epic_workspace_api`）
 - `woow_paas_platform` 模組已自動安裝
-- `extra/extra-addons/` 下的所有模組已自動偵測並安裝（掛載於 `/mnt/extra-addons-ext`）
+- 第三方 addon（來自 `paas-odoo-ci/addons/`）已自動偵測並安裝（掛載於 `/mnt/extra-addons-ext`，路徑由 `PAAS_CI_ADDONS_PATH` 控制）
 - 語言已設定為繁體中文（zh_TW）
 - 無 demo 資料（乾淨環境）
 

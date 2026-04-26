@@ -150,6 +150,10 @@ PGADMIN_DEFAULT_PASSWORD=admin
 
 # Debug Port（用於 VS Code 遠端調試，可選）
 DEBUG_PORT=5678
+
+# 第三方 addon 路徑（mount 進 /mnt/extra-addons-ext）
+# 預設指向 paas-odoo-ci repo 的 addons/；不同 checkout 位置請改絕對路徑
+PAAS_CI_ADDONS_PATH=../../../woow-paas-repo/paas-odoo-ci/addons
 EOF
 
 # 7. 顯示配置摘要

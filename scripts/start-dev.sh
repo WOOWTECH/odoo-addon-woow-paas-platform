@@ -174,9 +174,13 @@ else
         echo -e "${YELLOW}📦 資料庫不存在，正在建立並安裝模組...${NC}"
         echo -e "${YELLOW}   （首次啟動需要 1-3 分鐘，請耐心等候）${NC}"
 
-        # 自動偵測 extra/extra-addons 中的模組
+        # 自動偵測第三方 addon 路徑中的模組（來自 paas-odoo-ci repo）
         INSTALL_MODULES="base,woow_paas_platform"
-        EXTRA_ADDONS_DIR="$PROJECT_ROOT/extra/extra-addons"
+        EXTRA_ADDONS_DIR="${PAAS_CI_ADDONS_PATH:-../../../woow-paas-repo/paas-odoo-ci/addons}"
+        # 相對路徑相對於 PROJECT_ROOT 解析
+        if [[ "$EXTRA_ADDONS_DIR" != /* ]]; then
+            EXTRA_ADDONS_DIR="$PROJECT_ROOT/$EXTRA_ADDONS_DIR"
+        fi
         if [ -d "$EXTRA_ADDONS_DIR" ]; then
             for dir in "$EXTRA_ADDONS_DIR"/*/; do
                 module_name=$(basename "$dir")
@@ -184,6 +188,9 @@ else
                     INSTALL_MODULES="${INSTALL_MODULES},${module_name}"
                 fi
             done
+        else
+            echo -e "${YELLOW}⚠️  找不到第三方 addon 路徑：$EXTRA_ADDONS_DIR${NC}"
+            echo -e "${YELLOW}   請確認 paas-odoo-ci repo 已 clone，或在 .env 設定 PAAS_CI_ADDONS_PATH${NC}"
         fi
         echo -e "  ${BLUE}安裝模組：${NC} ${INSTALL_MODULES}"
 

@@ -22,6 +22,9 @@ config/odoo/odoo.conf
 # Docker override
 docker-compose.override.yml
 
+# Third-party addons (mount from paas-odoo-ci repo via PAAS_CI_ADDONS_PATH)
+extra/extra-addons/
+
 # Python virtual environment
 .venv/
 venv/
