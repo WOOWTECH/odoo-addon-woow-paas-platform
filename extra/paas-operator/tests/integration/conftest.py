@@ -15,7 +15,7 @@ To run these against an existing cluster::
 The tests will skip themselves if ``kubectl cluster-info`` cannot reach a
 cluster; in CI we provision a kind cluster and set ``KUBECONFIG`` first.
 
-Each test gets its own isolated namespace prefixed ``paas-ws-int-`` so a
+Each test gets its own isolated namespace prefixed ``paas-ws-test-op-`` so a
 failed cleanup never bleeds into another test.
 """
 import os
@@ -100,7 +100,7 @@ def app_client():
     cluster pointed to by ``KUBECONFIG``. Auth is disabled for tests.
     """
     os.environ.setdefault("API_KEY", "")
-    os.environ.setdefault("NAMESPACE_PREFIX", "paas-ws-int-")
+    os.environ.setdefault("NAMESPACE_PREFIX", "paas-ws-test-op-")
 
     from src.main import app
     with TestClient(app) as client:
@@ -110,7 +110,7 @@ def app_client():
 @pytest.fixture
 def test_namespace():
     """Isolated namespace per test, deleted (async) on teardown."""
-    name = f"paas-ws-int-{uuid.uuid4().hex[:8]}"
+    name = f"paas-ws-test-op-{uuid.uuid4().hex[:8]}"
     subprocess.run(
         ["kubectl", "create", "namespace", name],
         check=True, capture_output=True,

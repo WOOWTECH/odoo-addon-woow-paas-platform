@@ -46,7 +46,7 @@ pytest -m integration tests/integration/ -v
 
 ## Test isolation
 
-Each test gets its own namespace (`paas-ws-int-{uuid8}`) created and torn
+Each test gets its own namespace (`paas-ws-test-op-{uuid8}`) created and torn
 down by the `test_namespace` fixture. Failed cleanup never bleeds across
 tests because namespaces are always uniquely named.
 

@@ -67,7 +67,7 @@ jobs:
         working-directory: extra/paas-operator
         env:
           API_KEY: ""
-          NAMESPACE_PREFIX: "paas-ws-int-"
+          NAMESPACE_PREFIX: "paas-ws-test-op-"
         run: |
           pytest -m integration tests/integration/ -v --tb=short
 
