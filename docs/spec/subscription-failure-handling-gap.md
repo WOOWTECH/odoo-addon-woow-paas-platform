@@ -6,6 +6,9 @@ report. On code inspection it turned out the path is **not implemented**,
 hence non-testable at present. This document captures the gap, explains
 why it exists, and proposes a concrete shape for the fix.
 
+Design decisions resolved 2026-04-26 (see § Decisions); ready for
+implementation.
+
 ## Current Behavior
 
 `_sh_create_auto_invoice` (in `src/models/sh_subscription_fix.py`) is the
@@ -55,6 +58,14 @@ cancelled), which exits the fixed-term assumption — leaving no upstream
 mechanism to terminate a broken sub. The fix is local to `paas-platform`;
 no upstream edit needed.
 
+## Decisions
+
+| # | Question | Decision | Rationale |
+|---|---|---|---|
+| 1 | Guard the cycle advance? | **Yes** — only advance `sh_date_of_next_payment` on success. Failed cron also skips creating a duplicate invoice if an unpaid one already exists for the current period. | Without the guard each cycle produces another stale unpaid invoice on top of the previous one; AR ledger gets noisy fast. The guard turns "1 invoice + N retries" into the cleaner shape, and threshold semantics become "consecutive retry failures" (≈ days of dunning, given the daily cron). |
+| 2 | Email template at cancel? | **New** template `mail_template_subscription_cancelled` (separate from `mail_template_low_balance`). Different copy ("repeated payment failures → service cancelled"). Use a **new** dedup field `woow_cancellation_notified` so we never spam if a state transition retriggers. | Customer-facing finality is a different message from "your wallet is low"; sharing one template would overload its meaning. |
+| 3 | `threshold = 0` semantics | **Disabled** (current behaviour: keep retrying forever, no cancel). | More useful for test/staging deployments that don't want dunning side effects; "infinite" is the same as "very large", which is already expressible via a big number. |
+
 ## Proposed Implementation
 
 ### Schema
@@ -65,107 +76,156 @@ Add to `sh.subscription.subscription` (via local extension model in
 ```python
 woow_consecutive_payment_failures = fields.Integer(
     default=0,
-    help='Number of consecutive cycles where neither wallet nor auto-topup '
-         'could pay the invoice. Reset to 0 on successful payment.',
+    help='Number of consecutive cron ticks where neither wallet nor '
+         'auto-topup could settle the outstanding invoice. Reset to 0 on '
+         'successful payment.',
 )
 woow_last_payment_failure_at = fields.Datetime(
     help='Timestamp of most recent failed billing attempt.',
+)
+woow_cancellation_notified = fields.Boolean(
+    default=False,
+    help='Set when the auto-cancellation email has been queued, so a '
+         'state-transition retrigger does not double-send.',
 )
 ```
 
 ### Threshold (config_parameter)
 
 ```
-woow_paas_platform.max_consecutive_payment_failures = 6  # default; 0 disables
+woow_paas_platform.max_consecutive_payment_failures = 6  # default
+                                                          # 0 disables (no auto-cancel)
 ```
 
 ### Cron logic change (`_sh_create_auto_invoice`)
 
-In the unpaid branch (auto-topup also failed):
+Pseudocode for the per-subscription block:
 
 ```python
+today = fields.Date.today()
+if subscription.sh_date_of_next_payment != today:
+    continue
+
+# Decision 1: re-use the existing unpaid invoice instead of creating a
+# duplicate when a previous tick already produced one for this cycle.
+existing_unpaid = self.env['account.move'].sudo().search([
+    ('sh_subscription_id', '=', subscription.id),
+    ('payment_state', 'not in', ('paid', 'in_payment')),
+    ('state', '!=', 'cancel'),
+], order='invoice_date desc', limit=1)
+
+invoice = existing_unpaid or self.env['account.move'].sudo().create(
+    subscription._generate_invoice_vals()
+)
+
+paid = _try_pay(subscription, invoice)  # wallet → auto-topup → True/False
+
+if paid:
+    # Decision 1: only advance on success.
+    delta = unit_deltas.get(subscription.sh_unit)
+    if delta:
+        subscription.sh_date_of_next_payment = today + delta
+    if subscription.woow_consecutive_payment_failures:
+        subscription.woow_consecutive_payment_failures = 0
+    continue
+
+# --- failure path ---
 subscription.write({
     'woow_consecutive_payment_failures':
         subscription.woow_consecutive_payment_failures + 1,
     'woow_last_payment_failure_at': fields.Datetime.now(),
 })
+
 threshold = int(env['ir.config_parameter'].sudo().get_param(
     'woow_paas_platform.max_consecutive_payment_failures', '6'))
 if threshold and subscription.woow_consecutive_payment_failures >= threshold:
     _logger.warning(
-        '[SUB_FIX] auto_cancel sub=%s — %s consecutive failures',
+        '[SUB_FIX] auto_cancel sub=%s after %s consecutive failures',
         subscription.id, subscription.woow_consecutive_payment_failures,
     )
     subscription.write({'state': 'cancel'})
+    if not subscription.woow_cancellation_notified:
+        self._notify_subscription_cancelled(subscription, invoice)
+        subscription.write({'woow_cancellation_notified': True})
 ```
 
-In the success branches (wallet paid OR auto-topup recovered), reset:
+### Email template (Decision 2)
 
-```python
-if subscription.woow_consecutive_payment_failures:
-    subscription.write({'woow_consecutive_payment_failures': 0})
+New file `src/data/mail_template_subscription_cancelled.xml`, registered in
+`__manifest__.py`. Mirror the structure of `mail_template_low_balance` but
+with finality copy:
+
+```xml
+<record id="mail_template_subscription_cancelled" model="mail.template">
+    <field name="name">Subscription Cancelled — Repeated Payment Failures</field>
+    <field name="model_id" ref="base.model_res_partner"/>
+    <field name="subject">[Woow PaaS] Your subscription has been cancelled</field>
+    <field name="body_html" type="html">…</field>
+</record>
 ```
+
+A `_notify_subscription_cancelled(subscription, invoice)` helper renders
+and queues it, mirroring `_notify_low_balance` (already in
+`sh_subscription_fix.py`).
 
 ### Side effects (already covered by existing crons)
 
-Once `state='cancel'`, no further work is needed in `_sh_create_auto_invoice`.
-The existing `subscription_lifecycle_cron._enforce_single` chain takes over:
+Once `state='cancel'`, no further work is needed in `_sh_create_auto_invoice`
+(the search filter is `state='in_progress'`). The existing
+`subscription_lifecycle_cron._enforce_single` chain takes over:
 
 | Trigger | Action | Cron |
 |---|---|---|
 | `state=cancel` detected | `_do_suspend` (scale K8s pods to 0) | next `subscription_lifecycle_cron` run |
 | `cancel_date` > `cleanup_after_months` (default 6) | `_do_cleanup` (helm uninstall, release K8s resources) | same cron, later |
 
-So the only thing T19 adds is the **transition into** `cancel`. Suspend +
-cleanup are already battle-tested.
+So T19 only adds the **transition into `cancel`** plus the cancellation
+email. Suspend + cleanup are already verified end-to-end (T22 Phase B,
+2026-04-26).
 
 ## Implementation effort breakdown
 
 | Component | LOC (est.) | File |
 |---|---|---|
-| Model fields + default | ~10 | `src/models/sh_subscription_fix.py` |
-| Cron logic (increment / reset / threshold check) | ~25 | same file |
-| Pre-init migration (back-fill 0 on existing subs) | ~5 | `src/migrations/...` |
-| Unit tests (5 cases T19a–T19e) | ~150 | `src/tests/test_subscription_failure_handling.py` |
-| Doc update (CHANGELOG, possibly user-facing docs) | ~10 | `CHANGELOG.md` |
-| **Total** | **~200** | |
+| Model fields + default (3 fields) | ~15 | `src/models/sh_subscription_fix.py` |
+| Cron logic (guard advance + reuse-unpaid + counter + threshold) | ~50 | same file |
+| `_notify_subscription_cancelled` helper | ~25 | same file |
+| Email template XML | ~20 | `src/data/mail_template_subscription_cancelled.xml` |
+| Manifest + hooks (config_parameters cleanup, template registration) | ~10 | `src/__manifest__.py`, `src/hooks.py` |
+| Pre-init migration (back-fill 0/false on existing subs) | ~5 | `src/migrations/...` |
+| Unit tests (5 cases T19a–T19e) | ~250 | `src/tests/test_subscription_failure_handling.py` |
+| Doc update (CHANGELOG, README ops note) | ~15 | `CHANGELOG.md` |
+| **Total** | **~390** | |
 
-Estimated effort: **1–2 hours** including local verification.
+Estimated effort: **2–3 hours** including local verification.
 
-Risk: **low** — pure additions, no edits to existing payment paths. Behaviour
-is gated by `threshold > 0`, so test-only deployments can opt out by
-setting the param to `0`.
+Risk: **low–medium**:
+- Pure additions for fields, template, cancel notification — no edits to
+  existing payment paths.
+- The guard on `sh_date_of_next_payment` is the only behaviour change;
+  it's gated by payment outcome and so is observably equivalent to the
+  current code on the success path.
+- `threshold=0` makes the whole feature a no-op for environments that
+  cannot accept dunning behaviour yet.
 
 ## Test plan
 
+Daily cron + threshold=6 ⇒ ~6 daily retries before cancel.
+
 | # | Scenario | Setup | Expected |
 |---|---|---|---|
-| **T19a** | Single failure increments counter, doesn't cancel | empty wallet, no card; run cron once | `failures=1`, `state=in_progress` |
-| **T19b** | N-1 failures then a success resets counter | run cron N-1 times empty, then top up wallet, run cron | `failures=0`, `state=in_progress`, invoice paid |
-| **T19c** | N consecutive failures → cancel + suspend | run cron N times empty | `state=cancel`; next lifecycle_cron triggers `_do_suspend` |
-| **T19d** | Per-sub scope (failures don't bleed across subs) | one partner, two subs A (failing) + B (paying), N cycles | only A cancels; B stays `in_progress` |
-| **T19e** | `threshold=0` disables the feature | set param to 0, run cron N+1 times empty | `state` remains `in_progress`, counter still increments (informational only) |
-
-## Open design questions
-
-1. **Should the cycle advance also be guarded?** Today even a permanent
-   payment failure still advances `sh_date_of_next_payment`, generating one
-   stale unpaid invoice per cycle. Alternative: only advance after a paid
-   attempt (or after final cancel). Simpler to leave as-is for v1.
-2. **Should the customer get a distinct "subscription cancelled" email**,
-   or reuse `mail_template_low_balance`? Recommendation: new template,
-   different copy ("your service has been suspended due to repeated
-   failures"); reuse the same dedup field.
-3. **Should `threshold=0` mean "disabled" (current proposal) or "infinite"
-   (never cancel)?** Disabled is more useful for test environments.
+| **T19a** | Single failure increments counter, doesn't cancel | empty wallet, no card; run cron once | `failures=1`, `state=in_progress`, exactly 1 invoice (unpaid), `sh_date_of_next_payment` **not advanced** |
+| **T19b** | Failure then success on same period: existing unpaid is reused, counter resets | run cron empty (failures=1), top up wallet, run cron next day | `failures=0`, `state=in_progress`, still 1 invoice (now paid), `sh_date_of_next_payment` **advanced** by 1 cycle |
+| **T19c** | N consecutive failures → cancel + email + suspend | run cron 6× empty across 6 days | `state=cancel`, `woow_cancellation_notified=True`, exactly 1 invoice (still unpaid), 1 cancellation email queued; next `subscription_lifecycle_cron` triggers `_do_suspend` |
+| **T19d** | Per-sub scope (failures don't bleed across subs) | one partner, two subs A (failing) + B (paying), 6 cycles | only A cancels with notification; B stays `in_progress` with `failures=0` |
+| **T19e** | `threshold=0` disables auto-cancel | set param to 0, run cron 10× empty | `state` remains `in_progress`, counter still increments (informational), no cancellation email |
 
 ## Recommendation
 
 Implement before next material customer onboarding wave. The current
 unbounded retry behaviour silently bleeds compute and skews ARR reporting.
-~200 LOC, ~1–2 hours, low risk, fully local to `paas-platform`.
+~390 LOC, ~2–3 hours, low–medium risk, fully local to `paas-platform`.
 
 When implementing, the existing `subscription_lifecycle_cron` is the
-contract — T19 only needs to flip state to `cancel`; the rest of the
-suspend/cleanup machinery is already verified end-to-end (T22 Phase B,
-2026-04-26).
+contract — T19 only needs to flip state to `cancel` and queue one email;
+the rest of the suspend/cleanup machinery is already verified end-to-end.
