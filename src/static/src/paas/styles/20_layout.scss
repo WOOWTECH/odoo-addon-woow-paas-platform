@@ -11,7 +11,8 @@
 
 .o_woow_layout {
     display: flex;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
 }
 
 // -----------------------------------------------------------------------------
@@ -148,6 +149,8 @@
     display: flex;
     flex-direction: column;
     min-width: 0; // Prevent flex overflow
+    height: 100vh;
+    overflow: hidden;
 }
 
 // -----------------------------------------------------------------------------
@@ -409,6 +412,7 @@
     flex: 1;
     padding: 1.5rem;
     overflow-y: auto;
+    min-height: 0;
 }
 
 .o_woow_page_content {

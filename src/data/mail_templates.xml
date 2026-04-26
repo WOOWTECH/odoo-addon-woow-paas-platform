@@ -35,5 +35,43 @@
             </field>
             <field name="auto_delete" eval="True"/>
         </record>
+
+        <record id="mail_template_subscription_cancelled" model="mail.template">
+            <field name="name">PaaS: Subscription Auto-Cancelled (Repeated Payment Failures)</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">[Woow PaaS] Your subscription has been cancelled</field>
+            <field name="email_from">{{ object.company_id.email_formatted or user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="body_html" type="html">
+                <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                    <p>Hi <t t-out="object.name"/>,</p>
+                    <p>
+                        Your subscription
+                        <strong t-out="ctx.get('plan_name', '')"/>
+                        (<t t-out="ctx.get('subscription_name', '')"/>)
+                        has been <strong>auto-cancelled</strong> after
+                        <t t-out="ctx.get('failures', '')"/> consecutive
+                        payment failures on the outstanding invoice
+                        <strong t-out="ctx.get('invoice_name', '')"/>
+                        (<t t-out="ctx.get('amount_text', '')"/>).
+                    </p>
+                    <p>
+                        Your associated services have been suspended. Your
+                        data will be preserved for
+                        <strong><t t-out="ctx.get('preservation_months', 6)"/> months</strong>;
+                        starting a fresh subscription within that window may
+                        re-attach to your existing storage.
+                    </p>
+                    <p>
+                        To resume service, please subscribe again from the
+                        Woow PaaS marketplace.
+                    </p>
+                    <p style="color:#6b7280;font-size:12px;">
+                        If this cancellation is unexpected, contact support.
+                    </p>
+                </div>
+            </field>
+            <field name="auto_delete" eval="True"/>
+        </record>
     </data>
 </odoo>

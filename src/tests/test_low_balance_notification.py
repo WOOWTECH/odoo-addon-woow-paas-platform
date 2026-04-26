@@ -78,23 +78,22 @@ class TestLowBalanceNotification(TransactionCase):
         self.assertTrue(mails, "A top-up notification email should have been queued")
 
     def test_insufficient_balance_triggers_notify_via_auto_invoice(self):
-        """Regression guard: _sh_create_auto_invoice must call _notify_low_balance.
+        """Regression guard: the auto-invoice flow must call _notify_low_balance.
 
-        Guards against regressions where the call site in
-        sh_subscription_fix._sh_create_auto_invoice is accidentally removed.
-        Uses a source-level assertion because Odoo ORM is hard to mock
-        without a full subscription setup.
+        Source-level guard against accidental removal. T19 split the cron
+        body into helpers (``_on_payment_failure`` is the call site now);
+        check that helper instead of the top-level cron entrypoint.
         """
         import inspect
         from odoo.addons.woow_paas_platform.models.sh_subscription_fix import (
             ShSubscriptionFix,
         )
-        source = inspect.getsource(ShSubscriptionFix._sh_create_auto_invoice)
+        source = inspect.getsource(ShSubscriptionFix._on_payment_failure)
         self.assertIn(
             '_notify_low_balance',
             source,
-            "_sh_create_auto_invoice must still call _notify_low_balance "
-            "in the insufficient-balance branch."
+            "_on_payment_failure must still call _notify_low_balance "
+            "in the insufficient-balance branch.",
         )
 
     def test_attempt_auto_topup_success_credits_wallet(self):
@@ -180,36 +179,20 @@ class TestLowBalanceNotification(TransactionCase):
         self.assertFalse(ok)
         self.assertEqual(msg, 'error')
 
-    def test_auto_invoice_calls_attempt_auto_topup_before_notify(self):
-        """Regression guard: _sh_create_auto_invoice must wire _attempt_auto_topup
-        BEFORE _notify_low_balance in the insufficient-balance branch."""
+    def test_auto_invoice_attempts_auto_topup_before_giving_up(self):
+        """Regression guard: settlement must try _attempt_auto_topup before the
+        failure path runs. T19 moved this into _try_settle_invoice."""
         import inspect
         from odoo.addons.woow_paas_platform.models.sh_subscription_fix import ShSubscriptionFix
-        source = inspect.getsource(ShSubscriptionFix._sh_create_auto_invoice)
+        source = inspect.getsource(ShSubscriptionFix._try_settle_invoice)
         self.assertIn(
             '_attempt_auto_topup', source,
-            "_sh_create_auto_invoice must call _attempt_auto_topup",
+            "_try_settle_invoice must call _attempt_auto_topup before declaring failure",
         )
-        topup_idx = source.index('_attempt_auto_topup')
-        notify_idx = source.index('_notify_low_balance')
-        self.assertLess(
-            topup_idx, notify_idx,
-            "_attempt_auto_topup must be called BEFORE _notify_low_balance",
-        )
-
-    def test_auto_invoice_pays_invoice_when_auto_topup_succeeds(self):
-        """Regression guard: on _attempt_auto_topup success, branch must call
-        _handle_invoice_creation (not _notify_low_balance)."""
-        import inspect
-        from odoo.addons.woow_paas_platform.models.sh_subscription_fix import ShSubscriptionFix
-        source = inspect.getsource(ShSubscriptionFix._sh_create_auto_invoice)
-        # Verify the success-gated invoice creation path exists
-        self.assertIn('_handle_invoice_creation', source)
-        # Ensure _handle_invoice_creation appears after _attempt_auto_topup (success branch)
-        # Count occurrences — must be at least 2 (one original at the balance-sufficient path,
-        # one new at the topup-success path)
+        # _handle_invoice_creation must be reachable on BOTH the wallet-cover
+        # and the auto-topup-success branches.
         self.assertGreaterEqual(
             source.count('_handle_invoice_creation'), 2,
-            "_sh_create_auto_invoice must call _handle_invoice_creation in both "
+            "_try_settle_invoice must call _handle_invoice_creation in both "
             "the balance-sufficient path AND the auto-topup-success path",
         )

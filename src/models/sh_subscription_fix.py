@@ -54,104 +54,199 @@ class ShSubscriptionFix(models.Model):
 
     @api.model
     def _sh_create_auto_invoice(self):
-        subscriptions = self.env['sh.subscription.subscription'].sudo().search([
-            ('state', '=', 'in_progress'),
-        ])
+        """Daily auto-invoice cron with T19 dunning semantics.
+
+        Behaviour:
+        - Filter is ``next_payment <= today`` so a sub whose previous tick
+          left ``next_payment`` un-advanced (failed payment) keeps being
+          retried until either resolution or auto-cancel.
+        - Existing unpaid invoice for the sub is reused; we never stack a
+          second invoice on top while the first is outstanding.
+        - ``next_payment`` only advances on successful payment (Decision 1).
+        - Counter increments on each failed retry; resets on success.
+        - At ``threshold`` consecutive failures the sub is auto-cancelled
+          and a one-shot cancellation email is queued (Decision 2/4). The
+          existing ``subscription_lifecycle_cron`` then suspends K8s
+          resources.
+        """
         today = fields.Date.today()
-        due_today = [s for s in subscriptions if s.sh_date_of_next_payment == today]
+        Subscription = self.env['sh.subscription.subscription']
+        # Decision 1 follow-through: ``<= today`` (not ``==``) so a stuck
+        # next_payment continues to be processed daily.
+        subscriptions = Subscription.sudo().search([
+            ('state', '=', 'in_progress'),
+            ('sh_date_of_next_payment', '<=', today),
+        ])
+        threshold = int(self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.max_consecutive_payment_failures', '6'))
         _logger.info(
-            "[SUB_FIX] _sh_create_auto_invoice scan total_active=%s due_today=%s",
-            len(subscriptions), len(due_today),
+            "[SUB_FIX] _sh_create_auto_invoice scan due_or_overdue=%s threshold=%s",
+            len(subscriptions), threshold,
         )
         for subscription in subscriptions:
-            if subscription.sh_date_of_next_payment != fields.Date.today():
-                continue
+            self._process_subscription_billing(subscription, threshold)
 
-            _logger.info(
-                "[SUB_FIX] auto_invoice start sub=%s partner=%s price=%s balance=%s",
-                subscription.id,
-                subscription.sh_partner_id.id,
-                subscription.sh_plan_price,
-                subscription.sh_partner_id.wallet_balance,
+    def _process_subscription_billing(self, subscription, threshold):
+        """Per-subscription billing for one cron tick. Isolated for testability."""
+        today = fields.Date.today()
+        partner = subscription.sh_partner_id
+        _logger.info(
+            "[SUB_FIX] auto_invoice start sub=%s partner=%s price=%s "
+            "balance=%s failures=%s",
+            subscription.id, partner.id, subscription.sh_plan_price,
+            partner.wallet_balance,
+            subscription.woow_consecutive_payment_failures,
+        )
+        try:
+            with self.env.cr.savepoint():
+                invoice, is_new = self._get_or_create_cycle_invoice(subscription)
+                paid = self._try_settle_invoice(subscription, invoice)
+
+                if paid:
+                    self._on_payment_success(subscription, invoice, today)
+                    if is_new:
+                        self._send_invoice_pdf(subscription, invoice)
+                else:
+                    self._on_payment_failure(
+                        subscription, invoice, today, threshold,
+                    )
+        except Exception:
+            _logger.exception(
+                'Auto-invoice failed for subscription %s; continuing',
+                subscription.name,
             )
-            try:
-                with self.env.cr.savepoint():
-                    invoice_vals = subscription._generate_invoice_vals()
-                    invoice_id = self.env['account.move'].sudo().create(invoice_vals)
-                    subscription.compute_view_invoice()
-                    _logger.info(
-                        "[SUB_FIX] auto_invoice created sub=%s invoice=%s amount=%s",
-                        subscription.id, invoice_id.id, invoice_id.amount_total,
-                    )
 
-                    unit_deltas = {
-                        'day': relativedelta(days=subscription.sh_recurrency),
-                        'week': relativedelta(weeks=subscription.sh_recurrency),
-                        'month': relativedelta(months=subscription.sh_recurrency),
-                        'year': relativedelta(years=subscription.sh_recurrency),
-                    }
-                    delta = unit_deltas.get(subscription.sh_unit)
-                    if delta:
-                        subscription.sh_date_of_next_payment += delta
+    def _get_or_create_cycle_invoice(self, subscription):
+        """Return (invoice, is_new). Reuse the outstanding invoice if any."""
+        existing = self.env['account.move'].sudo().search([
+            ('sh_subscription_id', '=', subscription.id),
+            ('payment_state', 'not in', ('paid', 'in_payment')),
+            ('state', '!=', 'cancel'),
+            ('move_type', '=', 'out_invoice'),
+        ], order='invoice_date desc, id desc', limit=1)
+        if existing:
+            _logger.info(
+                "[SUB_FIX] auto_invoice reuse sub=%s invoice=%s amount=%s",
+                subscription.id, existing.id, existing.amount_total,
+            )
+            return existing, False
 
-                    # Check wallet balance before posting/paying the invoice
-                    partner = subscription.sh_partner_id
-                    if partner.wallet_balance >= invoice_id.amount_total:
-                        subscription._handle_invoice_creation(invoice_id)
-                    else:
-                        shortfall = invoice_id.amount_total - partner.wallet_balance
-                        topup_ok, topup_msg = self._attempt_auto_topup(partner, shortfall)
-                        if topup_ok:
-                            _logger.info(
-                                'Auto-topup covered shortfall=%.2f for subscription %s; '
-                                'proceeding with invoice %s',
-                                shortfall, subscription.name, invoice_id.name,
-                            )
-                            subscription._handle_invoice_creation(invoice_id)
-                        else:
-                            _logger.warning(
-                                "Insufficient wallet balance for subscription %s and "
-                                "auto-topup failed (%s): balance=%.2f, required=%.2f — "
-                                "invoice %s left unpaid",
-                                subscription.name, topup_msg, partner.wallet_balance,
-                                invoice_id.amount_total, invoice_id.name,
-                            )
-                            # Dedup: reuse the pre-renewal warning field so a partner who
-                            # already received today's warning doesn't get a second email.
-                            today = fields.Date.today()
-                            if subscription.woow_last_low_balance_warned_for != today:
-                                self._notify_low_balance(partner, invoice_id)
-                                subscription.write({'woow_last_low_balance_warned_for': today})
+        invoice_vals = subscription._generate_invoice_vals()
+        invoice = self.env['account.move'].sudo().create(invoice_vals)
+        subscription.compute_view_invoice()
+        _logger.info(
+            "[SUB_FIX] auto_invoice created sub=%s invoice=%s amount=%s",
+            subscription.id, invoice.id, invoice.amount_total,
+        )
+        return invoice, True
 
-                    try:
-                        pdf_content, _content_type = self.env['ir.actions.report'].sudo()._render_qweb_pdf(
-                            'account.account_invoices', invoice_id.id
-                        )
-                        attachment_id = self.env['ir.attachment'].sudo().create({
-                            'name': 'Subscription Invoice',
-                            'type': 'binary',
-                            'datas': base64.b64encode(pdf_content),
-                            'mimetype': 'application/pdf',
-                            'res_id': invoice_id.id,
-                            'res_model': 'account.move',
-                        })
-                        subscription._sh_send_subscription_email(attachment_id)
-                    except Exception:
-                        _logger.warning(
-                            "Failed to generate/send invoice PDF for subscription %s",
-                            subscription.name, exc_info=True,
-                        )
+    def _try_settle_invoice(self, subscription, invoice):
+        """Attempt wallet payment, then auto-topup. Returns True on success."""
+        partner = subscription.sh_partner_id
+        if partner.wallet_balance >= invoice.amount_total:
+            subscription._handle_invoice_creation(invoice)
+            return True
 
-                    _logger.info(
-                        "Auto-invoice created for subscription %s (amount=%s, next=%s)",
-                        subscription.name, invoice_id.amount_total,
-                        subscription.sh_date_of_next_payment,
-                    )
-            except Exception:
-                _logger.exception(
-                    'Auto-invoice failed for subscription %s; continuing',
-                    subscription.name,
-                )
+        shortfall = invoice.amount_total - partner.wallet_balance
+        topup_ok, topup_msg = self._attempt_auto_topup(partner, shortfall)
+        if topup_ok:
+            _logger.info(
+                'Auto-topup covered shortfall=%.2f for subscription %s; '
+                'proceeding with invoice %s',
+                shortfall, subscription.name, invoice.name,
+            )
+            subscription._handle_invoice_creation(invoice)
+            return True
+
+        _logger.warning(
+            "Insufficient wallet balance for subscription %s and "
+            "auto-topup failed (%s): balance=%.2f, required=%.2f — "
+            "invoice %s left unpaid",
+            subscription.name, topup_msg, partner.wallet_balance,
+            invoice.amount_total, invoice.name,
+        )
+        return False
+
+    def _on_payment_success(self, subscription, invoice, today):
+        """Advance next_payment, reset dunning counter."""
+        unit_deltas = {
+            'day': relativedelta(days=subscription.sh_recurrency),
+            'week': relativedelta(weeks=subscription.sh_recurrency),
+            'month': relativedelta(months=subscription.sh_recurrency),
+            'year': relativedelta(years=subscription.sh_recurrency),
+        }
+        delta = unit_deltas.get(subscription.sh_unit)
+        vals = {}
+        if delta:
+            vals['sh_date_of_next_payment'] = today + delta
+        if subscription.woow_consecutive_payment_failures:
+            vals['woow_consecutive_payment_failures'] = 0
+        if vals:
+            subscription.write(vals)
+        _logger.info(
+            "[SUB_FIX] auto_invoice paid sub=%s invoice=%s next_payment=%s",
+            subscription.id, invoice.name,
+            vals.get('sh_date_of_next_payment',
+                     subscription.sh_date_of_next_payment),
+        )
+
+    def _on_payment_failure(self, subscription, invoice, today, threshold):
+        """Increment counter, possibly auto-cancel + notify."""
+        new_count = subscription.woow_consecutive_payment_failures + 1
+        subscription.write({
+            'woow_consecutive_payment_failures': new_count,
+            'woow_last_payment_failure_at': fields.Datetime.now(),
+        })
+
+        # Existing per-cycle low-balance warning, deduped on the original
+        # next_payment date so retries on the same cycle don't re-spam.
+        partner = subscription.sh_partner_id
+        warn_key = subscription.sh_date_of_next_payment or today
+        if subscription.woow_last_low_balance_warned_for != warn_key:
+            self._notify_low_balance(partner, invoice)
+            subscription.write({'woow_last_low_balance_warned_for': warn_key})
+
+        # Threshold check (Decision 4: hard-cancel; Decision 3: 0 = disabled).
+        if threshold and new_count >= threshold:
+            _logger.warning(
+                "[SUB_FIX] auto_cancel sub=%s after %s consecutive failures",
+                subscription.id, new_count,
+            )
+            subscription.write({'state': 'cancel'})
+            if not subscription.woow_cancellation_notified:
+                self._notify_subscription_cancelled(subscription, invoice)
+                subscription.write({'woow_cancellation_notified': True})
+        else:
+            _logger.info(
+                "[SUB_FIX] auto_invoice failure recorded sub=%s failures=%s/%s",
+                subscription.id, new_count, threshold or '∞',
+            )
+
+    def _send_invoice_pdf(self, subscription, invoice):
+        """Render + email invoice PDF. First-creation only, never on retry."""
+        try:
+            pdf_content, _content_type = self.env[
+                'ir.actions.report'
+            ].sudo()._render_qweb_pdf('account.account_invoices', invoice.id)
+            attachment = self.env['ir.attachment'].sudo().create({
+                'name': 'Subscription Invoice',
+                'type': 'binary',
+                'datas': base64.b64encode(pdf_content),
+                'mimetype': 'application/pdf',
+                'res_id': invoice.id,
+                'res_model': 'account.move',
+            })
+            subscription._sh_send_subscription_email(attachment)
+            _logger.info(
+                "Auto-invoice created for subscription %s (amount=%s, next=%s)",
+                subscription.name, invoice.amount_total,
+                subscription.sh_date_of_next_payment,
+            )
+        except Exception:
+            _logger.warning(
+                "Failed to generate/send invoice PDF for subscription %s",
+                subscription.name, exc_info=True,
+            )
 
     @api.model
     def _notify_low_balance(self, partner, invoice):
@@ -193,6 +288,57 @@ class ShSubscriptionFix(models.Model):
             _logger.exception(
                 "Failed to queue low-balance notification for partner %s",
                 partner.id,
+            )
+
+    @api.model
+    def _notify_subscription_cancelled(self, subscription, invoice):
+        """Send a one-shot "subscription auto-cancelled" email to the partner.
+
+        Called once when ``woow_consecutive_payment_failures`` crosses the
+        configured threshold and the sub flips to ``state='cancel'``. Dedup
+        is the caller's responsibility via ``woow_cancellation_notified``.
+        """
+        template = self.env.ref(
+            'woow_paas_platform.mail_template_subscription_cancelled',
+            raise_if_not_found=False,
+        )
+        if not template:
+            _logger.warning(
+                "mail_template_subscription_cancelled not found; skip notification"
+            )
+            return
+
+        partner = subscription.sh_partner_id
+        cleanup_months = int(self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.cleanup_after_months', '6'))
+        amount_text = formatLang(
+            self.env, invoice.amount_total, currency_obj=invoice.currency_id,
+        )
+        ctx = {
+            'subscription_name': subscription.name or '',
+            'plan_name': (
+                subscription.sh_subscription_plan_id.name
+                if subscription.sh_subscription_plan_id else ''
+            ),
+            'invoice_name': invoice.name or '',
+            'amount_text': amount_text,
+            'failures': subscription.woow_consecutive_payment_failures,
+            'preservation_months': cleanup_months,
+        }
+        try:
+            template.with_context(**ctx).send_mail(
+                partner.id,
+                force_send=False,
+                email_layout_xmlid='mail.mail_notification_light',
+            )
+            _logger.info(
+                "[SUB_FIX] cancellation email queued partner=%s sub=%s",
+                partner.id, subscription.id,
+            )
+        except Exception:
+            _logger.exception(
+                "Failed to queue cancellation email for partner %s sub=%s",
+                partner.id, subscription.id,
             )
 
     def _handle_invoice_creation(self, invoice_id):
