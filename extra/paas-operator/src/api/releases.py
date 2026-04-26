@@ -399,9 +399,11 @@ def get_release_status(namespace: str, name: str):
     summary="Scale a release's deployments",
 )
 def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge=0, le=10)):
-    """Scale all deployments in a Helm release.
+    """Scale all workloads (Deployments + StatefulSets) in a Helm release.
 
     Used for subscription suspend (replicas=0) and resume (replicas=1).
+    Bitnami charts deploy their primary workload as a StatefulSet so we
+    cover both kinds; releases that have neither are a 404.
 
     Args:
         namespace: Release namespace
@@ -409,33 +411,47 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
         replicas: Target replica count (0 to suspend, 1+ to resume)
 
     Returns:
-        Confirmation message
+        Confirmation message with scaled workload counts.
 
     Raises:
         HTTPException: If scaling fails
     """
+    selector = f"app.kubernetes.io/instance={name}"
     try:
-        # Find deployments belonging to this release
         deployments = k8s_service.get_deployments(
             namespace=namespace,
-            label_selector=f"app.kubernetes.io/instance={name}",
+            label_selector=selector,
         )
-        if not deployments:
+        statefulsets = k8s_service.get_statefulsets(
+            namespace=namespace,
+            label_selector=selector,
+        )
+
+        if not deployments and not statefulsets:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No deployments found for release {name} in namespace {namespace}",
+                detail=f"No deployments or statefulsets found for release {name} in namespace {namespace}",
             )
 
-        scaled = []
+        scaled_deps = []
         for dep in deployments:
             dep_name = dep["name"]
             k8s_service.scale_deployment(namespace, dep_name, replicas)
-            scaled.append(dep_name)
+            scaled_deps.append(dep_name)
             logger.info(f"Scaled deployment {dep_name} in {namespace} to {replicas} replicas")
 
+        scaled_sts = []
+        for sts in statefulsets:
+            sts_name = sts["name"]
+            k8s_service.scale_statefulset(namespace, sts_name, replicas)
+            scaled_sts.append(sts_name)
+            logger.info(f"Scaled statefulset {sts_name} in {namespace} to {replicas} replicas")
+
+        total = len(scaled_deps) + len(scaled_sts)
         return {
-            "message": f"Scaled {len(scaled)} deployment(s) to {replicas} replicas",
-            "deployments": ", ".join(scaled),
+            "message": f"Scaled {total} workload(s) to {replicas} replicas",
+            "deployments": ", ".join(scaled_deps),
+            "statefulsets": ", ".join(scaled_sts),
         }
 
     except ValueError as e:
@@ -447,7 +463,7 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
         logger.error(f"kubectl scale failed: {e.message}\nStderr: {e.stderr}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to scale deployment. Check operator logs for details.",
+            detail="Failed to scale workload. Check operator logs for details.",
         )
 
 

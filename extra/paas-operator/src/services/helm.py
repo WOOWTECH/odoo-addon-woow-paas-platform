@@ -834,6 +834,59 @@ class KubernetesService:
 
         self._run_command(args)
 
+    def get_statefulsets(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get statefulsets in a namespace.
+
+        Bitnami charts (Redis, PostgreSQL, Odoo, ...) deploy their primary
+        workload as a StatefulSet, so subscription suspend/resume must
+        cover this kind too.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get",
+            "statefulsets",
+            "--namespace",
+            namespace,
+            "--output",
+            "json",
+        ]
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
+        sts_data = json.loads(result.stdout)
+        statefulsets = []
+        for sts in sts_data.get("items", []):
+            metadata = sts.get("metadata", {})
+            statefulsets.append({
+                "name": metadata.get("name", ""),
+                "namespace": namespace,
+            })
+        return statefulsets
+
+    def scale_statefulset(
+        self,
+        namespace: str,
+        statefulset_name: str,
+        replicas: int,
+    ) -> None:
+        """Scale a Kubernetes statefulset to the given replica count."""
+        validate_namespace(namespace)
+
+        args = [
+            "scale",
+            "statefulset",
+            statefulset_name,
+            "--namespace",
+            namespace,
+            f"--replicas={replicas}",
+        ]
+
+        self._run_command(args)
+
     def apply_manifest(self, manifest: dict) -> Dict[str, Any]:
         """Apply a Kubernetes manifest via kubectl apply.
 
