@@ -296,7 +296,7 @@ class TestCloudServiceController(TransactionCase):
             'image': 'evil:latest',   # NOT allowed
         }
 
-        filtered = controller._filter_allowed_helm_values(
+        filtered, rejected = controller._filter_allowed_helm_values(
             user_values,
             self.template_with_specs,
         )
@@ -308,6 +308,9 @@ class TestCloudServiceController(TransactionCase):
         self.assertNotIn('image', filtered)
         self.assertEqual(filtered['replicas'], 3)
         self.assertEqual(filtered['port'], 9000)
+        # Disallowed keys are reported back so the caller can warn the user.
+        self.assertIn('malicious_key', rejected)
+        self.assertIn('image', rejected)
 
     def test_helm_values_filtering_no_specs(self):
         """Test that all values pass through when no specs defined."""
@@ -331,13 +334,14 @@ class TestCloudServiceController(TransactionCase):
             'any_key': 'any_value',
         }
 
-        filtered = controller._filter_allowed_helm_values(
+        filtered, rejected = controller._filter_allowed_helm_values(
             user_values,
             template_no_specs,
         )
 
-        # All values should pass through
+        # All values should pass through, nothing rejected
         self.assertEqual(filtered, user_values)
+        self.assertEqual(rejected, [])
 
     def test_helm_values_filtering_empty_values(self):
         """Test filtering with empty values."""
@@ -345,12 +349,13 @@ class TestCloudServiceController(TransactionCase):
 
         controller = PaasController()
 
-        filtered = controller._filter_allowed_helm_values(
+        filtered, rejected = controller._filter_allowed_helm_values(
             {},
             self.template_with_specs,
         )
 
         self.assertEqual(filtered, {})
+        self.assertEqual(rejected, [])
 
     def test_helm_values_filtering_none_values(self):
         """Test filtering with None values."""
@@ -358,12 +363,13 @@ class TestCloudServiceController(TransactionCase):
 
         controller = PaasController()
 
-        filtered = controller._filter_allowed_helm_values(
+        filtered, rejected = controller._filter_allowed_helm_values(
             None,
             self.template_with_specs,
         )
 
         self.assertEqual(filtered, {})
+        self.assertEqual(rejected, [])
 
     def test_service_subdomain_uniqueness(self):
         """Test that subdomain uniqueness is enforced."""

@@ -185,10 +185,12 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         """Check if subscription expired beyond grace period."""
         self.ensure_one()
         sub = self.subscription_id
-        if not sub or not sub.sh_end_date:
+        if not sub:
             return False
         if sub.state == 'cancel':
             return True
+        if not sub.sh_end_date:
+            return False
         if sub.state not in ('expire', 'close'):
             return False
         days_expired = (fields.Date.today() - sub.sh_end_date).days

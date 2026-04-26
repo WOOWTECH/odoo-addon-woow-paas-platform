@@ -78,15 +78,19 @@ class TestCloudAppTemplateMCPFields(TransactionCase):
 
 @tagged('post_install', '-at_install')
 class TestBuildMCPSidecarConfig(TransactionCase):
-    """Test _build_mcp_sidecar_config method on PaasController."""
+    """Test _build_mcp_sidecar_config method on CloudService model.
+
+    The helper used to live on PaasController but moved to the CloudService
+    model (see ``models/cloud_service.py``). We exercise it through any
+    cloud_service record since the method does not depend on instance state.
+    """
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.Template = cls.env['woow_paas_platform.cloud_app_template']
-        # Import the controller
-        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-        cls.controller = PaasController()
+        # Use a CloudService record to access _build_mcp_sidecar_config.
+        cls.builder = cls.env['woow_paas_platform.cloud_service']
 
     def _make_mcp_template(self, **overrides):
         """Helper to create an MCP-enabled template."""
@@ -111,7 +115,7 @@ class TestBuildMCPSidecarConfig(TransactionCase):
         template = self._make_mcp_template()
         auth_token = str(uuid.uuid4())
 
-        result = self.controller._build_mcp_sidecar_config(template, auth_token)
+        result = self.builder._build_mcp_sidecar_config(template, auth_token)
 
         self.assertIn('container', result)
         container = result['container']
@@ -127,7 +131,7 @@ class TestBuildMCPSidecarConfig(TransactionCase):
         template = self._make_mcp_template()
         auth_token = 'test-token-123'
 
-        result = self.controller._build_mcp_sidecar_config(template, auth_token)
+        result = self.builder._build_mcp_sidecar_config(template, auth_token)
         env_vars = result['container']['env']
         env_dict = {e['name']: e['value'] for e in env_vars}
 
@@ -155,7 +159,7 @@ class TestBuildMCPSidecarConfig(TransactionCase):
         )
         auth_token = 'real-token'
 
-        result = self.controller._build_mcp_sidecar_config(template, auth_token)
+        result = self.builder._build_mcp_sidecar_config(template, auth_token)
         env_vars = result['container']['env']
         env_dict = {e['name']: e['value'] for e in env_vars}
 
@@ -173,18 +177,23 @@ class TestBuildMCPSidecarConfig(TransactionCase):
         )
         auth_token = 'token'
 
-        # Should not raise
-        result = self.controller._build_mcp_sidecar_config(template, auth_token)
-        env_vars = result['container']['env']
-        # Only the 4 required env vars
-        self.assertEqual(len(env_vars), 4)
+        # Should not raise; only the built-in env vars survive (no custom ones merged in).
+        baseline = self.builder._build_mcp_sidecar_config(
+            self._make_mcp_template(slug='baseline-no-env'), auth_token,
+        )
+        result = self.builder._build_mcp_sidecar_config(template, auth_token)
+        self.assertEqual(
+            len(result['container']['env']),
+            len(baseline['container']['env']),
+            'invalid JSON should add zero env vars beyond the baseline set',
+        )
 
     def test_default_sidecar_port_when_zero(self):
         """When mcp_sidecar_port is 0/falsy, fallback to 3000."""
         template = self._make_mcp_template(mcp_sidecar_port=0)
         auth_token = 'token'
 
-        result = self.controller._build_mcp_sidecar_config(template, auth_token)
+        result = self.builder._build_mcp_sidecar_config(template, auth_token)
         container = result['container']
         self.assertEqual(container['ports'], [{'containerPort': 3000}])
 
@@ -193,7 +202,7 @@ class TestBuildMCPSidecarConfig(TransactionCase):
         template = self._make_mcp_template(mcp_sidecar_port=4000)
         auth_token = 'token'
 
-        result = self.controller._build_mcp_sidecar_config(template, auth_token)
+        result = self.builder._build_mcp_sidecar_config(template, auth_token)
         container = result['container']
         self.assertEqual(container['livenessProbe']['httpGet']['port'], 4000)
         self.assertEqual(container['readinessProbe']['httpGet']['port'], 4000)
@@ -439,14 +448,14 @@ class TestMCPServerCronRetry(TransactionCase):
 
     @patch('odoo.addons.woow_paas_platform.models.mcp_server.McpServer.action_sync_tools_safe')
     def test_cron_marks_error_after_max_retries(self, mock_sync):
-        """After 3 failed retries, server state becomes 'error'."""
-        server = self._create_auto_mcp_server(state='draft', retry_count=3)
+        """After MAX_SYNC_RETRIES (10) failed retries, server state becomes 'error'."""
+        server = self._create_auto_mcp_server(state='draft', retry_count=10)
 
         self.McpServer._cron_retry_mcp_sync()
 
         server.invalidate_recordset()
         self.assertEqual(server.state, 'error')
-        self.assertIn('failed after 3 attempts', server.state_message)
+        self.assertIn('failed after 10 attempts', server.state_message)
         # sync should NOT have been called for this server (already exceeded)
         mock_sync.assert_not_called()
 
@@ -497,16 +506,16 @@ class TestMCPServerCronRetry(TransactionCase):
 
     @patch('odoo.addons.woow_paas_platform.models.mcp_server.McpServer.action_sync_tools_safe')
     def test_cron_retries_up_to_max(self, mock_sync):
-        """Servers with retry_count < 3 are retried; at 3 they get error."""
+        """Servers with retry_count < MAX (10) are retried; at MAX they get error."""
         mock_sync.return_value = False
 
-        server_ok = self._create_auto_mcp_server(state='draft', retry_count=2)
-        server_max = self._create_auto_mcp_server(state='draft', retry_count=3)
+        server_ok = self._create_auto_mcp_server(state='draft', retry_count=9)
+        server_max = self._create_auto_mcp_server(state='draft', retry_count=10)
 
         self.McpServer._cron_retry_mcp_sync()
 
-        # server_ok (retry_count=2) should have sync called
-        # server_max (retry_count=3) should be set to error, no sync
+        # server_ok (retry_count=9) should have sync called
+        # server_max (retry_count=10) should be set to error, no sync
         self.assertEqual(mock_sync.call_count, 1)
 
         server_max.invalidate_recordset()

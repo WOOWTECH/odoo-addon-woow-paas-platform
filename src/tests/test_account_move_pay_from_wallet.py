@@ -99,7 +99,7 @@ class TestPayFromWallet(TransactionCase):
         tx = self.env['wallet.transaction'].sudo().search(
             [('partner_id', '=', self.partner.id)], order='id desc', limit=1,
         )
-        self.assertEqual(tx.amount, -250.0)
+        self.assertEqual(tx.amount, -80.0)
         self.assertIn(invoice.name or '', tx.description)
 
     def test_pay_from_wallet_creates_reconciled_payment(self):

@@ -18,6 +18,15 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
 
         self.workspace = self.Workspace.create({'name': 'Test WS'})
 
+        # Non-admin internal user for tests that exercise _check_operation_allowed
+        # (admins bypass all subscription restrictions, so blocked-operation tests
+        # need a regular user to actually trigger the UserError).
+        self.regular_user = self.env['res.users'].create({
+            'login': 'sub_lifecycle_regular',
+            'name': 'Regular Lifecycle User',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+
         self.template = self.Template.create({
             'name': 'Test App',
             'slug': 'test-app',
@@ -133,6 +142,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             service, state='expire',
             sh_end_date=date.today() - timedelta(days=3),
         )
+        service = service.with_user(self.regular_user)
         with self.assertRaises(UserError):
             service._check_operation_allowed(operation='write')
 
@@ -152,6 +162,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             service, state='expire',
             sh_end_date=date.today() - timedelta(days=10),
         )
+        service = service.with_user(self.regular_user)
         with self.assertRaises(UserError):
             service._check_operation_allowed(operation='read')
 
@@ -170,7 +181,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
     # _do_suspend / _do_resume (CloudService)
     # ----------------------------------------------------------------
 
-    @patch('odoo.addons.woow_paas_platform.models.cloud_service.get_paas_operator_client')
+    @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_service_suspend(self, mock_get_client):
         """Suspend should set state to suspended and call scale(0)."""
         mock_client = MagicMock()
@@ -189,7 +200,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             'svc-test', 'paas-ws-test', replicas=0,
         )
 
-    @patch('odoo.addons.woow_paas_platform.models.cloud_service.get_paas_operator_client')
+    @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_service_resume(self, mock_get_client):
         """Resume should restore pre-suspend state and call scale(1)."""
         mock_client = MagicMock()
@@ -235,10 +246,9 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
         self.assertEqual(home.state, 'suspended')
         self.assertEqual(home.pre_suspend_state, 'active')
         mock_client.configure_tunnel.assert_called_once()
+        # Suspend routes the tunnel to a 503 sentinel so user traffic is blocked.
         call_args = mock_client.configure_tunnel.call_args
-        self.assertEqual(call_args[1].get('service_url') or call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get('service_url'), None)
-        # Verify it was called (args may vary based on call style)
-        self.assertTrue(mock_client.configure_tunnel.called)
+        self.assertEqual(call_args.kwargs.get('service_url'), 'http_status:503')
 
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_smarthome_resume(self, mock_get_client):
@@ -366,7 +376,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
             'helm_chart_version': '1.0.0',
         })
 
-    @patch('odoo.addons.woow_paas_platform.models.cloud_service.get_paas_operator_client')
+    @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_cron_suspends_past_grace(self, mock_get_client):
         """Cron should suspend services expired beyond grace period."""
         mock_client = MagicMock()
@@ -396,7 +406,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
         service.invalidate_recordset()
         self.assertEqual(service.state, 'suspended')
 
-    @patch('odoo.addons.woow_paas_platform.models.cloud_service.get_paas_operator_client')
+    @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_cron_does_not_suspend_in_grace(self, mock_get_client):
         """Cron should NOT suspend services within grace period."""
         mock_client = MagicMock()
@@ -424,7 +434,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
         service.invalidate_recordset()
         self.assertEqual(service.state, 'running')  # Still running, within grace
 
-    @patch('odoo.addons.woow_paas_platform.models.cloud_service.get_paas_operator_client')
+    @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_cron_resumes_renewed(self, mock_get_client):
         """Cron should resume suspended services when subscription is renewed."""
         mock_client = MagicMock()
