@@ -41,7 +41,7 @@
                             <div class="o_woow_transaction_row">
                                 <!-- Left: Icon -->
                                 <div t-attf-class="o_woow_txn_icon_circle {{ getTxnColorClass(txn) }}">
-                                    <WoowIcon t-att-name="getTxnIcon(txn)" size="20"/>
+                                    <WoowIcon name="getTxnIcon(txn)" size="20"/>
                                 </div>
 
                                 <!-- Middle: Description + Date -->

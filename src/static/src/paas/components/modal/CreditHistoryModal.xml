@@ -48,7 +48,7 @@
                                 <div class="o_woow_credit_history_row">
                                     <!-- Icon -->
                                     <div t-attf-class="o_woow_txn_icon_circle o_woow_txn_icon_circle_sm {{ getTxnColorClass(txn) }}">
-                                        <WoowIcon t-att-name="getTxnIcon(txn)" size="16"/>
+                                        <WoowIcon name="getTxnIcon(txn)" size="16"/>
                                     </div>
 
                                     <!-- Description + Date -->
