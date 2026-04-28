@@ -100,6 +100,15 @@ class WalletTopup(models.Model):
             ('payment_transaction_id', '=', tx.id),
             ('transaction_type', '=', 'topup'),
         ], limit=1)
+        # G2-B: persist the structured breakdown on the transaction so the
+        # frontend can show "NT$ 1000 + 100 bonus = 1,100 pts" instead of a
+        # collapsed amount. Defensive `if wtx:` mirrors the existing
+        # implicit guard at `wtx.id` on the next line.
+        if wtx:
+            wtx.write({
+                'base_amount': self.credits,
+                'bonus_amount': self.bonus,
+            })
         self.write({'state': 'done', 'wallet_transaction_id': wtx.id})
         _logger.info(
             "[TOPUP] _on_payment_done complete topup=%s wallet_tx=%s new_state=done",

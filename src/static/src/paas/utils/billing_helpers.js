@@ -138,6 +138,29 @@ export function getInvoiceStatusInfo(invoice) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Render a top-up description with bonus breakdown when applicable.
+ *
+ * For top-up transactions that include a bonus, expands the stored
+ * description (e.g. `"Top-up: Plan 1000"`) into
+ * `"Top-up: Plan 1000 + 100 bonus = 1,100 pts"` so users can see what
+ * they paid for vs what they earned. Non-topup rows, legacy rows that
+ * predate the metadata migration, and zero-bonus top-ups all fall back
+ * to the unchanged `description` string.
+ *
+ * @param {Object} txn - Transaction object with `description`, `base_amount`,
+ *   `bonus_amount`
+ * @returns {string}
+ */
+export function formatTopupDescription(txn) {
+  if (!txn) return "";
+  const bonus = txn.bonus_amount || 0;
+  if (bonus <= 0) return txn.description || "";
+  const base = txn.base_amount || 0;
+  const total = base + bonus;
+  return `${txn.description} + ${bonus.toLocaleString()} bonus = ${total.toLocaleString()} pts`;
+}
+
+/**
  * Determine transaction display properties based on amount and description.
  *
  * @param {Object} txn - Transaction object with `amount` and `description`

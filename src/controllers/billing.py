@@ -155,6 +155,9 @@ class BillingController(Controller):
                 'transaction_type': 'credit' if txn.amount >= 0 else 'debit',
                 'amount': txn.amount,
                 'balance_after': txn.balance_after,
+                # G2-B: surface top-up breakdown (0 for non-topup / legacy rows)
+                'base_amount': txn.base_amount or 0.0,
+                'bonus_amount': txn.bonus_amount or 0.0,
             })
 
         return {

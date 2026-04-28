@@ -53,7 +53,7 @@
 
                                     <!-- Description + Date -->
                                     <div class="o_woow_credit_history_details">
-                                        <span class="o_woow_credit_history_desc" t-esc="txn.description || txn.name || '-'"/>
+                                        <span class="o_woow_credit_history_desc" t-esc="formatDescription(txn)"/>
                                         <span class="o_woow_credit_history_date" t-esc="formatDate(txn.date)"/>
                                     </div>
 

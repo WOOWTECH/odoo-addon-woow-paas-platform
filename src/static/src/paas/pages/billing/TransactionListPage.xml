@@ -46,7 +46,7 @@
 
                                 <!-- Middle: Description + Date -->
                                 <div class="o_woow_txn_details">
-                                    <span class="o_woow_txn_description" t-esc="txn.description || txn.name || '-'"/>
+                                    <span class="o_woow_txn_description" t-esc="formatDescription(txn)"/>
                                     <span class="o_woow_txn_date" t-esc="formatDate(txn.date)"/>
                                 </div>
 

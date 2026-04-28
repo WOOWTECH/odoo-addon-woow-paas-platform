@@ -7,6 +7,7 @@ import { router } from "../../core/router";
 import {
   formatDateTimeShort,
   formatAmountDecimal,
+  formatTopupDescription,
   getTxnDisplay,
 } from "../../utils/billing_helpers";
 
@@ -73,6 +74,10 @@ export class CreditHistoryModal extends Component {
 
   formatDate(dateStr) {
     return formatDateTimeShort(dateStr);
+  }
+
+  formatDescription(txn) {
+    return formatTopupDescription(txn) || txn.name || "-";
   }
 
   onBackdropClick(ev) {

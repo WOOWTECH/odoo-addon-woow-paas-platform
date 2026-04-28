@@ -7,6 +7,7 @@ import { router } from "../../core/router";
 import {
   formatDateTime,
   formatAmountDecimal,
+  formatTopupDescription,
   getTxnDisplay,
   computePageNumbers,
 } from "../../utils/billing_helpers";
@@ -90,6 +91,10 @@ export class TransactionListPage extends Component {
 
   formatDate(dateStr) {
     return formatDateTime(dateStr);
+  }
+
+  formatDescription(txn) {
+    return formatTopupDescription(txn) || txn.name || "-";
   }
 
   goToPage(page) {

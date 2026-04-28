@@ -26,3 +26,4 @@ from . import test_change_plan_refund
 from . import test_subscription_failure_handling
 from . import test_topup_plan_best_value
 from . import test_skip_trial_estimate
+from . import test_wallet_transaction_bonus
