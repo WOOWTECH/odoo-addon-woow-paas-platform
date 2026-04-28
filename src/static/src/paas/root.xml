@@ -76,6 +76,9 @@
             <t t-elif="router.current === 'settings-payment-methods-add'">
                 <AddPaymentMethodPage/>
             </t>
+            <t t-elif="router.current === 'not-found'">
+                <NotFoundPage/>
+            </t>
             <t t-else="">
                 <EmptyState/>
             </t>

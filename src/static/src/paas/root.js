@@ -28,6 +28,7 @@ import { ProfilePage } from "./pages/settings/ProfilePage";
 import { PaymentMethodsListPage } from "./pages/settings/PaymentMethodsListPage";
 import { AddPaymentMethodPage } from "./pages/settings/AddPaymentMethodPage";
 import { EmptyState } from "./pages/empty/EmptyState";
+import { NotFoundPage } from "./pages/not-found/NotFoundPage";
 
 export class Root extends Component {
     static template = "woow_paas_platform.Root";
@@ -58,6 +59,7 @@ export class Root extends Component {
         PaymentMethodsListPage,
         AddPaymentMethodPage,
         EmptyState,
+        NotFoundPage,
     };
     static props = {};
 

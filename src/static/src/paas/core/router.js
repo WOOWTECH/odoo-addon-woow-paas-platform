@@ -97,9 +97,10 @@ export const router = reactive({
             }
         }
 
-        // Fall back to exact path match (query-stripped)
+        // Fall back to exact path match (query-stripped). Unknown paths land
+        // on the NotFoundPage rather than silently rendering the dashboard.
         const route = routes.find(r => r.path === path);
-        this.current = route ? route.routeName : "dashboard";
+        this.current = route ? route.routeName : "not-found";
     },
 
     getRouteFromHash() {
