@@ -533,6 +533,7 @@ class BillingController(Controller):
                 'credits': p.credits,
                 'bonus': p.bonus,
                 'label': p.label or '',
+                'is_best_value': p.is_best_value,
                 'icon': p.icon or 'toll',
                 'category': p.category or 'all',
             } for p in plans],

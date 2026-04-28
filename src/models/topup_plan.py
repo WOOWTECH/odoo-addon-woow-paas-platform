@@ -1,4 +1,4 @@
-from odoo import fields, models
+from odoo import api, fields, models
 
 
 class TopupPlan(models.Model):
@@ -19,3 +19,20 @@ class TopupPlan(models.Model):
     icon = fields.Char(string='Icon Name', default='toll')  # Material icon name
     sequence = fields.Integer(string='Sequence', default=10)
     active = fields.Boolean(string='Active', default=True)
+
+    is_best_value = fields.Boolean(
+        string='Best Value',
+        compute='_compute_is_best_value',
+        help='True iff this plan has the highest bonus/credits ratio among active plans.',
+    )
+
+    @api.depends('credits', 'bonus', 'active')
+    def _compute_is_best_value(self):
+        active_plans = self.search([('active', '=', True)])
+        ratios = [
+            (p.bonus / p.credits) for p in active_plans if p.credits
+        ]
+        best_ratio = max(ratios) if ratios else 0.0
+        for rec in self:
+            ratio = (rec.bonus / rec.credits) if rec.credits else 0.0
+            rec.is_best_value = (ratio == best_ratio and ratio > 0)

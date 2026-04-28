@@ -74,7 +74,10 @@
                         <t t-foreach="plans" t-as="plan" t-key="plan.id">
                             <div class="o_woow_topup_plan_card">
                                 <!-- Badge -->
-                                <t t-if="plan.label">
+                                <t t-if="plan.is_best_value">
+                                    <div class="o_woow_topup_plan_badge">BEST VALUE</div>
+                                </t>
+                                <t t-elif="plan.label">
                                     <div class="o_woow_topup_plan_badge">
                                         <t t-esc="plan.label"/>
                                     </div>

@@ -24,3 +24,4 @@ from . import test_topup_status
 from . import test_topup_cron
 from . import test_change_plan_refund
 from . import test_subscription_failure_handling
+from . import test_topup_plan_best_value

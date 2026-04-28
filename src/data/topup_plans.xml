@@ -15,7 +15,6 @@
             <field name="amount">100</field>
             <field name="credits">100</field>
             <field name="bonus">5</field>
-            <field name="label">BEST VALUE</field>
             <field name="icon">monetization_on</field>
             <field name="category">recommended</field>
             <field name="sequence">20</field>
