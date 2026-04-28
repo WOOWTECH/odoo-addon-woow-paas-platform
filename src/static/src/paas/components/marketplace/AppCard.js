@@ -82,7 +82,7 @@ export class AppCard extends Component {
      * @param {Event} ev - Click event
      */
     handleAdd(ev) {
-        ev?.stopPropagation();
+        ev.stopPropagation();
         if (this.props.onAdd) {
             this.props.onAdd(this.props.template);
         }

@@ -92,7 +92,7 @@ export class ServiceCard extends Component {
     }
 
     openWebUI(ev) {
-        ev?.stopPropagation();
+        ev.stopPropagation();
         if (this.serviceUrl && this.props.service.state === "running") {
             window.open(this.serviceUrl, "_blank");
         }
@@ -102,7 +102,7 @@ export class ServiceCard extends Component {
     }
 
     openSettings(ev) {
-        ev?.stopPropagation();
+        ev.stopPropagation();
         if (this.props.onSettings) {
             this.props.onSettings();
         }
@@ -110,6 +110,6 @@ export class ServiceCard extends Component {
 
     onUrlClick(ev) {
         // Stop propagation to allow link click without triggering card click
-        ev?.stopPropagation();
+        ev.stopPropagation();
     }
 }
