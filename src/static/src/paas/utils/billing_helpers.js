@@ -157,7 +157,9 @@ export function formatTopupDescription(txn) {
   if (bonus <= 0) return txn.description || "";
   const base = txn.base_amount || 0;
   const total = base + bonus;
-  return `${txn.description} + ${bonus.toLocaleString()} bonus = ${total.toLocaleString()} pts`;
+  // Defensive against a falsy description: avoid interpolating literal "undefined".
+  const desc = txn.description || "";
+  return `${desc} + ${bonus.toLocaleString()} bonus = ${total.toLocaleString()} pts`;
 }
 
 /**

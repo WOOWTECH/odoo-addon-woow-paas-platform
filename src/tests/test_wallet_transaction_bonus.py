@@ -198,6 +198,7 @@ class TestWalletTransactionBonus(TransactionCase):
         self.assertAlmostEqual(wtx.bonus_amount, 0.0)
 
         # Run the same SQL the migration uses.
+        # DUPLICATED FROM src/migrations/18.0.1.0.17/post-migrate.py — keep in sync.
         self.env.cr.execute(
             """
             UPDATE wallet_transaction wt
