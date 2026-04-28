@@ -134,7 +134,7 @@ export class InvoiceListPage extends Component {
   }
 
   showPay(ev, invoice) {
-    ev.stopPropagation();
+    ev?.stopPropagation();
     this.state.selectedInvoice = invoice;
     this.state.showPayModal = true;
   }

@@ -75,6 +75,6 @@ export class SmartHomeCard extends Component {
     }
 
     onUrlClick(ev) {
-        ev.stopPropagation();
+        ev?.stopPropagation();
     }
 }
