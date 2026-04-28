@@ -28,7 +28,7 @@
                             </div>
                             <div class="o_woow_svc_modal_summary_right">
                                 <span class="o_woow_svc_modal_price">
-                                    <t t-esc="planPrice"/> pts
+                                    <t t-esc="planPrice"/>
                                 </span>
                                 <span class="o_woow_svc_modal_price_period">/ month</span>
                             </div>

@@ -3,6 +3,7 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
+import { formatPoints } from "../../utils/billing_helpers";
 
 const TEMPLATE_ICONS = {
   n8n: "cloud",
@@ -54,10 +55,7 @@ export class SubscribedServicesModal extends Component {
 
   get planPrice() {
     const price = this.state.detail?.plan_price ?? this.props.subscription.plan_price ?? 0;
-    return price.toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
+    return formatPoints(price);
   }
 
   get recurrencyLabel() {

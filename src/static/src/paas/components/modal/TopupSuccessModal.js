@@ -3,6 +3,7 @@ import { Component } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
+import { formatPoints } from "../../utils/billing_helpers";
 
 /**
  * TopupSuccessModal Component
@@ -46,7 +47,7 @@ export class TopupSuccessModal extends Component {
   }
 
   get formattedBalance() {
-    return this.newBalance.toLocaleString();
+    return formatPoints(this.newBalance);
   }
 
   get hasBonus() {

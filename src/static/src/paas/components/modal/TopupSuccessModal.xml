@@ -29,7 +29,7 @@
                     <div class="o_woow_topup_success_balance">
                         <span class="o_woow_topup_success_balance_label">New Balance</span>
                         <span class="o_woow_topup_success_balance_value">
-                            <t t-esc="formattedBalance"/> pts
+                            <t t-esc="formattedBalance"/>
                         </span>
                     </div>
                 </div>

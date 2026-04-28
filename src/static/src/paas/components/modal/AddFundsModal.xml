@@ -16,7 +16,7 @@
                 <div class="o_woow_modal_body">
                     <!-- Amount Display -->
                     <div class="o_woow_addfunds_amount_section">
-                        <span class="o_woow_addfunds_amount_prefix">$</span>
+                        <span class="o_woow_addfunds_amount_prefix">NT$</span>
                         <span class="o_woow_addfunds_amount_value" t-esc="formattedAmount"/>
                     </div>
 
@@ -72,7 +72,7 @@
                     <div class="o_woow_addfunds_total">
                         <span class="o_woow_addfunds_total_label">Total to pay</span>
                         <span class="o_woow_addfunds_total_value">
-                            $<t t-esc="formattedAmount"/>
+                            NT$<t t-esc="formattedAmount"/>
                         </span>
                     </div>
 
