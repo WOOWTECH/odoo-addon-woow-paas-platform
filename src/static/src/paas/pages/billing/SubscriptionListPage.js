@@ -148,13 +148,13 @@ export class SubscriptionListPage extends Component {
   }
 
   showManage(ev, sub) {
-    ev.stopPropagation();
+    ev?.stopPropagation();
     this.state.selectedSubscription = sub;
     this.state.showServicesModal = true;
   }
 
   showCancel(ev, sub) {
-    ev.stopPropagation();
+    ev?.stopPropagation();
     this.state.selectedSubscription = sub;
     this.state.showCancelModal = true;
   }
