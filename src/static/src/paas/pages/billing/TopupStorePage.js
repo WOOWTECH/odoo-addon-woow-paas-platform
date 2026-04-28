@@ -8,6 +8,7 @@ import { TopupSuccessModal } from "../../components/modal/TopupSuccessModal";
 import { billingService } from "../../services/billing_service";
 import { translateTopupError } from "../../services/topup_errors";
 import { router } from "../../core/router";
+import { formatAmount, formatPoints } from "../../utils/billing_helpers";
 
 const CATEGORY_TABS = [
   { key: null, label: "All Packs" },
@@ -81,8 +82,7 @@ export class TopupStorePage extends Component {
   }
 
   get formattedBalance() {
-    const balance = this.billing.wallet.balance ?? 0;
-    return balance.toLocaleString();
+    return formatPoints(this.billing.wallet.balance ?? 0);
   }
 
   async loadPlans() {
@@ -99,10 +99,7 @@ export class TopupStorePage extends Component {
   }
 
   formatAmount(amount) {
-    return (amount ?? 0).toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
+    return formatAmount(amount);
   }
 
   onPurchaseClick(plan) {

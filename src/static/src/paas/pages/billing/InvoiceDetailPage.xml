@@ -40,9 +40,8 @@
                             <div class="o_woow_invoice_sidebar_amount">
                                 <span class="o_woow_invoice_sidebar_label">Total Amount</span>
                                 <span class="o_woow_invoice_sidebar_value">
-                                    <t t-esc="formatAmount(invoice.amount_total)"/>
+                                    <t t-esc="formatPoints(invoice.amount_total)"/>
                                 </span>
-                                <span class="o_woow_invoice_sidebar_unit">Points</span>
                             </div>
 
                             <span t-attf-class="o_woow_invoice_due_badge {{ dueLabelClass }}">
@@ -128,7 +127,7 @@
                                             </div>
                                             <div class="o_woow_line_col o_woow_line_price">
                                                 <span class="o_woow_line_mobile_label">Price: </span>
-                                                <t t-esc="formatAmountDecimal(line.price_unit)"/>
+                                                <t t-esc="formatPoints(line.price_unit)"/>
                                             </div>
                                             <div class="o_woow_line_col o_woow_line_tax">
                                                 <span class="o_woow_line_mobile_label">Tax: </span>
@@ -136,7 +135,7 @@
                                             </div>
                                             <div class="o_woow_line_col o_woow_line_amount">
                                                 <span class="o_woow_line_mobile_label">Amount: </span>
-                                                <strong t-esc="formatAmountDecimal(line.price_subtotal)"/>
+                                                <strong t-esc="formatPoints(line.price_subtotal)"/>
                                             </div>
                                         </div>
                                     </t>
@@ -147,15 +146,15 @@
                             <div class="o_woow_invoice_summary">
                                 <div class="o_woow_invoice_summary_row">
                                     <span>Untaxed Amount</span>
-                                    <span t-esc="formatAmountDecimal(invoice.amount_untaxed)"/>
+                                    <span t-esc="formatPoints(invoice.amount_untaxed)"/>
                                 </div>
                                 <div class="o_woow_invoice_summary_row">
                                     <span>Taxes</span>
-                                    <span t-esc="formatAmountDecimal(invoice.amount_tax)"/>
+                                    <span t-esc="formatPoints(invoice.amount_tax)"/>
                                 </div>
                                 <div class="o_woow_invoice_summary_row o_woow_invoice_summary_total">
                                     <span>Total</span>
-                                    <span t-esc="formatAmountDecimal(invoice.amount_total)"/> pts
+                                    <span t-esc="formatPoints(invoice.amount_total)"/>
                                 </div>
                             </div>
                         </WoowCard>

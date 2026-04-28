@@ -22,13 +22,13 @@
                         <div class="o_woow_pay_row">
                             <span class="o_woow_pay_label">Amount</span>
                             <span class="o_woow_pay_value o_woow_pay_amount">
-                                <t t-esc="formattedAmount"/> pts
+                                <t t-esc="formattedAmount"/>
                             </span>
                         </div>
                         <div class="o_woow_pay_row">
                             <span class="o_woow_pay_label">Wallet Balance</span>
                             <span class="o_woow_pay_value">
-                                <t t-esc="formattedBalance"/> pts
+                                <t t-esc="formattedBalance"/>
                             </span>
                         </div>
                     </div>
@@ -52,7 +52,7 @@
                         <div class="o_woow_pay_confirm_text">
                             <WoowIcon name="'info'" size="20"/>
                             <p>
-                                Pay <strong><t t-esc="formattedAmount"/> pts</strong> from your wallet credits?
+                                Pay <strong><t t-esc="formattedAmount"/></strong> from your wallet credits?
                             </p>
                         </div>
                     </t>

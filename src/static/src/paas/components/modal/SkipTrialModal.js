@@ -3,6 +3,7 @@ import { Component, onMounted, useState } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { cloudService } from "../../services/cloud_service";
+import { formatPoints } from "../../utils/billing_helpers";
 
 /**
  * SkipTrialModal Component
@@ -52,6 +53,10 @@ export class SkipTrialModal extends Component {
 
     get planPrice() {
         return this.props.service.subscription?.plan_price || 0;
+    }
+
+    formatPoints(amount) {
+        return formatPoints(amount);
     }
 
     get trialEndDate() {

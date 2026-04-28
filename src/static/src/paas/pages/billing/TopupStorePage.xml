@@ -35,7 +35,6 @@
                     </div>
                     <div class="o_woow_topup_balance_amount">
                         <span class="o_woow_topup_balance_value" t-esc="formattedBalance"/>
-                        <span class="o_woow_topup_balance_unit">Points</span>
                     </div>
                 </div>
             </WoowCard>
@@ -110,7 +109,7 @@
 
                                 <!-- Price -->
                                 <div class="o_woow_topup_plan_price">
-                                    $<t t-esc="formatAmount(plan.amount)"/>
+                                    NT$<t t-esc="formatAmount(plan.amount)"/>
                                 </div>
 
                                 <!-- Purchase Button -->

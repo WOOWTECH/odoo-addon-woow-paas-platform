@@ -7,7 +7,7 @@ import { CancelSubscriptionModal } from "../../components/modal/CancelSubscripti
 import { SubscribedServicesModal } from "../../components/modal/SubscribedServicesModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
-import { formatDate, formatAmount, computePageNumbers } from "../../utils/billing_helpers";
+import { formatDate, formatPoints, computePageNumbers } from "../../utils/billing_helpers";
 
 const ITEMS_PER_PAGE = 10;
 
@@ -124,7 +124,7 @@ export class SubscriptionListPage extends Component {
   }
 
   formatPrice(price) {
-    return formatAmount(price);
+    return formatPoints(price);
   }
 
   onFilterChange(filterKey) {

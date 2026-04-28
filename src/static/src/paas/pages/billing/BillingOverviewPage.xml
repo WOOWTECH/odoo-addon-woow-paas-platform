@@ -28,7 +28,7 @@
                                 <h3>Wallet balance is too low for upcoming renewal</h3>
                                 <p>
                                     You need at least
-                                    <strong><t t-esc="formatAmountDecimal(lowBalanceShortfall)"/> pts</strong>
+                                    <strong><t t-esc="formatPoints(lowBalanceShortfall)"/></strong>
                                     more to cover subscriptions renewing in the next 3 days.
                                     Top up now to avoid service interruption.
                                 </p>
@@ -53,7 +53,6 @@
                             </div>
                             <div class="o_woow_billing_credit_amount">
                                 <span class="o_woow_billing_balance" t-esc="formattedBalance"/>
-                                <span class="o_woow_billing_unit">Points</span>
                             </div>
                             <p class="o_woow_billing_rate">Conversion Rate: 1 Point = NT$ 1</p>
                             <a class="o_woow_billing_view_history_link" t-on-click.prevent="showCreditHistory">
@@ -175,7 +174,7 @@
                                     </div>
                                     <div class="o_woow_billing_recent_invoice_right">
                                         <span class="o_woow_billing_recent_invoice_amount">
-                                            <t t-esc="formatAmount(invoice.amount_total)"/> pts
+                                            <t t-esc="formatPoints(invoice.amount_total)"/>
                                         </span>
                                         <span t-attf-class="o_woow_invoice_badge {{ getStatusClass(invoice) }}">
                                             <span class="o_woow_invoice_badge_dot"/>

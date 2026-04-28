@@ -6,7 +6,7 @@ import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
 import {
   formatDateTimeShort,
-  formatAmountDecimal,
+  formatPoints,
   formatTopupDescription,
   getTxnDisplay,
 } from "../../utils/billing_helpers";
@@ -43,9 +43,12 @@ export class CreditHistoryModal extends Component {
     return this.billing.transactions;
   }
 
+  get walletBalance() {
+    return this.billing.wallet.balance ?? 0;
+  }
+
   get formattedBalance() {
-    const balance = this.billing.wallet.balance ?? 0;
-    return balance.toLocaleString();
+    return formatPoints(this.walletBalance);
   }
 
   getTxnIcon(txn) {
@@ -57,10 +60,7 @@ export class CreditHistoryModal extends Component {
   }
 
   formatAmount(txn) {
-    const display = getTxnDisplay(txn);
-    const abs = Math.abs(txn.amount ?? 0);
-    const formatted = formatAmountDecimal(abs);
-    return `${display.sign}$${formatted}`;
+    return formatPoints(txn.amount, { signed: true });
   }
 
   getAmountClass(txn) {
@@ -69,7 +69,7 @@ export class CreditHistoryModal extends Component {
 
   formatBalance(txn) {
     if (txn.balance_after == null) return "";
-    return formatAmountDecimal(txn.balance_after);
+    return formatPoints(txn.balance_after);
   }
 
   formatDate(dateStr) {

@@ -2,6 +2,7 @@
 import { Component, onMounted, useState } from "@odoo/owl";
 import { billingService } from "../../services/billing_service";
 import { profileService } from "../../services/profile_service";
+import { formatPoints } from "../../utils/billing_helpers";
 
 const WORKSPACE_ROUTES = [
     "workspace-detail", "workspace-team", "marketplace", "configure", "service-detail",
@@ -28,7 +29,7 @@ export class Header extends Component {
     }
 
     get formattedBalance() {
-        return `$${this.walletBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return formatPoints(this.walletBalance);
     }
 
     get partnerName() {

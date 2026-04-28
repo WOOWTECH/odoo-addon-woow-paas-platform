@@ -3,6 +3,7 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
+import { formatPoints } from "../../utils/billing_helpers";
 
 /**
  * PayInvoiceModal Component
@@ -45,7 +46,7 @@ export class PayInvoiceModal extends Component {
   }
 
   get formattedAmount() {
-    return this.amount.toLocaleString();
+    return formatPoints(this.amount);
   }
 
   get walletBalance() {
@@ -53,7 +54,7 @@ export class PayInvoiceModal extends Component {
   }
 
   get formattedBalance() {
-    return this.walletBalance.toLocaleString();
+    return formatPoints(this.walletBalance);
   }
 
   get hasSufficientBalance() {

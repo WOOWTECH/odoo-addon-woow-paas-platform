@@ -83,13 +83,52 @@ export function formatDateTimeShort(dateStr) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Format a points / credits value for display.
+ *
+ * Conventions:
+ * - Always two decimals (eliminates "574 vs 573.85" precision mismatch).
+ * - Always `pts` suffix (replaces the prior $ / Points / Credits zoo).
+ * - Optional `+` / `-` sign prefix for transaction rows so debits and
+ *   credits are visually distinct.
+ *
+ * Examples:
+ *   formatPoints(573.85)                    → "573.85 pts"
+ *   formatPoints(573.85, { signed: true })  → "+573.85 pts"
+ *   formatPoints(-573.85, { signed: true }) → "-573.85 pts"
+ *   formatPoints(0, { signed: true })       → "0.00 pts"  (no sign on zero)
+ *   formatPoints(null)                      → "0.00 pts"
+ *   formatPoints(1234.5, { precision: 0 })  → "1,235 pts" (rounded)
+ *
+ * @param {number|null|undefined} value
+ * @param {{signed?: boolean, precision?: number}} [opts]
+ * @returns {string}
+ */
+export function formatPoints(value, { signed = false, precision = 2 } = {}) {
+  const n = Number(value ?? 0);
+  const abs = Math.abs(n);
+  const body = abs.toLocaleString(undefined, {
+    minimumFractionDigits: precision,
+    maximumFractionDigits: precision,
+  });
+  let prefix = "";
+  if (signed && n > 0) prefix = "+";
+  else if (n < 0) prefix = "-";
+  return `${prefix}${body} pts`;
+}
+
+/**
  * Format amount with locale separators, no decimals (e.g. "1,234").
+ *
+ * @deprecated Use `formatPoints(amount, { precision: 0 })` for new code.
+ *   Kept as a backward-compatibility shim — preserves the original contract
+ *   (no `pts` suffix, no decimals) so any caller missed by the G1 sweep
+ *   continues to render correctly.
  *
  * @param {number|null|undefined} amount
  * @returns {string}
  */
 export function formatAmount(amount) {
-  return (amount ?? 0).toLocaleString(undefined, {
+  return Number(amount ?? 0).toLocaleString(undefined, {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   });
@@ -98,11 +137,16 @@ export function formatAmount(amount) {
 /**
  * Format amount with 2 decimal places (e.g. "1,234.00").
  *
+ * @deprecated Use `formatPoints(amount)` for new code.
+ *   Kept as a backward-compatibility shim — preserves the original contract
+ *   (no `pts` suffix, two decimals) so any caller missed by the G1 sweep
+ *   continues to render correctly.
+ *
  * @param {number|null|undefined} amount
  * @returns {string}
  */
 export function formatAmountDecimal(amount) {
-  return (amount ?? 0).toLocaleString(undefined, {
+  return Number(amount ?? 0).toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });

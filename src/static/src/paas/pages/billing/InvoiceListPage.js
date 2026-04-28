@@ -8,7 +8,7 @@ import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
 import {
   formatDate,
-  formatAmount,
+  formatPoints,
   getInvoiceStatusInfo,
   computePageNumbers,
 } from "../../utils/billing_helpers";
@@ -95,8 +95,8 @@ export class InvoiceListPage extends Component {
     return status === "waiting" || status === "overdue";
   }
 
-  formatAmount(amount) {
-    return formatAmount(amount);
+  formatPoints(amount) {
+    return formatPoints(amount);
   }
 
   formatDate(dateStr) {

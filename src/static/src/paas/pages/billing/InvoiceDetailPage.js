@@ -8,8 +8,7 @@ import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
 import {
   formatDate,
-  formatAmount,
-  formatAmountDecimal,
+  formatPoints,
   INVOICE_STATUS_MAP,
 } from "../../utils/billing_helpers";
 
@@ -92,12 +91,8 @@ export class InvoiceDetailPage extends Component {
     return this.invoice?.lines || [];
   }
 
-  formatAmount(amount) {
-    return formatAmount(amount);
-  }
-
-  formatAmountDecimal(amount) {
-    return formatAmountDecimal(amount);
+  formatPoints(amount) {
+    return formatPoints(amount);
   }
 
   formatDate(dateStr) {

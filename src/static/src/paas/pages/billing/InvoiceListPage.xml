@@ -84,7 +84,7 @@
                             <div class="o_woow_invoice_col o_woow_invoice_col_amount">
                                 <span class="o_woow_invoice_col_label">Amount</span>
                                 <span class="o_woow_invoice_amount_value">
-                                    <t t-esc="formatAmount(invoice.amount_total)"/> pts
+                                    <t t-esc="formatPoints(invoice.amount_total)"/>
                                 </span>
                             </div>
                             <div class="o_woow_invoice_col o_woow_invoice_col_status">

@@ -50,7 +50,7 @@
                             <div class="o_woow_pay_row">
                                 <span class="o_woow_pay_label">Subtotal</span>
                                 <span class="o_woow_pay_value">
-                                    <t t-esc="state.estimate.untaxed.toFixed(2)"/> pts
+                                    <t t-esc="formatPoints(state.estimate.untaxed)"/>
                                 </span>
                             </div>
                             <div class="o_woow_pay_row">
@@ -58,19 +58,19 @@
                                     Tax (<t t-esc="(state.estimate.tax_rate * 100).toFixed(0)"/>%)
                                 </span>
                                 <span class="o_woow_pay_value">
-                                    <t t-esc="state.estimate.tax_amount.toFixed(2)"/> pts
+                                    <t t-esc="formatPoints(state.estimate.tax_amount)"/>
                                 </span>
                             </div>
                             <div class="o_woow_pay_row">
                                 <span class="o_woow_pay_label">Total</span>
                                 <span class="o_woow_pay_value o_woow_pay_amount">
-                                    <t t-esc="state.estimate.total.toFixed(2)"/> pts
+                                    <t t-esc="formatPoints(state.estimate.total)"/>
                                 </span>
                             </div>
                             <div class="o_woow_pay_row">
                                 <span class="o_woow_pay_label">Wallet Balance</span>
                                 <span class="o_woow_pay_value">
-                                    <t t-esc="state.estimate.wallet_balance.toFixed(2)"/> pts
+                                    <t t-esc="formatPoints(state.estimate.wallet_balance)"/>
                                 </span>
                             </div>
                         </div>
@@ -82,7 +82,7 @@
                                 <div>
                                     <p>
                                         Insufficient balance.
-                                        You need <strong><t t-esc="state.estimate.shortage.toFixed(2)"/> pts</strong> more
+                                        You need <strong><t t-esc="formatPoints(state.estimate.shortage)"/></strong> more
                                         to skip the trial.
                                     </p>
                                     <a href="#/billing/topup" class="o_woow_pay_topup_link">

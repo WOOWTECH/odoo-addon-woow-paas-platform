@@ -17,7 +17,6 @@
                             <span class="o_woow_credit_history_balance_label">Current Balance</span>
                             <span class="o_woow_credit_history_balance_value">
                                 <t t-esc="formattedBalance"/>
-                                <span class="o_woow_credit_history_balance_unit">Points</span>
                             </span>
                         </div>
                         <WoowButton variant="'primary'" size="'sm'" onClick.bind="goToTopup">
