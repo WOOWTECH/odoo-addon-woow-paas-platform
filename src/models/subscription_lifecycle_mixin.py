@@ -9,6 +9,54 @@ from odoo.exceptions import UserError
 _logger = logging.getLogger(__name__)
 
 
+def _subscription_total_with_tax(sub):
+    """Compute (untaxed, tax_rate, tax_amount, total) for a subscription.
+
+    Shared between `_skip_trial_estimate` (skip-trial confirmation modal)
+    and the `/api/dashboard/summary` endpoint's `next_bill_estimate` so a
+    single tax-computation rule serves both surfaces. Drift here would
+    surface as "the modal said 573.85 but the dashboard said 499" — the
+    same class of bug as the original Issue #9 root cause.
+
+    Tax source matches what `_generate_invoice_vals` will write onto the
+    invoice line: prefer `sh_taxes_ids`, fall back to the subscription's
+    product taxes for subs whose onchange chain never populated
+    `sh_taxes_ids` (legacy data path).
+
+    Args:
+        sub: a `sh.subscription.subscription` recordset (single record).
+
+    Returns:
+        tuple of floats: (untaxed, tax_rate, tax_amount, total).
+        All zero when sub is empty / sh_plan_price is 0.
+    """
+    if not sub:
+        return 0.0, 0.0, 0.0, 0.0
+    untaxed = sub.sh_plan_price or 0.0
+    if not untaxed:
+        return 0.0, 0.0, 0.0, 0.0
+
+    taxes = sub.sh_taxes_ids
+    if not taxes and sub.product_id:
+        taxes = sub.product_id.taxes_id
+
+    currency = sub.currency_id or sub.env.company.currency_id
+
+    if taxes:
+        compute = taxes.compute_all(
+            untaxed,
+            partner=sub.sh_partner_id,
+            currency=currency,
+        )
+        tax_amount = compute['total_included'] - compute['total_excluded']
+        tax_rate = (tax_amount / untaxed) if untaxed else 0.0
+    else:
+        tax_amount = 0.0
+        tax_rate = 0.0
+
+    return float(untaxed), float(tax_rate), float(tax_amount), float(untaxed + tax_amount)
+
+
 class SubscriptionLifecycleMixin(models.AbstractModel):
     _name = 'woow_paas_platform.subscription_lifecycle_mixin'
     _description = 'Subscription Lifecycle Mixin'
@@ -259,31 +307,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         if not sub.sh_trial:
             raise UserError("Subscription is not in trial period.")
 
-        untaxed = sub.sh_plan_price or 0.0
-
-        # Tax source matches what _generate_invoice_vals will write onto the
-        # invoice line (sh_taxes_ids on the subscription), with a fallback
-        # to the subscription's product taxes for subs whose onchange chain
-        # never populated sh_taxes_ids.
-        taxes = sub.sh_taxes_ids
-        if not taxes and sub.product_id:
-            taxes = sub.product_id.taxes_id
-
-        currency = sub.currency_id or self.env.company.currency_id
-
-        if taxes:
-            compute = taxes.compute_all(
-                untaxed,
-                partner=sub.sh_partner_id,
-                currency=currency,
-            )
-            tax_amount = compute['total_included'] - compute['total_excluded']
-            tax_rate = (tax_amount / untaxed) if untaxed else 0.0
-        else:
-            tax_amount = 0.0
-            tax_rate = 0.0
-
-        total = untaxed + tax_amount
+        # Tax breakdown is computed by the shared helper so the dashboard's
+        # next_bill_estimate uses the same rule as the skip-trial modal.
+        untaxed, tax_rate, tax_amount, total = _subscription_total_with_tax(sub)
 
         today = fields.Date.today()
         delta = {
