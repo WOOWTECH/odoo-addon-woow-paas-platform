@@ -929,6 +929,34 @@ class PaasController(Controller):
             },
         }
 
+    @route("/api/cloud-services/services/<int:service_id>/skip-trial-estimate", auth="user", methods=["POST"], type="json")
+    def api_service_skip_trial_estimate(self, service_id: int, **kw: Any) -> dict[str, Any]:
+        """Return the upcoming-invoice breakdown for skip-trial confirmation.
+
+        Side-effect-free: computes untaxed / tax / total + wallet sufficiency
+        without mutating the subscription. Used by the confirm modal so the
+        displayed total matches what `api_service_skip_trial` will charge.
+        """
+        CloudService = request.env['woow_paas_platform.cloud_service']
+        service = CloudService.browse(service_id)
+        if not service.exists():
+            return {'success': False, 'error': 'Service not found'}
+
+        workspace = service.workspace_id
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {'success': False, 'error': 'Admin access required'}
+
+        try:
+            estimate = service._skip_trial_estimate()
+        except Exception as e:
+            _logger.error(
+                "Error estimating skip-trial for service %s: %s", service_id, e,
+            )
+            return {'success': False, 'error': str(e)}
+
+        return {'success': True, 'data': estimate}
+
     @route("/api/cloud-services/services/<int:service_id>/skip-trial", auth="user", methods=["POST"], type="json")
     def api_service_skip_trial(self, service_id: int, **kw: Any) -> dict[str, Any]:
         """Skip trial period and start paid billing immediately."""

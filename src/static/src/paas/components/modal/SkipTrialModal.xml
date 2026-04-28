@@ -23,10 +23,76 @@
                         </p>
                         <ul style="text-align: left; margin: 0 auto; display: inline-block;">
                             <li>End your free trial immediately</li>
-                            <li>Generate your first invoice of <strong><t t-esc="planPrice"/> pts</strong></li>
+                            <li>Generate your first invoice now</li>
                             <li>Start regular monthly billing today</li>
                         </ul>
                     </div>
+
+                    <!-- Loading state -->
+                    <t t-if="state.loadingEstimate">
+                        <div class="o_woow_pay_confirm_text">
+                            <WoowIcon name="'sync'" size="20" class="'o_woow_spin'"/>
+                            <p>Loading invoice breakdown...</p>
+                        </div>
+                    </t>
+
+                    <!-- Estimate failed -->
+                    <t t-if="!state.loadingEstimate and state.estimateError">
+                        <div class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.estimateError"/>
+                        </div>
+                    </t>
+
+                    <!-- Breakdown table (loaded successfully) -->
+                    <t t-if="!state.loadingEstimate and !state.estimateError and state.estimate">
+                        <div class="o_woow_pay_info">
+                            <div class="o_woow_pay_row">
+                                <span class="o_woow_pay_label">Subtotal</span>
+                                <span class="o_woow_pay_value">
+                                    <t t-esc="state.estimate.untaxed.toFixed(2)"/> pts
+                                </span>
+                            </div>
+                            <div class="o_woow_pay_row">
+                                <span class="o_woow_pay_label">
+                                    Tax (<t t-esc="(state.estimate.tax_rate * 100).toFixed(0)"/>%)
+                                </span>
+                                <span class="o_woow_pay_value">
+                                    <t t-esc="state.estimate.tax_amount.toFixed(2)"/> pts
+                                </span>
+                            </div>
+                            <div class="o_woow_pay_row">
+                                <span class="o_woow_pay_label">Total</span>
+                                <span class="o_woow_pay_value o_woow_pay_amount">
+                                    <t t-esc="state.estimate.total.toFixed(2)"/> pts
+                                </span>
+                            </div>
+                            <div class="o_woow_pay_row">
+                                <span class="o_woow_pay_label">Wallet Balance</span>
+                                <span class="o_woow_pay_value">
+                                    <t t-esc="state.estimate.wallet_balance.toFixed(2)"/> pts
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Insufficient balance warning + top-up link -->
+                        <t t-if="!state.estimate.sufficient">
+                            <div class="o_woow_pay_warning">
+                                <WoowIcon name="'warning'" size="20"/>
+                                <div>
+                                    <p>
+                                        Insufficient balance.
+                                        You need <strong><t t-esc="state.estimate.shortage.toFixed(2)"/> pts</strong> more
+                                        to skip the trial.
+                                    </p>
+                                    <a href="#/billing/topup" class="o_woow_pay_topup_link">
+                                        <WoowIcon name="'add'" size="16"/>
+                                        Top up your wallet
+                                    </a>
+                                </div>
+                            </div>
+                        </t>
+                    </t>
 
                     <div t-if="state.error" class="o_woow_error_message">
                         <WoowIcon name="'error'" size="16"/>
@@ -46,7 +112,7 @@
                         variant="'primary'"
                         size="'md'"
                         onClick.bind="onConfirm"
-                        disabled="state.skipping">
+                        disabled="!canConfirm">
                         <t t-if="state.skipping">
                             <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
                             Processing...

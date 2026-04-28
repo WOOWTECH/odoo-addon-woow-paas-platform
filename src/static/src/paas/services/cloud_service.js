@@ -220,6 +220,34 @@ export const cloudService = reactive({
         }
     },
 
+    /**
+     * Get the upcoming-invoice breakdown for a skip-trial confirmation.
+     *
+     * Side-effect-free counterpart to `skipTrial`: returns untaxed / tax /
+     * total + wallet sufficiency so the confirm modal can render the real
+     * amount before the user commits.
+     *
+     * @param {number} serviceId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     *   data has keys: untaxed, tax_rate, tax_amount, total, currency,
+     *   wallet_balance, sufficient, shortage, billing_cycle_start,
+     *   billing_cycle_end.
+     */
+    async getSkipTrialEstimate(serviceId) {
+        try {
+            const result = await jsonRpc(
+                `/api/cloud-services/services/${serviceId}/skip-trial-estimate`,
+                {},
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    },
+
     async fetchOdooAddons(templateId = null, category = null) {
         this.operationLoading.fetchOdooAddons = true;
         try {

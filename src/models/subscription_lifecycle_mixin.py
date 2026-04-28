@@ -231,6 +231,82 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     # Skip trial
     # ----------------------------------------------------------------
 
+    def _skip_trial_estimate(self):
+        """Compute the upcoming-invoice breakdown for skip-trial.
+
+        Side-effect-free counterpart to ``_skip_trial``: returns the same
+        amount that the actual skip-trial would invoice, broken down into
+        untaxed / tax / total, plus wallet sufficiency info. Used by the
+        confirm modal to render the breakdown before the user commits.
+
+        Mirrors the same three preconditions as ``_skip_trial`` so the
+        modal can surface the same UserError messages on load.
+
+        Returns:
+            dict with keys:
+                untaxed, tax_rate, tax_amount, total, currency,
+                wallet_balance, sufficient, shortage,
+                billing_cycle_start, billing_cycle_end
+        Raises:
+            UserError when no subscription / not active / not in trial.
+        """
+        self.ensure_one()
+        sub = self.sudo().subscription_id
+        if not sub:
+            raise UserError("No subscription linked to this service.")
+        if sub.state != 'in_progress':
+            raise UserError("Subscription is not active.")
+        if not sub.sh_trial:
+            raise UserError("Subscription is not in trial period.")
+
+        untaxed = sub.sh_plan_price or 0.0
+
+        # Tax source matches what _generate_invoice_vals will write onto the
+        # invoice line (sh_taxes_ids on the subscription), with a fallback
+        # to the subscription's product taxes for subs whose onchange chain
+        # never populated sh_taxes_ids.
+        taxes = sub.sh_taxes_ids
+        if not taxes and sub.product_id:
+            taxes = sub.product_id.taxes_id
+
+        currency = sub.currency_id or self.env.company.currency_id
+
+        if taxes:
+            compute = taxes.compute_all(
+                untaxed,
+                partner=sub.sh_partner_id,
+                currency=currency,
+            )
+            tax_amount = compute['total_included'] - compute['total_excluded']
+            tax_rate = (tax_amount / untaxed) if untaxed else 0.0
+        else:
+            tax_amount = 0.0
+            tax_rate = 0.0
+
+        total = untaxed + tax_amount
+
+        today = fields.Date.today()
+        delta = {
+            'day': relativedelta(days=sub.sh_recurrency or 1),
+            'week': relativedelta(weeks=sub.sh_recurrency or 1),
+            'month': relativedelta(months=sub.sh_recurrency or 1),
+            'year': relativedelta(years=sub.sh_recurrency or 1),
+        }.get(sub.sh_unit, relativedelta(months=1))
+
+        wallet_balance = sub.sh_partner_id.wallet_balance or 0.0
+        return {
+            'untaxed': float(untaxed),
+            'tax_rate': float(tax_rate),
+            'tax_amount': float(tax_amount),
+            'total': float(total),
+            'currency': 'pts',
+            'wallet_balance': float(wallet_balance),
+            'sufficient': wallet_balance >= total,
+            'shortage': float(max(0.0, total - wallet_balance)),
+            'billing_cycle_start': today.isoformat(),
+            'billing_cycle_end': (today + delta).isoformat(),
+        }
+
     def _skip_trial(self):
         """Skip the trial period and start paid billing immediately.
 
