@@ -1,4 +1,5 @@
 from odoo import api, fields, models
+from odoo.tools import float_compare
 
 
 class TopupPlan(models.Model):
@@ -20,10 +21,11 @@ class TopupPlan(models.Model):
     sequence = fields.Integer(string='Sequence', default=10)
     active = fields.Boolean(string='Active', default=True)
 
+    # Recomputed on every read. Safe at N<~50 plans; convert to stored if N grows.
     is_best_value = fields.Boolean(
         string='Best Value',
         compute='_compute_is_best_value',
-        help='True iff this plan has the highest bonus/credits ratio among active plans.',
+        help='True when this plan has the highest bonus/credits ratio among active plans.',
     )
 
     @api.depends('credits', 'bonus', 'active')
@@ -35,4 +37,7 @@ class TopupPlan(models.Model):
         best_ratio = max(ratios) if ratios else 0.0
         for rec in self:
             ratio = (rec.bonus / rec.credits) if rec.credits else 0.0
-            rec.is_best_value = (ratio == best_ratio and ratio > 0)
+            rec.is_best_value = (
+                ratio > 0
+                and float_compare(ratio, best_ratio, precision_digits=6) == 0
+            )
