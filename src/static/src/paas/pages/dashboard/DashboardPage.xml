@@ -4,12 +4,12 @@
         <div class="o_woow_dashboard">
             <!-- Welcome Section -->
             <div class="o_woow_welcome">
-                <h1>Welcome back, Sarah!</h1>
+                <h1>Welcome back, <t t-esc="welcomeName"/>!</h1>
                 <p>Here is what is happening with your workspaces today.</p>
             </div>
 
             <!-- Stats Grid -->
-            <div class="o_woow_stats_grid">
+            <div class="o_woow_stats_grid" t-if="stats.length">
                 <t t-foreach="stats" t-as="stat" t-key="stat.label">
                     <WoowCard shadow="true" class="'o_woow_stat_card'">
                         <div class="o_woow_stat_header">
@@ -36,10 +36,19 @@
                 </t>
             </div>
 
+            <!-- Coming-soon placeholder while real dashboard data is wired in sprint 3 -->
+            <WoowCard t-if="!stats.length" shadow="true" class="'o_woow_dashboard_placeholder'">
+                <div class="o_woow_placeholder_content">
+                    <WoowIcon name="'hourglass_empty'" size="32"/>
+                    <h3>Dashboard insights coming soon</h3>
+                    <p>Workspace, billing, and activity summaries will appear here. Check the <strong>Billing</strong> page for current credit balance.</p>
+                </div>
+            </WoowCard>
+
             <!-- Main Content Grid -->
             <div class="o_woow_dashboard_grid">
                 <!-- Recent Activity -->
-                <WoowCard class="'o_woow_activity_card'">
+                <WoowCard t-if="activities.length" class="'o_woow_activity_card'">
                     <h3>Recent Activity</h3>
                     <div class="o_woow_activity_list">
                         <t t-foreach="activities" t-as="activity" t-key="activity_index">
@@ -59,7 +68,7 @@
                 </WoowCard>
 
                 <!-- Quick Access -->
-                <WoowCard class="'o_woow_quick_access_card'">
+                <WoowCard t-if="quickAccess.length" class="'o_woow_quick_access_card'">
                     <h3>Quick Access</h3>
                     <div class="o_woow_quick_grid">
                         <t t-foreach="quickAccess" t-as="item" t-key="item.name">
