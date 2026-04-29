@@ -51,10 +51,12 @@ class TestDashboardSummary(HttpCase):
         # production DB with seed subscriptions (e.g. SUB-00001) would make
         # `next_bill_estimate` sum across (existing + test-fixture) subs.
         # The test transaction rolls back so the production rows are restored.
+        # Selection values from sh.subscription.subscription.state:
+        # draft / in_progress / cancel / close / expire / renewed
         self.Subscription.sudo().search([
             ('sh_partner_id', '=', self.partner.id),
             ('state', '=', 'in_progress'),
-        ]).write({'state': 'closed'})
+        ]).write({'state': 'close'})
 
         # Wallet balance fixture: the partner's wallet_balance comes from
         # loyalty card points. We seed it via the documented public API so
