@@ -15,6 +15,7 @@
         "sh_subscription",
         "sh_subscription_wallet",
         "payment_ecpay_ecpg",
+        "ecpay_invoice_tw",
     ],
     "data": [
         "security/ir.model.access.csv",
@@ -40,6 +41,8 @@
         "data/mail_templates.xml",
         "data/low_balance_warning_cron.xml",
         "data/cron_topup.xml",
+        "data/ecpay_invoice_cron.xml",
+        "views/account_move_views.xml",
         "views/paas_app.xml",
         "views/oauth2_templates.xml",
         "views/oauth_client_views.xml",

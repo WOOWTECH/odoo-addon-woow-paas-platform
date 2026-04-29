@@ -132,6 +132,12 @@ class ShSubscriptionFix(models.Model):
             return existing, False
 
         invoice_vals = subscription._generate_invoice_vals()
+        # Carry the partner's invoice carrier preference into the move so the
+        # ECPay issuing cron has everything it needs at post time.
+        invoice_vals.update(
+            subscription.sh_partner_id._woow_partner_invoice_vals()
+        )
+        invoice_vals['woow_invoice_issue_state'] = 'pending'
         invoice = self.env['account.move'].sudo().create(invoice_vals)
         subscription.compute_view_invoice()
         _logger.info(

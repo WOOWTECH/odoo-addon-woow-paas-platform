@@ -28,3 +28,7 @@ from . import test_topup_plan_best_value
 from . import test_skip_trial_estimate
 from . import test_wallet_transaction_bonus
 from . import test_dashboard_summary
+from . import test_ecpay_invoice_carrier_mapping
+from . import test_ecpay_invoice_topup
+from . import test_ecpay_invoice_retry
+from . import test_ecpay_invoice_subscription
