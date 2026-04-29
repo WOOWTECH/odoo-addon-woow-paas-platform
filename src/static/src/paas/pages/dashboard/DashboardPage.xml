@@ -72,7 +72,7 @@
                                     </div>
                                     <div class="o_woow_activity_content">
                                         <span class="o_woow_activity_user"><t t-esc="activity.actor"/></span>
-                                        <span class="o_woow_activity_action"> <t t-esc="activity.action.replace('_', ' ')"/> </span>
+                                        <span class="o_woow_activity_action"> <t t-esc="activity.action.replace(/_/g, ' ')"/> </span>
                                         <span class="o_woow_activity_target"><t t-esc="activity.target"/></span>
                                         <div t-if="activity.description" class="o_woow_activity_description">
                                             <t t-esc="activity.description"/>

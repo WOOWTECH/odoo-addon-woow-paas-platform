@@ -67,9 +67,14 @@ class DashboardController(Controller):
                 'recent_activity': self._recent_activity(partner),
             }
             return {'success': True, 'data': data}
-        except Exception as e:  # pragma: no cover — defensive top-level guard
+        except Exception:  # pragma: no cover — defensive top-level guard
+            # Log full traceback server-side; return a stable user-facing string
+            # so internal field/table names don't leak to the client.
             _logger.exception("Dashboard summary failed for user=%s", request.env.user.id)
-            return {'success': False, 'error': str(e)}
+            return {
+                'success': False,
+                'error': "Failed to load dashboard. Please try again.",
+            }
 
     # ------------------------------------------------------------------
     # Block builders
