@@ -46,6 +46,16 @@ class TestDashboardSummary(HttpCase):
         )
         existing.unlink()
 
+        # Close any pre-existing active subscriptions for the admin partner
+        # so the billing test fixture is deterministic. Without this, a
+        # production DB with seed subscriptions (e.g. SUB-00001) would make
+        # `next_bill_estimate` sum across (existing + test-fixture) subs.
+        # The test transaction rolls back so the production rows are restored.
+        self.Subscription.sudo().search([
+            ('sh_partner_id', '=', self.partner.id),
+            ('state', '=', 'in_progress'),
+        ]).write({'state': 'closed'})
+
         # Wallet balance fixture: the partner's wallet_balance comes from
         # loyalty card points. We seed it via the documented public API so
         # the field's compute logic stays exercised end-to-end.
