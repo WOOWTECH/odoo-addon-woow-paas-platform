@@ -32,3 +32,4 @@ from . import test_ecpay_invoice_carrier_mapping
 from . import test_ecpay_invoice_topup
 from . import test_ecpay_invoice_retry
 from . import test_ecpay_invoice_subscription
+from . import integration
