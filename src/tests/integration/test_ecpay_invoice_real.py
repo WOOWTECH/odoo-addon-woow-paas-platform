@@ -40,7 +40,7 @@ from odoo.tests import tagged
 from odoo.tests.common import TransactionCase
 
 
-@tagged('-standard', 'ecpay_real')
+@tagged('-standard', '-at_install', 'post_install', 'ecpay_real')
 class TestEcpayInvoiceReal(TransactionCase):
 
     @classmethod

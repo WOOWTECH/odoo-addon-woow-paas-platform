@@ -32,4 +32,4 @@ from . import test_ecpay_invoice_carrier_mapping
 from . import test_ecpay_invoice_topup
 from . import test_ecpay_invoice_retry
 from . import test_ecpay_invoice_subscription
-from . import integration
+from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
