@@ -11,6 +11,11 @@ _logger = logging.getLogger(__name__)
 # Error codes — stable contract for frontend
 ERR_NAME_REQUIRED = 'name_required'
 ERR_INVALID_EMAIL = 'invalid_email'
+ERR_INVALID_CARRIER_TYPE = 'invalid_carrier_type'
+
+VALID_CARRIER_TYPES = (
+    'email', 'mobile', 'citizen', 'triplicate', 'paper', 'donation',
+)
 
 # Accepts typical public emails. Intentionally stricter than RFC 5322:
 #   - requires at least one dot after @ (rejects "user@localhost" and
@@ -42,6 +47,15 @@ class ProfileController(Controller):
             'email': partner.email or '',
             'phone': partner.phone or '',
             'avatar_url': f'/web/image/res.partner/{partner.id}/image_128',
+        }
+
+    def _serialize_invoice(self, partner):
+        return {
+            'invoice_carrier_type': partner.woow_invoice_carrier_type or 'email',
+            'invoice_carrier': partner.woow_invoice_carrier or '',
+            'invoice_tax_id': partner.woow_invoice_tax_id or '',
+            'invoice_title': partner.woow_invoice_title or '',
+            'invoice_lovecode': partner.woow_invoice_lovecode or '',
         }
 
     # ==================== Endpoints ====================
@@ -102,3 +116,45 @@ class ProfileController(Controller):
             'phone': (phone or '').strip() or False,
         })
         return {'success': True, 'data': self._serialize(partner)}
+
+    @route("/api/me/invoice-preference", auth="user", methods=["POST"], type="json")
+    def api_me_invoice_preference(self, **kw) -> dict[str, Any]:
+        """Return the current user's stored invoice carrier preference."""
+        return {'success': True, 'data': self._serialize_invoice(self._me_guard())}
+
+    @route(
+        "/api/me/invoice-preference/update",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_me_invoice_preference_update(
+        self,
+        invoice_carrier_type: str | None = None,
+        invoice_carrier: str | None = None,
+        invoice_tax_id: str | None = None,
+        invoice_title: str | None = None,
+        invoice_lovecode: str | None = None,
+        **kw,
+    ) -> dict[str, Any]:
+        """Replace this user's invoice carrier preference. Full replace, not
+        patch — callers must re-send any fields they want preserved.
+
+        Validation is intentionally minimal: ECPay's validate_ecpay_invoice
+        runs at issue time and is the source of truth for carrier-number /
+        love-code / tax-id formats. Doing it here too would risk drift.
+        """
+        partner = self._me_guard()
+        ct = (invoice_carrier_type or 'email').strip()
+        if ct not in VALID_CARRIER_TYPES:
+            return {
+                'success': False,
+                'error': 'Invalid carrier type',
+                'code': ERR_INVALID_CARRIER_TYPE,
+            }
+        partner.write({
+            'woow_invoice_carrier_type': ct,
+            'woow_invoice_carrier': (invoice_carrier or '').strip() or False,
+            'woow_invoice_tax_id': (invoice_tax_id or '').strip() or False,
+            'woow_invoice_title': (invoice_title or '').strip() or False,
+            'woow_invoice_lovecode': (invoice_lovecode or '').strip() or False,
+        })
+        return {'success': True, 'data': self._serialize_invoice(partner)}

@@ -42,9 +42,13 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
  */
 export const profileService = reactive({
     partner: null,        // {id, name, email, phone, avatar_url} or null
+    invoicePreference: null, // {invoice_carrier_type, invoice_carrier, ...} or null
     loading: false,
     saving: false,
+    invoiceLoading: false,
+    invoiceSaving: false,
     _fetchPromise: null,
+    _invoiceFetchPromise: null,
     error: null,
 
     async fetch() {
@@ -86,6 +90,43 @@ export const profileService = reactive({
             return { success: false, error: msg };
         } finally {
             this.saving = false;
+        }
+    },
+
+    async fetchInvoicePreference() {
+        if (this._invoiceFetchPromise) return this._invoiceFetchPromise;
+        this._invoiceFetchPromise = (async () => {
+            this.invoiceLoading = true;
+            try {
+                const result = await jsonRpc("/api/me/invoice-preference", {});
+                if (!result.success) throw new Error(result.error || "Failed to load invoice preference");
+                this.invoicePreference = result.data;
+            } catch (err) {
+                this.error = err.message || String(err);
+            } finally {
+                this.invoiceLoading = false;
+                this._invoiceFetchPromise = null;
+            }
+        })();
+        return this._invoiceFetchPromise;
+    },
+
+    async updateInvoicePreference(patch) {
+        if (this.invoiceSaving) {
+            return { success: false, error: "Update already in progress" };
+        }
+        this.invoiceSaving = true;
+        try {
+            const result = await jsonRpc("/api/me/invoice-preference/update", patch);
+            if (result.success) {
+                this.invoicePreference = result.data;
+            }
+            return result;
+        } catch (err) {
+            const msg = err.message || String(err);
+            return { success: false, error: msg };
+        } finally {
+            this.invoiceSaving = false;
         }
     },
 });

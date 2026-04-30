@@ -86,6 +86,88 @@
                         </div>
                     </div>
                 </WoowCard>
+
+                <WoowCard shadow="true" class="'o_woow_profile_card'">
+                    <div class="o_woow_profile_section_header">
+                        <h2>Invoice Preference</h2>
+                        <p>Used as the default carrier when issuing ECPay e-invoices for subscription
+                            payments. You can still override per top-up at checkout.</p>
+                    </div>
+
+                    <t t-if="state.invoiceSaveSuccess">
+                        <div class="o_woow_success_banner" role="alert">
+                            <WoowIcon name="'check_circle'" size="24"/>
+                            <span>Invoice preference saved.</span>
+                        </div>
+                    </t>
+
+                    <t t-if="state.invoiceServerError">
+                        <div class="o_woow_error_banner" role="alert">
+                            <WoowIcon name="'error'" size="20"/>
+                            <span t-esc="state.invoiceServerError"/>
+                        </div>
+                    </t>
+
+                    <div class="o_woow_profile_form">
+                        <div class="o_woow_field">
+                            <label for="invoice_carrier_type">Carrier type</label>
+                            <select id="invoice_carrier_type"
+                                    t-model="state.invoiceForm.invoice_carrier_type">
+                                <option value="email">Email carrier (ECPay)</option>
+                                <option value="mobile">Mobile barcode</option>
+                                <option value="citizen">Citizen digital cert</option>
+                                <option value="triplicate">Triplicate (B2B)</option>
+                                <option value="paper">Paper</option>
+                                <option value="donation">Donation</option>
+                            </select>
+                        </div>
+
+                        <t t-if="showCarrierNumber">
+                            <div class="o_woow_field">
+                                <label for="invoice_carrier">Carrier number</label>
+                                <input id="invoice_carrier" type="text"
+                                       t-model="state.invoiceForm.invoice_carrier"
+                                       placeholder="e.g. /ABC+123 (mobile) or 16-char citizen ID"/>
+                            </div>
+                        </t>
+
+                        <t t-if="showBusinessFields">
+                            <div class="o_woow_field">
+                                <label for="invoice_tax_id">Tax ID (統編)</label>
+                                <input id="invoice_tax_id" type="text"
+                                       t-model="state.invoiceForm.invoice_tax_id"
+                                       placeholder="8-digit business tax ID"/>
+                            </div>
+                            <div class="o_woow_field">
+                                <label for="invoice_title">Invoice title (抬頭)</label>
+                                <input id="invoice_title" type="text"
+                                       t-model="state.invoiceForm.invoice_title"
+                                       placeholder="Defaults to your name if left blank"/>
+                            </div>
+                        </t>
+
+                        <t t-if="showLovecode">
+                            <div class="o_woow_field">
+                                <label for="invoice_lovecode">Love code (愛心碼)</label>
+                                <input id="invoice_lovecode" type="text"
+                                       t-model="state.invoiceForm.invoice_lovecode"
+                                       placeholder="3-7 digit organisation code"/>
+                            </div>
+                        </t>
+
+                        <div class="o_woow_profile_actions">
+                            <WoowButton variant="'secondary'" size="'md'" onClick.bind="onCancelInvoice"
+                                        disabled="state.invoiceSaving">
+                                Cancel
+                            </WoowButton>
+                            <WoowButton variant="'primary'" size="'md'" onClick.bind="onSaveInvoice"
+                                        disabled="state.invoiceSaving">
+                                <t t-if="state.invoiceSaving">Saving…</t>
+                                <t t-else="">Save</t>
+                            </WoowButton>
+                        </div>
+                    </div>
+                </WoowCard>
             </t>
         </div>
     </t>

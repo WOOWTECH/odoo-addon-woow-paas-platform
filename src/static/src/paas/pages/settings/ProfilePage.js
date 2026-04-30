@@ -20,20 +20,37 @@ export class ProfilePage extends Component {
             saving: false,
             saveSuccess: false,
             serverError: null,
+            invoiceForm: {
+                invoice_carrier_type: "email",
+                invoice_carrier: "",
+                invoice_tax_id: "",
+                invoice_title: "",
+                invoice_lovecode: "",
+            },
+            invoiceSaving: false,
+            invoiceSaveSuccess: false,
+            invoiceServerError: null,
         });
         this._saveSuccessTimer = null;
+        this._invoiceSaveSuccessTimer = null;
 
         onMounted(async () => {
-            if (!this.profile.partner) {
-                await profileService.fetch();
-            }
+            const tasks = [];
+            if (!this.profile.partner) tasks.push(profileService.fetch());
+            if (!this.profile.invoicePreference) tasks.push(profileService.fetchInvoicePreference());
+            await Promise.all(tasks);
             this._resetFormFromService();
+            this._resetInvoiceFormFromService();
         });
 
         onWillUnmount(() => {
             if (this._saveSuccessTimer) {
                 clearTimeout(this._saveSuccessTimer);
                 this._saveSuccessTimer = null;
+            }
+            if (this._invoiceSaveSuccessTimer) {
+                clearTimeout(this._invoiceSaveSuccessTimer);
+                this._invoiceSaveSuccessTimer = null;
             }
         });
     }
@@ -46,6 +63,17 @@ export class ProfilePage extends Component {
         this.state.form.phone = p.phone || "";
         this.state.fieldErrors = {};
         this.state.serverError = null;
+    }
+
+    _resetInvoiceFormFromService() {
+        const ip = this.profile.invoicePreference;
+        if (!ip) return;
+        this.state.invoiceForm.invoice_carrier_type = ip.invoice_carrier_type || "email";
+        this.state.invoiceForm.invoice_carrier = ip.invoice_carrier || "";
+        this.state.invoiceForm.invoice_tax_id = ip.invoice_tax_id || "";
+        this.state.invoiceForm.invoice_title = ip.invoice_title || "";
+        this.state.invoiceForm.invoice_lovecode = ip.invoice_lovecode || "";
+        this.state.invoiceServerError = null;
     }
 
     get isLoading() {
@@ -104,5 +132,50 @@ export class ProfilePage extends Component {
 
     onCancel() {
         this._resetFormFromService();
+    }
+
+    get invoiceCarrierType() {
+        return this.state.invoiceForm.invoice_carrier_type;
+    }
+
+    get showCarrierNumber() {
+        return ["mobile", "citizen"].includes(this.invoiceCarrierType);
+    }
+
+    get showBusinessFields() {
+        return this.invoiceCarrierType === "triplicate";
+    }
+
+    get showLovecode() {
+        return this.invoiceCarrierType === "donation";
+    }
+
+    async onSaveInvoice() {
+        this.state.invoiceSaveSuccess = false;
+        this.state.invoiceServerError = null;
+        this.state.invoiceSaving = true;
+        const result = await profileService.updateInvoicePreference({
+            invoice_carrier_type: this.state.invoiceForm.invoice_carrier_type,
+            invoice_carrier: this.state.invoiceForm.invoice_carrier.trim(),
+            invoice_tax_id: this.state.invoiceForm.invoice_tax_id.trim(),
+            invoice_title: this.state.invoiceForm.invoice_title.trim(),
+            invoice_lovecode: this.state.invoiceForm.invoice_lovecode.trim(),
+        });
+        this.state.invoiceSaving = false;
+        if (result.success) {
+            this._resetInvoiceFormFromService();
+            this.state.invoiceSaveSuccess = true;
+            if (this._invoiceSaveSuccessTimer) clearTimeout(this._invoiceSaveSuccessTimer);
+            this._invoiceSaveSuccessTimer = setTimeout(() => {
+                this.state.invoiceSaveSuccess = false;
+                this._invoiceSaveSuccessTimer = null;
+            }, 3000);
+        } else {
+            this.state.invoiceServerError = result.error || "Update failed";
+        }
+    }
+
+    onCancelInvoice() {
+        this._resetInvoiceFormFromService();
     }
 }
