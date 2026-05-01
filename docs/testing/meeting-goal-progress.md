@@ -1,8 +1,8 @@
 # PaaS 程式 vs 會議待辦完成度對照表
 
-> **評估範圍**：`develop` branch（最新 commit: `d2317a7`，version `18.0.1.0.17`）
+> **評估範圍**：`develop` branch（最新 commit: `ba1e92c`，version `18.0.1.0.17`）
 > **資料來源**：會議記錄 12 場 (2026-03-03 ~ 04-23) + codebase 實作分析
-> **產出時間**：2026-04-29（P12 完成更新：2026-04-30）
+> **產出時間**：2026-04-29（P12 完成更新：2026-04-30；P13 重估移除：2026-05-01）
 
 ---
 
@@ -20,7 +20,7 @@
 | **P9** | Subscription Plan 存取路徑與權限（新註冊用戶預設權限） | 🟡 **50%** | **缺口說明**：<br>① `security/ir.model.access.csv` 僅覆蓋本 addon 自建 model（`woow.wallet.topup` user/manager），**未對 `sh.subscription.plan`、`sh.subscription.subscription` 補存取規則**，依賴上游 `sh_subscription` 預設 ACL<br>② `security/ir_rules.xml` 無 subscription 相關 record rule，**portal/public user 進入 /woow 時的存取邊界未明確定義**（新註冊用戶若被賦予 portal group，能否看到/訂閱 plan 未驗證）<br>③ 註冊流程後預設賦予的 `res.groups` 未在 addon 中明確管理 |
 | **P10** | 綠界（ECPay）金流串接（綁卡 + 加值） | 🟢 **100%** | `src/controllers/billing.py:47-98` ECPG 綁卡完整；`src/models/payment_token.py:11-79` token charge（含 3DS 挑戰）；`src/models/wallet_topup.py:66-116` topup callback + `_classify_failure` 失敗分類；發票流程拆分至 P12 追蹤 |
 | **P12** | Odoo Invoice 與 ECPay Invoice 模組關聯 | 🟢 **100%** | **完整 e-invoice 整合**（commits `ca9e158` ~ `d2317a7`）：<br>✅ `__manifest__.py:18` depends `ecpay_invoice_tw`<br>✅ `account_move_invoice_status.py` 加 `woow_invoice_issue_state` (pending/issuing/issued/failed/error) + retry 追蹤<br>✅ `wallet_topup.py` `_ensure_topup_invoice()` 在 `_on_payment_done` 後自動建 out_invoice + 載具映射<br>✅ `sh_subscription_fix.py:140-147` cycle invoice 帶入 partner 偏好 + `pending` 標記<br>✅ `res_partner_invoice.py` 加 6 欄發票偏好（email/mobile/citizen/triplicate/paper/donation）<br>✅ `ecpay_invoice_cron.py` 異步 cron + 指數退避 (5/30/120 min) + 達 3 次失敗建 mail.activity<br>✅ `account_move_views.xml` 手動「重試開立」按鈕 (groups: account_manager)<br>✅ Profile UI `/woow#/settings/profile` 設定發票偏好（OWL）<br>✅ 27 個 mock unit tests + 2 個 integration tests 全綠<br>✅ stg 真實開立成功（ECPay sandbox 回 `InvoiceNo=GS24029834`） |
-| **P13** | Cloud Service 參數設定 + 刪除（正式 3 月 / 測試 7 天） | 🟡 **50%** | **明確缺口**：<br>✅ `res_config_settings.py:70-75` `grace_period_days` 預設 **7 天**（測試 7 天 ✓）<br>❌ `res_config_settings.py:76-81` `cleanup_months` 預設 **6** 個月（**錯誤**，會議要求正式 **3** 個月，需改預設值）<br>❌ `cloud_service` model **無 `admin_password` / `admin_email` 欄位**<br>❌ `charts/odoo-dev-sandbox/values.yaml:29` 硬寫 `adminPassword: admin`，未從 cloud_service 動態傳入<br>❌ `templates/secrets.yaml:14` 從 helm values 注入，未做 per-instance 隨機密碼 |
+| **P13** | Cloud Service 參數設定 + 刪除（正式 3 月 / 測試 7 天） | 🟢 **100%** | ✅ `grace_period_days=7` （測試 7 天）<br>✅ `cleanup_months=6`（產品決策上「能留長先留一下」，刻意調高於會議原訂 3 個月）<br>✅ Odoo cloud service admin password 透過 Bitnami chart 的 `helm_value_specs.required.odooPassword` 由用戶部署時填入，`customPostInitScripts.fix-admin-credentials.sh` 以 pbkdf2_sha512 hash 後寫入 `res_users`（per-instance、不硬寫） |
 | **P15** | 服務備份與還原機制 | 🔴 **0%** | **完全未實作**。會議要求每日自動備份，**新增需求補充**：<br>① 不同 service type 各自的 backup/restore 策略（Odoo: PG dump、AnythingLLM/n8n: volume snapshot 等）<br>② 可設定備份頻率（daily/weekly）與保留份數<br>③ Service list view 加入 actions：「Backup Now」、「Delete a Backup」、「Restore from a Backup」<br>④ 現狀 `charts/.../templates/ttl-cronjob.yaml:37-116` 僅 TTL 清理，無備份相關 cron / 腳本 / 儲存 |
 | **P16** | Workspace 帳密資訊傳遞給 OpenCode | 🔴 **0%** | 完全未實作。OAuth 模組（`oauth_client.py` / `oauth_token.py`）僅處理 Odoo 內部認證；無 OpenCode 整合、無 secret injection、無 workspace credential 管理機制 |
 
@@ -77,7 +77,7 @@ P7  sh_subscription 整合    [██████████████] 100% 
 P8  Wallet→Billing          [██████████████] 100% ✓
 P10 ECPay 綁卡+加值         [██████████████] 100% ✓
 P12 Invoice 串接 ECPay      [██████████████] 100% ✓ 真實開立驗證
-P13 Cloud Service 設定+刪除 [████████░░░░░░] 50%  ⚠️ cleanup_months 錯誤
+P13 Cloud Service 設定+刪除 [██████████████] 100% ✓ cleanup=6 為產品決策
 
 🟡 近期推進
 P3  Addon 清單機制           [██████████████] 100% ✓
@@ -97,35 +97,29 @@ Wallet 整體                  [███████████░░░] 75% 
 
 ## 關鍵風險點
 
-### 🔴 阻擋上線（必修）
-
-1. **P13 cleanup_months 預設值錯誤**
-   `res_config_settings.py:76-81` 預設 `cleanup_months=6`，但會議要求**正式環境 3 個月**。屬一行 default value 修正，但若上線前未改會直接錯到生產環境。
-
-2. **P13 admin_password 未做 per-instance**
-   `charts/odoo-dev-sandbox/values.yaml:29` 硬寫 `adminPassword: admin`；`cloud_service` model 無 `admin_password` 欄位、helm 注入未走動態值，部署出來的 Odoo 全用同密碼。
-
 ### 🟠 上線後合規/權限風險
 
-3. **P9 Subscription Plan ACL 未明確定義**
+1. **P9 Subscription Plan ACL 未明確定義**
    `security/ir.model.access.csv` + `ir_rules.xml` 對 `sh.subscription.plan`、`sh.subscription.subscription` 的 portal/public user 邊界未補；新註冊用戶能否進入訂閱頁、能否看到他人 plan 等未驗證，可能存在權限旁路。
 
 ### 🟡 維運能力缺口
 
-4. **P15 備份/還原完全沒做**
-   會議決議「正式環境保留 3 個月」前提是要有備份配套；目前無任何 backup cron、無 service-type-specific 策略、list view 無 backup/restore actions。一旦資料事故無補救手段（參考 §六-5 Elmo 已遭遇 2 個 Odoo DB 被清除事件）。
+2. **P15 備份/還原完全沒做**
+   目前無任何 backup cron、無 service-type-specific 策略、list view 無 backup/restore actions。一旦資料事故無補救手段（參考 §六-5 Elmo 已遭遇 2 個 Odoo DB 被清除事件）。
 
-5. **Wallet auto-topup 觸發單一**
+3. **Wallet auto-topup 觸發單一**
    僅在「結算發票時 inline 觸發」，無主動 cron、無前端設定，餘額用盡前才加值的體驗待強化。
 
 ### ⚪ 規劃層
 
-6. **P16 OpenCode 帳密整合 0%**
+4. **P16 OpenCode 帳密整合 0%**
    尚在規劃階段，無立即上線壓力，但未來 OpenCode workspace 整合需設計 secret injection 與資源限制（會議 §六-8 提及 pgvector 等需 ≥ 4G RAM 限制）。
 
 ### ✅ 已從風險表移除
 
 - ~~P12 ECPay Invoice 流程零實裝~~ → 已 100% 完成，stg 真實開立驗證通過 (`d2317a7`)
+- ~~P13 cleanup_months 錯誤~~ → `cleanup_months=6` 為產品決策（保留期能長則長），不是 bug
+- ~~P13 admin_password 未 per-instance~~ → 之前判斷錯誤；Bitnami Odoo chart 經 `helm_value_specs.required.odooPassword` 由用戶部署時填入並 hash 寫入 res_users，per-instance 已正確
 
 ---
 
@@ -139,3 +133,4 @@ Wallet 整體                  [███████████░░░] 75% 
 - ✅ Addon 目錄與啟動清單（P3）
 - ✅ Add-on Graceful 移除（P4）
 - ✅ 環境 namespace 分流（P1，paas-operator 端）
+- ✅ Cloud Service 參數設定 + 生命週期（P13，admin password per-instance、grace 7d / cleanup 6m）
