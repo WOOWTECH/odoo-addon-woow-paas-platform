@@ -2,7 +2,7 @@
 
 > **評估範圍**：`develop` branch（最新 commit: `ba1e92c`，version `18.0.1.0.17`）
 > **資料來源**：會議記錄 12 場 (2026-03-03 ~ 04-23) + codebase 實作分析
-> **產出時間**：2026-04-29（P12 完成更新：2026-04-30；P13 重估移除：2026-05-01；P9 重新驗證：2026-05-01；P9 完成：2026-05-02）
+> **產出時間**：2026-04-29　**最後更新**：2026-05-02（更新歷史見文末 Changelog）
 
 ---
 
@@ -70,27 +70,25 @@
 ## 整體完成度視覺化
 
 ```
-🔴 上線前必完成（高優先）
-P1  Odoo Service 環境分流   [██████████████] 100% ✓ (paas-operator 端)
-P5  PaaS+Subscription 合併  [██████████████] 100% ✓
-P7  sh_subscription 整合    [██████████████] 100% ✓
-P8  Wallet→Billing          [██████████████] 100% ✓
-P10 ECPay 綁卡+加值         [██████████████] 100% ✓
-P12 Invoice 串接 ECPay      [██████████████] 100% ✓ 真實開立驗證
-P13 Cloud Service 設定+刪除 [██████████████] 100% ✓ cleanup=6 為產品決策
+🟢 已完成（100%）
+P1  Odoo Service 環境分流    [██████████████] ✓ paas-operator 端
+P3  Addon 清單機制            [██████████████] ✓
+P4  Add-on Graceful 移除      [██████████████] ✓
+P5  PaaS+Subscription 合併   [██████████████] ✓
+P7  sh_subscription 整合     [██████████████] ✓
+P8  Wallet→Billing           [██████████████] ✓
+P9  Subscription Plan 權限   [██████████████] ✓ 上游 ACL + 雙層保護
+P10 ECPay 綁卡+加值          [██████████████] ✓
+P12 Invoice 串接 ECPay       [██████████████] ✓ stg 真實開立驗證
+P13 Cloud Service 設定+刪除  [██████████████] ✓ cleanup=6 為產品決策
+試用期 7 天                   [██████████████] ✓
 
-🟡 近期推進
-P3  Addon 清單機制           [██████████████] 100% ✓
-P4  Graceful 移除            [██████████████] 100% ✓
-P15 服務備份/還原             [░░░░░░░░░░░░░░] 0%   ⚠️ 完全沒做
+🟡 進行中（部分）
+Wallet 整體                   [███████████░░░] 75%  auto-topup cron 缺
 
-🟢 規劃中
-P9  Subscription Plan 權限   [██████████████] 100% ✓ (上游 ACL + 雙層保護驗證完成)
-P16 OpenCode 帳密            [░░░░░░░░░░░░░░] 0%
-
-跨項目
-試用期 7 天                  [██████████████] 100% ✓
-Wallet 整體                  [███████████░░░] 75%  (auto-topup cron 缺)
+🔴 未做（0%）
+P15 服務備份/還原              [░░░░░░░░░░░░░░] 0%   ⚠️ 高風險（無補救手段）
+P16 OpenCode 帳密             [░░░░░░░░░░░░░░] 0%   規劃階段，無立即上線壓力
 ```
 
 ---
@@ -131,3 +129,14 @@ Wallet 整體                  [███████████░░░] 75% 
 - ✅ 環境 namespace 分流（P1，paas-operator 端）
 - ✅ Cloud Service 參數設定 + 生命週期（P13，admin password per-instance、grace 7d / cleanup 6m）
 - ✅ **Subscription Plan 存取邊界（P9）** — 上游 sh_subscription portal record rule + PaaS controller 雙層保護，4 unit tests + 2 web smoke 驗證
+
+---
+
+## Changelog
+
+| 日期 | 變更 |
+|------|------|
+| 2026-05-02 | P9 ACL 邊界完成驗證（4 unit tests + 2 web smoke 全綠），70% → 100%；移除原 §關鍵風險點 §1 |
+| 2026-05-01 | P9 重新驗證 50% → 70%（controller `.sudo()` + `auth="user"` 緩解，剩 RPC 邊界）；P13 重估：`cleanup_months=6` 為產品決策非 bug、admin password 已 per-instance |
+| 2026-04-30 | P12 ECPay e-invoice 整合 100% 完成，stg 真實開立驗證通過 (`d2317a7`) |
+| 2026-04-29 | 初版產出（基於會議記錄 12 場 + codebase 實作分析） |
