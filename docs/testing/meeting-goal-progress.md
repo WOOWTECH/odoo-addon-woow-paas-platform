@@ -2,7 +2,7 @@
 
 > **評估範圍**：`develop` branch（最新 commit: `ba1e92c`，version `18.0.1.0.17`）
 > **資料來源**：會議記錄 12 場 (2026-03-03 ~ 04-23) + codebase 實作分析
-> **產出時間**：2026-04-29（P12 完成更新：2026-04-30；P13 重估移除：2026-05-01）
+> **產出時間**：2026-04-29（P12 完成更新：2026-04-30；P13 重估移除：2026-05-01；P9 重新驗證：2026-05-01；P9 完成：2026-05-02）
 
 ---
 
@@ -17,7 +17,7 @@
 | **P5** | PaaS + Subscription 合併 | 🟢 **100%** | `__manifest__.py:14-17` depends `sh_subscription` + `sh_subscription_wallet`；`src/models/subscription_lifecycle_mixin.py` 共 457 行涵蓋 trial 啟動、skip-trial（`_skip_trial()` L336-417）、to-paid 同步、grace period、cleanup；`cloud_service.py:44` 繼承 mixin |
 | **P7** | sh_subscription 整合（含非同步） | 🟢 **100%** | `src/models/sh_subscription_fix.py` 修 auto-invoice bug；`src/models/subscription_lifecycle_cron.py` 用 ir.cron 實現非同步處理（trial 結束、發票結算、grace period 推進、清理）。**未使用 OCA queue_job**（manifest 無相關依賴），純 ir.cron 模式即足以滿足需求 |
 | **P8** | Wallet → Billing 分頁 | 🟢 **100%** | 前端 `src/static/src/paas/pages/billing/` 6 個頁面（`BillingOverviewPage`、`InvoiceList`、`TopupStore`、`SubscriptionList`、`TransactionList` 等）；`src/controllers/billing.py` 完整 endpoint；`src/models/wallet_topup.py` + `wallet_transaction.py` model + state machine（draft → pending → done/failed）+ bonus 機制全到位 |
-| **P9** | Subscription Plan 存取路徑與權限（新註冊用戶預設權限） | 🟡 **50%** | **缺口說明**：<br>① `security/ir.model.access.csv` 僅覆蓋本 addon 自建 model（`woow.wallet.topup` user/manager），**未對 `sh.subscription.plan`、`sh.subscription.subscription` 補存取規則**，依賴上游 `sh_subscription` 預設 ACL<br>② `security/ir_rules.xml` 無 subscription 相關 record rule，**portal/public user 進入 /woow 時的存取邊界未明確定義**（新註冊用戶若被賦予 portal group，能否看到/訂閱 plan 未驗證）<br>③ 註冊流程後預設賦予的 `res.groups` 未在 addon 中明確管理 |
+| **P9** | Subscription Plan 存取路徑與權限（新註冊用戶預設權限） | 🟢 **100%** | **設計決策**：本 addon 不重複實作上游 ACL，採用「上游 sh_subscription 提供 base.group_portal ACL + portal record rule（filter `sh_partner_id`）」+「PaaS controller `auth="user"` + `.sudo()`」的雙層保護<br>**驗證證據**（2026-05-02 跑於 dev-sandbox-stg）：<br>✅ 上游 ACL 靜態分析：`sh_subscription_security.xml` 已給 `base.group_portal` plan 全可讀 + subscription `sh_partner_id = user.partner_id` record rule<br>✅ 4 條 unit test (`src/tests/test_acl_p9.py`) 0 failed：portal 只看自己 sub / portal 可讀全 plan / internal 無 role 被擋 / signup template user 只含 base.group_portal<br>✅ Web 煙霧 Smoke 1：admin RPC 驗 `base.template_portal_user_id=5` (portaltemplate, active=False)，groups 全 portal-derived 無 base.group_user<br>✅ Web 煙霧 Smoke 2：`/web/signup` 完整流程註冊新 user → 導向 `/my`，admin 視角驗證 `share=true, hasInternalUser=false, hasPortal=true`<br>✅ 文件：`docs/deployment/admin-roles.md` 說明 PaaS admin 啟用 `sh_subscription.group_manager_sh_subscription` 步驟<br>**設計原則**：portal user **不疊加** sh_subscription functional group（會破壞 portal/internal 邊界）；PaaS admin **手動加入** `group_manager_sh_subscription` 才能後台跨租戶管理 |
 | **P10** | 綠界（ECPay）金流串接（綁卡 + 加值） | 🟢 **100%** | `src/controllers/billing.py:47-98` ECPG 綁卡完整；`src/models/payment_token.py:11-79` token charge（含 3DS 挑戰）；`src/models/wallet_topup.py:66-116` topup callback + `_classify_failure` 失敗分類；發票流程拆分至 P12 追蹤 |
 | **P12** | Odoo Invoice 與 ECPay Invoice 模組關聯 | 🟢 **100%** | **完整 e-invoice 整合**（commits `ca9e158` ~ `d2317a7`）：<br>✅ `__manifest__.py:18` depends `ecpay_invoice_tw`<br>✅ `account_move_invoice_status.py` 加 `woow_invoice_issue_state` (pending/issuing/issued/failed/error) + retry 追蹤<br>✅ `wallet_topup.py` `_ensure_topup_invoice()` 在 `_on_payment_done` 後自動建 out_invoice + 載具映射<br>✅ `sh_subscription_fix.py:140-147` cycle invoice 帶入 partner 偏好 + `pending` 標記<br>✅ `res_partner_invoice.py` 加 6 欄發票偏好（email/mobile/citizen/triplicate/paper/donation）<br>✅ `ecpay_invoice_cron.py` 異步 cron + 指數退避 (5/30/120 min) + 達 3 次失敗建 mail.activity<br>✅ `account_move_views.xml` 手動「重試開立」按鈕 (groups: account_manager)<br>✅ Profile UI `/woow#/settings/profile` 設定發票偏好（OWL）<br>✅ 27 個 mock unit tests + 2 個 integration tests 全綠<br>✅ stg 真實開立成功（ECPay sandbox 回 `InvoiceNo=GS24029834`） |
 | **P13** | Cloud Service 參數設定 + 刪除（正式 3 月 / 測試 7 天） | 🟢 **100%** | ✅ `grace_period_days=7` （測試 7 天）<br>✅ `cleanup_months=6`（產品決策上「能留長先留一下」，刻意調高於會議原訂 3 個月）<br>✅ Odoo cloud service admin password 透過 Bitnami chart 的 `helm_value_specs.required.odooPassword` 由用戶部署時填入，`customPostInitScripts.fix-admin-credentials.sh` 以 pbkdf2_sha512 hash 後寫入 `res_users`（per-instance、不硬寫） |
@@ -85,7 +85,7 @@ P4  Graceful 移除            [██████████████] 100%
 P15 服務備份/還原             [░░░░░░░░░░░░░░] 0%   ⚠️ 完全沒做
 
 🟢 規劃中
-P9  Subscription Plan 權限   [████████░░░░░░] 50%
+P9  Subscription Plan 權限   [██████████████] 100% ✓ (上游 ACL + 雙層保護驗證完成)
 P16 OpenCode 帳密            [░░░░░░░░░░░░░░] 0%
 
 跨項目
@@ -97,22 +97,17 @@ Wallet 整體                  [███████████░░░] 75% 
 
 ## 關鍵風險點
 
-### 🟠 上線後合規/權限風險
-
-1. **P9 Subscription Plan ACL 未明確定義**
-   `security/ir.model.access.csv` + `ir_rules.xml` 對 `sh.subscription.plan`、`sh.subscription.subscription` 的 portal/public user 邊界未補；新註冊用戶能否進入訂閱頁、能否看到他人 plan 等未驗證，可能存在權限旁路。
-
 ### 🟡 維運能力缺口
 
-2. **P15 備份/還原完全沒做**
+1. **P15 備份/還原完全沒做**
    目前無任何 backup cron、無 service-type-specific 策略、list view 無 backup/restore actions。一旦資料事故無補救手段（參考 §六-5 Elmo 已遭遇 2 個 Odoo DB 被清除事件）。
 
-3. **Wallet auto-topup 觸發單一**
+2. **Wallet auto-topup 觸發單一**
    僅在「結算發票時 inline 觸發」，無主動 cron、無前端設定，餘額用盡前才加值的體驗待強化。
 
 ### ⚪ 規劃層
 
-4. **P16 OpenCode 帳密整合 0%**
+3. **P16 OpenCode 帳密整合 0%**
    尚在規劃階段，無立即上線壓力，但未來 OpenCode workspace 整合需設計 secret injection 與資源限制（會議 §六-8 提及 pgvector 等需 ≥ 4G RAM 限制）。
 
 ### ✅ 已從風險表移除
@@ -120,6 +115,7 @@ Wallet 整體                  [███████████░░░] 75% 
 - ~~P12 ECPay Invoice 流程零實裝~~ → 已 100% 完成，stg 真實開立驗證通過 (`d2317a7`)
 - ~~P13 cleanup_months 錯誤~~ → `cleanup_months=6` 為產品決策（保留期能長則長），不是 bug
 - ~~P13 admin_password 未 per-instance~~ → 之前判斷錯誤；Bitnami Odoo chart 經 `helm_value_specs.required.odooPassword` 由用戶部署時填入並 hash 寫入 res_users，per-instance 已正確
+- ~~P9 Subscription Plan RPC 直接存取邊界未驗證~~ → 2026-05-02 完成驗證，4 unit tests + 2 web smoke 全綠；上游已 cover portal record rule，PaaS controller 雙層保護有效
 
 ---
 
@@ -134,3 +130,4 @@ Wallet 整體                  [███████████░░░] 75% 
 - ✅ Add-on Graceful 移除（P4）
 - ✅ 環境 namespace 分流（P1，paas-operator 端）
 - ✅ Cloud Service 參數設定 + 生命週期（P13，admin password per-instance、grace 7d / cleanup 6m）
+- ✅ **Subscription Plan 存取邊界（P9）** — 上游 sh_subscription portal record rule + PaaS controller 雙層保護，4 unit tests + 2 web smoke 驗證
