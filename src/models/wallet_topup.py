@@ -2,6 +2,7 @@ import logging
 from datetime import timedelta
 
 from odoo import api, fields, models
+from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -71,6 +72,57 @@ class WalletTopup(models.Model):
             if any(k in low for k in keywords):
                 return code
         return 'generic'
+
+    @api.model
+    def create_auto_topup(self, partner, amount):
+        """Factory: create a draft auto-topup for the given shortfall.
+
+        System-triggered topup (no fixed plan, no bonus, currency=TWD).
+        Used by Phase 4.3's deprecation shim and the future active auto-topup
+        cron (tracked in maestri 'pending' note).
+
+        Args:
+            partner: res.partner record
+            amount: positive float, the shortfall to cover (TWD)
+
+        Returns:
+            woow.wallet.topup record (state='draft', source='auto')
+
+        Raises:
+            ValidationError: if amount <= 0
+        """
+        if amount <= 0:
+            raise ValidationError(
+                "Auto-topup amount must be positive (got %s)" % amount
+            )
+
+        twd = self.env.ref('base.TWD', raise_if_not_found=True)
+        vals = {
+            'partner_id': partner.id,
+            'amount': float(amount),
+            'credits': float(amount),
+            'bonus': 0.0,
+            'currency_id': twd.id,
+            'source': 'auto',
+            'state': 'draft',
+        }
+        # Inherit partner's invoice preference (mirrors manual topup flow).
+        # _woow_partner_invoice_vals returns dict with the correct keys for the
+        # account.move side; for the topup, we pull only the fields that exist
+        # on woow.wallet.topup.
+        if hasattr(partner, '_woow_partner_invoice_vals'):
+            for src, dst in (
+                ('woow_invoice_carrier_type', 'invoice_carrier_type'),
+                ('woow_invoice_carrier', 'invoice_carrier'),
+                ('woow_invoice_tax_id', 'invoice_tax_id'),
+                ('woow_invoice_title', 'invoice_title'),
+                ('woow_invoice_lovecode', 'invoice_lovecode'),
+            ):
+                if src in partner._fields:
+                    val = partner[src]
+                    if val:
+                        vals[dst] = val
+        return self.sudo().create(vals)
 
     def _on_payment_done(self, tx):
         """Credit the wallet when the linked payment transaction succeeds.
