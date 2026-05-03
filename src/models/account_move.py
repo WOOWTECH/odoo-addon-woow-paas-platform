@@ -9,6 +9,32 @@ _logger = logging.getLogger(__name__)
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
+    def create_ecpay_invoice(self):
+        """Short-circuit when invoice is PaaS-flagged and not forced.
+
+        Why: upstream `ecpay_invoice_tw` calls `create_ecpay_invoice()` inline
+        from its `action_post()` hook (when company.auto_invoice='automatic'),
+        raising UserError on ECPay failure — which would roll back the entire
+        `_pay_from_wallet` transaction (including the wallet deduction).
+
+        PaaS-created invoices set `woow_skip_upstream_hook=True` so this
+        method returns early when called from the upstream hook. Our async
+        `ecpay_invoice_cron` opens the back door via
+        `with_context(woow_force_issue=True)` so it can still issue the invoice.
+
+        Thread-safe: pure inheritance + context (no class-level monkey-patch).
+        """
+        self.ensure_one()
+        if (self.woow_skip_upstream_hook
+                and not self.env.context.get('woow_force_issue')):
+            _logger.debug(
+                "[INV] create_ecpay_invoice short-circuit invoice=%s "
+                "(skip flag set, no force ctx)",
+                self.id,
+            )
+            return
+        return super().create_ecpay_invoice()
+
     def _pay_from_wallet(self, subscription=None):
         """Settle this invoice using wallet points.
 
