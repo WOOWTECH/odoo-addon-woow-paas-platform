@@ -1,10 +1,25 @@
 import logging
+import math
+import uuid
 from datetime import timedelta
 
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
+
+
+# Stable failure codes returned by `charge_via_token`. Mirrors the constants
+# in sh_subscription_fix.py so callers can switch between the two charge paths
+# without relearning the vocabulary.
+TOPUP_OK = 'ok'
+TOPUP_INVALID_STATE = 'invalid_state'
+TOPUP_NO_TOKEN = 'no_token'
+TOPUP_PROVIDER_NOT_ENABLED = 'provider_not_enabled'
+TOPUP_CURRENCY_NOT_CONFIGURED = 'currency_not_configured'
+TOPUP_3DS_REQUIRED = '3ds_required'
+TOPUP_SDK_ERROR = 'sdk_error'
+TOPUP_WALLET_CREDIT_FAILED = 'wallet_credit_failed'
 
 
 class WalletTopup(models.Model):
@@ -124,6 +139,121 @@ class WalletTopup(models.Model):
                         vals[dst] = val
         return self.sudo().create(vals)
 
+    def charge_via_token(self, token):
+        """Synchronously charge `token` for self.amount, credit wallet, create invoice.
+
+        Args:
+            token: payment.token record (must be active, ECPG-bound)
+
+        Returns:
+            (ok: bool, message: str). Side effects:
+            - state transitions: draft -> pending -> done/failed
+            - on done: wallet credited, invoice created (woow_skip_upstream_hook=True)
+            - on 3DS required: state stays 'pending' (cron can't drive 3DS)
+
+        Return codes (message):
+            'ok'                          - charge succeeded
+            'invalid_state'               - topup not in 'draft' state (concurrent/replay)
+            'no_token'                    - token missing/inactive/no ecpg_bindcard_id
+            'provider_not_enabled'        - token's provider has no enable_ecpg
+            'currency_not_configured'    - neither provider nor TWD available
+            '3ds_required'                - ECPG returned ThreeDURL; cron can't complete
+            'sdk_error'                   - exception from _send_payment_request
+            'wallet_credit_failed'        - ECPay charged but wallet credit failed (CRITICAL)
+            '<state>'                     - tx ended in non-done state (state name returned)
+        """
+        self.ensure_one()
+        # Defense against concurrent callers (cron + webhook + manual button):
+        # only a draft topup is chargeable. Once another caller flips to 'pending',
+        # this caller should bail rather than create a second payment.transaction.
+        if self.state != 'draft':
+            _logger.info(
+                '[TOPUP_AUTO] charge_via_token aborted: state=%s topup=%s',
+                self.state, self.id,
+            )
+            return False, TOPUP_INVALID_STATE
+        if not token or not token.active or not token.ecpg_bindcard_id:
+            return False, TOPUP_NO_TOKEN
+
+        provider = token.provider_id
+        if not provider or not getattr(provider, 'enable_ecpg', False):
+            return False, TOPUP_PROVIDER_NOT_ENABLED
+
+        currency = provider.main_currency_id or self.env.ref(
+            'base.TWD', raise_if_not_found=False,
+        )
+        if not currency:
+            return False, TOPUP_CURRENCY_NOT_CONFIGURED
+
+        self.write({'state': 'pending'})
+        charge_amount = int(math.ceil(self.amount))
+        # 20-char limit on ECPay reference; UUID hex keeps unique portion first
+        # so ecpay's _ecpg_build_merchant_trade_no truncation preserves uniqueness.
+        reference = f'TOPUP{uuid.uuid4().hex[:15].upper()}'
+
+        tx = self.env['payment.transaction'].sudo().create({
+            'provider_id': provider.id,
+            'payment_method_id': token.payment_method_id.id,
+            'reference': reference,
+            'amount': float(charge_amount),
+            'currency_id': currency.id,
+            'partner_id': self.partner_id.id,
+            'token_id': token.id,
+            'operation': 'offline',
+            # Link the tx back to this topup so the _set_done callback in
+            # payment_transaction.py can credit the wallet if the user later
+            # completes 3DS via the web flow (without waiting for the cleanup
+            # cron to reconcile).
+            'woow_topup_id': self.id,
+        })
+        self.write({'payment_transaction_id': tx.id})
+        _logger.info(
+            "[TOPUP_AUTO] tx created topup=%s tx=%s ref=%s amount=%s token=%s",
+            self.id, tx.id, reference, charge_amount, token.id,
+        )
+
+        try:
+            result = tx._send_payment_request()
+        except Exception:
+            _logger.exception(
+                '[TOPUP_AUTO] send_payment_request failed topup=%s', self.id,
+            )
+            self.write({'state': 'failed', 'failure_code': TOPUP_SDK_ERROR})
+            return False, TOPUP_SDK_ERROR
+
+        # 3DS - keep state pending, don't fail. User may complete via web later.
+        if isinstance(result, dict) and result.get('redirect_url'):
+            _logger.info(
+                '[TOPUP_AUTO] 3DS required topup=%s tx=%s; aborting cron path',
+                self.id, tx.id,
+            )
+            return False, TOPUP_3DS_REQUIRED
+
+        if tx.state != 'done':
+            _logger.warning(
+                '[TOPUP_AUTO] tx not done topup=%s tx=%s state=%s',
+                self.id, tx.id, tx.state,
+            )
+            self.write({'state': 'failed', 'failure_code': tx.state})
+            return False, tx.state
+
+        # ECPay has charged the card. Subsequent failure during _on_payment_done
+        # must NOT propagate - otherwise the outer transaction rolls back and the
+        # next caller would charge AGAIN. Catch + log critical.
+        try:
+            self._on_payment_done(tx)
+        except Exception:
+            _logger.exception(
+                'CRITICAL: auto-topup charged ECPay (tx=%s amount=%.2f) but '
+                'post-charge bookkeeping failed; manual reconciliation required '
+                '(topup=%s, partner=%s)',
+                tx.reference, charge_amount, self.id, self.partner_id.id,
+            )
+            self.write({'state': 'failed', 'failure_code': TOPUP_WALLET_CREDIT_FAILED})
+            return False, TOPUP_WALLET_CREDIT_FAILED
+
+        return True, TOPUP_OK
+
     def _on_payment_done(self, tx):
         """Credit the wallet when the linked payment transaction succeeds.
 
@@ -140,7 +270,11 @@ class WalletTopup(models.Model):
                 self.id, self.wallet_transaction_id.id if self.wallet_transaction_id else None,
             )
             return
-        description = f"Top-up: {self.plan_id.name}"
+        # Auto-topups have no plan_id (Path B Phase 4.1 made plan_id nullable).
+        # Without this guard the description renders "Top-up: False" in the
+        # wallet ledger. Mirrors the existing `_create_topup_invoice` guard
+        # below.
+        description = f"Top-up: {self.plan_id.name}" if self.plan_id else "Wallet Top-up"
         total_credits = self.credits + self.bonus
         _logger.info(
             "[TOPUP] crediting wallet topup=%s partner=%s credits=%s+bonus=%s total=%s",
@@ -305,6 +439,11 @@ class WalletTopup(models.Model):
                 'price_unit': self.amount,
             })],
             'woow_invoice_issue_state': 'pending',
+            # Path B: PaaS issues e-invoices via cron only. The skip flag
+            # short-circuits the upstream `create_ecpay_invoice` action_post
+            # hook so the same move isn't issued twice (once inline, once by
+            # the cron). Required for both manual and auto topups.
+            'woow_skip_upstream_hook': True,
         }
         move_vals.update(self._map_carrier_to_ecpay_vals())
         move = self.env['account.move'].sudo().create(move_vals)

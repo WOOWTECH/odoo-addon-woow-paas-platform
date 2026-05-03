@@ -722,7 +722,7 @@ class BillingController(Controller):
             'new_balance': partner.wallet_balance,
             'failure_code': topup.failure_code or '',
             'failure_message': topup.failure_message or '',
-            'plan_name': topup.plan_id.name,
+            'plan_name': topup.plan_id.name or '',
         }}
 
     # ==================== Subscription API ====================
