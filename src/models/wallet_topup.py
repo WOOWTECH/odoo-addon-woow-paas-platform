@@ -105,17 +105,28 @@ class WalletTopup(models.Model):
 
         Raises:
             ValidationError: if amount <= 0
+
+        Note: amount is ceil()'d to integer TWD so the wallet credit, the
+        Odoo invoice price_unit, and the ECPay charge all reconcile to the
+        same value. The fractional surplus (max 0.99 TWD) accrues to the
+        user's wallet for future use.
         """
         if amount <= 0:
             raise ValidationError(
                 "Auto-topup amount must be positive (got %s)" % amount
             )
 
+        # Ceil to integer TWD: ECPay requires positive integer charge amount,
+        # and wallet credit / invoice line price must match the actual charge
+        # to keep the customer's invoice + card statement + wallet ledger
+        # reconcilable. Surplus stays in the wallet.
+        ceil_amount = float(math.ceil(amount))
+
         twd = self.env.ref('base.TWD', raise_if_not_found=True)
         vals = {
             'partner_id': partner.id,
-            'amount': float(amount),
-            'credits': float(amount),
+            'amount': ceil_amount,
+            'credits': ceil_amount,
             'bonus': 0.0,
             'currency_id': twd.id,
             'source': 'auto',

@@ -1,22 +1,11 @@
 import base64
 import logging
-import math
-import uuid
 
 from dateutil.relativedelta import relativedelta
 
 from odoo import api, fields, models
+from odoo.exceptions import ValidationError
 from odoo.tools.misc import formatLang
-
-# Return codes from _attempt_auto_topup.
-TOPUP_OK = 'ok'
-TOPUP_NO_SHORTFALL = 'no_shortfall'
-TOPUP_NO_TOKEN = 'no_token'
-TOPUP_PROVIDER_NOT_ENABLED = 'provider_not_enabled'
-TOPUP_CURRENCY_NOT_CONFIGURED = 'currency_not_configured'
-TOPUP_3DS_REQUIRED = '3ds_required'
-TOPUP_SDK_ERROR = 'sdk_error'
-TOPUP_WALLET_CREDIT_FAILED = 'wallet_credit_failed'
 
 _logger = logging.getLogger(__name__)
 
@@ -389,151 +378,81 @@ class ShSubscriptionFix(models.Model):
 
     @api.model
     def _attempt_auto_topup(self, partner, shortfall):
-        """Charge the partner's default bound card to top up the wallet.
+        """[DEPRECATED] Thin wrapper around wallet.topup.charge_via_token.
 
-        Args:
-            partner: res.partner record
-            shortfall: float amount needed (TWD)
+        Kept for backwards compatibility with existing tests and the existing
+        ``_try_settle_invoice`` call site. New code should call wallet.topup
+        directly via ``create_auto_topup()`` + ``charge_via_token()``.
 
-        Returns:
-            (True, 'ok')           — charge succeeded, wallet credited
-            (False, 'no_shortfall')— shortfall <= 0
-            (False, 'no_token')    — partner has no usable default ECPG token
-            (False, 'provider_not_enabled') — token's provider does not have enable_ecpg
-            (False, 'currency_not_configured') — neither provider nor TWD available
-            (False, '3ds_required')— ECPG returned ThreeDURL; cron cannot complete 3DS
-            (False, '<state>')     — payment.transaction ended in a non-done state
-            (False, 'sdk_error')   — unexpected exception from _send_payment_request
-            (False, 'wallet_credit_failed') — ECPay charged but wallet credit failed;
-                                              MANUAL RECONCILIATION REQUIRED
+        Returns ``(ok, msg)`` — same contract as before. The actual ECPay
+        charge, wallet credit, and invoice creation are delegated to
+        ``wallet.topup``.
+
+        Return codes (preserved from original implementation):
+
+        - ``'ok'``                          — charge succeeded, wallet credited
+        - ``'no_shortfall'``                — shortfall <= 0
+        - ``'no_token'``                    — no usable default ECPG token
+        - ``'provider_not_enabled'``        — token's provider missing enable_ecpg
+        - ``'currency_not_configured'``     — neither provider nor TWD available
+        - ``'3ds_required'``                — ECPG returned ThreeDURL
+        - ``'<state>'``                     — tx ended in non-done state
+        - ``'sdk_error'``                   — exception from _send_payment_request
+        - ``'wallet_credit_failed'``        — ECPay charged but wallet credit failed
+        - ``'invalid_state'``               — topup state guard (concurrent caller)
+
+        TODO: remove after one stable release once all callers migrated.
+        Tracked in: ``docs/plans/2026-05-03-invoice-issue-fix-path-b.md``
+        "Follow-up tickets" section.
         """
         _logger.info(
-            "[AUTO_TOPUP] _attempt_auto_topup partner=%s shortfall=%s",
+            '[AUTO_TOPUP] delegating to wallet.topup partner=%s shortfall=%s',
             partner.id, shortfall,
         )
         if shortfall <= 0:
-            return False, TOPUP_NO_SHORTFALL
+            return False, 'no_shortfall'
 
-        # ECPay requires TotalAmount as a positive integer TWD. Ceil so the wallet
-        # covers the invoice even if the shortfall has a fractional TWD component.
-        charge_amount = int(math.ceil(shortfall))
+        token = self._resolve_default_token(partner)
+        if not token:
+            return False, 'no_token'
 
-        # Default-token preference: Odoo Enterprise's account_payment adds a
-        # company-dependent `property_payment_token_id` on res.partner. On
-        # community installs that field is absent, so we fall back to the most
-        # recently created active ECPG-bound token for this partner. The
-        # set-default UI is a no-op without the Enterprise field — that is a
-        # known limitation tracked separately for Phase 2c.
-        token = self.env['payment.token'].sudo()
+        # base.TWD missing or other factory-time validation failure: degrade
+        # to the documented `currency_not_configured` code so the contract
+        # advertised in this docstring stays accurate.
+        try:
+            topup = self.env['woow.wallet.topup'].sudo().create_auto_topup(
+                partner=partner, amount=shortfall,
+            )
+        except (ValidationError, ValueError):
+            _logger.exception(
+                '[AUTO_TOPUP] create_auto_topup failed partner=%s shortfall=%s',
+                partner.id, shortfall,
+            )
+            return False, 'currency_not_configured'
+        return topup.charge_via_token(token)
+
+    def _resolve_default_token(self, partner):
+        """Find the default ECPG-bound payment token for ``partner``.
+
+        Phase 2c known limitation: community ed has no
+        ``property_payment_token_id`` so we fall back to the most recently
+        created active ECPG-bound token.
+
+        Returns: ``payment.token`` record (or ``None`` if none found).
+        """
+        Token = self.env['payment.token'].sudo()
+        token = Token
         if 'property_payment_token_id' in partner._fields:
             token = partner.with_company(
-                partner.company_id or self.env.company
+                partner.company_id or self.env.company,
             ).sudo().property_payment_token_id
         if not token or not token.active or not token.ecpg_bindcard_id:
-            token = self.env['payment.token'].sudo().search(
+            token = Token.search(
                 [
                     ('partner_id', '=', partner.id),
                     ('active', '=', True),
                     ('ecpg_bindcard_id', '!=', False),
                 ],
-                order='id desc',
-                limit=1,
+                order='id desc', limit=1,
             )
-
-        if not token or not token.active or not token.ecpg_bindcard_id:
-            _logger.info(
-                "[AUTO_TOPUP] no usable token partner=%s", partner.id,
-            )
-            return False, TOPUP_NO_TOKEN
-
-        provider = token.provider_id
-        if not provider or not getattr(provider, 'enable_ecpg', False):
-            _logger.info(
-                "[AUTO_TOPUP] provider not ECPG partner=%s token=%s provider=%s",
-                partner.id, token.id, provider.code if provider else None,
-            )
-            return False, TOPUP_PROVIDER_NOT_ENABLED
-
-        currency = provider.main_currency_id or self.env.ref(
-            'base.TWD', raise_if_not_found=False,
-        )
-        if not currency:
-            return False, TOPUP_CURRENCY_NOT_CONFIGURED
-
-        # 20-char limit: put the unique portion first (uuid) so ecpay's
-        # _ecpg_build_merchant_trade_no truncation preserves uniqueness.
-        # Matches upstream's BIND{uuid16} pattern.
-        reference = f'TOPUP{uuid.uuid4().hex[:15].upper()}'
-        tx = self.env['payment.transaction'].sudo().create({
-            'provider_id': provider.id,
-            'payment_method_id': token.payment_method_id.id,
-            'reference': reference,
-            'amount': float(charge_amount),
-            'currency_id': currency.id,
-            'partner_id': partner.id,
-            'token_id': token.id,
-            'operation': 'offline',
-        })
-        _logger.info(
-            "[AUTO_TOPUP] tx created partner=%s tx=%s ref=%s amount=%s token=%s",
-            partner.id, tx.id, reference, charge_amount, token.id,
-        )
-
-        try:
-            result = tx._send_payment_request()
-        except Exception as e:
-            _logger.exception(
-                '[AUTO_TOPUP] send_payment_request failed partner=%s tx=%s: %s',
-                partner.id, tx.id, e,
-            )
-            return False, TOPUP_SDK_ERROR
-
-        # 3DS redirect — cron cannot drive it. Treat as failure.
-        if isinstance(result, dict) and result.get('redirect_url'):
-            _logger.info(
-                '[AUTO_TOPUP] 3DS required partner=%s tx=%s; aborting',
-                partner.id, tx.id,
-            )
-            return False, TOPUP_3DS_REQUIRED
-
-        if tx.state != 'done':
-            _logger.warning(
-                '[AUTO_TOPUP] tx not done partner=%s tx=%s state=%s',
-                partner.id, tx.id, tx.state,
-            )
-            return False, tx.state
-
-        # ECPay has already charged the card. A subsequent failure during
-        # add_wallet_points must NOT propagate — otherwise the outer cron
-        # transaction rolls back, the payment.transaction row disappears, and
-        # the next cron tick will charge the card AGAIN.
-        #
-        # We catch any wallet-credit failure, log it as a critical operational
-        # event (manual reconciliation required), and return a dedicated
-        # failure code so the caller does not retry this run.
-        try:
-            partner.sudo().add_wallet_points(
-                float(charge_amount),
-                description='Auto top-up for subscription renewal',
-                payment_transaction=tx,
-            )
-        except Exception:
-            _logger.exception(
-                'CRITICAL: auto-topup charged at ECPay (tx=%s, charge_amount=%.2f) '
-                'but wallet credit failed; manual reconciliation required '
-                '(partner=%s)',
-                tx.reference, charge_amount, partner.id,
-            )
-            return False, TOPUP_WALLET_CREDIT_FAILED
-
-        # Invalidate the non-stored compute so the caller's subsequent
-        # `_handle_invoice_creation` (which re-reads partner.wallet_balance to
-        # decide pay-from-wallet vs fallback) sees the post-credit balance.
-        # Without this, the cron charges the user's card AND leaves the
-        # invoice unpaid because it reads the pre-credit cached balance.
-        partner.invalidate_recordset(['wallet_balance'])
-        _logger.info(
-            '[AUTO_TOPUP] succeeded partner=%s charge_amount=%.2f tx=%s new_balance=%s',
-            partner.id, charge_amount, tx.reference, partner.wallet_balance,
-        )
-        return True, TOPUP_OK
+        return token if token and token.active and token.ecpg_bindcard_id else None

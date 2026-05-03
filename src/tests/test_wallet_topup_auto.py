@@ -59,6 +59,16 @@ class TestCreateAutoTopup(TransactionCase):
                 partner=self.partner, amount=-10,
             )
 
+    def test_create_auto_topup_ceils_fractional_amount(self):
+        """Fractional shortfall must round UP to integer TWD so wallet/invoice/charge reconcile."""
+        topup = self.env['woow.wallet.topup'].create_auto_topup(
+            partner=self.partner, amount=300.40,
+        )
+        self.assertEqual(topup.amount, 301.0,
+                         "amount must be ceil()'d so it matches ECPay charge")
+        self.assertEqual(topup.credits, 301.0,
+                         "credits must equal amount (1 credit = 1 TWD)")
+
 
 class TestChargeViaToken(TransactionCase):
     """Tests for wallet.topup.charge_via_token (Path B Phase 4.2)."""
