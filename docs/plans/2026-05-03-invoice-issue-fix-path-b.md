@@ -608,6 +608,28 @@ git commit -m "feat: add wallet.topup.create_auto_topup factory method"
 
 ### Task 4.2: 新增 `wallet.topup.charge_via_token` 執行扣款 → 觸發 `_on_payment_done`
 
+**⚠️ Pre-requisite landmine guards（從 Task 1.1 code review 發現）：**
+
+`plan_id` 變 nullable 後，以下兩處 f-string 會在 auto-topup（無 plan_id）時產出髒資料。**做 Task 4.2 之前必須先補上 nullable guard**（同 commit 內或前置 commit）：
+
+1. **`src/models/wallet_topup.py:91`** — `_on_payment_done` 的 wallet ledger 描述：
+   ```python
+   # Before
+   description = f"Top-up: {self.plan_id.name}"
+   # After (mirror the existing guard at line 242)
+   description = f"Top-up: {self.plan_id.name}" if self.plan_id else "Wallet Top-up"
+   ```
+
+2. **`src/controllers/billing.py:725`** — topup status API 回傳給前端：
+   ```python
+   # Before
+   'plan_name': topup.plan_id.name,
+   # After (mirror dashboard.py:260-261 既有 pattern)
+   'plan_name': topup.plan_id.name or '',
+   ```
+
+不補的話：auto-topup 跑成功時，wallet 帳本會出現 "Top-up: False"，前端 API 會收到 `"plan_name": false`。
+
 **Files:**
 - Modify: `src/models/wallet_topup.py`
 - Test: `src/tests/test_wallet_topup_auto.py`（追加 test）
