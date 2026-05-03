@@ -135,6 +135,11 @@ def create_ecpay_invoice(self):
 
 詳見 design：`docs/plans/2026-05-03-invoice-issue-fix-path-b.md` Task 2.1 / 2.2。
 
+> ⚠️ **Refund (out_refund) not yet covered.** Upstream's `action_post` also calls
+> `run_refund()` inline when `company.auto_invoice='automatic'`. Our override
+> only intercepts `create_ecpay_invoice`. If/when refund/折讓 logic is added,
+> mirror the skip-flag pattern for `run_refund`.
+
 ## 如果 ops 把 `company.auto_invoice='automatic'` 會怎樣？
 
 PaaS 仍可正常運作。

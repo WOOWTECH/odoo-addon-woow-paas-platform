@@ -133,10 +133,10 @@ class WalletTopup(models.Model):
             'state': 'draft',
         }
         # Inherit partner's invoice preference (mirrors manual topup flow).
-        # _woow_partner_invoice_vals returns dict with the correct keys for the
-        # account.move side; for the topup, we pull only the fields that exist
-        # on woow.wallet.topup.
-        if hasattr(partner, '_woow_partner_invoice_vals'):
+        # Guard on the actual partner-side field we read — both the partner
+        # extension and this topup model ship together, so the gate matches
+        # the real precondition rather than checking for an unrelated method.
+        if 'woow_invoice_carrier_type' in partner._fields:
             for src, dst in (
                 ('woow_invoice_carrier_type', 'invoice_carrier_type'),
                 ('woow_invoice_carrier', 'invoice_carrier'),
@@ -282,10 +282,15 @@ class WalletTopup(models.Model):
             )
             return
         # Auto-topups have no plan_id (Path B Phase 4.1 made plan_id nullable).
-        # Without this guard the description renders "Top-up: False" in the
-        # wallet ledger. Mirrors the existing `_create_topup_invoice` guard
-        # below.
-        description = f"Top-up: {self.plan_id.name}" if self.plan_id else "Wallet Top-up"
+        # Without a guard the description would render "Top-up: False" in the
+        # wallet ledger. Distinguish auto vs manual fallback so customer support
+        # can tell at a glance which entries came from system-triggered topups.
+        if self.plan_id:
+            description = f"Top-up: {self.plan_id.name}"
+        elif self.source == 'auto':
+            description = "Wallet Top-up (auto)"
+        else:
+            description = "Wallet Top-up"
         total_credits = self.credits + self.bonus
         _logger.info(
             "[TOPUP] crediting wallet topup=%s partner=%s credits=%s+bonus=%s total=%s",

@@ -43,6 +43,11 @@
 
 這保證了 PaaS 的開票行為可預測、可控、與上游設定無耦合。
 
+> **Scope limitation (2026-05):** The current `woow_skip_upstream_hook` mechanism
+> only isolates `out_invoice` issuance (`create_ecpay_invoice`). Refund flows
+> (`out_refund` → upstream `run_refund`) are not yet covered — `run_refund` will
+> need a parallel override when 折讓/退費 is implemented.
+
 ---
 
 ## 對照表：理念 vs. 實作
