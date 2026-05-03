@@ -64,11 +64,19 @@ class TestEcpayInvoiceSubscription(TransactionCase):
         self.assertEqual(invoice.ecpay_CustomerIdentifier, '12345678')
         self.assertEqual(invoice.ec_ident_name, 'Sub Co Ltd')
 
-    def test_cycle_invoice_marked_pending(self):
+    def test_cycle_invoice_marked_not_required(self):
+        """Path B: cycle invoices are paid via wallet (already-issued topups),
+        so they MUST NOT request another ECPay e-invoice. They should also
+        set the upstream-hook skip flag so company.auto_invoice='automatic'
+        won't trigger inline issuance.
+
+        See docs/architecture/billing-philosophy.md Principle 3-5.
+        """
         partner = self._make_partner_with_carrier()
         sub = self._make_sub(partner)
         invoice, _ = self.Sub._get_or_create_cycle_invoice(sub)
-        self.assertEqual(invoice.woow_invoice_issue_state, 'pending')
+        self.assertEqual(invoice.woow_invoice_issue_state, 'not_required')
+        self.assertTrue(invoice.woow_skip_upstream_hook)
 
     def test_existing_invoice_reuse_does_not_change_state(self):
         partner = self._make_partner_with_carrier()

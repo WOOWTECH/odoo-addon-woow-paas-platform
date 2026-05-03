@@ -137,7 +137,12 @@ class ShSubscriptionFix(models.Model):
         invoice_vals.update(
             subscription.sh_partner_id._woow_partner_invoice_vals()
         )
-        invoice_vals['woow_invoice_issue_state'] = 'pending'
+        # Path B: cycle invoice 由 wallet 扣款結算（儲值時已開過 ECPay 發票），
+        # 不重複開發票。woow_skip_upstream_hook 隔離上游 inline hook
+        # (即使 company.auto_invoice='automatic' 也不會被觸發開立)。
+        # 詳見 docs/architecture/billing-philosophy.md Principle 3-5。
+        invoice_vals['woow_invoice_issue_state'] = 'not_required'
+        invoice_vals['woow_skip_upstream_hook'] = True
         invoice = self.env['account.move'].sudo().create(invoice_vals)
         subscription.compute_view_invoice()
         _logger.info(
