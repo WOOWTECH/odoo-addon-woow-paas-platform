@@ -1,5 +1,6 @@
 # Test suite for woow_paas_platform
 from . import test_account_move_pay_from_wallet
+from . import test_account_move_skip_hook_field
 from . import test_cloud_app_template
 from . import test_cloud_service
 from . import test_cloud_api

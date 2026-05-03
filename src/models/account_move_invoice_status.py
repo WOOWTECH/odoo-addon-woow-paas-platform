@@ -21,6 +21,15 @@ class AccountMoveInvoiceStatus(models.Model):
     woow_invoice_retry_count = fields.Integer(default=0, copy=False)
     woow_invoice_last_error = fields.Text(copy=False)
     woow_invoice_next_retry_at = fields.Datetime(copy=False)
+    woow_skip_upstream_hook = fields.Boolean(
+        default=False,
+        copy=False,
+        help='When True, account.move.action_post() bypasses the upstream '
+             'ecpay_invoice_tw inline hook. PaaS-created invoices set this so '
+             'our async ecpay_invoice_cron is the sole issuer. Has no effect '
+             'when company.auto_invoice is "manual" (upstream hook is a no-op '
+             'in that case anyway).',
+    )
 
     def action_woow_retry_ecpay_invoice(self):
         """Manual fallback for `account.group_account_manager` users.
