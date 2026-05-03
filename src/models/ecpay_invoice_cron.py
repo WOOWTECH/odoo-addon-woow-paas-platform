@@ -75,7 +75,9 @@ class EcpayInvoiceCron(models.AbstractModel):
 
         move.write({'woow_invoice_issue_state': 'issuing'})
         try:
-            move.create_ecpay_invoice()
+            # 透過 woow_force_issue context bypass Task 2.1 的 short-circuit
+            # (PaaS-flagged invoice 只允許這支 cron 開立，杜絕上游 inline hook)
+            move.with_context(woow_force_issue=True).create_ecpay_invoice()
         except Exception as exc:
             self._record_failure(move, str(exc))
             return
