@@ -12,7 +12,7 @@ class WalletTopup(models.Model):
     _order = 'create_date desc, id desc'
 
     partner_id = fields.Many2one('res.partner', required=True, index=True, ondelete='restrict')
-    plan_id = fields.Many2one('woow_paas_platform.topup_plan', required=True, ondelete='restrict')
+    plan_id = fields.Many2one('woow_paas_platform.topup_plan', ondelete='restrict')
 
     amount = fields.Monetary(required=True)
     credits = fields.Float(required=True)
@@ -26,6 +26,13 @@ class WalletTopup(models.Model):
         ('failed', 'Failed'),
         ('cancelled', 'Cancelled'),
     ], default='draft', required=True, index=True)
+
+    source = fields.Selection([
+        ('manual', 'Manual (user-initiated)'),
+        ('auto', 'Auto (system-triggered shortfall)'),
+    ], default='manual', required=True, index=True,
+       help='manual = user clicked topup; auto = system triggered to cover '
+            'subscription invoice shortfall.')
 
     payment_transaction_id = fields.Many2one('payment.transaction', ondelete='restrict', index=True)
     wallet_transaction_id = fields.Many2one('wallet.transaction', readonly=True)
