@@ -24,11 +24,13 @@ class AccountMoveInvoiceStatus(models.Model):
     woow_skip_upstream_hook = fields.Boolean(
         default=False,
         copy=False,
-        help='When True, account.move.action_post() bypasses the upstream '
-             'ecpay_invoice_tw inline hook. PaaS-created invoices set this so '
-             'our async ecpay_invoice_cron is the sole issuer. Has no effect '
-             'when company.auto_invoice is "manual" (upstream hook is a no-op '
-             'in that case anyway).',
+        help='When True, this account.move\'s create_ecpay_invoice() '
+             'short-circuits when called from upstream ecpay_invoice_tw\'s '
+             'inline action_post hook. PaaS-created invoices set this so only '
+             'our async ecpay_invoice_cron (which uses '
+             'with_context(woow_force_issue=True)) issues the e-invoice. Has no '
+             'effect when company.auto_invoice is "manual" (the upstream inline '
+             'hook is a no-op in that case anyway).',
     )
 
     def action_woow_retry_ecpay_invoice(self):

@@ -225,11 +225,33 @@ class WalletTopup(models.Model):
 
         try:
             result = tx._send_payment_request()
-        except Exception:
+        except Exception as e:
+            if tx.state == 'done':
+                # Inner callback (_set_done → _on_payment_done) raised AFTER ECPay
+                # accepted the charge. Card was actually charged; route to CRITICAL
+                # path so ops gets the manual-reconciliation alert with full context.
+                _logger.exception(
+                    'CRITICAL: auto-topup tx _set_done() ran (ECPay charged tx=%s '
+                    'amount=%.2f) but inner callback raised; manual reconciliation '
+                    'required (topup=%s, partner=%s, partner_email=%s)',
+                    tx.reference, charge_amount, self.id, self.partner_id.id,
+                    self.partner_id.email or '(none)',
+                )
+                self.write({
+                    'state': 'failed',
+                    'failure_code': TOPUP_WALLET_CREDIT_FAILED,
+                    'failure_message': f"CHARGED_NOT_CREDITED: {str(e)[:400]}",
+                })
+                return False, TOPUP_WALLET_CREDIT_FAILED
+            # Real SDK error (ECPay never accepted) — safe to retry
             _logger.exception(
                 '[TOPUP_AUTO] send_payment_request failed topup=%s', self.id,
             )
-            self.write({'state': 'failed', 'failure_code': TOPUP_SDK_ERROR})
+            self.write({
+                'state': 'failed',
+                'failure_code': TOPUP_SDK_ERROR,
+                'failure_message': str(e)[:500],
+            })
             return False, TOPUP_SDK_ERROR
 
         # 3DS - keep state pending, don't fail. User may complete via web later.
@@ -241,11 +263,19 @@ class WalletTopup(models.Model):
             return False, TOPUP_3DS_REQUIRED
 
         if tx.state != 'done':
+            state_msg = tx.state_message or ''
             _logger.warning(
-                '[TOPUP_AUTO] tx not done topup=%s tx=%s state=%s',
-                self.id, tx.id, tx.state,
+                '[TOPUP_AUTO] tx not done topup=%s tx=%s state=%s msg=%r',
+                self.id, tx.id, tx.state, state_msg[:200],
             )
-            self.write({'state': 'failed', 'failure_code': tx.state})
+            classified = self._classify_failure(state_msg)
+            self.write({
+                'state': 'failed',
+                # Prefer classified code (e.g. 'card_declined') over raw tx.state
+                # when ECPay error message gives us a hint
+                'failure_code': classified if classified != 'generic' else tx.state,
+                'failure_message': state_msg[:500],
+            })
             return False, tx.state
 
         # ECPay has charged the card. Subsequent failure during _on_payment_done
@@ -253,14 +283,23 @@ class WalletTopup(models.Model):
         # next caller would charge AGAIN. Catch + log critical.
         try:
             self._on_payment_done(tx)
-        except Exception:
+        except Exception as e:
             _logger.exception(
-                'CRITICAL: auto-topup charged ECPay (tx=%s amount=%.2f) but '
-                'post-charge bookkeeping failed; manual reconciliation required '
-                '(topup=%s, partner=%s)',
-                tx.reference, charge_amount, self.id, self.partner_id.id,
+                'CRITICAL: auto-topup charged ECPay (tx=%s amount=%.2f currency=%s) '
+                'but post-charge bookkeeping failed; manual reconciliation required '
+                '(topup=%s, partner=%s, partner_email=%s)',
+                tx.reference, charge_amount, self.currency_id.name,
+                self.id, self.partner_id.id,
+                self.partner_id.email or '(none)',
             )
-            self.write({'state': 'failed', 'failure_code': TOPUP_WALLET_CREDIT_FAILED})
+            self.write({
+                'state': 'failed',
+                'failure_code': TOPUP_WALLET_CREDIT_FAILED,
+                # Prefix lets ops filter/search dashboards for "card was charged
+                # but bookkeeping failed" — distinct from genuine "did not charge"
+                # failures.
+                'failure_message': f"CHARGED_NOT_CREDITED: {str(e)[:400]}",
+            })
             return False, TOPUP_WALLET_CREDIT_FAILED
 
         return True, TOPUP_OK
@@ -281,7 +320,7 @@ class WalletTopup(models.Model):
                 self.id, self.wallet_transaction_id.id if self.wallet_transaction_id else None,
             )
             return
-        # Auto-topups have no plan_id (Path B Phase 4.1 made plan_id nullable).
+        # Auto-topups have no plan_id (Path B Phase 1 (Task 1.1) made plan_id nullable).
         # Without a guard the description would render "Top-up: False" in the
         # wallet ledger. Distinguish auto vs manual fallback so customer support
         # can tell at a glance which entries came from system-triggered topups.
@@ -470,9 +509,28 @@ class WalletTopup(models.Model):
             # woow_invoice_issue_state stays 'pending' so the issuing cron
             # ignores it (it filters posted moves only).
             _logger.exception(
-                "[TOPUP] action_post failed topup=%s move=%s",
-                self.id, move.id,
+                "CRITICAL: topup invoice action_post failed; wallet was credited "
+                "(or pending credit) but no e-invoice will be issued without "
+                "manual recovery. topup=%s move=%s partner=%s amount=%s",
+                self.id, move.id, self.partner_id.id, self.amount,
             )
+            # Surface via mail.activity so accounting managers see it in their
+            # inbox. Reuse the cron's notify helper (logs + creates activity for
+            # account.group_account_manager users).
+            try:
+                self.env['woow_paas_platform.ecpay_invoice_cron']._notify_admin_on_error(
+                    move,
+                    "Topup invoice action_post failed; manual review required. "
+                    "Wallet credit may have happened — check topup record before "
+                    "re-posting.",
+                )
+            except Exception:
+                # Best-effort notification — don't let activity creation failure
+                # mask the original action_post failure.
+                _logger.exception(
+                    '[TOPUP] mail.activity creation failed for stuck draft move=%s',
+                    move.id,
+                )
         return move
 
     @api.model
