@@ -1,9 +1,5 @@
 # PaaS 計費與發票開立的產品哲學
 
-以下是整理後可直接留存的版本，建議放在 `docs/architecture/billing-philosophy.md` 或類似位置。
-
----
-
 ## PaaS 計費與發票開立原則
 
 ### 核心理念

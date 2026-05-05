@@ -437,11 +437,14 @@ class ShSubscriptionFix(models.Model):
     def _resolve_default_token(self, partner):
         """Find the default ECPG-bound payment token for ``partner``.
 
-        Phase 2c known limitation: community ed has no
+        Community-edition limitation: community ed has no
         ``property_payment_token_id`` so we fall back to the most recently
-        created active ECPG-bound token.
+        created active ECPG-bound token. A future ticket should add an
+        explicit ``is_default`` field on payment.token for deterministic
+        selection across editions.
 
-        Returns: ``payment.token`` record (or ``None`` if none found).
+        Returns: ``payment.token`` record. Empty recordset if no usable
+        token exists.
         """
         Token = self.env['payment.token'].sudo()
         token = Token
@@ -458,4 +461,6 @@ class ShSubscriptionFix(models.Model):
                 ],
                 order='id desc', limit=1,
             )
-        return token if token and token.active and token.ecpg_bindcard_id else None
+        if token and token.active and token.ecpg_bindcard_id:
+            return token
+        return self.env['payment.token']

@@ -466,7 +466,15 @@ class WalletTopup(models.Model):
         try:
             move = self._create_topup_invoice()
         except Exception:
-            _logger.exception("[TOPUP] invoice create failed topup=%s", self.id)
+            _logger.exception(
+                "CRITICAL: [TOPUP] invoice create failed; wallet may have been "
+                "credited but no Odoo invoice / e-invoice will be issued. "
+                "topup=%s partner=%s (email=%s) amount=%s source=%s. "
+                "Find orphaned topups via: woow.wallet.topup with "
+                "state='done' AND invoice_account_move_id=False",
+                self.id, self.partner_id.id, self.partner_id.email or '?',
+                self.amount, self.source,
+            )
             return self.env['account.move']
         self.write({
             'invoice_account_move_id': move.id,

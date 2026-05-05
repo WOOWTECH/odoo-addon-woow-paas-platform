@@ -27,9 +27,13 @@ class TestSubscriptionInvoiceState(TransactionCase):
         cls.Sub = cls.env['sh.subscription.subscription']
 
     def _make_partner(self, **kwargs):
+        # Note: wallet balance is NOT seeded here. _get_or_create_cycle_invoice
+        # only creates the invoice (doesn't pay it from wallet), so the partner's
+        # wallet balance is irrelevant for this test class. If a future test
+        # needs a credited wallet, use partner.add_wallet_points() per the
+        # pattern documented in test_wallet_topup_auto.py.
         return self.env['res.partner'].create({
             'name': 'CycleSkipUser',
-            'wallet_balance': 1000.0,
             **kwargs,
         })
 

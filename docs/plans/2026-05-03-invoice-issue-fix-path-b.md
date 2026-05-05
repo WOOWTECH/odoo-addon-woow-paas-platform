@@ -1,3 +1,14 @@
+> **Status (2026-05-05):** This plan is **historical**. Path B was implemented
+> and merged via PR #20. For current behavior see:
+> - Design rationale: `docs/architecture/billing-philosophy.md`
+> - Operational guide: `docs/deployment/invoice-issuing.md`
+>
+> This plan doc is kept for traceability of the implementation rationale
+> and as the target of `Task N.M` cross-references in commit messages and
+> code comments. Do NOT update — open a new plan if requirements change.
+
+---
+
 # Invoice Issue Fix — Path B (Auto-topup as wallet.topup + Upstream Hook Isolation) Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
