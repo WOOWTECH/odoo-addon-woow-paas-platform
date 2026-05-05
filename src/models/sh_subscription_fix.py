@@ -416,16 +416,19 @@ class ShSubscriptionFix(models.Model):
         if not token:
             return False, 'no_token'
 
-        # base.TWD missing or other factory-time validation failure: degrade
-        # to the documented `currency_not_configured` code so the contract
-        # advertised in this docstring stays accurate.
+        # Note: create_auto_topup pre-condition (amount > 0) is already checked
+        # above, so any ValidationError reaching here would be a programming bug
+        # we want to surface. ValueError catches the real case:
+        # env.ref('base.TWD', raise_if_not_found=True) raising on missing
+        # currency.
         try:
             topup = self.env['woow.wallet.topup'].sudo().create_auto_topup(
                 partner=partner, amount=shortfall,
             )
-        except (ValidationError, ValueError):
+        except ValueError:
             _logger.exception(
-                '[AUTO_TOPUP] create_auto_topup failed partner=%s shortfall=%s',
+                '[AUTO_TOPUP] create_auto_topup ValueError (likely missing TWD '
+                'ref) partner=%s shortfall=%s',
                 partner.id, shortfall,
             )
             return False, 'currency_not_configured'

@@ -196,3 +196,32 @@ class TestLowBalanceNotification(TransactionCase):
             "_try_settle_invoice must call _handle_invoice_creation in both "
             "the balance-sufficient path AND the auto-topup-success path",
         )
+
+    def test_attempt_auto_topup_returns_no_shortfall_for_zero(self):
+        """Pre-condition: shortfall<=0 returns ('no_shortfall', False)
+        without invoking the wallet.topup factory."""
+        Sub = self.env['sh.subscription.subscription']
+        ok, msg = Sub._attempt_auto_topup(self.partner, 0)
+        self.assertFalse(ok)
+        self.assertEqual(msg, 'no_shortfall')
+
+        ok, msg = Sub._attempt_auto_topup(self.partner, -10)
+        self.assertFalse(ok)
+        self.assertEqual(msg, 'no_shortfall')
+
+    def test_attempt_auto_topup_handles_currency_missing(self):
+        """If create_auto_topup raises ValueError (e.g. base.TWD missing
+        or other ref lookup failure), the shim catches and returns
+        ('currency_not_configured', False) instead of propagating."""
+        from unittest.mock import patch
+        self._setup_ecpg_token('AB12345678')  # ensures token resolution succeeds
+        with patch.object(
+            type(self.env['woow.wallet.topup']),
+            'create_auto_topup',
+            side_effect=ValueError("External ID not found: base.TWD"),
+        ):
+            ok, msg = self.env['sh.subscription.subscription']._attempt_auto_topup(
+                self.partner, 100,
+            )
+        self.assertFalse(ok)
+        self.assertEqual(msg, 'currency_not_configured')

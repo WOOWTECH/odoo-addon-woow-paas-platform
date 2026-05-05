@@ -90,3 +90,27 @@ class TestEcpayInvoiceSubscription(TransactionCase):
         self.assertFalse(is_new2)
         self.assertEqual(first, second)
         self.assertEqual(second.woow_invoice_issue_state, 'issued')
+
+    def test_cycle_invoice_action_post_does_not_call_upstream(self):
+        """End-to-end: cycle invoice posting with auto_invoice='automatic'
+        must NOT trigger upstream issuance.
+
+        This is the runtime behavior test that complements
+        test_cycle_invoice_marked_not_required (which only checks fields).
+        Without this test, a regression that accidentally re-flagged cycle
+        invoices to woow_skip_upstream_hook=False would let upstream's
+        inline hook fire on action_post, causing the wallet deduction to
+        roll back on any ECPay error.
+        """
+        from unittest.mock import patch
+        self.env.company.auto_invoice = 'automatic'
+        partner = self._make_partner_with_carrier()
+        sub = self._make_sub(partner)
+        invoice, _ = self.Sub._get_or_create_cycle_invoice(sub)
+        with patch(
+            'odoo.addons.ecpay_invoice_tw.models.account_invoice.AccountMove'
+            '.create_ecpay_invoice',
+            autospec=True,
+        ) as upstream:
+            invoice.action_post()
+            upstream.assert_not_called()

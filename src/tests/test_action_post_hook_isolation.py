@@ -82,3 +82,21 @@ class TestCreateEcpayInvoiceShortCircuit(TransactionCase):
         ) as upstream:
             inv.with_context(woow_force_issue=False).create_ecpay_invoice()
             upstream.assert_not_called()
+
+    def test_action_post_without_skip_flag_invokes_upstream(self):
+        """Positive control for test_action_post_with_skip_flag_does_not_invoke_upstream.
+
+        When skip_flag=False AND company.auto_invoice='automatic', action_post
+        MUST trigger upstream's create_ecpay_invoice. Without this positive
+        control, the negative test could pass even if Task 2.1's short-circuit
+        were broken (e.g. if upstream's filter unexpectedly excluded our test
+        invoice for unrelated reasons).
+        """
+        inv = self._make_invoice(skip_flag=False)
+        with patch(
+            'odoo.addons.ecpay_invoice_tw.models.account_invoice.AccountMove'
+            '.create_ecpay_invoice',
+            autospec=True,
+        ) as upstream:
+            inv.action_post()
+            upstream.assert_called()

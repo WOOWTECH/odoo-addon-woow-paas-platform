@@ -275,3 +275,27 @@ class TestLandmineGuards(TransactionCase):
         self.assertNotIn('False', wtx.description,
                           f"Description must not contain 'False'; got: {wtx.description}")
         self.assertIn('Top-up', wtx.description)
+
+    def test_create_topup_invoice_line_name_handles_nullable_plan(self):
+        """Auto-topup invoice line name must NOT be 'Wallet Topup: False'.
+
+        The plan landmine guards live in two places: _on_payment_done's wallet
+        ledger description (covered by test_on_payment_done_handles_nullable_plan_id)
+        AND _create_topup_invoice's line name. This test covers the latter.
+        """
+        topup = self.env['woow.wallet.topup'].create_auto_topup(
+            partner=self.partner, amount=50.0,
+        )
+        move = topup._create_topup_invoice()
+        self.assertTrue(move, "Invoice must be created for auto-topup")
+        self.assertTrue(
+            move.invoice_line_ids,
+            "Invoice must have at least one line",
+        )
+        line_name = move.invoice_line_ids[0].name
+        self.assertNotIn('False', line_name,
+                         f"Line name must not contain 'False'; got: {line_name!r}")
+        self.assertEqual(
+            line_name, 'Wallet Topup',
+            "Auto-topup with no plan should use the plain fallback line name",
+        )

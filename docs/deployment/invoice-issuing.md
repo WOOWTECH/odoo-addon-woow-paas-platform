@@ -73,7 +73,7 @@ sh_subscription cron → _get_or_create_cycle_invoice()
 | `woow_invoice_issue_state` | `pending` |
 | `woow_skip_upstream_hook` | `True` |
 | 由誰開立 ECPay 發票 | `ecpay_invoice_cron`（每 5 分鐘） |
-| Source | `src/models/wallet_topup.py:434` (`_create_topup_invoice`) |
+| Source | `src/models/wallet_topup.py::_create_topup_invoice` |
 
 ### 2. Auto-topup（訂閱週期 wallet 不足，自動補差額）
 
@@ -84,11 +84,11 @@ sh_subscription cron → _get_or_create_cycle_invoice()
 | `woow_skip_upstream_hook` | `True` |
 | 由誰開立 ECPay 發票 | 同手動儲值（`ecpay_invoice_cron`） |
 | 金額處理 | `math.ceil()` 到整數 TWD（ECPay 限制 + 金額對帳一致性） |
-| Source | `src/models/wallet_topup.py:91` (`create_auto_topup`)，<br>`src/models/sh_subscription_fix.py:380` (`_attempt_auto_topup` shim) |
+| Source | `src/models/wallet_topup.py::create_auto_topup`，<br>`src/models/sh_subscription_fix.py::_attempt_auto_topup` (shim) |
 
 > Path B 的核心：auto-topup 走與手動儲值**完全對稱**的 `wallet.topup` 流程，
 > 不再用獨立的 ad-hoc 開票路徑。`_attempt_auto_topup` 目前是 thin
-> deprecation shim（`src/models/sh_subscription_fix.py:380`），新程式碼應直接
+> deprecation shim（`src/models/sh_subscription_fix.py::_attempt_auto_topup`），新程式碼應直接
 > 用 `wallet.topup.create_auto_topup()` + `charge_via_token()`。
 
 ### 3. 訂閱 Cycle Invoice（訂閱週期帳單）
@@ -101,7 +101,7 @@ sh_subscription cron → _get_or_create_cycle_invoice()
 | 由誰開立 ECPay 發票 | **沒人**（不需要） |
 | 為什麼不開 | 由 wallet 結算，wallet 點數於儲值/auto-topup 時已開過 ECPay 發票，再開一次會雙重計稅 |
 | Odoo invoice 仍會建立 | ✅ 作為內部會計分錄 |
-| Source | `src/models/sh_subscription_fix.py:108` (`_get_or_create_cycle_invoice`) |
+| Source | `src/models/sh_subscription_fix.py::_get_or_create_cycle_invoice` |
 
 > 設計原則參見
 > [`docs/architecture/billing-philosophy.md`](../architecture/billing-philosophy.md)
@@ -117,7 +117,7 @@ sh_subscription cron → _get_or_create_cycle_invoice()
 1. **使用者被扣點數但沒有 invoice**（rollback 失敗或部分提交時的 race）
 2. **重複扣款 / 重複開票**（cron 與 inline hook 互相干擾）
 
-PaaS 的解法（Task 2.1，`src/models/account_move.py:12`）：
+PaaS 的解法（Task 2.1，`src/models/account_move.py::create_ecpay_invoice`）：
 
 ```python
 def create_ecpay_invoice(self):
@@ -187,7 +187,7 @@ DB 監控指標（Path B 部署後預期變化）：
 
 ### Failure Modes & Retry
 
-`ecpay_invoice_cron._record_failure`（`src/models/ecpay_invoice_cron.py:92`）：
+`ecpay_invoice_cron._record_failure`（`src/models/ecpay_invoice_cron.py::_record_failure`）：
 
 | 嘗試次數 | `woow_invoice_issue_state` | 下次 retry 間隔 | 備註 |
 |---------|---------------------------|----------------|------|
@@ -201,7 +201,7 @@ DB 監控指標（Path B 部署後預期變化）：
 ### Manual Recovery
 
 `account.move.action_woow_retry_ecpay_invoice`
-（`src/models/account_move_invoice_status.py:34`）：
+（`src/models/account_move_invoice_status.py::action_woow_retry_ecpay_invoice`）：
 
 - 權限：`account.group_account_manager`（accounting manager）
 - 行為：reset retry tracking（`woow_invoice_retry_count`、
@@ -235,10 +235,10 @@ EOF
 - 設計哲學：[`docs/architecture/billing-philosophy.md`](../architecture/billing-philosophy.md)
 - 實作 plan：[`docs/plans/2026-05-03-invoice-issue-fix-path-b.md`](../plans/2026-05-03-invoice-issue-fix-path-b.md)
 - 程式碼進入點：
-  - `src/models/wallet_topup.py:411` (`_ensure_topup_invoice`)
-  - `src/models/wallet_topup.py:434` (`_create_topup_invoice`)
-  - `src/models/account_move.py:12` (`create_ecpay_invoice` override / Task 2.1)
-  - `src/models/ecpay_invoice_cron.py:64` (`_issue_one` / Task 2.2)
-  - `src/models/sh_subscription_fix.py:108` (`_get_or_create_cycle_invoice` / Task 3.1)
-  - `src/models/sh_subscription_fix.py:380` (`_attempt_auto_topup` deprecation shim / Task 4.3)
+  - `src/models/wallet_topup.py::_ensure_topup_invoice`
+  - `src/models/wallet_topup.py::_create_topup_invoice`
+  - `src/models/account_move.py::create_ecpay_invoice` (override / Task 2.1)
+  - `src/models/ecpay_invoice_cron.py::_issue_one` (Task 2.2)
+  - `src/models/sh_subscription_fix.py::_get_or_create_cycle_invoice` (Task 3.1)
+  - `src/models/sh_subscription_fix.py::_attempt_auto_topup` (deprecation shim / Task 4.3)
   - `src/models/account_move_invoice_status.py` (PaaS 旗標欄位 + manual retry button)
