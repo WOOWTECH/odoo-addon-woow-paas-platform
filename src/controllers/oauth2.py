@@ -351,18 +351,10 @@ class OAuth2Controller(Controller):
             )
 
     def _authenticate_client(self, kwargs: dict) -> Any | None:
-        """Authenticate a client by client_id, optionally by client_secret.
+        """Authenticate by client_id (+ client_secret for confidential).
 
-        Public clients (RFC 8252) are authenticated by client_id alone; their
-        security guarantee comes from PKCE at the authorization step. They
-        MUST NOT carry a client_secret in the token request — receiving one
-        here is treated as an authentication failure to defend against
-        misconfigured clients leaking a populated secret field.
-
-        Confidential clients are authenticated by client_id + client_secret
-        verified against the stored hash.
-
-        Returns the client record or None.
+        Public clients are rejected if they carry any client_secret —
+        defense against misconfigured clients populating the field.
         """
         client_id_param = kwargs.get('client_id', '')
         client_secret = kwargs.get('client_secret', '')

@@ -298,11 +298,8 @@ class TestPublicClientConstraints(TransactionCase):
 
 
 class TestPkceOnlyTokenFlow(TransactionCase):
-    """PKCE-only token-endpoint tests via direct controller calls.
-
-    Uses TransactionCase + a mocked `request` object (same pattern as
-    test_ha_api.py) to avoid HttpCase's cross-cursor visibility issues.
-    """
+    """PKCE-only token-endpoint tests. Mocks `request` so the controller's
+    cursor stays in the test transaction (avoids HttpCase visibility gaps)."""
 
     REDIRECT_URI = 'https://my.home-assistant.io/redirect/oauth'
 

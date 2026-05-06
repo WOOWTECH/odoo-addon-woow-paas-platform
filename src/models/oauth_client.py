@@ -21,7 +21,9 @@ class OAuthClient(models.Model):
         readonly=True,
         index=True,
         default=lambda self: secrets.token_urlsafe(32),
-        help='Public identifier for the client application',
+        help='Public identifier for the client application. Readonly because '
+             'integrations hardcode this value (e.g. Home Assistant pins '
+             'woow-ha-smart-home in const.py) — rotating it breaks them.',
     )
     client_secret_hash = fields.Char(
         string='Client Secret (hashed)',
@@ -105,14 +107,7 @@ class OAuthClient(models.Model):
                 )
 
     def set_secret(self, plain_secret: str) -> None:
-        """Hash and store a client secret.
-
-        Args:
-            plain_secret: The plain-text secret to hash and store.
-
-        Raises:
-            ValidationError: If the client is a public client.
-        """
+        """Hash and store a client secret. Rejects public clients."""
         self.ensure_one()
         if self.client_type == 'public':
             raise ValidationError(
@@ -186,14 +181,7 @@ class OAuthClient(models.Model):
         }
 
     def action_regenerate_secret(self) -> dict:
-        """Regenerate the client secret. Shows the new secret once.
-
-        Returns:
-            Action dict to display the new secret to the admin.
-
-        Raises:
-            ValidationError: If the client is a public client.
-        """
+        """Regenerate the client secret and surface it once. Rejects public clients."""
         self.ensure_one()
         if self.client_type == 'public':
             raise ValidationError(
