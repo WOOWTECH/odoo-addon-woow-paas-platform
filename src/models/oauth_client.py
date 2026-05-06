@@ -1,6 +1,7 @@
 import secrets
 
 from odoo import api, fields, models
+from odoo.exceptions import ValidationError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
@@ -20,11 +21,33 @@ class OAuthClient(models.Model):
         readonly=True,
         index=True,
         default=lambda self: secrets.token_urlsafe(32),
-        help='Public identifier for the client application',
+        help='Public identifier for the client application. Readonly because '
+             'integrations hardcode this value (e.g. Home Assistant pins '
+             'woow-ha-smart-home in const.py) — rotating it breaks them.',
     )
     client_secret_hash = fields.Char(
         string='Client Secret (hashed)',
-        help='Hashed client secret. The plain secret is only shown once at creation.',
+        help='Hashed client secret. The plain secret is only shown once at creation. '
+             'Must be empty for public clients.',
+    )
+    client_type = fields.Selection(
+        selection=[
+            ('confidential', 'Confidential'),
+            ('public', 'Public'),
+        ],
+        string='Client Type',
+        default='confidential',
+        required=True,
+        help='Confidential clients store a client_secret (server-to-server, traditional web apps). '
+             'Public clients (native apps, SPAs, HA integrations) cannot keep a secret '
+             'and must use PKCE for the authorization_code grant.',
+    )
+    require_pkce = fields.Boolean(
+        string='Require PKCE',
+        default=False,
+        help='If enabled, the authorization endpoint rejects requests without a '
+             'code_challenge, and only S256 method is accepted. '
+             'Public clients always require PKCE.',
     )
     redirect_uris = fields.Text(
         string='Redirect URIs',
@@ -57,13 +80,39 @@ class OAuthClient(models.Model):
         ),
     ]
 
-    def set_secret(self, plain_secret: str) -> None:
-        """Hash and store a client secret.
+    @api.constrains('client_type', 'client_secret_hash', 'require_pkce', 'grant_types')
+    def _check_client_type_consistency(self) -> None:
+        """Enforce invariants for public clients (RFC 8252 / RFC 7636 hardening)."""
+        for record in self:
+            if record.client_type != 'public':
+                continue
+            if record.client_secret_hash:
+                raise ValidationError(
+                    "Public clients must not have a client_secret. "
+                    "Public clients rely on PKCE for authorization-code security."
+                )
+            if not record.require_pkce:
+                raise ValidationError(
+                    "Public clients must have 'Require PKCE' enabled."
+                )
+            grant_set = {
+                g.strip()
+                for g in (record.grant_types or '').split(',')
+                if g.strip()
+            }
+            if 'client_credentials' in grant_set:
+                raise ValidationError(
+                    "Public clients cannot use the client_credentials grant type. "
+                    "Use a confidential client for server-to-server access."
+                )
 
-        Args:
-            plain_secret: The plain-text secret to hash and store.
-        """
+    def set_secret(self, plain_secret: str) -> None:
+        """Hash and store a client secret. Rejects public clients."""
         self.ensure_one()
+        if self.client_type == 'public':
+            raise ValidationError(
+                "Cannot set a client_secret on a public client."
+            )
         self.client_secret_hash = generate_password_hash(plain_secret)
 
     def verify_secret(self, plain_secret: str) -> bool:
@@ -132,12 +181,12 @@ class OAuthClient(models.Model):
         }
 
     def action_regenerate_secret(self) -> dict:
-        """Regenerate the client secret. Shows the new secret once.
-
-        Returns:
-            Action dict to display the new secret to the admin.
-        """
+        """Regenerate the client secret and surface it once. Rejects public clients."""
         self.ensure_one()
+        if self.client_type == 'public':
+            raise ValidationError(
+                "Public clients have no secret to regenerate."
+            )
         new_secret = secrets.token_urlsafe(48)
         self.set_secret(new_secret)
         return {

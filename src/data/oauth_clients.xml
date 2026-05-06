@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- noupdate=1 so that admin-edited fields (e.g. additional redirect URIs)
+         survive module upgrades. The record is only seeded on first install. -->
+    <data noupdate="1">
+
+        <!-- Home Assistant Smart Home Integration (public client + PKCE-only).
+             client_id is fixed because HA custom component hardcodes it in const.py.
+             redirect_uri is HA's standard my.home-assistant.io callback. -->
+        <record id="oauth_client_ha_smart_home" model="woow_paas_platform.oauth_client">
+            <field name="name">Home Assistant Smart Home Integration</field>
+            <field name="client_id">woow-ha-smart-home</field>
+            <field name="client_type">public</field>
+            <field name="require_pkce" eval="True"/>
+            <field name="redirect_uris">https://my.home-assistant.io/redirect/oauth</field>
+            <field name="grant_types">authorization_code,refresh_token</field>
+            <field name="scopes">smarthome:read smarthome:tunnel workspace:read</field>
+            <field name="is_active" eval="True"/>
+        </record>
+
+    </data>
+</odoo>

@@ -46,6 +46,7 @@
         "views/paas_app.xml",
         "views/oauth2_templates.xml",
         "views/oauth_client_views.xml",
+        "data/oauth_clients.xml",
     ],
     "assets": {
         "web.assets_backend": [
