@@ -136,6 +136,7 @@ P16 OpenCode 帳密             [░░░░░░░░░░░░░░] 0% 
 
 | 日期 | 變更 |
 |------|------|
+| 2026-05-03 | **Path B Invoice Fix 完成**（branch `featrue/ecpg`）：訂閱 cycle invoice 改 `not_required`（不再重複開 ECPay 發票）；auto-topup 重構走 `wallet.topup(source='auto')` 對稱流程；新增 `woow_skip_upstream_hook` flag 隔離上游 `ecpay_invoice_tw` inline hook（即使 `company.auto_invoice='automatic'` 也安全）；fractional shortfall 統一 `ceil()` 避免 wallet/invoice/charge 三方對不上。PR #20 共 16 個 commits（含 review fixup），35 個新測試，0 regression（5 個 pre-existing TestEcpayInvoiceTopup errors 不變）。詳見 `docs/plans/2026-05-03-invoice-issue-fix-path-b.md` 與 `docs/architecture/billing-philosophy.md` |
 | 2026-05-02 | P9 ACL 邊界完成驗證（4 unit tests + 2 web smoke 全綠），70% → 100%；移除原 §關鍵風險點 §1 |
 | 2026-05-01 | P9 重新驗證 50% → 70%（controller `.sudo()` + `auth="user"` 緩解，剩 RPC 邊界）；P13 重估：`cleanup_months=6` 為產品決策非 bug、admin password 已 per-instance |
 | 2026-04-30 | P12 ECPay e-invoice 整合 100% 完成，stg 真實開立驗證通過 (`d2317a7`) |
