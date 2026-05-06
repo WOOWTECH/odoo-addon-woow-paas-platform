@@ -524,3 +524,151 @@ class TestPkceOnlyTokenFlow(TransactionCase):
         )
         self.assertEqual(status, 200, body)
         self.assertIn('access_token', body)
+
+    def test_token_redirect_uri_mismatch_returns_invalid_grant(self):
+        verifier, challenge = self._pkce_pair()
+        code = self._create_auth_code(challenge)
+        status, body = self._call_token(
+            grant_type='authorization_code',
+            code=code,
+            redirect_uri='https://attacker.example.com/callback',
+            client_id=self.public_client.client_id,
+            code_verifier=verifier,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body['error'], 'invalid_grant')
+
+    def test_token_unknown_client_id_returns_invalid_client(self):
+        status, body = self._call_token(
+            grant_type='authorization_code',
+            code='whatever',
+            redirect_uri=self.REDIRECT_URI,
+            client_id='nonexistent-client-id-xyz',
+            code_verifier='whatever',
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(body['error'], 'invalid_client')
+
+    def test_inactive_public_client_cannot_authenticate(self):
+        self.public_client.is_active = False
+        verifier, challenge = self._pkce_pair()
+        code = self._create_auth_code(challenge)
+        status, body = self._call_token(
+            grant_type='authorization_code',
+            code=code,
+            redirect_uri=self.REDIRECT_URI,
+            client_id=self.public_client.client_id,
+            code_verifier=verifier,
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(body['error'], 'invalid_client')
+
+
+class TestAuthorizeEndpointPkce(TransactionCase):
+    """PKCE enforcement on /oauth2/authorize (GET + POST)."""
+
+    REDIRECT_URI = 'https://my.home-assistant.io/redirect/oauth'
+
+    def setUp(self):
+        super().setUp()
+        self.OAuthClient = self.env['woow_paas_platform.oauth_client']
+        self.OAuthCode = self.env['woow_paas_platform.oauth_code']
+
+        self.public_client = self.OAuthClient.create({
+            'name': 'Authorize PKCE Test Client',
+            'client_id': 'test-authorize-public-client',
+            'redirect_uris': self.REDIRECT_URI,
+            'client_type': 'public',
+            'require_pkce': True,
+            'scopes': 'smarthome:read smarthome:tunnel workspace:read',
+            'grant_types': 'authorization_code,refresh_token',
+        })
+
+    def _call_authorize_get(self, **kwargs):
+        from odoo.addons.woow_paas_platform.controllers.oauth2 import (
+            OAuth2Controller,
+        )
+        captured = {}
+
+        def fake_render(template, ctx):
+            captured['template'] = template
+            captured['ctx'] = ctx
+            return MagicMock(name='render-result')
+
+        request_mock = MagicMock()
+        request_mock.env = self.env
+        request_mock.render = fake_render
+        with patch(
+            'odoo.addons.woow_paas_platform.controllers.oauth2.request',
+            request_mock,
+        ):
+            OAuth2Controller().authorize_get(**kwargs)
+        return captured
+
+    def _call_authorize_post(self, **kwargs):
+        from odoo.addons.woow_paas_platform.controllers.oauth2 import (
+            OAuth2Controller,
+        )
+        captured = {}
+
+        def fake_render(template, ctx):
+            captured['render_template'] = template
+            captured['render_ctx'] = ctx
+            return MagicMock(name='render-result')
+
+        def fake_redirect(url, local=False):
+            captured['redirect_url'] = url
+            return MagicMock(name='redirect-result')
+
+        request_mock = MagicMock()
+        request_mock.env = self.env
+        request_mock.render = fake_render
+        request_mock.redirect = fake_redirect
+        with patch(
+            'odoo.addons.woow_paas_platform.controllers.oauth2.request',
+            request_mock,
+        ):
+            OAuth2Controller().authorize_post(**kwargs)
+        return captured
+
+    def test_authorize_get_without_challenge_renders_pkce_required(self):
+        result = self._call_authorize_get(
+            response_type='code',
+            client_id=self.public_client.client_id,
+            redirect_uri=self.REDIRECT_URI,
+            scope='smarthome:read',
+            state='xyz',
+        )
+        self.assertEqual(result['template'], 'woow_paas_platform.oauth2_error')
+        self.assertEqual(result['ctx']['error_title'], 'PKCE Required')
+
+    def test_authorize_get_with_plain_method_rejected(self):
+        result = self._call_authorize_get(
+            response_type='code',
+            client_id=self.public_client.client_id,
+            redirect_uri=self.REDIRECT_URI,
+            scope='smarthome:read',
+            state='xyz',
+            code_challenge='dummy-challenge-string',
+            code_challenge_method='plain',
+        )
+        self.assertEqual(result['template'], 'woow_paas_platform.oauth2_error')
+        self.assertEqual(result['ctx']['error_title'], 'Invalid PKCE Method')
+
+    def test_authorize_post_without_challenge_redirects_with_error(self):
+        # Bypass GET: hand-crafted POST without code_challenge must not
+        # produce an authorization code, even though the user "approved".
+        result = self._call_authorize_post(
+            client_id=self.public_client.client_id,
+            redirect_uri=self.REDIRECT_URI,
+            scope='smarthome:read',
+            state='xyz-state',
+            approve='1',
+        )
+        self.assertIn('redirect_url', result)
+        self.assertIn('error=invalid_request', result['redirect_url'])
+        self.assertIn('state=xyz-state', result['redirect_url'])
+        codes = self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ])
+        self.assertFalse(codes)
