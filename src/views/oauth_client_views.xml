@@ -8,6 +8,7 @@
             <list string="OAuth Clients" decoration-muted="not is_active">
                 <field name="name"/>
                 <field name="client_id"/>
+                <field name="client_type"/>
                 <field name="scopes"/>
                 <field name="grant_types"/>
                 <field name="is_active"/>
@@ -28,6 +29,7 @@
                             string="Regenerate Secret"
                             class="btn-secondary"
                             icon="fa-refresh"
+                            invisible="client_type == 'public'"
                             confirm="This will invalidate the current client secret. Continue?"/>
                 </header>
                 <sheet>
@@ -42,6 +44,7 @@
                     <group>
                         <group string="Client Credentials">
                             <field name="client_id"/>
+                            <field name="client_type"/>
                             <field name="is_active"/>
                         </group>
                         <group string="OAuth Configuration">
@@ -49,6 +52,7 @@
                                    placeholder="authorization_code,refresh_token"/>
                             <field name="scopes"
                                    placeholder="smarthome:read smarthome:tunnel workspace:read"/>
+                            <field name="require_pkce"/>
                         </group>
                     </group>
                     <group string="Redirect URIs">

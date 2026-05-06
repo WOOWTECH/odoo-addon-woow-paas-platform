@@ -176,6 +176,23 @@ class OAuth2Controller(Controller):
                 'error_message': 'The redirect_uri is not registered for this application.',
             })
 
+        # Enforce PKCE for public / require_pkce clients
+        pkce_required = client.client_type == 'public' or client.require_pkce
+        if pkce_required:
+            if not code_challenge:
+                return request.render('woow_paas_platform.oauth2_error', {
+                    'error_title': 'PKCE Required',
+                    'error_message': 'This client requires PKCE. '
+                                     'Include code_challenge and '
+                                     'code_challenge_method=S256.',
+                })
+            if code_challenge_method != 'S256':
+                return request.render('woow_paas_platform.oauth2_error', {
+                    'error_title': 'Invalid PKCE Method',
+                    'error_message': 'Only code_challenge_method=S256 is '
+                                     'accepted for this client.',
+                })
+
         # Validate scopes
         requested_scopes = scope.split() if scope else []
         allowed_scopes = client.get_allowed_scopes()
@@ -246,6 +263,18 @@ class OAuth2Controller(Controller):
                 'error_message': 'Invalid client or redirect URI.',
             })
 
+        # Re-enforce PKCE on POST (defense against bypassing the GET step).
+        pkce_required = client.client_type == 'public' or client.require_pkce
+        if pkce_required:
+            if not code_challenge or code_challenge_method != 'S256':
+                params = {
+                    'error': 'invalid_request',
+                    'error_description': 'PKCE with S256 is required for this client.',
+                }
+                if state:
+                    params['state'] = state
+                return request.redirect(_build_redirect_uri(redirect_uri, params), local=False)
+
         # User denied
         if 'deny' in kwargs:
             params = {'error': 'access_denied', 'error_description': 'User denied access'}
@@ -309,14 +338,23 @@ class OAuth2Controller(Controller):
             )
 
     def _authenticate_client(self, kwargs: dict) -> Any | None:
-        """Authenticate a client using client_id and client_secret.
+        """Authenticate a client by client_id, optionally by client_secret.
+
+        Public clients (RFC 8252) are authenticated by client_id alone; their
+        security guarantee comes from PKCE at the authorization step. They
+        MUST NOT carry a client_secret in the token request — receiving one
+        here is treated as an authentication failure to defend against
+        misconfigured clients leaking a populated secret field.
+
+        Confidential clients are authenticated by client_id + client_secret
+        verified against the stored hash.
 
         Returns the client record or None.
         """
         client_id_param = kwargs.get('client_id', '')
         client_secret = kwargs.get('client_secret', '')
 
-        if not client_id_param or not client_secret:
+        if not client_id_param:
             return None
 
         client = request.env['woow_paas_platform.oauth_client'].sudo().search([
@@ -324,7 +362,19 @@ class OAuth2Controller(Controller):
             ('is_active', '=', True),
         ], limit=1)
 
-        if not client or not client.verify_secret(client_secret):
+        if not client:
+            return None
+
+        if client.client_type == 'public':
+            if client_secret:
+                _logger.warning(
+                    'Public client "%s" attempted token auth with a client_secret — rejected.',
+                    client.name,
+                )
+                return None
+            return client
+
+        if not client_secret or not client.verify_secret(client_secret):
             return None
 
         return client
@@ -418,10 +468,26 @@ class OAuth2Controller(Controller):
         if auth_code.redirect_uri != redirect_uri:
             return _json_error('invalid_grant', 'Redirect URI mismatch.')
 
+        # PKCE enforcement: public / require_pkce clients must have issued
+        # the code with a challenge, blocking any downgrade attack where a
+        # public client somehow obtained a non-PKCE auth_code.
+        pkce_required = client.client_type == 'public' or client.require_pkce
+        if pkce_required and not auth_code.code_challenge:
+            return _json_error(
+                'invalid_grant',
+                'Authorization code was not issued with PKCE; '
+                'this client requires PKCE.',
+            )
+
         # PKCE verification
         if auth_code.code_challenge:
             if not code_verifier:
                 return _json_error('invalid_grant', 'PKCE code_verifier is required.')
+            if pkce_required and auth_code.code_challenge_method != 'S256':
+                return _json_error(
+                    'invalid_grant',
+                    'This client requires code_challenge_method=S256.',
+                )
             if not _verify_pkce(
                 code_verifier, auth_code.code_challenge, auth_code.code_challenge_method or 'plain'
             ):
