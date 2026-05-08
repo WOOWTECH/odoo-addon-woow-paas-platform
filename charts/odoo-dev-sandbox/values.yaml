@@ -164,12 +164,20 @@ resourceQuota:
 # --- Network Policy ---
 networkPolicy:
   enabled: true
-  # Allow ingress from specific namespaces (e.g., cloudflare tunnel namespace)
+  # Allow ingress from specific namespaces (e.g., cloudflare tunnel namespace).
+  # Each namespace listed here is automatically mirrored on the egress side
+  # too, so reply traffic can return — required because the K3s NetworkPolicy
+  # enforcer treats some reply paths as fresh egress and would otherwise drop
+  # them once the ipBlock-except rule excludes the cluster pod CIDR. If you
+  # ever need ingress without reply egress (rare), don't list it here — add a
+  # separate field instead.
   allowIngressFromNamespaces: []
   # Example for STG mode:
   # allowIngressFromNamespaces:
   #   - paas-stg-cloudflare-system
-  # Allow egress to specific namespaces (e.g., paas-operator namespace)
+
+  # Allow egress to specific namespaces the sandbox itself initiates calls to
+  # (e.g., paas-operator). One-way; not paired with ingress.
   allowEgressToNamespaces: []
   # Example for STG mode:
   # allowEgressToNamespaces:

@@ -74,4 +74,15 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: {{ . }}
     {{- end }}
+    # Mirror ingress allowlist for reply traffic. K8s NetworkPolicy is
+    # conceptually stateful, but K3s' embedded enforcer treats some reply
+    # paths as fresh egress and drops them once the ipBlock-except rule above
+    # excludes the cluster pod CIDR (10.42.0.0/16 ⊂ 10.0.0.0/8). Re-listing
+    # the inbound namespaces on the egress side closes that gap.
+    {{- range .Values.networkPolicy.allowIngressFromNamespaces }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+    {{- end }}
 {{- end }}
