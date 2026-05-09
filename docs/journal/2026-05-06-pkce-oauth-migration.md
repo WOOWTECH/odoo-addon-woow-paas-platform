@@ -206,7 +206,7 @@ INSERT INTO woow_paas_platform_smart_home (
 
 ---
 
-## Phase 7：HA E2E 全綠 + PR #2（2026-05-07）
+## Phase 7：HA E2E 全綠 + PR #3（2026-05-07）
 
 HA agent 重試 add integration，10 個階段全跑完：
 
@@ -220,9 +220,9 @@ HA agent 重試 add integration，10 個階段全跑完：
 
 PKCE 行為跟 `sm-api-doc §3.4` spec 100% 對齊。
 
-HA 端 [PR #2](https://git-prod.woowtech.io/ha-components/woow_paas_smart_home/pulls/2) 5 commits 全過 ruff + hassfest，等 paas-platform prod 部署後 merge。
+HA 端 [PR #3](https://git-prod.woowtech.io/ha-components/woow_paas_smart_home/pulls/3) 5 commits 全過 ruff + hassfest，等 paas-platform prod 部署後 merge。
 
-> Note：HA 端 repo 在 2026-05-09 從 `gitlab.com/woow3/woow-paas-smart-home` 遷移到內部 `git-prod.woowtech.io/ha-components/woow_paas_smart_home`。舊 GitLab MR !1 closed（含 redirect comment），同樣 5 commits 已 push 到新 origin、開為 PR #2。本文一律使用新 PR #2 引用。
+> Note：HA 端 repo 在 2026-05-09 從 `gitlab.com/woow3/woow-paas-smart-home` 遷移到內部 `git-prod.woowtech.io/ha-components/woow_paas_smart_home`。舊 GitLab MR !1 closed、Gitea PR #2 也 closed（重建為繁中 description），同樣 5 commits 一直在 `feat/pkce-oauth-migration` branch，最終版是 PR #3。本文一律使用 PR #3 引用。
 
 寫進 `sm-api-doc §9`。
 
@@ -315,7 +315,7 @@ Chart fix 獨立有效。
 | Stg deploy `paas-odoo-stg:20260506.1608` + DB schema migrate | ✅ |
 | `woow-ha-smart-home` public client seed | ✅ DB verified |
 | `E2E Test Home`（id=1）seed | ✅ DB verified |
-| HA [PR #2](https://git-prod.woowtech.io/ha-components/woow_paas_smart_home/pulls/2)（5 commits，ruff + hassfest 全綠） | ✅ Ready，等 prod merge |
+| HA [PR #3](https://git-prod.woowtech.io/ha-components/woow_paas_smart_home/pulls/3)（5 commits，ruff + hassfest 全綠） | ✅ Ready，等 prod merge |
 | HA E2E 10/10 階段（含 1 個 mock-token 預期 fail） | ✅ |
 | paas-platform PR #22（chart NP fix + docs） | ✅ Merged → develop |
 | paas-charts close-loop confirm | ✅ |
@@ -323,7 +323,7 @@ Chart fix 獨立有效。
 剩下 user-driven steps：
 
 1. paas-platform develop → main → prod release（v* tag）
-2. HA 端 PR #2 merge（同步 prod release，避免 prod 抓不到 public client）
+2. HA 端 PR #3 merge（同步 prod release，避免 prod 抓不到 public client）
 3. paas-operator 排期 provision 真 Cloudflare tunnel 給某個 stg home，做最後一段 tunnel-connect 驗證
 
 ---
