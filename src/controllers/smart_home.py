@@ -415,6 +415,19 @@ class SmartHomeController(Controller):
                 "error": "Smart Home template not found or inactive",
             }
 
+        # Pre-check that the template actually has plans linked. Without
+        # this guard the next branch ("plan not in template.subscription_
+        # plan_ids") would fire and tell the admin "selected plan is not
+        # available for this template", which misdirects them to the plan
+        # they picked rather than the empty M2M on the template itself.
+        # The text mirrors api_smarthome_template_plans so admins see the
+        # same diagnosis whether the failure surfaces during list or create.
+        if not template.subscription_plan_ids:
+            return {
+                "success": False,
+                "error": "Template has no subscription plans configured",
+            }
+
         # Validate plan and its membership in the template's plan list
         Plan = request.env["sh.subscription.plan"].sudo()
         plan = Plan.browse(plan_id)
