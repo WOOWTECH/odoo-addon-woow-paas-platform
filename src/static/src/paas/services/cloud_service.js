@@ -159,21 +159,30 @@ export const cloudService = reactive({
     odooAddons: [],
 
     /**
-     * Fetch available subscription plans for a template
+     * Fetch available subscription plans for a template.
+     *
+     * Returns ApiResponse<Array> so callers can surface backend errors
+     * instead of silently rendering "no plans" — same rationale as the
+     * Smart Home variant in workspace_service.fetchSmartHomePlans. The
+     * backend hard-fails on missing/inactive/empty templates with a
+     * specific message; we want admins to see that message, not a blank
+     * list that looks like a bug.
+     *
      * @param {number} templateId - Template ID
-     * @returns {Promise<Array>} List of plans
+     * @returns {Promise<ApiResponse<Array>>}
      */
     async fetchPlans(templateId) {
         try {
             const result = await jsonRpc(`/api/cloud-services/templates/${templateId}/plans`, {});
             if (result.success) {
-                return result.data;
+                return { success: true, data: result.data };
             }
-            console.error("Failed to fetch plans:", result.error);
-            return [];
+            return {
+                success: false,
+                error: result.error || "Failed to fetch plans",
+            };
         } catch (err) {
-            console.error("Failed to fetch plans:", err);
-            return [];
+            return { success: false, error: err.message || "Network error" };
         }
     },
 

@@ -38,6 +38,11 @@ export class CreateSmartHomeModal extends Component {
             loadingPlans: false,
             provisioning: false,
             error: null,
+            // Surface backend fetch failures so admins see the actual
+            // error (e.g. "Template has no subscription plans configured")
+            // instead of a misleading "No plans available" empty state.
+            templatesError: null,
+            plansError: null,
             step: "form", // "form" | "provisioning" | "done"
             provisionProgress: 0,
         });
@@ -47,13 +52,19 @@ export class CreateSmartHomeModal extends Component {
 
     async loadTemplates() {
         this.state.loadingTemplates = true;
-        const templates = await workspaceService.fetchSmartHomeTemplates();
-        this.state.templates = templates;
+        this.state.templatesError = null;
+        const result = await workspaceService.fetchSmartHomeTemplates();
         this.state.loadingTemplates = false;
-        if (templates.length > 0) {
+        if (!result.success) {
+            this.state.templatesError = result.error;
+            this.state.templates = [];
+            return;
+        }
+        this.state.templates = result.data;
+        if (this.state.templates.length > 0) {
             // Auto-select the first template; users can switch via the
             // dropdown when more than one is active.
-            await this.onTemplateSelect(templates[0].id);
+            await this.onTemplateSelect(this.state.templates[0].id);
         }
     }
 
@@ -62,12 +73,17 @@ export class CreateSmartHomeModal extends Component {
         this.state.selectedPlanId = null;
         this.state.plans = [];
         this.state.error = null;
+        this.state.plansError = null;
         this.state.loadingPlans = true;
-        const plans = await workspaceService.fetchSmartHomePlans(templateId);
-        this.state.plans = plans;
+        const result = await workspaceService.fetchSmartHomePlans(templateId);
         this.state.loadingPlans = false;
-        if (plans.length > 0) {
-            this.state.selectedPlanId = plans[0].id;
+        if (!result.success) {
+            this.state.plansError = result.error;
+            return;
+        }
+        this.state.plans = result.data;
+        if (this.state.plans.length > 0) {
+            this.state.selectedPlanId = this.state.plans[0].id;
         }
     }
 

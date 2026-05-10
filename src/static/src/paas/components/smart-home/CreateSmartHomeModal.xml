@@ -78,6 +78,12 @@
                                 Loading templates...
                             </div>
                         </t>
+                        <t t-elif="state.templatesError">
+                            <div class="o_woow_error_message">
+                                <WoowIcon name="'error'" size="16"/>
+                                <span t-esc="state.templatesError"/>
+                            </div>
+                        </t>
                         <t t-elif="state.templates.length === 0">
                             <div class="o_woow_error_message">
                                 <WoowIcon name="'warning'" size="16"/>
@@ -92,6 +98,12 @@
                             <div class="o_woow_form_hint">
                                 <WoowIcon name="'sync'" size="14" class="'o_woow_spin'"/>
                                 Loading plans...
+                            </div>
+                        </t>
+                        <t t-elif="state.plansError">
+                            <div class="o_woow_error_message">
+                                <WoowIcon name="'error'" size="16"/>
+                                <span t-esc="state.plansError"/>
                             </div>
                         </t>
                         <t t-else="">

@@ -34,6 +34,7 @@ export class AppConfigurationPage extends Component {
             // Subscription plan
             plans: [],
             selectedPlanId: null,
+            plansError: null,
             // Validation errors
             errors: {},
             // Launch state
@@ -60,11 +61,20 @@ export class AppConfigurationPage extends Component {
             this.state.template = result.data;
             // Initialize helm values with defaults
             this.initializeHelmValues(result.data);
-            // Load available subscription plans
-            const plans = await cloudService.fetchPlans(this.props.templateId);
-            this.state.plans = plans;
-            if (plans.length > 0) {
-                this.state.selectedPlanId = plans[0].id;
+            // Load available subscription plans. fetchPlans returns
+            // ApiResponse<Array> — surface backend errors verbatim so admin
+            // misconfiguration (template missing/inactive/empty) doesn't
+            // look like a blank-list bug.
+            this.state.plansError = null;
+            const plansResult = await cloudService.fetchPlans(this.props.templateId);
+            if (plansResult.success) {
+                this.state.plans = plansResult.data;
+                if (this.state.plans.length > 0) {
+                    this.state.selectedPlanId = this.state.plans[0].id;
+                }
+            } else {
+                this.state.plans = [];
+                this.state.plansError = plansResult.error;
             }
         } else {
             this.state.error = result.error || "Failed to load template";

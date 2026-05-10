@@ -355,18 +355,25 @@ export const workspaceService = reactive({
      * a passive default; once multiple active templates exist the modal
      * surfaces them as a choice.
      *
-     * @returns {Promise<Array>} List of {id, name, slug, description}
+     * Returns ApiResponse<Array> so callers can surface backend errors —
+     * the design rejects silent fallback to an empty list because that
+     * hides admin misconfiguration ("No plans available" with no clue
+     * what's actually wrong).
+     *
+     * @returns {Promise<ApiResponse<Array>>}
      */
     async fetchSmartHomeTemplates() {
         try {
             const result = await jsonRpc("/api/smart-home/templates", {});
             if (result.success) {
-                return result.data;
+                return { success: true, data: result.data };
             }
-            return [];
+            return {
+                success: false,
+                error: result.error || "Failed to fetch templates",
+            };
         } catch (err) {
-            console.warn("Failed to fetch smart home templates:", err);
-            return [];
+            return { success: false, error: err.message || "Network error" };
         }
     },
 
@@ -374,32 +381,29 @@ export const workspaceService = reactive({
      * Fetch subscription plans bound to a Smart Home template.
      *
      * `templateId` is required — there is no global "all SH plans" listing
-     * any more (Q2: hard fail when no template). Pass an id from
+     * any more (hard fail when no template). Pass an id obtained from
      * `fetchSmartHomeTemplates`.
      *
      * @param {number} templateId
-     * @returns {Promise<Array>} List of plan objects
+     * @returns {Promise<ApiResponse<Array>>}
      */
     async fetchSmartHomePlans(templateId) {
         if (!templateId) {
-            console.warn("fetchSmartHomePlans called without templateId");
-            return [];
+            return { success: false, error: "templateId is required" };
         }
         try {
             const result = await jsonRpc(
                 `/api/smart-home/templates/${templateId}/plans`, {},
             );
             if (result.success) {
-                return result.data;
+                return { success: true, data: result.data };
             }
-            console.warn(
-                "Failed to fetch smart home plans for template %s: %s",
-                templateId, result.error,
-            );
-            return [];
+            return {
+                success: false,
+                error: result.error || "Failed to fetch plans",
+            };
         } catch (err) {
-            console.warn("Failed to fetch smart home plans:", err);
-            return [];
+            return { success: false, error: err.message || "Network error" };
         }
     },
 
