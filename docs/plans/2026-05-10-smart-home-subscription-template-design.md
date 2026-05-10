@@ -163,6 +163,18 @@ Mirrors `controllers/paas.py:932` and `:960` exactly. Both delegate to the lifec
 
 ---
 
+## Follow-up: SH-wide role check audit (#24)
+
+Review round 2 added an admin/owner role check to the two new skip-trial
+endpoints, mirroring the cloud-service pattern at `paas.py:945-948,968-971`.
+The four pre-existing mutating SH endpoints (`create` / `delete` /
+`provision` / `change-plan`) still gate on workspace membership only —
+any `role='user'` member can call them and affect the workspace owner's
+resources. Tracked separately in **issue #24** so this PR stays focused
+on the template-bound subscription rewrite.
+
+---
+
 ## Migration notes
 
 - `subscription_template_links.xml` is `noupdate=0`; on `-u` the SH template's `subscription_plan_ids` resets to `[plan_smarthome_monthly, plan_smarthome_yearly]`. Admins who add custom plans through the form view keep them only if they also add them through the data XML. Same convention as cloud-service template links.
