@@ -10,6 +10,8 @@ from typing import Any
 
 from odoo.http import request, route, Controller
 
+from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
+
 _logger = logging.getLogger(__name__)
 
 
@@ -274,6 +276,11 @@ class SmartHomeController(Controller):
         calculation lives on subscription_lifecycle_mixin._skip_trial_estimate
         and is shared with the dashboard's next_bill_estimate so amounts stay
         consistent across surfaces.
+
+        Requires the caller to be workspace owner or admin: skip-trial commits
+        the workspace owner's wallet to a charge, so a regular member must
+        not be able to trigger billing on someone else's behalf. Mirrors the
+        cloud-service role guard at paas.py:947-948.
         """
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
@@ -281,6 +288,10 @@ class SmartHomeController(Controller):
                 "success": False,
                 "error": "Workspace not found or access denied",
             }
+
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Admin access required"}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
@@ -304,13 +315,21 @@ class SmartHomeController(Controller):
     def api_smarthome_skip_trial(
         self, workspace_id: int, smarthome_id: int, **kwargs: Any,
     ) -> dict[str, Any]:
-        """End trial and start paid billing immediately for a Smart Home."""
+        """End trial and start paid billing immediately for a Smart Home.
+
+        Owner/admin only — same rationale as api_smarthome_skip_trial_estimate
+        (this is the mutating counterpart that actually charges the wallet).
+        """
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {
                 "success": False,
                 "error": "Workspace not found or access denied",
             }
+
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Admin access required"}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
