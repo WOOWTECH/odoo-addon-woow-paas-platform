@@ -1,12 +1,14 @@
 """Tests for the Smart Home subscription/skip-trial flow.
 
 Covers the controller-level wiring that mirrors cloud-service: create-with-
-template-validation and skip-trial pass-through to the lifecycle mixin.
+template-validation, the public `/api/smart-home/templates/<id>/plans` hard
+fails, and skip-trial pass-through to the lifecycle mixin (with the role
+guard added in review C2).
 
-We exercise the controller's _create_smarthome / skip-trial helpers
+We exercise the controller's `_create_smarthome` / route handlers
 directly rather than via HttpCase — the workspace-access plumbing they
-read from request.env is exposed through the controller class methods, so
-behaviour matches what the routes do without the HTTP overhead.
+read from `request.env` is exposed through the controller class methods,
+so behaviour matches what the routes do without the HTTP overhead.
 """
 from unittest.mock import patch, MagicMock
 
@@ -15,6 +17,14 @@ from odoo.tests.common import TransactionCase
 from odoo.addons.woow_paas_platform.controllers.smart_home import (
     SmartHomeController,
 )
+
+
+def _patch_request(env):
+    """Patch the controller's `request` global with a MagicMock that exposes env."""
+    return patch(
+        'odoo.addons.woow_paas_platform.controllers.smart_home.request',
+        new=MagicMock(env=env),
+    )
 
 
 class TestSmartHomeSubscriptionFlow(TransactionCase):
@@ -73,16 +83,9 @@ class TestSmartHomeSubscriptionFlow(TransactionCase):
 
         self.controller = SmartHomeController()
 
-    def _patch_request_env(self, env):
-        """Helper: patch odoo.http.request to expose env for controller calls."""
-        return patch(
-            'odoo.addons.woow_paas_platform.controllers.smart_home.request',
-            new=MagicMock(env=env),
-        )
-
     def test_create_rejects_missing_template_id(self):
         """Hard fail when caller forgets template_id — Q2 / brainstorm decision."""
-        with self._patch_request_env(self.env):
+        with _patch_request(self.env):
             res = self.controller._create_smarthome(
                 workspace=self.workspace,
                 name='Forgotten template',
@@ -97,7 +100,7 @@ class TestSmartHomeSubscriptionFlow(TransactionCase):
         """Plan validation is symmetric to paas.py:1586 — out-of-template plan
         is rejected so admin misconfiguration produces a clear error rather
         than a silent subscription with the wrong plan."""
-        with self._patch_request_env(self.env):
+        with _patch_request(self.env):
             res = self.controller._create_smarthome(
                 workspace=self.workspace,
                 name='Wrong plan',
@@ -111,7 +114,7 @@ class TestSmartHomeSubscriptionFlow(TransactionCase):
     def test_create_rejects_inactive_template(self):
         """An inactive template should not be selectable."""
         self.template.is_active = False
-        with self._patch_request_env(self.env):
+        with _patch_request(self.env):
             res = self.controller._create_smarthome(
                 workspace=self.workspace,
                 name='Inactive tmpl',
@@ -122,10 +125,27 @@ class TestSmartHomeSubscriptionFlow(TransactionCase):
         self.assertFalse(res['success'])
         self.assertIn('inactive', res['error'].lower())
 
+    def test_create_rejects_template_with_no_plans(self):
+        """Template active but no plans linked — surface the empty-template
+        message verbatim (S2). Without this the next branch would fire and
+        misleadingly tell the admin the *plan* is unavailable.
+        """
+        self.template.subscription_plan_ids = [(5, 0, 0)]  # clear M2M
+        with _patch_request(self.env):
+            res = self.controller._create_smarthome(
+                workspace=self.workspace,
+                name='Empty template',
+                ha_port=8123,
+                plan_id=self.plan_in.id,
+                template_id=self.template.id,
+            )
+        self.assertFalse(res['success'])
+        self.assertIn('no subscription plans', res['error'].lower())
+
     def test_create_happy_path_creates_subscription(self):
         """Successful create: SmartHome record exists + has a confirmed
         subscription tied to the chosen plan, with trial active."""
-        with self._patch_request_env(self.env):
+        with _patch_request(self.env):
             res = self.controller._create_smarthome(
                 workspace=self.workspace,
                 name='Happy HA',
@@ -142,12 +162,62 @@ class TestSmartHomeSubscriptionFlow(TransactionCase):
         self.assertTrue(sh.subscription_id.sh_trial)
 
 
-class TestSmartHomeSkipTrialEndpoints(TransactionCase):
-    """Skip-trial endpoints delegate to the lifecycle mixin.
+class TestSmartHomeTemplatePlansEndpoint(TransactionCase):
+    """Hard-fail paths on the public `/api/smart-home/templates/<id>/plans`.
 
-    We don't need to retest the mixin's logic (covered in
-    test_skip_trial_estimate.py) — we just verify the controller-side guards
-    (workspace access, smarthome lookup) and that the mixin is invoked.
+    The endpoint refuses to fall back to a name-search if the template is
+    misconfigured — admins should see the specific reason, not a blank
+    "no plans" UI (Q2 brainstorm decision).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
+        self.controller = SmartHomeController()
+
+    def test_template_not_found(self):
+        """Browse a non-existent id."""
+        with _patch_request(self.env):
+            res = self.controller.api_smarthome_template_plans(template_id=999999)
+        self.assertFalse(res['success'])
+        self.assertIn('not found', res['error'].lower())
+
+    def test_template_inactive(self):
+        """Active=False template is filtered out of the catalog."""
+        tmpl = self.SHTemplate.create({
+            'name': 'Inactive Tmpl',
+            'is_active': False,
+        })
+        with _patch_request(self.env):
+            res = self.controller.api_smarthome_template_plans(template_id=tmpl.id)
+        self.assertFalse(res['success'])
+        # The "not found or inactive" message covers both branches; either
+        # word should be enough for the admin to investigate.
+        self.assertTrue(
+            'inactive' in res['error'].lower() or 'not found' in res['error'].lower(),
+            res['error'],
+        )
+
+    def test_template_no_plans(self):
+        """Active template with no plans linked — hard fail with the
+        canonical message that admins see in both list and create paths."""
+        tmpl = self.SHTemplate.create({
+            'name': 'Empty Tmpl',
+            'is_active': True,
+        })
+        with _patch_request(self.env):
+            res = self.controller.api_smarthome_template_plans(template_id=tmpl.id)
+        self.assertFalse(res['success'])
+        self.assertIn('no subscription plans', res['error'].lower())
+
+
+class TestSmartHomeSkipTrialEndpoints(TransactionCase):
+    """Skip-trial endpoints delegate to the lifecycle mixin and gate on role.
+
+    We don't retest the mixin's logic (covered in
+    test_skip_trial_estimate.py) — we verify the controller-side guards
+    (workspace access, owner/admin role check from review C2) and that
+    the mixin is invoked when guards pass.
     """
 
     def setUp(self):
@@ -155,6 +225,7 @@ class TestSmartHomeSkipTrialEndpoints(TransactionCase):
         self.SmartHome = self.env['woow_paas_platform.smart_home']
         self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
         self.Workspace = self.env['woow_paas_platform.workspace']
+        self.WorkspaceAccess = self.env['woow_paas_platform.workspace_access']
         self.Plan = self.env['sh.subscription.plan']
 
         plan = self.Plan.create({
@@ -172,9 +243,14 @@ class TestSmartHomeSkipTrialEndpoints(TransactionCase):
             'subscription_plan_ids': [(6, 0, [plan.id])],
         })
 
+        self.admin_user = self.env.ref('base.user_admin')
+        # Workspace.create auto-provisions a WorkspaceAccess for `owner_id`
+        # with role='owner', so we don't need to create one manually here.
+        # The previous version of this setUp tried to and hit
+        # "duplicate key value violates unique_user_workspace".
         self.workspace = self.Workspace.create({
             'name': 'Skip WS',
-            'owner_id': self.env.ref('base.user_admin').id,
+            'owner_id': self.admin_user.id,
         })
         self.smart_home = self.SmartHome.create({
             'name': 'Skip Home',
@@ -182,36 +258,174 @@ class TestSmartHomeSkipTrialEndpoints(TransactionCase):
         })
         self.controller = SmartHomeController()
 
-    def test_skip_trial_estimate_called_on_smarthome(self):
-        """The controller should delegate to smarthome._skip_trial_estimate."""
-        sentinel = {'untaxed': 100.0, 'tax_rate': 0.0, 'tax_amount': 0.0,
-                    'total': 100.0, 'currency': 'pts',
-                    'wallet_balance': 200.0, 'sufficient': True,
-                    'shortage': 0.0,
-                    'billing_cycle_start': '2026-05-10',
-                    'billing_cycle_end': '2026-06-10'}
+    def _add_member(self, login, role):
+        """Create a fresh user and grant them the given role on the workspace."""
+        user = self.env['res.users'].create({
+            'name': login,
+            'login': login,
+            'email': '%s@example.test' % login,
+        })
+        self.WorkspaceAccess.create({
+            'workspace_id': self.workspace.id,
+            'user_id': user.id,
+            'role': role,
+        })
+        return user
 
+    def test_skip_trial_estimate_admin_invokes_mixin(self):
+        """Admin can request the estimate; mixin is called and result returned.
+
+        Replaces the previous test_skip_trial_estimate_called_on_smarthome
+        which guarded the assertion with `if res['success']:` and so passed
+        even when the underlying delegation never happened.
+        """
+        sentinel = {
+            'untaxed': 100.0, 'tax_rate': 0.0, 'tax_amount': 0.0,
+            'total': 100.0, 'currency': 'pts',
+            'wallet_balance': 200.0, 'sufficient': True, 'shortage': 0.0,
+            'billing_cycle_start': '2026-05-10',
+            'billing_cycle_end': '2026-06-10',
+        }
         with patch.object(
             type(self.smart_home), '_skip_trial_estimate',
             return_value=sentinel,
-        ) as mocked, patch(
-            'odoo.addons.woow_paas_platform.controllers.smart_home.request',
-            new=MagicMock(env=self.env, env_user=self.env.user),
-        ) as req:
-            req.env = self.env
-
-            # The route helper requires _get_smarthome_or_error to find the
-            # SH; bypass the workspace-access plumbing by calling the inner
-            # mixin directly via the controller's route handler.
+        ) as mocked, _patch_request(self.env(user=self.admin_user)):
             res = self.controller.api_smarthome_skip_trial_estimate(
                 workspace_id=self.workspace.id,
                 smarthome_id=self.smart_home.id,
             )
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(res['data'], sentinel)
+        mocked.assert_called_once()
 
-        # Either request-env plumbing returned an access error (covered by
-        # _get_workspace_or_error) or the mixin sentinel came through —
-        # either way, our controller routed to the mixin instead of doing
-        # its own math.
-        if res['success']:
-            self.assertEqual(res['data'], sentinel)
-            mocked.assert_called_once()
+    def test_skip_trial_estimate_non_admin_rejected(self):
+        """Workspace 'user'-role member cannot call skip-trial-estimate.
+
+        Regression for review C2 — before the role guard, any member
+        could trigger billing-affecting code paths against the workspace
+        owner's wallet via the mutating skip-trial endpoint.
+        """
+        member = self._add_member('sh_member_estimate', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_smarthome_skip_trial_estimate(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+            )
+        self.assertFalse(res['success'])
+        self.assertIn('admin', res['error'].lower())
+
+    def test_skip_trial_admin_invokes_mixin(self):
+        """Admin can call the mutating skip-trial; mixin is invoked + invoice info returned."""
+        invoice_sentinel = {'invoice_id': 42, 'amount': 115.0}
+        sub_info_sentinel = {
+            'id': 1, 'state': 'in_progress', 'is_trial': False,
+            'plan_name': 'Skip Plan', 'plan_price': 100.0,
+        }
+        with patch.object(
+            type(self.smart_home), '_skip_trial',
+            return_value=invoice_sentinel,
+        ) as mocked, patch.object(
+            type(self.smart_home), '_get_subscription_info',
+            return_value=sub_info_sentinel,
+        ), _patch_request(self.env(user=self.admin_user)):
+            res = self.controller.api_smarthome_skip_trial(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+            )
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(res['data']['invoice'], invoice_sentinel)
+        self.assertEqual(res['data']['subscription'], sub_info_sentinel)
+        mocked.assert_called_once()
+
+    def test_skip_trial_non_admin_rejected(self):
+        """Member without admin role cannot trigger billing — mutating variant."""
+        member = self._add_member('sh_member_skip', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_smarthome_skip_trial(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+            )
+        self.assertFalse(res['success'])
+        self.assertIn('admin', res['error'].lower())
+
+
+class TestSmartHomeChangePlanACL(TransactionCase):
+    """Regression for the missing `.sudo()` on the change-plan endpoint's plan read.
+
+    Before the fix, an internal user without the Subscription/Manager group
+    couldn't change SH plan because `Plan.browse(plan_id).exists()` would
+    return False under ACL, causing the endpoint to misreport "Plan not
+    found". The fix adds `.sudo()` at controllers/smart_home.py:127.
+
+    We don't drive the full happy path (which would require seeded products,
+    journal config, partner wallet etc.) — instead we drive the request just
+    far enough to prove the Plan read gets past the ACL boundary, by
+    asserting that the resulting error is *not* "Plan not found".
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.controller = SmartHomeController()
+        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
+        self.Workspace = self.env['woow_paas_platform.workspace']
+        self.WorkspaceAccess = self.env['woow_paas_platform.workspace_access']
+        self.Plan = self.env['sh.subscription.plan']
+
+        plan_a = self.Plan.create({
+            'name': 'ACL Plan A',
+            'sh_plan_price': 100.0,
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_no_of_billing_cycle': -1,
+        })
+        self.plan_b = self.Plan.create({
+            'name': 'ACL Plan B',
+            'sh_plan_price': 200.0,
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_no_of_billing_cycle': -1,
+        })
+        self.template = self.SHTemplate.create({
+            'name': 'ACL Tmpl',
+            'subscription_plan_ids': [(6, 0, [plan_a.id, self.plan_b.id])],
+        })
+
+        # Internal user *not* in the Subscription/Manager group — models the
+        # portal-like permission profile that surfaced the staging bug. The
+        # default `res.users.create` here yields an internal user bound only
+        # to base.group_user (no subscription_user / subscription_manager).
+        self.member = self.env['res.users'].create({
+            'name': 'Plain Internal User',
+            'login': 'sh_change_plan_member',
+            'email': 'sh_change_plan_member@example.test',
+        })
+        # Workspace.create auto-provisions WorkspaceAccess for owner_id;
+        # no need to create another one (would violate unique constraint).
+        self.workspace = self.Workspace.create({
+            'name': 'Change Plan WS',
+            'owner_id': self.member.id,
+        })
+        self.smart_home = self.SmartHome.create({
+            'name': 'Change Plan Home',
+            'workspace_id': self.workspace.id,
+        })
+
+    def test_plan_read_works_under_sudo_for_non_manager(self):
+        """Non-Manager user gets past `Plan.browse(plan_id).exists()`.
+
+        If the `.sudo()` weren't there, `exists()` would return False under
+        ACL and the endpoint would short-circuit with "Plan not found".
+        We provide a valid plan id, so the only way for the assertion below
+        to succeed is for the sudo'd read to find the plan and the request
+        to advance to the next guard ("No active subscription").
+        """
+        with _patch_request(self.env(user=self.member)):
+            res = self.controller.api_smarthome_change_plan(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+                plan_id=self.plan_b.id,
+            )
+        self.assertFalse(res['success'])
+        self.assertNotIn('plan not found', res['error'].lower())
+        self.assertIn('subscription', res['error'].lower())
