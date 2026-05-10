@@ -13,4 +13,11 @@
         name="Cloud"
         parent="menu_woow_paas_platform_root"
         sequence="30"/>
+
+    <!-- Smart Home 子選單群組 -->
+    <menuitem
+        id="menu_smart_home"
+        name="Smart Home"
+        parent="menu_woow_paas_platform_root"
+        sequence="40"/>
 </odoo>
