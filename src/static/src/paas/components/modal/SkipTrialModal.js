@@ -2,28 +2,36 @@
 import { Component, onMounted, useState } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
-import { cloudService } from "../../services/cloud_service";
 import { formatPoints } from "../../utils/billing_helpers";
 
 /**
  * SkipTrialModal Component
  *
- * Confirmation modal for skipping trial period and starting paid billing.
- * On mount, calls `cloudService.getSkipTrialEstimate` to fetch the
- * upcoming-invoice breakdown (untaxed / tax / total) + wallet sufficiency
- * info, then renders the breakdown and gates the confirm button on
- * `state.estimate?.sufficient`.
+ * Confirmation modal for skipping a subscription's trial period and
+ * starting paid billing immediately. The modal is service-type-agnostic:
+ * the caller supplies `loadEstimate` / `confirmSkip` callbacks pointing at
+ * whichever backend the parent page is for (Cloud Service, Smart Home, …),
+ * so the same UI handles every service type without duplication.
  *
  * Props:
- *   - service (Object): Service data { id, name, subscription }
- *   - onClose (Function): Called when modal is closed/cancelled
- *   - onSkipped (Function): Called after successful skip
+ *   - service (Object): { id, name, subscription } — display data only.
+ *     The modal never derives the request target from `service.id`; the
+ *     callbacks already know what to call. `service` exists purely for
+ *     name/trial-end-date rendering.
+ *   - loadEstimate (Function): () => Promise<ApiResponse<EstimateData>>.
+ *     Called on mount to populate the breakdown. Should be side-effect-free.
+ *   - confirmSkip (Function): () => Promise<ApiResponse<Object>>.
+ *     Called when the user confirms; mutates the subscription.
+ *   - onClose (Function): Called when modal is closed/cancelled.
+ *   - onSkipped (Function): Called after a successful confirmSkip.
  */
 export class SkipTrialModal extends Component {
     static template = "woow_paas_platform.SkipTrialModal";
     static components = { WoowButton, WoowIcon };
     static props = {
         service: { type: Object },
+        loadEstimate: { type: Function },
+        confirmSkip: { type: Function },
         onClose: { type: Function },
         onSkipped: { type: Function },
     };
@@ -42,7 +50,7 @@ export class SkipTrialModal extends Component {
     async loadEstimate() {
         this.state.loadingEstimate = true;
         this.state.estimateError = null;
-        const result = await cloudService.getSkipTrialEstimate(this.props.service.id);
+        const result = await this.props.loadEstimate();
         if (result.success) {
             this.state.estimate = result.data;
         } else {
@@ -85,7 +93,7 @@ export class SkipTrialModal extends Component {
         this.state.skipping = true;
         this.state.error = null;
 
-        const result = await cloudService.skipTrial(this.props.service.id);
+        const result = await this.props.confirmSkip();
 
         if (result.success) {
             this.props.onSkipped();

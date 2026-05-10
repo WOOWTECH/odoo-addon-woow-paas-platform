@@ -60,6 +60,14 @@
                     </div>
                     <div class="o_woow_smart_home_detail_actions">
                         <WoowButton
+                            t-if="isTrialActive"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showSkipTrial">
+                            <WoowIcon name="'skip_next'" size="18"/>
+                            Skip Trial
+                        </WoowButton>
+                        <WoowButton
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="refreshStatus"
@@ -81,6 +89,47 @@
                         </WoowButton>
                     </div>
                 </div>
+
+                <!-- Subscription Info Panel -->
+                <WoowCard t-if="subscription" shadow="true" class="'o_woow_subscription_info_card'">
+                    <div class="o_woow_tunnel_info_header">
+                        <WoowIcon name="'card_membership'" size="24"/>
+                        <h2>Subscription</h2>
+                        <span t-if="subscription.is_trial" class="o_woow_badge o_woow_badge_warning">Trial</span>
+                    </div>
+                    <div class="o_woow_tunnel_info_grid">
+                        <div class="o_woow_tunnel_info_item">
+                            <div class="o_woow_tunnel_info_label">
+                                <WoowIcon name="'subscriptions'" size="16"/>
+                                <span>Plan</span>
+                            </div>
+                            <div class="o_woow_tunnel_info_value">
+                                <span t-esc="subscription.plan_name or 'N/A'"/>
+                                <span class="o_woow_pay_label" t-if="subscription.plan_price">
+                                    (<t t-esc="formattedPlanPrice"/>)
+                                </span>
+                            </div>
+                        </div>
+                        <div class="o_woow_tunnel_info_item" t-if="subscription.is_trial">
+                            <div class="o_woow_tunnel_info_label">
+                                <WoowIcon name="'event'" size="16"/>
+                                <span>Trial Ends</span>
+                            </div>
+                            <div class="o_woow_tunnel_info_value">
+                                <span t-esc="subscription.trial_end_date or 'N/A'"/>
+                            </div>
+                        </div>
+                        <div class="o_woow_tunnel_info_item">
+                            <div class="o_woow_tunnel_info_label">
+                                <WoowIcon name="'schedule_send'" size="16"/>
+                                <span>Next Payment</span>
+                            </div>
+                            <div class="o_woow_tunnel_info_value">
+                                <span t-esc="subscription.next_payment or 'N/A'"/>
+                            </div>
+                        </div>
+                    </div>
+                </WoowCard>
 
                 <!-- Tunnel Info Panel -->
                 <WoowCard shadow="true" class="'o_woow_tunnel_info_card'">
@@ -139,6 +188,15 @@
                     </div>
                 </WoowCard>
             </t>
+
+            <!-- Skip Trial Modal -->
+            <SkipTrialModal
+                t-if="state.showSkipTrialModal and home"
+                service="home"
+                loadEstimate="loadSmartHomeEstimate"
+                confirmSkip="confirmSmartHomeSkip"
+                onClose.bind="hideSkipTrial"
+                onSkipped.bind="onTrialSkipped"/>
 
             <!-- Delete Confirmation Modal -->
             <t t-if="state.showDeleteConfirm">

@@ -21,7 +21,13 @@
         </record>
 
         <!-- AnythingLLM template does not exist yet; plans will be linked when created -->
-        <!-- Smart Home plans are used directly by SmartHome model, not via template -->
+
+        <!-- Link smart_home_template to its subscription plans -->
+
+        <record id="smart_home_home_assistant" model="woow_paas_platform.smart_home_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_smarthome_monthly'), ref('plan_smarthome_yearly')])]"/>
+        </record>
 
     </data>
 </odoo>

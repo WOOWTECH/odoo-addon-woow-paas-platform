@@ -241,6 +241,17 @@ export class ServiceDetailPage extends Component {
         this.loadService();
     }
 
+    // Skip-trial callbacks bound to cloudService — passed to SkipTrialModal
+    // so the same modal works for cloud services and smart homes (and any
+    // future service type) without modal-side branching.
+    loadCloudServiceEstimate = () => {
+        return cloudService.getSkipTrialEstimate(this.props.serviceId);
+    };
+
+    confirmCloudServiceSkip = () => {
+        return cloudService.skipTrial(this.props.serviceId);
+    };
+
     // Domain Modal
     showDomainModal() {
         this.state.showDomainModal = true;

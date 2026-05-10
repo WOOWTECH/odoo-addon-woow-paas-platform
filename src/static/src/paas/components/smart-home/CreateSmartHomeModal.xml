@@ -51,11 +51,68 @@
                             </small>
                         </div>
 
-                        <PlanSelector
-                            plans="state.plans"
-                            selectedPlanId="state.selectedPlanId"
-                            onSelect.bind="onPlanSelect"
-                        />
+                        <!-- Template selector: shown only when more than one
+                             active template exists. With a single template
+                             the dropdown would just be visual noise — the
+                             plan list below already implicitly identifies it. -->
+                        <div class="o_woow_form_group" t-if="state.templates.length &gt; 1">
+                            <label for="smarthome_template">Smart Home Template</label>
+                            <select
+                                id="smarthome_template"
+                                class="o_woow_input"
+                                t-on-change="onTemplateChange"
+                                t-att-disabled="state.loading">
+                                <t t-foreach="state.templates" t-as="tmpl" t-key="tmpl.id">
+                                    <option
+                                        t-att-value="tmpl.id"
+                                        t-att-selected="tmpl.id === state.selectedTemplateId">
+                                        <t t-esc="tmpl.name"/>
+                                    </option>
+                                </t>
+                            </select>
+                        </div>
+
+                        <t t-if="state.loadingTemplates">
+                            <div class="o_woow_form_hint">
+                                <WoowIcon name="'sync'" size="14" class="'o_woow_spin'"/>
+                                Loading templates...
+                            </div>
+                        </t>
+                        <t t-elif="state.templatesError">
+                            <div class="o_woow_error_message">
+                                <WoowIcon name="'error'" size="16"/>
+                                <span t-esc="state.templatesError"/>
+                            </div>
+                        </t>
+                        <t t-elif="state.templates.length === 0">
+                            <div class="o_woow_error_message">
+                                <WoowIcon name="'warning'" size="16"/>
+                                <span>
+                                    No active Smart Home template configured.
+                                    Contact admin to set up a template under
+                                    Settings → Woow PaaS → Smart Home → Templates.
+                                </span>
+                            </div>
+                        </t>
+                        <t t-elif="state.loadingPlans">
+                            <div class="o_woow_form_hint">
+                                <WoowIcon name="'sync'" size="14" class="'o_woow_spin'"/>
+                                Loading plans...
+                            </div>
+                        </t>
+                        <t t-elif="state.plansError">
+                            <div class="o_woow_error_message">
+                                <WoowIcon name="'error'" size="16"/>
+                                <span t-esc="state.plansError"/>
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <PlanSelector
+                                plans="state.plans"
+                                selectedPlanId="state.selectedPlanId"
+                                onSelect.bind="onPlanSelect"
+                            />
+                        </t>
 
                         <div t-if="state.error" class="o_woow_error_message">
                             <WoowIcon name="'error'" size="16"/>

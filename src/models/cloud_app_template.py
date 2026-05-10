@@ -1,4 +1,5 @@
-from odoo import fields, models
+from odoo import api, fields, models
+from odoo.exceptions import ValidationError
 
 
 class CloudAppTemplate(models.Model):
@@ -177,3 +178,34 @@ class CloudAppTemplate(models.Model):
         default=True,
         help='Whether this template is available for deployment',
     )
+
+    @api.constrains('subscription_plan_ids')
+    def _check_no_cross_service_type_plans(self):
+        """Symmetrical to smart_home_template — a plan belongs to one service type only.
+
+        Triggered when an admin edits a CloudAppTemplate; rejects the change if
+        any of the chosen plans is already attached to a SmartHomeTemplate.
+        Without this check, the SH-side constrains alone wouldn't catch
+        edits made on the CS side.
+        """
+        if not self:
+            return
+        SHTemplate = self.env['woow_paas_platform.smart_home_template']
+        for record in self:
+            if not record.subscription_plan_ids:
+                continue
+            conflicts = SHTemplate.search([
+                ('subscription_plan_ids', 'in', record.subscription_plan_ids.ids),
+            ])
+            if conflicts:
+                shared = record.subscription_plan_ids & conflicts.subscription_plan_ids
+                raise ValidationError(
+                    "Plan(s) %s are already linked to Smart Home Template(s) %s. "
+                    "A subscription plan must belong to a single service type — "
+                    "its product determines the invoice line text, so sharing "
+                    "would produce invoices that don't match the actual service."
+                    % (
+                        ', '.join(shared.mapped('name')),
+                        ', '.join(conflicts.mapped('name')),
+                    )
+                )

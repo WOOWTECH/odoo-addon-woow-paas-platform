@@ -41,3 +41,4 @@ venv/
 # Allow chart default values (no secrets, only defaults)
 !charts/*/values.yaml
 !charts/*/values-*.yaml
+.maestri
