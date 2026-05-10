@@ -347,19 +347,113 @@ export const workspaceService = reactive({
     // -------------------------------------------------------------------------
 
     /**
-     * Fetch available Smart Home subscription plans
-     * @returns {Promise<Array>} List of plans
+     * Fetch available Smart Home templates (catalog entries that group plans).
+     *
+     * Mirrors the cloud-service template flow: a template is the unit an
+     * admin manages plan-bindings on, and the frontend has the user pick
+     * one before listing plans. With a single active template the picker is
+     * a passive default; once multiple active templates exist the modal
+     * surfaces them as a choice.
+     *
+     * @returns {Promise<Array>} List of {id, name, slug, description}
      */
-    async fetchSmartHomePlans() {
+    async fetchSmartHomeTemplates() {
         try {
-            const result = await jsonRpc("/api/smart-home/plans", {});
+            const result = await jsonRpc("/api/smart-home/templates", {});
             if (result.success) {
                 return result.data;
             }
             return [];
         } catch (err) {
+            console.warn("Failed to fetch smart home templates:", err);
+            return [];
+        }
+    },
+
+    /**
+     * Fetch subscription plans bound to a Smart Home template.
+     *
+     * `templateId` is required — there is no global "all SH plans" listing
+     * any more (Q2: hard fail when no template). Pass an id from
+     * `fetchSmartHomeTemplates`.
+     *
+     * @param {number} templateId
+     * @returns {Promise<Array>} List of plan objects
+     */
+    async fetchSmartHomePlans(templateId) {
+        if (!templateId) {
+            console.warn("fetchSmartHomePlans called without templateId");
+            return [];
+        }
+        try {
+            const result = await jsonRpc(
+                `/api/smart-home/templates/${templateId}/plans`, {},
+            );
+            if (result.success) {
+                return result.data;
+            }
+            console.warn(
+                "Failed to fetch smart home plans for template %s: %s",
+                templateId, result.error,
+            );
+            return [];
+        } catch (err) {
             console.warn("Failed to fetch smart home plans:", err);
             return [];
+        }
+    },
+
+    /**
+     * Get the upcoming-invoice breakdown for a Smart Home skip-trial.
+     *
+     * Side-effect-free counterpart to `skipTrialSmartHome`. Used by the
+     * confirm modal to render the actual amount + wallet sufficiency
+     * before the user commits.
+     *
+     * @param {number} workspaceId
+     * @param {number} homeId
+     * @returns {Promise<ApiResponse<Object>>}
+     */
+    async getSkipTrialEstimateSmartHome(workspaceId, homeId) {
+        this.operationLoading.skipTrialEstimateSmartHome = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/smarthomes/${homeId}/skip-trial-estimate`,
+                {},
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.skipTrialEstimateSmartHome = false;
+        }
+    },
+
+    /**
+     * End a Smart Home subscription's trial and start paid billing.
+     *
+     * @param {number} workspaceId
+     * @param {number} homeId
+     * @returns {Promise<ApiResponse<Object>>}
+     */
+    async skipTrialSmartHome(workspaceId, homeId) {
+        this.operationLoading.skipTrialSmartHome = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/smarthomes/${homeId}/skip-trial`,
+                {},
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.skipTrialSmartHome = false;
         }
     },
 
@@ -391,6 +485,9 @@ export const workspaceService = reactive({
      * @param {number} workspaceId - Target workspace ID
      * @param {Object} data - Smart home creation data
      * @param {string} data.name - Smart home name
+     * @param {number} data.template_id - Smart Home template ID (required)
+     * @param {number} data.plan_id - Subscription plan ID (required, must
+     *   belong to the chosen template)
      * @param {number} [data.ha_port=8123] - Home Assistant port
      * @returns {Promise<ApiResponse<Object>>}
      */
@@ -402,6 +499,7 @@ export const workspaceService = reactive({
                 name: data.name,
                 ha_port: data.ha_port || 8123,
                 plan_id: data.plan_id,
+                template_id: data.template_id,
             });
             if (result.success) {
                 return { success: true, data: result.data };

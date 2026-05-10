@@ -29,23 +29,52 @@ export class CreateSmartHomeModal extends Component {
         this.state = useState({
             name: "",
             haPort: "8123",
+            templates: [],
+            selectedTemplateId: null,
             plans: [],
             selectedPlanId: null,
             loading: false,
+            loadingTemplates: true,
+            loadingPlans: false,
             provisioning: false,
             error: null,
             step: "form", // "form" | "provisioning" | "done"
             provisionProgress: 0,
         });
 
-        this.loadPlans();
+        this.loadTemplates();
     }
 
-    async loadPlans() {
-        const plans = await workspaceService.fetchSmartHomePlans();
+    async loadTemplates() {
+        this.state.loadingTemplates = true;
+        const templates = await workspaceService.fetchSmartHomeTemplates();
+        this.state.templates = templates;
+        this.state.loadingTemplates = false;
+        if (templates.length > 0) {
+            // Auto-select the first template; users can switch via the
+            // dropdown when more than one is active.
+            await this.onTemplateSelect(templates[0].id);
+        }
+    }
+
+    async onTemplateSelect(templateId) {
+        this.state.selectedTemplateId = templateId;
+        this.state.selectedPlanId = null;
+        this.state.plans = [];
+        this.state.error = null;
+        this.state.loadingPlans = true;
+        const plans = await workspaceService.fetchSmartHomePlans(templateId);
         this.state.plans = plans;
+        this.state.loadingPlans = false;
         if (plans.length > 0) {
             this.state.selectedPlanId = plans[0].id;
+        }
+    }
+
+    onTemplateChange(ev) {
+        const id = parseInt(ev.target.value, 10);
+        if (!isNaN(id)) {
+            this.onTemplateSelect(id);
         }
     }
 
@@ -82,6 +111,11 @@ export class CreateSmartHomeModal extends Component {
             return;
         }
 
+        if (!this.state.selectedTemplateId) {
+            this.state.error = "Please select a Smart Home template";
+            return;
+        }
+
         if (!this.state.selectedPlanId) {
             this.state.error = "Please select a subscription plan";
             return;
@@ -95,6 +129,7 @@ export class CreateSmartHomeModal extends Component {
             name,
             ha_port: port,
             plan_id: this.state.selectedPlanId,
+            template_id: this.state.selectedTemplateId,
         });
 
         if (!createResult.success) {
