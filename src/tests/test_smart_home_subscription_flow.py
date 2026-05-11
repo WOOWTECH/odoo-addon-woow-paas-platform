@@ -312,7 +312,7 @@ class TestSmartHomeSkipTrialEndpoints(TransactionCase):
                 smarthome_id=self.smart_home.id,
             )
         self.assertFalse(res['success'])
-        self.assertIn('admin', res['error'].lower())
+        self.assertIn('permission', res['error'].lower())
 
     def test_skip_trial_admin_invokes_mixin(self):
         """Admin can call the mutating skip-trial; mixin is invoked + invoice info returned."""
@@ -346,7 +346,7 @@ class TestSmartHomeSkipTrialEndpoints(TransactionCase):
                 smarthome_id=self.smart_home.id,
             )
         self.assertFalse(res['success'])
-        self.assertIn('admin', res['error'].lower())
+        self.assertIn('permission', res['error'].lower())
 
 
 class TestSmartHomeChangePlanACL(TransactionCase):
@@ -429,3 +429,203 @@ class TestSmartHomeChangePlanACL(TransactionCase):
         self.assertFalse(res['success'])
         self.assertNotIn('plan not found', res['error'].lower())
         self.assertIn('subscription', res['error'].lower())
+
+
+class TestSmartHomeMutatingEndpointsRoleCheck(TransactionCase):
+    """Role-check coverage for the four mutating SH endpoints.
+
+    Sibling of TestSmartHomeSkipTrialEndpoints — same fixture shape, same
+    `_add_member` helper, two tests per endpoint (admin happy + non-admin
+    rejected). The reject branch asserts the unified "Insufficient
+    permissions" wording introduced in this PR.
+
+    For the dispatch endpoints (api_smarthomes / api_smarthome_detail) the
+    role check is intentionally inside each mutating action branch so that
+    read-only actions (list / get / refresh_status) stay open to every
+    workspace member — those reads are not retested here, they are
+    exercised by TestSmartHomeSubscriptionFlow and the SH detail page.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
+        self.Workspace = self.env['woow_paas_platform.workspace']
+        self.WorkspaceAccess = self.env['woow_paas_platform.workspace_access']
+        self.Plan = self.env['sh.subscription.plan']
+
+        self.plan = self.Plan.create({
+            'name': 'Role Check Plan',
+            'sh_plan_price': 100.0,
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_no_of_billing_cycle': -1,
+        })
+        self.template = self.SHTemplate.create({
+            'name': 'Role Check Tmpl',
+            'subscription_plan_ids': [(6, 0, [self.plan.id])],
+        })
+
+        self.admin_user = self.env.ref('base.user_admin')
+        # Workspace.create auto-provisions WorkspaceAccess(role='owner') for
+        # owner_id — no need to insert another row (would violate the
+        # unique_user_workspace constraint).
+        self.workspace = self.Workspace.create({
+            'name': 'Role Check WS',
+            'owner_id': self.admin_user.id,
+        })
+        self.smart_home = self.SmartHome.create({
+            'name': 'Role Check Home',
+            'workspace_id': self.workspace.id,
+        })
+        self.controller = SmartHomeController()
+
+    def _add_member(self, login, role):
+        """Create a fresh user and grant them the given role on the workspace."""
+        user = self.env['res.users'].create({
+            'name': login,
+            'login': login,
+            'email': '%s@example.test' % login,
+        })
+        self.WorkspaceAccess.create({
+            'workspace_id': self.workspace.id,
+            'user_id': user.id,
+            'role': role,
+        })
+        return user
+
+    # ---------------- create ----------------
+
+    def test_create_admin_succeeds(self):
+        """Admin clears the role check and the controller's _create_smarthome
+        helper is invoked. We mock the helper because its plan/product
+        wiring is exercised separately in TestSmartHomeSubscriptionFlow."""
+        sentinel = {'success': True, 'data': {'id': 999}}
+        with patch.object(
+            SmartHomeController, '_create_smarthome',
+            return_value=sentinel,
+        ) as mocked, _patch_request(self.env(user=self.admin_user)):
+            res = self.controller.api_smarthomes(
+                workspace_id=self.workspace.id,
+                action='create',
+                name='Admin Home',
+                plan_id=self.plan.id,
+                template_id=self.template.id,
+            )
+        self.assertTrue(res['success'], res.get('error'))
+        mocked.assert_called_once()
+
+    def test_create_non_admin_rejected(self):
+        """A workspace 'user'-role member is blocked before _create_smarthome
+        runs — proves the role guard is the gate, not template/plan validation."""
+        member = self._add_member('sh_create_member', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_smarthomes(
+                workspace_id=self.workspace.id,
+                action='create',
+                name='Should Be Rejected',
+                plan_id=self.plan.id,
+                template_id=self.template.id,
+            )
+        self.assertFalse(res['success'])
+        self.assertIn('permission', res['error'].lower())
+
+    # ---------------- delete ----------------
+
+    def test_delete_admin_succeeds(self):
+        """Admin passes the role check; both _check_operation_allowed and
+        _delete_smarthome are mocked so the test focuses on the gate."""
+        with patch.object(
+            type(self.smart_home), '_check_operation_allowed',
+            return_value=None,
+        ), patch.object(
+            SmartHomeController, '_delete_smarthome',
+            return_value={'success': True, 'data': {'message': 'deleted'}},
+        ) as mocked, _patch_request(self.env(user=self.admin_user)):
+            res = self.controller.api_smarthome_detail(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+                action='delete',
+            )
+        self.assertTrue(res['success'], res.get('error'))
+        mocked.assert_called_once()
+
+    def test_delete_non_admin_rejected(self):
+        """Workspace 'user'-role member cannot delete another owner's SH."""
+        member = self._add_member('sh_delete_member', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_smarthome_detail(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+                action='delete',
+            )
+        self.assertFalse(res['success'])
+        self.assertIn('permission', res['error'].lower())
+
+    # ---------------- provision ----------------
+
+    def test_provision_admin_succeeds(self):
+        """Admin passes the role check on provision; the K8s-side work
+        (_provision_smarthome) is mocked since this test is about the gate."""
+        with patch.object(
+            type(self.smart_home), '_check_operation_allowed',
+            return_value=None,
+        ), patch.object(
+            SmartHomeController, '_provision_smarthome',
+            return_value={'success': True, 'data': {}},
+        ) as mocked, _patch_request(self.env(user=self.admin_user)):
+            res = self.controller.api_smarthome_detail(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+                action='provision',
+            )
+        self.assertTrue(res['success'], res.get('error'))
+        mocked.assert_called_once()
+
+    def test_provision_non_admin_rejected(self):
+        """Provision creates the tunnel + consumes K8s quota; member-level
+        users must not be able to trigger it on the owner's behalf."""
+        member = self._add_member('sh_provision_member', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_smarthome_detail(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+                action='provision',
+            )
+        self.assertFalse(res['success'])
+        self.assertIn('permission', res['error'].lower())
+
+    # ---------------- change-plan ----------------
+
+    def test_change_plan_admin_passes_role_check(self):
+        """Admin gets past the role check. We don't drive the full happy
+        path (which needs an active subscription, partner wallet, journal
+        config, etc. — covered separately); we prove the gate by asserting
+        the resulting error is the subsequent business-state error, *not*
+        a permission error.
+
+        Same approach as TestSmartHomeChangePlanACL above, applied to the
+        new role-check guard."""
+        with _patch_request(self.env(user=self.admin_user)):
+            res = self.controller.api_smarthome_change_plan(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+                plan_id=self.plan.id,
+            )
+        self.assertFalse(res['success'])
+        self.assertNotIn('permission', res['error'].lower())
+        self.assertIn('subscription', res['error'].lower())
+
+    def test_change_plan_non_admin_rejected(self):
+        """Member without admin role cannot change the plan — change-plan
+        moves money (refund + new charge), so the gate matters here even
+        more than for create/delete/provision."""
+        member = self._add_member('sh_change_plan_role_member', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_smarthome_change_plan(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+                plan_id=self.plan.id,
+            )
+        self.assertFalse(res['success'])
+        self.assertIn('permission', res['error'].lower())
