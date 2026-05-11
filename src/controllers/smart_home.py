@@ -304,7 +304,7 @@ class SmartHomeController(Controller):
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Admin access required"}
+            return {"success": False, "error": "Insufficient permissions"}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
@@ -342,7 +342,7 @@ class SmartHomeController(Controller):
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Admin access required"}
+            return {"success": False, "error": "Insufficient permissions"}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
