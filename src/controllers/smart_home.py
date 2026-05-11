@@ -50,6 +50,9 @@ class SmartHomeController(Controller):
         if action == "list":
             return self._list_smarthomes(workspace)
         elif action == "create":
+            access = workspace.check_user_access(request.env.user)
+            if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+                return {"success": False, "error": "Insufficient permissions"}
             plan_id = kwargs.get("plan_id")
             template_id = kwargs.get("template_id")
             return self._create_smarthome(
@@ -87,12 +90,18 @@ class SmartHomeController(Controller):
         if action == "get":
             return {"success": True, "data": smarthome.to_dict()}
         elif action == "delete":
+            access = workspace.check_user_access(request.env.user)
+            if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+                return {"success": False, "error": "Insufficient permissions"}
             try:
                 smarthome._check_operation_allowed(operation='write')
             except Exception as e:
                 return {"success": False, "error": str(e)}
             return self._delete_smarthome(smarthome)
         elif action == "provision":
+            access = workspace.check_user_access(request.env.user)
+            if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+                return {"success": False, "error": "Insufficient permissions"}
             try:
                 smarthome._check_operation_allowed(operation='write')
             except Exception as e:
@@ -125,6 +134,10 @@ class SmartHomeController(Controller):
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
             return {"success": False, "error": "Smart home not found"}
+
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Insufficient permissions"}
 
         # sudo: portal users lack ACL on sh.subscription.plan; the records are
         # catalog data and the workspace-access check above already gates who
@@ -291,7 +304,7 @@ class SmartHomeController(Controller):
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Admin access required"}
+            return {"success": False, "error": "Insufficient permissions"}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
@@ -329,7 +342,7 @@ class SmartHomeController(Controller):
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Admin access required"}
+            return {"success": False, "error": "Insufficient permissions"}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
