@@ -501,6 +501,25 @@ class TestSmartHomeChangePlanCascadeSudo(TransactionCase):
             'login': 'sh_owner_no_subscription_manager',
             'email': 'sh_owner_no_subscription_manager@example.test',
         })
+        # Explicitly reset groups: sandbox DBs cloned from stg inherit a
+        # res.config.settings.default_user_template that auto-grants 4
+        # Administrator groups + Invoicing on user.create. Without this
+        # reset the fixture would be admin-equivalent and the regression
+        # would silently no-op (the R1 reviewer's revert-cycle caught
+        # exactly this — pre-fix, test still passed). Hard-pinning groups
+        # to base.group_user makes the fixture name match its semantics.
+        base_user = self.env.ref('base.group_user')
+        self.owner.groups_id = [(6, 0, [base_user.id])]
+        # Sanity assertion: pins the regression's value. If a future
+        # default_user_template change re-introduces the manager group on
+        # ordinary internal users, this assertion fails loudly rather than
+        # letting the test silently lose meaning.
+        manager_group = self.env.ref(
+            'sh_subscription.group_manager_sh_subscription',
+            raise_if_not_found=False,
+        )
+        if manager_group:
+            self.assertNotIn(manager_group, self.owner.groups_id)
         # Workspace.create auto-provisions owner WorkspaceAccess(role=owner).
         self.workspace = self.Workspace.create({
             'name': 'Cascade WS',
@@ -520,11 +539,25 @@ class TestSmartHomeChangePlanCascadeSudo(TransactionCase):
         # and silently lose its regression value.
         self.assertTrue(self.smart_home.subscription_id)
         self.assertEqual(self.smart_home.subscription_id.state, 'in_progress')
+        # Drop the env cache before the user-scoped call. Odoo's env.cache is
+        # transaction-scoped and *shared across envs* — without this, the
+        # admin-context reads above (sanity + mixin internals) would prime
+        # the cache for sh.subscription.subscription, and the owner-env
+        # traversal in the test would hit cache instead of re-checking ACL,
+        # masking the very bug we're regressing against. The pre-fix
+        # AccessError only surfaces on a fresh read, which is the situation
+        # in production (each HTTP request starts with an empty cache).
+        self.env.invalidate_all()
 
     def test_change_plan_workspace_owner_without_manager_group_passes_acl(self):
         """As workspace OWNER (not in group_sh_subscription_manager), the
         change-plan request must pass both gates: the [OWNER, ADMIN] role
         check (#24) AND the model ACL on sh.subscription.subscription.
+
+        The fixture explicitly resets ``self.owner.groups_id`` to only
+        ``base.group_user`` (see setUp); without that reset the sandbox-DB
+        default_user_template would seed the user with admin-equivalent
+        groups and this regression test would no-op.
 
         Pre-fix: ``old_sub = smarthome.subscription_id`` raised
         ``AccessError`` → ``{success: false, error: "You are not allowed
