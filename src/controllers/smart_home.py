@@ -147,7 +147,12 @@ class SmartHomeController(Controller):
         if not plan.exists():
             return {"success": False, "error": "Plan not found"}
 
-        old_sub = smarthome.subscription_id
+        # sudo: portal/workspace-owner users typically lack ACL on
+        # sh.subscription.subscription (it gates on group_sh_subscription_manager,
+        # which workspace owners don't auto-receive). The workspace + role
+        # check above already gates who can drive change_plan, so the sudo
+        # here is a narrow widening that mirrors paas.py:874's cascade.
+        old_sub = smarthome.sudo().subscription_id
         _logger.info(
             "[SH] change_plan request workspace=%s sh=%s new_plan=%s old_sub=%s",
             workspace_id, smarthome_id, plan_id,
@@ -185,10 +190,16 @@ class SmartHomeController(Controller):
         })
 
         smarthome._create_and_confirm_subscription(partner, plan)
+        # sudo: same rationale as the old_sub read above — Odoo's prefetch
+        # cache *usually* lets the post-create traversal succeed, but the
+        # intervening `.sudo().write()` on old_sub invalidates portions of
+        # the cache, so paranoidly sudo here too. Avoids drift between this
+        # log line's reliability and the rest of the endpoint's guarantees.
+        new_sub = smarthome.sudo().subscription_id
         _logger.info(
             "[SH] change_plan done sh=%s old_sub=%s new_sub=%s",
             smarthome_id, old_sub.id,
-            smarthome.subscription_id.id if smarthome.subscription_id else None,
+            new_sub.id if new_sub else None,
         )
 
         return {
