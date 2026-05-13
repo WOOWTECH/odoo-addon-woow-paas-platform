@@ -117,8 +117,8 @@ Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正
 部署獨立的開發沙盒環境到 Kubernetes：
 
 ```bash
-# 為當前 branch 建立沙盒
-./.claude/skills/k8s-dev-sandbox/scripts/create.sh
+# 為當前 branch 建立沙盒 (--context required, see fix/sandbox-scripts-context-safety)
+./.claude/skills/k8s-dev-sandbox/scripts/create.sh --context woow-k3s
 
 # 列出所有活躍的沙盒
 ./.claude/skills/k8s-dev-sandbox/scripts/list.sh

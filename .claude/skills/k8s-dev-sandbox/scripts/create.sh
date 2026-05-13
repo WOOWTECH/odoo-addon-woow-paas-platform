@@ -43,6 +43,12 @@ MODE_OVERRIDE=""
 EXTRA_VALUES=""
 PGADMIN=false
 INGRESS=false
+# KUBE_CONTEXT must be set explicitly (--context flag or KUBE_CONTEXT env).
+# Defaulting to the current context silently lets a user with stale
+# `kubectl config use-context docker-desktop` accidentally target the wrong
+# cluster; for `helm install` that means "Namespace not found" failures
+# leaving partial state, plus a cross-cluster footgun if a name collides.
+KUBE_CONTEXT="${KUBE_CONTEXT:-}"
 
 # --- 解析參數 ---
 while [[ $# -gt 0 ]]; do
@@ -75,6 +81,10 @@ while [[ $# -gt 0 ]]; do
             INGRESS=true
             shift
             ;;
+        --context)
+            KUBE_CONTEXT="$2"
+            shift 2
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -88,13 +98,15 @@ while [[ $# -gt 0 ]]; do
             echo "  --values <file>     Additional Helm values file"
             echo "  --pgadmin           Enable PgAdmin"
             echo "  --ingress           Enable Ingress ({slug}.woowtech.io)"
+            echo "  --context <name>    Required: kubectl context (e.g. woow-k3s, docker-desktop)."
+            echo "                      Can also be set via KUBE_CONTEXT env var."
             echo "  -h, --help          Show usage"
             echo ""
             echo "Examples:"
-            echo "  $0"
-            echo "  $0 --branch feature-login --ttl 48h"
-            echo "  $0 --image woow-odoo-dev:main-abc1234"
-            echo "  $0 --image registry/repo:tag --mode stg"
+            echo "  $0 --context woow-k3s"
+            echo "  $0 --context woow-k3s --branch feature-login --ttl 48h"
+            echo "  KUBE_CONTEXT=woow-k3s $0 --image woow-odoo-dev:main-abc1234"
+            echo "  $0 --context woow-k3s --image registry/repo:tag --mode stg"
             exit 0
             ;;
         *)
@@ -113,8 +125,29 @@ if ! command -v kubectl >/dev/null 2>&1; then
     exit 1
 fi
 
+# Require explicit kubectl context — see KUBE_CONTEXT comment near the top.
+if [[ -z "$KUBE_CONTEXT" ]]; then
+    echo -e "${RED}ERROR: kubectl context is required (use --context <name> or export KUBE_CONTEXT).${NC}" >&2
+    echo -e "${YELLOW}This is required to prevent accidental cross-cluster deploys.${NC}" >&2
+    echo -e "${YELLOW}Available contexts:${NC}" >&2
+    kubectl config get-contexts -o name 2>/dev/null | sed 's/^/  /' >&2 || echo "  (none configured)" >&2
+    echo -e "${YELLOW}Example: $0 --context woow-k3s${NC}" >&2
+    exit 1
+fi
+if ! kubectl config get-contexts -o name 2>/dev/null | grep -qx "$KUBE_CONTEXT"; then
+    echo -e "${RED}ERROR: kubectl context '${KUBE_CONTEXT}' not found in kubeconfig.${NC}" >&2
+    echo -e "${YELLOW}Available contexts:${NC}" >&2
+    kubectl config get-contexts -o name 2>/dev/null | sed 's/^/  /' >&2 || true
+    exit 1
+fi
+# Switch to the requested context; subsequent kubectl/helm calls inherit it.
+# Visible echo so the operator sees exactly which cluster they're targeting.
+echo -e "${BLUE}Using kubectl context:${NC} ${GREEN}${KUBE_CONTEXT}${NC}"
+kubectl config use-context "$KUBE_CONTEXT" >/dev/null
+export KUBE_CONTEXT
+
 if ! kubectl cluster-info >/dev/null 2>&1; then
-    echo -e "${RED}Cannot connect to Kubernetes cluster. Check your kubeconfig.${NC}" >&2
+    echo -e "${RED}Cannot connect to Kubernetes cluster '${KUBE_CONTEXT}'. Check your kubeconfig.${NC}" >&2
     exit 1
 fi
 
