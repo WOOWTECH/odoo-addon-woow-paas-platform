@@ -431,6 +431,159 @@ class TestSmartHomeChangePlanACL(TransactionCase):
         self.assertIn('subscription', res['error'].lower())
 
 
+class TestSmartHomeChangePlanCascadeSudo(TransactionCase):
+    """Regression for #27: workspace owner without sh_subscription manager
+    group can pass the model ACL on change-plan's subscription traversal.
+
+    PR for #24 added the [OWNER, ADMIN] role check; stg E2E then found the
+    next gate — ``ir.model.access`` on ``sh.subscription.subscription`` —
+    is *not* waived by workspace ownership. This pins the cascade sudo at
+    ``smart_home.py`` so typical workspace owners (NOT in
+    ``group_sh_subscription_manager``) reach the same outcome cloud-service
+    already does at ``paas.py:874``.
+
+    We don't drive the full happy path (wallet rules, journal config,
+    invoice generation depend on demo data we don't seed) — instead we
+    drive the request far enough to prove the ACL gate no longer surfaces,
+    by asserting the error string does NOT contain the ir.model.access
+    rejection.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
+        self.Workspace = self.env['woow_paas_platform.workspace']
+        self.Plan = self.env['sh.subscription.plan']
+        self.controller = SmartHomeController()
+
+        self.plan_a = self.Plan.create({
+            'name': 'Cascade Plan A',
+            'sh_plan_price': 100.0,
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_no_of_billing_cycle': -1,
+        })
+        self.plan_b = self.Plan.create({
+            'name': 'Cascade Plan B',
+            'sh_plan_price': 200.0,
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_no_of_billing_cycle': -1,
+        })
+        # _create_and_confirm_subscription resolves the subscription product
+        # via product.template.sh_subscription_plan_id — seed one product
+        # per plan because the test exercises change-plan A → B and the
+        # endpoint creates a fresh subscription for plan_b, which also
+        # needs a backing product.
+        for plan, label in [(self.plan_a, 'A'), (self.plan_b, 'B')]:
+            self.env['product.template'].sudo().create({
+                'name': 'Cascade Plan %s Product' % label,
+                'type': 'service',
+                'sh_product_subscribe': True,
+                'sh_subscription_plan_id': plan.id,
+                'list_price': plan.sh_plan_price,
+            })
+        self.template = self.SHTemplate.create({
+            'name': 'Cascade Tmpl',
+            'subscription_plan_ids': [(6, 0, [self.plan_a.id, self.plan_b.id])],
+        })
+
+        # Workspace owner WITHOUT any sh_subscription group — models the
+        # real-world default where workspace ownership grants PaaS-side
+        # access but the user remains an ordinary internal user (only
+        # base.group_user). This is the profile that surfaced the bug on
+        # stg: Mitchell Admin (uid=2) was workspace owner on WS 27 but
+        # not in group_sh_subscription_manager, so the relation traversal
+        # `smarthome.subscription_id` was denied by ir.model.access.
+        self.owner = self.env['res.users'].create({
+            'name': 'Workspace Owner Without Manager Group',
+            'login': 'sh_owner_no_subscription_manager',
+            'email': 'sh_owner_no_subscription_manager@example.test',
+        })
+        # Explicitly reset groups: sandbox DBs cloned from stg inherit a
+        # res.config.settings.default_user_template that auto-grants 4
+        # Administrator groups + Invoicing on user.create. Without this
+        # reset the fixture would be admin-equivalent and the regression
+        # would silently no-op (the R1 reviewer's revert-cycle caught
+        # exactly this — pre-fix, test still passed). Hard-pinning groups
+        # to base.group_user makes the fixture name match its semantics.
+        base_user = self.env.ref('base.group_user')
+        self.owner.groups_id = [(6, 0, [base_user.id])]
+        # Sanity assertion: pins the regression's value. If a future
+        # default_user_template change re-introduces the manager group on
+        # ordinary internal users, this assertion fails loudly rather than
+        # letting the test silently lose meaning.
+        manager_group = self.env.ref(
+            'sh_subscription.group_manager_sh_subscription',
+            raise_if_not_found=False,
+        )
+        if manager_group:
+            self.assertNotIn(manager_group, self.owner.groups_id)
+        # Workspace.create auto-provisions owner WorkspaceAccess(role=owner).
+        self.workspace = self.Workspace.create({
+            'name': 'Cascade WS',
+            'owner_id': self.owner.id,
+        })
+        self.smart_home = self.SmartHome.create({
+            'name': 'Cascade Home',
+            'workspace_id': self.workspace.id,
+        })
+        # Seed an in_progress subscription as the test admin (TransactionCase
+        # default env). The user-scoped call happens in the test body, where
+        # we switch to self.owner via _patch_request.
+        partner = self.workspace.owner_id.partner_id
+        self.smart_home._create_and_confirm_subscription(partner, self.plan_a)
+        # Sanity: fixture actually seeded an in_progress subscription. If this
+        # fails, the test below would still pass under cache-only behaviour
+        # and silently lose its regression value.
+        self.assertTrue(self.smart_home.subscription_id)
+        self.assertEqual(self.smart_home.subscription_id.state, 'in_progress')
+        # Drop the env cache before the user-scoped call. Odoo's env.cache is
+        # transaction-scoped and *shared across envs* — without this, the
+        # admin-context reads above (sanity + mixin internals) would prime
+        # the cache for sh.subscription.subscription, and the owner-env
+        # traversal in the test would hit cache instead of re-checking ACL,
+        # masking the very bug we're regressing against. The pre-fix
+        # AccessError only surfaces on a fresh read, which is the situation
+        # in production (each HTTP request starts with an empty cache).
+        self.env.invalidate_all()
+
+    def test_change_plan_workspace_owner_without_manager_group_passes_acl(self):
+        """As workspace OWNER (not in group_sh_subscription_manager), the
+        change-plan request must pass both gates: the [OWNER, ADMIN] role
+        check (#24) AND the model ACL on sh.subscription.subscription.
+
+        The fixture explicitly resets ``self.owner.groups_id`` to only
+        ``base.group_user`` (see setUp); without that reset the sandbox-DB
+        default_user_template would seed the user with admin-equivalent
+        groups and this regression test would no-op.
+
+        Pre-fix: ``old_sub = smarthome.subscription_id`` raised
+        ``AccessError`` → ``{success: false, error: "You are not allowed
+        to access sh.subscription.subscription"}``.
+
+        Post-fix: ``smarthome.sudo().subscription_id`` reads through; the
+        endpoint advances past the ACL gate. The remaining business path
+        (refund calc, wallet credit, new subscription creation) may still
+        fail under the minimal fixture — those are out of scope here.
+        """
+        with _patch_request(self.env(user=self.owner)):
+            res = self.controller.api_smarthome_change_plan(
+                workspace_id=self.workspace.id,
+                smarthome_id=self.smart_home.id,
+                plan_id=self.plan_b.id,
+            )
+        error_text = (res.get('error') or '').lower()
+        # The ACL gate must not be the failure mode.
+        self.assertNotIn('not allowed to access', error_text, res)
+        self.assertNotIn('sh.subscription.subscription', error_text, res)
+        # The role check from #24 must also still be passing for this user
+        # (workspace OWNER), so the failure mode (if any) is downstream of
+        # both gates — not 'Insufficient permissions'.
+        self.assertNotIn('insufficient permissions', error_text, res)
+
+
 class TestSmartHomeMutatingEndpointsRoleCheck(TransactionCase):
     """Role-check coverage for the four mutating SH endpoints.
 
