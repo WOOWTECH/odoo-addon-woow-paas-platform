@@ -14,6 +14,8 @@
 #   --tag <tag>           Override git tag (default: stg-YYYYMMDD.HHMM, docker tag auto-derived)
 #   --timeout <seconds>   Build wait timeout (default: 900 = 15 min)
 #   --interval <seconds>  Poll interval (default: 30)
+#   --context <name>      kubectl context (default: woow-k3s; override only when
+#                         intentionally targeting a different cluster)
 #   -h, --help            Show usage
 #
 # Prerequisites:
@@ -54,6 +56,13 @@ SKIP_BUILD=false
 INGRESS=false
 POLL_TIMEOUT=900
 POLL_INTERVAL=30
+# Staging always targets woow-k3s — this is the only valid stg destination,
+# and hardcoding the default closes the cross-cluster footgun (current
+# kubectl context could be anything, e.g. docker-desktop). --context still
+# overrides for the rare case (e.g. testing the pipeline against a
+# secondary cluster), and the override is logged loudly so it's never
+# accidental.
+KUBE_CONTEXT="${KUBE_CONTEXT:-woow-k3s}"
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
@@ -86,8 +95,12 @@ while [[ $# -gt 0 ]]; do
             POLL_INTERVAL="$2"
             shift 2
             ;;
+        --context)
+            KUBE_CONTEXT="$2"
+            shift 2
+            ;;
         -h|--help)
-            head -25 "$0" | tail -23
+            head -29 "$0" | tail -27
             exit 0
             ;;
         -*)
@@ -110,6 +123,24 @@ for cmd in tea jq kubectl helm git; do
         exit 1
     fi
 done
+
+# Verify the kubectl context exists in kubeconfig, then switch + export
+# so child scripts (notably create.sh) inherit the same target.
+if ! kubectl config get-contexts -o name 2>/dev/null | grep -qx "$KUBE_CONTEXT"; then
+    echo -e "${RED}ERROR: kubectl context '${KUBE_CONTEXT}' not found in kubeconfig.${NC}" >&2
+    echo -e "${YELLOW}Available contexts:${NC}" >&2
+    kubectl config get-contexts -o name 2>/dev/null | sed 's/^/  /' >&2 || true
+    echo -e "${YELLOW}Default for stg is 'woow-k3s'; override with --context only if you really mean it.${NC}" >&2
+    exit 1
+fi
+# Loud echo: if the operator is overriding away from woow-k3s, make it
+# obvious before any helm/kubectl operation runs.
+if [[ "$KUBE_CONTEXT" != "woow-k3s" ]]; then
+    echo -e "${YELLOW}WARNING: targeting non-default context '${KUBE_CONTEXT}' (stg default is 'woow-k3s').${NC}"
+fi
+echo -e "${BLUE}Using kubectl context:${NC} ${GREEN}${KUBE_CONTEXT}${NC}"
+kubectl config use-context "$KUBE_CONTEXT" >/dev/null
+export KUBE_CONTEXT
 
 # --- Helper: seed web.base.url + freeze for HTTPS ECPay callbacks ---
 #
