@@ -879,18 +879,30 @@ class PaasController(Controller):
         if not old_sub or old_sub.state != 'in_progress':
             return {'success': False, 'error': 'No active subscription'}
 
-        if not old_sub.sh_end_date or not old_sub.sh_start_date:
-            return {'success': False, 'error': 'Subscription dates are incomplete'}
+        # During trial, sh_end_date is legitimately NULL (billing period
+        # hasn't started yet). Strict date completeness is only meaningful
+        # for active subs — see the SH-side counterpart in smart_home.py
+        # for the full rationale. `_compute_unused_refund` is already
+        # trial-aware (returns 0), so the rest of the flow is safe.
+        if not old_sub.sh_trial:
+            if not old_sub.sh_end_date or not old_sub.sh_start_date:
+                return {'success': False, 'error': 'Subscription dates are incomplete'}
 
-        # Calculate refund
-        total_days = (old_sub.sh_end_date - old_sub.sh_start_date).days or 1
-        remaining_days = max(0, (old_sub.sh_end_date - fields.Date.today()).days)
-        refund = round(old_sub.sh_plan_price * remaining_days / total_days, 2)
+        # Refund: defer to the model method instead of recomputing the
+        # proration inline. The previous inline form
+        #   refund = price * remaining_days / total_days
+        # would have crashed on trial subs (sh_end_date is None) once the
+        # date guard above was relaxed; the model method is the SH side's
+        # canonical calculator and is already covered by
+        # test_change_plan_refund.py for the trial / partial / end-of-cycle
+        # cases. SH at smart_home.py:167 already routes through it; this
+        # change brings CS to parity.
+        refund = old_sub._compute_unused_refund()
 
         partner = old_sub.sh_partner_id
         _logger.info(
-            "[CLOUD_SVC] change_plan refund calc service=%s total_days=%s remaining=%s price=%s refund=%s partner=%s",
-            service_id, total_days, remaining_days,
+            "[CLOUD_SVC] change_plan refund calc service=%s start=%s end=%s price=%s refund=%s partner=%s",
+            service_id, old_sub.sh_start_date, old_sub.sh_end_date,
             old_sub.sh_plan_price, refund, partner.id,
         )
 
