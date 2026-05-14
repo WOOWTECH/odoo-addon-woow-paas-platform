@@ -161,8 +161,17 @@ class SmartHomeController(Controller):
         if not old_sub or old_sub.state != "in_progress":
             return {"success": False, "error": "No active subscription"}
 
-        if not old_sub.sh_end_date or not old_sub.sh_start_date:
-            return {"success": False, "error": "Subscription dates are incomplete"}
+        # During trial, sh_end_date is legitimately NULL (billing period
+        # hasn't started yet — mixin sets sh_start_date = trial_end + 1 but
+        # leaves sh_end_date empty until the first invoice cycle). Strict
+        # date completeness is only meaningful for active subs, where NULL
+        # dates would indicate a data-integrity bug worth surfacing.
+        # `_compute_unused_refund` is already trial-aware (returns 0), and
+        # `_create_and_confirm_subscription` re-derives all dates from the
+        # new plan, so the rest of the flow does not need NULL-date guards.
+        if not old_sub.sh_trial:
+            if not old_sub.sh_end_date or not old_sub.sh_start_date:
+                return {"success": False, "error": "Subscription dates are incomplete"}
 
         refund = old_sub._compute_unused_refund()
 

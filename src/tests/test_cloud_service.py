@@ -297,3 +297,178 @@ class TestCloudService(TransactionCase):
             'paas-ws-stg-cafef00d', 'svc-deadbeef',
         )
         self.assertEqual(service.state, 'deleting')
+
+class TestCloudServiceChangePlanTrialMode(TransactionCase):
+    """Trial-state change-plan on CS (issue #34).
+
+    Mirror of TestSmartHomeChangePlanTrialMode for SH: same 3 product
+    paths, plus Q6 — verifies the controller now routes refund through
+    _compute_unused_refund (the deleted inline calc would have crashed on
+    NULL sh_end_date once the date guard relaxed for trial state).
+
+    Fixture follows the PR #28 hardening (Q8): owner.groups_id is
+    explicitly reset to base.group_user only, env cache is dropped before
+    the user-scoped call, and the manager-group absence is sanity-asserted.
+    """
+
+    def setUp(self):
+        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+        super().setUp()
+        self.CloudService = self.env["woow_paas_platform.cloud_service"]
+        self.CSTemplate = self.env["woow_paas_platform.cloud_app_template"]
+        self.Workspace = self.env["woow_paas_platform.workspace"]
+        self.Plan = self.env["sh.subscription.plan"]
+        self.controller = PaasController()
+
+        self.plan_a_trial7 = self.Plan.create({
+            "name": "CS Trial Mode A (7d trial)",
+            "sh_plan_price": 100.0, "sh_duration": 1, "sh_unit": "month",
+            "sh_no_of_billing_cycle": -1,
+            "sh_trial": True, "sh_trial_duration": 7, "sh_trial_unit": "day",
+        })
+        self.plan_b_trial14 = self.Plan.create({
+            "name": "CS Trial Mode B (14d trial)",
+            "sh_plan_price": 200.0, "sh_duration": 1, "sh_unit": "month",
+            "sh_no_of_billing_cycle": -1,
+            "sh_trial": True, "sh_trial_duration": 14, "sh_trial_unit": "day",
+        })
+        self.plan_c_notrial = self.Plan.create({
+            "name": "CS Trial Mode C (no trial)",
+            "sh_plan_price": 300.0, "sh_duration": 1, "sh_unit": "month",
+            "sh_no_of_billing_cycle": -1,
+            "sh_trial": False,
+        })
+        for plan, label in [
+            (self.plan_a_trial7, "A"),
+            (self.plan_b_trial14, "B"),
+            (self.plan_c_notrial, "C"),
+        ]:
+            self.env["product.template"].sudo().create({
+                "name": "CS Trial Mode Plan %s Product" % label,
+                "type": "service",
+                "sh_product_subscribe": True,
+                "sh_subscription_plan_id": plan.id,
+                "list_price": plan.sh_plan_price,
+            })
+
+        self.template = self.CSTemplate.create({
+            "name": "CS Trial Mode Tmpl",
+            "slug": "cs-trial-mode",
+            "helm_repo_url": "https://charts.example.com",
+            "helm_chart_name": "cs-trial-mode",
+            "helm_chart_version": "1.0.0",
+            "min_vcpu": 1,
+            "min_ram_gb": 1.0,
+            "min_storage_gb": 1,
+        })
+
+        self.owner = self.env["res.users"].create({
+            "name": "CS Trial Mode Owner",
+            "login": "cs_trial_mode_owner",
+            "email": "cs_trial_mode_owner@example.test",
+        })
+        # Q8 / PR #28 fixture hygiene.
+        base_user = self.env.ref("base.group_user")
+        self.owner.groups_id = [(6, 0, [base_user.id])]
+        manager_group = self.env.ref(
+            "sh_subscription.group_manager_sh_subscription",
+            raise_if_not_found=False,
+        )
+        if manager_group:
+            self.assertNotIn(manager_group, self.owner.groups_id)
+
+        self.workspace = self.Workspace.create({
+            "name": "CS Trial Mode WS",
+            "owner_id": self.owner.id,
+        })
+        self.service = self.CloudService.create({
+            "name": "CS Trial Mode Service",
+            "workspace_id": self.workspace.id,
+            "template_id": self.template.id,
+        })
+
+    def _patch_paas_request(self, env):
+        return patch(
+            "odoo.addons.woow_paas_platform.controllers.paas.request",
+            new=MagicMock(env=env),
+        )
+
+    def _seed_subscription(self, plan):
+        """Seed an in_progress sub on `plan`, then force NULL sh_end_date
+        on trial subs to reproduce the stg E2E shape from PR #28.
+
+        See the SH counterpart for the full rationale — fresh-created
+        trial subs may have sh_end_date populated by onchange, so this
+        helper explicitly NULLs it for trial-state seeds.
+        """
+        partner = self.workspace.owner_id.partner_id
+        self.service._create_and_confirm_subscription(partner, plan)
+        sub = self.service.sudo().subscription_id
+        if sub.sh_trial:
+            sub.write({"sh_end_date": False})
+        self.env.invalidate_all()
+
+    def test_trial_to_trial_new_sub_restarts_trial(self):
+        """Q1: trial -> trial change-plan creates a new sub in trial state
+        with the new plan's trial duration counted from today."""
+        from datetime import date, timedelta
+        self._seed_subscription(self.plan_a_trial7)
+        self.assertTrue(self.service.sudo().subscription_id.sh_trial)
+
+        with self._patch_paas_request(self.env(user=self.owner)):
+            res = self.controller.api_service_change_plan(
+                service_id=self.service.id,
+                plan_id=self.plan_b_trial14.id,
+            )
+        self.assertTrue(res["success"], res.get("error"))
+
+        new_sub = self.service.sudo().subscription_id
+        self.assertTrue(new_sub.sh_trial)
+        self.assertEqual(new_sub.sh_subscription_plan_id, self.plan_b_trial14)
+        self.assertEqual(res["data"]["refund_amount"], 0)
+        # See SH counterpart for why sh_trial_end_date is not asserted —
+        # depends on onchange ordering, orthogonal to #34, tracked in #33.
+
+    def test_trial_to_no_trial_enters_active(self):
+        """Q2: trial -> no-trial change-plan creates an active sub."""
+        from datetime import date
+        self._seed_subscription(self.plan_a_trial7)
+
+        with self._patch_paas_request(self.env(user=self.owner)):
+            res = self.controller.api_service_change_plan(
+                service_id=self.service.id,
+                plan_id=self.plan_c_notrial.id,
+            )
+        self.assertTrue(res["success"], res.get("error"))
+
+        new_sub = self.service.sudo().subscription_id
+        self.assertFalse(new_sub.sh_trial)
+        self.assertEqual(new_sub.sh_subscription_plan_id, self.plan_c_notrial)
+        self.assertEqual(new_sub.sh_start_date, date.today())
+        self.assertEqual(res["data"]["refund_amount"], 0)
+
+    def test_active_to_active_regression_proration(self):
+        """Regression + Q6: active -> active path still produces a positive
+        proration refund, now sourced from _compute_unused_refund instead
+        of the deleted inline calc. Asserts the exact half-cycle value to
+        catch any drift in how the controller threads refund through."""
+        from datetime import date, timedelta
+        self._seed_subscription(self.plan_c_notrial)
+        today = date.today()
+        old_sub = self.service.sudo().subscription_id
+        old_sub.write({
+            "sh_trial": False,
+            "sh_start_date": today - timedelta(days=15),
+            "sh_end_date": today + timedelta(days=15),
+        })
+        self.env.invalidate_all()
+
+        with self._patch_paas_request(self.env(user=self.owner)):
+            res = self.controller.api_service_change_plan(
+                service_id=self.service.id,
+                plan_id=self.plan_a_trial7.id,
+            )
+        self.assertTrue(res["success"], res.get("error"))
+        # Half of 300 (15 / 30 days remaining) = 150.0
+        self.assertEqual(res["data"]["refund_amount"], 150.0)
+
