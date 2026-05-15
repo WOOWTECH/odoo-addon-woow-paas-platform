@@ -166,24 +166,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         # onchanges disable trial and set start_date=today (immediate billing).
         # PaaS treats each service independently — force trial from plan.
         if plan.sh_trial and not subscription.sh_trial:
-            subscription.sh_trial = True
-            subscription.sh_trial_duration = plan.sh_trial_duration
-            subscription.sh_trial_unit = plan.sh_trial_unit
-            trial_delta = {
-                'day': relativedelta(days=plan.sh_trial_duration),
-                'week': relativedelta(weeks=plan.sh_trial_duration),
-                'month': relativedelta(months=plan.sh_trial_duration),
-                'year': relativedelta(years=plan.sh_trial_duration),
-            }.get(plan.sh_trial_unit, relativedelta())
-            trial_end = date.today() + trial_delta - relativedelta(days=1)
-            subscription.sh_trial_end_date = trial_end
-            subscription.sh_start_date = trial_end + relativedelta(days=1)
-            subscription.sh_date_of_next_payment = subscription.sh_start_date
-            _logger.info(
-                "Forced trial for subscription %s: %s days, billing starts %s",
-                subscription.name, plan.sh_trial_duration,
-                subscription.sh_start_date,
-            )
+            self._force_trial_dates_from_plan(subscription, plan)
 
         # Confirm → in_progress (starts trial if configured)
         subscription.sh_subscription_confirm()
@@ -195,6 +178,34 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             self._name, self.id, subscription.sh_trial,
         )
         return subscription
+
+    def _force_trial_dates_from_plan(self, subscription, plan):
+        """Force trial fields and dates on ``subscription`` from ``plan``.
+
+        Plan-driven explicit set; never trusts the chained onchange compute
+        in ``_create_and_confirm_subscription`` to populate trial dates.
+        """
+        trial_delta = {
+            'day': relativedelta(days=plan.sh_trial_duration),
+            'week': relativedelta(weeks=plan.sh_trial_duration),
+            'month': relativedelta(months=plan.sh_trial_duration),
+            'year': relativedelta(years=plan.sh_trial_duration),
+        }.get(plan.sh_trial_unit, relativedelta())
+        trial_end = date.today() + trial_delta - relativedelta(days=1)
+        start_date = trial_end + relativedelta(days=1)
+        subscription.write({
+            'sh_trial': True,
+            'sh_trial_duration': plan.sh_trial_duration,
+            'sh_trial_unit': plan.sh_trial_unit,
+            'sh_trial_end_date': trial_end,
+            'sh_start_date': start_date,
+            'sh_date_of_next_payment': start_date,
+        })
+        _logger.info(
+            "Forced trial for subscription %s: %s %s, billing starts %s",
+            subscription.name, plan.sh_trial_duration, plan.sh_trial_unit,
+            start_date,
+        )
 
     # ----------------------------------------------------------------
     # Subscription state checks
