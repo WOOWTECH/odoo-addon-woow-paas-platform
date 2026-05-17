@@ -64,23 +64,45 @@ def migrate(cr, version):
         cr.rowcount,
     )
 
-    # Odoo's project module ships `project_public_members_rule` for base.group_user
-    # with domain ['|', ('privacy_visibility', '!=', 'followers'), follower-check].
-    # Odoo evaluates per-group rules with OR, so any always-true leg of that rule
-    # bypasses the workspace filter introduced by D3=A. Deactivate it so the
-    # decouple-refactor's `project_rule_workspace_member` is the sole gate.
+    # Odoo's project module ships rules whose always-true legs OR-bypass the
+    # workspace filter introduced by D3=A (see Odoo `ir_rule.py:140-168` —
+    # per-group rules combine with OR, so a single permissive leg defeats all
+    # stricter rules in the same group). Deactivate the symmetric pair on both
+    # project.project and project.task:
+    #
+    #   - project.project_public_members_rule (base.group_user, project.project)
+    #         leg: privacy_visibility != 'followers' → matches Odoo's default
+    #              privacy ('portal'/'employees') → universal project read
+    #   - project.task_visibility_rule (base.group_user, project.task)
+    #         leg: project.privacy_visibility != 'followers' → same leak shape,
+    #              perm_read implicit
+    #   - project.task_visibility_rule_project_user (project.group_project_user,
+    #         project.task) — same domain, perm_read=False so it grants write /
+    #         create / unlink to any group_project_user on every non-followers
+    #         project's tasks
+    #
+    # CAQA B1 caught the asymmetry: project rule was deactivated in 18.0.1.0.22
+    # but the two task counterparts were left active, so cross-workspace task
+    # read still leaked via the std rule's always-true leg. Listing all three
+    # in one UPDATE keeps them in lockstep on future migrations.
     cr.execute(
         """
         UPDATE ir_rule SET active = false
         WHERE id IN (
             SELECT res_id FROM ir_model_data
             WHERE module = 'project'
-              AND name = 'project_public_members_rule'
               AND model = 'ir.rule'
+              AND name IN (
+                'project_public_members_rule',
+                'task_visibility_rule',
+                'task_visibility_rule_project_user'
+              )
         )
         """
     )
     _logger.info(
-        "Deactivated project.project_public_members_rule (%s rows)",
+        "Deactivated 3 Odoo std rules that OR-bypass the workspace filter "
+        "(project_public_members_rule + task_visibility_rule + "
+        "task_visibility_rule_project_user) — %s rows",
         cr.rowcount,
     )

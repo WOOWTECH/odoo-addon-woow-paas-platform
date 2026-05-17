@@ -89,12 +89,18 @@ SELECT column_name FROM information_schema.columns
 WHERE table_name = 'project_task'
   AND column_name IN ('primary_cloud_service_id', 'workspace_id');
 
--- 2. 新 ir.rule 落地、舊 leaky rule deactivated
+-- 2. 新 ir.rule 落地、舊 leaky rules deactivated（B1 patch 後 3 條對等）
 SELECT id, name, active FROM ir_rule WHERE name LIKE '%workspace member%';
-SELECT id, name, active FROM ir_rule WHERE id = (
-    SELECT res_id FROM ir_model_data WHERE module='project' AND name='project_public_members_rule'
-);
--- expect: project_public_members_rule.active = false
+SELECT d.name AS xmlid, r.name, r.active
+FROM ir_rule r
+JOIN ir_model_data d ON d.res_id = r.id AND d.model = 'ir.rule'
+WHERE d.module = 'project'
+  AND d.name IN (
+    'project_public_members_rule',          -- project.project
+    'task_visibility_rule',                  -- project.task (base.group_user)
+    'task_visibility_rule_project_user'      -- project.task (group_project_user)
+  );
+-- expect: 3 rows, all active = false
 
 -- 3. 既有 bound project 的 workspace_id 仍可正確 derive
 SELECT p.id, p.name, p.cloud_service_id, p.workspace_id
@@ -106,11 +112,17 @@ LIMIT 5;
 ### Rollback（若 emergency）
 
 ```sql
--- 1. 還原 project_public_members_rule
+-- 1. 還原 3 條 Odoo std rules（B1 patch 後對等處理）
 UPDATE ir_rule SET active = true
-WHERE id = (
+WHERE id IN (
     SELECT res_id FROM ir_model_data
-    WHERE module='project' AND name='project_public_members_rule' AND model='ir.rule'
+    WHERE module = 'project'
+      AND model = 'ir.rule'
+      AND name IN (
+        'project_public_members_rule',          -- project.project
+        'task_visibility_rule',                  -- project.task (base.group_user)
+        'task_visibility_rule_project_user'      -- project.task (group_project_user)
+      )
 );
 
 -- 2. revert merge commit → restart Odoo
@@ -124,7 +136,9 @@ WHERE id = (
 | 動作 | 可逆性 | 緩解 |
 |---|---|---|
 | `project_task_cloud_service_rel` M2M 表創建 | **半可逆**（rollback 會丟失使用者設定的 extras 連結）| rollback 前 dump 該表；plan R2 已標 |
-| `project_public_members_rule.active = false` | **可逆**（rollback SQL 上方提供）| 影響面：base.group_user 用戶失去「可見所有非 followers project」的權限，改走 workspace-scoped 過濾 |
+| `project.project_public_members_rule.active = false` | **可逆**（rollback SQL 上方提供）| 影響面：base.group_user 用戶失去「可見所有非 followers project」的權限，改為 workspace-scoped 過濾 |
+| `project.task_visibility_rule.active = false` | **可逆**（rollback SQL 上方提供，CAQA B1 patch 引入）| 與上方對等的 task 端；不拔則 base.group_user 在 ORM 層仍可讀取所有非 followers project 的 task（cross-workspace 資料外洩） |
+| `project.task_visibility_rule_project_user.active = false` | **可逆**（rollback SQL 上方提供，CAQA B1 patch 引入）| 同上 — group_project_user 的 task RWCU 版本；OR 語義會讓任何 group_project_user 用戶寫到其他 workspace 的 task |
 | `project_rule_workspace_member` 改寫 + `cloud_service_rule_workspace_member` 新增 | **可逆**（revert XML + module update）| ir_rules.xml 用 noupdate=0 包裝，重新 -u 套用 |
 | 新欄位（`extra_cloud_service_ids`, `primary_cloud_service_id`, `workspace_id`, `incompatible_extra_cloud_service_ids`, `chat_enabled` 等）| **可逆**（移欄位定義即可；Odoo 不會自動 drop column，留著無害；如需徹底清補 post-uninstall hook）| - |
 
@@ -135,20 +149,21 @@ WHERE id = (
 跑 `./.claude/skills/k8s-dev-sandbox/scripts/test.sh feat-decouple-cs-projects --module woow_paas_platform`（docker-desktop sandbox）：
 
 ```
-ERROR woow_feat_decouple_cs_projects odoo.tests.result: 8 failed, 25 error(s) of 435 tests when loading database
+ERROR woow_feat_decouple_cs_projects odoo.tests.result: 8 failed, 24 error(s) of 437 tests when loading database
 ```
 
-- **24 / 25 refactor ACs 變綠**（baseline tester：25 reds → 1 leftover = AC #5 test bug）
+- **25 / 25 refactor ACs 全綠** + **2 / 2 B1 cross-workspace task isolation tests 綠**（共 39 refactor tests + 2 sanity 全部通過 — AC #5 在 commit b582a44 由 tester 修正 user_ids fixture bug 後也綠）
 - **7 / 7 regression 守線維持綠**
 - **32 pre-existing infra fails out of scope**（subscription journal / TWD currency / smart_home demo user — 與本 PR 無關，per test scope report `刻意不處理`）
-- 排除 infra + AC #5 後，**0 個 refactor 由本 PR 引入的新失敗**
+- 排除 pre-existing infra 後，**0 個由本 PR 引入的新失敗**
 
 ## Side effects 評估
 
 | 影響面 | 描述 |
 |---|---|
 | **`base.group_user` ACL on project.project / project.task** | 新增 RWCU 權限（原本只有 group_project_user / group_project_manager 有 create/write/unlink）。record rule 縮緊到 workspace member / project member，所以實際可動範圍與舊行為一致 |
-| **`base.group_user` 失去「所有非 followers project 可見」**（project_public_members_rule deactivated）| 改為 workspace-scoped。對 PaaS 多租戶語義是 tightening，對純 Odoo project 使用情境是 break-change。本 module 是這個 Odoo instance 唯一的 project consumer，影響面僅限於開發者本機可能看到的 demo project |
+| **`base.group_user` 失去「所有非 followers project 可見」**（`project.project_public_members_rule` deactivated）| 改為 workspace-scoped。對 PaaS 多租戶語義是 tightening，對純 Odoo project 使用情境是 break-change。本 module 是這個 Odoo instance 唯一的 project consumer，影響面僅限於開發者本機可能看到的 demo project |
+| **`base.group_user` / `group_project_user` 失去「所有非 followers project 的 task 可見」**（`project.task_visibility_rule` + `project.task_visibility_rule_project_user` deactivated，CAQA B1 patch 對等補上）| 與 project 端對稱；OR-語義會讓 std rule 的 `privacy_visibility != 'followers'` 一直為真，旁路 D3=A 的 workspace 過濾。三條 rule 必須三位一體 deactivate 才能堵住 cross-workspace task data leak |
 | **Project create_uid 自動可見** | 新 rule 加 `create_uid` 葉子，避免使用者建完自己的 unbound project 立即看不到的 UX bug |
 | **MCP tools 注入** | `discuss_channel._get_user_mcp_tools` **未變動**，仍只從 primary service 取 user MCP tools；extras 的 MCP tools 不會被 chatter 自動拉。Plan §Out of scope 沒寫，這裡記錄為 follow-up 候選 |
 | **Controller `has_project` flag** | 保留（CreateProjectModal 移除前端 filter 後，仍可用於 service detail page 顯示綁定狀態）|
@@ -164,14 +179,18 @@ ERROR woow_feat_decouple_cs_projects odoo.tests.result: 8 failed, 25 error(s) of
 ## Follow-up（reporter 候選）
 
 - D9 階段 2：升級 sanitizer 為 whitelist 模式（plan §Decisions D9 已記 follow-up）
-- AC #5 test fixture 修正（去掉 user_ids 寫）— 需 tester 動手
 - Sentinel `***REDACTED***` i18n 化
 - Extras 跨 workspace 候選放寬（D6 從 C → B）
 - Chatter `_get_user_mcp_tools` 是否也整合 extras 的 MCP tools
+- Plan / pattern docs：把「addon override std ir.rule for ACL hardening 必須在 project + task 兩端對等」寫成 pattern note（CAQA B1 lesson）
 
 ## 主要 commits
 
 1. `3081a41` docs(refactor): plan + test scope + report
 2. `fec64b0` test(refactor): red-phase tests for 25 ACs
-3. `b164d76` feat(refactor): decouple — model + ACL + UI + migration
+3. `b164d76` feat(refactor): decouple — model + ACL + UI + migration（含 18.0.1.0.22 migration）
 4. `9d458f7` fix(skills): in-pod sandbox test runner `-u` + alternate ports
+5. `3d43443` docs(refactor): PR description draft
+6. `b582a44` test: align AC #5 helper with Odoo 18 project.project schema (tester)
+7. `d570006` test: lock cross-workspace project.task read isolation (CAQA B1) (tester)
+8. `<this commit>` fix(refactor): deactivate task-side std rules symmetrically (CAQA B1 patch)
