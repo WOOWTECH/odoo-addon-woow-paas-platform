@@ -529,6 +529,21 @@ _CONFIG_PARAMETERS = [
 ]
 ```
 
+## Known patterns
+
+改動以下 model 與 ACL 前必看 invariants 與 pattern docs，避免 B1-class data leak 重炸：
+
+- **CloudService / Project decoupling**：見 `docs/refactor/decisions/cloud-service-project-decouple.md`（含 7 條 Invariants）
+- **Odoo addon override std ir.rule**（任何在 `ir.model.access.csv` 給 `base.group_user` 加 project / task / Odoo std model 的 RWCU 時）：見 `docs/refactor/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
+- **PaaS workspace member ACL 收緊**：見 `docs/refactor/patterns/paas-workspace-member-acl-tightening.md`
+
+Pitfall 持久化紀錄（debug 撞牆時對照）：
+
+- `docs/refactor/pitfalls/cross-workspace-task-data-leak.md` — CAQA B1 incident
+- `docs/refactor/pitfalls/plan-vs-odoo-schema-mismatch.md` — plan 引用不存在欄位的教訓
+
+Follow-up 追蹤：`docs/refactor/followups/follow-ups.md`（11 條未竟事項）
+
 ## Code Style Guide
 
 ### Indentation

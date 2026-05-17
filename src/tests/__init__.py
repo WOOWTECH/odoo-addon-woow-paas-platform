@@ -41,4 +41,12 @@ from . import test_ecpay_invoice_retry
 from . import test_ecpay_invoice_subscription
 from . import test_subscription_invoice_state
 from . import test_acl_p9
+# refactor: decouple CloudService ↔ Project (red phase)
+from . import test_project_decouple
+from . import test_cloud_service_acl
+from . import test_task_service_extras
+from . import test_chatter_service_injection
+from . import test_ux_routing_views
+# refactor: CAQA §E HIGH BLOCKER B1 — cross-ws task read regression
+from . import test_cross_workspace_task_isolation
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

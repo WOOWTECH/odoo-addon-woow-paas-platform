@@ -21,6 +21,16 @@
                             <field name="channel_id" readonly="1"/>
                         </group>
                     </group>
+                    <group string="Linked Cloud Services">
+                        <field name="primary_cloud_service_id" readonly="1"/>
+                        <field name="extra_cloud_service_ids"
+                               widget="many2many_tags"
+                               options="{'no_create': True}"/>
+                        <field name="incompatible_extra_cloud_service_ids"
+                               widget="many2many_tags"
+                               readonly="1"
+                               invisible="not incompatible_extra_cloud_service_ids"/>
+                    </group>
                 </page>
             </xpath>
         </field>

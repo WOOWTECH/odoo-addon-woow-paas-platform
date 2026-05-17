@@ -62,18 +62,13 @@
                         </t>
                     </div>
 
-                    <!-- Cloud Service Dropdown (shown after workspace selected) -->
+                    <!-- Cloud Service Dropdown (shown after workspace selected; D5=A: optional) -->
                     <div t-if="state.workspaceId" class="o_woow_form_group">
-                        <label for="project_cloud_service">Cloud Service</label>
+                        <label for="project_cloud_service">Cloud Service (optional)</label>
                         <t t-if="state.cloudServicesLoading">
                             <div class="o_woow_input o_woow_select_loading">
                                 <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
                                 <span>Loading services...</span>
-                            </div>
-                        </t>
-                        <t t-elif="state.cloudServices.length === 0">
-                            <div class="o_woow_input o_woow_select_empty">
-                                No available services in this workspace
                             </div>
                         </t>
                         <t t-else="">
@@ -84,7 +79,7 @@
                                 t-on-change="onCloudServiceChange"
                                 t-att-disabled="state.loading"
                             >
-                                <option value="">Select a cloud service...</option>
+                                <option value="">— No service — (Unbound project)</option>
                                 <t t-foreach="state.cloudServices" t-as="svc" t-key="svc.id">
                                     <option t-att-value="svc.id" t-att-selected="svc.id === state.cloudServiceId" t-esc="svc.name"/>
                                 </t>

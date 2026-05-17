@@ -157,8 +157,9 @@ echo ""
 # Disable errexit so we can capture the exit code from kubectl exec
 set +e
 kubectl exec -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" -- \
-    odoo --test-enable --test-tags "$MODULE" --stop-after-init \
-    --log-level=test -d "$DB_NAME" -c /etc/odoo/odoo.conf
+    odoo -u "$MODULE" --test-enable --test-tags "$MODULE" --stop-after-init \
+    --http-port=18069 --gevent-port=18072 --log-level=test \
+    -d "$DB_NAME" -c /etc/odoo/odoo.conf
 TEST_EXIT_CODE=$?
 set -e
 
