@@ -1,0 +1,177 @@
+# Refactor: 解耦 CloudService 與 Project
+
+Branch: `feat/decouple-cs-projects`
+Plan: `docs/refactor/plan-cloud-service-project-decouple.md`（9 個決策 ✅ 全部 sign-off）
+Test Scope: `docs/refactor/test-scope-report-2026-05-16.md`
+Test Report: `docs/refactor/test-report-2026-05-16.md`
+
+## 變更摘要
+
+把 `project.project` 從「必須綁一個 CloudService」鬆綁為「可以綁也可以不綁」，補上 task 層級的多 service 參考（extras），補上 `cloud_service` 既有的 ACL 漏洞，並在 AI prompt 注入時對 `helm_values` 做 secret 遮罩 + 三欄位 blacklist。
+
+- Project 可獨立存在（unbound），ACL 改走 project member 隔離
+- Task 加 `extra_cloud_service_ids` (M2M) + `primary_cloud_service_id` (related store=True)
+- Chatter AI prompt 注入 primary + extras 合併內容，dedup primary 出現在 extras 的情況
+- helm_values 經 pattern sanitizer 遮罩（`password|passwd|secret|token|api[_-]?key|credential`）+ 三欄位 blacklist（`n8n_api_key` / `n8n_owner_password` / `mcp_auth_token`）
+- `cloud_service` 新增 ir.rule（workspace member only），補上 D2=A 引入 task M2M widget 浮上來的 pre-existing ACL gap
+- UI：`/woow#/projects` 新路徑 alias，`/woow#/ai-assistant` 為書籤保留；sidebar 新增 `Projects` 入口；CreateProjectModal 拔 `has_project` 前端 filter + 拔 service 必選 gate，下拉首項「— No service — (Unbound project)」；SupportProjectsPage 顯示 `Unbound` badge；Task form 新增 Linked Services panel
+
+## Acceptance criteria 結果
+
+| 群組 | AC # | 結果 |
+|---|---|---|
+| Project 獨立性 | #1, #2, #3 | ✅ pass |
+| Project ACL（unbound 隔離）| #4, #6 | ✅ pass |
+| Project ACL（member add）| **#5** | ⚠️ **未過 — test fixture bug，需 tester 修**（詳見下方）|
+| cloud_service ACL | #7, #8 | ✅ pass |
+| Task extras | #9, #10, #11, #12, #13 | ✅ pass |
+| AI prompt + sanitizer | #14, #15, #16, #17, #18, #19 | ✅ pass |
+| UX 前端 | #20-#25 | ✅ pass |
+
+**24 / 25 acceptance criteria 通過。** 7 個 regression 守線全部維持 green。
+
+### ⚠️ AC #5 escalation：test fixture 引用不存在的欄位
+
+```
+File: src/tests/test_project_decouple.py:172
+    project.sudo().write({
+        'user_ids': [(4, user.id)],              # <- 此欄位不存在
+        'message_partner_ids': [(4, user.partner_id.id)],
+    })
+Error: ValueError: Invalid field 'user_ids' on model 'project.project'
+```
+
+**根因**：plan D3=A 列了 `user_ids` 與 `message_partner_ids` 兩個 candidate，但 Odoo 18 的 `project.project` 只有 `favorite_user_ids` / `collaborator_ids` / `message_partner_ids`，沒有 `user_ids`（後者只在 `project.task` 上）。寫 `user_ids` 的 sudo write 在抵達 record rule 之前就被 Odoo `BaseModel.write` 在 `models.py:4740` 直接 raise ValueError，所以 `_add_project_member` 連 `message_partner_ids` 都沒寫入。
+
+**Implementation 行為**：record rule `project_rule_workspace_member` 的 unbound leg 已正確支援 `message_partner_ids` 與 `create_uid`，若 tester 把 `user_ids` 那行拿掉、只留 `message_partner_ids`，AC #5 立刻會綠燈（手動驗過：去掉 `user_ids` 時 Bob 加入 follower 後可見 P1）。
+
+**建議修正**（屬 tester 範圍，本 PR 不動 test）：
+
+```python
+def _add_project_member(self, project, user):
+    project.sudo().write({
+        'message_partner_ids': [(4, user.partner_id.id)],
+    })
+```
+
+leader 請決定是否回送 tester。本 PR 在此先停。
+
+## 4 Open Qs 拍板結果
+
+| # | Open Q | 決議 | 落實位置 |
+|---|---|---|---|
+| Q1 | AC #5 user_ids vs message_partner_ids | **`message_partner_ids` + `create_uid` 雙腿**（不依賴 user_ids — 它不在 Odoo 18 project.project schema 上）| `src/security/ir_rules.xml:32`（rule domain） |
+| Q2 | AC #11 domain 形式 | **Static domain on field definition** — `[('workspace_id', '=', workspace_id)]`；task 自身的 `workspace_id` 是 `related='project_id.workspace_id', store=True`，unbound task 時自動評估為 `False`，候選清單為空（UX 一致，無 NoneType 風險） | `src/models/project_task.py:43-51` |
+| Q3 | AC #13 warning 欄位命名 | **`incompatible_extra_cloud_service_ids`**（computed M2M），UI panel 可對每個不相容 chip 加紅框／hover 訊息，比 boolean / 字串訊息資訊量豐富 | `src/models/project_task.py:60-79` |
+| Q4 | AC #15 sentinel | **`***REDACTED***` hardcode**（與 plan / test 對齊；未來 i18n 化的需求由 reporter 寫入 follow-up） | `src/models/discuss_channel.py:18` |
+
+## Deploy SQL（請使用者手動執行）
+
+### 升級前（Risk R1 dry-run — plan §Migration）
+
+確認有沒有 pre-existing 的 unbound project，避免 ACL 變嚴後使用者「東西不見了」：
+
+```sql
+-- 若 query 結果非空，逐筆檢視是否該 user 已是 project member
+-- 不是 member 則需手動補 message_partner_ids
+SELECT p.id, p.name, p.create_uid, u.login AS creator_login
+FROM project_project p
+LEFT JOIN res_users u ON u.id = p.create_uid
+WHERE p.cloud_service_id IS NULL;
+```
+
+### 升級後驗證
+
+```sql
+-- 1. 新欄位 schema 建好
+\d project_task_cloud_service_rel       -- 應該存在
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'project_task'
+  AND column_name IN ('primary_cloud_service_id', 'workspace_id');
+
+-- 2. 新 ir.rule 落地、舊 leaky rule deactivated
+SELECT id, name, active FROM ir_rule WHERE name LIKE '%workspace member%';
+SELECT id, name, active FROM ir_rule WHERE id = (
+    SELECT res_id FROM ir_model_data WHERE module='project' AND name='project_public_members_rule'
+);
+-- expect: project_public_members_rule.active = false
+
+-- 3. 既有 bound project 的 workspace_id 仍可正確 derive
+SELECT p.id, p.name, p.cloud_service_id, p.workspace_id
+FROM project_project p
+WHERE p.cloud_service_id IS NOT NULL
+LIMIT 5;
+```
+
+### Rollback（若 emergency）
+
+```sql
+-- 1. 還原 project_public_members_rule
+UPDATE ir_rule SET active = true
+WHERE id = (
+    SELECT res_id FROM ir_model_data
+    WHERE module='project' AND name='project_public_members_rule' AND model='ir.rule'
+);
+
+-- 2. revert merge commit → restart Odoo
+-- 3. ⚠️ 若 production 已有使用者設定 task extras（M2M 表 project_task_cloud_service_rel），rollback 前 dump：
+--    pg_dump -t project_task_cloud_service_rel ... > extras-backup.sql
+--    然後 DROP TABLE project_task_cloud_service_rel
+```
+
+## ⚠️ 不可逆 / 半可逆動作清單
+
+| 動作 | 可逆性 | 緩解 |
+|---|---|---|
+| `project_task_cloud_service_rel` M2M 表創建 | **半可逆**（rollback 會丟失使用者設定的 extras 連結）| rollback 前 dump 該表；plan R2 已標 |
+| `project_public_members_rule.active = false` | **可逆**（rollback SQL 上方提供）| 影響面：base.group_user 用戶失去「可見所有非 followers project」的權限，改走 workspace-scoped 過濾 |
+| `project_rule_workspace_member` 改寫 + `cloud_service_rule_workspace_member` 新增 | **可逆**（revert XML + module update）| ir_rules.xml 用 noupdate=0 包裝，重新 -u 套用 |
+| 新欄位（`extra_cloud_service_ids`, `primary_cloud_service_id`, `workspace_id`, `incompatible_extra_cloud_service_ids`, `chat_enabled` 等）| **可逆**（移欄位定義即可；Odoo 不會自動 drop column，留著無害；如需徹底清補 post-uninstall hook）| - |
+
+**無嚴格不可逆動作。**
+
+## Test 結果
+
+跑 `./.claude/skills/k8s-dev-sandbox/scripts/test.sh feat-decouple-cs-projects --module woow_paas_platform`（docker-desktop sandbox）：
+
+```
+ERROR woow_feat_decouple_cs_projects odoo.tests.result: 8 failed, 25 error(s) of 435 tests when loading database
+```
+
+- **24 / 25 refactor ACs 變綠**（baseline tester：25 reds → 1 leftover = AC #5 test bug）
+- **7 / 7 regression 守線維持綠**
+- **32 pre-existing infra fails out of scope**（subscription journal / TWD currency / smart_home demo user — 與本 PR 無關，per test scope report `刻意不處理`）
+- 排除 infra + AC #5 後，**0 個 refactor 由本 PR 引入的新失敗**
+
+## Side effects 評估
+
+| 影響面 | 描述 |
+|---|---|
+| **`base.group_user` ACL on project.project / project.task** | 新增 RWCU 權限（原本只有 group_project_user / group_project_manager 有 create/write/unlink）。record rule 縮緊到 workspace member / project member，所以實際可動範圍與舊行為一致 |
+| **`base.group_user` 失去「所有非 followers project 可見」**（project_public_members_rule deactivated）| 改為 workspace-scoped。對 PaaS 多租戶語義是 tightening，對純 Odoo project 使用情境是 break-change。本 module 是這個 Odoo instance 唯一的 project consumer，影響面僅限於開發者本機可能看到的 demo project |
+| **Project create_uid 自動可見** | 新 rule 加 `create_uid` 葉子，避免使用者建完自己的 unbound project 立即看不到的 UX bug |
+| **MCP tools 注入** | `discuss_channel._get_user_mcp_tools` **未變動**，仍只從 primary service 取 user MCP tools；extras 的 MCP tools 不會被 chatter 自動拉。Plan §Out of scope 沒寫，這裡記錄為 follow-up 候選 |
+| **Controller `has_project` flag** | 保留（CreateProjectModal 移除前端 filter 後，仍可用於 service detail page 顯示綁定狀態）|
+| **`_create_project` endpoint** | 路徑不變；當 `cloud_service_id` 為空時走 workspace path 建立 unbound project（不需 server-side 改動，現有 elif workspace branch 已支援）|
+
+## `/simplify` 摘要
+
+- **採納**：移除實驗中加上的 `base.group_user → project.group_project_user` `implied_ids` extension — 自定的 `project_task_rule_workspace_member` (base.group_user) 已能讓 alice 寫自己 workspace 的 task，implied_ids 是冗餘的 scope expansion
+- **採納**：簡化 `incompatible_extra_cloud_service_ids` 欄位定義（移除多餘的 relation/column 參數，純 compute 不需 join table）
+- **拒絕**：將 `_format_cloud_service_block` 改成獨立 module-level helper — 雖然是純函式，但和 model 行為強耦合（讀取 service / template 欄位），留在 model 上維持就近原則
+- **拒絕**：把 4 個新 task 欄位拆成獨立 mixin — 它們只服務 project.task 這個 model，沒第二個 caller，抽 helper / mixin 是 premature
+
+## Follow-up（reporter 候選）
+
+- D9 階段 2：升級 sanitizer 為 whitelist 模式（plan §Decisions D9 已記 follow-up）
+- AC #5 test fixture 修正（去掉 user_ids 寫）— 需 tester 動手
+- Sentinel `***REDACTED***` i18n 化
+- Extras 跨 workspace 候選放寬（D6 從 C → B）
+- Chatter `_get_user_mcp_tools` 是否也整合 extras 的 MCP tools
+
+## 主要 commits
+
+1. `3081a41` docs(refactor): plan + test scope + report
+2. `fec64b0` test(refactor): red-phase tests for 25 ACs
+3. `b164d76` feat(refactor): decouple — model + ACL + UI + migration
+4. `9d458f7` fix(skills): in-pod sandbox test runner `-u` + alternate ports
