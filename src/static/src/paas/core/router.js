@@ -13,6 +13,9 @@ const routes = [
     { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers)$/ },
     { path: "workspace/:id/services/:serviceId", name: "Service Detail", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
     { path: "ai-assistant", name: "AI Assistant", routeName: "ai-assistant" },
+    // D4=C: `/woow#/projects` is the new entry; `/woow#/ai-assistant/projects` stays
+    //        as a bookmark-preserving alias landing on the same route.
+    { path: "projects", name: "Projects", routeName: "ai-projects" },
     { path: "ai-assistant/projects/:id", name: "Project Kanban", routeName: "ai-project-kanban", pattern: /^ai-assistant\/projects\/(\d+)$/ },
     { path: "ai-assistant/projects", name: "Support Projects", routeName: "ai-projects" },
     { path: "ai-assistant/tasks/:taskId", name: "Task Detail", routeName: "ai-task-detail", pattern: /^ai-assistant\/tasks\/(\d+)$/ },

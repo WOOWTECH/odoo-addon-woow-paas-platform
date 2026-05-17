@@ -65,10 +65,10 @@ export class CreateProjectModal extends Component {
         this.state.cloudServicesLoading = true;
         try {
             await cloudService.fetchServices(workspaceId);
-            // Filter out services that already have a project (1:1 constraint)
-            this.state.cloudServices = (cloudService.services || []).filter(
-                (svc) => !svc.has_project
-            );
+            // D5=A: list every service; the server-side `unique_cloud_service`
+            // constraint is the source of truth for the 1:1 limit, and the
+            // "— No service —" first option lets users create an unbound project.
+            this.state.cloudServices = cloudService.services || [];
             // If pre-selected cloud service is in the list, keep it; otherwise clear
             if (
                 this.state.cloudServiceId &&
@@ -126,25 +126,23 @@ export class CreateProjectModal extends Component {
             return;
         }
 
-        if (!this.state.cloudServiceId) {
-            this.state.error = "Please select a cloud service";
-            return;
-        }
-
+        // D5=A: cloud_service is optional. When the user picks "— No service —"
+        // we create an unbound project scoped to the workspace.
         this.state.loading = true;
         this.state.error = null;
 
         try {
-            let result;
             const payload = {
                 name,
                 description: this.state.description.trim(),
             };
 
-            result = await supportService.createProjectForService(
-                this.state.cloudServiceId,
-                payload
-            );
+            const result = this.state.cloudServiceId
+                ? await supportService.createProjectForService(
+                      this.state.cloudServiceId,
+                      payload,
+                  )
+                : await supportService.createProject(this.state.workspaceId, payload);
 
             if (result.success) {
                 this.props.onCreated(result.data);

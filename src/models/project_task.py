@@ -25,6 +25,52 @@ class ProjectTask(models.Model):
         help='Automatically trigger AI reply when messages are posted',
     )
 
+    # ------------------------------------------------------------------ #
+    #  Linked Cloud Services (D2=A / D6=C / D7=A)                         #
+    # ------------------------------------------------------------------ #
+    workspace_id = fields.Many2one(
+        'woow_paas_platform.workspace',
+        related='project_id.workspace_id',
+        store=True,
+        index=True,
+        string='Workspace',
+    )
+    primary_cloud_service_id = fields.Many2one(
+        'woow_paas_platform.cloud_service',
+        related='project_id.cloud_service_id',
+        store=True,
+        index=True,
+        string='Primary Cloud Service',
+    )
+    extra_cloud_service_ids = fields.Many2many(
+        comodel_name='woow_paas_platform.cloud_service',
+        relation='project_task_cloud_service_rel',
+        column1='task_id',
+        column2='cloud_service_id',
+        domain="[('workspace_id', '=', workspace_id)]",
+        string='Extra Linked Services',
+    )
+    incompatible_extra_cloud_service_ids = fields.Many2many(
+        comodel_name='woow_paas_platform.cloud_service',
+        compute='_compute_incompatible_extra_cloud_service_ids',
+        string='Incompatible Extra Services',
+        help='Extras whose workspace no longer matches this task — UI flags '
+             'them with a warning chip; server keeps them on cross-project moves.',
+    )
+
+    @api.depends('extra_cloud_service_ids.workspace_id', 'workspace_id')
+    def _compute_incompatible_extra_cloud_service_ids(self):
+        for task in self:
+            ws = task.workspace_id
+            if not ws:
+                task.incompatible_extra_cloud_service_ids = task.extra_cloud_service_ids
+            else:
+                task.incompatible_extra_cloud_service_ids = (
+                    task.extra_cloud_service_ids.filtered(
+                        lambda s: s.workspace_id != ws
+                    )
+                )
+
     def _create_chat_channel(self):
         """Lazily create a discuss.channel for the task chat.
 

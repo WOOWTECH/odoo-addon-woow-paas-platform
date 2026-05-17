@@ -8,6 +8,7 @@ export class Sidebar extends Component {
     navItems = [
         { path: "dashboard", name: "Dashboard", icon: "dashboard" },
         { path: "workspaces", name: "Workspaces", icon: "workspaces" },
+        { path: "projects", name: "Projects", icon: "folder" },
         { path: "ai-assistant", name: "AI Assistant", icon: "smart_toy" },
         { section: "Finance" },
         { path: "billing", name: "Billing", icon: "payments" },
@@ -25,13 +26,14 @@ export class Sidebar extends Component {
      */
     isActive(item) {
         const current = this.props.router.current;
+        if (item.path === "projects") {
+            return current === "ai-projects" || current === "ai-project-kanban";
+        }
         if (item.path === "ai-assistant") {
             return current === "ai-assistant"
-                || current === "ai-projects"
                 || current === "ai-tasks"
                 || current === "ai-task-detail"
-                || current === "ai-chat"
-                || current === "ai-project-kanban";
+                || current === "ai-chat";
         }
         if (item.path === "billing") {
             return current === "billing"
