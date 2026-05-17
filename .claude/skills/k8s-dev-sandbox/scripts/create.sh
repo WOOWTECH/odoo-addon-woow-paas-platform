@@ -146,7 +146,7 @@ echo -e "${BLUE}Using kubectl context:${NC} ${GREEN}${KUBE_CONTEXT}${NC}"
 kubectl config use-context "$KUBE_CONTEXT" >/dev/null
 export KUBE_CONTEXT
 
-if ! kubectl cluster-info >/dev/null 2>&1; then
+if ! kubectl --request-timeout=30s cluster-info >/dev/null 2>&1; then
     echo -e "${RED}Cannot connect to Kubernetes cluster '${KUBE_CONTEXT}'. Check your kubeconfig.${NC}" >&2
     exit 1
 fi
