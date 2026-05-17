@@ -165,12 +165,14 @@ class TestProjectUnboundACL(TransactionCase):
     def _add_project_member(self, project, user):
         """Add ``user`` as a project member.
 
-        Plan D3=A allows either ``user_ids`` or ``message_partner_ids``;
-        implementation chooses one and updates the record rule accordingly.
-        We exercise both axes so the test stays valid regardless of choice.
+        Odoo 18 ``project.project`` exposes no ``user_ids`` field — D3=A
+        in the plan used that label loosely.  The schema-accurate axes
+        are ``message_partner_ids`` (follower) and ``create_uid``; the
+        implementation's record rule covers both legs, and we follow the
+        follower path here because it matches the ad-hoc "share with X"
+        flow the AC describes.
         """
         project.sudo().write({
-            'user_ids': [(4, user.id)],
             'message_partner_ids': [(4, user.partner_id.id)],
         })
 
