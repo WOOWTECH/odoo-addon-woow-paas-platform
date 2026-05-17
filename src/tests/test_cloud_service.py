@@ -395,11 +395,14 @@ class TestCloudServiceChangePlanTrialMode(TransactionCase):
 
     def _seed_subscription(self, plan):
         """Seed an in_progress sub on `plan`, then force NULL sh_end_date
-        on trial subs to reproduce the stg E2E shape from PR #28.
+        on trial subs to reproduce historical stg/prod DB residue.
 
-        See the SH counterpart for the full rationale — fresh-created
-        trial subs may have sh_end_date populated by onchange, so this
-        helper explicitly NULLs it for trial-state seeds.
+        Post-#33, fresh trial subs get a coherent (start, trial_end, end)
+        triple, so this NULL state no longer occurs at create time. But
+        legacy rows (stg subs 22/35–39 and any prod equivalents) still
+        carry it, and the #34 controller relaxation must continue to
+        accept them — hence the explicit NULL here for the regression
+        path. See SH counterpart for the full rationale.
         """
         partner = self.workspace.owner_id.partner_id
         self.service._create_and_confirm_subscription(partner, plan)
@@ -410,8 +413,15 @@ class TestCloudServiceChangePlanTrialMode(TransactionCase):
 
     def test_trial_to_trial_new_sub_restarts_trial(self):
         """Q1: trial -> trial change-plan creates a new sub in trial state
-        with the new plan's trial duration counted from today."""
+        with the new plan's trial duration counted from today.
+
+        Post-#33 the date triple (start, trial_end, end) is asserted; the
+        plan-driven force in ``_force_trial_dates_from_plan`` runs for
+        every trial sub regardless of whether the onchange chain already
+        flipped sh_trial=True.
+        """
         from datetime import date, timedelta
+        from dateutil.relativedelta import relativedelta
         self._seed_subscription(self.plan_a_trial7)
         self.assertTrue(self.service.sudo().subscription_id.sh_trial)
 
@@ -426,8 +436,17 @@ class TestCloudServiceChangePlanTrialMode(TransactionCase):
         self.assertTrue(new_sub.sh_trial)
         self.assertEqual(new_sub.sh_subscription_plan_id, self.plan_b_trial14)
         self.assertEqual(res["data"]["refund_amount"], 0)
-        # See SH counterpart for why sh_trial_end_date is not asserted —
-        # depends on onchange ordering, orthogonal to #34, tracked in #33.
+
+        # #33: date triple is plan-driven, not onchange-derived.
+        today = date.today()
+        expected_trial_end = today + timedelta(days=14) - timedelta(days=1)
+        expected_start = expected_trial_end + timedelta(days=1)
+        expected_end = (
+            expected_start + relativedelta(months=1) - timedelta(days=1)
+        )
+        self.assertEqual(new_sub.sh_trial_end_date, expected_trial_end)
+        self.assertEqual(new_sub.sh_start_date, expected_start)
+        self.assertEqual(new_sub.sh_end_date, expected_end)
 
     def test_trial_to_no_trial_enters_active(self):
         """Q2: trial -> no-trial change-plan creates an active sub."""

@@ -2,6 +2,8 @@
 from datetime import date, timedelta
 from unittest.mock import patch, MagicMock
 
+from dateutil.relativedelta import relativedelta
+
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import UserError
 
@@ -462,3 +464,160 @@ class TestSubscriptionLifecycleCron(TransactionCase):
 
         service.invalidate_recordset()
         self.assertEqual(service.state, 'running')
+
+
+class TestForceTrialDatesFromPlan(TransactionCase):
+    """Cover the unconditional plan-driven trial-date write (issue #33).
+
+    Pre-fix, ``_create_and_confirm_subscription`` relied on the onchange
+    chain to populate sh_trial_end_date / sh_end_date, then only ran the
+    explicit force-trial path on the dedup-collision branch. Two failure
+    modes were observed on stg:
+
+    - fresh trial sub (no dedup) → both sh_trial_end_date and sh_end_date
+      NULL (subs 38, 39).
+    - dedup-collision-only force path set sh_trial_end_date but not
+      sh_end_date, which onchange then computed as ``start - 1 day`` (subs
+      22, 36, 37).
+
+    The fix removes the dedup gate and writes the full date triple
+    (start, trial_end, end) plan-driven. These tests assert the triple is
+    coherent for every code path SmartHome / CloudService can reach.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.Workspace = self.env['woow_paas_platform.workspace']
+        self.Plan = self.env['sh.subscription.plan']
+
+        # 7-day trial / 1-month billing cycle.
+        self.plan_trial = self.Plan.create({
+            'name': 'Trial 7d / Monthly',
+            'sh_plan_price': 100.0,
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_no_of_billing_cycle': -1,
+            'sh_trial': True,
+            'sh_trial_duration': 7,
+            'sh_trial_unit': 'day',
+        })
+        # No-trial control plan.
+        self.plan_notrial = self.Plan.create({
+            'name': 'No Trial / Monthly',
+            'sh_plan_price': 200.0,
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_no_of_billing_cycle': -1,
+            'sh_trial': False,
+        })
+        # _create_and_confirm_subscription resolves the subscription
+        # product via product.template.sh_subscription_plan_id.
+        for plan, label in [
+            (self.plan_trial, 'Trial7'),
+            (self.plan_notrial, 'NoTrial'),
+        ]:
+            self.env['product.template'].sudo().create({
+                'name': 'Force-Trial Product %s' % label,
+                'type': 'service',
+                'sh_product_subscribe': True,
+                'sh_subscription_plan_id': plan.id,
+                'list_price': plan.sh_plan_price,
+            })
+
+        self.owner = self.env['res.users'].create({
+            'login': 'force_trial_owner',
+            'name': 'Force-Trial Owner',
+            'email': 'force_trial_owner@example.test',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.workspace = self.Workspace.create({
+            'name': 'Force-Trial WS',
+            'owner_id': self.owner.id,
+        })
+        self.partner = self.owner.partner_id
+
+    def _make_smart_home(self, name):
+        return self.SmartHome.create({
+            'name': name,
+            'workspace_id': self.workspace.id,
+        })
+
+    def test_fresh_trial_plan_writes_full_date_triple(self):
+        """Fresh trial sub (no dedup collision) gets sh_trial=True and a
+        coherent (start, trial_end, end) date triple.
+
+        This is the path that produced stg subs 38 / 39 with NULL dates
+        pre-fix — the onchange chain did not populate them and the
+        force-trial block was gated behind dedup-collision so it never
+        ran.
+        """
+        smart_home = self._make_smart_home('Fresh-Trial Home')
+        smart_home._create_and_confirm_subscription(
+            self.partner, self.plan_trial,
+        )
+        sub = smart_home.sudo().subscription_id
+
+        today = date.today()
+        expected_trial_end = today + timedelta(days=7) - timedelta(days=1)
+        expected_start = expected_trial_end + timedelta(days=1)
+        # plan.sh_duration=1, sh_unit='month' → end = start + 1m − 1d.
+        expected_end = (
+            expected_start + relativedelta(months=1) - timedelta(days=1)
+        )
+
+        self.assertTrue(
+            sub.sh_trial, 'fresh trial sub must be in trial state',
+        )
+        self.assertEqual(sub.sh_trial_duration, 7)
+        self.assertEqual(sub.sh_trial_unit, 'day')
+        self.assertEqual(
+            sub.sh_trial_end_date, expected_trial_end,
+            'sh_trial_end_date must be set on fresh trial sub (#33)',
+        )
+        self.assertEqual(sub.sh_start_date, expected_start)
+        self.assertEqual(
+            sub.sh_end_date, expected_end,
+            'sh_end_date must be set on fresh trial sub (#33)',
+        )
+        self.assertEqual(sub.sh_date_of_next_payment, expected_start)
+
+    def test_dedup_collision_still_forces_trial_dates(self):
+        """Second sub on the same plan + partner triggers sh_subscription
+        dedup. The unconditional force path still writes a coherent date
+        triple — this is the path that worked pre-#33 and must not
+        regress."""
+        first = self._make_smart_home('First Home')
+        first._create_and_confirm_subscription(self.partner, self.plan_trial)
+
+        second = self._make_smart_home('Second Home')
+        second._create_and_confirm_subscription(self.partner, self.plan_trial)
+        sub = second.sudo().subscription_id
+
+        today = date.today()
+        expected_trial_end = today + timedelta(days=7) - timedelta(days=1)
+        expected_start = expected_trial_end + timedelta(days=1)
+        expected_end = (
+            expected_start + relativedelta(months=1) - timedelta(days=1)
+        )
+
+        self.assertTrue(sub.sh_trial)
+        self.assertEqual(sub.sh_trial_end_date, expected_trial_end)
+        self.assertEqual(sub.sh_start_date, expected_start)
+        self.assertEqual(sub.sh_end_date, expected_end)
+
+    def test_non_trial_plan_leaves_trial_fields_inert(self):
+        """``plan.sh_trial=False`` must skip the helper entirely so
+        sh_trial stays False and sh_trial_end_date stays empty. Removing
+        the dedup gate must not accidentally enable trial on non-trial
+        subs."""
+        smart_home = self._make_smart_home('No-Trial Home')
+        smart_home._create_and_confirm_subscription(
+            self.partner, self.plan_notrial,
+        )
+        sub = smart_home.sudo().subscription_id
+
+        self.assertFalse(
+            sub.sh_trial, 'non-trial plan must NOT produce trial sub',
+        )
+        self.assertFalse(sub.sh_trial_end_date)

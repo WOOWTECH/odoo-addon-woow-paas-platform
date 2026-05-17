@@ -695,15 +695,16 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
 
     def _seed_subscription(self, plan):
         """Seed an in_progress sub on `plan`, then force the NULL-end-date
-        shape on trial subs to model the stg E2E surface from PR #28.
+        shape on trial subs to model historical stg DB residue.
 
-        Fresh _create_and_confirm_subscription tends to populate
-        sh_end_date via the onchange chain even for trial subs, so a naive
-        fixture would hide the bug this PR is fixing (the controller
-        rejecting trial subs whose sh_end_date is NULL). PR #28 stg E2E
-        on sub 35 (workspace 27) had NULL sh_end_date — that's the real
-        production shape, and the regression test must reproduce it for
-        the revert-test-confirm cycle to be meaningful.
+        Post-#33, fresh ``_create_and_confirm_subscription`` writes a
+        coherent (start, trial_end, end) triple on every trial sub — so
+        a brand-new sub no longer naturally reaches the NULL-end-date
+        state. But subs 22 / 35–39 on stg, and any equivalent rows on
+        prod, were created pre-fix and still carry that shape. The
+        controller's relaxation (#34) must continue to accept them, so
+        this fixture explicitly NULLs sh_end_date to reproduce that
+        legacy state for the #34 regression test.
 
         Cache invalidation: env.cache is transaction-scope and shared
         across envs; admin-context reads above prime sh.subscription.
@@ -719,8 +720,18 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
 
     def test_trial_to_trial_new_sub_restarts_trial(self):
         """Q1: trial -> trial change-plan creates a new sub in trial state
-        with the new plan's trial duration counted from today."""
+        with the new plan's trial duration counted from today.
+
+        Post-#33 the date triple (start, trial_end, end) is asserted: the
+        unconditional plan-driven force in
+        ``_force_trial_dates_from_plan`` runs for every trial sub,
+        regardless of whether the onchange chain already flipped
+        sh_trial=True. Pre-#33 these assertions had to be skipped because
+        the dedup gate short-circuited the helper on the onchange-set
+        sh_trial=True path.
+        """
         from datetime import date, timedelta
+        from dateutil.relativedelta import relativedelta
         self._seed_subscription(self.plan_a_trial7)
         # Pre-condition: old sub is in trial. If this fails the rest of the
         # test is meaningless; assert loudly.
@@ -739,14 +750,17 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
         self.assertEqual(new_sub.sh_subscription_plan_id, self.plan_b_trial14)
         # Old sub was trial -> _compute_unused_refund returns 0.
         self.assertEqual(res['data']['refund_amount'], 0)
-        # Note: sh_trial_end_date is intentionally NOT asserted here.
-        # Empirically, when the new plan also has trial flags set, the
-        # sub.sh_trial bit comes from the onchange chain rather than the
-        # mixin's force-trial path (mixin:168 short-circuits because
-        # sub.sh_trial is already True). The onchange chain leaves
-        # sh_trial_end_date empty in some shapes — likely the same family
-        # of issues tracked in #33. This is orthogonal to issue #34 and
-        # tested separately when that one is fixed.
+
+        # #33: date triple is plan-driven, not onchange-derived.
+        today = date.today()
+        expected_trial_end = today + timedelta(days=14) - timedelta(days=1)
+        expected_start = expected_trial_end + timedelta(days=1)
+        expected_end = (
+            expected_start + relativedelta(months=1) - timedelta(days=1)
+        )
+        self.assertEqual(new_sub.sh_trial_end_date, expected_trial_end)
+        self.assertEqual(new_sub.sh_start_date, expected_start)
+        self.assertEqual(new_sub.sh_end_date, expected_end)
 
     def test_trial_to_no_trial_enters_active(self):
         """Q2: trial -> no-trial change-plan creates an active (non-trial)

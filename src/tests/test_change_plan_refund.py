@@ -86,6 +86,62 @@ class TestChangePlanRefund(TransactionCase):
         })
         self.assertEqual(sub._compute_unused_refund(), 0)
 
+    def test_refund_zero_when_start_date_missing(self):
+        """Missing sh_start_date alone (mirror of the end-date guard).
+
+        Symmetric NULL guard — neither side of the (start, end) interval
+        is allowed to be NULL before the formula runs. Guards against
+        regressions that would re-introduce ``None - date`` TypeErrors.
+        """
+        sub = self.Sub.new({
+            'sh_partner_id': self.partner.id,
+            'sh_start_date': False,
+            'sh_end_date': date.today() + timedelta(days=10),
+            'sh_plan_price': 100.0,
+        })
+        self.assertEqual(sub._compute_unused_refund(), 0)
+
+    def test_refund_zero_when_end_before_start(self):
+        """``end < start`` invariant violation — historical bad data.
+
+        Mirrors the shape PR #35 R1 review observed in trial change-plan
+        diag (``sh_end_date = today − 31d`` while ``sh_start_date = today``,
+        i.e. end before start). The ``max(0, end - today)`` clamp keeps
+        refund at 0 so the controller does not return negative or
+        nonsense refunds when historical bad data slips through.
+
+        Pre-#33 this could occur from the dedup-collision force-trial
+        path leaving sh_end_date untouched while onchange backfilled it
+        to ``start - 1 day``. Post-#33 fresh subs no longer reach this
+        state, but legacy rows on prod / stg do, so the guard stays
+        load-bearing.
+        """
+        today = date.today()
+        sub = self.Sub.new({
+            'sh_partner_id': self.partner.id,
+            'sh_start_date': today,
+            'sh_end_date': today - timedelta(days=31),
+            'sh_plan_price': 100.0,
+        })
+        self.assertEqual(sub._compute_unused_refund(), 0)
+
+    def test_refund_zero_when_zero_duration_cycle(self):
+        """``end == start`` (zero-day cycle) → div-by-zero guard.
+
+        The ``(end - start).days or 1`` fallback prevents a
+        ``ZeroDivisionError`` when the billing window collapses to a
+        single day. ``max(0, end - today)`` then keeps refund at 0
+        because today coincides with the end of the cycle.
+        """
+        today = date.today()
+        sub = self.Sub.new({
+            'sh_partner_id': self.partner.id,
+            'sh_start_date': today,
+            'sh_end_date': today,
+            'sh_plan_price': 100.0,
+        })
+        self.assertEqual(sub._compute_unused_refund(), 0)
+
     # --- wizard parity --------------------------------------------------- #
 
     def test_wizard_refund_uses_helper_during_trial(self):

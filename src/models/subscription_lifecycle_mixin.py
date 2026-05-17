@@ -161,29 +161,17 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         subscription._onchange_sh_trial_subcription_start_date()
         subscription._onchange_sh_trial_subcription_end_date()
 
-        # sh_subscription deduplicates trials per partner+plan+product:
-        # if the same user already has a subscription with the same plan,
-        # onchanges disable trial and set start_date=today (immediate billing).
-        # PaaS treats each service independently — force trial from plan.
-        if plan.sh_trial and not subscription.sh_trial:
-            subscription.sh_trial = True
-            subscription.sh_trial_duration = plan.sh_trial_duration
-            subscription.sh_trial_unit = plan.sh_trial_unit
-            trial_delta = {
-                'day': relativedelta(days=plan.sh_trial_duration),
-                'week': relativedelta(weeks=plan.sh_trial_duration),
-                'month': relativedelta(months=plan.sh_trial_duration),
-                'year': relativedelta(years=plan.sh_trial_duration),
-            }.get(plan.sh_trial_unit, relativedelta())
-            trial_end = date.today() + trial_delta - relativedelta(days=1)
-            subscription.sh_trial_end_date = trial_end
-            subscription.sh_start_date = trial_end + relativedelta(days=1)
-            subscription.sh_date_of_next_payment = subscription.sh_start_date
-            _logger.info(
-                "Forced trial for subscription %s: %s days, billing starts %s",
-                subscription.name, plan.sh_trial_duration,
-                subscription.sh_start_date,
-            )
+        # Always force trial dates from the plan when the plan is a trial
+        # plan. The chained onchange compute (lines above) leaves
+        # sh_trial_end_date and sh_end_date NULL on a fresh trial sub when
+        # sh_subscription's dedup logic does not collide, and falls through
+        # to "end = start - 1 day" on the dedup-collision branch when only
+        # the trial-end-date onchange fires. Unconditional plan-driven write
+        # is the only path that yields a coherent (start, trial_end, end)
+        # triple for every trial sub. See issue #33 for the systematic
+        # NULL / off-by-one stg DB evidence.
+        if plan.sh_trial:
+            self._force_trial_dates_from_plan(subscription, plan)
 
         # Confirm → in_progress (starts trial if configured)
         subscription.sh_subscription_confirm()
@@ -195,6 +183,45 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             self._name, self.id, subscription.sh_trial,
         )
         return subscription
+
+    def _force_trial_dates_from_plan(self, subscription, plan):
+        """Force trial fields and dates on ``subscription`` from ``plan``.
+
+        Plan-driven explicit set; never trusts the chained onchange compute
+        in ``_create_and_confirm_subscription`` to populate trial dates.
+        Writes the full date triple — sh_trial_end_date, sh_start_date,
+        sh_end_date — so downstream readers (UI trial countdown, refund
+        compute) never see a partial state.
+        """
+        trial_delta = {
+            'day': relativedelta(days=plan.sh_trial_duration),
+            'week': relativedelta(weeks=plan.sh_trial_duration),
+            'month': relativedelta(months=plan.sh_trial_duration),
+            'year': relativedelta(years=plan.sh_trial_duration),
+        }.get(plan.sh_trial_unit, relativedelta())
+        cycle_delta = {
+            'day': relativedelta(days=plan.sh_duration),
+            'week': relativedelta(weeks=plan.sh_duration),
+            'month': relativedelta(months=plan.sh_duration),
+            'year': relativedelta(years=plan.sh_duration),
+        }.get(plan.sh_unit, relativedelta())
+        trial_end = date.today() + trial_delta - relativedelta(days=1)
+        start_date = trial_end + relativedelta(days=1)
+        end_date = start_date + cycle_delta - relativedelta(days=1)
+        subscription.write({
+            'sh_trial': True,
+            'sh_trial_duration': plan.sh_trial_duration,
+            'sh_trial_unit': plan.sh_trial_unit,
+            'sh_trial_end_date': trial_end,
+            'sh_start_date': start_date,
+            'sh_end_date': end_date,
+            'sh_date_of_next_payment': start_date,
+        })
+        _logger.info(
+            "Forced trial for subscription %s: %s %s, billing %s → %s",
+            subscription.name, plan.sh_trial_duration, plan.sh_trial_unit,
+            start_date, end_date,
+        )
 
     # ----------------------------------------------------------------
     # Subscription state checks
