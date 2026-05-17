@@ -1,4 +1,4 @@
-"""18.0.1.0.18 — CloudService ↔ Project decouple (D3=A / D8=A).
+"""18.0.1.0.23 — CloudService ↔ Project decouple (D3=A / D8=A) + CAQA B1 patch.
 
 Forces the rewritten `project_rule_workspace_member` domain to take effect on
 DBs that loaded the legacy rule under ``noupdate="1"`` (so a plain ``-u`` does
@@ -7,6 +7,11 @@ updates re-apply the XML-defined domain.
 
 The companion rule ``cloud_service_rule_workspace_member`` is new — XML load
 handles its create — but we still flip its noupdate flag for the same reason.
+
+Finally, deactivates three Odoo std rules (`project_public_members_rule` plus
+the task-side pair) whose always-true `privacy_visibility != 'followers'` legs
+would OR-bypass the workspace filter. See the long-form comment on the third
+SQL block for the multi-rule symmetry rationale.
 """
 import logging
 

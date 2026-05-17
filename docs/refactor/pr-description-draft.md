@@ -21,40 +21,16 @@ Test Report: `docs/refactor/test-report-2026-05-16.md`
 | 群組 | AC # | 結果 |
 |---|---|---|
 | Project 獨立性 | #1, #2, #3 | ✅ pass |
-| Project ACL（unbound 隔離）| #4, #6 | ✅ pass |
-| Project ACL（member add）| **#5** | ⚠️ **未過 — test fixture bug，需 tester 修**（詳見下方）|
+| Project ACL（unbound 隔離）| #4, #5, #6 | ✅ pass |
 | cloud_service ACL | #7, #8 | ✅ pass |
 | Task extras | #9, #10, #11, #12, #13 | ✅ pass |
 | AI prompt + sanitizer | #14, #15, #16, #17, #18, #19 | ✅ pass |
 | UX 前端 | #20-#25 | ✅ pass |
+| B1 cross-workspace task isolation | 2 sanity | ✅ pass |
 
-**24 / 25 acceptance criteria 通過。** 7 個 regression 守線全部維持 green。
+**25 / 25 acceptance criteria 通過 + 2 B1 sanity tests 通過。** 7 個 regression 守線全部維持 green。
 
-### ⚠️ AC #5 escalation：test fixture 引用不存在的欄位
-
-```
-File: src/tests/test_project_decouple.py:172
-    project.sudo().write({
-        'user_ids': [(4, user.id)],              # <- 此欄位不存在
-        'message_partner_ids': [(4, user.partner_id.id)],
-    })
-Error: ValueError: Invalid field 'user_ids' on model 'project.project'
-```
-
-**根因**：plan D3=A 列了 `user_ids` 與 `message_partner_ids` 兩個 candidate，但 Odoo 18 的 `project.project` 只有 `favorite_user_ids` / `collaborator_ids` / `message_partner_ids`，沒有 `user_ids`（後者只在 `project.task` 上）。寫 `user_ids` 的 sudo write 在抵達 record rule 之前就被 Odoo `BaseModel.write` 在 `models.py:4740` 直接 raise ValueError，所以 `_add_project_member` 連 `message_partner_ids` 都沒寫入。
-
-**Implementation 行為**：record rule `project_rule_workspace_member` 的 unbound leg 已正確支援 `message_partner_ids` 與 `create_uid`，若 tester 把 `user_ids` 那行拿掉、只留 `message_partner_ids`，AC #5 立刻會綠燈（手動驗過：去掉 `user_ids` 時 Bob 加入 follower 後可見 P1）。
-
-**建議修正**（屬 tester 範圍，本 PR 不動 test）：
-
-```python
-def _add_project_member(self, project, user):
-    project.sudo().write({
-        'message_partner_ids': [(4, user.partner_id.id)],
-    })
-```
-
-leader 請決定是否回送 tester。本 PR 在此先停。
+> **AC #5 註記**：plan D3=A 原列 `user_ids` / `message_partner_ids` 兩個 candidate，但 Odoo 18 `project.project` 沒有 `user_ids` 欄位（只有 `favorite_user_ids` / `collaborator_ids` / `message_partner_ids`），原 fixture 寫 `user_ids` 會被 `BaseModel.write` 直接 raise `ValueError`。Tester 在 commit b582a44 移除 `user_ids` 那行、僅保留 `message_partner_ids`，與 implementation 的 record rule unbound leg（`message_partner_ids` + `create_uid`）對齊後 AC #5 變綠。
 
 ## 4 Open Qs 拍板結果
 

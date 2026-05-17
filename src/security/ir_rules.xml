@@ -52,8 +52,10 @@
 
     <!-- Refactor-managed rules (noupdate=0): module owns the definitive domain,
          so module updates re-apply edits. Admin tweaks here will be reverted on
-         `-u` — that is the intended behaviour for these two security-critical
-         rules introduced by the CloudService ↔ Project decouple refactor. -->
+         `-u` — that is the intended behaviour for the three security-critical
+         rules introduced by the CloudService ↔ Project decouple refactor
+         (project_rule_workspace_member, cloud_service_rule_workspace_member,
+         project_task_rule_workspace_member). -->
     <data noupdate="0">
         <!-- Project visibility (decoupled CloudService ↔ Project):
              - bound project → visible to workspace members (via cloud_service.workspace)
@@ -94,7 +96,15 @@
              project.group_project_user; this rule grants the same surface to plain
              base.group_user accounts when they belong to the task's project workspace
              (bound) or are project followers/creator (unbound). Required for D3=A
-             so workspace members can manage tasks on their own projects. -->
+             so workspace members can manage tasks on their own projects.
+
+             Partners with the symmetric deactivation in migrations/18.0.1.0.23/
+             post-migrate.py, which turns off Odoo's `task_visibility_rule` and
+             `task_visibility_rule_project_user`. If a future maintainer re-enables
+             either std rule, the OR-combined per-group ruleset will reopen the
+             cross-workspace task leak that CAQA B1 caught. Keep the three-way
+             deactivation (project_public_members_rule + the two task rules) and
+             this scoped task rule in lockstep. -->
         <record id="project_task_rule_workspace_member" model="ir.rule">
             <field name="name">Task: workspace member (bound) or project member (unbound)</field>
             <field name="model_id" ref="project.model_project_task"/>
