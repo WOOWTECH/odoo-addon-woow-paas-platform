@@ -33,7 +33,13 @@ Refactor 前的耦合：`mcp_server` 有 `cloud_service_id` M2O 指向 `woow_paa
 - **Constraint (D4/D5)**：保留 `scope` 欄位，加 Python `@api.constrains`：
   - `_check_scope_project_consistency`：`scope='user' ⇔ project_id IS NOT NULL`
   - `_check_user_scope_requires_bound_project`：user-scope MCP 的 project 必須是 bound（`project_id.cloud_service_id IS NOT NULL`）
-- **ACL**：新增 `mcp_server_rule_workspace_member` + `mcp_tool_rule_workspace_member` 兩條 `ir.rule` 套 `base.group_user`，dual-leg domain：`'|', ('scope'='system'), (workspace member chain)`。CSV row 從 `1,0,0,0` 提升為 `1,1,1,1`，靠 rule 兜底範圍。
+- **ACL（MAJOR 1 fix 後修訂為 rule split）**：新增**四條** `ir.rule` 套 `base.group_user`，按 read direction 與 create/write/unlink direction 拆開：
+  - `mcp_server_rule_system_readonly` (`scope='system'`) — `perm_read=True`，其餘 false
+  - `mcp_server_rule_workspace_user` (`scope='user'` + workspace 條件) — 全 perm true
+  - `mcp_tool_rule_system_readonly` (`server_id.scope='system'`) — read only
+  - `mcp_tool_rule_workspace_user` (`server_id.scope='user'` + workspace 條件) — 全 perm true
+
+  CSV row 從 `1,0,0,0` 提升為 `1,1,1,1`（hard cap，rule 層細控 row-level）。原 dual-leg single rule 設計（`'|', ('scope', '=', 'system'), (workspace chain)`）有 create-direction leak：base.group_user 可透過 ORM `create({'scope': 'system', ...})` 創建 system-scope MCP（leg 1 對 new row 永真）。Rule split 分離 read 與 create permission 後，user 只能 create scope='user' MCP 在自家 workspace 內。
 - **AI chat consumer**：`discuss_channel._get_user_mcp_tools` 與 `controllers/ai_assistant._get_user_mcp_tools_for_channel` 改走 `task.project_id.mcp_server_ids`。
 - **Backend view (D6=A)**：`mcp_server_views.xml` form 上 `cloud_service_id` 欄位替換為 `project_id`。
 - **Frontend (D6=A)**：`McpServersTab.xml` 保留在 service 頁，內部 query 改 `service.project_ids[0].mcp_server_ids`，**不**搬到 project 頁。
@@ -76,6 +82,32 @@ Refactor 前的耦合：`mcp_server` 有 `cloud_service_id` M2O 指向 `woow_paa
 
 **對 ACL rule 的 implication**：D5 ACL rule domain `('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)` — 看起來怕「unbound project 的 user-scope MCP」會 leak（cloud_service_id IS NULL → 整條 chain False → 看不到 → 等於 cross-user invisible）。但 constraint 已禁止這種 row 存在，所以 ACL domain 不需要 dual-leg fallback。
 
+### 5'. ACL Rule split (MAJOR 1 fix, 2026-05-18 post-CAQA)
+
+**為什麼必須拆 rule，而非 perm CSV 或 accept-as-design**：
+
+原始 plan 用單一 dual-leg rule（`'|', ('scope', '=', 'system'), (workspace chain)`）+ CSV `1,1,1,1`。reviewer MAJOR 1 抓到 **create direction leak**：
+
+- ORM `create({'scope': 'system', ...})` 時 Odoo 對 new record 套 record rule 的 create domain check
+- Leg 1 `('scope', '=', 'system')` 對 new row 為真 → rule allow create
+- D4 constraint 允許 scope='system' + project_id=NULL → ORM 層通過
+- 新 row 立刻被 same rule 的 read leg 1 永真所有 base.group_user 可讀
+
+**攻擊 vector 具體**：
+- Phishing URL：user-created system MCP 出現在 ai.assistant.mcp_server_ids domain (`scope='system' AND active=True`) 內，admin 設定 assistant 時可能不慎選入 → 全 instance AI chat 走 attacker endpoint
+- Tool definition forgery：mcp_tool 同 dual-leg rule，user 對既有 system MCP 添加假 tool 定義 → 改變 AI behavior
+- DoS：灌爆 mcp_server 與 mcp_tool table
+
+**為什麼 perm CSV gate（option B）行不通**：CSV access right 是 model-level binary cap，無法表達「user 可創 scope=user / 不可創 scope=system」的 row-level 區分。把 user CSV row perm_create=0 會把所有 create path 都堵掉，含合法的 user-scope create — 等於把語意決定塞錯 layer。
+
+**為什麼 accept-as-design（option C）不行**：CAQA Invariant #6 的「always-true leg 是 intentional」前提是「system MCP 只有 admin / sudo create」— 但 CSV/rule 沒 enforce 這個前提。Accept 等於把「假設」當「現實」、留 known security hole 給 reviewer 標 MAJOR；違反 [[cross-workspace-task-data-leak]] 「ACL 補丁不解 root cause」教訓。
+
+**為什麼 rule split 對**：
+- ACL layer 直接 enforce — row-level 區分用 record rule 表達是 Odoo idiom
+- 既有 codebase pattern：`workspace_rule_member_access`（read-only）+ `workspace_rule_create`（create-only）已是 split idiom（`ir_rules.xml` line 5-26）
+- 對等 mcp_tool sub-model 同步拆（B1 對等性）
+- sudo() context 不被 rule 卡，`_model_auto_create_mcp_server` + demo data + admin manual create 路徑都保留
+
 ### 5. ACL 自家 model，無 std rule 對等問題（D5/ACL）
 
 **為什麼不需要 [[odoo-addon-std-rule-symmetric-deactivation]] checklist**：
@@ -117,6 +149,7 @@ WHERE r.model_id IN (
 
 ### Negative / 要持續注意
 
+- **MAJOR 1 fix：rule split 後若任何人把 4 條 rule 合併回單一 dual-leg rule 或把 system_readonly 的 perm_create / perm_write / perm_unlink 改 True，立刻重炸 reviewer 已 catch 的 data leak**。Test #19-#22 是這個 invariant 的 regression lock，PR review 必看 ir_rules.xml 內 `mcp_server_rule_system_readonly` / `mcp_tool_rule_system_readonly` 的 perm_* 是否被改。
 - **D1 cleanup hook 必須維持「unlink MCP → helm uninstall」順序**。任何把 hook 移到 helm uninstall 後 / 漏 filter scope='user' 的修改 = MCP zombie。Test #8 鎖此順序，PR review 必看 hook 位置。
 - **D5 constraint 與 cleanup hook 互依**：constraint 假設「user-scope MCP 必有 bound project」；cleanup hook 必須在 project unbind 或 service unlink 前清掉 user-scope MCP，否則 constraint 在 unbind 動作中 violate（無法寫成）。
 - **`scope='system'` 仍對所有 `base.group_user` 可讀**（Risk #3）。本次不收緊 system-scope ACL — 假設 system MCP 是平台級工具、含 admin-curated 配置。若未來引入 sensitive system MCP（含 API key 等），需重新 review。
@@ -143,11 +176,25 @@ WHERE r.model_id IN (
 
    改順序會讓 service 刪後留 MCP zombie（url 失效但 row 還在），最終由 D5 constraint 在 user 動作中 raise — 但 user-facing error 比 quiet cleanup 差。
 
-5. **`mcp_server` ACL 必須有 `mcp_server_rule_workspace_member` + `mcp_tool_rule_workspace_member` 兩條 rule 對等存在**。Tool 走 `server_id` 反向 — 任何加 `mcp_server` ACL 但漏 `mcp_tool` 對等 rule = sub-model leak（B1-style）。雖然兩個 model 都是自家、無 std rule 對等問題，但 ACL 對等性原則一樣適用 — see [[odoo-addon-std-rule-symmetric-deactivation]] §Why pattern。
+5. **`mcp_server` ACL 必須有**四條** rule 對等存在（MAJOR 1 fix）**：
+   - `mcp_server_rule_system_readonly`（read only on `scope='system'`）
+   - `mcp_server_rule_workspace_user`（full perm on `scope='user'` + workspace member）
+   - `mcp_tool_rule_system_readonly`（read only on `server_id.scope='system'`）
+   - `mcp_tool_rule_workspace_user`（full perm on `server_id.scope='user'` + workspace member）
 
-6. **`mcp_server_rule_workspace_member` 的 system-scope leg 是故意的 always-true，非 OR-bypass bug**。Domain `'|', ('scope', '=', 'system'), (workspace chain)` — system 那條腿對任何 `base.group_user` 永真。這是設計：system MCP 是平台級工具，所有 internal user 透過 ai.assistant 用。**不要**因為看起來像 [[cross-workspace-task-data-leak]] 的 always-true leg 就「修」掉它 — 它跟 B1 的 std rule always-true 性質不同（B1 是 std rule 對 employees-privacy project 的隱含放行；這裡是明確 scope='system' 的顯式設計）。
+   Tool 走 `server_id` 反向 — 任何加 `mcp_server` ACL 但漏 `mcp_tool` 對等 rule = sub-model leak（B1-style）。任何把四條合併回單一 dual-leg rule = 重炸 reviewer MAJOR 1 抓到的 create-direction leak。雖然兩個 model 都是自家、無 std rule 對等問題，但 ACL 對等性原則一樣適用 — see [[odoo-addon-std-rule-symmetric-deactivation]] §Why pattern。
+
+6. **`mcp_server_rule_system_readonly` 的 system-scope domain 是故意 always-true（對 read direction），但 `perm_create=False` / `perm_write=False` / `perm_unlink=False` 是 invariant（MAJOR 1 fix）**。Domain `[('scope', '=', 'system')]` — 對任何 `base.group_user` 與任何 system-scope row 永真。**read direction 的 always-true 是設計**（system MCP 是平台級工具，所有 internal user 透過 ai.assistant 用）；但 **create/write/unlink direction 的 always-true 是 MAJOR 1 漏洞**（user 自創 system MCP → 全 instance 可讀 → phishing / forgery / DoS 攻擊面）。後人若把這條 rule 的 perm_create / perm_write / perm_unlink 改 True，或把 system_readonly 與 workspace_user 合併回單一 dual-leg rule，立刻重炸 MAJOR 1（reviewer 已 catch 一次）。Read direction always-true 跟 [[cross-workspace-task-data-leak]] B1 的 std rule always-true 性質不同（B1 是 std rule 對 employees-privacy project 的隱含放行；這裡是明確 scope='system' 的顯式設計）。
 
 7. **`mcp_server.url` 算法仍走 `self.project_id.cloud_service_id` 取 backing service**。Schema 上看不到 service 但邏輯上依賴 service — 任何 inline `self.cloud_service_id` 改寫漏掉 `_model_build_mcp_endpoint_url` 會炸（NoneType chain）。Migration 後 grep `self.cloud_service_id` 在 `mcp_server.py` 內必須 0 hit。
+
+8. **System-scope MCP create 必須限制在 sudo() / admin (`group_system`) / demo data XML 三條路徑（MAJOR 1 invariant）**。`base.group_user` 透過 ORM `env['woow_paas_platform.mcp_server'].create({'scope': 'system', ...})` 必須 raise `AccessError`。Enforcement：`mcp_server_rule_system_readonly.perm_create=False`（套 base.group_user）+ `mcp_server_rule_workspace_user` domain 限 `scope='user'`。合法 create paths：
+   - `_model_auto_create_mcp_server` 用 sudo() create 的是 scope='user'，不適用此 invariant（被 D5 constraint 覆蓋）
+   - admin 後台 form view 透過 `access_mcp_server_admin` (group_system) row 走 admin CSV — perm_create=1
+   - `cloud_app_templates.xml` 等 demo data noupdate=0 XML record bypass record rule
+   - 任何未來新增的 system MCP create path 必須走 sudo() 或 group_system，並文件化此 invariant，否則違反
+
+   Test #19 是這個 invariant 的 regression lock；mcp_tool 對等 test #20。Migration `18.0.1.0.24` 刪舊兩條 dual-leg rule 的 SQL 是這個 invariant 的 enforcement entry（防 module update 殘留舊 rule OR-combine 重新打開漏洞）。
 
 ## See also
 

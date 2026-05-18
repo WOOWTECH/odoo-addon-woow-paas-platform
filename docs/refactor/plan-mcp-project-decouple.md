@@ -74,22 +74,31 @@ D1 / D3 / D4 / D5 / D6 由 leader 拍板（2026-05-18 brainstorm）；D2 invento
 15. `ai.assistant.mcp_server_ids` M2M domain 維持 `[('scope', '=', 'system'), ('active', '=', True)]` — 不變。
 16. SSE streaming 與 message_post 路徑都能正確拿到 user-scope MCP tools（regression：n8n MCP tool 透過 chat 能被呼叫成功）。
 
-### ACL（mcp_server / mcp_tool 從無 rule 到有 rule）
+### ACL（mcp_server / mcp_tool 從無 rule 到有 rule — rule split per MAJOR 1 fix）
 
-17. `mcp_server_rule_workspace_member` 套 `base.group_user`，domain：
-    ```
-    ['|', ('scope', '=', 'system'),
-          ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]
-    ```
-    — system MCP 對所有 base.group_user 可讀；user MCP 只對該 project 的 workspace member 可讀。
-18. `mcp_tool_rule_workspace_member` 對等 sub-model rule，domain 穿過 `server_id`：
-    ```
-    ['|', ('server_id.scope', '=', 'system'),
-          ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]
-    ```
-19. Cross-workspace user 不能 search / browse.read 別 workspace 的 user-scope mcp_server / mcp_tool（不論 ORM 路徑或 controller 路徑）。
-20. Own-workspace user **可以** read / write / create / unlink 自己 workspace 內的 user-scope mcp_server（防 over-correction）。
-21. `ir.model.access.csv` row：`mcp_server` / `mcp_tool` 給 `base.group_user` 的 RWCU 從 `1,0,0,0` 提升為 `1,1,1,1`（讓 user 能在自己 workspace 內 CRUD），靠 rule 兜底範圍。Admin row（`group_system`）不變。
+**Reviewer MAJOR 1 fix**：原 dual-leg single-rule 設計允許 base.group_user 透過 ORM `create({'scope': 'system', ...})` 創建 system-scope MCP（domain leg 1 `('scope', '=', 'system')` 對 new row 永真 → rule allow create → row created → 全 instance 可讀）。攻擊 vector：phishing URL、tool call interception、mcp_tool 偽造定義。Rule 必須拆成兩條，分別 enforce read 與 create direction。
+
+17. `mcp_server_rule_system_readonly` 套 `base.group_user`：
+    - domain: `[('scope', '=', 'system')]`
+    - `perm_read=True, perm_write=False, perm_create=False, perm_unlink=False`
+    - 效果：所有 base.group_user 可讀 system-scope MCP，但**不可** create/write/unlink。
+18. `mcp_server_rule_workspace_user` 套 `base.group_user`：
+    - domain: `[('scope', '=', 'user'), ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]`
+    - `perm_read=True, perm_write=True, perm_create=True, perm_unlink=True`
+    - 效果：workspace 成員對自家 user-scope MCP 全 CRUD；不可在此 rule 下 create scope='system'（domain match 失敗）。
+19. `mcp_tool_rule_system_readonly` 對等 sub-model rule（B1 對等性原則）：
+    - domain: `[('server_id.scope', '=', 'system')]`
+    - `perm_read=True, perm_write=False, perm_create=False, perm_unlink=False`
+    - 防：user 對既有 system MCP 偽造 tool 定義。
+20. `mcp_tool_rule_workspace_user` 對等 sub-model rule：
+    - domain: `[('server_id.scope', '=', 'user'), ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]`
+    - `perm_read=True, perm_write=True, perm_create=True, perm_unlink=True`
+21. **MAJOR 1 invariant**：base.group_user 透過 ORM `create({'scope': 'system', ...})` 必須 raise AccessError；只有 sudo() context（auto-create user-scope 用，跟 system create 無關）、`access_mcp_server_admin` (group_system) row、demo data XML 可以建 system-scope MCP。
+22. Cross-workspace user 不能 search / browse.read 別 workspace 的 user-scope mcp_server / mcp_tool（不論 ORM 路徑或 controller 路徑）。
+23. Own-workspace user **可以** read / write / create / unlink 自己 workspace 內的 user-scope mcp_server（防 over-correction）。
+24. `ir.model.access.csv` row：`mcp_server` / `mcp_tool` 給 `base.group_user` 的 RWCU 維持 `1,1,1,1`（**CSV 為 hard cap，rule 細控 row-level**）。Admin row（`group_system`）不變。
+
+**為何 CSV 維持 1,1,1,1 而非降 perm_create=0**：CSV access right 是 model-level binary cap，無法表達「user 可建 scope=user / 不可建 scope=system」這種 row-level 區分。若 CSV 改 perm_create=0 會把所有 create 都堵掉（含合法的 user-scope create path），等於把語意決定塞錯層。Rule 層 enforce 才是 Odoo idiom（見 `workspace_rule_member_access` + `workspace_rule_create` 既有 split pattern）。
 
 ### Backend / Frontend view
 
@@ -120,7 +129,13 @@ D1 / D3 / D4 / D5 / D6 由 leader 拍板（2026-05-18 brainstorm）；D2 invento
 
 ### Security（2 個）
 - `src/security/ir.model.access.csv` — `mcp_server` / `mcp_tool` user row RWCU 從 `1,0,0,0` → `1,1,1,1`（admin row 不變）
-- `src/security/ir_rules.xml` — 新增 `mcp_server_rule_workspace_member` 與 `mcp_tool_rule_workspace_member` 兩條 rule（`noupdate="0"` data 區塊，跟 refactor-managed rules 一起）
+- `src/security/ir_rules.xml` — **MAJOR 1 fix**：把既有 `mcp_server_rule_workspace_member` + `mcp_tool_rule_workspace_member` 兩條 dual-leg rule **拆成 4 條**（`noupdate="0"` data 區塊）：
+  - `mcp_server_rule_system_readonly`（domain `[('scope', '=', 'system')]`, perm_read only）
+  - `mcp_server_rule_workspace_user`（domain `[('scope', '=', 'user'), (workspace chain)]`, 全 perm）
+  - `mcp_tool_rule_system_readonly`（domain `[('server_id.scope', '=', 'system')]`, perm_read only）
+  - `mcp_tool_rule_workspace_user`（domain `[('server_id.scope', '=', 'user'), (workspace chain)]`, 全 perm）
+
+  既有兩條 rule 的 xmlid 一併 retire（migration 18.0.1.0.24 加 SQL `DELETE FROM ir_rule WHERE id IN (SELECT res_id FROM ir_model_data WHERE module='woow_paas_platform' AND name IN ('mcp_server_rule_workspace_member', 'mcp_tool_rule_workspace_member'))` 防 noupdate=0 模組更新時殘留）。
 
 ### Views（1 個）
 - `src/views/mcp_server_views.xml` — form view 欄位改名
@@ -130,11 +145,12 @@ D1 / D3 / D4 / D5 / D6 由 leader 拍板（2026-05-18 brainstorm）；D2 invento
 - 對應 service_service.js / API helper（如果有 MCP CRUD client side）：傳入參數 key 改 `project_id`
 
 ### Migration（1 個新檔）
-- `src/migrations/18.0.1.0.24/post-migrate.py` — 四件事：
+- `src/migrations/18.0.1.0.24/post-migrate.py` — 五件事：
   1. Backfill：`UPDATE woow_paas_platform_mcp_server SET project_id = (SELECT id FROM project_project WHERE cloud_service_id = woow_paas_platform_mcp_server.cloud_service_id LIMIT 1) WHERE cloud_service_id IS NOT NULL AND scope = 'user'`
   2. 對 `scope='user' AND project_id IS NULL`（backfill 失敗 — service 沒對應 project）的 row：**archive (active=False) + log warning**（**不 unlink** — migration 是不可逆動作，archive 留 rollback 救命繩；後續可另寫清理 job 把長期 archived 的 row 刪除）
   3. Drop `cloud_service_id` column
   4. `ir_model_data.noupdate=false` 對新 ir.rule xmlid（同 18.0.1.0.23 的 noupdate flip pattern）
+  5. **MAJOR 1 fix**：DELETE 舊兩條 dual-leg rule（`mcp_server_rule_workspace_member` / `mcp_tool_rule_workspace_member`）的 row + 對應 ir_model_data — 防 module update 殘留與新 4 條 rule OR-combine 重新打開漏洞
 
 ### Manifest
 - `src/__manifest__.py` — version bump `18.0.1.0.23` → `18.0.1.0.24`
@@ -171,12 +187,18 @@ D1 / D3 / D4 / D5 / D6 由 leader 拍板（2026-05-18 brainstorm）；D2 invento
 13. **channel_no_mcp_for_unbound_project**: project unbound（無 cloud_service_id）→ `_get_user_mcp_tools()` 回 empty recordset（D5 constraint 同時保證這個狀態不會 exist）。
 14. **assistant_system_mcp_unchanged**: ai.assistant.mcp_server_ids M2M 仍可拿 system MCP，行為與 refactor 前一致。
 
-**E. ACL（cross-workspace isolation）**（`test_mcp_acl_isolation.py` 新檔，套 `test_cloud_service_acl.py` 樣板）
+**E. ACL（cross-workspace isolation + MAJOR 1 create-direction）**（`test_mcp_acl_isolation.py` 新檔，套 `test_cloud_service_acl.py` 樣板）
 
 15. **alice_cannot_read_bob_user_mcp_via_orm**: Alice (W1) 與 Bob (W2) 是不同 workspace 的 internal user；Bob 的 project 有 user MCP；Alice with_user 走 `search([('id', '=', bob_mcp.id)])` → 空 recordset；走 `browse(bob_mcp.id).read()` → raise AccessError。
 16. **alice_cannot_read_bob_user_mcp_tool**: 同上對 mcp_tool sub-model（B1-style 對等檢查）。
 17. **bob_can_read_own_workspace_mcp**: Bob with_user 拿自家 MCP search/read 正常（防 over-correction）。
 18. **all_users_can_read_system_mcp**: scope='system' 對 Alice 與 Bob 都可讀（system MCP 是公共資源）。
+19. **MAJOR 1: user_cannot_create_system_mcp_via_orm**: Bob with_user `env['woow_paas_platform.mcp_server'].create({'scope': 'system', 'name': 'evil', 'url': '...', 'transport': 'sse'})` → raise AccessError（rule split create direction enforcement）。
+20. **MAJOR 1: user_cannot_create_mcp_tool_for_system_server**: Bob with_user 對既有 system MCP `env['woow_paas_platform.mcp_tool'].create({'server_id': system_mcp.id, ...})` → raise AccessError（sub-model 對等 create deny）。
+21. **MAJOR 1: user_cannot_write_or_unlink_system_mcp**: Bob with_user `system_mcp.with_user(bob).write({...})` 或 `.unlink()` → raise AccessError（rule split write/unlink direction）。
+22. **MAJOR 1: sudo_can_create_system_mcp**: sudo() context 仍可 create scope='system' MCP（為 demo data / admin 維護路徑保留 — 不被 rule split 卡到）。
+23. **MAJOR 1: admin_can_create_system_mcp_via_backend**: group_system user 走 admin CSV row（access_mcp_server_admin）可 create system MCP — 後台維護路徑通暢。
+24. **MAJOR 1: user_can_still_create_user_scope_in_own_workspace**: Bob with_user 在自家 workspace 創 scope='user' MCP（透過 sudo bypass D5 constraint 模擬 service auto-create 後的 update 場景）→ 成功（防止 rule split over-correction 把合法 user-scope create 一起堵）。
 
 **F. View regression**（既有 `test_ux_routing_views.py` extend）
 
