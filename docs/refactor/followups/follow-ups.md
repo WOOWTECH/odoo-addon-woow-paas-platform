@@ -1,26 +1,37 @@
-# Follow-ups — CloudService ↔ Project Decouple
+# Follow-ups — PaaS refactor cycle 追蹤
 
-> 本次 refactor 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
+> 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
-**State as of 2026-05-17**：B1 已 RESOLVED、PR APPROVED WITH CAVEATS、9 條 follow-up 待後續處理。
+**State as of 2026-05-18**：
+- Cycle 1（cloud-service ↔ project decouple, 2026-05-17）：F1-F11，B1 已 RESOLVED、PR APPROVED WITH CAVEATS
+- Cycle 2（mcp cloud_service_id → project_id decouple, 2026-05-18）：F12-F20 新增，PR APPROVED WITH CAVEATS round 2，4 BLOCKER/MAJOR 全 close
 
 ## Index
 
-| # | Severity | Origin | 主題 | Status |
-|---|----------|--------|------|--------|
-| F1 | medium | refactor | ACL 對等性 checklist 持久化 | doc-only ✅（本 doc 已寫進 [[odoo-addon-std-rule-symmetric-deactivation]]） |
-| F2 | medium | refactor | `_sanitize_helm_values` 同名異實重命名 | 待新 PR |
-| F3 | medium | refactor | Cross-workspace incompatible extras 注 AI prompt | 待設計 |
-| F4 | medium | pre-existing | `_check_project_access` / `_check_task_access` 對 unbound IDOR | 待新 PR |
-| F5 | medium | refactor (deferred) | Migration xmlid drift 防呆 assertion | 使用者 accept 不加本 PR；待新 PR |
-| F6 | medium | refactor | D9 階段 2 — sanitizer 升級 whitelist 模式 | 等 telemetry，待新 PR |
-| F7 | minor | refactor | BottomNav mobile vs Sidebar D4 拆分後 UX 一致性 | 待設計 |
-| F8 | minor | refactor (test) | Test hardening — AC#11 / AC#14 / B1 group_project_user / sanitizer fallback | 待新 PR |
-| F9 | minor | refactor | Sanitizer / `_loadCloudServices` 等 silent fallback observability | 待新 PR |
-| F10 | minor | pre-existing | `_list_projects` with sudo + empty domain 跨 tenant 列 | D5=A 放大；待新 PR |
-| F11 | minor | refactor | Sentinel `***REDACTED***` i18n 化 | 由 F6 觸發後一起評估 |
+| # | Severity | Origin | Cycle | 主題 | Status |
+|---|----------|--------|-------|------|--------|
+| F1 | medium | refactor | 1 | ACL 對等性 checklist 持久化 | doc-only ✅（本 doc 已寫進 [[odoo-addon-std-rule-symmetric-deactivation]]） |
+| F2 | medium | refactor | 1 | `_sanitize_helm_values` 同名異實重命名 | 待新 PR |
+| F3 | medium | refactor | 1 | Cross-workspace incompatible extras 注 AI prompt | 待設計 |
+| F4 | medium | pre-existing | 1 | `_check_project_access` / `_check_task_access` 對 unbound IDOR | 待新 PR |
+| F5 | medium | refactor (deferred) | 1 | Migration xmlid drift 防呆 assertion | 使用者 accept 不加本 PR；待新 PR |
+| F6 | medium | refactor | 1 | D9 階段 2 — sanitizer 升級 whitelist 模式 | 等 telemetry，待新 PR |
+| F7 | minor | refactor | 1 | BottomNav mobile vs Sidebar D4 拆分後 UX 一致性 | 待設計 |
+| F8 | minor | refactor (test) | 1 | Test hardening — AC#11 / AC#14 / B1 group_project_user / sanitizer fallback | 待新 PR |
+| F9 | minor | refactor | 1 | Sanitizer / `_loadCloudServices` 等 silent fallback observability | 待新 PR |
+| F10 | minor | pre-existing | 1 | `_list_projects` with sudo + empty domain 跨 tenant 列 | D5=A 放大；待新 PR |
+| F11 | minor | refactor | 1 | Sentinel `***REDACTED***` i18n 化 | 由 F6 觸發後一起評估 |
+| F12 | medium | pre-existing | 2 | Controller `helm_values` 漏 sanitize（違反 cycle 1 Inv #6） | 與 F2 合併 or 獨立 hotfix |
+| F13 | medium | refactor | 2 | B1 task ACL deactivation 對齊 `18.0.1.0.23` pattern | next refactor cycle `18.0.1.0.25` |
+| F14 | medium | refactor (caveat) | 2 | Cleanup hook `mapped` 路徑 belt-and-braces `sudo()`（CAQA C1） | 待新 PR |
+| F15 | info | refactor | 2 | `_do_cleanup` retry-on-error semantics 文件化（R2-1） | doc invariant inline + [[mcp-project-decouple]] §Inv |
+| F16 | info | refactor | 2 | `mcp_server` / `mcp_tool` rule-count parity lint check（R2-2） | 待新 PR |
+| F17 | minor | refactor (test) | 2 | `state='error'` re-entry test case（R2-3） | 待新 PR |
+| F18 | trivial | refactor | 2 | `_create_admin_user` helper docstring 過 cautious（R2-4） | reporter 順手清 or 留 |
+| F19 | minor | refactor | 2 | Round 1 17 minor / info 集合（silent-failure / type-design / migration assertion）| 留 batch 處理 |
+| F20 | minor | refactor (simplify) | 2 | Controller manual check helper 抽取 + `_get_user_mcp_tools` mixin | 待新 PR |
 
-下方逐條細節 + 觸發條件 + 建議落點。
+下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12+ 是 cycle 2 新增。
 
 ---
 
@@ -181,22 +192,156 @@
 
 ---
 
+---
+
+# Cycle 2 — MCP `cloud_service_id → project_id` Decouple (2026-05-18)
+
+> Cycle 2 完成於 2026-05-18，commit chain `5c5d980 → 9f147d8`。Reviewer round 2 APPROVED WITH CAVEATS。新 F12-F20 條目來自 CAQA C1 / F12 + round 1 verdict 17 minor + round 2 verdict 4 new minor + reporter durable docs 寫作時順帶整理。
+
+## F12 — 控制器 `helm_values` 漏 sanitize（pre-existing，違反 cycle 1 Inv #6）
+
+- **Severity**: medium
+- **Origin**: CAQA `docs/refactor/caqa-2026-05-18.md §F12` out-of-scope finding（CAQA 跨 cycle 1 + cycle 2 漏抓兩次）
+- **Location**: `src/controllers/ai_assistant.py:609-610` — SSE streaming path 注入 `service.helm_values` 到 AI system prompt **未走 `_sanitize_helm_values`**；對比 `src/models/discuss_channel.py:303` non-streaming path 有 sanitize
+- **Violation**: cycle 1 Invariant #6（AI prompt 注入 `helm_values` 必須經 `_sanitize_helm_values`）
+- **為何沒在本次擋下**：本次 implementation diff 未改此段 code，無新增 surface。本次 verdict 評估「是否引入 / 加劇」— pre-existing 不擋
+- **觸發路徑**：user 開啟 SSE chat 且 task 連到 bound project + `chat_enabled=True` + `ai_auto_reply=True` 才會 fire（非任何 user 隨意觸發）
+- **建議落點**：
+  - 路徑 1：與 F2（同名異實重命名 / 抽 utils）合併處理，徹底解決
+  - 路徑 2：若評估 AI chat 已上 stg / 即將 prod，獨立 hotfix PR 立刻修（機械式 1-line fix：`service.helm_values` → `_sanitize_helm_values(service.helm_values)` 並 import）
+- **何時**：next AI chat 相關 PR 一併處理
+
+## F13 — B1 task ACL deactivation 對齊 `18.0.1.0.23` pattern（next refactor cycle `18.0.1.0.25`）
+
+- **Severity**: medium
+- **Origin**: round 2 verdict 42 reds baseline survey（commit 9f147d8 §Out-of-scope 42 reds）
+- **狀況**：`test_cross_workspace_task_isolation` AC4 與 `test_project_decouple` 在 round 2 baseline 仍 red — failure pattern 是 B1 task regression，root cause 在 migrations `18.0.1.0.22/0.23` std-rule deactivation timing，與本次 cycle 2 無關
+- **下個 cycle 動作**：建立 `src/migrations/18.0.1.0.25/post-migrate.py` 對齊 `18.0.1.0.23` project_public_members_rule pattern — single UPDATE + IN clause deactivate task std rules
+- **不擋 cycle 2**：reviewer round 2 已驗 baseline survey 方法學健全（git stash → re-run baseline → 同 reds reproduce），cycle 2 commit range 內 0 改動這些 file → 無 blast radius
+- **何時**：next refactor cycle，把這 42 reds 收尾
+
+## F14 — Cleanup hook `mapped` 路徑 belt-and-braces `sudo()`（CAQA C1）
+
+- **Severity**: medium
+- **Origin**: CAQA `docs/refactor/caqa-2026-05-18.md §C1`
+- **Location**: `src/models/cloud_service.py:1134-1136` + `:1192-1194`（`_do_cleanup` step 1 + `unlink()` override）
+- **現狀**：
+  ```python
+  user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
+      lambda s: s.scope == 'user'
+  )
+  if user_mcps:
+      user_mcps.sudo().unlink()
+  ```
+  `mapped('mcp_server_ids')` 走 ir.rule（如果 caller context 不是 sudo）— 目前 caller 都是 cron / subscription_lifecycle_mixin / controller 直 unlink，預期都是 sudo / admin context，但 `_do_cleanup` 與 `unlink()` 都是 public method
+- **風險**：未來 callable surface 擴大（如 non-sudo caller）+ user 對某些 user-scope MCP 無 read 權限（cross-workspace edge case） → `mapped` 漏掉那些 row → 沒 unlink → 變 zombie
+- **建議落點**：
+  - A：`self.project_ids.mapped('mcp_server_ids').sudo().filtered(...).unlink()` — sudo mapped 結果
+  - B：`self.sudo().project_ids.mapped('mcp_server_ids').filtered(...).sudo().unlink()` — sudo 整條 walk
+- **何時**：next touch `cloud_service.py` cleanup path PR 順手做
+
+## F15 — `_do_cleanup` retry-on-error semantics 文件化（R2-1）
+
+- **Severity**: info（doc invariant only，無 code change）
+- **Origin**: round 2 verdict R2-1（code-reviewer 提的 info caveat）
+- **狀況**：subscription cron 在 cancel 後再 trigger `_do_cleanup` 是 retry-friendly 設計（state='error' 不擋）— 後人若加 `if state == 'error': return` short-circuit guard 會打破 auto-retry
+- **建議落點**：
+  - 在 [[mcp-project-decouple]] §Invariants 新增「`_do_cleanup` 必須 re-entry safe — `state='error'` 不該 short-circuit return」一條（已部分於 cycle 2 finalize 補 — see Inv #4 helm fail state ordering description）
+  - 在 `cloud_service.py:1119` docstring 加 retry note
+- **何時**：reporter inline 處理（cycle 2 完成）— 或下個 touch `_do_cleanup` PR
+
+## F16 — `mcp_server` / `mcp_tool` rule-count parity lint check（R2-2）
+
+- **Severity**: info
+- **Origin**: round 2 verdict R2-2（code-reviewer 提）
+- **狀況**：無 automated lint 檢查 `mcp_server` / `mcp_tool` rule-count parity。依賴人眼 / [[mcp-project-decouple]] §Invariant #5 doc。任何後人加第 4 對 rule 漏對等 = B1-style sub-model leak
+- **建議落點**：
+  - A：post-migrate 加 invariant assertion — `SELECT COUNT(*) FROM ir_rule WHERE model_id IN (mcp_server, mcp_tool) GROUP BY model_id` — 兩個 count 不等 raise
+  - B：CI lint script grep `ir_rules.xml` 內 mcp_server vs mcp_tool record count
+  - C：dev-only `make check-mcp-rule-parity` target
+- **何時**：next hardening sprint / next ir_rules.xml touch PR
+
+## F17 — `state='error'` re-entry test case（R2-3）
+
+- **Severity**: minor
+- **Origin**: round 2 verdict R2-3（pr-test-analyzer 提）
+- **狀況**：`_do_cleanup` 在 `state='error'` 時 re-entry 行為未鎖 test — 後人若加 short-circuit guard（見 F15）會打破 retry，無 regression lock
+- **建議落點**：`src/tests/test_mcp_project_lifecycle.py` 加 case：
+  ```python
+  def test_do_cleanup_reentry_after_error_state(self):
+      """If _do_cleanup left state='error' (helm uninstall fail),
+      a subsequent _do_cleanup call must retry (not short-circuit)."""
+      service = self._make_service_in_error_state(...)
+      # _do_cleanup again should retry helm uninstall, not no-op
+      with patch(...) as mock_helm:
+          service._do_cleanup()
+          mock_helm.assert_called_once()
+  ```
+- **何時**：next test hardening PR
+
+## F18 — `_create_admin_user` helper docstring 過 cautious（R2-4）
+
+- **Severity**: trivial
+- **Origin**: round 2 verdict R2-4（pr-test-analyzer 提）
+- **狀況**：`_create_admin_user` helper 的 docstring 對 `(4, ...)` stale-cache 行為的 claim 是 unverified Odoo 民俗，但實際用 `(6, 0, ...)` 是 idiomatic — 無害 over-cautious
+- **建議落點**：clean docstring，移除 unverified Odoo 民俗 claim，保留「use `(6, 0, ...)` 的 idiomatic reason」就好
+- **何時**：reporter 順手清 or 留下個 touch 順手做（trivial — 不擋任何 PR）
+
+## F19 — Round 1 17 minor / info 集合（cross-reference round 1 verdict）
+
+- **Severity**: minor / info（mixed）
+- **Origin**: `docs/refactor/pr-review-verdict-mcp-2026-05-18.md §Minor / Info`（commit `e9a5927`）— round 1 reviewer 5-agent 平行 review 提的 17 條 minor，本 verdict 不擋 round 2 approval
+- **內容 cluster**（不在本 doc 重複列每條，避免 ephemeral 雜訊）：
+  - **Silent failure** (silent-failure-hunter H2/H3/M1-M5)：cleanup step 1 unlink 無 try/except、SSE streaming MCP fail silent fallback、migration pre-flight assertion 缺失、cron retry 無 user notification — 7 條
+  - **Type design** (type-design-analyzer F1/F5/F6/F7)：D4 partial SQL CHECK 雙保險、CSV 1,1,1,1 可緊縮、`auto_created` write protection、`scope` 二元假設 — 4 條
+  - **Test coverage hole** (pr-test-analyzer)：archived project + user-scope MCP 場景、localhost URL fallback 場景、`_simulate_auto_create` helper drift — 3 條
+  - **Code clarity** (code-reviewer)：Controller "MCP Server not found" 對 system-scope misleading、`self.project_ids[:1]` 非確定性 ordering — 2 條
+  - **CAQA typo**：21 AC → 25 AC — ✅ DONE（reporter phase 已修）
+- **建議落點**：
+  - 多數 silent-failure cluster 等 F9 observability sprint 一併 batch
+  - Type design 等 next mcp_server.py touch PR 順手評估
+  - Test coverage 跟 F8 batch
+  - Code clarity 等 next paas.py touch PR 順手做
+- **何時**：分散 batch，不獨立 PR
+
+## F20 — Controller manual check helper + `_get_user_mcp_tools` mixin abstraction（/simplify）
+
+- **Severity**: minor
+- **Origin**: round 1 verdict §`/simplify` 後是否還有可簡化處
+- **狀況**：
+  - Controller manual check pattern `if not server.exists() or server.project_id.cloud_service_id.id != service.id` 在 `paas.py:1335/1353/1366/1384` 重複 4 次 — 可抽 `_check_mcp_server_belongs_to_service(server, service)` helper（與 F19 minor #12 一併）
+  - `_get_user_mcp_tools` 在 `discuss_channel.py:310` 與 `_get_user_mcp_tools_for_channel` 在 `ai_assistant.py:614` chain walk 邏輯一樣，可抽 mixin function。Controller path 自己重寫一遍是 cursor invalidation 考量（line 415 註解有提及）— **可不簡化，但 surface 此 duplication 給未來 maintainer**
+- **建議落點**：next touch 對應 file 的 PR 順手做。Test #26（AC #14）已是 behavioural lock，helper-wrap-safe（helper 內部走舊鏈仍會被抓）— 抽 helper 不會破測試
+- **何時**：next paas.py / ai_assistant.py 整理 PR
+
+---
+
 ## Cross-cutting: 給未來 PR 作者的 hint
 
 每個改動下列檔案的 PR，自查本 doc 對應條目：
-- `src/security/ir_rules.xml` / `src/security/ir.model.access.csv` → F1 / F4
-- `src/migrations/<v>/post-migrate.py` → F5 (xmlid drift 防呆)
+- `src/security/ir_rules.xml` / `src/security/ir.model.access.csv` → F1 / F4 / F16
+- `src/migrations/<v>/post-migrate.py` → F5 (cycle 1 xmlid drift 防呆) / F13 (cycle 2 task ACL 對齊)
 - `src/models/discuss_channel.py` → F2 / F3 / F6 / F9
-- `src/controllers/ai_assistant.py` → F4 / F10
-- `src/tests/test_*.py` → F8
+- `src/models/cloud_service.py` → F14 / F15
+- `src/models/mcp_server.py` → F19 (type design / test coverage cluster)
+- `src/controllers/ai_assistant.py` → F4 / F10 / F12 / F20
+- `src/controllers/paas.py` → F19 / F20
+- `src/tests/test_*.py` → F8 / F17 / F19
 - `src/static/src/paas/layout/` → F7
 
 ## See also
 
-- [[cloud-service-project-decouple]] §Consequences — 本次決策後仍要持續注意的負面影響
-- [[odoo-addon-std-rule-symmetric-deactivation]] — F1 的 doc 形式
+- [[cloud-service-project-decouple]] §Consequences — cycle 1 決策後仍要持續注意的負面影響
+- [[mcp-project-decouple]] §Consequences + §Round 2 改動敘事 — cycle 2 決策後仍要持續注意的負面影響
+- [[odoo-addon-std-rule-symmetric-deactivation]] — F1 / F13 的 doc 形式
 - [[cross-workspace-task-data-leak]] §Hardening 建議 — F5 的更完整 context
-- 原始 review：
-  - `docs/refactor/caqa-2026-05-16.md` §Caveat 清單（M1-M4 + L1-L3 來源）
-  - `docs/refactor/pr-review-verdict-2026-05-17.md` §Defer to reporter（R-mobile, R-test-hardening, R-silent-degradation）+ §Recommendation（reporter follow-up 1-9 整合）
-  - `docs/refactor/pr-description-draft.md` §Follow-up（候選清單）
+- [[direct-unlink-bypass-cleanup-hook]] — F14 的根因 context
+- [[system-mcp-create-acl-bypass]] — F16 的根因 context
+- [[tag-scoped-test-misses-full-u-failures]] — F19 「test coverage hole」cluster 的根因 context
+- 原始 review（合成來源，本 doc 引用不複製）：
+  - `docs/refactor/caqa-2026-05-16.md` §Caveat 清單（M1-M4 + L1-L3 — cycle 1）
+  - `docs/refactor/caqa-2026-05-18.md` §Caveat / Out-of-scope（C1 + F12 — cycle 2）
+  - `docs/refactor/pr-review-verdict-2026-05-17.md` §Recommendation（reporter follow-up 1-9 整合 — cycle 1）
+  - `docs/refactor/pr-review-verdict-mcp-2026-05-18.md` §Minor / Info（17 條 round 1 minor — cycle 2）
+  - `docs/refactor/pr-review-verdict-mcp-round2-2026-05-18.md` §新 minor / info（R2-1 ~ R2-4 — cycle 2 round 2）
+  - `docs/refactor/pr-description-draft.md` §Follow-up（cycle 1 候選清單）

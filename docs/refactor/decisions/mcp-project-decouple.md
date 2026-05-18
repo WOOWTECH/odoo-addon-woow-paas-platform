@@ -1,10 +1,10 @@
 # Decision: MCP `cloud_service_id` → `project_id` Refactor
 
 **Date**: 2026-05-18
-**Status**: draft (pending reporter finalize)
+**Status**: final
 **Components**: `woow_paas_platform.mcp_server`, `woow_paas_platform.mcp_tool`, `project.project`, `cloud_service`, `ir.rule`
 
-> Draft — finalize 在 reporter phase。此版本反映 plan 階段 leader 拍板的 6 個決策（D1/D2/D3/D4/D5/D6），實作後可能補充。
+> Finalized 2026-05-18 reporter phase。本版反映 7-phase 跑完後的完整設計（plan 6 decisions + reviewer round-1 fix loop 補的 ACL rule split + cleanup hook override）。後人改本區前先讀 §Invariants（1-8 條 + Round 2 改動敘事）。
 
 ## Context
 
@@ -136,6 +136,59 @@ WHERE r.model_id IN (
 
 **對未來而言**：若使用者實際 feedback「我都從 project 進 chat，找不到 MCP 設定」，再評估搬 — 屬於 UX feature 而非 schema refactor。
 
+## Round 2 改動敘事（reviewer NEEDS REVISION → APPROVED WITH CAVEATS）
+
+本次 refactor 經兩輪 review，round 1 reviewer 補抓 CAQA 漏掉的 2 BLOCKER + 2 MAJOR — 對未來 refactor cycle 有結構性教訓，故記錄於此。
+
+### CAQA 漏抓的兩個盲點
+
+CAQA report (`docs/refactor/caqa-2026-05-18.md`) 對 14 invariants 全 verify ✅，verdict 為 APPROVED WITH CAVEATS。但 §同源 code path 檢查（line 219-234）明文排除 `tests/` 與 `migrations/`，理由是「tester fixture 故意保留舊鏈 reference 以鎖 regression」。**這個 exclude 太寬**：
+
+| 盲點 | CAQA 漏抓內容 | Reviewer 補抓 |
+|---|---|---|
+| **盲點 A（tests/ 範圍）** | `test_mcp_integration.py` 內 3 個 既有 class（`TestAutoCreateMCPServer` / `TestMCPServerCronRetry` / `TestMCPServerCascadeDelete`，共 14 個 test method）仍引用 `cloud_service.user_mcp_server_ids` 與 `mcp_server.cloud_service_id` 舊 schema | 10 處 stale schema reference → 全 suite `-u woow_paas_platform --test-enable` 必 `ValueError: Invalid field 'cloud_service_id'` red |
+| **盲點 B（service.unlink 全 path）** | CAQA Inv #4 verified `_do_cleanup` 自身順序對，但**沒驗證所有 `service.unlink()` path 都經 `_do_cleanup`** | `paas.py:1953, 1966, 2156` 3 條 controller direct unlink + `mcp_server.py:787` cron self-unlink 都 bypass `_do_cleanup` → user-scope MCP zombie |
+
+### Reviewer 用 5-agent multi-agent 補 CAQA
+
+Round 1 reviewer 透過 `/pr-review-toolkit:review-pr` 跑 5 個 sub-agent（code-reviewer / pr-test-analyzer / silent-failure-hunter / type-design-analyzer / comment-analyzer）。Multi-agent **無分歧**：
+
+- BLOCKER 1（stale test schema）— code-reviewer + pr-test-analyzer 雙簽
+- BLOCKER 2（direct unlink → zombie MCP）— code-reviewer + silent-failure-hunter（H4）雙簽
+- MAJOR 1（system create data leak）— code-reviewer 獨自抓到（CAQA Inv #6 只 verify read leg always-true，沒檢查 `perm_create=True` 在 always-true leg 下的 implication）
+- MAJOR 2（helm fail state）— code-reviewer + silent-failure-hunter（H1）雙簽
+
+5-agent 平行 review 是 CAQA 單 agent 視角無法替代的補強路徑。
+
+### Leader 的 fix loop coordination
+
+Round 1 verdict 退回**三個 phase**（tester + impl + planner），leader 並聯 dispatch + 串聯 verify：
+
+```
+e9a5927  round 1 verdict (NEEDS REVISION, 2 BLOCKER + 2 MAJOR)
+   ↓
+4ff8f4b  planner re-doc       — MAJOR 1 rule split 設計（Inv #5/#6 重寫 + Inv #8 新增）
+   ↓
+fdf51fc  impl ACL             — 6-rule split + migration step 5 retire 舊 rule
+   ↓
+cf34a65  impl unlink + state  — BLOCKER 2 + MAJOR 2 一輪解（unlink override + helm fail → state='error'）
+   ↓
+97b5313  tester port + 9 regression test — BLOCKER 1 + 鎖 BLOCKER 2 / MAJOR 1 / MAJOR 2
+   ↓
+9f147d8  round 2 verdict (APPROVED WITH CAVEATS, 4 finding 全 closed + 4 new minor)
+```
+
+Leader 選 **Option A (port 既有 class)** 而非 Option B (retire 3 class)：port + 9 regression test 比 retire 完整（保留既有 test 名 + 補 BLOCKER/MAJOR regression）。Tester 判斷對。
+
+### 為什麼這對未來 refactor cycle 重要
+
+1. **CAQA exclude 範圍要 narrowly scope**：「tests/ 排除」應該只 cover tester 故意建立的 regression fixture，不該 cover 既有 test 模組的 stale schema reference。未來 CAQA template 須區分這兩種 tests/ 內容。
+2. **「同源 code path 檢查」必須 walk 全 unlink/delete path**，不只 verify `_do_cleanup` 自身。Pattern: `grep -rn "model_name\.unlink\(\)\|env\['model'\]\.unlink\(\)" src/`。
+3. **Always-true ACL leg 必須分 read direction 與 create direction 評估**：read direction 永真可能是設計（system-scope 公開資源），create direction 永真**永遠是漏洞**（user 自創 system row → 全 instance 可讀）。CAQA invariant template 須拆 read / create 兩個 verify check。
+4. **Multi-agent review 對單一 reviewer (CAQA) 視角的補強價值已被驗證**：5-agent 抓 4 個 CAQA 漏的 finding。未來高風險 refactor（schema + ACL + lifecycle 三平面同改）應預設走 multi-agent review，不只靠 CAQA。
+
+對應 follow-up 已列入 `docs/refactor/followups/follow-ups.md`（R2-1 ~ R2-4）。
+
 ## Consequences
 
 ### Positive
@@ -176,17 +229,34 @@ WHERE r.model_id IN (
 
    改順序會讓 service 刪後留 MCP zombie（url 失效但 row 還在），最終由 D5 constraint 在 user 動作中 raise — 但 user-facing error 比 quiet cleanup 差。
 
-5. **`mcp_server` ACL 必須有**四條** rule 對等存在（MAJOR 1 fix）**：
-   - `mcp_server_rule_system_readonly`（read only on `scope='system'`）
-   - `mcp_server_rule_workspace_user`（full perm on `scope='user'` + workspace member）
-   - `mcp_tool_rule_system_readonly`（read only on `server_id.scope='system'`）
-   - `mcp_tool_rule_workspace_user`（full perm on `server_id.scope='user'` + workspace member）
+5. **`mcp_server` + `mcp_tool` ACL 必須有**六條** rule 對等存在（MAJOR 1 fix，3 mcp_server × 3 mcp_tool 對等鏡像）**：
 
-   Tool 走 `server_id` 反向 — 任何加 `mcp_server` ACL 但漏 `mcp_tool` 對等 rule = sub-model leak（B1-style）。任何把四條合併回單一 dual-leg rule = 重炸 reviewer MAJOR 1 抓到的 create-direction leak。雖然兩個 model 都是自家、無 std rule 對等問題，但 ACL 對等性原則一樣適用 — see [[odoo-addon-std-rule-symmetric-deactivation]] §Why pattern。
+   | mcp_server | mcp_tool（走 `server_id` 反向） | Groups | Domain | Perms |
+   |---|---|---|---|---|
+   | `mcp_server_rule_system_readonly` | `mcp_tool_rule_system_readonly` | `base.group_user` | `scope='system'` / `server_id.scope='system'` | `R=True, W/C/U=False` |
+   | `mcp_server_rule_workspace_user` | `mcp_tool_rule_workspace_user` | `base.group_user` | `scope='user' AND workspace chain` / 同上反向 | `R/W/C/U=True` |
+   | `mcp_server_rule_admin_full` | `mcp_tool_rule_admin_full` | `base.group_system` | `[(1, '=', 1)]`（unconditional） | `R/W/C/U=True` |
+
+   **為什麼需要 admin_full**：`group_system` 透過 `_group_implied_ids` 繼承 `group_user`，OR-combined 後 `system_readonly.perm_create=False` 會把 admin 後台 create 也擋掉（admin 想在 backend 維護 system MCP 失敗）。`admin_full` 套 `group_system` + `domain=[(1,'=',1)]` short-circuit deny。**Odoo per-group rule OR semantics 決定** — `ir_rule.py:140-168`。
+
+   **invariant**：
+   - 任何加 `mcp_server` ACL 但漏 `mcp_tool` 對等 rule = sub-model leak（B1-style）
+   - 任何把六條合併回單一 dual-leg rule = 重炸 reviewer MAJOR 1 抓到的 create-direction leak
+   - 任何拿掉 `*_admin_full` 任一條 = admin 後台 system MCP 維護壞掉（partial failure mode 比 full failure 更難 debug）
+   - `mcp_server` rule count 必須 ≡ `mcp_tool` rule count（CAQA 級 lint，後人若加第 4 對 rule 必須加雙邊）
+
+   雖然兩個 model 都是自家、無 std rule 對等問題，但 ACL 對等性原則仍適用 — see [[odoo-addon-std-rule-symmetric-deactivation]] §Why pattern + [[mcp-acl-6-rule-split]] pattern。
 
 6. **`mcp_server_rule_system_readonly` 的 system-scope domain 是故意 always-true（對 read direction），但 `perm_create=False` / `perm_write=False` / `perm_unlink=False` 是 invariant（MAJOR 1 fix）**。Domain `[('scope', '=', 'system')]` — 對任何 `base.group_user` 與任何 system-scope row 永真。**read direction 的 always-true 是設計**（system MCP 是平台級工具，所有 internal user 透過 ai.assistant 用）；但 **create/write/unlink direction 的 always-true 是 MAJOR 1 漏洞**（user 自創 system MCP → 全 instance 可讀 → phishing / forgery / DoS 攻擊面）。後人若把這條 rule 的 perm_create / perm_write / perm_unlink 改 True，或把 system_readonly 與 workspace_user 合併回單一 dual-leg rule，立刻重炸 MAJOR 1（reviewer 已 catch 一次）。Read direction always-true 跟 [[cross-workspace-task-data-leak]] B1 的 std rule always-true 性質不同（B1 是 std rule 對 employees-privacy project 的隱含放行；這裡是明確 scope='system' 的顯式設計）。
 
-7. **`mcp_server.url` 算法仍走 `self.project_id.cloud_service_id` 取 backing service**。Schema 上看不到 service 但邏輯上依賴 service — 任何 inline `self.cloud_service_id` 改寫漏掉 `_model_build_mcp_endpoint_url` 會炸（NoneType chain）。Migration 後 grep `self.cloud_service_id` 在 `mcp_server.py` 內必須 0 hit。
+7. **`mcp_server.url` 由 `cloud_service._model_build_mcp_endpoint_url` 在 auto-create 時計算並 snapshot 寫入**。演算法物理上歸 service（`helm_release_name + helm_namespace + sidecar_port + endpoint_path`），因此**留在 `cloud_service.py:1015` 而非搬到 `mcp_server.py`** — schema 上看不到 service，邏輯上仍依賴 backing service。
+
+   **本欄位是 snapshot，不是 dynamic compute**：service 重命名 / 換 namespace 後 `mcp_server.url` 不會自動同步，須由 caller 顯式重算或重建 row。屬於 pre-existing 行為（plan §Risk #4），不在本次 refactor scope。
+
+   **後人 verify**：
+   - `mcp_server.py` 內 grep `self.cloud_service_id` 必 0 hit（這是 trivially pass 的 sanity，因為演算法不在這個檔案 — 真正守護點在 `cloud_service._model_build_mcp_endpoint_url`）
+   - `cloud_service.py::_model_build_mcp_endpoint_url` 內若加 walk path，必須是 `self.project_ids[:1].mcp_server_ids` 反向（不走舊 `user_mcp_server_ids` 反向 O2M — 已移除）
+   - 若未來把 URL 改成 dynamic compute（為了解 stale URL 風險），須走獨立 plan 並評估 chat-runtime 效能（每次 tool call 額外 4-jump walk）
 
 8. **System-scope MCP create 必須限制在 sudo() / admin (`group_system`) / demo data XML 三條路徑（MAJOR 1 invariant）**。`base.group_user` 透過 ORM `env['woow_paas_platform.mcp_server'].create({'scope': 'system', ...})` 必須 raise `AccessError`。Enforcement：`mcp_server_rule_system_readonly.perm_create=False`（套 base.group_user）+ `mcp_server_rule_workspace_user` domain 限 `scope='user'`。合法 create paths：
    - `_model_auto_create_mcp_server` 用 sudo() create 的是 scope='user'，不適用此 invariant（被 D5 constraint 覆蓋）
@@ -199,19 +269,33 @@ WHERE r.model_id IN (
 ## See also
 
 - Patterns:
-  - [[paas-workspace-member-acl-tightening]] — `mcp_server` / `mcp_tool` ACL 的三件套
+  - [[paas-workspace-member-acl-tightening]] — `mcp_server` / `mcp_tool` ACL 的三件套（workspace-scoped CRUD）
   - [[odoo-addon-std-rule-symmetric-deactivation]] — 雖然本次 model 是自家、無 std rule 對等，但「ACL 對等」原則仍適用（mcp_server ↔ mcp_tool）
+  - [[mcp-acl-6-rule-split]] — 本次 MAJOR 1 fix 抽出的 pattern（`system_readonly` + `workspace_user` + `admin_full` per-model triplet，共 6 條 rule）
+  - [[cloud-service-unlink-override-cleanup]] — 本次 BLOCKER 2 fix 抽出的 pattern（parent `ondelete='set null'` + child cleanup via `unlink()` override，所有 caller path 全 catch）
 - Pitfalls:
   - [[cross-workspace-task-data-leak]] — B1 pitfall，sub-model 對等 leak 範例（mcp_tool 必須跟 mcp_server 一起加 rule）
+  - [[direct-unlink-bypass-cleanup-hook]] — BLOCKER 2 踩坑（controller direct unlink 繞 `_do_cleanup`，`@api.constrains` 救不了 parent-field 變動）
+  - [[system-mcp-create-acl-bypass]] — MAJOR 1 踩坑（dual-leg rule `perm_create=True` 對 always-true leg 是 privilege escalation surface）
+  - [[tag-scoped-test-misses-full-u-failures]] — BLOCKER 1 踩坑（CAQA 用 `--test-tags` scope-limited 驗綠，漏抓 cross-module stale schema reference）
 - Plan:
-  - `docs/refactor/plan-mcp-project-decouple.md`（本 decision 的 implementation plan）
-- Inputs:
-  - Brief from refactor-leader, 2026-05-18
-  - Brainstorm with refactor-leader, 2026-05-18（D1-D6 拍板）
-- 關鍵 code（plan 落地後填）:
-  - `src/migrations/18.0.1.0.24/post-migrate.py:?`（backfill + orphan cleanup + drop column）
-  - `src/security/ir_rules.xml:?`（兩條新 rule）
-  - `src/models/mcp_server.py:?`（`project_id` 欄位 + 兩條 constraint + `_model_build_mcp_endpoint_url` 路徑改）
-  - `src/models/cloud_service.py:?`（`_do_cleanup` hook + 移除 `user_mcp_server_ids` O2M）
-  - `src/models/project_project.py:?`（新增 `mcp_server_ids` O2M）
-  - `src/tests/test_mcp_acl_isolation.py`（B1-style cross-workspace regression）
+  - `docs/refactor/plan-mcp-project-decouple.md`（本 decision 的 implementation plan，25 AC）
+- Inputs（reporter 合成來源 — 不在 durable docs 重複，只列引用）:
+  - `docs/refactor/test-scope-report-mcp-2026-05-18.md`（26 cases red proof + cycle-3 fixture rationale）
+  - `docs/refactor/test-coverage-mcp-project-decouple.md`（test-explainer 視角 coverage report）
+  - `docs/refactor/caqa-2026-05-18.md`（CAQA 14 invariants check + C1 / F12 / Inv #7 caveat）
+  - `docs/refactor/pr-review-verdict-mcp-2026-05-18.md`（round 1 NEEDS REVISION，2 BLOCKER + 2 MAJOR + 17 minor）
+  - `docs/refactor/pr-review-verdict-mcp-round2-2026-05-18.md`（round 2 APPROVED WITH CAVEATS，4 finding closed + 4 new minor）
+- 關鍵 code（finalize 時填入實際 line）:
+  - `src/__manifest__.py:3` — version `18.0.1.0.24`
+  - `src/migrations/18.0.1.0.24/post-migrate.py:49-180` — 5-step migration（backfill / orphan archive / drop column / noupdate flip / retire 舊 dual-leg rule）
+  - `src/security/ir_rules.xml:134-216` — 6 rule split（3 mcp_server × 3 mcp_tool 對等）
+  - `src/security/ir.model.access.csv:14,16` — `base.group_user` 對 `mcp_server` / `mcp_tool` 從 `1,0,0,0` → `1,1,1,1`
+  - `src/models/mcp_server.py:58-64` — `project_id` 欄位（`ondelete='cascade'`, indexed）
+  - `src/models/mcp_server.py:111-139` — D4 + D5 兩條 `@api.constrains`
+  - `src/models/cloud_service.py:1015-1036` — `_model_build_mcp_endpoint_url`（演算法物理歸 service）
+  - `src/models/cloud_service.py:1119-1171` — `_do_cleanup` 三步 + helm fail → state='error'（MAJOR 2 fix）
+  - `src/models/cloud_service.py:1176-1201` — `unlink()` override（BLOCKER 2 fix，catch direct unlink path）
+  - `src/models/project_project.py:?` — 新增 `mcp_server_ids = fields.One2many(..., 'project_id', ...)`
+  - `src/models/discuss_channel.py:310` + `src/controllers/ai_assistant.py:614` — 消費鏈走 `task.project_id.mcp_server_ids`
+  - `src/tests/test_mcp_acl_isolation.py` + `test_mcp_project_lifecycle.py` + `test_mcp_chat_consumption.py` + `test_mcp_project_decouple_migration.py` + `test_mcp_integration.py::TestMcpProjectScopeConstraints` — 共 26 + 9 = 35 regression cases
