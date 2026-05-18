@@ -49,4 +49,9 @@ from . import test_chatter_service_injection
 from . import test_ux_routing_views
 # refactor: CAQA §E HIGH BLOCKER B1 — cross-ws task read regression
 from . import test_cross_workspace_task_isolation
+# refactor: MCP cloud_service_id → project_id (red phase)
+from . import test_mcp_project_decouple_migration
+from . import test_mcp_project_lifecycle
+from . import test_mcp_acl_isolation
+from . import test_mcp_chat_consumption
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

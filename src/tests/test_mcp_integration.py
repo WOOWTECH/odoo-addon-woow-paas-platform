@@ -785,3 +785,181 @@ class TestMCPServerModel(TransactionCase):
         self.assertFalse(server.auto_created)
         self.assertEqual(server.sync_retry_count, 0)
         self.assertEqual(server.state, 'draft')
+
+
+# ====================================================================== #
+# TDD red phase — mcp_server scope/project_id consistency constraints     #
+# (Plan §Constraint AC #6 & #7, Decision §Invariants 2 & 3)               #
+#                                                                         #
+# Today (pre-implementation):                                             #
+#   * ``mcp_server.project_id`` does not exist.                           #
+#   * No ``@api.constrains`` on ``scope`` / ``project_id``.               #
+#                                                                         #
+# Red expectation:                                                        #
+#   1. Field guard ``self.fail()`` → AssertionError until ``project_id``  #
+#      is added (AC #1).                                                  #
+#   2. Once the field exists but the constraint is missing, ``create``    #
+#      with violating values does NOT raise → ``assertRaises`` fails →    #
+#      AssertionError.                                                    #
+# ====================================================================== #
+
+
+@tagged('post_install', '-at_install')
+class TestMcpProjectScopeConstraints(TransactionCase):
+    """AC #6 / #7 — D4 & D5 scope/project consistency constraints."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Workspace = cls.env['woow_paas_platform.workspace']
+        cls.Template = cls.env['woow_paas_platform.cloud_app_template']
+        cls.Service = cls.env['woow_paas_platform.cloud_service']
+        cls.Project = cls.env['project.project']
+        cls.McpServer = cls.env['woow_paas_platform.mcp_server']
+
+    def setUp(self):
+        super().setUp()
+        if 'project_id' not in self.McpServer._fields:
+            self.fail(
+                "mcp_server.project_id field missing — constraint tests "
+                "rely on the new schema (Plan AC #1). Implement schema "
+                "before constraints."
+            )
+
+        self.workspace = self.Workspace.sudo().create({
+            'name': 'WS Constraint MCP',
+        })
+        self.template = self.Template.sudo().create({
+            'name': 'Tmpl Constraint MCP',
+            'slug': 'tmpl-constraint-mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'tmpl-c-mcp',
+            'helm_chart_version': '1.0.0',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+        })
+        self.bound_service = self.Service.sudo().create({
+            'name': 'Constraint Bound Svc',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_release_name': 'constraint-svc',
+            'helm_namespace': 'paas-ws-c',
+        })
+        self.project_bound = self.Project.sudo().create({
+            'name': 'Constraint Bound Project',
+            'cloud_service_id': self.bound_service.id,
+        })
+        self.project_unbound = self.Project.sudo().create({
+            'name': 'Constraint Unbound Project',
+        })
+
+    # ------------------------------------------------------------------ #
+    # AC #6 / D4 invariant — scope='user' requires project_id NOT NULL    #
+    # ------------------------------------------------------------------ #
+    def test_ac6_constraint_user_scope_requires_project(self):
+        """AC #6 / D4: scope='user' with project_id NULL must raise ValidationError.
+
+        The Python ``@api.constrains('scope', 'project_id')`` must
+        enforce ``scope='user' ⇔ project_id IS NOT NULL`` (decision §3).
+        Without the constraint, ORM accepts the inconsistent row → the
+        whole D4 invariant breaks (AI chat would see a user-scope MCP
+        with no project to anchor its workspace).
+        """
+        # ValidationError is the canonical Odoo constraint failure.
+        # We import lazily to avoid import-time coupling on stub envs.
+        from odoo.exceptions import ValidationError
+
+        with self.assertRaises(
+            ValidationError,
+            msg=(
+                "AC #6 / D4: creating scope='user' with project_id=False "
+                "did not raise ValidationError. Add "
+                "_check_scope_project_consistency to mcp_server."
+            ),
+        ):
+            self.McpServer.sudo().create({
+                'name': 'Bad User No Project',
+                'url': 'http://x/mcp',
+                'transport': 'streamable_http',
+                'scope': 'user',
+                'project_id': False,
+            })
+
+    # ------------------------------------------------------------------ #
+    # AC #6 / D4 invariant — scope='system' requires project_id IS NULL   #
+    # ------------------------------------------------------------------ #
+    def test_ac6_constraint_system_scope_excludes_project(self):
+        """AC #6 / D4: scope='system' with project_id set must raise.
+
+        The bi-directional invariant: scope='system' implies
+        project_id IS NULL.  Without enforcement, an operator setting
+        a system MCP on a project would create a row that breaks the
+        D5 reasoning (system MCP doesn't belong to a project — it's
+        platform-wide).
+        """
+        from odoo.exceptions import ValidationError
+
+        with self.assertRaises(
+            ValidationError,
+            msg=(
+                "AC #6 / D4: creating scope='system' with project_id set "
+                "did not raise ValidationError. The constraint must check "
+                "BOTH directions (scope='user' ⇔ project_id NOT NULL)."
+            ),
+        ):
+            self.McpServer.sudo().create({
+                'name': 'Bad System With Project',
+                'url': 'http://sys/mcp',
+                'transport': 'streamable_http',
+                'scope': 'system',
+                'project_id': self.project_bound.id,
+            })
+
+    # ------------------------------------------------------------------ #
+    # AC #7 / D5 invariant — user-scope MCP requires bound project        #
+    # ------------------------------------------------------------------ #
+    def test_ac7_constraint_user_scope_requires_bound_project(self):
+        """AC #7 / D5: user-scope MCP must point to a project with cloud_service_id.
+
+        Physical reality: user-scope MCP is a sidecar wrapper (``url``
+        derives from ``service.helm_release_name + helm_namespace``).
+        An unbound project (no cloud_service_id) has no service → no
+        sidecar → the MCP has no physical anchor.  D5 puts this
+        invariant in schema-level constraint rather than ACL filter
+        (B1 pitfall: never patch root-cause invariants with rule
+        filters).
+        """
+        from odoo.exceptions import ValidationError
+
+        with self.assertRaises(
+            ValidationError,
+            msg=(
+                "AC #7 / D5: creating scope='user' with an unbound project "
+                "did not raise ValidationError. Add "
+                "_check_user_scope_requires_bound_project — domain "
+                "project_id.cloud_service_id IS NOT NULL."
+            ),
+        ):
+            self.McpServer.sudo().create({
+                'name': 'Bad User On Unbound Project',
+                'url': 'http://x/mcp',
+                'transport': 'streamable_http',
+                'scope': 'user',
+                'project_id': self.project_unbound.id,
+            })
+
+        # Positive sanity: same row with bound project should succeed.
+        try:
+            ok = self.McpServer.sudo().create({
+                'name': 'OK User On Bound Project',
+                'url': 'http://chat-svc-mcp.paas-ws-c.svc.cluster.local:3001/mcp',
+                'transport': 'streamable_http',
+                'scope': 'user',
+                'project_id': self.project_bound.id,
+            })
+        except ValidationError as exc:
+            self.fail(
+                f"AC #7 / D5 over-correction: scope='user' on a bound "
+                f"project raised ValidationError: {exc}. Constraint must "
+                f"only block unbound projects."
+            )
+        self.assertTrue(ok.exists())
