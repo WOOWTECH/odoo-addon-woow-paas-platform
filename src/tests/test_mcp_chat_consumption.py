@@ -228,13 +228,21 @@ class TestMcpChatConsumption(TransactionCase):
             'server_id': system_mcp.id,
         })
 
-        # Build the assistant — sh from data file or build minimal record.
-        # We follow the safe path: take any existing system-mcp-capable
-        # assistant if seeded, otherwise create one against the inherited
-        # ai.assistant model.
+        # Build the assistant — `ai.assistant.config_id` is required
+        # NOT NULL (ai_base_gt/models/ai_assistant.py:17) so we must
+        # supply a minimal `ai.config` record before creation.
+        ai_config = self.env['ai.config'].sudo().create({
+            'name': 'AC15 Test Config',
+            'type': 'chatgpt',
+            'api_key': 'sk-test-ac15',
+            'model': 'gpt-4o-mini',
+            'temperature': 0.7,
+            'max_tokens': 2000,
+        })
         Assistant = self.env['ai.assistant']
         assistant = Assistant.sudo().create({
             'name': 'TestSystemAssistant',
+            'config_id': ai_config.id,
             'mcp_server_ids': [(6, 0, [system_mcp.id])],
         })
 

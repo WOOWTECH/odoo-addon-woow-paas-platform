@@ -187,6 +187,20 @@ class TestMcpProjectDecoupleMigrationBehavior(TransactionCase):
     def setUp(self):
         super().setUp()
         self.migrate = _load_migrate_function()
+        # Restore legacy ``cloud_service_id`` column so the migration can
+        # be exercised in a state matching prod-upgrade (column-present
+        # when migrate() runs, column-dropped when migrate() finishes).
+        # Implementation's post-migrate.py guards the orphan-archive
+        # branch on this column's presence; without restoring it the
+        # behaviour suite degenerates to the second-run idempotent path
+        # and never tests the real backfill/archive logic.
+        # Leader ruling 2026-05-18 (D3=A "one-shot drop") authorises
+        # this fixture-side restore — tester fixture only, no production
+        # code touched.
+        self.env.cr.execute(
+            "ALTER TABLE woow_paas_platform_mcp_server "
+            "ADD COLUMN IF NOT EXISTS cloud_service_id INTEGER"
+        )
         Workspace = self.env['woow_paas_platform.workspace']
         Template = self.env['woow_paas_platform.cloud_app_template']
         Service = self.env['woow_paas_platform.cloud_service']
