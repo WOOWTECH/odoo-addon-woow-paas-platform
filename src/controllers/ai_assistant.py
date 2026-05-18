@@ -480,7 +480,14 @@ class AiAssistantController(Controller):
                         })
                         yield f'data: {event_data}\n\n'
             except AIClientError as exc:
-                error_data = json.dumps({'error': exc.message, 'done': True})
+                _logger.exception(
+                    'AI stream failed for channel %s (assistant=%s): %s | detail=%s',
+                    channel_id, assistant.name, exc.message, exc.detail,
+                )
+                error_message = exc.message
+                if exc.detail:
+                    error_message = f'{exc.message} — {exc.detail}'
+                error_data = json.dumps({'error': error_message, 'done': True})
                 yield f'data: {error_data}\n\n'
                 return
 
