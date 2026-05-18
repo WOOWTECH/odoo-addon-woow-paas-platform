@@ -380,3 +380,219 @@ class TestMcpAclCrossWorkspaceIsolation(TransactionCase):
             "remained — investigate ondelete cascade or rule blocking "
             "physical delete.",
         )
+
+    # ====================================================================== #
+    # MAJOR 1 regression — reviewer (2026-05-18, NEEDS REVISION)             #
+    #                                                                       #
+    # Planner ruling A (rule split, 2026-05-18): the previous single        #
+    # ``mcp_server_rule_workspace_member`` is split into two complementary  #
+    # rules so the system / workspace-user scopes have asymmetric           #
+    # permissions:                                                          #
+    #                                                                       #
+    #   1. ``mcp_server_rule_system_readonly``  — perm_read only;           #
+    #      domain ``[('scope', '=', 'system')]``. Reachable by every        #
+    #      ``base.group_user``; nobody can create/write/unlink a            #
+    #      scope='system' row unless they go through ``sudo()`` or hold     #
+    #      ``base.group_system`` (admin CSV).                               #
+    #                                                                       #
+    #   2. ``mcp_server_rule_workspace_user`` — perm_read / write /         #
+    #      create / unlink; domain                                          #
+    #      ``[('scope', '=', 'user'),                                       #
+    #        ('project_id.cloud_service_id.workspace_id.access_ids.user_id',
+    #          '=', user.id)]``.                                            #
+    #      Workspace member full CRUD on user-scope MCP, bound to own       #
+    #      workspace via project chain.                                     #
+    #                                                                       #
+    # These 6 cases lock the asymmetry. Any reviewer touching ir_rules.xml  #
+    # or ir.model.access.csv on ``mcp_server`` must keep this suite green.  #
+    # The mcp_tool sub-model deny (case 2) ties to the B1 sub-model         #
+    # pitfall — see ``docs/refactor/pitfalls/cross-workspace-task-data-     #
+    # leak.md``.                                                            #
+    # ====================================================================== #
+    def _create_admin_user(self, login='mcp_acl_admin'):
+        """Create a fresh ``base.group_system`` user (helper for case 5).
+
+        Set both ``base.group_user`` and ``base.group_system`` at
+        create time — a post-create ``write({groups_id: [(4, ...)]})``
+        leaves a stale env cache and the new group is not honoured by
+        the ``with_user(...)`` ACL check.
+        """
+        return self.env['res.users'].sudo().create({
+            'login': login,
+            'name': 'Admin (MCP-ACL)',
+            'email': f'{login}@test.example',
+            'groups_id': [(6, 0, [
+                self.env.ref('base.group_user').id,
+                self.env.ref('base.group_system').id,
+            ])],
+        })
+
+    # MAJOR 1 regression — case 1: scope='system' create blocked for user
+    def test_user_cannot_create_system_mcp_via_orm(self):
+        """MAJOR 1: scope='system' create raises AccessError for group_user.
+
+        ``mcp_server_rule_workspace_user`` domain doesn't match a new row
+        with ``scope='system'``; ``mcp_server_rule_system_readonly``
+        matches but doesn't grant perm_create. No rule grants the
+        operation → AccessError.
+        """
+        with self.assertRaises(
+            AccessError,
+            msg=(
+                "MAJOR 1 regression (case 1): group_user must NOT create "
+                "scope='system' mcp_server rows. Rule split required: "
+                "system_readonly rule = perm_read only; workspace_user "
+                "rule domain filters scope='user'."
+            ),
+        ):
+            self.McpServer.with_user(self.bob).create({
+                'name': 'Bob Forbidden System MCP',
+                'url': 'http://malicious.example/sse',
+                'transport': 'sse',
+                'scope': 'system',
+            })
+
+    # MAJOR 1 regression — case 2: mcp_tool create on system server blocked
+    def test_user_cannot_create_mcp_tool_for_system_server(self):
+        """MAJOR 1 / B1 sub-model: mcp_tool create on system MCP blocked.
+
+        Mirrors case 1 on the sub-model. Without this guard a user
+        could attach a malicious tool to the platform-wide system MCP
+        and have every workspace's AI assistant load it. The mcp_tool
+        rule must walk ``server_id.scope`` to refuse create when the
+        parent server is system-scope (or apply the same scope filter
+        as mcp_server rule split).
+        """
+        with self.assertRaises(
+            AccessError,
+            msg=(
+                "MAJOR 1 regression (case 2 / B1 sub-model): group_user "
+                "must NOT add tools to scope='system' mcp_server. Tool "
+                "rule must inherit the system_readonly restriction via "
+                "server_id chain."
+            ),
+        ):
+            self.McpTool.with_user(self.bob).create({
+                'name': 'malicious_system_tool',
+                'description': 'Tool attempting to attach to system MCP',
+                'input_schema': '{}',
+                'server_id': self.system_mcp.id,
+            })
+
+    # MAJOR 1 regression — case 3: write/unlink on system MCP blocked
+    def test_user_cannot_write_or_unlink_system_mcp(self):
+        """MAJOR 1: scope='system' write + unlink raises AccessError.
+
+        ``system_readonly`` rule grants only perm_read. Group_user with
+        no matching rule for write/unlink on a system row → AccessError
+        on both ops. Tested as one method with two sub-asserts so
+        partial degradation (e.g. write blocked but unlink allowed) is
+        surfaced at the failing leg.
+        """
+        BobSystemMcp = self.McpServer.with_user(self.bob).browse(
+            self.system_mcp.id,
+        )
+        # WRITE leg
+        with self.assertRaises(
+            AccessError,
+            msg=(
+                "MAJOR 1 regression (case 3 / WRITE leg): group_user "
+                "must NOT write to scope='system' mcp_server. "
+                "system_readonly rule perm_write must be False."
+            ),
+        ):
+            BobSystemMcp.write({'name': 'Hijacked System MCP'})
+
+        # UNLINK leg
+        with self.assertRaises(
+            AccessError,
+            msg=(
+                "MAJOR 1 regression (case 3 / UNLINK leg): group_user "
+                "must NOT unlink scope='system' mcp_server. "
+                "system_readonly rule perm_unlink must be False."
+            ),
+        ):
+            BobSystemMcp.unlink()
+
+    # MAJOR 1 regression — case 4: sudo() bypass still works (demo / admin path)
+    def test_sudo_can_create_system_mcp(self):
+        """MAJOR 1 boundary: ``.sudo()`` bypass remains functional.
+
+        Demo data, migration scripts, and admin orchestration use
+        ``.sudo()`` to seed system MCP. Rule split must NOT block the
+        sudo path — otherwise the addon install + data load breaks.
+        """
+        try:
+            new_sys = self.McpServer.sudo().create({
+                'name': 'Sudo Seeded System MCP',
+                'url': 'http://platform2.mcp/sse',
+                'transport': 'sse',
+                'scope': 'system',
+            })
+        except AccessError as exc:
+            self.fail(
+                "MAJOR 1 regression (case 4): sudo() create of "
+                f"scope='system' mcp_server raised AccessError: {exc}. "
+                "Rule split must keep sudo path open for demo data and "
+                "migration seeding."
+            )
+        self.assertEqual(new_sys.scope, 'system')
+
+    # MAJOR 1 regression — case 5: group_system admin can create via backend
+    def test_admin_can_create_system_mcp_via_backend(self):
+        """MAJOR 1: ``base.group_system`` user creates system MCP normally.
+
+        The CSV row ``access_mcp_server_admin`` (group_system) must
+        grant full CRUD on mcp_server, and no rule constrains
+        group_system. Tests that the rule-split refactor preserves
+        the admin backend path — Settings → MCP Servers UI must
+        remain usable for a settings admin.
+        """
+        admin_user = self._create_admin_user()
+
+        try:
+            sys_mcp = self.McpServer.with_user(admin_user).create({
+                'name': 'Admin Backend System MCP',
+                'url': 'http://admin-seeded.mcp/sse',
+                'transport': 'sse',
+                'scope': 'system',
+            })
+        except AccessError as exc:
+            self.fail(
+                "MAJOR 1 regression (case 5): admin user "
+                "(base.group_system) failed to create scope='system' "
+                f"mcp_server via backend: {exc}. Check "
+                "access_mcp_server_admin CSV row + rule groups field."
+            )
+        self.assertEqual(sys_mcp.scope, 'system')
+
+    # MAJOR 1 regression — case 6: over-correction guard, user CRUD still works
+    def test_user_can_still_create_user_scope_in_own_workspace(self):
+        """MAJOR 1 boundary: over-correction guard for user-scope CRUD.
+
+        Companion to AC #21 ``test_ac21_bob_can_crud_own_workspace_mcp``
+        — that case locks the CSV row flip ``access_mcp_server_user``
+        from 1,0,0,0 → 1,1,1,1. This case re-verifies post-MAJOR-1
+        rule split that ``workspace_user`` rule's perm_create is still
+        True (the system_readonly rule must not accidentally cover
+        scope='user' rows and degrade CRUD to read-only). Catches a
+        too-broad domain on system_readonly rule.
+        """
+        try:
+            new_user_mcp = self.McpServer.with_user(self.bob).create({
+                'name': 'Bob New User MCP',
+                'url': 'http://bob-new-mcp.svc.cluster.local:3001/mcp',
+                'transport': 'streamable_http',
+                'scope': 'user',
+                'project_id': self.project_bob.id,
+            })
+        except AccessError as exc:
+            self.fail(
+                "MAJOR 1 regression (case 6): workspace member CRUD "
+                "on own-workspace user-scope mcp_server BROKE post "
+                f"rule split: {exc}. system_readonly rule domain may "
+                "be too broad (must filter scope='system' only) — see "
+                "AC #21 sister test for the CSV flip baseline."
+            )
+        self.assertEqual(new_user_mcp.scope, 'user')
+        self.assertEqual(new_user_mcp.project_id.id, self.project_bob.id)
