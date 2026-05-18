@@ -764,8 +764,16 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
 
     def test_trial_to_no_trial_enters_active(self):
         """Q2: trial -> no-trial change-plan creates an active (non-trial)
-        sub with sh_start_date=today (immediate billing)."""
-        from datetime import date
+        sub with sh_start_date=today (immediate billing).
+
+        Issue #39: also assert the active-path date triple is coherent —
+        pre-fix the new non-trial sub had sh_end_date = start - 32d
+        because ``_create_and_confirm_subscription`` fell through to the
+        onchange chain that multiplies cycle_delta by
+        sh_no_of_billing_cycle (-1, unlimited billing).
+        """
+        from datetime import date, timedelta
+        from dateutil.relativedelta import relativedelta
         self._seed_subscription(self.plan_a_trial7)
 
         with _patch_request(self.env(user=self.owner)):
@@ -782,6 +790,23 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
         self.assertEqual(new_sub.sh_start_date, date.today())
         # Old sub was trial -> refund still 0.
         self.assertEqual(res['data']['refund_amount'], 0)
+
+        # Issue #39 invariants on the new active sub.
+        cycle_delta = relativedelta(months=1)
+        expected_end = new_sub.sh_start_date + cycle_delta - timedelta(days=1)
+        self.assertGreaterEqual(
+            new_sub.sh_end_date, new_sub.sh_start_date,
+            'invariant: sh_end_date must never be earlier than sh_start_date',
+        )
+        self.assertEqual(
+            new_sub.sh_end_date, expected_end,
+            'sh_end_date must be plan-driven (#39): start + cycle_delta - 1d',
+        )
+        self.assertEqual(
+            new_sub.sh_date_of_next_payment,
+            new_sub.sh_start_date + cycle_delta,
+            'next payment must be plan-driven (#39): start + cycle_delta',
+        )
 
     def test_active_to_active_regression_proration(self):
         """Regression: active -> active path still produces a positive

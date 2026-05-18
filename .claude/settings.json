@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(maestri list)",
+      "Bash(maestri check *)",
+      "Bash(maestri note read *)",
+      "Bash(maestri --help)",
+      "Bash(plutil -lint *)",
+      "Bash(tmux capture-pane *)",
+      "Bash(kubectl get *)",
+      "Bash(kubectl describe *)",
+      "Bash(kubectl wait *)",
+      "Bash(kubectl config get-contexts*)",
+      "Bash(npm view *)",
+      "mcp__MongoDB__find",
+      "mcp__MongoDB__count",
+      "mcp__MongoDB__aggregate",
+      "mcp__MongoDB__collection-indexes",
+      "mcp__MongoDB__collection-schema",
+      "mcp__wallaby__wallaby_failingTests",
+      "mcp__wallaby__wallaby_runtimeValues",
+      "mcp__serena__get_symbols_overview",
+      "mcp__serena__find_symbol",
+      "mcp__serena__read_memory",
+      "mcp__serena__check_onboarding_performed"
+    ]
+  }
+}
