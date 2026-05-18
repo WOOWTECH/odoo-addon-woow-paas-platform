@@ -161,17 +161,14 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         subscription._onchange_sh_trial_subcription_start_date()
         subscription._onchange_sh_trial_subcription_end_date()
 
-        # Always force trial dates from the plan when the plan is a trial
-        # plan. The chained onchange compute (lines above) leaves
-        # sh_trial_end_date and sh_end_date NULL on a fresh trial sub when
-        # sh_subscription's dedup logic does not collide, and falls through
-        # to "end = start - 1 day" on the dedup-collision branch when only
-        # the trial-end-date onchange fires. Unconditional plan-driven write
-        # is the only path that yields a coherent (start, trial_end, end)
-        # triple for every trial sub. See issue #33 for the systematic
-        # NULL / off-by-one stg DB evidence.
+        # Always override the onchange-chain-computed dates with plan-driven
+        # values; the third-party onchange compute is unreliable on both
+        # branches (issue #33 for trial, #39 for non-trial). See helper
+        # docstrings for the specific arithmetic each branch corrects.
         if plan.sh_trial:
             self._force_trial_dates_from_plan(subscription, plan)
+        else:
+            self._force_active_dates_from_plan(subscription, plan)
 
         # Confirm → in_progress (starts trial if configured)
         subscription.sh_subscription_confirm()
@@ -221,6 +218,36 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             "Forced trial for subscription %s: %s %s, billing %s → %s",
             subscription.name, plan.sh_trial_duration, plan.sh_trial_unit,
             start_date, end_date,
+        )
+
+    def _force_active_dates_from_plan(self, subscription, plan):
+        """Force start/end/next-payment fields on a non-trial ``subscription``.
+
+        Plan-driven (start_date=today, end_date=start+cycle_delta-1d) so
+        downstream readers never see end < start; cycle_delta does NOT
+        multiply by sh_no_of_billing_cycle (= -1 on every platform plan,
+        which was the issue #39 root cause).
+
+        ``sh_date_of_next_payment`` is seeded to ``start_date``;
+        ``sh_subscription_confirm()`` advances it by one cycle to
+        ``start + cycle_delta`` after creating the first invoice.
+        """
+        cycle_delta = {
+            'day': relativedelta(days=plan.sh_duration),
+            'week': relativedelta(weeks=plan.sh_duration),
+            'month': relativedelta(months=plan.sh_duration),
+            'year': relativedelta(years=plan.sh_duration),
+        }.get(plan.sh_unit, relativedelta())
+        start_date = date.today()
+        end_date = start_date + cycle_delta - relativedelta(days=1)
+        subscription.write({
+            'sh_start_date': start_date,
+            'sh_end_date': end_date,
+            'sh_date_of_next_payment': start_date,
+        })
+        _logger.info(
+            "Forced active dates for subscription %s: billing %s → %s",
+            subscription.name, start_date, end_date,
         )
 
     # ----------------------------------------------------------------

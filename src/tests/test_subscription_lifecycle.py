@@ -607,10 +607,16 @@ class TestForceTrialDatesFromPlan(TransactionCase):
         self.assertEqual(sub.sh_end_date, expected_end)
 
     def test_non_trial_plan_leaves_trial_fields_inert(self):
-        """``plan.sh_trial=False`` must skip the helper entirely so
+        """``plan.sh_trial=False`` must skip the trial helper entirely so
         sh_trial stays False and sh_trial_end_date stays empty. Removing
         the dedup gate must not accidentally enable trial on non-trial
-        subs."""
+        subs.
+
+        Issue #39: also assert the active-path date triple is coherent —
+        pre-fix the onchange chain produced sh_end_date = start - 32d on
+        non-trial subs because cycle_delta was multiplied by
+        sh_no_of_billing_cycle (-1, unlimited billing platform-wide).
+        """
         smart_home = self._make_smart_home('No-Trial Home')
         smart_home._create_and_confirm_subscription(
             self.partner, self.plan_notrial,
@@ -621,3 +627,114 @@ class TestForceTrialDatesFromPlan(TransactionCase):
             sub.sh_trial, 'non-trial plan must NOT produce trial sub',
         )
         self.assertFalse(sub.sh_trial_end_date)
+        # Issue #39 invariants on the active date triple.
+        self.assertGreaterEqual(
+            sub.sh_end_date, sub.sh_start_date,
+            'invariant: sh_end_date must never be earlier than sh_start_date',
+        )
+        cycle_delta = relativedelta(months=1)
+        self.assertEqual(
+            sub.sh_date_of_next_payment,
+            sub.sh_start_date + cycle_delta,
+            'next payment must be plan-driven (#39): start + cycle_delta',
+        )
+
+
+class TestForceActiveDatesFromPlan(TransactionCase):
+    """Cover the unconditional plan-driven active-date write (issue #39).
+
+    Pre-fix, ``_create_and_confirm_subscription`` only forced trial dates
+    (PR #38, gated behind ``if plan.sh_trial:``). The non-trial path fell
+    through to ``sh_subscription``'s onchange chain, which multiplies
+    cycle_delta by ``sh_no_of_billing_cycle`` (set to -1 platform-wide for
+    unlimited billing), producing sh_end_date = sh_start_date - 32d. UI
+    countdown / grace-period readers that consume sh_end_date directly
+    (rather than sh_date_of_next_payment) thus saw a negative remaining
+    window the moment the sub was created. Refund clamps in
+    ``_compute_unused_refund`` masked the financial side but the cosmetic
+    side leaked to users.
+
+    The fix adds a sibling helper ``_force_active_dates_from_plan`` that
+    writes (start, end, next_payment) plan-driven for every non-trial sub,
+    mirroring the PR #38 trial-side correction.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.Workspace = self.env['woow_paas_platform.workspace']
+        self.Plan = self.env['sh.subscription.plan']
+
+        # Non-trial 1-month plan with unlimited billing cycle, the shape
+        # every platform plan ships with — this is the exact configuration
+        # that triggers the onchange bug (1 * -1 * month = -1 month).
+        self.plan_notrial = self.Plan.create({
+            'name': 'No Trial / Monthly',
+            'sh_plan_price': 200.0,
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_no_of_billing_cycle': -1,
+            'sh_trial': False,
+        })
+        # _create_and_confirm_subscription resolves the subscription
+        # product via product.template.sh_subscription_plan_id.
+        self.env['product.template'].sudo().create({
+            'name': 'Force-Active Product NoTrial',
+            'type': 'service',
+            'sh_product_subscribe': True,
+            'sh_subscription_plan_id': self.plan_notrial.id,
+            'list_price': self.plan_notrial.sh_plan_price,
+        })
+
+        # PR #28 hardening: non-admin owner so no implicit bypass.
+        self.owner = self.env['res.users'].create({
+            'login': 'force_active_owner',
+            'name': 'Force-Active Owner',
+            'email': 'force_active_owner@example.test',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.workspace = self.Workspace.create({
+            'name': 'Force-Active WS',
+            'owner_id': self.owner.id,
+        })
+        self.partner = self.owner.partner_id
+
+    def _make_smart_home(self, name):
+        return self.SmartHome.create({
+            'name': name,
+            'workspace_id': self.workspace.id,
+        })
+
+    def test_fresh_non_trial_plan_writes_active_date_triple(self):
+        """Fresh non-trial sub gets a coherent (start, end, next_payment)
+        triple from the plan, not the buggy onchange chain.
+
+        Pre-fix:  end = start + 1 * -1 * month - 1d = start - 32d.
+        Post-fix: end = start + 1 * month - 1d (no billing-cycle multiplier).
+        """
+        smart_home = self._make_smart_home('Fresh-NoTrial Home')
+        smart_home._create_and_confirm_subscription(
+            self.partner, self.plan_notrial,
+        )
+        sub = smart_home.sudo().subscription_id
+
+        today = date.today()
+        cycle_delta = relativedelta(months=1)
+        expected_end = today + cycle_delta - timedelta(days=1)
+
+        self.assertFalse(
+            sub.sh_trial, 'non-trial plan must NOT produce trial sub',
+        )
+        self.assertEqual(sub.sh_start_date, today)
+        self.assertEqual(
+            sub.sh_end_date, expected_end,
+            'sh_end_date must be plan-driven (#39): start + cycle_delta - 1d',
+        )
+        self.assertGreaterEqual(
+            sub.sh_end_date, sub.sh_start_date,
+            'invariant: sh_end_date must never be earlier than sh_start_date',
+        )
+        self.assertEqual(
+            sub.sh_date_of_next_payment, today + cycle_delta,
+            'next payment must be plan-driven (#39): start + cycle_delta',
+        )
