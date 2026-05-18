@@ -4,7 +4,7 @@ Defensive backfill (D2) — idempotent so re-running ``-u woow_paas_platform``
 is a noop on the second pass. Designed to be safe even when
 ``cloud_service_id`` column has already been dropped (introspect before SQL).
 
-Four steps:
+Five steps:
 
 1. **Backfill** ``project_id`` from ``cloud_service_id`` for user-scope rows
    (only when the column still exists), walking through the bound
@@ -20,9 +20,15 @@ Four steps:
    ``active=true`` filter on the second pass.
 3. **Drop column** ``cloud_service_id`` (D3=A one-shot — only runs when the
    column still exists).
-4. **Noupdate flip** on the two new ir.rule xmlids so future ``-u``
+4. **Noupdate flip** on the four new ir.rule xmlids so future ``-u``
    re-applies any XML domain edits (same pattern as 18.0.1.0.23). Always
    runs.
+5. **Retire MAJOR 1 legacy rules** — DELETE the original dual-leg
+   ``mcp_server_rule_workspace_member`` / ``mcp_tool_rule_workspace_member``
+   rows and their ``ir_model_data`` entries. They were superseded by the
+   four-rule split (system_readonly + workspace_user × server/tool); leaving
+   them active would OR-combine with the new rules and re-open the
+   create-direction leak (any base.group_user could create scope='system').
 """
 import logging
 
@@ -115,12 +121,54 @@ def migrate(cr, version):
             "Dropped woow_paas_platform_mcp_server.cloud_service_id column"
         )
 
-    # Step 4 — flip noupdate on the two new ir.rule xmlids so future module
-    # updates re-apply XML-defined domains (same pattern as 18.0.1.0.23).
+    # Step 4 — flip noupdate on the six new ir.rule xmlids (4 split rules +
+    # 2 admin-bypass rules) so future module updates re-apply XML-defined
+    # domains (same pattern as 18.0.1.0.23).
     cr.execute(
         """
         UPDATE ir_model_data
         SET noupdate = false
+        WHERE module = 'woow_paas_platform'
+          AND model = 'ir.rule'
+          AND name IN (
+            'mcp_server_rule_system_readonly',
+            'mcp_server_rule_workspace_user',
+            'mcp_server_rule_admin_full',
+            'mcp_tool_rule_system_readonly',
+            'mcp_tool_rule_workspace_user',
+            'mcp_tool_rule_admin_full'
+          )
+        """
+    )
+    _logger.info(
+        "Cleared noupdate on new MCP ir.rule xmlids (%s data rows)",
+        cr.rowcount,
+    )
+
+    # Step 5 — MAJOR 1 fix: retire the original dual-leg rules. Leaving them
+    # active would OR-combine with the new split rules and re-open the
+    # create-direction leak (any base.group_user could create scope='system'
+    # because the ('scope', '=', 'system') leg evaluates True for new rows).
+    # Two DELETEs because ir_model_data does NOT cascade to ir_rule on its
+    # own — order: drop the rule rows first, then their xmlid pointers.
+    cr.execute(
+        """
+        DELETE FROM ir_rule
+        WHERE id IN (
+            SELECT res_id FROM ir_model_data
+            WHERE module = 'woow_paas_platform'
+              AND model = 'ir.rule'
+              AND name IN (
+                'mcp_server_rule_workspace_member',
+                'mcp_tool_rule_workspace_member'
+              )
+        )
+        """
+    )
+    retired_rule_rows = cr.rowcount
+    cr.execute(
+        """
+        DELETE FROM ir_model_data
         WHERE module = 'woow_paas_platform'
           AND model = 'ir.rule'
           AND name IN (
@@ -129,7 +177,8 @@ def migrate(cr, version):
           )
         """
     )
-    _logger.info(
-        "Cleared noupdate on new MCP ir.rule xmlids (%s data rows)",
-        cr.rowcount,
-    )
+    if retired_rule_rows or cr.rowcount:
+        _logger.info(
+            "Retired legacy dual-leg MCP rules: %s ir_rule + %s ir_model_data rows",
+            retired_rule_rows, cr.rowcount,
+        )

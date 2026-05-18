@@ -116,18 +116,40 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
-        <!-- McpServer: workspace member (user-scope) + always-true system leg.
-             Plugs the pre-existing ACL gap (no rule meant base.group_user could
-             read every MCP in the instance). System leg is intentionally
-             always-true: scope='system' MCPs are platform tools designed for
-             every internal user via ai.assistant.mcp_server_ids. See
-             decisions/mcp-project-decouple.md §Invariant 6 (explicitly NOT a
-             B1-style OR-bypass — the always-true leg is a deliberate scope
-             design, not an unintended std-rule leak). -->
-        <record id="mcp_server_rule_workspace_member" model="ir.rule">
-            <field name="name">McpServer: workspace member (user) or system-scope</field>
+        <!-- MAJOR 1 fix (rule split): the original dual-leg single-rule design
+             (mcp_server_rule_workspace_member + mcp_tool_rule_workspace_member)
+             let base.group_user ORM-create scope='system' MCP rows because the
+             ('scope', '=', 'system') leg is True for newly-built rows. Split
+             into two rules per model so read direction stays universally true
+             for system-scope (Invariant #6) while create/write/unlink are
+             scoped to user-scope rows in the caller's own workspace. Pattern
+             mirrors workspace_rule_member_access + workspace_rule_create
+             above. Migration 18.0.1.0.24 step 5 retires the old two xmlids
+             to prevent OR-combine with these new rules on `-u`. -->
+
+        <!-- McpServer: system-scope is universally READABLE only (Invariant #6).
+             perm_create/write/unlink False here blocks ORM create({'scope':
+             'system', ...}) attacks — only sudo, group_system, and demo data
+             XML may seed system MCP. -->
+        <record id="mcp_server_rule_system_readonly" model="ir.rule">
+            <field name="name">McpServer: system-scope read-only (all internal users)</field>
             <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
-            <field name="domain_force">['|', ('scope', '=', 'system'), ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="domain_force">[('scope', '=', 'system')]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- McpServer: workspace members get full CRUD on user-scope MCP in
+             their own workspace. scope='user' in the domain ensures this rule
+             cannot be used to create scope='system' rows (domain match fails
+             on a system-scope new record). -->
+        <record id="mcp_server_rule_workspace_user" model="ir.rule">
+            <field name="name">McpServer: workspace member CRUD on user-scope</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
+            <field name="domain_force">[('scope', '=', 'user'), ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
@@ -135,15 +157,56 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
-        <!-- McpTool: B1 sub-model symmetric deny. mcp_tool has no project_id of
-             its own — the rule walks through server_id for the same workspace-
-             member chain. Missing this is the B1 leak pattern (see
-             pitfalls/cross-workspace-task-data-leak.md). -->
-        <record id="mcp_tool_rule_workspace_member" model="ir.rule">
-            <field name="name">McpTool: workspace member (user) or system-scope</field>
+        <!-- McpTool: B1 sub-model parity — system-scope tools read-only via
+             server_id walk. perm_create=False blocks tool definition forgery
+             on existing system MCPs. -->
+        <record id="mcp_tool_rule_system_readonly" model="ir.rule">
+            <field name="name">McpTool: system-scope read-only (all internal users)</field>
             <field name="model_id" ref="model_woow_paas_platform_mcp_tool"/>
-            <field name="domain_force">['|', ('server_id.scope', '=', 'system'), ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="domain_force">[('server_id.scope', '=', 'system')]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- McpTool: B1 sub-model parity — workspace member full CRUD on
+             tools whose server is in their workspace. -->
+        <record id="mcp_tool_rule_workspace_user" model="ir.rule">
+            <field name="name">McpTool: workspace member CRUD on user-scope</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_tool"/>
+            <field name="domain_force">[('server_id.scope', '=', 'user'), ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- Admin (group_system) backend bypass. Required because
+             group_system inherits group_user via implied_ids — without an
+             explicit group_system rule, the system_readonly perm_create=False
+             blocks admin from seeding scope='system' MCP through the backend
+             UI. Odoo resolves rules per-group with OR semantics, so this
+             rule short-circuits the deny for admins. Same bypass for
+             mcp_tool below (B1 sub-model parity). -->
+        <record id="mcp_server_rule_admin_full" model="ir.rule">
+            <field name="name">McpServer: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="mcp_tool_rule_admin_full" model="ir.rule">
+            <field name="name">McpTool: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_tool"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
             <field name="perm_create" eval="True"/>
