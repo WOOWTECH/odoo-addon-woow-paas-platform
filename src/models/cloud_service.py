@@ -1123,6 +1123,11 @@ class CloudService(models.Model):
         unlink user-scope MCP → helm uninstall → state='deleting'. Re-ordering
         opens a time window where mcp_server rows reference a torn-down sidecar
         URL (silent network failures in AI chat tool calls).
+
+        On helm uninstall failure: state='error' + error_message (mirrors
+        _do_suspend / _do_resume). User-scope MCP is already unlinked at that
+        point — D5 invariant is preserved (no zombie rows pointing at a stale
+        sidecar) even when the cleanup half-succeeds.
         """
         self.ensure_one()
         _logger.info(
@@ -1156,8 +1161,41 @@ class CloudService(models.Model):
                 )
             except Exception as e:
                 _logger.warning(
-                    "[CLOUD_SVC] _do_cleanup failed service=%s: %s",
+                    "[CLOUD_SVC] _do_cleanup helm uninstall failed service=%s: %s",
                     self.id, e,
                 )
+                self.write({
+                    'state': 'error',
+                    'error_message': f'Cleanup failed: {e}',
+                })
+                return
+
         # Step 3 — mark state so cron/UI know teardown is in progress.
         self.write({'state': 'deleting'})
+
+    def unlink(self):
+        """Cleanup user-scope MCP before deleting the service record.
+
+        Catches every unlink path — controllers calling ``service.unlink()``
+        directly after their own helm uninstall, cron taking down a stuck
+        service, manual ORM ops — without forcing callers to remember to call
+        ``_do_cleanup`` first. ``project.project.cloud_service_id`` is
+        ``ondelete='set null'`` (cloud-service ↔ project Invariant #2), so a
+        naked ``unlink()`` would leave ``project_id`` populated on user-scope
+        MCP rows while their backing sidecar is gone — D5 violation + zombie
+        URL. ``_do_cleanup`` does the same step but only triggers on the
+        lifecycle path; this override is the catch-all guard.
+
+        Idempotent against ``_do_cleanup``: when both run, the second one
+        finds the user-scope MCP recordset already empty.
+        """
+        user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
+            lambda s: s.scope == 'user'
+        )
+        if user_mcps:
+            user_mcps.sudo().unlink()
+            _logger.info(
+                "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
+                "for service ids=%s", len(user_mcps), self.ids,
+            )
+        return super().unlink()
