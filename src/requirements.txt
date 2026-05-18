@@ -15,5 +15,12 @@ pyyaml>=6.0
 # extra-addons: odoo_ai_assistant_chatgpt_connector
 openai>=1.0.0
 
+# extra-addons: ecpay_invoice_tw
+pycryptodomex
+
+# extra-addons: payment_ecpay_ecpg
+cryptography
+requests
+
 # optional: AI embedding (fastembed pulls onnxruntime ~200MB, adds 5-10 min)
 fastembed>=0.5.0,<=0.5.1

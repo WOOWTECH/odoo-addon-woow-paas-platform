@@ -33,9 +33,9 @@ spec:
           args:
             - |
               {{- if .Values.odoo.extraPipRequirementsFile }}
-              pip3 install --break-system-packages --no-cache-dir -r '{{ .Values.odoo.extraPipRequirementsFile }}' 2>/dev/null && \
+              pip3 install --break-system-packages --no-cache-dir -r '{{ .Values.odoo.extraPipRequirementsFile }}' && \
               {{- else }}
-              pip3 install --break-system-packages{{- range .Values.odoo.extraPipPackages }} '{{ . }}'{{- end }} 2>/dev/null && \
+              pip3 install --break-system-packages{{- range .Values.odoo.extraPipPackages }} '{{ . }}'{{- end }} && \
               {{- end }}
               exec odoo{{ if .Values.odoo.devMode }} --dev reload,qweb,xml{{ end }}{{ if .Values.odoo.updateModules }} -u {{ .Values.odoo.updateModules }}{{ end }} -c /etc/odoo/odoo.conf
           {{- else }}

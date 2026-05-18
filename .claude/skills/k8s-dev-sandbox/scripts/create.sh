@@ -299,6 +299,17 @@ HELM_INSTALL_ARGS=(
     --set "sandbox.mode=$MODE"
 )
 
+# 套用對應模式的 values overlay
+# 沒套用會讓 chart default（networkPolicy.enabled=true）擋掉 pip install 對 pypi.org 的 egress
+case "$MODE" in
+    local|ci-local)
+        HELM_INSTALL_ARGS+=( -f "$CHART_DIR/values-local.yaml" )
+        ;;
+    stg)
+        HELM_INSTALL_ARGS+=( -f "$CHART_DIR/values-ci.yaml" )
+        ;;
+esac
+
 # STG 模式：首次部署需更新 web module（base 自動初始化但 web 不會）
 # 使用 -u (update) 而非 -i (init)，確保 base.latest_version 正確寫入，
 # 且 cron 不會因 init 模式被阻擋
@@ -311,7 +322,16 @@ fi
 # Local 模式需要掛載 hostPath
 if [ "$MODE" = "local" ]; then
     SRC_PATH="${PROJECT_ROOT}/src"
-    EXTRA_ADDONS_PATH="${PROJECT_ROOT}/extra/extra-addons"
+    # extra-addons 來源：優先讀 .env 的 PAAS_CI_ADDONS_PATH（commit 928613a 後的 source of truth），
+    # fallback 才用舊路徑 extra/extra-addons（已 deprecated，多數 worktree 不存在）
+    if [ -z "${PAAS_CI_ADDONS_PATH:-}" ] && [ -f "${PROJECT_ROOT}/.env" ]; then
+        PAAS_CI_ADDONS_PATH="$(grep -E '^PAAS_CI_ADDONS_PATH=' "${PROJECT_ROOT}/.env" | tail -1 | cut -d= -f2-)"
+    fi
+    if [ -n "${PAAS_CI_ADDONS_PATH:-}" ] && [ -d "$PAAS_CI_ADDONS_PATH" ]; then
+        EXTRA_ADDONS_PATH="$PAAS_CI_ADDONS_PATH"
+    else
+        EXTRA_ADDONS_PATH="${PROJECT_ROOT}/extra/extra-addons"
+    fi
     HELM_INSTALL_ARGS+=(
         --set "codeMount.hostPath=$SRC_PATH"
         --set "codeMount.extraAddonsHostPath=$EXTRA_ADDONS_PATH"
