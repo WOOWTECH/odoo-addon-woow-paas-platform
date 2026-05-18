@@ -1,11 +1,11 @@
 # Test Scope Report — MCP `cloud_service_id` → `project_id` (red phase)
 
-**Date**: 2026-05-18 (re-opened + re-finalized 2026-05-18)
+**Date**: 2026-05-18 (re-opened + re-finalized 2026-05-18; cycle-3 fixture rationale appended 2026-05-18)
 **Author**: refactor-tester (TDD red phase)
 **Plan**: `docs/refactor/plan-mcp-project-decouple.md`
 **Decision (draft)**: `docs/refactor/decisions/mcp-project-decouple.md`
-**Status**: signed-off (refactor-leader, 2026-05-18 — re-finalized after Gap-1/Gap-2 fill)
-**Phase**: tester → test-explainer (final)
+**Status**: signed-off (refactor-leader, 2026-05-18 — re-finalized after Gap-1/Gap-2 fill; cycle-3 A-plan fixtures landed `48d49bb`)
+**Phase**: tester → test-explainer → green sign-off (final)
 
 ## Revision history
 
@@ -13,6 +13,113 @@
 |-------|------|-------|---------|
 | 1 (initial red) | 2026-05-18 | 24 | TDD red-phase deliverable |
 | 2 (re-open) | 2026-05-18 | 26 | test-explainer review surfaced Gap 1 (AC #14 controller test) + Gap 2 (AC #21 CSV 4-leg CRUD). Leader ruled Gap 3 (AC #19 dual-path lock visual) acceptable. |
+| 3 (green sign-off, fixture patches) | 2026-05-18 | 26 | Implementation phase reached 0 failed / 0 error / 26 tests after **2 tester-side fixture patches** — see §Cycle-3 fixture rationale below. No production-code or assert changes. Commit `48d49bb`. |
+
+## Cycle-3 fixture rationale (A-plan, 2026-05-18)
+
+Two fixture patches were required to take the green run from
+`3 failed, 0 error of 26 tests` to `0 failed, 0 error of 26 tests`.
+Both are tester-side fixture-only changes (no production code, no
+assert edits, no original-24-cases line touched). Recorded here so
+reviewer phase can trace the intent if any of the 26 cases pass
+suspiciously cleanly.
+
+### Fixture #1 — `ai.assistant.config_id` seed for AC #15
+
+**File**: `src/tests/test_mcp_chat_consumption.py:228-239`
+(within `TestMcpChatConsumption.test_ac15_assistant_system_mcp_unchanged`)
+
+**Symptom**: round-2 red phase passed the fixture creation only
+because the field-guard `setUp` short-circuited (project_id missing
+on `mcp_server`). Once the green phase landed `project_id`, the
+guard no longer fired and the test ran far enough to call
+`ai.assistant.create(...)` — which raised
+`psycopg2.errors.NotNullViolation: null value in column "config_id"
+of relation "ai_assistant"`. This is a tester-side fixture gap,
+not an implementation bug.
+
+**Root cause**: `ai_base_gt/models/ai_assistant.py:17` declares
+`config_id = fields.Many2one('ai.config', ..., required=True)`. The
+round-2 fixture omitted `config_id` from the `create()` call.
+
+**Fix**: seed a minimal `ai.config` record (mirroring the pattern
+in `src/tests/test_ai_assistant.py:14-22`) and pass its id to the
+assistant create. Six new fixture lines, zero assertion changes.
+
+### Fixture #2 — `setUp` `ALTER TABLE ADD COLUMN IF NOT EXISTS`
+
+**File**: `src/tests/test_mcp_project_decouple_migration.py:187-201`
+(within `TestMcpProjectDecoupleMigrationBehavior.setUp`)
+
+**Symptom**: after the implementation's `post-migrate.py` landed,
+3 behaviour tests (`test_ac3_migrate_backfill_user_scope_mcp`,
+`test_ac3_migrate_orphan_user_scope_archive`,
+`test_ac4_migrate_idempotent`) failed with assertions like:
+
+* `None != <project-id>` — backfill never wrote `project_id`
+* `True is not false` — orphan rows never archived to `active=False`
+
+Per-test logs surfaced:
+
+```
+mcp_project_decouple_migration_18_0_1_0_24:
+    cloud_service_id column already absent —
+    backfill + drop skipped (idempotent second-run path).
+```
+
+**Root cause**: Odoo's `TransactionCase` rolls back data (savepoint)
+between tests but **does not roll back DDL** that happened before
+the savepoint. The first test in the suite ran the production
+`migrate()` which legitimately dropped `cloud_service_id`; from
+test #2 onwards every test entered `migrate()` with the column
+already absent, took the "second-run idempotent" branch in
+`post-migrate.py`, and never exercised the real backfill /
+orphan-archive code path.
+
+**Fix**: `setUp` issues
+`ALTER TABLE woow_paas_platform_mcp_server ADD COLUMN IF NOT
+EXISTS cloud_service_id INTEGER`
+to restore the pre-migration column shape **once per test**. Every
+behaviour test now re-enters `migrate()` in the prod-equivalent
+state: column-present at entry, column-dropped at exit. This is
+fixture-only — production code unchanged, assertion semantics
+unchanged.
+
+**Alternatives considered by leader (2026-05-18 ruling: A-plan)**:
+
+| Option | Description | Verdict |
+|--------|-------------|---------|
+| **A (chosen)** | setUp `ALTER TABLE ADD COLUMN IF NOT EXISTS` | Matches prod migration semantics. Fixture-only. No D3 violation. |
+| B | Skip `DROP COLUMN` in `post-migrate.py` | Violates D3=A "one-shot drop" decision (see `docs/refactor/decisions/mcp-project-decouple.md`). Rejected. |
+| C | Accept second-run path in behaviour suite | Test only verifies idempotency; never proves backfill/archive correctness. Caveat-only fallback. Rejected. |
+| D | Per-test transactional savepoint rewind | Implementation side admits this isn't feasible — DDL can't be re-applied cleanly without changing `post-migrate.py`. Rejected. |
+
+**Why A is safe**: the production migration runs once per Odoo
+upgrade. In production the column starts present and ends absent.
+A-plan's `setUp` recreates exactly that boundary condition before
+each behaviour test, so the test faithfully simulates the prod
+state machine. The risk this *could* mask — namely, accidentally
+relying on the column being recreated mid-run — does not apply
+because the fix is in `setUp` (test isolation boundary), not in
+`migrate()` or any production helper.
+
+### Verification — final green proof
+
+```
+2026-05-18 13:09:32,684 1 INFO  ... odoo.service.server :
+    26 post-tests in 1.76s, 3086 queries
+2026-05-18 13:09:32,684 1 INFO  ... odoo.tests.result   :
+    0 failed, 0 error(s) of 26 tests when loading database
+    'woow_feature_project_mcp_skill'
+```
+
+Command:
+`docker compose run --rm web odoo -d woow_feature_project_mcp_skill
+ -u woow_paas_platform --test-enable --test-tags
+ "/woow_paas_platform:Test{MigrationSchema,MigrationBehavior,
+ Lifecycle,AclCrossWorkspaceIsolation,ChatConsumption,
+ AiAssistantControllerMcpToolsForChannel,ProjectScopeConstraints}"
+ --stop-after-init --log-level=test`
 
 ### Gap 1 — AC #14 explicit controller test (added 2026-05-18 re-open)
 
