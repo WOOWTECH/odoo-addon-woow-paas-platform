@@ -40,7 +40,7 @@
                         </group>
                         <group string="Configuration">
                             <field name="scope"/>
-                            <field name="cloud_service_id"
+                            <field name="project_id"
                                    invisible="scope != 'user'"/>
                             <field name="active"/>
                             <field name="auto_created" invisible="True"/>

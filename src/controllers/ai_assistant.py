@@ -619,21 +619,20 @@ class AiAssistantController(Controller):
         return '\n'.join(parts)
 
     def _get_user_mcp_tools_for_channel(self, channel):
-        """Get user-scope MCP tools from the cloud service linked to this channel.
+        """Get user-scope MCP tools from the project linked to this channel.
 
-        Follows the chain: channel → task → project → cloud_service → user_mcp_servers → tools.
+        Follows the chain: channel → task → project → mcp_server_ids → tools.
         Returns an MCP tool recordset, or empty recordset if not applicable.
         """
         McpTool = request.env['woow_paas_platform.mcp_tool'].sudo()
         task = request.env['project.task'].sudo().search([
             ('channel_id', '=', channel.id),
         ], limit=1)
-        if not task or not task.project_id or not task.project_id.cloud_service_id:
+        if not task or not task.project_id:
             return McpTool.browse()
 
-        service = task.project_id.cloud_service_id
-        servers = service.user_mcp_server_ids.filtered(
-            lambda s: s.active and s.state == 'connected'
+        servers = task.project_id.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active and s.state == 'connected'
         )
         if not servers:
             return McpTool.browse()

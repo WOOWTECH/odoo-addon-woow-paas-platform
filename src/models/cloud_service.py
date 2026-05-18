@@ -187,14 +187,6 @@ class CloudService(models.Model):
         string='Support Projects',
     )
 
-    # User MCP Servers
-    user_mcp_server_ids = fields.One2many(
-        comodel_name='woow_paas_platform.mcp_server',
-        inverse_name='cloud_service_id',
-        string='MCP Servers',
-        domain=[('scope', '=', 'user')],
-    )
-
     # MCP Sidecar
     mcp_auth_token = fields.Char(
         string='MCP Auth Token',
@@ -982,9 +974,20 @@ class CloudService(models.Model):
         if not template.mcp_enabled or not template.mcp_sidecar_image:
             return
 
+        # Resolved Q #3: user-scope MCP is project-anchored. If the service has
+        # no support project yet, skip + log info (no retry — future creation
+        # of a project does not trigger backfill, that's a follow-up).
+        project = self.project_ids[:1]
+        if not project:
+            _logger.info(
+                "Skip MCP auto-create for service '%s' (id=%s): no support "
+                "project bound yet.", self.name, self.id,
+            )
+            return
+
         McpServer = self.env['woow_paas_platform.mcp_server'].sudo()
         existing = McpServer.search([
-            ('cloud_service_id', '=', self.id),
+            ('project_id', '=', project.id),
             ('auto_created', '=', True),
         ], limit=1)
         if existing:
@@ -997,7 +1000,7 @@ class CloudService(models.Model):
             'url': mcp_url,
             'transport': template.mcp_transport or 'streamable_http',
             'scope': 'user',
-            'cloud_service_id': self.id,
+            'project_id': project.id,
             'auto_created': True,
             'api_key': self.mcp_auth_token,
             'description': f"Auto-created MCP server for {self.name}",
@@ -1114,15 +1117,33 @@ class CloudService(models.Model):
         )
 
     def _do_cleanup(self):
-        """Helm uninstall — permanently remove the service."""
+        """Helm uninstall — permanently remove the service.
+
+        Order matters (D1 / Invariant #4 — see decisions/mcp-project-decouple.md):
+        unlink user-scope MCP → helm uninstall → state='deleting'. Re-ordering
+        opens a time window where mcp_server rows reference a torn-down sidecar
+        URL (silent network failures in AI chat tool calls).
+        """
         self.ensure_one()
         _logger.info(
             "[CLOUD_SVC] _do_cleanup service=%s name=%s release=%s ns=%s",
             self.id, self.name, self.helm_release_name, self.helm_namespace,
         )
 
+        # Step 1 — unlink user-scope MCP first, before the sidecar is torn down.
+        user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
+            lambda s: s.scope == 'user'
+        )
+        if user_mcps:
+            user_mcps.sudo().unlink()
+            _logger.info(
+                "[CLOUD_SVC] _do_cleanup unlinked %s user-scope MCP server(s) "
+                "for service=%s", len(user_mcps), self.id,
+            )
+
         from ..services.paas_operator import get_paas_operator_client
 
+        # Step 2 — helm uninstall (physical sidecar teardown).
         client = get_paas_operator_client(self.env)
         if client and self.helm_release_name and self.helm_namespace:
             try:
@@ -1138,4 +1159,5 @@ class CloudService(models.Model):
                     "[CLOUD_SVC] _do_cleanup failed service=%s: %s",
                     self.id, e,
                 )
+        # Step 3 — mark state so cron/UI know teardown is in progress.
         self.write({'state': 'deleting'})

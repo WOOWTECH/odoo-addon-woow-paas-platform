@@ -115,5 +115,39 @@
             <field name="perm_create" eval="True"/>
             <field name="perm_unlink" eval="True"/>
         </record>
+
+        <!-- McpServer: workspace member (user-scope) + always-true system leg.
+             Plugs the pre-existing ACL gap (no rule meant base.group_user could
+             read every MCP in the instance). System leg is intentionally
+             always-true: scope='system' MCPs are platform tools designed for
+             every internal user via ai.assistant.mcp_server_ids. See
+             decisions/mcp-project-decouple.md §Invariant 6 (explicitly NOT a
+             B1-style OR-bypass — the always-true leg is a deliberate scope
+             design, not an unintended std-rule leak). -->
+        <record id="mcp_server_rule_workspace_member" model="ir.rule">
+            <field name="name">McpServer: workspace member (user) or system-scope</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
+            <field name="domain_force">['|', ('scope', '=', 'system'), ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- McpTool: B1 sub-model symmetric deny. mcp_tool has no project_id of
+             its own — the rule walks through server_id for the same workspace-
+             member chain. Missing this is the B1 leak pattern (see
+             pitfalls/cross-workspace-task-data-leak.md). -->
+        <record id="mcp_tool_rule_workspace_member" model="ir.rule">
+            <field name="name">McpTool: workspace member (user) or system-scope</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_tool"/>
+            <field name="domain_force">['|', ('server_id.scope', '=', 'system'), ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
     </data>
 </odoo>
