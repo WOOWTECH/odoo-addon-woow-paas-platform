@@ -41,6 +41,7 @@ Red expectations today (pre-implementation):
    the regression lock for "don't break the system MCP path".
 """
 import uuid
+from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase, tagged
 
@@ -243,4 +244,152 @@ class TestMcpChatConsumption(TransactionCase):
             "AC #15 regression: ai.assistant.mcp_server_ids no longer "
             "exposes system-scope MCP tools. Refactor must not change "
             "the M2M domain or get_enabled_mcp_tools behaviour.",
+        )
+
+
+# ====================================================================== #
+# Tester Re-Open #1 (2026-05-18) — Gap 1: AC #14 explicit controller test #
+#                                                                         #
+# Why a separate suite, not folded into TestMcpChatConsumption:           #
+#   The controller method `AiAssistantController._get_user_mcp_tools_for_ #
+#   channel` lives in src/controllers/ai_assistant.py and uses the        #
+#   module-level ``request`` (from ``odoo.http``).  Testing it requires   #
+#   patching that ``request`` symbol — pattern proven by                  #
+#   test_cloud_service_acl.py::TestCloudServiceControllerRegression which #
+#   uses ``MagicMock(env=env)`` to inject the test env without an HTTP    #
+#   round-trip.                                                           #
+#                                                                         #
+# Why we cannot rely on the channel test alone (test-explainer review):   #
+#   If the implementer factors the chain walk into a helper method (e.g.  #
+#   ``_walk_channel_to_project_mcps``), a grep for                        #
+#   ``cloud_service_id.user_mcp_server_ids`` in the controller would      #
+#   return 0 hits — yet the helper might still walk the legacy chain.     #
+#   A behavioural test on the controller path catches that case.          #
+# ====================================================================== #
+
+
+@tagged('post_install', '-at_install')
+class TestAiAssistantControllerMcpToolsForChannel(TransactionCase):
+    """AC #14: AiAssistantController._get_user_mcp_tools_for_channel walks project.
+
+    Mirrors fixture shape of TestMcpChatConsumption but exercises the
+    controller path explicitly.  Builds the (channel → task → bound
+    project → user MCP → tool) graph, patches the controller's request
+    symbol with ``MagicMock(env=env)``, calls the method directly, and
+    asserts the tool recordset is returned.
+
+    Red expectation today:
+      * ``mcp_server.project_id`` missing → ``self.fail()`` →
+        ``AssertionError`` (clean red).
+      * After field exists but controller still walks
+        ``task.project_id.cloud_service_id.user_mcp_server_ids``: tool
+        recordset is empty (MCP was linked only via ``project_id``,
+        which the legacy chain ignores) → ``assertEqual(tools, tool)``
+        fails with ``AssertionError``.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Workspace = cls.env['woow_paas_platform.workspace']
+        cls.Template = cls.env['woow_paas_platform.cloud_app_template']
+        cls.Service = cls.env['woow_paas_platform.cloud_service']
+        cls.Project = cls.env['project.project']
+        cls.Task = cls.env['project.task']
+        cls.Channel = cls.env['discuss.channel']
+        cls.McpServer = cls.env['woow_paas_platform.mcp_server']
+        cls.McpTool = cls.env['woow_paas_platform.mcp_tool']
+
+    def setUp(self):
+        # Import inside setUp so test discovery doesn't fail if the
+        # controller module structure changes later.
+        from odoo.addons.woow_paas_platform.controllers.ai_assistant import (
+            AiAssistantController,
+        )
+
+        super().setUp()
+        self.controller = AiAssistantController()
+
+        if 'project_id' not in self.McpServer._fields:
+            self.fail(
+                "AC #14: mcp_server.project_id field missing — controller "
+                "rebar test cannot run pre-implementation."
+            )
+        if 'mcp_server_ids' not in self.Project._fields:
+            self.fail(
+                "AC #14: project.project.mcp_server_ids inverse missing — "
+                "controller cannot walk task.project_id.mcp_server_ids."
+            )
+
+        self.workspace = self.Workspace.sudo().create({'name': 'WS Ctrl MCP'})
+        self.template = self.Template.sudo().create({
+            'name': 'Tmpl Ctrl MCP',
+            'slug': 'tmpl-ctrl-mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'tmpl-ctrl-mcp',
+            'helm_chart_version': '1.0.0',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+        })
+        self.service = self.Service.sudo().create({
+            'name': 'Svc Ctrl MCP',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_release_name': 'ctrl-svc',
+            'helm_namespace': 'paas-ws-ctrl',
+            'mcp_auth_token': str(uuid.uuid4()),
+        })
+        self.project = self.Project.sudo().create({
+            'name': 'Ctrl Bound Project',
+            'cloud_service_id': self.service.id,
+        })
+        self.channel = self.Channel.sudo().create({
+            'name': 'Ctrl Chan',
+            'channel_type': 'channel',
+        })
+        self.Task.sudo().create({
+            'name': 'Ctrl Task',
+            'project_id': self.project.id,
+            'channel_id': self.channel.id,
+        })
+        # MCP linked ONLY by project_id (no cloud_service_id) — legacy
+        # chain would not find this.
+        self.mcp = self.McpServer.sudo().create({
+            'name': 'Ctrl Bound User MCP',
+            'url': 'http://ctrl-svc-mcp.paas-ws-ctrl.svc.cluster.local:3001/mcp',
+            'transport': 'streamable_http',
+            'scope': 'user',
+            'project_id': self.project.id,
+            'state': 'connected',
+        })
+        self.tool = self.McpTool.sudo().create({
+            'name': 'controller_chain_tool',
+            'description': 'Tool reachable only via the new project chain.',
+            'input_schema': '{}',
+            'server_id': self.mcp.id,
+        })
+
+    def test_ac14_controller_get_user_mcp_tools_for_channel_walks_project(self):
+        """AC #14: controller must walk task.project_id.mcp_server_ids.
+
+        Patches the module-level ``request`` symbol so the controller
+        sees our test env (no HTTP round-trip needed).  Same pattern as
+        test_cloud_service_acl.py::TestCloudServiceControllerRegression.
+        """
+        request_mock = MagicMock(env=self.env)
+        with patch(
+            'odoo.addons.woow_paas_platform.controllers.ai_assistant.request',
+            new=request_mock,
+        ):
+            tools = self.controller._get_user_mcp_tools_for_channel(
+                self.channel,
+            )
+
+        self.assertEqual(
+            tools, self.tool,
+            "AC #14: AiAssistantController._get_user_mcp_tools_for_channel "
+            "returned empty / wrong recordset. Got tools=%r. Expected the "
+            "tool linked via project_id.mcp_server_ids — controller still "
+            "walking task.project_id.cloud_service_id.user_mcp_server_ids "
+            "(legacy chain). Even if a helper wraps the walk, the chain "
+            "literal must follow project_id.mcp_server_ids." % (tools,),
         )

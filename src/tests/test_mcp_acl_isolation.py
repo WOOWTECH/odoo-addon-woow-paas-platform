@@ -281,3 +281,102 @@ class TestMcpAclCrossWorkspaceIsolation(TransactionCase):
                 f"be always-true. (This is intentional — see Invariant #6 "
                 f"long-form comment; not a B1-style OR-bypass bug.)",
             )
+
+    # ------------------------------------------------------------------ #
+    # Tester Re-Open #1 (2026-05-18) — Gap 2: AC #21 CSV CRUD 4-leg       #
+    #                                                                    #
+    # AC #20 covers the READ leg of                                      #
+    # ``ir.model.access.csv:access_mcp_server_user`` (perm bits change   #
+    # from ``1,0,0,0`` → ``1,1,1,1``) — Bob can search/read his own MCP. #
+    # But a CSV typo like ``1,1,0,0`` would still let Bob read while     #
+    # blocking create/write/unlink — Test #20 alone misses that.         #
+    #                                                                    #
+    # This case exercises the remaining 3 legs (CREATE / WRITE / UNLINK) #
+    # in one parametrised method on the same workspace-member positive   #
+    # path used by Test #20.  Confirms the full CRUD CSV bits flipped    #
+    # AND the rule's perm_write / perm_create / perm_unlink are True.    #
+    # ------------------------------------------------------------------ #
+    def test_ac21_bob_can_crud_own_workspace_mcp(self):
+        """AC #21 / AC #20 sanity: 4-leg CRUD positive path.
+
+        Sub-cases (single test method, 3 ops in sequence over a fresh
+        target row — kept atomic so a partial CSV flip surfaces as a
+        single test red, not three):
+
+        1. CREATE — Bob creates a new user-scope mcp_server bound to his
+           own workspace's project. Must succeed.
+        2. WRITE  — Bob writes a benign field on the just-created row.
+           Must succeed.
+        3. UNLINK — Bob unlinks the row. Must succeed.
+
+        Today (red): CSV row reads ``1,0,0,0`` so CREATE raises
+        ``AccessError`` immediately — clean ``AssertionError`` from
+        ``self.fail(...)`` catch. Even after CSV opens, the row needs
+        ``mcp_server.project_id`` to exist and the rule's
+        ``perm_create``/``perm_write``/``perm_unlink`` to be True.
+        """
+        from odoo.exceptions import AccessError
+
+        # The fixture's setUp() field-guard already short-circuits when
+        # project_id is missing, so by the time we reach here the schema
+        # is at least field-ready.
+
+        BobMcpServer = self.McpServer.with_user(self.bob)
+
+        # ---- CREATE ----
+        try:
+            new_mcp = BobMcpServer.create({
+                'name': 'Bob Own-WS CRUD Test MCP',
+                'url': 'http://bob-svc-mcp.paas-ws-bob.svc.cluster.local:3001/mcp',
+                'transport': 'streamable_http',
+                'scope': 'user',
+                'project_id': self.project_bob.id,
+            })
+        except AccessError as exc:
+            self.fail(
+                f"AC #21 CREATE leg: Bob cannot create a user MCP in his "
+                f"own workspace W2. CSV bit perm_create likely still 0 "
+                f"on access_mcp_server_user (or the rule's perm_create "
+                f"flag is False). Raised: {exc}"
+            )
+        self.assertTrue(
+            new_mcp.exists(),
+            "AC #21 CREATE leg: created record did not materialise.",
+        )
+
+        # ---- WRITE ----
+        try:
+            new_mcp.write({'description': 'CRUD leg sanity update.'})
+        except AccessError as exc:
+            self.fail(
+                f"AC #21 WRITE leg: Bob cannot write to his own W2 MCP. "
+                f"CSV bit perm_write likely still 0 (or rule's "
+                f"perm_write flag False). Raised: {exc}"
+            )
+        # Re-read with bob context to confirm the change landed visibly.
+        self.assertEqual(
+            new_mcp.description, 'CRUD leg sanity update.',
+            "AC #21 WRITE leg: write call returned without error but "
+            "value did not update.",
+        )
+
+        # ---- UNLINK ----
+        target_id = new_mcp.id
+        try:
+            new_mcp.unlink()
+        except AccessError as exc:
+            self.fail(
+                f"AC #21 UNLINK leg: Bob cannot unlink his own W2 MCP. "
+                f"CSV bit perm_unlink likely still 0 (or rule's "
+                f"perm_unlink flag False). Raised: {exc}"
+            )
+        # Confirm the row is gone (use sudo to bypass any post-deletion
+        # rule weirdness — we are checking DB state, not visibility).
+        self.assertFalse(
+            self.McpServer.sudo()
+            .with_context(active_test=False)
+            .browse(target_id).exists(),
+            "AC #21 UNLINK leg: unlink succeeded silently but row "
+            "remained — investigate ondelete cascade or rule blocking "
+            "physical delete.",
+        )
