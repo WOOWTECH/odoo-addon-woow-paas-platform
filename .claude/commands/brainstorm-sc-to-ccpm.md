@@ -2,17 +2,17 @@
 allowed-tools: Skill, Read, Write, Edit, Bash, LS, AskUserQuestion
 ---
 
-# /brainstorm-sc-ccpm — Discover with /sc:brainstorm, ship into ccpm
+# /brainstorm-sc-to-ccpm — Discover with /sc:brainstorm, ship into ccpm
 
 把 `/sc:brainstorm` 多 persona 探索 + ccpm PRD/Epic schema 塑形 銜接起來。Brainstorm 適合開放式發掘，但輸出不符合 ccpm 的 frontmatter / section schema，這個 command 做塑形 + 銜接。
 
 ## Usage
 
 ```
-/brainstorm-sc-ccpm <kebab-case-feature-name>
+/brainstorm-sc-to-ccpm <kebab-case-feature-name>
 ```
 
-例：`/brainstorm-sc-ccpm ai-chat-mermaid-rendering`
+例：`/brainstorm-sc-to-ccpm ai-chat-mermaid-rendering`
 
 未給 feature name → 透過 `AskUserQuestion` 詢問。
 
