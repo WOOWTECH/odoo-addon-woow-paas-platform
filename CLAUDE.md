@@ -645,14 +645,8 @@ This project uses the **CCPM** Agent Skill ([automazeio/ccpm](https://github.com
 
 - `.claude/prds/` — Product Requirement Documents
 - `.claude/epics/<feature>/` — `epic.md` + numbered task files + `updates/` progress tracking
-- `.claude/context/` — Project context files referenced below
 
-### Context Files
-
-- `.claude/context/project-overview.md` - Current features and status
-- `.claude/context/tech-context.md` - Technology stack
-- `.claude/context/project-style-guide.md` - Coding conventions
-- `.claude/context/system-patterns.md` - Architecture patterns
+> Old v1 project-context docs (project-overview / tech-context / system-patterns / ...) were archived to `docs/archived/ccpm-v1/context/` — v2 ccpm does not maintain a global context dir; each agent reads context from `epics/<feature>/` as needed.
 
 ### Updating the skill
 
