@@ -1,8 +1,9 @@
 ---
 name: namespace-subdomain-refactor
-status: backlog
+status: completed
 created: 2026-03-01T14:55:36Z
-progress: 0%
+progress: 100%
+updated: 2026-05-19T06:33:56Z
 prd: .claude/prds/namespace-subdomain-refactor.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/131
 ---
@@ -108,3 +109,9 @@ Total tasks: 4
 Parallel tasks: 2 (#133, #134)
 Sequential tasks: 2 (#132, #135)
 Estimated total effort: 2.5 hours
+
+---
+
+> **Shipped pre-ccpm-sync (2026-05-19)**: 此 epic 的實作已 ship（見 codebase / git log），但 ccpm 紀錄
+> 未跟上。Archive 時補上 `status: completed` + `progress: 100%`。個別 task 的 GitHub issue 狀態未變動
+> （沒有對應 PR ref 可關）。

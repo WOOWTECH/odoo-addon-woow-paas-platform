@@ -1,8 +1,9 @@
 ---
 name: k8s-dev-sandbox
-status: backlog
+status: completed
 created: 2026-02-28T09:41:51Z
-progress: 0%
+progress: 100%
+updated: 2026-05-19T06:33:56Z
 prd: .claude/prds/k8s-dev-sandbox.md
 github: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues/117
 ---
@@ -168,3 +169,9 @@ Total tasks: 10
 Parallel tasks: 6 (#123, #125, #129, #122, #124, #128)
 Sequential tasks: 4 (#121, #127, #126, #130)
 Estimated total effort: ~42-56 hours
+
+---
+
+> **Shipped pre-ccpm-sync (2026-05-19)**: 此 epic 的實作已 ship（見 codebase / git log），但 ccpm 紀錄
+> 未跟上。Archive 時補上 `status: completed` + `progress: 100%`。個別 task 的 GitHub issue 狀態未變動
+> （沒有對應 PR ref 可關）。
