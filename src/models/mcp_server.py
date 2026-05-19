@@ -3,6 +3,7 @@ import json
 import logging
 
 from odoo import api, fields, models
+from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -54,11 +55,12 @@ class McpServer(models.Model):
         default='system',
         required=True,
     )
-    cloud_service_id = fields.Many2one(
-        'woow_paas_platform.cloud_service',
-        string='Cloud Service',
+    project_id = fields.Many2one(
+        'project.project',
+        string='Project',
         ondelete='cascade',
-        help='Only set for user-scoped MCP servers',
+        index=True,
+        help='Only set for user-scoped MCP servers. Cascade-delete with project.',
     )
     tool_ids = fields.One2many(
         'woow_paas_platform.mcp_tool',
@@ -105,6 +107,36 @@ class McpServer(models.Model):
     def _compute_tool_count(self):
         for record in self:
             record.tool_count = len(record.tool_ids)
+
+    @api.constrains('scope', 'project_id')
+    def _check_scope_project_consistency(self):
+        # D4 invariant: scope='user' iff project_id IS NOT NULL.
+        for record in self:
+            if record.scope == 'user' and not record.project_id:
+                raise ValidationError(
+                    "User-scope MCP server '%s' must be linked to a project "
+                    "(scope='user' requires project_id)." % record.name
+                )
+            if record.scope == 'system' and record.project_id:
+                raise ValidationError(
+                    "System-scope MCP server '%s' must not be linked to a "
+                    "project (scope='system' requires project_id=NULL)."
+                    % record.name
+                )
+
+    @api.constrains('scope', 'project_id')
+    def _check_user_scope_requires_bound_project(self):
+        # D5 invariant: user-scope MCP must hang off a project that is bound
+        # to a cloud_service (the sidecar that physically backs the MCP URL).
+        for record in self:
+            if record.scope != 'user':
+                continue
+            if record.project_id and not record.project_id.cloud_service_id:
+                raise ValidationError(
+                    "User-scope MCP server '%s' must be linked to a project "
+                    "bound to a Cloud Service (unbound projects have no "
+                    "sidecar to back the MCP URL)." % record.name
+                )
 
     def _get_mcp_client_config(self):
         """Build config dict for MultiServerMCPClient."""

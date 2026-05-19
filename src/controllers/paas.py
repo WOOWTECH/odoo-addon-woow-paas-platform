@@ -1286,7 +1286,14 @@ class PaasController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     def _list_mcp_servers(self, service) -> dict[str, Any]:
-        servers = service.sudo().user_mcp_server_ids.filtered(lambda s: s.active)
+        # User-scope MCP now hangs off project, not service (D6 keeps the
+        # frontend tab on the service page; query walks service.project_ids).
+        project = service.sudo().project_ids[:1]
+        if not project:
+            return {'success': True, 'data': []}
+        servers = project.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active
+        )
         return {
             'success': True,
             'data': [self._format_mcp_server(s) for s in servers],
@@ -1298,6 +1305,13 @@ class PaasController(Controller):
         if not name or not url:
             return {'success': False, 'error': 'Name and URL are required'}
 
+        project = service.sudo().project_ids[:1]
+        if not project:
+            return {
+                'success': False,
+                'error': 'No support project bound to this service.',
+            }
+
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.create({
             'name': name,
@@ -1307,7 +1321,7 @@ class PaasController(Controller):
             'headers_json': params.get('headers_json', ''),
             'description': params.get('description', ''),
             'scope': 'user',
-            'cloud_service_id': service.id,
+            'project_id': project.id,
         })
         return {'success': True, 'data': self._format_mcp_server(server)}
 
@@ -1318,7 +1332,7 @@ class PaasController(Controller):
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
-        if not server.exists() or server.cloud_service_id.id != service.id:
+        if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
         vals = {}
@@ -1336,7 +1350,7 @@ class PaasController(Controller):
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
-        if not server.exists() or server.cloud_service_id.id != service.id:
+        if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
         server.unlink()
@@ -1349,7 +1363,7 @@ class PaasController(Controller):
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
-        if not server.exists() or server.cloud_service_id.id != service.id:
+        if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
         try:
@@ -1367,7 +1381,7 @@ class PaasController(Controller):
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
-        if not server.exists() or server.cloud_service_id.id != service.id:
+        if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
         try:
@@ -2332,11 +2346,21 @@ class PaasController(Controller):
         if not template.mcp_enabled or not template.mcp_sidecar_image:
             return
 
+        # Resolved Q #3: user-scope MCP is project-anchored. Skip + log if the
+        # service has no support project bound yet (no retry mechanism here).
+        project = service.project_ids[:1]
+        if not project:
+            _logger.info(
+                "Skip MCP auto-create for service '%s' (id=%s): no support "
+                "project bound yet.", service.name, service.id,
+            )
+            return
+
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
 
         # Check if already exists (avoid duplicates on re-deploy/upgrade)
         existing = McpServer.search([
-            ('cloud_service_id', '=', service.id),
+            ('project_id', '=', project.id),
             ('auto_created', '=', True),
         ], limit=1)
         if existing:
@@ -2355,7 +2379,7 @@ class PaasController(Controller):
             'url': mcp_url,
             'transport': template.mcp_transport or 'streamable_http',
             'scope': 'user',
-            'cloud_service_id': service.id,
+            'project_id': project.id,
             'auto_created': True,
             'api_key': service.mcp_auth_token,
             'description': f"Auto-created MCP server for {service.name}",

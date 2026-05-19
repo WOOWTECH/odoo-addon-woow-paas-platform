@@ -308,20 +308,19 @@ class DiscussChannel(models.Model):
         return '\n'.join(parts)
 
     def _get_user_mcp_tools(self):
-        """Get user-scope MCP tools from the cloud service linked to this channel.
+        """Get user-scope MCP tools from the project linked to this channel.
 
-        Follows: channel → task → project → cloud_service → user_mcp_servers → tools.
+        Follows: channel → task → project → mcp_server_ids → tools.
         """
         McpTool = self.env['woow_paas_platform.mcp_tool'].sudo()
         task = self.env['project.task'].sudo().search([
             ('channel_id', '=', self.id),
         ], limit=1)
-        if not task or not task.project_id or not task.project_id.cloud_service_id:
+        if not task or not task.project_id:
             return McpTool.browse()
 
-        service = task.project_id.cloud_service_id
-        servers = service.user_mcp_server_ids.filtered(
-            lambda s: s.active and s.state == 'connected'
+        servers = task.project_id.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active and s.state == 'connected'
         )
         if not servers:
             return McpTool.browse()

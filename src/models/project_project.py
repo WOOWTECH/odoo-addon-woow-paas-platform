@@ -18,6 +18,11 @@ class ProjectProject(models.Model):
         store=True,
         help='Workspace derived from the linked Cloud Service',
     )
+    mcp_server_ids = fields.One2many(
+        'woow_paas_platform.mcp_server',
+        'project_id',
+        string='MCP Servers',
+    )
 
     @api.depends('cloud_service_id.workspace_id')
     def _compute_workspace_id(self):

@@ -251,7 +251,16 @@ class TestAutoCreateMCPServer(TransactionCase):
         })
 
     def _create_service(self, template=None, **overrides):
-        """Helper to create a cloud service."""
+        """Helper to create a cloud service + its bound support project.
+
+        Refactor post-condition (Invariant #4 / D5 — see
+        ``docs/refactor/decisions/mcp-project-decouple.md``): user-scope
+        ``mcp_server`` rows bind to ``project.project`` via ``project_id``
+        and require a project that points back to the service. The
+        production controller (``controllers/paas.py:_auto_create_mcp_server``)
+        skips MCP creation when ``service.project_ids[:1]`` is empty, so
+        every test in this class needs a bound project pre-created.
+        """
         vals = {
             'name': 'Test Service',
             'workspace_id': self.workspace.id,
@@ -261,23 +270,37 @@ class TestAutoCreateMCPServer(TransactionCase):
             'mcp_auth_token': str(uuid.uuid4()),
         }
         vals.update(overrides)
-        return self.Service.create(vals)
+        service = self.Service.create(vals)
+        self.env['project.project'].sudo().create({
+            'name': f'{service.name} Project',
+            'cloud_service_id': service.id,
+        })
+        return service
 
     def _simulate_auto_create(self, service):
         """Simulate what _auto_create_mcp_server does, without request context.
 
         This replicates the controller logic so we can test it within
-        TransactionCase (no HTTP request needed).
+        TransactionCase (no HTTP request needed). Mirrors
+        ``controllers/paas.py:_auto_create_mcp_server`` — same
+        ``service.project_ids[:1]`` resolution + ``project_id`` field
+        used for both idempotency search and ``create()``.
         """
         template = service.template_id
         if not template.mcp_enabled or not template.mcp_sidecar_image:
+            return None
+
+        # Resolved Q #3: project-anchored MCP. Production skips when no
+        # support project bound — match that contract.
+        project = service.project_ids[:1]
+        if not project:
             return None
 
         McpServer = self.env['woow_paas_platform.mcp_server'].sudo()
 
         # Idempotency check
         existing = McpServer.search([
-            ('cloud_service_id', '=', service.id),
+            ('project_id', '=', project.id),
             ('auto_created', '=', True),
         ], limit=1)
         if existing:
@@ -300,7 +323,7 @@ class TestAutoCreateMCPServer(TransactionCase):
             'url': mcp_url,
             'transport': template.mcp_transport or 'streamable_http',
             'scope': 'user',
-            'cloud_service_id': service.id,
+            'project_id': project.id,
             'auto_created': True,
             'api_key': service.mcp_auth_token,
             'description': f"Auto-created MCP server for {service.name}",
@@ -315,7 +338,9 @@ class TestAutoCreateMCPServer(TransactionCase):
         self.assertTrue(server)
         self.assertTrue(server.auto_created)
         self.assertEqual(server.scope, 'user')
-        self.assertEqual(server.cloud_service_id.id, service.id)
+        # Refactor: link back via project chain
+        # (server.project_id.cloud_service_id) — no direct M2O.
+        self.assertEqual(server.project_id.cloud_service_id.id, service.id)
         self.assertEqual(server.transport, 'streamable_http')
         self.assertIn(service.name, server.name)
         self.assertEqual(server.state, 'draft')
@@ -340,9 +365,11 @@ class TestAutoCreateMCPServer(TransactionCase):
 
         self.assertEqual(server1.id, server2.id)
 
-        # Only one auto-created MCP Server for this service
+        # Only one auto-created MCP Server for this service.
+        # Walk via project chain (server.project_id.cloud_service_id);
+        # cloud_service.user_mcp_server_ids was removed by the refactor.
         count = self.McpServer.search_count([
-            ('cloud_service_id', '=', service.id),
+            ('project_id.cloud_service_id', '=', service.id),
             ('auto_created', '=', True),
         ])
         self.assertEqual(count, 1)
@@ -354,8 +381,10 @@ class TestAutoCreateMCPServer(TransactionCase):
 
         self.assertIsNone(server)
 
+        # Walk via project chain — see test_auto_create_idempotent for
+        # rationale (cloud_service.user_mcp_server_ids removed).
         count = self.McpServer.search_count([
-            ('cloud_service_id', '=', service.id),
+            ('project_id.cloud_service_id', '=', service.id),
             ('auto_created', '=', True),
         ])
         self.assertEqual(count, 0)
@@ -376,12 +405,17 @@ class TestAutoCreateMCPServer(TransactionCase):
 
         self.assertIsNone(server)
 
-    def test_mcp_server_linked_to_service_via_one2many(self):
-        """Service's user_mcp_server_ids includes the auto-created server."""
+    def test_mcp_server_linked_to_service_via_project_chain(self):
+        """Service exposes user-scope MCP via project_ids.mcp_server_ids.
+
+        Refactor: ``cloud_service.user_mcp_server_ids`` was removed in
+        favour of walking through ``service.project_ids.mcp_server_ids``
+        (the new inverse on ``project.project``). Lock the new chain.
+        """
         service = self._create_service()
         server = self._simulate_auto_create(service)
 
-        self.assertIn(server.id, service.user_mcp_server_ids.ids)
+        self.assertIn(server.id, service.project_ids.mcp_server_ids.ids)
 
 
 @tagged('post_install', '-at_install')
@@ -412,7 +446,13 @@ class TestMCPServerCronRetry(TransactionCase):
         })
 
     def _create_auto_mcp_server(self, state='draft', retry_count=0, **overrides):
-        """Helper to create an auto-created MCP Server in given state."""
+        """Helper to create an auto-created MCP Server in given state.
+
+        Post-refactor: user-scope ``mcp_server`` rows require a
+        ``project_id`` (D4 invariant — scope=user iff project_id NOT
+        NULL). Seed a bound project per call so each test gets a fresh
+        service + project + MCP triplet.
+        """
         service = self.Service.create({
             'name': 'Cron Service',
             'workspace_id': self.workspace.id,
@@ -421,12 +461,16 @@ class TestMCPServerCronRetry(TransactionCase):
             'helm_namespace': 'paas-ws-cron',
             'mcp_auth_token': str(uuid.uuid4()),
         })
+        project = self.env['project.project'].sudo().create({
+            'name': f'{service.name} Project',
+            'cloud_service_id': service.id,
+        })
         vals = {
             'name': f'{service.name} MCP',
             'url': 'http://cron-n8n-mcp.paas-ws-cron.svc.cluster.local:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
-            'cloud_service_id': service.id,
+            'project_id': project.id,
             'auto_created': True,
             'state': state,
             'sync_retry_count': retry_count,
@@ -530,6 +574,32 @@ class TestMCPServerSyncSafe(TransactionCase):
     def setUpClass(cls):
         super().setUpClass()
         cls.McpServer = cls.env['woow_paas_platform.mcp_server']
+        # Post-refactor: scope='user' rows require project_id (D4
+        # invariant — Python constraint @_check_scope_project_consistency
+        # at mcp_server.py:116). Seed a service + bound project once at
+        # class level so each sync_safe test can reuse the same project.
+        Workspace = cls.env['woow_paas_platform.workspace']
+        Template = cls.env['woow_paas_platform.cloud_app_template']
+        Service = cls.env['woow_paas_platform.cloud_service']
+        Project = cls.env['project.project']
+        cls.workspace = Workspace.create({'name': 'Sync Safe WS'})
+        cls.template = Template.create({
+            'name': 'Tmpl Sync Safe',
+            'slug': 'tmpl-sync-safe',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'tmpl-sync-safe',
+            'helm_chart_version': '1.0.0',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+        })
+        cls.service = Service.create({
+            'name': 'Sync Safe Service',
+            'workspace_id': cls.workspace.id,
+            'template_id': cls.template.id,
+        })
+        cls.project = Project.sudo().create({
+            'name': 'Sync Safe Project',
+            'cloud_service_id': cls.service.id,
+        })
 
     @patch('odoo.addons.woow_paas_platform.models.mcp_server.McpServer._async_sync_tools')
     def test_sync_safe_success(self, mock_async):
@@ -541,6 +611,7 @@ class TestMCPServerSyncSafe(TransactionCase):
             'url': 'http://localhost:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
+            'project_id': self.project.id,
             'auto_created': True,
             'state': 'draft',
             'sync_retry_count': 2,
@@ -563,6 +634,7 @@ class TestMCPServerSyncSafe(TransactionCase):
             'url': 'http://localhost:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
+            'project_id': self.project.id,
             'auto_created': True,
             'state': 'draft',
             'sync_retry_count': 0,
@@ -596,7 +668,17 @@ class TestMCPServerSyncSafe(TransactionCase):
 
 @tagged('post_install', '-at_install')
 class TestMCPServerCascadeDelete(TransactionCase):
-    """Test that deleting CloudService cascades to auto-created MCP Server."""
+    """Lifecycle: deleting CloudService cleans up auto-created MCP Server.
+
+    Post-refactor mechanism (no longer FK cascade): user-scope
+    ``mcp_server.project_id`` is ``ondelete='cascade'`` to
+    ``project.project`` but **not** to ``cloud_service``. The
+    cloud-service ↔ project link uses ``ondelete='set null'``
+    (see ``docs/refactor/decisions/mcp-project-decouple.md`` Invariant
+    #2). Cleanup therefore happens via ``cloud_service.unlink()``
+    override (BLOCKER 2 fix) + project-direct cascade for the project
+    deletion path. Tests below exercise both routes.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -619,45 +701,66 @@ class TestMCPServerCascadeDelete(TransactionCase):
             'mcp_sidecar_port': 3000,
         })
 
-    def test_delete_service_cascades_to_mcp_server(self):
-        """Deleting CloudService should delete its auto-created MCP Server."""
+    def test_delete_service_cleans_user_mcp(self):
+        """Direct ``service.unlink()`` removes user-scope MCP rows.
+
+        Post-refactor: no FK cascade from cloud_service to mcp_server
+        (mcp_server.project_id ondelete=cascade hits project, not
+        service). The cleanup is done by ``cloud_service.unlink()``
+        override — see BLOCKER 2 regression test below for the
+        explicit override-vs-cascade lock.
+        """
         service = self.Service.create({
             'name': 'To Delete Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
             'mcp_auth_token': str(uuid.uuid4()),
         })
-
+        project = self.env['project.project'].sudo().create({
+            'name': f'{service.name} Project',
+            'cloud_service_id': service.id,
+        })
         server = self.McpServer.sudo().create({
             'name': f'{service.name} MCP',
             'url': 'http://test-mcp.ns.svc.cluster.local:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
-            'cloud_service_id': service.id,
+            'project_id': project.id,
             'auto_created': True,
         })
         server_id = server.id
 
         service.unlink()
 
-        # MCP Server should be cascade-deleted (ondelete='cascade')
+        # MCP Server is removed via cloud_service.unlink() override
+        # (cloud_service.py:1176-1201). No FK cascade is involved on
+        # the cloud_service ↔ mcp_server path.
         self.assertFalse(self.McpServer.sudo().browse(server_id).exists())
 
     def test_delete_service_also_deletes_mcp_tools(self):
-        """Cascade: Service -> MCP Server -> MCP Tools all cleaned up."""
+        """Service unlink → MCP Server (via override) → Tools (FK cascade).
+
+        Chain:
+        - ``cloud_service.unlink()`` override removes user-scope MCP.
+        - ``mcp_tool.server_id`` is ondelete='cascade' on ``mcp_server``,
+          so tools follow automatically.
+        """
         service = self.Service.create({
             'name': 'Tool Cascade Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
             'mcp_auth_token': str(uuid.uuid4()),
         })
-
+        project = self.env['project.project'].sudo().create({
+            'name': f'{service.name} Project',
+            'cloud_service_id': service.id,
+        })
         server = self.McpServer.sudo().create({
             'name': f'{service.name} MCP',
             'url': 'http://test-mcp.ns.svc.cluster.local:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
-            'cloud_service_id': service.id,
+            'project_id': project.id,
             'auto_created': True,
         })
 
@@ -676,30 +779,277 @@ class TestMCPServerCascadeDelete(TransactionCase):
         self.assertFalse(self.McpServer.sudo().browse(server_id).exists())
         self.assertFalse(McpTool.sudo().browse(tool_id).exists())
 
-    def test_delete_workspace_cascades_through_service_to_mcp(self):
-        """Workspace delete -> Service delete -> MCP Server delete."""
-        workspace = self.Workspace.create({'name': 'Full Cascade WS'})
+    def test_delete_workspace_preserves_mcp_via_orphaned_project(self):
+        """Workspace delete → Service deleted; project + MCP survive.
+
+        Post-refactor semantics (Invariant #2 — cloud_service ↔ project
+        ondelete='set null', not cascade):
+
+        * workspace.unlink() cascades to cloud_service via
+          ``cloud_service.workspace_id`` ondelete='cascade'.
+        * Cascade happens at PostgreSQL FK level — the Python
+          ``cloud_service.unlink()`` override does NOT fire on the
+          cascade path (DB cascade bypasses Python ORM hooks).
+        * ``project.cloud_service_id`` ondelete='set null' so the
+          project survives as an orphan (cloud_service_id = NULL).
+        * The user-scope MCP's ``project_id`` still points at the
+          surviving project, so the MCP also survives.
+
+        This is the **intended** new behaviour: projects + their MCP
+        servers are independent of any single service's lifecycle
+        (D6 ruling — see ``docs/refactor/decisions/mcp-project-decouple.md``).
+        The orphan project can be re-bound to a new service later
+        without losing its MCP tools / chat history.
+
+        Pre-refactor expectation (workspace.unlink → MCP gone via
+        direct FK cascade on mcp_server.cloud_service_id) no longer
+        applies because that direct FK was removed.
+        """
+        workspace = self.Workspace.create({'name': 'Workspace Survive WS'})
         service = self.Service.create({
-            'name': 'Full Cascade Service',
+            'name': 'Survive Service',
             'workspace_id': workspace.id,
             'template_id': self.mcp_template.id,
             'mcp_auth_token': str(uuid.uuid4()),
+        })
+        project = self.env['project.project'].sudo().create({
+            'name': f'{service.name} Project',
+            'cloud_service_id': service.id,
         })
         server = self.McpServer.sudo().create({
             'name': f'{service.name} MCP',
             'url': 'http://test-mcp.ns.svc.cluster.local:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
-            'cloud_service_id': service.id,
+            'project_id': project.id,
             'auto_created': True,
         })
         service_id = service.id
+        project_id = project.id
         server_id = server.id
 
         workspace.unlink()
 
-        self.assertFalse(self.Service.browse(service_id).exists())
-        self.assertFalse(self.McpServer.sudo().browse(server_id).exists())
+        # Service is gone (FK cascade from workspace).
+        self.assertFalse(
+            self.Service.browse(service_id).exists(),
+            "Workspace cascade should delete the service (cloud_service."
+            "workspace_id ondelete='cascade').",
+        )
+        # Project survives — its cloud_service_id was set to NULL by
+        # FK on cascade.
+        surviving_project = self.env['project.project'].sudo().browse(project_id)
+        self.assertTrue(
+            surviving_project.exists(),
+            "Invariant #2 regression: project must survive its bound "
+            "service deletion (cloud_service_id ondelete='set null'). "
+            "If this fails, ondelete was accidentally changed to "
+            "'cascade' — D6 decision violated.",
+        )
+        self.assertFalse(
+            surviving_project.cloud_service_id,
+            "Invariant #2 regression: surviving project's "
+            "cloud_service_id must be NULL after the bound service is "
+            "cascaded away by workspace deletion.",
+        )
+        # MCP survives because its project_id is still valid.
+        self.assertTrue(
+            self.McpServer.sudo().browse(server_id).exists(),
+            "Refactor regression: user-scope MCP should survive a "
+            "workspace cascade because its project (parent) survives. "
+            "If this fails, mcp_server.project_id ondelete may have "
+            "been accidentally tied to the service chain.",
+        )
+
+    # ------------------------------------------------------------------ #
+    # BLOCKER 2 regression — reviewer (2026-05-18, NEEDS REVISION)        #
+    #                                                                    #
+    # Reviewer surfaced that the round-2/round-3 suites covered the      #
+    # `_do_cleanup` path but never explicitly locked the                 #
+    # `cloud_service.unlink()` override path that catches direct         #
+    # unlink() calls (controllers, cron, ORM ops) bypassing the          #
+    # lifecycle helper. Implementation added the override in             #
+    # cloud_service.py:1176-1201 covering 4 unlink entry points          #
+    # (3 reviewer-surfaced + 1 sweep-found at _poll_and_update_status    #
+    # line 787). This regression locks the override behaviour            #
+    # **without** going through _do_cleanup — distinct from              #
+    # test_delete_service_cleans_user_mcp above only in intent (this     #
+    # test would still pass if the override were removed and _do_cleanup #
+    # were the only path; that scenario would be the legitimate          #
+    # behaviour to catch here).                                          #
+    # ------------------------------------------------------------------ #
+    def test_blocker2_unlink_override_cleans_user_mcp_without_do_cleanup(self):
+        """BLOCKER 2: direct ``service.unlink()`` cleans user-scope MCP.
+
+        Locks the override-vs-cascade invariant: even when no
+        ``_do_cleanup`` precedes the unlink (e.g. controller deleting
+        a stuck service after its own helm uninstall, cron compaction,
+        a manual ORM op), the user-scope MCP rows that point at the
+        service's project_ids MUST be removed in the same transaction.
+
+        A zombie row (user-scope MCP whose backing sidecar is gone)
+        violates D5 / Invariant #5 and produces silent AI-chat tool
+        failures.
+        """
+        service = self.Service.create({
+            'name': 'Direct Unlink Service',
+            'workspace_id': self.workspace.id,
+            'template_id': self.mcp_template.id,
+            'helm_release_name': 'direct-unlink',
+            'helm_namespace': 'paas-ws-du',
+            'mcp_auth_token': str(uuid.uuid4()),
+        })
+        project = self.env['project.project'].sudo().create({
+            'name': f'{service.name} Project',
+            'cloud_service_id': service.id,
+        })
+        user_mcp = self.McpServer.sudo().create({
+            'name': f'{service.name} MCP',
+            'url': 'http://direct-unlink-mcp.paas-ws-du.svc.cluster.local:3000/mcp',
+            'transport': 'streamable_http',
+            'scope': 'user',
+            'project_id': project.id,
+            'auto_created': True,
+        })
+        mcp_id = user_mcp.id
+
+        # Note: we deliberately do NOT call service._do_cleanup() here.
+        # The override at cloud_service.unlink() must do the cleanup on
+        # its own — this is the entire point of the regression lock.
+        service.unlink()
+
+        self.assertFalse(
+            self.McpServer.sudo().browse(mcp_id).exists(),
+            "BLOCKER 2 regression: user-scope MCP must be removed by "
+            "cloud_service.unlink() override even when _do_cleanup is "
+            "not invoked first. See cloud_service.py:1176-1201.",
+        )
+
+    def test_blocker2_unlink_override_skips_system_mcp(self):
+        """BLOCKER 2 boundary: system-scope MCP is NOT touched by unlink.
+
+        The override filters on ``scope == 'user'`` (D5 / Invariant
+        #1 — system-scope MCP rows are not bound to any service and
+        must survive service deletion). Without this filter, deleting
+        a service could blow away platform-wide system MCP and break
+        every other workspace's AI assistant.
+        """
+        service = self.Service.create({
+            'name': 'System Safe Service',
+            'workspace_id': self.workspace.id,
+            'template_id': self.mcp_template.id,
+            'helm_release_name': 'sys-safe',
+            'helm_namespace': 'paas-ws-ss',
+            'mcp_auth_token': str(uuid.uuid4()),
+        })
+        # System-scope MCP — no project_id (Invariant #1).
+        system_mcp = self.McpServer.sudo().create({
+            'name': 'Platform System MCP',
+            'url': 'http://platform.mcp/sse',
+            'transport': 'sse',
+            'scope': 'system',
+        })
+        sys_id = system_mcp.id
+
+        service.unlink()
+
+        self.assertTrue(
+            self.McpServer.sudo().browse(sys_id).exists(),
+            "BLOCKER 2 boundary: system-scope MCP must survive a "
+            "service unlink — only scope='user' rows are tied to the "
+            "service via project chain. See cloud_service.py:1192 "
+            "(`.filtered(lambda s: s.scope == 'user')`).",
+        )
+
+    # ------------------------------------------------------------------ #
+    # MAJOR 2 regression — reviewer (2026-05-18, NEEDS REVISION)         #
+    #                                                                    #
+    # Reviewer surfaced that no test locked the new contract from        #
+    # cloud_service.py:1162-1171: when the helm uninstall step inside    #
+    # _do_cleanup raises, service.state must be set to 'error' (mirror   #
+    # of _do_suspend / _do_resume fail handling) — NOT left at the       #
+    # pre-call state, NOT advanced to 'deleting'. Half-success state     #
+    # is also a contract: user-scope MCP was unlinked BEFORE the helm    #
+    # attempt (D1 / Invariant #4 ordering), so on helm fail we end up    #
+    # with MCP-gone + state=error.                                       #
+    # ------------------------------------------------------------------ #
+    def test_major2_do_cleanup_helm_fail_sets_error_state(self):
+        """MAJOR 2: ``_do_cleanup`` helm uninstall fail → state='error'.
+
+        Mocks ``get_paas_operator_client`` to return a client whose
+        ``uninstall_release`` raises. Asserts the post-fail state
+        machine: state='error', error_message populated, NOT advanced
+        to 'deleting'. Also confirms user-scope MCP was already
+        unlinked before the helm attempt (D1 ordering).
+        """
+        service = self.Service.create({
+            'name': 'Helm Fail Service',
+            'workspace_id': self.workspace.id,
+            'template_id': self.mcp_template.id,
+            'helm_release_name': 'helm-fail',
+            'helm_namespace': 'paas-ws-hf',
+            'mcp_auth_token': str(uuid.uuid4()),
+            'state': 'running',
+        })
+        project = self.env['project.project'].sudo().create({
+            'name': f'{service.name} Project',
+            'cloud_service_id': service.id,
+        })
+        user_mcp = self.McpServer.sudo().create({
+            'name': f'{service.name} MCP',
+            'url': 'http://helm-fail-mcp.paas-ws-hf.svc.cluster.local:3000/mcp',
+            'transport': 'streamable_http',
+            'scope': 'user',
+            'project_id': project.id,
+            'auto_created': True,
+        })
+        mcp_id = user_mcp.id
+
+        # Patch the local import inside _do_cleanup to return a
+        # client whose uninstall_release raises a generic Exception.
+        # The path is module-relative (
+        # ``from ..services.paas_operator import get_paas_operator_client``)
+        # so we patch the symbol at its source module.
+        mock_client = MagicMock()
+        mock_client.uninstall_release.side_effect = RuntimeError(
+            'helm broken in test'
+        )
+        patch_target = (
+            'odoo.addons.woow_paas_platform.services.paas_operator.'
+            'get_paas_operator_client'
+        )
+        with patch(patch_target, return_value=mock_client):
+            service._do_cleanup()
+
+        service.invalidate_recordset()
+        self.assertEqual(
+            service.state, 'error',
+            "MAJOR 2 regression: helm uninstall fail must set "
+            "state='error' (mirrors _do_suspend / _do_resume). See "
+            "cloud_service.py:1162-1171.",
+        )
+        self.assertNotEqual(
+            service.state, 'deleting',
+            "MAJOR 2 regression: helm uninstall fail must NOT advance "
+            "the service to state='deleting'; that's reserved for the "
+            "success path at cloud_service.py:1174.",
+        )
+        self.assertIn(
+            'helm broken in test', service.error_message or '',
+            "MAJOR 2 regression: error_message must surface the helm "
+            "exception so operators can diagnose without re-reading "
+            "logs.",
+        )
+        # Half-success: user-scope MCP was already unlinked at
+        # cloud_service.py:1139-1147 before the helm attempt (D1 /
+        # Invariant #4 — no zombie rows even when cleanup half-fails).
+        self.assertFalse(
+            self.McpServer.sudo().browse(mcp_id).exists(),
+            "MAJOR 2 boundary (D1 / Invariant #4): user-scope MCP "
+            "must be unlinked BEFORE the helm uninstall attempt, so "
+            "even a half-success cleanup leaves no zombie rows "
+            "pointing at a stale sidecar URL.",
+        )
 
 
 @tagged('post_install', '-at_install')
@@ -785,3 +1135,181 @@ class TestMCPServerModel(TransactionCase):
         self.assertFalse(server.auto_created)
         self.assertEqual(server.sync_retry_count, 0)
         self.assertEqual(server.state, 'draft')
+
+
+# ====================================================================== #
+# TDD red phase — mcp_server scope/project_id consistency constraints     #
+# (Plan §Constraint AC #6 & #7, Decision §Invariants 2 & 3)               #
+#                                                                         #
+# Today (pre-implementation):                                             #
+#   * ``mcp_server.project_id`` does not exist.                           #
+#   * No ``@api.constrains`` on ``scope`` / ``project_id``.               #
+#                                                                         #
+# Red expectation:                                                        #
+#   1. Field guard ``self.fail()`` → AssertionError until ``project_id``  #
+#      is added (AC #1).                                                  #
+#   2. Once the field exists but the constraint is missing, ``create``    #
+#      with violating values does NOT raise → ``assertRaises`` fails →    #
+#      AssertionError.                                                    #
+# ====================================================================== #
+
+
+@tagged('post_install', '-at_install')
+class TestMcpProjectScopeConstraints(TransactionCase):
+    """AC #6 / #7 — D4 & D5 scope/project consistency constraints."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Workspace = cls.env['woow_paas_platform.workspace']
+        cls.Template = cls.env['woow_paas_platform.cloud_app_template']
+        cls.Service = cls.env['woow_paas_platform.cloud_service']
+        cls.Project = cls.env['project.project']
+        cls.McpServer = cls.env['woow_paas_platform.mcp_server']
+
+    def setUp(self):
+        super().setUp()
+        if 'project_id' not in self.McpServer._fields:
+            self.fail(
+                "mcp_server.project_id field missing — constraint tests "
+                "rely on the new schema (Plan AC #1). Implement schema "
+                "before constraints."
+            )
+
+        self.workspace = self.Workspace.sudo().create({
+            'name': 'WS Constraint MCP',
+        })
+        self.template = self.Template.sudo().create({
+            'name': 'Tmpl Constraint MCP',
+            'slug': 'tmpl-constraint-mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'tmpl-c-mcp',
+            'helm_chart_version': '1.0.0',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+        })
+        self.bound_service = self.Service.sudo().create({
+            'name': 'Constraint Bound Svc',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_release_name': 'constraint-svc',
+            'helm_namespace': 'paas-ws-c',
+        })
+        self.project_bound = self.Project.sudo().create({
+            'name': 'Constraint Bound Project',
+            'cloud_service_id': self.bound_service.id,
+        })
+        self.project_unbound = self.Project.sudo().create({
+            'name': 'Constraint Unbound Project',
+        })
+
+    # ------------------------------------------------------------------ #
+    # AC #6 / D4 invariant — scope='user' requires project_id NOT NULL    #
+    # ------------------------------------------------------------------ #
+    def test_ac6_constraint_user_scope_requires_project(self):
+        """AC #6 / D4: scope='user' with project_id NULL must raise ValidationError.
+
+        The Python ``@api.constrains('scope', 'project_id')`` must
+        enforce ``scope='user' ⇔ project_id IS NOT NULL`` (decision §3).
+        Without the constraint, ORM accepts the inconsistent row → the
+        whole D4 invariant breaks (AI chat would see a user-scope MCP
+        with no project to anchor its workspace).
+        """
+        # ValidationError is the canonical Odoo constraint failure.
+        # We import lazily to avoid import-time coupling on stub envs.
+        from odoo.exceptions import ValidationError
+
+        with self.assertRaises(
+            ValidationError,
+            msg=(
+                "AC #6 / D4: creating scope='user' with project_id=False "
+                "did not raise ValidationError. Add "
+                "_check_scope_project_consistency to mcp_server."
+            ),
+        ):
+            self.McpServer.sudo().create({
+                'name': 'Bad User No Project',
+                'url': 'http://x/mcp',
+                'transport': 'streamable_http',
+                'scope': 'user',
+                'project_id': False,
+            })
+
+    # ------------------------------------------------------------------ #
+    # AC #6 / D4 invariant — scope='system' requires project_id IS NULL   #
+    # ------------------------------------------------------------------ #
+    def test_ac6_constraint_system_scope_excludes_project(self):
+        """AC #6 / D4: scope='system' with project_id set must raise.
+
+        The bi-directional invariant: scope='system' implies
+        project_id IS NULL.  Without enforcement, an operator setting
+        a system MCP on a project would create a row that breaks the
+        D5 reasoning (system MCP doesn't belong to a project — it's
+        platform-wide).
+        """
+        from odoo.exceptions import ValidationError
+
+        with self.assertRaises(
+            ValidationError,
+            msg=(
+                "AC #6 / D4: creating scope='system' with project_id set "
+                "did not raise ValidationError. The constraint must check "
+                "BOTH directions (scope='user' ⇔ project_id NOT NULL)."
+            ),
+        ):
+            self.McpServer.sudo().create({
+                'name': 'Bad System With Project',
+                'url': 'http://sys/mcp',
+                'transport': 'streamable_http',
+                'scope': 'system',
+                'project_id': self.project_bound.id,
+            })
+
+    # ------------------------------------------------------------------ #
+    # AC #7 / D5 invariant — user-scope MCP requires bound project        #
+    # ------------------------------------------------------------------ #
+    def test_ac7_constraint_user_scope_requires_bound_project(self):
+        """AC #7 / D5: user-scope MCP must point to a project with cloud_service_id.
+
+        Physical reality: user-scope MCP is a sidecar wrapper (``url``
+        derives from ``service.helm_release_name + helm_namespace``).
+        An unbound project (no cloud_service_id) has no service → no
+        sidecar → the MCP has no physical anchor.  D5 puts this
+        invariant in schema-level constraint rather than ACL filter
+        (B1 pitfall: never patch root-cause invariants with rule
+        filters).
+        """
+        from odoo.exceptions import ValidationError
+
+        with self.assertRaises(
+            ValidationError,
+            msg=(
+                "AC #7 / D5: creating scope='user' with an unbound project "
+                "did not raise ValidationError. Add "
+                "_check_user_scope_requires_bound_project — domain "
+                "project_id.cloud_service_id IS NOT NULL."
+            ),
+        ):
+            self.McpServer.sudo().create({
+                'name': 'Bad User On Unbound Project',
+                'url': 'http://x/mcp',
+                'transport': 'streamable_http',
+                'scope': 'user',
+                'project_id': self.project_unbound.id,
+            })
+
+        # Positive sanity: same row with bound project should succeed.
+        try:
+            ok = self.McpServer.sudo().create({
+                'name': 'OK User On Bound Project',
+                'url': 'http://chat-svc-mcp.paas-ws-c.svc.cluster.local:3001/mcp',
+                'transport': 'streamable_http',
+                'scope': 'user',
+                'project_id': self.project_bound.id,
+            })
+        except ValidationError as exc:
+            self.fail(
+                f"AC #7 / D5 over-correction: scope='user' on a bound "
+                f"project raised ValidationError: {exc}. Constraint must "
+                f"only block unbound projects."
+            )
+        self.assertTrue(ok.exists())
