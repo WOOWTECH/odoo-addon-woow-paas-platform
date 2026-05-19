@@ -40,7 +40,7 @@
 | 動作 | 指令 |
 |------|------|
 | 建新 doc（含 frontmatter 模板） | `/docs:new <category> <name>` |
-| 把 ccpm epic / superpowers 探索 promote 到主結構 | `/docs:promote ccpm:<epic-name>` 或 `/docs:promote superpowers:<file>` |
+| 把 ccpm epic / superpowers 探索 promote 到主結構 | `/docs:promote ccpm:<feature-name>` 或 `/docs:promote superpowers:<file>` |
 
 ## 命名規則
 

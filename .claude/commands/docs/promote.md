@@ -9,15 +9,21 @@ ccpm epic 完成、或 superpowers brainstorming/writing-plans 跑完之後，�
 ## Usage
 
 ```
-/docs:promote ccpm:<epic-name>
+/docs:promote ccpm:<feature-name>
 /docs:promote superpowers:<spec-or-plan-filename>
 ```
+
+`<feature-name>` 是 ccpm 流程的 feature slug，**PRD / Epic / Tasks 三者共用同一個 name**（如 `wallet-billing`、`odoo-service-config-enhancement`），對應到：
+- `.claude/prds/<feature-name>.md`（PRD — 由 plan skill 產出）
+- `.claude/epics/<feature-name>/epic.md`（Epic — parse-prd 後）
+- `.claude/epics/<feature-name>/<N>.md`（Tasks — decompose 後）
+- `.claude/epics/<feature-name>/updates/<N>/`（執行進度）
 
 例：
 
 ```
 /docs:promote ccpm:wallet-billing
-/docs:promote ccpm:cloud-service-decouple
+/docs:promote ccpm:odoo-service-config-enhancement
 /docs:promote superpowers:2026-05-16-ai-chat-mermaid-rendering-design.md
 ```
 
@@ -26,9 +32,9 @@ ccpm epic 完成、或 superpowers brainstorming/writing-plans 跑完之後，�
 ### Step 0 — 驗證輸入
 
 1. 解析 source 類型：
-   - `ccpm:<name>`：檢查 `.claude/epics/<name>/epic.md` 存在（含 `.claude/epics/archived/<name>/`）。
+   - `ccpm:<feature-name>`：檢查 `.claude/prds/<name>.md` **或** `.claude/epics/<name>/epic.md`（含 `.claude/epics/archived/<name>/`）至少其一存在。
    - `superpowers:<file>`：檢查 `docs/superpowers/specs/<file>` 或 `docs/superpowers/plans/<file>` 存在。
-2. 不存在 → 用 `AskUserQuestion` 請使用者確認名稱或路徑。
+2. 全部不存在 → 用 `AskUserQuestion` 請使用者確認名稱或路徑。
 3. **記錄 datetime**：
    ```bash
    NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -36,14 +42,24 @@ ccpm epic 完成、或 superpowers brainstorming/writing-plans 跑完之後，�
 
 ### Step 1 — 讀內容並識別 promote 候選
 
-**ccpm 模式**：
-- 讀 `.claude/epics/<name>/epic.md`
-- 讀所有 `<N>.md` task files（含 archived/）
+**ccpm 模式**（讀完整 ccpm tree，PRD → Epic → Tasks → updates）：
+
+- 讀 `.claude/prds/<name>.md`（如存在）
+- 讀 `.claude/epics/<name>/epic.md`（如存在）
+- 讀所有 `.claude/epics/<name>/<N>.md` task files
+- 掃 `.claude/epics/<name>/updates/<N>/` 內 `progress.md` / `stream-*.md`（含 archived/）
 - 識別段落：
-  - "Architecture Decisions" / "Trade-offs" / "Design" → 候選去 `docs/decisions/refactor/` 或 `decisions/philosophy/`
-  - "Pitfalls" / "Incidents" / "What went wrong" / "Bug" → 候選去 `docs/tracking/pitfalls/`
-  - "Follow-up" / "Tech debt" / "TODO" → 候選 append 到 `docs/tracking/followups/follow-ups.md`
-  - "Pattern" / 可複用實作 → 候選去 `docs/decisions/patterns/`
+  - **PRD 來源**：
+    - "User Stories" + Acceptance Criteria → 候選去 `docs/reference/features/`
+    - "Functional Requirements" / "Non-Functional Requirements" → 同上
+    - "Success Criteria"（可量測指標）→ `docs/reference/features/` 或 `docs/decisions/philosophy/`
+  - **Epic 來源**：
+    - "Architecture Decisions" / "Trade-offs" / "Technical Approach" → `docs/decisions/refactor/` 或 `decisions/philosophy/`
+    - 可複用 pattern → `docs/decisions/patterns/`
+  - **Tasks / updates 來源**：
+    - "Pitfalls" / "Incidents" / "What went wrong" / "Bug" → `docs/tracking/pitfalls/`
+    - "Follow-up" / "Tech debt" / "TODO" / "Caveat" → append 到 `docs/tracking/followups/follow-ups.md`
+    - 實作中發現的 pattern → `docs/decisions/patterns/`
 
 **superpowers 模式**：
 - 讀 `docs/superpowers/specs/<file>` 或 `docs/superpowers/plans/<file>`

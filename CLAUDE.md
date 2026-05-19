@@ -565,7 +565,7 @@ Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（11 條未竟事項�
 **工具指令**：
 
 - `/docs:new <category> <name>` — 建新 doc（產 frontmatter 模板）
-- `/docs:promote ccpm:<epic-name>` 或 `/docs:promote superpowers:<file>` — 把 ccpm epic / superpowers 探索 promote 到主結構
+- `/docs:promote ccpm:<feature-name>` 或 `/docs:promote superpowers:<file>` — 把 ccpm epic / superpowers 探索 promote 到主結構
 
 **CI 策略**：
 
