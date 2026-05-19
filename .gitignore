@@ -15,6 +15,7 @@ resource/stitch_*
 .env
 .env.local
 .env.*.local
+.DS_Store
 
 # Generated config (from template)
 config/odoo/odoo.conf
