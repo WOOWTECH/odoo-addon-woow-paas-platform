@@ -20,6 +20,7 @@
 | [`deployment/`](deployment/) | K8s setup、運維、troubleshooting、admin roles |
 | [`testing/`](testing/) | Odoo test、PaaS operator test、E2E test guide |
 | [`tutorials/`](tutorials/) | 完整逐步指引（cloud odoo addon management） |
+| [`frameworks/`](frameworks/) | Claude Code framework 使用指南（ccpm、superpowers、SuperClaude） |
 
 ## 命名
 

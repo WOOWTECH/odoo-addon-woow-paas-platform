@@ -654,42 +654,44 @@ export class SubscriptionCard extends Component {
 - PostgreSQL 14+ (for Odoo)
 - Cloudflare DNS (or custom domain for Ingress)
 
-## Claude Code PM
+## Framework integration
 
-This project uses the **CCPM** Agent Skill ([automazeio/ccpm](https://github.com/automazeio/ccpm)) for spec-driven project management. The skill auto-triggers on PM-related intents — you usually don't need to type slash commands.
+本 repo 同時用三套 Claude Code framework，各自 scope 與整合點不同。**詳細使用指南漸進載入** — 需要哪套再讀對應檔，不要一次全載：
 
-`.claude/skills/ccpm` is a symlink to a local clone of `automazeio/ccpm` (path varies per machine — run `readlink .claude/skills/ccpm` to see where yours points).
+| Framework | Scope / 安裝形式 | 主要用途 | 詳細指南 |
+|-----------|----------------|---------|---------|
+| **ccpm**（[automazeio/ccpm](https://github.com/automazeio/ccpm)） | Project skill — symlink `.claude/skills/ccpm` | spec-driven PM：PRD → Epic → GitHub issues → 平行 agents | [`docs/guides/frameworks/ccpm.md`](docs/guides/frameworks/ccpm.md) |
+| **superpowers**（[obra/superpowers](https://github.com/obra/superpowers)） | User-scope plugin（SessionStart hook 自動注入） | 16+ skills：brainstorming / writing-plans / TDD / debugging / code-review / worktree | [`docs/guides/frameworks/superpowers.md`](docs/guides/frameworks/superpowers.md) |
+| **SuperClaude_Framework**（[SuperClaude-Org/SuperClaude_Framework](https://github.com/SuperClaude-Org/SuperClaude_Framework)） | User-scope `~/.claude/commands/sc/*` | 30+ slash commands；本 repo 只用 `/sc:brainstorm` + ad hoc 其他 | [`docs/guides/frameworks/superclaude.md`](docs/guides/frameworks/superclaude.md) |
 
-### Trigger phrases (skill auto-routes)
+### 共用整合點：`/docs:promote`
 
-| Intent | Example phrasing |
-|---|---|
-| Plan a feature | "write a PRD for X", "let's plan X", "scope this out" |
-| Decompose epic | "break this epic into tasks", "decompose the X epic" |
-| Sync to GitHub | "sync the X epic", "push tasks to github" |
-| Start work | "start working on issue N", "let's work on issue N" |
-| Status / standup | "standup", "what's next", "what's blocked", "what are we working on" |
+ccpm 或 superpowers 的長期價值產出，透過 `/docs:promote` 升級到 `docs/` 主結構（6 類，見上方 Docs organisation）：
 
-### Working data (kept in repo)
-
-- `.claude/prds/` — Product Requirement Documents
-- `.claude/epics/<feature>/` — `epic.md` + numbered task files + `updates/` progress tracking
-
-> Old v1 project-context docs (project-overview / tech-context / system-patterns / ...) were archived to `docs/archived/ccpm-v1/context/` — v2 ccpm does not maintain a global context dir; each agent reads context from `epics/<feature>/` as needed.
-
-### Updating the skill
-
-Run `git pull` inside the clone that `.claude/skills/ccpm` resolves to. One-liner:
-
-```bash
-git -C "$(readlink .claude/skills/ccpm)/../.." pull
+```
+/docs:promote ccpm:<feature-name>           # 從 .claude/epics/ 或 .claude/prds/
+/docs:promote superpowers:<filename>        # 從 docs/superpowers/{specs,plans}/
 ```
 
-### First-time setup on a new machine
+### 新 feature 探索入口：`/brainstorm-sc-to-ccpm`
 
-1. Clone `automazeio/ccpm` somewhere outside the repo (e.g. a personal skills folder).
-2. `ln -s <clone>/skill/ccpm .claude/skills/ccpm`
-3. Verify `readlink .claude/skills/ccpm` resolves to your clone.
+`/sc:brainstorm`（SuperClaude）多 persona 探索 → 塑形 ccpm-compliant PRD → 進 ccpm tree：
+
+```
+/brainstorm-sc-to-ccpm <feature-slug>
+```
+
+### 不啟用清單
+
+- **`/sc:pm`**（SuperClaude）— 預設寫 `docs/{temp,patterns,pdca,mistakes,checklists}/`，與本 repo 6 類結構衝突；PM 工作流由 ccpm 承擔
+- **ccpm v1**（散置 `agents/` `commands/pm/` `rules/` `scripts/pm/`）— 已遷移到 v2 Agent Skill，舊 context dir archive 到 `docs/archived/ccpm-v1/context/`
+
+### 三套之間的關係
+
+- **ccpm** 是主 PM 工具（owns `.claude/prds/` + `.claude/epics/`）
+- **superpowers** 是輔助工具集（owns `docs/superpowers/` 工具自管理區）
+- **SuperClaude** 是 ad hoc command 庫（產出多在 `claudedocs/` git-ignored，唯 `/sc:brainstorm` 透過 `/brainstorm-sc-to-ccpm` 接 ccpm）
+- **superpowers `brainstorming`** 與 **`/sc:brainstorm`** 功能重疊：本 repo 統一走 `/brainstorm-sc-to-ccpm`（SuperClaude 路徑，與 ccpm schema 對齊較好）
 
 ## Worktree Development
 
