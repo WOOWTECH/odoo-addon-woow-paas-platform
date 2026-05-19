@@ -95,6 +95,11 @@
                                     <span t-att-class="'o_woow_sp_badge ' + getStatusBadgeClass(project)">
                                         <t t-esc="getStatusLabel(project)"/>
                                     </span>
+                                    <button class="o_woow_sp_settings_btn"
+                                            title="Project settings"
+                                            t-on-click="getSettingsHandler(project.id)">
+                                        <WoowIcon name="'settings'" size="16"/>
+                                    </button>
                                 </div>
 
                                 <!-- Description -->

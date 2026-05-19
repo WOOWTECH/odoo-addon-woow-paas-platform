@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from odoo import fields
+from odoo.exceptions import ValidationError
 from odoo.http import request, route, Controller
 
 from ..models.workspace_access import (
@@ -1417,6 +1418,270 @@ class PaasController(Controller):
             'tool_count': server.tool_count,
             'tools': tools,
             'last_sync': server.last_sync.isoformat() if server.last_sync else None,
+        }
+
+    # ==================== Project-centric Support API (D4 / OR-6) ====================
+
+    _PROJECT_NOT_FOUND_ERROR = 'Project not found or access denied'
+
+    class _SyntheticAccess:
+        """Stand-in access record for unbound projects (OR-7 carve-out).
+
+        Aligns with ``ai_assistant.py:_check_project_access``: unbound
+        projects grant global access to authenticated internal users.
+        D5 ORM constraint still protects user-scope MCP integrity.
+        """
+        def __init__(self, role):
+            self.role = role
+
+    def _resolve_project_access(self, project_id: int):
+        """Resolve a project + workspace access record for the current user.
+
+        Returns ``(project, access)`` if the user can reach the project. On
+        any failure path returns ``(None, None)`` so the caller emits the
+        unified ``Project not found or access denied`` message (AC #6 / #11
+        防 id enumeration). Unbound projects (no cloud_service / workspace)
+        grant a synthetic ``ROLE_OWNER`` access — see OR-7.
+        """
+        Project = request.env['project.project'].sudo()
+        project = Project.browse(project_id)
+        if not project.exists():
+            return None, None
+        workspace = project.cloud_service_id.workspace_id
+        if not workspace:
+            return project, self._SyntheticAccess(role=ROLE_OWNER)
+        access = workspace.check_user_access(request.env.user)
+        if not access:
+            return None, None
+        return project, access
+
+    @route(
+        "/api/support-projects/<int:project_id>",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_support_project_detail(
+        self,
+        project_id: int,
+        action: str = 'get',
+        **kw: Any,
+    ) -> dict[str, Any]:
+        """Project detail operations (get / update).
+
+        URL is hyphenated (``/api/support-projects/...``) to avoid the
+        ``/api/support/projects/<wid>`` slash pattern in ``ai_assistant.py``
+        which scopes to a workspace, not a project — see Plan D4 / OR-6.
+        """
+        project, access = self._resolve_project_access(project_id)
+        if not project or not access:
+            return {'success': False, 'error': self._PROJECT_NOT_FOUND_ERROR}
+
+        if action == 'get':
+            return {'success': True, 'data': self._format_project_detail(project)}
+        if action == 'update':
+            if access.role not in (ROLE_OWNER, ROLE_ADMIN):
+                return {'success': False, 'error': 'Permission denied'}
+            return self._update_support_project(project, kw)
+        return {'success': False, 'error': f'Unknown action: {action}'}
+
+    def _format_project_detail(self, project) -> dict[str, Any]:
+        servers = project.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active
+        )
+        return {
+            'id': project.id,
+            'name': project.name,
+            'description': project.description or '',
+            'cloud_service_id': project.cloud_service_id.id if project.cloud_service_id else False,
+            'cloud_service_name': project.cloud_service_id.name if project.cloud_service_id else '',
+            'workspace_id': project.workspace_id.id if project.workspace_id else False,
+            'workspace_name': project.workspace_id.name if project.workspace_id else '',
+            'mcp_server_ids': [self._format_mcp_server(s) for s in servers],
+            'task_count': project.task_count,
+            'open_task_count': project.open_task_count,
+            'created_date': project.create_date.isoformat() if project.create_date else None,
+        }
+
+    def _update_support_project(self, project, params: dict) -> dict[str, Any]:
+        vals: dict[str, Any] = {}
+        if 'name' in params:
+            name = (params.get('name') or '').strip()
+            if not name:
+                return {'success': False, 'error': 'Name cannot be empty'}
+            vals['name'] = name
+        if 'description' in params:
+            vals['description'] = params.get('description') or ''
+
+        if 'cloud_service_id' in params:
+            target_raw = params.get('cloud_service_id')
+            if target_raw:
+                CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
+                target = CloudService.browse(int(target_raw))
+                if not target.exists():
+                    return {'success': False, 'error': 'Cloud Service not found'}
+                current_ws = project.workspace_id
+                if not current_ws or target.workspace_id.id != current_ws.id:
+                    return {
+                        'success': False,
+                        'error': 'Cloud Service must belong to the same workspace.',
+                    }
+                vals['cloud_service_id'] = target.id
+            else:
+                # Unbind path — Plan AC #3 third bullet / OR-4: the
+                # ``@api.constrains('scope', 'project_id')`` on mcp_server
+                # does NOT auto-fire when ``project.cloud_service_id`` is
+                # written, so we must manually query for user-scope MCP
+                # and block unbind ourselves.
+                lingering = project.mcp_server_ids.filtered(
+                    lambda s: s.scope == 'user'
+                )
+                if lingering:
+                    sample = lingering[0]
+                    return {
+                        'success': False,
+                        'error': (
+                            "User-scope MCP server '%s' must be linked to a "
+                            "project bound to a Cloud Service (unbound projects "
+                            "have no sidecar to back the MCP URL)." % sample.name
+                        ),
+                    }
+                vals['cloud_service_id'] = False
+
+        if not vals:
+            return {'success': True, 'data': self._format_project_detail(project)}
+
+        try:
+            project.sudo().write(vals)
+        except ValidationError as e:
+            return {'success': False, 'error': str(e)}
+        return {'success': True, 'data': self._format_project_detail(project)}
+
+    @route(
+        "/api/support-projects/<int:project_id>/mcp-servers",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_support_project_mcp_servers(
+        self,
+        project_id: int,
+        action: str = 'list',
+        **kw: Any,
+    ) -> dict[str, Any]:
+        """Project-centric MCP CRUD (Plan D4 / AC #4-7)."""
+        project, access = self._resolve_project_access(project_id)
+        if not project or not access:
+            return {'success': False, 'error': self._PROJECT_NOT_FOUND_ERROR}
+
+        if action == 'list':
+            return self._list_project_mcp_servers(project)
+
+        write_actions = ('create', 'update', 'delete', 'sync', 'test')
+        if action in write_actions and access.role not in (ROLE_OWNER, ROLE_ADMIN):
+            return {'success': False, 'error': 'Permission denied'}
+
+        if action == 'create':
+            return self._create_project_mcp_server(project, kw)
+        if action == 'update':
+            return self._update_project_mcp_server(project, kw)
+        if action == 'delete':
+            return self._delete_project_mcp_server(project, kw)
+        if action == 'sync':
+            return self._sync_project_mcp_server(project, kw)
+        if action == 'test':
+            return self._test_project_mcp_server(project, kw)
+        return {'success': False, 'error': f'Unknown action: {action}'}
+
+    def _list_project_mcp_servers(self, project) -> dict[str, Any]:
+        servers = project.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active
+        )
+        return {
+            'success': True,
+            'data': [self._format_mcp_server(s) for s in servers],
+        }
+
+    def _create_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        name = (params.get('name') or '').strip()
+        url = (params.get('url') or '').strip()
+        if not name or not url:
+            return {'success': False, 'error': 'Name and URL are required'}
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        # Wrap in a savepoint so the row is rolled back if the D5
+        # constraint (mcp_server._check_user_scope_requires_bound_project)
+        # fires — the constraint runs after INSERT and the failed row
+        # would otherwise persist until the request transaction commits.
+        try:
+            with request.env.cr.savepoint():
+                server = McpServer.create({
+                    'name': name,
+                    'url': url,
+                    'transport': params.get('transport', 'sse'),
+                    'api_key': params.get('api_key', ''),
+                    'headers_json': params.get('headers_json', ''),
+                    'description': params.get('description', ''),
+                    'scope': 'user',
+                    'project_id': project.id,
+                })
+        except ValidationError as e:
+            return {'success': False, 'error': str(e)}
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _resolve_project_mcp(self, project, params: dict):
+        server_id = params.get('server_id')
+        if not server_id:
+            return None, {'success': False, 'error': 'server_id is required'}
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        server = McpServer.browse(int(server_id))
+        if not server.exists() or server.project_id.id != project.id:
+            return None, {'success': False, 'error': 'MCP Server not found'}
+        return server, None
+
+    def _update_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        server, error = self._resolve_project_mcp(project, params)
+        if error:
+            return error
+        vals: dict[str, Any] = {}
+        for field_name in ('name', 'url', 'transport', 'api_key', 'headers_json', 'description'):
+            if field_name in params:
+                vals[field_name] = params[field_name]
+        if vals:
+            try:
+                server.write(vals)
+            except ValidationError as e:
+                return {'success': False, 'error': str(e)}
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _delete_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        server, error = self._resolve_project_mcp(project, params)
+        if error:
+            return error
+        server.unlink()
+        return {'success': True}
+
+    def _sync_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        server, error = self._resolve_project_mcp(project, params)
+        if error:
+            return error
+        try:
+            server.action_sync_tools()
+        except Exception as e:
+            _logger.warning('MCP sync failed for server %s: %s', server.name, e)
+            return {'success': False, 'error': f'Sync failed: {e}'}
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _test_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        server, error = self._resolve_project_mcp(project, params)
+        if error:
+            return error
+        try:
+            server.action_test_connection()
+        except Exception as e:
+            return {'success': False, 'error': f'Connection test failed: {e}'}
+        return {
+            'success': True,
+            'data': {
+                'state': server.state,
+                'state_message': server.state_message or '',
+            },
         }
 
     # ==================== Cloud Service Helpers ====================

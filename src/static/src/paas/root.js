@@ -16,6 +16,7 @@ import { SupportTasksPage } from "./pages/support-tasks/SupportTasksPage";
 import { TaskDetailPage } from "./pages/task-detail/TaskDetailPage";
 import { AiChatPage } from "./pages/ai-chat/AiChatPage";
 import { ProjectKanbanPage } from "./pages/project-kanban/ProjectKanbanPage";
+import { ProjectDetailPage } from "./pages/project-detail/ProjectDetailPage";
 import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
 import { BillingOverviewPage } from "./pages/billing/BillingOverviewPage";
 import { InvoiceListPage } from "./pages/billing/InvoiceListPage";
@@ -47,6 +48,7 @@ export class Root extends Component {
         TaskDetailPage,
         AiChatPage,
         ProjectKanbanPage,
+        ProjectDetailPage,
         SmartHomeDetailPage,
         BillingOverviewPage,
         InvoiceListPage,

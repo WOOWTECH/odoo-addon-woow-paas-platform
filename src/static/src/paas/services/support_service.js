@@ -427,6 +427,165 @@ export const supportService = reactive({
     },
 
     /**
+     * Fetch full detail for a single project (used by ProjectDetailPage).
+     * @param {number} projectId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async fetchProjectDetail(projectId) {
+        this.operationLoading.fetchProjectDetail = true;
+        try {
+            const result = await jsonRpc(`/api/support-projects/${projectId}`, {
+                action: "get",
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.fetchProjectDetail = false;
+        }
+    },
+
+    /**
+     * Update a project (name / description / cloud_service_id).
+     * Optimistically refreshes the matching row in this.projects so list-page
+     * badges reflect the change without a reload (Plan AC #17 / #21).
+     * @param {number} projectId
+     * @param {Object} payload
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async updateProject(projectId, payload) {
+        this.operationLoading.updateProject = true;
+        try {
+            const result = await jsonRpc(`/api/support-projects/${projectId}`, {
+                action: "update",
+                ...payload,
+            });
+            if (result.success) {
+                const idx = this.projects.findIndex((p) => p.id === projectId);
+                if (idx !== -1) {
+                    this.projects[idx] = { ...this.projects[idx], ...result.data };
+                }
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.updateProject = false;
+        }
+    },
+
+    /**
+     * List user-scope MCP servers for a project.
+     * @param {number} projectId
+     */
+    async fetchProjectMcpServers(projectId) {
+        this.operationLoading.fetchProjectMcpServers = true;
+        try {
+            const result = await jsonRpc(
+                `/api/support-projects/${projectId}/mcp-servers`,
+                { action: "list" },
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.fetchProjectMcpServers = false;
+        }
+    },
+
+    async createProjectMcpServer(projectId, payload) {
+        this.operationLoading.createProjectMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/support-projects/${projectId}/mcp-servers`,
+                { action: "create", ...payload },
+            );
+            return result.success
+                ? { success: true, data: result.data }
+                : { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.createProjectMcpServer = false;
+        }
+    },
+
+    async updateProjectMcpServer(projectId, serverId, payload) {
+        this.operationLoading.updateProjectMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/support-projects/${projectId}/mcp-servers`,
+                { action: "update", server_id: serverId, ...payload },
+            );
+            return result.success
+                ? { success: true, data: result.data }
+                : { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.updateProjectMcpServer = false;
+        }
+    },
+
+    async deleteProjectMcpServer(projectId, serverId) {
+        this.operationLoading.deleteProjectMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/support-projects/${projectId}/mcp-servers`,
+                { action: "delete", server_id: serverId },
+            );
+            return result.success
+                ? { success: true }
+                : { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.deleteProjectMcpServer = false;
+        }
+    },
+
+    async syncProjectMcpServer(projectId, serverId) {
+        this.operationLoading.syncProjectMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/support-projects/${projectId}/mcp-servers`,
+                { action: "sync", server_id: serverId },
+            );
+            return result.success
+                ? { success: true, data: result.data }
+                : { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.syncProjectMcpServer = false;
+        }
+    },
+
+    async testProjectMcpServer(projectId, serverId) {
+        this.operationLoading.testProjectMcpServer = true;
+        try {
+            const result = await jsonRpc(
+                `/api/support-projects/${projectId}/mcp-servers`,
+                { action: "test", server_id: serverId },
+            );
+            return result.success
+                ? { success: true, data: result.data }
+                : { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.testProjectMcpServer = false;
+        }
+    },
+
+    /**
      * Check if a specific operation is loading
      * @param {string} operation - Operation name
      * @returns {boolean}

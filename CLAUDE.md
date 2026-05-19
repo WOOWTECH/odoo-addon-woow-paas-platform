@@ -540,6 +540,7 @@ _CONFIG_PARAMETERS = [
 - **CloudService / Project decoupling**：見 `docs/decisions/refactor/cloud-service-project-decouple.md`（含 7 條 Invariants）
 - **Odoo addon override std ir.rule**（任何在 `ir.model.access.csv` 給 `base.group_user` 加 project / task / Odoo std model 的 RWCU 時）：見 `docs/decisions/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
 - **PaaS workspace member ACL 收緊**：見 `docs/decisions/patterns/paas-workspace-member-acl-tightening.md`
+- **Odoo addon 不 override std field 型態**（任何想動 Odoo std model 欄位型態 / shape 的 PR）：見 `docs/decisions/patterns/odoo-std-field-no-override.md`
 
 Pitfall 持久化紀錄（debug 撞牆時對照）：
 
@@ -786,7 +787,7 @@ docker compose -f docker-compose.shared-db.yml up -d
 
 ### 重要提醒
 
-- **網址測試**：使用 http://localhost（不是 :8069）以啟用 websocket
+- **網址測試**：使用 `http://localhost`（不是 `:8069`）以啟用 websocket
 - **自動配置**：環境變數由腳本自動生成，請勿手動修改 `.env`
 - **資料庫名稱**：基於 branch 名稱，將 `/` 和 `-` 轉為 `_`
 - **Port 範圍**：8069-9068（基於目錄路徑 hash 計算）

@@ -118,6 +118,32 @@ if actual != expected_count:
 
 Reviewer cleanup #6 已列為候選，[[follow-ups]] 追蹤。
 
+### Hardening: declaration-data ↔ migration 1:1 對稱（B-1 incident 2026-05-20）
+
+Issue #48 PR 把 task pair 的 std rule deactivation 從 migration 抽出來搬到 `src/security/ir_rules.xml` declaration data 時，**只搬了 2 條 task rule，漏了 migration 內第 3 條** `project.project_public_members_rule`。Fresh install 路徑不跑 migration、只跑 declaration data 的 `<function>` → 第 3 條 std rule 在 fresh install 上**仍 active** → 自家 `project_rule_workspace_member` 與其 OR-combined → 跨 workspace `project.project` ORM read leak。**同源 pattern 重蹈（漏一條 std rule deactivation）**，只是這次表面在 project 端、不在 task 端。
+
+Root cause chain：
+
+1. Spec D9 / AC #29 字面只寫「task rule」兩條 — **spec 本身漏了第 3 條**
+2. Implementer 忠實依 spec 實作 → declaration data `<function>` 只 eval 2 條 rule ref
+3. Implementation 自驗 SQL 也只 query 2 條（mirror 自己的 list），自證自迴圈，沒抓到不對稱
+
+跟 task-pair 原 incident 的差異：原 incident 是 migration 漏拔 task pair；本 incident 是 declaration data 漏拔 project rule。**上一節 Hardening 建議的 migration row count 防呆守不到 declaration data 路徑** — fresh install 不跑 migration。
+
+**Lesson**：未來把 migration 邏輯搬到 declaration data（或 declaration data 內任何 std rule 對 `base.group_user` 的 batch deactivate）時：
+
+- (a) **Inventory migration 內所有 std rule write** — `git log -p src/migrations/` 抓所有 deactivate / UPDATE std rule 的 statement
+- (b) **Cross-check declaration data 是否 1:1 對應** — migration 內 deactivate 的每條 std rule 都必須在 declaration data 的 `<function>` / `<record>` ref list 出現
+- (c) Single UPDATE + IN clause（migration form）≡ single `<function>` + ref list（declaration form）— **兩邊 list 必須同步**，任一邊改了都要 cross check 另一邊
+- (d) **驗 SQL 不能 mirror 自己的 list** — 用 [[odoo-addon-std-rule-symmetric-deactivation]] 的 inventory query 獨立列出 Odoo std `addons/project/security/project_security.xml` 所有套 `base.group_user` 的 rule，與 declaration data 對比，**不要從自己的 deactivate list 倒推**
+- (e) **Spec 階段就要走 inventory** — 本 incident 根因是 spec 漏寫，不是 implementer 錯。spec 內任何 `<function>` deactivate 範圍規定，都要強制過 [[odoo-addon-std-rule-symmetric-deactivation]] §(c) "single UPDATE + IN clause" 的對稱性 mental check
+
+References：
+
+- Spec D9 / AC #29 / OR-9：`docs/plans/2026-Q2/2026-05-19-project-detail-page-design.md`
+- CAQA B-1 fix verified：`docs/tracking/caqa-report-2026-05-20-project-detail-page-issue-48.md` §B-1
+- Fix landed in `src/security/ir_rules.xml:230-233`（補第 3 條 ref 進 `<function>` eval list）— 同 PR 內
+
 ## Related
 
 - [[odoo-addon-std-rule-symmetric-deactivation]] — 這個 leak 抽煉出來的可複用 pattern
