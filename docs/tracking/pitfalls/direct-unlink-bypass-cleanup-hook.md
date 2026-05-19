@@ -159,7 +159,7 @@ class CloudService(models.Model):
   - `src/tests/test_mcp_project_lifecycle.py::test_blocker2_unlink_override_*` — regression
 - Commit / report：
   - commit `cf34a65` — `fix: cloud_service unlink override + cleanup helm fail state`
-  - `docs/refactor/pr-review-verdict-mcp-2026-05-18.md §BLOCKER 2` — round 1 抓到的完整證據鏈
+  - `docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md §BLOCKER 2` — round 1 抓到的完整證據鏈
 - Odoo 上游證據：
   - `addons/base/models/ir_actions.py` etc. — Odoo ORM `unlink()` override + `super()` 是 idiomatic 改寫點
   - Odoo `@api.constrains` doc — constraint trigger 文件（明文不 cover cross-model FK transitive 變動）

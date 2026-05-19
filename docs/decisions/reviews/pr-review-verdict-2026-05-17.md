@@ -3,11 +3,11 @@ name: pr-review-verdict-2026-05-17
 phase: review
 team: refactor
 reviewer: refactor-reviewer
-plan_ref: docs/refactor/plan-cloud-service-project-decouple.md
-test_scope_ref: docs/refactor/test-scope-report-2026-05-16.md
-test_report_ref: docs/refactor/test-report-2026-05-16.md
-caqa_ref: docs/refactor/caqa-2026-05-16.md
-pr_draft_ref: docs/refactor/pr-description-draft.md
+plan_ref: docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md
+test_scope_ref: docs/tracking/test-reports/test-scope-report-2026-05-16.md
+test_report_ref: docs/tracking/test-reports/test-report-2026-05-16.md
+caqa_ref: docs/decisions/reviews/caqa-2026-05-16.md
+pr_draft_ref: docs/decisions/reviews/pr-description-draft.md
 diff_range: 3081a41^..HEAD (8 commits)
 created: 2026-05-17T00:00:00Z
 updated: 2026-05-17T00:00:00Z
@@ -27,7 +27,7 @@ status: approved-with-caveats
 
 ### Actionable items（建議 fix-before-merge，皆 trivial / 5 分鐘級別）
 1. **L1 docstring carry-over**：`src/migrations/18.0.1.0.23/post-migrate.py:1` 仍寫 `"""18.0.1.0.18 — ..."""`，目錄是 `18.0.1.0.23/`。CAQA L1 已標，未修；建議順手改字。
-2. **PR draft 內部不一致**：`docs/refactor/pr-description-draft.md:25-57` 仍把 AC #5 標為 ⚠️ 未過，但 line 155 報告「39 refactor tests + 2 sanity 全部通過」（含 AC #5 在 commit b582a44 修好）。發 PR 前清掉 ⚠️ section 並把 line 22-31 結果表改為 25/25 ✅。
+2. **PR draft 內部不一致**：`docs/decisions/reviews/pr-description-draft.md:25-57` 仍把 AC #5 標為 ⚠️ 未過，但 line 155 報告「39 refactor tests + 2 sanity 全部通過」（含 AC #5 在 commit b582a44 修好）。發 PR 前清掉 ⚠️ section 並把 line 22-31 結果表改為 25/25 ✅。
 3. **router.js 註解誤導**（comment-analyzer Critical）：`src/static/src/paas/core/router.js:16-17` 註解寫「`/woow#/ai-assistant/projects` stays as a bookmark-preserving alias」，但 plan D4=C 要求保留的書籤是 `/woow#/ai-assistant`（line 47, AC #20 line 106, line 193）。實際 code L15 `ai-assistant` route 走 `routeName: "ai-assistant"`（不是 ai-projects），跟註解描述的「alias 同 route」不符；alias 行為實際發生在 L20（`ai-assistant/projects`→`ai-projects`）。修字以對齊真實行為與 plan 用語。
 4. **ir_rules.xml 註解計數已 stale**：`src/security/ir_rules.xml:53-56` 寫 "these two security-critical rules"，現在 noupdate=0 block 內已有 **3** 條 rule（`project_rule_workspace_member` + `cloud_service_rule_workspace_member` + `project_task_rule_workspace_member`）。
 5. **task rule 註解缺對等 cross-ref**：`src/security/ir_rules.xml:92-97` 解釋自己的目的，但沒提到 `post-migrate.py` 對等 deactivate `task_visibility_rule` + `task_visibility_rule_project_user`。加 1 行 cross-ref 防未來維護者再啟用 std rule 重炸 B1。
@@ -118,7 +118,7 @@ status: approved-with-caveats
 | R3 | minor | router.js 註解描述 alias 為 `/woow#/ai-assistant/projects`，與 plan / AC 用 `/woow#/ai-assistant` 不符；實際 L15 `ai-assistant` route 走 AI Assistant 不 alias 到 ai-projects | `static/src/paas/core/router.js:16-17` | Cleanup #3 |
 | R4 | minor | ir_rules.xml 註解 "two security-critical rules" 已 stale（現 3 條） | `security/ir_rules.xml:53-56` | Cleanup #4 |
 | R5 | minor | task rule 註解未 cross-ref 對等 std rule deactivation 在 migration | `security/ir_rules.xml:92-97` | Cleanup #5 |
-| R6 | minor | PR draft AC#5 ⚠️ section 與 footer all-green 結果衝突，內部不一致 | `docs/refactor/pr-description-draft.md:25-57 / 155` | Cleanup #2 |
+| R6 | minor | PR draft AC#5 ⚠️ section 與 footer all-green 結果衝突，內部不一致 | `docs/decisions/reviews/pr-description-draft.md:25-57 / 155` | Cleanup #2 |
 | R7 | info | B1 test 未涵蓋 group_project_user write/unlink leg via `task_visibility_rule_project_user`（perm_read=False 的版本） | `tests/test_cross_workspace_task_isolation.py` | Defer to reporter；PaaS 不給租戶 group_project_user，但 paranoia 加 1 條 sibling test 增強回歸防護 |
 | R8 | info | AC #11 domain test 是 string-grep stub，AC #14 dedup test format-brittle | tests/* | Defer to reporter（test-hardening） |
 | R9 | info | Sanitizer / CreateProjectModal `_loadCloudServices` 等多處 silent fallback 無 log line | discuss_channel.py / CreateProjectModal.js | Defer to reporter（observability） |

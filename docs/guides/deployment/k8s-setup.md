@@ -351,8 +351,8 @@ kubectl delete namespace paas-system
 ## Next Steps
 
 - Review [Troubleshooting Guide](troubleshooting.md) for common issues
-- Read [Developer Getting Started](../development/getting-started.md) to customize the platform
-- Check [Application Marketplace Spec](../spec/cloud-services.md) to add custom templates
+- Read [Developer Getting Started](../getting-started.md) to customize the platform
+- Check [Application Marketplace Spec](../../reference/features/cloud-services.md) to add custom templates
 
 ## Support
 

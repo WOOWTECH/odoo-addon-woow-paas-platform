@@ -3,7 +3,7 @@ name: test-scope-report-2026-05-16
 phase: red
 team: refactor
 tester: refactor-tester
-plan_ref: docs/refactor/plan-cloud-service-project-decouple.md
+plan_ref: docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md
 sandbox: dev-sandbox-feat-decouple-cs-projects (docker-desktop, local mode)
 created: 2026-05-16T00:00:00Z
 updated: 2026-05-17T01:10:00Z

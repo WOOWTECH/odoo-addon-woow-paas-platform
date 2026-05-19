@@ -104,7 +104,7 @@ sh_subscription cron → _get_or_create_cycle_invoice()
 | Source | `src/models/sh_subscription_fix.py::_get_or_create_cycle_invoice` |
 
 > 設計原則參見
-> [`docs/architecture/billing-philosophy.md`](../architecture/billing-philosophy.md)
+> [`docs/decisions/philosophy/billing-philosophy.md`](../../decisions/philosophy/billing-philosophy.md)
 > 五大原則第 3、4 點。
 
 ## 為什麼需要 `woow_skip_upstream_hook`?
@@ -232,8 +232,8 @@ EOF
 
 ## Reference
 
-- 設計哲學：[`docs/architecture/billing-philosophy.md`](../architecture/billing-philosophy.md)
-- 實作 plan：[`docs/plans/2026-05-03-invoice-issue-fix-path-b.md`](../plans/2026-05-03-invoice-issue-fix-path-b.md)
+- 設計哲學：[`docs/decisions/philosophy/billing-philosophy.md`](../../decisions/philosophy/billing-philosophy.md)
+- 實作 plan：[`docs/plans/2026-Q2/2026-05-03-invoice-issue-fix-path-b.md`](../../plans/2026-Q2/2026-05-03-invoice-issue-fix-path-b.md)
 - 程式碼進入點：
   - `src/models/wallet_topup.py::_ensure_topup_invoice`
   - `src/models/wallet_topup.py::_create_topup_invoice`

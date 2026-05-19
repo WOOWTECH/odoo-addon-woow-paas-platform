@@ -283,7 +283,7 @@ WHERE p.cloud_service_id IS NULL;
 **決議：A → B**（先 A pattern sanitizer 上線，後續升級到 B whitelist）。
 
 - 第一階段（本次 PR）：實作 A pattern sanitizer + 明確 blacklist 三欄位（`n8n_api_key` / `n8n_owner_password` / `mcp_auth_token`）；redacted value 顯示為 `***REDACTED***`。
-- 第二階段（follow-up）：reporter 在 phase 結尾把「升級到 whitelist 模式」寫入 `docs/refactor/` 或對應 follow-up issue，搭配 telemetry / pen-test 結果判斷時機。
+- 第二階段（follow-up）：reporter 在 phase 結尾把「升級到 whitelist 模式」寫入 `docs/tracking/followups/follow-ups.md` 或對應 follow-up issue，搭配 telemetry / pen-test 結果判斷時機。
 
 ### Open Q2 — 升級前 SQL dry-run ✅
 **決議：採 planner 推薦** — 列為 implementation phase 的 deployment checklist 一部分：
@@ -302,7 +302,7 @@ WHERE p.cloud_service_id IS NULL;
 ## Hand-off checklist（Planner → Tester）
 
 使用者已 sign-off（2026-05-16T13:23:21Z）。refactor-planner 用：
-`maestri ask "refactor-phase-leader" "plan-signed: docs/refactor/plan-cloud-service-project-decouple.md ; D1=B(留 unique constraint, Project 可 unbound); D2=A(Task M2M extras + related primary); D3=A(unbound project ACL 改 project member); D4=C(ai-assistant→Projects, 路徑 alias); D5=A; D6=C(限同 workspace); D7=A(primary+extras 注入); D8=A(補 cloud_service record rule); D9=A→B(本次 pattern sanitizer + blacklist 三欄位, follow-up 升級 whitelist); sidebar 保留英文 Projects; deploy SQL 由 implementation 寫進 PR description, 使用者手動跑"`
+`maestri ask "refactor-phase-leader" "plan-signed: docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md ; D1=B(留 unique constraint, Project 可 unbound); D2=A(Task M2M extras + related primary); D3=A(unbound project ACL 改 project member); D4=C(ai-assistant→Projects, 路徑 alias); D5=A; D6=C(限同 workspace); D7=A(primary+extras 注入); D8=A(補 cloud_service record rule); D9=A→B(本次 pattern sanitizer + blacklist 三欄位, follow-up 升級 whitelist); sidebar 保留英文 Projects; deploy SQL 由 implementation 寫進 PR description, 使用者手動跑"`
 回 leader。
 
 Tester 開始 TDD red 階段時，建議 acceptance criteria #1-25 逐條轉 test case；本 plan 不列具體 test function 名稱 / fixture 細節（由 tester 決定）。

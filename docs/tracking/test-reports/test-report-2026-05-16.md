@@ -3,8 +3,8 @@ name: test-report-2026-05-16
 phase: red-explained
 team: refactor
 test_explainer: refactor-test-explainer
-plan_ref: docs/refactor/plan-cloud-service-project-decouple.md
-test_scope_ref: docs/refactor/test-scope-report-2026-05-16.md
+plan_ref: docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md
+test_scope_ref: docs/tracking/test-reports/test-scope-report-2026-05-16.md
 created: 2026-05-17T00:00:00Z
 updated: 2026-05-17T00:00:00Z
 status: ready-for-implementation

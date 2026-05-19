@@ -4,10 +4,10 @@ phase: review
 round: 2
 team: refactor
 reviewer: refactor-reviewer
-round1_verdict_ref: docs/refactor/pr-review-verdict-mcp-2026-05-18.md
-plan_ref: docs/refactor/plan-mcp-project-decouple.md
-decision_ref: docs/refactor/decisions/mcp-project-decouple.md
-caqa_ref: docs/refactor/caqa-2026-05-18.md
+round1_verdict_ref: docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md
+plan_ref: docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md
+decision_ref: docs/decisions/refactor/mcp-project-decouple.md
+caqa_ref: docs/decisions/reviews/caqa-2026-05-18.md
 diff_range: e9a5927..HEAD (4 commits: 4ff8f4b docs / fdf51fc refactor / cf34a65 fix / 97b5313 test)
 created: 2026-05-18T15:30:22Z
 updated: 2026-05-18T15:30:22Z
@@ -142,8 +142,8 @@ Reviewer 結案進 standby。
 - [[mcp-project-decouple]] — decision draft（Inv #5/#6 重寫 + Inv #8 新增，round 2 fdf51fc/4ff8f4b 同步更新）
 - [[caqa-2026-05-18]] — CAQA 報告
 - [[cross-workspace-task-data-leak]] — B1 pitfall（reviewer round 2 確認新 6-rule split 仍守住 B1 sub-model parity）
-- `docs/refactor/plan-mcp-project-decouple.md` — 25 AC plan（round 2 4ff8f4b 同步更新 MAJOR 1 fix）
-- `docs/refactor/test-coverage-mcp-project-decouple.md` — coverage report
+- `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md` — 25 AC plan（round 2 4ff8f4b 同步更新 MAJOR 1 fix）
+- `docs/tracking/test-reports/test-coverage-mcp-project-decouple.md` — coverage report
 
 ---
 

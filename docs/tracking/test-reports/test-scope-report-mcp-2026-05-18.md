@@ -2,8 +2,8 @@
 
 **Date**: 2026-05-18 (re-opened + re-finalized 2026-05-18; cycle-3 fixture rationale appended 2026-05-18)
 **Author**: refactor-tester (TDD red phase)
-**Plan**: `docs/refactor/plan-mcp-project-decouple.md`
-**Decision (draft)**: `docs/refactor/decisions/mcp-project-decouple.md`
+**Plan**: `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md`
+**Decision (draft)**: `docs/decisions/refactor/mcp-project-decouple.md`
 **Status**: signed-off (refactor-leader, 2026-05-18 — re-finalized after Gap-1/Gap-2 fill; cycle-3 A-plan fixtures landed `48d49bb`)
 **Phase**: tester → test-explainer → green sign-off (final)
 
@@ -90,7 +90,7 @@ unchanged.
 | Option | Description | Verdict |
 |--------|-------------|---------|
 | **A (chosen)** | setUp `ALTER TABLE ADD COLUMN IF NOT EXISTS` | Matches prod migration semantics. Fixture-only. No D3 violation. |
-| B | Skip `DROP COLUMN` in `post-migrate.py` | Violates D3=A "one-shot drop" decision (see `docs/refactor/decisions/mcp-project-decouple.md`). Rejected. |
+| B | Skip `DROP COLUMN` in `post-migrate.py` | Violates D3=A "one-shot drop" decision (see `docs/decisions/refactor/mcp-project-decouple.md`). Rejected. |
 | C | Accept second-run path in behaviour suite | Test only verifies idempotency; never proves backfill/archive correctness. Caveat-only fallback. Rejected. |
 | D | Per-test transactional savepoint rewind | Implementation side admits this isn't feasible — DDL can't be re-applied cleanly without changing `post-migrate.py`. Rejected. |
 
@@ -198,7 +198,7 @@ discovers them at module load.
 
 ## AC → test mapping
 
-Source AC numbering matches `docs/refactor/plan-mcp-project-decouple.md
+Source AC numbering matches `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md
 §Acceptance criteria` (AC #1-#25).
 
 ### Schema & 資料 (AC #1, #2, #3, #4, #5)

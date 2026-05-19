@@ -1,6 +1,6 @@
 # Subscription Integration — Implementation Workflow
 
-Based on: `docs/spec/subscription-integration-design.md`
+Based on: `docs/reference/features/subscription-integration-design.md`
 
 ## Phase Overview
 

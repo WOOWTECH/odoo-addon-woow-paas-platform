@@ -647,9 +647,9 @@ debugger;  // Breakpoint
 
 ## Next Steps
 
-- Read [K8s Deployment Guide](../deployment/k8s-setup.md) to deploy to production
-- Check [Troubleshooting Guide](../deployment/troubleshooting.md) for common issues
-- Review [Cloud Services Spec](../spec/cloud-services.md) to understand the architecture
+- Read [K8s Deployment Guide](deployment/k8s-setup.md) to deploy to production
+- Check [Troubleshooting Guide](deployment/troubleshooting.md) for common issues
+- Review [Cloud Services Spec](../reference/features/cloud-services.md) to understand the architecture
 - Explore the codebase and start contributing!
 
 ## Getting Help

@@ -130,8 +130,8 @@ Reviewer cleanup #6 已列為候選，[[follow-ups]] 追蹤。
 - Commit / report：
   - commit `9552cb7` — `fix(refactor): deactivate task-side std rules symmetrically (CAQA B1)`
   - commit `d570006` — `test: lock cross-workspace project.task read isolation (CAQA B1)`
-  - `docs/refactor/caqa-2026-05-16.md §E` — 完整 BLOCKER 原始證據鏈
-  - `docs/refactor/caqa-2026-05-16.md §B1 Re-review` — fix 驗證
+  - `docs/decisions/reviews/caqa-2026-05-16.md §E` — 完整 BLOCKER 原始證據鏈
+  - `docs/decisions/reviews/caqa-2026-05-16.md §B1 Re-review` — fix 驗證
 - Odoo 上游證據：
   - `addons/project/security/project_security.xml:88-172`（被 deactivate 的 3 條 std rule 定義）
   - `addons/base/models/ir_rule.py:140-168`（OR 語意實作）

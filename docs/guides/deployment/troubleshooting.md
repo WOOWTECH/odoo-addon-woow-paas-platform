@@ -605,5 +605,5 @@ If you're still experiencing issues after trying these solutions:
 
 4. **Review documentation**:
    - [K8s Setup Guide](k8s-setup.md)
-   - [Developer Guide](../development/getting-started.md)
-   - [Cloud Services Spec](../spec/cloud-services.md)
+   - [Developer Guide](../getting-started.md)
+   - [Cloud Services Spec](../../reference/features/cloud-services.md)

@@ -306,7 +306,7 @@ SELECT COUNT(*) FROM woow_paas_platform_mcp_server WHERE scope = 'user';
 ## Hand-off 給 tester
 
 實作前先讀：
-- [[mcp-project-decouple]] §Invariants（draft 在 `docs/refactor/decisions/`）
+- [[mcp-project-decouple]] §Invariants（draft 在 `docs/decisions/refactor/`）
 - [[paas-workspace-member-acl-tightening]]
 - [[cross-workspace-task-data-leak]]（B1 pitfall — 對等 sub-model rule 邏輯）
 

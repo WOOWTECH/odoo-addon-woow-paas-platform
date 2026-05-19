@@ -137,12 +137,12 @@ Odoo `ir_rule.py:140-168` 對同 group 多 rule 採 **OR 語意**。`project.pro
 - Follow-ups:
   - [[follow-ups]] — 9 條未處理事項追蹤
 - Inputs（合成來源，原始紀錄）:
-  - `docs/refactor/plan-cloud-service-project-decouple.md`
-  - `docs/refactor/test-scope-report-2026-05-16.md`
-  - `docs/refactor/test-report-2026-05-16.md`
-  - `docs/refactor/caqa-2026-05-16.md`
-  - `docs/refactor/pr-review-verdict-2026-05-17.md`
-  - `docs/refactor/pr-description-draft.md`
+  - `docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md`
+  - `docs/tracking/test-reports/test-scope-report-2026-05-16.md`
+  - `docs/tracking/test-reports/test-report-2026-05-16.md`
+  - `docs/decisions/reviews/caqa-2026-05-16.md`
+  - `docs/decisions/reviews/pr-review-verdict-2026-05-17.md`
+  - `docs/decisions/reviews/pr-description-draft.md`
 - 關鍵 code：
   - `src/migrations/18.0.1.0.23/post-migrate.py:93-107`（B1 fix invariant enforcement）
   - `src/security/ir_rules.xml:65-117`（3 條 addon ir.rule）

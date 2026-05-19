@@ -4,9 +4,9 @@
 **Author**: refactor-test-explainer (draft；reporter phase 合併或 finalize)
 **Audience**: reviewer + stakeholder + future onboarding
 **Inputs**:
-- Plan: `docs/refactor/plan-mcp-project-decouple.md` (25 AC, 6 decisions, 4 open risks)
-- Decision: `docs/refactor/decisions/mcp-project-decouple.md` (7 invariants)
-- Tester report: `docs/refactor/test-scope-report-mcp-2026-05-18.md`
+- Plan: `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md` (25 AC, 6 decisions, 4 open risks)
+- Decision: `docs/decisions/refactor/mcp-project-decouple.md` (7 invariants)
+- Tester report: `docs/tracking/test-reports/test-scope-report-mcp-2026-05-18.md`
 - 5 test files (**26 cases**，全 red，all `AssertionError`，0 fixture noise)
 
 讀這份報告**不需要打開 test code**。每條 AC 都標清「測什麼、為什麼、不寫會炸什麼」。
@@ -106,7 +106,7 @@
 
 ## 專章 1：B1-style 對等 deny — 為何同時測 `mcp_server` + `mcp_tool`
 
-**B1 pitfall 出處**：`docs/refactor/pitfalls/cross-workspace-task-data-leak.md`（CAQA B1 incident）。前次 refactor `project.task` 加 workspace-member rule 時漏掉 sub-model `project.task` 自己的 inherited std rule，導致 task 的 description / chatter 跨 workspace 可讀（main rule 鎖 task 但 sub-model 級不對等）。
+**B1 pitfall 出處**：`docs/tracking/pitfalls/cross-workspace-task-data-leak.md`（CAQA B1 incident）。前次 refactor `project.task` 加 workspace-member rule 時漏掉 sub-model `project.task` 自己的 inherited std rule，導致 task 的 description / chatter 跨 workspace 可讀（main rule 鎖 task 但 sub-model 級不對等）。
 
 **本次的等效情境**：
 ```
@@ -292,7 +292,7 @@ D5 + D1 cleanup hook 互依：
 - [[paas-workspace-member-acl-tightening]] — workspace-member ACL 三件套 pattern
 - [[odoo-addon-std-rule-symmetric-deactivation]] — std rule 對等 deactivation pattern（本次 model 是自家、不需要 deactivate，但「ACL 對等」概念仍適用）
 - [[cross-workspace-task-data-leak]] — B1 pitfall（sub-model 對等 leak 的根源案例）
-- `docs/refactor/test-scope-report-mcp-2026-05-18.md` — tester 的 AC mapping + red proof + 6 open Q
+- `docs/tracking/test-reports/test-scope-report-mcp-2026-05-18.md` — tester 的 AC mapping + red proof + 6 open Q
 
 ## Hand-off
 

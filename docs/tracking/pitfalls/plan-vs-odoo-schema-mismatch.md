@@ -99,7 +99,7 @@ self.env['project.project']._fields.keys()
 - Commit：
   - `b582a44` — `test: align AC #5 helper with Odoo 18 project.project schema`
 - Plan 內原始引文：
-  - `docs/refactor/plan-cloud-service-project-decouple.md` §D3=A line 131
-  - `docs/refactor/plan-cloud-service-project-decouple.md` §Open Q1
+  - `docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md` §D3=A line 131
+  - `docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md` §Open Q1
 - Odoo 上游：
   - `addons/project/models/project.py`（Odoo 18 `project.project` 真實欄位 inventory）

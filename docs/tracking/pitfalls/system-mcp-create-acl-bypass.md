@@ -262,7 +262,7 @@ class McpServer(models.Model):
 - Commit / report：
   - commit `fdf51fc` — `refactor: MCP ACL rule split for system create deny`
   - commit `4ff8f4b` — `docs(refactor): MAJOR 1 rule split fix - system MCP create deny`（plan + decision 同步）
-  - `docs/refactor/pr-review-verdict-mcp-2026-05-18.md §MAJOR 1` — round 1 reviewer 完整攻擊鏈
+  - `docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md §MAJOR 1` — round 1 reviewer 完整攻擊鏈
 - Odoo 上游證據：
   - `addons/base/models/ir_rule.py:140-168` — per-group rule OR semantics（同 group OR）
   - Odoo `_group_implied_ids` — group_system 繼承 group_user（決定 admin_full 必要性）

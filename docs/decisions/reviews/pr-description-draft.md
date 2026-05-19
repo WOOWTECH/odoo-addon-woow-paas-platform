@@ -1,9 +1,9 @@
 # Refactor: 解耦 CloudService 與 Project
 
 Branch: `feat/decouple-cs-projects`
-Plan: `docs/refactor/plan-cloud-service-project-decouple.md`（9 個決策 ✅ 全部 sign-off）
-Test Scope: `docs/refactor/test-scope-report-2026-05-16.md`
-Test Report: `docs/refactor/test-report-2026-05-16.md`
+Plan: `docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md`（9 個決策 ✅ 全部 sign-off）
+Test Scope: `docs/tracking/test-reports/test-scope-report-2026-05-16.md`
+Test Report: `docs/tracking/test-reports/test-report-2026-05-16.md`
 
 ## 變更摘要
 

@@ -259,7 +259,7 @@ verify dep source 不是空目錄、不是缺 `ai_base_gt/__manifest__.py`，這
 - `charts/odoo-dev-sandbox/values-local.yaml`（local mode override；目前不 pin dep path）
 - `.claude/skills/k8s-dev-sandbox/SKILL.md` + `scripts/create.sh`（sandbox lifecycle；建議
   改 `extraAddonsHostPath` default 與加 fail-fast 在此）
-- 既有相關 doc：`docs/issue/stg-sandbox-networkpolicy-cross-ns-block.md`（同 chart 不同 issue）
+- 既有相關 doc：`docs/tracking/issues/stg-sandbox-networkpolicy-cross-ns-block.md`（同 chart 不同 issue）
 - 同 session 的 sh_journal_id fix：見 `/tmp/tester-red-39.md` §「Sandbox quirks」第 2 點 + 本 doc §4
-- Pattern doc 對應：`docs/patterns/plan-driven-date-helper.md`（PR #42 的 code 修法；
+- Pattern doc 對應：`docs/decisions/patterns/plan-driven-date-helper.md`（PR #42 的 code 修法；
   本 doc 是 PR #42 session 中 sandbox 層遇到的獨立議題，不是同一個 fix 的兩面）

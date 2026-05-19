@@ -185,8 +185,8 @@ Dev sandbox / staging deploy 預設跑 `-u woow_paas_platform`（不帶 `--test-
   - `src/tests/test_mcp_integration.py::TestAutoCreateMCPServer` / `TestMCPServerCronRetry` / `TestMCPServerCascadeDelete` — port 後對新 schema
 - Commit / report：
   - commit `97b5313` — `test(refactor): re-loop tester fix for reviewer round-2 NEEDS REVISION`
-  - `docs/refactor/pr-review-verdict-mcp-2026-05-18.md §BLOCKER 1` — round 1 完整證據鏈
-  - `docs/refactor/caqa-2026-05-18.md §同源 code path 檢查` — CAQA 排除範圍（line 219-234）
+  - `docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md §BLOCKER 1` — round 1 完整證據鏈
+  - `docs/decisions/reviews/caqa-2026-05-18.md §同源 code path 檢查` — CAQA 排除範圍（line 219-234）
 - Odoo 上游證據：
   - Odoo `--test-tags` filter 機制（filter test methods，但 import-time `from ... import` 仍會跑 — stale schema 在 setUp 才 raise）
   - `TransactionCase.setUpClass` — class-level setup 觸發點

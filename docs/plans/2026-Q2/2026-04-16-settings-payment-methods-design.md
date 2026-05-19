@@ -198,7 +198,7 @@ Grace period 到期 cron → 檢查是否已補值成功
 > - **SDK 載入**：在 `AddPaymentMethodPage` 的 `setup()` 動態注入 3 支 `<script>`（jQuery → node-forge → `sdk-1.0.0.js`），不加進全域 `assets_paas`（綁卡低頻）
 >
 > ### Phase 2a 執行計畫
-> 詳細 task 清單見 [`docs/plans/2026-04-19-settings-phase2a-implementation.md`](./2026-04-19-settings-phase2a-implementation.md)（待建立）。
+> 詳細 task 清單見 [`docs/plans/2026-04-18-settings-phase2a-implementation.md`](./2026-04-18-settings-phase2a-implementation.md)。
 
 ---
 

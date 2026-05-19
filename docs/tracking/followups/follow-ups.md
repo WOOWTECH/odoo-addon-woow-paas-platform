@@ -110,7 +110,7 @@
       raise RuntimeError(
           f"Odoo std rule xmlid drift detected: found {actual}, expected 3. "
           "B1 leak might silently return — abort migration. "
-          "See docs/refactor/pitfalls/cross-workspace-task-data-leak.md"
+          "See docs/tracking/pitfalls/cross-workspace-task-data-leak.md"
       )
   ```
 - **何時**：下次 migration touch 或 Odoo 版本升級前必加
@@ -201,7 +201,7 @@
 ## F12 — 控制器 `helm_values` 漏 sanitize（pre-existing，違反 cycle 1 Inv #6）
 
 - **Severity**: medium
-- **Origin**: CAQA `docs/refactor/caqa-2026-05-18.md §F12` out-of-scope finding（CAQA 跨 cycle 1 + cycle 2 漏抓兩次）
+- **Origin**: CAQA `docs/decisions/reviews/caqa-2026-05-18.md §F12` out-of-scope finding（CAQA 跨 cycle 1 + cycle 2 漏抓兩次）
 - **Location**: `src/controllers/ai_assistant.py:609-610` — SSE streaming path 注入 `service.helm_values` 到 AI system prompt **未走 `_sanitize_helm_values`**；對比 `src/models/discuss_channel.py:303` non-streaming path 有 sanitize
 - **Violation**: cycle 1 Invariant #6（AI prompt 注入 `helm_values` 必須經 `_sanitize_helm_values`）
 - **為何沒在本次擋下**：本次 implementation diff 未改此段 code，無新增 surface。本次 verdict 評估「是否引入 / 加劇」— pre-existing 不擋
@@ -223,7 +223,7 @@
 ## F14 — Cleanup hook `mapped` 路徑 belt-and-braces `sudo()`（CAQA C1）
 
 - **Severity**: medium
-- **Origin**: CAQA `docs/refactor/caqa-2026-05-18.md §C1`
+- **Origin**: CAQA `docs/decisions/reviews/caqa-2026-05-18.md §C1`
 - **Location**: `src/models/cloud_service.py:1134-1136` + `:1192-1194`（`_do_cleanup` step 1 + `unlink()` override）
 - **現狀**：
   ```python
@@ -290,7 +290,7 @@
 ## F19 — Round 1 17 minor / info 集合（cross-reference round 1 verdict）
 
 - **Severity**: minor / info（mixed）
-- **Origin**: `docs/refactor/pr-review-verdict-mcp-2026-05-18.md §Minor / Info`（commit `e9a5927`）— round 1 reviewer 5-agent 平行 review 提的 17 條 minor，本 verdict 不擋 round 2 approval
+- **Origin**: `docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md §Minor / Info`（commit `e9a5927`）— round 1 reviewer 5-agent 平行 review 提的 17 條 minor，本 verdict 不擋 round 2 approval
 - **內容 cluster**（不在本 doc 重複列每條，避免 ephemeral 雜訊）：
   - **Silent failure** (silent-failure-hunter H2/H3/M1-M5)：cleanup step 1 unlink 無 try/except、SSE streaming MCP fail silent fallback、migration pre-flight assertion 缺失、cron retry 無 user notification — 7 條
   - **Type design** (type-design-analyzer F1/F5/F6/F7)：D4 partial SQL CHECK 雙保險、CSV 1,1,1,1 可緊縮、`auto_created` write protection、`scope` 二元假設 — 4 條
@@ -339,9 +339,9 @@
 - [[system-mcp-create-acl-bypass]] — F16 的根因 context
 - [[tag-scoped-test-misses-full-u-failures]] — F19 「test coverage hole」cluster 的根因 context
 - 原始 review（合成來源，本 doc 引用不複製）：
-  - `docs/refactor/caqa-2026-05-16.md` §Caveat 清單（M1-M4 + L1-L3 — cycle 1）
-  - `docs/refactor/caqa-2026-05-18.md` §Caveat / Out-of-scope（C1 + F12 — cycle 2）
-  - `docs/refactor/pr-review-verdict-2026-05-17.md` §Recommendation（reporter follow-up 1-9 整合 — cycle 1）
-  - `docs/refactor/pr-review-verdict-mcp-2026-05-18.md` §Minor / Info（17 條 round 1 minor — cycle 2）
-  - `docs/refactor/pr-review-verdict-mcp-round2-2026-05-18.md` §新 minor / info（R2-1 ~ R2-4 — cycle 2 round 2）
-  - `docs/refactor/pr-description-draft.md` §Follow-up（cycle 1 候選清單）
+  - `docs/decisions/reviews/caqa-2026-05-16.md` §Caveat 清單（M1-M4 + L1-L3 — cycle 1）
+  - `docs/decisions/reviews/caqa-2026-05-18.md` §Caveat / Out-of-scope（C1 + F12 — cycle 2）
+  - `docs/decisions/reviews/pr-review-verdict-2026-05-17.md` §Recommendation（reporter follow-up 1-9 整合 — cycle 1）
+  - `docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md` §Minor / Info（17 條 round 1 minor — cycle 2）
+  - `docs/decisions/reviews/pr-review-verdict-mcp-round2-2026-05-18.md` §新 minor / info（R2-1 ~ R2-4 — cycle 2 round 2）
+  - `docs/decisions/reviews/pr-description-draft.md` §Follow-up（cycle 1 候選清單）

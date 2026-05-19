@@ -1,7 +1,7 @@
 > **Status (2026-05-05):** This plan is **historical**. Path B was implemented
 > and merged via PR #20. For current behavior see:
-> - Design rationale: `docs/architecture/billing-philosophy.md`
-> - Operational guide: `docs/deployment/invoice-issuing.md`
+> - Design rationale: `docs/decisions/philosophy/billing-philosophy.md`
+> - Operational guide: `docs/guides/deployment/invoice-issuing.md`
 >
 > This plan doc is kept for traceability of the implementation rationale
 > and as the target of `Task N.M` cross-references in commit messages and
@@ -15,7 +15,7 @@
 
 **Goal:** 修正訂閱 cycle invoice 重複開立 ECPay 發票、auto-topup 漏開發票兩個 bug，並讓 PaaS 開立流程與上游 `ecpay_invoice_tw` 的 inline hook 完全隔離（避免未來官方網站把 `company.auto_invoice` 改成 `automatic` 時破壞 PaaS）。
 
-**設計依據：** 本 plan 是 [`docs/architecture/billing-philosophy.md`](../architecture/billing-philosophy.md) 5 大原則的具體實作。實作時若有任何取捨，以哲學文件為準。
+**設計依據：** 本 plan 是 [`docs/decisions/philosophy/billing-philosophy.md`](../../decisions/philosophy/billing-philosophy.md) 5 大原則的具體實作。實作時若有任何取捨，以哲學文件為準。
 
 **Architecture:**
 - **訂閱 cycle invoice → `not_required`**：訂閱用 wallet 扣款不應再開 ECPay 發票（儲值時已開過）
@@ -950,7 +950,7 @@ git commit -m "feat: manual topup invoices also set skip_upstream_hook flag"
 ### Task 6.1: 更新 deployment 文件
 
 **Files:**
-- Modify: `docs/deployment/admin-roles.md`（或新建 `docs/deployment/invoice-issuing.md`）
+- Modify: `docs/guides/deployment/admin-roles.md`（或新建 `docs/guides/deployment/invoice-issuing.md`）
 
 **Step 1: 撰寫文件章節**
 
@@ -965,7 +965,7 @@ git commit -m "feat: manual topup invoices also set skip_upstream_hook flag"
 **Step 2: Commit**
 
 ```bash
-git add docs/deployment/invoice-issuing.md
+git add docs/guides/deployment/invoice-issuing.md
 git commit -m "docs: document ECPay invoice issuing isolation strategy"
 ```
 

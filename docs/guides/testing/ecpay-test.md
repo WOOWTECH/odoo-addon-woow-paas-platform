@@ -214,7 +214,7 @@ E2E 驗 4 個 invariants：
 
 ### Spec 文件
 
-`docs/spec/subscription-failure-handling-gap.md`
+`docs/reference/features/subscription-failure-handling-gap.md`
 
 ---
 

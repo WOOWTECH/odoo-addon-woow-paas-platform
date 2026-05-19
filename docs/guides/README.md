@@ -32,4 +32,4 @@
 - 步驟必須含**前置條件 → 動作 → 預期結果**
 - 命令行範例優先（複製貼上即可執行）
 - 失敗情境的 troubleshooting 放在主步驟之後
-- 引用 reference/ 規格時用相對路徑：`[API spec](../../reference/api/woowtech-paas-api-specification.md)`
+- 引用 reference/ 規格時用相對路徑（從 guides 子目錄看，形如 `../../reference/api/<file>.md`）

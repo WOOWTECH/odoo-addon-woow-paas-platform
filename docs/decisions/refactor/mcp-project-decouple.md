@@ -142,7 +142,7 @@ WHERE r.model_id IN (
 
 ### CAQA 漏抓的兩個盲點
 
-CAQA report (`docs/refactor/caqa-2026-05-18.md`) 對 14 invariants 全 verify ✅，verdict 為 APPROVED WITH CAVEATS。但 §同源 code path 檢查（line 219-234）明文排除 `tests/` 與 `migrations/`，理由是「tester fixture 故意保留舊鏈 reference 以鎖 regression」。**這個 exclude 太寬**：
+CAQA report (`docs/decisions/reviews/caqa-2026-05-18.md`) 對 14 invariants 全 verify ✅，verdict 為 APPROVED WITH CAVEATS。但 §同源 code path 檢查（line 219-234）明文排除 `tests/` 與 `migrations/`，理由是「tester fixture 故意保留舊鏈 reference 以鎖 regression」。**這個 exclude 太寬**：
 
 | 盲點 | CAQA 漏抓內容 | Reviewer 補抓 |
 |---|---|---|
@@ -187,7 +187,7 @@ Leader 選 **Option A (port 既有 class)** 而非 Option B (retire 3 class)：p
 3. **Always-true ACL leg 必須分 read direction 與 create direction 評估**：read direction 永真可能是設計（system-scope 公開資源），create direction 永真**永遠是漏洞**（user 自創 system row → 全 instance 可讀）。CAQA invariant template 須拆 read / create 兩個 verify check。
 4. **Multi-agent review 對單一 reviewer (CAQA) 視角的補強價值已被驗證**：5-agent 抓 4 個 CAQA 漏的 finding。未來高風險 refactor（schema + ACL + lifecycle 三平面同改）應預設走 multi-agent review，不只靠 CAQA。
 
-對應 follow-up 已列入 `docs/refactor/followups/follow-ups.md`（R2-1 ~ R2-4）。
+對應 follow-up 已列入 `docs/tracking/followups/follow-ups.md`（R2-1 ~ R2-4）。
 
 ## Consequences
 
@@ -279,13 +279,13 @@ Leader 選 **Option A (port 既有 class)** 而非 Option B (retire 3 class)：p
   - [[system-mcp-create-acl-bypass]] — MAJOR 1 踩坑（dual-leg rule `perm_create=True` 對 always-true leg 是 privilege escalation surface）
   - [[tag-scoped-test-misses-full-u-failures]] — BLOCKER 1 踩坑（CAQA 用 `--test-tags` scope-limited 驗綠，漏抓 cross-module stale schema reference）
 - Plan:
-  - `docs/refactor/plan-mcp-project-decouple.md`（本 decision 的 implementation plan，25 AC）
+  - `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md`（本 decision 的 implementation plan，25 AC）
 - Inputs（reporter 合成來源 — 不在 durable docs 重複，只列引用）:
-  - `docs/refactor/test-scope-report-mcp-2026-05-18.md`（26 cases red proof + cycle-3 fixture rationale）
-  - `docs/refactor/test-coverage-mcp-project-decouple.md`（test-explainer 視角 coverage report）
-  - `docs/refactor/caqa-2026-05-18.md`（CAQA 14 invariants check + C1 / F12 / Inv #7 caveat）
-  - `docs/refactor/pr-review-verdict-mcp-2026-05-18.md`（round 1 NEEDS REVISION，2 BLOCKER + 2 MAJOR + 17 minor）
-  - `docs/refactor/pr-review-verdict-mcp-round2-2026-05-18.md`（round 2 APPROVED WITH CAVEATS，4 finding closed + 4 new minor）
+  - `docs/tracking/test-reports/test-scope-report-mcp-2026-05-18.md`（26 cases red proof + cycle-3 fixture rationale）
+  - `docs/tracking/test-reports/test-coverage-mcp-project-decouple.md`（test-explainer 視角 coverage report）
+  - `docs/decisions/reviews/caqa-2026-05-18.md`（CAQA 14 invariants check + C1 / F12 / Inv #7 caveat）
+  - `docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md`（round 1 NEEDS REVISION，2 BLOCKER + 2 MAJOR + 17 minor）
+  - `docs/decisions/reviews/pr-review-verdict-mcp-round2-2026-05-18.md`（round 2 APPROVED WITH CAVEATS，4 finding closed + 4 new minor）
 - 關鍵 code（finalize 時填入實際 line）:
   - `src/__manifest__.py:3` — version `18.0.1.0.24`
   - `src/migrations/18.0.1.0.24/post-migrate.py:49-180` — 5-step migration（backfill / orphan archive / drop column / noupdate flip / retire 舊 dual-leg rule）

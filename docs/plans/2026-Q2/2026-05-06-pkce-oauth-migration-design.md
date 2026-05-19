@@ -257,4 +257,4 @@ PKCE-only public client OAuth2 flow 由 paas-platform 端「擴充」既有 OAut
 - `src/controllers/oauth2.py`、`src/models/oauth_client.py`、`src/data/oauth_clients.xml`、`src/tests/test_oauth2.py`
 - HA Core `homeassistant/helpers/config_entry_oauth2_flow.py:64-76, 194-338, 548-553`
 - RFC 7636（PKCE）、RFC 8252（OAuth 2.0 for Native Apps）
-- 過程記錄：`docs/journal/2026-05-06-pkce-oauth-migration.md`
+- 過程記錄：`docs/plans/journal/2026-05-06-pkce-oauth-migration.md`
