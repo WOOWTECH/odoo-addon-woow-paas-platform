@@ -79,12 +79,12 @@ ccpm epic 完成、或 superpowers brainstorming/writing-plans 跑完之後，�
 
 ### Step 3 — 產出新檔 / append
 
-新建檔的 frontmatter：
+**3.1 預設 frontmatter（適用 `decisions/` 與 `reference/features/`、`plans/`）**：
 
 ```yaml
 ---
 title: <段落標題或 user 指定>
-category: decisions | plans | tracking
+category: decisions | plans | reference
 status: active
 created: <NOW>
 updated: <NOW>
@@ -94,18 +94,58 @@ related: [<list>]
 ---
 ```
 
-`follow-ups.md` 模式：append 一個 H2 段落，格式：
+**3.2 `tracking/pitfalls/` 模式 — 對齊既有手寫格式（無 frontmatter）**：
+
+`docs/tracking/pitfalls/` 內既有 5 個檔都是「無 frontmatter + H1 + 摘要 quote + 多個 H2 section」結構，CLAUDE.md `Known patterns` 直接引用。promote 出來的檔遵循同一格式：
 
 ```markdown
-## <title>（<YYYY-MM-DD>）
+# Pitfall: <title>
 
-- **Source**: <原 source 路徑>
-- **Owner**: <如有>
-- **Status**: open
-- **Context**: <一段說明>
+> Source: <原 source 路徑> (promoted <YYYY-MM-DD>)
+>
+> <一句話 summary：什麼情境會踩到 + 後果，1-2 行>
+
+## Symptom
+
+<觀察到的現象，可含 reproducer code block>
+
+## Root Cause
+
+<根因分析>
+
+## Fix
+
+<修法 — 含 PR / commit ref 如有>
+
+## Prevention
+
+<未來怎麼避免、檢查清單 / pattern doc 連結>
 ```
 
-雙檔 plan 模式（superpowers writing-plans 輸出）：產出 `<quarter>/<YYYY-MM-DD>-<slug>-design.md` + `-implementation.md`，分別把 design / implementation 段落寫入。
+如 source 含 incident timeline，可額外加 `## Timeline` 段落（既有 `cross-workspace-task-data-leak.md` 有）。
+
+**3.3 `tracking/followups/follow-ups.md` 模式 — 對齊既有 F# 流水號**：
+
+`follow-ups.md` 採跨 refactor cycle 連續編號（F1, F2, ...）+ 頂部 Index 表格。promote 工具**不自動編號**（編號由 reporter 後續整理時統一指派，避免 race condition）。append 格式：
+
+```markdown
+## <title>（<YYYY-MM-DD>）— pending F#
+
+- **Source**: <原 source 路徑>
+- **Severity**: <minor | medium | major | info | trivial>
+- **Origin**: <pre-existing | refactor | refactor (test) | refactor (deferred) | refactor (caveat)>
+- **Cycle**: <如 source 提及，未明標就空白>
+- **Status**: open
+- **Action**: <建議動作 — 1 行>
+
+<段落說明：何時觸發、為什麼延後、相關連結>
+
+> **Reporter TODO**: 指派 F# 編號（既有最大 + 1）並加入頂部 Index 表格。
+```
+
+附加位置：在 `follow-ups.md` 的**最末**（不要試圖插進現有 cycle section，避免 reporter 整理時順序混亂）。
+
+**3.4 雙檔 plan 模式（superpowers writing-plans 輸出）**：產出 `<quarter>/<YYYY-MM-DD>-<slug>-design.md` + `-implementation.md`，分別把 design / implementation 段落寫入。
 
 ### Step 4 — 在原檔加 promote 註記
 

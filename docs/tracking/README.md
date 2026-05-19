@@ -19,20 +19,44 @@
 |------|------|
 | [`issues/`](issues/) | 生產 / 沙盒問題排查紀錄（含修復方案 Path A/B） |
 | [`pitfalls/`](pitfalls/) | 已踩過的坑（cross-workspace data leak、plan-vs-schema mismatch 等） |
-| [`followups/`](followups/) | 技術債清單（單檔 `follow-ups.md`，每項 H2 + 日期） |
+| [`followups/`](followups/) | 技術債清單（單檔 `follow-ups.md`，F# 流水號跨 refactor cycle 連續編號） |
 | [`test-reports/`](test-reports/) | Test scope report、coverage report、CAQA test report |
 
 ## 命名
 
 - `issues/`：`<incident-slug>.md`（如 `sandbox-hostpath-rot.md`、`stg-networkpolicy.md`）
 - `pitfalls/`：`<incident-slug>.md`（如 `cross-workspace-task-data-leak.md`）
-- `followups/`：固定 `follow-ups.md`，每項 H2 + 日期標題
+- `followups/`：固定 `follow-ups.md`，內部用 F1, F2, ... 連續編號（跨 cycle 不重置）
 - `test-reports/`：`<feature>-<aspect>-YYYY-MM-DD.md` 或 `issue-<N>-test-coverage.md`
 
 ## 寫作慣例
 
-- 每筆 incident 含 **Timeline → Root Cause → Fix → Prevention**
-- Pitfall 必須含「Anti-pattern」段落（讀者第一眼就能避免）
-- follow-up 條目格式：H2 標題 + 日期 + responsible owner + status（open / done）
-- test-reports 含 scope summary + result table，連結回對應 plan / decision
-- 改檔不刪原文，加 `**Update YYYY-MM-DD**:` 區塊（保留 audit trail）
+### pitfalls/ — 無 frontmatter，採 H1 + sections 結構
+
+CLAUDE.md `Known patterns` 直接以路徑引用 pitfall 檔，所以**不加 YAML frontmatter**（避免 grep / lychee 噪訊）。固定結構：
+
+```markdown
+# Pitfall: <title>
+
+> Source: <如有 — promote 或 PR review ref>
+> <一句話 summary：什麼情境會踩到 + 後果>
+
+## Symptom
+## Root Cause
+## Fix
+## Prevention
+```
+
+可選加 `## Timeline`（含 incident 時序）、`## Reproducer`（重現步驟）、`## Related`（連結 decision / pattern）。
+
+### followups/follow-ups.md — F# 流水號 + 頂部 Index 表格
+
+跨 refactor cycle 連續編號（F1, F2, F3, ...）。**新 entry 先 append 在文末（標記 `pending F#`），reporter 整理時統一指派編號並加進 Index 表格**。每條附 severity / origin / cycle / status。
+
+### issues/ — 自由結構，重視可追蹤性
+
+每筆 incident 含 **Symptom → Timeline → Root Cause → Fix（Path A/B 如有）→ Prevention**。改檔不刪原文，加 `**Update YYYY-MM-DD**:` 區塊保留 audit trail。
+
+### test-reports/ — scope summary + result table
+
+含測試範圍清單 + 通過 / 失敗統計表 + 連結回對應 plan / decision。多輪 review 各自獨立檔（如 `caqa-2026-05-16.md` + `caqa-2026-05-18.md`）。
