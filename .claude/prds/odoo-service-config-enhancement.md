@@ -195,3 +195,9 @@ list_db = False
 - **PaaS Operator**：無需變更，現有的 `install_release()` 已支援任意 Helm values 傳遞
 - **Bitnami Odoo Chart**：依賴其 SMTP values 和 entrypoint script 的正確行為
 - **HelmValueForm 組件**：可能需擴充 select type 支援
+
+---
+
+> **Promoted to**: `docs/reference/features/odoo-service-config.md` (2026-05-19T05:54:44Z)
+>
+> User Stories（US-1/2/3 含 acceptance criteria）+ Success Criteria + SMTP 欄位規格升級為長期 feature spec。原 PRD 保留作為需求來源。

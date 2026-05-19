@@ -99,3 +99,9 @@ Total tasks: 5
 Parallel tasks: 1 (#8 可與 #6 並行)
 Sequential tasks: 4
 Estimated total effort: 5.5-8.5h
+
+---
+
+> **Promoted to**: `docs/decisions/refactor/odoo-service-config-enhancement.md` (2026-05-19T05:54:44Z)
+>
+> Architecture Decisions section（3 個決策含 trade-off）升級為長期文件。原 epic 保留作為實作參考。
