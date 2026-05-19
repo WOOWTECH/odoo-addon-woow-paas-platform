@@ -390,10 +390,14 @@ woow_paas_platform/
 │           ├── resource-quota.yaml
 │           ├── pgadmin-deployment.yaml
 │           └── ttl-cronjob.yaml
-├── docs/                         # Documentation
-│   ├── deployment/              # K8s setup, troubleshooting
-│   ├── development/             # Developer guides
-│   └── spec/                    # Feature specifications
+├── docs/                         # Documentation (6 類 + 工具自管理區，詳見 docs/README.md)
+│   ├── guides/                  # 任務導向（getting-started、development、deployment、testing、tutorials）
+│   ├── reference/               # 查找導向（api、features、architecture、pencil）
+│   ├── decisions/               # 解釋導向（philosophy、refactor、patterns、reviews）
+│   ├── plans/                   # 過程紀錄（按季度 2026-Q1/Q2 + journal）
+│   ├── tracking/                # 問題與追蹤（issues、pitfalls、followups、test-reports）
+│   ├── archived/                # 歷史檔案（ccpm-v1 等）
+│   └── superpowers/             # 工具自管理區（obra/superpowers plugin 自動寫入）
 └── .claude/                      # Claude Code PM configuration
     └── skills/
         ├── deploy-stg/           # Staging 部署 Skill
@@ -533,16 +537,41 @@ _CONFIG_PARAMETERS = [
 
 改動以下 model 與 ACL 前必看 invariants 與 pattern docs，避免 B1-class data leak 重炸：
 
-- **CloudService / Project decoupling**：見 `docs/refactor/decisions/cloud-service-project-decouple.md`（含 7 條 Invariants）
-- **Odoo addon override std ir.rule**（任何在 `ir.model.access.csv` 給 `base.group_user` 加 project / task / Odoo std model 的 RWCU 時）：見 `docs/refactor/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
-- **PaaS workspace member ACL 收緊**：見 `docs/refactor/patterns/paas-workspace-member-acl-tightening.md`
+- **CloudService / Project decoupling**：見 `docs/decisions/refactor/cloud-service-project-decouple.md`（含 7 條 Invariants）
+- **Odoo addon override std ir.rule**（任何在 `ir.model.access.csv` 給 `base.group_user` 加 project / task / Odoo std model 的 RWCU 時）：見 `docs/decisions/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
+- **PaaS workspace member ACL 收緊**：見 `docs/decisions/patterns/paas-workspace-member-acl-tightening.md`
 
 Pitfall 持久化紀錄（debug 撞牆時對照）：
 
-- `docs/refactor/pitfalls/cross-workspace-task-data-leak.md` — CAQA B1 incident
-- `docs/refactor/pitfalls/plan-vs-odoo-schema-mismatch.md` — plan 引用不存在欄位的教訓
+- `docs/tracking/pitfalls/cross-workspace-task-data-leak.md` — CAQA B1 incident
+- `docs/tracking/pitfalls/plan-vs-odoo-schema-mismatch.md` — plan 引用不存在欄位的教訓
 
-Follow-up 追蹤：`docs/refactor/followups/follow-ups.md`（11 條未竟事項）
+Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（11 條未竟事項）
+
+## Docs organisation
+
+`docs/` 採 **6 類混合 + 1 工具自管理區**（詳見 `docs/README.md`）。新檔前先決定類別：
+
+| 目錄 | 何時用 |
+|------|-------|
+| `docs/guides/` | 寫「如何做 X」的步驟（onboarding、deployment、testing） |
+| `docs/reference/` | 寫「是什麼 / 有什麼」的事實規格（API、feature spec） |
+| `docs/decisions/` | 寫「為什麼這樣設計」的論述（philosophy、refactor、pattern、PR review） |
+| `docs/plans/` | 啟動 epic / 大功能前寫 design+implementation 雙檔（按季度子目錄歸檔，例 `docs/plans/2026-Q2/`） |
+| `docs/tracking/` | 記錄 incident、pitfall、follow-up、test report |
+| `docs/archived/` | 不再使用但保留考古（不主動建檔） |
+| `docs/superpowers/` | obra/superpowers plugin 自動寫入區（不算主題類） |
+
+**工具指令**：
+
+- `/docs:new <category> <name>` — 建新 doc（產 frontmatter 模板）
+- `/docs:promote ccpm:<epic-name>` 或 `/docs:promote superpowers:<file>` — 把 ccpm epic / superpowers 探索 promote 到主結構
+
+**CI 策略**：
+
+- Phase 1（目前）：lychee broken link check，PR 觸發，失敗只 warning
+- Phase 2（穩定後）：升級為 block merge + orphan doc check
+- 例外清單：`docs/archived/`、`docs/superpowers/`
 
 ## Code Style Guide
 
