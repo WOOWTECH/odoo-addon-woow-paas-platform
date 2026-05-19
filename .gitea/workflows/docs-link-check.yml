@@ -1,0 +1,50 @@
+name: Docs Link Check (Phase 1 — warning only)
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**/*.md'
+      - 'CLAUDE.md'
+      - '.lychee.toml'
+      - '.gitea/workflows/docs-link-check.yml'
+
+jobs:
+  lychee:
+    runs-on: ubuntu-latest
+    # Phase 1: failure does NOT block merge. Phase 2 will remove this line.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >
+            --config .lychee.toml
+            --no-progress
+            --verbose
+            './docs/**/*.md'
+            'CLAUDE.md'
+          fail: false
+          output: ./lychee-report.md
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lychee-report
+          path: ./lychee-report.md
+
+      - name: Summarize
+        if: always()
+        run: |
+          echo "## Docs Link Check (Phase 1 — warning only)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f ./lychee-report.md ]; then
+            cat ./lychee-report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No lychee report produced." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Phase 1: failures do not block merge. Phase 2 will enable blocking + orphan check." >> $GITHUB_STEP_SUMMARY
