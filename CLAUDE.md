@@ -627,14 +627,25 @@ export class SubscriptionCard extends Component {
 
 ## Claude Code PM
 
-This project uses Claude Code PM (`.claude/` directory) for project management.
+This project uses the **CCPM** Agent Skill ([automazeio/ccpm](https://github.com/automazeio/ccpm)) for spec-driven project management. The skill auto-triggers on PM-related intents — you usually don't need to type slash commands.
 
-### Quick Commands
+`.claude/skills/ccpm` is a symlink to a local clone of `automazeio/ccpm` (path varies per machine — run `readlink .claude/skills/ccpm` to see where yours points).
 
-- `/pm:help` - Show all available commands
-- `/pm:status` - Project status overview
-- `/pm:next` - Next available task
-- `/pm:prd-new <name>` - Create new PRD
+### Trigger phrases (skill auto-routes)
+
+| Intent | Example phrasing |
+|---|---|
+| Plan a feature | "write a PRD for X", "let's plan X", "scope this out" |
+| Decompose epic | "break this epic into tasks", "decompose the X epic" |
+| Sync to GitHub | "sync the X epic", "push tasks to github" |
+| Start work | "start working on issue N", "let's work on issue N" |
+| Status / standup | "standup", "what's next", "what's blocked", "what are we working on" |
+
+### Working data (kept in repo)
+
+- `.claude/prds/` — Product Requirement Documents
+- `.claude/epics/<feature>/` — `epic.md` + numbered task files + `updates/` progress tracking
+- `.claude/context/` — Project context files referenced below
 
 ### Context Files
 
@@ -643,23 +654,19 @@ This project uses Claude Code PM (`.claude/` directory) for project management.
 - `.claude/context/project-style-guide.md` - Coding conventions
 - `.claude/context/system-patterns.md` - Architecture patterns
 
-### Rules Reference
+### Updating the skill
 
-The `.claude/rules/` directory contains coding standards and operation patterns that are automatically loaded by Claude Code PM:
+Run `git pull` inside the clone that `.claude/skills/ccpm` resolves to. One-liner:
 
-| Rule File                   | Description                                          |
-| --------------------------- | ---------------------------------------------------- |
-| `datetime.md`               | ISO 8601 datetime format standards for frontmatter   |
-| `frontmatter-operations.md` | YAML frontmatter reading/updating patterns           |
-| `github-operations.md`      | GitHub CLI patterns and repository protection        |
-| `standard-patterns.md`      | Core validation, output, and error handling patterns |
-| `strip-frontmatter.md`      | Removing frontmatter before GitHub sync              |
-| `path-standards.md`         | Relative path usage for portability and privacy      |
-| `worktree-operations.md`    | Git worktree creation and management                 |
-| `branch-operations.md`      | Git branch workflows                                 |
-| `agent-coordination.md`     | Multi-agent parallel execution rules                 |
-| `test-execution.md`         | Test runner patterns                                 |
-| `use-ast-grep.md`           | AST-based code search and refactoring                |
+```bash
+git -C "$(readlink .claude/skills/ccpm)/../.." pull
+```
+
+### First-time setup on a new machine
+
+1. Clone `automazeio/ccpm` somewhere outside the repo (e.g. a personal skills folder).
+2. `ln -s <clone>/skill/ccpm .claude/skills/ccpm`
+3. Verify `readlink .claude/skills/ccpm` resolves to your clone.
 
 ## Worktree Development
 
