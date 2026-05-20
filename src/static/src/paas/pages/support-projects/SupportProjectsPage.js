@@ -151,6 +151,17 @@ export class SupportProjectsPage extends Component {
         this.router.navigate("ai-assistant/projects/" + projectId);
     }
 
+    navigateToProjectSettings(projectId, ev) {
+        if (ev) {
+            ev.stopPropagation();
+        }
+        this.router.navigate("projects/" + projectId);
+    }
+
+    getSettingsHandler(projectId) {
+        return (ev) => this.navigateToProjectSettings(projectId, ev);
+    }
+
     navigateBack() {
         this.router.navigate("ai-assistant");
     }

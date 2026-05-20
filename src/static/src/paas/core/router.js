@@ -18,6 +18,7 @@ const routes = [
     //        shares the same `ai-projects` routeName so existing bookmarks
     //        continue to resolve to the same component.
     { path: "projects", name: "Projects", routeName: "ai-projects" },
+    { path: "projects/:id", name: "Project Detail", routeName: "project-detail", pattern: /^projects\/(\d+)$/ },
     { path: "ai-assistant/projects/:id", name: "Project Kanban", routeName: "ai-project-kanban", pattern: /^ai-assistant\/projects\/(\d+)$/ },
     { path: "ai-assistant/projects", name: "Support Projects", routeName: "ai-projects" },
     { path: "ai-assistant/tasks/:taskId", name: "Task Detail", routeName: "ai-task-detail", pattern: /^ai-assistant\/tasks\/(\d+)$/ },

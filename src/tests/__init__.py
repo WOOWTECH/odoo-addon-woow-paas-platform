@@ -54,4 +54,7 @@ from . import test_mcp_project_decouple_migration
 from . import test_mcp_project_lifecycle
 from . import test_mcp_acl_isolation
 from . import test_mcp_chat_consumption
+# issue #48: Project Detail page — project-centric endpoints (TDD red)
+from . import test_project_detail_endpoints
+from . import test_project_mcp_project_centric
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

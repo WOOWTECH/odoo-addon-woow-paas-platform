@@ -9,6 +9,7 @@ _IMPORT_NAME_OVERRIDES = {
     'pillow': 'PIL',
     'scikit-learn': 'sklearn',
     'python-dateutil': 'dateutil',
+    'pycryptodomex': 'Cryptodome',
 }
 
 

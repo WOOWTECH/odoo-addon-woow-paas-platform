@@ -22,6 +22,7 @@ jobs:
         with:
           args: >
             --config .lychee.toml
+            --header "Authorization: token ${{ secrets.CI_GITEA_TOKEN }}"
             --no-progress
             --verbose
             './docs/**/*.md'

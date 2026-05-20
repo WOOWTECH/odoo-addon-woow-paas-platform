@@ -1,6 +1,6 @@
 """TDD red regression test — cross-workspace project.task read isolation.
 
-CAQA report: docs/refactor/caqa-2026-05-16.md §E HIGH BLOCKER (B1)
+CAQA report: docs/decisions/reviews/caqa-2026-05-16.md §E HIGH BLOCKER (B1)
 
 Background:
 - Implementation added ``ir.model.access.csv:27`` granting ``base.group_user``
@@ -8,7 +8,7 @@ Background:
 - Implementation added ``project_task_rule_workspace_member`` in
   ``ir_rules.xml`` to workspace-gate task RWCU.
 - Implementation deactivated ``project.project_public_members_rule`` in the
-  ``18.0.1.0.22`` migration to remove the OR-leg leak on ``project.project``.
+  ``18.0.1.0.23`` migration to remove the OR-leg leak on ``project.project``.
 - **Implementation did NOT deactivate** the task-level counterparts
   ``project.task_visibility_rule`` and ``project.task_visibility_rule_project_user``
   (Odoo std, both target ``base.group_user`` / ``project.group_project_user``,
@@ -121,7 +121,7 @@ class TestTaskCrossWorkspaceACL(TransactionCase):
             "B1 leak: Alice (W1) can search() Bob's W2 task. Need to "
             "deactivate std `project.task_visibility_rule` + "
             "`project.task_visibility_rule_project_user` symmetrically with "
-            "the project.project fix in migrations/18.0.1.0.22.",
+            "the project.project fix in migrations/18.0.1.0.23.",
         )
 
         # 2. browse().read() — explicit ACL check, raises when blocked.
@@ -133,6 +133,56 @@ class TestTaskCrossWorkspaceACL(TransactionCase):
                 "task rule is the only active rule on base.group_user.",
         ):
             task_as_alice.read(['name'])
+
+    def test_alice_cannot_read_bob_project_via_orm(self):
+        """B1-class regression — std `project.project_public_members_rule` leak.
+
+        Mirror of ``test_alice_cannot_read_bob_task_via_orm`` but at the
+        ``project.project`` layer. CAQA (re-loop §"同源 code path 檢查")
+        surfaced that the fresh-install B1 patch had to deactivate three
+        std rules — the project-level one
+        (``project.project_public_members_rule``) is the symmetric peer of
+        the two task-level rules already covered by the test above. Without
+        a regression lock at the project layer, a future revert of just
+        the project XML ref would silently re-leak project rows even while
+        the task tests stay green.
+
+        Spec ref: D9 / AC #29 — declaration-data (``ir_rules.xml``)
+        deactivation of the project rule must land in lockstep with the
+        task-side rules, so both fresh-install and upgrade paths share the
+        same effective ACL.
+
+        Asserts BOTH ORM read paths Odoo uses post-fix:
+          - ``search`` filters out Bob's W2 project (returns empty)
+          - explicit ``browse(id).read()`` raises ``AccessError``
+        """
+        Project = self.env['project.project']
+
+        # 1. search() — record-rule denial is a silent filter.
+        visible = Project.with_user(self.alice).search([
+            ('id', '=', self.project_bob.id),
+        ])
+        self.assertFalse(
+            visible,
+            "B1 leak (project): Alice (W1) can search() Bob's W2 project. "
+            "Need to deactivate std `project.project_public_members_rule` "
+            "in declaration data (security/ir_rules.xml) symmetrically with "
+            "the task-side rule deactivation — see CAQA B-1 / spec D9 / "
+            "AC #29.",
+        )
+
+        # 2. browse().read() — explicit ACL check, raises when blocked.
+        project_as_alice = Project.with_user(self.alice).browse(
+            self.project_bob.id,
+        )
+        with self.assertRaises(
+            AccessError,
+            msg="B1 leak (project): browse().read() on Bob's W2 project "
+                "succeeded for Alice — AccessError expected once std "
+                "`project.project_public_members_rule` is deactivated "
+                "in declaration data alongside the task-side rules.",
+        ):
+            project_as_alice.read(['name'])
 
     def test_bob_can_read_own_workspace_task(self):
         """Sanity: own-workspace task read must remain accessible.

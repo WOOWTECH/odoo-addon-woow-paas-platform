@@ -212,5 +212,35 @@
             <field name="perm_create" eval="True"/>
             <field name="perm_unlink" eval="True"/>
         </record>
+
+        <!-- CAQA B1 fresh-install fix (D9 / AC #29): deactivate the three Odoo
+             std project/task rules whose always-true `privacy_visibility !=
+             'followers'` legs would OR-bypass our workspace-scoped rules
+             (project_rule_workspace_member + project_task_rule_workspace_member).
+
+             3-way symmetric deactivation matches migrations/18.0.1.0.23/post-migrate.py:
+               - project.project_public_members_rule  → project.project leak
+               - project.task_visibility_rule         → project.task leak (base.group_user)
+               - project.task_visibility_rule_project_user → project.task leak (project_user)
+
+             Migration only runs on upgrade (`if not version: return` early-out at
+             post-migrate.py:35), so fresh-install path needs this XML declaration
+             to land all three at install time too. CAQA B-1 (re-loop 2026-05-20)
+             caught the missing project_public_members_rule entry — keep the
+             ref list in 1:1 sync with the migration's UPDATE ... WHERE name IN (...).
+
+             We can't use `<record id="project.task_visibility_rule">` because the
+             std rules were loaded by project module under `<data noupdate="1">`
+             (project/security/project_security.xml:48), so their ir_model_data
+             rows carry noupdate=true and Odoo's XML loader skips updates from
+             other modules. The `<function>` call bypasses this — it goes
+             straight through ORM write. Re-enabling any of the three std rules
+             re-opens the original B1 leak surfaced in CAQA. -->
+        <function model="ir.rule" name="write" eval="[
+            [ref('project.project_public_members_rule'),
+             ref('project.task_visibility_rule'),
+             ref('project.task_visibility_rule_project_user')],
+            {'active': False}
+        ]"/>
     </data>
 </odoo>

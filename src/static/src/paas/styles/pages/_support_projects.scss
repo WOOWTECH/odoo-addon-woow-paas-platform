@@ -234,6 +234,29 @@
     }
 }
 
+.o_woow_sp_settings_btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+    color: $woow-text-secondary;
+    display: inline-flex;
+    align-items: center;
+    opacity: 0;
+    transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+    flex-shrink: 0;
+
+    .o_woow_sp_card:hover & {
+        opacity: 1;
+    }
+
+    &:hover {
+        background: rgba(0, 0, 0, 0.05);
+        color: $woow-text-primary;
+    }
+}
+
 .o_woow_sp_card_title {
     font-size: 1rem;
     font-weight: 600;

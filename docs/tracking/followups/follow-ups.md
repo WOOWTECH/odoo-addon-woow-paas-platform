@@ -2,9 +2,10 @@
 
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
-**State as of 2026-05-18**：
+**State as of 2026-05-20**：
 - Cycle 1（cloud-service ↔ project decouple, 2026-05-17）：F1-F11，B1 已 RESOLVED、PR APPROVED WITH CAVEATS
 - Cycle 2（mcp cloud_service_id → project_id decouple, 2026-05-18）：F12-F20 新增，PR APPROVED WITH CAVEATS round 2，4 BLOCKER/MAJOR 全 close
+- Cycle 3（Project Detail page, issue #48, 2026-05-20）：F21-F28 新增，APPROVED WITH CAVEATS，B-1 fresh-install fix verified；AC #28 reviewer E2E 完成 10/11 pass + 1 FAIL（E2E-G1，不擋 merge）；R-1 / R-2 hard caveats 收於 reporter phase（commit pending），R-3 / R-6 / E2E-G1 + 其他 polish 進 follow-up issue
 
 ## Index
 
@@ -30,8 +31,16 @@
 | F18 | trivial | refactor | 2 | `_create_admin_user` helper docstring 過 cautious（R2-4） | reporter 順手清 or 留 |
 | F19 | minor | refactor | 2 | Round 1 17 minor / info 集合（silent-failure / type-design / migration assertion）| 留 batch 處理 |
 | F20 | minor | refactor (simplify) | 2 | Controller manual check helper 抽取 + `_get_user_mcp_tools` mixin | 待新 PR |
+| F21 | medium | refactor (cycle 3) | 3 | URL pattern 統一 + service-centric MCP endpoint deprecation (OR-1 / OR-6) | gitea #50 ✓ |
+| F22 | medium | refactor (cycle 3) | 3 | D5 invariant 重設計 cluster — sidecar MCP auto-create / rebind race / `@api.constrains` ORM enforcement (OR-2 / OR-4 / OR-5 / R-4) | gitea #49 ✓ |
+| F23 | medium | spec gap (cycle 3) | 3 | Unbound project ACL — endpoint 對 unbound 路徑無防 enumeration (OR-7 / R-4 partial) | gitea #51 ✓ + partial #49 |
+| F24 | trivial | doc (cycle 3) | 3 | Issue #48 carve-out comment（OR-3）+ worktree env gaps（OR-8）+ declaration↔migration pitfall（OR-9） | reporter phase ✅ (本批已落) |
+| F25 | important+ | reviewer (cycle 3) | 3 | Frontend UX hardening + error handling — McpServersSection delete/sync/test 沒 else (R-3) + `_delete_project_mcp_server` 沒 try/except + update 路徑沒 savepoint parity (R-6) + CloudServiceBindingSection rebind-from-unbound dropdown 空 (E2E-G1) | Follow-up issue: #52 |
+| F26 | minor | reviewer (cycle 3) | 3 | Polish cluster — `workspace_id` 缺 `readonly=True`（R-5）/ `support_service.js` optimistic merge stuck spinner（R-9）/ `ir_rules.xml:217-238` comment 改 zh-tw（R-10） | 新 polish issue 待開 |
+| F27 | minor | reviewer (cycle 3) | 3 | Test gaps G1 / G3 / G6（R-7）— update whitelist 範圍 / sync/test ACL matrix / XSS sanitize 未測 | tester 補 red 或 follow-up issue |
+| F28 | long-term | architectural (cycle 3) | 3 | Description rich-text editor 升級 — `document.execCommand` (legacy) → ProseMirror / TipTap (R-8) | architectural issue，等 editor 需求變寬時開 |
 
-下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12+ 是 cycle 2 新增。
+下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12-F20 是 cycle 2。F21+ 是 cycle 3 (issue #48 Project Detail page)。
 
 ---
 
@@ -316,18 +325,115 @@
 
 ---
 
+---
+
+# Cycle 3 — Project Detail Page (Issue #48, 2026-05-20)
+
+> Cycle 3 完成於 2026-05-20，final commit `32cf414`。Reviewer `approved with caveats`。R-1（doc dead refs）+ R-2（BasicInfoSection seed sanitize）由 reporter phase 收（commit pending，leader 統一 amend）。其餘 caveats 進 follow-up issue / 既有 #49 #50 #51。本 cycle 新加 F21-F28。OR-* 編號對應 spec `docs/plans/2026-Q2/2026-05-19-project-detail-page-design.md` §Open risks，R-* 編號對應 reviewer report `docs/tracking/reviewer-report-2026-05-20-project-detail-page-issue-48.md`。
+
+## F21 — URL pattern 統一 + service-centric MCP endpoint deprecation（OR-1 / OR-6）
+
+- **Severity**: medium（架構 debt，不擋 ship）
+- **Origin**: spec §Open risks OR-1 + OR-6；CAQA 確認；reviewer follow-up alignment
+- **OR-1**：本 cycle 新增 `/api/support-projects/<id>/mcp-servers` project-centric endpoint，但舊 service-centric MCP endpoint（`/api/cloud-services/<sid>/mcp-servers`）仍保留為 dead code。需要 deprecate 流程（grep call sites → 移除前端 / 後端引用 → drop endpoint）
+- **OR-6**：URL pattern 不一致 — 部分 endpoint 用 `/api/workspaces/<wid>/...` nesting，部分用 root-level `/api/support-projects/<pid>/...`。建議全部統一到 `/api/workspaces` nesting
+- **Status**: ✓ 已 surface 在 gitea #50（合併 OR-1 + OR-6）
+- **何時**：#50 排程
+
+## F22 — D5 invariant 重設計 cluster（OR-2 / OR-4 / OR-5 / R-4）
+
+- **Severity**: medium（D5 是物理現實 invariant，目前靠 multi-layer enforcement，不夠收斂）
+- **Origin**: spec §Open risks OR-2/4/5；reviewer R-4
+- **D5 invariant**: user-scope MCP 必須掛 bound project（`project.cloud_service_id IS NOT NULL`）。目前 enforcement 分散三層：
+  - **Endpoint manual query**（rebind / unbind 走 controller 手動 query 擋）— `paas.py` `_update_support_project` D5 leg（OR-4）
+  - **ORM 沒 `@api.constrains`**（`project.project.cloud_service_id` 沒 model-layer enforcement，靠 controller / 前端 gate）— R-4
+  - **Rebind race condition**（同時 rebind + create user MCP 可能繞過 D5）— OR-2
+  - **Sidecar auto-create + URL 機制**（D5 violation 後的 sidecar lifecycle 沒設計完）— OR-5
+- **Status**: ✓ 已 surface 在 gitea #49（合併 OR-2 / OR-4 / OR-5 / R-4 一次重設計）
+- **建議**：#49 同 PR 內考慮加 `@api.constrains('cloud_service_id')` model-layer enforcement，把 D5 收斂到 ORM 層，endpoint manual query 變 redundant 可刪
+- **何時**：#49 排程
+
+## F23 — Unbound project ACL — 缺防 enumeration / spec gap（OR-7 / R-4 partial）
+
+- **Severity**: medium（pre-existing IDOR 性質，與 F4 同源 — F4 是 ai_assistant.py controller，本條是 paas.py support-projects endpoint）
+- **Origin**: spec §Open risks OR-7（spec deferred 不測 unbound）；CAQA §C-3b；reviewer
+- **狀況**：endpoint `/api/support-projects/<id>` 對 unbound project（`cloud_service_id IS NULL`）路徑走 OR-7 carve-out 給 `_SyntheticAccess(ROLE_OWNER)`，**沒有**統一防 enum 訊息層（與 bound non-member 路徑不對稱）。任意 internal user brute-force id 都拿 ROLE_OWNER → 可讀整 payload + update name/description
+- **OR-7 三選項**：
+  - A：creator-only carve-out（`create_uid == user.id OR user.partner_id in message_partner_ids`）
+  - B：unbound 一律走防 enum 訊息（與 bound non-member 一致）
+  - C：unbound project 廢除（要求 user 必先 bind cloud service）
+- **Status**: ✓ 已 surface 在 gitea #51（OR-7 ACL spec gap）+ partial 重疊到 #49（D5 重設計時一併）
+- **何時**：#51 排程，與 F4 同一 PR 處理較自然
+
+## F24 — Reporter phase 已落的 doc work（OR-3 / OR-8 / OR-9）
+
+- **Severity**: trivial（doc-only）
+- **Origin**: reviewer follow-up alignment 標 reporter phase
+- **Status**: ✅ 本批 reporter phase 已落
+- **明細**：
+  - **OR-3** — issue #48 comment 澄清 D6 status carve-out（碰到 issue 字面誤會「Status 欄位」一事）：已在 reporter phase 之前 post on gitea #48 comment
+  - **OR-8** — worktree env setup gaps：sub-(a) `hooks.py` `pycryptodomex` import 已在本 cycle implementation 內補；sub-(b) `PAAS_CI_ADDONS_PATH` / `requirements.txt` pre-install 等 dev env gap 屬 worktree-sync skill / dev script 範疇，本 cycle 不展開
+  - **OR-9** — declaration data ↔ migration 1:1 對稱 hardening：本 cycle B-1 fresh-install 重蹈 task pair pattern 的根因；已補進 [[cross-workspace-task-data-leak]] §Hardening `declaration-data ↔ migration 1:1 對稱`
+- **何時**：✅ 完成
+
+## F25 — Frontend UX hardening + error handling cluster（R-3 / R-6 / E2E-G1）
+
+- **Severity**: important+（UX silent failure / data-loading gap — issue #48 是 UI page，UI 功能 regression / silent failure 是主功能 regression）
+- **Origin**: reviewer R-3 + R-6（silent-failure-hunter critical NEW + important）+ reviewer AC #28 E2E 2026-05-20 step 11 FAIL（E2E-G1）
+- **R-3 細節**：`McpServersSection.js:136-161` 三個 method 都用 `if (result.success)` 沒 `else`。Backend 回 `{success: false}` 時 UI 不 surface error（最嚴重 deleteServer：row 仍在 UI 上但 user 以為已刪）。Real surface 場景：sync / test 在 sidecar 斷時 fall-through 至此
+- **R-6 細節**：`_delete_project_mcp_server`（`paas.py:1653`）沒 try/except 包 unlink；`_update_project_mcp_server`（L1638）+ `_update_support_project`（L1504）沒 savepoint（vs `_create_project_mcp_server` 有 savepoint）
+- **E2E-G1 細節**：`CloudServiceBindingSection.js` `loadAvailableServices` 對 unbound project（`workspace_id == null`）沒 fetch services → dropdown 只剩 "Unbound" 選項，無法在 Project Detail 頁完成 rebind from unbound state。Workaround：Create modal 可指定 `cloud_service`；Same-session unbind 後可走通（cached），reload 或從 list 頁進來踩到
+- **Status**: Follow-up issue: #52 (已 post on gitea, 涵蓋 R-3 + R-6 + E2E-G1)
+- **建議 fix direction (E2E-G1)**：A：`loadAvailableServices` 對 `workspace_id == null` fall-back fetch all-accessible-workspaces 同 Create modal 行為；B：UI 顯示 disabled dropdown + 提示文案
+- **何時**：下一個 sprint 處理（leader 已 post issue #52）
+
+## F26 — Polish cluster (R-5 / R-9 / R-10)
+
+- **Severity**: minor（style / behavior polish，不擋 ship）
+- **Origin**: reviewer R-5 / R-9 / R-10
+- **明細**：
+  - **R-5** — `project.project.workspace_id` 是 compute field 沒 `readonly=True`：silent write 不報錯但無效，misleading（type-design-analyzer）。1-line fix
+  - **R-9** — `support_service.js:469-471 + 487-490` `updateProject` optimistic merge 在 `try` 內、`finally clear loading`：若 merge throw 會 stuck spinner（code-reviewer）。1-2 line fix
+  - **R-10** — `ir_rules.xml:217-238` comment block 英文（CLAUDE.md 要求 zh-tw），其他相鄰 rule 都用 zh-tw（code-reviewer）。Style polish
+- **建議落點**：新 polish issue「project-detail page polish — post-merge maintainability sweep」（reviewer report Soft caveat tracked 表已建議標題）
+- **何時**：next paas.py / project.project / ir_rules.xml touch PR 順手做，或單獨 polish issue
+
+## F27 — Test gaps G1 / G3 / G6（R-7）
+
+- **Severity**: minor（implementation 都對；test 是「future regression 強守線」缺塊）
+- **Origin**: reviewer R-7（pr-test-analyzer）
+- **缺塊**：
+  - **G1** — `update` action 的 whitelist scope / `project_id` 寫入是否被 reject 未測
+  - **G3** — `sync` / `test` action 的完整 ACL matrix（owner / admin / member / non-member × success / fail）不完整
+  - **G6** — XSS sanitize 在 description 寫入 + 讀取雙路徑未被 test 守
+- **建議**：每條對應加 1-2 條 test
+- **何時**：next test hardening PR；可與 cycle 1 F8 + cycle 2 F17 一併 batch
+
+## F28 — Description rich-text editor 升級（long-term，R-8）
+
+- **Severity**: long-term architectural
+- **Origin**: reviewer R-8
+- **狀況**：本 cycle `BasicInfoSection` 用 `document.execCommand("bold"/"italic"/...)` 實作最小 rich-text。API legacy，瀏覽器仍支援但 spec 已 deprecated。產品演進到需要 more 編輯能力（如 mention / embed / collaborative editing）時，需要切到 ProseMirror / TipTap / Lexical 之類正式 rich-text framework
+- **與本 cycle 的關係**：本 cycle ship 的 execCommand 寫法**沒有錯**（minimum viable rich-text，符合 issue #48 scope），但記在 follow-up 為了告訴未來 maintainer「進一步功能需求要 framework 切換」
+- **何時**：產品需求變寬時開 architectural issue 評估
+
+---
+
 ## Cross-cutting: 給未來 PR 作者的 hint
 
 每個改動下列檔案的 PR，自查本 doc 對應條目：
-- `src/security/ir_rules.xml` / `src/security/ir.model.access.csv` → F1 / F4 / F16
+- `src/security/ir_rules.xml` / `src/security/ir.model.access.csv` → F1 / F4 / F16 / F24 (declaration↔migration 對稱) / F26 (R-10 zh-tw comment)
 - `src/migrations/<v>/post-migrate.py` → F5 (cycle 1 xmlid drift 防呆) / F13 (cycle 2 task ACL 對齊)
 - `src/models/discuss_channel.py` → F2 / F3 / F6 / F9
 - `src/models/cloud_service.py` → F14 / F15
 - `src/models/mcp_server.py` → F19 (type design / test coverage cluster)
+- `src/models/project_project.py` → F22 (D5 `@api.constrains`) / F26 (R-5 `workspace_id` readonly)
 - `src/controllers/ai_assistant.py` → F4 / F10 / F12 / F20
-- `src/controllers/paas.py` → F19 / F20
-- `src/tests/test_*.py` → F8 / F17 / F19
+- `src/controllers/paas.py` → F19 / F20 / F22 (D5 重設計) / F23 (unbound ACL) / F25 (R-6 try/except + savepoint)
+- `src/tests/test_*.py` → F8 / F17 / F19 / F27 (G1 / G3 / G6 test gaps)
 - `src/static/src/paas/layout/` → F7
+- `src/static/src/paas/pages/project-detail/` → F25 (R-3 McpServersSection error display + E2E-G1 CloudServiceBindingSection rebind-from-unbound) / F28 (R-8 editor migration)
+- `src/static/src/paas/services/support_service.js` → F26 (R-9 optimistic merge order)
 
 ## See also
 
@@ -345,3 +451,5 @@
   - `docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md` §Minor / Info（17 條 round 1 minor — cycle 2）
   - `docs/decisions/reviews/pr-review-verdict-mcp-round2-2026-05-18.md` §新 minor / info（R2-1 ~ R2-4 — cycle 2 round 2）
   - `docs/decisions/reviews/pr-description-draft.md` §Follow-up（cycle 1 候選清單）
+  - `docs/tracking/caqa-report-2026-05-20-project-detail-page-issue-48.md` §Blocker + §Caveat（B-1 + C-1..C-3b — cycle 3）
+  - `docs/tracking/reviewer-report-2026-05-20-project-detail-page-issue-48.md` §Hard caveats + §Soft caveat tracked（R-1 ~ R-10 — cycle 3）
