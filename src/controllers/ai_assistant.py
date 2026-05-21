@@ -41,12 +41,19 @@ class AiAssistantController(Controller):
         ]) > 0
 
     def _check_project_access(self, project):
-        """Verify the current user has access to the project via cloud service.
+        """Verify the current user has access to the project.
 
-        Returns True if the project has no cloud service (global) or the user
-        is a member of the workspace that owns the cloud service.
+        - Bound project: requires workspace membership.
+        - Unbound project (no cloud_service): requires follower membership
+          (``message_partner_ids``). This must mirror the ir.rule
+          ``mcp_server_rule_workspace_user`` leg 2 — diverging from it
+          re-opens the IDOR surface where the rule layer denies but the
+          controller layer still serves the row.
         """
-        if not project.cloud_service_id or not project.cloud_service_id.workspace_id:
+        if not project.cloud_service_id:
+            user_partner = request.env.user.partner_id
+            return user_partner in project.message_partner_ids
+        if not project.cloud_service_id.workspace_id:
             return True
         return self._check_workspace_access(project.cloud_service_id.workspace_id)
 

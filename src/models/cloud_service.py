@@ -845,8 +845,6 @@ class CloudService(models.Model):
                         'helm_revision': helm_revision,
                         'error_message': False,
                     })
-                    if original_state != 'running':
-                        service._model_auto_create_mcp_server()
 
         elif release_status == 'failed':
             service.write({
@@ -910,10 +908,6 @@ class CloudService(models.Model):
                         _logger.warning("Failed to update helm_values with real API key for service %s", self.name)
                 self.write(update_vals)
                 _logger.info("n8n init succeeded for service %s (via cron)", self.name)
-                try:
-                    self._model_auto_create_mcp_server()
-                except Exception as e:
-                    _logger.warning("Auto-create MCP server failed for %s: %s", self.name, e)
             else:
                 self._record_init_failure(result.get('error', 'Unknown error'))
 
@@ -936,10 +930,6 @@ class CloudService(models.Model):
                     'addon_update_pending': False,
                 })
                 _logger.info("Odoo init succeeded for service %s (via cron)", self.name)
-                try:
-                    self._model_auto_create_mcp_server()
-                except Exception as e:
-                    _logger.warning("Auto-create MCP server failed for %s: %s", self.name, e)
             else:
                 self._record_init_failure(result.get('error', 'Unknown error'))
         except Exception as e:
@@ -964,53 +954,11 @@ class CloudService(models.Model):
         )
 
     # ------------------------------------------------------------------ #
-    #  MCP auto-create (model context)                                   #
+    #  MCP sidecar URL helper (model-context twin of                     #
+    #  PaasController._compute_sidecar_url_hint — kept for the           #
+    #  cron / non-request callers; see docs/decisions for the duplication #
+    #  follow-up)                                                        #
     # ------------------------------------------------------------------ #
-
-    def _model_auto_create_mcp_server(self):
-        """Auto-create MCP Server when transitioning to running (model context)."""
-        self.ensure_one()
-        template = self.template_id
-        if not template.mcp_enabled or not template.mcp_sidecar_image:
-            return
-
-        # Resolved Q #3: user-scope MCP is project-anchored. If the service has
-        # no support project yet, skip + log info (no retry — future creation
-        # of a project does not trigger backfill, that's a follow-up).
-        project = self.project_ids[:1]
-        if not project:
-            _logger.info(
-                "Skip MCP auto-create for service '%s' (id=%s): no support "
-                "project bound yet.", self.name, self.id,
-            )
-            return
-
-        McpServer = self.env['woow_paas_platform.mcp_server'].sudo()
-        existing = McpServer.search([
-            ('project_id', '=', project.id),
-            ('auto_created', '=', True),
-        ], limit=1)
-        if existing:
-            return
-
-        mcp_url = self._model_build_mcp_endpoint_url()
-
-        server = McpServer.create({
-            'name': f"{self.name} MCP",
-            'url': mcp_url,
-            'transport': template.mcp_transport or 'streamable_http',
-            'scope': 'user',
-            'project_id': project.id,
-            'auto_created': True,
-            'api_key': self.mcp_auth_token,
-            'description': f"Auto-created MCP server for {self.name}",
-        })
-
-        _logger.info(
-            "Auto-created MCP Server '%s' (id=%s) for cloud service '%s' (via cron)",
-            server.name, server.id, self.name,
-        )
-        server.action_sync_tools_safe()
 
     def _model_build_mcp_endpoint_url(self):
         """Build MCP endpoint URL (model context, no request needed)."""
@@ -1119,15 +1067,15 @@ class CloudService(models.Model):
     def _do_cleanup(self):
         """Helm uninstall — permanently remove the service.
 
-        Order matters (D1 / Invariant #4 — see decisions/mcp-project-decouple.md):
-        unlink user-scope MCP → helm uninstall → state='deleting'. Re-ordering
-        opens a time window where mcp_server rows reference a torn-down sidecar
-        URL (silent network failures in AI chat tool calls).
+        Order matters: unlink sidecar-backed user-scope MCP → helm uninstall
+        → state='deleting'. Re-ordering opens a time window where mcp_server
+        rows reference a torn-down sidecar URL (silent network failures in
+        AI chat tool calls).
 
-        On helm uninstall failure: state='error' + error_message (mirrors
-        _do_suspend / _do_resume). User-scope MCP is already unlinked at that
-        point — D5 invariant is preserved (no zombie rows pointing at a stale
-        sidecar) even when the cleanup half-succeeds.
+        The ``sidecar_backed`` filter is load-bearing: only sidecar-backed
+        user-scope MCP follows the service lifecycle; user-provided external
+        MCP rows have URLs independent of this service and must survive the
+        teardown.
         """
         self.ensure_one()
         _logger.info(
@@ -1135,9 +1083,10 @@ class CloudService(models.Model):
             self.id, self.name, self.helm_release_name, self.helm_namespace,
         )
 
-        # Step 1 — unlink user-scope MCP first, before the sidecar is torn down.
+        # Step 1 — unlink sidecar-backed user MCP first, before the sidecar
+        # is torn down. External-URL user MCP (sidecar_backed=False) stays.
         user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
-            lambda s: s.scope == 'user'
+            lambda s: s.scope == 'user' and s.sidecar_backed
         )
         if user_mcps:
             user_mcps.sudo().unlink()
@@ -1174,23 +1123,25 @@ class CloudService(models.Model):
         self.write({'state': 'deleting'})
 
     def unlink(self):
-        """Cleanup user-scope MCP before deleting the service record.
+        """Cleanup sidecar-backed user-scope MCP before deleting the service.
 
         Catches every unlink path — controllers calling ``service.unlink()``
         directly after their own helm uninstall, cron taking down a stuck
-        service, manual ORM ops — without forcing callers to remember to call
-        ``_do_cleanup`` first. ``project.project.cloud_service_id`` is
-        ``ondelete='set null'`` (cloud-service ↔ project Invariant #2), so a
-        naked ``unlink()`` would leave ``project_id`` populated on user-scope
-        MCP rows while their backing sidecar is gone — D5 violation + zombie
-        URL. ``_do_cleanup`` does the same step but only triggers on the
-        lifecycle path; this override is the catch-all guard.
+        service, manual ORM ops — without forcing callers to remember to
+        call ``_do_cleanup`` first. ``project.cloud_service_id`` is
+        ``ondelete='set null'``, so a naked ``unlink()`` would leave
+        ``project_id`` populated on sidecar-backed MCP rows while their
+        backing sidecar is gone — zombie URL. ``_do_cleanup`` does the same
+        step but only triggers on the lifecycle path; this override is the
+        catch-all guard.
 
-        Idempotent against ``_do_cleanup``: when both run, the second one
-        finds the user-scope MCP recordset already empty.
+        The ``sidecar_backed`` filter keeps user-provided external MCP rows
+        intact — their URL is physically independent of this service.
+        Idempotent against ``_do_cleanup``: when both run, the second finds
+        the matching recordset already empty.
         """
         user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
-            lambda s: s.scope == 'user'
+            lambda s: s.scope == 'user' and s.sidecar_backed
         )
         if user_mcps:
             user_mcps.sudo().unlink()

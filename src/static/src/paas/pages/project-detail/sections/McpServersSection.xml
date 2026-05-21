@@ -6,24 +6,24 @@
                 <WoowIcon name="'extension'" size="20"/>
                 <h3>MCP Servers</h3>
                 <div class="o_woow_project_detail__section_actions">
-                    <WoowButton variant="'primary'" size="'sm'"
-                                onClick.bind="showAddForm"
-                                disabled="isUnbound">
+                    <WoowButton t-if="canAddSidecarMcp" variant="'primary'" size="'sm'"
+                                onClick.bind="showAddSidecarForm">
                         <WoowIcon name="'add'" size="16"/>
-                        Add Server
+                        Add Sidecar MCP
+                    </WoowButton>
+                    <WoowButton variant="'secondary'" size="'sm'"
+                                onClick.bind="showAddExternalForm">
+                        <WoowIcon name="'add'" size="16"/>
+                        Add External MCP
                     </WoowButton>
                 </div>
-            </div>
-
-            <div t-if="isUnbound" class="o_woow_project_detail__hint">
-                <WoowIcon name="'info'" size="16"/>
-                <span>Bind a Cloud Service first to manage user-scope MCP servers.</span>
             </div>
 
             <WoowCard t-if="state.showForm" class="'o_woow_mcp_form_card'">
                 <div class="o_woow_mcp_form">
                     <h4 t-if="state.editingServer">Edit MCP Server</h4>
-                    <h4 t-else="">Add MCP Server</h4>
+                    <h4 t-elif="state.isSidecarFlow">Add Sidecar MCP</h4>
+                    <h4 t-else="">Add External MCP</h4>
 
                     <div t-if="state.formError" class="o_woow_mcp_form__error">
                         <WoowIcon name="'error'" size="16"/>
