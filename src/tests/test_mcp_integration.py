@@ -720,14 +720,21 @@ class TestMCPServerCascadeDelete(TransactionCase):
             'name': f'{service.name} Project',
             'cloud_service_id': service.id,
         })
-        server = self.McpServer.sudo().create({
+        # AC #24 regression lock (2026-05-20 mcp-refactor): cleanup filter
+        # is `lambda s: s.scope == 'user' and s.sidecar_backed`; feed the
+        # new flag when the field exists so this PR #47 BLOCKER 2 line
+        # stays green post-refactor.
+        server_vals = {
             'name': f'{service.name} MCP',
             'url': 'http://test-mcp.ns.svc.cluster.local:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
             'project_id': project.id,
             'auto_created': True,
-        })
+        }
+        if 'sidecar_backed' in self.McpServer._fields:
+            server_vals['sidecar_backed'] = True
+        server = self.McpServer.sudo().create(server_vals)
         server_id = server.id
 
         service.unlink()
@@ -755,14 +762,19 @@ class TestMCPServerCascadeDelete(TransactionCase):
             'name': f'{service.name} Project',
             'cloud_service_id': service.id,
         })
-        server = self.McpServer.sudo().create({
+        # AC #24 regression lock (2026-05-20 mcp-refactor) — same rationale
+        # as test_delete_service_cleans_user_mcp above.
+        server_vals = {
             'name': f'{service.name} MCP',
             'url': 'http://test-mcp.ns.svc.cluster.local:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
             'project_id': project.id,
             'auto_created': True,
-        })
+        }
+        if 'sidecar_backed' in self.McpServer._fields:
+            server_vals['sidecar_backed'] = True
+        server = self.McpServer.sudo().create(server_vals)
 
         McpTool = self.env['woow_paas_platform.mcp_tool']
         tool = McpTool.sudo().create({
@@ -903,14 +915,22 @@ class TestMCPServerCascadeDelete(TransactionCase):
             'name': f'{service.name} Project',
             'cloud_service_id': service.id,
         })
-        user_mcp = self.McpServer.sudo().create({
+        # AC #24 (2026-05-20 mcp-refactor) regression lock: also feed
+        # ``sidecar_backed=True`` when the new field exists so the
+        # post-refactor cleanup filter ``lambda s: s.scope == 'user' and
+        # s.sidecar_backed`` matches this row. Pre-impl the field is
+        # absent → branch skipped.
+        mcp_vals = {
             'name': f'{service.name} MCP',
             'url': 'http://direct-unlink-mcp.paas-ws-du.svc.cluster.local:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
             'project_id': project.id,
             'auto_created': True,
-        })
+        }
+        if 'sidecar_backed' in self.McpServer._fields:
+            mcp_vals['sidecar_backed'] = True
+        user_mcp = self.McpServer.sudo().create(mcp_vals)
         mcp_id = user_mcp.id
 
         # Note: we deliberately do NOT call service._do_cleanup() here.
@@ -995,14 +1015,19 @@ class TestMCPServerCascadeDelete(TransactionCase):
             'name': f'{service.name} Project',
             'cloud_service_id': service.id,
         })
-        user_mcp = self.McpServer.sudo().create({
+        # AC #24 regression lock (2026-05-20 mcp-refactor) — same rationale
+        # as test_delete_service_cleans_user_mcp above.
+        user_mcp_vals = {
             'name': f'{service.name} MCP',
             'url': 'http://helm-fail-mcp.paas-ws-hf.svc.cluster.local:3000/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
             'project_id': project.id,
             'auto_created': True,
-        })
+        }
+        if 'sidecar_backed' in self.McpServer._fields:
+            user_mcp_vals['sidecar_backed'] = True
+        user_mcp = self.McpServer.sudo().create(user_mcp_vals)
         mcp_id = user_mcp.id
 
         # Patch the local import inside _do_cleanup to return a
@@ -1264,52 +1289,292 @@ class TestMcpProjectScopeConstraints(TransactionCase):
                 'project_id': self.project_bound.id,
             })
 
-    # ------------------------------------------------------------------ #
-    # AC #7 / D5 invariant — user-scope MCP requires bound project        #
-    # ------------------------------------------------------------------ #
-    def test_ac7_constraint_user_scope_requires_bound_project(self):
-        """AC #7 / D5: user-scope MCP must point to a project with cloud_service_id.
 
-        Physical reality: user-scope MCP is a sidecar wrapper (``url``
-        derives from ``service.helm_release_name + helm_namespace``).
-        An unbound project (no cloud_service_id) has no service → no
-        sidecar → the MCP has no physical anchor.  D5 puts this
-        invariant in schema-level constraint rather than ACL filter
-        (B1 pitfall: never patch root-cause invariants with rule
-        filters).
+
+# ====================================================================== #
+# TDD red phase — Group C: auto-create teardown verification              #
+#                                                                         #
+# Plan: docs/plans/2026-Q2/2026-05-20-mcp-refactor-url-redesign-plan.md   #
+#   AC #7:  cloud_service.py:_model_auto_create_mcp_server 整段刪除      #
+#   AC #8:  cloud_service.py 內 3 個 call sites 全部刪除                  #
+#             - line 849 (_poll_and_update_status → state='running')      #
+#             - line 914 (_model_init_n8n 成功後)                         #
+#             - line 940 (_model_init_odoo 成功後)                        #
+#   AC #9:  controllers/paas.py:_auto_create_mcp_server 整段刪除          #
+#   AC #10: controllers/paas.py 內 3 個 call sites 全部刪除               #
+#   AC #11: cloud service 轉 running **不會** 產生新的 mcp_server row     #
+#   AC #12: n8n template 初始化成功 **不會** 產生新的 mcp_server row      #
+#                                                                         #
+# Red expectation today (pre-implementation, 2026-05-20):                 #
+#   * test_service_state_transition_running_does_not_create_mcp → RED:    #
+#     today line 849 still calls service._model_auto_create_mcp_server(); #
+#     post-impl call site gone → no MCP row appears.                      #
+#   * test_n8n_init_success_does_not_create_mcp → RED: line 914 same.     #
+#   * test_odoo_init_success_does_not_create_mcp → RED: line 940 same.    #
+#   * test_old_auto_create_methods_removed → RED: source still defines    #
+#     `_model_auto_create_mcp_server` (cloud_service.py:970) and          #
+#     `_auto_create_mcp_server` (paas.py:2601).                           #
+#                                                                         #
+# Boundary: only exercises the **model** call paths (line 849 / 914 /     #
+# 940). Controller paths (paas.py:2395 / 2493 / 2560) are covered by      #
+# AC #10 grep test (the entire `_auto_create_mcp_server` method gone).    #
+# ====================================================================== #
+
+
+@tagged('post_install', '-at_install')
+class TestAutoCreateTeardown(TransactionCase):
+    """C group — AC #7-12, auto-create code path physically removed."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Workspace = cls.env['woow_paas_platform.workspace']
+        cls.Template = cls.env['woow_paas_platform.cloud_app_template']
+        cls.Service = cls.env['woow_paas_platform.cloud_service']
+        cls.Project = cls.env['project.project']
+        cls.McpServer = cls.env['woow_paas_platform.mcp_server']
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = self.Workspace.sudo().create({
+            'name': 'WS AutoCreateTeardown',
+        })
+        # n8n-style template — post_deploy_init_type='n8n' so init path
+        # exercises the line-914 call site. mcp_enabled=True so any
+        # legacy auto-create would fire.
+        self.template_n8n = self.Template.sudo().create({
+            'name': 'AC-Tear n8n',
+            'slug': f'act-n8n-{uuid.uuid4().hex[:8]}',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'act-n8n',
+            'helm_chart_version': '1.0.0',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+            'mcp_enabled': True,
+            'mcp_sidecar_image': 'ghcr.io/test/mcp:latest',
+            'mcp_sidecar_port': 3001,
+            'mcp_transport': 'streamable_http',
+            'mcp_endpoint_path': '/mcp',
+            'post_deploy_init_type': 'n8n',
+        })
+        # Odoo-style template — post_deploy_init_type='odoo' for line 940.
+        self.template_odoo = self.Template.sudo().create({
+            'name': 'AC-Tear Odoo',
+            'slug': f'act-odoo-{uuid.uuid4().hex[:8]}',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'act-odoo',
+            'helm_chart_version': '1.0.0',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+            'mcp_enabled': True,
+            'mcp_sidecar_image': 'ghcr.io/test/mcp:latest',
+            'mcp_sidecar_port': 3001,
+            'mcp_transport': 'streamable_http',
+            'mcp_endpoint_path': '/mcp',
+            'post_deploy_init_type': 'odoo',
+        })
+        # Plain mcp-enabled template (no init) — for the state='running'
+        # transition path (line 849).
+        self.template_plain = self.Template.sudo().create({
+            'name': 'AC-Tear Plain MCP',
+            'slug': f'act-plain-{uuid.uuid4().hex[:8]}',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'act-plain',
+            'helm_chart_version': '1.0.0',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+            'mcp_enabled': True,
+            'mcp_sidecar_image': 'ghcr.io/test/mcp:latest',
+            'mcp_sidecar_port': 3001,
+            'mcp_transport': 'streamable_http',
+            'mcp_endpoint_path': '/mcp',
+            'post_deploy_init_type': 'none',
+        })
+
+    def _make_service_with_project(self, template, name_prefix, release_name):
+        service = self.Service.sudo().create({
+            'name': f'{name_prefix} Service',
+            'workspace_id': self.workspace.id,
+            'template_id': template.id,
+            'helm_release_name': release_name,
+            'helm_namespace': 'paas-ws-act',
+            'mcp_auth_token': str(uuid.uuid4()),
+            'state': 'deploying',
+        })
+        self.Project.sudo().create({
+            'name': f'{service.name} Project',
+            'cloud_service_id': service.id,
+        })
+        return service
+
+    def _count_mcp_for_service(self, service):
+        return self.McpServer.sudo().with_context(active_test=False).search_count([
+            ('project_id.cloud_service_id', '=', service.id),
+        ])
+
+    # ------------------------------------------------------------------ #
+    # AC #11 (and #7 / #8 by extension): state='running' → no MCP create  #
+    # ------------------------------------------------------------------ #
+    def test_service_state_transition_running_does_not_create_mcp(self):
+        """AC #7 / #8 / #11: cloud_service.py:849 auto-create call site
+        removed — state='running' transition leaves mcp_server_ids empty.
+
+        Drives the production code path ``_poll_and_update_status`` with
+        a mocked client returning a fully-ready 'deployed' release for a
+        no-init template; per AC #11 the post-condition is **no
+        mcp_server row** for the service.
+
+        **Red today**：line 849 calls
+        ``service._model_auto_create_mcp_server()`` which creates the
+        row → count==1 → assertion fails.
         """
-        from odoo.exceptions import ValidationError
+        service = self._make_service_with_project(
+            self.template_plain, 'C1 Plain', 'c1-plain-svc',
+        )
+        # Before — no MCP yet.
+        self.assertEqual(
+            self._count_mcp_for_service(service), 0,
+            "Fixture sanity: no MCP should exist before the transition.",
+        )
 
-        with self.assertRaises(
-            ValidationError,
-            msg=(
-                "AC #7 / D5: creating scope='user' with an unbound project "
-                "did not raise ValidationError. Add "
-                "_check_user_scope_requires_bound_project — domain "
-                "project_id.cloud_service_id IS NOT NULL."
-            ),
-        ):
-            self.McpServer.sudo().create({
-                'name': 'Bad User On Unbound Project',
-                'url': 'http://x/mcp',
-                'transport': 'streamable_http',
-                'scope': 'user',
-                'project_id': self.project_unbound.id,
-            })
+        fake_client = MagicMock()
+        fake_client.get_status.return_value = {
+            'release': {'status': 'deployed', 'revision': 1},
+            'pods': [{'phase': 'Running', 'ready': '1/1'}],
+        }
 
-        # Positive sanity: same row with bound project should succeed.
-        try:
-            ok = self.McpServer.sudo().create({
-                'name': 'OK User On Bound Project',
-                'url': 'http://chat-svc-mcp.paas-ws-c.svc.cluster.local:3001/mcp',
-                'transport': 'streamable_http',
-                'scope': 'user',
-                'project_id': self.project_bound.id,
-            })
-        except ValidationError as exc:
-            self.fail(
-                f"AC #7 / D5 over-correction: scope='user' on a bound "
-                f"project raised ValidationError: {exc}. Constraint must "
-                f"only block unbound projects."
-            )
-        self.assertTrue(ok.exists())
+        service._poll_and_update_status(fake_client)
+
+        # Post — state moved to running.
+        service.invalidate_recordset()
+        self.assertEqual(
+            service.state, 'running',
+            "Fixture sanity: transition didn't reach 'running'; mock "
+            "client may not match the production status shape.",
+        )
+        self.assertEqual(
+            self._count_mcp_for_service(service), 0,
+            "AC #11: state='running' transition CREATED a new mcp_server "
+            "row. cloud_service.py:849 auto-create call site must be "
+            "removed (AC #8 third bullet). Per AC #7 the entire "
+            "_model_auto_create_mcp_server method goes too.",
+        )
+
+    # ------------------------------------------------------------------ #
+    # AC #12 (and #8 / #10): n8n init success → no MCP create             #
+    # ------------------------------------------------------------------ #
+    def test_n8n_init_success_does_not_create_mcp(self):
+        """AC #8 (line 914) / #12: n8n post-deploy init success path
+        must NOT auto-create MCP row.
+
+        Exercises ``service._model_init_n8n(client)`` directly with
+        ``client.init_n8n`` returning ``{'success': True, 'api_key':
+        '...'}``. Production path runs at line 914 today —
+        ``self._model_auto_create_mcp_server()`` inside ``try / except``.
+
+        **Red today**：line 914 fires → count==1.
+        """
+        service = self._make_service_with_project(
+            self.template_n8n, 'C2 n8n', 'c2-n8n-svc',
+        )
+        self.assertEqual(self._count_mcp_for_service(service), 0)
+
+        fake_client = MagicMock()
+        fake_client.init_n8n.return_value = {
+            'success': True, 'api_key': 'fake-n8n-key-c2',
+        }
+
+        service._model_init_n8n(fake_client)
+
+        self.assertEqual(
+            self._count_mcp_for_service(service), 0,
+            "AC #12: n8n init success created a new mcp_server row. "
+            "cloud_service.py:914 auto-create call site must be removed "
+            "(AC #8 fourth bullet).",
+        )
+
+    # ------------------------------------------------------------------ #
+    # AC #12 / #8: odoo init success → no MCP create                      #
+    # ------------------------------------------------------------------ #
+    def test_odoo_init_success_does_not_create_mcp(self):
+        """AC #8 (line 940) / #12: Odoo post-deploy init success path
+        must NOT auto-create MCP row.
+
+        Same pattern as n8n test but exercises ``_model_init_odoo``.
+
+        **Red today**：line 940 fires → count==1.
+        """
+        service = self._make_service_with_project(
+            self.template_odoo, 'C3 Odoo', 'c3-odoo-svc',
+        )
+        self.assertEqual(self._count_mcp_for_service(service), 0)
+
+        fake_client = MagicMock()
+        fake_client.init_odoo.return_value = {'success': True}
+
+        service._model_init_odoo(fake_client)
+
+        self.assertEqual(
+            self._count_mcp_for_service(service), 0,
+            "AC #12 / AC #8: Odoo init success created a new mcp_server "
+            "row. cloud_service.py:940 auto-create call site must be "
+            "removed (AC #8 fifth bullet).",
+        )
+
+    # ------------------------------------------------------------------ #
+    # AC #7 / #9: both auto-create methods physically gone from source    #
+    # ------------------------------------------------------------------ #
+    def test_old_auto_create_methods_removed_from_source(self):
+        """AC #7 / AC #9: ``_model_auto_create_mcp_server`` (cloud_service.py)
+        and ``_auto_create_mcp_server`` (paas.py) physically deleted.
+
+        Grep both source files (more robust than ``hasattr`` reflection —
+        method-name-still-defined-but-stubbed-noop wouldn't be caught by
+        attribute checks; source-string match catches that too). Pattern
+        mirrors A group ``test_d5_constraint_method_no_longer_exists_in_
+        mcp_server_source``.
+
+        **Red today**：both methods are still defined:
+          - ``src/models/cloud_service.py:970``
+            ``def _model_auto_create_mcp_server(self):``
+          - ``src/controllers/paas.py:2601``
+            ``def _auto_create_mcp_server(self, ...):``
+
+        Substring matches return True → assertNotIn fails.
+        """
+        import inspect, os
+        from odoo.addons.woow_paas_platform.models import cloud_service as cs_module
+        from odoo.addons.woow_paas_platform.controllers import paas as paas_module
+
+        # cloud_service.py — model-context auto-create.
+        cs_path = inspect.getsourcefile(cs_module)
+        self.assertTrue(
+            cs_path and os.path.exists(cs_path),
+            f"Test sanity: cannot locate cloud_service.py source "
+            f"(got {cs_path!r}).",
+        )
+        with open(cs_path, encoding='utf-8') as fh:
+            cs_source = fh.read()
+        self.assertNotIn(
+            'def _model_auto_create_mcp_server',
+            cs_source,
+            "AC #7: cloud_service.py still defines "
+            "_model_auto_create_mcp_server — refactor must remove "
+            "the entire method (Plan AC #7). Grep "
+            "`src/models/cloud_service.py` for the @method block at "
+            "line 970-1013.",
+        )
+
+        # paas.py — controller-context auto-create.
+        paas_path = inspect.getsourcefile(paas_module)
+        self.assertTrue(
+            paas_path and os.path.exists(paas_path),
+            f"Test sanity: cannot locate paas.py source (got {paas_path!r}).",
+        )
+        with open(paas_path, encoding='utf-8') as fh:
+            paas_source = fh.read()
+        self.assertNotIn(
+            'def _auto_create_mcp_server',
+            paas_source,
+            "AC #9: controllers/paas.py still defines "
+            "_auto_create_mcp_server — refactor must remove the entire "
+            "method (Plan AC #9). Grep `src/controllers/paas.py` for "
+            "the method body at line 2601-2660.",
+        )

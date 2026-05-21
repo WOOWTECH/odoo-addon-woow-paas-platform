@@ -57,4 +57,11 @@ from . import test_mcp_chat_consumption
 # issue #48: Project Detail page — project-centric endpoints (TDD red)
 from . import test_project_detail_endpoints
 from . import test_project_mcp_project_centric
+# issue #49 + #51: MCP user-scope URL refactor + unbound project ACL (合 #51 — TDD red)
+from . import test_mcp_d5_removal
+from . import test_mcp_sidecar_backed_lifecycle
+from . import test_mcp_sidecar_hint_endpoint
+from . import test_mcp_external_url_creation
+from . import test_mcp_acl_unbound_isolation
+from . import test_mcp_project_decouple_migration_25
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

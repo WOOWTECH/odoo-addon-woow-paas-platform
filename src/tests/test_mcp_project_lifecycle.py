@@ -88,7 +88,24 @@ class TestMcpProjectLifecycle(TransactionCase):
     def _make_service_with_project_and_mcp(
         self, name_prefix='LC', release_name='lc-svc',
     ):
-        """Build the canonical fixture: service ↔ bound project ↔ user MCP."""
+        """Build the canonical fixture: service ↔ bound project ↔ user MCP.
+
+        Plan AC #24 (2026-05-20 mcp-refactor-url-redesign) regression lock:
+        既有 BLOCKER 2 fixture 必須繼續綠。Fixture now writes BOTH
+        ``auto_created=True`` (legacy field) AND ``sidecar_backed=True``
+        (new field) so the test stays green throughout the migration
+        window:
+
+          - pre-impl: ``sidecar_backed`` field doesn't exist → ORM
+            silently drops unknown key when impl不存在的話 raise
+            ValueError; fixture-side guard catches missing field via
+            ``hasattr`` so legacy auto_created path still works.
+          - post-impl: ``sidecar_backed=True`` makes the cleanup filter
+            ``lambda s: s.scope == 'user' and s.sidecar_backed`` match
+            this row (matches the production fixture invariant — sidecar-
+            backed user-scope MCP must be cleaned up by both _do_cleanup
+            and unlink override paths per AC #21 / #22).
+        """
         service = self.Service.sudo().create({
             'name': f'{name_prefix} Service',
             'workspace_id': self.workspace.id,
@@ -101,14 +118,21 @@ class TestMcpProjectLifecycle(TransactionCase):
             'name': f'{name_prefix} Project',
             'cloud_service_id': service.id,
         })
-        user_mcp = self.McpServer.sudo().create({
+        mcp_vals = {
             'name': f'{name_prefix} User MCP',
             'url': f'http://{release_name}-mcp.paas-ws-lc.svc.cluster.local:3001/mcp',
             'transport': 'streamable_http',
             'scope': 'user',
             'project_id': project.id,
             'auto_created': True,
-        })
+        }
+        # AC #24 regression lock — feed sidecar_backed=True if the new
+        # field already exists. Pre-impl this branch is skipped; post-
+        # impl the production filter requires it for the row to be
+        # cleaned up.
+        if 'sidecar_backed' in self.McpServer._fields:
+            mcp_vals['sidecar_backed'] = True
+        user_mcp = self.McpServer.sudo().create(mcp_vals)
         return service, project, user_mcp
 
     # ------------------------------------------------------------------ #
