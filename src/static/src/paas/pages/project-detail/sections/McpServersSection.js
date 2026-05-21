@@ -24,6 +24,10 @@ export class McpServersSection extends Component {
             form: this._emptyForm(),
             formError: null,
             saving: false,
+            // Tracks which shortcut opened the form (Add Sidecar vs Add
+            // External) so the commit payload carries the right
+            // sidecar_backed flag.
+            isSidecarFlow: false,
         });
 
         onMounted(() => this.loadServers());
@@ -35,6 +39,12 @@ export class McpServersSection extends Component {
 
     get isUnbound() {
         return !this.props.project.cloud_service_id;
+    }
+
+    get canAddSidecarMcp() {
+        // Button only visible when the backing service exposes a sidecar
+        // template; endpoint still re-validates ACL on click.
+        return !!this.props.project.cloud_service_mcp_enabled;
     }
 
     _emptyForm() {
@@ -60,18 +70,40 @@ export class McpServersSection extends Component {
         this.state.loading = false;
     }
 
-    showAddForm() {
-        if (this.isUnbound) {
+    async showAddSidecarForm() {
+        if (!this.canAddSidecarMcp) {
             return;
         }
         this.state.editingServer = null;
         this.state.form = this._emptyForm();
         this.state.formError = null;
+        this.state.isSidecarFlow = true;
+        this.state.showForm = true;
+        const hint = await supportService.fetchSidecarHint(this.projectId);
+        if (hint.success && hint.data) {
+            this.state.form = {
+                name: hint.data.suggested_name || "",
+                url: hint.data.url || "",
+                transport: hint.data.transport || "streamable_http",
+                api_key: hint.data.api_key || "",
+                description: "",
+            };
+        } else if (hint.error) {
+            this.state.formError = hint.error;
+        }
+    }
+
+    showAddExternalForm() {
+        this.state.editingServer = null;
+        this.state.form = this._emptyForm();
+        this.state.formError = null;
+        this.state.isSidecarFlow = false;
         this.state.showForm = true;
     }
 
     showEditForm(server) {
         this.state.editingServer = server;
+        this.state.isSidecarFlow = !!server.sidecar_backed;
         this.state.form = {
             name: server.name,
             url: server.url,
@@ -87,6 +119,7 @@ export class McpServersSection extends Component {
         this.state.showForm = false;
         this.state.editingServer = null;
         this.state.formError = null;
+        this.state.isSidecarFlow = false;
     }
 
     onFormInput(field, ev) {
@@ -121,6 +154,7 @@ export class McpServersSection extends Component {
                 payload,
             );
         } else {
+            payload.sidecar_backed = !!this.state.isSidecarFlow;
             result = await supportService.createProjectMcpServer(this.projectId, payload);
         }
 

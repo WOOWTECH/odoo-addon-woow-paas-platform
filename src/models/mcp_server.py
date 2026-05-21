@@ -91,10 +91,17 @@ class McpServer(models.Model):
         readonly=True,
     )
     auto_created = fields.Boolean(
-        string='Auto Created',
+        string='Auto Created (deprecated)',
         default=False,
         readonly=True,
-        help='Automatically created by the system during cloud service deployment',
+        help='Deprecated; use sidecar_backed for new code paths.',
+    )
+    sidecar_backed = fields.Boolean(
+        string='Sidecar Backed',
+        default=False,
+        readonly=True,
+        help='MCP record was populated from a sidecar URL hint and is tied to '
+             'the backing cloud service lifecycle',
     )
     sync_retry_count = fields.Integer(
         string='Sync Retry Count',
@@ -122,20 +129,6 @@ class McpServer(models.Model):
                     "System-scope MCP server '%s' must not be linked to a "
                     "project (scope='system' requires project_id=NULL)."
                     % record.name
-                )
-
-    @api.constrains('scope', 'project_id')
-    def _check_user_scope_requires_bound_project(self):
-        # D5 invariant: user-scope MCP must hang off a project that is bound
-        # to a cloud_service (the sidecar that physically backs the MCP URL).
-        for record in self:
-            if record.scope != 'user':
-                continue
-            if record.project_id and not record.project_id.cloud_service_id:
-                raise ValidationError(
-                    "User-scope MCP server '%s' must be linked to a project "
-                    "bound to a Cloud Service (unbound projects have no "
-                    "sidecar to back the MCP URL)." % record.name
                 )
 
     def _get_mcp_client_config(self):

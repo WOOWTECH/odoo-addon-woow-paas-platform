@@ -631,58 +631,6 @@ class TestProjectDetailRebind(TestProjectDetailFixture):
             "AC #3: after unbind, project.cloud_service_id must be empty/NULL.",
         )
 
-    def test_unbind_with_user_mcp_rejected_via_endpoint_manual_query(self):
-        """AC #3: unbind on a project with user-scope MCP must be blocked.
-
-        The endpoint must **manually** ``project.mcp_server_ids.filtered
-        (lambda m: m.scope == 'user')`` before writing
-        ``cloud_service_id=False`` — because
-        ``mcp_server.py:_check_user_scope_requires_bound_project`` is
-        ``@api.constrains('scope', 'project_id')``, it does NOT
-        automatically fire on ``project.cloud_service_id`` writes
-        (Plan AC #3 third bullet; OR-4 future cleanup).
-
-        Without the manual gate the unbind would silently succeed
-        (project becomes unbound, MCP still ORM-visible pointing at a
-        torn-down sidecar — same D5 violation pattern as B1).
-
-        The error wording must align with
-        ``mcp_server.py:_check_user_scope_requires_bound_project``
-        ("must be linked to a project bound to a Cloud Service"); we
-        lock the substring "Cloud Service" so the error is recognisably
-        D5 rather than a generic write failure.
-        """
-        self.authenticate('pd_alice', 'pd_alice')
-        original_cs = self.project_w1_with_mcp.cloud_service_id.id
-        result = self._post(
-            self._url_detail(self.project_w1_with_mcp.id),
-            {'action': 'update', 'cloud_service_id': False},
-        )
-        self.assertFalse(
-            result.get('success'),
-            f"AC #3: unbind with user-scope MCP must be rejected. "
-            f"Got: {result!r}",
-        )
-        error_msg = (result.get('error') or '').lower()
-        self.assertIn(
-            'cloud service', error_msg,
-            "AC #3: D5 violation error must mention 'Cloud Service' "
-            "(aligned with mcp_server.py:"
-            "_check_user_scope_requires_bound_project wording).",
-        )
-        # Binding must be preserved — no partial write.
-        self.project_w1_with_mcp.invalidate_recordset()
-        self.assertEqual(
-            self.project_w1_with_mcp.cloud_service_id.id, original_cs,
-            "AC #3: rejected unbind must leave the project's "
-            "cloud_service_id unchanged (no partial write).",
-        )
-        # The user-scope MCP row must also still exist.
-        self.assertTrue(
-            self.McpServer.sudo().browse(self.user_mcp_w1.id).exists(),
-            "AC #3: rejected unbind must not touch the user-scope MCP.",
-        )
-
     def test_rebind_with_user_mcp_to_same_workspace_succeeds(self):
         """AC #3: rebind a project_with_mcp to another same-ws service still succeeds.
 
@@ -751,4 +699,182 @@ class TestProjectDetailUrlPattern(TestProjectDetailFixture):
             'success', result,
             "D4 / OR-6: hyphenated URL must reach the handler and "
             "return a `success` flag in the JSON-RPC result envelope.",
+        )
+
+
+# =========================================================================== #
+# OR-4 endpoint cleanup — Plan AC #25                                         #
+#                                                                             #
+# Plan: docs/plans/2026-Q2/2026-05-20-mcp-refactor-url-redesign-plan.md       #
+#   AC #25: `_update_support_project` (paas.py:1504-1556) unbind path 的       #
+#   D5 manual query (line 1528-1547) **整段刪除**. `vals['cloud_service_id'] #
+#   = False` 直接 write，**不檢查** lingering user-scope MCP. R-4 不補.       #
+#                                                                             #
+# Rationale: D5 拔了，sidecar-backed filter (AC #21/#22) 自然處理 cleanup; 既  #
+# 有 endpoint manual query 不再需要 + 與 B 案「unbound project 可掛 user-     #
+# scope MCP」(AC #6) 衝突 — 必須刪。                                          #
+#                                                                             #
+# Red expectation today (pre-implementation, 2026-05-20):                     #
+#   * test_unbind_succeeds_with_external_user_mcp_present → RED：今天          #
+#     manual query 擋 unbind 帶 user-scope MCP project (PR #53                #
+#     test_unbind_with_user_mcp_rejected_via_endpoint_manual_query lock)。    #
+#     B 案後此邏輯反而錯 — unbind 必須成功；assertTrue(result.success) 失敗。 #
+#   * test_unbind_succeeds_with_sidecar_backed_mcp_present → RED：同上但帶    #
+#     sidecar_backed=True fixture。                                            #
+#   * test_existing_or4_manual_query_path_removed → RED：grep paas.py        #
+#     `_update_support_project` 內仍有「lingering user-scope MCP」query 邏輯。 #
+# =========================================================================== #
+
+
+@tagged('post_install', '-at_install')
+class TestProjectDetailUnbindOr4Cleanup(TestProjectDetailFixture):
+    """D group — Plan AC #25, OR-4 endpoint cleanup debt 收."""
+
+    def test_unbind_succeeds_with_external_user_mcp_present(self):
+        """AC #25: unbind a project with external user-scope MCP must
+        SUCCEED (B 案 / OQ-1 — schema 不再 enforce bound-only).
+
+        The fixture seeds ``project_w1_with_mcp`` with one user-scope
+        MCP (``auto_created=True`` — would map to ``sidecar_backed=True``
+        post-migration; here we test the **external** case by creating
+        a sibling external MCP and unbinding).
+
+        After implementation: ``_update_support_project`` writes
+        ``cloud_service_id=False`` directly, no manual lingering-MCP
+        guard. The external MCP row survives (lifecycle decoupled from
+        service per New Inv #9 / cleanup filter AC #21).
+
+        Caveat per plan §AC #25 second bullet: sidecar-backed MCP would
+        be in a hybrid weird state (URL is cluster.local but service
+        still attached) — that's user-correctable; not a zombie.
+
+        **Red today**：``_update_support_project`` (paas.py:1528-1547)
+        currently blocks unbind with a manual query — ``assertTrue
+        (result.success)`` fails.
+        """
+        # Seed an external (sidecar_backed=False) user-scope MCP
+        # alongside the fixture's auto_created one. We don't write
+        # sidecar_backed explicitly — field may not exist pre-impl;
+        # the fixture's pre-existing user_mcp_w1 already covers the
+        # "any user-scope MCP present" condition.
+        external_mcp = self.McpServer.sudo().create({
+            'name': 'PD External MCP (D group)',
+            'url': 'https://mcp.example.com/sse',
+            'transport': 'sse',
+            'scope': 'user',
+            'project_id': self.project_w1_with_mcp.id,
+        })
+
+        self.authenticate('pd_alice', 'pd_alice')
+        result = self._post(
+            self._url_detail(self.project_w1_with_mcp.id),
+            {'action': 'update', 'cloud_service_id': False},
+        )
+        self.assertTrue(
+            result.get('success'),
+            "AC #25: unbind with external user-scope MCP present must "
+            "SUCCEED post-refactor. paas.py:_update_support_project "
+            "manual query (line 1528-1547) must be deleted. Pre-impl "
+            "this test red-locks the current rejection behaviour. "
+            f"Got: {result!r}.",
+        )
+
+        # Project actually unbound.
+        self.project_w1_with_mcp.invalidate_recordset()
+        self.assertFalse(
+            self.project_w1_with_mcp.cloud_service_id,
+            "AC #25: project.cloud_service_id must be NULL after "
+            "successful unbind.",
+        )
+
+        # External MCP survives unbind — its lifecycle is user-managed.
+        external_mcp.invalidate_recordset()
+        self.assertTrue(
+            external_mcp.exists(),
+            "AC #25: external user-scope MCP must survive its project's "
+            "unbind (lifecycle decoupled from service per New Inv #9).",
+        )
+
+    def test_unbind_succeeds_with_sidecar_backed_mcp_present(self):
+        """AC #25: unbind with **sidecar_backed=True** MCP also succeeds.
+
+        Caveat per plan §AC #25 second bullet: sidecar-backed MCP enters
+        a "hybrid weird state" (URL is cluster.local pointing at the
+        still-running service while project is now unbound). Not a
+        zombie — user can re-bind or delete the MCP. Endpoint does NOT
+        block this.
+
+        Setup: the fixture's ``self.user_mcp_w1`` was created with
+        ``auto_created=True`` (today's pre-rename) — post-implementation
+        the migration backfills it to ``sidecar_backed=True``. For the
+        test we write the field explicitly so the test is independent
+        of migration order.
+
+        **Red today**：same root cause — manual query (lambda s:
+        s.scope == 'user') matches the sidecar-backed row → unbind
+        blocked → result.success=False.
+        """
+        # Make sure the fixture's user_mcp_w1 is marked sidecar_backed
+        # (this is the state post-AC-#3 migration). Skip cleanly if
+        # field doesn't exist — surfaces field-missing as a B-group
+        # signal not a D-group false red.
+        if 'sidecar_backed' not in self.McpServer._fields:
+            self.fail(
+                "Fixture-side schema guard: mcp_server.sidecar_backed "
+                "missing — Plan AC #2 not yet implemented. D-group tests "
+                "depend on the field. (See B-group setUp for the "
+                "canonical schema guard.)"
+            )
+        self.user_mcp_w1.sudo().write({'sidecar_backed': True})
+
+        self.authenticate('pd_alice', 'pd_alice')
+        result = self._post(
+            self._url_detail(self.project_w1_with_mcp.id),
+            {'action': 'update', 'cloud_service_id': False},
+        )
+        self.assertTrue(
+            result.get('success'),
+            "AC #25: unbind with sidecar_backed=True user-scope MCP "
+            "present must SUCCEED post-refactor. Hybrid weird state is "
+            "intentional per Plan §AC #25 second bullet caveat. "
+            f"Got: {result!r}.",
+        )
+
+        self.project_w1_with_mcp.invalidate_recordset()
+        self.assertFalse(
+            self.project_w1_with_mcp.cloud_service_id,
+            "AC #25: unbind must complete even with sidecar_backed MCP.",
+        )
+
+    def test_existing_or4_manual_query_path_removed_from_source(self):
+        """AC #25: source grep — manual lingering-MCP query gone.
+
+        Grep ``paas.py`` for the marker substring that the current
+        manual query uses; refactor must remove it. More robust than
+        attribute reflection (the entire branch is plain Python control
+        flow, no method to reflect on).
+
+        Locks the specific pattern from line 1534:
+        ``lingering = project.mcp_server_ids.filtered(...)``. The var
+        name ``lingering`` is unique enough to be a reliable removal
+        marker.
+
+        **Red today**：var name ``lingering`` still in paas.py → assert
+        not in source fails.
+        """
+        import inspect, os
+        from odoo.addons.woow_paas_platform.controllers import paas as paas_module
+        paas_path = inspect.getsourcefile(paas_module)
+        self.assertTrue(
+            paas_path and os.path.exists(paas_path),
+            f"Test sanity: cannot locate paas.py source.",
+        )
+        with open(paas_path, encoding='utf-8') as fh:
+            paas_source = fh.read()
+        self.assertNotIn(
+            'lingering = project.mcp_server_ids',
+            paas_source,
+            "AC #25: `lingering = project.mcp_server_ids` lookup still "
+            "in `_update_support_project`. The manual query block at "
+            "paas.py:1528-1547 must be deleted per Plan AC #25.",
         )

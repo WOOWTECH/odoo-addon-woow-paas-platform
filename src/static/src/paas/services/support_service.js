@@ -517,6 +517,29 @@ export const supportService = reactive({
         }
     },
 
+    /**
+     * Fetch the sidecar MCP prefill hint (URL / transport / api_key /
+     * suggested_name) for a project. Drives the ``Add Sidecar MCP``
+     * shortcut's modal prefill.
+     * @param {number} projectId
+     */
+    async fetchSidecarHint(projectId) {
+        this.operationLoading.fetchSidecarHint = true;
+        try {
+            const result = await jsonRpc(
+                `/api/support-projects/${projectId}/mcp-servers`,
+                { action: "sidecar-hint" },
+            );
+            return result.success
+                ? { success: true, data: result.data }
+                : { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.fetchSidecarHint = false;
+        }
+    },
+
     async updateProjectMcpServer(projectId, serverId, payload) {
         this.operationLoading.updateProjectMcpServer = true;
         try {

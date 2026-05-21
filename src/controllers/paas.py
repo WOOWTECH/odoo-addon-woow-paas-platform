@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import threading
@@ -7,6 +8,7 @@ import traceback
 import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from odoo import fields
 from odoo.exceptions import ValidationError
@@ -23,6 +25,49 @@ from ..services.paas_operator import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+# Cloud metadata endpoints must never be reachable from a user-provided
+# MCP URL. cluster.local resolves into pod-network IPs and must stay
+# allowed (sidecar-backed URL form).
+_SSRF_BLOCKED_IPV4 = frozenset({
+    '169.254.169.254',  # AWS / GCP / Azure IMDSv1
+})
+_SSRF_BLOCKED_IPV6 = frozenset({
+    'fd00:ec2::254',  # AWS IMDSv2 IPv6
+})
+_SSRF_ALLOWED_SCHEMES = frozenset({'http', 'https'})
+
+
+def _validate_mcp_url(url: str) -> str | None:
+    """Minimal SSRF guard: reject non-http(s) schemes + cloud metadata IPs."""
+    if not url:
+        return 'URL is required'
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return f'URL host not allowed: {url}'
+    scheme = (parsed.scheme or '').lower()
+    if scheme not in _SSRF_ALLOWED_SCHEMES:
+        return (
+            f'URL scheme not allowed: {parsed.scheme!r} '
+            '(only http/https accepted)'
+        )
+    host = (parsed.hostname or '').strip()
+    if not host:
+        return f'URL host not allowed: {url}'
+    if host in _SSRF_BLOCKED_IPV4:
+        return f'URL host not allowed: {host}'
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.is_link_local:
+            return f'URL host not allowed: [{host}]'
+        if str(ip).lower() in _SSRF_BLOCKED_IPV6:
+            return f'URL host not allowed: [{host}]'
+    return None
 
 
 class PaasController(Controller):
@@ -1305,6 +1350,9 @@ class PaasController(Controller):
         url = params.get('url', '').strip()
         if not name or not url:
             return {'success': False, 'error': 'Name and URL are required'}
+        url_error = _validate_mcp_url(url)
+        if url_error:
+            return {'success': False, 'error': url_error}
 
         project = service.sudo().project_ids[:1]
         if not project:
@@ -1335,6 +1383,11 @@ class PaasController(Controller):
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
+
+        if 'url' in params:
+            url_error = _validate_mcp_url((params.get('url') or '').strip())
+            if url_error:
+                return {'success': False, 'error': url_error}
 
         vals = {}
         for field in ('name', 'url', 'transport', 'api_key', 'headers_json', 'description'):
@@ -1418,6 +1471,7 @@ class PaasController(Controller):
             'tool_count': server.tool_count,
             'tools': tools,
             'last_sync': server.last_sync.isoformat() if server.last_sync else None,
+            'sidecar_backed': bool(server.sidecar_backed),
         }
 
     # ==================== Project-centric Support API (D4 / OR-6) ====================
@@ -1425,11 +1479,15 @@ class PaasController(Controller):
     _PROJECT_NOT_FOUND_ERROR = 'Project not found or access denied'
 
     class _SyntheticAccess:
-        """Stand-in access record for unbound projects (OR-7 carve-out).
+        """Stand-in access record for unbound projects.
 
-        Aligns with ``ai_assistant.py:_check_project_access``: unbound
-        projects grant global access to authenticated internal users.
-        D5 ORM constraint still protects user-scope MCP integrity.
+        Issued only after the unbound carve-out in
+        ``_resolve_project_access`` has already verified that the current
+        user is a project follower — the role is granted to a
+        scope-resolved user, not to anyone authenticated. Mirrors the
+        follower carve-out in ``ai_assistant.py:_check_project_access``;
+        both layers must stay in lock-step, otherwise the rule layer
+        denies but the controller layer still serves the row.
         """
         def __init__(self, role):
             self.role = role
@@ -1437,11 +1495,13 @@ class PaasController(Controller):
     def _resolve_project_access(self, project_id: int):
         """Resolve a project + workspace access record for the current user.
 
-        Returns ``(project, access)`` if the user can reach the project. On
-        any failure path returns ``(None, None)`` so the caller emits the
-        unified ``Project not found or access denied`` message (AC #6 / #11
-        防 id enumeration). Unbound projects (no cloud_service / workspace)
-        grant a synthetic ``ROLE_OWNER`` access — see OR-7.
+        Returns ``(project, access)`` when the user can reach the project,
+        or ``(None, None)`` for every deny path — the unified ``Project
+        not found or access denied`` error keeps id enumeration closed.
+
+        Unbound projects (no cloud_service / workspace) require the
+        current user to be in ``project.message_partner_ids`` (follower
+        carve-out, in lock-step with ``ai_assistant.py``).
         """
         Project = request.env['project.project'].sudo()
         project = Project.browse(project_id)
@@ -1449,7 +1509,10 @@ class PaasController(Controller):
             return None, None
         workspace = project.cloud_service_id.workspace_id
         if not workspace:
-            return project, self._SyntheticAccess(role=ROLE_OWNER)
+            user_partner = request.env.user.partner_id
+            if user_partner in project.message_partner_ids:
+                return project, self._SyntheticAccess(role=ROLE_OWNER)
+            return None, None
         access = workspace.check_user_access(request.env.user)
         if not access:
             return None, None
@@ -1487,12 +1550,16 @@ class PaasController(Controller):
         servers = project.mcp_server_ids.filtered(
             lambda s: s.scope == 'user' and s.active
         )
+        service = project.cloud_service_id
         return {
             'id': project.id,
             'name': project.name,
             'description': project.description or '',
-            'cloud_service_id': project.cloud_service_id.id if project.cloud_service_id else False,
-            'cloud_service_name': project.cloud_service_id.name if project.cloud_service_id else '',
+            'cloud_service_id': service.id if service else False,
+            'cloud_service_name': service.name if service else '',
+            'cloud_service_mcp_enabled': bool(
+                service and service.template_id.mcp_enabled
+            ),
             'workspace_id': project.workspace_id.id if project.workspace_id else False,
             'workspace_name': project.workspace_id.name if project.workspace_id else '',
             'mcp_server_ids': [self._format_mcp_server(s) for s in servers],
@@ -1526,24 +1593,6 @@ class PaasController(Controller):
                     }
                 vals['cloud_service_id'] = target.id
             else:
-                # Unbind path — Plan AC #3 third bullet / OR-4: the
-                # ``@api.constrains('scope', 'project_id')`` on mcp_server
-                # does NOT auto-fire when ``project.cloud_service_id`` is
-                # written, so we must manually query for user-scope MCP
-                # and block unbind ourselves.
-                lingering = project.mcp_server_ids.filtered(
-                    lambda s: s.scope == 'user'
-                )
-                if lingering:
-                    sample = lingering[0]
-                    return {
-                        'success': False,
-                        'error': (
-                            "User-scope MCP server '%s' must be linked to a "
-                            "project bound to a Cloud Service (unbound projects "
-                            "have no sidecar to back the MCP URL)." % sample.name
-                        ),
-                    }
                 vals['cloud_service_id'] = False
 
         if not vals:
@@ -1573,10 +1622,16 @@ class PaasController(Controller):
         if action == 'list':
             return self._list_project_mcp_servers(project)
 
-        write_actions = ('create', 'update', 'delete', 'sync', 'test')
+        # sidecar-hint is read-only but mirrors create's owner/admin gate
+        # (it is the prefill backing for the Add Sidecar MCP shortcut).
+        write_actions = (
+            'create', 'update', 'delete', 'sync', 'test', 'sidecar-hint',
+        )
         if action in write_actions and access.role not in (ROLE_OWNER, ROLE_ADMIN):
             return {'success': False, 'error': 'Permission denied'}
 
+        if action == 'sidecar-hint':
+            return self._compute_project_sidecar_hint(project)
         if action == 'create':
             return self._create_project_mcp_server(project, kw)
         if action == 'update':
@@ -1588,6 +1643,26 @@ class PaasController(Controller):
         if action == 'test':
             return self._test_project_mcp_server(project, kw)
         return {'success': False, 'error': f'Unknown action: {action}'}
+
+    def _compute_project_sidecar_hint(self, project) -> dict[str, Any]:
+        """Return prefill payload for the Add Sidecar MCP UI shortcut, or
+        an error when the project has no mcp-enabled backing service."""
+        service = project.cloud_service_id
+        if not service or not service.template_id.mcp_enabled:
+            return {
+                'success': False,
+                'error': 'No sidecar available for this project',
+            }
+        template = service.template_id
+        return {
+            'success': True,
+            'data': {
+                'url': self._compute_sidecar_url_hint(service),
+                'transport': template.mcp_transport or 'streamable_http',
+                'api_key': service.mcp_auth_token or '',
+                'suggested_name': f'{service.name} MCP',
+            },
+        }
 
     def _list_project_mcp_servers(self, project) -> dict[str, Any]:
         servers = project.mcp_server_ids.filtered(
@@ -1603,24 +1678,25 @@ class PaasController(Controller):
         url = (params.get('url') or '').strip()
         if not name or not url:
             return {'success': False, 'error': 'Name and URL are required'}
+        url_error = _validate_mcp_url(url)
+        if url_error:
+            return {'success': False, 'error': url_error}
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
-        # Wrap in a savepoint so the row is rolled back if the D5
-        # constraint (mcp_server._check_user_scope_requires_bound_project)
-        # fires — the constraint runs after INSERT and the failed row
-        # would otherwise persist until the request transaction commits.
         try:
-            with request.env.cr.savepoint():
-                server = McpServer.create({
-                    'name': name,
-                    'url': url,
-                    'transport': params.get('transport', 'sse'),
-                    'api_key': params.get('api_key', ''),
-                    'headers_json': params.get('headers_json', ''),
-                    'description': params.get('description', ''),
-                    'scope': 'user',
-                    'project_id': project.id,
-                })
+            server = McpServer.create({
+                'name': name,
+                'url': url,
+                'transport': params.get('transport', 'sse'),
+                'api_key': params.get('api_key', ''),
+                'headers_json': params.get('headers_json', ''),
+                'description': params.get('description', ''),
+                'scope': 'user',
+                'project_id': project.id,
+                # Payload-driven; endpoint deliberately does not enforce
+                # URL ↔ flag consistency — frontend owns the mental model.
+                'sidecar_backed': bool(params.get('sidecar_backed', False)),
+            })
         except ValidationError as e:
             return {'success': False, 'error': str(e)}
         return {'success': True, 'data': self._format_mcp_server(server)}
@@ -1639,6 +1715,10 @@ class PaasController(Controller):
         server, error = self._resolve_project_mcp(project, params)
         if error:
             return error
+        if 'url' in params:
+            url_error = _validate_mcp_url((params.get('url') or '').strip())
+            if url_error:
+                return {'success': False, 'error': url_error}
         vals: dict[str, Any] = {}
         for field_name in ('name', 'url', 'transport', 'api_key', 'headers_json', 'description'):
             if field_name in params:
@@ -2382,22 +2462,12 @@ class PaasController(Controller):
                         self._run_post_deploy_init(service)
 
                     else:
-                        # No init needed or already done → running
+                        # No init needed or already done → running.
                         service.write({
                             'state': 'running',
                             'helm_revision': helm_revision,
                             'error_message': False,
                         })
-
-                        # Auto-create MCP Server when transitioning to running
-                        if original_state != 'running':
-                            try:
-                                self._auto_create_mcp_server(service)
-                            except Exception as e:
-                                _logger.warning(
-                                    "Auto-create MCP server failed for service %s: %s",
-                                    service.name, e,
-                                )
                 # else: still deploying/waiting for pods
 
             elif release_status == 'failed':
@@ -2489,13 +2559,6 @@ class PaasController(Controller):
                         "n8n init succeeded for service %s, API key and helm_values updated",
                         service.name,
                     )
-                    try:
-                        self._auto_create_mcp_server(service)
-                    except Exception as e:
-                        _logger.warning(
-                            "Auto-create MCP server failed for service %s: %s",
-                            service.name, e,
-                        )
                 else:
                     retries = (service.init_retries or 0) + 1
                     error_msg = result.get('error', 'Unknown error')
@@ -2556,13 +2619,6 @@ class PaasController(Controller):
                         result.get('modules_added', 0),
                         result.get('modules_updated', 0),
                     )
-                    try:
-                        self._auto_create_mcp_server(service)
-                    except Exception as e:
-                        _logger.warning(
-                            "Auto-create MCP server failed for service %s: %s",
-                            service.name, e,
-                        )
                 else:
                     retries = (service.init_retries or 0) + 1
                     error_msg = result.get('error', 'Unknown error')
@@ -2598,77 +2654,15 @@ class PaasController(Controller):
                     retries, service.name, e,
                 )
 
-    def _auto_create_mcp_server(self, service: Any) -> None:
-        """Auto-create MCP Server record for a cloud service with MCP enabled.
+    def _compute_sidecar_url_hint(self, service: Any) -> str:
+        """Compute the MCP endpoint URL for a service's sidecar.
 
-        Called when a service transitions to 'running' state. Creates a
-        user-scope MCP Server record linked to the cloud service and
-        triggers tool discovery.
-
-        Idempotent: skips creation if an auto-created record already exists.
+        Prefers the cluster-internal K8s service address (most reliable —
+        Cloudflare routes the main app port only, not the sidecar). Falls
+        back to subdomain, then to a localhost placeholder the user must
+        edit.
         """
         template = service.template_id
-        if not template.mcp_enabled or not template.mcp_sidecar_image:
-            return
-
-        # Resolved Q #3: user-scope MCP is project-anchored. Skip + log if the
-        # service has no support project bound yet (no retry mechanism here).
-        project = service.project_ids[:1]
-        if not project:
-            _logger.info(
-                "Skip MCP auto-create for service '%s' (id=%s): no support "
-                "project bound yet.", service.name, service.id,
-            )
-            return
-
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
-
-        # Check if already exists (avoid duplicates on re-deploy/upgrade)
-        existing = McpServer.search([
-            ('project_id', '=', project.id),
-            ('auto_created', '=', True),
-        ], limit=1)
-        if existing:
-            _logger.debug(
-                "MCP Server already exists for service %s (id=%s), skipping auto-create",
-                service.name, existing.id,
-            )
-            return
-
-        # Build MCP endpoint URL
-        mcp_url = self._build_mcp_endpoint_url(service, template)
-
-        # Create MCP Server record
-        server = McpServer.create({
-            'name': f"{service.name} MCP",
-            'url': mcp_url,
-            'transport': template.mcp_transport or 'streamable_http',
-            'scope': 'user',
-            'project_id': project.id,
-            'auto_created': True,
-            'api_key': service.mcp_auth_token,
-            'description': f"Auto-created MCP server for {service.name}",
-        })
-
-        _logger.info(
-            "Auto-created MCP Server '%s' (id=%s) for cloud service '%s'",
-            server.name, server.id, service.name,
-        )
-
-        # Try to sync tools using safe method (keeps state as 'draft' on
-        # failure so the cron retry mechanism can pick it up later).
-        server.action_sync_tools_safe()
-
-    def _build_mcp_endpoint_url(self, service: Any, template: Any) -> str:
-        """Build the MCP endpoint URL for a cloud service sidecar.
-
-        Constructs the URL using the service's subdomain and the PaaS
-        domain from system configuration. Falls back to a Kubernetes
-        internal service URL when no subdomain is available.
-
-        Returns:
-            str: The full MCP endpoint URL.
-        """
         endpoint_path = template.mcp_endpoint_path or '/mcp'
         sidecar_port = template.mcp_sidecar_port or 3001
 

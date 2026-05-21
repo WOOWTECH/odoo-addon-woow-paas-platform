@@ -142,14 +142,28 @@
             <field name="perm_unlink" eval="False"/>
         </record>
 
-        <!-- McpServer: workspace members get full CRUD on user-scope MCP in
-             their own workspace. scope='user' in the domain ensures this rule
-             cannot be used to create scope='system' rows (domain match fails
-             on a system-scope new record). -->
+        <!-- McpServer: workspace members get full CRUD on user-scope MCP.
+             Dual-leg domain:
+               - leg 1 (bound project):     workspace.access_ids walk —
+                                            sidecar-backed flow.
+               - leg 2 (unbound project):   project follower walk via
+                                            message_partner_ids — external
+                                            URL flow.
+             scope='user' is the OUTERMOST AND so the create direction
+             cannot be abused to land scope='system' rows. Both legs walk
+             follower / workspace membership, so cross-workspace users
+             still cannot read either flavour. -->
         <record id="mcp_server_rule_workspace_user" model="ir.rule">
             <field name="name">McpServer: workspace member CRUD on user-scope</field>
             <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
-            <field name="domain_force">[('scope', '=', 'user'), ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="domain_force">['&amp;',
+                ('scope', '=', 'user'),
+                '|',
+                    ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+                    '&amp;',
+                        ('project_id.cloud_service_id', '=', False),
+                        ('project_id.message_partner_ids', 'in', [user.partner_id.id])
+            ]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
@@ -171,12 +185,21 @@
             <field name="perm_unlink" eval="False"/>
         </record>
 
-        <!-- McpTool: B1 sub-model parity — workspace member full CRUD on
-             tools whose server is in their workspace. -->
+        <!-- McpTool: sub-model parity — workspace member full CRUD on
+             tools whose server is in their workspace. Dual-leg domain
+             mirrors mcp_server_rule_workspace_user through the
+             ``server_id`` walk. -->
         <record id="mcp_tool_rule_workspace_user" model="ir.rule">
             <field name="name">McpTool: workspace member CRUD on user-scope</field>
             <field name="model_id" ref="model_woow_paas_platform_mcp_tool"/>
-            <field name="domain_force">[('server_id.scope', '=', 'user'), ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="domain_force">['&amp;',
+                ('server_id.scope', '=', 'user'),
+                '|',
+                    ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+                    '&amp;',
+                        ('server_id.project_id.cloud_service_id', '=', False),
+                        ('server_id.project_id.message_partner_ids', 'in', [user.partner_id.id])
+            ]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
