@@ -218,9 +218,15 @@ Leader 選 **Option A (port 既有 class)** 而非 Option B (retire 3 class)：p
 
 2. **`scope='user' ⇔ project_id IS NOT NULL`（D4 invariant）**。任何寫入路徑（ORM create/write、migration backfill、direct SQL）破壞此關係 = `_check_scope_project_consistency` raise。`scope` 與 `project_id` 必須同步遷移 — 不可只改一個。
 
-3. **User-scope MCP 必須掛 bound project（D5 invariant）**。`scope='user' AND project_id.cloud_service_id IS NULL` 是禁止狀態。Cleanup hook（D1）負責在「project unbind」與「service unlink」場景下先清掉 user-scope MCP，防止這個狀態出現。任何拔 cleanup hook / 改 unbind 邏輯的動作 = 違反 invariant。
+3. **~~User-scope MCP 必須掛 bound project（D5 invariant）~~ — DEPRECATED 2026-05-21（cycle 4 [[mcp-url-redesign]] 拔除）**。原本 `scope='user' AND project_id.cloud_service_id IS NULL` 是禁止狀態，靠 `_check_user_scope_requires_bound_project` constraint enforcement。
 
-4. **`cloud_service._do_cleanup` 必須在 helm uninstall 之前主動 unlink user-scope MCP（D1 invariant）**。順序：先 `self.project_ids.mapped('mcp_server_ids').filtered(lambda s: s.scope == 'user').sudo().unlink()` → 再 `client.uninstall_release(...)` → 再 `self.write({'state': 'deleting'})`。test #8 是這個 invariant 的 regression lock。
+   **為什麼拔**：URL 物理依賴 sidecar 是 PR #47 設計時的真實限制；cycle 4 透過拆 sidecar auto-create + 新增 `sidecar_backed` flag 把這條 invariant 從「ORM 層阻止」改為「`sidecar_backed` flag 標 row 物理依賴 + ACL dual-leg 守 unbound visibility」兩個 mechanism 配合的較弱契約。拔 D5 unblock 三件事：(a) 使用者可手動加 external MCP 到 unbound project；(b) OR-2 race / OR-4 endpoint manual query / R-4 ORM constraint 全部自然消失；(c) UI 不用中性化「不暗示 user-scope MCP 與 cloud_service 有 ownership 關係」。
+
+   **拔後 ORM-layer 無 invariant 守**：unbound project + user-scope MCP 是合法狀態。任何後人想「補回 D5 風格的 invariant」（如 R-4 `@api.constrains` 或 SQL constraint）必先評估「為什麼當初拍板拔」，否則重新引入整個 cluster。詳見 [[mcp-url-redesign]] §Consequences Negative。
+
+4. **`cloud_service._do_cleanup` 必須在 helm uninstall 之前主動 unlink user-scope MCP（D1 invariant）**。順序：先 `self.project_ids.mapped('mcp_server_ids').filtered(lambda s: s.scope == 'user' and s.sidecar_backed).sudo().unlink()` → 再 `client.uninstall_release(...)` → 再 `self.write({'state': 'deleting'})`。test #8 是這個 invariant 的 regression lock。
+
+   **2026-05-21 更新（cycle 4 [[mcp-url-redesign]] 落地）**：filter 加 `and s.sidecar_backed` 條件 — 只清「sidecar-backed 的 user-scope MCP」（其 URL 依賴 backing service 的 sidecar，service 拆了 URL zombie），保留「user-provided external URL」MCP（物理獨立於 service）。順序不變、`sudo()` 不變、test regression lock 維持（fixture conditional 餵 `sidecar_backed=True` 維持既有 9 case 全綠）。本 invariant 與 [[mcp-url-redesign]] **Inv #9** 是同一條 lifecycle 規則的兩個視角（此處從「順序」角度看，[[mcp-url-redesign]] Inv #9 從「filter 條件」角度看）。
 
    **為何這個順序（後人不要重排）**：cleanup 三步驟之間的時間窗存在的「中介狀態」是 race condition 來源。順序選擇明確避開兩個風險：
    - **若先 uninstall 再 unlink**：時間窗 1 內 helm 已拆 sidecar、url 無效，但 ORM 還看得到 mcp_server 與 mcp_tool 的 active row — 另一個 process（cron / SSE 串流 / channel.message_post）此刻拿到 mcp_tool 引用發起 RPC，連線到不存在的 endpoint → uncaught NetworkError / silent fail。AI chat 回覆會看起來「執行 tool 但無 output」— 比 fast-fail 更難 debug。
@@ -234,8 +240,10 @@ Leader 選 **Option A (port 既有 class)** 而非 Option B (retire 3 class)：p
    | mcp_server | mcp_tool（走 `server_id` 反向） | Groups | Domain | Perms |
    |---|---|---|---|---|
    | `mcp_server_rule_system_readonly` | `mcp_tool_rule_system_readonly` | `base.group_user` | `scope='system'` / `server_id.scope='system'` | `R=True, W/C/U=False` |
-   | `mcp_server_rule_workspace_user` | `mcp_tool_rule_workspace_user` | `base.group_user` | `scope='user' AND workspace chain` / 同上反向 | `R/W/C/U=True` |
+   | `mcp_server_rule_workspace_user` | `mcp_tool_rule_workspace_user` | `base.group_user` | **dual-leg**：`scope='user' AND (bound walk OR unbound carve-out via message_partner_ids)` / 同上反向 | `R/W/C/U=True` |
    | `mcp_server_rule_admin_full` | `mcp_tool_rule_admin_full` | `base.group_system` | `[(1, '=', 1)]`（unconditional） | `R/W/C/U=True` |
+
+   **2026-05-21 更新（cycle 4 [[mcp-url-redesign]] 落地）**：`workspace_user` × 2 條 rule domain 升級為 **dual-leg**（合 #51）— 原 single-leg 只 walk bound project，本 cycle 加 leg 2 unbound carve-out 給「unbound project + follower」可讀。**外層 AND `scope='user'` 是 MAJOR 1 重炸防線根基** — 任何把外層 AND 拆掉、把 leg 2 改 always-true、把 mcp_tool sub-model 漏改 = 重炸 [[system-mcp-create-acl-bypass]]。完整 dual-leg shape 與禁止動作見 [[mcp-url-redesign]] **Inv #11**；pattern 落地見 [[unbound-project-acl-dual-leg]] + 升級為 dual-leg variant 後的 [[mcp-acl-6-rule-split]]。其餘 4/6 條（`system_readonly` × 2 + `admin_full` × 2）**不動**。
 
    **為什麼需要 admin_full**：`group_system` 透過 `_group_implied_ids` 繼承 `group_user`，OR-combined 後 `system_readonly.perm_create=False` 會把 admin 後台 create 也擋掉（admin 想在 backend 維護 system MCP 失敗）。`admin_full` 套 `group_system` + `domain=[(1,'=',1)]` short-circuit deny。**Odoo per-group rule OR semantics 決定** — `ir_rule.py:140-168`。
 
@@ -253,6 +261,8 @@ Leader 選 **Option A (port 既有 class)** 而非 Option B (retire 3 class)：p
 
    **本欄位是 snapshot，不是 dynamic compute**：service 重命名 / 換 namespace 後 `mcp_server.url` 不會自動同步，須由 caller 顯式重算或重建 row。屬於 pre-existing 行為（plan §Risk #4），不在本次 refactor scope。
 
+   **2026-05-21 更新（cycle 4 [[mcp-url-redesign]] 落地）**：auto-create 兩條 path（model + controller）已拆 — 演算法不再被 model context 內任何方法呼叫，**保留為 cron / non-request caller helper**；`controllers/paas._build_mcp_endpoint_url` 改名 `_compute_sidecar_url_hint`（語意 self-documenting，被新 sidecar-hint endpoint 呼叫，給 UI shortcut 預填 URL）。snapshot 性質不變、algorithm 不變。Helper duplication（model side + controller side 兩個 algorithm copy）見 [[follow-ups]] F19 / F-X4 follow-up。
+
    **後人 verify**：
    - `mcp_server.py` 內 grep `self.cloud_service_id` 必 0 hit（這是 trivially pass 的 sanity，因為演算法不在這個檔案 — 真正守護點在 `cloud_service._model_build_mcp_endpoint_url`）
    - `cloud_service.py::_model_build_mcp_endpoint_url` 內若加 walk path，必須是 `self.project_ids[:1].mcp_server_ids` 反向（不走舊 `user_mcp_server_ids` 反向 O2M — 已移除）
@@ -266,18 +276,35 @@ Leader 選 **Option A (port 既有 class)** 而非 Option B (retire 3 class)：p
 
    Test #19 是這個 invariant 的 regression lock；mcp_tool 對等 test #20。Migration `18.0.1.0.24` 刪舊兩條 dual-leg rule 的 SQL 是這個 invariant 的 enforcement entry（防 module update 殘留舊 rule OR-combine 重新打開漏洞）。
 
+### Cycle 4 新加 invariants（2026-05-21 [[mcp-url-redesign]] 落地）
+
+本 cycle 拔 D5 + 拆 auto-create + dual-leg ACL 後新增 **Inv #9 / #10 / #11**：
+
+- **Inv #9** — `sidecar_backed=True` 的 user-scope MCP 必由 `_do_cleanup` 與 `unlink()` 兩條 path 清掉（filter 必須包含 `sidecar_backed=True`）
+- **Inv #10** — UI shortcut「Add Sidecar MCP」create path 必帶 `sidecar_backed=True`（endpoint + frontend 兩處 enforcement）
+- **Inv #11** — `workspace_user` + `mcp_tool_workspace_user` 兩條 rule domain 必須 dual-leg（外層 AND `scope='user'` 鎖 MAJOR 1 防線根基）
+
+完整 invariant 內容 + 禁止動作 + regression lock test 名稱 **canonical home 在 [[mcp-url-redesign]] §Invariants** — 本 doc 不重複（避免雙寫漂移）。
+
 ## See also
 
+- Successor decision（cycle 4）:
+  - [[mcp-url-redesign]] — 2026-05-21 拔 D5 + 拆 sidecar auto-create + dual-leg ACL + sidecar_backed flag + UI shortcut B 案。本 doc Inv #3 / #4 / #5 / #7 已對應更新；新加 Inv #9 / #10 / #11 canonical home 在 mcp-url-redesign。
 - Patterns:
   - [[paas-workspace-member-acl-tightening]] — `mcp_server` / `mcp_tool` ACL 的三件套（workspace-scoped CRUD）
   - [[odoo-addon-std-rule-symmetric-deactivation]] — 雖然本次 model 是自家、無 std rule 對等，但「ACL 對等」原則仍適用（mcp_server ↔ mcp_tool）
-  - [[mcp-acl-6-rule-split]] — 本次 MAJOR 1 fix 抽出的 pattern（`system_readonly` + `workspace_user` + `admin_full` per-model triplet，共 6 條 rule）
+  - [[mcp-acl-6-rule-split]] — 本次 MAJOR 1 fix 抽出的 pattern（`system_readonly` + `workspace_user` + `admin_full` per-model triplet，共 6 條 rule；cycle 4 升級為 dual-leg variant）
   - [[cloud-service-unlink-override-cleanup]] — 本次 BLOCKER 2 fix 抽出的 pattern（parent `ondelete='set null'` + child cleanup via `unlink()` override，所有 caller path 全 catch）
+  - [[unbound-project-acl-dual-leg]] — cycle 4 抽出（ir.rule dual-leg domain shape 給 optional-binding model；OR-7 (c) message_partner_ids walk）
+  - [[two-layer-acl-lockstep]] — cycle 4 抽出（同 model 兩層 ACL — ir.rule + controller carve-out / 多 controller endpoint — 必須 lock-step 收緊或放寬）
+  - [[sidecar-backed-flag-lifecycle]] — cycle 4 抽出（schema flag 標 row 物理依賴 + 配對的 cleanup filter + create path 強制 set 的契約）
 - Pitfalls:
   - [[cross-workspace-task-data-leak]] — B1 pitfall，sub-model 對等 leak 範例（mcp_tool 必須跟 mcp_server 一起加 rule）
   - [[direct-unlink-bypass-cleanup-hook]] — BLOCKER 2 踩坑（controller direct unlink 繞 `_do_cleanup`，`@api.constrains` 救不了 parent-field 變動）
   - [[system-mcp-create-acl-bypass]] — MAJOR 1 踩坑（dual-leg rule `perm_create=True` 對 always-true leg 是 privilege escalation surface）
   - [[tag-scoped-test-misses-full-u-failures]] — BLOCKER 1 踩坑（CAQA 用 `--test-tags` scope-limited 驗綠，漏抓 cross-module stale schema reference）
+  - [[two-layer-acl-asymmetric-deny]] — cycle 4 HC-2 踩坑（兩層 ACL 收緊一層另一層 silent 放行 = silent IDOR partial fix 比沒 fix 更糟）
+  - [[legacy-endpoint-scope-blindness]] — cycle 4 HC-1 踩坑（plan AC 只 cover 新 endpoint，legacy same-source code path silent miss）
 - Plan:
   - `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md`（本 decision 的 implementation plan，25 AC）
 - Inputs（reporter 合成來源 — 不在 durable docs 重複，只列引用）:

@@ -1,6 +1,8 @@
 # Pattern: 6-rule split for mixed-scope model（`system_readonly` + `workspace_user` + `admin_full`）
 
 > 適用：同一 model 內有**兩種 row scope**（platform-level public-readable + tenant-level workspace-scoped），且需在 `base.group_user` 開放 CRUD。Single dual-leg rule **不夠**（create direction privilege escalation surface）— 必須按 perm direction 拆 3 條 + sub-model 對等鏡像 = 共 6 條。
+>
+> **2026-05-21 更新（cycle 4 [[mcp-url-redesign]] 落地）**：`workspace_user` × 2 條 rule 升級為 **dual-leg variant**（合 #51） — leg 1 bound walk（原樣）+ leg 2 unbound carve-out via `message_partner_ids`。詳見下方 §Dual-leg variant 段 + [[unbound-project-acl-dual-leg]] pattern。其餘 4/6 條（`system_readonly` × 2 + `admin_full` × 2）**不動**。
 
 ## When to use
 
@@ -45,11 +47,24 @@ mcp_tool    server_id ───►  mcp_server
     <field name="perm_unlink" eval="False"/>
 </record>
 
-<!-- 2. workspace-scope CRUD (workspace members on own user-scope) -->
+<!-- 2. workspace-scope CRUD (workspace members on own user-scope) — dual-leg as of cycle 4 -->
 <record id="mcp_server_rule_workspace_user" model="ir.rule">
     <field name="name">McpServer: workspace member CRUD on user-scope</field>
     <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
-    <field name="domain_force">[('scope', '=', 'user'), ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+    <!--
+        Dual-leg (cycle 4):
+        - 外層 AND ('scope','=','user') 鎖 MAJOR 1 防線（system create direction deny）
+        - 內層 OR: leg 1 bound walk OR leg 2 unbound + follower carve-out
+        詳見 [[unbound-project-acl-dual-leg]] pattern + [[mcp-url-redesign]] Inv #11
+    -->
+    <field name="domain_force">['&amp;',
+        ('scope', '=', 'user'),
+        '|',
+        ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+        '&amp;',
+        ('project_id.cloud_service_id', '=', False),
+        ('project_id.message_partner_ids', 'in', [user.partner_id.id])
+    ]</field>
     <field name="groups" eval="[(4, ref('base.group_user'))]"/>
     <field name="perm_read" eval="True"/>
     <field name="perm_write" eval="True"/>
@@ -79,7 +94,15 @@ mcp_tool    server_id ───►  mcp_server
 </record>
 
 <record id="mcp_tool_rule_workspace_user" model="ir.rule">
-    <field name="domain_force">[('server_id.scope', '=', 'user'), ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+    <!-- Dual-leg sub-model mirror（cycle 4），所有 leaf 前綴 server_id. -->
+    <field name="domain_force">['&amp;',
+        ('server_id.scope', '=', 'user'),
+        '|',
+        ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+        '&amp;',
+        ('server_id.project_id.cloud_service_id', '=', False),
+        ('server_id.project_id.message_partner_ids', 'in', [user.partner_id.id])
+    ]</field>
     <!-- perms / groups 同 mcp_server_rule_workspace_user -->
 </record>
 
@@ -202,15 +225,28 @@ domain = [('server_id.scope', '=', 'system')]
 ```
 
 ```python
-# parent workspace chain
-domain = [('scope', '=', 'user'), ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]
+# parent workspace chain — dual-leg as of cycle 4 (見 [[unbound-project-acl-dual-leg]])
+domain = [
+    '&', ('scope', '=', 'user'),
+    '|', ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+    '&', ('project_id.cloud_service_id', '=', False),
+         ('project_id.message_partner_ids', 'in', [user.partner_id.id]),
+]
 
-# sub-model
-domain = [('server_id.scope', '=', 'user'), ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]
+# sub-model — dual-leg sub-model 對等 (server_id. 前綴)
+domain = [
+    '&', ('server_id.scope', '=', 'user'),
+    '|', ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+    '&', ('server_id.project_id.cloud_service_id', '=', False),
+         ('server_id.project_id.message_partner_ids', 'in', [user.partner_id.id]),
+]
 ```
 
 任何 sub-model domain 與 parent domain 不對稱 = ACL 行為 drift（cross-workspace user 透過 sub-model
 路徑可能看到不該看的 row）。
+
+**Dual-leg 對稱原則**：parent 加 leg 2 unbound carve-out 時，sub-model 兩個 leaf 都要前綴 `server_id.`
+— 漏一邊 = leg 2 walk 走錯 model → 完全不工作或意外 always-true。
 
 ## Test scaffolding（必備 regression）
 
@@ -229,6 +265,18 @@ fix 漏網。本 codebase（commit `97b5313` tester port + regression）已落 9
 | `test_alice_cannot_read_bob_user_mcp_tool` | sub-model 對等 deny |
 | `test_system_mcp_readable_by_all_users` | `system_readonly` always-true 是 intentional design |
 
+**Cycle 4 dual-leg variant 補 12 條（`test_mcp_acl_unbound_isolation.py` H 段）**：
+
+| Test | 守護 |
+|---|---|
+| H.1 / H.2 | leg 2 unbound carve-out allow（owner / follower 兩條） |
+| H.3 / H.4 | leg 2 unbound deny（non-follower / cross-workspace 兩條 — leg 2 邏輯 acid test）|
+| H.5 / H.6 | sub-model parity（mcp_tool 對等 dual-leg）|
+| H.7 / H.8 / H.9 | controller layer mirror（[[two-layer-acl-lockstep]]）|
+| H.10 | leg 1 bound walk regression preserved |
+| **H.11 / H.12** | **MAJOR 1 重炸防線**：外層 AND `scope='user'` 鎖 system create direction，Charlie 對 ORM `create({'scope': 'system'})` 必 `AccessError`（sub-model 對等）|
+| H.3b / H.4b (HC-3 round 2) | perm direction matrix — Dave / Bob write/unlink unbound external MCP 必 `AccessError` |
+
 少任何一條 = partial-correct fix（fix 一邊漏另一邊）可能逃過 review。
 
 ## 後人改本區前 checklist
@@ -237,23 +285,33 @@ fix 漏網。本 codebase（commit `97b5313` tester port + regression）已落 9
 
 1. **要加新 rule 嗎？** → 同時加 parent + sub-model 對等 → mcp_server rule count == mcp_tool rule count
 2. **要改既有 rule 的 domain 嗎？** → parent + sub-model 同步改（sub-model 前綴 `server_id.`）
-3. **要改 perm_* 嗎？** → 想清楚 read / write / create / unlink 4 direction 各自的攻擊面（特別是 always-true domain leg + perm_create=True 組合）
-4. **想合併回 dual-leg single rule？** → STOP，重炸 reviewer MAJOR 1（[[system-mcp-create-acl-bypass]]）
-5. **想拿掉 `admin_full` rule？** → STOP，admin 後台維護路徑會壞（partial failure mode）
-6. **跑 9 regression test**：`docker compose run --rm web odoo -d ... --test-tags "/woow_paas_platform:TestMcpAclCrossWorkspaceIsolation"` — 全綠才能 commit
+3. **要改 `workspace_user` 的 dual-leg 嗎？**（cycle 4 升級）→
+   - 外層 AND `('scope', '=', 'user')` **不能拆**（拆 = 重炸 MAJOR 1）
+   - leg 1 bound walk **不能改 always-true**（改 = cross-workspace leak）
+   - leg 2 unbound carve-out **不能改 always-true**（改 = 跨 workspace user 讀 unbound）
+   - leg 2 必須 mirror controller layer carve-out（[[two-layer-acl-lockstep]] — `ai_assistant._check_project_access` + `paas._resolve_project_access`）
+4. **要改 perm_* 嗎？** → 想清楚 read / write / create / unlink 4 direction 各自的攻擊面（特別是 always-true domain leg + perm_create=True 組合）
+5. **想合併回 dual-leg single rule？** → STOP，重炸 reviewer MAJOR 1（[[system-mcp-create-acl-bypass]]）
+6. **想拿掉 `admin_full` rule？** → STOP，admin 後台維護路徑會壞（partial failure mode）
+7. **跑 21 regression test**：原 9 (PR #47) + dual-leg 12 (H.1–H.12 cycle 4) + perm direction 4 (H.3b/H.4b round 2)；`docker compose run --rm web odoo -d ... --test-tags "/woow_paas_platform:TestMcpAclCrossWorkspaceIsolation,TestMcpAclUnboundIsolation"` — 全綠才能 commit
 
 ## See also
 
-- [[mcp-project-decouple]] §Invariants #5 + #6 + #8 — 本 pattern 的 invariant lock
+- [[mcp-project-decouple]] §Invariants #5 + #6 + #8 — 本 pattern 的 invariant lock（cycle 2 落地點）
+- [[mcp-url-redesign]] §Invariants Inv #11 — cycle 4 dual-leg 升級的 invariant + 4 禁止動作
+- [[unbound-project-acl-dual-leg]] — `workspace_user` × 2 dual-leg 升級的 detailed pattern + 12 H-method matrix
+- [[two-layer-acl-lockstep]] — controller layer 與 ir.rule 對齊（leg 2 mirror）
 - [[paas-workspace-member-acl-tightening]] — single-scope 模型的 3 件套（本 pattern 的「mixed scope」變體）
 - [[odoo-addon-std-rule-symmetric-deactivation]] — Odoo std model 的對等 deactivation（mcp 是自家 model 不適用，但「ACL 對等」原則一樣）
 - [[system-mcp-create-acl-bypass]] — 不走本 pattern 會踩的 MAJOR 1 漏洞
 - [[cross-workspace-task-data-leak]] — B1 sub-model parity 教訓的根源案例
 - 關鍵 code：
-  - `src/security/ir_rules.xml:134-216` — 6 條 rule split 落地
+  - `src/security/ir_rules.xml` `mcp_server_rule_workspace_user` + `mcp_tool_rule_workspace_user` — cycle 4 dual-leg domain
+  - `src/security/ir_rules.xml` `mcp_server_rule_system_readonly` + `mcp_tool_rule_system_readonly` + `mcp_server_rule_admin_full` + `mcp_tool_rule_admin_full` — 4/6 不動 rule
   - `src/security/ir.model.access.csv:14,16` — CSV `1,1,1,1` 為 hard cap
-  - `src/migrations/18.0.1.0.24/post-migrate.py:160-180` — 舊 dual-leg rule retire（step 5）
-  - `src/tests/test_mcp_acl_isolation.py` — 9 regression cases
+  - `src/migrations/18.0.1.0.24/post-migrate.py:160-180` — 舊 dual-leg rule retire（step 5，cycle 2）
+  - `src/tests/test_mcp_acl_isolation.py` — 9 regression cases（cycle 2）
+  - `src/tests/test_mcp_acl_unbound_isolation.py` — 12 H-method matrix + HC-3 round 2 perm direction（cycle 4）
 - 上游 Odoo 原理：
   - `addons/base/models/ir_rule.py:140-168` — per-group rule OR semantics（admin_full 必要的根因）
   - Odoo `_group_implied_ids` — group_system 繼承 group_user 的機制
