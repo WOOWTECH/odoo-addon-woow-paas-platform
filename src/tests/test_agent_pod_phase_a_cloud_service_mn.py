@@ -272,9 +272,8 @@ class TestPhaseACleanupFilterDelineation(TransactionCase):
         this unit test env), we accept that — only the post-cleanup
         ORM state matters for filter delineation.
         """
-        self.assertEqual(
+        self.assertTrue(
             self.mcp_a.exists() and self.mcp_b.exists() and self.mcp_external.exists(),
-            True,
             "Fixture sanity: all three MCP rows alive pre-cleanup.",
         )
         try:
