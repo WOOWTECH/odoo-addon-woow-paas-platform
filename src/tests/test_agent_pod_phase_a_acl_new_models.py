@@ -112,7 +112,7 @@ Fixture / env assumptions:
 """
 import uuid
 
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, ValidationError
 from odoo.tests.common import TransactionCase, tagged
 
 
@@ -815,3 +815,180 @@ class TestPhaseAAclProjectAccess(_NewModelAclFixture):
                 "(would let user kick out other project members).",
         ):
             dave_row.with_user(self.charlie).unlink()
+
+
+@tagged('post_install', '-at_install')
+class TestPhaseAAclAgentTemplateCrossProjectInjection(_NewModelAclFixture):
+    """HC-3 — agent_template.project_ids cross-project injection guard.
+
+    Reviewer HC-3 (2026-05-22, user sign-off option C — hotfix):
+
+    Attack vector: ir.rule on agent_template scopes RWCU per
+    ``project_ids.project_access_ids.user_id`` walk. An admin of P_A
+    can legitimately create a template T bound to P_A. The walk
+    matches → admin passes rule check. Now admin writes
+    ``T.project_ids = [(4, P_B.id)]`` to extend the template to a
+    project they have NO access to. The write triggers per-row rule
+    re-check, but the rule's domain matches if EITHER existing
+    project (P_A) walks to admin's user_id — so the M2M extension is
+    silently allowed.
+
+    Outcome: T becomes visible / invokable on P_B for that admin's
+    instance, and worse, T's binding now appears in P_B owner's
+    backend (project_ids contains victim P_B). Privilege escalation
+    + cross-project information leak.
+
+    Per HC-3 hotfix design (user sign-off C):
+
+      Add Python ``@api.constrains('project_ids')`` that on every
+      write/create iterates new project_ids and asserts the writer
+      has ``role IN ('owner', 'admin')`` on EACH bound project, or
+      is group_system / sudo-context.
+
+    Methods:
+
+    * HC3.1  admin in A only — write({'project_ids': [(4, B)]})
+             raises ValidationError
+    * HC3.2  admin in both A and B — write succeeds
+    * HC3.3  sudo() bypass — even cross-project bind succeeds in
+             sudo-context (template seeding / migration paths)
+    * HC3.4  group_system bypass — admin user with base.group_system
+             succeeds regardless of project_access
+
+    Red expectation today: impl has NOT added the @api.constrains
+    guard → all four method test the constraint:
+      * HC3.1, HC3.2: HC3.1 expects ValidationError but write goes
+        through silently → assertRaises fails (RED).
+      * HC3.2: write succeeds today AND post-impl → PASS (regression
+        lock; reviewer must verify still passes after constraint adds
+        proper authorization carve-out).
+      * HC3.3, HC3.4: sudo / group_system path silently succeeds
+        today AND post-impl → PASS (regression locks for legitimate
+        bypass).
+    """
+
+    def setUp(self):
+        super().setUp()
+        ai_cfg = self.env['ai.config'].sudo().search([], limit=1)
+        self._ai_cfg_id = ai_cfg.id if ai_cfg else False
+
+        # Charlie is currently P1 role=user — promote to admin so he
+        # can legitimately create/manage templates on P1.
+        self._charlie_p1_row = self.PAccess.sudo().search([
+            ('project_id', '=', self.project_p1.id),
+            ('partner_id', '=', self.charlie.partner_id.id),
+        ], limit=1)
+        self._charlie_p1_row.sudo().write({'role': 'admin'})
+
+        # Charlie's legitimate template bound to P1 only.
+        self.tmpl_charlie_p1 = self.AgentTemplate.sudo().create({
+            'name': f'HC3 Charlie tmpl P1 {self.suffix}',
+            'is_public': False,
+            'state': 'draft',
+            'model_config_id': self._ai_cfg_id or False,
+            'project_ids': [(6, 0, [self.project_p1.id])],
+        })
+
+    # ------------------------------------------------------------------ #
+    # HC3.1 — admin of A cannot inject B into project_ids                #
+    # ------------------------------------------------------------------ #
+    def test_HC3_1_admin_in_A_cannot_extend_template_to_unrelated_B(self):
+        """HC3.1: Charlie (P1 admin, NO access to P2) cannot extend
+        his P1 template to include P2.
+
+        Red today: no @api.constrains on project_ids → write goes
+        through, template now visible on P2 for Charlie's instance
+        + leaks into P2 owner's backend list.
+        """
+        with self.assertRaises(
+            ValidationError,
+            msg="HC3.1: writing project_ids to add an unrelated project "
+                "must raise ValidationError. Reviewer HC-3 — add "
+                "@api.constrains on agent_template.project_ids that "
+                "checks writer has admin/owner role on every newly-"
+                "added project.",
+        ):
+            self.tmpl_charlie_p1.with_user(self.charlie).write({
+                'project_ids': [(4, self.project_p2.id)],
+            })
+
+    # ------------------------------------------------------------------ #
+    # HC3.2 — admin of A AND B can legitimately extend                   #
+    # ------------------------------------------------------------------ #
+    def test_HC3_2_admin_in_both_projects_can_extend(self):
+        """HC3.2: If Charlie holds admin role on BOTH P1 and P2, the
+        extension is legitimate (template authored by a person trusted
+        on both projects).
+
+        Regression lock — the constraint must NOT block this case.
+        """
+        # Promote Charlie to admin on P2 too (admin-managed setup).
+        self.PAccess.sudo().create({
+            'project_id': self.project_p2.id,
+            'partner_id': self.charlie.partner_id.id,
+            'role': 'admin',
+        })
+
+        try:
+            self.tmpl_charlie_p1.with_user(self.charlie).write({
+                'project_ids': [(4, self.project_p2.id)],
+            })
+        except Exception as exc:  # noqa: BLE001
+            self.fail(
+                "HC3.2: write must succeed when writer is admin of "
+                "every newly-bound project. Got %s: %s. The constraint "
+                "carve-out must allow legitimate cross-project owners "
+                "/ admins." % (type(exc).__name__, exc),
+            )
+        self.tmpl_charlie_p1.invalidate_recordset()
+        self.assertIn(
+            self.project_p2.id, self.tmpl_charlie_p1.project_ids.ids,
+            "HC3.2 fixture sanity: extension landed in M2M.",
+        )
+
+    # ------------------------------------------------------------------ #
+    # HC3.3 — sudo() context bypass                                       #
+    # ------------------------------------------------------------------ #
+    def test_HC3_3_sudo_context_bypasses_constraint(self):
+        """HC3.3: sudo() write bypasses the constraint — used by
+        template seeding cron / migration / paas-operator webhook etc.
+
+        Regression lock — sudo path must NOT be blocked.
+        """
+        try:
+            self.tmpl_charlie_p1.sudo().write({
+                'project_ids': [(4, self.project_p2.id)],
+            })
+        except Exception as exc:  # noqa: BLE001
+            self.fail(
+                "HC3.3: sudo() context must bypass the project_ids "
+                "constraint (legitimate seeding path). Got %s: %s."
+                % (type(exc).__name__, exc),
+            )
+
+    # ------------------------------------------------------------------ #
+    # HC3.4 — group_system user bypass                                    #
+    # ------------------------------------------------------------------ #
+    def test_HC3_4_group_system_user_bypasses_constraint(self):
+        """HC3.4: A user with base.group_system can extend template
+        cross-project without holding per-project project_access —
+        the constraint must recognize group_system as authorized.
+
+        Eve is the group_system user from the shared fixture.
+
+        Regression lock — admin backend maintenance path must NOT be
+        blocked. Without this carve-out the backend "Apps → Agent
+        Template → bind project" workflow breaks for the platform
+        admin who curates system templates.
+        """
+        try:
+            self.tmpl_charlie_p1.with_user(self.eve).write({
+                'project_ids': [(4, self.project_p2.id)],
+            })
+        except Exception as exc:  # noqa: BLE001
+            self.fail(
+                "HC3.4: group_system user must bypass the project_ids "
+                "constraint. Got %s: %s. Carve-out must check "
+                "``self.env.user.has_group('base.group_system')``."
+                % (type(exc).__name__, exc),
+            )
