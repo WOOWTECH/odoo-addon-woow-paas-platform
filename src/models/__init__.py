@@ -10,6 +10,7 @@ from . import low_balance_warning_cron
 from . import res_config_settings
 from . import workspace
 from . import workspace_access
+from . import project_access
 from . import cloud_app_template
 from . import smart_home_template
 from . import cloud_service
@@ -25,6 +26,9 @@ from . import smart_home
 from . import ai_assistant
 from . import mcp_server
 from . import mcp_tool
+from . import skill
+from . import agent_template
+from . import agent_session
 from . import topup_plan
 from . import wallet_transaction
 from . import wallet_topup

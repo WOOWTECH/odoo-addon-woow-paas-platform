@@ -180,10 +180,12 @@ class CloudService(models.Model):
         help='Storage in GB allocated to this service',
     )
 
-    # Support Project
-    project_ids = fields.One2many(
+    # Support Project — Phase A M:N reverse (shared project_cloud_service_rel)
+    project_ids = fields.Many2many(
         comodel_name='project.project',
-        inverse_name='cloud_service_id',
+        relation='project_cloud_service_rel',
+        column1='cloud_service_id',
+        column2='project_id',
         string='Support Projects',
     )
 
@@ -1084,10 +1086,13 @@ class CloudService(models.Model):
         )
 
         # Step 1 — unlink sidecar-backed user MCP first, before the sidecar
-        # is torn down. External-URL user MCP (sidecar_backed=False) stays.
-        user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
-            lambda s: s.scope == 'user' and s.sidecar_backed
-        )
+        # is torn down. M:N: project may also bind other cloud_services whose
+        # sidecar-backed MCP must SURVIVE — narrow by URL prefix to clear only
+        # rows pointing at *this* service's sidecar. External-URL user MCP
+        # (sidecar_backed=False) stays. Services without a sidecar identity
+        # fall back to the broad filter (URL-prefix unknown).
+        url_prefix = self._sidecar_url_prefix()
+        user_mcps = self._collect_sidecar_user_mcps(url_prefix)
         if user_mcps:
             user_mcps.sudo().unlink()
             _logger.info(
@@ -1139,14 +1144,52 @@ class CloudService(models.Model):
         intact — their URL is physically independent of this service.
         Idempotent against ``_do_cleanup``: when both run, the second finds
         the matching recordset already empty.
+
+        M:N (Phase A): each cloud_service narrows by its own URL prefix so
+        tearing down service A does not collateral-unlink service B's
+        sidecar-backed MCP rows on a project that binds both.
         """
-        user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
+        for service in self:
+            user_mcps = service._collect_sidecar_user_mcps(
+                service._sidecar_url_prefix()
+            )
+            if user_mcps:
+                user_mcps.sudo().unlink()
+                _logger.info(
+                    "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
+                    "for service id=%s", len(user_mcps), service.id,
+                )
+        return super().unlink()
+
+    def _collect_sidecar_user_mcps(self, url_prefix):
+        """Return sidecar-backed user-scope MCP rows attached via M:N
+        projects whose URL belongs to this service's sidecar (or all of
+        them when no URL prefix is available, e.g. pre-deploy fixtures).
+        """
+        self.ensure_one()
+        candidates = self.project_ids.mapped('mcp_server_ids').filtered(
             lambda s: s.scope == 'user' and s.sidecar_backed
         )
-        if user_mcps:
-            user_mcps.sudo().unlink()
-            _logger.info(
-                "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
-                "for service ids=%s", len(user_mcps), self.ids,
-            )
-        return super().unlink()
+        if url_prefix is None:
+            return candidates
+        return candidates.filtered(
+            lambda s: (s.url or '').startswith(url_prefix)
+        )
+
+    def _sidecar_url_prefix(self):
+        """Return the URL prefix used by sidecar-backed user-scope MCP rows
+        whose backing sidecar is *this* cloud_service, or ``None`` if this
+        service has no sidecar identity (no helm_release_name/namespace).
+
+        ``None`` lets callers fall back to the legacy filter that prunes any
+        sidecar-backed user-scope row — required so services created without
+        helm metadata (older fixtures, pre-deploy state) still drop their
+        MCPs on teardown.
+        """
+        self.ensure_one()
+        if not self.helm_release_name or not self.helm_namespace:
+            return None
+        return (
+            f'http://{self.helm_release_name}-mcp.'
+            f'{self.helm_namespace}.svc.cluster.local'
+        )

@@ -133,6 +133,7 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.registry_secret_name',
     'woow_paas_platform.topup_payment_enabled',
     'woow_paas_platform.max_consecutive_payment_failures',
+    'woow_paas_platform.agent_namespace_secret',
 ]
 
 
