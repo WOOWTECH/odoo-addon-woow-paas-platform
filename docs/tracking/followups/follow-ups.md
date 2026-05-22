@@ -2,11 +2,12 @@
 
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
-**State as of 2026-05-21**：
+**State as of 2026-05-23**：
 - Cycle 1（cloud-service ↔ project decouple, 2026-05-17）：F1-F11，B1 已 RESOLVED、PR APPROVED WITH CAVEATS
 - Cycle 2（mcp cloud_service_id → project_id decouple, 2026-05-18）：F12-F20 新增，PR APPROVED WITH CAVEATS round 2，4 BLOCKER/MAJOR 全 close
 - Cycle 3（Project Detail page, issue #48, 2026-05-20）：F21-F28 新增，APPROVED WITH CAVEATS，B-1 fresh-install fix verified；AC #28 reviewer E2E 完成 10/11 pass + 1 FAIL（E2E-G1，不擋 merge）；R-1 / R-2 hard caveats 收於 reporter phase（commit pending），R-3 / R-6 / E2E-G1 + 其他 polish 進 follow-up issue
 - Cycle 4（MCP refactor URL redesign + unbound project ACL, issue #49 + #51, 2026-05-21）：**F22 + F23 RESOLVED**；F-X1~F-X8 新增；reviewer round 2 APPROVED WITH CAVEATS，3 hard caveat (HC-1/2/3) 全 closed in PR；1 new MINOR (SC-6b)；20 條 soft caveat (SC-1~SC-20) 分散 reporter inline / dedicated follow-up / batch 三類處理
+- Cycle 5（Agent runtime pod Phase A — schema M:N + 4 new models + 16 rule + migration, 2026-05-22 → 2026-05-23）：CAQA round 1 BLOCKED（B-1：4 new model 無 ir.rule scope-restrict）→ impl round 2 補 16 rule + PA-5 Python gate + SK-6 path (a) field-level mask；CAQA round 2 APPROVED WITH CAVEATS；**B-1 closed + OQ-A-2 closed**；reviewer round 1 抓 4 HC + 28 SC（CAQA 漏抓 HC-1/HC-2/HC-3/HC-4）；leader 拍板 HC-3 + HC-4 hotfix in this PR，HC-1 + HC-2 標 reporter follow-up；impl round 3 補 `agent_template._check_project_ids_grantor_authority` + `skill._anchor_bundle_attachment` + `ir.attachment` row-level rule 兩條 + 8 test method；144/144 PASS + Full suite 664/0 fail；CAQA round 3 + reviewer round 2 APPROVED WITH CAVEATS；**HC-3 + HC-4 closed in PR；HC-1 + HC-2 + EC-3a + EC-4a → F-PA-13~16**；F-PA-1~F-PA-12 已於 round 2 reporter cycle 落地；18 invariants 守線（PR #47 + #54 共 11 條 + Phase A 7 條 + Phase A #8 新增）+ 2 new pattern doc（`constraint-input-trust-expansion` + `attachment-row-level-acl-and-anchor-stamping`）
 
 ## Index
 
@@ -49,8 +50,24 @@
 | F26 | minor | reviewer (cycle 3) | 3 | Polish cluster — `workspace_id` 缺 `readonly=True`（R-5）/ `support_service.js` optimistic merge stuck spinner（R-9）/ `ir_rules.xml:217-238` comment 改 zh-tw（R-10） | 新 polish issue 待開 |
 | F27 | minor | reviewer (cycle 3) | 3 | Test gaps G1 / G3 / G6（R-7）— update whitelist 範圍 / sync/test ACL matrix / XSS sanitize 未測 | tester 補 red 或 follow-up issue |
 | F28 | long-term | architectural (cycle 3) | 3 | Description rich-text editor 升級 — `document.execCommand` (legacy) → ProseMirror / TipTap (R-8) | architectural issue，等 editor 需求變寬時開 |
+| F-PA-1 | medium | refactor (cycle 5) | 5 | `agent_session._get_namespace_secret` fallback default `_DEFAULT_SECRET` hardcoded — 公開 git repo 可預計算 hash (CAQA round 1 M-3) | install hook hard guard PR — `agent_session.py:7` |
+| F-PA-2 | medium | refactor (cycle 5) | 5 | `cloud_service._sidecar_url_prefix` return None for missing helm metadata → broad filter 可能誤殺其他 service sidecar-backed MCP (CAQA round 1 M-4) | fixture / pre-deploy edge case PR — `cloud_service.py:1175-1194` |
+| F-PA-3 | medium | refactor (cycle 5) | 5 | `project.cloud_service_id` stored compute 失去明示 `ondelete='set null'` — verify Odoo 18 default 後補明示 (CAQA round 1 M-5) | small PR — `project_project.py:18-27`；need Odoo 18 stored compute M2O FK default verify |
+| F-PA-4 | medium | refactor (cycle 5 deferred) | 5 | Phase A task #14-18 五個 view file defer — agent_template_views / agent_session_views / skill_views / project_access_views / project_external_mcp_setting (含 SSRF risk 警示)；leader 拍板 OQ-A-3 = defer Phase B/C | Phase B/C admin UI batch |
+| F-PA-5 | low | refactor (cycle 5) | 5 | `skill_rule_project_user` perm_write/perm_create=False — design §3.2 line 1528「user W/C only own draft」implementation 簡化為 conservative R only；ir.rule 無法表達「own draft」需 Python state guard (CAQA round 2 C-A-1) | Phase B/C 補時加 state='draft' + uploaded_by_uid=self Python gate |
+| F-PA-6 | low | refactor (cycle 5) | 5 | `ASSIGNABLE_ROLES_BY_ROLE[ROLE_OWNER]` 包含 ROLE_OWNER；design §4.3 line 2090 不含 owner — implementation 寬鬆（owner 可邀請其他 owner）；business intent 確認 (CAQA round 2 C-A-2) | leader / planner 拍板 design 是否更新；implementation 若改窄需 Python gate 同步 |
+| F-PA-7 | low | refactor (cycle 5) | 5 | `skill.bundle_attachment_id` `groups='base.group_system'` field-level mask — 同時擋 project owner/admin 透過 backend form 直接 attach；admin 必須走 ORM sudo / API endpoint upload (CAQA round 2 C-A-3) | Phase B/C bundle upload API + maintainer doc update |
+| F-PA-8 | low | refactor (cycle 5) | 5 | `discuss_channel.py:262` comment stale — 寫「project's cloud_service_id」但 implementation 已用 `task.primary_cloud_service_id` hybrid spec (CAQA round 1 I-1) | reporter 順手清 or batch |
+| F-PA-9 | low | refactor (cycle 5) | 5 | `cloud_service._do_cleanup` 沒明示 `self.ensure_one()` — multi-record 在 helper 內 raise 行為不清楚 (CAQA round 1 I-3) | small refactor PR — `cloud_service.py:1086-1101` |
+| F-PA-10 | low | refactor (cycle 5) | 5 | `project_task.primary_cloud_service_id` docstring「The compute acts as a default」描述不精確 — Odoo readonly=False + computed 是 implicit default idiom (CAQA round 1 I-4) | reporter 順手清 docstring |
+| F-PA-11 | low | refactor (cycle 5) | 5 | `project_project.create()` override SUPERUSER_ID skip → migration step 9 fallback to `create_uid` partner，demo / install hook project owner 可能為 OdooBot partner (CAQA round 1 I-5) | Phase B/C 評估 demo data project 預設 owner 政策 |
+| F-PA-12 | low | refactor (cycle 5) | 5 | `project_access._compute_user_id` 用 `sudo().search([('partner_id', '=', X)], limit=1)` 無 deterministic ordering (CAQA round 1 I-6) | small PR — 加 `order='id ASC'` |
+| F-PA-13 | medium | reviewer (cycle 5 round 1 HC-1) | 5 | `project_project._inverse_cloud_service_id` 用 `[(6, 0, [X.id])]` replace semantics — Phase A migration 後既有 1-service M:N row 沒實際 break；**Phase B/C 多 service binding active 前必修**（否則 controller `cloud_service_id = X` write silently drop 其他 binding） | Phase B/C 必修 PR — `project_project.py:88-99` + `paas.py:1594` + `ai_assistant.py:944` |
+| F-PA-14 | medium | reviewer (cycle 5 round 1 HC-2) | 5 | `project.sudo().create()` (在 `ai_assistant.py:946`) bypass `project_project.create()` override 對 `SUPERUSER_ID` skip bootstrap → creator silently 無 `project_access` owner row → 對 4 個新 model 的 16 條 ir.rule 全 fail → creator **看不到自己 project** 上 agent_template / agent_session / skill / project_access；**Phase D-F use_agent_runtime active 前必修** | Phase D-F 必修 PR — `project_project.py:122` + `ai_assistant.py:946` |
+| F-PA-15 | info | reviewer (cycle 5 round 2 EC-3a) | 5 | HC-3 hotfix `_check_project_ids_grantor_authority` 對 `is_superuser()` + `has_group('base.group_system')` bypass — Phase B/C 加 controller endpoint 用 `agent_template.sudo().write({'project_ids': ...})` path 不 enforce constraint，必須對齊 [[two-layer-acl-lockstep]] pattern 在 controller carve-out 補 grantor check | Phase B/C controller layer touch PR 提醒 — `agent_template.py:94-122` |
+| F-PA-16 | info | reviewer (cycle 5 round 2 EC-4a) | 5 | `skill._anchor_bundle_attachment` 對既有 attachment 的 `res_model` overwrite 是 destructive — 若 admin (`base.group_system`) 把已存在的 `mail.message` attachment（`res_model='mail.message'`）assign 給 `skill.bundle_attachment_id`，anchor 把 attachment 的 `res_model` overwrite 成 `'woow_paas_platform.skill'`，切斷原 mail.message linkage；docstring 已警告但需 maintainer doc 補強 | reporter 順手 / Phase B/C bundle upload API PR — `skill.py:108-129` docstring |
 
-下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12-F20 是 cycle 2。F21+ 是 cycle 3 (issue #48 Project Detail page)。
+下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12-F20 是 cycle 2。F21+ 是 cycle 3 (issue #48 Project Detail page)。F-X1+ 是 cycle 4 (MCP refactor URL redesign)。F-PA-1+ 是 cycle 5 (Agent runtime pod Phase A)。F-PA-13+ 是 cycle 5 round 1 reviewer 抓 CAQA 漏抓 4 HC 中 leader 拍板 defer 的 2 條（HC-1 / HC-2）+ round 2 hotfix 落地後 reviewer 獨立 walk 抽出的 2 條 edge case 提醒（EC-3a / EC-4a）。
 
 ---
 
@@ -558,17 +575,245 @@
 
 ---
 
+## F-PA-1 — `agent_session._get_namespace_secret` fallback `_DEFAULT_SECRET` hardcoded
+
+- **Severity**: medium（security caveat；B-1 修了後攻擊面 severity 降，但 install 預設仍應 reject）
+- **Origin**: CAQA round 1 M-3 — `src/models/agent_session.py:7` 寫死 `_DEFAULT_SECRET = b'woow-paas-agent-namespace-fallback-secret'`
+- **影響**：公開 git repo → attacker 取得 default secret → 預計算 hash for any project_id；B-1 修了後 attacker 無法直接 ORM create agent_session（rule 擋），但可預測 victim project 的 K8s namespace 名稱（reconnaissance value）
+- **建議落點**：
+  - install hook 加 hard guard：`ir.config_parameter` 取 `woow_paas_platform.agent_namespace_secret`，若空 / 短於 32 bytes → raise `ValidationError`
+  - 或改 default 為 `secrets.token_bytes(32).hex()` 隨機生成（per-install 不同），首次 install 寫入 config_parameter
+- **何時**：dedicated PR 或 Phase B（paas-agent-runtime 建置時一併補）
+
+---
+
+## F-PA-2 — `cloud_service._sidecar_url_prefix` None fallback → broad-filter 誤殺風險
+
+- **Severity**: medium（M:N 下 fixture / pre-deploy state 可能踩；production 影響低 — service deploy 後才有 sidecar-backed MCP）
+- **Origin**: CAQA round 1 M-4 — `src/models/cloud_service.py:1175-1194` `_sidecar_url_prefix()` 對 service 沒 `helm_release_name` / `helm_namespace` 時 return `None`；`_collect_sidecar_user_mcps` 收到 None → 走 broad filter（清所有 candidate）
+- **觸發路徑**：
+  - project X 綁 service A（無 helm metadata，可能 pre-deploy / fixture）+ service B（有 helm metadata，已 deploy）
+  - service A unlink → `_sidecar_url_prefix()` return None → broad filter → 清 X 上所有 sidecar-backed MCP，包含 service B 的 sidecar MCP
+- **建議落點**：
+  - fallback 改用 `cloud_service.id` 作為 namespace marker（不存在於其他 service URL）— 例如 `f'__service_{self.id}__'` 永不 match `s.url.startswith(...)`，等效於不清
+  - 或改為 raise / warn 強制 helm metadata 一致性（service 必有 helm name / namespace）
+- **何時**：cleanup safety net hardening PR / Phase B（paas-agent-runtime 建置時可同步檢視 fixture path）
+
+---
+
+## F-PA-3 — `project.cloud_service_id` stored compute 失去明示 `ondelete='set null'`
+
+- **Severity**: medium（correctness uncertainty；不一定是 bug 但 best practice 應該保留明示）
+- **Origin**: CAQA round 1 M-5 — `src/models/project_project.py:18-27` 改 `cloud_service_id` 從 plain Many2one with `ondelete='set null'` 到 stored compute + inverse，**失去明示 ondelete**
+- **影響**：
+  - Odoo 18 對 stored compute Many2one with `store=True` 的 FK constraint default ondelete 依賴 framework default fallback（未驗證 Odoo 18 對 stored compute 的具體行為）
+  - 若 Odoo 18 默認 `set null` → 行為等價；若 `restrict` → cloud_service unlink 卡死
+  - M:N relation table `project_cloud_service_rel` 已是 `ON DELETE CASCADE`（pre-migrate 明文），所以 unlink 物理上 OK；但 stored compute column 是否同步 recompute 是 Odoo internal 行為，需 verify
+- **建議落點**：
+  - verify Odoo 18 stored compute M2O FK constraint default ondelete（grep `Many2one.ondelete` 在 Odoo 18 `fields.py`）
+  - 明示 `ondelete='set null'` 對齊舊版本契約：`fields.Many2one(..., compute='...', inverse='...', store=True, ondelete='set null')`
+- **何時**：small clarity PR / 順手做
+
+---
+
+## F-PA-4 — Phase A 5 view files defer to Phase B/C
+
+- **Severity**: medium（admin operational gap，本身非 security / data 風險）
+- **Origin**: OQ-A-3 leader 拍板 defer — plan §Phase A task #14-18 列 5 個 view file，implementation 全沒做：
+  - `src/views/agent_template_views.xml`
+  - `src/views/agent_session_views.xml`
+  - `src/views/skill_views.xml`
+  - `src/views/project_access_views.xml`
+  - `src/views/project_external_mcp_setting.xml`（含 SSRF risk 警示）
+- **影響**：
+  - Admin 後台無法直接管理 4 個新 model（必須走 ORM / DB）
+  - `external_mcp_allowed` 無 admin UI 開關（必須 ORM `with_user(admin).project.write({'external_mcp_allowed': True})`）
+  - `project_external_mcp_setting.xml` 含 SSRF risk 警示 — Phase A enable external_mcp_allowed 時 admin 看不到風險提示
+- **建議落點**：
+  - Phase B/C admin UI batch PR — 配套 16 ir.rule（已落地）+ 4 new model 後台 form / tree / search view
+  - `project_external_mcp_setting.xml` 必含 zh-tw SSRF risk 警示文字（design 預期）
+- **何時**：Phase B 或 Phase C admin UI batch
+
+---
+
+## F-PA-5 — `skill_rule_project_user` 「only own draft」design intent 簡化
+
+- **Severity**: low（implementation 比 design 嚴；不是 leak surface）
+- **Origin**: CAQA round 2 C-A-1 — design §3.2 line 1528 `skill_rule_project_user`「R=True, W/C=True (only own draft), U=False」；implementation 簡化為 R only，因 ir.rule 無法表達「own draft」需 Python state guard
+- **影響**：
+  - Phase A user role 無法在自己 draft skill 上 W/C（必須升 admin role）
+  - 對 Phase A scope（schema-only，skill upload API 留 Phase B/C）影響 marginal
+- **建議落點**：
+  - Phase B/C skill upload API 同 PR 補 Python state guard：
+    - `@api.constrains('state', 'uploaded_by_uid')` 或 `write()` override 對 user role：只允 `state='draft' AND uploaded_by_uid=self.env.uid`
+    - rule `skill_rule_project_user` perm_write=True + perm_create=True；Python gate 守 row 內容
+- **何時**：Phase B/C skill upload API PR 同 commit
+
+---
+
+## F-PA-6 — `ASSIGNABLE_ROLES_BY_ROLE[ROLE_OWNER]` 包含 ROLE_OWNER vs design 出入
+
+- **Severity**: low（business intent 出入；implementation 寬鬆但合理）
+- **Origin**: CAQA round 2 C-A-2 — `src/models/project_access.py:20-25` `ASSIGNABLE_ROLES_BY_ROLE[ROLE_OWNER] = [ROLE_OWNER, ROLE_ADMIN, ROLE_USER, ROLE_GUEST]`；design §4.3 line 2090 `ASSIGNABLE_ROLES_BY_OWNER = ['admin', 'user', 'guest']` 不含 owner
+- **影響**：
+  - implementation 允許 owner grant 另一 owner（multiple owner 是 design 允許的 case，line 2070 `other_owners` 概念）
+  - design 漏寫或 implementation 過寬，需 leader / planner 拍板
+- **建議落點**：
+  - (a) update design §4.3 ASSIGNABLE_ROLES_BY_OWNER 加 owner（business intent confirm）
+  - (b) update implementation 把 owner 拿掉，加 ownership transfer 專用 method（business intent confirm 「owner 必須 transfer 而非 grant」）
+- **何時**：leader / planner 拍板後 doc-only 或 impl PR
+
+---
+
+## F-PA-7 — `skill.bundle_attachment_id` `groups='base.group_system'` 同擋 project admin
+
+- **Severity**: low（design intent acceptable but maintainer documentation 不足）
+- **Origin**: CAQA round 2 C-A-3 — `src/models/skill.py:42-47` `bundle_attachment_id = fields.Many2one('ir.attachment', groups='base.group_system')` SK-6 path (a)；field-level mask 同時擋 project owner/admin 透過 backend form 直接 attach
+- **影響**：
+  - Project owner/admin 必須走 ORM sudo / API endpoint upload bundle，不能用 Odoo backend form
+  - design intent 是 protect bundle binary from non-system；implementation 選最嚴（合理）但 maintainer 看 form view 時會困惑
+- **建議落點**：
+  - Phase B/C skill upload API endpoint 補（必走 sudo create attachment + ORM create skill 兩步）
+  - maintainer doc：`docs/decisions/patterns/skill-bundle-attachment-field-level-mask.md` 或 inline comment 補：「project admin 不能透過 backend form attach bundle，必須走 API」
+- **何時**：Phase B/C skill upload API PR 同 commit + reporter 補 maintainer doc
+
+---
+
+## F-PA-8 — `discuss_channel.py:262` stale comment
+
+- **Severity**: trivial (comment-only)
+- **Origin**: CAQA round 1 I-1 — `src/models/discuss_channel.py:262` comment 寫「task's primary service (project's cloud_service_id) first」；implementation 已走 `task.primary_cloud_service_id` (hybrid spec)
+- **建議落點**：reporter 順手清 — comment 改寫對齊 hybrid spec：「task's primary service (computed default + drift handler, see §7.0.3)」
+- **何時**：reporter phase 或 batch
+
+---
+
+## F-PA-9 — `cloud_service._do_cleanup` 缺 ensure_one()
+
+- **Severity**: low (defensive style)
+- **Origin**: CAQA round 1 I-3 — `src/models/cloud_service.py:1086-1101` `_do_cleanup` 內走 helper `_sidecar_url_prefix()` / `_collect_sidecar_user_mcps()` 都 ensure_one；但 `_do_cleanup` 本身沒明示 single-record semantics
+- **影響**：multi-record `_do_cleanup` 呼叫會在 helper 內 raise，行為意圖不清楚；後續 maintainer 看 method body 不知 single-record assumption
+- **建議落點**：method 第一行加 `self.ensure_one()` 明示 — 與 helper 一致
+- **何時**：small clarity PR / 順手做
+
+---
+
+## F-PA-10 — `primary_cloud_service_id` docstring 描述不精確
+
+- **Severity**: trivial (docstring clarity)
+- **Origin**: CAQA round 1 I-4 — `src/models/project_task.py:38-39, 74-89` `primary_cloud_service_id` docstring 寫「The compute acts as a default」描述不精確（Odoo readonly=False + computed 是 implicit default idiom）
+- **建議落點**：docstring 改寫對齊 Odoo idiom：「Stored Many2one with computed default — `readonly=False` makes the compute act as initial value; explicit writes persist via the `inverse` lift, drift resets only when current pick is no longer in the project's bound set.」
+- **何時**：reporter 順手清
+
+---
+
+## F-PA-11 — `project_project.create()` SUPERUSER_ID skip → OdooBot owner risk
+
+- **Severity**: low (功能對齊 design，但 OdooBot owner 概念上奇怪)
+- **Origin**: CAQA round 1 I-5 — `src/models/project_project.py:108-110` 對 `SUPERUSER_ID` skip bootstrap；migration step 9 補做但 fallback 到 `pp.create_uid`（可能是 OdooBot）
+- **影響**：demo / install hook 創建的 project owner = OdooBot partner；design §4.3「real human owner」明文 — OdooBot 不算
+- **建議落點**：
+  - 評估是否 demo data project 預設不需 owner row（design intent 確認）
+  - migration step 9 加 OdooBot detection：若 fallback uid = SUPERUSER_ID，skip + log warning「project_id=X demo / install hook created；no human owner — admin 手動指定」
+- **何時**：Phase B/C 或 owner 政策 PR
+
+---
+
+## F-PA-12 — `project_access._compute_user_id` 無 deterministic ordering
+
+- **Severity**: low (single partner 對應多 user 邏輯上不該發生，但 limit=1 沒明示 ordering)
+- **Origin**: CAQA round 1 I-6 — `src/models/project_access.py:81-87` `_compute_user_id` 走 `sudo().search([('partner_id', '=', X)], limit=1)` 無 deterministic ordering
+- **影響**：若同 partner_id 對應多 user 行（不該發生但 Odoo 不擋），limit=1 結果不確定
+- **建議落點**：加 `order='id ASC'` 保 deterministic：`sudo().search([...], limit=1, order='id ASC')`
+- **何時**：small clarity PR / 順手做
+
+---
+
+## F-PA-13 — `project_project._inverse_cloud_service_id` replace semantics silent drop M:N bindings
+
+- **Severity**: medium（silent contract change + latent regression at Phase B/C multi-bind activation；CAQA 漏抓，reviewer round 1 抓出標 HC-1）
+- **Origin**: reviewer round 1 HC-1（silent-failure-hunter C-2）— `src/models/project_project.py:88-99` `_inverse_cloud_service_id` 把 `cloud_service_id = X` write 透過 `[(6, 0, [X.id])]` replace 整個 `cloud_service_ids` M:N 集
+- **狀況**：
+  - Phase A migration 後既有 1-service M:N row 沒實際 break（每 row 1 service，replace = noop）
+  - **Phase B/C user 透過 UI add 第二 service 後**，任何 controller `cloud_service_id = X` write 會 silently drop 其他 binding，無 log / 無 warning / 無 error
+  - 下游影響：`workspace_ids` 收縮 / `task.primary_cloud_service_id` drift / `agent_template.project_ids` 評估改變 / ir.rule visibility 退化 / cleanup lifecycle 連帶錯亂
+- **Caller surface（grep verified）**：
+  - `src/controllers/paas.py:1594` `vals['cloud_service_id'] = target.id` in `_update_support_project`（rebind path）
+  - `src/controllers/ai_assistant.py:944` `vals['cloud_service_id'] = int(cs_id)` in `_create_project`（create path）
+- **本 PR 製造？**：是（M2O → stored compute + inverse 是本 PR 引入）；controller caller 是 pre-existing legacy write
+- **leader 拍板**：(a) approve with hard caveat — Phase B/C multi-bind activation 前必修
+- **建議落點**：
+  - 路徑 1（推薦）：`_inverse_cloud_service_id` 加 `_logger.warning` 當既有 set 非空 replace；同時更新 `cloud_service_id` field `help=` 文字明示 "deprecated alias — write replaces full m:n set, prefer cloud_service_ids"
+  - 路徑 2：改 additive `(4, X.id)` 語意 — 但變動 controller layer 既有 1-service rebind 行為（不是純 additive，會破 unbind 與 rebind 邏輯），需配套 controller layer 改 m:n 語意
+- **何時**：**Phase B/C multi-bind activation 前必修**
+
+---
+
+## F-PA-14 — `project.sudo().create()` bypass `project_access` bootstrap → creator 看不到自己 project 上 4 model
+
+- **Severity**: medium（latent functional regression — 不是 security IDOR，是 own-project visibility gap；CAQA 漏抓，reviewer round 1 抓出標 HC-2）
+- **Origin**: reviewer round 1 HC-2（silent-failure-hunter C-1）— `src/models/project_project.py:122` create() override `if self.env.uid == SUPERUSER_ID: return projects` skip bootstrap；對 `ai_assistant.py:946` 唯一 production sudo create path（grep verified）→ bootstrap branch skip → 新 project 無 `project_access` owner row
+- **狀況**：
+  - Creator 仍可看到 project itself（透過 `project_rule_workspace_member` leg 2 carve-out `create_uid = user.id`）
+  - 但對 4 個新 model（`agent_template` / `agent_session` / `skill` / `project_access`）的 16 條 ir.rule 全 walk `project_id.project_access_ids` → no row exists → creator 完全看不到自己 project 上的這些 records
+  - **Phase A 沒人 active 4 model**（dormant）→ 無 visible impact today
+  - **Phase B-D `use_agent_runtime` active 後 immediate functional regression** — creator 不能管理自己 project 的 templates / skills / sessions
+- **與 F-PA-11（OdooBot owner edge case）區分**：F-PA-11 是 demo / install hook fallback；本條 F-PA-14 是 production controller 透過 `ai_assistant.py:946` 觸發的 silent visibility gap — 嚴重得多
+- **本 PR 製造？**：是（SUPERUSER skip + 4 model ir.rule 是本 PR）；ai_assistant.py sudo create 是 pre-existing
+- **leader 拍板**：(a) approve with hard caveat — Phase D-F `use_agent_runtime` activation 前必修
+- **建議落點**：
+  - 路徑 1（推薦）：`project_project.create()` 對「`is_superuser()` 但 `env.user.partner_id` 是 real human」case 仍走 bootstrap；透過 context flag（e.g. `_skip_project_access_bootstrap=True`）讓 cron/install/migration 顯式 opt-out
+  - 路徑 2：controller fix — `ai_assistant.py:946` 改 `request.env['project.project'].with_user(env.user).create(vals)` 不走 sudo（需 verify create 對 std `project.project` 沒 ACL 阻擋 base.group_user — std `ir.model.access.csv access_project_project_internal` 已是 1,1,1,1 應該允許）
+- **何時**：**Phase D-F use_agent_runtime active 前必修**
+
+---
+
+## F-PA-15 — controller sudo path 對 grantor authority constraint bypass — Phase B-E lock-step 提醒
+
+- **Severity**: info（reviewer round 2 EC-3a — round 1 HC-3 hotfix 落地後 reviewer 獨立 walk surface 的 edge case；Phase A 沒 controller 走此 path，dormant）
+- **Origin**: reviewer round 2 §12.4 EC-3a — HC-3 hotfix `_check_project_ids_grantor_authority` 對 `is_superuser()` 與 `has_group('base.group_system')` 兩條 bypass；Phase B/C 加 controller endpoint 用 `agent_template.sudo().write({'project_ids': ...})` 時，constraint 不 enforce — 必須在 controller layer 對齊 [[two-layer-acl-lockstep]] pattern 補 grantor check
+- **狀況**：
+  - Phase A grep verify `agent_template.*sudo\(\)\.write` in `src/controllers/` → 0 hit（dormant）
+  - Phase B-E 預期加：admin UI form save / webhook endpoint / cron rebind — 任一 sudo path 都要 mirror Python grantor check
+- **建議落點**：
+  - Phase B-C controller layer 加 `_check_template_grantor_authority(template, project_ids)` helper（與 `agent_template._check_project_ids_grantor_authority` 雷同），controller sudo path 前 call
+  - 對齊 [[two-layer-acl-lockstep]] Layer 1 (ir.rule + Python `@api.constrains`) + Layer 2 (controller helper) 三層 lock-step
+- **何時**：Phase B/C 加 agent_template 相關 controller endpoint touch PR
+
+---
+
+## F-PA-16 — `skill._anchor_bundle_attachment` destructive overwrite — maintainer doc 補強
+
+- **Severity**: info（reviewer round 2 EC-4a — round 1 HC-4 hotfix 落地後 reviewer 獨立 walk surface 的 edge case；docstring 已警告但 maintainer doc 補強需求）
+- **Origin**: reviewer round 2 §12.4 EC-4a — `skill._anchor_bundle_attachment` 若 admin (`base.group_system`) 把已存在的 `mail.message` attachment（`res_model='mail.message'`）assign 給 `skill.bundle_attachment_id`，anchor 把 attachment 的 `res_model` overwrite 成 `'woow_paas_platform.skill'` → 切斷與原 mail.message 的 `res_model` 反向查路徑
+- **狀況**：
+  - 對 admin 路徑是預期破壞性 anchoring（admin 是 curating attachment ownership）
+  - 但 admin 在 backend form attach 既存 attachment 時可能不知道 res_model 會被改寫 → silent doc gap
+- **建議落點**：
+  - `skill.py:108-129` `_anchor_bundle_attachment` docstring 已警告（NB destructive — 切斷 mail.message linkage）；建議補加 inline comment 在 attachment write 行明示
+  - Phase B/C bundle upload API endpoint 補：upload pipeline 走「create new attachment」而非「re-assign existing」path，繞過 destructive overwrite scenario
+  - reporter maintainer doc 補：`docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md` 已 list 此 anti-pattern；建議 admin backend form 加 view-level warning（Phase B/C view 補時順手）
+- **何時**：reporter 順手清 / Phase B/C bundle upload API PR
+
+---
+
 ## Cross-cutting: 給未來 PR 作者的 hint
 
 每個改動下列檔案的 PR，自查本 doc 對應條目：
-- `src/security/ir_rules.xml` / `src/security/ir.model.access.csv` → F1 / F4 / F16 / F24 (declaration↔migration 對稱) / F26 (R-10 zh-tw comment) / F-X3 (cycle 4 comment ref noise — `ir_rules.xml:251` PR #53 ref)
-- `src/migrations/<v>/post-migrate.py` → F5 (cycle 1 xmlid drift 防呆) / F13 (cycle 2 task ACL 對齊) / F-X7 (cycle 4 drop `auto_created` column after F-X1)
-- `src/models/discuss_channel.py` → F2 / F3 / F6 / F9
-- `src/models/cloud_service.py` → F14 / F15 / F-X4 (URL helper duplication `_model_build_mcp_endpoint_url`)
+- `src/security/ir_rules.xml` / `src/security/ir.model.access.csv` → F1 / F4 / F16 / F24 (declaration↔migration 對稱) / F26 (R-10 zh-tw comment) / F-X3 (cycle 4 comment ref noise — `ir_rules.xml:251` PR #53 ref) / cycle 5 16 new rule + project/task M:N walk + 2 ir.attachment rule（HC-4 hotfix `ir_attachment_rule_skill_bundle_*`）
+- `src/migrations/<v>/post-migrate.py` → F5 (cycle 1 xmlid drift 防呆) / F13 (cycle 2 task ACL 對齊) / F-X7 (cycle 4 drop `auto_created` column after F-X1) / F-PA-11 (cycle 5 SUPERUSER bootstrap OdooBot owner detection)
+- `src/models/discuss_channel.py` → F2 / F3 / F6 / F9 / F-PA-8 (cycle 5 stale comment line 262)
+- `src/models/cloud_service.py` → F14 / F15 / F-X4 (URL helper duplication `_model_build_mcp_endpoint_url`) / F-PA-2 (cycle 5 `_sidecar_url_prefix` None fallback) / F-PA-9 (cycle 5 `_do_cleanup` ensure_one)
 - `src/models/mcp_server.py` → F19 (type design / test coverage cluster) / F-X1 (cron `_cron_retry_mcp_sync` 改 sidecar_backed) / F-X7 (drop `auto_created` field)
-- `src/models/project_project.py` → ~~F22 (D5 `@api.constrains`)~~ RESOLVED cycle 4 / F26 (R-5 `workspace_id` readonly)
-- `src/controllers/ai_assistant.py` → F4 / F10 / F12 / F20 / F-X2 (bound-no-workspace edge case + drift cluster)
-- `src/controllers/paas.py` → F19 / F20 / ~~F22 (D5 重設計)~~ RESOLVED cycle 4 / ~~F23 (unbound ACL)~~ RESOLVED cycle 4 / F25 (R-6 try/except + savepoint) / F-X2 (`_resolve_project_access` drift) / F-X4 (`_compute_sidecar_url_hint` duplication) / F-X5 (SSRF error format)
+- `src/models/project_project.py` → ~~F22 (D5 `@api.constrains`)~~ RESOLVED cycle 4 / F26 (R-5 `workspace_id` readonly) / F-PA-3 (cycle 5 cloud_service_id stored compute ondelete) / F-PA-11 (cycle 5 SUPERUSER bootstrap) / F-PA-13 (cycle 5 round 1 HC-1 inverse replace semantics) / F-PA-14 (cycle 5 round 1 HC-2 SUPERUSER skip → project_access bootstrap gap)
+- `src/models/project_task.py` → F-PA-10 (cycle 5 primary_cloud_service_id docstring clarity)
+- `src/models/project_access.py` → F-PA-6 (cycle 5 ASSIGNABLE_ROLES_BY_OWNER vs design) / F-PA-12 (cycle 5 `_compute_user_id` ordering)
+- `src/models/skill.py` → F-PA-5 (cycle 5 `skill_rule_project_user` own draft Python guard) / F-PA-7 (cycle 5 `bundle_attachment_id` field-level mask doc) / F-PA-16 (cycle 5 round 2 `_anchor_bundle_attachment` destructive overwrite doc 補強)
+- `src/models/agent_template.py` → F-PA-15 (cycle 5 round 2 EC-3a controller sudo path 對 `_check_project_ids_grantor_authority` bypass 提醒 — Phase B/C controller layer 補)
+- `src/models/agent_session.py` → F-PA-1 (cycle 5 namespace_secret hardcode → install hook hard guard)
+- `src/views/` (Phase A defer) → F-PA-4 (cycle 5 5 view files agent_template_views / agent_session_views / skill_views / project_access_views / project_external_mcp_setting incl. SSRF risk 警示)
+- `src/controllers/ai_assistant.py` → F4 / F10 / F12 / F20 / F-X2 (bound-no-workspace edge case + drift cluster) / F-PA-14 (cycle 5 round 1 HC-2 `project.sudo().create()` bypass project_access bootstrap)
+- `src/controllers/paas.py` → F19 / F20 / ~~F22 (D5 重設計)~~ RESOLVED cycle 4 / ~~F23 (unbound ACL)~~ RESOLVED cycle 4 / F25 (R-6 try/except + savepoint) / F-X2 (`_resolve_project_access` drift) / F-X4 (`_compute_sidecar_url_hint` duplication) / F-X5 (SSRF error format) / F-PA-13 (cycle 5 round 1 HC-1 `vals['cloud_service_id'] = X` write silent replace M:N)
 - `src/tests/test_*.py` → F8 / F17 / F19 / F27 (G1 / G3 / G6 test gaps) / F-X6 (cycle 4 D5 stale comment) / SC-15~SC-17 (cycle 4 test gaps)
 - `src/static/src/paas/layout/` → F7
 - `src/static/src/paas/pages/project-detail/` → F25 (R-3 McpServersSection error display + E2E-G1 CloudServiceBindingSection rebind-from-unbound) / F28 (R-8 editor migration) / F-X3 (`McpServersTab.js:12` comment noise)
@@ -587,6 +832,8 @@
 - [[tag-scoped-test-misses-full-u-failures]] — F19 「test coverage hole」cluster 的根因 context
 - [[two-layer-acl-asymmetric-deny]] — F-X2 的根因 context（cycle 4 HC-2）
 - [[legacy-endpoint-scope-blindness]] — cycle 4 HC-1 的根因 context（plan AC scope blindness）
+- [[constraint-input-trust-expansion]] — F-PA-15 的根因 context（cycle 5 round 1 HC-3 同 family — m2m write constraint grantor authority check）
+- [[attachment-row-level-acl-and-anchor-stamping]] — F-PA-16 的根因 context（cycle 5 round 1 HC-4 — bundle attachment defense in depth）
 - 原始 review（合成來源，本 doc 引用不複製）：
   - `docs/decisions/reviews/caqa-2026-05-16.md` §Caveat 清單（M1-M4 + L1-L3 — cycle 1）
   - `docs/decisions/reviews/caqa-2026-05-18.md` §Caveat / Out-of-scope（C1 + F12 — cycle 2）
@@ -598,3 +845,5 @@
   - `docs/tracking/reviewer-report-2026-05-20-project-detail-page-issue-48.md` §Hard caveats + §Soft caveat tracked（R-1 ~ R-10 — cycle 3）
   - `docs/tracking/caqa-report-2026-05-20-mcp-refactor.md` §Medium / Low findings（M1 / M2 / L1-L4 — cycle 4）
   - `docs/tracking/reviewer-report-2026-05-20-mcp-refactor.md` §Hard Caveats + §Soft Caveats + §Appendix A round 2 closure（HC-1/2/3 + SC-1~SC-20 + NM-R1 — cycle 4）
+  - `docs/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §6 Blocker + §7 Caveat + §13 Round 2 verify + §14 Round 3 HC-3/HC-4 verify（B-1 + M-1~M-5 + I-1~I-6 + C-A-1~C-A-3 — cycle 5）
+  - `docs/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §3 4 HC Hard Caveats + §5 28 SC Soft Caveats + §12 Round 2 HC-3/HC-4 closure（HC-1~HC-4 + SC-1~SC-28 + EC-3a/EC-4a — cycle 5）

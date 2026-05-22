@@ -1,6 +1,6 @@
 ---
 name: plan-agent-runtime-pod-design
-status: in-review (§1.2 rework + §2 rework + §1.3 + §7.0 prereq signed-off; §3 draft submitted)
+status: signed-off (design + plan complete; ready for tester hand-off)
 created: 2026-05-21
 updated: 2026-05-21
 phase: planning
@@ -60,8 +60,9 @@ MCP Servers (現有獨立 pod，不動)
 | LangGraph build | `_build_agent_graph` / `_async_agent_invoke` / `_async_agent_stream` 直接在 Odoo addon 內 | `src/models/ai_client.py:231-409` |
 | Odoo bus 使用 | 全 repo 唯一 `bus.bus._sendone` 在 `discuss_channel.py:248`（給 Odoo Discuss UI） | grep |
 | MCP config 介面 | `mcp_server._get_mcp_client_config()` 已是純 dict（`transport`/`url`/`headers`） | `src/models/mcp_server.py:141-159` |
-| MCP D4/D5 invariants | scope='user' iff project_id non-null；user-scope 必須掛綁 cloud_service 的 project | `src/models/mcp_server.py:111-139` + `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md` |
-| MCP cleanup ordering | `cloud_service._do_cleanup`：先 unlink user-scope MCP → helm uninstall → state='deleting' | `src/models/cloud_service.py:1119-1201` |
+| MCP D4 invariant（active）| `scope='user'` iff `project_id IS NOT NULL`；user-scope MCP 是 **project 一等公民**（owned by project，不再依附 cloud_service）| `src/models/mcp_server.py:111-139` + `docs/decisions/refactor/mcp-project-decouple.md` |
+| MCP D5 invariant（**deprecated — refactor branch cycle 4 拔除**）| ~~user-scope MCP 必須掛在綁 cloud_service 的 project~~ 已刪 — unbound project + user-scope MCP 是合法狀態；外部 URL MCP 不依附任何 cloud_service | `docs/decisions/refactor/mcp-url-redesign.md` §Invariants |
+| MCP cleanup ordering | `cloud_service._do_cleanup`：先 unlink **`sidecar_backed=True`** user-scope MCP → helm uninstall → state='deleting'；external (`sidecar_backed=False`) MCP **不動** | `src/models/cloud_service.py:1119-1201` + Inv #9 |
 | K8s namespace pattern | 既有 cloud_service 每 service 一個 helm release，共用 per-workspace namespace + ResourceQuota（3× sum of `allocated_*` 欄位） | `src/models/cloud_service.py:431-453` |
 | StorageClass 默認 | `ir.config_parameter` `woow_paas_platform.storage_class_name` = `longhorn-delete`（**reclaim policy = Delete**） | `src/models/cloud_service.py:393-399` |
 | Suspend pattern | `_do_suspend` / `_do_resume` = scale to 0/1 replicas（保留 PVC） | `src/models/cloud_service.py:1042-1117` |
@@ -286,10 +287,11 @@ MCP Servers (現有獨立 pod，不動)
 
 **Finding**
 
-- 既有 `mcp_server` model 有 D4 / D5 invariants（不可動）：
+- 既有 `mcp_server` model 有 **D4 invariant（不可動）**：
   - D4：`scope='user'` iff `project_id IS NOT NULL`
-  - D5：user-scope MCP 必須掛在綁 `cloud_service` 的 project
-- 既有 cleanup ordering（`cloud_service._do_cleanup`，`docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md` 已 sign-off）：unlink user-scope MCP → helm uninstall → state='deleting'
+  - ~~D5：user-scope MCP 必須掛在綁 `cloud_service` 的 project~~ **已被 refactor branch (cycle 4 / `mcp-url-redesign`) 整段刪除**；unbound project + user-scope MCP 是合法狀態
+  - **user-scope MCP 是 project 一等公民**（owned by project，不再依附 cloud_service）；`sidecar_backed` boolean flag 區分物理是否依賴 backing service sidecar（**實作細節**，schema 不變）
+- 既有 cleanup ordering（`cloud_service._do_cleanup`，refactor branch cycle 4 已落地）：unlink `sidecar_backed=True` user-scope MCP → helm uninstall → state='deleting'；external MCP (`sidecar_backed=False`) 不動
 - `_get_mcp_client_config()` 已是純 dict 介面（`{transport, url, headers}`），完全 portable 給 pod 用
 - MCP URL 是 cluster-internal DNS（`http://release-mcp.{ns}.svc.cluster.local:port/path`） — agent pod 在 K8s 內可直達，但**跨 namespace 需要 NetworkPolicy egress 允許**
 
@@ -312,7 +314,7 @@ MCP Servers (現有獨立 pod，不動)
     - 收到 invalidate 的 pod 把對應 MCP server 從 in-memory list 拿掉（不重啟），同時把後續對該 server 的 tool call 改 reject
     - 用戶下次 first message 啟新 thread / 新 pod 時拿到 fresh snapshot
   - **更激進選項**：cleanup 時 paas-operator 直接 `kubectl delete pod` 對應 workspace 的 agent pod（強迫 cold start）— 簡單但 UX 較 disruptive
-- **不動 `mcp_server` schema**（保持 D4/D5 invariants，不違反 task brief constraint）
+- **不動 `mcp_server` schema**（保持 D4 invariant；D5 已被 refactor branch 拔，本 epic 不重新引入）
 - **NetworkPolicy 跨 namespace egress**：
   - agent-runtime 的 egress allowlist 用 `namespaceSelector + matchLabels { woow.tw/workspace-id: <id> }` 限定到自己 workspace 的 cloud_service namespace
   - 在 `create_namespace` 時自動寫入 label，agent-runtime helm chart 用 helm template 渲染 namespaceSelector
@@ -468,7 +470,10 @@ Agent Pod (per project, long-lived; ns=paas-ws-pa-{hash}, release=agent-pa-{hash
   │  - NetworkPolicy: egress = DNS + (project.workspace_ids 集合的所有 cloud_service ns) + AI provider whitelist
   │
   ↓ egress (whitelist, per project.workspace_ids)
-MCP Servers (project.cloud_service_ids 內各 cloud_service 的 sidecar，跨 workspace；schema 不動)
+MCP Servers (project 一等公民)
+  ├ sidecar-backed (sidecar_backed=True)：物理位於 project.cloud_service_ids 內 cloud_service 的 sidecar pod（跨 workspace）
+  └ external (sidecar_backed=False)：任意 URL（cluster.local 內外皆可）
+  schema 不動（refactor branch 已 finalized）
 AI Provider (OpenAI-compatible)
 ```
 
@@ -570,8 +575,30 @@ res.users
 - workspace_access **不蘊含** project_access（在 first-class model 下，project 是獨立邊界）
 - project_access **不蘊含** workspace_access（project 可跨 workspace；project member 可能不是任一綁定 workspace 的 member）
 - agent pod **物理邊界 = project**：pod 服務 project 內 user，跨 project 物理隔離
-- agent pod **能訪問的 cloud_service / MCP**：透過該 project 的 `cloud_service_ids` 集合 → 並集 of 各 cloud_service 的 mcp_server（含 sidecar-backed 與 external）
-- agent pod **NetworkPolicy egress**：必須允許 egress 到該 project `cloud_service_ids` 的所有 workspace namespace（K8s `namespaceSelector` 用 `workspace_id` label match 該 project workspaces 集合）
+- agent pod **能訪問的 MCP**：透過該 project 的 `mcp_server_ids`（project 一等公民集合）→ 含兩種 row：
+  - **sidecar-backed** (`sidecar_backed=True`)：URL 指向 project.cloud_service_ids 內某 cloud_service sidecar；NetworkPolicy egress 須開到該 cloud_service 的 namespace
+  - **external** (`sidecar_backed=False`)：URL 指向任意（cluster.local 內外）；NetworkPolicy egress 須允許對應目標
+- agent pod **NetworkPolicy egress**：(a) 允許 egress 到該 project `cloud_service_ids` 的所有 workspace namespace（給 sidecar-backed MCP 用，K8s `namespaceSelector` 用 `workspace_id` label match）；(b) 允許 egress 到 external MCP 白名單目標（給 external MCP 用，§6 細節）
+
+##### §1.3.2 — ACL Invariants（本 epic 引入）
+
+> 編號 `Inv A1`、`Inv A2` ...（`A` = agent-runtime epic）獨立於 mcp-* doc 的 Inv #1~#11，避免與 refactor branch invariants 混淆。
+
+- **Inv A1 — agent_template cross-project write 必須 grantor 雙重驗（ir.rule 'any' + Python @api.constrains）**：M2M `project_ids` 上 ir.rule 對 write 動作評估「任一現存 element 滿足 user domain」即放行（Odoo ORM 內建 M2M write 行為），attacker 可透過 `write({'project_ids': [(4, victim)]})` 由「自己有 admin/owner 的 A」誘騙 ir.rule pass 後實際把 template 綁到 victim B → cross-project leak。**ir.rule 不夠**，必須加 `agent_template._check_project_ids_grantor_authority` Python constraint：每個 new `project_id` element 都驗 `env.user` 在該 project 有 admin/owner role；SUPERUSER + `base.group_system` 直接 bypass（admin / migration / cron 合法跨 project 寫入路徑保留）。違反 invariant 行為：把 constraint 拔掉 / 改 sudo() bypass / 漏 group_system 細粒度 check — 重炸 HC-3 (PR #54 HC-2 同 family — `constraint-input-trust-expansion` pattern)。
+
+  此 pattern 已抽到 `docs/decisions/patterns/constraint-input-trust-expansion.md`（本 epic Phase A 補 `@api.constrains` 作為 first instance；PR #54 HC-2 `_resolve_project_access` 對 unbound non-follower 收緊是同 family 的第二個 instance）。
+
+- **Inv A2 — skill bundle attachment 必須 defense in depth 兩層（anchor stamping + `ir.attachment` row-level ir.rule）**：`skill.bundle_attachment_id` 是 `groups='base.group_system'` field-level mask（B-1.SK-6 path a），但 field-level mask **只擋 ORM read 該 field**；attacker (base.group_user + project_access role=user) 仍可 enumerate `ir.attachment.id` 整數，透過 Odoo std `/web/content/<id>?download=1` HTTP endpoint 直接下載 — endpoint 走 `ir.attachment._check` Python delegation，對 `res_model='woow_paas_platform.skill' + res_id=skill_id` attachment 回頭評估 skill model ACL（user 對 skill `skill_rule_project_user` perm_read=True allow）→ delegation 通過 → bundle bytes 串流 → **subprocess 執行 attacker reverse-engineered payload → RCE on agent pod**。
+
+  **Defense in depth 兩層**必須同時存在：
+  - **Layer 1 — Anchor stamping**：`skill.create()` / `skill.write({'bundle_attachment_id': ...})` 兩 path 都呼叫 `_anchor_bundle_attachment`，強制 attachment 三件套 stamping（`res_model='woow_paas_platform.skill'` + `res_id=skill.id` + `public=False`）— ensure delegation target correct + 不旁路 `/web/image` 等 public endpoint
+  - **Layer 2 — `ir.attachment` row-level ir.rule**：兩條一組 — `ir_attachment_rule_skill_bundle_user_scope` (base.group_user) domain `[('res_model', '!=', 'woow_paas_platform.skill')]` R/W/C/U=True（對 skill bundle attachment row-level deny，對既有 non-skill attachment 不變動）+ `ir_attachment_rule_skill_bundle_admin_full` (base.group_system) domain `[(1, '=', 1)]` R/W/C/U=True（per-group OR semantics admin bypass，對齊 [[cross-workspace-task-data-leak]] B1 root cause「第一次加 base.group_user ir.rule 對等加 group_system admin_full bypass」）
+
+  違反 invariant 行為：(1) 只用 field-level group mask 沒 row-level ir.rule — `/web/content` enumeration bypass；(2) 只用 ir.rule 沒 anchor stamping — attachment `res_model` 未對 → Layer 2a domain 對 non-skill 值 True → bypass；(3) 漏 admin_full group_system bypass — 對 base.group_user 第一次加 ir.attachment ir.rule 與 [[cross-workspace-task-data-leak]] B1 root cause 同源，重蹈 admin 後台 form 進不去 silent functional regression；(4) Layer 2 `perm_read/write/create/unlink` 沒全 True — 對 base.group_user 既有 non-skill attachment 操作收緊 silent regression；(5) anchor create override 漏 write override — admin re-assign attachment via write 漏 anchor → stamp 不對 → Layer 2 失效。
+
+  此 pattern 已抽到 `docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`；對 Odoo 18 base + bundled addons 必須 grep verify **0 std ir.rule on ir.attachment for base.group_user**（[[odoo-addon-std-rule-symmetric-deactivation]] 紅線 — Phase A CAQA round 3 §14.4 已 independent grep verified）才能加 Layer 2 不撞 OR-bypass 災情；本 epic Phase A 補的 2 條 `ir_attachment_rule_skill_bundle_*` 是該 pattern 的 first instance。
+
+> **Inv A1 + Inv A2 合起來對應**：CAQA report `docs/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.7 invariant verify table 中 **「Phase A #8 (HC-3 grantor authority + HC-4 attachment row-level)」**新加 invariant — 三件套（(a) agent_template grantor authority constraint + (b) skill bundle attachment row-level deny + (c) anchor stamping ensure delegation target correct）；reporter phase 把 (a) 落在 Inv A1、(b)+(c) 落在 Inv A2，便於 future maintainer 兩條獨立查。
 
 #### §1.3.3 對 refactor branch 已 fix 範圍的明確引用
 
@@ -1720,10 +1747,10 @@ class Skill(models.Model):
 
 | 維度 | Skill | MCP |
 |------|-------|-----|
-| **執行位置** | agent pod 內 subprocess（fork from LangGraph process） | 獨立 MCP server pod（cloud_service sidecar，跨 namespace） |
+| **執行位置** | agent pod 內 subprocess（fork from LangGraph process） | 獨立服務 — **兩種形態**：(i) `sidecar_backed=True` → cloud_service sidecar pod（跨 namespace；隨 cloud_service 起伏）；(ii) `sidecar_backed=False` → external URL（任意，cluster.local 內外） |
 | **通訊** | subprocess.run with stdin/stdout JSON | MCP protocol over HTTP/SSE（langchain-mcp-adapters） |
-| **生命週期** | per-invocation 短生命（subprocess 起 → 跑 → 死） | long-lived sidecar service（隨 cloud_service 起伏） |
-| **跨對話** | 同 pod 內所有 thread 共用 cache（PVC） | 同 cloud_service 內所有 project 共用 sidecar |
+| **生命週期** | per-invocation 短生命（subprocess 起 → 跑 → 死） | long-lived service — sidecar-backed 隨 cloud_service；external 完全獨立 |
+| **跨對話** | 同 pod 內所有 thread 共用 cache（PVC） | 全平台共用同一 mcp_server row；sidecar-backed 物理上由 cloud_service 內所有 project 共用 sidecar；external 由 url 提供方決定 |
 | **Trust model** | user-trusted bundle（§1.2 sign-off） | external service trust（既有 mcp_server / mcp_tool ACL + Inv #11 dual-leg） |
 | **Schema source** | SKILL.md frontmatter `parameters` JSON Schema | MCP `tools/list` 動態 discovery（既有 `mcp_server.action_sync_tools`） |
 | **部署 / 註冊** | bundle upload to Odoo → `skill` row | helm deploy cloud_service + sidecar → `mcp_server` row（auto-create 已退場，UI shortcut 手動加） |
@@ -1793,13 +1820,13 @@ class Skill(models.Model):
 
 ### §3.13 Open questions for leader sign-off（§3 escalation）
 
-> 5 條核心拍板需求，phase-planner 推薦已 inline 在 §3.3 / §3.4 / §3.8 / §3.9 / §3.10 給出。
+> 5 條核心拍板需求，phase-planner 推薦已 inline 在 §3.3 / §3.4 / §3.8 / §3.9 / §3.10 給出。**全部 sign-off 2026-05-21**。
 
-1. **[需 leader 拍板] Storage backend（§3.3）**：採 phase-planner 推薦 **(a) ir.attachment**（簡單、對齊既有 pattern、25 MB bundle limit）？或 (b) OCI image registry / (c) S3-compatible？
-2. **[需 leader 拍板] Versioning 模型（§3.4）**：採 phase-planner 推薦 **immutable bundle + version alias**（每 upload 新 row、`is_latest` boolean、archived 30 day cron 清 binary）？或 mutable 覆蓋？
-3. **[需 leader 拍板] Signature / digest（§3.8）**：採 phase-planner 推薦 **v1 SHA256 digest（integrity）only，無 cryptographic signature**？或 v1 就要 GPG / cosign 簽章？
-4. **[需 leader 拍板] Sandbox profile（§3.9）**：採 phase-planner 推薦 **v1 bundle SKILL.md declare 純 metadata，執行限制 100% 由 host enforce**？或 declare 可放寬限制（更寬鬆但增加 attack surface）？
-5. **[需 leader 拍板] Skill / MCP namespace（§3.10）**：採 phase-planner 推薦 **LangGraph 層統一抽象為 tool；物理 / Odoo model / ACL / namespace 全分離；tool name prefix 區分**？或共用 namespace 抽象（強迫 ACL 合併、生命週期妥協）？
+1. ~~**[需 leader 拍板] Storage backend（§3.3）**~~ **[SIGNED-OFF 2026-05-21]** (a) ir.attachment（25 MB bundle limit、Odoo backup/GC 共用）
+2. ~~**[需 leader 拍板] Versioning 模型（§3.4）**~~ **[SIGNED-OFF 2026-05-21]** immutable bundle + `is_latest` alias + archived 30 day cron 清 binary
+3. ~~**[需 leader 拍板] Signature / digest（§3.8）**~~ **[SIGNED-OFF 2026-05-21]** v1 SHA256 digest (integrity) only，無 cryptographic signature（GPG / cosign 留 v2 marketplace）
+4. ~~**[需 leader 拍板] Sandbox profile（§3.9）**~~ **[SIGNED-OFF 2026-05-21]** v1 bundle SKILL.md declare = metadata only；執行限制 100% host enforce（pod-level securityContext + NetworkPolicy + rlimit）
+5. ~~**[需 leader 拍板] Skill / MCP namespace（§3.10）**~~ **[SIGNED-OFF 2026-05-21]** LangGraph 統一 BaseTool 抽象；物理 / Odoo model / ACL / namespace 全分離；tool name prefix `skill_*` vs `mcp_<server>_*` 區分
 
 **§3 額外探出來但不阻塞 §3 sign-off 的事項**（不需立刻拍板，§4~§6 各節再處理）：
 
@@ -1810,43 +1837,2148 @@ class Skill(models.Model):
 - skill 對 langchain 版本鎖定 — §4 與 agent_template metadata 一起設計
 - LangGraph thread checkpoint 內 tool_call args 是否快取 skill 內部 state（影響 reproducibility）— §4 / §5 拍板
 
-## §4 Agent template & binding model (agent ↔ skills ↔ MCPs) — TODO（預告 bullets）
+## §4 Agent template & binding model (agent ↔ skills ↔ MCPs)
 
-> §4 draft 未啟動，等 §2 + §1.3 sign-off 後展開。下列為 per-project pivot 蘊含的 §4 範圍預告：
+> **Status**：Phase 1 — §4 draft submitted, awaiting sign-off
+> 依賴：§1.3 project first-class（project_access ACL）、§2.12 agent_session model、§3 skill registry
+> 5 條 [需 leader 拍板] 留 §4.11 escalate（已預警：template-project cardinality、權限粒度、shared memory 寫權限、計費歸屬；額外發現第 5 條 — agent_template 與既有 ai.assistant 並存策略）
 
-**§4 預期涵蓋**：
+### §4.0 Scope（§4 處理什麼、不處理什麼）
 
-- **project_access role 對 agent invoke 的權限差別**：
-  - admin role 可：配置 agent_template binding、調整 agent quota override、設 per-project secret（API key 等）、reset workspace state、撤銷 user role
-  - user role 可：invoke agent（送 chat message）、讀自己 thread 的 history、上傳自家 skill（若 v1 允許）
-  - guest role 可：唯讀觀察（看其他 user 與 agent 的對話）— 是否要進 v1 留 open
-  - non-member：spawn-or-attach 之前在 Odoo controller 端被擋（既有 `_check_channel_access` + 新加 `_check_project_access` 串接）
-- **agent_template ↔ project binding cardinality**（暫 open）：
-  - 選項 A：M:N — 一個 project 可用多個 template，一個 template 可被多 project 共享（runtime 看 invoke 時用哪個）
-  - 選項 B：1:N (template:project) — template 是 global，project 選一個用
-  - 選項 C：1:1 — 每個 project 有自己的 template，不共享（最隔離但難維護）
-  - phase-planner 傾向 A，但要 §4 拍板
-- **per-project shared memory 模型**：
-  - 跨 thread 共享：`/workspace/project-{pid}/shared/`（所有 project member 共讀）
-  - thread-private：`/workspace/project-{pid}/threads/{channel_id}/`（LangGraph thread checkpoint）
-  - 跨 project 共享：v1 不做（trust 跨 project 物理隔離）
-  - admin / user role 對 shared memory 寫權限差別：admin 可清空 / 修改、user 唯讀？或都可寫？— §4 拍板
-- **agent_template + skill / mcp_server binding 路徑**：
-  - skill：`agent_template.skill_ids` (M2M to `woow_paas_platform.skill`)？skill 是 project-level 還是 template-level？
-  - mcp_server：agent runtime 看 `project.mcp_server_ids`（既有路徑）；agent_template 是否再加 own MCP whitelist 限制？
-- **per-project agent quota override**：
-  - 默認從 `ir.config_parameter` 拿
-  - admin role + project plan 可動態調整 override（存 `project.agent_quota_*` field？或新增 `agent_session.quota_override_*` field？— **不動 project schema** 偏好後者）
-- **計費歸屬（與 §2.8.1 surface 對齊）**：
-  - project.primary_workspace_id 概念：建 project 時鎖 first cloud_service 的 workspace 為 primary
-  - 主費用走 primary；secondary workspace 不計費，只享 read access
-  - 或：M:N project 跨 workspace 時，計費分攤 — 各 workspace 按比例分擔 — 太複雜，§4 拍板
+**§4 處理**：
 
-## §5 Transport (Odoo ↔ Pod, WS/SSE protocol) — TODO
+- `woow_paas_platform.agent_template` Odoo model（取代部份 ai.assistant 的角色，但**不取代 ai.assistant 本身** — §4.11 Q5 拍板共存策略）
+- agent_template ↔ project cardinality 拍板
+- `woow_paas_platform.project_access` Odoo model（first-class ACL，仿 workspace_access pattern）
+- Agent invoke 權限矩陣（admin / user / guest / non-member × 動作）
+- Per-project shared memory 模型（thread-private + shared subdir + skill cache 寫權限）
+- Skill / MCP binding 兩層 merge 路徑（per-project + per-agent-template）
+- 計費歸屬（與 §2.8.1 對齊；primary_workspace 概念落地點）
+- Per-project agent quota override（存 agent_session field，**不動 project schema**）
 
-## §6 Sandbox security model (NetworkPolicy / RBAC / seccomp) — TODO
+**§4 不處理**（留後續章節）：
 
-## §7 Migration path (LangGraph 從 Odoo 搬遷的階段策略) — TODO（含 prerequisite section）
+- WS / SSE protocol schema → §5
+- LangGraph thread checkpoint 內部結構與 cross-thread state shape → §5（與 transport 一起）
+- Skill subprocess sandbox 細部約束 → §6
+- 既有 `ai_assistant.py` controller / `discuss_channel.py` `message_post` override 改動順序 → §7
+- ai.config / ai_client.py 重寫切割線（§1.1 Q6 已 sign-off）→ §7
+- Migration（既有 `default_ai_assistant_id` config_parameter 怎麼搬到 project-level binding） → §7
+
+### §4.1 `woow_paas_platform.agent_template` Odoo model
+
+```python
+class AgentTemplate(models.Model):
+    _name = 'woow_paas_platform.agent_template'
+    _description = 'Agent runtime template (system prompt + tool binding)'
+    _order = 'is_public desc, name'
+
+    # Identity
+    name = fields.Char(
+        string='Template Name',
+        required=True,
+        index=True,
+        help='Slug; unique across instance for system / public templates, '
+             'unique per (project_ids bound set) for private templates',
+    )
+    title = fields.Char(string='Display Title')
+    description = fields.Text()
+
+    # LangGraph runtime config
+    system_prompt = fields.Text(
+        string='System Prompt',
+        help='Base system prompt prepended to all LangGraph thread; '
+             'cloud_service context (§1.1 discuss_channel._get_cloud_service_context) '
+             'still injected at runtime per channel',
+    )
+    model_config_id = fields.Many2one(
+        'ai.config',
+        string='LLM Provider Config',
+        required=True,
+        help='Reference to existing ai.config (OpenAI-compatible)',
+    )
+    model_overrides = fields.Text(
+        string='Model Param Overrides (JSON)',
+        help='Optional JSON: { "model": "...", "temperature": 0.7, "max_tokens": 4096 } '
+             'overrides ai.config defaults for this template',
+    )
+
+    # Tool binding (subset within project scope; §4.6 merge logic)
+    skill_ids = fields.Many2many(
+        'woow_paas_platform.skill',
+        relation='agent_template_skill_rel',
+        string='Bound Skills',
+        help='Empty = inherit all published skills from bound project(s); '
+             'non-empty = whitelist subset',
+    )
+    mcp_server_ids = fields.Many2many(
+        'woow_paas_platform.mcp_server',
+        relation='agent_template_mcp_server_rel',
+        string='Bound MCP Servers',
+        help='Empty = inherit all project mcp_server_ids + scope=system; '
+             'non-empty = whitelist subset (must be subset of project allowed set)',
+    )
+
+    # Project binding (M:N — §4.2 sign-off)
+    project_ids = fields.Many2many(
+        'project.project',
+        relation='agent_template_project_rel',
+        string='Bound Projects',
+        help='Which projects can use this template; empty + is_public=False = orphan / draft only',
+    )
+    is_public = fields.Boolean(
+        string='Public (System) Template',
+        default=False,
+        help='If True, ignore project_ids ACL — all project member can use; '
+             'system templates managed by admin (base.group_system)',
+    )
+
+    # Lifecycle
+    state = fields.Selection([
+        ('draft', 'Draft'),
+        ('published', 'Published'),
+        ('deprecated', 'Deprecated'),
+        ('archived', 'Archived'),
+    ], default='draft', required=True, index=True)
+
+    # Audit
+    created_by_uid = fields.Many2one(
+        'res.users',
+        readonly=True,
+        default=lambda self: self.env.uid,
+    )
+    created_at = fields.Datetime(readonly=True, default=fields.Datetime.now)
+
+    @api.constrains('is_public', 'project_ids')
+    def _check_visibility_consistency(self):
+        """is_public=False AND empty project_ids = orphan template (only draft allowed)."""
+        for t in self:
+            if not t.is_public and not t.project_ids and t.state != 'draft':
+                raise ValidationError(
+                    "Private template '%s' must bind at least one project "
+                    "before publish." % t.name
+                )
+
+    @api.constrains('mcp_server_ids', 'project_ids')
+    def _check_mcp_subset(self):
+        """Bound mcp_server must be subset of (project.mcp_server_ids ∪ scope=system)."""
+        for t in self:
+            if not t.mcp_server_ids:
+                continue
+            allowed_user_scope = t.project_ids.mapped('mcp_server_ids').ids
+            allowed_system = self.env['woow_paas_platform.mcp_server'].sudo().search([
+                ('scope', '=', 'system'),
+            ]).ids
+            allowed_set = set(allowed_user_scope) | set(allowed_system)
+            for mcp in t.mcp_server_ids:
+                if mcp.id not in allowed_set:
+                    raise ValidationError(
+                        "MCP server '%s' is not bound to any of template's projects "
+                        "and is not system-scope." % mcp.name
+                    )
+
+    @api.constrains('project_ids')
+    def _check_project_ids_grantor_authority(self):
+        """HC-3 fix — grantor (current env.user) must have admin/owner role on every new project_id.
+
+        Without this Python constraint, an attacker who is admin on project A can:
+          1. Create template T with project_ids=[A] (ir.rule allows: A is current user's domain)
+          2. write(T, project_ids=[(4, victim_B)]) — ir.rule 'any' over M2M still evaluates True
+             because A ∈ project_ids satisfies admin walk → write proceeds
+          3. T now bound to B → cross-project leak (T usable by B members via agent_template_rule_project_*)
+        Pattern alignment: same shape as `project_access._check_at_least_one_owner` — Python
+        constraint covers ir.rule blind spot when M2M domain evaluation does not enforce
+        per-element grantor authority. Reporter phase should抽 pattern
+        `constraint-input-trust-expansion` (same family as PR #54 HC-2 silent IDOR).
+        """
+        SUPERUSER_ID = 1
+        if self.env.uid == SUPERUSER_ID or self.env.user.has_group('base.group_system'):
+            return  # bypass — admin / migration / cron all need to write across projects
+        grantor_partner = self.env.user.partner_id
+        for t in self:
+            for project in t.project_ids:
+                has_authority = self.env['woow_paas_platform.project_access'].sudo().search_count([
+                    ('project_id', '=', project.id),
+                    ('partner_id', '=', grantor_partner.id),
+                    ('role', 'in', ('owner', 'admin')),
+                ]) > 0
+                if not has_authority:
+                    raise ValidationError(
+                        "Cannot bind template '%s' to project '%s': "
+                        "you must have admin or owner role on the target project."
+                        % (t.name, project.name)
+                    )
+```
+
+**ACL**（4 rule split，對齊 §3.2 skill pattern）：
+
+| Rule | Group | Domain | Perms |
+|------|-------|--------|-------|
+| `agent_template_rule_public_readonly` | base.group_user | `is_public=True` | R only |
+| `agent_template_rule_project_admin` | base.group_user | `project_ids.project_access_ids` walk（role=admin/owner，user_id=user.id） | R/W/C/U |
+| `agent_template_rule_project_user` | base.group_user | `project_ids.project_access_ids` walk（role=user，user_id=user.id） | R only |
+| `agent_template_rule_admin_full` | base.group_system | `[(1, '=', 1)]` | R/W/C/U |
+
+**對等 invariant**：仿 [[mcp-acl-6-rule-split]] pattern — agent_template 是 model owner，其 M2M 透過 model 本身的 ACL 控制（不需 sub-model rule 對等，因為 M2M 不是 sub-model）。
+
+### §4.2 agent_template ↔ project cardinality（Q1 拍板用）
+
+**phase-planner 推薦：A — M:N**
+
+三選項 trade-off：
+
+| 方案 | Cardinality | 共享性 | 配置成本 | Per-project customization | 推薦 |
+|------|-------------|-------|---------|--------------------------|------|
+| **A (推薦)** | template **M:N** project | 同 template 給多 project 用；同 project 用多 template（user 切換 agent mode）| 中 — 透過 admin 配置 binding | 透過 model_overrides + per-project skill subset 補足 | ✓ |
+| B | template **1:N** project（template 是 global / per-org） | 同 template 多 project 用（單向 fanout）；同 project 只一 template | 低 — 不分 per-project | 不可 — project 不能客製 | ✗ |
+| C | template **1:1** project | 每 project 一 template（緊耦合）| 高 — 每新 project 都要建 template | 完全 isolated | ✗ |
+
+**選 A 的理由**：
+
+- 對齊既有 ai.assistant 設計理念（ai.assistant 是 global，project 引用 single via `default_ai_assistant_id` config — A 升級為 explicit M:N）
+- 系統可有「公司預設 agent」(`is_public=True`) + 每 project 可自建「team-specific agent」(`project_ids` M:N binding)
+- M:N 是「super-set」— 將來若要退到 1:N 比 1:1 升 M:N 簡單
+
+**選 B 的反對**：
+
+- 同 project 只能一 template → 用戶要切換「研究 agent」vs「coding agent」要去 project setting 改 template → 破壞「agent 是工具，多種工具並存」的心智模型
+- 無 per-project customization → 多租戶需求迅速崩潰
+
+**選 C 的反對**：
+
+- 每 project 強迫建 template → onboarding 摩擦大
+- 跨 project 共享 template 不可能 → 無公司預設 agent 概念
+- ai.assistant 既有設計也是 global，C 反而退化
+
+**M:N constraint**（§4.1 已寫）：
+
+- template.mcp_server_ids 必須是 project allowed set 的 subset（cross-project user-scope MCP 不能透過 template 借用）
+- template.skill_ids 同理（跨 project 不共享 skill）
+
+### §4.3 `woow_paas_platform.project_access` Odoo model
+
+對齊既有 `workspace_access` 結構（line by line）：
+
+```python
+class ProjectAccess(models.Model):
+    _name = 'woow_paas_platform.project_access'
+    _description = 'Project Member Access (first-class)'
+    _order = 'role desc, create_date desc'
+    _rec_name = 'partner_id'
+
+    # Core fields
+    project_id = fields.Many2one(
+        'project.project',
+        required=True,
+        ondelete='cascade',
+        index=True,
+    )
+    partner_id = fields.Many2one(
+        'res.partner',
+        string='Member',
+        required=True,
+        ondelete='cascade',
+        index=True,
+        help='Partner reference (not user_id) for consistency with workspace_access D3=A idiom',
+    )
+    user_id = fields.Many2one(
+        'res.users',
+        string='User',
+        compute='_compute_user_id',
+        store=True,
+        index=True,
+        help='Derived from partner_id; used in ir.rule walk',
+    )
+
+    # Role (對齊 workspace_access ROLE_SELECTION)
+    role = fields.Selection([
+        ('owner', 'Owner'),
+        ('admin', 'Admin'),
+        ('user', 'User'),
+        ('guest', 'Guest'),
+    ], string='Role', required=True, default='user', index=True)
+
+    # Audit
+    invited_by_uid = fields.Many2one(
+        'res.users',
+        readonly=True,
+        default=lambda self: self.env.uid,
+    )
+    invited_at = fields.Datetime(readonly=True, default=fields.Datetime.now)
+
+    _sql_constraints = [
+        ('unique_partner_per_project',
+         'UNIQUE(project_id, partner_id)',
+         'A partner can have only one access record per project.'),
+    ]
+
+    @api.depends('partner_id')
+    def _compute_user_id(self):
+        """Map partner_id → user_id; partner without user → null (treat as orphan)."""
+        for rec in self:
+            users = self.env['res.users'].sudo().search([
+                ('partner_id', '=', rec.partner_id.id),
+            ], limit=1)
+            rec.user_id = users.id if users else False
+
+    @api.constrains('role', 'project_id')
+    def _check_at_least_one_owner(self):
+        """Each project must have at least one role=owner project_access row."""
+        for rec in self:
+            if rec.role != 'owner':
+                continue
+            other_owners = self.search_count([
+                ('project_id', '=', rec.project_id.id),
+                ('role', '=', 'owner'),
+                ('id', '!=', rec.id),
+            ])
+            # 不阻止 create；阻止「unlink 最後一個 owner」(in unlink override)
+```
+
+**Role hierarchy**（沿用 workspace_access ROLE_HIERARCHY）：
+
+```python
+ROLE_HIERARCHY = ['guest', 'user', 'admin', 'owner']  # low → high
+ASSIGNABLE_ROLES_BY_OWNER = ['admin', 'user', 'guest']
+ASSIGNABLE_ROLES_BY_ADMIN = ['user', 'guest']  # admin 不能升別人為 admin/owner
+```
+
+**Project 自動 bootstrap owner**：
+
+- `project_project.create()` override：建 project 時自動建 project_access row with `role=owner, partner_id=env.user.partner_id`
+- 這在 §7 migration 對既有 project 做 backfill（既有 project 沒 project_access，migration 拿 cloud_service.workspace_id.access_ids 內 role=owner 的 partners 灌進去）
+
+**ACL**（仿 workspace_access pattern，4 rule + sub-model 對等）：
+
+| Rule | Group | Domain | Perms |
+|------|-------|--------|-------|
+| `project_access_rule_member_read` | base.group_user | `project_id.project_access_ids` 內 partner_id=user.partner_id | R only |
+| `project_access_rule_owner_admin_manage` | base.group_user | `project_id.project_access_ids` 內 partner_id=user.partner_id AND role IN ('owner', 'admin') | R/W/C/U（admin 不能 unlink owner — Python constraint 守） |
+| `project_access_rule_self` | base.group_user | `partner_id=user.partner_id`（自己看自己） | R only |
+| `project_access_rule_admin_full` | base.group_system | `[(1, '=', 1)]` | R/W/C/U |
+
+### §4.4 Agent invoke 權限矩陣（Q2 拍板用）
+
+**phase-planner 推薦**：
+
+| Action | owner | admin | user | guest | non-member |
+|--------|-------|-------|------|-------|-----------|
+| **chat / invoke** |  |  |  |  |  |
+| Invoke agent (send message → trigger spawn-or-attach) | ✓ | ✓ | ✓ | ✗ | ✗ |
+| Create new thread / channel | ✓ | ✓ | ✓ | ✗ | ✗ |
+| Read own thread history | ✓ | ✓ | ✓ | ✓ | ✗ |
+| Read others' thread (same project) | ✓ | ✓ | ✗ | ✓ | ✗ |
+| Delete own thread | ✓ | ✓ | ✓ | ✗ | ✗ |
+| Delete others' thread | ✓ | ✓ | ✗ | ✗ | ✗ |
+| **skill / tool** |  |  |  |  |  |
+| Upload draft skill (state=draft) | ✓ | ✓ | ✓ | ✗ | ✗ |
+| Publish skill (state=published) | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Archive skill | ✓ | ✓ | ✗ | ✗ | ✗ |
+| **template / binding** |  |  |  |  |  |
+| Create / modify template | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Modify template ↔ project binding | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Modify template.mcp_server_ids / skill_ids | ✓ | ✓ | ✗ | ✗ | ✗ |
+| **project / quota** |  |  |  |  |  |
+| Set agent quota override（§4.8）| ✓ | ✓ | ✗ | ✗ | ✗ |
+| Reset workspace state（清 PVC） | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Add / remove project member | ✓ | ✓ (cannot remove owner) | ✗ | ✗ | ✗ |
+| Change member role | ✓ (any) | ✓ (limited to user/guest assign) | ✗ | ✗ | ✗ |
+| Modify project.cloud_service_ids binding | ✓ | ✓ | ✗ | ✗ | ✗ |
+| **mcp / external integration** |  |  |  |  |  |
+| Add sidecar MCP / external MCP（§3.10 + refactor branch UI shortcut）| ✓ | ✓ | ✓ (own create) | ✗ | ✗ |
+| Modify others' MCP | ✓ | ✓ | ✗ | ✗ | ✗ |
+
+**Guest read-only 細部**：
+
+- 看 channel / thread history 不需要「send message 權限」— guest 可在 SSE EventSource 訂閱看流但 POST 訊息端點 reject
+- 看 skill / template name 但不能 download bundle binary（透過 ir.attachment ACL → bundle_attachment 走 group restrict）
+- 看 mcp_server name 但不能看 api_key（既有 `groups='base.group_system'` 守住）
+- 不能觸發 spawn-or-attach（pod 不為 guest 起來；若 guest 是 project 內唯一線上 user，pod 不 active — 這是 acceptable 行為）
+
+**Non-member**：完全不可見（既有 `_check_channel_access` + 新加 `_check_project_access` 串接擋下；§7 落地時改）
+
+### §4.5 Per-project shared memory model（Q3 拍板用）
+
+**PVC layout**（per-project pod）：
+
+```
+/workspace/project-{pid}/
+├── threads/
+│   └── {channel_id}/
+│       ├── checkpoint.json          ← LangGraph thread state
+│       └── tool_invocations.jsonl   ← audit log
+├── shared/
+│   ├── memory.json                  ← LLM 自主寫的 long-term memory
+│   ├── notes/                       ← user 上傳檔案 / 跨 thread 引用
+│   └── exports/                     ← skill 產出檔
+└── skills/
+    └── cache/<name>/<version>/      ← §3.5 skill bundle cache
+```
+
+**寫權限矩陣（phase-planner 推薦）**：
+
+| 路徑 | owner | admin | user | guest | runtime auto |
+|------|-------|-------|------|-------|--------------|
+| `threads/{channel_id}/` | invoker 自己寫（thread = invoker 的 chat）；owner/admin 可 unlink 整 thread | 同 owner | 同上（只自己） | ✗（不能 invoke） | ✓（per tool_call append） |
+| `shared/memory.json` | R/W | R/W | R only | R only | ✓（LLM 工具 set_memory） |
+| `shared/notes/` | R/W/U | R/W/U | R/W (own files) | R only | — |
+| `shared/exports/` | R/W/U | R/W/U | R | R only | ✓ (skill 產出寫入) |
+| `skills/cache/` | — (不直接動) | — | — | — | ✓（runtime 自動 lazy fetch） |
+
+**為什麼 user 對 shared/memory.json 只可讀**：
+
+- LLM 自主 long-term memory 是 agent runtime 行為（透過 tool 寫入），user 不該手動編輯（會打亂 agent context coherence）
+- 例外：admin 可手動 reset memory（透過 admin tool，§4.4 reset workspace state）
+
+**為什麼 guest 對 shared/exports/ 只可讀**：
+
+- guest 可看 skill 產出（用於 review / 學習）
+- 不能 invoke = 不能觸發 skill = 不會寫入 exports（runtime 不為 guest 起 tool）
+
+**Enforcement 機制**：
+
+- Odoo controller 層：在送 message / spawn-or-attach / fetch-file endpoint check project_access role
+- Pod 層：runtime 收 WS message 帶 invoker role (in spawn-or-attach payload 內已 freeze 該 thread 的 invoker)，tool dispatch 前 check role × tool permission；不過 v1 收斂為 **「role check 在 Odoo 端 gate，pod 端視為 trusted invoke」**（pod 不重複 check role；避免 race）
+- 例外：reset workspace state（admin only）是 pod 端 admin endpoint，需獨立 auth check
+
+### §4.6 Skill / MCP binding 兩層 merge 路徑
+
+**兩層 binding source**：
+
+```
+Layer 1: per-project
+  - project.skill_ids (M2M via §3.2 skill.project_id reverse)
+    [但 skill model 是 M2O project_id, 所以是 reverse O2M]
+  - project.mcp_server_ids (refactor branch 既有 O2M)
+
+Layer 2: per-agent-template
+  - template.skill_ids (M2M)
+  - template.mcp_server_ids (M2M)
+```
+
+**Merge logic（pod 啟動時）**：
+
+```python
+def resolve_runtime_tools(project, template):
+    # MCP servers
+    if template.mcp_server_ids:
+        mcp_set = template.mcp_server_ids
+        # constraint already enforced: mcp_set ⊆ project user-scope ∪ scope=system (§4.1)
+    else:
+        mcp_set = project.mcp_server_ids | env['woow_paas_platform.mcp_server'].search([
+            ('scope', '=', 'system'), ('active', '=', True),
+        ])
+        # 預設 = 所有 project 可見的 MCP
+
+    # Skills
+    if template.skill_ids:
+        skill_set = template.skill_ids.filtered(
+            lambda s: s.project_id == project and s.state == 'published'
+        )
+    else:
+        skill_set = env['woow_paas_platform.skill'].search([
+            ('project_id', '=', project.id),
+            ('state', '=', 'published'),
+            ('is_latest', '=', True),
+        ])
+        # 預設 = 該 project 所有 latest published skill
+
+    return mcp_set, skill_set
+```
+
+**送進 pod 的 ConfigMap snapshot**：
+
+```json
+{
+  "mcp_servers": [
+    {"name": "...", "url": "...", "transport": "...", "headers": {...}, "scope": "user|system"}
+  ],
+  "skills": [
+    {"name": "...", "version": "...", "sha256": "...", "fetch_uri": "...", "metadata": {...}}
+  ],
+  "system_prompt": "...",
+  "model_config": {...}
+}
+```
+
+**Template 切換的 thread 影響**：
+
+- 同 channel 切 template → 不清 thread checkpoint（thread state 保留）
+- LangGraph 用新 template 的 system_prompt + tool set 繼續 thread
+- LLM context 內已有歷史 turn（用舊 template 跑的）— 新 template 對歷史 turn 的 tool_call 可能 reference 不存在的 tool → runtime 標 `tool_unavailable` event，user 看 warning
+- v1 簡單做法：UI 切 template 時 show warning「將使用新 agent 模式繼續對話，部分歷史工具可能不可用」
+
+### §4.7 計費歸屬 — primary_workspace 概念（Q4 拍板用）
+
+**Problem statement**：project.cloud_service_ids 可跨 workspace（§1.3）→ agent quota 費用算給誰？
+
+**phase-planner 推薦：(b) 存 `agent_session.primary_workspace_id`（agent_session-level snapshot；不污染 project schema）**
+
+三選項 trade-off：
+
+| 方案 | 存哪 | 動 project schema | drift（project.workspace_ids 變動）處理 | 推薦 |
+|------|------|------------------|----------------------------------|------|
+| (a) `project.primary_workspace_id` field | project 上 | 是（本 epic 已 in-scope，但仍是擴大）| project owner 手動改；不一致時用戶可見 | ✗（避免擴大 project schema） |
+| **(b)（推薦）** `agent_session.primary_workspace_id` | agent_session 上 | 否 | spawn-or-attach 時 freeze；workspace_ids 變動透過 sync-workspaces 觸發 admin 確認 | ✓ |
+| (c) Derived: `project.workspace_ids[0]` | 不存 | 否 | first ordering 不穩定（M2M 順序非保證） | ✗ |
+
+**選 (b) 的具體機制**：
+
+- `agent_session` 新增 field `primary_workspace_id = fields.Many2one('woow_paas_platform.workspace')`
+- spawn-or-attach 時 Odoo 端：若 agent_session 已有 `primary_workspace_id` → 用既有；否則 default 取 `project.cloud_service_ids[0].workspace_id`
+- admin 在 Odoo project setting UI 可顯式選 / 改（透過 form view）
+- 改 primary 變動是計費動作 → 觸發 audit log + workspace owner 通知
+
+**費用模型（v1 baseline）**：
+
+- agent quota cost = `primary_workspace.plan.agent_quota_cost_per_unit × usage_units`
+- usage_units 計算：pod active hours（粗糙 v1）；token consumption（精細 v2）
+- secondary workspace（project.workspace_ids 內非 primary 的）只享 NetworkPolicy egress access；零分攤
+- billing cycle 月結，agent quota cost 加進 primary_workspace 的 monthly invoice（沿用 sh_subscription_wallet）
+
+**Drift 處理**：
+
+- `project.workspace_ids` 變動（add / remove cloud_service 蘊含 add / remove workspace）→ 透過 §2.12 cron drift detection 已偵測
+- 若 primary_workspace 被 remove from project.workspace_ids（cloud_service 全部跨 workspace remove 後）→ pod 在 active 期間繼續用既有 primary（billing 不中斷）；下次 reap → resume cycle 時，admin 必須改 primary（不然 spawn-or-attach reject with `primary_workspace_no_longer_bound`）
+
+**Edge case**：
+
+- Project 第一次建立時還沒綁任何 cloud_service → `primary_workspace_id = NULL` → agent 不可 spawn（除非綁至少一個 cloud_service）— v1 enforce
+- Project 跨 workspace 但 primary_workspace 退訂 PaaS → 仍走 primary（fail-safe to user notification）；admin 必須改
+
+### §4.8 Per-project agent quota override
+
+**設計（不動 project schema，存 agent_session）**：
+
+```python
+# agent_session 上 (§2.12 model 補充 fields)
+quota_override_cpu = fields.Integer(
+    string='CPU Quota Override (cores)',
+    help='Default = ir.config_parameter.agent_quota_cpu_per_project; '
+         'override only set by owner/admin via UI',
+)
+quota_override_memory_gi = fields.Integer(string='Memory Quota Override (Gi)')
+quota_override_storage_gi = fields.Integer(string='Storage Quota Override (Gi)')
+
+@api.depends('quota_override_cpu')
+def _compute_effective_quota_cpu(self):
+    """Use override if set, else ir.config_parameter default."""
+    default_cpu = int(self.env['ir.config_parameter'].sudo().get_param(
+        'woow_paas_platform.agent_quota_cpu_per_project', '2',
+    ))
+    for rec in self:
+        rec.effective_quota_cpu = rec.quota_override_cpu or default_cpu
+```
+
+**Override 設置流程**：
+
+- owner / admin 在 Odoo project setting UI 顯式設 override（透過 form view）
+- 修改後寫 audit log；通知 primary_workspace owner（影響計費）
+- next spawn-or-attach 時 paas-operator 收到新 namespace ResourceQuota（透過 update_namespace endpoint — 新增 if needed）
+- 既有 ACTIVE pod 不熱更新 quota（K8s ResourceQuota 是 namespace-level，新 limits 只對新 pod 生效）
+
+**Override 受 plan 上限約束**：
+
+- `primary_workspace.plan.agent_max_quota_cpu` 是硬上限
+- override 超過 plan max → form view validation reject
+- plan 升級時自動放寬上限；plan 降級時若既有 override > new max → cron warning + admin 手動調
+
+### §4.9 Affected files / new files（§4 範圍預測）
+
+**新建（落地時）**：
+
+- `src/models/agent_template.py` — §4.1 model
+- `src/models/project_access.py` — §4.3 model
+- `src/views/agent_template_views.xml` — backend form / list
+- `src/views/project_access_views.xml` — backend form / list
+- `src/security/ir.model.access.csv` — agent_template + project_access ACL rows
+- `src/security/ir_rules.xml` — agent_template 4 rule + project_access 4 rule
+- `src/static/src/paas/pages/project-detail/sections/AgentTemplateSection.{js,xml}` — frontend
+- `src/static/src/paas/pages/project-detail/sections/ProjectAccessSection.{js,xml}` — frontend
+- `src/static/src/paas/services/agent_template_service.js` — API client
+- `src/static/src/paas/services/project_access_service.js` — API client
+- `src/controllers/projects.py`（或 paas.py 內）— agent_template + project_access endpoints
+
+**修改（落地時）**：
+
+- `src/__manifest__.py` — bump version + data 加 views/security
+- `src/models/__init__.py` — import
+- `src/models/agent_session.py`（§2.12 補加 fields）：
+  - `primary_workspace_id`
+  - `quota_override_cpu` / `quota_override_memory_gi` / `quota_override_storage_gi`
+  - `effective_quota_*` computed
+  - `agent_template_id` 已在 §2.12 列出，不變
+- `src/models/project_project.py`（§7 prereq 已動 schema；本 §4 不再加 field）：
+  - 加 `project_access_ids = One2many('woow_paas_platform.project_access', 'project_id')` 反向關聯
+  - 加 `_default_create_project_access` hook（create project 時自動建 owner role）
+- `src/controllers/ai_assistant.py`（§7 範圍，但 §4 ACL gate 在此 controller 加）：
+  - `_check_channel_access` 串接 `_check_project_access`（既有 method 已 fallback workspace_access，新加 project_access leg）
+
+**不動**（保護 invariants）：
+
+- `mcp_server` / `mcp_tool` schema / ACL（refactor branch finalized）
+- `cloud_service` lifecycle
+- workspace_access model（並存，§4.3 project_access 是新增 first-class ACL；workspace_access 仍處理 workspace 自身權限）
+- 既有 ai.assistant model（**重要**：§4.11 Q5 拍板共存策略）
+
+### §4.10 Risks
+
+| Risk | 嚴重度 | Mitigation | Rollback |
+|------|-------|-----------|---------|
+| 既有 ai.assistant 與新 agent_template 雙寫漂移 | 高 | §4.11 Q5 拍板共存策略；migration 階段固定 mapping | 兩 model 並存，rollback 切回 ai.assistant single source |
+| Template 修改影響所有 binding project（live update） | 中 | UI 顯示 binding count；改 published template 觸發 confirmation；audit log | template 改回；既有 pod 不熱重載（next spawn 才生效） |
+| Template 引用 archived skill / deprecated mcp_server | 中 | runtime invoke 時 filter archived/deprecated；標 `tool_unavailable` event | template owner 手動 unbind |
+| Project_access 與 workspace_access 不一致導致 ACL 混亂 | 中 | 兩層 ACL 解耦（§1.3）；agent invoke 只看 project_access；workspace 操作只看 workspace_access | project_access 顯式管理；不假設從 workspace_access 推導 |
+| 最後一個 owner 被 unlink 導致 project 孤立 | 中 | project_access unlink override：check role=owner count > 1 才允許 unlink | admin 後台手動補 |
+| primary_workspace 退訂 PaaS 但 project 還活著 | 中 | spawn-or-attach reject + 通知 owner 改 primary | 改 primary or unbind 該 workspace |
+| Guest invoke 嘗試 bypass ACL | 高 | ACL 兩層 lock-step（Odoo controller + pod 端 invoke gate）；參考 [[two-layer-acl-lockstep]] pattern | 補 ACL；audit log |
+| 不同 template 切換 thread 後 LLM 行為混亂 | 低 | UI warning；historical tool_call 標 `tool_unavailable` event | user 重啟 thread |
+| agent_template 升 deprecated 但 binding project 仍在用 | 中 | UI 顯示 deprecated 標記；不強制中斷既有 pod；新 spawn-or-attach reject | unbind / 換 template |
+| Quota override drift（plan 降級後 override > max） | 低 | cron 每天掃；超限給 warning email 給 admin | admin 手動調 override |
+
+### §4.11 Open questions for leader sign-off（§4 escalation）
+
+> 5 條核心拍板需求。phase-planner 推薦已 inline 在 §4.2 / §4.4 / §4.5 / §4.7 給出；第 5 條（既有 ai.assistant 並存策略）是 §4 探出來的額外拍板。**全部 sign-off 2026-05-22**。
+
+1. ~~**[需 leader 拍板] Agent template ↔ project cardinality（§4.2）**~~ **[SIGNED-OFF 2026-05-22]** A: M:N（template 可給多 project 用；project 可選多 template）
+2. ~~**[需 leader 拍板] Agent invoke 權限矩陣（§4.4）**~~ **[SIGNED-OFF 2026-05-22]** owner/admin 全權；user invoke + thread CRUD + draft skill upload；guest read-only；non-member 完全阻擋
+3. ~~**[需 leader 拍板] Shared memory 寫權限（§4.5）**~~ **[SIGNED-OFF 2026-05-22]** threads = invoker / memory.json admin R/W + user R / notes/exports admin R/W/U + user R/W own + guest R
+4. ~~**[需 leader 拍板] 計費歸屬 primary_workspace（§4.7）**~~ **[SIGNED-OFF 2026-05-22]** (b) 存 `agent_session.primary_workspace_id`（不動 project schema）+ spawn-or-attach freeze + admin UI 改 + drift 偵測
+5. ~~**[需 leader 拍板 — §4 新發現] agent_template 與既有 ai.assistant 並存策略**~~ **[SIGNED-OFF 2026-05-22]** (i) 並存 + `default_ai_assistant_id` config_parameter fallback（agent_template 未設時走舊路徑）
+
+**§4 額外探出來但不阻塞 §4 sign-off 的事項**（不需立刻拍板，§5~§7 各節再處理）：
+
+- LangGraph thread checkpoint 切 template 時的 schema migration（同 thread 切不同 template，tool set 變動的記憶處理）— §5 拍板
+- `agent.assistant.context_id` 既有的 system prompt source（PR #46 之前）vs 新 `agent_template.system_prompt` 取代邏輯 — §7 拍板
+- Pod 端如何即時收到 template 改動（hot reload vs cold reload）— §5 拍板（與 sync-workspaces 類似機制）
+- ai.config 內 api_key 的 group_system 守線在 per-project agent_template binding 下不變（user 看不到 api_key）— 確認 §1.3 invariant 守住，**不阻塞** § 4 sign-off
+- Backend admin 後台對 system template (is_public=True) 的特殊 UI — 留 implementation 階段
+- agent_template `model_overrides` JSON validation schema — 留 implementation 階段
+
+## §5 Transport (Odoo ↔ Pod, WS/SSE protocol)
+
+> **Status**：Phase 1 — §5 draft submitted, awaiting sign-off
+> 依賴：§1.2 第二輪 sign-off (frontend SSE 不動)、§2.11 paas-operator endpoints、§4 agent_template + project_access
+> 5 條 [需 leader 拍板] 留 §5.11 escalate（已預警：envelope schema 版本、auth 機制、mcp.json reload、agent_session state sync、額外 WS connection 生命週期）
+
+### §5.0 Scope（§5 處理什麼、不處理什麼）
+
+**§5 處理**：
+
+- 兩段 transport 架構（Browser ↔ Odoo SSE 不動；Odoo ↔ Pod outbound WS 新增）
+- WS message envelope JSON schema + 12 types + 序列保證
+- Odoo ↔ Pod auth 機制（HS256 bearer token + shared secret）
+- ConfigMap mcp.json reload 策略（hot reload via inotify + WS push）
+- agent_session ↔ paas-operator state sync 機制（webhook + 輪詢 fallback）
+- Odoo `controllers/ai_assistant.py` SSE generator rewrite pseudocode
+- Tool set 變動處理（§4.6 蘊含的 `tool_unavailable` event 細化）
+- Pod 端 FastAPI WS server 結構 + concurrent connection 處理
+
+**§5 不處理**（留後續章節）：
+
+- NetworkPolicy / securityContext 細節 → §6
+- WS 流量加密細節（TLS terminator）→ §6 + deployment
+- Subprocess sandbox 細部約束 → §6
+- 既有 `ai_assistant.py` controller 改動順序 + `discuss_channel.py` 同步分支刪除時機 → §7
+- 跨 Odoo worker 內 WS connection share（worker pool sizing 影響）→ deployment / SRE
+
+### §5.1 兩段 transport 架構
+
+```
+┌────────────┐         ┌──────────────────────────────┐         ┌────────────────────┐
+│  Browser   │  SSE    │  Odoo controller             │  WS     │  Agent Pod         │
+│ (EventSource)        │  (/api/ai/stream/<channel>)  │         │  (FastAPI WS:8000) │
+│            │◄────────┤  ↕ async_to_sync 橋接        │◄───────►│  /v1/chat          │
+└────────────┘         └──────────────────────────────┘         └────────────────────┘
+   (A) 不動               (B) 新增 outbound WS client                (B) 新增 inbound WS server
+```
+
+**段 (A) Browser ↔ Odoo — SSE EventSource（不動，**§1.2 第二輪 sign-off**）**：
+
+- 既有 `/api/ai/stream/<channel_id>?csrf_token=...` SSE endpoint 不變
+- `src/static/src/paas/services/ai_service.js:130` 客戶端 `EventSource` 不變
+- 既有 `_sse_error_response` / `data: {chunk}\n\n` / `data: {done: true}\n\n` event 格式 **保留**（v1 不引入新 event type 到 SSE 層 — pod → Odoo 的新 type（如 `tool_unavailable`）在 Odoo controller 內 forward to SSE 時包成既有 schema 內可呈現的事件）
+- 為什麼 frontend 不動：(1) §1.2 第二輪 sign-off 守住；(2) Odoo Discuss UI 與 PaaS chat UI 都用 SSE，統一 transport 簡化 frontend；(3) browser WS 對 SSE 沒帶來新 capability for our use case
+
+**段 (B) Odoo ↔ Pod — Outbound WS（新增）**：
+
+- 新建：Odoo controller 在 SSE generator 內以 client 角色 open outbound WS to `ws://agent-pa-{hash}-svc.paas-ws-pa-{hash}.svc.cluster.local:8000/v1/chat`
+- Pod 端：FastAPI `@app.websocket("/v1/chat")` route 作 server
+- 雙向：Odoo → Pod 傳 user message / cancel / template_update / mcp_invalidate / ping；Pod → Odoo 傳 text_chunk / tool_call / tool_result / tool_error / tool_unavailable / status / error / done / pong
+- 為什麼 (B) 用 WS 而非 SSE 或 HTTP polling：bidirectional 必要（pod 也要 push template_update / mcp_invalidate 到 pod 對話進行中時即時觸發 — 雖然 v1 也可改成 ConfigMap inotify，但 WS 同 channel 簡化 transport 層）
+
+**為什麼用 cluster.local DNS 直連 pod，不過 paas-operator proxy**：
+
+- pod IP 不穩定（reap/resume cycle 後 IP 變）— Service ClusterIP 穩定，命名走 `agent-pa-{hash}-svc.paas-ws-pa-{hash}.svc.cluster.local`
+- 不要 paas-operator 代理：avoid extra hop latency；paas-operator 不該變成 stateful proxy
+- Odoo 在 cluster 內（同 K8s）— 直達 cluster.local DNS
+
+### §5.2 WS message envelope schema（Q1 拍板用）
+
+**Envelope 結構**（JSON over WS frame，UTF-8 text frame）：
+
+```json
+{
+  "version": "1.0",                      // protocol version (frozen string)
+  "type": "<message_type>",              // see types table below
+  "request_id": "uuid-v4",               // unique per user_message; all related events share same id
+  "correlation_id": "uuid-v4 | null",    // optional; for tool_call chains
+  "sequence_number": 1,                  // monotonic int per request_id (0-indexed within a request)
+  "timestamp": "2026-05-22T10:30:00Z",   // ISO 8601 UTC
+  "payload": { ... }                     // type-specific schema
+}
+```
+
+**Message types（v1.0 — frozen after sign-off）**：
+
+| Direction | Type | Payload 必填 | 用途 |
+|-----------|------|-------------|------|
+| **Odoo → Pod** |  |  |  |
+| → | `user_message` | `channel_id`, `body`, `history`, `template_id`, `invoker_role`, `invoker_user_id` | 用戶發送訊息觸發 LangGraph |
+| → | `cancel` | `request_id_target` | 取消正在進行的 request |
+| → | `template_update` | `template_id`, `template_snapshot` | 通知 pod template 配置變動（hot reload） |
+| → | `mcp_invalidate` | `mcp_snapshot_hash` | 通知 pod 重新 parse mcp.json（hot reload） |
+| → | `skill_invalidate` | `skill_snapshot_hash` | 通知 pod 重新 fetch skill list |
+| → | `ping` | `nonce` | heartbeat ping |
+| **Pod → Odoo** |  |  |  |
+| ← | `text_chunk` | `content` | LLM 文字流片段 |
+| ← | `tool_call` | `tool_name`, `tool_args`, `tool_call_id` | LangGraph tool 開始 |
+| ← | `tool_result` | `tool_call_id`, `result` | tool 成功完成 |
+| ← | `tool_error` | `tool_call_id`, `error`, `code` | tool 執行失敗 |
+| ← | `tool_unavailable` | `tool_name`, `reason` ∈ {archived, removed_from_template, mcp_offline}, `recovery_hint` | tool 在當前 context 不可用（§5.7） |
+| ← | `status` | `stage` ∈ {spawning, fetching_skill, ws_connected, llm_thinking}, `elapsed_ms` | 進度 update |
+| ← | `error` | `error`, `code`, `fatal: bool` | 致命錯誤；fatal=True 後關 WS |
+| ← | `done` | `full_response`, `usage` (tokens), `message_id` | response 完成 |
+| ← | `pong` | `nonce` | heartbeat reply |
+
+**序列保證**：
+
+- `request_id`：unique per user_message；所有 response chunks 都帶相同 request_id
+- `correlation_id`：optional；同一 tool_call 鏈內保持（用於 multi-step tool 追蹤）
+- `sequence_number`：monotonic int per request_id（從 0 開始遞增），防 out-of-order delivery 或重複；Odoo 收 envelope 時根據 sequence_number 排序 / 去重
+- `version`：protocol version；v1 = `"1.0"`，後續 v1.1 / v2 需向後相容（new types 可加，既有 types schema 不刪 field）
+
+**Error envelope 細部**：
+
+```json
+// pod 端致命錯誤（如 LangGraph runtime crash）
+{
+  "version": "1.0",
+  "type": "error",
+  "request_id": "...",
+  "payload": {
+    "error": "LangGraph runtime panic: ...",
+    "code": "runtime_panic",      // enum: runtime_panic / llm_provider_error / mcp_connection_error / skill_subprocess_timeout / auth_expired
+    "fatal": true                  // true = 關 WS；false = 可繼續
+  }
+}
+```
+
+**Heartbeat 策略**：
+
+- Odoo 每 30s 送 `ping`，Pod 60s 內沒回 `pong` → Odoo 關 WS + 標 reap-or-restart
+- Pod 每 30s 接收 ping 計時器 reset；接收 user_message / send chunk 也算 alive
+- 防 idle reaper 誤判：active WS connection 算 active；reap 只看 last_active annotation（§2.3）
+
+### §5.3 Odoo ↔ Pod auth（Q2 拍板用）
+
+**phase-planner 推薦：(b) HS256 bearer token + shared secret + spawn-or-attach 時簽發**
+
+三選項 trade-off：
+
+| 方案 | 機制 | 安全性 | 實作 cost | Scoping（per-project）| 推薦 |
+|------|------|-------|----------|----------------------|------|
+| (a) Static API key | helm chart 注入單一 cluster secret | 弱（leak 一次 → 全 cluster 失守） | 最低 | 不行（同 key 全 pod 共用）| ✗ |
+| **(b)（推薦）** Bearer token | spawn-or-attach 時 paas-operator 用 shared secret 簽 HS256 JWT；含 project_hash + workspace_ids + exp | 強（leak → 一個 pod 一段時間）| 中 | 是（token 內 claim project_hash） | ✓ |
+| (c) mTLS | Pod 與 Odoo 各持證書 | 最強 | 高（cert lifecycle / rotation / CA） | 是（cert CN claim） | ✗（v1 過度）|
+
+**選 (b) 的具體機制**：
+
+```
+spawn-or-attach 流程內：
+   1. Odoo controller 呼 paas-operator POST /spawn-or-attach
+   2. paas-operator:
+      - 起 pod / resume / attach（§2.11 既有）
+      - 用 shared secret (cluster Secret `agent-runtime-auth`) 簽 JWT:
+        payload = {
+          "iss": "paas-operator",
+          "aud": "agent-runtime",
+          "project_hash": "...",
+          "workspace_ids": [...],
+          "channel_id": ...,           # invocation-level scope
+          "invoker_user_id": ...,
+          "invoker_role": "...",       # admin/user/guest
+          "exp": now + 1h,
+          "iat": now,
+          "jti": uuid-v4               # 防 replay
+        }
+        algo = HS256
+   3. paas-operator return { pod_ws_url, auth_token: <jwt>, pod_state, ... }
+   4. Odoo controller open WS：
+        ws.connect(pod_ws_url + "?token=" + jwt)
+      OR header: Authorization: Bearer <jwt>
+   5. Pod 端 FastAPI WS handler 用 shared secret 驗 token signature + exp + project_hash 對應自己
+```
+
+**Token scope**：
+
+- 一個 token 只 valid for 一個 (project_hash, channel_id, invoker) tuple — 不能 cross-project / cross-channel
+- exp 1 小時；過期 → ws 關閉 + Odoo 重 spawn-or-attach 拿新 token
+- 不重用：一個 token 配一個 WS connection（jti 防 replay）
+
+**Shared secret 管理**：
+
+- K8s Secret `agent-runtime-auth-secret`，namespace `paas-system`
+- paas-operator + 所有 agent pod 都 mount 同一 secret
+- agent pod helm chart values 引用該 secret（不寫死在 image）
+- Rotate：admin 手動 — 改 secret + bump paas-operator + bump 所有 pod 的 helm release（cycle reap → resume 用新 secret）
+- v1 沒 auto rotation（留 v2）
+
+**Odoo 端不需 shared secret**：Odoo 不簽 token（paas-operator 簽），只 forward；所以 Odoo 不接觸 secret — 縮小 attack surface
+
+### §5.4 ConfigMap mcp.json hot reload vs cold reload（Q3 拍板用）
+
+**phase-planner 推薦：(a) Hot reload via WS push + inotify fallback**
+
+三選項：
+
+| 方案 | 機制 | 延遲 | UX | 風險 | 推薦 |
+|------|------|------|-----|------|------|
+| **(a)（推薦）** Hot reload (WS push primary + inotify fallback) | Odoo write hook → paas-operator sync-workspaces → WS `mcp_invalidate` push → pod runtime 重 parse；inotify watcher 作 60s 內兜底 | < 5s（WS 路徑）；60s（inotify 兜底） | active session 不中斷 | mid-flight tool_call 仍走舊 snapshot（acceptable）| ✓ |
+| (b) Cold reload via pod restart | sync-workspaces → paas-operator scale_release 0 → 1 重啟 pod | 7-15s（resume cycle）| active session 中斷重連 | mid-flight tool_call lose；user 感受 spawning event | ✗ |
+| (c) Pure inotify | 只靠 K8s ConfigMap mount 後 inotify | 30-60s（kubelet sync）| 不中斷 | 大延遲對「user 改 cloud_service 後立即測試 agent」UX 差 | ✗ |
+
+**選 (a) 的具體流程**：
+
+```
+變動觸發路徑：
+   1. Odoo: project.cloud_service_ids / agent_template / mcp_server 變動
+      → write hook 呼 paas-operator POST /agent-runtimes/{hash}/sync-workspaces
+                                            or /invalidate-mcp
+   2. paas-operator:
+      a. patch ConfigMap `agent-pa-{hash}-mcp` with new mcp snapshot
+      b. patch ConfigMap annotation `agent.woow.tw/snapshot-hash` = new SHA256
+      c. 主動 WS push to pod (paas-operator 自己 open transient WS to pod) 
+         或：postFile a flag → Odoo 在下次 user_message envelope 內帶 mcp_invalidate
+   3. Pod 端：
+      a. WS handler 收到 mcp_invalidate envelope → reload mcp.json + update in-memory tool_set
+      b. 若漏接（paas-operator → pod WS 失敗）→ inotify on /etc/agent-runtime/mcp.json mount path 作 60s 內兜底
+   4. mid-flight tool_call：
+      - 用舊 snapshot 完成本 invocation（避免 mid-flight state 混亂）
+      - Next invocation 走新 snapshot
+```
+
+**Hot reload 的邊界 condition**：
+
+- mcp_server 被 archive 時，pod 內仍有 active reference（mid-flight）→ tool_call 完成；next 用新 snapshot → emit `tool_unavailable`
+- 新 mcp_server 添加 → 新 snapshot 含 + LangGraph 下次 resolve_tool 時動態 register
+- agent_template 切換 → 同樣走 `template_update` envelope，pod 端切 template 配置 + tool set
+
+**為什麼不純走 inotify**：
+
+- K8s ConfigMap mount 在 worker node kubelet 級 cache + sync 大約 30-60s 才反映 — UX 太慢
+- 對於「user 改 cloud_service 後立即測試 agent」場景，60s 等待不可接受
+- WS push 路徑能在 5s 內生效（cluster.local 直連 + asyncio）
+
+**為什麼 inotify 作 fallback 必要**：
+
+- WS push 路徑萬一失敗（pod restart 中 / paas-operator 短暫 down），inotify 兜底保證最終一致
+- ConfigMap mount 本身就是 hot reload 機制；不用白不用
+
+### §5.5 agent_session ↔ paas-operator state sync（Q4 拍板用）
+
+**phase-planner 推薦：(a) Webhook primary + (b) 輪詢 fallback**
+
+State sync 是**雙向**：
+
+- Pod state machine 變化（spawning → active → reaped → ...）→ 同步到 Odoo `agent_session.state`
+- Odoo agent_session 設定變動（quota override / template binding）→ pod runtime 拿到（透過 spawn-or-attach 重新注入或 hot reload）
+
+**主路徑：Webhook（paas-operator → Odoo）**：
+
+```
+paas-operator 端：
+   - spawn / reap / GC 任一狀態變動後，callback Odoo controller
+   - Endpoint: POST {odoo_base_url}/api/agent-runtimes/webhook/state-update
+   - Payload:
+     {
+       "project_hash": "...",
+       "new_state": "active|reaped|spawn_failed|degraded",
+       "ts": "ISO 8601",
+       "reason": "spawn complete | idle reap | helm fail | ...",
+       "pod_ws_url": "...",       // optional, only for active state
+       "spawn_age_ms": 5234       // optional
+     }
+   - Auth: HMAC-SHA256 with shared secret `agent-runtime-webhook-secret`
+     - Header: X-PaaS-Signature: hmac(payload_body, secret)
+     - 防 spoofing
+
+Odoo 端：
+   - controller endpoint：/api/agent-runtimes/webhook/state-update (auth=none, type=json)
+   - verify HMAC signature
+   - 找 agent_session by project_namespace_hash
+   - update state + last_synced_at + last_state_event_ts
+```
+
+**Fallback：Odoo cron 輪詢**：
+
+```
+Cron schedule: every 5 min
+Logic:
+   - search agent_session where state IN (spawning, active, reaped, degraded) AND
+            last_synced_at < now - 10 min  # webhook 漏網時兜底
+   - for each: call paas-operator GET /agent-runtimes/{hash}/status
+   - update agent_session.state + last_synced_at
+```
+
+**為什麼不選 (c) SSE**：
+
+- Odoo 端用 SSE listener 需要 long-lived worker thread — 占用 worker pool（每 worker 服務一個 paas-operator SSE 連線）
+- paas-operator 端 SSE source 也要維持 N 條長連線（給 N 個 Odoo workers）
+- 複雜度高且不解決 webhook delivery failure（fallback 仍需要輪詢）
+
+**Webhook delivery failure 處理**：
+
+- HMAC 驗 fail → 401 reject + paas-operator log warn
+- 5xx 回應 → paas-operator retry 3 次 exponential backoff
+- 仍失敗 → cron 輪詢兜底
+- Drift detection：cron 比對 paas-operator 端 ground truth vs Odoo agent_session.state；不一致 → Odoo 端更新 + audit log
+
+### §5.6 SSE generator rewrite（Odoo controller）
+
+當前 `controllers/ai_assistant.py:353-544` 的 SSE generator 內 `asyncio.run` LangGraph 整段 **改寫**。
+
+**新版 pseudocode**：
+
+```python
+@route('/api/ai/stream/<int:channel_id>', auth='user', methods=['GET'], type='http')
+def api_ai_stream(self, channel_id, **kwargs):
+    """SSE endpoint — Odoo ↔ Pod transport bridge (rewritten for agent-runtime pod)."""
+
+    # ① validate CSRF + channel access (既有)
+    csrf_token = kwargs.get('csrf_token', '')
+    if not csrf_token or not request.validate_csrf(csrf_token):
+        return self._sse_error_response('Invalid request', 'csrf_error')
+
+    channel = request.env['discuss.channel'].sudo().browse(channel_id)
+    if not channel.exists() or not self._check_channel_access(channel):
+        return self._sse_error_response('Access denied', 'access_denied')
+
+    # ② resolve project_id (新加)
+    task = request.env['project.task'].sudo().search([
+        ('channel_id', '=', channel_id),
+    ], limit=1)
+    if not task or not task.project_id:
+        return self._sse_error_response('Channel not bound to a project', 'no_project')
+    project = task.project_id
+
+    # ③ project_access check (新加 — § 4)
+    if not self._check_project_access(project):
+        return self._sse_error_response('Project access denied', 'project_access_denied')
+
+    # ④ resolve agent_template (per-project default; fallback default_ai_assistant_id, § 4.11 Q5)
+    template = self._resolve_agent_template(project)
+    if not template:
+        return self._sse_error_response('No agent template configured', 'no_template')
+
+    # ⑤ pre-fetch ORM data BEFORE entering the generator (cursor 仍 valid)
+    invoker = request.env.user
+    invoker_role = self._get_project_access_role(project, invoker)
+    mcp_snapshot = self._build_mcp_snapshot(project, template)
+    skill_snapshot = self._build_skill_snapshot(project, template)
+    history = channel._get_chat_history(limit=20)
+    user_message = self._get_latest_user_message(channel)
+    request_id = str(uuid.uuid4())
+
+    # ⑥ call paas-operator spawn-or-attach
+    from ..services.agent_runtime_client import get_agent_runtime_client
+    client = get_agent_runtime_client(request.env)
+    try:
+        runtime_info = client.spawn_or_attach(
+            project=project,
+            channel_id=channel_id,
+            invoker_user_id=invoker.id,
+            invoker_role=invoker_role,
+            agent_template=template,
+            mcp_snapshot=mcp_snapshot,
+            skill_snapshot=skill_snapshot,
+        )
+    except RuntimeError as exc:
+        return self._sse_error_response(f'Pod spawn failed: {exc}', 'spawn_failed')
+
+    pod_ws_url = runtime_info['pod_ws_url']
+    auth_token = runtime_info['auth_token']
+
+    # ⑦ open outbound WS + relay envelopes as SSE events
+    db_name = request.env.cr.dbname
+    uid = request.env.uid
+
+    def generate():
+        """SSE generator — bridges pod WS events to browser SSE."""
+        import asyncio
+        import websockets
+
+        async def relay():
+            """Connect WS, send user_message, yield response envelopes."""
+            async with websockets.connect(
+                pod_ws_url,
+                extra_headers={'Authorization': f'Bearer {auth_token}'},
+                ping_interval=30,    # heartbeat
+                ping_timeout=60,
+            ) as ws:
+                # Send user_message envelope
+                await ws.send(json.dumps({
+                    'version': '1.0',
+                    'type': 'user_message',
+                    'request_id': request_id,
+                    'sequence_number': 0,
+                    'timestamp': datetime.utcnow().isoformat() + 'Z',
+                    'payload': {
+                        'channel_id': channel_id,
+                        'body': user_message,
+                        'history': history,
+                        'template_id': template.id,
+                        'invoker_role': invoker_role,
+                        'invoker_user_id': invoker.id,
+                    },
+                }))
+
+                # Receive envelopes until done / fatal error
+                async for msg in ws:
+                    yield json.loads(msg)
+                    envelope = json.loads(msg)
+                    if envelope['type'] == 'done':
+                        return
+                    if envelope['type'] == 'error' and envelope['payload'].get('fatal'):
+                        return
+
+        # Sync iterator over async generator (Odoo worker is sync)
+        loop = asyncio.new_event_loop()
+        try:
+            agen = relay()
+            full_response = ''
+            saved_message_id = None
+            while True:
+                try:
+                    envelope = loop.run_until_complete(agen.__anext__())
+                except StopAsyncIteration:
+                    break
+
+                # Forward envelope as SSE event (transform to legacy SSE schema)
+                if envelope['type'] == 'text_chunk':
+                    chunk = envelope['payload']['content']
+                    full_response += chunk
+                    yield f'data: {json.dumps({"chunk": chunk, "done": False})}\n\n'
+                elif envelope['type'] in ('tool_call', 'tool_result', 'tool_error', 'tool_unavailable'):
+                    yield f'data: {json.dumps({**envelope, "done": False})}\n\n'
+                elif envelope['type'] == 'status':
+                    yield f'data: {json.dumps({**envelope, "done": False})}\n\n'
+                elif envelope['type'] == 'done':
+                    # Persist AI response to mail.message (既有邏輯沿用)
+                    saved_message_id = self._persist_ai_response(
+                        db_name, uid, channel_id, full_response, template,
+                    )
+                    yield f'data: {json.dumps({
+                        "chunk": "",
+                        "done": True,
+                        "full_response": full_response,
+                        "message_id": saved_message_id,
+                    })}\n\n'
+                    break
+                elif envelope['type'] == 'error':
+                    yield f'data: {json.dumps({"error": envelope["payload"]["error"], "done": True})}\n\n'
+                    break
+        except Exception as exc:
+            _logger.exception('SSE-WS bridge failed for channel %s: %s', channel_id, exc)
+            yield f'data: {json.dumps({"error": str(exc), "done": True})}\n\n'
+        finally:
+            loop.close()
+
+    return Response(
+        generate(),
+        content_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+```
+
+**新增的 Odoo helper**（在 `src/services/agent_runtime_client.py`）：
+
+```python
+class AgentRuntimeClient:
+    """HTTP client to paas-operator for agent-runtime ops."""
+
+    def spawn_or_attach(self, project, channel_id, invoker_user_id,
+                        invoker_role, agent_template, mcp_snapshot, skill_snapshot):
+        """POST /api/agent-runtimes/spawn-or-attach.
+
+        Returns: { pod_ws_url, auth_token, pod_state, spawn_age_ms }
+        """
+        ...
+
+    def reap(self, project_hash):
+        ...
+
+    def invalidate_mcp(self, project_hash):
+        ...
+```
+
+**注意**：原 `discuss_channel.py:55-118` 的 `message_post` override 同步 LangChain 分支將被 **刪除**（§7 prereq 已列明；本 §5 不重複）。SSE generator 唯一觸發 AI 回應的入口。
+
+### §5.7 Tool set 變動處理（§4.6 `tool_unavailable` event 細化）
+
+**三個變動情境**：
+
+1. **Template 切換**（user 在 chat 中切 agent_template）
+2. **Skill upgrade / archive**（owner 在 Odoo 改 skill state）
+3. **MCP invalidation** — 三子情境：
+   - (a) **sidecar-backed MCP 物理 teardown**：cloud_service `_do_cleanup` → 對應 `sidecar_backed=True` MCP unlink + sidecar pod 拆 → 該 MCP URL 死
+   - (b) **external MCP 變動**：user 在 Odoo UI 改 mcp_server.url / headers / archive → 跑相同 invalidate-mcp 路徑（refactor branch cycle 4 拔 D5 後 external MCP 是合法獨立 row）
+   - (c) **project.cloud_service_ids 變動**：add/remove cloud_service → 連帶觸發 sidecar-backed MCP 可達性變動（egress allowlist 同步透過 `sync-workspaces` endpoint）
+
+**LangGraph thread checkpoint 結構**（pod runtime 內，存 PVC）：
+
+```python
+# /workspace/project-{pid}/threads/{channel_id}/checkpoint.json
+{
+    "thread_id": "channel-42",
+    "messages": [
+        HumanMessage(...),
+        AIMessage(content="...", tool_calls=[{"id": "tc-1", "name": "search_docs", ...}]),
+        ToolMessage(tool_call_id="tc-1", content="..."),
+        AIMessage(content="..."),
+    ],
+    "template_id_when_created": 5,
+    "tool_set_snapshot_hash": "abc123",  # SHA of resolve_runtime_tools output at thread create
+    ...
+}
+```
+
+**Tool resolve 時點**：
+
+- LangGraph runtime 每收到 LLM 返回的 tool_call → resolve_tool(name) against current snapshot
+- 若 `name` 存在當前 snapshot：dispatch（subprocess for skill / HTTP for mcp）
+- 若不存在：emit `tool_unavailable` envelope，**不阻斷 LangGraph stream**
+
+**`tool_unavailable` envelope payload**：
+
+```json
+{
+  "version": "1.0",
+  "type": "tool_unavailable",
+  "request_id": "...",
+  "payload": {
+    "tool_name": "search_docs",
+    "tool_call_id": "tc-1",
+    "reason": "removed_from_template | archived | mcp_offline | template_mismatch",
+    "recovery_hint": "Tool 'search_docs' was removed from current agent template. Switch back to previous template or contact admin.",
+    "context": {
+      "current_template_id": 6,
+      "thread_template_id_when_created": 5,
+      "current_snapshot_hash": "def456",
+      "thread_snapshot_hash": "abc123"
+    }
+  }
+}
+```
+
+**Template 切換 specific**：
+
+- Odoo controller 在 `user_message` envelope 內帶 `template_id`
+- Pod 收到後 compare with thread's `template_id_when_created`
+- 不一致：用新 template 的 system_prompt + tool_set 繼續 thread；但 history 內既有 tool_call references 可能 `tool_unavailable`
+- frontend 收到 `tool_unavailable` → UI 顯示「該工具在當前模式不可用」chip
+- LLM 看到 ToolMessage with empty result（或 system message hint）後決定如何回應
+
+**Skill upgrade specific（active thread 內遇到舊版 skill）**：
+
+- Default behavior：active thread 內 reference 走 thread-local snapshot（thread create 時的 version）— 不熱替換
+- 新 spawn-or-attach（下次 conv）才走新 version
+- 例外：admin 顯式呼 `force_refresh_snapshot` endpoint → 即時更新 thread snapshot
+
+**MCP invalidation specific（cloud_service teardown 進行中）**：
+
+- 既有 `cloud_service._do_cleanup`：unlink sidecar-backed MCP → helm uninstall → state='deleting'（§7 prereq 延伸 M:N）
+- 在 helm uninstall 後，pod 內 mcp.json 還有舊 URL（未 reload）
+- 下次 tool_call reference 該 MCP → langchain-mcp-adapters connect fail → emit `tool_unavailable` with reason `mcp_offline`
+- 同時 paas-operator 觸發 `invalidate_mcp` WS push → pod runtime 移除舊 mcp_server from snapshot
+
+### §5.8 Pod 端 WS server 結構
+
+**FastAPI WebSocket route**（image source `runtime/transport/ws_server.py`）：
+
+```python
+# pseudocode in agent-runtime image
+import asyncio
+import json
+from contextlib import asynccontextmanager
+from datetime import datetime
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+
+from runtime.transport.auth import verify_token
+from runtime.transport.envelope import format_envelope
+from runtime.langgraph_runtime import LangGraphRuntime  # 全域單例
+from runtime.state.mcp_reloader import McpReloader     # inotify watcher
+
+app = FastAPI()
+
+# Global runtime (module-level singleton)
+runtime = LangGraphRuntime()
+mcp_reloader = McpReloader('/etc/agent-runtime/mcp.json')
+mcp_reloader.start()  # background inotify task
+
+@app.on_event('startup')
+async def startup():
+    await runtime.initialize()  # load LangGraph + langchain-mcp-adapters
+
+@app.websocket('/v1/chat')
+async def websocket_chat(ws: WebSocket, token: str = Query(...)):
+    # ① verify auth token
+    try:
+        claims = verify_token(token)  # HS256, returns {project_hash, channel_id, invoker_role, ...}
+    except Exception as e:
+        await ws.close(code=4401, reason=f'Auth failed: {e}')
+        return
+
+    # ② verify token's project_hash matches own pod
+    if claims['project_hash'] != settings.PROJECT_HASH:
+        await ws.close(code=4403, reason='Token project mismatch')
+        return
+
+    await ws.accept()
+
+    try:
+        # ③ receive first envelope (must be user_message)
+        msg_text = await ws.receive_text()
+        envelope = json.loads(msg_text)
+        if envelope.get('type') != 'user_message':
+            await ws.send_json(format_envelope(
+                'error', payload={'error': 'expected user_message', 'code': 'protocol_violation', 'fatal': True},
+                request_id=envelope.get('request_id', 'unknown'),
+            ))
+            await ws.close(code=4400)
+            return
+
+        request_id = envelope['request_id']
+        payload = envelope['payload']
+        channel_id = payload['channel_id']
+        thread_id = f'channel-{channel_id}'
+
+        # ④ stream LangGraph events as WS envelopes
+        seq = 0
+        async for event in runtime.stream(
+            thread_id=thread_id,
+            user_message=payload['body'],
+            history=payload['history'],
+            template_id=payload['template_id'],
+            invoker_role=payload['invoker_role'],
+        ):
+            seq += 1
+            await ws.send_json(format_envelope(
+                event.type,
+                payload=event.payload,
+                request_id=request_id,
+                sequence_number=seq,
+            ))
+
+            # listen for cancel envelope concurrently (race)
+            # — implementation detail: use asyncio.create_task + cancel propagation
+
+        # ⑤ send done
+        await ws.send_json(format_envelope(
+            'done',
+            payload={'full_response': event.full_response, 'usage': event.usage},
+            request_id=request_id,
+            sequence_number=seq + 1,
+        ))
+
+    except WebSocketDisconnect:
+        # Client closed; LangGraph thread checkpoint already persisted to PVC
+        pass
+    except Exception as exc:
+        await ws.send_json(format_envelope(
+            'error',
+            payload={'error': str(exc), 'code': 'runtime_panic', 'fatal': True},
+            request_id=envelope.get('request_id', 'unknown'),
+        ))
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+```
+
+**並發處理**：
+
+- FastAPI + uvicorn + asyncio 天然支援多個 WS connection 同時
+- 一個 pod 同時服務多個 WS connection（同 project 內多 user / 多 thread 並行）
+- LangGraph thread isolation 透過 `thread_id`（= channel_id）
+- 同 thread 不允許並行 invoke（用 in-process per-thread asyncio.Lock）— 同 channel 同時兩個 WS request 第二個會 wait
+- 跨 thread 並行 OK
+
+**Module-level shared state**：
+
+- `LangGraphRuntime` 是 module 級單例（避免每 connection 重建 graph）
+- `mcp_snapshot` 是 module 級 in-memory dict（inotify watcher 更新）
+- `skill_snapshot` 同上
+- 所有 thread-specific state（messages / tool_call history）走 LangGraph checkpoint store（thread_id 分隔）
+
+**Heartbeat 整合**：
+
+- FastAPI WebSocket 內建 ping/pong（`ping_interval=30, ping_timeout=60` 從 client 端設）
+- 不需 application-level ping/pong（v1 簡單）
+
+**Resource limits per connection**：
+
+- 每 WS connection 不開 thread；asyncio 單 event loop
+- LangGraph subprocess invoke：每 tool_call 起一個 subprocess（§3 / §6 細節）
+- 防 memory exhaust：pod-level cgroup limits（§6）
+
+### §5.9 Affected files / new files（§5 範圍預測）
+
+**新建（agent-runtime image source，`woow-paas-agent-runtime` repo）**：
+
+- `runtime/transport/ws_server.py` — FastAPI WebSocket route
+- `runtime/transport/auth.py` — HS256 token verify
+- `runtime/transport/envelope.py` — JSON envelope serializer + type enum
+- `runtime/state/mcp_reloader.py` — ConfigMap inotify watcher
+- `runtime/state/template_reloader.py` — Template hot reload handler
+- `runtime/state/skill_reloader.py` — Skill snapshot reloader
+- `runtime/langgraph_runtime.py` — Module-level LangGraph singleton + stream
+
+**新建（Odoo addon）**：
+
+- `src/services/agent_runtime_client.py` — HTTP/WS client wrapper to paas-operator + pod
+- `src/controllers/agent_runtime_webhook.py` — paas-operator → Odoo webhook receiver
+- `src/security/ir_rules.xml` — webhook endpoint sudo (auth=none)
+
+**新建（paas-operator）**：
+
+- `extra/paas-operator/src/services/jwt_signer.py` — HS256 token signer
+- `extra/paas-operator/src/services/webhook_dispatcher.py` — outbound webhook + retry
+- `extra/paas-operator/src/api/agent_runtimes.py` — 既有（§2.11）內加 sign + webhook 邏輯
+- `extra/paas-operator/src/services/mcp_invalidator.py` — patch ConfigMap + WS push
+
+**修改（Odoo addon）**：
+
+- `src/controllers/ai_assistant.py` — SSE generator 重寫（§5.6 pseudocode）
+- `src/controllers/__init__.py` — 加 agent_runtime_webhook import
+- `src/models/agent_session.py` — 加 `last_synced_at` / `last_state_event_ts` fields
+- `src/models/__init__.py` — import agent_runtime_client（service）
+- `src/__manifest__.py` — bump version + 加 controller XML
+- `requirements.txt` — 加 `websockets` (client)；`PyJWT` (HS256 sign — paas-operator 端)
+
+**修改（image / chart）**：
+
+- `woow-paas-charts/charts/agent-runtime/templates/secret.yaml` — `agent-runtime-auth-secret` 跨 namespace 拉取
+- `woow-paas-charts/charts/agent-runtime/templates/deployment.yaml` — env `SHARED_SECRET` from secret mount
+- `woow-paas-charts/charts/agent-runtime/templates/service.yaml` — ClusterIP for WS
+
+**不動**（保護 invariants）：
+
+- 既有 `src/static/src/paas/services/ai_service.js` 內 EventSource 邏輯 — frontend 零變更
+- `src/static/src/paas/pages/ai-chat/AiChatPage.js` SSE consumer — 零變更
+- 既有 `_sse_error_response` helper — 沿用
+- `mcp_server` schema / ACL（refactor branch finalized）
+- 既有 SSE event schema 對 frontend（`{chunk, done, full_response, message_id, error, warning}`）— 沿用
+
+### §5.10 Risks
+
+| Risk | 嚴重度 | Mitigation | Rollback |
+|------|-------|-----------|---------|
+| WS connection drop mid-stream → SSE generator hang / Odoo worker 卡住 | 高 | ping/pong heartbeat（30s ping，60s pong timeout）；asyncio.wait_for 包關鍵 await；Odoo worker thread timeout 30 min（既有設定）| 重連；frontend 收到 SSE error event 後 user 手動 retry |
+| Odoo worker pool 容量：每 active conv 吃 1 worker | 高 | worker pool sizing 算清楚（既有 Odoo `workers` 設定）；100 active conv ≈ 100 worker；不夠時擴容 | 既有 Odoo worker pool 設定增加 |
+| WS auth token 過期但 conv 還在進行 | 中 | 1h exp + Odoo 端 detect 401 後 re-spawn-or-attach 拿新 token 自動續 | user 重整頁面（極端情境）|
+| ConfigMap inotify delay (kubelet sync ~60s) | 中 | WS push 主路徑 < 5s；inotify 只兜底 | 60s 後最終一致 |
+| Pod LangGraph 全域 graph state 跨 thread 污染 | 高 | langgraph-checkpoint per-thread namespace；tool_dispatcher 用 thread_id 隔離 stdout/stderr | thread 重啟（不破壞 PVC 既有 checkpoint）|
+| WS heartbeat 失敗導致 false reap | 中 | reaper 看 `last-active` annotation（pod 自己 patch），WS heartbeat 失敗本身不觸發 reap | active session 由 WS 計時延展 last-active |
+| 重複 user_message envelope（user retry）| 低 | request_id 去重（pod 端 cache request_id 1 小時內）| 第二次 request_id 同 → reject + 回 cached result（idempotent）|
+| Webhook delivery 失敗（paas-operator → Odoo）| 中 | retry 3 次 exponential backoff；cron 輪詢兜底 | drift detection cron 補狀態 |
+| 大 tool_result payload 超過 WS message size | 低 | WS frame default max 1 MB；超過 chunk 化 by request_id + sequence_number | 超大 payload 用 ir.attachment 引用 + URL fallback |
+| Cancel envelope race（Odoo 送 cancel 但 pod 已完成）| 低 | cancel idempotent；pod 收到時 noop if request_id 已 done | 不影響正確性 |
+| Webhook HMAC secret leak | 高 | rotate secret + 重啟 paas-operator + agent pod；audit log | 同 §5.3 shared secret rotate |
+| WS message 順序錯亂（asyncio 並發）| 中 | sequence_number monotonic + Odoo 端排序 buffer（短延遲）| sequence_number 0 → N 連續驗證 |
+| SSE-WS 橋接的 event loop 不乾淨關閉 | 中 | try/finally + loop.close()；超時強制 cancel | 既有 SSE generator pattern 已測 |
+
+### §5.11 Open questions for leader sign-off（§5 escalation）
+
+> 5 條核心拍板需求。phase-planner 推薦已 inline 在 §5.2 / §5.3 / §5.4 / §5.5 給出；額外第 5 條（WS connection 生命週期）是 §5.8 探出來的設計選擇。**全部 sign-off 2026-05-22**（doc-wide consistency pass 完成後 batch）。
+
+1. ~~**[需 leader 拍板] WS envelope schema v1.0 frozen（§5.2）**~~ **[SIGNED-OFF 2026-05-22]** 12 types + envelope 結構 (version/type/request_id/correlation_id/sequence_number/timestamp/payload) frozen for v1
+2. ~~**[需 leader 拍板] Odoo ↔ Pod auth（§5.3）**~~ **[SIGNED-OFF 2026-05-22]** (b) HS256 bearer token + spawn-or-attach 簽發 + 1h exp + shared secret in K8s Secret
+3. ~~**[需 leader 拍板] ConfigMap reload 策略（§5.4）**~~ **[SIGNED-OFF 2026-05-22]** (a) hot reload via WS push 主 + inotify 60s 兜底
+4. ~~**[需 leader 拍板] State sync 機制（§5.5）**~~ **[SIGNED-OFF 2026-05-22]** (a) webhook + (b) cron 輪詢 fallback
+5. ~~**[需 leader 拍板 — §5 新發現] WS connection 生命週期**~~ **[SIGNED-OFF 2026-05-22]** 每 user_message 一個短連 WS connection（spawn-or-attach 拿 token → open WS → done → close）— 對比表保留歷史紀錄：
+
+  - 短連線優：implementation 簡單（既有 SSE 一對一 mapping）；token scope tight；無 mid-life connection state 問題
+  - 短連線劣：每 user_message 都重建 WS（增加 setup latency 50-200ms）；spawn-or-attach 每次都呼（pod 端內部 attach idempotent）
+  - 長連線優：低 latency continuous chat；setup cost 攤提
+  - 長連線劣：連線中 token 過期處理 / cleanup race / pod reap during connection 都要顯式處理；複雜度高
+
+**§5 額外探出來但不阻塞 §5 sign-off**（§6/§7 處理）：
+
+- WS 流量 TLS encryption（cluster-internal 是否強制 TLS or plain ws://）— §6 安全章
+- Token replay 攻擊深度防護（jti 已有，但需要 Pod 端 cache size）— §6
+- LangGraph tool_call subprocess 的 stdout 限制（max_output_kb）細節 — §6
+- Skill subprocess 對 mcp_snapshot 的讀取權限 — §6（subprocess env / cgroup share 問題）
+- 既有 `discuss_channel.py:55-118` `message_post` override 同步分支刪除時機 — §7
+- 既有 `ai_client.py` 整檔切割線（pure runtime 搬到 image source 後 Odoo 端剩什麼）— §7
+- 既有 SSE chunks 與新 envelope 的 mapping table（兼容 frontend 字面 `{chunk, done, full_response}`）— implementation 階段
+
+## §6 Sandbox security model (NetworkPolicy / RBAC / seccomp / TLS / rlimit / SSRF)
+
+> **Status**：Phase 1 — §6 draft submitted, awaiting sign-off
+> 依賴：§1.2 trust model (user-trusted)、§2.7 paas-ws-pa-{hash} namespace、§3.9 sandbox profile (bundle declare = metadata only / host 100% enforce)、§4.3 project_access ACL、§5.3 HS256 auth
+> 6 條 [需 leader 拍板] 留 §6.13 escalate（已預警 5 條 + 額外 RBAC granularity）
+
+### §6.0 Scope（§6 處理什麼、不處理什麼）
+
+**§6 處理**：
+
+- Pod-level securityContext baseline（runAsNonRoot / readOnlyRootFs / seccomp / dropAllCaps）— **比既有 cloud_service Bitnami chart 嚴格**（§1.1 Q4 sign-off 蘊含）
+- Filesystem 隔離（rootfs ro + /tmp tmpfs + /workspace PVC subdir + /etc/agent-runtime ConfigMap mount + secret mount）
+- NetworkPolicy egress 三類 allowlist（DNS + sidecar-backed MCP 跨 ns + external MCP 白名單機制）
+- Subprocess spawn 約束（env whitelist + rlimit baseline + timeout default + skill 拿資源走 LangGraph tool API 間接）
+- Cluster-internal TLS 強制與否
+- Token replay defense（jti cache + shared secret rotation 配套）
+- SSRF guard（延伸 refactor branch minimal 防護 + 是否再加 egress enforcement）
+- Odoo worker pool sizing（對應 §5.6 SSE generator 1 worker per active conv 阻塞）
+- RBAC（pod ServiceAccount + paas-operator ServiceAccount 邊界）
+- Audit logging（pod 結構化 JSON + Odoo audit trail）
+
+**§6 不處理**（留後續章節）：
+
+- Secret rotation 自動化流程細節 → implementation
+- Pod log 收集 stack（Loki / Elastic / Vector）→ deployment / SRE
+- Cluster admin policy（K8s admission controller / OPA / Kyverno）→ SRE
+- 完整 SSRF 加固（DNS rebinding / RFC1918 internal）→ refactor branch follow-up #52
+- 既有 cloud_service helm chart securityContext review → 不在 scope（與 agent-runtime 解耦）
+- Marketplace skill trust 強隔離（gVisor / Kata）→ v2
+
+### §6.1 Pod-level securityContext baseline
+
+**Pod spec**（agent-runtime helm chart `templates/deployment.yaml`）：
+
+```yaml
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001          # PVC mount ownership
+        seccompProfile:
+          type: RuntimeDefault   # docker/containerd default seccomp profile
+      containers:
+        - name: agent-runtime
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: []            # 不需要任何 capability
+            # runAsNonRoot 從 pod-level 繼承
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+```
+
+**對比既有 cloud_service Bitnami chart baseline**：
+
+| Setting | Bitnami（既有 cloud_service） | agent-runtime（本 epic） | 差異理由 |
+|---------|--------------------------|------------------------|---------|
+| `runAsNonRoot` | 通常 `true` | `true` | 一致 |
+| `runAsUser` | 1001 (Bitnami convention) | 10001 (避免衝突) | 區分 |
+| `seccompProfile` | 不設（user values 自加）| `RuntimeDefault` (強制) | 嚴格 |
+| `readOnlyRootFilesystem` | 不設 | `true` | 嚴格 |
+| `allowPrivilegeEscalation` | 不設（K8s default true） | `false` | 嚴格 |
+| `capabilities.drop` | 不設 | `["ALL"]` | 嚴格 |
+
+**為什麼比 cloud_service 嚴格**：
+
+- cloud_service 用 Bitnami chart 是因為相容多種 application（Odoo / n8n / PostgreSQL 等），baseline 偏寬以避免破壞 application
+- agent-runtime 是自家 image（`woow-paas-agent-runtime`），可以也應該設 stricter baseline
+- v1 trust model = user-trusted，但 skill subprocess 仍要 defense in depth（防 prompt injection 誘導 skill 做不該做的事）
+
+**Helm chart 不允許 user override 這些 securityContext**：
+
+- helm values 不暴露 `securityContext.*` 為 user-settable
+- 只允許 `agentRuntime.resources` (CPU/memory) 與 `agentRuntime.image.tag` 兩個 user-settable
+- 保證 admin cluster-wide baseline 一致
+
+### §6.2 Filesystem 隔離
+
+**Mount layout**（pod 內 view）：
+
+```
+/                                      ← rootfs (read-only, image content)
+├── /etc/agent-runtime/                ← ConfigMap mount (read-only)
+│   ├── mcp.json                       ← per-project MCP snapshot
+│   ├── template.json                  ← per-project agent_template snapshot
+│   └── skills.json                    ← per-project skill list
+├── /run/secrets/                      ← K8s secrets mount (read-only)
+│   └── agent-runtime-auth-secret      ← shared secret for HS256 (file-mounted, not env)
+├── /tmp/                              ← emptyDir tmpfs (read-write, ephemeral)
+│                                        ← subprocess HOME / temporary files
+├── /workspace/                        ← PVC mount (read-write, persistent)
+│   └── project-{pid}/
+│       ├── threads/{channel_id}/      ← LangGraph thread checkpoints
+│       ├── shared/                    ← cross-thread memory + notes + exports
+│       └── skills/cache/<name>/<ver>/ ← skill bundle cache (§3.5)
+└── /var/log/agent-runtime/            ← emptyDir for application logs (read-write, ephemeral)
+                                       ← container log stream 自動收 stdout
+```
+
+**Volume types**：
+
+| Mount | Type | RW | Persistence | 內容 |
+|-------|------|----|----|------|
+| `/` | image rootfs | RO | per-image | python / libs / agent-runtime code |
+| `/etc/agent-runtime/` | ConfigMap projected | RO | 隨 ConfigMap | MCP / template / skill snapshots |
+| `/run/secrets/` | Secret projected | RO | 隨 Secret | shared HS256 secret |
+| `/tmp/` | emptyDir + medium=Memory | RW | pod 內，restart 失 | subprocess scratch / Python temp |
+| `/workspace/` | PVC | RW | 跨 pod restart | thread checkpoints / shared memory / skill cache |
+| `/var/log/agent-runtime/` | emptyDir | RW | pod 內 | application log (also goes to stdout) |
+
+**subprocess fs view**（skill subprocess 繼承 pod mount）：
+
+- skill 看到的 `/` 與 main runtime 相同（無 chroot）
+- skill 寫 `/workspace/project-{pid}/skills/cache/<own>/output/`（runtime 設 cwd）
+- skill 不能寫 `/etc/agent-runtime/`（RO）
+- skill 不能讀 `/run/secrets/`（透過 subprocess env whitelist 防止，§6.4）
+
+**PVC subdir isolation**：
+
+- 同 project 內所有 thread 共用 `/workspace/project-{pid}/threads/` 但不同 channel_id subdir
+- runtime 不對 PVC 做 ACL（filesystem-level）— project_access 在 Odoo 端 gate
+- subprocess fs ACL 不額外加（v1 trust model 接受 cross-thread leak 風險）
+
+### §6.3 NetworkPolicy egress 細部（Q1 拍板用）
+
+**Three egress allowlist 類別**：
+
+| 類別 | 目標 | 鎖定機制 | 變動頻率 |
+|------|-----|---------|---------|
+| (1) DNS | `kube-system` ns (UDP/TCP 53) | namespaceSelector + port | 永久 static |
+| (2) Sidecar-backed MCP | project.workspace_ids 對應的 cloud_service ns | namespaceSelector + `woow.tw/workspace-id` label | 隨 project.cloud_service_ids 變動 |
+| (3) External MCP + AI provider | 任意外網 URL（含 cluster.local 外） | **白名單機制（Q1 拍板）** | 隨 project 配置 |
+
+**NetworkPolicy yaml skeleton**（helm chart 渲染）：
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-pa-{hash}-egress
+  namespace: paas-ws-pa-{hash}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-runtime
+  policyTypes: [Egress]
+  egress:
+    # (1) DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # (2) Sidecar-backed MCP — workspace_ids 集合渲染為 N 條 rule
+    {{- range .Values.agentRuntime.workspaceIds }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              woow.tw/workspace-id: {{ . | quote }}
+      # MCP sidecar 通常 port 3000 / 3001
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 3001
+    {{- end }}
+    # (3) External egress — 依 hybrid scheme 決定（Q1）
+    {{- if .Values.agentRuntime.externalEgress.enabled }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8       # cluster pod CIDR
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16   # link-local (含 cloud metadata 169.254.169.254)
+              - 100.64.0.0/10    # CGNAT (Tailscale 等)
+              - 127.0.0.0/8      # loopback
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    {{- end }}
+```
+
+**External MCP 白名單機制三選項**：
+
+| 方案 | 機制 | 細粒度 | 維運 cost | 推薦 |
+|------|------|-------|---------|------|
+| (a) Per-project ConfigMap FQDN whitelist | helm chart 渲染 NetworkPolicy 對個別 FQDN allow | 最細（per-URL） | 高（NetworkPolicy 不支援原生 FQDN，需 egress gateway like Cilium or fork policy）| ✗ v1 過度 |
+| (b) Cluster-level admin allowlist | global allowlist，user 不可加 | 粗（cluster 一致）| 低 | ✗ 不符合 project 自治 |
+| **(c)（推薦）** Hybrid: project-level boolean + global RFC1918 deny | `project.external_mcp_allowed = Boolean`，True → 渲染 ipBlock allow 0.0.0.0/0 minus RFC1918 + cloud metadata；False → 純 sidecar-backed only | 中（per-project on/off）| 低 | ✓ |
+
+**選 (c) 的具體機制**：
+
+- Odoo `project.external_mcp_allowed` boolean field（**不算動 project schema 紅線嗎？** — 是 additive field，本 epic in-scope 蘊含）
+- 預設 False（保守）
+- admin 在 Odoo project setting 顯式打開（需顯式同意 SSRF 風險）
+- 打開後：渲染 NetworkPolicy egress (3) rule 允許 0.0.0.0/0 minus RFC1918 + cloud metadata + port 80/443
+- 改變該 boolean → 觸發 `sync-workspaces` endpoint → helm upgrade NetworkPolicy
+
+**為什麼 (a) per-FQDN allowlist 不可行（v1）**：
+
+- K8s NetworkPolicy 原生不支援 FQDN（只 IP / CIDR / podSelector / namespaceSelector）
+- FQDN egress 需要：
+  - CNI 支援 FQDN policy（Cilium 支援；Calico 部分支援；K3s default Flannel 不支援）
+  - Egress gateway / proxy（Squid / Istio egress gateway）— 多一條維運線
+- 本 cluster (woow-k3s) 用 Flannel — 不支援
+- 留 v2 評估升級 CNI 或加 egress gateway
+
+**為什麼 (b) cluster-level 不行**：
+
+- 不同 project 有不同 external 需求（A 用 OpenAI，B 用 Anthropic，C 用內部 LLM）
+- cluster-level allowlist 無法區分 per-project
+- 與 project 一等公民理念衝突
+
+### §6.4 Subprocess spawn 約束（Q2 拍板用）
+
+**phase-planner 推薦 rlimit baseline**：
+
+| Resource | 值 | 對應 SKILL.md frontmatter | 備註 |
+|----------|---|--------------------------|------|
+| `RLIMIT_CPU` | 30s | （無對應；bundle 不可放寬）| CPU time hard limit |
+| `RLIMIT_AS` (virtual memory) | 512 MiB | （無對應）| Address space limit |
+| `RLIMIT_NOFILE` | 64 | （無對應）| Open file descriptors |
+| `RLIMIT_NPROC` | 16 | （無對應）| Child procs / threads per user |
+| `RLIMIT_FSIZE` | 100 MiB | （無對應）| Max single file write |
+| `subprocess.run(timeout=)` | 60s | `timeout_seconds`（bundle hint，host cap）| Wall clock |
+| stdout max | 256 KiB | `max_output_kb`（bundle hint，host cap）| stdout buffer cut-off |
+
+**subprocess spawn pseudocode**（agent-runtime image `runtime/security/subprocess_runner.py`）：
+
+```python
+import os
+import resource
+import subprocess
+import signal
+
+# Constants — cannot be widened by SKILL.md bundle declare
+_HOST_HARD_RLIMITS = {
+    'cpu_seconds': 30,
+    'rss_bytes': 512 * 1024 ** 2,
+    'nofile': 64,
+    'nproc': 16,
+    'fsize_bytes': 100 * 1024 ** 2,
+}
+_HOST_WALL_TIMEOUT_SEC = 60
+_HOST_MAX_STDOUT_BYTES = 256 * 1024
+
+def _set_rlimits():
+    """Apply rlimits in child process before exec."""
+    r = _HOST_HARD_RLIMITS
+    resource.setrlimit(resource.RLIMIT_CPU,    (r['cpu_seconds'], r['cpu_seconds']))
+    resource.setrlimit(resource.RLIMIT_AS,     (r['rss_bytes'],    r['rss_bytes']))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (r['nofile'],       r['nofile']))
+    resource.setrlimit(resource.RLIMIT_NPROC,  (r['nproc'],        r['nproc']))
+    resource.setrlimit(resource.RLIMIT_FSIZE,  (r['fsize_bytes'],  r['fsize_bytes']))
+
+def _safe_env(skill_meta):
+    """Build env whitelist for skill subprocess. NO secrets pass-through."""
+    return {
+        'PATH': '/usr/local/bin:/usr/bin:/bin',
+        'HOME': '/tmp',
+        'LANG': 'en_US.UTF-8',
+        'PROJECT_HASH': os.environ['PROJECT_HASH'],   # readable for self-id
+        # explicit NOT passed (defense in depth, env whitelist):
+        # OPENAI_API_KEY / MCP api_key / SHARED_SECRET / DATABASE_URL / ...
+    }
+
+def spawn_skill_subprocess(skill_path, args, skill_meta, invoker_role):
+    """Spawn skill with hard rlimit + env whitelist + wall timeout."""
+    env = _safe_env(skill_meta)
+    bundle_timeout = min(
+        skill_meta.get('timeout_seconds', _HOST_WALL_TIMEOUT_SEC),
+        _HOST_WALL_TIMEOUT_SEC,
+    )
+    try:
+        proc = subprocess.run(
+            [skill_path, *args],
+            env=env,
+            preexec_fn=_set_rlimits,         # Unix only; agent-runtime 跑 Linux pod
+            timeout=bundle_timeout,
+            stdin=subprocess.PIPE,
+            input=json.dumps(skill_meta.get('input_args', {})),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            cwd=f'/workspace/project-{os.environ["PROJECT_ID"]}/skills/cache/{skill_meta["name"]}/{skill_meta["version"]}',
+        )
+        # Cut stdout to host max (bundle declare cannot raise)
+        bundle_max = min(
+            (skill_meta.get('max_output_kb', 256) * 1024),
+            _HOST_MAX_STDOUT_BYTES,
+        )
+        stdout = proc.stdout[:bundle_max]
+        return {
+            'exit_code': proc.returncode,
+            'stdout': stdout,
+            'stderr': proc.stderr[:8192],   # stderr capped harder
+            'truncated_stdout': len(proc.stdout) > bundle_max,
+        }
+    except subprocess.TimeoutExpired:
+        # subprocess.run timeout 已 SIGKILL；rlimit CPU 30s 也會自殺
+        return {'exit_code': -1, 'stdout': b'', 'stderr': b'TIMEOUT', 'timeout': True}
+```
+
+**Skill 拿 MCP / AI 的 indirect 機制**：
+
+- skill **不能直接呼** MCP API 或 OpenAI API（env 無 api_key）
+- skill 透過 stdin 接 args；透過 stdout return result
+- LangGraph runtime 把 skill 包成 `BaseTool`；runtime 主動 dispatch（先 call skill → skill stdout 帶結果 → runtime 再決定下步驟）
+- skill 想要「呼 MCP」？skill 用 LangGraph runtime 提供的「subprocess 通訊協議」回 `{call_mcp: <name>, args: {...}}` → runtime parse 後 dispatch；但這變成 nested invocation，**v1 不支援**（單純 single-shot skill）
+- v2 評估 nested skill→MCP invocation 路徑
+
+**為什麼 env 完全不 pass-through secrets**：
+
+- prompt injection 防護：LLM 被誘導 call skill，skill 若有 OPENAI_API_KEY → 可能上傳外送
+- skill 在 trust 模型內是 user-trusted，但 defense in depth：secret 是 platform-level，不該被 user-bundle 接觸
+
+### §6.5 Cluster-internal TLS（Q3 拍板用）
+
+**phase-planner 推薦：(b) v1 不強制 cluster-internal TLS；依賴 NetworkPolicy + namespace 物理隔離 + 對外強制 HTTPS**
+
+兩選項：
+
+| 方案 | Cluster-internal 流量 | 對外流量 | 實作 cost | 推薦 |
+|------|---------------------|---------|---------|------|
+| (a) 強制 TLS（mTLS or one-way）| Odoo↔Pod / pod↔mcp_server / pod↔AI_provider 全 TLS | 同 (b) | 高（cert lifecycle / rotation / CA / SAN）| ✗ |
+| **(b)（推薦）** 不強制 cluster-internal TLS | ws:// + http:// cluster-internal；NetworkPolicy + ns 物理隔離 | external MCP / AI provider 強制 HTTPS（refactor branch SSRF guard scheme check 已 enforce）| 低 | ✓ |
+
+**選 (b) 的理由**：
+
+- K8s NetworkPolicy + namespace 物理隔離 + CNI 級的 cluster pod CIDR 隔離已提供足夠 isolation for v1
+- mTLS 維運 cost 高（cert lifecycle / rotation / CA / SAN）— 對於 v1 trust model（user-trusted skill + admin-managed infra）是 over-engineering
+- Cluster-internal 流量在 worker node 上的 CNI plugin 級別本就難被嗅探（前提：cluster admin policy 沒被 compromise）
+- 對外（external MCP / AI provider）強制 HTTPS — 由 `mcp_server.url` scheme check 與 `_validate_mcp_url` 既有邏輯 enforce
+
+**(b) 加固點**：
+
+- shared secret 走 K8s Secret + mount as file（不寫 env 防止 process inspection leak）
+- HS256 token in WS URL query string 不適合（log 會記）— 改用 `Authorization: Bearer <token>` header（既有 §5.3 推薦）
+- paas-operator → Odoo webhook 走 HTTPS（既有 cloudflare ingress / cluster ingress LB）
+- 對 external MCP / AI provider 強制 HTTPS — refactor branch `_validate_mcp_url` 拒非 http(s) scheme（既有）；本 epic 再加 pod 端 outbound check（defense in depth）
+
+**v2 path to TLS**（不在本 epic）：
+
+- 引入 service mesh（Istio / Linkerd）→ 自動 mTLS
+- 或：手動 cert-manager + envoy sidecar
+- 配套 cert rotation 自動化
+
+### §6.6 Token replay defense（Q4 拍板用）
+
+**phase-planner 推薦：(a) in-memory LRU TTL cache per pod + 雙 secret window rotation**
+
+**jti cache 三選項**：
+
+| 方案 | 機制 | 跨 pod 一致 | Pod restart 後 | 實作 cost | 推薦 |
+|------|------|-----------|--------------|---------|------|
+| **(a)（推薦）** In-memory LRU TTL per pod | Python `cachetools.TTLCache(maxsize=10000, ttl=65*60)` | 否（pod 間獨立）| Cache reset；short replay window risk | 低 | ✓ |
+| (b) Redis shared across pods | 跨 pod 一致 | 是 | 持久 | 高（多 1 service 依賴 + 認證 + 容量） | ✗ |
+| (c) ConfigMap pod-local persist | K8s API call 太慢 for hot path | 否 | 持久 | 高 | ✗ |
+
+**選 (a) 的具體機制**：
+
+```python
+# agent-runtime image runtime/security/jti_cache.py
+from cachetools import TTLCache
+from threading import Lock
+
+# 1 hour token exp + 5 min clock skew buffer = 65 min cache TTL
+_JTI_CACHE = TTLCache(maxsize=10_000, ttl=65 * 60)
+_JTI_LOCK = Lock()
+
+def check_and_record_jti(jti: str) -> bool:
+    """Return True if jti is fresh; False if already seen (replay)."""
+    with _JTI_LOCK:
+        if jti in _JTI_CACHE:
+            return False
+        _JTI_CACHE[jti] = True
+        return True
+```
+
+**Replay window risk on pod restart**：
+
+- pod restart 後 cache 重置 → 已用過 jti 可被 replay 一次
+- 但：token exp = 1h，pod restart 多在 reap (≥30 min idle) 才發生 — restart 時所有 active token 多已過期
+- v1 接受此 risk（trust model + 1h exp 期短）
+- v2 評估 Redis（若 high-frequency replay attack 出現）
+
+**Shared secret rotation 配套（v1 admin 手動 + 雙 secret window）**：
+
+K8s Secret yaml：
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-runtime-auth-secret
+  namespace: paas-system
+type: Opaque
+data:
+  current: <base64 of current HS256 secret>
+  previous: <base64 of previous HS256 secret>  # nil 或同 current 在第一次部署時
+```
+
+**Rotation 流程**：
+
+1. **Phase 0**（穩定態）：secret 內 `current=X`, `previous=X`（值相同）；paas-operator 簽 token 用 X；pod 驗 token 試 X
+2. **Phase 1**（admin 開始 rotation）：admin 生成 Y → 改 K8s Secret 為 `current=Y, previous=X` → `kubectl rollout restart deployment/paas-operator`
+3. **Phase 2**（active token 過期窗口，1h）：
+   - paas-operator 新簽 token 用 Y
+   - 既有 active token（用 X 簽）仍 valid（pod 端驗時試 current=Y fail → fall back try previous=X succeed）
+   - 既有 active connection 不中斷
+4. **Phase 3**（過期窗口結束後）：admin 改 K8s Secret 為 `current=Y, previous=Y` → rollout restart → 完成 rotation
+
+**Pod 端驗證 pseudocode**：
+
+```python
+# agent-runtime image runtime/transport/auth.py
+import jwt
+
+def verify_token(token: str) -> dict:
+    """Try current secret first; fallback to previous (during rotation window)."""
+    secrets = read_secrets_from_mount()  # /run/secrets/agent-runtime-auth-secret/
+    current = secrets['current']
+    previous = secrets.get('previous', current)
+
+    last_err = None
+    for sec in (current, previous):
+        try:
+            claims = jwt.decode(token, sec, algorithms=['HS256'])
+            if not check_and_record_jti(claims['jti']):
+                raise ValueError('Token replay detected (jti reused)')
+            return claims
+        except jwt.InvalidSignatureError as e:
+            last_err = e
+            continue
+        except jwt.ExpiredSignatureError:
+            raise   # exp check fail — no point trying previous secret
+    raise ValueError(f'Token signature invalid against both current/previous: {last_err}')
+```
+
+### §6.7 SSRF guard
+
+**refactor branch 已有 minimal SSRF guard（保留繼承）**：
+
+`controllers/paas.py._validate_mcp_url` 已 enforce：
+
+- 拒 169.254.169.254 (AWS/GCP/Azure IMDSv1 IPv4)
+- 拒 IPv6 link-local (fe80::/10)
+- 拒 fd00:ec2::254 (AWS IMDSv2 IPv6)
+- 拒非 http(s) scheme
+- **允許 cluster.local**（sidecar-backed URL 形態必須允許）
+
+**本 epic 補強（defense in depth）**：
+
+- Pod 端 outbound MCP / AI provider HTTP client 在 connection 前**再次** SSRF check
+  - location：agent-runtime image `runtime/security/url_validator.py`
+  - 在 `langchain-mcp-adapters` 建 `MultiServerMCPClient` 前 validate config['url']
+  - 在 `langchain_openai.ChatOpenAI` 建 client 前 validate `api_base_url`
+- 不擴大 SSRF allowlist（既有 minimal 足）
+- 配合 §6.3 NetworkPolicy egress hybrid scheme：external MCP 必須通過 `project.external_mcp_allowed=True`
+  + URL 通過 SSRF check + DNS resolve 結果不能落 RFC1918 / cloud metadata IP
+
+**本 epic 不做**（留 follow-up #52）：
+
+- DNS rebinding 防護：時間差 attack（first resolve to public IP，second resolve to private IP）
+- TOCTOU race：URL validate 通過後實際 connect 時 DNS 變動
+- 完整 RFC1918 deny on egress（K8s NetworkPolicy 已 except RFC1918 to cluster pod CIDR，但 worker node DNS / hostNetwork 等 corner case 仍可能繞）
+
+### §6.8 Odoo worker pool sizing（Q5 拍板用）
+
+**問題敘述**：
+
+§5.6 SSE generator 設計為「open WS to pod → relay envelopes」— 每 active conversation 阻塞 1 Odoo worker thread（generator 內 asyncio loop run）。
+
+**phase-planner 推薦公式**：
+
+```
+required_workers = peak_concurrent_active_conv + baseline_workers
+                 = N + 16
+```
+
+| 變數 | 預設值 | 解釋 |
+|------|-------|------|
+| `peak_concurrent_active_conv` | 50（v1 SLO 上限）| 100 user × 50% 同時 chat 假設 |
+| `baseline_workers` | 16 | admin login / cron / RPC / OAuth / other API |
+| 推薦 | 66 | v1 deployment baseline |
+
+**警告機制**：
+
+- Odoo log warn if active SSE generator count > `0.8 * workers`：
+  ```
+  Odoo cron 每 30s 檢查 active SSE generator count（透過 controller-level counter）
+  超過 0.8 * workers → log warn + 寫 ir.config_parameter telemetry
+  ```
+- Dashboard widget（後台 Settings → Woow PaaS）顯示：
+  - Active SSE conn count
+  - Worker utilization %
+  - Queue depth（pending SSE requests）
+
+**Worker 不夠時行為**：
+
+- 第 N+1 個 SSE 請求進來時，werkzeug 在 worker pool 排隊
+- 超過 Odoo `proxy_read_timeout`（default 60s）→ ingress 端 timeout
+- Frontend 收到 SSE 連線失敗 → 顯示「服務忙碌中，稍後再試」
+
+**Deployment 拍板**：
+
+- helm chart values 暴露 `odoo.workers` 為 helm parameter
+- v1 baseline 66；隨 active conv 增長線性升
+- 實際 N 值 deployment 階段拍板（不在 §6 scope）
+
+**長期 path（v2）**：
+
+- 引入 async controller（Odoo 18 有部分 async 支援）— 不需要 1 worker per conv
+- 或：SSE relay 拉到獨立 sidecar（Odoo 不直接維持長連線；sidecar 接 SSE + paas-operator 端 WS）
+
+### §6.9 RBAC
+
+**Pod ServiceAccount 權限**（agent-runtime helm chart `templates/role.yaml`）：
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-pa-{hash}
+  namespace: paas-ws-pa-{hash}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-pa-{hash}-pod-self
+  namespace: paas-ws-pa-{hash}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames:
+      - "agent-pa-{hash}-mcp"
+      - "agent-pa-{hash}-template"
+      - "agent-pa-{hash}-skills"
+    verbs: ["get", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["agent-pa-{hash}"]
+    verbs: ["patch"]   # 自己 patch 自己 annotation last-active
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-pa-{hash}-pod-self
+  namespace: paas-ws-pa-{hash}
+subjects:
+  - kind: ServiceAccount
+    name: agent-pa-{hash}
+    namespace: paas-ws-pa-{hash}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-pa-{hash}-pod-self
+```
+
+**為什麼 pod 不允許 list other pods / read other secrets / 動 namespace**：
+
+- 最小權限原則
+- pod 內 LangGraph runtime + skill subprocess 都不需要這些
+- 若 future feature 需要（如「skill 互相 invoke」）再評估
+
+**paas-operator ServiceAccount 對 agent ns 的權限**（既有 helm.py `helm_service` + `k8s_service` 走 service account）：
+
+- create/delete/get/list/patch namespace（已有，限定 `paas-ws-` prefix）
+- helm release CRUD（透過 helm CLI binding to operator's SA）
+- create/patch ConfigMap（用於 spawn-or-attach 寫 mcp.json / template.json / skills.json）
+- patch Deployment replicas（scale to 0/1，§2.3 reaper / resume）
+- patch namespace annotations（TTL: `sandbox.woow.tw/expires`，§2.5 GC）
+- **不允許**：
+  - `pods/exec` / `pods/log`（v1 不開 admin shell；v2 評估）
+  - 跨 cluster admin operation
+
+**ServiceAccount token mount 政策**：
+
+- pod 不需要 ServiceAccount token （default automountServiceAccountToken=true 是大坑）
+- helm chart `deployment.yaml` 設 `automountServiceAccountToken: false`
+- 純 token replay 風險：若 pod 被入侵，attacker 拿不到 SA token → 不能呼 K8s API
+- runtime 自己 watch ConfigMap 用 inotify 不用 K8s API（不需要 SA token）
+
+**Q6 — Pod RBAC granularity（額外拍板）**：
+
+phase-planner 推薦的 RBAC 是最小：pod 只能 read 自己 ConfigMap + patch 自己 Deployment annotation。三選項：
+
+| 方案 | Pod RBAC | 風險 | 推薦 |
+|------|---------|------|------|
+| (i) 最小（推薦）| read own ConfigMap + patch own Deployment annotation；無 SA token mount | 最低 | ✓ |
+| (ii) 中等 | + read own pod status + list own pods | 中（pod 可探測自己狀態） | ✗ 不必要 |
+| (iii) 寬鬆 | + read other ConfigMap in same ns | 高（cross-project ConfigMap leak） | ✗ |
+
+### §6.10 Audit logging
+
+**Pod 端結構化 JSON log**（stdout，K8s logging stack 收集）：
+
+```json
+{
+  "ts": "2026-05-22T10:30:45.123Z",
+  "level": "info",
+  "event": "tool_invoke",
+  "project_hash": "jbswy3dpehpk3pxp",
+  "channel_id": 42,
+  "request_id": "uuid-v4",
+  "invoker_user_id": 105,
+  "invoker_role": "user",
+  "tool_name": "search_docs",
+  "tool_type": "skill",     // or "mcp"
+  "duration_ms": 234,
+  "status": "ok"            // or "error", "timeout", "unavailable"
+}
+```
+
+**事件 types**：
+
+| Event | trigger | Pod or Odoo |
+|-------|---------|-------------|
+| `pod_spawn` | pod startup 完成 | Pod |
+| `pod_reap` | scale to 0 完成 | paas-operator |
+| `pod_resume` | scale to 1 完成 | paas-operator |
+| `ws_connect` / `ws_disconnect` | WS handshake | Pod |
+| `user_message_received` | first envelope | Pod |
+| `tool_invoke` | LangGraph dispatch | Pod |
+| `tool_unavailable` | tool resolve fail | Pod |
+| `mcp_invalidate_received` / `template_update_received` | WS hot reload event | Pod |
+| `auth_failure` | token verify fail | Pod |
+| `replay_attempt_blocked` | jti cache hit | Pod |
+| `subprocess_timeout` / `subprocess_oom` | skill rlimit hit | Pod |
+| `error` | runtime exception | Pod |
+
+**Odoo 端 audit log**：
+
+- Webhook signature verify fail → log warn + counter（既有 Odoo log infra）
+- project_access role 變動 → mail.message audit trail（沿用 Odoo mail.thread audit pattern）
+- agent quota override 變動 → audit
+- spawn-or-attach call → audit (debug level)
+- secret rotation phase change → log critical
+
+**不在本 §6 scope（→ deployment / SRE）**：
+
+- cluster logging stack 細節（Loki / Elastic / Vector / Fluentd）
+- log retention policy
+- log aggregation / dashboard / alerting rule
+- PII redaction in audit log
+
+### §6.11 Affected files / new files（§6 範圍預測）
+
+**新建（agent-runtime image source）**：
+
+- `runtime/security/subprocess_runner.py` — rlimit + env whitelist + timeout
+- `runtime/security/url_validator.py` — pod 端 SSRF check (defense in depth)
+- `runtime/security/jti_cache.py` — TTLCache + lock
+- `runtime/security/audit_logger.py` — structured JSON logger to stdout
+- `runtime/transport/auth.py` — already in §5.9；本節補 dual-secret rotation 支援
+
+**新建（agent-runtime helm chart `woow-paas-charts/charts/agent-runtime/templates/`）**：
+
+- `network-policy.yaml` — egress 三類 allowlist（DNS + sidecar-backed + external hybrid）
+- `service-account.yaml` — pod ServiceAccount
+- `role.yaml` — minimal RBAC（read own ConfigMap + patch own Deployment annotation）
+- `role-binding.yaml` — bind SA to Role
+- `secret.yaml` — `agent-runtime-auth-secret` 包 current/previous 雙 key（從 cluster Secret reference）
+
+**修改（Odoo addon）**：
+
+- `src/models/project_project.py` — 加 `external_mcp_allowed = fields.Boolean(default=False)`（§6.3 hybrid scheme）
+- `src/models/__init__.py` — 確認 import
+- `src/views/project_external_mcp_setting.xml` — admin UI 顯式同意 SSRF risk + 切換 boolean
+- `src/security/ir.model.access.csv` — project external_mcp_allowed 屬於 project admin（透過 project_access 控）
+
+**修改（paas-operator）**：
+
+- `extra/paas-operator/src/api/agent_runtimes.py` — sync-workspaces 內讀 project.external_mcp_allowed + 渲染對應 NetworkPolicy values
+- `extra/paas-operator/src/services/jwt_signer.py` — dual-secret rotation 支援（read current + previous from Secret）
+- `extra/paas-operator/src/services/audit_logger.py` — webhook outbound + audit emit
+
+**不動**（保護 invariants）：
+
+- 既有 `controllers/paas.py._validate_mcp_url` SSRF guard（refactor branch cycle 4 finalized）
+- `mcp_server` / `mcp_tool` schema / ACL
+- `cloud_service` 既有 securityContext（cloud_service 用 Bitnami chart 不收緊；agent-runtime 自家設 stricter）
+- Odoo std field
+
+### §6.12 Risks
+
+| Risk | 嚴重度 | Mitigation | Rollback |
+|------|-------|-----------|---------|
+| Odoo worker pool 不夠 → SSE 排隊 / timeout | 高 | warn at 0.8 utilization；Dashboard 顯示；helm chart 暴露 `odoo.workers` 可調 | helm upgrade 加 worker；長期 path 走 v2 async controller |
+| Subprocess fork bomb → cgroup limit hit → pod crash | 中 | RLIMIT_NPROC=16 + cgroup memory limit；pod restart 自動 | 持續 crash → admin 手動 reset workspace（清 PVC） |
+| RLIMIT_NOFILE 太低（64）→ skill 開檔失敗 | 低 | 大多 skill 不需要 > 64 file；可 per-skill SKILL.md request raise（host cap 仍 in place）| 提高 baseline if real bottleneck |
+| External MCP allowlist 漏網 → SSRF | 高 | hybrid scheme `external_mcp_allowed=False` default；pod 端 url validate；NetworkPolicy ipBlock except RFC1918 | admin 改 external_mcp_allowed=False；audit log review |
+| jti cache pod restart → short replay window | 中 | token exp 1h + pod restart 主要在 reap (≥30 min idle)；active token 多已過期 | v2 評估 Redis |
+| Shared secret 過期未 rotate → spawn-or-attach 失敗 | 高 | dual-secret window；admin alert 30 day 提醒 | 緊急 rotation（流程 §6.6） |
+| Audit log 失敗（stdout 滿 / collector down）| 中 | container log stream fallback；K8s logging stack alert | logging stack 自己的 SRE |
+| NetworkPolicy K3s reply-traffic bug | 中 | dev-sandbox chart 已 patch（[[mcp-url-redesign]] 已記）；agent-runtime chart 沿用 | helm upgrade |
+| Subprocess child 透過 RLIMIT_NPROC 自殺 | 低 | 16 child procs/threads 對 skill 足夠；rare case 提高 | per-skill RLIMIT raise |
+| Pod RBAC patch annotation 太常 → etcd 壓力 | 中 | last-active annotation 30s 內 throttle；high-traffic project 才頻繁 | throttle interval up |
+| ServiceAccount token mount → token leak | 高 | `automountServiceAccountToken: false`；pod 不需要 SA token | helm chart enforce |
+| ConfigMap update lag 60s → mid-flight stale | 中 | WS push 主路徑 < 5s；inotify 兜底；mid-flight tool_call 完成走舊（§5.7） | hot reload |
+| Subprocess stdout 超過 256 KiB cut-off | 低 | bundle hint `max_output_kb` <= 256；超過 truncate + log warn | per-skill request raise |
+| Subprocess timeout 超過 30s CPU + 60s wall | 低 | RLIMIT_CPU + wall timeout 雙保險；skill 應分多 invocation | per-skill request raise |
+| Pod admin endpoint（reset workspace etc）被誤觸 | 中 | admin endpoint 走獨立 auth + project_access role check | audit log 反查 |
+| 雙 secret rotation 中途新 token 拒舊 pod | 低 | rotation 期間 pod 端嘗 current then previous；ws connection 短連（§5.11 sign-off）→ rotation 不破現有 conn | rotation flow §6.6 |
+| External MCP URL DNS rebinding attack | 中 | v1 不防（follow-up #52）；mitigation：pod 端 cache DNS result 短期；連續 connect 用同 IP | follow-up #52 |
+| project_access role 變動延遲反映到 pod | 低 | role check 在 Odoo controller 端 gate（每 user_message 一次）；pod 端不 cache role；隨即生效 | OK |
+| Audit log PII 漏洩（user_id / message body）| 中 | structured JSON log redact body；user_id 保留（內部 ID）；mail.message body 仍在 Odoo DB | log redaction policy |
+
+### §6.13 Open questions for leader sign-off（§6 escalation）
+
+> 6 條核心拍板需求。phase-planner 推薦已 inline 在 §6.3 / §6.4 / §6.5 / §6.6 / §6.8 / §6.9 給出。**全部 sign-off 2026-05-22**。
+
+1. ~~**[需 leader 拍板] External MCP allowlist 機制（§6.3）**~~ **[SIGNED-OFF 2026-05-22]** (c) Hybrid: `project.external_mcp_allowed` boolean + 0.0.0.0/0 minus RFC1918+cloud metadata egress + port 80/443
+2. ~~**[需 leader 拍板] Subprocess rlimit baseline 數值（§6.4）**~~ **[SIGNED-OFF 2026-05-22]** CPU 30s / RSS 512 MiB / NOFILE 64 / NPROC 16 / FSIZE 100 MiB / wall 60s / stdout 256 KiB
+3. ~~**[需 leader 拍板] Cluster-internal TLS 強制與否（§6.5）**~~ **[SIGNED-OFF 2026-05-22]** (b) v1 不強制 cluster-internal TLS + 對外 HTTPS 強制（refactor branch SSRF guard 已 enforce）
+4. ~~**[需 leader 拍板] Token replay defense + secret rotation（§6.6）**~~ **[SIGNED-OFF 2026-05-22]** (a) in-memory `TTLCache(maxsize=10_000, ttl=65*60)` per pod + 雙 secret window 4-phase 手動 rotation
+5. ~~**[需 leader 拍板] Odoo worker pool sizing（§6.8）**~~ **[SIGNED-OFF 2026-05-22]** baseline 公式 `peak_concurrent_active_conv + 16`；v1 預設 66 workers；warn at 0.8 utilization + dashboard widget；deployment 階段定實際 N
+6. ~~**[需 leader 拍板 — 新增] Pod RBAC granularity（§6.9）**~~ **[SIGNED-OFF 2026-05-22]** (i) 最小 — read own ConfigMap + patch own Deployment annotation；`automountServiceAccountToken: false`
+
+**§6 額外探出來但不阻塞 §6 sign-off**（§7 / implementation / deployment 處理）：
+
+- `project.external_mcp_allowed` field 加在 project 上是 additive schema change（不算 task brief 紅線「動 project schema」） — §7 prereq 已蘊含可加 additive field
+- pod log collection stack（Loki / Elastic / Vector）— deployment / SRE
+- 對 LangGraph runtime in-process 共享 mcp_snapshot 的 thread-safety — implementation 階段（asyncio + threading 邊界）
+- Subprocess child 對 PVC `/workspace/project-{pid}/shared/` 寫權限與 `invoker_role` 對應的 enforcement（§4.5 寫權限矩陣的 pod 端 implementation 細節）— implementation
+- Audit log retention / SIEM 整合 — SRE
+- 完整 SSRF 加固（DNS rebinding / TOCTOU）— refactor branch follow-up #52
+- gVisor / Kata for marketplace skill（v2）— 不在本 epic
+
+## §7 Migration path (LangGraph 從 Odoo 搬遷的階段策略)
+
+> **Status**：Phase 1 — §7 full draft submitted, awaiting sign-off
+> §7.0 prerequisite 已 sign-off 2026-05-21；§7.0.7 補上 additive schema 集成（含 §6 sign-off 的 `project.external_mcp_allowed`）；§7.1 - §7.10 為本次新加 full draft
+> 5 條 [需 leader 拍板] 留 §7.10 escalate（migration phase 切片 / cross-repo CI trigger / dual-write window / ai_client.py 刪除時機 / Fleet bundle 對接時機）
 
 > §7 完整 draft 留後續 phase；本節先 inline 寫 **prerequisite section**（per-project pivot 對 §7 的硬約束）。
 
@@ -1952,10 +4084,10 @@ class ProjectProject(models.Model):
 
 新 schema 下：
 
-- `primary_cloud_service_id` 從 `related` 改 **獨立 Many2one**（user 在 multi-binding project 內手動選 primary），或計算 from `project_id.cloud_service_ids[:1]`
-- `extra_cloud_service_ids` domain 拆掉 `workspace_id =` 限制（project 跨 workspace 後 task 跟著跨），改 `domain="[('id', 'in', parent.project_id.cloud_service_ids.ids)]"` 限制 task 只能選 project 已綁的 cloud_service
+- **`primary_cloud_service_id`** — **[SIGNED-OFF 2026-05-22 — hybrid (c)]** 獨立 `Many2one`；default 從 `project_id.cloud_service_ids[:1]` (M2M order by id ASC)；user 可在 task form 改（domain `[('id', 'in', project_id.cloud_service_ids.ids)]`）；`project.cloud_service_ids` 變動時若既有 primary 仍 ∈ new set 則保留，否則 reset to first
+- **`extra_cloud_service_ids`** — domain 拆掉 `workspace_id =` 限制（project 跨 workspace 後 task 跟著跨），改 `domain="[('id', 'in', parent.project_id.cloud_service_ids.ids)]"` 限制 task 只能選 project 已綁的 cloud_service
 
-具體選哪個 §7 final draft 拍板（這是 §1.3 提到的 task connect change，**留 §7**）。
+> **§7.0.3 ambiguity 補拍 2026-05-22**（tester re-engage Q2）：採 hybrid (c) auto-default + user override，對齊同 epic §4.7 `agent_session.primary_workspace_id` pattern。Tester T.5 test 對應加 user override case。Q1 cross-ws M:N walk OR semantics（tester R.7 不變）見 §1.3.2 implicit。
 
 #### §7.0.4 `cloud_service._do_cleanup` 從 1:N 延伸到 M:N
 
@@ -2031,9 +4163,618 @@ user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
 - `woow-paas-cd` Fleet bundle 需新增 `agent-runtime` 部署 spec — bundle 設定誰來建（DevOps 或 phase-implementation 階段）
 - 不在本 epic phase-planner scope
 
-### §7.1 ~ §7.N — TODO
+#### §7.0.7 Additive schema changes（彙整本 epic 全部 additive）
 
-LangGraph 程式碼搬家順序、Odoo addon 內 `ai_client.py` / `discuss_channel.py` / `controllers/ai_assistant.py` 改動順序、跨 repo CI trigger 機制（§1.2 跨 repo coordination 預告）、`langchain_*` Odoo 依賴清理時機 — 全部留 §7 draft 階段展開。
+獨立於 §7.0.2 project M2O→M2M（break change），下列是 additive — 既有 record 不影響：
+
+| 模型 | 動作 | §引用 |
+|------|------|------|
+| `project.project` | 加 `external_mcp_allowed = Boolean(default=False)` | §6.3 |
+| `project.project` | 加 `project_access_ids = One2many('project_access', 'project_id')` 反向 | §4.3 |
+| `agent_template` | 新 model（M:N to project / skill / mcp_server） | §4.1 |
+| `agent_session` | 新 model（per-project lifecycle + `project_namespace_hash` + `primary_workspace_id` + `quota_override_*`） | §2.12 + §4.7 + §4.8 |
+| `skill` | 新 model（per-project + `bundle_attachment_id` + `bundle_sha256` + state） | §3.2 |
+| `project_access` | 新 model（partner_id + role + project_id） | §4.3 |
+| `cloud_service` | 加 `project_ids = Many2many(... project_cloud_service_rel ...)` reverse（同 §7.0.2 step 6 的 relation table） | §1.3.1 + §7.0.2 |
+
+**Migration 落地動作（post-migrate.py 補步驟）**：
+
+- **Step 7**：CREATE TABLE for new models（Odoo `--init` 自動，無需手寫 SQL）
+- **Step 8**：`UPDATE project_project SET external_mcp_allowed = FALSE WHERE external_mcp_allowed IS NULL`（idempotent default backfill）
+- **Step 9**：既有 project bootstrap `project_access`（取既有 cloud_service.workspace_id 的 owner partner，建 owner role row；若 project 已 unbound 從任一綁定 cloud_service workspace 取）
+- **Step 10**：既有 default ai.assistant 若 referenced by `default_ai_assistant_id` config_parameter → 維持 fallback，**不**自動轉成 agent_template（§7.5）
+
+### §7.1 Migration phase 切片（Q1 拍板用）
+
+從現狀（Odoo addon 內 LangGraph + ai_client.py 同步路徑）到目標（agent-runtime pod 內 LangGraph + WS transport），**phase-planner 推薦 7 個 phase**（每 phase 獨立可 ship + rollback）：
+
+```
+Phase A (schema + models) ─→ Phase B (image + chart, no deploy) ─→ Phase C (operator + odoo client)
+                                                                            │
+Phase G (Fleet + prod) ─← Phase F (dependency cleanup) ─← Phase E (gradual rollout) ─← Phase D (pilot + dual-write start)
+```
+
+#### Phase A — Schema migration + new models
+
+**Goal**：把 project schema 從 M2O 升到 M:N + 新增 agent_template / agent_session / skill / project_access models，但**還沒**拆 LangGraph runtime 出去。
+
+**Scope（ship 什麼）**：
+
+- §7.0.2 6-step project schema migration（M2O `cloud_service_id` → M:N `cloud_service_ids`）
+- §7.0.3 task model 連鎖修改（primary_cloud_service_id 從 related 改獨立 M2O + extra domain 拆 same-workspace 限制）
+- §7.0.4 `cloud_service._do_cleanup` 1:N → M:N filter 改寫
+- §7.0.5 ACL dual-leg walk path M2O → M2M
+- §7.0.7 全部 additive schema（external_mcp_allowed + agent_template / agent_session / skill / project_access models + project_access bootstrap）
+- 既有 ai_client.py + discuss_channel.message_post 同步分支 **不動**（仍走舊路徑）
+
+**不 ship**：
+
+- Agent runtime pod
+- WS transport
+- paas-operator agent-runtime endpoints
+
+**Acceptance criteria（簡列；對照 §7.7 hand-off 詳列）**：
+
+- 既有 ai_client.py 路徑 100% backward compat（regression test 全綠）
+- project 可手動加多 cloud_service via M:N
+- project_access 對既有 project 自動 bootstrap owner role
+- mcp_server / mcp_tool ACL dual-leg domain M2M walk 通過 refactor branch existing test 9-12 case
+
+**Rollback**：
+
+- git revert + post-migrate.py rollback SQL（DROP project_cloud_service_rel table + 重建 UNIQUE constraint + drop new model tables）
+- 既有 ai_client.py 同步路徑無動，roll back 即還原
+
+#### Phase B — Image source + helm chart in repo（不 deploy）
+
+**Goal**：建 `woow-paas-agent-runtime` repo + helm chart in `woow-paas-charts/charts/agent-runtime/`，CI 跑 lint/test/build/push image to JCR，**不 deploy 到任何 cluster**。
+
+**Scope**：
+
+- 新建 `woow-paas-agent-runtime` repo（structure: `runtime/{transport,langgraph,security,skills,state}/`，Dockerfile，requirements.txt，tests/）
+- LangGraph runtime / WS server / subprocess runner / SSRF check / jti cache / audit logger — code lift from既有 ai_client.py + 新加 transport / security layer
+- 新建 `woow-paas-charts/charts/agent-runtime/`（templates: namespace / deployment / service / configmap-mcp / network-policy / serviceaccount / role / rolebinding / secret）
+- CI on tag push: build image → push JCR with tag → §7.2 cross-repo dispatch
+
+**不 ship**：
+
+- 不部署到任何 cluster
+- Odoo 不 reference image / chart（純倉庫存在）
+
+**Acceptance criteria**：
+
+- image build CI 通過
+- helm chart lint + `helm template` 渲染通過
+- 本地測試 image 啟動 + WS server respond `/v1/chat` 連線（mock token）
+
+**Rollback**：
+
+- tag delete + image registry delete tag（無 deploy 引用）
+
+#### Phase C — paas-operator agent-runtime router + Odoo client side stub
+
+**Goal**：開通 paas-operator agent-runtime endpoints + Odoo 端 `agent_runtime_client.py` service + webhook receiver controller。**還沒** flip SSE generator 走新 path（Odoo 內仍走 ai_client.py 同步）。
+
+**Scope**：
+
+- paas-operator: 新建 `extra/paas-operator/src/api/agent_runtimes.py`（§2.11 endpoints + §5.3 jwt signer + §5.5 webhook dispatcher + §6.3 NetworkPolicy update path）
+- paas-operator: 加 `agent-runtime-auth-secret` K8s Secret mount + dual-secret rotation 支援
+- Odoo: 新建 `src/services/agent_runtime_client.py` (HTTP/WS client wrapper)
+- Odoo: 新建 `src/controllers/agent_runtime_webhook.py` (state-update receiver with HMAC verify)
+- Odoo: 加 `requirements.txt` `websockets` + `PyJWT`
+- 既有 ai_client.py + SSE generator **不改**
+
+**不 ship**：
+
+- frontend 任何變動
+- SSE generator 切換邏輯
+
+**Acceptance criteria**：
+
+- paas-operator unit test `POST /api/agent-runtimes/spawn-or-attach` 在 mock K8s 下成功 sign JWT 並返回 pod_ws_url（即使 pod 不存在）
+- Odoo `agent_runtime_client` 可從 dev shell 呼到 paas-operator 並收 token
+- Webhook receiver 驗 HMAC + 寫 audit log
+
+**Rollback**：
+
+- paas-operator endpoint 改 410 Gone（無 caller）
+- Odoo 端 service code 留 dormant
+
+#### Phase D — Pilot + dual-write start（per-project flag）
+
+**Goal**：第一個 pilot project（admin-controlled flag）切換到 agent-runtime pod；非 pilot project 仍走舊 ai_client.py 同步。
+
+**Scope**：
+
+- `project.project` 加 `use_agent_runtime = Boolean(default=False)` field（**§7.1 Q1 拍板**：是否加此 toggle field；推薦加）
+- `controllers/ai_assistant.py` SSE generator 內加 if-else：
+  ```python
+  if project.use_agent_runtime:
+      # 走 §5.6 新版（spawn-or-attach + WS）
+  else:
+      # 走既有 ai_client.py 同步分支（保留）
+  ```
+- 第一個 pilot project（admin 在 Odoo UI 顯式開 flag）→ 走 pod
+- monitor: cold start latency / error rate / WS connection health / worker pool util
+- pilot 至少 2 週觀察期 + 至少 3 個 active conversation
+
+**不 ship**：
+
+- 非 pilot project 自動切換
+- Odoo dependency 清理
+
+**Acceptance criteria**：
+
+- pilot project: chat invoke 成功 → 收 SSE chunks → 與 ai.assistant 既有 path 行為等效（功能對等）
+- 非 pilot project: 行為零變動（regression test 綠）
+- 監控 dashboard: pilot 對應 namespace 出現 active pod + last-active annotation 流動
+
+**Rollback**：
+
+- pilot project `use_agent_runtime = False`（一次 click）→ 立即 fallback 到 ai_client.py 同步
+- agent pod 自然 reap（30 min idle）
+
+#### Phase E — Gradual rollout
+
+**Goal**：admin 漸進 enable `use_agent_runtime` for additional projects；最終 100% project on agent-runtime。
+
+**Scope**：
+
+- Admin Dashboard widget：批次 enable / disable `use_agent_runtime` per project
+- 監控 metric: rollout 進度 + error rate per project
+- Phase E 期間預期持續 4-8 週（依 production project 數量）
+
+**不 ship**：
+
+- 自動 enable（admin 仍須顯式批准）
+
+**Acceptance criteria**：
+
+- ≥ 80% project on agent-runtime + observation period ≥ 2 weeks 無 regression
+- 100% project on agent-runtime 達 milestone
+
+**Rollback**：
+
+- per-project disable flag（同 Phase D 機制）
+- 若大量 project 同時遇問題 → admin 觸發 cluster-wide global toggle（新 config_parameter `force_disable_agent_runtime`）
+
+#### Phase F — Old path cleanup（destructive）
+
+**Goal**：在 Phase E 全部 100% project on agent-runtime + 觀察期至少 4 週後，刪除舊路徑 code。
+
+**Scope（破壞性）**：
+
+- 刪 `discuss_channel.message_post` override 內 LangChain 同步分支（§1.1 Q6 sign-off 蘊含）
+- 刪 `ai_client.py` 內 LangGraph 相關 method（`_build_agent_graph` / `_async_agent_invoke` / `_async_agent_stream`）
+- 改 `ai_client.py` 為純 metadata serializer（保留 `from_assistant` / `_build_mcp_server_config` 等 ORM-bound helper；移除 streaming/tool-call 邏輯）
+- 從 Odoo `__manifest__.py` 移除 `external_dependencies`：`langchain_core` / `langgraph` / `langchain_openai`
+- 保留 `langchain_mcp_adapters`（`mcp_server.action_sync_tools` cron 仍需要 — 留 v2 處理）
+- 移除 `project.use_agent_runtime` flag（不再有 dual-mode）
+- 移除 fallback `default_ai_assistant_id` config_parameter 邏輯（強制 agent_template 必設）— **§7.1 Q1 + Q3 拍板**
+
+**不 ship**：
+
+- 改前端
+- 動 mcp_server schema
+
+**Acceptance criteria**：
+
+- Odoo container image 體積測量縮小 ≥ 30%
+- 既有 chat 場景無 regression（all green)
+- Audit log 確認無人 hit old path（log 含 `path: legacy_sync` 標記，0 count after Phase F）
+
+**Rollback**（破壞性 — 必須 Phase D-E 觀察期長且穩定）：
+
+- git revert Phase F commit
+- 重新加 `external_dependencies` + pip install
+- `use_agent_runtime` flag 重新加回 + default True 保 prod project state
+
+#### Phase G — Fleet bundle + production deploy
+
+**Goal**：把 agent-runtime helm chart + paas-operator 新版 透過 `woow-paas-cd` Fleet bundle deploy 到 production cluster。
+
+**Scope**：
+
+- `woow-paas-cd` Fleet bundle 新增 `agent-runtime` 部署 spec（reference `woow-paas-charts/charts/agent-runtime`）
+- paas-operator 新版 deployment via 既有 cd path
+- dev → stg → prod 階段 rollout（仿既有 deployment pattern）
+- 建立 Prometheus alert rules：cold start latency p95 / WS error rate / worker pool util / quota usage
+- 建立 Grafana dashboard：per-namespace agent pod state / per-project active conv
+
+**不 ship**：
+
+- v2 feature（marketplace skill / async controller / Redis jti cache）
+
+**Acceptance criteria**：
+
+- production cluster agent-runtime 部署成功
+- monitoring stack 收到 metrics + alert 觸發測試通過
+- 第一個 prod project 在 production agent-runtime 上 chat invoke 成功
+
+**Rollback**：
+
+- Fleet bundle revert（K8s GitOps 反向 sync）
+- 既有 production cloud_service 不受影響（不在同 namespace）
+
+### §7.2 Cross-repo CI trigger（Q2 拍板用）
+
+**phase-planner 推薦：(b) Cross-repo Gitea API dispatch（仿既有 `paas-odoo-ci` pattern）**
+
+三選項：
+
+| 方案 | 機制 | 觸發延遲 | 維運 | 推薦 |
+|------|------|---------|------|------|
+| (a) 統一版本號 + 手動 PR | image push 後 maintainer 手動 PR 到 charts bump tag | 高（人為） | 低（無自動化）| ✗ 不夠紀律 |
+| **(b)（推薦）** Cross-repo dispatch | image push tag → Gitea API dispatch to charts repo workflow → auto commit bump | < 5min | 中（兩 workflow 維護） | ✓ 對齊 `paas-odoo-ci` pattern |
+| (c) 浮動 tag (`latest` / `main`) | chart 引用 `latest` tag；image push 自動拉新 | 即時 | 低 | ✗ rollback / 版本追蹤失準 |
+
+**選 (b) 的具體流程**（仿 `woow_paas_platform → paas-odoo-ci` pattern）：
+
+```
+woow-paas-agent-runtime push tag v1.0.0
+   ↓ .gitea/workflows/build-and-trigger.yml
+   1. docker build & push jcr-prod.woowtech.io/woow-paas-docker-local/agent-runtime:1.0.0
+   2. Gitea API: POST /repos/woow/woow-paas-charts/dispatches
+       body: { event_type: bump-agent-runtime, image_tag: 1.0.0 }
+
+woow-paas-charts 收 dispatch event
+   ↓ .gitea/workflows/bump-agent-runtime-image.yml
+   1. checkout main branch
+   2. sed -i "s/^  tag: .*/  tag: 1.0.0/" charts/agent-runtime/values.yaml
+   3. git commit -m "chore(agent-runtime): bump image tag to 1.0.0"
+   4. git push origin main
+   5. (optional) Gitea API: POST /repos/woow/woow-paas-cd/dispatches
+       event_type: sync-fleet, chart: agent-runtime
+```
+
+**Secret 需求**：
+
+- `woow-paas-agent-runtime` Gitea secret `CI_GITEA_TOKEN`：權限 `woow-paas-charts:Read+Write` + `woow-paas-cd:Write`
+- `woow-paas-charts` Gitea secret `CI_GITEA_TOKEN`：權限 `woow-paas-cd:Write`（鏈式触發 fleet sync）
+
+**Versioning convention**：
+
+- Image tag = semver `1.0.0`（不用日期時間戳，與 paas-odoo image tag pattern 區分）
+- Chart version = semver `1.0.0` 與 image tag 同步（chart deps 用 helm dependency chart）
+- Git tag on agent-runtime repo = `v1.0.0`
+- Git tag on charts repo（charts 升版時打 tag）= `agent-runtime-v1.0.0`
+
+### §7.3 Dual-write window（Q3 拍板用）
+
+**phase-planner 推薦：dual-write 期 = Phase D 開始到 Phase F 結束，總計 6-12 週**
+
+**Phase D-E 期間（dual-write active）**：
+
+- Odoo 內 ai_client.py 同步路徑 + agent-runtime pod 路徑 **並存**
+- 透過 `project.use_agent_runtime` flag per-project 切換
+- 既有 default ai.assistant 路徑透過 `default_ai_assistant_id` config_parameter fallback
+
+**Phase F 開始（dual-write 結束）**：
+
+- 100% project on agent-runtime ≥ 4 週
+- 監控確認 0 行為差異 + error rate stable
+- 拍板「可以刪舊 path」
+
+**為什麼 6-12 週**：
+
+- 4 週 pilot（Phase D）
+- 2-4 週 gradual rollout（Phase E）
+- 4 週 final observation 後才 Phase F destructive cleanup
+- 總計 dual-write 期 ≥ 10 週 ≤ 16 週
+
+**Cron 衝突防護**：
+
+- Dual-write 期間，agent_session lifecycle cron + ai.assistant cron 並存
+- Phase F 後 ai.assistant cron 不再被 trigger（因 use_agent_runtime 100% True；flag 刪除前後 cron 自然 noop）
+
+**Audit metric**：
+
+- 自 Phase D 起，SSE generator 內 log `path: agent_runtime` or `path: legacy_sync`（含 project_id）
+- Phase F 觸發條件：`legacy_sync` count = 0 持續 4 週
+
+### §7.4 Odoo dependency 清理（Q4 拍板用 — Phase F 時機）
+
+**phase-planner 推薦：Phase F destructive cleanup（與 §7.1 Phase F + §7.3 結束同步）**
+
+**Phase F 移除清單**：
+
+| Package | 從 Odoo 移除 | 保留位置 | 理由 |
+|---------|-------------|---------|------|
+| `langchain_core` | ✓ 從 `__manifest__.py external_dependencies` 移除 | agent-runtime image | LangGraph runtime 100% 搬到 pod |
+| `langgraph` | ✓ 同上 | agent-runtime image | 同上 |
+| `langchain_openai` | ✓ 同上 | agent-runtime image | 同上 |
+| `langchain_mcp_adapters` | ✗ **保留**（短期） | Odoo + agent-runtime image 並存 | `mcp_server.action_sync_tools` cron 仍跑 |
+
+**`langchain_mcp_adapters` v2 path**：
+
+- v2 目標：tool discovery 也搬到 agent-runtime image
+- 拔法：新增 paas-operator endpoint `/api/agent-runtimes/discover-mcp-tools?url=...`，Odoo cron 呼此 endpoint 而非自跑
+- 完整 Odoo langchain 拔乾淨 → Odoo container image 體積再縮小 ~150 MB
+
+**Phase F 觸發條件**：
+
+- §7.3 dual-write 結束（100% project on agent-runtime ≥ 4 週）
+- Phase F PR 包：
+  - 刪 `discuss_channel.py:55-118` 同步分支
+  - 刪 `ai_client.py` LangGraph 相關 method
+  - 改 `ai_client.py` 為純 metadata serializer
+  - 從 `__manifest__.py` 移除上述 3 package
+  - 刪 `use_agent_runtime` flag
+  - 刪 `default_ai_assistant_id` config_parameter fallback 邏輯
+
+**Rollback**（destructive change，謹慎）：
+
+- Phase F 是 destructive；rollback 需 git revert Phase F commit
+- 但 Phase D-E 觀察 ≥ 6 週 + Phase F 後監控 4 週 = 確認 stable 才繼續
+- 若 Phase F 後 4 週內出問題（罕見）→ revert（不算太晚）
+
+### §7.5 ai.assistant ↔ agent_template 並存 migration
+
+**遵循 §4.11 Q5 sign-off (i) 並存策略**：
+
+**Migration 規則**：
+
+- 既有 `default_ai_assistant_id` config_parameter **保留作 fallback**（直到 Phase F 才刪）
+- Project 第一次設 `agent_template_id` 時：
+  - **不自動** copy ai.assistant.context_id 到 agent_template.system_prompt
+  - admin 在 Odoo UI 顯式選擇：
+    - (a) 從既有 default ai.assistant context_id 「import」（一鍵 copy）
+    - (b) 從零開始撰寫新 system_prompt
+- 既有 ai.assistant continue work for non-PaaS Discuss UI（Odoo 原生入口）— v1 不動
+
+**Phase 對應**：
+
+- Phase A：agent_template model 建立，但既有 project 全沒設 `agent_template_id`
+- Phase D：pilot project admin 手動建 agent_template + 設 `project.agent_template_id`
+- Phase E：admin per-project 建立 + bind agent_template
+- Phase F：`default_ai_assistant_id` fallback 刪 → 強制每個 project 必設 agent_template_id（migration script 對未設者 bootstrap default agent_template）
+
+**Phase F 強制 migration**：
+
+```python
+# Step 11 of post-migrate.py (Phase F version, '18.0.1.0.30' or 類似)
+# 對所有未設 agent_template_id 的 project，建一個 system default agent_template
+default_assistant_id = env['ir.config_parameter'].sudo().get_param('woow_paas_platform.default_ai_assistant_id')
+if default_assistant_id:
+    default_assistant = env['ai.assistant'].sudo().browse(int(default_assistant_id))
+    if default_assistant.exists():
+        system_template = env['woow_paas_platform.agent_template'].sudo().create({
+            'name': 'system-default',
+            'title': default_assistant.name,
+            'system_prompt': default_assistant.context_id.context if default_assistant.context_id else '',
+            'model_config_id': default_assistant.config_id.id,
+            'is_public': True,
+            'state': 'published',
+        })
+        env.cr.execute(
+            "UPDATE project_project SET agent_template_id = %s WHERE agent_template_id IS NULL",
+            (system_template.id,),
+        )
+```
+
+### §7.6 Fleet bundle 對接（Q5 拍板用）
+
+**phase-planner 推薦：Phase G — dev → stg → prod 階段 rollout（仿既有 paas-odoo deploy pattern）**
+
+**Phase G deploy 序**：
+
+```
+1. dev cluster (docker-desktop / dev-sandbox):
+   - paas-operator new version deploy (內含 agent-runtime router)
+   - agent-runtime helm chart 安裝（不主動拉 pod；spawn-or-attach 才起）
+   - woow-paas-platform addon 升版 (Phase A schema migration + Phase D pilot toggle)
+   - Pilot project flag enable + 測試 cold start / WS / RBAC
+   - 至少 1 週觀察
+
+2. stg cluster (woow-k3s stg):
+   - 同 dev 序，但 production-like 環境
+   - 至少 2 週觀察 + 模擬 user / multi-project scenario
+
+3. prod cluster (woow-k3s prod):
+   - 同 stg 序
+   - Phase E gradual rollout per-project 開始
+```
+
+**Fleet bundle spec 變動**：
+
+`woow-paas-cd/bundles/agent-runtime/fleet.yaml`：
+
+```yaml
+namespace: paas-system  # operator 自己
+helm:
+  releaseName: paas-operator-v2  # 含 agent-runtime router 的新版
+  chart: ./charts/paas-operator
+  version: 2.0.0
+  values:
+    image:
+      tag: 2.0.0
+    agentRuntime:
+      enabled: true
+      sharedSecretRef: agent-runtime-auth-secret
+```
+
+agent-runtime helm chart 本身**不在 Fleet 中部署**（per-project 動態起 pod via paas-operator），所以 Fleet 主要 deploy：
+
+- paas-operator new version
+- agent-runtime helm chart 註冊到 helm repository（讓 paas-operator 能 pull）
+- Cluster-wide K8s Secret `agent-runtime-auth-secret`（內含 current/previous keys）
+
+**Rollback**：
+
+- Fleet 反向 sync 到 paas-operator v1（無 agent-runtime router）
+- 既有 ai_client.py 路徑無影響
+
+### §7.7 Implementation phase hand-off
+
+本 design 完成 + sign-off 後，下游 phase teammate hand-off 清單：
+
+#### Hand-off to phase-tester
+
+**Test scope per phase**：
+
+| Phase | Test 範圍 | Test type | 重點 case |
+|-------|-----------|----------|---------|
+| A | project schema migration + new models | unit + migration | M:N backfill correctness / project_access bootstrap / additive field default |
+| B | image build + helm chart lint | CI smoke | image starts; WS server responds |
+| C | paas-operator endpoint + Odoo client | integration | spawn-or-attach mock K8s; webhook HMAC verify |
+| D | pilot dual-write | E2E | use_agent_runtime=True → WS path; =False → legacy path |
+| E | gradual rollout | E2E + load | 100 active conv + worker pool util; multi-project NetworkPolicy egress |
+| F | destructive cleanup | regression | post-cleanup invoke 與 Phase E 行為等效 |
+| G | Fleet deploy + production | smoke | dev → stg → prod 各層 deploy gate |
+
+**Critical regression**（必鎖）：
+
+- mcp_server / mcp_tool 6-rule ACL (refactor branch existing 9-12 case)
+- D4 invariant (scope='user' iff project_id non-null)
+- cleanup ordering Inv #9 (sidecar-backed filter)
+- 既有 ai.assistant Discuss UI path (non-PaaS chat) 不 break
+
+**新加 regression**：
+
+- WS envelope sequence_number monotonic
+- jti replay reject
+- dual-secret rotation 4-phase transition
+- NetworkPolicy egress hybrid (sidecar-backed cross-ns + external 0.0.0.0/0)
+- subprocess rlimit enforce
+- per-project quota override
+- project_access role × agent invoke permission matrix（§4.4 表）
+
+#### Hand-off to phase-test-explainer
+
+- 拿 phase-tester 產出 → 寫 coverage report `docs/tracking/test-reports/test-coverage-agent-runtime-{date}.md`
+- 對齊 [[mcp-project-decouple]] / [[mcp-url-redesign]] cell-map pattern
+
+#### Hand-off to phase-implementation
+
+- 依本 design + `agent-runtime-pod-plan.md` 寫 code
+- **Branch 策略**：採 §7.0.1 SIGNED-OFF 策略 A — rebase `feature/agent-pod` 到 develop（已 merge refactor）
+- **Phase 順序**：A → B → C → D → E → F → G（不可跳）
+- **跨 repo coordination**：phase B 在 `woow-paas-agent-runtime` 新 repo；phase B 同時也建 `woow-paas-charts/charts/agent-runtime/`
+- **Decision doc updates**（reporter phase）：phase A 更新 `cloud-service-project-decouple.md` D1 invariant 字面（M:N 場景）+ `mcp-project-decouple.md` Inv #4 + `mcp-url-redesign.md` Inv #9
+
+#### Hand-off to phase-caqa
+
+- 14 invariants verify（沿用 PR #47 / PR #54 CAQA template）
+- 新加 invariant verify：
+  - per-project namespace hash collision 不發生
+  - WS envelope version frozen
+  - jti cache size 不爆
+  - Audit log structured JSON parse-able
+- 對齊 [[two-layer-acl-lockstep]] pattern 檢查兩層 ACL（ir.rule + Odoo controller `_check_project_access`）lock-step
+
+#### Hand-off to phase-reviewer
+
+- multi-agent review（5-agent pattern，已驗證兩次有效）
+- 同源 code path 檢查必走 grep
+- 重點 hot zone：
+  - Schema migration 同源 code path（grep `cloud_service_id` walk path）
+  - ACL dual-leg domain（grep `workspace_user` rule）
+  - subprocess sandbox（grep `subprocess.run`）
+  - NetworkPolicy template render（grep `namespaceSelector`）
+
+#### Hand-off to phase-reporter
+
+- Finalize decision docs：
+  - 更新 `docs/decisions/refactor/cloud-service-project-decouple.md` Invariant #2 字面（cloud_service ↔ project 從 1:N → M:N）
+  - 更新 `docs/decisions/refactor/mcp-project-decouple.md` Inv #4 字面（cleanup filter M:N URL prefix match）
+  - 新增 `docs/decisions/refactor/agent-runtime-pod-architecture.md` — Phase G ship 時建
+  - 抽 pattern：`per-project-namespace-hash-scheme` / `dual-secret-rotation-4-phase` / `bundle-declare-host-enforce`
+- follow-ups 列入 `docs/tracking/followups/follow-ups.md`：langchain-mcp-adapters 拔（v2）/ Redis jti cache（v2）/ DNS rebinding（#52）/ gVisor marketplace（v2）
+
+### §7.8 Affected / new / deleted files 彙整
+
+**新建（全 epic）**：
+
+新 repo `woow-paas-agent-runtime`：
+- `runtime/transport/{ws_server,auth,envelope}.py`
+- `runtime/langgraph_runtime.py`
+- `runtime/skills/{loader,cache,subprocess_runner}.py`
+- `runtime/security/{subprocess_runner,url_validator,jti_cache,audit_logger}.py`
+- `runtime/state/{mcp_reloader,template_reloader,skill_reloader}.py`
+- `Dockerfile` + `requirements.txt` + `tests/`
+
+新 `woow-paas-charts/charts/agent-runtime/`：
+- `Chart.yaml` + `values.yaml`
+- `templates/{namespace,deployment,service,configmap-mcp,network-policy,serviceaccount,role,rolebinding,secret}.yaml`
+
+Odoo addon 新檔：
+- `src/models/{agent_template,agent_session,skill,project_access}.py`
+- `src/views/{agent_template,agent_session,skill,project_access}_views.xml`
+- `src/services/agent_runtime_client.py`
+- `src/controllers/{agent_runtime_webhook,skills}.py`
+- `src/migrations/18.0.1.0.26/post-migrate.py`（Phase A schema migration）
+- `src/migrations/18.0.1.0.30/post-migrate.py`（Phase F migration — system default agent_template bootstrap）
+- `src/static/src/paas/pages/project-detail/sections/{AgentTemplateSection,ProjectAccessSection,SkillsSection,ExternalMcpAllowedSection}.{js,xml}`
+- `src/static/src/paas/services/{agent_template,project_access,skill}_service.js`
+- `src/data/{agent_session_cron,skill_cleanup_cron}.xml`
+- `src/security/ir_rules.xml`（agent_template + project_access + skill 各 4 rule）
+
+paas-operator 新檔：
+- `extra/paas-operator/src/api/agent_runtimes.py`
+- `extra/paas-operator/src/services/{jwt_signer,webhook_dispatcher,mcp_invalidator}.py`
+
+**修改（全 epic）**：
+
+Odoo addon 修改：
+- `src/models/project_project.py`（加 `cloud_service_ids` M2M + `workspace_ids` + `external_mcp_allowed` + `project_access_ids` reverse + `agent_template_id` M2O + `use_agent_runtime` boolean (Phase D-F)）
+- `src/models/project_task.py`（primary_cloud_service_id 改獨立 + extra domain 拆 same-workspace）
+- `src/models/cloud_service.py`（_do_cleanup filter URL prefix match + project_ids 改 M2M reverse）
+- `src/models/discuss_channel.py`（Phase D-E 加 use_agent_runtime fallback；Phase F 刪同步分支）
+- `src/models/ai_client.py`（Phase D 加 dual-mode；Phase F 刪 LangGraph methods）
+- `src/controllers/ai_assistant.py`（SSE generator rewrite per §5.6 + Phase D dual-mode）
+- `src/security/ir_rules.xml`（mcp_server / mcp_tool dual-leg walk path M2M）
+- `src/security/ir.model.access.csv`（加 new models access rows）
+- `src/__manifest__.py`（bump version + Phase F 移除 langchain external_dependencies）
+
+paas-operator 修改：
+- `extra/paas-operator/src/main.py`（include agent_runtimes router）
+- `extra/paas-operator/src/models/schemas.py`（agent-runtime request/response schemas）
+
+**刪除（Phase F）**：
+
+- `src/models/ai_client.py` 內 `_build_agent_graph` / `_async_agent_invoke` / `_async_agent_stream` 三 method（保留檔案，只刪 method body）
+- `src/models/discuss_channel.py` `message_post` override 內 `_post_ai_reply` 同步調用分支
+- `src/models/project_project.py` 內 `use_agent_runtime` field（Phase F dual-mode 移除）
+
+### §7.9 Risks & rollback strategy（per-phase）
+
+| Phase | 主 Risk | Mitigation | Rollback 策略 |
+|-------|---------|-----------|--------------|
+| A | M:N migration backfill 漏；既有 user-scope MCP 在 schema 改後失效 | post-migrate.py defensive + dry-run on stg first；既有 refactor branch test fixture 覆蓋 | post-migrate rollback SQL（DROP relation table + 重建 UNIQUE constraint）；既有 ai_client.py 不動，無 path 中斷 |
+| B | image build / chart template error | CI gate；helm template render 必過 | tag delete + image registry tag delete |
+| C | paas-operator endpoint bug；JWT 簽 / 驗 mismatch | unit test + integration test mock K8s | endpoint 改 410 Gone；Odoo client 端 dormant |
+| D | pilot project chat 失敗 → user 受影響 | pilot 只挑 admin-controlled internal project；2 週 observation；use_agent_runtime flag 立即 disable | `project.use_agent_runtime = False` → 立即 fallback |
+| E | 多 project 同時撞 worker pool / quota / network issue | 漸進 rollout；admin dashboard 顯示 metric；warn at 0.8 util | per-project disable；最壞 cluster-wide `force_disable_agent_runtime` config_parameter |
+| F | destructive cleanup 後 4 週才發現問題 | Phase E 觀察 ≥ 4 週 + Phase F 後監控 4 週；audit log `legacy_sync` count = 0 持續 4 週才執行 Phase F | git revert（destructive，但 Phase F PR 是單一 PR，revert clean） |
+| G | Fleet deploy 順序錯（先升 Odoo addon 但 paas-operator 未升）→ Odoo 呼新 endpoint 不存在 | dev → stg 各層強制順序 gate；Fleet bundle 設 dependency | Fleet 反向 sync |
+
+**跨 phase 共通 risk**：
+
+- agent-runtime image bug 致 cold start fail → user 完全無法 chat：
+  - mitigation：Phase D-E 期間 fallback flag；Phase F-G 後 fallback 拔掉前要極穩定
+- shared secret 過期未 rotate → 全 cluster spawn-or-attach 失敗：
+  - mitigation：§6.6 雙 secret window；admin 30 day 提前 alert
+- 跨 repo CI dispatch race（agent-runtime push 但 charts 還在 build 舊版本）→ deploy 不一致：
+  - mitigation：charts CI 等 image tag exists 才 commit bump；超時 fail loud
+
+### §7.10 Open questions for leader sign-off（§7 escalation）
+
+> 5 條核心拍板需求。phase-planner 推薦已 inline 在 §7.1 / §7.2 / §7.3 / §7.4 / §7.6 給出。**全部 sign-off 2026-05-22 — 本 epic design phase 收尾**。
+
+1. ~~**[需 leader 拍板] Migration phase 切片粒度（§7.1）**~~ **[SIGNED-OFF 2026-05-22]** 7 phase（A schema → B image → C operator → D pilot → E rollout → F cleanup → G fleet）
+2. ~~**[需 leader 拍板] Cross-repo CI trigger（§7.2）**~~ **[SIGNED-OFF 2026-05-22]** (b) Gitea API dispatch + semver image tag（仿 paas-odoo-ci pattern）
+3. ~~**[需 leader 拍板] Dual-write window 長度（§7.3）**~~ **[SIGNED-OFF 2026-05-22]** 6-12 週（Phase D 4w + E 2-4w + F 前 4w final observation；觸發條件 `legacy_sync count = 0 持續 4 週`）
+4. ~~**[需 leader 拍板] `ai_client.py` 刪除時機（§7.4）**~~ **[SIGNED-OFF 2026-05-22]** Phase F destructive cleanup；`langchain_mcp_adapters` 暫保留（v2 拔）
+5. ~~**[需 leader 拍板] Fleet bundle 對接時機（§7.6）**~~ **[SIGNED-OFF 2026-05-22]** Phase G dev → stg → prod 階段（每階段 ≥ 1-2 週觀察）
+
+**§7 額外探出來但不阻塞 §7 sign-off**（implementation 階段處理）：
+
+- Phase A 內具體 migration version number（`18.0.1.0.26` 是假設）— implementation 階段對齊 git history
+- Phase D pilot project 選擇（admin 指定 / 自選 / 全 default False 漸進 opt-in）— admin 拍板
+- Phase E rollout 排程（每週放 N 個 project）— admin 拍板
+- Phase F PR 結構（單一大 PR 還是拆 langchain dep / sync branch / flag 三個 PR）— implementation 階段判斷
+- `agent.woow.tw/` annotation domain 是否註冊（K8s admission webhook 不檢查 unknown annotation domain，免註冊）— 不阻塞
+- Fleet bundle 內 paas-operator 版本與 woow-paas-platform 版本 dependency 順序（Fleet 預設 alphabetical）— deployment 階段
 
 ---
 
@@ -2092,7 +4833,8 @@ LangGraph 程式碼搬家順序、Odoo addon 內 `ai_client.py` / `discuss_chann
 ### Decision / pattern pointers
 
 - `docs/decisions/refactor/cloud-service-project-decouple.md` — CloudService / Project invariants
-- `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md` — MCP D4/D5 invariants 來源
+- `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md` — MCP D4 invariant 來源（plan doc 當時亦含 D5，已被後續 `docs/decisions/refactor/mcp-url-redesign.md` cycle 4 拔除）
+- `docs/decisions/refactor/mcp-url-redesign.md` — D5 拔除 + `sidecar_backed` flag + dual-leg ACL（Inv #9/#10/#11）canonical home
 - `docs/decisions/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
 - `docs/decisions/patterns/odoo-std-field-no-override.md`
 
