@@ -168,6 +168,9 @@ export class McpServersSection extends Component {
     }
 
     async deleteServer(server) {
+        if (!confirm(`Are you sure you want to remove MCP server "${server.name}"?`)) {
+            return;
+        }
         const result = await supportService.deleteProjectMcpServer(this.projectId, server.id);
         if (result.success) {
             this.state.servers = this.state.servers.filter((s) => s.id !== server.id);
