@@ -8,6 +8,7 @@
 - Cycle 3（Project Detail page, issue #48, 2026-05-20）：F21-F28 新增，APPROVED WITH CAVEATS，B-1 fresh-install fix verified；AC #28 reviewer E2E 完成 10/11 pass + 1 FAIL（E2E-G1，不擋 merge）；R-1 / R-2 hard caveats 收於 reporter phase（commit pending），R-3 / R-6 / E2E-G1 + 其他 polish 進 follow-up issue
 - Cycle 4（MCP refactor URL redesign + unbound project ACL, issue #49 + #51, 2026-05-21）：**F22 + F23 RESOLVED**；F-X1~F-X8 新增；reviewer round 2 APPROVED WITH CAVEATS，3 hard caveat (HC-1/2/3) 全 closed in PR；1 new MINOR (SC-6b)；20 條 soft caveat (SC-1~SC-20) 分散 reporter inline / dedicated follow-up / batch 三類處理
 - Cycle 5（Agent runtime pod Phase A — schema M:N + 4 new models + 16 rule + migration, 2026-05-22 → 2026-05-23）：CAQA round 1 BLOCKED（B-1：4 new model 無 ir.rule scope-restrict）→ impl round 2 補 16 rule + PA-5 Python gate + SK-6 path (a) field-level mask；CAQA round 2 APPROVED WITH CAVEATS；**B-1 closed + OQ-A-2 closed**；reviewer round 1 抓 4 HC + 28 SC（CAQA 漏抓 HC-1/HC-2/HC-3/HC-4）；leader 拍板 HC-3 + HC-4 hotfix in this PR，HC-1 + HC-2 標 reporter follow-up；impl round 3 補 `agent_template._check_project_ids_grantor_authority` + `skill._anchor_bundle_attachment` + `ir.attachment` row-level rule 兩條 + 8 test method；144/144 PASS + Full suite 664/0 fail；CAQA round 3 + reviewer round 2 APPROVED WITH CAVEATS；**HC-3 + HC-4 closed in PR；HC-1 + HC-2 + EC-3a + EC-4a → F-PA-13~16**；F-PA-1~F-PA-12 已於 round 2 reporter cycle 落地；18 invariants 守線（PR #47 + #54 共 11 條 + Phase A 7 條 + Phase A #8 新增）+ 2 new pattern doc（`constraint-input-trust-expansion` + `attachment-row-level-acl-and-anchor-stamping`）
+- **agent-runtime-pod epic Phase B**（image source，**`paas-agent-runtime` repo**，2026-05-23）：14 production + 14 test + 11 commit + PR #1（CI green + merge 中）；CAQA Prism + reviewer Quorum 皆 **APPROVED WITH CAVEATS，0 BLOCKER**；HC-1（IP-literal SSRF）/ HC-2（ws_server claims authoritative — [[constraint-input-trust-expansion]] 的 image 端同型，pattern lens 兌現）/ subprocess rlimit real-trigger test / SC-7（role-scope tool cache）全 **round 2 內 resolved**；CI gate 三度價值（envelope 12→15 / cache path §3 vs §6 / checkout node-in-container）；carry-over SC-1~SC-9 + wiring assumptions 的 **canonical home = `paas-agent-runtime` repo `docs/PHASE_B_HANDOFF.md`**（cross-repo，不在本 doc 重列）；epic durable + pitfall 見本 repo `docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` + `docs/tracking/pitfalls/ci-workflow-container-missing-node.md`
 
 ## Index
 
@@ -797,6 +798,34 @@
 
 ---
 
+## Phase B carry-over（cross-repo — `paas-agent-runtime`）
+
+> Phase B（agent-runtime pod image source）的 code / test / CI / carry-over 全在 **`paas-agent-runtime` repo**。其 carry-over SC 的 **canonical home 是該 repo 的 `docs/PHASE_B_HANDOFF.md`**（不在本 woow_paas_platform follow-ups.md 重列每條，避免 cross-repo 雙寫漂移）。本段只記 **woow_paas_platform 側需要知道的連動點 + 指標**。
+
+### PB-ref — Phase B carry-over canonical home
+
+- **Canonical home**：`paas-agent-runtime` repo `docs/PHASE_B_HANDOFF.md`（§1 後續 phase 必補 / §2 Phase C wiring assumptions / §3 環境部署 note / §4 其餘 SC / §5 design 回標 planner）
+- **Phase B epic durable**（woow_paas_platform 側）：`docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md`
+- **carry-over SC 摘要**（細節見 PHASE_B_HANDOFF.md）：
+  - **SC-4 / SC-5**（glue phase 必補）：mcp/template reloader 缺 tool_set 失效 hook / stub 雙 done（契約已由 planner 4e65966 裁定 ws_server 是 done 唯一 producer）
+  - **SC-1 / SC-3 / SC-6 / SC-8 / SC-9** + audit_logger emit guard + base_reloader snapshot live dict：follow-up，不阻塞
+- **狀態**：Phase B PR #1 merge 中；上述 SC 由 Phase C/D 接力，**追蹤責任在 paas-agent-runtime repo**（本段僅 epic 視角指標）
+
+### PB-link-1 — F-PA-15 / F-PA-16 是 paas-agent-runtime `cache.py` 的跨 repo 前置依賴 ⚠
+
+- **連動**：`paas-agent-runtime` repo `runtime/skills/cache.py` 假設 woow_paas_platform 側 skill bundle attachment 已 **anchor `res_model='woow_paas_platform.skill'` + `public=False`** + row-level ACL（Inv A2）落實；pod 守「絕不直連 `ir.attachment`」（grep 確認全 runtime 零直連）
+- **woow_paas_platform 側對應 follow-up**：[[#F-PA-15]]（controller sudo path 對 `_check_project_ids_grantor_authority` lock-step）+ [[#F-PA-16]]（`_anchor_bundle_attachment` destructive overwrite doc）— 兩者落實狀態是 Phase C wiring 的前置條件
+- **行動**：**Phase C wiring 啟動前，必須確認 woow_paas_platform 的 anchor stamping + row-level ACL（F-PA-15 / F-PA-16 + Phase A Inv A2 / HC-4 hotfix）已落 production**；否則 pod fetch bundle 時 attachment delegation target 不對 → 可能 fetch 失敗或繞過 row-level ACL
+- **canonical**：`paas-agent-runtime` repo `docs/PHASE_B_HANDOFF.md` §2「F-PA-16 連動（woow_paas_platform 側，跨 repo）」
+
+### PB-link-2 — woow-paas-ci 待核對（push 前協調 ci agent）
+
+- `paas-agent-runtime` repo `.gitea/workflows/build-and-trigger.yml` 假設 JCR push secret 名（`JCR_USERNAME` / `JCR_PASSWORD`）/ runner label / Gitea API host — 需與 woow-paas-ci agent 核對
+- **canonical**：`paas-agent-runtime` repo `docs/PHASE_B_HANDOFF.md` §3「woow-paas-ci 待核對」
+- 與本 repo 既有 cross-repo CI 流程（CLAUDE.md §Release & Build paas-odoo Image）為**不同 pipeline**（paas-odoo image vs agent-runtime image），勿混
+
+---
+
 ## Cross-cutting: 給未來 PR 作者的 hint
 
 每個改動下列檔案的 PR，自查本 doc 對應條目：
@@ -832,8 +861,11 @@
 - [[tag-scoped-test-misses-full-u-failures]] — F19 「test coverage hole」cluster 的根因 context
 - [[two-layer-acl-asymmetric-deny]] — F-X2 的根因 context（cycle 4 HC-2）
 - [[legacy-endpoint-scope-blindness]] — cycle 4 HC-1 的根因 context（plan AC scope blindness）
-- [[constraint-input-trust-expansion]] — F-PA-15 的根因 context（cycle 5 round 1 HC-3 同 family — m2m write constraint grantor authority check）
-- [[attachment-row-level-acl-and-anchor-stamping]] — F-PA-16 的根因 context（cycle 5 round 1 HC-4 — bundle attachment defense in depth）
+- [[constraint-input-trust-expansion]] — F-PA-15 的根因 context（cycle 5 round 1 HC-3 同 family — m2m write constraint grantor authority check；Phase B HC-2 是其 image 端同型 instance）
+- [[attachment-row-level-acl-and-anchor-stamping]] — F-PA-16 的根因 context（cycle 5 round 1 HC-4 — bundle attachment defense in depth；Inv A2 = Phase B pod 零直連 ir.attachment 守線的 woow_paas_platform 側依賴）
+- `docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` — Phase B image source 完成 durable（cross-phase learnings：CI gate 三度價值 / HC-2 cross-phase 驗證 / 2 process learning）
+- [[ci-workflow-container-missing-node]] — Phase B B-5 抽 pitfall（CI `container: <lang-image>` + checkout → node exit 127 false green）
+- `paas-agent-runtime` repo `docs/PHASE_B_HANDOFF.md` — Phase B → C/D carry-over canonical home（cross-repo；SC-1~SC-9 + wiring assumptions）
 - 原始 review（合成來源，本 doc 引用不複製）：
   - `docs/decisions/reviews/caqa-2026-05-16.md` §Caveat 清單（M1-M4 + L1-L3 — cycle 1）
   - `docs/decisions/reviews/caqa-2026-05-18.md` §Caveat / Out-of-scope（C1 + F12 — cycle 2）

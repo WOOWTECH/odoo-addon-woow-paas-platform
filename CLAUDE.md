@@ -437,8 +437,9 @@ Pitfall 持久化紀錄（debug 撞牆時對照）：
 
 - `docs/tracking/pitfalls/cross-workspace-task-data-leak.md` — CAQA B1 incident
 - `docs/tracking/pitfalls/plan-vs-odoo-schema-mismatch.md` — plan 引用不存在欄位的教訓
+- `docs/tracking/pitfalls/ci-workflow-container-missing-node.md` — CI `container: <lang-image>` + `actions/checkout` → node not found (exit 127) → pytest 從沒跑到（false green）。**cross-repo CI infra learning**（agent-runtime-pod epic Phase B，`paas-agent-runtime` repo Gitea Actions；任何用 container image 跑 GitHub/Gitea Actions workflow 的 repo 都適用，本 repo Odoo CI 不受影響）
 
-Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（11 條未竟事項）
+Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（隨 cycle 持續累積；最新見該檔開頭 State 段）
 
 ## Docs organisation
 
