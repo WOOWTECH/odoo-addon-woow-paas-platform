@@ -2466,7 +2466,7 @@ def _compute_effective_quota_cpu(self):
 **§5 處理**：
 
 - 兩段 transport 架構（Browser ↔ Odoo SSE 不動；Odoo ↔ Pod outbound WS 新增）
-- WS message envelope JSON schema + 12 types + 序列保證
+- WS message envelope JSON schema + 15 types + 序列保證
 - Odoo ↔ Pod auth 機制（HS256 bearer token + shared secret）
 - ConfigMap mcp.json reload 策略（hot reload via inotify + WS push）
 - agent_session ↔ paas-operator state sync 機制（webhook + 輪詢 fallback）
@@ -2504,7 +2504,7 @@ def _compute_effective_quota_cpu(self):
 
 - 新建：Odoo controller 在 SSE generator 內以 client 角色 open outbound WS to `ws://agent-pa-{hash}-svc.paas-ws-pa-{hash}.svc.cluster.local:8000/v1/chat`
 - Pod 端：FastAPI `@app.websocket("/v1/chat")` route 作 server
-- 雙向：Odoo → Pod 傳 user message / cancel / template_update / mcp_invalidate / ping；Pod → Odoo 傳 text_chunk / tool_call / tool_result / tool_error / tool_unavailable / status / error / done / pong
+- 雙向：Odoo → Pod 傳 user message / cancel / template_update / mcp_invalidate / skill_invalidate / ping；Pod → Odoo 傳 text_chunk / tool_call / tool_result / tool_error / tool_unavailable / status / error / done / pong
 - 為什麼 (B) 用 WS 而非 SSE 或 HTTP polling：bidirectional 必要（pod 也要 push template_update / mcp_invalidate 到 pod 對話進行中時即時觸發 — 雖然 v1 也可改成 ConfigMap inotify，但 WS 同 channel 簡化 transport 層）
 
 **為什麼用 cluster.local DNS 直連 pod，不過 paas-operator proxy**：
@@ -3207,7 +3207,7 @@ async def websocket_chat(ws: WebSocket, token: str = Query(...)):
 
 > 5 條核心拍板需求。phase-planner 推薦已 inline 在 §5.2 / §5.3 / §5.4 / §5.5 給出；額外第 5 條（WS connection 生命週期）是 §5.8 探出來的設計選擇。**全部 sign-off 2026-05-22**（doc-wide consistency pass 完成後 batch）。
 
-1. ~~**[需 leader 拍板] WS envelope schema v1.0 frozen（§5.2）**~~ **[SIGNED-OFF 2026-05-22]** 12 types + envelope 結構 (version/type/request_id/correlation_id/sequence_number/timestamp/payload) frozen for v1
+1. ~~**[需 leader 拍板] WS envelope schema v1.0 frozen（§5.2）**~~ **[SIGNED-OFF 2026-05-22]** 15 types（Odoo→Pod 6 + Pod→Odoo 9）+ envelope 結構 (version/type/request_id/correlation_id/sequence_number/timestamp/payload) frozen for v1
 2. ~~**[需 leader 拍板] Odoo ↔ Pod auth（§5.3）**~~ **[SIGNED-OFF 2026-05-22]** (b) HS256 bearer token + spawn-or-attach 簽發 + 1h exp + shared secret in K8s Secret
 3. ~~**[需 leader 拍板] ConfigMap reload 策略（§5.4）**~~ **[SIGNED-OFF 2026-05-22]** (a) hot reload via WS push 主 + inotify 60s 兜底
 4. ~~**[需 leader 拍板] State sync 機制（§5.5）**~~ **[SIGNED-OFF 2026-05-22]** (a) webhook + (b) cron 輪詢 fallback

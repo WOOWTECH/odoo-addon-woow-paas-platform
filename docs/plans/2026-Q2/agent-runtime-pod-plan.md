@@ -156,7 +156,7 @@ related:
 1. Repo skeleton：`runtime/`, `Dockerfile`, `requirements.txt`, `pytest.ini`, `tests/`, `.gitea/workflows/`
 2. `runtime/transport/ws_server.py` — FastAPI WebSocket route `/v1/chat`（design doc §5.8 pseudocode）
 3. `runtime/transport/auth.py` — HS256 token verify with dual-secret fallback（§6.6）
-4. `runtime/transport/envelope.py` — JSON envelope serializer + 12 type enum（§5.2）
+4. `runtime/transport/envelope.py` — JSON envelope serializer + 15 type enum（§5.2）
 5. `runtime/langgraph_runtime.py` — Module-level singleton LangGraph + stream
 6. `runtime/skills/loader.py` — SKILL.md parse + StructuredTool wrap
 7. `runtime/skills/cache.py` — Lazy fetch + SHA256 verify + extract
