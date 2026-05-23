@@ -1430,7 +1430,7 @@ human-readable description (markdown body)
 - agent runtime 在 invoke skill 前，把 SKILL.md frontmatter parse 成 dict
 - 用 `langchain_core.tools.StructuredTool` 包裝（schema 來自 `parameters` 或預設 single-string `input`）
 - tool name = SKILL.md `name`；tool description = SKILL.md `description`
-- tool._run(args) → subprocess.run([runtime, entrypoint], input=json.dumps(args), timeout=timeout_seconds, env=<whitelist>, cwd=`/skills/<name>/<version>/`)
+- tool._run(args) → subprocess.run([runtime, entrypoint], input=json.dumps(args), timeout=timeout_seconds, env=<whitelist>, cwd=`/workspace/project-{pid}/skills/cache/<name>/<version>/`)（實體 PVC path；== cache.py extract 目標，canonical 見 §6.2）
 - stdout → tool result；stderr → log；exit_code != 0 → tool_error event（§5 protocol）
 
 ### §3.2 Odoo `woow_paas_platform.skill` registry model
@@ -1571,11 +1571,11 @@ class Skill(models.Model):
 **fetch 流程**（pod 端）：
 
 1. Pod 啟動 + 收到 first tool_call referencing skill `<name>@<version>`
-2. Pod 在 `/skills/<name>/<version>/` PVC subdir 找 cache → 命中則 verify `bundle.sha256` matches expected → use
+2. Pod 在 `/workspace/project-{pid}/skills/cache/<name>/<version>/` PVC subdir 找 cache → 命中則 verify `bundle.sha256` matches expected → use
 3. cache miss：pod 呼 Odoo endpoint `GET /api/agent-runtimes/skill-bundle?project_hash={hash}&skill_name={name}&version={ver}` （新增 controller endpoint）
    - Odoo 端：query `skill` model + project_access check（pod 的請求需帶 short-lived bearer token，§5 protocol）→ return ir.attachment binary
-4. Pod 寫到 `/skills/<name>/<version>/bundle.tar.gz` → verify SHA256 → extract → cache marker
-5. Subprocess invoke from `/skills/<name>/<version>/`
+4. Pod 寫到 `/workspace/project-{pid}/skills/cache/<name>/<version>/bundle.tar.gz` → verify SHA256 → extract → cache marker
+5. Subprocess invoke from `/workspace/project-{pid}/skills/cache/<name>/<version>/`（== subprocess_runner cwd §6.4）
 
 **Pod 對 Odoo 的 fetch auth**：透過 spawn-or-attach 時 Odoo 傳給 pod 的 short-lived signed token（內含 project_id + workspace_ids + 有效期 1h）— 細節 §5。
 
@@ -1603,10 +1603,10 @@ class Skill(models.Model):
 
 ### §3.5 Lazy fetch / cache 策略
 
-**Mount layout**（per-project pod）：
+**Mount layout**（per-project pod；canonical path 對齊 §6.2 filesystem mount table）：
 
 ```
-/skills/                                              ← read-only mountpoint
+/workspace/project-{pid}/skills/cache/                ← skill bundle cache root (PVC subdir)
 ├── <skill_name_1>/
 │   ├── <version_a>/
 │   │   ├── SKILL.md
@@ -1621,8 +1621,9 @@ class Skill(models.Model):
 
 **Storage backend on PVC**：
 
-- `/skills/` 是 PVC subdir（在 `/workspace/project-{pid}/skills/`）
-- 不是獨立 PVC（避免多 mount 複雜度）
+- **Canonical 實體 path** = `/workspace/project-{pid}/skills/cache/<name>/<version>/`（與 §6.2 mount table + §6.4 subprocess_runner cwd 一致；cache.py extract 目標 == subprocess cwd）
+- 本 doc 早期段落（§1.2 task brief 引述 ASCII / 概念敘述）用 `/skills/` 作 mountpoint 抽象簡寫；**實體 PVC 無獨立 `/skills/` K8s mount**，一律映射到 `/workspace/project-{pid}/skills/cache/`
+- 不是獨立 PVC（與 `threads/` `shared/` 同 PVC 不同 subdir，避免多 mount 複雜度）
 - subdir 內每 `<skill>/<version>/` 是 lazy fetch + extract 後留下
 
 **Mount strategy 比較**：
