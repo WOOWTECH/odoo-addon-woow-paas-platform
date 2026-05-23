@@ -1140,8 +1140,9 @@ labelSelector: app.kubernetes.io/name=agent-runtime
 
 URL 路徑改用 `project_hash` 為主鍵（**不放 project_id**，避免序號洩漏）：
 
-- `POST /api/agent-runtimes/spawn-or-attach` — body `{project_hash, project_workspace_ids: [w1, w2], mcp_snapshot, ai_provider_config, agent_template_id}` → return `{pod_ws_url, pod_state, spawn_age_ms}`
-  - 內部邏輯：lookup helm release `agent-pa-{project_hash}` in ns `paas-ws-pa-{project_hash}` → install / scale-1 / no-op → poll readiness → return
+- `POST /api/agent-runtimes/spawn-or-attach` — body `{project_hash, project_workspace_ids: [w1, w2], mcp_snapshot, ai_provider_config, agent_template_id}` → return `{pod_ws_url, ws_token, pod_state, spawn_age_ms}`
+  - 內部邏輯：lookup helm release `agent-pa-{project_hash}` in ns `paas-ws-pa-{project_hash}` → **簽 `skill_bundle_token`（注入 pod env `SKILL_BUNDLE_TOKEN`）** → install / scale-1 / no-op → poll readiness → **簽 `ws_token`（return 給 Odoo controller open WS 用）** → return
+  - **兩種 token scope（§5.3 HS256 dual-secret）**：`sign_ws_token`（per-invocation，return body）+ `sign_skill_bundle_token`（per-pod-lifetime，注入 pod env，cache.py fetch 用）— 詳見下方 Token lifecycle
   - **`project_workspace_ids` 用途**：渲染 NetworkPolicy egress allowlist（哪些 workspace ns 可達）；同時寫入 annotation `agent.woow.tw/workspace-ids`
 - `POST /api/agent-runtimes/{project_hash}/reap` — return `{action: "reaped" | "already_reaped" | "not_found"}`
   - 內部：`scale_release(release_name=agent-pa-{hash}, replicas=0)` + patch annotation `reaped-since`
@@ -1161,7 +1162,23 @@ paas-operator **不需要**反向查 project_id（純走 hash 識別 namespace /
 - Resume / sync-workspaces 時若 ConfigMap 已存在且 mcp_snapshot 變動 → `kubectl patch configmap`
 - Helm uninstall 不刪 ConfigMap（mcp.json ConfigMap 由 paas-operator 直接管理）— 或反過來：寫入 chart 內讓 helm 管，invalidation 走 `helm upgrade --set mcpSnapshot=...` — **待 §5 拍板**
 
-#### §2.11.1 既有 paas-operator router 影響
+#### §2.11.1 Token lifecycle（escalation #1 sign-off 2026-05-23）
+
+> **問題**：`SKILL_BUNDLE_TOKEN`（pod env 注入，cache.py fetch skill bundle 用）exp 1h；但 pod 長壽（reaped → resume cycle），resume 後既有 token 已過期 → cache miss（resume 後遇新 skill）fetch 回 401。
+>
+> **sign-off mitigation**：**spawn-or-attach 與 resume 路徑都重簽 `SKILL_BUNDLE_TOKEN`（+ `ws_token`）並 patch pod env**。
+
+| 路徑 | token 動作 | 影響範圍 |
+|------|-----------|---------|
+| `spawn-or-attach`（cold start / ABSENT→ACTIVE） | 簽 `skill_bundle_token` + `ws_token`；helm install 時注入 pod env `SKILL_BUNDLE_TOKEN` | 新 pod 拿 fresh token |
+| `resume`（REAPED→ACTIVE；spawn-or-attach 偵測 replicas=0 內含此路徑） | **重簽 `skill_bundle_token` + `ws_token`** → `kubectl set env deployment/agent-pa-{hash} SKILL_BUNDLE_TOKEN=<new>` patch pod env → scale-1 | resume 後 pod 拿 fresh token；cache miss 用新 token fetch |
+| cache hit（PVC 保留既有 skill bundle） | **不需 token**（直接讀 PVC，不 fetch Odoo） | resume 後 token 過期不影響已 cache 的 skill |
+
+**為什麼 cache hit 不受 token 過期影響**：skill bundle 已 extract 在 `/workspace/project-{pid}/skills/cache/<name>/<version>/`（PVC，reap 不刪），resume 後 cache hit 直接讀 PVC，**不呼 Odoo fetch endpoint** → token 過期無關。只有「resume 後遇『PVC 沒有的新 skill』」才 cache miss → 用 resume 重簽的 fresh token fetch。
+
+**patch pod env 時機**：resume 在 scale-1 **之前** patch deployment env（K8s 重建 pod 時帶新 env），避免 race（pod 起來才 patch → pod 已用舊 env）。
+
+#### §2.11.2 既有 paas-operator router 影響
 
 新 endpoints 全部歸入 **新建 router** `extra/paas-operator/src/api/agent_runtimes.py`，main.py 加 `app.include_router(agent_runtimes.router)`。
 
@@ -1577,7 +1594,12 @@ class Skill(models.Model):
 4. Pod 寫到 `/workspace/project-{pid}/skills/cache/<name>/<version>/bundle.tar.gz` → verify SHA256 → extract → cache marker
 5. Subprocess invoke from `/workspace/project-{pid}/skills/cache/<name>/<version>/`（== subprocess_runner cwd §6.4）
 
-**Pod 對 Odoo 的 fetch auth**：透過 spawn-or-attach 時 Odoo 傳給 pod 的 short-lived signed token（內含 project_id + workspace_ids + 有效期 1h）— 細節 §5。
+**Pod 對 Odoo 的 fetch auth + token lifecycle**（escalation #1 sign-off 2026-05-23）：
+
+- pod env `SKILL_BUNDLE_TOKEN` = paas-operator 簽的 `skill_bundle_token`（HS256 dual-secret §5.3；claims 含 project_id + workspace_ids + exp 1h）
+- **token lifecycle**：`spawn-or-attach`（cold start）+ `resume`（REAPED→ACTIVE）**兩條路徑都重簽** skill bundle token + patch pod env（§2.11.2）— 解決 pod 長壽後 token 1h 過期問題
+- **cache hit 不受 token 過期影響**：skill bundle 已 extract 在 PVC `/workspace/project-{pid}/skills/cache/<name>/<version>/`（reap 不刪），cache hit 直接讀 PVC 不 fetch Odoo；只有 cache miss（resume 後遇 PVC 沒有的新 skill）才用 resume 重簽的 fresh token fetch
+- **Odoo skill-bundle endpoint verify 雙路徑**（對齊 Phase B image `cache.py` frozen contract）：`Authorization: Bearer {SKILL_BUNDLE_TOKEN || SHARED_SECRET fallback}` — Odoo 端 verify 接受 (a) HS256 `skill_bundle_token`（正常路徑）or (b) raw `SHARED_SECRET`（image fallback when token env 缺）；兩者皆 authoritative 取 token claims project_id（不信 query param，HC-2 ruling [[constraint-input-trust-expansion]]）
 
 ### §3.4 Versioning（Q2 拍板用）
 
