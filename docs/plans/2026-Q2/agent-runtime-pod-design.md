@@ -2657,7 +2657,46 @@ spawn-or-attach 流程內：
 - Rotate：admin 手動 — 改 secret + bump paas-operator + bump 所有 pod 的 helm release（cycle reap → resume 用新 secret）
 - v1 沒 auto rotation（留 v2）
 
-**Odoo 端不需 shared secret**：Odoo 不簽 token（paas-operator 簽），只 forward；所以 Odoo 不接觸 secret — 縮小 attack surface
+**Odoo 端 secret 接觸範圍（OQ#1 clarify 2026-05-24）**：
+
+「Odoo 不接觸 secret」**僅限 WS session token（`ws_token`）** — Odoo controller 只 forward `ws_token`（spawn-or-attach return 的）給 pod，**不 verify**（pod 自己 verify），故 WS token 路徑 Odoo 不需 secret。
+
+但 Odoo 有**兩個 server-side verify 路徑必須持 secret**：
+
+| 路徑 | 用途 | secret |
+|------|------|--------|
+| ② skill-bundle endpoint（§3.3） | verify `SKILL_BUNDLE_TOKEN`（HS256） | `agent-runtime-auth-secret`（與 ws_token / skill_bundle_token 簽發同一把） |
+| ③ webhook receiver（§5.5） | verify pod→Odoo state HMAC-SHA256 | `agent-runtime-webhook-secret` |
+
+**secret 來源 — phase-planner 推薦 (b) K8s Secret env injection（single source of truth）**：
+
+| 方案 | 機制 | rotation | 推薦 |
+|------|------|---------|------|
+| (a) ir.config_parameter | 沿用既有 `operator_api_key` pattern；admin 手動填 Odoo DB | ⚠ rotation drift — K8s Secret 改了 config_parameter 沒同步；§6.6 dual-secret window 失效（Odoo 要手動存 current/previous 兩 param） | ✗ |
+| **(b)（推薦）** K8s Secret env injection | production: deployment `env.valueFrom.secretKeyRef`（同 §6.6 K8s Secret `agent-runtime-auth-secret` + `agent-runtime-webhook-secret`）→ env `AGENT_RUNTIME_AUTH_SECRET_CURRENT/_PREVIOUS` + webhook 同理；dev: docker-compose `.env` 同 env 名 | ✓ single source（與 image §6.6 同 K8s Secret）→ rotation 一處改不 drift；secret 不落 Odoo DB | ✓ |
+
+**選 (b) 的理由**：
+
+1. **single source of truth** — 與 image 端 §6.6 同一把 K8s Secret，§6.6 dual-secret rotation（current/previous 4-phase）自動 cover Odoo verify，**不 drift**
+2. **secret 不落 Odoo DB** — env > ir.config_parameter（後者在 `ir_config_parameter` table plaintext，DB dump 洩漏）
+3. **本質不同於 `operator_api_key`** — operator_api_key 是 Odoo→operator 的 **outbound caller credential**（Odoo 主動持有去呼 operator，config_parameter 合理）；本 case 是 Odoo 作為 **server verify inbound 的 shared signing secret**，應與 §6.6 同 source
+4. **dev / docker-compose 也走 env**（`.env`）→ code path 統一讀 env，不分環境
+
+**dual-secret current/previous fallback（OQ#1 第 3 點 — 必須）**：
+
+Odoo 端 verify **必須支援 current/previous fallback**（對齊 §6.6 4-phase rotation）— 否則 rotation 過渡窗口（1h）內 Odoo 會 reject 用 `previous` secret 簽的 token / HMAC：
+
+```python
+# skill-bundle token verify (HS256) + webhook HMAC verify 共用此 pattern
+for sec in (env['AGENT_RUNTIME_AUTH_SECRET_CURRENT'], env.get('..._PREVIOUS')):
+    if sec and _verify(token_or_hmac, sec):
+        return ok
+raise Unauthorized
+```
+
+**tester setUp 影響**：原假設 (a) set `ir.config_parameter` → 改 (b) monkeypatch `os.environ['AGENT_RUNTIME_AUTH_SECRET_CURRENT']` / `..._WEBHOOK_SECRET_CURRENT`（一行差異；route / token-authoritative / HMAC 語義不受影響）。
+
+**若 leader 選 (a)**（dev 簡單優先）：rotation 配套**必須**加 — Odoo config_parameter 也存 `..._auth_secret_current` + `..._auth_secret_previous` 兩 param，§6.6 rotation runbook 加「同步 K8s Secret → Odoo config_parameter」手動步驟（drift 風險由 runbook 紀律承擔）。
 
 ### §5.4 ConfigMap mcp.json hot reload vs cold reload（Q3 拍板用）
 
