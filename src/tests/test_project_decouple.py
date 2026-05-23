@@ -13,8 +13,6 @@ AssertionError (B can see A's unbound project — the bug we are fixing).
 """
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import ValidationError, AccessError
-from psycopg2 import IntegrityError
-from odoo.tools import mute_logger
 
 
 class TestProjectDecouple(TransactionCase):
@@ -61,19 +59,11 @@ class TestProjectDecouple(TransactionCase):
             "Unbound project must have empty workspace_id (computed)")
 
     # ---------------- AC #2 ---------------- #
-    def test_ac2_unique_cloud_service_constraint_preserved(self):
-        """AC #2: A Service may have at most one bound Project (regression)."""
-        self.Project.create({
-            'name': 'First Bound',
-            'cloud_service_id': self.service.id,
-        })
-        with self.assertRaises(IntegrityError), \
-                self.cr.savepoint(), \
-                mute_logger('odoo.sql_db'):
-            self.Project.create({
-                'name': 'Second Bound (should fail)',
-                'cloud_service_id': self.service.id,
-            })
+    # Retired in .26 — see agent-runtime-pod-design §7.0.2 Step 3
+    # (UNIQUE(cloud_service_id) is dropped to support M:N project ↔
+    # cloud_service binding). PR #47 1:N invariant is superseded by
+    # this epic's M:N migration; preserving the UNIQUE assertion would
+    # contradict Phase A's design intent.
 
     # ---------------- AC #3 ---------------- #
     def test_ac3_bound_project_workspace_id_unchanged(self):

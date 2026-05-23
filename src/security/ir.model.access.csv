@@ -25,3 +25,11 @@ access_woow_wallet_topup_user,woow.wallet.topup.user,model_woow_wallet_topup,bas
 access_woow_wallet_topup_manager,woow.wallet.topup.manager,model_woow_wallet_topup,base.group_system,1,1,1,1
 access_project_project_internal,project.project internal user,project.model_project_project,base.group_user,1,1,1,1
 access_project_task_internal,project.task internal user,project.model_project_task,base.group_user,1,1,1,1
+access_agent_template_user,woow_paas_platform.agent_template.user,model_woow_paas_platform_agent_template,base.group_user,1,1,1,1
+access_agent_template_admin,woow_paas_platform.agent_template.admin,model_woow_paas_platform_agent_template,base.group_system,1,1,1,1
+access_agent_session_user,woow_paas_platform.agent_session.user,model_woow_paas_platform_agent_session,base.group_user,1,1,1,1
+access_agent_session_admin,woow_paas_platform.agent_session.admin,model_woow_paas_platform_agent_session,base.group_system,1,1,1,1
+access_skill_user,woow_paas_platform.skill.user,model_woow_paas_platform_skill,base.group_user,1,1,1,1
+access_skill_admin,woow_paas_platform.skill.admin,model_woow_paas_platform_skill,base.group_system,1,1,1,1
+access_project_access_user,woow_paas_platform.project_access.user,model_woow_paas_platform_project_access,base.group_user,1,1,1,1
+access_project_access_admin,woow_paas_platform.project_access.admin,model_woow_paas_platform_project_access,base.group_system,1,1,1,1

@@ -430,13 +430,16 @@ _CONFIG_PARAMETERS = [
 - **Odoo addon override std ir.rule**（任何在 `ir.model.access.csv` 給 `base.group_user` 加 project / task / Odoo std model 的 RWCU 時）：見 `docs/decisions/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
 - **PaaS workspace member ACL 收緊**：見 `docs/decisions/patterns/paas-workspace-member-acl-tightening.md`
 - **Odoo addon 不 override std field 型態**（任何想動 Odoo std model 欄位型態 / shape 的 PR）：見 `docs/decisions/patterns/odoo-std-field-no-override.md`
+- **m2m write constraint grantor authority check**（model 上有 attacker-writable Many2many + ir.rule / `@api.constrains` 用該 m2m 做 subset / authority 推導時）：見 `docs/decisions/patterns/constraint-input-trust-expansion.md`
+- **Bundle attachment defense in depth**（自家 model 透過 `ir.attachment` 存敏感 / RCE-class binary payload 時）：見 `docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`（anchor stamping + ir.attachment ir.rule 兩層）
 
 Pitfall 持久化紀錄（debug 撞牆時對照）：
 
 - `docs/tracking/pitfalls/cross-workspace-task-data-leak.md` — CAQA B1 incident
 - `docs/tracking/pitfalls/plan-vs-odoo-schema-mismatch.md` — plan 引用不存在欄位的教訓
+- `docs/tracking/pitfalls/ci-workflow-container-missing-node.md` — CI `container: <lang-image>` + `actions/checkout` → node not found (exit 127) → pytest 從沒跑到（false green）。**cross-repo CI infra learning**（agent-runtime-pod epic Phase B，`paas-agent-runtime` repo Gitea Actions；任何用 container image 跑 GitHub/Gitea Actions workflow 的 repo 都適用，本 repo Odoo CI 不受影響）
 
-Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（11 條未竟事項）
+Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（隨 cycle 持續累積；最新見該檔開頭 State 段）
 
 ## Docs organisation
 

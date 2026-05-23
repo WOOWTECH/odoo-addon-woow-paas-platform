@@ -64,4 +64,16 @@ from . import test_mcp_sidecar_hint_endpoint
 from . import test_mcp_external_url_creation
 from . import test_mcp_acl_unbound_isolation
 from . import test_mcp_project_decouple_migration_25
+# epic: agent-runtime-pod Phase A (TDD red)
+from . import test_agent_pod_phase_a_project_schema
+from . import test_agent_pod_phase_a_task_schema
+from . import test_agent_pod_phase_a_cloud_service_mn
+from . import test_agent_pod_phase_a_new_models
+from . import test_agent_pod_phase_a_acl
+from . import test_agent_pod_phase_a_migration
+# CAQA BLOCKER B-1 + OQ-A-2 (TDD red — impl 待補 16 rule + project/task M:N walk)
+from . import test_agent_pod_phase_a_acl_new_models
+from . import test_agent_pod_phase_a_project_task_acl_mn
+# Reviewer HC-3 + HC-4 (TDD red — impl 待補 @api.constrains + ir.attachment rule)
+from . import test_agent_pod_phase_a_attachment_acl
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

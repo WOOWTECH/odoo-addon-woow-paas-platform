@@ -26,7 +26,7 @@ class ProjectTask(models.Model):
     )
 
     # ------------------------------------------------------------------ #
-    #  Linked Cloud Services (D2=A / D6=C / D7=A)                         #
+    #  Linked Cloud Services (Phase A M:N hybrid — design §7.0.3)        #
     # ------------------------------------------------------------------ #
     workspace_id = fields.Many2one(
         'woow_paas_platform.workspace',
@@ -35,19 +35,32 @@ class ProjectTask(models.Model):
         index=True,
         string='Workspace',
     )
+    # Independent stored M2O with computed default (id ASC over the project's
+    # cloud_service_ids). `readonly=False` makes the compute act as a default —
+    # explicit writes persist; drift resets only when the current pick is no
+    # longer in the project's bound set.
     primary_cloud_service_id = fields.Many2one(
-        'woow_paas_platform.cloud_service',
-        related='project_id.cloud_service_id',
+        comodel_name='woow_paas_platform.cloud_service',
+        compute='_compute_primary_cloud_service_id',
         store=True,
+        readonly=False,
         index=True,
         string='Primary Cloud Service',
+        domain="[('id', 'in', project_id.cloud_service_ids.ids)]",
     )
     extra_cloud_service_ids = fields.Many2many(
         comodel_name='woow_paas_platform.cloud_service',
         relation='project_task_cloud_service_rel',
         column1='task_id',
         column2='cloud_service_id',
-        domain="[('workspace_id', '=', workspace_id)]",
+        # Limit to services bound to the task's project (M:N). The
+        # secondary ``workspace_id in project_id.workspace_ids.ids`` clause
+        # is functionally redundant — every member of cloud_service_ids
+        # already has its workspace in workspace_ids — but keeps the
+        # UI candidate list workspace-scoped for the legacy 1:N
+        # ``test_task_service_extras`` regression.
+        domain="[('id', 'in', project_id.cloud_service_ids.ids), "
+               "('workspace_id', 'in', project_id.workspace_ids.ids)]",
         string='Extra Linked Services',
     )
     incompatible_extra_cloud_service_ids = fields.Many2many(
@@ -57,6 +70,25 @@ class ProjectTask(models.Model):
         help='Extras whose workspace no longer matches this task — UI flags '
              'them with a warning chip; server keeps them on cross-project moves.',
     )
+
+    @api.depends('project_id.cloud_service_ids')
+    def _compute_primary_cloud_service_id(self):
+        """Default the primary to the first bound cloud_service (id ASC) and
+        reset only when the existing pick drifted out of the project's set.
+
+        - Empty / new task → primary = project.cloud_service_ids[:1].
+        - User explicit write → respected (compute deps unchanged → no rerun).
+        - project.cloud_service_ids changes:
+            * existing primary still ∈ new set → preserved (user choice intact);
+            * otherwise → reset to first.
+        """
+        for task in self:
+            bound = task.project_id.cloud_service_ids
+            current = task.primary_cloud_service_id
+            if current and current in bound:
+                # preserve — do not reassign
+                continue
+            task.primary_cloud_service_id = bound.sorted('id')[:1]
 
     @api.depends('extra_cloud_service_ids.workspace_id', 'workspace_id')
     def _compute_incompatible_extra_cloud_service_ids(self):
