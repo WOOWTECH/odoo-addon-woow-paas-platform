@@ -49,10 +49,14 @@ Fixture / env assumptions:
 * Phase A new models (agent_session) in registry.
 * operator_url / operator_api_key set via ir.config_parameter for client
   tests (existing keys).
-* Webhook HMAC secret read from ir.config_parameter key
-  ``woow_paas_platform.agent_runtime_webhook_secret`` — see Open question
-  (secret source may be a mounted K8s Secret instead; route + HMAC
-  semantics unaffected).
+* Webhook HMAC secret read by the receiver from the INJECTED ENV (OQ#1
+  ruling (b) — K8s Secret env injection, design §5.3 commit f5333c3). The
+  env var NAME is impl-defined; the placeholder below re-aligns if impl picks
+  a different name. In dev/docker-compose the helm chart injects it from the
+  K8s Secret; here the test sets os.environ for the in-process controller and
+  restores it via addCleanup. (operator_url / operator_api_key for the client
+  tests stay as ir.config_parameter — those are existing Odoo settings, not
+  the new shared secret.)
 
 Boundary (intentionally NOT tested here):
 
@@ -65,6 +69,7 @@ Boundary (intentionally NOT tested here):
 import hashlib
 import hmac
 import json
+import os
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -73,7 +78,9 @@ from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 
 _WEBHOOK_SECRET = "phase-c-webhook-secret-abcdef"
-_WEBHOOK_SECRET_PARAM = "woow_paas_platform.agent_runtime_webhook_secret"
+# OQ#1 ruling (b): K8s Secret env injection. Env var NAME is impl-defined —
+# this placeholder re-aligns when impl enters.
+_ENV_WEBHOOK_SECRET = "AGENT_RUNTIME_WEBHOOK_SECRET"
 _CLIENT_MOD = "odoo.addons.woow_paas_platform.services.agent_runtime_client"
 
 
@@ -214,12 +221,21 @@ class TestPhaseCWebhookReceiver(HttpCase):
         cls.Session = cls.env['woow_paas_platform.agent_session']
         cls.Project = cls.env['project.project']
 
+    def _set_env(self, key, value):
+        """Set an env var for the in-process controller, restore on teardown."""
+        prev = os.environ.get(key)
+        os.environ[key] = value
+        self.addCleanup(
+            lambda: os.environ.__setitem__(key, prev) if prev is not None
+            else os.environ.pop(key, None)
+        )
+
     def setUp(self):
         super().setUp()
         self.suffix = uuid.uuid4().hex[:8]
-        self.env['ir.config_parameter'].sudo().set_param(
-            _WEBHOOK_SECRET_PARAM, _WEBHOOK_SECRET,
-        )
+        # OQ#1 ruling (b): receiver reads the HMAC secret from the injected ENV
+        # (K8s Secret env injection). Env var name is an impl-defined placeholder.
+        self._set_env(_ENV_WEBHOOK_SECRET, _WEBHOOK_SECRET)
         self.project = self.Project.sudo().create({'name': f'wh-{self.suffix}'})
         # agent_session auto-computes project_namespace_hash on create.
         self.session = self.Session.sudo().create({

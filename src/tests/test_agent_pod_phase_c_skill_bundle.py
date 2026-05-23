@@ -55,12 +55,14 @@ Red expectation today (Phase C impl has NOT started):
 Fixture / env assumptions:
 
 * Phase A new models in registry (skill + project_access + agent_session).
-* Shared HS256 secret read by the endpoint from ir.config_parameter key
-  ``woow_paas_platform.agent_runtime_auth_secret`` (current). This mirrors
-  the existing operator_url / operator_api_key config_parameter pattern.
-  → see Open question: if impl reads the secret from a mounted K8s Secret
-    file instead, the secret-source line in setUp needs aligning (the route
-    contract + token-authoritative behaviour are unaffected).
+* Shared HS256 secret read by the endpoint from the pod's INJECTED ENV
+  (OQ#1 ruling (b) — K8s Secret env injection, design §5.3 commit f5333c3),
+  with a previous-secret fallback per §6.6 dual-secret rotation window. The
+  env var NAMES are impl-defined; the placeholders below re-align if impl
+  picks different names (route contract + token-authoritative behaviour are
+  unaffected). In dev/docker-compose the helm chart injects these env vars
+  from the K8s Secret; here the test sets os.environ for the in-process
+  controller and restores it via addCleanup.
 * Tokens are HS256-signed with pure stdlib here (hmac+base64) so the test
   does not depend on PyJWT being installed yet (PyJWT lands in block ④).
 
@@ -99,7 +101,11 @@ def _sign_hs256(payload: dict, secret: str) -> str:
 
 
 _AUTH_SECRET = "phase-c-skill-bundle-secret-0123456789"
-_SECRET_PARAM = "woow_paas_platform.agent_runtime_auth_secret"
+_AUTH_SECRET_PREVIOUS = "phase-c-skill-bundle-secret-PREVIOUS99"
+# OQ#1 ruling (b): K8s Secret env injection (§5.3/§6.6 dual-secret). Env var
+# NAMES are impl-defined — these placeholders re-align when impl enters.
+_ENV_SECRET_CURRENT = "AGENT_RUNTIME_AUTH_SECRET_CURRENT"
+_ENV_SECRET_PREVIOUS = "AGENT_RUNTIME_AUTH_SECRET_PREVIOUS"
 
 
 def _skill_bundle_token(project_hash, project_id, workspace_ids, secret,
@@ -217,14 +223,24 @@ class TestPhaseCSkillBundleEndpoint(HttpCase):
         cls.Skill = cls.env['woow_paas_platform.skill']
         cls.Attachment = cls.env['ir.attachment']
 
+    def _set_env(self, key, value):
+        """Set an env var for the in-process controller, restore on teardown."""
+        prev = os.environ.get(key)
+        os.environ[key] = value
+        self.addCleanup(
+            lambda: os.environ.__setitem__(key, prev) if prev is not None
+            else os.environ.pop(key, None)
+        )
+
     def setUp(self):
         super().setUp()
         self.suffix = uuid.uuid4().hex[:8]
 
-        # Endpoint reads the shared HS256 secret from this config_parameter.
-        self.env['ir.config_parameter'].sudo().set_param(
-            _SECRET_PARAM, _AUTH_SECRET,
-        )
+        # OQ#1 ruling (b): endpoint reads the shared HS256 secret from the pod's
+        # INJECTED ENV (K8s Secret env injection), current + previous fallback
+        # (§6.6). Env var names are impl-defined placeholders.
+        self._set_env(_ENV_SECRET_CURRENT, _AUTH_SECRET)
+        self._set_env(_ENV_SECRET_PREVIOUS, _AUTH_SECRET_PREVIOUS)
 
         # Two projects: A holds the published skill; B is the "other" project
         # used to prove the token (not the query param) decides resolution.
