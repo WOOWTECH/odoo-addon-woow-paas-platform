@@ -76,4 +76,8 @@ from . import test_agent_pod_phase_a_acl_new_models
 from . import test_agent_pod_phase_a_project_task_acl_mn
 # Reviewer HC-3 + HC-4 (TDD red — impl 待補 @api.constrains + ir.attachment rule)
 from . import test_agent_pod_phase_a_attachment_acl
+# epic: agent-runtime-pod Phase C (TDD red — paas-operator ① 為 pytest，不在此)
+from . import test_agent_pod_phase_c_skill_bundle          # 塊②
+from . import test_agent_pod_phase_c_client_webhook        # 塊③
+from . import test_agent_pod_phase_c_sse_gateway           # 塊④
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
