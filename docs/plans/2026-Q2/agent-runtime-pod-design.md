@@ -2535,7 +2535,7 @@ def _compute_effective_quota_cpu(self):
 | Direction | Type | Payload 必填 | 用途 |
 |-----------|------|-------------|------|
 | **Odoo → Pod** |  |  |  |
-| → | `user_message` | `channel_id`, `body`, `history`, `template_id`, `invoker_role`, `invoker_user_id` | 用戶發送訊息觸發 LangGraph |
+| → | `user_message` | `body`, `history`, `template_id`（LangGraph input）；`channel_id` / `invoker_role` / `invoker_user_id` ⚠ **僅作 LangGraph input — security 決策（audit 歸因 / role 授權）一律取 token claims（§5.3 權威），payload 同名欄 NOT security decision**（HC-2 ruling；見 [[constraint-input-trust-expansion]] image 端同型 instance） | 用戶發送訊息觸發 LangGraph |
 | → | `cancel` | `request_id_target` | 取消正在進行的 request |
 | → | `template_update` | `template_id`, `template_snapshot` | 通知 pod template 配置變動（hot reload） |
 | → | `mcp_invalidate` | `mcp_snapshot_hash` | 通知 pod 重新 parse mcp.json（hot reload） |
@@ -3065,17 +3065,25 @@ async def websocket_chat(ws: WebSocket, token: str = Query(...)):
 
         request_id = envelope['request_id']
         payload = envelope['payload']
-        channel_id = payload['channel_id']
+
+        # HC-2 ruling — security 決策（audit 歸因 + role 授權）一律取 token claims（authoritative），
+        # 不取 client-controlled payload（防 repudiation / 提權）。
+        # See §5.3 + [[constraint-input-trust-expansion]]（image 端同型 instance，呼應 Phase A §4.1 _check_project_ids_grantor_authority）。
+        channel_id = claims['channel_id']            # ← claims, NOT payload (audit 歸因 + thread scope)
+        invoker_user_id = claims['invoker_user_id']  # ← claims, NOT payload (audit 歸因)
+        invoker_role = claims['invoker_role']        # ← claims, NOT payload (role 授權)
         thread_id = f'channel-{channel_id}'
+        # payload 同名欄（payload.get('channel_id') / ['invoker_role'] / ['invoker_user_id']）
+        # 若存在僅作 cross-check / 忽略 — 絕不參與 security 決策
 
         # ④ stream LangGraph events as WS envelopes
         seq = 0
         async for event in runtime.stream(
             thread_id=thread_id,
-            user_message=payload['body'],
-            history=payload['history'],
-            template_id=payload['template_id'],
-            invoker_role=payload['invoker_role'],
+            user_message=payload['body'],        # payload: LangGraph input (non-security)
+            history=payload['history'],          # payload: LangGraph input
+            template_id=payload['template_id'],  # payload: LangGraph input
+            invoker_role=invoker_role,           # ← from claims (role authz; tool-authz wiring 後生效)
         ):
             seq += 1
             await ws.send_json(format_envelope(
@@ -3088,7 +3096,10 @@ async def websocket_chat(ws: WebSocket, token: str = Query(...)):
             # listen for cancel envelope concurrently (race)
             # — implementation detail: use asyncio.create_task + cancel propagation
 
-        # ⑤ send done
+        # ⑤ send done — pod ws_server 是 done event 的【唯一 producer】(single done per request_id)
+        #    runtime.stream 本身只 yield text_chunk / tool_* events，**不送 done**（避免 stub 雙 done）；
+        #    ws_server 在 stream 迭代結束後送單一 done。
+        #    Odoo SSE generator (§5.6) 收到此 done → 轉成 browser SSE `{done: True}` 並 break（1:1 轉換，不新增第二個 done）。
         await ws.send_json(format_envelope(
             'done',
             payload={'full_response': event.full_response, 'usage': event.usage},
@@ -3526,7 +3537,8 @@ def spawn_skill_subprocess(skill_path, args, skill_meta, invoker_role):
             env=env,
             preexec_fn=_set_rlimits,         # Unix only; agent-runtime 跑 Linux pod
             timeout=bundle_timeout,
-            stdin=subprocess.PIPE,
+            # NOTE: `input=` 自動設 stdin=PIPE；**不可同時寫 stdin=subprocess.PIPE**（ValueError）。
+            # impl 已正確修：只保留 input=（移除 stdin=PIPE）。
             input=json.dumps(skill_meta.get('input_args', {})),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
