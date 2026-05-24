@@ -109,7 +109,13 @@ _ENV_SECRET_PREVIOUS = "AGENT_RUNTIME_AUTH_SECRET_PREVIOUS"
 
 
 def _skill_bundle_token(project_hash, project_id, workspace_ids, secret,
-                        exp_offset=3600):
+                        exp_offset=3600, token_use='skill_bundle'):
+    """Craft a skill_bundle-scope token.
+
+    ``token_use`` defaults to 'skill_bundle' (C-1 hardening — the endpoint
+    asserts this claim). Pass token_use='ws' / 'forged' / None to exercise
+    the C-1 cross-scope rejection paths.
+    """
     now = int(time.time())
     payload = {
         "iss": "paas-operator",
@@ -120,6 +126,8 @@ def _skill_bundle_token(project_hash, project_id, workspace_ids, secret,
         "exp": now + exp_offset,
         "jti": uuid.uuid4().hex,
     }
+    if token_use is not None:
+        payload["token_use"] = token_use
     return _sign_hs256(payload, secret)
 
 
@@ -419,3 +427,78 @@ class TestPhaseCSkillBundleEndpoint(HttpCase):
             "(only published bundles are fetchable). Got %s."
             % resp.status_code,
         )
+
+    # ------------------------------------------------------------------ #
+    # C-1 hardening — token_use claim cross-scope rejection               #
+    #                                                                     #
+    # All C-1 reject cases use a valid project_a.id + the current secret  #
+    # so token_use is the ONLY differentiator — today the endpoint        #
+    # ignores token_use and serves 200 (RED: assert 403); post-impl the   #
+    # endpoint asserts token_use=='skill_bundle' and returns 403.         #
+    # ------------------------------------------------------------------ #
+    def test_C1_ws_token_use_rejected(self):
+        """C-1: a ws-scope token (token_use='ws') — otherwise valid for the
+        skill's project — must be rejected 403 by the skill-bundle endpoint.
+        A ws token must never be replayable as a bundle-fetch token."""
+        token = _skill_bundle_token(
+            self.wrong_hash, self.project_a.id, [], _AUTH_SECRET,
+            token_use='ws',
+        )
+        resp = self._get(
+            self._url(self.wrong_hash, self.skill.name, '1.0.0'), token,
+        )
+        self.assertEqual(
+            resp.status_code, 403,
+            "C-1: token_use='ws' must be rejected 403 by the skill-bundle "
+            "endpoint (defense in depth — do not rely only on claim shape). "
+            "Got %s." % resp.status_code,
+        )
+
+    def test_C1_missing_token_use_rejected(self):
+        """C-1: a token with NO token_use claim must be rejected 403
+        (fail-closed — an unstamped token is not a valid skill_bundle token)."""
+        token = _skill_bundle_token(
+            self.wrong_hash, self.project_a.id, [], _AUTH_SECRET,
+            token_use=None,
+        )
+        resp = self._get(
+            self._url(self.wrong_hash, self.skill.name, '1.0.0'), token,
+        )
+        self.assertEqual(
+            resp.status_code, 403,
+            "C-1: a token missing the token_use claim must be rejected 403 "
+            "(fail-closed). Got %s." % resp.status_code,
+        )
+
+    def test_C1_forged_token_use_rejected(self):
+        """C-1: an unknown/forged token_use value must be rejected 403."""
+        token = _skill_bundle_token(
+            self.wrong_hash, self.project_a.id, [], _AUTH_SECRET,
+            token_use='admin-everything',
+        )
+        resp = self._get(
+            self._url(self.wrong_hash, self.skill.name, '1.0.0'), token,
+        )
+        self.assertEqual(
+            resp.status_code, 403,
+            "C-1: an unrecognised token_use value must be rejected 403 "
+            "(allowlist, not denylist). Got %s." % resp.status_code,
+        )
+
+    def test_C1_skill_bundle_token_use_accepted(self):
+        """C-1 (positive lock): the correct token_use='skill_bundle' value
+        still serves the bundle 200. Green today + post-impl — proves the
+        C-1 check does not break the legitimate fetch path."""
+        token = _skill_bundle_token(
+            self.wrong_hash, self.project_a.id, [], _AUTH_SECRET,
+            token_use='skill_bundle',
+        )
+        resp = self._get(
+            self._url(self.wrong_hash, self.skill.name, '1.0.0'), token,
+        )
+        self.assertEqual(
+            resp.status_code, 200,
+            "C-1: token_use='skill_bundle' (the correct scope) must still "
+            "serve the bundle 200. Got %s." % resp.status_code,
+        )
+        self.assertEqual(resp.content, self.bundle_bytes)

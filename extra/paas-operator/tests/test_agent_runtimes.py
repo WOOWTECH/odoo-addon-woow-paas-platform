@@ -190,6 +190,34 @@ class TestJwtSigner:
             "skill_bundle_token (per-pod-lifetime) must not carry channel_id"
         )
 
+    # --- C-1 hardening: explicit token_use claim (defense in depth) -------- #
+    def test_C1_ws_token_carries_token_use_ws(self):
+        """C-1: sign_ws_token stamps token_use='ws' so verifiers can reject a
+        ws token presented to a skill_bundle context (and vice versa) without
+        relying on the implicit claim-shape difference. Red today: signer does
+        not emit a token_use claim yet."""
+        signer = self._signer()
+        claims = _decode_jwt_payload(signer.sign_ws_token(
+            project_hash="pa1234567890abcd", channel_id=1,
+            invoker_user_id=2, invoker_role="user", secret=_SECRET_CURRENT,
+        ))
+        assert claims.get("token_use") == "ws", (
+            "C-1: ws_token must carry explicit token_use='ws' "
+            "(got %r)" % claims.get("token_use")
+        )
+
+    def test_C1_skill_bundle_token_carries_token_use_skill_bundle(self):
+        """C-1: sign_skill_bundle_token stamps token_use='skill_bundle'."""
+        signer = self._signer()
+        claims = _decode_jwt_payload(signer.sign_skill_bundle_token(
+            project_hash="pa1234567890abcd", project_id=99,
+            workspace_ids=[1], secret=_SECRET_CURRENT,
+        ))
+        assert claims.get("token_use") == "skill_bundle", (
+            "C-1: skill_bundle_token must carry explicit "
+            "token_use='skill_bundle' (got %r)" % claims.get("token_use")
+        )
+
     def test_verify_roundtrip_current_secret(self):
         """J.4: verify_token round-trips a token signed with the current secret."""
         signer = self._signer()
