@@ -1,8 +1,12 @@
 import base64
 import hashlib
 import hmac
+import logging
+from datetime import timedelta
 
 from odoo import api, fields, models
+
+_logger = logging.getLogger(__name__)
 
 _DEFAULT_SECRET = b'woow-paas-agent-namespace-fallback-secret'
 
@@ -81,6 +85,16 @@ class AgentSession(models.Model):
     mcp_snapshot_hash = fields.Char(readonly=True)
     last_error = fields.Text(readonly=True)
 
+    # paas-operator state sync (design §5.5 — webhook primary + cron fallback)
+    last_synced_at = fields.Datetime(
+        readonly=True,
+        help='Stamped whenever a webhook / drift cron syncs this session.',
+    )
+    last_state_event_ts = fields.Datetime(
+        readonly=True,
+        help='Timestamp of the last paas-operator state event (drift detection).',
+    )
+
     _sql_constraints = [
         (
             'unique_project',
@@ -111,3 +125,38 @@ class AgentSession(models.Model):
         if raw:
             return raw.encode()
         return _DEFAULT_SECRET
+
+    @api.model
+    def _cron_drift_detection(self):
+        """Fallback poll for sessions the webhook may have missed (§5.5).
+
+        Sessions in a live-ish state whose ``last_synced_at`` is stale
+        (> 10 min) are re-synced against paas-operator's status endpoint.
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(self.env)
+        if not client:
+            return
+        threshold = fields.Datetime.now() - timedelta(minutes=10)
+        stale = self.sudo().search([
+            ('state', 'in', ['spawning', 'active', 'reaped', 'degraded']),
+            '|',
+            ('last_synced_at', '=', False),
+            ('last_synced_at', '<', threshold),
+        ])
+        for session in stale:
+            if not session.project_namespace_hash:
+                continue
+            try:
+                status = client.get_status(session.project_namespace_hash)
+            except Exception as exc:
+                _logger.warning(
+                    'Drift sync failed for agent_session %s: %s', session.id, exc,
+                )
+                continue
+            vals = {'last_synced_at': fields.Datetime.now()}
+            if status.get('state'):
+                vals['state'] = status['state']
+            if 'pod_ws_url' in status:
+                vals['pod_ws_url'] = status['pod_ws_url'] or False
+            session.write(vals)
