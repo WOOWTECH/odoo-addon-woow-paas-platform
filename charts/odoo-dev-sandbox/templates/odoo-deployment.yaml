@@ -75,6 +75,42 @@ spec:
                 secretKeyRef:
                   name: {{ include "odoo-dev-sandbox.secretName" . }}
                   key: postgres-database
+            # Agent-runtime shared secrets (OQ#1 ruling (b) — K8s Secret env
+            # injection). Frozen env names; consumed by the skill-bundle /
+            # webhook / namespace-hash code paths (flag-gated by
+            # project.use_agent_runtime, so optional for sandboxes that don't
+            # enable it — a missing key leaves the env unset, which fails closed
+            # only when the agent-runtime path actually runs).
+            - name: AGENT_RUNTIME_AUTH_SECRET_CURRENT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: agent-runtime-auth-secret-current
+                  optional: true
+            - name: AGENT_RUNTIME_AUTH_SECRET_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: agent-runtime-auth-secret-previous
+                  optional: true
+            - name: AGENT_RUNTIME_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: agent-runtime-webhook-secret
+                  optional: true
+            - name: AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: agent-runtime-webhook-secret-previous
+                  optional: true
+            - name: AGENT_RUNTIME_NAMESPACE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: agent-runtime-namespace-secret
+                  optional: true
           volumeMounts:
             - name: odoo-config
               mountPath: /etc/odoo/odoo.conf

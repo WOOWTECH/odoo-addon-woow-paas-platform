@@ -116,12 +116,23 @@ class ProjectProject(models.Model):
         projects = super().create(vals_list)
         if 'woow_paas_platform.project_access' not in self.env.registry:
             return projects
-        # Skip bootstrap when called as SUPERUSER (__system__ / cron /
-        # install hooks / migration): the row exists to represent a real
-        # human owner; module-internal callers should not appear as owners.
+        # Resolve the owner-partner to bootstrap (HC-2
+        # [[constraint-input-trust-expansion]]): authority comes from a trusted
+        # source, never inferred from an attacker-controllable context value.
+        # - SUPERUSER path (sudo: paas-operator provisioning / cron / install /
+        #   migration): only an EXPLICIT ``bootstrap_owner_partner_id`` hint —
+        #   set by a trusted caller naming the real human owner — bootstraps;
+        #   a bare SUPERUSER create with NO hint does NOT auto-own.
+        # - Normal self-service create: the authenticated user owns the project.
+        #   The hint is NOT honoured here — a non-trusted caller must not be able
+        #   to assign ownership to an arbitrary partner via the context.
         if self.env.uid == SUPERUSER_ID:
-            return projects
-        partner = self.env.user.partner_id
+            hint_partner_id = self.env.context.get('bootstrap_owner_partner_id')
+            if not hint_partner_id:
+                return projects
+            partner = self.env['res.partner'].browse(hint_partner_id).exists()
+        else:
+            partner = self.env.user.partner_id
         if not partner:
             return projects
         PAccess = self.env['woow_paas_platform.project_access']

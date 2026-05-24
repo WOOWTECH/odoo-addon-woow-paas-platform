@@ -133,7 +133,8 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.registry_secret_name',
     'woow_paas_platform.topup_payment_enabled',
     'woow_paas_platform.max_consecutive_payment_failures',
-    'woow_paas_platform.agent_namespace_secret',
+    # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
+    # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
 ]
 
 

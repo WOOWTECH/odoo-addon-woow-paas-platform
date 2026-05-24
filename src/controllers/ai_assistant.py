@@ -726,7 +726,21 @@ class AiAssistantController(Controller):
                     'error': str(exc), 'done': True,
                 }) + '\n\n'
             finally:
-                loop.close()
+                # The done / error branches break out of the drain loop with the
+                # relay generator SUSPENDED at its yield inside
+                # ``async with websockets.connect()``; only aclose() unwinds it
+                # so the connection's __aexit__ (the WS close) runs — otherwise
+                # we leak a pod connection per chat turn (F-PC-6 / P-2). On the
+                # exception path the async-with already unwound, so aclose() is a
+                # harmless no-op. Best-effort: a pod that dropped uncleanly can
+                # raise during the WS close handshake, which must not crash the
+                # already-finished SSE stream — log and still close the loop.
+                try:
+                    loop.run_until_complete(agen.aclose())
+                except Exception as close_exc:
+                    _logger.debug('relay aclose() during cleanup: %s', close_exc)
+                finally:
+                    loop.close()
 
         return Response(
             generate(),
