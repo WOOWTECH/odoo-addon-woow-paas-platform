@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Phase D WS3 / SEED.1: an UNPUBLISHED demo agent_template, seeded by the
+         module but NOT bound to any real project. It is a code-prep placeholder
+         for the admin enablement surface — it must stay unpublished (draft) and
+         its xmlid is a frozen contract: woow_paas_platform.agent_template_demo. -->
+    <data noupdate="1">
+        <record id="agent_template_demo" model="woow_paas_platform.agent_template">
+            <field name="name">Demo Agent Template</field>
+            <field name="title">Demo Agent</field>
+            <field name="description">Unpublished demo template for the Phase D agent-runtime enablement surface. Not bound to any project.</field>
+            <field name="is_public" eval="True"/>
+            <field name="state">draft</field>
+        </record>
+    </data>
+</odoo>
