@@ -834,6 +834,43 @@ class KubernetesService:
 
         self._run_command(args)
 
+    def get_deployment_replicas(
+        self, namespace: str, deployment_name: str
+    ) -> int:
+        """Return the desired replica count of a deployment (0 if reaped).
+
+        Used by the agent-runtime lifecycle to distinguish attach (replicas>=1)
+        from resume (replicas==0).
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "deployment", deployment_name,
+            "--namespace", namespace,
+            "--output", "jsonpath={.spec.replicas}",
+        ]
+        result = self._run_command(args)
+        output = result.stdout.strip()
+        return int(output) if output else 0
+
+    def set_deployment_env(
+        self, namespace: str, deployment_name: str, env: Dict[str, str]
+    ) -> None:
+        """Set/replace environment variables on a deployment via ``kubectl set env``.
+
+        Triggers a rollout; used on resume to inject a freshly-signed
+        SKILL_BUNDLE_TOKEN BEFORE scaling back to 1 (design §2.11.1 — avoids
+        the pod coming up with a stale token).
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "set", "env",
+            f"deployment/{deployment_name}",
+            "--namespace", namespace,
+        ] + [f"{key}={value}" for key, value in env.items()]
+        self._run_command(args)
+
     def get_statefulsets(
         self, namespace: str, label_selector: Optional[str] = None
     ) -> List[Dict[str, Any]]:

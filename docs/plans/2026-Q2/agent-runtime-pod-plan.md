@@ -217,66 +217,117 @@ related:
 
 ---
 
-## Phase C — paas-operator agent-runtime router + Odoo client side
+## Phase C — paas-operator endpoints + Odoo WS gateway + client/webhook
+
+> **[Phase C 細化 2026-05-23 — Phase A/B merged, base 解鎖]** scope 對齊 leader Phase C 三大塊；補上原 task list 漏的 **skill bundle download endpoint**（Phase B image `cache.py` 假設存在）+ **SKILL_BUNDLE_TOKEN 簽發/注入** + **agent_session webhook-sync field**。
 
 ### Goal
 
-開通 paas-operator 新 endpoints + Odoo 端 `agent_runtime_client.py` service + webhook receiver。**還沒** flip SSE generator 切換邏輯。
+開通三大塊：(1) paas-operator agent-runtime endpoints (2) Odoo controller WS gateway（SSE generator rewrite，§5.6） (3) agent_runtime_client + webhook + skill bundle endpoint。**SSE rewrite 含 `use_agent_runtime` flag gate（預設 False）— code ready but not activated**；Phase C **不做** Phase D pilot deployment（不 enable flag + monitor）。
 
-### Tasks
+### Phase C scope 邊界（vs Phase D）
 
-**paas-operator**：
+- **Phase C ship**：WS gateway code（SSE rewrite + dual-mode flag 預設 False）+ paas-operator endpoints + client/webhook/skill-bundle endpoint + K8s Secret
+- **Phase C 不做**（→ Phase D）：enable `use_agent_runtime` flag for pilot project / monitor cold start latency / 實際 pod 起在 production cluster
+- 理由：code 與 activation 分離 — Phase C merge 後 production chat 行為零變動（flag False 走既有 ai_client.py），Phase D 才漸進 enable
 
-1. `extra/paas-operator/src/api/agent_runtimes.py`（新檔）：
-   - `POST /api/agent-runtimes/spawn-or-attach`
-   - `POST /api/agent-runtimes/{project_hash}/reap`
-   - `POST /api/agent-runtimes/{project_hash}/resume`（or 內含於 spawn-or-attach）
-   - `POST /api/agent-runtimes/{project_hash}/invalidate-mcp`
-   - `POST /api/agent-runtimes/{project_hash}/sync-workspaces`
-   - `DELETE /api/agent-runtimes/{project_hash}`
-   - `GET /api/agent-runtimes/{project_hash}/status`
-2. `extra/paas-operator/src/services/jwt_signer.py`（HS256 + dual-secret read from K8s Secret）
-3. `extra/paas-operator/src/services/webhook_dispatcher.py`（HMAC-SHA256 sign + retry 3x exp backoff）
-4. `extra/paas-operator/src/services/mcp_invalidator.py`（patch ConfigMap + WS push to pod）
-5. `extra/paas-operator/src/models/schemas.py`（agent-runtime request/response Pydantic models）
-6. `extra/paas-operator/src/main.py`：include 新 router
-7. K8s Secret `agent-runtime-auth-secret`（在 `paas-system` ns）含 `current` + `previous` keys
+### Tasks（implementation-level，依賴序 ①→④）
 
-**Odoo client side**：
+#### ① paas-operator agent-runtime endpoints（`extra/paas-operator/` — 只新增，不動既有 router）
 
-8. `src/services/agent_runtime_client.py`（新檔）— HTTP client 包：`spawn_or_attach()` / `reap()` / `invalidate_mcp()` / `sync_workspaces()` / `delete()`
-9. `src/controllers/agent_runtime_webhook.py`（新檔）— `POST /api/agent-runtimes/webhook/state-update`（HMAC verify + 更新 agent_session.state）
-10. `src/__manifest__.py`：requirements.txt 加 `websockets`（client）
-11. `src/data/agent_session_cron.xml` — drift detection cron（每 5 min 對比 paas-operator status）
+1. `extra/paas-operator/src/services/jwt_signer.py`（新檔）— HS256 sign + dual-secret read from K8s Secret（§5.3 / §6.6）；**兩種 token scope**：
+   - `sign_ws_token(project_hash, channel_id, invoker_user_id, invoker_role, exp=1h)` — Odoo controller open WS 用（per-invocation）
+   - `sign_skill_bundle_token(project_hash, project_id, workspace_ids, exp=1h)` — 注入 pod env `SKILL_BUNDLE_TOKEN`（per-pod-lifetime；cache.py fetch 用）
+2. `extra/paas-operator/src/services/webhook_dispatcher.py`（新檔）— pod→Odoo state-update outbound：HMAC-SHA256 sign + retry 3x exp backoff（§5.5）
+3. `extra/paas-operator/src/services/mcp_invalidator.py`（新檔）— patch ConfigMap mcp.json + WS push to pod（§5.4）
+4. `extra/paas-operator/src/models/schemas.py`（**既有檔，append** agent-runtime Pydantic models）— `SpawnOrAttachRequest` / `SpawnOrAttachResponse` / `SyncWorkspacesRequest` / `AgentRuntimeStatusResponse`
+5. `extra/paas-operator/src/api/agent_runtimes.py`（新檔，新 router `prefix=/api/agent-runtimes`）：
+   - `POST /spawn-or-attach` — body `{project_hash, project_id, channel_id, invoker_user_id, invoker_role, project_workspace_ids, agent_template_snapshot, mcp_snapshot, skill_snapshot}` → lookup helm release `agent-pa-{hash}` in ns `paas-ws-pa-{hash}` → install（含 helm values: image tag + pod env `ODOO_BASE_URL`/`PROJECT_HASH`/`SKILL_BUNDLE_TOKEN`/`SHARED_SECRET` ref）/ scale-1 / no-op → poll readiness → sign `ws_token` → return `{pod_ws_url, ws_token, pod_state, spawn_age_ms}`
+   - `POST /{project_hash}/reap` — `scale_release(replicas=0)` + annotation `reaped-since`
+   - `POST /{project_hash}/resume` — scale-1（or 內含 spawn-or-attach；resume 時 **重簽 SKILL_BUNDLE_TOKEN** 並 patch pod env，見 ⚠ escalation）
+   - `POST /{project_hash}/invalidate-mcp` — call mcp_invalidator
+   - `POST /{project_hash}/sync-workspaces` — body `{project_workspace_ids}` → helm upgrade 重渲染 NetworkPolicy egress
+   - `DELETE /{project_hash}` — helm uninstall
+   - `GET /{project_hash}/status` — return `{state, last_active, pod_ws_url, spawn_age_ms}`
+6. `extra/paas-operator/src/main.py`（**既有檔**）— `app.include_router(agent_runtimes.router)`（只加一行 include；既有 releases/namespaces/tunnels/routes/init/odoo_modules router 不動）
+7. K8s Secret `agent-runtime-auth-secret`（`paas-system` ns）含 `current` + `previous` keys（helm chart 落地 — Phase G Fleet；Phase C dev 手動 `kubectl create secret`）
+
+#### ② Odoo skill bundle download endpoint + agent_session field（cross-repo wiring 對齊 Phase B cache.py）
+
+8. `src/models/agent_session.py`（**既有檔，append** 2 field）— webhook state sync 需要：
+   - `last_synced_at = fields.Datetime(readonly=True)`（webhook / cron 更新時戳）
+   - `last_state_event_ts = fields.Datetime(readonly=True)`（最後一次 paas-operator state event ts，drift detection 用）
+   - migration `18.0.1.0.27/` 加 column（additive，nullable，無 backfill）
+9. `src/controllers/agent_runtime_skill.py`（新檔）— **Phase B `cache.py` 假設的 endpoint**：
+   - `GET /api/agent-runtimes/skill-bundle?project_hash={hash}&skill_name={name}&version={ver}`（auth='none'，內部 verify `SKILL_BUNDLE_TOKEN` Bearer header；不走 Odoo session）
+   - verify token（HS256 dual-secret，同 §5.3）→ decode project_id/workspace_ids → project_access 確認 skill ∈ project + state=published → return `ir.attachment` binary（`skill.bundle_attachment_id.datas`）
+   - **token authoritative**（不信 query param project_hash — 對齊 HC-2 ruling [[constraint-input-trust-expansion]]）：以 token claims 的 project_id 為準，query param 僅 cross-check
+
+#### ③ Odoo agent_runtime_client + webhook receiver
+
+10. `src/services/agent_runtime_client.py`（新檔）— HTTP client wrapper to paas-operator：`spawn_or_attach()` / `reap()` / `resume()` / `invalidate_mcp()` / `sync_workspaces()` / `delete()` / `get_status()`；讀 `ir.config_parameter` operator_url + operator_api_key（沿用既有 `get_paas_operator_client` pattern）
+11. `src/controllers/agent_runtime_webhook.py`（新檔）— `POST /api/agent-runtimes/webhook/state-update`（auth='none'，HMAC-SHA256 verify with `agent-runtime-webhook-secret`）→ 找 agent_session by `project_namespace_hash` → update `state` + `last_synced_at` + `last_state_event_ts`；invalid HMAC → 401 + log warn
+12. `src/data/agent_session_cron.xml`（新檔）— drift detection cron（每 5 min：search agent_session state ∈ active/spawning/reaped/degraded AND last_synced_at < now-10min → call `get_status` 補同步）
+13. `src/__manifest__.py`（**既有檔**）— bump version `18.0.1.0.26` → `18.0.1.0.27`；data 加 cron xml + migration
+
+#### ④ Odoo controller WS gateway（SSE generator rewrite，§5.6）
+
+14. `src/controllers/ai_assistant.py`（**既有檔**）— `/api/ai/stream/<channel_id>` SSE generator rewrite per §5.6：
+    - 加 `if project.use_agent_runtime:` 分支（**flag gate，預設 False**）
+      - True 分支：resolve project_id + project_access check → 序列化 agent_template/mcp/skill snapshot → `agent_runtime_client.spawn_or_attach()` → open outbound WS to `pod_ws_url`（帶 `ws_token`）→ relay 15-type envelopes as SSE events（envelope→既有 SSE schema 轉換；done 1:1，§5.6/§5.8）
+      - False 分支：既有 ai_client.py 同步路徑（**不動**）
+    - frontend `ai_service.js` EventSource **零變更**（§1.2 sign-off）
+15. `requirements.txt`（**既有檔**）— 加 `websockets`（Odoo controller WS client）+ `PyJWT`（webhook/skill-bundle token verify）
 
 ### Test scope（Phase C）
 
-- paas-operator unit test：`spawn_or_attach` mock K8s（無真實 pod）— 簽 JWT + return mock URL
-- paas-operator integration test：與 dev k8s 真起 pod 並 attach
+**① paas-operator**：
+- unit test：`spawn_or_attach` mock K8s（無真實 pod）— 簽 ws_token + skill_bundle_token + return mock URL
+- unit test：jwt_signer 兩種 token scope sign+verify roundtrip；dual-secret current/previous fallback
+- integration test：與 dev k8s 真起 pod 並 attach（既有 paas-operator integration test pattern，`-m integration`）
+- jti cache replay：同 jti 第二次 verify 不 pass
+
+**② skill bundle endpoint + agent_session field**：
+- skill bundle download：valid SKILL_BUNDLE_TOKEN → return binary；token invalid/expired → 401；project_access 不符 → 403；skill not published → 404
+- **token authoritative**：query param project_hash ≠ token claims project_id → 用 token claims（HC-2 ruling regression lock）
+- agent_session migration 27：`last_synced_at` / `last_state_event_ts` column additive nullable（既有 row 不破）
+
+**③ client + webhook**：
 - Odoo `agent_runtime_client.spawn_or_attach` 從 dev shell call paas-operator 成功取 token
-- Webhook receiver: HMAC valid → update agent_session.state；invalid → 401 + log warn
-- jti cache 在 paas-operator 內：同 jti 第二次 sign 不被 verify pass（防 replay）
+- Webhook receiver: HMAC valid → update agent_session.state + last_synced_at；invalid → 401 + log warn
+- drift cron：last_synced_at stale → 補 get_status 同步
+
+**④ SSE gateway rewrite**：
+- `use_agent_runtime=False`（預設）→ 走既有 ai_client.py 同步路徑（**regression 全綠，production 行為零變動**）
+- `use_agent_runtime=True`（test fixture 開）→ WS path：spawn-or-attach → open WS → relay 15-type envelope → SSE event 轉換（envelope→`{chunk}`/`{done}`）；done 1:1（pod 單一 producer）
+- frontend `ai_service.js` EventSource 零變更（snapshot test 確認 SSE schema 不變）
 
 ### Dependencies
 
-- Phase B 完成（image push 到 JCR，paas-operator 在 spawn-or-attach 內 reference 該 image）
+- Phase A merged develop (9479cb2) ✓ — 4 model + project_namespace_hash 可用
+- Phase B image source merged (paas-agent-runtime PR #1) ✓ — image contract（`ODOO_BASE_URL`/`SKILL_BUNDLE_TOKEN`/`PROJECT_HASH` env + 15-type envelope + HS256 dual-secret + mcp.json ConfigMap）已凍結，Phase C 對齊
+- 依賴序：① paas-operator → ② skill endpoint（cache.py 假設）→ ③ client/webhook → ④ SSE gateway（最後 wire，flag gate）
 
 ### Estimated effort
 
-**1 週**（3-5 工作日）
+**1.5-2 週**（scope 含 SSE rewrite + skill bundle endpoint + 兩種 token；比原估 1 週擴）
 
 ### Risk
 
 | Risk | Mitigation |
 |------|-----------|
-| paas-operator router 加新 endpoint 撞既有 namespace_prefix check | 確認 `paas-ws-pa-{hash}` 滿足 `paas-ws-` prefix（design doc §2.7 已確認） |
-| JWT 簽 / 驗 mismatch（algo / claim shape）| Unit test cover full sign+verify roundtrip |
-| Webhook HMAC secret 未配置 | helm chart 必填 + paas-operator 啟動 fail loud |
+| paas-operator router 加新 endpoint 撞既有 namespace_prefix check | 確認 `paas-ws-pa-{hash}` 滿足 `paas-ws-` prefix（design §2.7 已確認） |
+| JWT 簽 / 驗 mismatch（algo / claim shape）| Unit test cover full sign+verify roundtrip（兩種 token scope） |
+| Webhook HMAC secret 未配置 | Phase C dev 手動 kubectl secret；helm chart 必填（Phase G）；paas-operator 啟動 fail loud |
+| **SKILL_BUNDLE_TOKEN resume 後過期** → cache miss fetch 401 | ⚠ design clarification（見 escalation）— spawn-or-attach/resume 每次重簽 token + patch pod env；cache hit（PVC 保留）不受影響 |
+| SSE rewrite merge 影響 production chat | `use_agent_runtime` flag 預設 False → flag gate；False 走既有路徑零變動 |
+| skill bundle endpoint auth='none' 被濫用 | token authoritative（HC-2 ruling）+ HS256 verify + project_access check；query param 不信 |
 
 ### Rollback
 
 - paas-operator router 改 410 Gone
-- Odoo client / webhook 留 dormant（不被 caller 引用）
+- Odoo client / webhook / skill-bundle endpoint 留 dormant（無 caller — SSE flag False）
+- SSE rewrite：flag False 即等同未改（既有路徑接手）
 
 ---
 
@@ -288,14 +339,14 @@ related:
 
 ### Tasks
 
-1. `src/controllers/ai_assistant.py` SSE generator：加 `if project.use_agent_runtime` 分支
-   - True 分支：design doc §5.6 pseudocode（spawn-or-attach + WS bridge）
-   - False 分支：既有 ai_client.py 同步路徑（不動）
-2. `src/services/agent_runtime_client.py`：integrate to `_post_ai_reply` path（discuss_channel.py 內加 dual-mode）
-3. `src/views/project_views.xml`：admin 看得到 `use_agent_runtime` toggle（隱式於後台 form）
-4. Admin 在 Odoo backend 對 1 個 pilot project 設 `use_agent_runtime = True`
-5. Admin 建第一個 agent_template + bind 到 pilot project
-6. Monitor dashboard 設定：metric scraping（cold start latency / WS error rate / worker pool util）
+> **[調整 2026-05-23]** SSE generator rewrite code 已在 **Phase C 塊 ④** ship（flag gate 預設 False）。Phase D 不再寫 SSE code，只 **enable flag + 實際 pilot deployment + monitor**。
+
+1. `src/views/project_views.xml`：admin 後台 form 顯示 `use_agent_runtime` toggle（Phase C 已加 field，Phase D 加 UI）
+2. Admin 建第一個 agent_template + bind 到 pilot project（§4 agent_template model 已 Phase A ship）
+3. Admin 對 1 個 pilot project 設 `use_agent_runtime = True` → 觸發 Phase C 塊 ④ 的 WS path
+4. dev/stg cluster: 確認 spawn-or-attach 真起 pod + WS relay + skill bundle fetch 端到端通
+5. Monitor dashboard 設定：metric scraping（cold start latency / WS error rate / worker pool util）
+6. Pilot 觀察 ≥ 2 週（cold start p95 < 15s / WS error < 1% / worker pool < 50%）
 
 ### Test scope（Phase D）
 
@@ -306,6 +357,18 @@ related:
 ### Dependencies
 
 - Phase A + B + C 全部 ship + dev/stg cluster 跑通
+
+### ⚠ Phase D enable gate（CAQA Phase C 抓的 3 條 plan-alignment gap — enable runtime 前必修）
+
+> flag-gated 不阻 Phase C merge（`use_agent_runtime=False` 時不走 WS path）；但 **Phase D enable flag 前必須全 close**，否則 enable 後 runtime 會炸 / silent 落公開 secret。
+
+| Gate | gap | enable 前必做 | design ref |
+|------|-----|--------------|-----------|
+| **A-1** websockets API 版本 | `extra_headers`（websockets <14）vs `additional_headers`（≥14 改名 breaking）；requirements 釘 `>=12.0` 無上界 → 裝到 ≥14 WS connect 炸 | requirements 釘 `websockets>=12.0,<14`（或 code 相容 both kwargs）+ 實機驗 WS connect | §5.6 |
+| **C-3** webhook HMAC dual-secret | impl webhook verify 單 secret，缺 current/previous fallback | webhook verify 補 dual-secret fallback（對齊 §6.6 4-phase rotation） | §5.3 OQ#1 / §5.5 |
+| **C-5** namespace secret auto-gen | `_DEFAULT_SECRET` 硬編碼公開 fallback；§2.15 規定的 migration auto-gen 未實作 → fresh install silent 落公開 secret → namespace hash 可預測 | migration / install hook fresh install 必 auto-gen random secret 寫入 `ir.config_parameter woow_paas_platform.agent_namespace_secret` | §2.15 / §2.7 |
+
+**gate 驗收**：3 條全 close + Phase D pilot 第一次 spawn-or-attach 真起 pod 前，CAQA / reviewer 再 verify 一輪（特別 A-1 實機 WS connect + C-5 fresh install secret 非公開值）。對應 `docs/tracking/followups/follow-ups.md`。
 
 ### Estimated effort
 

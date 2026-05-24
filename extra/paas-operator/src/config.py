@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     registry_password: str = ""
     registry_secret_name: str = "paas-registry"
 
+    # Agent Runtime (per-project pod) — design §2.11
+    agent_runtime_chart: str = "agent-runtime"  # chart ref for helm install/upgrade
+    agent_runtime_image_tag: str = "latest"  # pod image tag injected into values
+    odoo_base_url: str = ""  # ODOO_BASE_URL injected into pod env (skill-bundle fetch)
+
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
     cloudflare_api_token: str = ""  # API token with Cloudflare Tunnel:Edit and DNS:Edit permission

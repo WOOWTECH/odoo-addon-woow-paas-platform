@@ -370,3 +370,42 @@ class ErrorResponse(BaseModel):
 
     detail: str
     error_type: Optional[str] = None
+
+
+# Agent Runtime (per-project pod) — design §2.11
+
+
+class SpawnOrAttachRequest(BaseModel):
+    """Request to spawn / attach / resume a project's agent-runtime pod."""
+
+    project_hash: str = Field(..., description="K8s namespace hash (per-project)")
+    project_id: int = Field(..., description="Authoritative project id (token claim)")
+    channel_id: int = Field(..., description="Invoking discuss.channel id")
+    invoker_user_id: int = Field(..., description="Invoking res.users id")
+    invoker_role: str = Field(..., description="Invoker project_access role")
+    project_workspace_ids: List[int] = Field(
+        default_factory=list,
+        description="Workspace ids the pod's NetworkPolicy egress may reach",
+    )
+    agent_template_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    mcp_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    skill_snapshot: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ResumeRequest(BaseModel):
+    """Optional body for the standalone resume endpoint (re-sign token)."""
+
+    project_id: Optional[int] = None
+    project_workspace_ids: List[int] = Field(default_factory=list)
+
+
+class InvalidateMcpRequest(BaseModel):
+    """Request to invalidate a pod's mcp.json ConfigMap snapshot."""
+
+    mcp_snapshot: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SyncWorkspacesRequest(BaseModel):
+    """Request to re-render a pod's NetworkPolicy egress allowlist."""
+
+    project_workspace_ids: List[int] = Field(default_factory=list)

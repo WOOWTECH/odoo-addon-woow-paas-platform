@@ -1140,8 +1140,9 @@ labelSelector: app.kubernetes.io/name=agent-runtime
 
 URL 路徑改用 `project_hash` 為主鍵（**不放 project_id**，避免序號洩漏）：
 
-- `POST /api/agent-runtimes/spawn-or-attach` — body `{project_hash, project_workspace_ids: [w1, w2], mcp_snapshot, ai_provider_config, agent_template_id}` → return `{pod_ws_url, pod_state, spawn_age_ms}`
-  - 內部邏輯：lookup helm release `agent-pa-{project_hash}` in ns `paas-ws-pa-{project_hash}` → install / scale-1 / no-op → poll readiness → return
+- `POST /api/agent-runtimes/spawn-or-attach` — body `{project_hash, project_workspace_ids: [w1, w2], mcp_snapshot, ai_provider_config, agent_template_id}` → return `{pod_ws_url, ws_token, pod_state, spawn_age_ms}`
+  - 內部邏輯：lookup helm release `agent-pa-{project_hash}` in ns `paas-ws-pa-{project_hash}` → **簽 `skill_bundle_token`（注入 pod env `SKILL_BUNDLE_TOKEN`）** → install / scale-1 / no-op → poll readiness → **簽 `ws_token`（return 給 Odoo controller open WS 用）** → return
+  - **兩種 token scope（§5.3 HS256 dual-secret）**：`sign_ws_token`（per-invocation，return body）+ `sign_skill_bundle_token`（per-pod-lifetime，注入 pod env，cache.py fetch 用）— 詳見下方 Token lifecycle
   - **`project_workspace_ids` 用途**：渲染 NetworkPolicy egress allowlist（哪些 workspace ns 可達）；同時寫入 annotation `agent.woow.tw/workspace-ids`
 - `POST /api/agent-runtimes/{project_hash}/reap` — return `{action: "reaped" | "already_reaped" | "not_found"}`
   - 內部：`scale_release(release_name=agent-pa-{hash}, replicas=0)` + patch annotation `reaped-since`
@@ -1161,7 +1162,23 @@ paas-operator **不需要**反向查 project_id（純走 hash 識別 namespace /
 - Resume / sync-workspaces 時若 ConfigMap 已存在且 mcp_snapshot 變動 → `kubectl patch configmap`
 - Helm uninstall 不刪 ConfigMap（mcp.json ConfigMap 由 paas-operator 直接管理）— 或反過來：寫入 chart 內讓 helm 管，invalidation 走 `helm upgrade --set mcpSnapshot=...` — **待 §5 拍板**
 
-#### §2.11.1 既有 paas-operator router 影響
+#### §2.11.1 Token lifecycle（escalation #1 sign-off 2026-05-23）
+
+> **問題**：`SKILL_BUNDLE_TOKEN`（pod env 注入，cache.py fetch skill bundle 用）exp 1h；但 pod 長壽（reaped → resume cycle），resume 後既有 token 已過期 → cache miss（resume 後遇新 skill）fetch 回 401。
+>
+> **sign-off mitigation**：**spawn-or-attach 與 resume 路徑都重簽 `SKILL_BUNDLE_TOKEN`（+ `ws_token`）並 patch pod env**。
+
+| 路徑 | token 動作 | 影響範圍 |
+|------|-----------|---------|
+| `spawn-or-attach`（cold start / ABSENT→ACTIVE） | 簽 `skill_bundle_token` + `ws_token`；helm install 時注入 pod env `SKILL_BUNDLE_TOKEN` | 新 pod 拿 fresh token |
+| `resume`（REAPED→ACTIVE；spawn-or-attach 偵測 replicas=0 內含此路徑） | **重簽 `skill_bundle_token` + `ws_token`** → `kubectl set env deployment/agent-pa-{hash} SKILL_BUNDLE_TOKEN=<new>` patch pod env → scale-1 | resume 後 pod 拿 fresh token；cache miss 用新 token fetch |
+| cache hit（PVC 保留既有 skill bundle） | **不需 token**（直接讀 PVC，不 fetch Odoo） | resume 後 token 過期不影響已 cache 的 skill |
+
+**為什麼 cache hit 不受 token 過期影響**：skill bundle 已 extract 在 `/workspace/project-{pid}/skills/cache/<name>/<version>/`（PVC，reap 不刪），resume 後 cache hit 直接讀 PVC，**不呼 Odoo fetch endpoint** → token 過期無關。只有「resume 後遇『PVC 沒有的新 skill』」才 cache miss → 用 resume 重簽的 fresh token fetch。
+
+**patch pod env 時機**：resume 在 scale-1 **之前** patch deployment env（K8s 重建 pod 時帶新 env），避免 race（pod 起來才 patch → pod 已用舊 env）。
+
+#### §2.11.2 既有 paas-operator router 影響
 
 新 endpoints 全部歸入 **新建 router** `extra/paas-operator/src/api/agent_runtimes.py`，main.py 加 `app.include_router(agent_runtimes.router)`。
 
@@ -1324,7 +1341,7 @@ class AgentSession(models.Model):
 | reaper CronJob race（同 project 被多 job 同時 reap） | 低 | scale_release(0) 等冪；annotation patch 用 RFC 6902 strategic merge | 無影響 |
 | Helm install 失敗導致 state 卡在 SPAWNING | 中 | spawn timeout 60s + retry 機制；超過 3 次標 SPAWN_FAILED | 手動 `helm uninstall` 釋放 release name；下次 project member 訊息重試 |
 | Hash collision（不同 project_id 算出同 hash） | 極低 | hmac-sha256 取 10 bytes = 80 bits；2^40 project 才有 50% birthday collision；`agent_session.project_namespace_hash` UNIQUE constraint 在 collision 時 raise，迫使重算或人工干預 | 改 secret 重算（涉及 cluster-wide hash 重新生成 — 不可逆事件級操作；rotate 機制 §7 細化）|
-| Secret leak → attacker 可預測 hash → enumerate namespace | 高 | secret 存 `ir.config_parameter` + `groups='base.group_system'`；不寫入 git；migration 第一次部署時自動生成 random | rotate secret（同上）；attacker 已 enumerate 的部分 namespace 名稱無 K8s read permission 仍無法 access |
+| Secret leak → attacker 可預測 hash → enumerate namespace | 高 | secret 存 `ir.config_parameter` + `groups='base.group_system'`；不寫入 git；**⚠ C-5 (CAQA Phase C)：migration / install hook 第一次部署必 auto-gen random secret — 目前 `agent_session._DEFAULT_SECRET` 是硬編碼公開 fallback，fresh install 若 migration auto-gen 未實作會 silent 落公開 secret → namespace hash 可預測。caveat（K8s RBAC + 獨立簽章 secret 兩層 gate 仍擋 access），但 Phase D enable 前必修（gate）** | rotate secret（同上）；attacker 已 enumerate 的部分 namespace 名稱無 K8s read permission 仍無法 access |
 | ConfigMap mcp.json 與實際 mcp_server 不同步 | 中 | resume 時主動 patch ConfigMap；§5 invalidation 機制兜底；drift cron 每小時掃 | paas-operator API `POST /invalidate-mcp` 強制重寫 |
 | 長 TTL GC 誤刪正在活躍 pod | 高 | GC 只挑 REAPED >= T_gc；ACTIVE 不會被掃到 | helm uninstall 後 project member 再送訊息會冷啟新 pod；thread state lose（acceptable for 30day+ idle） |
 | paas-operator down → Odoo 無法 spawn pod | 高 | Odoo 端 retry + circuit breaker；既有 cloud_service 已有 timeout pattern | paas-operator 重啟；Odoo 端 fallback「服務暫不可用」訊息 |
@@ -1577,7 +1594,12 @@ class Skill(models.Model):
 4. Pod 寫到 `/workspace/project-{pid}/skills/cache/<name>/<version>/bundle.tar.gz` → verify SHA256 → extract → cache marker
 5. Subprocess invoke from `/workspace/project-{pid}/skills/cache/<name>/<version>/`（== subprocess_runner cwd §6.4）
 
-**Pod 對 Odoo 的 fetch auth**：透過 spawn-or-attach 時 Odoo 傳給 pod 的 short-lived signed token（內含 project_id + workspace_ids + 有效期 1h）— 細節 §5。
+**Pod 對 Odoo 的 fetch auth + token lifecycle**（escalation #1 sign-off 2026-05-23）：
+
+- pod env `SKILL_BUNDLE_TOKEN` = paas-operator 簽的 `skill_bundle_token`（HS256 dual-secret §5.3；claims 含 project_id + workspace_ids + exp 1h）
+- **token lifecycle**：`spawn-or-attach`（cold start）+ `resume`（REAPED→ACTIVE）**兩條路徑都重簽** skill bundle token + patch pod env（§2.11.2）— 解決 pod 長壽後 token 1h 過期問題
+- **cache hit 不受 token 過期影響**：skill bundle 已 extract 在 PVC `/workspace/project-{pid}/skills/cache/<name>/<version>/`（reap 不刪），cache hit 直接讀 PVC 不 fetch Odoo；只有 cache miss（resume 後遇 PVC 沒有的新 skill）才用 resume 重簽的 fresh token fetch
+- **Odoo skill-bundle endpoint verify 雙路徑**（對齊 Phase B image `cache.py` frozen contract）：`Authorization: Bearer {SKILL_BUNDLE_TOKEN || SHARED_SECRET fallback}` — Odoo 端 verify 接受 (a) HS256 `skill_bundle_token`（正常路徑）or (b) raw `SHARED_SECRET`（image fallback when token env 缺）；兩者皆 authoritative 取 token claims project_id（不信 query param，HC-2 ruling [[constraint-input-trust-expansion]]）
 
 ### §3.4 Versioning（Q2 拍板用）
 
@@ -2635,7 +2657,46 @@ spawn-or-attach 流程內：
 - Rotate：admin 手動 — 改 secret + bump paas-operator + bump 所有 pod 的 helm release（cycle reap → resume 用新 secret）
 - v1 沒 auto rotation（留 v2）
 
-**Odoo 端不需 shared secret**：Odoo 不簽 token（paas-operator 簽），只 forward；所以 Odoo 不接觸 secret — 縮小 attack surface
+**Odoo 端 secret 接觸範圍（OQ#1 clarify 2026-05-24）**：
+
+「Odoo 不接觸 secret」**僅限 WS session token（`ws_token`）** — Odoo controller 只 forward `ws_token`（spawn-or-attach return 的）給 pod，**不 verify**（pod 自己 verify），故 WS token 路徑 Odoo 不需 secret。
+
+但 Odoo 有**兩個 server-side verify 路徑必須持 secret**：
+
+| 路徑 | 用途 | secret |
+|------|------|--------|
+| ② skill-bundle endpoint（§3.3） | verify `SKILL_BUNDLE_TOKEN`（HS256） | `agent-runtime-auth-secret`（與 ws_token / skill_bundle_token 簽發同一把） |
+| ③ webhook receiver（§5.5） | verify pod→Odoo state HMAC-SHA256 | `agent-runtime-webhook-secret` |
+
+**secret 來源 — phase-planner 推薦 (b) K8s Secret env injection（single source of truth）**：
+
+| 方案 | 機制 | rotation | 推薦 |
+|------|------|---------|------|
+| (a) ir.config_parameter | 沿用既有 `operator_api_key` pattern；admin 手動填 Odoo DB | ⚠ rotation drift — K8s Secret 改了 config_parameter 沒同步；§6.6 dual-secret window 失效（Odoo 要手動存 current/previous 兩 param） | ✗ |
+| **(b)（推薦）** K8s Secret env injection | production: deployment `env.valueFrom.secretKeyRef`（同 §6.6 K8s Secret `agent-runtime-auth-secret` + `agent-runtime-webhook-secret`）→ env `AGENT_RUNTIME_AUTH_SECRET_CURRENT/_PREVIOUS` + webhook 同理；dev: docker-compose `.env` 同 env 名 | ✓ single source（與 image §6.6 同 K8s Secret）→ rotation 一處改不 drift；secret 不落 Odoo DB | ✓ |
+
+**選 (b) 的理由**：
+
+1. **single source of truth** — 與 image 端 §6.6 同一把 K8s Secret，§6.6 dual-secret rotation（current/previous 4-phase）自動 cover Odoo verify，**不 drift**
+2. **secret 不落 Odoo DB** — env > ir.config_parameter（後者在 `ir_config_parameter` table plaintext，DB dump 洩漏）
+3. **本質不同於 `operator_api_key`** — operator_api_key 是 Odoo→operator 的 **outbound caller credential**（Odoo 主動持有去呼 operator，config_parameter 合理）；本 case 是 Odoo 作為 **server verify inbound 的 shared signing secret**，應與 §6.6 同 source
+4. **dev / docker-compose 也走 env**（`.env`）→ code path 統一讀 env，不分環境
+
+**dual-secret current/previous fallback（OQ#1 第 3 點 — 必須）**：
+
+Odoo 端 verify **必須支援 current/previous fallback**（對齊 §6.6 4-phase rotation）— 否則 rotation 過渡窗口（1h）內 Odoo 會 reject 用 `previous` secret 簽的 token / HMAC：
+
+```python
+# skill-bundle token verify (HS256) + webhook HMAC verify 共用此 pattern
+for sec in (env['AGENT_RUNTIME_AUTH_SECRET_CURRENT'], env.get('..._PREVIOUS')):
+    if sec and _verify(token_or_hmac, sec):
+        return ok
+raise Unauthorized
+```
+
+**tester setUp 影響**：原假設 (a) set `ir.config_parameter` → 改 (b) monkeypatch `os.environ['AGENT_RUNTIME_AUTH_SECRET_CURRENT']` / `..._WEBHOOK_SECRET_CURRENT`（一行差異；route / token-authoritative / HMAC 語義不受影響）。
+
+**若 leader 選 (a)**（dev 簡單優先）：rotation 配套**必須**加 — Odoo config_parameter 也存 `..._auth_secret_current` + `..._auth_secret_previous` 兩 param，§6.6 rotation runbook 加「同步 K8s Secret → Odoo config_parameter」手動步驟（drift 風險由 runbook 紀律承擔）。
 
 ### §5.4 ConfigMap mcp.json hot reload vs cold reload（Q3 拍板用）
 
@@ -2711,6 +2772,7 @@ paas-operator 端：
        "spawn_age_ms": 5234       // optional
      }
    - Auth: HMAC-SHA256 with shared secret `agent-runtime-webhook-secret`
+     - ⚠ **C-3 (CAQA Phase C)**：verify **必須 dual-secret current/previous fallback**（對齊 §6.6 4-phase rotation + §5.3 OQ#1）— impl 易漏寫單 secret；單 secret 在 rotation 過渡窗口（1h）會 reject `previous`-signed HMAC。非安全洞（cron 兜底狀態同步），但 Phase D enable webhook 前必修（gate）
      - Header: X-PaaS-Signature: hmac(payload_body, secret)
      - 防 spoofing
 
@@ -2821,9 +2883,14 @@ def api_ai_stream(self, channel_id, **kwargs):
 
         async def relay():
             """Connect WS, send user_message, yield response envelopes."""
+            # ⚠ A-1 dependency caveat (CAQA Phase C): websockets <14 用 `extra_headers`；
+            #    websockets ≥14 已移除改名 `additional_headers`（breaking）。
+            #    requirements **必須釘 `websockets>=12.0,<14`**（保 extra_headers API），
+            #    或 code 相容 both（kwargs 選擇 — 見下）。Phase D enable WS 前必驗（gate）。
+            _hdr_kw = 'extra_headers'  # websockets <14; ≥14 → 'additional_headers'
             async with websockets.connect(
                 pod_ws_url,
-                extra_headers={'Authorization': f'Bearer {auth_token}'},
+                **{_hdr_kw: {'Authorization': f'Bearer {auth_token}'}},
                 ping_interval=30,    # heartbeat
                 ping_timeout=60,
             ) as ws:

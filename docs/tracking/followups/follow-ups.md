@@ -2,13 +2,14 @@
 
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
-**State as of 2026-05-23**：
+**State as of 2026-05-24**：
 - Cycle 1（cloud-service ↔ project decouple, 2026-05-17）：F1-F11，B1 已 RESOLVED、PR APPROVED WITH CAVEATS
 - Cycle 2（mcp cloud_service_id → project_id decouple, 2026-05-18）：F12-F20 新增，PR APPROVED WITH CAVEATS round 2，4 BLOCKER/MAJOR 全 close
 - Cycle 3（Project Detail page, issue #48, 2026-05-20）：F21-F28 新增，APPROVED WITH CAVEATS，B-1 fresh-install fix verified；AC #28 reviewer E2E 完成 10/11 pass + 1 FAIL（E2E-G1，不擋 merge）；R-1 / R-2 hard caveats 收於 reporter phase（commit pending），R-3 / R-6 / E2E-G1 + 其他 polish 進 follow-up issue
 - Cycle 4（MCP refactor URL redesign + unbound project ACL, issue #49 + #51, 2026-05-21）：**F22 + F23 RESOLVED**；F-X1~F-X8 新增；reviewer round 2 APPROVED WITH CAVEATS，3 hard caveat (HC-1/2/3) 全 closed in PR；1 new MINOR (SC-6b)；20 條 soft caveat (SC-1~SC-20) 分散 reporter inline / dedicated follow-up / batch 三類處理
 - Cycle 5（Agent runtime pod Phase A — schema M:N + 4 new models + 16 rule + migration, 2026-05-22 → 2026-05-23）：CAQA round 1 BLOCKED（B-1：4 new model 無 ir.rule scope-restrict）→ impl round 2 補 16 rule + PA-5 Python gate + SK-6 path (a) field-level mask；CAQA round 2 APPROVED WITH CAVEATS；**B-1 closed + OQ-A-2 closed**；reviewer round 1 抓 4 HC + 28 SC（CAQA 漏抓 HC-1/HC-2/HC-3/HC-4）；leader 拍板 HC-3 + HC-4 hotfix in this PR，HC-1 + HC-2 標 reporter follow-up；impl round 3 補 `agent_template._check_project_ids_grantor_authority` + `skill._anchor_bundle_attachment` + `ir.attachment` row-level rule 兩條 + 8 test method；144/144 PASS + Full suite 664/0 fail；CAQA round 3 + reviewer round 2 APPROVED WITH CAVEATS；**HC-3 + HC-4 closed in PR；HC-1 + HC-2 + EC-3a + EC-4a → F-PA-13~16**；F-PA-1~F-PA-12 已於 round 2 reporter cycle 落地；18 invariants 守線（PR #47 + #54 共 11 條 + Phase A 7 條 + Phase A #8 新增）+ 2 new pattern doc（`constraint-input-trust-expansion` + `attachment-row-level-acl-and-anchor-stamping`）
 - **agent-runtime-pod epic Phase B**（image source，**`paas-agent-runtime` repo**，2026-05-23）：14 production + 14 test + 11 commit + PR #1（CI green + merge 中）；CAQA Prism + reviewer Quorum 皆 **APPROVED WITH CAVEATS，0 BLOCKER**；HC-1（IP-literal SSRF）/ HC-2（ws_server claims authoritative — [[constraint-input-trust-expansion]] 的 image 端同型，pattern lens 兌現）/ subprocess rlimit real-trigger test / SC-7（role-scope tool cache）全 **round 2 內 resolved**；CI gate 三度價值（envelope 12→15 / cache path §3 vs §6 / checkout node-in-container）；carry-over SC-1~SC-9 + wiring assumptions 的 **canonical home = `paas-agent-runtime` repo `docs/PHASE_B_HANDOFF.md`**（cross-repo，不在本 doc 重列）；epic durable + pitfall 見本 repo `docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` + `docs/tracking/pitfalls/ci-workflow-container-missing-node.md`
+- **agent-runtime-pod epic Phase C**（epic wiring 收口：operator endpoints + skill-bundle + SSE bridge，2026-05-24）：`9479cb2..HEAD` = 12 commit / 29 檔 / +3980；3 impl commit（`6abb490` operator / `ec226b7` Odoo wiring / `d3aa60e` M.9 版號無關）+ C-1 hardening `7daf1f4`（+ red test `1305b77`）；CAQA **PASS WITH CAVEATS**（8 caveat + C-1 disputed + 6 info）+ reviewer **APPROVE WITH CAVEATS**（8 caveat 全同意 + 新 N-1~N-5；0 blocker）；**C-1 disputed severity（security-auditor 判 blocker vs CAQA 判 caveat）經 leader 裁決走 hardening `7daf1f4` MOOTED**（reviewer 獨立驗 fail-closed，既非接受 caveat 亦非 block，是修掉）；守線全過（HC-2 第三度 token-authoritative / HC-4 machine-auth 獨立路徑 / B1 gate 在 spawn 之前 / frozen contract 逐欄位 / resume race / dual-secret / migration idempotent）；cross-repo C-1 `token_use` **三端對齊**（operator 簽 + Odoo verify + pod WS verify `paas-agent-runtime` PR #2 `ba6b417`，**sign-first-then-verify zero-downtime**）；Phase-versioned test 第二次（M.9 `d3aa60e`，Cycle 1 retire test_ac2 是第一次）→ 抽 [[phase-versioned-test-assertion]]；OQ-R-1（design §5.6/§5.5/§2.15 `3cab339` 補 A-1/C-3/C-5）+ OQ-R-2（`ba6b417` merge）皆 addressed；**Phase D enablement gate must-fix（A-1/C-2/C-3/N-1/P-2/C-1-A 嚴格）見下方 §Phase D enablement gate**；epic durable 見 `docs/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md`
 
 ## Index
 
@@ -849,6 +850,39 @@
 - `src/static/src/paas/services/support_service.js` → F26 (R-9 optimistic merge order) / F-X3 (`support_service.js:454` comment noise)
 - `scripts/test-addon.sh` / dev tooling → F-X8 (worktree env gap)
 
+## Phase D enablement gate — CAQA + reviewer Phase C 彙整（flag flip 前 must-fix）
+
+**2026-05-24** · **狀態 OPEN** — 全部 flag-gated，**不阻 Phase C inert merge**（`use_agent_runtime=False` 不走 WS path）；**Phase D enable `use_agent_runtime` flag 前，must-fix 區必全 close**。來源：CAQA Phase C（A-1/C-3/C-5 plan-alignment，commit `3cab339` 初列 F-PC-1/2/3）+ reviewer Phase C（cross-check 8 caveat 全同意 + 新 N-1~N-5，§12 把 gate 精化為 **must-fix / follow-up 兩層**）。完整論述見 `docs/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md`。
+
+**OQ 閉合狀態（review 後 leader 協調已 addressed）**：
+- **OQ-R-1（plan-source 偏離 escalate planner）**：design §5.6（A-1 `extra_headers`）/ §5.5+§2772（C-3 webhook dual-secret）/ §2.15（C-5 namespace auto-gen）三處 design 文字為源、impl 偏離 → 已由 commit `3cab339` 補 ⚠ 標註 + 相容寫法（§5.6 `_hdr_kw`）→ **addressed**（design 同步完成；impl 端落實仍待 Phase D，見下）。
+- **OQ-R-2（cross-repo C-1 WS 對稱半邊）**：Phase B pod WS verifier 對稱拒絕 `token_use != 'ws'` 已由 `paas-agent-runtime` repo PR #2 `ba6b417`（**B transitional** — 缺 claim 放行的過渡語意）merge → **addressed**（A 嚴格收緊列下方 F-PC-7 must-fix）。
+
+### must-fix（`use_agent_runtime` flip 前必全 close）
+
+| # | caveat | 位置 | 為何 flip 前必修 | escalate |
+|---|--------|------|----------------|----------|
+| **F-PC-1** | A-1 websockets `extra_headers` | `ai_assistant.py:650` + `requirements.txt:10` | websockets ≥14 移除 `extra_headers` 改名 `additional_headers`；`>=12.0` 無上界 → flag-on + 裝 ≥14 即 **每條對話首次 connect `TypeError`** 失敗。**做**：釘 `websockets>=12.0,<14` 或 code 相容 both kwargs + 實機驗 WS connect | planner（design §5.6 為源，`3cab339` 已補相容寫法）|
+| **F-PC-2** | C-3 webhook dual-secret | `agent_runtime_webhook.py:62` | 單 secret；rotation 過渡窗口（1h）reject `previous`-signed HMAC（cron 兜底但可用性 gap）。**做**：webhook verify 補 `current`/`previous` fallback（與 skill-bundle token verify 共用 pattern）| planner（design §5.5 為源，`3cab339` 已補 ⚠）|
+| **F-PC-4** | C-2 operator auth fail-open | `extra/paas-operator/src/main.py:89-91` | `api_key` 未設時 middleware fail-open；Phase C 使 operator 成 **token 簽發者** → fail-open 時可為**任意 project_id** 簽 properly-scoped skill_bundle_token → **跨租戶 bundle 外洩原語**（C-1 對此無解，拿到的是目標 project 合法 token，故 C-2 才是跨 project 風險真正放大器）。**做**：`api_key` 未設 → fail closed / 503（至少對 agent-runtime router）| — |
+| **F-PC-5** | N-1 client `raise_for_status` | `agent_runtime_client.py:32-33` | `_request` 無 `raise_for_status` → operator error（401 bad-key / 500 helm）不 raise → `runtime_info` 變錯誤 dict → `pod_ws_url=None` → `websockets.connect(None)` 被 `:721` 廣捕 → browser 收 **cryptic WS error 而非真因**（error 通道失能，疊 N-2）。**做**：加 `raise_for_status` 或顯式 status 檢查，拋 typed error 帶 operator `detail` | — |
+| **F-PC-6** | P-2 async-gen `aclose()` | `ai_assistant.py:678-729` | `finally` 只 `loop.close()` 未先 `loop.run_until_complete(agen.aclose())`；**每條路徑（含正常 done break）relay 都 abandon 在 `yield` → `async with websockets.connect` 的 `__aexit__` 不執行 → pod 側 WS 洩至 ping_timeout(≤60s)**（reviewer 比 CAQA 描述廣：非只 client 斷線）。**做**：drain loop 補 `aclose()` | — |
+| **F-PC-7** | C-1 A 嚴格收緊（cross-repo）| `paas-agent-runtime` `runtime/transport/auth.py`（PR #2 `ba6b417` 後）| 目前 WS verifier 是 **B transitional**（缺 `token_use` 放行，sign-first-then-verify 過渡）；**待 operator prod 全簽 `token_use` 後**，切 **A 嚴格**（缺 → reject）封死過渡放行——否則 ws-token vs bundle-token 的隱性耦合半開。**做**：operator 全簽確認後切 verifier A 嚴格 | cross-repo（與 paas-agent-runtime 協調）|
+
+### follow-up（enable 後 / 較低優先）
+
+- **F-PC-3 (C-5) namespace secret auto-gen** — `agent_session.py:11,122-127` `_DEFAULT_SECRET` 硬編碼公開 fallback；design §2.15 規定的「migration 首次部署 auto-gen random」未實作 → fresh install silent 落公開 secret → `paas-ws-pa-{hash}` 可預測。**CAQA 初判 gate（F-PC-3）→ reviewer §6/§12 降 follow-up**：只洩 namespace 命名，K8s RBAC + 獨立簽章 secret（`agent-runtime-auth-secret`）兩層仍 gate 實際 access，故非即時洞。**仍建議 enable 前一併修**（design §2.15 規定）：fresh install auto-gen random 寫入 `ir.config_parameter woow_paas_platform.agent_namespace_secret`。escalate planner（design §2.15 為源，`3cab339` 已補 ⚠）。與 [[#F-PA-1]]（Phase A 同源 install hook hard guard）同一落點。
+- **C-4** webhook replay/freshness（`agent_runtime_webhook.py:30-37,82`）— HMAC timing-safe（`hmac.compare_digest`）但無 nonce/timestamp 窗口；合法 POST 可 replay 翻 `agent_session.state`（cron 自癒）。方向：簽章涵蓋 `ts` 拒舊事件 / per project_hash 單調 `sequence_number`。
+- **C-6** operator 盲信 `project_hash` 格式（`agent_runtimes.py:38` + `mcp_invalidator.py:18-35`）— `validate_namespace` 只檢 `paas-ws-` 前綴不檢 hash 尾（list-arg 排除 shell injection，疊 C-2 放大）。方向：邊界驗 `^[a-z2-7]{16}$`。
+- **P-1** SSE worker-pin（`ai_assistant.py:635`）— 每 active conversation 佔 1 Odoo sync worker（design §6.8 認列 tradeoff，公式 `peak_concurrent_active_conv(50)+baseline(16)=66`）。方向：Phase D 依公式 size worker pool + 確保 pod envelope 必以 `done`/`fatal` 收尾（永遠串流的 pod 釘死 worker）。
+- **N-2** dispatcher retry（`webhook_dispatcher.py:41-52`，**未接線** — grep 確認 operator 內無 production caller，只 def + test）— retry 只看 `status_code>=500`，忽略 httpx ConnectError/Timeout（最常見瞬斷零 retry）+ 耗盡後 silent give-up。**接線前修**：wrap `httpx.RequestError` 視 retryable + 耗盡 `logger.error`。
+- **N-3** exc 洩漏泛化（`ai_assistant.py:625,726`，= CAQA C-7 加強）— `str(exc)` 可能含 pod 內部 `ws://` cluster DNS 洩到 browser；server 端 `_logger.exception` 已對（保留）。方向：client 端泛化訊息 + correlation id，細節只進 log。
+- **N-4** operator namespace/release 命名契約未 assert（`tests/test_agent_runtimes.py:291-292`）— `_NS`/`_RELEASE` dead 常數 + 常數缺 `pa-` 分隔符（impl 命名跨檔一致 `paas-ws-pa-{hash}`，純 test 衛生非 impl bug）。方向：補 `_names()` call-args 斷言（鎖 hash→namespace→RBAC 邊界值）。
+- **N-5** SHA256-over-raw-bytes invariant 僅隱含（`test_..._skill_bundle.py` SB.1）— 加一行 `sha256(resp.content)==skill.bundle_sha256` 直接斷言廉價硬化 contract（pod 端責任，acceptable）。
+- **info（6）**：C-7（exc 洩漏 SSE，併 N-3）/ Q-1（`datetime.utcnow()` deprecated，`ai_assistant.py:659`，方向 `datetime.now(timezone.utc)`）/ Q-2（HS256 verify 雙實作 — 跨 process/repo 無法共享 module，刻意非 DRY 違規）/ Q-4（`new_state` 寫入無 Selection 預檢 → out-of-enum 得 500 非 silent corruption）/ P-3（cron drift 5min sequential `get_status`）/ P-4（operator `verify_token` + jti cache 似未被 router 取用，operator 只簽 / pod 才驗 → 可移除或待用 helper）。
+
+**gate 驗收**：Phase D 第一次 spawn-or-attach 真起 pod（enable flag）前，CAQA / reviewer 再 verify 一輪 — 特別 **F-PC-1 實機 WS connect**（websockets 版本對）/ **F-PC-5 + F-PC-6 error 通道 + WS lifecycle**（operator error 正確 surface + 每條對話無 WS 洩漏）/ **F-PC-7 A 嚴格切換**（operator prod 全簽 `token_use` 確認後）。對應 plan `agent-runtime-pod-plan.md` Phase D §「Phase D enable gate」。
+
 ## See also
 
 - [[cloud-service-project-decouple]] §Consequences — cycle 1 決策後仍要持續注意的負面影響
@@ -865,7 +899,10 @@
 - [[attachment-row-level-acl-and-anchor-stamping]] — F-PA-16 的根因 context（cycle 5 round 1 HC-4 — bundle attachment defense in depth；Inv A2 = Phase B pod 零直連 ir.attachment 守線的 woow_paas_platform 側依賴）
 - `docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` — Phase B image source 完成 durable（cross-phase learnings：CI gate 三度價值 / HC-2 cross-phase 驗證 / 2 process learning）
 - [[ci-workflow-container-missing-node]] — Phase B B-5 抽 pitfall（CI `container: <lang-image>` + checkout → node exit 127 false green）
+- `docs/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md` — Phase C wiring 收口 durable（cross-phase learnings：C-1 disputed severity 第三條路 MOOTED / cross-repo `token_use` 三端 sign-first-then-verify zero-downtime / phase-versioned test 第二次）
+- [[phase-versioned-test-assertion]] — Phase C M.9 第二次撞牆抽 pattern（phase test 勿硬編當時 schema 值，用 monotonic `>=` / 存在性斷言）
 - `paas-agent-runtime` repo `docs/PHASE_B_HANDOFF.md` — Phase B → C/D carry-over canonical home（cross-repo；SC-1~SC-9 + wiring assumptions）
+- `paas-agent-runtime` repo `runtime/transport/auth.py` + PR #2 `ba6b417` — Phase C C-1 WS 側對稱補丁（token_use B transitional，F-PC-7 A 嚴格收緊前置）
 - 原始 review（合成來源，本 doc 引用不複製）：
   - `docs/decisions/reviews/caqa-2026-05-16.md` §Caveat 清單（M1-M4 + L1-L3 — cycle 1）
   - `docs/decisions/reviews/caqa-2026-05-18.md` §Caveat / Out-of-scope（C1 + F12 — cycle 2）

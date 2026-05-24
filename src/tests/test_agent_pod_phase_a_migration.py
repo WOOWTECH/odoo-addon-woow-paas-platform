@@ -61,6 +61,7 @@ Boundary（刻意不測）:
 """
 import importlib.util
 import os
+import re
 import uuid
 
 from odoo.tests.common import TransactionCase, tagged
@@ -120,7 +121,29 @@ class TestPhaseAMigrationFilesExist(TransactionCase):
         )
 
     def test_manifest_version_bumped(self):
-        """M.9: ``__manifest__.py`` version bumped to 18.0.1.0.26."""
+        """M.9: Phase A migration dir stays on Odoo's upgrade path + the
+        manifest version does not regress below it.
+
+        Real intent (NOT "manifest == 18.0.1.0.26 forever"): the
+        ``migrations/18.0.1.0.26/`` directory must still exist so Odoo's
+        upgrade path picks it up, and ``__manifest__.py`` must declare a
+        version **>= 18.0.1.0.26**. Later phases legitimately bump it higher
+        (Phase C → 18.0.1.0.27 per plan §Phase C Task 13, impl ec226b7), so
+        a hard-coded ``== 26`` would make this Phase A test and every later
+        phase's version bump mutually exclusive (test-vs-test red). The
+        monotonic check keeps the original guarantee — version must not fall
+        below the value that activates the Phase A migration — without
+        pinning it. (Version-agnostic fix signed off, same model as Cycle 1
+        retire of test_ac2.)
+        """
+        # (a) Phase A migration directory still present on the upgrade path.
+        self.assertTrue(
+            os.path.isdir(_MIGRATION_DIR),
+            "M.9: src/migrations/18.0.1.0.26/ directory missing — the Phase "
+            "A migration would be dropped from Odoo's upgrade path.",
+        )
+
+        # (b) manifest version >= 18.0.1.0.26 (monotonic, not pinned).
         manifest_path = os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), '..', '__manifest__.py',
@@ -128,12 +151,21 @@ class TestPhaseAMigrationFilesExist(TransactionCase):
         )
         with open(manifest_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        self.assertIn(
-            '"version": "18.0.1.0.26"', content,
-            "M.9: __manifest__.py must declare version '18.0.1.0.26' "
-            "(currently 18.0.1.0.25). Plan §Phase A Task 19. Without "
-            "the bump the migrations/18.0.1.0.26/ directory is ignored "
-            "by Odoo loader.",
+        match = re.search(
+            r'["\']version["\']\s*:\s*["\']([0-9]+(?:\.[0-9]+)*)["\']',
+            content,
+        )
+        self.assertIsNotNone(
+            match,
+            "M.9: __manifest__.py has no parseable version string.",
+        )
+        version_tuple = tuple(int(p) for p in match.group(1).split('.'))
+        self.assertGreaterEqual(
+            version_tuple, (18, 0, 1, 0, 26),
+            "M.9: __manifest__.py version %s must be >= 18.0.1.0.26 so the "
+            "migrations/18.0.1.0.26/ directory is honoured by the Odoo "
+            "loader. Later phases may bump higher (Phase C → 18.0.1.0.27). "
+            "Plan §Phase A Task 19." % match.group(1),
         )
 
 

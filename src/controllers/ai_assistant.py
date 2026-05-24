@@ -381,6 +381,20 @@ class AiAssistantController(Controller):
         if not self._check_channel_access(channel):
             return self._sse_error_response('Access denied', 'access_denied')
 
+        # Agent-runtime dual-mode gate (§5.6): when the channel's project opts
+        # in, route to the pod-backed runtime branch. The flag defaults False,
+        # so production chat stays on the legacy synchronous path below until
+        # Phase D enables it per pilot project.
+        runtime_task = request.env['project.task'].sudo().search([
+            ('channel_id', '=', channel_id),
+        ], limit=1)
+        runtime_project = (
+            runtime_task.project_id if runtime_task
+            else request.env['project.project']
+        )
+        if runtime_project and runtime_project.use_agent_runtime:
+            return self._stream_agent_runtime(channel, runtime_project, channel_id)
+
         # Find the assistant for this channel
         assistant = self._get_channel_assistant(channel)
         if not assistant:
@@ -549,6 +563,249 @@ class AiAssistantController(Controller):
                 'X-Accel-Buffering': 'no',
             },
         )
+
+    def _stream_agent_runtime(self, channel, project, channel_id):
+        """Agent-runtime pod transport branch (§5.6, flag-gated).
+
+        Bridges the per-project pod's WS envelope stream to the browser SSE
+        stream. Reached only when ``project.use_agent_runtime`` is True; the
+        SSE entry point and frontend EventSource contract are unchanged.
+        """
+        import uuid
+
+        # ③ project_access gate (§4)
+        if not self._check_project_access(project):
+            return self._sse_error_response(
+                'Project access denied', 'project_access_denied',
+            )
+
+        # ④ resolve agent_template (per-project default)
+        template = self._resolve_agent_template(project)
+        if not template:
+            return self._sse_error_response(
+                'No agent template configured', 'no_template',
+            )
+
+        # ⑤ pre-fetch ORM data before entering the generator (cursor valid here)
+        invoker = request.env.user
+        invoker_role = self._get_project_access_role(project, invoker)
+        mcp_snapshot = self._build_mcp_snapshot(project, template)
+        skill_snapshot = self._build_skill_snapshot(project, template)
+        history = channel._get_chat_history(limit=20)
+        last_message = request.env['mail.message'].sudo().search([
+            ('res_id', '=', channel_id),
+            ('model', '=', 'discuss.channel'),
+            ('message_type', '=', 'comment'),
+        ], order='id desc', limit=1)
+        user_message = last_message.body or '' if last_message else ''
+        request_id = str(uuid.uuid4())
+
+        # ⑥ spawn-or-attach the project pod
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(request.env)
+        if not client:
+            return self._sse_error_response(
+                'Agent runtime not configured', 'spawn_failed',
+            )
+        try:
+            runtime_info = client.spawn_or_attach(
+                project=project,
+                channel_id=channel_id,
+                invoker_user_id=invoker.id,
+                invoker_role=invoker_role,
+                agent_template=template,
+                mcp_snapshot=mcp_snapshot,
+                skill_snapshot=skill_snapshot,
+            )
+        except Exception as exc:
+            _logger.exception(
+                'spawn-or-attach failed for channel %s: %s', channel_id, exc,
+            )
+            return self._sse_error_response(
+                f'Pod spawn failed: {exc}', 'spawn_failed',
+            )
+
+        pod_ws_url = runtime_info.get('pod_ws_url')
+        auth_token = runtime_info.get('auth_token') or runtime_info.get('ws_token')
+        db_name = request.env.cr.dbname
+        uid = request.env.uid
+        context = dict(request.env.context)
+        template_id = template.id
+
+        def generate():
+            import asyncio
+            from datetime import datetime as _dt
+            try:
+                import websockets
+            except ImportError as exc:
+                _logger.error('websockets unavailable for WS bridge: %s', exc)
+                yield 'data: ' + json.dumps({
+                    'error': 'WS client unavailable', 'done': True,
+                }) + '\n\n'
+                return
+
+            async def relay():
+                async with websockets.connect(
+                    pod_ws_url,
+                    extra_headers={'Authorization': f'Bearer {auth_token}'},
+                    ping_interval=30,
+                    ping_timeout=60,
+                ) as ws:
+                    await ws.send(json.dumps({
+                        'version': '1.0',
+                        'type': 'user_message',
+                        'request_id': request_id,
+                        'sequence_number': 0,
+                        'timestamp': _dt.utcnow().isoformat() + 'Z',
+                        'payload': {
+                            'channel_id': channel_id,
+                            'body': user_message,
+                            'history': history,
+                            'template_id': template_id,
+                            'invoker_role': invoker_role,
+                            'invoker_user_id': uid,
+                        },
+                    }))
+                    async for raw in ws:
+                        envelope = json.loads(raw)
+                        yield envelope
+                        if envelope.get('type') == 'done':
+                            return
+                        if envelope.get('type') == 'error' and \
+                                envelope.get('payload', {}).get('fatal'):
+                            return
+
+            loop = asyncio.new_event_loop()
+            try:
+                agen = relay()
+                full_response = ''
+                while True:
+                    try:
+                        envelope = loop.run_until_complete(agen.__anext__())
+                    except StopAsyncIteration:
+                        break
+                    etype = envelope.get('type')
+                    if etype == 'text_chunk':
+                        chunk = envelope.get('payload', {}).get('content', '')
+                        full_response += chunk
+                        yield 'data: ' + json.dumps({
+                            'chunk': chunk, 'done': False,
+                        }) + '\n\n'
+                    elif etype in (
+                        'tool_call', 'tool_result', 'tool_error',
+                        'tool_unavailable', 'status',
+                    ):
+                        yield 'data: ' + json.dumps({
+                            **envelope, 'done': False,
+                        }) + '\n\n'
+                    elif etype == 'done':
+                        saved_message_id = self._persist_ai_response(
+                            db_name, uid, channel_id, full_response, context,
+                        )
+                        done_payload = {
+                            'chunk': '', 'done': True,
+                            'full_response': full_response,
+                        }
+                        if saved_message_id:
+                            done_payload['message_id'] = saved_message_id
+                        yield 'data: ' + json.dumps(done_payload) + '\n\n'
+                        break
+                    elif etype == 'error':
+                        err = envelope.get('payload', {}).get(
+                            'error', 'Agent runtime error',
+                        )
+                        yield 'data: ' + json.dumps({
+                            'error': err, 'done': True,
+                        }) + '\n\n'
+                        break
+            except Exception as exc:
+                _logger.exception(
+                    'SSE-WS bridge failed for channel %s: %s', channel_id, exc,
+                )
+                yield 'data: ' + json.dumps({
+                    'error': str(exc), 'done': True,
+                }) + '\n\n'
+            finally:
+                loop.close()
+
+        return Response(
+            generate(),
+            content_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            },
+        )
+
+    def _resolve_agent_template(self, project):
+        """Resolve the agent_template bound to a project (prefer published)."""
+        AgentTemplate = request.env['woow_paas_platform.agent_template'].sudo()
+        template = AgentTemplate.search([
+            ('project_ids', 'in', project.id),
+            ('state', '=', 'published'),
+        ], limit=1)
+        if not template:
+            template = AgentTemplate.search([
+                ('project_ids', 'in', project.id),
+            ], limit=1)
+        if not template and project.agent_template_id:
+            template = project.agent_template_id
+        return template or None
+
+    def _get_project_access_role(self, project, user):
+        """Return the user's project_access role string (default 'guest')."""
+        access = request.env['woow_paas_platform.project_access'].sudo().search([
+            ('project_id', '=', project.id),
+            ('user_id', '=', user.id),
+        ], limit=1)
+        return access.role if access else 'guest'
+
+    def _build_mcp_snapshot(self, project, template):
+        """Serialise the template's bound MCP servers for the pod ConfigMap."""
+        servers = {}
+        for mcp in template.mcp_server_ids:
+            servers[mcp.name] = {'url': mcp.url or '', 'transport': mcp.transport}
+        return {'servers': servers}
+
+    def _build_skill_snapshot(self, project, template):
+        """Serialise the template's published skills (name/version/sha) for the pod."""
+        return [
+            {'name': skill.name, 'version': skill.version,
+             'sha256': skill.bundle_sha256}
+            for skill in template.skill_ids.filtered(
+                lambda s: s.state == 'published'
+            )
+        ]
+
+    def _persist_ai_response(self, db_name, uid, channel_id, full_response, context):
+        """Persist the assembled agent-runtime response to the channel."""
+        if not full_response:
+            return None
+        try:
+            import odoo
+            from odoo import api as odoo_api
+            registry = odoo.registry(db_name)
+            with registry.cursor() as new_cr:
+                new_env = odoo_api.Environment(new_cr, uid, context)
+                author_id = new_env.ref('base.partner_root').id
+                new_channel = new_env['discuss.channel'].browse(channel_id)
+                msg = new_channel.with_context(
+                    mail_create_nosubscribe=True,
+                    skip_ai_reply=True,
+                ).message_post(
+                    body=full_response,
+                    message_type='comment',
+                    subtype_xmlid='mail.mt_comment',
+                    author_id=author_id,
+                )
+                return msg.id
+        except Exception as exc:
+            _logger.exception(
+                'Failed to persist agent-runtime response for channel %s: %s',
+                channel_id, exc,
+            )
+            return None
 
     def _get_channel_assistant(self, channel):
         """Find the appropriate AI assistant for a channel.

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Drift detection fallback poll (design §5.5): re-sync sessions
+             whose webhook update was missed (last_synced_at stale > 10 min). -->
+        <record id="ir_cron_agent_session_drift" model="ir.cron">
+            <field name="name">Agent Session: Drift Detection</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_drift_detection()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>
