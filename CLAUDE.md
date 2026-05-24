@@ -438,6 +438,7 @@ Pitfall 持久化紀錄（debug 撞牆時對照）：
 - `docs/tracking/pitfalls/cross-workspace-task-data-leak.md` — CAQA B1 incident
 - `docs/tracking/pitfalls/plan-vs-odoo-schema-mismatch.md` — plan 引用不存在欄位的教訓
 - `docs/tracking/pitfalls/ci-workflow-container-missing-node.md` — CI `container: <lang-image>` + `actions/checkout` → node not found (exit 127) → pytest 從沒跑到（false green）。**cross-repo CI infra learning**（agent-runtime-pod epic Phase B，`paas-agent-runtime` repo Gitea Actions；任何用 container image 跑 GitHub/Gitea Actions workflow 的 repo 都適用，本 repo Odoo CI 不受影響）
+- `docs/decisions/patterns/phase-versioned-test-assertion.md` —（pattern doc，列此作 debug 對照）phase test 硬編當時 schema 快照值（manifest version `== "x"` / constraint 名 / 欄位 count）→ 後續 phase 合法演進同塊 schema 時撞 **test-vs-test red**（紅的 test 名與真因無關，debug 成本高）。改用 monotonic `>=` / 存在性斷言鎖 intent。**multi-phase schema test discipline**（agent-runtime-pod epic 內第二次撞牆抽：Cycle 1 `test_ac2` UNIQUE + Phase C M.9 manifest version；epic Phase D-F 版號 / schema 續演進會再撞）
 
 Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（隨 cycle 持續累積；最新見該檔開頭 State 段）
 
