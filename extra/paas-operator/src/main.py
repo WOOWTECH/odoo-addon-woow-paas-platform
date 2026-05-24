@@ -7,7 +7,15 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api import init, namespaces, odoo_modules, releases, routes, tunnels
+from src.api import (
+    agent_runtimes,
+    init,
+    namespaces,
+    odoo_modules,
+    releases,
+    routes,
+    tunnels,
+)
 from src.config import settings
 from src.models.schemas import ErrorResponse, HealthResponse
 from src.services.helm import HelmService
@@ -152,6 +160,7 @@ app.include_router(routes.router)
 app.include_router(tunnels.router)
 app.include_router(init.router)
 app.include_router(odoo_modules.router)
+app.include_router(agent_runtimes.router)
 
 
 # Root endpoint
