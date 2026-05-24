@@ -79,6 +79,7 @@ def sign_ws_token(
     payload = {
         "iss": _ISS,
         "aud": _AUD,
+        "token_use": "ws",
         "project_hash": project_hash,
         "channel_id": channel_id,
         "invoker_user_id": invoker_user_id,
@@ -107,6 +108,7 @@ def sign_skill_bundle_token(
     payload = {
         "iss": _ISS,
         "aud": _AUD,
+        "token_use": "skill_bundle",
         "project_hash": project_hash,
         "project_id": project_id,
         "workspace_ids": list(workspace_ids or []),

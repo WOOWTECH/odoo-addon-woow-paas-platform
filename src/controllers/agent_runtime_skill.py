@@ -98,6 +98,13 @@ class AgentRuntimeSkillController(Controller):
         if not claims:
             return self._unauthorized()
 
+        # C-1 hardening (defense in depth): an authentic token is only usable
+        # here if it was minted for the skill-bundle scope. A ws-scope token,
+        # an unstamped token, or a forged token_use is rejected (allowlist,
+        # fail-closed) so a ws token can never be replayed as a bundle fetch.
+        if claims.get('token_use') != 'skill_bundle':
+            return self._forbidden()
+
         # HC-2: the token's project_id is authoritative; the query param is not.
         project_id = claims.get('project_id')
         if not project_id:
@@ -127,6 +134,9 @@ class AgentRuntimeSkillController(Controller):
 
     def _unauthorized(self):
         return http.Response('Unauthorized', status=401, content_type='text/plain')
+
+    def _forbidden(self):
+        return http.Response('Forbidden', status=403, content_type='text/plain')
 
     def _not_found(self):
         return http.Response('Not Found', status=404, content_type='text/plain')
