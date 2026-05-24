@@ -32,8 +32,11 @@ pip install -r requirements.txt
 HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
 ```
 
-7 tests, ~10 s on a clean cluster. The `app_client` fixture sets `API_KEY=""`
-and `NAMESPACE_PREFIX="paas-ws-test-op-"` automatically — no need to export.
+7 tests, ~10 s on a clean cluster. The `app_client` fixture sets a real
+`API_KEY` (default `integration-test-key`) + `NAMESPACE_PREFIX="paas-ws-test-op-"`
+automatically and sends the matching `X-API-Key` header — no need to export.
+(Since F-PC-4 the operator fails closed with 503 on an unset key, so the suite
+authenticates rather than relying on the old empty-key pass-through.)
 
 Cluster choice:
 

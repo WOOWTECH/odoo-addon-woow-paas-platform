@@ -17,12 +17,16 @@ from src.models.schemas import (
 
 @pytest.fixture
 def client():
-    """Create FastAPI test client."""
-    # Disable API key auth for tests
+    """Create FastAPI test client (auth satisfied with a real key + header).
+
+    F-PC-4: an unset key now fails closed (503), so the client supplies a real
+    key and a matching X-API-Key header rather than relying on the old empty-key
+    pass-through. Auth-specific behaviour is covered by TestAuthentication.
+    """
     with patch("src.main.settings") as mock_settings:
-        mock_settings.api_key = ""
+        mock_settings.api_key = "test-api-key"
         mock_settings.namespace_prefix = "paas-ws-"
-        yield TestClient(app)
+        yield TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
 class TestHealthEndpoint:

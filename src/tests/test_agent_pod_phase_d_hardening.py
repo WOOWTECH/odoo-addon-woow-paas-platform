@@ -305,3 +305,37 @@ class TestPhaseDBootstrapOwnerHint(TransactionCase):
             "make __system__ an owner (the fix must stay a hint, not a "
             "blanket sudo-bootstrap).",
         )
+
+    def test_FPA14_normal_user_hint_ignored_self_owns(self):
+        """Regression: a normal (non-trusted) create IGNORES the owner hint.
+
+        The hint is trusted ONLY on the sudo/SUPERUSER path (HC-2): a normal
+        caller must not be able to assign 'owner' to an arbitrary partner via
+        ``bootstrap_owner_partner_id``. A normal user's create owns ITSELF and
+        the hinted third-party partner gets no owner row. This locks the
+        /simplify tightening — without it, reverting the hint to "wins on any
+        path" would not go red.
+        """
+        suffix = uuid.uuid4().hex[:6]
+        victim = self.env['res.partner'].sudo().create({'name': f'victim-{suffix}'})
+        user = self.env['res.users'].sudo().create({
+            'name': f'fpa14-normal-{suffix}',
+            'login': f'fpa14normal_{uuid.uuid4().hex[:8]}',
+            'groups_id': [(6, 0, [
+                self.env.ref('base.group_user').id,
+                self.env.ref('project.group_project_manager').id,
+            ])],
+        })
+        project = self.env['project.project'].with_user(user).with_context(
+            bootstrap_owner_partner_id=victim.id,
+        ).create({'name': f'fpa14u-{suffix}'})
+        self.assertTrue(
+            self._owner_rows(project, user.partner_id),
+            "F-PA-14 guard: a normal user's create must own ITSELF.",
+        )
+        self.assertFalse(
+            self._owner_rows(project, victim),
+            "F-PA-14 guard: a normal user must NOT assign 'owner' to an "
+            "arbitrary partner via bootstrap_owner_partner_id — the hint is "
+            "trusted only on the sudo/SUPERUSER path (HC-2).",
+        )

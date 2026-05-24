@@ -10,11 +10,11 @@ from src.services.cloudflare import CloudflareException
 
 @pytest.fixture
 def client():
-    """Create FastAPI test client with auth disabled."""
+    """Create FastAPI test client (F-PC-4: real key + matching header)."""
     with patch("src.main.settings") as mock_settings:
-        mock_settings.api_key = ""
+        mock_settings.api_key = "test-api-key"
         mock_settings.namespace_prefix = "paas-ws-"
-        yield TestClient(app)
+        yield TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
 class TestCreateTunnel:
