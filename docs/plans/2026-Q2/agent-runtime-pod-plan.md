@@ -358,6 +358,18 @@ related:
 
 - Phase A + B + C 全部 ship + dev/stg cluster 跑通
 
+### ⚠ Phase D enable gate（CAQA Phase C 抓的 3 條 plan-alignment gap — enable runtime 前必修）
+
+> flag-gated 不阻 Phase C merge（`use_agent_runtime=False` 時不走 WS path）；但 **Phase D enable flag 前必須全 close**，否則 enable 後 runtime 會炸 / silent 落公開 secret。
+
+| Gate | gap | enable 前必做 | design ref |
+|------|-----|--------------|-----------|
+| **A-1** websockets API 版本 | `extra_headers`（websockets <14）vs `additional_headers`（≥14 改名 breaking）；requirements 釘 `>=12.0` 無上界 → 裝到 ≥14 WS connect 炸 | requirements 釘 `websockets>=12.0,<14`（或 code 相容 both kwargs）+ 實機驗 WS connect | §5.6 |
+| **C-3** webhook HMAC dual-secret | impl webhook verify 單 secret，缺 current/previous fallback | webhook verify 補 dual-secret fallback（對齊 §6.6 4-phase rotation） | §5.3 OQ#1 / §5.5 |
+| **C-5** namespace secret auto-gen | `_DEFAULT_SECRET` 硬編碼公開 fallback；§2.15 規定的 migration auto-gen 未實作 → fresh install silent 落公開 secret → namespace hash 可預測 | migration / install hook fresh install 必 auto-gen random secret 寫入 `ir.config_parameter woow_paas_platform.agent_namespace_secret` | §2.15 / §2.7 |
+
+**gate 驗收**：3 條全 close + Phase D pilot 第一次 spawn-or-attach 真起 pod 前，CAQA / reviewer 再 verify 一輪（特別 A-1 實機 WS connect + C-5 fresh install secret 非公開值）。對應 `docs/tracking/followups/follow-ups.md`。
+
 ### Estimated effort
 
 **2 週**（pilot 觀察期）

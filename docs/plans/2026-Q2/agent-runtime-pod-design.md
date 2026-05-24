@@ -1341,7 +1341,7 @@ class AgentSession(models.Model):
 | reaper CronJob race（同 project 被多 job 同時 reap） | 低 | scale_release(0) 等冪；annotation patch 用 RFC 6902 strategic merge | 無影響 |
 | Helm install 失敗導致 state 卡在 SPAWNING | 中 | spawn timeout 60s + retry 機制；超過 3 次標 SPAWN_FAILED | 手動 `helm uninstall` 釋放 release name；下次 project member 訊息重試 |
 | Hash collision（不同 project_id 算出同 hash） | 極低 | hmac-sha256 取 10 bytes = 80 bits；2^40 project 才有 50% birthday collision；`agent_session.project_namespace_hash` UNIQUE constraint 在 collision 時 raise，迫使重算或人工干預 | 改 secret 重算（涉及 cluster-wide hash 重新生成 — 不可逆事件級操作；rotate 機制 §7 細化）|
-| Secret leak → attacker 可預測 hash → enumerate namespace | 高 | secret 存 `ir.config_parameter` + `groups='base.group_system'`；不寫入 git；migration 第一次部署時自動生成 random | rotate secret（同上）；attacker 已 enumerate 的部分 namespace 名稱無 K8s read permission 仍無法 access |
+| Secret leak → attacker 可預測 hash → enumerate namespace | 高 | secret 存 `ir.config_parameter` + `groups='base.group_system'`；不寫入 git；**⚠ C-5 (CAQA Phase C)：migration / install hook 第一次部署必 auto-gen random secret — 目前 `agent_session._DEFAULT_SECRET` 是硬編碼公開 fallback，fresh install 若 migration auto-gen 未實作會 silent 落公開 secret → namespace hash 可預測。caveat（K8s RBAC + 獨立簽章 secret 兩層 gate 仍擋 access），但 Phase D enable 前必修（gate）** | rotate secret（同上）；attacker 已 enumerate 的部分 namespace 名稱無 K8s read permission 仍無法 access |
 | ConfigMap mcp.json 與實際 mcp_server 不同步 | 中 | resume 時主動 patch ConfigMap；§5 invalidation 機制兜底；drift cron 每小時掃 | paas-operator API `POST /invalidate-mcp` 強制重寫 |
 | 長 TTL GC 誤刪正在活躍 pod | 高 | GC 只挑 REAPED >= T_gc；ACTIVE 不會被掃到 | helm uninstall 後 project member 再送訊息會冷啟新 pod；thread state lose（acceptable for 30day+ idle） |
 | paas-operator down → Odoo 無法 spawn pod | 高 | Odoo 端 retry + circuit breaker；既有 cloud_service 已有 timeout pattern | paas-operator 重啟；Odoo 端 fallback「服務暫不可用」訊息 |
@@ -2772,6 +2772,7 @@ paas-operator 端：
        "spawn_age_ms": 5234       // optional
      }
    - Auth: HMAC-SHA256 with shared secret `agent-runtime-webhook-secret`
+     - ⚠ **C-3 (CAQA Phase C)**：verify **必須 dual-secret current/previous fallback**（對齊 §6.6 4-phase rotation + §5.3 OQ#1）— impl 易漏寫單 secret；單 secret 在 rotation 過渡窗口（1h）會 reject `previous`-signed HMAC。非安全洞（cron 兜底狀態同步），但 Phase D enable webhook 前必修（gate）
      - Header: X-PaaS-Signature: hmac(payload_body, secret)
      - 防 spoofing
 
@@ -2882,9 +2883,14 @@ def api_ai_stream(self, channel_id, **kwargs):
 
         async def relay():
             """Connect WS, send user_message, yield response envelopes."""
+            # ⚠ A-1 dependency caveat (CAQA Phase C): websockets <14 用 `extra_headers`；
+            #    websockets ≥14 已移除改名 `additional_headers`（breaking）。
+            #    requirements **必須釘 `websockets>=12.0,<14`**（保 extra_headers API），
+            #    或 code 相容 both（kwargs 選擇 — 見下）。Phase D enable WS 前必驗（gate）。
+            _hdr_kw = 'extra_headers'  # websockets <14; ≥14 → 'additional_headers'
             async with websockets.connect(
                 pod_ws_url,
-                extra_headers={'Authorization': f'Bearer {auth_token}'},
+                **{_hdr_kw: {'Authorization': f'Bearer {auth_token}'}},
                 ping_interval=30,    # heartbeat
                 ping_timeout=60,
             ) as ws:

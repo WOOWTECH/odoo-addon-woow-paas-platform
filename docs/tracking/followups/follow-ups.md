@@ -849,6 +849,16 @@
 - `src/static/src/paas/services/support_service.js` → F26 (R-9 optimistic merge order) / F-X3 (`support_service.js:454` comment noise)
 - `scripts/test-addon.sh` / dev tooling → F-X8 (worktree env gap)
 
+## F-PC-1 / F-PC-2 / F-PC-3 — Phase D enable gate（CAQA Phase C A-1/C-3/C-5）
+
+**2026-05-24** · **狀態 OPEN** — flag-gated 不阻 Phase C merge（`use_agent_runtime=False` 不走 WS path）；**Phase D enable `use_agent_runtime` flag 前必全 close**。來源：CAQA Phase C plan-alignment review。
+
+- **F-PC-1 (A-1) websockets API 版本相依**：design §5.6 + impl 用 `websockets.connect(extra_headers=...)`，但 websockets ≥14 已移除改名 `additional_headers`（breaking）；`requirements` 釘 `>=12.0` 無上界 → Phase D 裝到 ≥14 時 WS connect 炸。**必做**：釘 `websockets>=12.0,<14`（或 code 相容 both kwargs）+ 實機驗 WS connect。ref design §5.6。
+- **F-PC-2 (C-3) webhook HMAC dual-secret**：impl webhook receiver verify 單 secret，缺 design §5.3 OQ#1 / §6.6 規定的 `current`/`previous` dual-secret fallback。非安全洞（cron 兜底 state 同步），但 §6.6 4-phase rotation 過渡窗口（1h）會 reject `previous`-signed HMAC。**必做**：webhook verify 補 dual-secret fallback（與 skill-bundle token verify 共用 pattern）。ref design §5.3 / §5.5 / §6.6。
+- **F-PC-3 (C-5) namespace secret auto-gen**：`agent_session._DEFAULT_SECRET` 是硬編碼公開 fallback；design §2.15 規定的「migration 第一次部署 auto-gen random」未實作 → fresh install silent 落公開 secret → `paas-ws-pa-{hash}` namespace hash 可預測（attacker enumerate）。caveat（K8s RBAC + `agent-runtime-auth-secret` 簽章 secret 兩層 gate 仍擋實際 access），非即時洞。**必做**：migration / install hook fresh install auto-gen random secret 寫入 `ir.config_parameter woow_paas_platform.agent_namespace_secret`。ref design §2.15 / §2.7。
+
+**gate 驗收**：Phase D 第一次 spawn-or-attach 真起 pod（enable flag）前，CAQA / reviewer 再 verify 一輪 — 特別 **A-1 實機 WS connect**（websockets 版本對）+ **C-5 fresh install secret 非 `_DEFAULT_SECRET` 公開值**。對應 plan `agent-runtime-pod-plan.md` Phase D §「Phase D enable gate」。
+
 ## See also
 
 - [[cloud-service-project-decouple]] §Consequences — cycle 1 決策後仍要持續注意的負面影響
