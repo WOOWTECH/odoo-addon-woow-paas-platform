@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Surface the Phase A use_agent_runtime toggle on the project form so an
+         admin can enable an agent-runtime pilot project from the UI (Phase D
+         WS3 / UI.1). Just this field — neighbouring fields (external_mcp_allowed
+         etc.) are intentionally out of scope. -->
+    <record id="view_project_form_inherit_agent_runtime" model="ir.ui.view">
+        <field name="name">project.project.form.inherit.woow.agent_runtime</field>
+        <field name="model">project.project</field>
+        <field name="inherit_id" ref="project.edit_project"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet//group" position="inside">
+                <field name="use_agent_runtime"/>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

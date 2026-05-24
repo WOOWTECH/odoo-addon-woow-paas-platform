@@ -104,11 +104,11 @@ def _decode_jwt_payload(token):
 
 @pytest.fixture
 def client():
-    """FastAPI test client with API-key auth disabled (mirrors test_api.py)."""
+    """FastAPI test client (F-PC-4: real key + matching header, mirrors test_api.py)."""
     with patch("src.main.settings") as mock_settings:
-        mock_settings.api_key = ""
+        mock_settings.api_key = "test-api-key"
         mock_settings.namespace_prefix = "paas-ws-"
-        yield TestClient(app)
+        yield TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
 _SECRET_CURRENT = "current-secret-aaaaaaaaaaaaaaaaaaaa"

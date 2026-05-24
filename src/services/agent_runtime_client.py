@@ -15,6 +15,15 @@ _PREFIX = '/api/agent-runtimes'
 _TIMEOUT = 30
 
 
+class AgentRuntimeOperatorError(Exception):
+    """Raised when the paas-operator returns a 4xx/5xx for an agent-runtime op.
+
+    Carries the operator's ``detail`` so the SSE bridge surfaces the real cause
+    instead of swallowing the error dict / leaking a cryptic JSONDecodeError
+    (N-1 / F-PC-5).
+    """
+
+
 class AgentRuntimeClient:
     """Thin HTTP wrapper around the paas-operator agent-runtime endpoints."""
 
@@ -30,7 +39,23 @@ class AgentRuntimeClient:
             headers={'X-API-Key': self.api_key, 'Content-Type': 'application/json'},
             timeout=_TIMEOUT,
         )
+        if not resp.ok:
+            raise AgentRuntimeOperatorError(
+                'paas-operator %s %s → %s: %s'
+                % (method, path, resp.status_code, self._error_detail(resp))
+            )
         return resp.json()
+
+    @staticmethod
+    def _error_detail(resp):
+        """Best-effort extraction of the operator error ``detail``."""
+        try:
+            body = resp.json()
+        except Exception:
+            return resp.text
+        if isinstance(body, dict):
+            return body.get('detail') or body
+        return body
 
     def spawn_or_attach(self, project, channel_id, invoker_user_id,
                         invoker_role, agent_template, mcp_snapshot, skill_snapshot):

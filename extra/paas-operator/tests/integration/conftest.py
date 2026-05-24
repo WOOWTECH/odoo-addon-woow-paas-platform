@@ -97,13 +97,22 @@ def app_client():
     """FastAPI TestClient bound to the real operator app.
 
     No mocking — ``k8s_service`` will shell out to ``kubectl`` against the
-    cluster pointed to by ``KUBECONFIG``. Auth is disabled for tests.
+    cluster pointed to by ``KUBECONFIG``.
+
+    F-PC-4: the operator now fails closed (503) on an unset API key, so the
+    suite authenticates with a real key + matching header instead of the old
+    empty-key pass-through. The key is forced onto the already-instantiated
+    settings singleton (it may have been read at import time, before this
+    fixture set the env).
     """
-    os.environ.setdefault("API_KEY", "")
+    api_key = os.environ.get("API_KEY") or "integration-test-key"
+    os.environ["API_KEY"] = api_key
     os.environ.setdefault("NAMESPACE_PREFIX", "paas-ws-test-op-")
 
+    from src.config import settings
     from src.main import app
-    with TestClient(app) as client:
+    settings.api_key = api_key
+    with TestClient(app, headers={"X-API-Key": api_key}) as client:
         yield client
 
 

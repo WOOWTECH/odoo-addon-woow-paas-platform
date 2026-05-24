@@ -60,6 +60,7 @@ Boundary:
   semantics beyond subset constraint — Phase B/C scope.
 * Skill bundle upload pipeline (controller side) — Phase B/C scope.
 """
+import os
 import re
 import uuid
 
@@ -223,6 +224,10 @@ class TestPhaseAAgentSessionModel(TransactionCase):
     def setUp(self):
         super().setUp()
         self.suffix = uuid.uuid4().hex[:8]
+        # Forward-compat with the F-PC-3 fail-closed fix: creating an
+        # agent_session now requires the injected namespace secret env.
+        os.environ['AGENT_RUNTIME_NAMESPACE_SECRET'] = 'phase-a-test-ns-secret'
+        self.addCleanup(os.environ.pop, 'AGENT_RUNTIME_NAMESPACE_SECRET', None)
 
     def test_agent_session_required_fields(self):
         """N.4: agent_session declares required field shape."""

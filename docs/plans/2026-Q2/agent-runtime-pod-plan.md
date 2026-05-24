@@ -331,62 +331,173 @@ related:
 
 ---
 
-## Phase D — Pilot + dual-write start
+## Phase D — Enable-gate code-ready（must-fix close + admin 啟用面 + cross-repo wiring）
+
+> **[範圍重定義 2026-05-24]** Phase A+B+C 主體已 ship（PR #59 merged → develop）。本 session = **code-ready**：把 flip `use_agent_runtime` flag 的**所有 CODE 前提**全 close。**不 flip flag、不起 pod、不部署、不做 2 週觀察** —— 那塊由使用者依下方 [§Pilot runbook](#pilot-runbook使用者自行執行) 自行執行。原「pilot + dual-write + 2 週觀察」內容已下沉成 runbook。
 
 ### Goal
 
-第一個 pilot project（admin-controlled）切換到 agent-runtime pod；其他 project 仍走舊 ai_client.py 同步。觀察 ≥ 2 週。
+1. enable-gate **must-fix（F-PC-1/2/4/5/6/7）全 close** —— flip 後 runtime 不炸、error 通道正常、跨租戶 token 原語封死、無 WS 洩漏。
+2. **admin 啟用面 code 就緒** —— `use_agent_runtime` toggle UI + agent_template seed（不實際 bind）。
+3. **cross-repo wiring 對齊** —— paas-agent-runtime verifier A 嚴格收緊。（Odoo K8s Secret env mount 落**本 repo** `charts/odoo-dev-sandbox`，屬 WS1，見 charts 條）
 
-### Tasks
+### Scope boundary（本 session **不**做）
 
-> **[調整 2026-05-23]** SSE generator rewrite code 已在 **Phase C 塊 ④** ship（flag gate 預設 False）。Phase D 不再寫 SSE code，只 **enable flag + 實際 pilot deployment + monitor**。
+- ❌ 不設 `use_agent_runtime=True`（不 flip）、不起 pod、不部署 cluster、不做 2 週 SLO 觀察。
+- ❌ paas-operator **僅 F-PC-4** 准動既有 middleware（security hardening）；其餘對 operator 一律 router-additive。
+- ❌ 相鄰模組 / 架構擴張（F-PA-14 以外的 bootstrap 重構、worker pool sizing impl…）→ 先回 leader，不擅擴 scope。
+- ✅ secret 來源 = **K8s Secret env**（OQ#1 ruling (b)）；不新增 ir.config_parameter secret。
 
-1. `src/views/project_views.xml`：admin 後台 form 顯示 `use_agent_runtime` toggle（Phase C 已加 field，Phase D 加 UI）
-2. Admin 建第一個 agent_template + bind 到 pilot project（§4 agent_template model 已 Phase A ship）
-3. Admin 對 1 個 pilot project 設 `use_agent_runtime = True` → 觸發 Phase C 塊 ④ 的 WS path
-4. dev/stg cluster: 確認 spawn-or-attach 真起 pod + WS relay + skill bundle fetch 端到端通
-5. Monitor dashboard 設定：metric scraping（cold start latency / WS error rate / worker pool util）
-6. Pilot 觀察 ≥ 2 週（cold start p95 < 15s / WS error < 1% / worker pool < 50%）
+---
 
-### Test scope（Phase D）
+### Decisions（已拍板 2026-05-24，使用者全採 planner 推薦）
 
-- E2E test: pilot project chat invoke → 收 SSE chunks → 與 ai.assistant 既有 path 行為等效
-- Regression: 非 pilot project 行為零變動（all green）
-- 觀察 metric: cold start p95 < 15s / WS error rate < 1% / worker pool util < 50%
+**D-1 · F-PC-4 = Global fail-closed.** operator `api_key` 未設 → **所有 router** 503（不只 agent-runtime router）。理由：operator fail-open 使其成 token 簽發者時可為任意 project_id 簽 scoped `skill_bundle_token`（跨租戶 bundle 外洩原語，follow-ups F-PC-4），且 fail-open 對 releases/namespaces/tunnels 等所有 router 都是未認證 K8s 操作 footgun。**已接受 blast radius**：~6 支既有 test fixture（`test_api.py` / `test_tunnels.py` / `test_scale.py` / `test_agent_runtimes.py` / `test_odoo_module.py` 的 `api_key=""`）+ integration `conftest.py:102 app_client`（`API_KEY=""`）全改設真 key 或改斷言 503；keyless dev/stg operator 終結。
 
-### Dependencies
+**D-2 · F-PC-3 = K8s Secret env (b).** `agent_session` namespace secret 改讀 K8s Secret env，殺 `_DEFAULT_SECRET` 公開 fallback + 移除 ir.config_parameter read，缺 secret → **fail-closed**。與 OQ#1 constraint + 已 ship 的 skill-bundle/webhook env pattern 一致。**design §2.15 待 follow-up 改寫**（本 plan 不改 design，另開條目）。
 
-- Phase A + B + C 全部 ship + dev/stg cluster 跑通
+**D-3 · F-PA-14 = 本次納入（最低優先）.** `project.sudo().create()` 跳 owner bootstrap fix；fix 須 care HC-2 family bootstrap 語義（[[constraint-input-trust-expansion]]），方向：`create` 接受顯式 owner-partner（context hint）讓 sudo path 也能 bootstrap，不破「SUPERUSER 不自動成 owner」原意。
 
-### ⚠ Phase D enable gate（CAQA Phase C 抓的 3 條 plan-alignment gap — enable runtime 前必修）
+### Rejected options（reporter 持久化用）
 
-> flag-gated 不阻 Phase C merge（`use_agent_runtime=False` 時不走 WS path）；但 **Phase D enable flag 前必須全 close**，否則 enable 後 runtime 會炸 / silent 落公開 secret。
+- **D-1 (ii) scoped fail-closed**（僅 agent-runtime router 503）—— 否決：blast radius 雖小，但保留其餘 router fail-open footgun，非乾淨終態。
+- **D-2 (a) ir.config_parameter auto-gen**（design §2.15 原案）—— 否決：self-contained 但保留第二套 secret 機制（與 env 模式分歧）+ secret 落 Odoo DB。改採 env single-source。
+- **D-3 剔除 F-PA-14 留獨立 cycle** —— 否決：cheap correctness + 趁在 area，一併納入。
 
-| Gate | gap | enable 前必做 | design ref |
-|------|-----|--------------|-----------|
-| **A-1** websockets API 版本 | `extra_headers`（websockets <14）vs `additional_headers`（≥14 改名 breaking）；requirements 釘 `>=12.0` 無上界 → 裝到 ≥14 WS connect 炸 | requirements 釘 `websockets>=12.0,<14`（或 code 相容 both kwargs）+ 實機驗 WS connect | §5.6 |
-| **C-3** webhook HMAC dual-secret | impl webhook verify 單 secret，缺 current/previous fallback | webhook verify 補 dual-secret fallback（對齊 §6.6 4-phase rotation） | §5.3 OQ#1 / §5.5 |
-| **C-5** namespace secret auto-gen | `_DEFAULT_SECRET` 硬編碼公開 fallback；§2.15 規定的 migration auto-gen 未實作 → fresh install silent 落公開 secret → namespace hash 可預測 | migration / install hook fresh install 必 auto-gen random secret 寫入 `ir.config_parameter woow_paas_platform.agent_namespace_secret` | §2.15 / §2.7 |
+### 軟契約 env 名（**凍結** · 本 repo `charts/odoo-dev-sandbox` 照此 mount）
 
-**gate 驗收**：3 條全 close + Phase D pilot 第一次 spawn-or-attach 真起 pod 前，CAQA / reviewer 再 verify 一輪（特別 A-1 實機 WS connect + C-5 fresh install secret 非公開值）。對應 `docs/tracking/followups/follow-ups.md`。
+Odoo deployment（`charts/odoo-dev-sandbox/templates/odoo-deployment.yaml`，WS1 charts 條）須注入的 K8s Secret env（**production Odoo CD `woow-paas-cd` 留 Phase G**）：
+
+| env 變數 | 用途 | 狀態 | 消費端 |
+|----------|------|------|--------|
+| `AGENT_RUNTIME_AUTH_SECRET_CURRENT` | skill-bundle token 驗（HS256 current）| 既有（Phase C）| `agent_runtime_skill.py:33` |
+| `AGENT_RUNTIME_AUTH_SECRET_PREVIOUS` | skill-bundle token 驗（rotation previous）| 既有（Phase C）| `agent_runtime_skill.py:34` |
+| `AGENT_RUNTIME_WEBHOOK_SECRET` | webhook HMAC 驗（current）| 既有（Phase C，裸名）| `agent_runtime_webhook.py:27` |
+| **`AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS`** | webhook HMAC 驗（previous，F-PC-2 新增）| **本 session 新增** | F-PC-2 webhook verify |
+| **`AGENT_RUNTIME_NAMESPACE_SECRET`** | namespace hash HMAC（F-PC-3 (b)）| **本 session 新增** | F-PC-3 `agent_session` |
+
+> **凍結理由**：
+> - webhook **current 維持既有裸名** `AGENT_RUNTIME_WEBHOOK_SECRET`（不改 Phase C 已 ship 的讀取點），previous 用 `_PREVIOUS` 後綴 —— 刻意不對稱於 auth 的 `_CURRENT/_PREVIOUS`，換取向後相容。
+> - namespace secret **刻意單一、不 dual-secret / 不 rotation**：一旦輪替，同 project 算出不同 hash → `paas-ws-pa-{hash}` namespace 漂移 → 既有 pod 變孤兒。故 namespace secret 必須穩定，與 auth/webhook（可輪替）的設計差異是**有意的**；缺即 fail-closed（flag-gated，未 spawn 不需 secret）。
+
+---
+
+### Workstream 1 — woow_paas_platform 本 repo（TDD，tester 可直接接）
+
+> 涵蓋 must-fix（F-PC-1/2/4/5/6）+ 本次納入（F-PC-3 = D-2、F-PA-14 = D-3）+ charts env mount（本 repo `charts/odoo-dev-sandbox`，落點修正 2026-05-24）。每條給「先紅的斷言入口」+「fix 方向（不含 impl 細節）」；實際 test case 由 tester 展開（planner 不代寫）。
+
+| # | caveat | 位置 | red test 入口（先紅斷言）| fix 方向 |
+|---|--------|------|----------------------------|----------|
+| **F-PC-1** | A-1 websockets kwarg | `ai_assistant.py:648-650`（`websockets.connect(... extra_headers=...)`）+ `requirements.txt:10` | 斷言 `requirements.txt` 的 `websockets` 釘**有上界 `<14`**（解析/regex test）；websockets ≥14 移除 `extra_headers` 改名 `additional_headers` | 釘 `websockets>=12.0,<14`；（選）connect 端依版本擇 kwarg（design §5.6 `_hdr_kw` 相容寫法）。**實機 WS connect 驗 → pilot gate**（無 pod 無法單測） |
+| **F-PC-2** | C-3 webhook dual-secret | `agent_runtime_webhook.py:30-37,62` | webhook 收 **previous-secret 簽** 的 body → 現 **401（紅）** → 修後 200；current 仍 200；皆非 → 401 | `_verify_hmac` 改 try current → previous fallback，**複用 `agent_runtime_skill.py:62-80 _verify_skill_bundle_token` 的 dual-env pattern**；新增 env **`AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS`**（凍結名，→ WS2 charts mount） |
+| **F-PC-4** | C-2 operator fail-open | `extra/paas-operator/src/main.py:89-91` | operator 單測：`api_key=""` 打**任一**受保護 route → 現 **pass-through（紅，應 503）** → 修後 503 | `api_key` 未設 → **global fail-closed 503（所有 router，D-1 定案）**；**同 PR 一併更新** ~6 支既有 fixture（`test_api.py`/`test_tunnels.py`/`test_scale.py`/`test_agent_runtimes.py`/`test_odoo_module.py` 設真 key 或斷言 503）+ integration `conftest.py:102 app_client` |
+| **F-PC-5** | N-1 client raise_for_status | `agent_runtime_client.py:25-33`（`_request`）| mock operator 回 401/500 → 現 `_request` 回錯誤 dict / 拋 `JSONDecodeError`（紅）→ 修後拋 **typed error 帶 operator `detail`** | `_request` 加 status 檢查，4xx/5xx 拋自訂 typed exception 攜 detail；SSE 端（`:620,:721`）已有 except 接 → 確認 surface 真因非 cryptic |
+| **F-PC-6** | P-2 async-gen aclose | `ai_assistant.py:678-729`（drain loop `finally` 只 `loop.close()`）| mock relay async-gen 記錄 `aclose()` 是否被 await；跑 bridge **done / error / 例外** 三路徑 → 現皆未 aclose（紅）→ 修後三路徑都先 aclose | drain loop `finally` 在 `loop.close()` 前補 `loop.run_until_complete(agen.aclose())` |
+| **F-PC-3** (D-2) | C-5 namespace secret env | `agent_session.py:11,113-127`（`_DEFAULT_SECRET` + `_get_namespace_secret` + `create`）| env 設好 → hash 由 env secret 算（非 `_DEFAULT_SECRET`）；env **未設** → `create` **fail-closed raise**（現用公開 fallback silent 算 hash = 紅）| `_get_namespace_secret` 改讀 env **`AGENT_RUNTIME_NAMESPACE_SECRET`**（凍結名），缺 → raise；移除 `_DEFAULT_SECRET` + ir.config_parameter read；`src/hooks.py` `_CONFIG_PARAMETERS` 若列 `...agent_namespace_secret` 須移除 |
+| **F-PA-14** (D-3) | HC-2 bootstrap bypass | `project_project.py:114-139`（create bootstrap）+ 觸發的 controller sudo-create 呼叫點 | `project.sudo().create({...})` 帶 owner-partner hint → 現跳 bootstrap、creator 無 owner row（紅）→ 修後該 partner 得 owner `project_access` | create 接受顯式 owner-partner（context hint，如 `bootstrap_owner_partner_id`）使 sudo path 也 bootstrap；不破「SUPERUSER 不自動成 owner」原意；care HC-2 [[constraint-input-trust-expansion]] |
+| **charts** | secret env mount（**本 repo** chart，落點修正 2026-05-24）| `charts/odoo-dev-sandbox/templates/odoo-deployment.yaml` + 新 `charts/odoo-dev-sandbox/tests/test_agent_runtime_env.sh` | `helm template` render 的 odoo-deployment **缺凍結 5 env** → 紅（**bash 斷言，無 helm-unittest**）| odoo-deployment 注入凍結 5 env（既有 `env:`/`secretKeyRef:` pattern 可循，`:62`+；secret 來源 `templates/secrets.yaml`）；新建 `tests/test_agent_runtime_env.sh`（bash + `helm template`）。**production Odoo CD（`woow-paas-cd`）secret env → Phase G**（本次只動 dev/stg `odoo-dev-sandbox`）|
+
+### Workstream 2 — cross-repo（paas-agent-runtime，需該 repo agent）
+
+> **[落點修正 2026-05-24]** 原 charts 列已移 **WS1** —— Odoo deployment chart 在**本 repo** `charts/odoo-dev-sandbox`（非 `woow-paas-charts` repo，後者只有 agent-runtime pod chart）。WS2 cross-repo 僅剩 F-PC-7。
+
+| # | repo / 位置 | red test 入口 | fix 方向 | 前置 |
+|---|------------|--------------|----------|------|
+| **F-PC-7** | `paas-agent-runtime` `runtime/transport/auth.py verify_token`（B transitional，commit `18d9602`）| token **缺 `token_use` claim** → 現放行（紅，A 嚴格應拒）→ 修後拋 `TokenUseError` | verifier 由 B 過渡（缺 claim 放行）切 **A 嚴格**（缺 → 拒），對稱於 Odoo skill-bundle 端（`agent_runtime_skill.py:105` 已 A 嚴格）| **已滿足**：operator 全簽 `token_use`（Phase C merged）→ 可切。deploy 順序見 runbook |
+
+### Workstream 3 — admin 啟用面（code only，不實際 bind / 不 flip）
+
+1. **admin UI toggle** — `src/views/project_views.xml`：project form 加 `use_agent_runtime` 顯示（field 已在 `project_project.py:63` Phase A ship，view 未顯示）。red test：view arch 含 `use_agent_runtime`（或沿用既有 field-存在斷言 + 加 arch smoke）。**只加此 toggle，不順手動 `external_mcp_allowed` 等相鄰 field（超 scope）**。
+2. **agent_template seed** — 新 `src/data/agent_template_demo.xml`：seed 一個 **unpublished demo** agent_template，**不 bind 真 project**（leader：code 準備不實際 bind）+ 掛進 `__manifest__.py` data list。red test：demo record 安裝後存在。
+
+---
+
+### Task sequence + dependency graph
+
+```
+（前置 · 已完成）operator 全簽 token_use（Phase C merged）
+        │
+        ▼
+[WS1 本 repo]  F-PC-1 / F-PC-4 / F-PC-5 / F-PC-6 / F-PA-14  ── 互相獨立，可平行
+               F-PC-2 ───────┐
+               F-PC-3 ───────┤（env 名已凍結）
+               charts  ──────┤（odoo-dev-sandbox 照凍結 5 env 名 mount，本 repo）
+[WS3 admin]  UI / seed ───────┤（additive，平行）
+                              ▼
+                       （WS1/WS3 全平行，無互鎖）
+
+[WS2 F-PC-7]  paas-agent-runtime A 嚴格 ── 前置已滿足，與上述全平行（獨立 repo）
+```
+
+- **無硬 CODE 阻塞**：全部可平行 —— charts（本 repo `odoo-dev-sandbox`）照凍結 env 名 mount，不需等其餘 code 完成；F-PC-7 獨立 repo。
+- **DEPLOYMENT 順序**（非 code 順序，進 runbook）：charts secret 先於 **dev/stg** Odoo redeploy；operator(簽 token_use) 先於 pod(A 嚴格) deploy。
+
+### Test scope（給 tester）
+
+- **既有 regression（必綠）**：`use_agent_runtime=False`（default）行為零變動 —— SSE 走既有 path（`test_agent_pod_phase_c_sse_gateway.py` SSE.1/SSE.5）。operator 既有 fixture 因 F-PC-4 global fail-closed 須隨改（已納 F-PC-4 同 PR，見 WS1）。
+- **新行為（紅→綠）**：上方 WS1 + WS2 每列的 red test 入口。
+- **刻意不測（pilot gate，無 pod 無法單測）**：F-PC-1 實機 WS connect（websockets 版本對）/ spawn-or-attach 真起 pod 端到端 / SLO metric —— 全列入 runbook flip 前 CAQA/reviewer re-verify，不在本 session 單測。
+
+### Tester hand-off — red test 入口 checklist（單一入口）
+
+> TDD：每項先寫紅 test → 實作 → 綠。詳細位置 / fix 方向見上方 WS1/WS2/WS3 表。標 ⚡ 者可平行起手（無硬 code 阻塞）。
+
+| 項 | repo | red test 一句話入口 | WS |
+|----|------|---------------------|----|
+| ⚡ F-PC-1 | woow_paas_platform | `requirements.txt` websockets 無 `<14` 上界 → 紅 | WS1 |
+| ⚡ F-PC-2 | woow_paas_platform | previous-secret 簽的 webhook body 得 401 → 紅 | WS1 |
+| ⚡ F-PC-4 | paas-operator（本 repo `extra/`）| `api_key=""` 打受保護 route 仍 pass-through → 紅（+ 同 PR 改 ~6 fixture）| WS1 |
+| ⚡ F-PC-5 | woow_paas_platform | operator 回 401/500 時 `_request` 不拋 typed error → 紅 | WS1 |
+| ⚡ F-PC-6 | woow_paas_platform | bridge done/error/例外 三路徑 relay 未 aclose → 紅 | WS1 |
+| ⚡ F-PC-3 | woow_paas_platform | namespace secret env 未設時 `create` 不 fail-closed（用公開 fallback）→ 紅 | WS1 |
+| ⚡ F-PA-14 | woow_paas_platform | `sudo().create()` 帶 owner hint 仍跳 bootstrap → 紅 | WS1 |
+| ⚡ admin UI | woow_paas_platform | project form view arch 不含 `use_agent_runtime` → 紅 | WS3 |
+| ⚡ seed | woow_paas_platform | demo agent_template record 安裝後不存在 → 紅 | WS3 |
+| ⚡ F-PC-7 | paas-agent-runtime | 缺 `token_use` claim 的 token 仍放行 → 紅 | WS2 |
+| ⚡ charts | 本 repo `charts/odoo-dev-sandbox` | `helm template` odoo-deployment 缺凍結 5 env → 紅（bash 斷言，無 helm-unittest）| WS1 |
 
 ### Estimated effort
 
-**2 週**（pilot 觀察期）
+**code-ready**（不含 pilot 觀察期）。WS1 八項（F-PC-1/2/4/5/6 + F-PC-3 + F-PA-14 + charts；F-PC-4 落 `extra/paas-operator/`、charts 落 `charts/odoo-dev-sandbox/`，其餘 woow_paas_platform）+ WS3 兩項屬本 repo；WS2 僅 F-PC-7 一項跨 repo（paas-agent-runtime）。
 
-### Risk
+---
 
-| Risk | Mitigation |
-|------|-----------|
-| Pilot project chat 完全失敗 → user 受影響 | Pilot 選 admin-controlled internal project；2 週 observation；use_agent_runtime flag 立即 toggle |
-| Worker pool 撞滿（pilot 用太多 conv）| 監控 + admin alert at 0.8 util |
-| Cold start latency 超 15s | metric warn；若持續 > 15s → 暫停 phase advance |
+### Pilot runbook（使用者自行執行）
 
-### Rollback
+> code-ready 完成 + flip gate 驗收通過後，由**使用者**執行；本 session 不代跑。
 
-- `project.use_agent_runtime = False`（admin UI 一鍵）
-- agent pod 自然 reap（30 min idle）
-- 既有 ai_client.py 路徑接手
+1. **前置**：cluster 可達（`kubectl config use-context <dev/stg>`）；K8s Secret 建好（凍結 5 env：`AGENT_RUNTIME_AUTH_SECRET_CURRENT`/`_PREVIOUS` + `AGENT_RUNTIME_WEBHOOK_SECRET`/`_PREVIOUS` + `AGENT_RUNTIME_NAMESPACE_SECRET`）；helm 部署 **dev/stg `odoo-dev-sandbox`**（已含 WS1 charts env mount）+ operator（全簽 `token_use`）+ paas-agent-runtime image（A 嚴格）。**production Odoo（`woow-paas-cd`）secret env mount 留 Phase G**。
+2. **deploy 順序**：charts secret → Odoo redeploy（吃新 env）；operator(簽 token_use) **先於** pod(A 嚴格) deploy（否則在途舊 token 被 A 嚴格拒）。
+3. **flip**：admin UI 對 **1 個 admin-controlled** pilot project 設 `use_agent_runtime=True`。
+4. **端到端驗**：spawn-or-attach 真起 pod + WS relay + skill bundle fetch 端到端通。
+5. **觀察 ≥ 2 週**：cold start p95 < 15s / WS error rate < 1% / worker pool util < 50%（撞 0.8 util 告警；p95 持續 > 15s → 暫停 advance）。
+6. **rollback**：`use_agent_runtime=False`（admin UI 一鍵）→ pod 自然 reap（30 min idle）→ 既有 `ai_client.py` 路徑接手。
+
+### ⚠ Flip-gate caveats（部署 invariant，code 不強制 — CAQA/reviewer Phase D D-CAVEAT-1/2）
+
+這 2 條**不是 code 缺陷**（11 must-fix 全 close），而是「部署 / cross-repo ops invariant 未被 code 強制」的風險，flag-gated 故不阻 merge，但 **flip 前必照做**。
+
+**D-CAVEAT-1 — namespace secret 須跨 3 進程同值（+ charts `optional:true` 放大 partial 部署風險）**
+- 機制：F-PC-3 把 namespace secret 從公開 fallback 改 K8s Secret env `AGENT_RUNTIME_NAMESPACE_SECRET`（缺即 fail-closed）。failure mode 隨之從「靜默用公開 default」變成「**Odoo web worker / cron worker / operator 三進程中任一拿到不同或空值 → namespace hash 靜默分歧**」→ webhook 永遠 404、或同 project 在不同 worker 算出不同 `paas-ws-pa-{hash}` namespace。
+- 放大點：`charts/odoo-dev-sandbox` 的 secretKeyRef 用 `optional: true` → **partial 部署（secret 只掛到部分進程）不會在 deploy 時炸**，會靜默分歧到首次使用才現形。
+- **做**：單一 K8s Secret **同值**掛入**全部** Odoo pod（web + cron）+ operator；考慮在 hash 消費點加 startup/health 一致性斷言（把「靜默分歧」前移成「啟動即報」）。此 secret 刻意**不可輪替**（輪替 → hash 漂移 → 孤兒 pod，見 design §2.15）。
+
+**D-CAVEAT-2 — token_use deploy-order + 1h 在途窗口 + operator 反向 rollback 危害**
+- 約束：operator 簽 `token_use` 必 **100% 先於** pod 切 A 嚴格（否則 A 嚴格 pod 拒缺 claim 的在途 token）。正常 forward path 已關閉（operator 自 Phase C 已簽 `token_use`），**但 code 無 gate 在 ordering 違反時拒啟動**。
+- 在途窗口：`ws_token` exp 3600s → pre-token_use operator 簽的 token 有**最長 1h** 被 A 嚴格 pod 誤殺的窗口。
+- **反向 rollback 不安全且未記載**：operator 降回 token_use baseline 以下（不再簽 claim）、而 pod 仍 A 嚴格 → pod 拒所有新 token。**rollback operator 前必先把 pod verifier 退回 B transitional**。
+- **做**：deploy 序固定 **operator（簽 token_use）→ pod（A 嚴格）**；operator `/health` 暴露 `signs token_use: true` 供下方 flip-gate checklist **機器可驗**（把 F-PC-7 的人工「確認後」轉成可檢查訊號）；rollback 反向操作。
+
+### Flip gate 驗收（flip 前必過）
+
+WS1+WS2 全 close 後、**第一次真 flip / spawn-or-attach 起 pod 前**，CAQA / reviewer 再 verify 一輪，特別：
+
+- **F-PC-1** 實機 WS connect（websockets 版本對，connect 不 `TypeError`）
+- **F-PC-5 + F-PC-6** error 通道 + WS lifecycle（operator error 正確 surface 真因 + 每條對話無 WS 洩漏至 ping_timeout）
+- **F-PC-7** A 嚴格切換（operator prod 全簽 `token_use` 確認後）
+- **F-PC-3** fresh install secret 非公開值 / 缺 `AGENT_RUNTIME_NAMESPACE_SECRET` 時 fail-closed
+
+對應 `docs/tracking/followups/follow-ups.md` §Phase D enablement gate（must-fix / follow-up 兩層）。
 
 ---
 
@@ -511,6 +622,7 @@ related:
    - paas-operator new version reference（含 agent-runtime router）
    - agent-runtime helm chart registry reference
    - K8s Secret `agent-runtime-auth-secret`（dual key）
+   - **production Odoo deployment secret env mount**（將 Phase D 在 dev/stg `odoo-dev-sandbox` 已做的凍結 5 env 對齊到 production Odoo CD：`AGENT_RUNTIME_AUTH_SECRET_CURRENT`/`_PREVIOUS` + `AGENT_RUNTIME_WEBHOOK_SECRET`/`_PREVIOUS` + `AGENT_RUNTIME_NAMESPACE_SECRET`）—— 缺 `AGENT_RUNTIME_NAMESPACE_SECRET` 時 `agent_session` fail-closed（Phase D F-PC-3 (b)），故 prod 上線前此 env 必到位
 2. Deploy 順序 enforcement（Fleet bundle dependency）：
    - paas-operator new version first
    - K8s Secret create

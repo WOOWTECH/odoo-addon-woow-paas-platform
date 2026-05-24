@@ -254,9 +254,35 @@ agent_template.project_ids 寫 attempt
 - `src/tests/test_<model>_grantor_authority.py`（自家命名）
 - 每條 test method 對應 cell map 編號 — `test_<HC#>_<short_desc>` 命名 self-document
 
+## Forward-looking invariant — bootstrap / provisioning owner hint（Phase D HC-2 / F-PA-14）★
+
+本 pattern 在 epic 內第四度出現（Phase A HC-3 m2m grantor → Phase B HC-2 WS payload→claims → Phase C C-1 token_use → **Phase D F-PA-14 owner-bootstrap hint**），每次技術 surface 不同、抽象同一。Phase D 的 instance 是 `project.project.create()` 的 owner-bootstrap：
+
+```python
+if self.env.uid == SUPERUSER_ID:
+    hint_partner_id = self.env.context.get('bootstrap_owner_partner_id')
+    if not hint_partner_id: return projects   # 無 hint → 不 auto-own
+    partner = self.env['res.partner'].browse(hint_partner_id).exists()
+else:
+    partner = self.env.user.partner_id        # normal user 忽略 hint，owns 自己
+```
+
+**/simplify 自抓的收緊**：初版 bootstrap hint 對 normal-user 也可讀（「方便」），/simplify pass 自抓「normal-user 信任 context hint = ownership-assignment 原語」→ 收緊成 **SUPERUSER 分支才讀 hint，normal-user 分支完全忽略**。這正是本 pattern 的核心動作：security 決策（誰成為 owner）不信 attacker-controllable input（context hint），改用 authoritative source（SUPERUSER 明示 / 已認證 user 自己的 partner_id）。
+
+**Forward-looking invariant（後人新增 set-site 前必看 — 鎖未來 operator provisioning）**：
+
+> `bootstrap_owner_partner_id` 是 **superuser-only 的 out-of-band channel**；其值必須 **server-authoritative**（來自 provisioning record，或已認證真人自己的 partner_id），**任何 controller 不得從 `kw` / `params` / inbound `context` 填入**。
+>
+> 今日 production **零 set-site**（grep 確認，唯一 consumer 是 `project_project.py:130` read-site）。未來某 phase 接 operator provisioning 真 set-site 時，**違反此條 = 把 bootstrap 便利退化成 ownership-assignment 原語（B1 復發）**。set-site 作者必須確認 hint 來源是 server 算的（非 request body）—— Odoo 18 `request.env.context` 不 merge request body（`JsonRPCDispatcher` 把 JSON `params` 放 `request.params` plain kwargs，不進 `request.env.context`），但若 controller 顯式 `with_context(bootstrap_owner_partner_id=kw[...])` 把 untrusted 值傳下去就破功。
+
+read-site comment（`project_project.py:119-128`）已就地警告此 SET-SITE invariant（[[two-layer-acl-lockstep]] 精神：knowledge 同時落 pattern doc + code-site）。
+
 ## See also
 
 - 真實落地 case：
+  - **Phase D HC-2 / F-PA-14**（owner-bootstrap hint，4th instance）：`docs/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` §Security focus 2 + §Caveat「forward-looking invariant」/ `docs/tracking/reviewer-report-2026-05-25-agent-runtime-pod-phase-d.md` §4（security-auditor 獨立確認 airtight，延伸 framework-substrate 驗 indirect injection 關閉）
+  - **Phase C C-1**（token_use claim，token 層 3rd instance）：`docs/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md` §4
+  - **Phase B HC-2**（WS payload→claims，image 端 2nd instance）：`docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` §4
   - **Phase A HC-3**：`docs/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.2 — agent_template grantor authority constraint closure
   - **Phase A HC-3**：`docs/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §3.1 HC-3 + §12.2 closure 證據
   - **Phase A reviewer EC-3a**：`docs/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §12.4 — Phase B-E controller sudo path lock-step 提醒

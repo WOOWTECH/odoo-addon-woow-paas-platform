@@ -2,13 +2,21 @@ import base64
 import hashlib
 import hmac
 import logging
+import os
 from datetime import timedelta
 
 from odoo import api, fields, models
+from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
-_DEFAULT_SECRET = b'woow-paas-agent-namespace-fallback-secret'
+# The namespace secret is injected as a K8s Secret env (OQ#1 ruling (b)). It is
+# deliberately single (no rotation _PREVIOUS): rotating it would re-derive a
+# different hash for the same project → namespace drift → orphaned pods. A
+# MISSING secret fails closed (see _get_namespace_secret) rather than falling
+# back to any source-public default — otherwise anyone reading the source could
+# compute the namespace hash (a public primitive).
+_ENV_NAMESPACE_SECRET = 'AGENT_RUNTIME_NAMESPACE_SECRET'
 
 
 def _compute_project_namespace_hash(project_id, secret):
@@ -120,11 +128,21 @@ class AgentSession(models.Model):
 
     @api.model
     def _get_namespace_secret(self):
-        ICP = self.env['ir.config_parameter'].sudo()
-        raw = ICP.get_param('woow_paas_platform.agent_namespace_secret', '')
-        if raw:
-            return raw.encode()
-        return _DEFAULT_SECRET
+        """Return the namespace HMAC secret from the injected env, fail-closed.
+
+        Reads ``AGENT_RUNTIME_NAMESPACE_SECRET`` (the K8s Secret env). A missing
+        / empty value raises instead of using any default — the hash must not be
+        derivable from source alone (F-PC-3 / C-5 / D-2).
+        """
+        raw = os.environ.get(_ENV_NAMESPACE_SECRET, '')
+        if not raw:
+            raise UserError(
+                "Agent runtime namespace secret is not configured: set the "
+                "%s environment variable (injected from the K8s Secret). The "
+                "namespace hash is not derived without it (fail-closed)."
+                % _ENV_NAMESPACE_SECRET
+            )
+        return raw.encode()
 
     @api.model
     def _cron_drift_detection(self):

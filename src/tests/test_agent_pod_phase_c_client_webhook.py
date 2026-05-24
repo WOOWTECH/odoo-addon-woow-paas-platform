@@ -81,6 +81,10 @@ _WEBHOOK_SECRET = "phase-c-webhook-secret-abcdef"
 # OQ#1 ruling (b): K8s Secret env injection. Env var NAME is impl-defined —
 # this placeholder re-aligns when impl enters.
 _ENV_WEBHOOK_SECRET = "AGENT_RUNTIME_WEBHOOK_SECRET"
+# Forward-compat with the Phase D F-PC-3 fail-closed fix: creating an
+# agent_session now requires the injected namespace secret env.
+_ENV_NAMESPACE_SECRET = "AGENT_RUNTIME_NAMESPACE_SECRET"
+_NAMESPACE_SECRET = "phase-c-namespace-secret"
 _CLIENT_MOD = "odoo.addons.woow_paas_platform.services.agent_runtime_client"
 
 
@@ -96,6 +100,10 @@ class TestPhaseCAgentRuntimeClient(TransactionCase):
         ICP = self.env['ir.config_parameter'].sudo()
         ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
         ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')
+        # spawn_or_attach resolves the project hash by creating an agent_session,
+        # which now requires the namespace secret env (F-PC-3 fail-closed).
+        os.environ[_ENV_NAMESPACE_SECRET] = _NAMESPACE_SECRET
+        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
 
     def _import_client(self):
         """Import the (not-yet-created) client module.
@@ -236,6 +244,9 @@ class TestPhaseCWebhookReceiver(HttpCase):
         # OQ#1 ruling (b): receiver reads the HMAC secret from the injected ENV
         # (K8s Secret env injection). Env var name is an impl-defined placeholder.
         self._set_env(_ENV_WEBHOOK_SECRET, _WEBHOOK_SECRET)
+        # Creating the session below now requires the namespace secret env
+        # (F-PC-3 fail-closed).
+        self._set_env(_ENV_NAMESPACE_SECRET, _NAMESPACE_SECRET)
         self.project = self.Project.sudo().create({'name': f'wh-{self.suffix}'})
         # agent_session auto-computes project_namespace_hash on create.
         self.session = self.Session.sudo().create({
@@ -365,6 +376,11 @@ class TestPhaseCDriftCron(TransactionCase):
         ICP = self.env['ir.config_parameter'].sudo()
         ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
         ICP.set_param('woow_paas_platform.operator_api_key', 'k')
+
+        # Forward-compat with the F-PC-3 fail-closed fix: creating an
+        # agent_session now requires the injected namespace secret env.
+        os.environ[_ENV_NAMESPACE_SECRET] = _NAMESPACE_SECRET
+        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
 
         project = self.env['project.project'].sudo().create(
             {'name': f'cr2-{uuid.uuid4().hex[:6]}'})

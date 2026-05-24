@@ -80,4 +80,8 @@ from . import test_agent_pod_phase_a_attachment_acl
 from . import test_agent_pod_phase_c_skill_bundle          # 塊②
 from . import test_agent_pod_phase_c_client_webhook        # 塊③
 from . import test_agent_pod_phase_c_sse_gateway           # 塊④
+# epic: agent-runtime-pod Phase D WS1+WS3 (TDD red — F-PC-1/4/charts 為 host 端，不在此)
+from . import test_agent_pod_phase_d_hardening             # F-PC-2/3/5 + F-PA-14
+from . import test_agent_pod_phase_d_sse_aclose            # F-PC-6
+from . import test_agent_pod_phase_d_enablement            # WS3 UI + seed
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

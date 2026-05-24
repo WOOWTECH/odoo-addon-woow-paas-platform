@@ -86,9 +86,16 @@ async def verify_api_key(request: Request, call_next):
     # Check API key header
     api_key = request.headers.get("X-API-Key")
 
+    # An UNSET key is a misconfiguration, not a "disable auth" switch: fail
+    # CLOSED (503) for every protected route rather than serving spawn / reap /
+    # delete / scale to anyone (F-PC-4 / C-2 / D-1). Health & docs stay exempt
+    # (checked above) so the k8s liveness probe is unaffected.
     if not settings.api_key:
-        logger.warning("API key not configured - authentication disabled")
-        return await call_next(request)
+        logger.error("API key not configured - failing closed (503)")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "Operator API key not configured"},
+        )
 
     if api_key != settings.api_key:
         logger.warning(f"Invalid API key attempt from {request.client.host}")

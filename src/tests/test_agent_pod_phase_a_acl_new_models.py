@@ -110,6 +110,7 @@ Fixture / env assumptions:
 * refactor branch invariants (D4, Inv #9/#10/#11, 6-rule mcp split)
   unchanged — not touched by this test file.
 """
+import os
 import uuid
 
 from odoo.exceptions import AccessError, ValidationError
@@ -444,6 +445,10 @@ class TestPhaseAAclAgentSession(_NewModelAclFixture):
 
     def setUp(self):
         super().setUp()
+        # Forward-compat with the F-PC-3 fail-closed fix: creating an
+        # agent_session now requires the injected namespace secret env.
+        os.environ['AGENT_RUNTIME_NAMESPACE_SECRET'] = 'phase-a-test-ns-secret'
+        self.addCleanup(os.environ.pop, 'AGENT_RUNTIME_NAMESPACE_SECRET', None)
         # Two sessions — one per project.
         self.session_p1 = self.AgentSession.sudo().create({
             'project_id': self.project_p1.id,
