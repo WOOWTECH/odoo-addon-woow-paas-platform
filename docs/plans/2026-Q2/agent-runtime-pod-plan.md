@@ -465,6 +465,8 @@ Odoo deployment（`charts/odoo-dev-sandbox/templates/odoo-deployment.yaml`，WS1
 ### Pilot runbook（使用者自行執行）
 
 > code-ready 完成 + flip gate 驗收通過後，由**使用者**執行；本 session 不代跑。
+>
+> **▶ 可執行 step-by-step checklist（動作 + 指令 + 驗收 + rollback）**：`docs/guides/deployment/agent-runtime-pilot-flip-gate-runbook.md`。下方為高層摘要 + caveat 論述源（runbook 引用此處、不複製）。
 
 1. **前置**：cluster 可達（`kubectl config use-context <dev/stg>`）；K8s Secret 建好（凍結 5 env：`AGENT_RUNTIME_AUTH_SECRET_CURRENT`/`_PREVIOUS` + `AGENT_RUNTIME_WEBHOOK_SECRET`/`_PREVIOUS` + `AGENT_RUNTIME_NAMESPACE_SECRET`）；helm 部署 **dev/stg `odoo-dev-sandbox`**（已含 WS1 charts env mount）+ operator（全簽 `token_use`）+ paas-agent-runtime image（A 嚴格）。**production Odoo（`woow-paas-cd`）secret env mount 留 Phase G**。
 2. **deploy 順序**：charts secret → Odoo redeploy（吃新 env）；operator(簽 token_use) **先於** pod(A 嚴格) deploy（否則在途舊 token 被 A 嚴格拒）。
