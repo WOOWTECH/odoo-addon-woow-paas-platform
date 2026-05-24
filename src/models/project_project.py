@@ -126,6 +126,17 @@ class ProjectProject(models.Model):
         # - Normal self-service create: the authenticated user owns the project.
         #   The hint is NOT honoured here — a non-trusted caller must not be able
         #   to assign ownership to an arbitrary partner via the context.
+        #
+        # ⚠ SET-SITE INVARIANT (for whoever adds the FIRST writer of this hint):
+        #   There is NO production set-site today (only tests set it). When a
+        #   future phase wires operator provisioning to bootstrap an owner, the
+        #   hint value MUST be server-authoritative — derived from a provisioning
+        #   record or the authenticated user's own partner_id — and MUST NEVER be
+        #   filled from request `kw`/`params`/inbound `context`. Passing an
+        #   attacker-controllable value here degrades bootstrap convenience into an
+        #   ownership-assignment primitive (B1 relapse). See
+        #   docs/decisions/patterns/constraint-input-trust-expansion.md
+        #   §Forward-looking invariant.
         if self.env.uid == SUPERUSER_ID:
             hint_partner_id = self.env.context.get('bootstrap_owner_partner_id')
             if not hint_partner_id:
