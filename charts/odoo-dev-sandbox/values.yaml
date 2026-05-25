@@ -183,6 +183,14 @@ networkPolicy:
   # allowEgressToNamespaces:
   #   - paas-stg-system
 
+  # Let the dynamic agent-runtime pod namespaces (paas-ws-pa-*, labelled
+  # paas-managed=true by the operator) talk to Odoo through allow-internal:
+  # adds a label-based ingress (pod->odoo skill-bundle) + egress (odoo->pod WS
+  # /v1/chat, which also mirrors the ingress for K3s reply traffic). Opt-in
+  # (default false) so non-agent-runtime sandboxes are unaffected. Set true for
+  # the agent-runtime pilot.
+  allowAgentRuntimePods: false
+
 # --- Secret Management ---
 secrets:
   # Use an existing K8s secret instead of creating one
