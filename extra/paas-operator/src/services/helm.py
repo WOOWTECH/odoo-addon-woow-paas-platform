@@ -116,6 +116,9 @@ class HelmService:
         values: Optional[Dict[str, Any]] = None,
         version: Optional[str] = None,
         create_namespace: bool = False,
+        repo: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> ReleaseInfo:
         """Install a Helm chart.
 
@@ -126,6 +129,10 @@ class HelmService:
             values: Values override
             version: Chart version
             create_namespace: Create namespace if not exists
+            repo: Optional classic Helm repo URL for stateless fetch (--repo).
+                Leave None for direct/OCI chart refs (marketplace default).
+            username: Optional repo username for a private Helm repo (--username).
+            password: Optional repo password/token for a private repo (--password).
 
         Returns:
             Release information
@@ -151,6 +158,17 @@ class HelmService:
 
         if version:
             args.extend(["--version", version])
+
+        # Classic Helm repo (stateless): resolve the chart directly from a repo
+        # URL without a persistent `helm repo add` — used by the agent-runtime
+        # path (private Gitea classic Helm repo over in-cluster HTTP). Unset for
+        # the existing marketplace OCI refs, so their behaviour is unchanged.
+        if repo:
+            args.extend(["--repo", repo])
+        if username:
+            args.extend(["--username", username])
+        if password:
+            args.extend(["--password", password])
 
         # Write values to temp file if provided
         if values:
@@ -215,6 +233,9 @@ class HelmService:
         version: Optional[str] = None,
         reset_values: bool = False,
         reuse_values: bool = True,
+        repo: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
 
@@ -226,6 +247,9 @@ class HelmService:
             version: Chart version
             reset_values: Reset to chart default values
             reuse_values: Reuse last release values
+            repo: Optional classic Helm repo URL for stateless fetch (--repo).
+            username: Optional repo username for a private Helm repo (--username).
+            password: Optional repo password/token for a private repo (--password).
 
         Returns:
             Updated release information
@@ -260,6 +284,14 @@ class HelmService:
             args.append("--reset-values")
         elif reuse_values:
             args.append("--reuse-values")
+
+        # Classic Helm repo (stateless) — mirrors install(); see its note.
+        if repo:
+            args.extend(["--repo", repo])
+        if username:
+            args.extend(["--username", username])
+        if password:
+            args.extend(["--password", password])
 
         if values:
             with tempfile.NamedTemporaryFile(

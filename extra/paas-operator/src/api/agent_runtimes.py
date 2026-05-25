@@ -67,6 +67,21 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
     }
 
 
+def _chart_source_kwargs() -> dict:
+    """Helm kwargs to fetch the agent-runtime chart from the private Gitea
+    classic Helm repo (gap C): stateless ``--repo``/``--version`` + read creds.
+
+    Empty settings collapse to ``None`` so helm omits the flags — keeping the
+    call backward-compatible with the marketplace's direct/OCI chart refs.
+    """
+    return {
+        "repo": settings.agent_runtime_repo_url or None,
+        "version": settings.agent_runtime_chart_version or None,
+        "username": settings.agent_runtime_repo_username or None,
+        "password": settings.agent_runtime_repo_password or None,
+    }
+
+
 def _resume_pod(namespace, release, project_hash, project_id, workspace_ids):
     """Re-sign SKILL_BUNDLE_TOKEN, patch pod env, THEN scale to 1 (§2.11.1).
 
@@ -103,6 +118,7 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
             chart=settings.agent_runtime_chart,
             values=_build_install_values(request, skill_bundle_token),
             create_namespace=True,
+            **_chart_source_kwargs(),
         )
         pod_state = "spawning"
     else:
@@ -190,6 +206,7 @@ def sync_workspaces(project_hash: str, request: SyncWorkspacesRequest):
             "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
         },
         reuse_values=True,
+        **_chart_source_kwargs(),
     )
     return {"action": "synced", "workspace_ids": request.project_workspace_ids}
 
