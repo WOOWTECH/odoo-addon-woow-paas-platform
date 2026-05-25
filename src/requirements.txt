@@ -3,6 +3,10 @@ langchain-openai>=0.3.0
 langchain-core>=0.3.0
 langchain-mcp-adapters>=0.2.0,<0.3.0
 langgraph>=0.2.0
+# agent-runtime SSE<->WS bridge: ai_assistant._stream_agent_runtime opens an
+# async client connection to the pod's /v1/chat (async with websockets.connect()).
+# Hard dependency — without it the bridge ImportErrors ("WS client unavailable").
+websockets>=12.0,<14.0
 
 # extra-addons: ai_base_gt
 packaging
