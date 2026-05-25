@@ -61,9 +61,18 @@
 
 ## 2. ☸️ operator 就緒（簽 token_use）+ 版本確認
 
-operator 自 Phase C 已簽 `token_use`（forward path 已關閉）。pilot cluster 的 operator 須：(a) 版本 ≥ 簽 token_use、(b) spawn pod 用的 agent-runtime image 指向 step 1 的 A 嚴格 tag。
+operator **code** 自 Phase C（`7daf1f4`，develop）已簽 `token_use`。但 ⚠ **部署的 operator image 未必是 Phase C+ 版本** —— 2026-05-25 查 `paas-app-bundle-cd`（Rancher Fleet GitOps）時，現役 stg operator image 是 `20260426.0534`（4/26，**Phase C merge 5/24 之前 → 不簽 `token_use`**）。**若不升級就往下 flip，A 嚴格 pod 會拒這個舊 operator 簽的無 `token_use` token → 連線炸。** 故 pilot flip 前**必先升級 operator image**。
 
-- [ ] 確認 pilot cluster operator 版本含 `token_use` 簽發
+pilot cluster 的 operator 須：(a) image 版本 ≥ 簽 `token_use`（Phase C+）、(b) spawn pod 用的 agent-runtime image 指向 step 1 的 A 嚴格 tag。
+
+**operator 升級（現役舊版 → Phase C+）：**
+
+- [ ] 確認 Phase C+ operator image 已 build：`build-paas-operator` CI 觸發於 `push develop` + `extra/paas-operator/**`，Phase C（`7daf1f4`）/ Phase D（`8d152f7`）merge develop 應已自動 build（tag = commit SHA 7 碼 + `latest`）。⚠ Gitea < 1.26 → `tea` 查不到 CI run，須 **Gitea web → Actions 確認 `build-paas-operator` 成功** + jcr `woow-paas-docker-local/paas-operator` 有對應 tag
+- [ ] 更新 `paas-app-bundle-cd/paas-operator-stg/values-stg.yaml` 的 `image.tag`（`20260426.0534` → Phase C+ tag，建議 pin commit SHA 非 `latest`）→ `git commit + push`（Rancher Fleet 自動部署）
+- [ ] 驗 stg operator 已 rollout 新版（operator pod 跑的 image tag = 升級後）：
+  ```bash
+  kubectl --context <stg-ctx> -n paas-stg-system get deploy -o wide | grep -i operator
+  ```
 - [ ] operator config（spawn pod 用的 agent-runtime image）指向 step 1 A 嚴格 image tag
 - [ ] port-forward 驗 health：
   ```bash
