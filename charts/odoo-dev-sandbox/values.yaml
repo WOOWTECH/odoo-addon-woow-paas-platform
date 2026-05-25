@@ -188,6 +188,20 @@ secrets:
   # Use an existing K8s secret instead of creating one
   existingSecret: ""
 
+# --- Agent-runtime shared secrets (agent-runtime pilot / Phase D) ---
+# Populated into the chart Secret (secrets.yaml) ONLY when set; consumed by
+# odoo-deployment.yaml via optional secretKeyRef. For the agent-runtime pilot,
+# set authSecretCurrent to the SAME raw HS256 key as the operator's
+# AGENT_RUNTIME_AUTH_SECRET_CURRENT so Odoo verifies the operator-signed
+# skill_bundle_token (D-CAVEAT-1). Empty = key omitted = env unset (fail-closed
+# when the agent-runtime path runs). Set at deploy via --set (do not commit).
+agentRuntime:
+  authSecretCurrent: ""
+  authSecretPrevious: ""
+  webhookSecret: ""
+  webhookSecretPrevious: ""
+  namespaceSecret: ""
+
 # --- Registry credentials (stg mode) ---
 registry:
   # Docker registry server
