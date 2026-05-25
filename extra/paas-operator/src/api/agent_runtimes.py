@@ -86,6 +86,10 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
     values = {
         "image": {"tag": settings.agent_runtime_image_tag},
         "projectHash": request.project_hash,
+        # projectId is a chart-required value (_helpers.tpl agent-runtime.validate):
+        # the B-2 image uses it for the subprocess cwd. It rides in the pod env
+        # only (never a URL/ns key — keeps the serial-leak guard intact).
+        "projectId": request.project_id,
         "env": {
             "ODOO_BASE_URL": settings.odoo_base_url,
             "PROJECT_HASH": request.project_hash,
