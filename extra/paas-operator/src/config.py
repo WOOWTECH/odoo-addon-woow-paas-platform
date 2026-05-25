@@ -34,9 +34,18 @@ class Settings(BaseSettings):
     registry_secret_name: str = "paas-registry"
 
     # Agent Runtime (per-project pod) — design §2.11
-    agent_runtime_chart: str = "agent-runtime"  # chart ref for helm install/upgrade
-    agent_runtime_image_tag: str = "latest"  # pod image tag injected into values
-    odoo_base_url: str = ""  # ODOO_BASE_URL injected into pod env (skill-bundle fetch)
+    # Chart lives in a PRIVATE Gitea classic Helm repo (gap C decision): operator
+    # fetches it statelessly via `helm install --repo <url> --version <ver>
+    # --username/--password` (no `helm repo add`; OCI is unavailable in this env).
+    # agent_runtime_chart is the bare chart NAME; repo URL / version / read creds
+    # are separate env-overridable settings, set by the operator deployment (gap A).
+    agent_runtime_chart: str = "agent-runtime"  # chart NAME (resolved via --repo)
+    agent_runtime_repo_url: str = ""  # classic Helm repo URL (--repo), e.g. http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm
+    agent_runtime_chart_version: str = ""  # chart version (--version); empty = latest in index. This is the CHART version (e.g. 0.1.0), NOT the image tag
+    agent_runtime_repo_username: str = ""  # Gitea read:package username (--username); private repo auth
+    agent_runtime_repo_password: str = ""  # Gitea read:package token (--password); private repo auth
+    agent_runtime_image_tag: str = "1.0.0"  # pod image tag (appVersion) injected into values; 'latest' does not exist, only 1.0.0 is built
+    odoo_base_url: str = ""  # ODOO_BASE_URL injected into pod env (skill-bundle fetch); stg = internal svc, e.g. http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.local:8069
 
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
