@@ -988,6 +988,17 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - 修法: 依 [[agent-runtime-ws-protocol]]（PR #69）契約實作 pod `/v1/chat` 回覆 + skill-bundle fetch
 - lane: **paas-agent-runtime image team**（與 F-PILOT-8 LLM cred 連動）
 
+## F-GC-2 — deploy-stg/create.sh 重跑洗掉 odoo agent-runtime 啟用（durability）
+
+- **Severity**: medium（durability；pilot 一次性 OK，但每次重 deploy-stg 後 odoo 端 agent-runtime 會被關掉）
+- **Origin**: agent-runtime-pod epic gap C / odoo (i) pilot 部署（2026-05-25，PR #64 + deploy-stg 4a/4b）
+- **問題**: odoo 端 agent-runtime 啟用走 (4b) `helm upgrade stg --reuse-values --set agentRuntime.* --set networkPolicy.allowAgentRuntimePods=true`（chart from-values，PR #64）。但 `create.sh`（k8s-dev-sandbox / deploy-stg 用）是 `helm upgrade $SLUG --set <stg-mode 值>` **fresh set、無 `--reuse-values`**（`create.sh:294`）→ **下次 deploy-stg/create.sh 重跑會把 agentRuntime（secret keys）+ allowAgentRuntimePods 洗回 chart 預設（空 / false）→ odoo 端 agent-runtime 被關掉、skill-bundle/auth/namespace secret env 消失**。
+- **為何 pilot 接受**: 一次性 e2e 跑 4a→4b 即可、值撐到下次 deploy；每次重 deploy-stg 後重跑 (4b) 即恢復。secret 值刻意不進腳本/CI（敏感、使用者提供）是對的設計。
+- **durable 修法（腳本層，非 chart-only）**: (i) odoo agent-runtime secret 改 **existingSecret**（pre-create K8s secret、像 operator 端 paas-cd 慣例）→ create.sh redeploy 不碰、secret 不落 helm values；(ii) `allowAgentRuntimePods=true`（非敏感）做成 create.sh stg-mode 預設 或 stg values file 固定套。
+- **owner**: paas-platform（odoo-dev-sandbox chart / deploy-stg lane）+ paas-cd（secret 慣例）；**pilot 驗證後排程**。
+- 對照: [[agent-runtime-operator-chart-install-contract]]（§附帶 WS transport / NP）、本檔 F-GC-1（同 pilot 另一 hardening）、F-PILOT-3（同源 deploy-stg stg-mode 重跑 durability；odoo 端另一軸 = image default，本條 = agentRuntime secret env + NP flag）。
+- **狀態（2026-05-26 verify）**: **保留 open**。軌 2 durable 收尾（agent-runtime chart `0.1.1` / operator+paas-cd existingSecret / F-PILOT-3 odoo image）**皆未涵蓋本條** —— 實查 develop `create.sh` 仍為 fresh `--set`（HELM_INSTALL_ARGS 僅 `sandbox.branch/ttl/mode` 等，**無** agentRuntime / `secrets.existingSecret` / `allowAgentRuntimePods` / `--reuse-values` 任何 wiring；chart 雖具 `secrets.existingSecret` + `agentRuntime.*` + `allowAgentRuntimePods` 機制，但 stg-mode 部署流程未啟用），F-GC-2 技術結論在現況仍成立、durable 修法 (i)+(ii) 尚未實作 → **不標 RESOLVED**。
+
 ## See also
 
 - [[cloud-service-project-decouple]] §Consequences — cycle 1 決策後仍要持續注意的負面影響
