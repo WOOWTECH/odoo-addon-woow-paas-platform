@@ -2,7 +2,7 @@ apiVersion: v2
 name: odoo-dev-sandbox
 description: Odoo 18 development sandbox for Kubernetes (K3s/K8s)
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "18.0"
 keywords:
   - odoo

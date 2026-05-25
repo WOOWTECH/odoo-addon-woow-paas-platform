@@ -45,6 +45,14 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: {{ . }}
     {{- end }}
+    {{- if .Values.networkPolicy.allowAgentRuntimePods }}
+    # Allow ingress from agent-runtime pods (dynamic paas-ws-pa-* ns, labelled
+    # paas-managed=true by the operator) — pod->odoo skill-bundle fetch.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              paas-managed: "true"
+    {{- end }}
   egress:
     # Allow DNS resolution (UDP + TCP on port 53)
     - to:
@@ -84,5 +92,13 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ . }}
+    {{- end }}
+    {{- if .Values.networkPolicy.allowAgentRuntimePods }}
+    # Allow egress to agent-runtime pods (odoo->pod WS /v1/chat) + reply mirror
+    # for the pod->odoo ingress above (K3s treats replies as fresh egress).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              paas-managed: "true"
     {{- end }}
 {{- end }}

@@ -183,10 +183,32 @@ networkPolicy:
   # allowEgressToNamespaces:
   #   - paas-stg-system
 
+  # Let the dynamic agent-runtime pod namespaces (paas-ws-pa-*, labelled
+  # paas-managed=true by the operator) talk to Odoo through allow-internal:
+  # adds a label-based ingress (pod->odoo skill-bundle) + egress (odoo->pod WS
+  # /v1/chat, which also mirrors the ingress for K3s reply traffic). Opt-in
+  # (default false) so non-agent-runtime sandboxes are unaffected. Set true for
+  # the agent-runtime pilot.
+  allowAgentRuntimePods: false
+
 # --- Secret Management ---
 secrets:
   # Use an existing K8s secret instead of creating one
   existingSecret: ""
+
+# --- Agent-runtime shared secrets (agent-runtime pilot / Phase D) ---
+# Populated into the chart Secret (secrets.yaml) ONLY when set; consumed by
+# odoo-deployment.yaml via optional secretKeyRef. For the agent-runtime pilot,
+# set authSecretCurrent to the SAME raw HS256 key as the operator's
+# AGENT_RUNTIME_AUTH_SECRET_CURRENT so Odoo verifies the operator-signed
+# skill_bundle_token (D-CAVEAT-1). Empty = key omitted = env unset (fail-closed
+# when the agent-runtime path runs). Set at deploy via --set (do not commit).
+agentRuntime:
+  authSecretCurrent: ""
+  authSecretPrevious: ""
+  webhookSecret: ""
+  webhookSecretPrevious: ""
+  namespaceSecret: ""
 
 # --- Registry credentials (stg mode) ---
 registry:
