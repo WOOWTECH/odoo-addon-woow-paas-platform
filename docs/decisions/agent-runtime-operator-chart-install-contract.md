@@ -124,3 +124,17 @@ networkPolicy:
 
 - **OCI `oci://`**：本環境 push 端已驗證壞掉（redirect loop，commit `5079cc1`），pilot 不賭未驗證的修復。`--plain-http` 救活可能性留作後續優化。
 - **lifespan `helm repo add`（stateful）**：需維護 `repositories.yaml` + index 快取、chart 升版要 `helm repo update`、Gitea 啟動時宕機卡 startup — 對動態 spawn 不利。
+
+## 附帶修正：WS URL transport contract（同 PR 修 bug 2）
+
+gap C 對焦 chart Service 時，順帶揪出 operator `_pod_ws_url` 與 design §B + agent-runtime chart 的 transport drift（既有 bug、非 install），leader 裁示同 PR #63 修：
+
+| | 修正前 | 修正後（design §B + chart） |
+|---|--------|------------------------------|
+| port | 8080 | **8000**（image uvicorn / `runtime/transport/ws_server`）|
+| path | /ws | **/v1/chat**（`@app.websocket('/v1/chat')`）|
+| svc 名 | `{release}`（`agent-pa-{hash}`）| **`{release}-svc`**（chart fullname + `-svc`，paas-charts 對齊 design）|
+
+→ 修正後 `_pod_ws_url` = `ws://agent-pa-{hash}-svc.paas-ws-pa-{hash}.svc.cluster.local:8000/v1/chat`。Odoo 以 client 連此 WS、pod 進來即 `verify_token`（HS256，secret = `AGENT_RUNTIME_AUTH_SECRET_CURRENT`，與 operator 簽 ws_token 同把 → **D-CAVEAT-1 三方同值**），故 `agent-runtime-auth-secret` pilot 需 provision（`auth.manageSecret=true`）。
+
+**Transport audit**（leader 指示順帶查）：agent-runtime 路徑只有此一處 drift。`ODOO_BASE_URL` 為 env 驅動（operator 只傳 base、pod 自組路徑）；operator 不構造 webhook callback URL（pod 從 `ODOO_BASE_URL` 自組）；`tunnels` / `releases` 的 URL 屬其他 feature、非本 epic。
