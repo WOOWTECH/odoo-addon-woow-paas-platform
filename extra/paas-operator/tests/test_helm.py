@@ -120,6 +120,157 @@ class TestHelmService:
         mock_run.assert_not_called()
 
     @patch("subprocess.run")
+    def test_install_with_repo_and_version_adds_flags(self, mock_run, helm_service):
+        """install() with a classic Helm repo URL appends --repo and --version.
+
+        agent-runtime path (design gap C): the chart lives in a private Gitea
+        classic Helm repo, fetched statelessly via --repo (no `helm repo add`).
+        """
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "agent-pa-abc",
+                "namespace": "paas-ws-pa-abc",
+                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "chart": {"metadata": {"name": "agent-runtime", "appVersion": "1.0.0"}},
+            }),
+            stderr="",
+        )
+
+        helm_service.install(
+            namespace="paas-ws-pa-abc",
+            name="agent-pa-abc",
+            chart="agent-runtime",
+            repo="http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm",
+            version="0.1.0",
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert "--repo" in cmd
+        assert cmd[cmd.index("--repo") + 1] == (
+            "http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm"
+        )
+        assert "--version" in cmd
+        assert cmd[cmd.index("--version") + 1] == "0.1.0"
+
+    @patch("subprocess.run")
+    def test_install_with_repo_credentials_adds_auth_flags(self, mock_run, helm_service):
+        """install() with repo credentials appends --username and --password.
+
+        woow-paas is a private Gitea org: anonymous index.yaml pull = 401, so a
+        read:package token must be passed through to helm.
+        """
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "agent-pa-abc",
+                "namespace": "paas-ws-pa-abc",
+                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "chart": {"metadata": {"name": "agent-runtime", "appVersion": "1.0.0"}},
+            }),
+            stderr="",
+        )
+
+        helm_service.install(
+            namespace="paas-ws-pa-abc",
+            name="agent-pa-abc",
+            chart="agent-runtime",
+            repo="http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm",
+            username="ci-bot",
+            password="gitea-token",
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[cmd.index("--username") + 1] == "ci-bot"
+        assert cmd[cmd.index("--password") + 1] == "gitea-token"
+
+    @patch("subprocess.run")
+    def test_install_without_repo_is_backward_compatible(self, mock_run, helm_service):
+        """install() without repo/credentials must NOT emit --repo/--username/--password.
+
+        Guards the existing marketplace path (OCI refs like
+        oci://registry-1.docker.io/bitnamicharts/postgresql) against regression.
+        """
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "test-release",
+                "namespace": "paas-ws-test",
+                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "chart": {"metadata": {"name": "postgresql", "appVersion": "16"}},
+            }),
+            stderr="",
+        )
+
+        helm_service.install(
+            namespace="paas-ws-test",
+            name="test-release",
+            chart="oci://registry-1.docker.io/bitnamicharts/postgresql",
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert "--repo" not in cmd
+        assert "--username" not in cmd
+        assert "--password" not in cmd
+
+    @patch("subprocess.run")
+    def test_upgrade_with_repo_and_version_adds_flags(self, mock_run, helm_service):
+        """upgrade() with a classic Helm repo URL appends --repo and --version.
+
+        sync-workspaces re-renders the NetworkPolicy egress allowlist via helm
+        upgrade and must resolve the same private-repo chart as install.
+        """
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "agent-pa-abc",
+                "namespace": "paas-ws-pa-abc",
+                "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+                "chart": {"metadata": {"name": "agent-runtime", "appVersion": "1.0.0"}},
+            }),
+            stderr="",
+        )
+
+        helm_service.upgrade(
+            namespace="paas-ws-pa-abc",
+            name="agent-pa-abc",
+            chart="agent-runtime",
+            repo="http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm",
+            version="0.1.0",
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[cmd.index("--repo") + 1] == (
+            "http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm"
+        )
+        assert cmd[cmd.index("--version") + 1] == "0.1.0"
+
+    @patch("subprocess.run")
+    def test_upgrade_without_repo_is_backward_compatible(self, mock_run, helm_service):
+        """upgrade() without repo/credentials must NOT emit --repo/--username/--password."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "test-release",
+                "namespace": "paas-ws-test",
+                "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+                "chart": {"metadata": {"name": "postgresql", "appVersion": "16"}},
+            }),
+            stderr="",
+        )
+
+        helm_service.upgrade(
+            namespace="paas-ws-test",
+            name="test-release",
+            chart="oci://registry-1.docker.io/bitnamicharts/postgresql",
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert "--repo" not in cmd
+        assert "--username" not in cmd
+        assert "--password" not in cmd
+
+    @patch("subprocess.run")
     def test_get_release(self, mock_run, helm_service):
         """Test get release info."""
         # helm list returns a JSON array, not a single object

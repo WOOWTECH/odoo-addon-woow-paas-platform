@@ -899,6 +899,16 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - **R-4** bootstrap hint int-coerce（`project_project.py:133`，security-auditor optional/defensive）— `bootstrap_owner_partner_id` 未 `int()`-coerce 即 `browse()`；今天 unreachable（無 untrusted set-site，見 [[constraint-input-trust-expansion]] §Forward-looking invariant）。方向：一行 `int()` guard 防未來 careless trusted caller 傳 string。
 - **何時**：Phase D pilot 前或 Phase E（code/test PR，非 reporter）。
 
+## F-GC-1 — SKILL_BUNDLE_TOKEN secretKeyRef hardening（gap C pilot）
+
+- **Severity**: minor（security hardening；pilot 可接受現狀）
+- **Origin**: agent-runtime-pod epic gap C（operator chart install + WS transport，2026-05-25，PR #63）
+- **問題**: operator 把 `SKILL_BUNDLE_TOKEN` 以 **plain env value** 注入 pod（install 走 helm `values.env.SKILL_BUNDLE_TOKEN`、resume 走 `kubectl set env`）→ token 明文落 pod spec（`kubectl get pod -o yaml` / `describe` 可見）。
+- **為何 pilot 接受**: token 短壽（exp 1h）+ 每次 resume 重簽重注 → 明文風險窗 ≤1h 且輪替；且 plain env 是 operator resume（`kubectl set env`）機制的硬相容需求 — secretKeyRef 會被 `kubectl set env` 的 plain value 覆蓋成 drift。leader 已認同 plain env、secretKeyRef 列此 follow-up。
+- **hardening 方案（redesign，非 chart-only）**: operator 改為管 per-release K8s Secret（存 token）+ resume 時 patch 該 Secret；chart 改 `env.valueFrom.secretKeyRef`。需 operator + chart lock-step。
+- **owner**: paas-platform（operator）+ paas-charts（chart）；**待 leader 排程**。
+- 對照: [[agent-runtime-operator-chart-install-contract]] §Q2b / §替代方案、design §6.5。
+
 ## See also
 
 - [[cloud-service-project-decouple]] §Consequences — cycle 1 決策後仍要持續注意的負面影響

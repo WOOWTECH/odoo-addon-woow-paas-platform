@@ -304,6 +304,20 @@ _SPAWN_BODY = {
 }
 
 
+def test_pod_ws_url_matches_design_and_chart_service_contract():
+    """_pod_ws_url must match design §B + agent-runtime chart Service:
+    ``ws://<release>-svc.<ns>.svc.cluster.local:8000/v1/chat``.
+
+    Regression guard for the operator/design/chart transport drift
+    (was :8080 + /ws + bare release name without the -svc suffix).
+    """
+    from src.api.agent_runtimes import _pod_ws_url
+
+    assert _pod_ws_url("paas-ws-pa-abc", "agent-pa-abc") == (
+        "ws://agent-pa-abc-svc.paas-ws-pa-abc.svc.cluster.local:8000/v1/chat"
+    )
+
+
 class TestSpawnOrAttach:
     """S.1-S.3 — spawn-or-attach cold start / attach / resume."""
 
@@ -345,6 +359,85 @@ class TestSpawnOrAttach:
             assert "SKILL_BUNDLE_TOKEN" in (install_kwargs + install_args), (
                 "SKILL_BUNDLE_TOKEN must be passed to helm install as pod env"
             )
+
+    def test_spawn_or_attach_cold_start_passes_repo_and_auth_to_install(self, client):
+        """gap C: cold-start install fetches the chart from the PRIVATE classic
+        Helm repo — repo URL / chart version / read credentials are plumbed from
+        settings into helm install (--repo/--version/--username/--password)."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.settings.agent_runtime_repo_url",
+                   "http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm"), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_chart_version", "0.1.0"), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_repo_username", "ci-bot"), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_repo_password", "gitea-token"):
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt.token"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+
+            assert resp.status_code == 200, resp.text
+            kwargs = mock_helm.install.call_args.kwargs
+            assert kwargs.get("repo") == (
+                "http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm"
+            )
+            assert kwargs.get("version") == "0.1.0"
+            assert kwargs.get("username") == "ci-bot"
+            assert kwargs.get("password") == "gitea-token"
+
+    def test_spawn_cold_start_passes_auth_key_from_signing_secret(self, client):
+        """(4) D-CAVEAT-1: the pod verifies ws_token with the SAME HS256 key the
+        operator signs with. _build_install_values carries auth.currentKey from
+        jwt_signer's own signing-secret source → pod key == sign key (zero drift)."""
+        import os
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer.sign_ws_token", return_value="ws.jwt"), \
+             patch("src.api.agent_runtimes.jwt_signer.sign_skill_bundle_token", return_value="skill.jwt"), \
+             patch.dict(os.environ, {"AGENT_RUNTIME_AUTH_SECRET_CURRENT": "hs256-current-key"}):
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+
+            assert resp.status_code == 200, resp.text
+            values = mock_helm.install.call_args.kwargs["values"]
+            assert values.get("auth", {}).get("currentKey") == "hs256-current-key", (
+                "pod auth.currentKey must equal the operator's signing secret"
+            )
+
+    def test_spawn_cold_start_omits_auth_when_signing_secret_unset(self, client):
+        """Backward-compat: no AGENT_RUNTIME_AUTH_SECRET_CURRENT → no auth block
+        in install values (unconfigured path unchanged)."""
+        import os
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer.sign_ws_token", return_value="ws.jwt"), \
+             patch("src.api.agent_runtimes.jwt_signer.sign_skill_bundle_token", return_value="skill.jwt"), \
+             patch.dict(os.environ, {"AGENT_RUNTIME_AUTH_SECRET_CURRENT": ""}):
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+
+            assert resp.status_code == 200, resp.text
+            values = mock_helm.install.call_args.kwargs["values"]
+            assert "auth" not in values
 
     def test_spawn_or_attach_attach_existing_is_noop(self, client):
         """S.2: release already running (replicas=1) → no re-install."""
@@ -496,6 +589,31 @@ class TestSyncWorkspaces:
             )
             assert resp.status_code == 200, resp.text
             mock_helm.upgrade.assert_called_once()
+
+    def test_sync_workspaces_passes_repo_and_auth_to_upgrade(self, client):
+        """gap C: sync-workspaces helm upgrade must resolve the same private-repo
+        chart — repo URL / version / credentials plumbed from settings."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service"), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_repo_url",
+                   "http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm"), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_chart_version", "0.1.0"), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_repo_username", "ci-bot"), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_repo_password", "gitea-token"):
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_helm.upgrade.return_value = MagicMock()
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3, 5, 8]},
+            )
+            assert resp.status_code == 200, resp.text
+            kwargs = mock_helm.upgrade.call_args.kwargs
+            assert kwargs.get("repo") == (
+                "http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm"
+            )
+            assert kwargs.get("version") == "0.1.0"
+            assert kwargs.get("username") == "ci-bot"
+            assert kwargs.get("password") == "gitea-token"
 
 
 class TestDeleteRuntime:

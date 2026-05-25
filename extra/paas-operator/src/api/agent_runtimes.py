@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/agent-runtimes", tags=["agent-runtimes"])
 helm_service = HelmService()
 k8s_service = KubernetesService()
 
-_POD_WS_PORT = 8080
+_POD_WS_PORT = 8000  # pod FastAPI WS (uvicorn) port — design §B / image runtime/transport/ws_server
 
 
 def _names(project_hash: str):
@@ -39,7 +39,9 @@ def _names(project_hash: str):
 
 
 def _pod_ws_url(namespace: str, release: str) -> str:
-    return f"ws://{release}.{namespace}.svc.cluster.local:{_POD_WS_PORT}/ws"
+    # Must match design §B + agent-runtime chart Service: the chart names the
+    # Service "{release}-svc" and the pod serves the WS at /v1/chat on 8000.
+    return f"ws://{release}-svc.{namespace}.svc.cluster.local:{_POD_WS_PORT}/v1/chat"
 
 
 def _release_exists(namespace: str, release: str) -> bool:
@@ -55,7 +57,7 @@ def _release_exists(namespace: str, release: str) -> bool:
 
 def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str):
     """Helm values for a cold-start install (injects SKILL_BUNDLE_TOKEN env)."""
-    return {
+    values = {
         "image": {"tag": settings.agent_runtime_image_tag},
         "projectHash": request.project_hash,
         "env": {
@@ -64,6 +66,33 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
             "SKILL_BUNDLE_TOKEN": skill_bundle_token,
         },
         "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
+    }
+    # D-CAVEAT-1: the pod verifies the inbound ws_token with the SAME HS256 key
+    # the operator signs it with. Source the key from jwt_signer itself (not a
+    # second env read) so pod-key == sign-key by construction; the chart's
+    # auth.manageSecret renders the per-ns Secret + file-mount (/run/secrets).
+    # Omitted when unset so unconfigured installs are unaffected.
+    current_key = jwt_signer._current_secret()
+    if current_key:
+        values["auth"] = {"currentKey": current_key}
+        previous_key = jwt_signer._previous_secret()
+        if previous_key:
+            values["auth"]["previousKey"] = previous_key
+    return values
+
+
+def _chart_source_kwargs() -> dict:
+    """Helm kwargs to fetch the agent-runtime chart from the private Gitea
+    classic Helm repo (gap C): stateless ``--repo``/``--version`` + read creds.
+
+    Empty settings collapse to ``None`` so helm omits the flags — keeping the
+    call backward-compatible with the marketplace's direct/OCI chart refs.
+    """
+    return {
+        "repo": settings.agent_runtime_repo_url or None,
+        "version": settings.agent_runtime_chart_version or None,
+        "username": settings.agent_runtime_repo_username or None,
+        "password": settings.agent_runtime_repo_password or None,
     }
 
 
@@ -103,6 +132,7 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
             chart=settings.agent_runtime_chart,
             values=_build_install_values(request, skill_bundle_token),
             create_namespace=True,
+            **_chart_source_kwargs(),
         )
         pod_state = "spawning"
     else:
@@ -190,6 +220,7 @@ def sync_workspaces(project_hash: str, request: SyncWorkspacesRequest):
             "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
         },
         reuse_values=True,
+        **_chart_source_kwargs(),
     )
     return {"action": "synced", "workspace_ids": request.project_workspace_ids}
 
