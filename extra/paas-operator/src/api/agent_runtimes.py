@@ -5,7 +5,9 @@ This router is additive: it reuses the existing helm/k8s services and never
 touches the releases/namespaces/routes/tunnels routers (§2.11.2).
 
 Pod identity (design §2.7 / §2.10):
-    namespace  = paas-ws-pa-{hash}
+    namespace  = {settings.namespace_prefix}pa-{hash}  (e.g. paas-ws-pa-{hash}
+                 by default, paas-ws-stg-pa-{hash} when the operator is
+                 env-scoped) — derived so it always nests inside validate_namespace
     release    = agent-pa-{hash}
 """
 import logging
@@ -34,8 +36,15 @@ _POD_WS_PORT = 8000  # pod FastAPI WS (uvicorn) port — design §B / image runt
 
 
 def _names(project_hash: str):
-    """Return (namespace, release) for a project hash."""
-    return f"paas-ws-pa-{project_hash}", f"agent-pa-{project_hash}"
+    """Return (namespace, release) for a project hash.
+
+    The namespace is DERIVED from ``settings.namespace_prefix`` (the operator's
+    allowed-prefix guard) so it always nests inside validate_namespace. With the
+    default prefix ``paas-ws-`` this stays ``paas-ws-pa-{hash}`` (unchanged);
+    when the operator is env-scoped (e.g. ``paas-ws-stg-``) it becomes
+    ``paas-ws-stg-pa-{hash}``. The release name is prefix-independent.
+    """
+    return f"{settings.namespace_prefix}pa-{project_hash}", f"agent-pa-{project_hash}"
 
 
 def _pod_ws_url(namespace: str, release: str) -> str:
@@ -53,6 +62,23 @@ def _release_exists(namespace: str, release: str) -> bool:
         if "not found" in (exc.stderr or "").lower():
             return False
         raise
+
+
+def _ensure_namespace(namespace: str) -> None:
+    """Create/patch the project namespace carrying the ``paas-managed=true``
+    label (idempotent apply).
+
+    The Odoo NetworkPolicy authorises agent-runtime <-> Odoo traffic by this
+    LABEL (name-agnostic), and ``helm install --create-namespace`` creates a
+    BARE (unlabelled) namespace — so the operator applies the labelled namespace
+    itself and installs into it (create_namespace=False). Without the label,
+    pod<->Odoo traffic is silently NetworkPolicy-dropped.
+    """
+    k8s_service.apply_manifest({
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {"name": namespace, "labels": {"paas-managed": "true"}},
+    })
 
 
 def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str):
@@ -120,7 +146,9 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
     started = time.time()
 
     if not _release_exists(namespace, release):
-        # Cold start — sign skill_bundle_token and inject it at install time.
+        # Cold start — pre-create the labelled namespace (Odoo NP gate), then
+        # sign skill_bundle_token and inject it at install time.
+        _ensure_namespace(namespace)
         skill_bundle_token = jwt_signer.sign_skill_bundle_token(
             project_hash=request.project_hash,
             project_id=request.project_id,
@@ -131,7 +159,7 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
             name=release,
             chart=settings.agent_runtime_chart,
             values=_build_install_values(request, skill_bundle_token),
-            create_namespace=True,
+            create_namespace=False,  # ns already applied with paas-managed label
             **_chart_source_kwargs(),
         )
         pod_state = "spawning"

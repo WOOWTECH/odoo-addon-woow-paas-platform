@@ -318,6 +318,52 @@ def test_pod_ws_url_matches_design_and_chart_service_contract():
     )
 
 
+# --------------------------------------------------------------------------- #
+# Namespace identity — the agent-runtime ns must be DERIVED from the operator's #
+# allowed prefix (settings.namespace_prefix) so it always nests inside the      #
+# validate_namespace guard. Regression: spawn 500'd on stg where the operator   #
+# is env-scoped to 'paas-ws-stg-' but _names hardcoded 'paas-ws-pa-' (outside   #
+# the guard). Mocked unit tests of spawn never exercised validate_namespace —   #
+# exactly the BUG-7/8/9 mock-hidden contract drift class.                       #
+# --------------------------------------------------------------------------- #
+class TestNamespacePrefixDerivation:
+    def test_names_derives_namespace_from_configured_prefix(self):
+        from src.api import agent_runtimes
+
+        # env-scoped (stg) prefix → the ns must nest under it
+        with patch("src.api.agent_runtimes.settings.namespace_prefix", "paas-ws-stg-"):
+            ns, release = agent_runtimes._names("abc")
+            assert ns == "paas-ws-stg-pa-abc"
+            assert release == "agent-pa-abc"  # release name is prefix-independent
+        # default prefix reproduces the original value (backward-compat)
+        with patch("src.api.agent_runtimes.settings.namespace_prefix", "paas-ws-"):
+            ns, _ = agent_runtimes._names("abc")
+            assert ns == "paas-ws-pa-abc"
+
+    def test_names_namespace_passes_validate_namespace_under_stg_prefix(self):
+        """The exact spawn-500 regression: _names output must satisfy the
+        operator's validate_namespace guard under a tightened env-scoped prefix.
+        """
+        from src.api import agent_runtimes
+        from src.services.helm import validate_namespace
+
+        with patch("src.api.agent_runtimes.settings.namespace_prefix", "paas-ws-stg-"):
+            ns, _ = agent_runtimes._names("abc")
+            validate_namespace(ns)  # must NOT raise (was ValueError before fix)
+
+    def test_mcp_invalidator_namespace_tracks_names(self):
+        """mcp_invalidator targets the SAME project ns as _names; both must
+        derive from settings.namespace_prefix or the ConfigMap patch lands on
+        the wrong namespace under a non-default prefix.
+        """
+        from src.api import agent_runtimes
+        from src.services import mcp_invalidator
+
+        with patch("src.api.agent_runtimes.settings.namespace_prefix", "paas-ws-stg-"):
+            ns, _ = agent_runtimes._names("abc")
+            assert mcp_invalidator._namespace("abc") == ns == "paas-ws-stg-pa-abc"
+
+
 class TestSpawnOrAttach:
     """S.1-S.3 — spawn-or-attach cold start / attach / resume."""
 
@@ -359,6 +405,44 @@ class TestSpawnOrAttach:
             assert "SKILL_BUNDLE_TOKEN" in (install_kwargs + install_args), (
                 "SKILL_BUNDLE_TOKEN must be passed to helm install as pod env"
             )
+
+    def test_spawn_cold_start_labels_namespace_for_odoo_netpol(self, client):
+        """Cold start must pre-create the agent-runtime namespace carrying the
+        ``paas-managed=true`` LABEL: the Odoo NetworkPolicy authorises pod<->Odoo
+        traffic by that label (name-agnostic), and ``helm --create-namespace``
+        makes a BARE (unlabelled) ns. So the operator applies the labelled ns and
+        installs into it (create_namespace=False).
+        """
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            ns_manifests = [
+                c.args[0] for c in mock_k8s.apply_manifest.call_args_list
+                if c.args and isinstance(c.args[0], dict)
+                and c.args[0].get("kind") == "Namespace"
+            ]
+            assert ns_manifests, (
+                "cold start must pre-create the agent-runtime Namespace "
+                "(helm --create-namespace leaves it unlabelled)"
+            )
+            labels = ns_manifests[0].get("metadata", {}).get("labels", {})
+            assert labels.get("paas-managed") == "true", (
+                "agent-runtime ns must carry paas-managed=true for the Odoo NP"
+            )
+            # helm must NOT also race to create the (already labelled) namespace
+            assert mock_helm.install.call_args.kwargs.get("create_namespace") is False
 
     def test_spawn_or_attach_cold_start_passes_repo_and_auth_to_install(self, client):
         """gap C: cold-start install fetches the chart from the PRIVATE classic
