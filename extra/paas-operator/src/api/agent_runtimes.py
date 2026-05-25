@@ -57,7 +57,7 @@ def _release_exists(namespace: str, release: str) -> bool:
 
 def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str):
     """Helm values for a cold-start install (injects SKILL_BUNDLE_TOKEN env)."""
-    return {
+    values = {
         "image": {"tag": settings.agent_runtime_image_tag},
         "projectHash": request.project_hash,
         "env": {
@@ -67,6 +67,18 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
         },
         "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
     }
+    # D-CAVEAT-1: the pod verifies the inbound ws_token with the SAME HS256 key
+    # the operator signs it with. Source the key from jwt_signer itself (not a
+    # second env read) so pod-key == sign-key by construction; the chart's
+    # auth.manageSecret renders the per-ns Secret + file-mount (/run/secrets).
+    # Omitted when unset so unconfigured installs are unaffected.
+    current_key = jwt_signer._current_secret()
+    if current_key:
+        values["auth"] = {"currentKey": current_key}
+        previous_key = jwt_signer._previous_secret()
+        if previous_key:
+            values["auth"]["previousKey"] = previous_key
+    return values
 
 
 def _chart_source_kwargs() -> dict:

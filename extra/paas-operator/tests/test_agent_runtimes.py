@@ -392,6 +392,53 @@ class TestSpawnOrAttach:
             assert kwargs.get("username") == "ci-bot"
             assert kwargs.get("password") == "gitea-token"
 
+    def test_spawn_cold_start_passes_auth_key_from_signing_secret(self, client):
+        """(4) D-CAVEAT-1: the pod verifies ws_token with the SAME HS256 key the
+        operator signs with. _build_install_values carries auth.currentKey from
+        jwt_signer's own signing-secret source → pod key == sign key (zero drift)."""
+        import os
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer.sign_ws_token", return_value="ws.jwt"), \
+             patch("src.api.agent_runtimes.jwt_signer.sign_skill_bundle_token", return_value="skill.jwt"), \
+             patch.dict(os.environ, {"AGENT_RUNTIME_AUTH_SECRET_CURRENT": "hs256-current-key"}):
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+
+            assert resp.status_code == 200, resp.text
+            values = mock_helm.install.call_args.kwargs["values"]
+            assert values.get("auth", {}).get("currentKey") == "hs256-current-key", (
+                "pod auth.currentKey must equal the operator's signing secret"
+            )
+
+    def test_spawn_cold_start_omits_auth_when_signing_secret_unset(self, client):
+        """Backward-compat: no AGENT_RUNTIME_AUTH_SECRET_CURRENT → no auth block
+        in install values (unconfigured path unchanged)."""
+        import os
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer.sign_ws_token", return_value="ws.jwt"), \
+             patch("src.api.agent_runtimes.jwt_signer.sign_skill_bundle_token", return_value="skill.jwt"), \
+             patch.dict(os.environ, {"AGENT_RUNTIME_AUTH_SECRET_CURRENT": ""}):
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+
+            assert resp.status_code == 200, resp.text
+            values = mock_helm.install.call_args.kwargs["values"]
+            assert "auth" not in values
+
     def test_spawn_or_attach_attach_existing_is_noop(self, client):
         """S.2: release already running (replicas=1) → no re-install."""
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
