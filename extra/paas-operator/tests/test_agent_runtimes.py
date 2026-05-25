@@ -304,6 +304,20 @@ _SPAWN_BODY = {
 }
 
 
+def test_pod_ws_url_matches_design_and_chart_service_contract():
+    """_pod_ws_url must match design §B + agent-runtime chart Service:
+    ``ws://<release>-svc.<ns>.svc.cluster.local:8000/v1/chat``.
+
+    Regression guard for the operator/design/chart transport drift
+    (was :8080 + /ws + bare release name without the -svc suffix).
+    """
+    from src.api.agent_runtimes import _pod_ws_url
+
+    assert _pod_ws_url("paas-ws-pa-abc", "agent-pa-abc") == (
+        "ws://agent-pa-abc-svc.paas-ws-pa-abc.svc.cluster.local:8000/v1/chat"
+    )
+
+
 class TestSpawnOrAttach:
     """S.1-S.3 — spawn-or-attach cold start / attach / resume."""
 

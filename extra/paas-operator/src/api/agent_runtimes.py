@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/agent-runtimes", tags=["agent-runtimes"])
 helm_service = HelmService()
 k8s_service = KubernetesService()
 
-_POD_WS_PORT = 8080
+_POD_WS_PORT = 8000  # pod FastAPI WS (uvicorn) port — design §B / image runtime/transport/ws_server
 
 
 def _names(project_hash: str):
@@ -39,7 +39,9 @@ def _names(project_hash: str):
 
 
 def _pod_ws_url(namespace: str, release: str) -> str:
-    return f"ws://{release}.{namespace}.svc.cluster.local:{_POD_WS_PORT}/ws"
+    # Must match design §B + agent-runtime chart Service: the chart names the
+    # Service "{release}-svc" and the pod serves the WS at /v1/chat on 8000.
+    return f"ws://{release}-svc.{namespace}.svc.cluster.local:{_POD_WS_PORT}/v1/chat"
 
 
 def _release_exists(namespace: str, release: str) -> bool:
