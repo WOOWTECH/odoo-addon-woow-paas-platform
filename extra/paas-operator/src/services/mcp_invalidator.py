@@ -7,6 +7,7 @@ via WS push primary + inotify fallback).
 import json
 import logging
 
+from src.config import settings
 from src.services.helm import KubernetesService
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,10 @@ k8s_service = KubernetesService()
 
 
 def _namespace(project_hash: str) -> str:
-    return f"paas-ws-pa-{project_hash}"
+    # Mirror agent_runtimes._names: derive from the operator's allowed prefix so
+    # the ConfigMap patch targets the SAME namespace the pod runs in (e.g.
+    # 'paas-ws-stg-pa-{hash}' when env-scoped, 'paas-ws-pa-{hash}' by default).
+    return f"{settings.namespace_prefix}pa-{project_hash}"
 
 
 def _configmap_name(project_hash: str) -> str:
