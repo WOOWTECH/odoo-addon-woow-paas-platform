@@ -444,6 +444,29 @@ class TestSpawnOrAttach:
             # helm must NOT also race to create the (already labelled) namespace
             assert mock_helm.install.call_args.kwargs.get("create_namespace") is False
 
+    def test_build_install_values_carries_all_chart_required_keys(self):
+        """Contract test (operator <-> agent-runtime chart values). The chart's
+        _helpers.tpl ``agent-runtime.validate`` fails the install at RENDER time
+        unless every required value is set: projectHash + projectId +
+        auth.currentKey (when manageSecret=true). _build_install_values MUST
+        carry all of them or spawn 500s at chart render — the gate-3 class
+        (projectHash shipped, projectId was missed-forward despite being a
+        required field on the request). Locks the full required contract so a
+        future missed-forward fails here, not in a live spawn.
+        """
+        import os
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        req = SpawnOrAttachRequest(**_SPAWN_BODY)
+        with patch.dict(os.environ,
+                        {"AGENT_RUNTIME_AUTH_SECRET_CURRENT": "hs256-current-key"}):
+            values = _build_install_values(req, "skill.jwt.token")
+
+        assert values.get("projectHash") == _SPAWN_BODY["project_hash"]
+        assert values.get("projectId") == _SPAWN_BODY["project_id"]
+        assert values.get("auth", {}).get("currentKey") == "hs256-current-key"
+
     def test_spawn_or_attach_cold_start_passes_repo_and_auth_to_install(self, client):
         """gap C: cold-start install fetches the chart from the PRIVATE classic
         Helm repo — repo URL / chart version / read credentials are plumbed from
