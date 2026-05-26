@@ -954,6 +954,7 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - 修法: operator cold-start 把 registry pull secret provision 進動態 ns + forward `imagePullSecrets`（chart 已支援 value）
 - lane: **paas-platform(operator) + 設計拍板**: creds 來源（copy operator 自身 jfrog-registry / 新 config / 沿用 marketplace paas-registry 機制）+ 租戶 ns 放 registry creds 的安全
 - plan-level: **YES**
+- **[設計已拍 2026-05-26 · Track B]** creds 來源 = **沿用 marketplace `paas-registry`**（複用 operator 既有 `helm.py:649 ensure_registry_secret`，非 copy / 非新 config）；安全邊界 = **落租戶 ns 但收緊 pod SA/RBAC 不可讀 secret**（imagePullSecrets 只給 kubelet，pod process 讀不到）。design §8.1 / plan §Phase E0（WS-4a/b/c + T4.1-4.4；安全 INV-1 可測：pod 試讀 secret → Forbidden）。
 
 **F-PILOT-5** — NP `odooNamespace` 沒被 operator forward → chart 錯 default
 - 問題: chart NP ingress(odoo→pod WS)+egress(pod→odoo skill-bundle)都用 `.Values.networkPolicy.odooNamespace`，default `paas-system`（placeholder）≠ 實際 odoo ns（dev-sandbox-stg）；operator `_build_install_values` 只 forward egressWorkspaceIds、沒 forward odooNamespace → pod↔odoo 兩向被 agent pod 自身 NP 擋（refused）
@@ -976,6 +977,7 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - 問題: echo 收口不用 LLM；真 agent 要模型金鑰，但「金鑰怎麼到 pod」未設計（via skill-bundle？template model_config？專用 secret？）；綁 template model_config_id 後 echo 行為不變（echo 不行使 LLM）
 - lane: **設計拍板 + paas-agent-runtime image team** ｜ echo → 真 LLM 前必拍
 - plan-level: **YES**
+- **[設計已拍 2026-05-26 · Track B]** 注入路徑 = **專用 per-release K8s Secret + secretKeyRef env**（非 plain env / 非 skill-bundle 夾帶；LLM key 長壽，比 `SKILL_BUNDLE_TOKEN`(F-GC-1) 更該收緊）；隔離 = **per-tenant key**（`agent_template.model_config_id → ai.config.api_key` 已關聯，洩漏圈限單租戶）。產品策略（自帶 key/代付/quota/輪替）留 design open、不阻 code。design §8.2 / plan §Phase E0（WS-8a/b/c + T8.1-8.4；INV：secretKeyRef 不落明文 + per-tenant 隔離）。
 
 ### Tier 3 / 其他 lane
 

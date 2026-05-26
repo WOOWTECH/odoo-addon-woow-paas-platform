@@ -503,6 +503,75 @@ WS1+WS2 全 close 後、**第一次真 flip / spawn-or-attach 起 pod 前**，CA
 
 ---
 
+## Phase E0 — Pilot-revealed production gaps（F-PILOT-4 registry pull / F-PILOT-8 LLM credential）
+
+> **[2026-05-26]** pilot e2e transport 閉環（echo）後、gradual rollout（Phase E）前，補真正生產化 agent pod 的 2 個前提：私有 image 拉取 + 真 LLM agent 金鑰。design + 決策見 `agent-runtime-pod-design.md` §8（使用者拍板 4 decision point）；對應 follow-ups §F-PILOT 段 F-PILOT-4 / F-PILOT-8。
+
+### Goal
+
+- **F-PILOT-4**：每個 project 動態 ns 的 pod 能拉私有 `jcr-prod` agent-runtime image（消除 `ImagePullBackOff 401`）。
+- **F-PILOT-8**：真 LLM agent pod 拿到模型金鑰（per-tenant，secretKeyRef 注入）。
+
+### Scope boundary
+
+- 沿用既有機制（`ensure_registry_secret` / auth-secret secretKeyRef pattern），additive 不重構 operator。
+- F-PILOT-8 產品策略（自帶/代付/quota/fallback）留 design open，**不阻 code**。
+- 跨 repo lock-step（operator=paas-platform / chart=paas-charts / image=paas-agent-runtime）。
+
+### Workstream（跨 repo 落點）
+
+**F-PILOT-4 registry pull**
+1. **WS-4a [paas-platform]** operator cold-start path（`agent_runtimes.py spawn_or_attach`）在 `helm install` 前呼叫既有 `helm.py:649 ensure_registry_secret(namespace)` + `_build_install_values` 加 `imagePullSecrets:[{name: registry_secret_name}]`。
+2. **WS-4b [paas-charts]** agent-runtime chart `imagePullSecrets` 接線 deployment + 驗證 pod SA **minimal RBAC（無 `get/list/watch secrets`）**、不 mount 該 secret。
+3. **WS-4c [paas-charts/paas-cd]** 確認 agent-runtime operator 部署帶 `registry_*` settings（marketplace 已需，agent-runtime operator 同備）。
+
+**F-PILOT-8 LLM credential**
+1. **WS-8a [paas-platform]** spawn-or-attach request schema 擴充帶 `model_config`/`api_key`（Odoo `agent_runtime_client.py` 帶上，operator 不反查 Odoo DB）+ operator cold-start 建 per-release K8s Secret（`agent-pa-{hash}-llm`）。
+2. **WS-8b [paas-charts]** chart `LLM_API_KEY` env `valueFrom.secretKeyRef` + per-release Secret template（比照 auth-secret secretKeyRef pattern）。
+3. **WS-8c [paas-agent-runtime]** pod runtime 讀 `LLM_API_KEY` + model config 初始化 LangGraph LLM。
+
+### TDD red test 入口（tester 可直接接手）
+
+> 每條：test ID / 落點 suite / 測法 / red 條件（現況）/ green（fix 後）。phase 流程 tester 寫 red → implementation green → caqa → reviewer → reporter，跨 paas-platform / paas-charts / paas-agent-runtime。
+
+**F-PILOT-4 registry pull**
+
+- **T4.1 機制** [paas-platform · `extra/paas-operator/tests/test_agent_runtimes.py` unit]：mock helm+k8s，呼 `spawn_or_attach` cold-start。**斷言** (a) `helm_service.ensure_registry_secret(namespace)` 被呼叫一次 (b) `_build_install_values(...)` 回傳含 `imagePullSecrets: [{"name": settings.registry_secret_name}]`。**red**：現 cold-start 不呼叫 ensure_registry_secret、values 無 imagePullSecrets → 斷言失敗。
+- **T4.2 chart SA minimal** [paas-charts · agent-runtime chart `helm template` 斷言]：render chart。**斷言** (a) deployment `spec.template.spec.imagePullSecrets` 含 registry secret name (b) **render 出的 Role/ClusterRole rules 不含 `secrets` 資源的 `get`/`list`/`watch`**（SA 無 secret-read RBAC）。**red**：chart 未接 imagePullSecrets，或 SA 有 secret-read → 斷言失敗。
+- **T4.3 整合拉取** [paas-platform · `tests/integration/` real-k8s]：spawn 真 project pod（私有 jcr-prod image）。**斷言** pod 在 timeout 內 Ready、**不**停 `ImagePullBackOff`。**red**：無 pull secret → ImagePullBackOff。
+- **T4.4 安全·pod 不可讀 secret** [整合 · exec]：驗 agent pod SA `kubectl auth can-i get secret/paas-registry -n paas-ws-pa-{hash} --as=system:serviceaccount:paas-ws-pa-{hash}:{sa}` → 必 `no`；或 exec 進 pod 呼 K8s API `GET .../secrets/paas-registry` → 必 **403 Forbidden**。**red**：SA 能讀（`yes`/200）。**= F-PILOT-4 INV-1 的可測形式**。
+
+**F-PILOT-8 LLM credential**
+
+- **T8.1 機制** [paas-platform · operator unit]：mock，呼 spawn cold-start（request 帶 model_config/api_key）。**斷言** (a) operator 建 per-release Secret `agent-pa-{hash}-llm` 含 api_key (b) chart values `LLM_API_KEY` env 用 `valueFrom.secretKeyRef`（非 plain `value`）。**red**：無建 Secret / plain env。
+- **T8.2 不落明文** [paas-charts · `helm template`]：render。**斷言** deployment env `LLM_API_KEY` 為 `valueFrom.secretKeyRef`，pod spec **不含 api_key 明文 value**（grep key 值為空）。**red**：plain env 帶 key 值。
+- **T8.3 per-tenant 隔離** [paas-platform · 整合/unit]：project A/B 各 spawn。**斷言** A 的 LLM Secret 只含 A 的 api_key；B 的 key **不**出現在 A 的 Secret/env。**red**：共用/串值。
+- **T8.4 pod fail-fast** [paas-agent-runtime · pod runtime unit]：pod 啟動缺 `LLM_API_KEY`。**斷言** LangGraph LLM 初始化 **fail-fast**（明確 error，非 silent / 非延到首次呼叫）。**red**：未 fail-fast。
+
+### 安全 invariant（驗收 — 對應 test）
+
+- **F-PILOT-4 INV-1**：agent pod SA **無** `secrets` get/list/watch RBAC → chart render 斷言（**T4.2b**）+ 運行時 `kubectl auth can-i` / API 403（**T4.4**）。
+- **F-PILOT-4 INV-2**：`paas-registry` dockerconfigjson 落 ns 僅供 kubelet（imagePullSecrets），**不** mount 為 volume / 不 project 為 env（chart 不得有引用該 secret 的 volume/env）。
+- **F-PILOT-8 INV-1**：LLM key **secretKeyRef，不落 pod spec 明文**（**T8.2**）。
+- **F-PILOT-8 INV-2**：**per-tenant 隔離**，跨租戶 pod 無對方 key（**T8.3**）。
+
+### Dependencies / 順序
+
+- 前置：Phase D code-ready + pilot e2e 閉環（**已達**，echo round-trip 2026-05-26）。
+- F-PILOT-4 與 F-PILOT-8 **獨立可平行**；各自跨 repo lock-step。
+- **在 Phase E（rollout）前完成**：rollout = 多 project 動態 ns（registry secret 必須）+ 真 agent（LLM key 必須）。
+
+### Open（產品決策，不阻 code）
+
+- F-PILOT-8：租戶自帶 key vs 平台代付 / per-tenant quota / 未配 key fallback / api_key 輪替 invalidate 機制。
+
+### Rollback
+
+- F-PILOT-4：spawn 不呼叫 `ensure_registry_secret` + values 不 forward（回 pilot ephemeral copy workaround）。
+- F-PILOT-8：不建 LLM Secret（echo / 無 LLM agent 不受影響；真 LLM agent 暫不可用）。
+
+---
+
 ## Phase E — Gradual rollout
 
 ### Goal
