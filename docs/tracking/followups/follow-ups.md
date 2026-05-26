@@ -2,7 +2,7 @@
 
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
-**State as of 2026-05-25**：
+**State as of 2026-05-26**：
 - Cycle 1（cloud-service ↔ project decouple, 2026-05-17）：F1-F11，B1 已 RESOLVED、PR APPROVED WITH CAVEATS
 - Cycle 2（mcp cloud_service_id → project_id decouple, 2026-05-18）：F12-F20 新增，PR APPROVED WITH CAVEATS round 2，4 BLOCKER/MAJOR 全 close
 - Cycle 3（Project Detail page, issue #48, 2026-05-20）：F21-F28 新增，APPROVED WITH CAVEATS，B-1 fresh-install fix verified；AC #28 reviewer E2E 完成 10/11 pass + 1 FAIL（E2E-G1，不擋 merge）；R-1 / R-2 hard caveats 收於 reporter phase（commit pending），R-3 / R-6 / E2E-G1 + 其他 polish 進 follow-up issue
@@ -11,6 +11,7 @@
 - **agent-runtime-pod epic Phase B**（image source，**`paas-agent-runtime` repo**，2026-05-23）：14 production + 14 test + 11 commit + PR #1（CI green + merge 中）；CAQA Prism + reviewer Quorum 皆 **APPROVED WITH CAVEATS，0 BLOCKER**；HC-1（IP-literal SSRF）/ HC-2（ws_server claims authoritative — [[constraint-input-trust-expansion]] 的 image 端同型，pattern lens 兌現）/ subprocess rlimit real-trigger test / SC-7（role-scope tool cache）全 **round 2 內 resolved**；CI gate 三度價值（envelope 12→15 / cache path §3 vs §6 / checkout node-in-container）；carry-over SC-1~SC-9 + wiring assumptions 的 **canonical home = `paas-agent-runtime` repo `docs/PHASE_B_HANDOFF.md`**（cross-repo，不在本 doc 重列）；epic durable + pitfall 見本 repo `docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` + `docs/tracking/pitfalls/ci-workflow-container-missing-node.md`
 - **agent-runtime-pod epic Phase C**（epic wiring 收口：operator endpoints + skill-bundle + SSE bridge，2026-05-24）：`9479cb2..HEAD` = 12 commit / 29 檔 / +3980；3 impl commit（`6abb490` operator / `ec226b7` Odoo wiring / `d3aa60e` M.9 版號無關）+ C-1 hardening `7daf1f4`（+ red test `1305b77`）；CAQA **PASS WITH CAVEATS**（8 caveat + C-1 disputed + 6 info）+ reviewer **APPROVE WITH CAVEATS**（8 caveat 全同意 + 新 N-1~N-5；0 blocker）；**C-1 disputed severity（security-auditor 判 blocker vs CAQA 判 caveat）經 leader 裁決走 hardening `7daf1f4` MOOTED**（reviewer 獨立驗 fail-closed，既非接受 caveat 亦非 block，是修掉）；守線全過（HC-2 第三度 token-authoritative / HC-4 machine-auth 獨立路徑 / B1 gate 在 spawn 之前 / frozen contract 逐欄位 / resume race / dual-secret / migration idempotent）；cross-repo C-1 `token_use` **三端對齊**（operator 簽 + Odoo verify + pod WS verify `paas-agent-runtime` PR #2 `ba6b417`，**sign-first-then-verify zero-downtime**）；Phase-versioned test 第二次（M.9 `d3aa60e`，Cycle 1 retire test_ac2 是第一次）→ 抽 [[phase-versioned-test-assertion]]；OQ-R-1（design §5.6/§5.5/§2.15 `3cab339` 補 A-1/C-3/C-5）+ OQ-R-2（`ba6b417` merge）皆 addressed；**Phase D enablement gate must-fix（A-1/C-2/C-3/N-1/P-2/C-1-A 嚴格）見下方 §Phase D enablement gate**；epic durable 見 `docs/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md`
 - **agent-runtime-pod epic Phase D**（enable-gate caveat hardening — must-fix close + admin 啟用面 + cross-repo wiring，2026-05-25）：`a9a4d1f..HEAD` = 4 commit（`5398f92` red / `8d152f7` fix F-PC-1~6+F-PA-14+charts / `e2f1624` feat enablement surface / `e94991d` test fixtures）/ 29 檔 / +1224-43；CAQA **PASS WITH CAVEATS**（0 blocker / 2 net-new caveat / 9 info / 3 carried-forward）+ reviewer **APPROVE**（5-agent 無方向性分歧，全 proceed to Reporter）；**must-fix 全正確關閉目標 caveat**（F-PC-1~6 + F-PA-14 在本 repo close；F-PC-7 A 嚴格 = `paas-agent-runtime` `feature/f-pc-7-token-use-strict`（`a8b3ce2` red + `dabb275` feat），report 以 cross-repo「given/盤證」處理，**merge 到 main + deploy-order 屬 flip-gate**；F-PC-3 設計 pivot auto-gen→**K8s Secret env(b)** fail-closed，CAQA 評為比 auto-gen 更佳）；**HC-2/F-PA-14 經 security-auditor 獨立確認 airtight**（延伸 Odoo framework-substrate 驗 `request.env.context` 不 merge request body → indirect injection 關閉）—— [[constraint-input-trust-expansion]] 第 4 度 instance（owner-bootstrap hint，/simplify 自抓收緊 normal-user 不讀 hint）；2 net-new caveat（D-CAVEAT-1 namespace secret 跨 3 進程同值 + charts `optional:true` partial 風險 / D-CAVEAT-2 token_use deploy-order + 1h 窗口 + operator rollback）收 plan §Pilot runbook flip-gate；R-1~R-5 reviewer 新發現無 high-severity（R-1/R-5 comment reporter 順手補、R-2/R-3/R-4 見下 follow-up）；OQ-D-1（design §2.15/§5.5/§5.6/§3.4 reconcile）+ OQ-D-2（C-4/C-6/P-1 刻意延後 confirm）+ OQ-D-3（flip-gate runbook）皆 addressed；**epic Phase A-D code-ready 完成**（flip / 部署 / 2 週觀察由使用者依 runbook 自跑）；takeaway durable：[[credential-claim-test-fixture-coupling]] pattern + [[cross-repo-artifact-landing-assumption]] pitfall + HC-2 forward-invariant 落 [[constraint-input-trust-expansion]]；epic durable 見 `docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md`
+- **agent-runtime-pod epic Pilot e2e**（Step 6 flip 實跑 → transport round-trip 閉環，2026-05-26）：使用者 task 63 送 chat → odoo SSE→WS bridge → pod `/v1/chat` → echo `text_chunk` → odoo `_persist_ai_response`（channel 16 OdooBot 回覆）→ 前端顯示，**transport round-trip 完整閉環**（ws_token 三方同值 HS256 auth 驗過 invoker_role=owner）。實跑串出 **9-gap chain**（見 [[agent-runtime-pilot-e2e-gap-chain]] pitfall），cluster 側由 paas-platform 連續修復破關：**PR #66**(operator ns-prefix 衍生+paas-managed label) / **#67**(operator projectId forward) / **#68**(odoo websockets dep) / **#69**(odoo↔pod WS envelope 契約 doc 交 image team) + 一串 ephemeral patch 撐到閉環；2 process learning 抽 pattern（[[spawn-install-values-missed-forward]] + [[plan-gap-stop-and-report]]）；skill-bundle 實際 fetch 待真 LLM agent 行使（echo 純 ack 不用 skills、連通已證 pod→odoo 200 + endpoint 存在 + NP 雙向，非 infra gap）；**durable 回收清單見下方 Index F-PILOT-1~10**（分 Tier 1 ephemeral 會被 Fleet/restart 洗 / Tier 2 系統性 chart-operator 缺口每 project 都撞 / plan-level 設計拍板）
 
 ## Index
 
@@ -908,6 +909,81 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - **hardening 方案（redesign，非 chart-only）**: operator 改為管 per-release K8s Secret（存 token）+ resume 時 patch 該 Secret；chart 改 `env.valueFrom.secretKeyRef`。需 operator + chart lock-step。
 - **owner**: paas-platform（operator）+ paas-charts（chart）；**待 leader 排程**。
 - 對照: [[agent-runtime-operator-chart-install-contract]] §Q2b / §替代方案、design §6.5。
+
+## F-PILOT — agent-runtime pilot e2e durable 回收清單（2026-05-26）
+
+> Step 6 flip 實跑閉環時打的 ephemeral patch + 揭露的系統性 chart/operator 缺口 + plan-level 設計缺口。**這份是分派藍圖**（leader 拿去派各 repo agent 轉正）。根因鏈見 [[agent-runtime-pilot-e2e-gap-chain]]、process learning 見 [[spawn-install-values-missed-forward]] + [[plan-gap-stop-and-report]]。
+
+| # | tier | 主題 | lane | plan-level |
+|---|------|------|------|-----------|
+| F-PILOT-1 | 1 (ephemeral, Fleet sync 洗) | operator image f952f14 → pin | paas-cd | no |
+| F-PILOT-2 | 1 (ephemeral, Fleet sync 洗) | operator repoUrl external → chart default | paas-charts(PR#3)+paas-cd | no |
+| F-PILOT-3 | 1 (ephemeral, odoo restart 洗) | odoo websockets → PR#68+rebuild | paas-platform+deploy | no |
+| F-PILOT-4 | 2 (系統性, 每 project 撞) | 動態 ns registry pull secret provision + imagePullSecrets forward | paas-platform(operator)+設計 | **YES** |
+| F-PILOT-5 | 2 (系統性) | NP odooNamespace forward + chart default | paas-platform(operator)+paas-charts | minor |
+| F-PILOT-6 | 2 (系統性) | chart probe /health→tcpSocket | paas-charts ± image | no |
+| F-PILOT-7 | 2 (系統性) | chart strategy=Recreate (RWO PVC) | paas-charts | no |
+| F-PILOT-8 | plan-level | LLM credential 注入 | 設計拍板 + image | **YES** |
+| F-PILOT-9 | 3 (feature) | agent_template 管理 UI + 綁定 UI | paas-platform 未來 Phase | no |
+| F-PILOT-10 | image lane | echo→真 LLM chat + skill-bundle fetch | paas-agent-runtime image team | no |
+
+### Tier 1 — ephemeral，Fleet sync / pod restart 會洗掉（優先轉正保 pilot 穩定）
+
+**F-PILOT-1** — operator image `f952f14` 由 `kubectl set image` 暫頂
+- 問題: operator chart Fleet sync / helm-upgrade 用 chart image.tag 重設 → 回退舊 image → 撞回第 1 關（ns-prefix validate_namespace 500）+ 第 3 關（projectId）
+- 修法: paas-cd 在 stg values pin `f952f14`（含 PR #66 + #67，已 merge develop）
+- lane: **paas-cd** ｜ ⚠️ 與 F-PILOT-2 **必須原子化一起上**（merge PR#3 觸發 Fleet sync 時 image 沒同步 pin 就回退）
+
+**F-PILOT-2** — operator `AGENT_RUNTIME_REPO_URL=external` 由 `kubectl set env` 暫頂
+- 問題: 同上 Fleet sync 回退 → helm pull 撞 401（Gitea index tarball 公開 host vs operator 內部 DNS、helm 不跨 host 帶 basic-auth）
+- 修法: paas-charts **PR #3** operator chart default repoUrl 改 external + paas-cd 移除 CD pin（環境無關值該繼承 chart default）
+- lane: **paas-charts(PR#3) + paas-cd**
+
+**F-PILOT-3** — odoo `websockets` 由 `pip install` 暫頂進 running pod
+- 問題: odoo pod restart / redeploy 失去 pip install → `_stream_agent_runtime` import websockets ImportError → 「WS client unavailable」
+- 修法: **PR #68** merge（requirements.txt 加 websockets）+ paas-odoo image 重建（stg bake requirements）+ redeploy dev-sandbox-stg
+- lane: **paas-platform(PR#68) + deploy**
+
+### Tier 2 — 系統性 chart/operator 缺口（每個新 project 都撞；本 pilot 靠 patch 撐，operator 重 helm install 會洗、rollout-restart 保留）
+
+**F-PILOT-4** — 動態 per-project ns 無 registry pull secret + chart 沒帶 imagePullSecrets ⚠️ **plan-level**
+- 問題: agent-runtime 私有 image（jcr-prod）；operator `_ensure_namespace` 只建裸 labeled ns、無 dockerconfigjson；chart imagePullSecrets 預設空、operator 沒 forward → ImagePullBackOff 401（匿名 pull 被拒）
+- 修法: operator cold-start 把 registry pull secret provision 進動態 ns + forward `imagePullSecrets`（chart 已支援 value）
+- lane: **paas-platform(operator) + 設計拍板**: creds 來源（copy operator 自身 jfrog-registry / 新 config / 沿用 marketplace paas-registry 機制）+ 租戶 ns 放 registry creds 的安全
+- plan-level: **YES**
+
+**F-PILOT-5** — NP `odooNamespace` 沒被 operator forward → chart 錯 default
+- 問題: chart NP ingress(odoo→pod WS)+egress(pod→odoo skill-bundle)都用 `.Values.networkPolicy.odooNamespace`，default `paas-system`（placeholder）≠ 實際 odoo ns（dev-sandbox-stg）；operator `_build_install_values` 只 forward egressWorkspaceIds、沒 forward odooNamespace → pod↔odoo 兩向被 agent pod 自身 NP 擋（refused）
+- 修法: operator forward `networkPolicy.odooNamespace` + chart 修錯 default（理想設 required）
+- lane: **paas-platform(operator) + paas-charts** ｜ minor design: operator 取 odoo ns 來源（parse ODOO_BASE_URL FQDN vs 新 config）
+
+**F-PILOT-6** — chart probe path ↔ image health endpoint 不匹配
+- 問題: chart liveness/readiness `httpGet /health`，但 agent image 不 serve `/health`（404）→ readiness 永不 ready + liveness 殺 → CrashLoopBackOff → service 不 route
+- 修法: chart 改 `tcpSocket:ws(8000)`（最穩，uvicorn listen 即過）；或對的 health path；或 image team 補 `/health`
+- lane: **paas-charts ± image team**
+
+**F-PILOT-7** — chart RollingUpdate + RWO PVC → re-spawn Multi-Attach deadlock
+- 問題: deployment 預設 RollingUpdate，新 pod 起來前舊 pod 不釋放 RWO workspace PVC → 新 pod Multi-Attach 卡 ContainerCreating
+- 修法: chart `strategy: Recreate`（image agent 已 ephemeral patch 驗證可解）
+- lane: **paas-charts**
+
+### Plan-level 設計拍板
+
+**F-PILOT-8** — LLM credential 注入（真 LLM agent）⚠️ **plan-level**
+- 問題: echo 收口不用 LLM；真 agent 要模型金鑰，但「金鑰怎麼到 pod」未設計（via skill-bundle？template model_config？專用 secret？）；綁 template model_config_id 後 echo 行為不變（echo 不行使 LLM）
+- lane: **設計拍板 + paas-agent-runtime image team** ｜ echo → 真 LLM 前必拍
+- plan-level: **YES**
+
+### Tier 3 / 其他 lane
+
+**F-PILOT-9** — agent_template 管理 UI + project 綁定 UI（Phase D 故意延後）
+- 問題: 無 backend view/menu/action 建/發佈/綁 agent_template；project form 只曝露 use_agent_runtime、沒 agent_template_id；pilot 靠 dev-mode generic view / ORM 種
+- lane: **paas-platform 未來 Phase** ｜ severity low（pilot 可用 seed）
+
+**F-PILOT-10** — echo → 真 LLM chat 邏輯 + skill-bundle 實際 fetch（image lane）
+- 問題: image 1.0.1 echo 收口（收 user_message → 1 個 echo text_chunk，done 由 ws_server）；真 LLM 處理 + skill-bundle fetch 未實作
+- 修法: 依 [[agent-runtime-ws-protocol]]（PR #69）契約實作 pod `/v1/chat` 回覆 + skill-bundle fetch
+- lane: **paas-agent-runtime image team**（與 F-PILOT-8 LLM cred 連動）
 
 ## See also
 
