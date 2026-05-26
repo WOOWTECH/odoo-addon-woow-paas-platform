@@ -891,3 +891,193 @@ class TestExistingRoutersUntouched:
                 },
             )
             assert resp.status_code == 400
+
+
+# =========================================================================== #
+# Phase E0 — F-PILOT-4 (registry pull) / F-PILOT-8 (LLM credential) OPERATOR    #
+# gaps (TDD red). Plan §Phase E0 T4.1 / T8.1 / T8.3 ; design §8.1 / §8.2.       #
+#                                                                              #
+# Scope = OPERATOR UNIT only (this repo). Cross-repo / integration siblings    #
+# are MARKED here, NOT implemented in this round:                              #
+#   - T4.2 / T4.2b chart SA-minimal RBAC render ... paas-charts (helm template)#
+#   - T4.3 integration private-image pull (Ready, no ImagePullBackOff)          #
+#                                       ........... tests/integration real-k8s #
+#   - T4.4 SA-cannot-read-secret (exec -> Forbidden) integration / cluster      #
+#   - T8.2 chart LLM_API_KEY secretKeyRef / no-plaintext render                #
+#                                       ........... paas-charts (helm template) #
+#   - T8.4 pod fail-fast on missing LLM key ....... paas-agent-runtime image    #
+#   - F-PILOT-8 FULL e2e (pod really calls the LLM) BLOCKED on F-PILOT-10 (real #
+#       LLM image; the echo image never calls an LLM). This round proves only   #
+#       schema-carries-key + operator-provisions-Secret at the unit level.      #
+# =========================================================================== #
+
+
+class TestPilotGapRegistrySecret:
+    """F-PILOT-4 — operator must provision the private-registry pull secret.
+
+    Today cold start does ``_ensure_namespace -> sign -> helm_service.install``
+    and NEVER calls ``ensure_registry_secret``; ``_build_install_values`` carries
+    no ``imagePullSecrets``. So every dynamic-ns pod ``ImagePullBackOff 401`` on
+    the private jcr-prod image (pilot leaned on an ephemeral copy workaround).
+    """
+
+    def test_T41a_cold_start_calls_ensure_registry_secret(self, client):
+        """T4.1a: cold start must call ``helm_service.ensure_registry_secret(ns)``
+        (symmetric with the marketplace ``create_namespace_with_quota`` path) so
+        the ``paas-registry`` dockerconfigjson lands in the project ns."""
+        from src.api.agent_runtimes import _names
+        from src.services.helm import HelmException
+
+        ns, _release = _names(_HASH)
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get",
+                stderr="release: not found")
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            mock_helm.ensure_registry_secret.assert_called_once()
+            assert ns in str(mock_helm.ensure_registry_secret.call_args), (
+                "F-PILOT-4 T4.1a: cold start must call ensure_registry_secret "
+                "for the project ns %r (call_args=%r). Today it is never called "
+                "-> pod ImagePullBackOff 401 on the private image."
+                % (ns, mock_helm.ensure_registry_secret.call_args)
+            )
+
+    def test_T41b_build_install_values_forwards_image_pull_secrets(self):
+        """T4.1b: ``_build_install_values`` must forward
+        ``imagePullSecrets:[{name: settings.registry_secret_name}]``."""
+        from src.api.agent_runtimes import _build_install_values
+        from src.config import settings
+        from src.models.schemas import SpawnOrAttachRequest
+
+        values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert values.get("imagePullSecrets") == [
+            {"name": settings.registry_secret_name}
+        ], (
+            "F-PILOT-4 T4.1b: _build_install_values must forward "
+            "imagePullSecrets:[{name: %r}] so the agent-runtime chart can pull "
+            "the private jcr-prod image. Got %r."
+            % (settings.registry_secret_name, values.get("imagePullSecrets"))
+        )
+
+
+class TestPilotGapLlmCredential:
+    """F-PILOT-8 — operator must accept the per-tenant LLM ``api_key`` and
+    provision it as a per-release K8s Secret (``agent-pa-{hash}-llm``) for
+    secretKeyRef injection (design §8.2). The operator never queries the Odoo DB,
+    so the key rides the spawn request.
+
+    ASSUMPTION (flagged to leader): these assert the OPERATOR provisions the
+    Secret (plan WS-8a / T8.1a "operator 建 per-release Secret"). The chart-side
+    secretKeyRef + no-plaintext-pod-spec render is T8.2 (paas-charts). If impl
+    instead routes the key purely as a helm value for the chart's own Secret
+    template (auth-secret value pattern), the secret-provision seam below must be
+    re-pointed — see report.
+    """
+
+    def test_T81a_spawn_schema_carries_api_key(self):
+        """T8.1 (schema): ``SpawnOrAttachRequest`` must declare an ``api_key``
+        field so the Odoo client can pass the tenant LLM key."""
+        from src.models.schemas import SpawnOrAttachRequest
+
+        assert "api_key" in SpawnOrAttachRequest.model_fields, (
+            "F-PILOT-8 T8.1: SpawnOrAttachRequest must declare an 'api_key' "
+            "field so the Odoo agent_runtime_client passes the per-tenant LLM "
+            "key (the operator never queries the Odoo DB). Today the field is "
+            "absent so pydantic silently drops any api_key in the request body. "
+            "NB: any model-config field must NOT be named 'model_config' "
+            "(pydantic-reserved) — use e.g. 'llm_model_config'."
+        )
+
+    def test_T81b_cold_start_provisions_per_release_llm_secret(self, client):
+        """T8.1: cold start (request carrying api_key) must provision a
+        per-release Secret ``agent-pa-{hash}-llm`` carrying that api_key."""
+        from src.api.agent_runtimes import _names
+        from src.services.helm import HelmException
+
+        _ns, release = _names(_HASH)
+        secret_name = f"{release}-llm"
+        api_key = "sk-pilot-LLMKEY-abc123"
+        body = dict(_SPAWN_BODY, api_key=api_key)
+
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get",
+                stderr="release: not found")
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=body)
+            assert resp.status_code == 200, resp.text
+
+            # method-agnostic: inspect every mocked k8s/helm call for a Secret
+            # provisioning carrying both the per-release LLM secret name and the
+            # api_key (plain stringData OR base64 data).
+            provisioning = str(mock_k8s.mock_calls) + str(mock_helm.mock_calls)
+            key_b64 = base64.b64encode(api_key.encode()).decode()
+            assert secret_name in provisioning, (
+                "F-PILOT-8 T8.1: cold start must provision a per-release LLM "
+                "Secret %r (found no such call). Today the operator neither "
+                "accepts api_key (schema) nor creates the Secret." % secret_name
+            )
+            assert (api_key in provisioning) or (key_b64 in provisioning), (
+                "F-PILOT-8 T8.1: the per-release LLM Secret %r must carry the "
+                "request api_key (plain stringData or base64 data)." % secret_name
+            )
+
+    def test_T83_llm_secret_is_per_tenant_isolated(self, client):
+        """T8.3 (unit form): each project's LLM Secret carries ONLY its own
+        tenant key — another tenant's key never bleeds in (INV-2 per-tenant
+        isolation). The integration form (two real namespaces) is a cluster
+        acceptance item."""
+        from src.services.helm import HelmException
+
+        def _spawn(project_hash, api_key):
+            body = dict(_SPAWN_BODY, project_hash=project_hash, api_key=api_key)
+            with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+                 patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+                 patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+                mock_helm.get.side_effect = HelmException(
+                    message="not found", command="helm get",
+                    stderr="release: not found")
+                mock_helm.install.return_value = MagicMock()
+                mock_k8s.get_pods.return_value = [
+                    MagicMock(phase="Running", ready="1/1")]
+                mock_signer.sign_ws_token.return_value = "ws.jwt"
+                mock_signer.sign_skill_bundle_token.return_value = "skill.jwt"
+                resp = client.post(
+                    "/api/agent-runtimes/spawn-or-attach", json=body)
+                assert resp.status_code == 200, resp.text
+                return str(mock_k8s.mock_calls) + str(mock_helm.mock_calls)
+
+        key_a = "sk-tenantA-AAAAAA"
+        key_b = "sk-tenantB-BBBBBB"
+
+        def _present(secret, blob):
+            return (secret in blob
+                    or base64.b64encode(secret.encode()).decode() in blob)
+
+        calls_a = _spawn("pa1111111111aaaa", key_a)
+        calls_b = _spawn("pa2222222222bbbb", key_b)
+
+        assert _present(key_a, calls_a) and not _present(key_b, calls_a), (
+            "F-PILOT-8 T8.3: project A's LLM Secret must carry A's key and never "
+            "B's (per-tenant isolation INV-2). Today no per-tenant Secret is "
+            "provisioned at all."
+        )
+        assert _present(key_b, calls_b) and not _present(key_a, calls_b), (
+            "F-PILOT-8 T8.3: project B's LLM Secret must carry B's key and never "
+            "A's (per-tenant isolation INV-2)."
+        )
