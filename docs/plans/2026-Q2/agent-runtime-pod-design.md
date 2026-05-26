@@ -4857,6 +4857,102 @@ paas-operator 修改：
 
 ---
 
+## §8 Plan-gap addenda — pilot 揭露的 production-blocking gaps（F-PILOT-4 / F-PILOT-8）
+
+> **2026-05-26** pilot e2e transport 閉環（echo agent round-trip persist）跑通後揭露 2 個「真正生產化 agent pod（私有 image + 真 LLM agent）前必拍」的 plan-level 缺口（= follow-ups §F-PILOT 段的 F-PILOT-4 / F-PILOT-8 stub）。echo agent 仍用私有 `jcr-prod` agent-runtime image → F-PILOT-4 pilot 靠 ephemeral workaround（copy `jfrog-registry` + patch SA）撐住；echo 不呼叫 LLM → F-PILOT-8 pilot 沒撞。兩條經 superpowers brainstorming + grounding（operator/chart/既有 secret pattern 實證）+ 使用者拍板 4 個 decision point（2026-05-26）。
+>
+> **scope**：plan-level design 探索，不寫實作 code；實作落點跨 repo（operator=paas-platform / image=paas-agent-runtime / chart=paas-charts），每方案標清。phase 切片見 `agent-runtime-pod-plan.md` §Phase E0。
+
+### §8.1 F-PILOT-4 — Registry pull secret provision（私有 image 拉取）
+
+**問題鏈**（grounding 實證）：
+- agent-runtime image 在私有 `jcr-prod`，pod 拉它需 `dockerconfigjson` imagePullSecret。
+- operator 動態起 pod 走 `agent_runtimes.py:129 helm_service.install(..., create_namespace=True)` → helm `--create-namespace` 建**裸 ns**，**繞過** marketplace 用的 `helm.py create_namespace_with_quota`（後者 `:645` 會呼叫 `ensure_registry_secret`）。
+- 雙缺口：① 動態 ns 內**無** pull secret（沒呼叫 `ensure_registry_secret`）② `_build_install_values`（`agent_runtimes.py:58-81`）**沒 forward** imagePullSecrets。
+- → 每個新 project 動態 ns 的 pod `ImagePullBackOff 401`。pilot 靠 ephemeral copy `jfrog-registry` + patch SA 硬撐。
+
+**既有可複用機制**（grounding）：
+- `helm.py:649 ensure_registry_secret(namespace)`：從 `settings.registry_server/username/password`（`config.py:31-33`）建 `kubernetes.io/dockerconfigjson` secret，名 = `settings.registry_secret_name`（`config.py:34` = `"paas-registry"`，註解明寫「for tenant namespace imagePullSecrets」），kubectl apply 冪等，return secret name。**marketplace path 已用**。
+- agent-runtime chart（paas-charts）的 `imagePullSecrets` value 已支援（odoo-dev-sandbox `odoo-deployment.yaml` 同 pattern）。
+
+**決策**（使用者拍板 2026-05-26）：
+1. **creds 來源 = 沿用 marketplace `paas-registry`**（複用 `ensure_registry_secret`，不引入新憑證來源 / 不 copy operator 自身 secret）。
+2. **安全邊界 = 落租戶 ns + 收緊 pod SA/RBAC 不可讀該 secret**。
+
+**機制**（design 形狀，不寫 code）：
+- operator agent-runtime cold-start path 在 `helm install` **前**呼叫 `ensure_registry_secret(namespace)`（與 marketplace 對稱），把 `paas-registry` dockerconfigjson 建到 `paas-ws-pa-{hash}`。
+- `_build_install_values` 加 `imagePullSecrets: [{name: settings.registry_secret_name}]`（forward 到 chart `imagePullSecrets` value）。
+- 安全收緊：agent-runtime chart 的 pod ServiceAccount **不得**有 `get/list/watch secrets` RBAC；imagePullSecrets 只供 kubelet 拉 image，pod process 讀不到。**驗收**：exec into agent pod 試讀該 secret（API/`kubectl`）→ Forbidden。
+
+**安全邊界論述**：
+- registry creds 是**平台級憑證**（jcr-prod 全 pull 權），落每個不可信租戶 sandbox ns 有橫向洩漏面（malicious skill subprocess 若能讀 ns secret → 拿 jcr-prod creds）。
+- K8s 語義：`imagePullSecrets` 由 kubelet 在 node 上用於拉 image，**不** project 進 pod 檔案系統 / env；pod process 預設讀不到（除非 SA 有 secret read RBAC 或顯式 mount）。
+- 故「落 ns + 收緊 SA」在 K8s 模型下 sound：creds 存在 ns 但 sandbox process 拿不到。**前提 invariant**（paas-charts 必須驗）：chart SA minimal（無 secret read）+ 不 mount 該 secret。
+
+**落點（跨 repo）**：
+
+| 改動 | repo | 形狀 |
+|------|------|------|
+| cold-start path 呼叫 `ensure_registry_secret` + `_build_install_values` forward imagePullSecrets | **paas-platform**（`extra/paas-operator/src/api/agent_runtimes.py` + 既有 `helm.py:649`）| 複用既有函數，additive |
+| chart `imagePullSecrets` 接線 deployment + SA minimal RBAC（無 secret read）驗證 | **paas-charts**（agent-runtime chart）| value 已支援，確認 SA 不可讀 secret |
+| operator pod env 已注入 `registry_*`（marketplace 已需）| **paas-charts**（operator chart）/ **paas-cd** | 確認 agent-runtime operator 部署帶 registry creds |
+
+**被否決選項**：
+- copy operator 自身 `jfrog-registry` → 耦合 operator 部署細節、與 marketplace 分歧。
+- 新增 agent-runtime 專用 registry config → 多一套憑證管理，無必要（同一 jcr-prod）。
+- 不落租戶 ns（pre-pull/proxy）→ 最安全但需動 node/registry infra，超 pilot/rollout 範圍，列遠期 option。
+
+### §8.2 F-PILOT-8 — LLM credential 注入
+
+**問題**：真 agent pod 跑 LangGraph 要呼叫 LLM → 需模型金鑰。來源**已存在**（`agent_template.py:23 model_config_id → ai.config`，`ai.config.api_key`，既有 `ai_client.py:117` 讀法），但**注入 pod 路徑未設計**。echo agent 不呼叫 LLM 故 pilot 沒撞。
+
+**決策**（使用者拍板 2026-05-26）：
+1. **注入路徑 = 專用 per-release K8s Secret + secretKeyRef env**（不走 plain env / 不走 skill-bundle 夾帶）。
+2. **隔離 = per-tenant key**（各租戶 `ai.config.api_key`）+ **產品策略留 design open**。
+
+**機制**（design 形狀）：
+- api_key 來源是 Odoo `ai.config`；operator **不直連 Odoo DB**（既有架構），故 api_key 須經 spawn-or-attach request 由 Odoo client 帶給 operator（schema 擴充，見 open item），**不**讓 operator 反查 Odoo。
+- operator cold-start 建 **per-release K8s Secret**（如 `agent-pa-{hash}-llm`）存 api_key（+ model config），chart env `valueFrom.secretKeyRef`（如 `LLM_API_KEY`）→ pod 讀 env 初始化 LangGraph LLM。
+- **不落 pod spec 明文**（對齊 F-GC-1 hardening 方向）：LLM key 長壽高價值，比 `SKILL_BUNDLE_TOKEN`（短壽 1h、plain env 可接受）更該收緊。
+- 生命週期：cold start 建 Secret；resume 不需重建（key 固定，非 token）；ai.config.api_key 輪替 → invalidate/重建（open item）。
+
+**安全邊界論述**：
+- per-tenant key：洩漏圈限單一租戶（不像共用 platform key 一洩全平台計費被盜）。
+- secretKeyRef vs plain env：pod **必須**能讀 key（要呼叫 LLM），故 key 一定在 pod env 可達；secretKeyRef 的價值是**不落 pod spec 明文**（`kubectl get pod -o yaml` 不可見），降 spec 洩漏面。
+- key 落租戶 ns Secret 且 pod 可讀 → 與 F-PILOT-4 對比：registry creds pod **不該**讀（平台級、跨租戶）；LLM key pod **必須**讀（該租戶自己的、per-tenant）→ 洩漏不跨租戶。
+
+**落點（跨 repo）**：
+
+| 改動 | repo | 形狀 |
+|------|------|------|
+| spawn request schema 帶 model_config/api_key + operator 建 per-release LLM Secret | **paas-platform**（Odoo `agent_runtime_client.py` + operator `agent_runtimes.py`）| additive；api_key 傳遞 schema 需定 |
+| chart `LLM_API_KEY` env valueFrom secretKeyRef + per-release Secret template | **paas-charts**（agent-runtime chart）| 比照 auth secret secretKeyRef pattern |
+| pod runtime 讀 `LLM_API_KEY` + model config 初始化 LangGraph LLM | **paas-agent-runtime**（image）| 比照既有 env 讀法 |
+
+**產品 open questions（標 open，待產品決策，不阻 design）**：
+- 租戶自帶 key vs 平台代付（per-tenant 但誰的 key）？
+- 平台代付時 per-tenant quota / rate limit / 計費歸屬？
+- 租戶未配 key 時 fallback（拒 spawn / 平台 default key / 提示配置）？
+- api_key 輪替 → pod Secret invalidate 機制（cold start 重建 vs 主動 patch）？
+
+**被否決選項**：
+- plain env → 長壽 key 明文落 pod spec（F-GC-1 已知問題放大）。
+- skill-bundle 夾帶 → 耦合 skill 機制、擴大 bundle 信任面、token 與 model key 生命週期不同步。
+- 共用 platform key → 一個 sandbox 洩漏 → 全平台計費被盜 + 所有租戶受影響，與 sandbox 威脅模型衝突。
+
+### §8.3 與既有 secret 注入慣例對照
+
+| secret | 注入方式 | 落點 | 本 gap 對照 |
+|--------|---------|------|------------|
+| `AGENT_RUNTIME_AUTH_SECRET_*`（operator 簽 key）| existingSecret + secretKeyRef（pilot 軌 2 durable：paas-cd existingSecret pin）| operator pod | F-PILOT-8 比照 secretKeyRef |
+| `SKILL_BUNDLE_TOKEN`（per-invocation 短壽）| plain env（install）/ `kubectl set env`（resume）；secretKeyRef hardening 待排（F-GC-1）| agent pod | 短壽 1h → plain 可接受；LLM key 長壽 → 直接 secretKeyRef |
+| `paas-registry`（F-PILOT-4 agent-runtime）| `ensure_registry_secret` dockerconfigjson + forward imagePullSecrets | tenant ns（**pod 不可讀**）| 本 gap 新增 forward |
+| `LLM_API_KEY`（F-PILOT-8 新）| per-release Secret + secretKeyRef（**pod 可讀**）| agent pod | 本 gap 新增 |
+
+**一致性原則**：新設計與既有「K8s Secret env / secretKeyRef、operator 簽發/管理、pod 消費」三方慣例對齊；LLM key 採 secretKeyRef（非 plain env）是對 F-GC-1 教訓的前置應用（長壽憑證不落 spec 明文）。
+
+---
+
 ## Open questions for leader sign-off（§1 彙整）
 
 > phase-planner 不替使用者拍板，以下全部回 leader 轉達。括號內為 phase-planner 建議。
@@ -4869,29 +4965,29 @@ paas-operator 修改：
 
 ### 資源與生命週期
 
-4. **Reap 策略**（Q2）：「scale to 0（保留 PVC）+ 長 TTL helm uninstall」可以嗎？
-5. **StorageClass**（Q2）：選 X（用既有 `longhorn-delete`，長 TTL 後 state lose）or Y（新增 retain SC，state 持久但要手動 GC）？
-6. **Namespace 共用**（Q2）：(a) agent pod 共用 cloud_service 的 workspace namespace，or (b) 獨立 `paas-agent-ws{N}` namespace？
+4. **Reap 策略**（Q2）：~~「scale to 0（保留 PVC）+ 長 TTL helm uninstall」可以嗎？~~ **[已被 pilot 實作事實解決]** 正是此方案 — operator reap = `scale_deployment(0)` + `reaped-since` annotation（`agent_runtimes.py:170-190`）；resume = scale 1（`:193`）；`DELETE` = helm uninstall 長 TTL GC（`:228`）。
+5. **StorageClass**（Q2）：~~選 X（既有 `longhorn-delete`）or Y（retain SC）？~~ **[pilot 用 chart 預設 + 正式策略仍待拍]** pilot PVC 走 agent-runtime chart（paas-charts）`pvc.yaml` 預設 SC；**retain(Y) vs delete(X) + reap 後 PVC 留存行為仍待拍** — 待向 paas-charts 確認 pilot 實際 SC（cross-repo，本 doc 不臆測）。
+6. **Namespace 共用**（Q2）：~~(a) 共用 workspace ns or (b) 獨立 `paas-agent-ws{N}`？~~ **[已被 pilot 實作事實解決]** (b) 獨立 ns — per-project `paas-ws-pa-{hash}`（`agent_runtimes.py:38 _names`；§2.7）。命名從原 `paas-agent-ws{N}` 演進為 per-project hash。
 
 ### Transport
 
 7. **frontend 不動**（Q1）：~~「保留既有 SSE EventSource，只改 Odoo controller backend」可以嗎？（代價：Odoo worker per active conv）~~ **[SIGNED-OFF 2026-05-21 — per-project]** 保留既有 SSE EventSource；Odoo controller 內換 backend (open WS to per-project pod, forward chunks as SSE)；frontend 零變更
-8. **Cold start UX**（Q3）：「同步阻塞 15s timeout fallback」vs「立刻回 spawning event + 真實回應後到」？
+8. **Cold start UX**（Q3）：~~「同步阻塞 15s timeout」vs「立刻回 spawning event」？~~ **[部分 pilot 實作 + UX 仍待拍]** operator `spawn_or_attach` 同步回 `pod_state`（spawning/active）+ `spawn_age_ms`（含 readiness poll，`agent_runtimes.py:150,161-167`）；Phase D runbook 定 SLO cold start p95<15s。**「立刻回 spawning event + 非阻塞前端」UX 仍待 §5 transport 拍**（現為同步回 state）。
 
 ### MCP / cleanup ordering
 
-9. **MCP invalidation 方式**（Q5）：軟通知（drop from in-memory list）or 硬重啟 pod？
-10. **新 paas-operator endpoints**（Q5）：`/agent-runtimes/...` 系列是否 in scope？
+9. **MCP invalidation 方式**（Q5）：~~軟通知 or 硬重啟 pod？~~ **[已被 pilot 實作事實解決]** 軟 — `invalidate_mcp` patch pod `mcp.json` ConfigMap（`agent_runtimes.py:203-208` + `mcp_invalidator`；§5.4），非硬重啟。
+10. **新 paas-operator endpoints**（Q5）：~~`/agent-runtimes/...` 是否 in scope？~~ **[已被 pilot 實作事實解決]** in scope，已實作 — `agent_runtimes.py` router 7 endpoints（spawn-or-attach / reap / resume / invalidate-mcp / sync-workspaces / DELETE / status；§2.11）。
 
 ### 跨 repo / 命名
 
 11. **新 repo 名稱**（Q6）：~~`agent-runtime` or `woow-paas-agent-runtime`（對齊 init-agent-4 家族）？~~ **[SIGNED-OFF 2026-05-21]** image build repo 用 `woow-paas-agent-runtime`（對齊 init-agent-4「woow-paas-*」家族）
 12. **新 repo 形狀**（Q6）：~~image build + helm chart 同 repo（仿 paas-odoo-ci）or 分 repo？~~ **[SIGNED-OFF 2026-05-21]** image build 在 `woow-paas-agent-runtime`；helm chart 寫入既有 `woow-paas-charts`（與 cd / charts 家族對齊；跨 repo 版本同步 trade-off 已 accept，細節 §7 拍板）
-13. **刪除 `discuss_channel.message_post` 同步 LangChain 分支**（Q6）：可以執行嗎？（不可逆動作）
+13. **刪除 `discuss_channel.message_post` 同步 LangChain 分支**（Q6）：~~可以執行嗎？（不可逆）~~ **[仍待 — Phase F]** 不可逆，排 Phase F destructive cleanup（§7.4 已定：dual-write `legacy_sync count=0 持續 4 週` 後 + `ai_client.py` 同批刪）。pilot/E0/E 皆未觸及，Phase F 前仍 dual-write。
 
 ### 命名與 doc 對齊（不阻塞）
 
-14. **本 doc 命名**：依 docs/README.md 既有 plan 命名規則應為 `2026-05-21-agent-runtime-pod-design.md`（帶日期前綴），目前依 task brief 用無日期版本，要對齊嗎？
+14. **本 doc 命名**：~~應帶日期前綴 `2026-05-21-...`？~~ **[建議維持現狀，不阻塞]** 無日期版本已貫穿 epic A-D + pilot + §8 + plan.md + follow-ups 大量 cross-ref；改名破壞所有引用、收益低 → 建議維持 `agent-runtime-pod-design.md`（leader 可一句話推翻）。
 
 ---
 
