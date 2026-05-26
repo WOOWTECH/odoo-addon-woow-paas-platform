@@ -943,12 +943,15 @@ class TestPilotGapRegistrySecret:
             resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
             assert resp.status_code == 200, resp.text
 
-            mock_helm.ensure_registry_secret.assert_called_once()
-            assert ns in str(mock_helm.ensure_registry_secret.call_args), (
+            # ensure_registry_secret lives on KubernetesService (helm.py:649),
+            # mirrored by the marketplace create_namespace_with_quota path —
+            # so the operator calls it via k8s_service, not helm_service.
+            mock_k8s.ensure_registry_secret.assert_called_once()
+            assert ns in str(mock_k8s.ensure_registry_secret.call_args), (
                 "F-PILOT-4 T4.1a: cold start must call ensure_registry_secret "
                 "for the project ns %r (call_args=%r). Today it is never called "
                 "-> pod ImagePullBackOff 401 on the private image."
-                % (ns, mock_helm.ensure_registry_secret.call_args)
+                % (ns, mock_k8s.ensure_registry_secret.call_args)
             )
 
     def test_T41b_build_install_values_forwards_image_pull_secrets(self):
