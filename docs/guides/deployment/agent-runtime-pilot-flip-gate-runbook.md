@@ -48,7 +48,7 @@
 
 ## 1. 🔀 F-PC-7 merge main + image build（A 嚴格）
 
-**現況**：A 嚴格在 `paas-agent-runtime` `feature/f-pc-7-token-use-strict`（`a8b3ce2` + `dabb275`），**未 merge main**（main = PR #2 `ba6b417` B transitional）。Merge + build 是 flip-gate **硬前提**。
+**現況 [2026-05-26 更正 · stg 已完成]**：A 嚴格（`a8b3ce2` + `dabb275`）**已 merge main**（PR #3 `bb31676`，origin/main 已到 `3263352`/PR#4）+ build 進所有發佈 image（v1.0.0 / v1.0.1 皆 **unconditional A 嚴格、無 env toggle**）+ **stg pilot 已驗跑在 A 嚴格上**。本 step 對 **stg 已滿足**；保留作部署順序硬約束記錄（D-CAVEAT-2）+ **未來新環境（prod）部署仍適用**（見 §Prod 上線 gate）。〔原註：2026-05-25 reporter 在 stale clone 誤判 main 仍 B transitional `ba6b417`，B transitional 從沒 build 成 image → 已更正〕
 
 - [ ] 在 `paas-agent-runtime` 開 **PR #3**：`feature/f-pc-7-token-use-strict` → `main`
 - [ ] merge 後 CI build + push agent-runtime image（A 嚴格）到 registry（JCR）
@@ -213,10 +213,30 @@ flip 後 pilot project 第一次 chat invoke 觸發：
 
 ---
 
+## Prod 上線 gate（未來式 · stg-pilot 之後才適用）
+
+> ⚠️ **現在不適用**：本 epic 為 **stg-pilot-only**，無任何 prod agent namespace / prod agent pod。本節是**首個 prod agent pod 上線前**的前置 gate 記錄，屆時再執行；現階段不需動作。
+
+**Gate（首個 prod agent pod 上線前必做）**：
+
+- [ ] **確認 prod operator 全簽 `token_use`** — prod 環境部署的 operator image 版本 ≥ 簽 `token_use` 的版本（Phase C+，`7daf1f4` 後）。A 嚴格 pod **無條件**拒缺 `token_use` claim 的 token，**prod operator 若未全簽 → 首個 prod pod fail-closed、誤殺所有連線**。
+  - 驗法同 stg step 2：operator `/health` 含 `signs token_use: true`（若 gap-B 機器訊號已實作）→ 直接驗；否則 **人工確認** operator 部署 commit/version ≥ `token_use` 簽發版本。
+  - 部署順序同 D-CAVEAT-2：**operator(簽 `token_use`) 必先於 pod(A 嚴格)**；舊 operator 簽過的在途 `ws_token`（exp 3600s）最長有 **1h** 窗口被 A 嚴格 pod 誤殺。
+
+🚩 **風險旗標（A 嚴格無安全網）**：
+
+- A 嚴格 **無 runtime toggle**（unconditional 內建，無 env 開關可臨時降級放行）。
+- **無 pre-A-strict image tag 可當 kill-switch**（B transitional 從沒 build 成發佈 image，回退無 B 版可退）。
+- → 一旦 prod operator 全簽未就緒就起 pod，**誤殺只能靠「補簽」（升級/重啟 operator 重簽帶 `token_use` 的 token）或 hotfix**，**無法靠回退 image 救**。故 prod 上線**務必先驗 operator 全簽、再起首個 pod**。
+
+> stg 對照：stg pilot 已跑在 A 嚴格 + operator-stg 已簽 `token_use`（empirical 驗過，見上 step 1/2 + `docs/tracking/followups/follow-ups.md` §F-PC-7）。prod 重複同一 gate 即可。
+
+---
+
 ## Related
 
 - Plan：`docs/plans/2026-Q2/agent-runtime-pod-plan.md` §Pilot runbook / §Flip-gate caveats（D-CAVEAT-1/2 論述源）/ §Flip gate 驗收
 - Reporter durable：`docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §5
 - Review：`docs/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` / `docs/tracking/reviewer-report-2026-05-25-agent-runtime-pod-phase-d.md`
 - Follow-ups：`docs/tracking/followups/follow-ups.md` §Phase D enablement gate
-- Cross-repo：`paas-agent-runtime` `feature/f-pc-7-token-use-strict`（`a8b3ce2`+`dabb275`，F-PC-7 A 嚴格，merge+deploy 屬本 runbook step 1）
+- Cross-repo：`paas-agent-runtime` F-PC-7 A 嚴格（`a8b3ce2`+`dabb275`）— **[2026-05-26 更正] 已 merge main（PR #3 `bb31676`，origin/main `3263352`/PR#4）+ build 進所有發佈 image，stg closed**；prod 全簽 gate 見上 §Prod 上線 gate
