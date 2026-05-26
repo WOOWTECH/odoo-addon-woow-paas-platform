@@ -467,6 +467,33 @@ class TestSpawnOrAttach:
         assert values.get("projectId") == _SPAWN_BODY["project_id"]
         assert values.get("auth", {}).get("currentKey") == "hs256-current-key"
 
+    def test_build_install_values_derives_odoo_namespace_for_netpol(self):
+        """F-PILOT-5: agent pod NP `networkPolicy.odooNamespace` must point at
+        Odoo's real ns (else pod<->Odoo NP drops — chart default `paas-system` is
+        wrong). operator derives it from settings.odoo_base_url (in-cluster svc
+        FQDN `<svc>.<ns>.svc.cluster.local`). 4th instance of the missed-forward
+        class — see [[spawn-install-values-missed-forward]].
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        with patch("src.api.agent_runtimes.settings.odoo_base_url",
+                   "http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.local:8069"):
+            values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert values["networkPolicy"]["odooNamespace"] == "dev-sandbox-stg"
+
+    def test_build_install_values_omits_odoo_namespace_when_not_svc_fqdn(self):
+        """Non-svc-FQDN odoo_base_url (e.g. external host) → omit odooNamespace so
+        the chart falls back to its default rather than the operator guessing wrong.
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        with patch("src.api.agent_runtimes.settings.odoo_base_url",
+                   "https://odoo.example.com:8069"):
+            values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert "odooNamespace" not in values["networkPolicy"]
+
     def test_spawn_or_attach_cold_start_passes_repo_and_auth_to_install(self, client):
         """gap C: cold-start install fetches the chart from the PRIVATE classic
         Helm repo — repo URL / chart version / read credentials are plumbed from

@@ -10,15 +10,18 @@
 2. 下游對「缺 value」是**硬失敗**（chart `required` / validate `fail` / fail-closed env / schema required）。
 3. 組裝點的單元測試 **mock 掉下游**（不會真的 render / 部署），所以漏轉在 CI 綠、只在真部署現形。
 
-→ 本 epic 三個同 class instance（pilot 9-gap chain 的 gap 2/4/5，見 [[agent-runtime-pilot-e2e-gap-chain]]）：
+→ 本 epic 四個同 class instance（pilot 9-gap chain 的 gap 2/4/5/6-NP，見 [[agent-runtime-pilot-e2e-gap-chain]]）：
 
 | 漏轉的 value | 下游怎麼要 | 撞點 |
 |--------------|-----------|------|
 | namespace prefix（`_names` hardcode `paas-ws-pa-` 沒從 `settings.namespace_prefix` 衍生） | `validate_namespace` raise | spawn 500 |
 | `projectId`（`_build_install_values` 只給 `projectHash`） | chart `_helpers.tpl` validate `fail` | chart render 500 |
-| `imagePullSecrets` / `networkPolicy.odooNamespace`（沒 forward） | chart 用 default（空 / 錯 placeholder）→ pod 拉不到 image / NP 擋 | ImagePullBackOff / pod↔odoo refused |
+| `imagePullSecrets`（沒 forward + ns 無 registry secret） | chart 用 default（空）→ pod 拉不到私有 image | ImagePullBackOff（**含 plan-gap：creds provision**，見 [[plan-gap-stop-and-report]]） |
+| `networkPolicy.odooNamespace`（沒 forward）**← 第 4 例** | chart 用 default（`paas-system` 錯 placeholder）→ agent pod 自身 NP 不放行真 odoo ns | pod↔odoo refused（chart 0.1.1 + operator forward 才 durable） |
 
-三者共同點：**operator 手上其實有資料**（`request.project_id`、`settings.namespace_prefix`、`settings.odoo_base_url`、自身 registry secret），只是組裝點沒 forward 給下游 —— 是 **missed-forward**，不是「沒資料」的 design gap（後者見 [[plan-gap-stop-and-report]]）。
+四者共同點：**operator 手上其實有資料**（`request.project_id`、`settings.namespace_prefix`、`settings.odoo_base_url`、自身 registry secret），只是組裝點沒 forward 給下游 —— 是 **missed-forward**，不是「沒資料」的 design gap（後者見 [[plan-gap-stop-and-report]]）。
+
+> **第 4 例的 source 不是乾淨欄位**：`projectId`/`projectHash` 是 request 直接欄位、直接 forward；但 `odooNamespace` **無對應欄位**，要從 `settings.odoo_base_url`（in-cluster svc FQDN `<svc>.<ns>.svc.cluster.local`）**衍生**第 2 段。這把 missed-forward 推到與 plan-gap 的邊界：**有確定性來源 → 衍生（不是硬塞）+ 無法衍生時 fallback（omit 讓 chart 用 default、不亂猜）**。判準仍是「有沒有正確來源」——有（svc FQDN）→ 衍生即可，非 plan-gap。`_derive_odoo_namespace()` + contract test 鎖此衍生。
 
 ## The trap
 

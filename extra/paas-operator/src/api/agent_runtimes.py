@@ -81,6 +81,26 @@ def _ensure_namespace(namespace: str) -> None:
     })
 
 
+def _derive_odoo_namespace() -> Optional[str]:
+    """Derive the Odoo namespace from ``settings.odoo_base_url`` for the chart's
+    ``networkPolicy.odooNamespace`` (F-PILOT-5).
+
+    The agent pod's NetworkPolicy must allow ingress/egress to Odoo's *real*
+    namespace, else pod<->Odoo traffic (WS /v1/chat + skill-bundle) is dropped —
+    the chart's default is a wrong placeholder. ``odoo_base_url`` is the in-cluster
+    svc FQDN ``http://<svc>.<ns>.svc.cluster.local:<port>`` → ns = 2nd dotted
+    segment of the host. Returns None when the URL isn't a recognisable k8s svc
+    FQDN (external host etc.) so the chart keeps its own default rather than the
+    operator forwarding a wrong guess.
+    """
+    from urllib.parse import urlparse
+    host = urlparse(settings.odoo_base_url or "").hostname or ""
+    parts = host.split(".")
+    if len(parts) >= 3 and parts[2] == "svc":
+        return parts[1]
+    return None
+
+
 def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str):
     """Helm values for a cold-start install (injects SKILL_BUNDLE_TOKEN env)."""
     values = {
@@ -97,6 +117,12 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
         },
         "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
     }
+    # F-PILOT-5: forward the Odoo namespace so the pod's NetworkPolicy ingress
+    # (Odoo->pod WS) + egress (pod->Odoo skill-bundle) point at Odoo's real ns,
+    # not the chart's placeholder default. Omitted when not derivable (chart default).
+    odoo_namespace = _derive_odoo_namespace()
+    if odoo_namespace:
+        values["networkPolicy"]["odooNamespace"] = odoo_namespace
     # D-CAVEAT-1: the pod verifies the inbound ws_token with the SAME HS256 key
     # the operator signs it with. Source the key from jwt_signer itself (not a
     # second env read) so pod-key == sign-key by construction; the chart's
