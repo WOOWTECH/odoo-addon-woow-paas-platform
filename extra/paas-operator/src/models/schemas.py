@@ -390,6 +390,19 @@ class SpawnOrAttachRequest(BaseModel):
     agent_template_snapshot: Dict[str, Any] = Field(default_factory=dict)
     mcp_snapshot: Dict[str, Any] = Field(default_factory=dict)
     skill_snapshot: List[Dict[str, Any]] = Field(default_factory=list)
+    # F-PILOT-8 — per-tenant LLM credential (design §8.2). The operator never
+    # queries the Odoo DB, so the tenant's ai.config api_key (+ optional model
+    # config) rides the spawn request and the operator provisions it as a
+    # per-release Secret. NB the model-config field is `llm_model_config`, NOT
+    # `model_config` — the latter is a pydantic-reserved BaseModel attribute.
+    api_key: Optional[str] = Field(
+        default=None,
+        description="Per-tenant LLM api_key, provisioned as a per-release Secret",
+    )
+    llm_model_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional LLM model config (model / temperature / ...)",
+    )
 
 
 class ResumeRequest(BaseModel):

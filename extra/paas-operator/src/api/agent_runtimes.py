@@ -10,6 +10,7 @@ Pod identity (design §2.7 / §2.10):
                  env-scoped) — derived so it always nests inside validate_namespace
     release    = agent-pa-{hash}
 """
+import json
 import logging
 import time
 from typing import Optional
@@ -110,6 +111,10 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
         # the B-2 image uses it for the subprocess cwd. It rides in the pod env
         # only (never a URL/ns key — keeps the serial-leak guard intact).
         "projectId": request.project_id,
+        # F-PILOT-4: forward the private-registry pull secret so the chart sets
+        # imagePullSecrets and the kubelet can pull the private jcr-prod image
+        # (the secret itself is provisioned into the ns by ensure_registry_secret).
+        "imagePullSecrets": [{"name": settings.registry_secret_name}],
         "env": {
             "ODOO_BASE_URL": settings.odoo_base_url,
             "PROJECT_HASH": request.project_hash,
@@ -152,6 +157,34 @@ def _chart_source_kwargs() -> dict:
     }
 
 
+def _provision_llm_secret(namespace: str, release: str, request: SpawnOrAttachRequest) -> None:
+    """Provision the per-release LLM credential Secret (design §8.2 / F-PILOT-8).
+
+    The operator never queries the Odoo DB, so the tenant's LLM ``api_key``
+    (+ optional model config) rides the spawn request; the operator stores it in
+    a per-release Secret ``agent-pa-{hash}-llm`` — one per tenant, so a leak is
+    confined to that tenant (INV-2). The chart secretKeyRefs ``LLM_API_KEY`` from
+    it (no plaintext in the pod spec — T8.2, paas-charts). A request without an
+    api_key (e.g. the echo agent that never calls an LLM) provisions no Secret.
+    """
+    if not request.api_key:
+        return
+    string_data = {"LLM_API_KEY": request.api_key}
+    if request.llm_model_config:
+        string_data["LLM_MODEL_CONFIG"] = json.dumps(request.llm_model_config)
+    k8s_service.apply_manifest({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": f"{release}-llm",
+            "namespace": namespace,
+            "labels": {"paas-managed": "true"},
+        },
+        "type": "Opaque",
+        "stringData": string_data,
+    })
+
+
 def _resume_pod(namespace, release, project_hash, project_id, workspace_ids):
     """Re-sign SKILL_BUNDLE_TOKEN, patch pod env, THEN scale to 1 (§2.11.1).
 
@@ -176,9 +209,13 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
     started = time.time()
 
     if not _release_exists(namespace, release):
-        # Cold start — pre-create the labelled namespace (Odoo NP gate), then
-        # sign skill_bundle_token and inject it at install time.
+        # Cold start — pre-create the labelled namespace (Odoo NP gate), ensure
+        # the private-registry pull secret (F-PILOT-4, symmetric with the
+        # marketplace create_namespace_with_quota path) + provision the per-tenant
+        # LLM credential Secret (F-PILOT-8) BEFORE install, then sign + install.
         _ensure_namespace(namespace)
+        k8s_service.ensure_registry_secret(namespace)
+        _provision_llm_secret(namespace, release, request)
         skill_bundle_token = jwt_signer.sign_skill_bundle_token(
             project_hash=request.project_hash,
             project_id=request.project_id,

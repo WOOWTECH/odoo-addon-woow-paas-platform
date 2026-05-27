@@ -22,6 +22,22 @@ agent 端在每個 gap 自問：**「我手上有正確來源能填這個嗎？�
 
 > 注意：plan-gap **停下回報 ≠ 卡死**。本 epic 每個 plan-gap 仍可用 **ephemeral patch 解封續測**（copy secret / patch NP / patch probe）讓 e2e 往下驗，但 **durable 修正分軌交對的 lane / 設計拍板**，且回報時講清「這是 ephemeral、durable 是 plan-gap」。解封 ≠ 掩蓋；關鍵在**有沒有誠實標記它是未解的設計缺口**。
 
+## impl/test 層延伸（Phase E0 T4.1a）：撞錯 test 假設，修 test 別 bend impl 湊綠
+
+上面 3 個是 **operator↔plan 層**（agent 沒有來源資料填 plan 要的東西）。同一條守線在 **impl↔test 層**同等成立：**implementation 撞到一個錯的 test 假設時，停下回報修 test，別 bend impl 去滿足錯 test 而湊綠**。
+
+| | Phase E0 T4.1a |
+|---|---|
+| 撞到什麼 | red test `T4.1a` 把 `ensure_registry_secret` mock 在 **HelmService** 上，但該方法實際屬 **KubernetesService**（`k8s_service`）|
+| 「湊綠」會怎樣 | 把 impl 改成 `helm_service.ensure_registry_secret(...)` 去對上 mock → test 立刻綠，但 **prod `helm_service` 無此方法 → AttributeError 炸**（test-green 掩蓋 prod-crash）|
+| agent 實際做的 | 停下回報「**test mock 對象錯、不是 impl 錯**」→ 修 **test**（`e2a3d7b`：mock 改到 `k8s_service`）+ tester 自核實確認 → impl 維持正確的 `k8s_service.ensure_registry_secret`（green 是真綠）|
+
+**判準（與上 3 instance 同）**：紅的時候自問「**是 impl 錯，還是 test 假設錯？**」
+- impl 錯 → 改 impl。
+- **test 假設錯**（mock 對象 / 期望值 / fixture 假設與真實 API 不符）→ **停下回報修 test，別把 impl 扭去滿足錯 test**。後者是 [[credential-claim-test-fixture-coupling]]「在 test 裡繞過 gate 假綠」的鏡像：那邊是「改 test 去配合 impl」，這邊是「改 impl 去配合錯 test」，**兩者都讓 green 失真、把 bug 埋進 prod**。
+
+> 為什麼值得獨立記：plan-gap 停下回報常被理解為「planner / design 層」的事；E0 證明同一守線在 **TDD red→green 的日常 impl 迴圈**裡同等重要 —— red test 不是聖經，它也可能假設錯；green 的價值在「impl 真的對」，不在「surface 變綠」。
+
 ## Why it works
 
 - **保真**：e2e「表面往下走」不等於「真的解了」。硬塞假值會讓 round-trip 假性通過，把設計缺口埋進更深的下游（如硬塞 registry creds → pilot 過了，但 prod / 多租戶時 creds 擴散爆雷）。停下回報讓缺口**停在它真正該被決策的層級**。
@@ -40,4 +56,6 @@ agent 端在每個 gap 自問：**「我手上有正確來源能填這個嗎？�
 - [[spawn-install-values-missed-forward]] — 對照：真的是漏轉時直接補（別把漏轉誤判成 plan-gap 而過度 escalate）
 - [[agent-runtime-pilot-e2e-gap-chain]] — 三個 plan-gap instance 所在的完整 chain
 - [[constraint-input-trust-expansion]] — 「別讓便利機制退化成攻擊面」同源警覺（硬塞 owner / creds 的 B1-relapse 風險）
-- `follow-ups.md` §F-PILOT-4 / §F-PILOT-8 — 兩個 plan-gap 的 durable 追蹤條目
+- [[credential-claim-test-fixture-coupling]] — impl/test 層延伸的鏡像：那條是「改 test 去配合 impl（假綠 / missing-negative）」，本條 impl/test 段是「改 impl 去配合錯 test（湊綠）」，同根
+- `docs/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §2 + commit `e2a3d7b` — T4.1a mock-target 修 test 非改 impl 的落地 case
+- `follow-ups.md` §F-PILOT-4 / §F-PILOT-8 — 兩個 plan-gap 的 durable 追蹤條目（operator green 已落 Phase E0，見 §F-PILOT 收口）

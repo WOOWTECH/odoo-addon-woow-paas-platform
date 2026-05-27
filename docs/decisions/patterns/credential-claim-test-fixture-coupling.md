@@ -14,13 +14,21 @@
 
 ## What it looks like
 
-### 本 epic 的 3 個建立點（forward-coupling 先例）
+### 本 epic 的 4 個建立點（forward-coupling 先例）
 
 | Phase | 硬化 | 自建 credential 的 test 受影響點 |
 |-------|------|----------------------------------|
 | **B** | HC-2 require `channel_id`/`invoker_*` claims | `paas-agent-runtime` WS test 的 `_sign(...)` helper 須補這些 claim，否則 auth-layer reject |
 | **C** | F-PC-3 phase_c client/webhook fixtures | `test_agent_pod_phase_c_client_webhook` 自建 secret / 簽 token 的 fixture 須對齊新 verify |
 | **D** | F-PC-4 fail-closed + F-PC-3 fail-closed | `e94991d`：~6 個 operator fixture（`api_key=""`→真 key 或改斷言 503）+ 3 個 Odoo session-creating test 的 `setUp`（補設 `AGENT_RUNTIME_NAMESPACE_SECRET` env，否則 `agent_session.create` fail-closed raise）|
+| **E0** | F-PILOT-8 `api_key` optional→consumed（新 per-tenant LLM cred 路徑）| operator `test_agent_runtimes.py` 自建 spawn body：key-**present** 分支鎖死（T8.1b 建 secret / T8.3 per-tenant 隔離），但 key-**absent** 負分支**漏鎖**（E0-R-1，見下「missing-negative 形態」）|
+
+### missing-negative 形態（Phase E0 F-PILOT-8，E0-R-1）★
+
+E0 把這 pitfall 的**第二種形態**顯影：不是「fixture 沒補 → 紅」，而是「**conditional-create 的負分支根本沒被斷言 → 假性安心**」。`_provision_llm_secret` 的 `if not request.api_key: return`（keyless 早退 = echo pilot 主路徑）guard 正確且在，但測試只鎖 key-present 分支（建 `{release}-llm` Secret）、**沒鎖 key-absent 分支**（不建 Secret）。pr-test-analyzer 用 **mutation 證實**：刪掉 `if not request.api_key: return` guard → 全 43 test 仍綠 → 負分支無守線，未來改壞 guard 不會紅（documented behaviour 但無 regression lock）。tester 本輪補 `test_T81c`（`cdf5368`，mutation-resistant：assert keyless spawn 的 `apply_manifest` calls 不含 `{release}-llm` Secret）關閉。
+
+- **兩種形態同根**：(a) **fixture-coupling**（B/C/D）—— 硬化路徑 → 自建 credential 的 fixture 須 lock-step 補，漏補則紅（好）或繞過 gate 假綠（壞）；(b) **missing-negative**（E0）—— 開 conditional-credential 路徑 → 正分支鎖了、**負分支漏鎖**，mutation 不紅 = 有 guard 但無守線。根因都是「credential 路徑的**每個分支**都要有 mutation-resistant 的鎖」。
+- **mutation 是這類缺口的照妖鏡**：「刪掉 guard 後 test 還綠嗎？」一句話驗出負分支有沒有真被鎖 —— 比「看 coverage % 綠」可靠。reviewer/pr-test-analyzer 對新開 credential 路徑應例行做此 mutation 抽查。
 
 ### forward-coupling blast radius（Phase D F-PC-3 範例）
 
@@ -43,6 +51,7 @@
 ## See also
 
 - 落地 case：`docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §takeaway；impl `e94991d`（Phase D forward-coupling fixtures）；CAQA Phase D §Quality info（forward-coupling blast radius）。
+- 落地 case（E0 missing-negative）：`docs/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §5（key-present 鎖 / key-absent mutation 證實漏鎖）；test `cdf5368`（`test_T81c` mutation-resistant negative lock）；`docs/tracking/caqa-report-2026-05-27-agent-runtime-pod-phase-e0.md` §Known pitfalls（CAQA 委派 reviewer 核此分支）。
 - 觸發本 pattern 的硬化（同 epic）：[[constraint-input-trust-expansion]]（HC-2 / token_use claim 硬化 → 自建 token 的 test 受 coupling）。
 - 同 family（test 工程品質）：
   - [[phase-versioned-test-assertion]] —— 姐妹 pattern：那條是「test 斷言內容鎖死 schema 快照」，本條是「硬化 credential → 自建該 credential 的 fixture lock-step」；都屬「test 本身要跟著演進，否則紅得 confusing 或假綠」。
