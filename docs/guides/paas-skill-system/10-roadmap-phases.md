@@ -33,7 +33,7 @@ graph LR
 
 | Phase | 內容 | 狀態 |
 |---|---|---|
-| **A** | schema M:N 遷移（`cloud_service_id`→`cloud_service_ids`）+ 新增 4 個 model（agent_template / agent_session / skill / project_access）+ 16 條 ACL + 4 個後台 view | ✅ |
+| **A** | schema M:N 遷移（`cloud_service_id`→`cloud_service_ids`）+ 新增 4 個 model（agent_template / agent_session / skill / project_access）+ 16 條 ACL（**未含後台 view**；skill 後台管理 view 於 `feat/skill-list` 補上，見 `docs/superpowers/specs/2026-05-27-skill-admin-backend-ui-design.md`） | ✅ |
 | **B** | 建新 repo `woow-paas-agent-runtime`（runtime image）+ helm chart（`woow-paas-charts/charts/agent-runtime/`）；CI build/push 到 JCR；**不部署** | ✅ |
 | **C** | Odoo wiring：skill-bundle 端點 + client/webhook + SSE gateway；operator 端點（spawn/reap/resume/delete）；token 生命週期 | ✅ |
 | **D** | enable-gate caveat 修補（F-PC-1~7 / F-PA-14 硬化）+ admin 啟用面 + 跨 repo F-PC-7 | ✅ **現在** |
