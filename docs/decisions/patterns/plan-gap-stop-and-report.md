@@ -38,6 +38,22 @@ agent 端在每個 gap 自問：**「我手上有正確來源能填這個嗎？�
 
 > 為什麼值得獨立記：plan-gap 停下回報常被理解為「planner / design 層」的事；E0 證明同一守線在 **TDD red→green 的日常 impl 迴圈**裡同等重要 —— red test 不是聖經，它也可能假設錯；green 的價值在「impl 真的對」，不在「surface 變綠」。
 
+## F-PILOT-10 再現（hybrid 解 + cross-repo NP gate）
+
+真 LLM cycle 兩個 instance 各示範守線的一種「不硬塞」收法（不一定是「全停」）：
+
+| gap | 為何不能在本 lane 硬解完 | 若硬塞會怎樣 | agent 實際做的 |
+|-----|------------------------|--------------|----------------|
+| **Gap 3 — skill_snapshot 缺 tool schema**（image Slice 2 skill→StructuredTool 註冊撞契約）| snapshot 無 LLM tool-calling 需要的 `parameters`/args_schema；補完整 schema 牽涉 skill frontmatter parameters spec + host 轉發分工（未設計）| 硬塞一個猜的 args_schema = 餵 LLM 錯的 tool 介面、tool-call 參數對不上 | **hybrid 解**：snapshot 帶 `description`（host-owned、誠實）+ tool 用 single-string `input` fallback（足夠註冊+invoke）跑通（commit `33178e3`）；**富 args_schema 誠實延後 [[#F-PILOT-11]]**（tracked、標「需 design 排程」），不假裝已支援 |
+| **C10-1 — url_validator SSRF 殘留**（DNS-to-metadata / redirect）| validator 設計上不 resolve DNS → 無法在 image lane 內完整擋 DNS-name-to-metadata；真正的 egress 控制是 **cross-repo NetworkPolicy（paas-charts）**| 硬把 url_validator 宣稱成完整 SSRF 防線 = 假裝解了、把「主防線在別的 repo」藏起來 | **誠實標 defense-in-depth + escalate cross-repo NP gate**：image 順手補便宜的（關 redirect + trailing-dot 正規化，#52），主防線**明標 leader 須向 paas-charts 確認 NP backstop（CNI enforce egress + default-deny 排 link-local/metadata）才放行真 cluster**（未確認→升 HIGH） |
+
+**兩個變體，同一守線** —— plan-gap 不一定是「全停」：
+
+- **hybrid + defer**（Gap 3）：手上有誠實的最小解（description + single-string input）就先跑通，**沒設計過的富功能（args_schema）誠實延後到 tracked follow-up**，不猜不塞。
+- **cross-repo gate**（C10-1）：本 lane 補便宜的 defense-in-depth，但**主防線在別的 repo 就明標 escalate 成 leader cross-repo gate**，不在自己 lane 假裝解完（對照 [[cross-repo-artifact-landing-assumption]]：落點 / 主防線常不在你以為的 lane）。
+
+共同點與 pilot 3 instance 一致：**誠實標記未解 / 未完整的部分，路由到對的 lane 或 tracked follow-up，絕不用「表面跑通」掩蓋設計缺口**。
+
 ## Why it works
 
 - **保真**：e2e「表面往下走」不等於「真的解了」。硬塞假值會讓 round-trip 假性通過，把設計缺口埋進更深的下游（如硬塞 registry creds → pilot 過了，但 prod / 多租戶時 creds 擴散爆雷）。停下回報讓缺口**停在它真正該被決策的層級**。
@@ -58,4 +74,5 @@ agent 端在每個 gap 自問：**「我手上有正確來源能填這個嗎？�
 - [[constraint-input-trust-expansion]] — 「別讓便利機制退化成攻擊面」同源警覺（硬塞 owner / creds 的 B1-relapse 風險）
 - [[credential-claim-test-fixture-coupling]] — impl/test 層延伸的鏡像：那條是「改 test 去配合 impl（假綠 / missing-negative）」，本條 impl/test 段是「改 impl 去配合錯 test（湊綠）」，同根
 - `docs/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §2 + commit `e2a3d7b` — T4.1a mock-target 修 test 非改 impl 的落地 case
-- `follow-ups.md` §F-PILOT-4 / §F-PILOT-8 — 兩個 plan-gap 的 durable 追蹤條目（operator green 已落 Phase E0，見 §F-PILOT 收口）
+- `docs/tracking/caqa-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §C10-1 + `docs/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §5 — F-PILOT-10 C10-1 SSRF cross-repo NP hard gate（defense-in-depth vs 主防線 paas-charts NP）；commit `33178e3` — Gap 3 skill_snapshot hybrid 解
+- `follow-ups.md` §F-PILOT-4 / §F-PILOT-8 / §F-PILOT-10（review takeaway 三層 gate）— plan-gap 的 durable 追蹤條目（operator green 已落 Phase E0、真 LLM code 已落 F-PILOT-10，見 §F-PILOT 收口）

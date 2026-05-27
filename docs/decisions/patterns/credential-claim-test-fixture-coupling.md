@@ -14,7 +14,7 @@
 
 ## What it looks like
 
-### 本 epic 的 4 個建立點（forward-coupling 先例）
+### 本 epic 的 5 個建立點（forward-coupling 先例）
 
 | Phase | 硬化 | 自建 credential 的 test 受影響點 |
 |-------|------|----------------------------------|
@@ -22,6 +22,7 @@
 | **C** | F-PC-3 phase_c client/webhook fixtures | `test_agent_pod_phase_c_client_webhook` 自建 secret / 簽 token 的 fixture 須對齊新 verify |
 | **D** | F-PC-4 fail-closed + F-PC-3 fail-closed | `e94991d`：~6 個 operator fixture（`api_key=""`→真 key 或改斷言 503）+ 3 個 Odoo session-creating test 的 `setUp`（補設 `AGENT_RUNTIME_NAMESPACE_SECRET` env，否則 `agent_session.create` fail-closed raise）|
 | **E0** | F-PILOT-8 `api_key` optional→consumed（新 per-tenant LLM cred 路徑）| operator `test_agent_runtimes.py` 自建 spawn body：key-**present** 分支鎖死（T8.1b 建 secret / T8.3 per-tenant 隔離），但 key-**absent** 負分支**漏鎖**（E0-R-1，見下「missing-negative 形態」）|
+| **F-PILOT-10** | `cache.py` empty-bearer fail-closed（skill-bundle token absent → raise，`paas-agent-runtime` PR#6）| image `test_cache.py` 自建 fetch fixture — **做對的正面範例**：negative test 明確斷言空 token → `urlopen` **不被呼叫**（`pytest.fail` if called）+ raises `SkillFetchError`；forward-coupling 獨立驗證乾淨（test_loader mock `ensure_skill`/設 token、test_langgraph 不碰 `_fetch_bundle`）|
 
 ### missing-negative 形態（Phase E0 F-PILOT-8，E0-R-1）★
 
@@ -29,6 +30,7 @@ E0 把這 pitfall 的**第二種形態**顯影：不是「fixture 沒補 → 紅
 
 - **兩種形態同根**：(a) **fixture-coupling**（B/C/D）—— 硬化路徑 → 自建 credential 的 fixture 須 lock-step 補，漏補則紅（好）或繞過 gate 假綠（壞）；(b) **missing-negative**（E0）—— 開 conditional-credential 路徑 → 正分支鎖了、**負分支漏鎖**，mutation 不紅 = 有 guard 但無守線。根因都是「credential 路徑的**每個分支**都要有 mutation-resistant 的鎖」。
 - **mutation 是這類缺口的照妖鏡**：「刪掉 guard 後 test 還綠嗎？」一句話驗出負分支有沒有真被鎖 —— 比「看 coverage % 綠」可靠。reviewer/pr-test-analyzer 對新開 credential 路徑應例行做此 mutation 抽查。
+- **正面範例（F-PILOT-10 empty-bearer，對比 E0 缺口）★**：同一個 missing-negative 風險點，下個 cycle 的 `cache.py` empty-bearer 硬化**做對了** —— negative test 明確斷言「空 token → `urlopen` **不被呼叫**」（`pytest.fail` if called，不是只看「沒 raise」），reviewer 並獨立驗 forward-coupling 乾淨（test_loader mock `ensure_skill`/設 token、test_langgraph 不碰 `_fetch_bundle` → 無其他 fixture 依賴舊 empty-token→401 路徑）。**E0（漏鎖負分支）↔ F-PILOT-10（負分支 genuine 鎖 + forward-coupling 驗淨）= 同 pattern 的反例與正例並列**，差別就在「負分支有沒有 mutation-resistant 的真斷言」。reviewer 收 F-PILOT-10 時即以此對比點名（Phase E0 缺口 → 本輪範例）。
 
 ### forward-coupling blast radius（Phase D F-PC-3 範例）
 
@@ -52,6 +54,7 @@ E0 把這 pitfall 的**第二種形態**顯影：不是「fixture 沒補 → 紅
 
 - 落地 case：`docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §takeaway；impl `e94991d`（Phase D forward-coupling fixtures）；CAQA Phase D §Quality info（forward-coupling blast radius）。
 - 落地 case（E0 missing-negative）：`docs/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §5（key-present 鎖 / key-absent mutation 證實漏鎖）；test `cdf5368`（`test_T81c` mutation-resistant negative lock）；`docs/tracking/caqa-report-2026-05-27-agent-runtime-pod-phase-e0.md` §Known pitfalls（CAQA 委派 reviewer 核此分支）。
+- 落地 case（F-PILOT-10 **正面範例**）：`docs/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §1 headline + §10（empty-bearer lock-step genuine + forward-coupling 乾淨，reviewer 對比 E0 缺口點名）；`docs/tracking/caqa-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §Known pitfalls。
 - 觸發本 pattern 的硬化（同 epic）：[[constraint-input-trust-expansion]]（HC-2 / token_use claim 硬化 → 自建 token 的 test 受 coupling）。
 - 同 family（test 工程品質）：
   - [[phase-versioned-test-assertion]] —— 姐妹 pattern：那條是「test 斷言內容鎖死 schema 快照」，本條是「硬化 credential → 自建該 credential 的 fixture lock-step」；都屬「test 本身要跟著演進，否則紅得 confusing 或假綠」。
