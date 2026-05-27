@@ -23,6 +23,22 @@
 
 > **第 4 例的 source 不是乾淨欄位**：`projectId`/`projectHash` 是 request 直接欄位、直接 forward；但 `odooNamespace` **無對應欄位**，要從 `settings.odoo_base_url`（in-cluster svc FQDN `<svc>.<ns>.svc.cluster.local`）**衍生**第 2 段。這把 missed-forward 推到與 plan-gap 的邊界：**有確定性來源 → 衍生（不是硬塞）+ 無法衍生時 fallback（omit 讓 chart 用 default、不亂猜）**。判準仍是「有沒有正確來源」——有（svc FQDN）→ 衍生即可，非 plan-gap。`_derive_odoo_namespace()` + contract test 鎖此衍生。
 
+### F-PILOT-10 再現：optional value 漏轉是 silent（contract test 須涵蓋 optional）★
+
+真 LLM cluster e2e（[[agent-runtime-fpilot10-cluster-e2e-gap-chain]]）同一個組裝點 `_build_install_values` 又系統漏轉 3 個，但這次撞的是 chart **optional** value：
+
+| 漏轉的 value | 下游怎麼要 | 撞點 | chart 是 |
+|--------------|-----------|------|----------|
+| `imagePullSecrets`（operator stale 沒 forward + chart 無 default backstop）| 空 → pod 拉私有 image 失敗 | ImagePullBackOff（**silent**）| optional |
+| `LLM_MODEL_CONFIG` env（**chart 漏 wire** 映射）| pod 無 model/api_base config | pod 起但無回覆（**silent**）| optional |
+| `externalEgress`（operator 沒 forward）| NP default 不開 → 真 LLM egress 被擋 | LLM 連不出去（**silent**）| optional |
+
+**關鍵深化（vs pilot）**：pilot 漏轉撞 chart **required** value → validate `fail` → spawn **500**（loud，立刻知道）。F-PILOT-10 漏轉撞 chart **optional** value → chart 用 default/empty、**pod 照起、只 runtime 行為錯** → **沒 render error 可循**（要挖 `logs`/`describe`/`get -o yaml`）。**optional 漏轉比 required 更陰**，因為它不觸發任何硬失敗。
+
+→ **contract test 必須涵蓋 optional-but-load-bearing key，不只 required**：把 `test_build_install_values_carries_all_chart_required_keys` 擴成（或新增）斷言 optional key（`imagePullSecrets` / `LLM_MODEL_CONFIG` / `externalEgress`）也被 forward。required key 漏轉部署會 loud 撞到；**optional key 漏轉只有 contract test 擋得住**（否則一路 silent 到 cluster e2e runtime 才現形）。
+
+> 另一半 **G6 是 chart 漏 wire**（operator forward 了、chart template 沒映射進 pod env）—— missed-forward 的 **chart 半**。光 operator contract test 抓不到；要 **render-to-pod-spec integration test**（真 `helm template` → assert 渲染出的 pod spec env 有該 key）才守得住 operator↔chart 兩半的接縫。
+
 ## The trap
 
 一個個撞、一個個補：撞 `projectId` → 補 `projectId` → 重建 image → redeploy → 重 flip → 撞 `auth.currentKey`（其實有 default 沒撞，但下一個是 `odooNamespace`）→ 補 → 又一輪…… 每輪 PR + CI build + ephemeral redeploy + 人工 flip 重測，**N 個漏轉 = N 輪**。pilot 中若不全盤對齊，gap 4 之後還會冒 gap 4.5 / 4.6。
@@ -53,11 +69,12 @@ def test_build_install_values_carries_all_chart_required_keys():
 
 ## Forward-looking invariant
 
-組裝點（`_build_install_values` / `_names` / 任何 spawn config builder）**未來再加 chart required value**（如 Phase E/F 新 chart 欄位）時：(1) 同步 forward；(2) 擴充 contract test 斷言。chart 端**理想把環境相關 default 設成 required**（逼 operator 必傳），別留會在某環境錯的 placeholder default（如 `odooNamespace: paas-system` 是反例）。
+組裝點（`_build_install_values` / `_names` / 任何 spawn config builder）**未來再加 chart value**（required **或 optional**，如 Phase E/F/G 新 chart 欄位）時：(1) 同步 forward；(2) 擴充 contract test 斷言——**含 optional-but-load-bearing key**（F-PILOT-10 教訓：optional 漏轉 silent，比 required 更需要 test 鎖）；(3) 補 **render-to-pod-spec integration test**（真 `helm template` → assert pod spec 真有該 env/secret/NP），守住 operator forward + chart wire **兩半的接縫**（光 operator contract test 抓不到 chart 漏 wire）。chart 端**理想把環境相關 default 設成 required**（逼 operator 必傳），別留會在某環境錯的 placeholder default（如 `odooNamespace: paas-system` 是反例）。
 
 ## See also
 
-- [[agent-runtime-pilot-e2e-gap-chain]] — 本 pattern 的三個 instance（gap 2/4/5）所在的完整 chain
+- [[agent-runtime-pilot-e2e-gap-chain]] — 本 pattern 的三個 instance（pilot gap 2/4/5）所在的完整 chain
+- [[agent-runtime-fpilot10-cluster-e2e-gap-chain]] — F-PILOT-10 再現 instance（G2/G6/G7，**optional value silent 漏轉** + chart 漏 wire 半 + render-to-pod-spec 防線）
 - [[plan-gap-stop-and-report]] — 對照：當「不是漏轉、是沒資料」時的守線（別硬塞）
 - [[phase-versioned-test-assertion]] — 同 epic 的另一條 test-discipline pattern（multi-phase schema 斷言用 monotonic）
 - [[credential-claim-test-fixture-coupling]] — 同 epic：硬化 credential 路徑時的 test fixture forward-coupling（contract-lock 的姊妹概念）
