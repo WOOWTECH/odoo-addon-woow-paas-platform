@@ -783,10 +783,21 @@ class AiAssistantController(Controller):
         return {'servers': servers}
 
     def _build_skill_snapshot(self, project, template):
-        """Serialise the template's published skills (name/version/sha) for the pod."""
+        """Serialise the template's published skills for the pod.
+
+        Carries name / version / sha256 (bundle integrity) + ``description``
+        (host-owned metadata) so the pod can register a StructuredTool with a
+        meaningful tool description WITHOUT fetching the bundle (F-PILOT-10
+        Gap 3 hybrid). The tool args_schema (``parameters``) is intentionally
+        NOT here: it is runtime-owned ("host 不檢", design §skill parameters)
+        and the pod uses the single-string ``input`` fallback at registration,
+        fetching the bundle lazily on first invoke. Rich args_schema in the
+        snapshot is a deferred enhancement (see follow-ups §skill args_schema).
+        """
         return [
             {'name': skill.name, 'version': skill.version,
-             'sha256': skill.bundle_sha256}
+             'sha256': skill.bundle_sha256,
+             'description': skill.description or ''}
             for skill in template.skill_ids.filtered(
                 lambda s: s.state == 'published'
             )

@@ -109,6 +109,48 @@ class TestPhaseCSseFlagAndFrontendContract(TransactionCase):
             "SSE.2: EventSource URL must keep the csrf_token query param.",
         )
 
+    def test_SSE6_skill_snapshot_carries_description(self):
+        """SSE.6 (F-PILOT-10 Gap 3 hybrid): _build_skill_snapshot serialises
+        published skills with name/version/sha256 + description (host-owned,
+        lets the pod register a StructuredTool description WITHOUT fetching the
+        bundle). lock-step guard on the spawn snapshot contract (credential-
+        adjacent assembly). parameters/args_schema is intentionally absent
+        (runtime-owned; see follow-ups F-PILOT-11)."""
+        from odoo.addons.woow_paas_platform.controllers.ai_assistant import (
+            AiAssistantController,
+        )
+        project = self.env['project.project'].sudo().create(
+            {'name': f'sse6-{uuid.uuid4().hex[:6]}'})
+        published = self.env['woow_paas_platform.skill'].sudo().create({
+            'name': 'sk-pub', 'version': '0.1.0', 'bundle_sha256': 'a' * 64,
+            'project_id': project.id, 'state': 'published',
+            'description': 'Fetches the weather for a city.',
+        })
+        # a draft skill must NOT leak into the snapshot
+        self.env['woow_paas_platform.skill'].sudo().create({
+            'name': 'sk-draft', 'version': '0.1.0', 'bundle_sha256': 'b' * 64,
+            'project_id': project.id, 'state': 'draft',
+            'description': 'not published',
+        })
+        template = self.env['woow_paas_platform.agent_template'].sudo().create({
+            'name': f'tmpl-{uuid.uuid4().hex[:6]}',
+            'skill_ids': [(6, 0, (published + self.env['woow_paas_platform.skill']
+                                  .sudo().search([('name', '=', 'sk-draft')])).ids)],
+        })
+        snapshot = AiAssistantController()._build_skill_snapshot(project, template)
+        self.assertEqual(len(snapshot), 1, "only the published skill is snapshotted")
+        entry = snapshot[0]
+        self.assertEqual(entry['name'], 'sk-pub')
+        self.assertEqual(entry['version'], '0.1.0')
+        self.assertEqual(entry['sha256'], 'a' * 64)
+        self.assertEqual(
+            entry['description'], 'Fetches the weather for a city.',
+            "SSE.6: snapshot must carry the skill description (Gap 3 hybrid)")
+        self.assertNotIn(
+            'parameters', entry,
+            "SSE.6: parameters/args_schema is runtime-owned, NOT in the "
+            "snapshot (F-PILOT-11 deferred enhancement)")
+
 
 # --------------------------------------------------------------------------- #
 # SSE.3 / SSE.4 / SSE.5 — dual-mode dispatch behaviour                          #

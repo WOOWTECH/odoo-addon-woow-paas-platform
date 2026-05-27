@@ -159,7 +159,11 @@ class TestPhaseCAgentRuntimeClient(TransactionCase):
                 {'name': f'cl2-{uuid.uuid4().hex[:6]}'})
             result = client.spawn_or_attach(
                 project=project, channel_id=1, invoker_user_id=2,
-                invoker_role='user', agent_template=MagicMock(id=1),
+                invoker_role='user',
+                # model_config_id=None keeps this on the no-credential path so
+                # CL.2 asserts only the X-API-Key header (F-PILOT-8 forward-
+                # coupling, [[credential-claim-test-fixture-coupling]]).
+                agent_template=MagicMock(id=1, model_config_id=None),
                 mcp_snapshot={}, skill_snapshot=[],
             )
             self.assertEqual(result['pod_ws_url'], 'ws://pod')
@@ -208,6 +212,108 @@ class TestPhaseCAgentRuntimeClient(TransactionCase):
             call = (mock_requests.request.call_args or mock_requests.get.call_args)
             blob = json.dumps([call.args, call.kwargs], default=str)
             self.assertIn('pa1234567890abcd/status', blob)
+
+    # CL.6 / CL.7 — F-PILOT-8 LLM credential on the spawn body (design §8.2).
+    # The credential path is hardened forward: every fixture that builds a real
+    # spawn body now exercises ``agent_template.model_config_id`` — see
+    # [[credential-claim-test-fixture-coupling]] (CL.2's mock template carries
+    # ``model_config_id=None`` lock-step so it stays on the no-credential path).
+
+    def _make_ai_config(self, **overrides):
+        vals = {
+            'name': f'cfg-{uuid.uuid4().hex[:6]}', 'type': 'chatgpt',
+            'api_key': 'sk-llm-secret', 'model': 'gpt-4o-mini',
+            'temperature': 0.5, 'max_tokens': 1234,
+            'api_base_url': 'https://llm.example/v1',
+        }
+        vals.update(overrides)
+        return self.env['ai.config'].sudo().create(vals)
+
+    def test_CL6_spawn_or_attach_carries_llm_credential(self):
+        """CL.6: spawn body carries api_key + llm_model_config resolved from the
+        template's ai.config (mirrors ai_client.from_assistant: model /
+        api_base_url / temperature / max_tokens)."""
+        mod = self._import_client()
+        client = mod.get_agent_runtime_client(self.env)
+        config = self._make_ai_config()
+        template = self.env['woow_paas_platform.agent_template'].sudo().create({
+            'name': f'tmpl-{uuid.uuid4().hex[:6]}',
+            'model_config_id': config.id,
+        })
+        with patch.object(mod, 'requests', create=True) as mock_requests:
+            mock_requests.request.return_value = self._fake_response(
+                200, {'pod_ws_url': 'ws://pod', 'auth_token': 't',
+                      'pod_state': 'active', 'spawn_age_ms': 10})
+            mock_requests.post.return_value = mock_requests.request.return_value
+            project = self.env['project.project'].sudo().create(
+                {'name': f'cl6-{uuid.uuid4().hex[:6]}'})
+            client.spawn_or_attach(
+                project=project, channel_id=1, invoker_user_id=2,
+                invoker_role='owner', agent_template=template,
+                mcp_snapshot={}, skill_snapshot=[])
+            call = (mock_requests.request.call_args or mock_requests.post.call_args)
+            body = call.kwargs.get('json') or {}
+            self.assertEqual(
+                body.get('api_key'), 'sk-llm-secret',
+                "CL.6: spawn body must carry the tenant LLM api_key (F-PILOT-8)")
+            cfg = body.get('llm_model_config') or {}
+            self.assertEqual(cfg.get('model'), 'gpt-4o-mini')
+            self.assertEqual(cfg.get('api_base'), 'https://llm.example/v1')
+            self.assertEqual(cfg.get('temperature'), 0.5)
+            self.assertEqual(cfg.get('max_tokens'), 1234)
+
+    def test_CL6b_model_overrides_merge_on_top(self):
+        """CL.6b: agent_template.model_overrides (JSON) overrides ai.config."""
+        mod = self._import_client()
+        client = mod.get_agent_runtime_client(self.env)
+        config = self._make_ai_config()
+        template = self.env['woow_paas_platform.agent_template'].sudo().create({
+            'name': f'tmpl-{uuid.uuid4().hex[:6]}',
+            'model_config_id': config.id,
+            'model_overrides': json.dumps({'model': 'gpt-4o', 'temperature': 0.1}),
+        })
+        with patch.object(mod, 'requests', create=True) as mock_requests:
+            mock_requests.request.return_value = self._fake_response(
+                200, {'pod_ws_url': 'ws://pod', 'auth_token': 't',
+                      'pod_state': 'active', 'spawn_age_ms': 10})
+            mock_requests.post.return_value = mock_requests.request.return_value
+            project = self.env['project.project'].sudo().create(
+                {'name': f'cl6b-{uuid.uuid4().hex[:6]}'})
+            client.spawn_or_attach(
+                project=project, channel_id=1, invoker_user_id=2,
+                invoker_role='owner', agent_template=template,
+                mcp_snapshot={}, skill_snapshot=[])
+            call = (mock_requests.request.call_args or mock_requests.post.call_args)
+            cfg = (call.kwargs.get('json') or {}).get('llm_model_config') or {}
+            self.assertEqual(cfg.get('model'), 'gpt-4o', "override wins")
+            self.assertEqual(cfg.get('temperature'), 0.1, "override wins")
+            self.assertEqual(cfg.get('max_tokens'), 1234, "un-overridden kept")
+
+    def test_CL7_spawn_or_attach_omits_credential_without_config(self):
+        """CL.7 (拍板: key absent → fallback echo): a template with no bound
+        ai.config sends NO api_key / llm_model_config → operator skips the LLM
+        Secret → pod falls back to echo."""
+        mod = self._import_client()
+        client = mod.get_agent_runtime_client(self.env)
+        template = self.env['woow_paas_platform.agent_template'].sudo().create(
+            {'name': f'tmpl-noconfig-{uuid.uuid4().hex[:6]}'})
+        with patch.object(mod, 'requests', create=True) as mock_requests:
+            mock_requests.request.return_value = self._fake_response(
+                200, {'pod_ws_url': 'ws://pod', 'auth_token': 't',
+                      'pod_state': 'active', 'spawn_age_ms': 10})
+            mock_requests.post.return_value = mock_requests.request.return_value
+            project = self.env['project.project'].sudo().create(
+                {'name': f'cl7-{uuid.uuid4().hex[:6]}'})
+            client.spawn_or_attach(
+                project=project, channel_id=1, invoker_user_id=2,
+                invoker_role='owner', agent_template=template,
+                mcp_snapshot={}, skill_snapshot=[])
+            call = (mock_requests.request.call_args or mock_requests.post.call_args)
+            body = call.kwargs.get('json') or {}
+            self.assertIsNone(body.get('api_key'),
+                              "CL.7: no api_key when template has no ai.config")
+            self.assertIsNone(body.get('llm_model_config'),
+                              "CL.7: no llm_model_config without a credential")
 
 
 # --------------------------------------------------------------------------- #
