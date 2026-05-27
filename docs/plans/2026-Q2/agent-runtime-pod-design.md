@@ -914,11 +914,11 @@ Browser → Odoo controller → paas-operator POST /spawn-or-attach
 | `longhorn-delete` (reclaim=Delete) | 孤兒 PVC，需手動清；PV 隨 PVC delete | PVC 刪 → PV 刪 → 資料 lose（簡單） |
 | `longhorn-retain` (reclaim=Retain) | 孤兒 PVC + 孤兒 PV，需手動清兩個 | PVC 刪 → PV 保留為 Released 狀態，需手動 GC |
 
-**§2.6 將 phase-planner 推薦的方案在這裡 inline**：用 `longhorn-delete` + PVC 不 keep（**方案 X**）— 簡單，30 day 後 user state lose 是 acceptable trade-off。
+**§2.6 將 phase-planner 推薦的方案在這裡 inline**：~~用 `longhorn-delete` + PVC 不 keep（**方案 X**）~~ **[SUPERSEDED 2026-05-27 → `longhorn` Retain（§8.4.5）]** 使用者改採 reclaim=Retain（delete ns → PV 保留 Released、state 可 recover 優先於維運簡單）。
 
 ### §2.6 StorageClass 選擇（Q5 拍板用）
 
-**phase-planner 推薦**：**方案 X（longhorn-delete + PVC 不 keep）**
+**phase-planner 推薦**：~~**方案 X（longhorn-delete + PVC 不 keep）**~~ **[SUPERSEDED 2026-05-27 → `longhorn` Retain]** 使用者拍板採 reclaim=Retain（delete ns → PV 保留 Released、state 可 recover），理由與 teardown 生命週期見 §8.4.5 + §1 open #5。下方 X/Y/Z 分析（helm-uninstall 語境）保留供對照。
 
 | 方案 | StorageClass | helm `resource-policy` | 30-day 之後 state | 維運成本 |
 |------|-------------|----------------------|------------------|---------|
@@ -4957,7 +4957,7 @@ paas-operator 修改：
 
 > **2026-05-27** F-PILOT-10（echo → 真 LLM）啟動揭露：真 LLM agent pod 帶**明文 LLM 金鑰**（operator `_provision_llm_secret` 建 per-release `{release}-llm` Secret）。CAQA **E0-CAVEAT-1** 指出 operator teardown 從不回收 out-of-band resource → orphan 明文租戶金鑰殘留已 absent 的 ns。echo 階段 keyless 早退（`_provision_llm_secret` 不建 secret）邏輯上零 orphan，故 Phase E0 非 blocker；**真 LLM 上線前必收 = HARD gate**。本節 holistic 設計三類 out-of-band resource 的完整 teardown 生命週期（**非** piecemeal 補一行 `kubectl delete secret`）。
 >
-> **scope**：plan-level design；涉刪 ns / 刪 secret = 不可逆動作，**實作前回 leader 拍板**（決策點 D1/D2 + StorageClass 耦合 §8.4.5）。
+> **scope**：plan-level design。**D1/D2/Gap2 + StorageClass 已使用者 sign-off 2026-05-27**（見各小節）；惟涉刪 ns / 刪 secret = 不可逆動作，**operator/chart impl 落地前回 leader gate**（協調 operator `delete_runtime` 補 delete ns + chart `storageClassName=longhorn` 落地順序）。
 
 #### §8.4.1 問題：三類 out-of-band resource 不被 helm uninstall 回收（grounding）
 
@@ -4989,7 +4989,7 @@ operator cold-start（`spawn_or_attach` `agent_runtimes.py:206`）在 `helm inst
 | **teardown**（long-TTL GC / 顯式 delete）| 刪 | **刪** | 隨 ns cascade | 隨 ns cascade | 隨 ns（PV 看 SC）| uninstall |
 | **異常中斷殘留** | — | 孤兒 | 孤兒 | 孤兒 | 孤兒 | partial / 無 |
 
-#### §8.4.3 決策點 D1 — 明文 LLM secret 清理時機 ★待 leader 拍板
+#### §8.4.3 決策點 D1 — 明文 LLM secret 清理時機 ★SIGNED-OFF 2026-05-27 → D1-b
 
 | 選項 | 機制 | 評價 |
 |------|------|------|
@@ -4998,7 +4998,7 @@ operator cold-start（`spawn_or_attach` `agent_runtimes.py:206`）在 `helm inst
 
 **推薦 D1-b**：LLM secret 隨 ns teardown 清，不在 reap 時清。
 
-#### §8.4.4 決策點 D2 — ns-delete vs operator reap 責任邊界 ★待 leader 拍板
+#### §8.4.4 決策點 D2 — ns-delete vs operator reap 責任邊界 ★SIGNED-OFF 2026-05-27 → D2-a
 
 先釐清：agent-runtime per-project ns（`paas-ws-pa-{hash}`）由 operator `_ensure_namespace` 動態建，**teardown 只有 operator `delete_runtime` 一條路徑**（dev-sandbox `destroy.sh` 只刪 sandbox ns，不碰 operator 動態建的 per-project ns）。
 
@@ -5012,21 +5012,22 @@ operator cold-start（`spawn_or_attach` `agent_runtimes.py:206`）在 `helm inst
 
 **推薦 D2-a**：operator `delete_runtime` 負責「helm uninstall + kubectl delete namespace」雙步、冪等、誰建誰清。
 
-#### §8.4.5 不可逆動作 escalation — delete ns cascade 刪 PVC/PV ★必須拍板
+#### §8.4.5 delete ns × StorageClass — ★SIGNED-OFF 2026-05-27（longhorn Retain）
 
-`kubectl delete namespace` 會 **cascade 刪 ns 內 PVC → PV**（依 StorageClass reclaim policy）→ **LangGraph thread checkpoint + `/workspace/project-{id}/shared/` 永久 lose**（design line 144-145 已記此矛盾）。
+`kubectl delete namespace` 會 **cascade 刪 ns 內 PVC**；PV 命運依 StorageClass reclaim policy。**使用者 sign-off 2026-05-27：StorageClass = `longhorn`（reclaim=Retain）**。
 
-- 耦合 **§1 open #5 StorageClass 拍板**（仍待拍）：`longhorn-delete`（reclaim Delete → PV 隨刪，state lose，§2.6 選 X）vs `longhorn-retain`（PV 保留為 Released 孤兒，需另 GC）。**pilot 實際 SC 未確認**（cross-repo paas-charts，§1 open #5 已標）。
-- **緩解**：teardown（delete ns）只發生在 **long-TTL GC**（reaped > `T_gc` 預設 30 day，§2.5）；reaped→absent 前有 30 天 resume 窗口；對齊 §2.6 選 X 論述（30 天無互動 = 放棄 conversation，state lose acceptable）。
-- **rollback**：delete ns 不可逆（ns 刪即無）；緩解 = teardown 前的 30 天 reaped 窗口 = 唯一「rollback 窗口」。
+- **state 可 recover（拍板理由）**：delete ns → PVC 隨 ns 刪，但 PV 因 **Retain 保留為 `Released`** → **LangGraph thread checkpoint + `/workspace/project-{id}/shared/` 不隨 delete ns 消失**。誤刪 project / 誤觸 GC 後可從保留的 PV recover state（手動 / reconciler re-bind）。**推翻原 §2.6 推薦的方案 X（`longhorn-delete`，state lose）** —— 使用者取向：state 安全 + 可救 > 維運零成本。
+- **「不可逆」邊界修正**：ns 本身 + PVC binding 刪即無，但 **PV（= 實際 state）因 Retain 保留** → **state 層非不可逆**；真正不可逆的只剩「PVC↔PV 自動 binding 關係」，recover 需手動操作 Released PV。
+- **新增維運 trade-off（使用者已接受）**：Retain 的 Released PV **不自動 GC** → 長期累積孤兒 PV（佔 longhorn 容量），需 reconciler 定期掃 / 手動清 —— 此成本換取 state 可救。
+- **緩解（仍適用）**：teardown（delete ns）只發生在 **long-TTL GC**（reaped > `T_gc` 預設 30 day，§2.5）；reaped→absent 前有 30 天 resume 窗口。
 
-→ **此決策依賴 §1 open #5 StorageClass 拍板 + 向 paas-charts 確認 pilot 實際 SC，impl 前須 leader/使用者 sign-off**（plan-gap：planner 無法自填 cross-repo 的 pilot SC 實際值 — [[plan-gap-stop-and-report]]）。
+→ **impl gate**：operator `delete_runtime` 補 delete ns + chart `storageClassName=longhorn`（Retain）落地前回 leader（協調 operator/chart 順序，見 §8.4.8）。
 
 #### §8.4.6 異常中斷殘留兜底（design 揭露的新 gap）
 
 - **partial cold-start**：`spawn_or_attach` 在 `_ensure_namespace`→`ensure_registry_secret`→`_provision_llm_secret`→`helm install` 任一步失敗 → 殘留 ns + 部分 secret、無（或 failed）helm release。下次 spawn 因 cold-start 路徑冪等（`apply_manifest` / `ensure_registry_secret` 皆冪等）會覆蓋修復；**但 project 永不再 spawn → 孤兒**（§2.5 GC 掃 `reaped-since` annotation + `replicas=0`，partial 無 deployment / annotation → **掃不到** → 永久孤兒）。
 - **teardown 中途失敗**：`helm uninstall` 成功但 `kubectl delete namespace` timeout / finalizer 卡 → 殘留空 ns；冪等重試 `delete_runtime` 修復。
-- **兜底建議（新 decision，標待拍）**：§2.5 GC CronJob 擴掃條件 —— 除既有「`replicas=0` + reaped 超期」外，增掃「帶 `paas-managed` label 但**無對應 helm release**（或 release failed 超期）的 ns」→ delete ns。單一兜底點涵蓋 partial + teardown-失敗殘留，避免在 cold-start hot path 加 rollback 複雜度。
+- **兜底建議（Gap2 — ★SIGNED-OFF 2026-05-27）**：§2.5 GC CronJob 擴掃條件 —— 除既有「`replicas=0` + reaped 超期」外，增掃「帶 `paas-managed` label 但**無對應 helm release**（或 release failed 超期）的 ns」→ delete ns。單一兜底點涵蓋 partial + teardown-失敗殘留，避免在 cold-start hot path 加 rollback 複雜度。
 
 #### §8.4.7 安全邊界論述
 
@@ -5072,7 +5073,7 @@ operator cold-start（`spawn_or_attach` `agent_runtimes.py:206`）在 `helm inst
 ### 資源與生命週期
 
 4. **Reap 策略**（Q2）：~~「scale to 0（保留 PVC）+ 長 TTL helm uninstall」可以嗎？~~ **[已被 pilot 實作事實解決]** 正是此方案 — operator reap = `scale_deployment(0)` + `reaped-since` annotation（`agent_runtimes.py:170-190`）；resume = scale 1（`:193`）；`DELETE` = helm uninstall 長 TTL GC（`:228`）。
-5. **StorageClass**（Q2）：~~選 X（既有 `longhorn-delete`）or Y（retain SC）？~~ **[pilot 用 chart 預設 + 正式策略仍待拍]** pilot PVC 走 agent-runtime chart（paas-charts）`pvc.yaml` 預設 SC；**retain(Y) vs delete(X) + reap 後 PVC 留存行為仍待拍** — 待向 paas-charts 確認 pilot 實際 SC（cross-repo，本 doc 不臆測）。
+5. **StorageClass**（Q2）：~~選 X（既有 `longhorn-delete`）or Y（retain SC）？~~ **[SIGNED-OFF 2026-05-27] `longhorn`（reclaim=Retain）** — 使用者拍板：delete ns 時 PVC 隨刪、**PV 保留為 `Released` → state 可 recover（誤刪 project 可救）**，推翻原 §2.6 方案 X（`longhorn-delete`/state lose）。trade-off：Released PV 需 reconciler / 手動 GC（維運成本換 state 安全）。teardown 生命週期見 §8.4.5；chart `storageClassName=longhorn` 落點 = paas-charts（impl gate）。
 6. **Namespace 共用**（Q2）：~~(a) 共用 workspace ns or (b) 獨立 `paas-agent-ws{N}`？~~ **[已被 pilot 實作事實解決]** (b) 獨立 ns — per-project `paas-ws-pa-{hash}`（`agent_runtimes.py:38 _names`；§2.7）。命名從原 `paas-agent-ws{N}` 演進為 per-project hash。
 
 ### Transport
