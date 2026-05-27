@@ -1084,3 +1084,49 @@ class TestPilotGapLlmCredential:
             "F-PILOT-8 T8.3: project B's LLM Secret must carry B's key and never "
             "A's (per-tenant isolation INV-2)."
         )
+
+    def test_T81c_no_llm_secret_when_api_key_absent(self, client):
+        """E0-R-1 (negative branch lock): a spawn WITHOUT api_key — the current
+        echo pilot main path (echo agent never calls an LLM) — must provision NO
+        ``{release}-llm`` Secret. ``_provision_llm_secret`` must early-return on
+        an absent api_key.
+
+        mutation-resistant: deleting the impl's ``if not request.api_key:
+        return`` guard makes this red (the keyless spawn would then apply a
+        ``{release}-llm`` Secret with a null key). Guards the negative branch the
+        43-test suite previously left unlocked (credential-claim-test-fixture
+        -coupling pitfall)."""
+        from src.api.agent_runtimes import _names
+        from src.services.helm import HelmException
+
+        _ns, release = _names(_HASH)
+        llm_secret = f"{release}-llm"
+        # _SPAWN_BODY carries NO api_key (the keyless echo path).
+        assert "api_key" not in _SPAWN_BODY, "fixture: body must be keyless"
+
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get",
+                stderr="release: not found")
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            llm_secret_applies = [
+                c for c in mock_k8s.apply_manifest.call_args_list
+                if c.args and isinstance(c.args[0], dict)
+                and c.args[0].get("kind") == "Secret"
+                and c.args[0].get("metadata", {}).get("name") == llm_secret
+            ]
+            assert not llm_secret_applies, (
+                "E0-R-1: a keyless spawn must NOT provision the LLM Secret %r — "
+                "_provision_llm_secret must early-return when request.api_key is "
+                "absent (echo pilot main path). Found apply_manifest call(s): %r"
+                % (llm_secret, llm_secret_applies)
+            )
