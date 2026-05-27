@@ -1016,6 +1016,16 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - **owner**: paas-platform(operator)；**非 GA hard gate**（repo-read token scope 有限），但 credential-in-logs 應排程清
 - 對照: [[credential-claim-test-fixture-coupling]]（同 epic credential hygiene 紀律）；`docs/tracking/caqa-report-2026-05-27-agent-runtime-pod-phase-e0.md` §同源 code path 檢查 + §out-of-scope follow-up
 
+## F-PILOT-11 — 富 skill args_schema（tool `parameters`）進 spawn snapshot（需 design 排程）
+
+- **Severity**: low（enhancement；**F-PILOT-10 用 single-string `input` fallback 已足夠**跑通 tool 註冊，本條只為「富 args schema」品質升級）
+- **Origin**: F-PILOT-10 Gap 3（image Slice 2 skill→StructuredTool 註冊撞契約 gap，2026-05-27 hybrid 拍板）
+- **問題**: pod 註冊 StructuredTool 需 `args_schema`（= SKILL.md frontmatter `parameters` JSON Schema）。hybrid 後 snapshot 帶 name/version/sha256/**description**（已補），但**刻意不帶 `parameters`** —— `parameters`「runtime 用、host 不檢」（design §skill / `:1751`），pod 暫用 design 認可的 single-string `input` fallback（`:1448`），rich args 退化（`:1761` 已認列 tradeoff）。
+- **要做富 schema 的前置（皆未建）**: (i) **skill upload frontmatter parser** —— design `:1709` 設計的 `POST /api/support-projects/<id>/skills`（unzip + validate SKILL.md → populate `skill.skill_metadata` + `description`）**全未實作**，skill 目前靠 ORM seed、`skill_metadata` 永遠空（即 pilot `skills.json {}` 之因）；(ii) **minor 設計修正**：host 由「不檢 parameters」改「**轉發但不檢**」（轉發 ≠ 驗證，host 不解讀 schema 語意）。
+- **修法（之後）**: 建 upload parser populate `skill_metadata.parameters` → `_build_skill_snapshot` 多帶 `parameters` → pod 升級註冊富 args_schema、丟掉 single-string fallback。
+- **owner**: paas-platform（skill upload pipeline + snapshot）+ **design 排程**（frontmatter parameters schema / host 轉發分工修正）；**非 F-PILOT-10 範圍**。
+- 對照: [[agent-runtime-ws-protocol]] §5（已註 deferred）、design §skill（`:1424` parameters JSON Schema / `:1447-1448` pod parse + fallback / `:1709` upload pipeline / `:1751` host 不檢 / `:1761` 退化 tradeoff）。
+
 ## See also
 
 - [[cloud-service-project-decouple]] §Consequences — cycle 1 決策後仍要持續注意的負面影響

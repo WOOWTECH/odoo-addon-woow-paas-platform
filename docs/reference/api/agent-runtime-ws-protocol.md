@@ -170,18 +170,30 @@ ODOO_BASE_URL = http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.loc
 
 ### What to fetch + how to verify — `skill_snapshot` (delivered at spawn)
 
-The endpoint returns **only bytes**; the list of skills to fetch and each
-**expected sha256** ride the spawn request as `skill_snapshot`
-(`ai_assistant.py:785-793`):
+The endpoint returns **only bytes**; the list of skills to fetch, each
+**expected sha256**, and each skill's **`description`** ride the spawn request
+as `skill_snapshot` (`ai_assistant.py:_build_skill_snapshot`):
 
 ```json
-[ {"name": "<skill_name>", "version": "<ver>", "sha256": "<expected hex>"}, … ]
+[ {"name": "<skill_name>", "version": "<ver>", "sha256": "<expected hex>",
+   "description": "<host-owned skill description, may be empty>"}, … ]
 ```
 
-For each entry: GET the endpoint with `skill_name`+`version`, then assert
-`sha256(raw_bytes) == entry.sha256` (`bundle_sha256`, `ai_assistant.py:789`).
-**An empty `skill_snapshot` (template has no published skills) is valid** — fetch
-nothing; that still counts as a working path.
+- For each entry: GET the endpoint with `skill_name`+`version`, then assert
+  `sha256(raw_bytes) == entry.sha256` (`bundle_sha256`).
+- **`description`** is host-owned metadata for **tool registration** — register
+  the StructuredTool as `(name, description, args_schema)` **without fetching
+  the bundle**.
+- **`parameters` (the tool `args_schema`) is deliberately NOT in the snapshot.**
+  It is runtime-owned (SKILL.md frontmatter `parameters`, JSON Schema; "host 不檢",
+  design §skill). At registration the pod uses the **single-string `input`
+  fallback** (design: schema 來自 `parameters` 或預設 single-string `input`) and
+  fetches the bundle **lazily on first invoke** for execution. Carrying the rich
+  `parameters` in the snapshot (so the pod can register a structured schema
+  without any fetch) is a **deferred enhancement** — see
+  `docs/tracking/followups/follow-ups.md` §skill args_schema.
+- **An empty `skill_snapshot` (template has no published skills) is valid** —
+  fetch nothing; that still counts as a working path.
 
 ### MCP servers — `mcp_snapshot` (delivered at spawn)
 
