@@ -572,6 +572,58 @@ WS1+WS2 全 close 後、**第一次真 flip / spawn-or-attach 起 pod 前**，CA
 
 ---
 
+## Phase E0-T — Teardown lifecycle（F-PILOT-10 HARD gate · E0-CAVEAT-1）
+
+> **[2026-05-27]** CAQA E0-CAVEAT-1：operator teardown 從不回收 out-of-band resource（ns / `paas-registry` / `{release}-llm`，皆無 owner-ref）→ 真 LLM 上線後 orphan 明文租戶金鑰殘留 absent ns。echo keyless 零 orphan（非 blocker）；**真 LLM（Phase E rollout 帶真 agent）上線前必收 = HARD gate**。design + 使用者 sign-off（2026-05-27：D1-b / D2-a / Gap2 / StorageClass=`longhorn` Retain）見 `agent-runtime-pod-design.md` §8.4。
+
+### Goal
+
+- teardown（`delete_runtime` / long-TTL GC）完整回收 ns + 兩 secret + PVC（**D2-a 雙步**：helm uninstall + `kubectl delete namespace`）。
+- 真 LLM teardown 後 cluster **無殘留**明文 `{release}-llm`。
+- StorageClass=`longhorn`(Retain)：delete ns 後 PV 保留 `Released`、state 可 recover（誤刪可救）。
+- partial cold-start / teardown-失敗的孤兒 ns 被 GC 兜底（Gap2）。
+
+### ⚠ impl gate（不可逆）
+
+operator `delete_runtime` 補 delete ns + chart `storageClassName=longhorn`（Retain）= 不可逆動作，**落地前回 leader**（協調 operator/chart 順序）。本段僅 plan-level red test 入口，tester 寫 red 不阻 gate。
+
+### Workstream（跨 repo 落點）
+
+1. **WS-10a [paas-platform]** operator `delete_runtime`（`agent_runtimes.py:324`）補 `k8s_service.delete_namespace(ns)`（雙步、冪等 `--ignore-not-found`；helm uninstall 容忍 `not_found`）。
+2. **WS-10b [paas-platform]** §2.5 GC CronJob 擴掃條件：除「`replicas=0` + reaped 超期」外，增掃「帶 `paas-managed` label 但無對應 helm release（或 release failed 超期）」的 ns → delete（兜底 partial / teardown-失敗殘留）。
+3. **WS-10c [paas-charts]** agent-runtime chart PVC `storageClassName=longhorn`（reclaim=Retain）。
+
+### TDD red test 入口（tester 可直接接手）
+
+> 每條：test ID / 落點 suite / 測法 / red（現況）/ green（fix 後）。對應 design §8.4.9 AC。
+
+- **T10.1 雙步 teardown 機制** [paas-platform · `extra/paas-operator/tests/test_agent_runtimes.py` unit]：mock helm+k8s，呼 `delete_runtime`。**斷言** (a) `helm_service.uninstall(ns, release)` 被呼叫 (b) `k8s_service.delete_namespace(ns)` 被呼叫。**red**：現只 helm uninstall、無 delete ns → (b) 失敗。（AC1 / D2-a）
+- **T10.2 teardown 冪等** [paas-platform · unit]：對不存在 release/ns 呼 `delete_runtime`（重複兩次）。**斷言** 不 raise（helm `not_found` + delete ns `ignore-not-found` 皆 no-op）。**red**：未容忍 → raise。（AC2）
+- **T10.3 secret 跨 reap 存活** [paas-platform · unit/整合]：cold-start（帶 api_key）→ `reap` → **斷言** `{release}-llm` + `paas-registry` **仍存在** → `resume` → pod 正常起。**red**：若誤在 reap 清 secret → 不存在 / resume `CreateContainerConfigError`。（AC3 / D1-b 反向鎖）
+- **T10.4 真 LLM teardown 無殘留明文 secret** [paas-platform · `tests/integration/` real-k8s]：cold-start（真 api_key）→ `delete_runtime` → **斷言** ns `paas-ws-pa-{hash}` `NotFound`、`{release}-llm` 不存在。**red**：只 helm uninstall → ns + 明文 secret 殘留。（AC4 / INV-1）
+- **T10.5 partial 孤兒 ns GC 兜底** [paas-platform · GC 邏輯 unit]：模擬 partial（ns+secret 建好、無 helm release）。**斷言** GC 掃描識別「`paas-managed` 無 release」ns → 呼叫 delete。**red**：現 GC 只掃 `replicas=0`+reaped-since → partial 掃不到 → 永留。（AC5 / Gap2）
+- **T10.6 PV Retain 可 recover** [paas-charts · `helm template` + 整合]：(a) render PVC `storageClassName=longhorn`；(b) 整合：delete ns 後對應 PV 為 `Released`（非刪）。**red**：未指定 SC / SC=Delete → PV 隨刪。（§8.4.5 sign-off / INV-3）
+
+### 安全 / 正確性 invariant（驗收 — 對應 test）
+
+- **INV-1**：真 LLM teardown 後 cluster **無** absent project 的明文 `{release}-llm` Secret（**T10.4**）。
+- **INV-2**：secret 生命週期 = ns/release 壽命，**reap 不清**（**T10.3**）。
+- **INV-3**：StorageClass=`longhorn`(Retain) → delete ns 後 PV 保留 `Released`、state recoverable（**T10.6**）。
+
+### Dependencies / 順序
+
+- 前置：F-PILOT-8 LLM secret 注入已落（Phase E0）。
+- **真 LLM（Phase E rollout 帶真 agent）上線前 HARD gate**；echo 階段 keyless 零 orphan 不阻。
+- impl 落地前 **leader gate**（不可逆 delete ns，協調 operator WS-10a/b + chart WS-10c 順序）。
+
+### Rollback
+
+- WS-10a：`delete_runtime` 回只 helm uninstall（echo 零 orphan 無實害；真 LLM 階段不可接受 → 該階段不 rollback）。
+- WS-10b：GC 回原掃描條件。
+- WS-10c：SC 回 chart 預設（但失去 Retain 的 state-recover 保證）。
+
+---
+
 ## Phase E — Gradual rollout
 
 ### Goal
