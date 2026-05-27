@@ -14,23 +14,15 @@
 
 ## 如何跑測試（後續 task 引用）
 
-本專案測試透過 Docker worktree 環境。canonical 指令：
+本專案測試在 K8s dev sandbox（docker-desktop context）執行。sandbox 名稱 `feat-skill-list`（namespace `dev-sandbox-feat-skill-list`），已於環境前置建立並完成 DB init。canonical 指令：
 
 ```bash
-./scripts/test-addon.sh
+bash .claude/skills/k8s-dev-sandbox/scripts/test.sh feat-skill-list --module woow_paas_platform
 ```
 
-此腳本會 `-u` 更新 `woow_paas_platform` 模組（套用新欄位 / view）並跑模組全部測試。TDD 時在輸出中關注本計畫新增的 test class（`TestSkillAdminLifecycle` / `TestSkillAdminViews`）的 PASS/FAIL/ERROR。
+此腳本對 sandbox 的 odoo deployment 執行 `odoo -u woow_paas_platform --test-enable --test-tags woow_paas_platform --stop-after-init`（**含 `-u`，會更新模組套用新欄位 schema**），跑完自動 restart odoo。TDD 時在輸出中關注本計畫新增的 test class（`TestSkillAdminLifecycle` / `TestSkillAdminViews`）的 PASS/FAIL/ERROR。
 
-若你的環境可直接存取 `odoo-bin`（在 odoo-server root，worktree 已 mount），可加速只跑單一 class：
-
-```bash
-./odoo-bin -c odoo.conf -u woow_paas_platform \
-  --test-enable --test-tags /woow_paas_platform:TestSkillAdminLifecycle \
-  --stop-after-init
-```
-
-> Odoo 特性：新增 `published_at` 欄位或改 view 後，**必須 `-u` 更新模組**才會反映到 DB schema / UI；上面兩種指令都已含 `-u`。
+> sandbox 為 local 模式（hostPath 掛載 `src`），程式碼改動即時反映；但新增 `published_at` 欄位等 schema 變更仍需 `test.sh` 的 `-u` 才會建到 DB。第三方 addon 由 `PAAS_CI_ADDONS_PATH=/Users/eugene/Documents/woow/woow-paas-repo/paas-odoo-ci/addons` 提供（這個 worktree 的 `.env` 原本缺此設定，是 create 失敗的根因）。
 
 ---
 
@@ -193,7 +185,7 @@ from . import test_skill_admin_lifecycle                   # skill backend lifec
 
 - [ ] **Step 3: 跑測試確認紅**
 
-Run: `./scripts/test-addon.sh`
+Run: `bash .claude/skills/k8s-dev-sandbox/scripts/test.sh feat-skill-list --module woow_paas_platform`
 Expected: `TestSkillAdminLifecycle` 全紅 — `action_publish` / `action_deprecate` / `action_archive_skill` 不存在（AttributeError），且 `published_at` 欄位不存在。
 
 - [ ] **Step 4: 實作 model 變更**
@@ -324,7 +316,7 @@ from odoo.exceptions import UserError
 
 - [ ] **Step 5: 跑測試確認綠**
 
-Run: `./scripts/test-addon.sh`
+Run: `bash .claude/skills/k8s-dev-sandbox/scripts/test.sh feat-skill-list --module woow_paas_platform`
 Expected: `TestSkillAdminLifecycle` 全 PASS（8 個 test method）。
 
 - [ ] **Step 6: Commit**
@@ -390,7 +382,7 @@ from . import test_skill_admin_views                       # skill backend views
 
 - [ ] **Step 3: 跑測試確認紅**
 
-Run: `./scripts/test-addon.sh`
+Run: `bash .claude/skills/k8s-dev-sandbox/scripts/test.sh feat-skill-list --module woow_paas_platform`
 Expected: `TestSkillAdminViews` 兩個 test 紅 — `env.ref('woow_paas_platform.action_skill')` / `menu_skills` 找不到 xmlid（view 未建、manifest 未註冊）。
 
 - [ ] **Step 4: 建立 view 檔**
@@ -528,7 +520,7 @@ Edit `src/__manifest__.py` — 把第 39 行：
 
 - [ ] **Step 6: 跑測試確認綠（同時驗證 XML 載入無誤）**
 
-Run: `./scripts/test-addon.sh`
+Run: `bash .claude/skills/k8s-dev-sandbox/scripts/test.sh feat-skill-list --module woow_paas_platform`
 Expected: `TestSkillAdminViews` 兩個 test PASS；模組 `-u` 載入 `skill_views.xml` 無 XML/欄位錯誤（form 引用的 `published_at` 已於 Task 1 建立）。`TestSkillAdminLifecycle` 維持綠。
 
 - [ ] **Step 7: Commit**
