@@ -85,4 +85,5 @@ from . import test_agent_pod_phase_d_hardening             # F-PC-2/3/5 + F-PA-1
 from . import test_agent_pod_phase_d_sse_aclose            # F-PC-6
 from . import test_agent_pod_phase_d_enablement            # WS3 UI + seed
 from . import test_skill_admin_lifecycle                   # skill backend lifecycle
+from . import test_skill_admin_views                       # skill backend views smoke
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
