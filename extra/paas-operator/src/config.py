@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     agent_runtime_repo_password: str = ""  # Gitea read:package token (--password); private repo auth
     agent_runtime_image_tag: str = "1.0.0"  # pod image tag (appVersion) injected into values; 'latest' does not exist, only 1.0.0 is built
     odoo_base_url: str = ""  # ODOO_BASE_URL injected into pod env (skill-bundle fetch); stg = internal svc, e.g. http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.local:8069
+    # F-PILOT-10 (A): open the agent pod's egress to the EXTERNAL LLM endpoint
+    # (e.g. eugene-minimax.woowtech.io:443). The chart gates this behind
+    # `agentRuntime.externalEgress.enabled`; default OFF (closed egress = secure),
+    # explicit per-environment opt-in via env AGENT_RUNTIME_EXTERNAL_EGRESS_ENABLED.
+    agent_runtime_external_egress_enabled: bool = False  # forward to chart when real-LLM pods need outbound
 
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
