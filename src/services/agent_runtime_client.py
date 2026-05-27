@@ -5,6 +5,7 @@ Mirrors ``services.paas_operator.get_paas_operator_client`` — reads
 settings; these are the outbound caller credential, distinct from the inbound
 shared signing secret which lives in the injected env).
 """
+import json
 import logging
 
 import requests
@@ -13,6 +14,55 @@ _logger = logging.getLogger(__name__)
 
 _PREFIX = '/api/agent-runtimes'
 _TIMEOUT = 30
+
+# LLM model-config defaults — mirror ``ai_client.AIClient.from_assistant``
+# (models/ai_client.py:121-125) so the pod's ChatOpenAI sees the same values the
+# in-Odoo AI path would use.
+_LLM_DEFAULT_MODEL = 'gpt-4o-mini'
+_LLM_DEFAULT_API_BASE = 'https://api.openai.com/v1'
+_LLM_DEFAULT_MAX_TOKENS = 4096
+_LLM_DEFAULT_TEMPERATURE = 0.7
+
+
+def _build_llm_credential(agent_template):
+    """Resolve (api_key, llm_model_config) from the template's ai.config.
+
+    F-PILOT-8 / design §8.2: the operator never queries the Odoo DB, so the
+    tenant's LLM credential rides the spawn request; the operator provisions it
+    as a per-release Secret consumed by the pod (LLM_API_KEY / LLM_MODEL_CONFIG).
+
+    Reads ``agent_template.model_config_id`` (an ``ai.config``) the same way
+    ``ai_client.from_assistant`` does (model / api_base_url / temperature /
+    max_tokens), then merges ``agent_template.model_overrides`` (JSON) on top.
+
+    Returns ``(None, None)`` when no config is bound or it carries no api_key —
+    the operator then provisions no Secret and the pod falls back to echo
+    (拍板: key absent = fallback echo). The model-config field name is
+    ``llm_model_config`` (``model_config`` is pydantic-reserved operator-side).
+    """
+    config = agent_template.model_config_id if agent_template else None
+    if not config:
+        return None, None
+    api_key = config.api_key or None
+    if not api_key:
+        return None, None
+    model_config = {
+        'model': config.model or _LLM_DEFAULT_MODEL,
+        'api_base': config.api_base_url or _LLM_DEFAULT_API_BASE,
+        'temperature': (
+            config.temperature if config.temperature is not None
+            else _LLM_DEFAULT_TEMPERATURE
+        ),
+        'max_tokens': config.max_tokens or _LLM_DEFAULT_MAX_TOKENS,
+    }
+    if agent_template.model_overrides:
+        try:
+            overrides = json.loads(agent_template.model_overrides)
+        except (ValueError, TypeError):
+            overrides = None
+        if isinstance(overrides, dict):
+            model_config.update(overrides)
+    return api_key, model_config
 
 
 class AgentRuntimeOperatorError(Exception):
@@ -71,6 +121,14 @@ class AgentRuntimeClient:
             'mcp_snapshot': mcp_snapshot or {},
             'skill_snapshot': skill_snapshot or [],
         }
+        # F-PILOT-8: ride the tenant LLM credential on the spawn request so the
+        # operator can provision the per-release Secret. Omitted entirely when
+        # absent → operator skips the Secret → pod echo fallback.
+        api_key, llm_model_config = _build_llm_credential(agent_template)
+        if api_key:
+            body['api_key'] = api_key
+        if llm_model_config:
+            body['llm_model_config'] = llm_model_config
         return self._request('POST', '/spawn-or-attach', body)
 
     def reap(self, project_hash):
