@@ -43,6 +43,8 @@ from . import test_subscription_invoice_state
 from . import test_acl_p9
 # refactor: decouple CloudService ↔ Project (red phase)
 from . import test_project_decouple
+# fix/decuple-project: frontend + controller 收尾 (D1=A + D2=A — TDD red)
+from . import test_project_decouple_frontend_endpoint
 from . import test_cloud_service_acl
 from . import test_task_service_extras
 from . import test_chatter_service_injection
