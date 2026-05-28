@@ -31,6 +31,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 └─────────────┘      └──────────────┘      └──────────────┘
 ```
 
+## paas-platform 開發
+
+- 平台開發是在 Odoo 框架上開發 addon，加速 PaaS 平台。**儘量不使用 Odoo 原生網頁**，以 `/woow` 為入口（如 `/my` 等 Odoo 原生頁面租戶不會用到）。
+- 已有 addon dependencies 不要重造輪子，除非要修 bug 或補原始 addon 沒有的功能。
+- Odoo ERP 與 PaaS 共存（Odoo 同時供官方網站使用）。
+- `k8s-dev-sandbox` skill 可設定在 `woow-k3s` 或 `docker-desktop` context 管理 sandbox 環境。
+
+## kubectl
+
+兩個 context：
+
+- `woow-k3s`：woow prod / stg cluster（已設 Cloudflare WARP 可直連）
+- `docker-desktop`：本機測試、開發用
+
+**IMPORTANT**: kubectl 請明確指定 `--context`。
+
+## git
+
+PR / Issue / Comment 描述一律使用 zh-tw 繁體中文。
+
 ## Development Commands
 
 ### Run Odoo with this addon

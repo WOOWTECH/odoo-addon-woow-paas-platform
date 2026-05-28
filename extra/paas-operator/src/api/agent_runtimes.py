@@ -139,6 +139,14 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
         previous_key = jwt_signer._previous_secret()
         if previous_key:
             values["auth"]["previousKey"] = previous_key
+    # F-PILOT-10 (A): open the pod's external egress (e.g. to the LLM endpoint)
+    # when this environment opts in. The chart renders the egress rule behind
+    # agentRuntime.externalEgress.enabled; omitted (chart's closed default) when
+    # disabled. 5th instance of the missed-forward class — the chart consumed
+    # the value but the operator never set it, so real-LLM pods kept the closed
+    # default. See [[spawn-install-values-missed-forward]] + the forward-contract test.
+    if settings.agent_runtime_external_egress_enabled:
+        values.setdefault("agentRuntime", {})["externalEgress"] = {"enabled": True}
     return values
 
 

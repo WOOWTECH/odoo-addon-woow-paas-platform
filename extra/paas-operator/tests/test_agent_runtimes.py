@@ -494,6 +494,63 @@ class TestSpawnOrAttach:
             values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
         assert "odooNamespace" not in values["networkPolicy"]
 
+    def test_build_install_values_forwards_external_egress_when_enabled(self):
+        """F-PILOT-10 (A): real-LLM egress. The agent pod must reach the external
+        LLM endpoint (e.g. eugene-minimax.woowtech.io:443); chart 0.1.4 gates that
+        behind ``agentRuntime.externalEgress.enabled``. operator MUST forward it
+        from ``settings.agent_runtime_external_egress_enabled`` — 5th instance of
+        the missed-forward class (chart renders the value, operator never set it →
+        pod kept the closed-egress default → LLM unreachable). See
+        [[spawn-install-values-missed-forward]].
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        with patch("src.api.agent_runtimes.settings.agent_runtime_external_egress_enabled", True):
+            values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert values.get("agentRuntime", {}).get("externalEgress", {}).get("enabled") is True
+
+    def test_build_install_values_omits_external_egress_when_disabled(self):
+        """Default = egress closed (secure). operator does NOT set
+        agentRuntime.externalEgress so the chart keeps its closed default;
+        external egress is an explicit per-environment opt-in
+        (AGENT_RUNTIME_EXTERNAL_EGRESS_ENABLED), not on by default.
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        with patch("src.api.agent_runtimes.settings.agent_runtime_external_egress_enabled", False):
+            values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert values.get("agentRuntime", {}).get("externalEgress", {}).get("enabled") is not True
+
+    def test_build_install_values_forwards_all_consumed_chart_values(self):
+        """Forward-completeness contract (operator <-> chart 0.1.4). Beyond the
+        RENDER-required keys, the chart consumes a set of OPTIONAL values the
+        operator must forward when configured; a future missed-forward of any of
+        them (the recurring class) fails HERE, not in a live spawn. Covers the
+        historical instances (namespace prefix via _names / projectId /
+        imagePullSecrets / networkPolicy.odooNamespace) + the new externalEgress.
+        """
+        import os
+        from src.config import settings as _settings
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        with patch("src.api.agent_runtimes.settings.odoo_base_url",
+                   "http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.local:8069"), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_external_egress_enabled", True), \
+             patch.dict(os.environ, {"AGENT_RUNTIME_AUTH_SECRET_CURRENT": "k-cur"}):
+            values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        # required (chart _helpers.tpl validate)
+        assert values["projectHash"] == _SPAWN_BODY["project_hash"]
+        assert values["projectId"] == _SPAWN_BODY["project_id"]
+        assert values["auth"]["currentKey"] == "k-cur"
+        # optional, forwarded-when-configured (the missed-forward-prone set)
+        assert values["imagePullSecrets"] == [{"name": _settings.registry_secret_name}]
+        assert values["networkPolicy"]["odooNamespace"] == "dev-sandbox-stg"
+        assert values["networkPolicy"]["egressWorkspaceIds"] == _SPAWN_BODY["project_workspace_ids"]
+        assert values["agentRuntime"]["externalEgress"]["enabled"] is True
+
     def test_spawn_or_attach_cold_start_passes_repo_and_auth_to_install(self, client):
         """gap C: cold-start install fetches the chart from the PRIVATE classic
         Helm repo — repo URL / chart version / read credentials are plumbed from
