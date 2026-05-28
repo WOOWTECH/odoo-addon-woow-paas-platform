@@ -1183,7 +1183,11 @@ class AiAssistantController(Controller):
             domain.append(('cloud_service_id', '=', cloud_service.id))
         elif workspace:
             domain.append(('cloud_service_id.workspace_id', '=', workspace.id))
-        projects = request.env['project.project'].sudo().search(domain)
+        # Walk ir.rule (no sudo): project_rule_workspace_member dual-leg
+        # filters bound projects by workspace membership, unbound projects
+        # by creator / follower sub-legs. The bare-URL list path (no
+        # workspace_id, no cloud_service_id) must NOT cross-tenant-leak.
+        projects = request.env['project.project'].search(domain)
         data = [{
             'id': proj.id,
             'name': proj.name,
