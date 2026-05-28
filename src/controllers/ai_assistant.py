@@ -969,13 +969,19 @@ class AiAssistantController(Controller):
         Returns:
             dict: Task stats (total, active, completion percentage).
         """
-        # Scope stats to projects the current user has access to
-        user = request.env.user
-        accessible_projects = request.env['project.project'].sudo().search([
-            ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
-        ])
+        # Walk ir.rule (no sudo, empty domain): project_rule_workspace_member
+        # dual-leg covers both bound (workspace member leg) and unbound
+        # (follower / creator legs) projects for the caller. A hand-rolled
+        # bound-only filter (sudo + cloud_service_id.workspace_id.access_ids
+        # walk) under-counts — unbound projects miss the chain entirely
+        # (inverse symptom of T3 / T4 sudo+empty-domain over-access).
+        accessible_projects = request.env['project.project'].search([])
         task_domain = [('project_id', 'in', accessible_projects.ids)]
-        Task = request.env['project.task'].sudo()
+        # Unify with the project-side ir.rule walk above: task ir.rule
+        # (project_task_rule_workspace_member) traverses project_id and
+        # mirrors the dual-leg the projects search already passed, so no
+        # sudo is needed here either — closes the same-method anti-pattern.
+        Task = request.env['project.task']
         total = Task.search_count(task_domain)
         done = Task.search_count(task_domain + [('stage_id.name', 'in', ('Done', 'Cancelled'))])
         active = total - done
