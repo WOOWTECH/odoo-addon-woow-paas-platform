@@ -86,4 +86,5 @@ from . import test_agent_pod_phase_d_sse_aclose            # F-PC-6
 from . import test_agent_pod_phase_d_enablement            # WS3 UI + seed
 from . import test_skill_admin_lifecycle                   # skill backend lifecycle
 from . import test_skill_admin_views                       # skill backend views smoke
+from . import test_skill_is_latest_drift_regression        # is_latest drift regression
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
