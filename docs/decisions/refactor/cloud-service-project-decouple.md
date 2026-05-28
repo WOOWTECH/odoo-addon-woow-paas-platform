@@ -112,6 +112,18 @@ Odoo `ir_rule.py:140-168` 對同 group 多 rule 採 **OR 語意**。`project.pro
 - **`_check_project_access` / `_check_task_access` 對 unbound project 全放行**（pre-existing IDOR；本次 refactor 放大 surface — unbound project 從「無法存在」變「可存在」）。屬於 follow-up，不在本次 fix 範圍（see [[follow-ups]]）。
 - **`_get_cloud_service_context` 對 incompatible extras 仍注入 AI prompt**（plan AC #13 未明訂 strip；secret 已 sanitize 但 service name / subdomain 仍洩漏跨 workspace 語意資訊）。屬於 follow-up。
 
+### Cycle 6 follow-on closure（2026-05-28 frontend + controller 收尾）
+
+> Frontend Modal 強制 workspace 的限制已於 2026-05-28 plan 解除（D1=A 允許完全 unbound project）；同 PR 順手 close `cross-workspace-task-data-leak` B1 family 在 controller layer 4 個 sudo bypass instance（`_list_projects` + `_list_tasks` + `api_support_stats` accessible_projects + `api_support_stats` Task.sudo unify）。Frontend + controller 收尾 8 改動點 + 1 unify refactor + T1-T5 endpoint test 已守 controller layer ACL；同 family CAVEAT #2 (`_get_project_stages`) 仍 open（需 design），列 P1 follow-up（[[follow-ups]] F-DP-1）。
+
+- **Plan**：[[2026-05-28-decouple-project-from-workspace-frontend-plan]]（D1=A + D2=A + D3=A signed-off）
+- **Test report**：`docs/tracking/test-reports/2026-05-28-decouple-project-frontend-endpoint.md`（T1-T5 endpoint test layered red 設計 + outcome lock vs mechanism lock 階梯）
+- **CAQA report**：`docs/tracking/caqa-report-2026-05-28-decuple-project-frontend.md`（round 1 BLOCKER A1 → round 2 re-verdict APPROVED WITH CAVEATS → **Mini re-verdict (F-DP-2 + Task.sudo unify)** APPROVED WITH CAVEATS 不變，line 717-901）
+- **Reviewer report**：`docs/tracking/reviewer-report-2026-05-28-decuple-project-frontend.md`（4-agent verdict 無方向性分歧 APPROVE WITH CAVEATS；F-DP-2 mini cycle **reviewer phase 略過** per leader+user 拍板）
+- **B1 family closure 進度（5 instance 4 closed = 80%）**：`_list_projects` (cycle 6 TC4 follow-on close, 變體 A over-access) + `_list_tasks` (cycle 6 CAQA BLOCKER A1 close, 變體 A) + `api_support_stats` accessible_projects (cycle 6 F-DP-2 close, 變體 B under-access) + `api_support_stats` Task.sudo unify (cycle 6 同期, 變體 C same-method 半套)；剩 `_get_project_stages` ([[follow-ups]] F-DP-1，需 design — 移 `_ensure_default_stages` 到 explicit write endpoint)
+- **新 pattern doc**：[[orm-vs-endpoint-acl-test-coverage]]（**升級為 5 instance critical mass + anti-pattern 三變體 family (A over-access / B under-access / C same-method 半套)** + perf justification 章節）+ [[phase-leader-brief-as-pointer-not-source]]（brief 是導讀不是 source-of-truth，tester 校正 leader brief 漂移的紀律）
+- **新 pitfall doc**：[[decouple-project-frontend-worktree-dev-pitfalls]]（worktree port / OWL asset rebuild / docker restart 3 條 dev-env 教訓）+ [[orm-test-green-endpoint-leak-blindness]]（B1-B5 ORM 綠不蘊含 controller endpoint secure，plan §1.C「後端已完整支援」遮蔽 controller CRUD sudo 漏掃；含三變體 narrative）
+
 ## Invariants（後人改本區前必看）
 
 1. **`project.project._sql_constraints['unique_cloud_service']`** 不可拔。要拔就是把 Project ↔ Service 改成 1:N，必須走獨立 plan + schema migration + 既有資料 audit。
@@ -131,18 +143,24 @@ Odoo `ir_rule.py:140-168` 對同 group 多 rule 採 **OR 語意**。`project.pro
 - Patterns:
   - [[odoo-addon-std-rule-symmetric-deactivation]] — addon override Odoo std ACL 的對等處置原則
   - [[paas-workspace-member-acl-tightening]] — 在 addon 內收緊 `base.group_user` ACL 的 idiomatic pattern
+  - [[orm-vs-endpoint-acl-test-coverage]] — cycle 6 抽：controller layer 不可 sudo() 繞 ir.rule；ORM-level test 綠 ≠ endpoint ACL 安全
 - Pitfalls:
-  - [[cross-workspace-task-data-leak]] — B1 incident 完整脈絡
+  - [[cross-workspace-task-data-leak]] — B1 incident 完整脈絡（cycle 6 在 controller layer close 第 2、3 instance — `_list_projects` + `_list_tasks`）
   - [[plan-vs-odoo-schema-mismatch]] — AC#5 `user_ids` 不存在事件
+  - [[orm-test-green-endpoint-leak-blindness]] — cycle 6 抽：ORM-level test 全綠 + plan「後端已完整支援」掃描盲區
 - Follow-ups:
-  - [[follow-ups]] — 9 條未處理事項追蹤
+  - [[follow-ups]] — cycle 1 F1-F11 + cycle 6 F-DP-1~F-DP-8 等未處理事項追蹤
 - Inputs（合成來源，原始紀錄）:
   - `docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md`
+  - `docs/plans/2026-Q2/2026-05-28-decouple-project-from-workspace-frontend-plan.md`（cycle 6 frontend + controller 收尾）
   - `docs/tracking/test-reports/test-scope-report-2026-05-16.md`
   - `docs/tracking/test-reports/test-report-2026-05-16.md`
+  - `docs/tracking/test-reports/2026-05-28-decouple-project-frontend-endpoint.md`（cycle 6 T1-T4 endpoint test 設計 + layered red）
   - `docs/decisions/reviews/caqa-2026-05-16.md`
   - `docs/decisions/reviews/pr-review-verdict-2026-05-17.md`
   - `docs/decisions/reviews/pr-description-draft.md`
+  - `docs/tracking/caqa-report-2026-05-28-decuple-project-frontend.md`（cycle 6 CAQA round 1 BLOCKED → round 2 APPROVED WITH CAVEATS）
+  - `docs/tracking/reviewer-report-2026-05-28-decuple-project-frontend.md`（cycle 6 4-agent reviewer verdict）
 - 關鍵 code：
   - `src/migrations/18.0.1.0.23/post-migrate.py:93-107`（B1 fix invariant enforcement）
   - `src/security/ir_rules.xml:65-117`（3 條 addon ir.rule）
