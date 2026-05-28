@@ -2,7 +2,7 @@
 
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
-**State as of 2026-05-27**：
+**State as of 2026-05-28**：
 - Cycle 1（cloud-service ↔ project decouple, 2026-05-17）：F1-F11，B1 已 RESOLVED、PR APPROVED WITH CAVEATS
 - Cycle 2（mcp cloud_service_id → project_id decouple, 2026-05-18）：F12-F20 新增，PR APPROVED WITH CAVEATS round 2，4 BLOCKER/MAJOR 全 close
 - Cycle 3（Project Detail page, issue #48, 2026-05-20）：F21-F28 新增，APPROVED WITH CAVEATS，B-1 fresh-install fix verified；AC #28 reviewer E2E 完成 10/11 pass + 1 FAIL（E2E-G1，不擋 merge）；R-1 / R-2 hard caveats 收於 reporter phase（commit pending），R-3 / R-6 / E2E-G1 + 其他 polish 進 follow-up issue
@@ -13,6 +13,7 @@
 - **agent-runtime-pod epic Phase D**（enable-gate caveat hardening — must-fix close + admin 啟用面 + cross-repo wiring，2026-05-25）：`a9a4d1f..HEAD` = 4 commit（`5398f92` red / `8d152f7` fix F-PC-1~6+F-PA-14+charts / `e2f1624` feat enablement surface / `e94991d` test fixtures）/ 29 檔 / +1224-43；CAQA **PASS WITH CAVEATS**（0 blocker / 2 net-new caveat / 9 info / 3 carried-forward）+ reviewer **APPROVE**（5-agent 無方向性分歧，全 proceed to Reporter）；**must-fix 全正確關閉目標 caveat**（F-PC-1~6 + F-PA-14 在本 repo close；F-PC-7 A 嚴格 = `paas-agent-runtime` `feature/f-pc-7-token-use-strict`（`a8b3ce2` red + `dabb275` feat），report 以 cross-repo「given/盤證」處理，**merge 到 main + deploy-order 屬 flip-gate**；F-PC-3 設計 pivot auto-gen→**K8s Secret env(b)** fail-closed，CAQA 評為比 auto-gen 更佳）；**HC-2/F-PA-14 經 security-auditor 獨立確認 airtight**（延伸 Odoo framework-substrate 驗 `request.env.context` 不 merge request body → indirect injection 關閉）—— [[constraint-input-trust-expansion]] 第 4 度 instance（owner-bootstrap hint，/simplify 自抓收緊 normal-user 不讀 hint）；2 net-new caveat（D-CAVEAT-1 namespace secret 跨 3 進程同值 + charts `optional:true` partial 風險 / D-CAVEAT-2 token_use deploy-order + 1h 窗口 + operator rollback）收 plan §Pilot runbook flip-gate；R-1~R-5 reviewer 新發現無 high-severity（R-1/R-5 comment reporter 順手補、R-2/R-3/R-4 見下 follow-up）；OQ-D-1（design §2.15/§5.5/§5.6/§3.4 reconcile）+ OQ-D-2（C-4/C-6/P-1 刻意延後 confirm）+ OQ-D-3（flip-gate runbook）皆 addressed；**epic Phase A-D code-ready 完成**（flip / 部署 / 2 週觀察由使用者依 runbook 自跑）；takeaway durable：[[credential-claim-test-fixture-coupling]] pattern + [[cross-repo-artifact-landing-assumption]] pitfall + HC-2 forward-invariant 落 [[constraint-input-trust-expansion]]；epic durable 見 `docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md`
 - **agent-runtime-pod epic Pilot e2e**（Step 6 flip 實跑 → transport round-trip 閉環，2026-05-26）：使用者 task 63 送 chat → odoo SSE→WS bridge → pod `/v1/chat` → echo `text_chunk` → odoo `_persist_ai_response`（channel 16 OdooBot 回覆）→ 前端顯示，**transport round-trip 完整閉環**（ws_token 三方同值 HS256 auth 驗過 invoker_role=owner）。實跑串出 **9-gap chain**（見 [[agent-runtime-pilot-e2e-gap-chain]] pitfall），cluster 側由 paas-platform 連續修復破關：**PR #66**(operator ns-prefix 衍生+paas-managed label) / **#67**(operator projectId forward) / **#68**(odoo websockets dep) / **#69**(odoo↔pod WS envelope 契約 doc 交 image team) + 一串 ephemeral patch 撐到閉環；2 process learning 抽 pattern（[[spawn-install-values-missed-forward]] + [[plan-gap-stop-and-report]]）；skill-bundle 實際 fetch 待真 LLM agent 行使（echo 純 ack 不用 skills、連通已證 pod→odoo 200 + endpoint 存在 + NP 雙向，非 infra gap）；**durable 回收清單見下方 Index F-PILOT-1~10**（分 Tier 1 ephemeral 會被 Fleet/restart 洗 / Tier 2 系統性 chart-operator 缺口每 project 都撞 / plan-level 設計拍板）。**durable 收尾（2026-05-26）**：軌 2 直接轉正項 **F-PILOT-1/2/3/5/6/7 全 durable**——operator code `PR #66/#67/#71`（ns-prefix 衍生 / projectId / odooNamespace forward，3 missed-forward + contract test 鎖）merge develop、operator image `7b49f70` 建成；odoo websockets `PR #68` + image `20260526.1221` bake；charts `0.1.1`（chart-side default 修）；paas-cd pin 4 項（operator-stg image `7b49f70` + `AGENT_RUNTIME_CHART_VERSION=0.1.1` + `AGENT_RUNTIME_REPO_URL` external + odoo image `20260526.1221`）→ survive `helm upgrade --reuse-values` / Fleet sync。**剩 F-PILOT-4(registry provision) + F-PILOT-8(LLM cred) plan-gap 走 design 拍板，F-PILOT-3 ns-重建邊界 informational LOW（見下方詳述）**
 - **agent-runtime-pod epic Phase E0**（pilot-revealed production gap — F-PILOT-4 registry pull / F-PILOT-8 LLM credential，**operator green**，2026-05-27）：`b46f0af..HEAD` = 4 commit / 3 檔 / +245（`76836b8` red → `e2a3d7b` T4.1a mock-fix → `3d7e083` operator green → `cdf5368` E0-R-1 lock）；CAQA **PASS WITH CAVEATS**（0 blocker / 3 caveat / 6 info / 1 out-of-scope）+ reviewer **APPROVE**（4 方無方向性分歧）；**scope = operator unit only**（`extra/paas-operator/`），cross-repo chart/cluster 僅 lock-step caveat。operator 兩條 provisioning（F-PILOT-4 registry pull secret forward — 複用 `helm.py:649`、imagePullSecrets 只帶 secret 名不帶 creds / F-PILOT-8 per-tenant `{release}-llm` Secret — keyless 早退）**正確且 scope 收斂**；**明文 LLM key 5 點獨立重驗不洩漏**（零 logger / 0600 tmpfile / generic handler / KubectlException message-only / Optional[str] 無 422 echo）；per-tenant 隔離 INV-2 成立。**E0-R-1**（key-absent 負分支 missing-negative，mutation 證實刪 guard 全 43 test 仍綠）tester `cdf5368` 補 `test_T81c` mutation-resistant 鎖 → [[credential-claim-test-fixture-coupling]] §missing-negative 形態。**T4.1a** 撞錯 test mock 對象（`ensure_registry_secret` 屬 KubernetesService 非 HelmService）→ 停下修 **test**（`e2a3d7b`）非 bend impl（會 AttributeError 炸 prod）→ [[plan-gap-stop-and-report]] §impl/test 層延伸。3 caveat 路由：**E0-CAVEAT-1**（orphan 明文 LLM Secret on teardown）→ **F-PILOT-10 HARD gate**（echo 階段邏輯不可能、真 LLM 上線前必收 + holistic teardown-lifecycle design）；**E0-CAVEAT-2**（chart `LLM_API_KEY` secretKeyRef optional:true）+ **E0-CAVEAT-3**（registry creds blast radius / SA-minimal RBAC + 建議 pull-only-scoped）→ cross-repo lock-step **owner paas-charts**；out-of-scope helm.py argv repo-read token（gap C `df6348e`）→ **F-GC-3**。報告 commit + 2 pattern doc 更新（credential-claim + plan-gap-stop-and-report）見下
+- **skill-list cycle 6**（PR #81 follow-up — is_latest drift fix「model 層」+ 含瀏覽器 UI 的 e2e，2026-05-28）：`c36a9a1..HEAD` = 8 commits / 10 檔 / +859 -7（4 test commit + 1 fix + 1 feat migration + 1 docs test-coverage + 1 selector align）。CAQA **pass-with-medium-caveats**（high 0 / medium 2 / info 9）+ reviewer **approve with comments**（blocker 0 / major 7 / minor+nit+info 22；4-agent 無方向性分歧）。**根因修法落 model `create()` / `write()` hook**（[[invariant-recompute-on-orm-write-hook]] 抽 pattern — derived flag / 不變式不能只在 user-facing transition method 維護；ORM 任何寫入路徑（test fixture / 未來上傳 API / demo data / admin 匯入）都會 drift），配套幂等 migration `18.0.1.0.28` 對既有資料 backfill（無資料 no-op）。skill-related test **41/41 全綠**、playwright 4 階段 + 4 screenshot 視覺驗證符合 spec §④-b、不變式守線：transition method 既有 recompute 路徑（`action_publish` / `_deprecate` / `_archive_skill`）保留 belt-and-braces、`_recompute_is_latest` 內部 write `{'is_latest': ...}` 不踩 hook 條件 → 不遞迴。**tester 撞 fixture mechanics 雷**（HttpCase 內 `action_publish` 後接 raw SQL UPDATE 製造 drift sample 被 buffered ORM write flush 覆蓋 → `invalidate_recordset()` 只清 cache、不清 buffer）依 [[plan-gap-stop-and-report]] 守線停下回報 → impl 階段方案 A（`flush_all` 前後夾）落地，抽 [[httpcase-orm-flush-ordering-raw-sql]] pitfall。Phase C `MIG.1` 從硬編 `18.0.1.0.27` 改 monotonic `>= 27` —— [[phase-versioned-test-assertion]] 第三度落地（27→28 不撞紅，後續每次 bump 都不會撞）。2 caveat（C1 winner 演算雙寫雷 / C2 hook O(group_size) 單筆同步成本）+ 7 major（F1-F7 reviewer 抓，全非阻斷）+ 22 minor/nit/info 在 follow-up cycle 6 列冊；epic durable 收尾 + PR description / comment 草稿交 leader 用 tea CLI 操作。**Umbrella issue #84** 彙總 F-SK-1~9 search anchor（https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/84）。
 - **agent-runtime-pod epic F-PILOT-10**（真 LLM agent — image 真 LLM runtime + client LLM cred + teardown design，**3 PR merged**，2026-05-27）：image **PR#6 → main `6945ea5`**（真 LLM runtime：langgraph_runtime / loader / cache / url_validator）+ client **PR#76 → develop**（`agent_runtime_client` 帶 LLM cred，收 F-PILOT-8 client-side 鏈漏）+ teardown **PR#77 → develop**（design §8.4 holistic teardown，E0-CAVEAT-1 HARD gate 的設計回應）；develop = **`be6746d`**。CAQA **PASS WITH CAVEATS**（0 unconditional blocker / 1 conditional-escalation C10-1 SSRF / 5 caveat / 4 info）+ reviewer **APPROVE**（pilot stg，0 mandatory blocker，3-agent + CAQA 無方向性分歧）。**4 核心控制驗到位**：tool sandbox 無 command injection（list-args + stdin JSON + sha256-pinned entrypoint）/ fail-closed（empty-bearer 拒 + key-absent→echo 不洩 env/cred）/ credential 兩端不入 log / agent-loop DoS bound（`MAX_TOOL_ROUNDS=8`）。**empty-bearer lock-step 做對**（[[credential-claim-test-fixture-coupling]] 正面範例，對比 E0 key-absent 缺口）；mock TDD 5 切片完。**三層 gate 見下方 §F-PILOT-10 review takeaway**：Tier1 真 cluster 部署前 **C10-1 NP backstop**（paas-charts woow-k3s 已實測 ✓）/ Tier2 真 LLM 對外前 **R10-1 observability + C10-3 byte cap + C10-2 interpreter allowlist** / Tier3 一般 follow-up（C10-4/C10-5/R10-2/R10-3/R10-4）。pattern：[[plan-gap-stop-and-report]] 再現（Gap 3 hybrid + C10-1 cross-repo NP gate）。
 - **agent-runtime-pod epic F-PILOT-10 真 LLM round-trip 達成 🎉**（cluster e2e，2026-05-27，stg woow-k3s）：真 LLM 完整閉環（「你好8」12:58、**19s**、MiniMax-M2.7 真 LLM 生成、無 error、乾淨 disconnect、browser 真 LLM 回話且理解 history）。cluster + 完整 UI round-trip 串出 **8-gap chain**（mock/caqa/reviewer **全看不到**——render/deploy/真 NP/真 LLM/cold-start timing 在 mock 之下、部署狀態在靜態 review 之外，唯 cluster + 完整 round-trip 暴露）→ [[agent-runtime-fpilot10-cluster-e2e-gap-chain]] pitfall。真因聚類：**missed-forward**（G2/G6/G7，**optional value silent 漏轉** — 比 pilot required 硬 fail 更陰，contract test 須涵蓋 optional）+ **deploy gap**（G1 operator 自身 image stale ≠ pin agent-runtime image / G8 operator chart 無 extraEnv / G5 externalEgress 沒 enable）+ **transport timing**（G3 cold-start race relay 無 retry）+ **observability**（G4 真 LLM 失敗 silent close 無 error frame）。**3 道防線**（integration test render-to-pod-spec 涵蓋 optional + ensure_registry_secret real-K8s / deploy checklist 驗 running image 非 values pin / observability success-path log）+ 8-gap durable 見下方 §F-PILOT-10 cluster e2e gaps；pattern [[spawn-install-values-missed-forward]] 加 optional 深化。**[最終收尾 2026-05-27]** G8 externalEgress env ephemeral→durable（operator chart `0.1.11` + PR#79 + values-stg + survive redeploy）= F-PILOT-10 **唯一 ephemeral caveat 已解** → **cd 側全部署 durable**；**G1/G2/G5/G6/G7/G8 全 CLOSED**，剩 G3/G4 後續改善 + R10-1/C10-*/R10-*/F-PILOT-11 gate/test follow-up（後續 phase）。**F-PILOT-10 真 LLM epic 完整收口**（code + review + round-trip + 8-gap durable + 沉澱完整）。
 
@@ -73,8 +74,17 @@
 | F-PA-14 | medium | reviewer (cycle 5 round 1 HC-2) | 5 | `project.sudo().create()` (在 `ai_assistant.py:946`) bypass `project_project.create()` override 對 `SUPERUSER_ID` skip bootstrap → creator silently 無 `project_access` owner row → 對 4 個新 model 的 16 條 ir.rule 全 fail → creator **看不到自己 project** 上 agent_template / agent_session / skill / project_access；**Phase D-F use_agent_runtime active 前必修** | Phase D-F 必修 PR — `project_project.py:122` + `ai_assistant.py:946` |
 | F-PA-15 | info | reviewer (cycle 5 round 2 EC-3a) | 5 | HC-3 hotfix `_check_project_ids_grantor_authority` 對 `is_superuser()` + `has_group('base.group_system')` bypass — Phase B/C 加 controller endpoint 用 `agent_template.sudo().write({'project_ids': ...})` path 不 enforce constraint，必須對齊 [[two-layer-acl-lockstep]] pattern 在 controller carve-out 補 grantor check | Phase B/C controller layer touch PR 提醒 — `agent_template.py:94-122` |
 | F-PA-16 | info | reviewer (cycle 5 round 2 EC-4a) | 5 | `skill._anchor_bundle_attachment` 對既有 attachment 的 `res_model` overwrite 是 destructive — 若 admin (`base.group_system`) 把已存在的 `mail.message` attachment（`res_model='mail.message'`）assign 給 `skill.bundle_attachment_id`，anchor 把 attachment 的 `res_model` overwrite 成 `'woow_paas_platform.skill'`，切斷原 mail.message linkage；docstring 已警告但需 maintainer doc 補強 | reporter 順手 / Phase B/C bundle upload API PR — `skill.py:108-129` docstring |
+| F-SK-1 | medium | refactor (cycle 6) | 6 | `_recompute_is_latest`（`src/models/skill.py:202-220`）與 migration（`src/migrations/18.0.1.0.28/post-fix-is-latest.py:19-40`）共用「`(published_at desc, id desc)` winner」演算但兩份相同副本 — 未來既有 spec follow-up「semver 精確排序」演進時若漏改其一 → fresh deploy vs upgrade deploy 行為不一致 silent drift（CAQA C1 / 同源 reviewer F1 二階 model 內部兩條路徑差異） | 抽 `Skill._compute_is_latest_winner(group_records)` classmethod model + migration 共用；或 next semver 演進 PR 內 lock-step 改兩處 + 補 invariant test 鎖兩條路徑等效 |
+| F-SK-2 | medium | refactor (cycle 6) | 6 | model hook 對單筆 published create / write 即同步 search + sort + N×write 全 `(project_id, name)` group — admin 後台逐筆操作 negligible；批匯 N 個同 group → O(N²)（CAQA C2 / 同源 reviewer F2 跨 group N+1 放大） | 短期 reminder；中長期 batch upload API 出現時 hook 改 group-aware（`@api.model_create_multi` 收 distinct group → 一次性 recompute） |
+| F-SK-3 | major | reviewer (cycle 6 F1) | 6 | write hook 對 `deprecated → published` re-publish 用 `if not skill.published_at` guard 不刷新 `published_at`，與 `action_publish` 一律 stamp `fields.Datetime.now()` 不一致 — 兩條路徑對同操作給不同 winner 排序 | 加 regression test `test_write_state_to_published_from_deprecated_keeps_old_published_at` 顯式鎖語意；或在 `_recompute_is_latest` docstring 明寫「兩條路徑可能對 deprecated→republish 得到不同 winner」`src/models/skill.py:125-129` |
+| F-SK-4 | major | reviewer (cycle 6 F2) | 6 | write override `for skill in self: skill._recompute_is_latest(...)` 對來自 K 個不同 `(project_id, name)` group 的 N 筆 recordset 跑 N 次 search + N 次 sort（admin 多選 50 skills mass action_archive 場景）。idempotent 安全、worst-case 跨 group 放大 | dedupe group key set 後再 recompute（`published_at` 補刷必須 per-skill）`src/models/skill.py:117-130` |
+| F-SK-5 | major | reviewer (cycle 6 F3) | 6 | 截圖路徑硬編 `/tmp/skill-e2e-screenshots/` — POSIX-only，Windows 不可攜；jsdoc / README 未標 caveat `tests/e2e/skill/skill-admin-form.spec.ts:34` + `tests/e2e/skill/README.md:40-44, 56-61` | jsdoc / README 標「目前僅 POSIX；Windows 需 env override」caveat，或改 `process.env.SCREENSHOT_DIR ?? path.join(os.tmpdir(), 'skill-e2e-screenshots')` 同步更新註解 |
+| F-SK-6 | major | reviewer (cycle 6 F4) | 6 | README / spec 註解「leader 強調曾因此誤判 action_deprecate」口頭歸屬入庫 — 一年後讀者無從定位 `tests/e2e/skill/README.md:67` + `tests/e2e/skill/skill-admin-form.spec.ts:22-25` | 改事實陳述（「曾發生過：sandbox pod 跑舊 code 導致誤判 action_deprecate」），或刪脈絡只留 pitfall（轉 [[httpcase-orm-flush-ordering-raw-sql]] 等 doc） |
+| F-SK-7 | major | reviewer (cycle 6 F5) | 6 | 測試註解硬編「PR #81」「Plan §Phase C Task 13」脆弱 anchor（平台 / 修訂 artifact 易漂移失效）`src/tests/test_skill_is_latest_drift_regression.py:5`、`src/tests/test_skill_e2e_lifecycle_download.py:16`、`src/tests/test_agent_pod_phase_c_skill_bundle.py` | 改 in-repo anchor（檔名 + class 名），如「既有 `TestSkillAdminLifecycle` 已覆蓋」；plan task 引用補 stable summary |
+| F-SK-8 | major | reviewer (cycle 6 F6) | 6 | playwright `loginAdmin` `await page.fill('input[name="db"]', DB_NAME).catch(() => {})` 過寬吞錯 — selector timeout / element disabled / network crash 全被吞 → debug 錯位 `tests/e2e/skill/skill-admin-form.spec.ts:39` | narrow 到「element 不存在」：`const dbField = page.locator('input[name="db"]'); if (await dbField.count() > 0) await dbField.fill(DB_NAME);` |
+| F-SK-9 | major | reviewer (cycle 6 F7) | 6 | playwright `getByText(skillName, { exact: false }).first().click()` 對同名 skill 多版本 / cross-test pollution row silent wrong-row click → 開錯 form、後續 assert 失敗訊息誤導 `tests/e2e/skill/skill-admin-form.spec.ts:52` | `SKILL_E2E_NAME` 加 unique suffix（backend test 同 pattern `uuid.uuid4().hex[:8]`），或 `exact: true` + 由 fixture 注入 record id 走 data-id selector + `assert count() === 1` 顯式守線 |
 
-下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12-F20 是 cycle 2。F21+ 是 cycle 3 (issue #48 Project Detail page)。F-X1+ 是 cycle 4 (MCP refactor URL redesign)。F-PA-1+ 是 cycle 5 (Agent runtime pod Phase A)。F-PA-13+ 是 cycle 5 round 1 reviewer 抓 CAQA 漏抓 4 HC 中 leader 拍板 defer 的 2 條（HC-1 / HC-2）+ round 2 hotfix 落地後 reviewer 獨立 walk 抽出的 2 條 edge case 提醒（EC-3a / EC-4a）。
+下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12-F20 是 cycle 2。F21+ 是 cycle 3 (issue #48 Project Detail page)。F-X1+ 是 cycle 4 (MCP refactor URL redesign)。F-PA-1+ 是 cycle 5 (Agent runtime pod Phase A)。F-PA-13+ 是 cycle 5 round 1 reviewer 抓 CAQA 漏抓 4 HC 中 leader 拍板 defer 的 2 條（HC-1 / HC-2）+ round 2 hotfix 落地後 reviewer 獨立 walk 抽出的 2 條 edge case 提醒（EC-3a / EC-4a）。F-SK-1+ 是 cycle 6 skill-list（PR #81 follow-up — is_latest drift fix model 層 + 含瀏覽器 UI 的 e2e）。
 
 ---
 
@@ -1076,6 +1086,122 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - **owner**: paas-platform（skill upload pipeline + snapshot）+ **design 排程**（frontmatter parameters schema / host 轉發分工修正）；**非 F-PILOT-10 範圍**。
 - 對照: [[agent-runtime-ws-protocol]] §5（已註 deferred）、design §skill（`:1424` parameters JSON Schema / `:1447-1448` pod parse + fallback / `:1709` upload pipeline / `:1751` host 不檢 / `:1761` 退化 tradeoff）。
 
+---
+
+# Cycle 6 — skill-list (PR #81 follow-up — is_latest drift fix model 層 + 含瀏覽器 UI e2e, 2026-05-28)
+
+> Cycle 6 完成於 2026-05-28，`c36a9a1..5ac2081` = 8 commits / 10 檔 / +859 -7。CAQA `pass-with-medium-caveats`（high 0 / medium 2 / info 9）+ reviewer `approve with comments`（blocker 0 / major 7 / minor+nit+info 22）。**根因修法** = model `create()` / `write()` hook 收斂 `_recompute_is_latest`（[[invariant-recompute-on-orm-write-hook]] 抽 pattern）+ 配套幂等 migration `18.0.1.0.28` 對既有資料 backfill；**fixture mechanics 雷**（HttpCase raw SQL drift sample 被 buffered ORM write flush 覆蓋）抽 [[httpcase-orm-flush-ordering-raw-sql]] pitfall。skill-related test 41/41 全綠，playwright 4 階段 + 4 screenshot 符合 spec §④-b。F-SK-1~F-SK-2 = CAQA C1/C2 同源 reviewer F1/F2；F-SK-3~F-SK-9 = reviewer F1-F7 全。
+
+## F-SK-1 — winner 演算雙寫雷（model + migration 兩份相同副本，未抽 classmethod）
+
+- **Severity**: medium（CAQA C1 + 同源 reviewer F1 major 二階）
+- **Origin**: CAQA Quality Q3 + Architecture A2 同源、Reviewer code-reviewer M1 確認 + comment-analyzer M3 確認；spec §② 拍板可接受（migration 一次性、model 常駐生命週期不同），plan §Task 3 Step 1 備註過 fallback 抽 classmethod 但 implementation 選方案 A 沒抽
+- **Location**:
+  - `src/models/skill.py:202-220` — `_recompute_is_latest` model 常駐
+  - `src/migrations/18.0.1.0.28/post-fix-is-latest.py:19-40` — `migrate` 一次性
+- **問題**：兩份結構相同副本（`(published_at desc, id desc)` 取 winner + if-guard 寫 `is_latest`）；演算結果目前等效（`test_migration_fixes_existing_drift_sample` + `TestSkillIsLatestDriftRegression` 各自驗）
+- **為何留 caveat**：既有 spec follow-up「semver 精確排序」會改 winner 排序規則 — 規則改一邊忘改另一邊 → fresh sandbox 看似正常、prod upgrade 跑舊 migration → 隱性 drift（fresh deploy vs upgrade deploy 行為不一致）；「兩份相同邏輯」maintainability debt build-up over time
+- **建議落點**：
+  - 抽 `Skill._compute_is_latest_winner(group_records)` classmethod（純函式、no SQL），model `_recompute_is_latest` + migration 共用
+  - 或在本 doc + `_recompute_is_latest` docstring 標 explicit「winner 排序規則演進時 lock-step 改兩處」reminder
+  - 補 invariant test 鎖兩條路徑等效（同一份 drift recordset 各跑 model recompute / migration migrate 結果相同）
+- **何時**：semver 精確排序 PR 出現時（owner = paas-platform skill team）；不阻擋本 PR ship
+
+## F-SK-2 — hook 對單筆操作 O(group_size) 同步成本（跨 group N+1 放大）
+
+- **Severity**: medium（CAQA C2 + 同源 reviewer F2 major 跨 group 視角）
+- **Origin**: CAQA Performance P1 + Reviewer code-reviewer M2 確認
+- **Location**: `src/models/skill.py:104-114, 117-130`
+- **問題**：hook 每次踩中條件即同步：1 次 SQL search 全 `(project_id, name)` group + Python sort O(group · log group) + per-record if-guard write。對 batch ORM create N 筆同 group published → O(N²)（每次 search group size 越來越大；批匯 50 版本 → ~1225 records processed）；對混 group recordset N 筆（跨 K 個 group）→ N 次 search + sort（admin 多選 50 skills mass action_archive 場景）
+- **為何留 caveat**：當前場景（admin 後台逐筆操作 + spec §背景 5「skill 尚未對使用者開放」+ 預期版本數小）影響 negligible；既有 `TestSkillAdminLifecycle` 10/10 + 全 `-u` 41/41 skill-related test 通過驗證 perf 對 test runtime 無感；spec 非目標明示不擴 HTTP 上傳 API
+- **建議落點**：
+  - 短期：本 tracker reminder「批匯 / mass admin 動作出現時改 group-aware」
+  - 中長期 batch upload API 出現 → 新 method 用 `@api.model_create_multi` collect distinct `(project_id, name)` group → 對每 group 一次性 recompute（O(distinct_group) 而非 O(N²)）
+  - mass action（如 multi-select archive）→ write override 內 dedupe group key set 後再 recompute（`published_at` 補刷仍須 per-skill）
+- **何時**：HTTP batch upload API / mass admin action 排上路線圖時
+
+## F-SK-3 — write hook 對 `deprecated → published` re-publish 不刷新 `published_at`
+
+- **Severity**: major（reviewer F1，**非阻斷 ship**）
+- **Origin**: reviewer code-reviewer M1
+- **Location**: `src/models/skill.py:125-129`
+- **問題**：`action_publish` 一律 stamp `published_at = fields.Datetime.now()`（`skill.py:168-171`）；繞過 transition 走 `skill.write({'state': 'published'})` 時，hook 的 `if not skill.published_at` guard 對「已有舊 timestamp 的 deprecated」**不刷新** → 兩條路徑對同操作（re-publish a deprecated skill）給出不同 `published_at`，影響 `_recompute_is_latest` 的 `(published_at desc, id desc)` 排序語意
+- **與 spec 對照**：spec §① 字面是「補 published_at（只在缺時補）」與 hook 邏輯一致 → spec 已 take 此差異；reviewer 提醒「reader 容易誤改」
+- **建議落點**：
+  - (a) 加 regression test `test_write_state_to_published_from_deprecated_keeps_old_published_at` 顯式鎖語意
+  - (b) 或在 `_recompute_is_latest` docstring 明寫「兩條路徑可能對 deprecated→published re-publish 得到不同 winner」
+  - 兩者擇一即可；推薦 (a)（test 比 docstring 強）
+- **何時**：next touch `src/models/skill.py` 順手；不獨立 PR
+
+## F-SK-4 — write override 對混 group recordset N+1 放大
+
+- **Severity**: major（reviewer F2，**非阻斷 ship**；與 F-SK-2 同源 perf，**不同視角**：F-SK-2 是單 group batch；F-SK-4 是跨 group recordset）
+- **Origin**: reviewer code-reviewer M2
+- **Location**: `src/models/skill.py:117-130`
+- **問題**：`for skill in self: skill._recompute_is_latest(...)` 對 self=N 筆來自 K 個不同 `(project_id, name)` group 的 recordset → N 次 search + N 次 sort。idempotent 安全、worst-case 跨 group 放大。具體場景：admin 多選 50 skills mass action_archive → `write({'state': 'archived'})` 對 self=50 → 50 次 recompute（多數 if-guard no-op）
+- **建議落點**：dedupe group key（dedupe `(project_id, name)` set 後再 recompute；但 `published_at` 補刷必須 per-skill —— 拆兩 loop 或在同一 loop 內分別處理）
+- **何時**：mass admin action 路線圖出現時與 F-SK-2 一併處理
+
+## F-SK-5 — playwright 截圖路徑硬編 `/tmp` 不可攜
+
+- **Severity**: major（reviewer F3，**doc maintainability**；多平台 CI 才會顯）
+- **Origin**: reviewer comment-analyzer M1
+- **Location**: `tests/e2e/skill/skill-admin-form.spec.ts:34` (`const SCREENSHOT_DIR`) + jsdoc `:15` + `tests/e2e/skill/README.md:40-44, 56-61`
+- **問題**：POSIX-only 假設；註解未標 caveat；Windows / 部分 CI 沒 `/tmp` 直接炸；jsdoc 與 README 把 `/tmp/skill-e2e-screenshots` 寫死當「截圖位置」事實
+- **建議落點**：
+  - jsdoc / README 標 caveat「目前僅 POSIX；Windows 需 env override」
+  - 或改 `process.env.SCREENSHOT_DIR ?? path.join(os.tmpdir(), 'skill-e2e-screenshots')`、同步更新註解
+- **何時**：next playwright spec touch 順手；Windows / 跨 OS CI 排上來時必修
+
+## F-SK-6 — README / spec 註解「leader 強調」口頭歸屬入庫
+
+- **Severity**: major（reviewer F4，**doc maintainability**；一年後讀者無從定位）
+- **Origin**: reviewer comment-analyzer M2
+- **Location**: `tests/e2e/skill/README.md:67` + `tests/e2e/skill/skill-admin-form.spec.ts:22-25`
+- **問題**：「leader 強調曾因此誤判 action_deprecate」這類**當下對話脈絡**入庫後，半年後讀者沒有 channel 可定位「哪個 leader / 哪場討論 / 哪次誤判」。README 是**正式文件**、不該保留口頭歸屬
+- **建議落點**：改寫成事實陳述，e.g.「曾發生過：sandbox pod 跑舊 code → 修 model 後沒 rollout restart → 透過瀏覽器測 action_deprecate 看到舊行為而誤判邏輯有 bug」；或刪脈絡只留 pitfall（轉引 [[httpcase-orm-flush-ordering-raw-sql]] 或新建 sandbox rollout pitfall）
+- **何時**：next playwright spec touch 順手；不獨立 PR
+
+## F-SK-7 — 測試註解硬編「PR #81 / Plan §Phase C Task 13」脆弱 anchor
+
+- **Severity**: major（reviewer F5，**doc maintainability**；PR 編號 / plan task 編號為平台或修訂 artifact，會漂移失效）
+- **Origin**: reviewer comment-analyzer M3
+- **Location**:
+  - `src/tests/test_skill_is_latest_drift_regression.py:5`
+  - `src/tests/test_skill_e2e_lifecycle_download.py:16`
+  - `src/tests/test_agent_pod_phase_c_skill_bundle.py`（既有但被本 cycle 新註解延續）
+- **問題**：PR #81 / plan task 編號是平台層 artifact，時間久了：(a) PR 被搬到 issue tracker / 別的平台 → URL 死；(b) plan 檔名 / 章節重命名 → anchor 失效。讀者看 code 註解只能 grep 個 PR # 對不上現況
+- **建議落點**：改用 in-repo anchor：
+  - 「既有 `TestSkillAdminLifecycle` 已覆蓋」（用 class 名 + 檔名）
+  - 「見 `docs/decisions/patterns/invariant-recompute-on-orm-write-hook.md`」（用 doc 相對路徑）
+  - plan task 引用補 stable summary（不只引 `§Task X` anchor，順帶寫該 task 的一句意圖）
+- **何時**：next touch 各檔順手；不獨立 PR
+
+## F-SK-8 — playwright `loginAdmin` `.catch(() => {})` 過寬吞錯
+
+- **Severity**: major（reviewer F6，silent-failure）
+- **Origin**: reviewer silent-failure-hunter major-1
+- **Location**: `tests/e2e/skill/skill-admin-form.spec.ts:39`
+- **問題**：`await page.fill('input[name="db"]', DB_NAME).catch(() => {})` 無條件吞掉**任何**例外（selector timeout / element disabled / network crash），會導致 debug 錯位（後續 fill 報的錯不是 root cause）
+- **建議落點**：narrow 到「element 不存在」：
+  ```ts
+  const dbField = page.locator('input[name="db"]');
+  if (await dbField.count() > 0) await dbField.fill(DB_NAME);
+  ```
+- **何時**：next playwright spec touch；F-SK-9 一併處理
+
+## F-SK-9 — playwright `getByText.first()` silent wrong-row click
+
+- **Severity**: major（reviewer F7，silent-failure）
+- **Origin**: reviewer silent-failure-hunter major-2
+- **Location**: `tests/e2e/skill/skill-admin-form.spec.ts:52`
+- **問題**：`await page.getByText(skillName, { exact: false }).first().click();` — list 同 name 多版本 / cross-test pollution row 都會被 `first()` 吃到、click 成功**但開到錯 form** → 後續 assertion 失敗訊息誤導
+- **建議落點**：
+  - `SKILL_E2E_NAME` 帶 unique suffix（與 backend test 同 pattern `uuid.uuid4().hex[:8]`）
+  - 或 `exact: true` / 由 fixture 注入 record id 走 data-id selector
+  - 加 `expect(await page.getByText(...).count()).toBe(1)` 顯式守線（不留 silent 漂移空間）
+- **何時**：與 F-SK-8 一併處理
+
 ## See also
 
 - [[cloud-service-project-decouple]] §Consequences — cycle 1 決策後仍要持續注意的負面影響
@@ -1090,6 +1216,8 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - [[legacy-endpoint-scope-blindness]] — cycle 4 HC-1 的根因 context（plan AC scope blindness）
 - [[constraint-input-trust-expansion]] — F-PA-15 的根因 context（cycle 5 round 1 HC-3 同 family — m2m write constraint grantor authority check；Phase B HC-2 是其 image 端同型 instance）
 - [[attachment-row-level-acl-and-anchor-stamping]] — F-PA-16 的根因 context（cycle 5 round 1 HC-4 — bundle attachment defense in depth；Inv A2 = Phase B pod 零直連 ir.attachment 守線的 woow_paas_platform 側依賴）
+- [[invariant-recompute-on-orm-write-hook]] — F-SK-1~F-SK-4 的根因 context（cycle 6 — derived flag / 不變式不能只在 user-facing transition method 維護；ORM `create()` / `write()` hook 兜底所有寫入路徑；avoid recursion = 內部 write vals 不含 trigger key；本次 PR 落地的 pattern）
+- [[httpcase-orm-flush-ordering-raw-sql]] — cycle 6 fixture mechanics 雷（HttpCase 內 `action_publish` 後接 raw SQL UPDATE 製造 drift sample 被 buffered ORM write flush 覆蓋；`invalidate_recordset()` 只清 cache、不清 buffer；修法：raw SQL 前後夾 `flush_all`）
 - `docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` — Phase B image source 完成 durable（cross-phase learnings：CI gate 三度價值 / HC-2 cross-phase 驗證 / 2 process learning）
 - [[ci-workflow-container-missing-node]] — Phase B B-5 抽 pitfall（CI `container: <lang-image>` + checkout → node exit 127 false green）
 - `docs/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md` — Phase C wiring 收口 durable（cross-phase learnings：C-1 disputed severity 第三條路 MOOTED / cross-repo `token_use` 三端 sign-first-then-verify zero-downtime / phase-versioned test 第二次）
@@ -1117,3 +1245,4 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   - `docs/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` §四面向 + §Caveat（D-CAVEAT-1/2 + 9 info + 3 carried-forward — Phase D）/ `docs/tracking/reviewer-report-2026-05-25-agent-runtime-pod-phase-d.md` §4 HC-2 airtight + §6 R-1~R-5 + §7 carried-forward（Phase D）
   - `docs/tracking/caqa-report-2026-05-27-agent-runtime-pod-phase-e0.md` §四面向 + §Caveat（E0-CAVEAT-1/2/3 + out-of-scope — Phase E0 operator green）/ `docs/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §5 兩分支 + §6 R-1~R-5（Phase E0）
   - `docs/tracking/caqa-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §四面向 + §Caveat（C10-1~C10-5 + 4 info — F-PILOT-10 真 LLM）/ `docs/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §5 C10-1 NP gate + §6 R10-1~R10-4 + §11 三層 gate（F-PILOT-10）
+  - `docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` §Acceptance + §設計 + §非目標（cycle 6 spec）/ `docs/superpowers/plans/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` §Task 1-4（cycle 6 plan）/ `docs/tracking/test-reports/2026-05-28-skill-e2e-test-coverage.md` §第 3 章三層分工 + §第 4 章不測什麼 + §第 6 章已知偏差（cycle 6 test 意圖層說明）— CAQA / reviewer 報告為本 cycle ephemeral，路徑見上方 Cycle 6 段落（不在 in-repo doc，PR 完成 / branch 清理後消失）

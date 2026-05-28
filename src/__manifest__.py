@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.27",
+    "version": "18.0.1.0.28",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -37,6 +37,7 @@
         "views/cloud_service_views.xml",
         "views/cloud_odoo_addon_views.xml",
         "views/mcp_server_views.xml",
+        "views/skill_views.xml",
         "views/ai_assistant_views.xml",
         "views/topup_plan_views.xml",
         "views/res_config_settings_views.xml",
