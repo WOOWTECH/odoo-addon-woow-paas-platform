@@ -1035,8 +1035,6 @@ class AiAssistantController(Controller):
         if action == 'list':
             return self._list_projects(workspace, cloud_service)
         elif action == 'create':
-            if not cloud_service and not workspace:
-                return {'success': False, 'error': 'cloud_service_id is required for create'}
             return self._create_project(kwargs, cloud_service=cloud_service, workspace=workspace)
         elif action == 'update':
             return self._update_project(kwargs)
@@ -1226,6 +1224,14 @@ class AiAssistantController(Controller):
                 vals['cloud_service_id'] = int(cs_id)
 
         project = request.env['project.project'].sudo().create(vals)
+        # D2=A: sudo().create() leaves create_uid=SUPERUSER, so the
+        # project_rule_workspace_member create_uid sub-leg never matches the
+        # caller. Subscribe the caller as a follower so the message_partner_ids
+        # sub-leg passes — required for unbound projects (no workspace member
+        # leg) and harmless for bound ones (workspace member leg still primary).
+        project.sudo().message_subscribe(
+            partner_ids=[request.env.user.partner_id.id],
+        )
         return {
             'success': True,
             'data': {
