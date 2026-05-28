@@ -44,14 +44,13 @@ async function loginAdmin(page) {
 }
 
 async function openSkillForm(page, skillName) {
-  // 進 Woow PaaS → Skills menu（admin only） → list → 開 form
-  await page.goto(`${BASE_URL}/odoo`);
-  // 點 Woow PaaS app（具體 selector 依 admin theme 微調）
-  await page.getByRole('link', { name: /woow paas/i }).click();
-  await page.getByRole('link', { name: /^skills$/i }).click();
-  // list 中點該 skill 進 form
+  // 進 Woow PaaS → Skills menu（admin only） → list → 開 form。
+  // 走 action XMLID 直達 list 比點 menu 穩（菜單 selector 隨 theme/i18n 變動）。
+  await page.goto(`${BASE_URL}/odoo/action-woow_paas_platform.action_skill`);
+  await page.waitForLoadState('networkidle');
+  // list 中點該 skill 的 cell 開 form view
   await page.getByText(skillName, { exact: false }).first().click();
-  await page.waitForSelector('.o_form_view');
+  await page.waitForLoadState('networkidle');
 }
 
 test.describe('Skill admin form — transition button UI wiring', () => {
@@ -59,80 +58,49 @@ test.describe('Skill admin form — transition button UI wiring', () => {
     await loginAdmin(page);
     await openSkillForm(page, SKILL_NAME);
 
+    // Selector strategy: Odoo 18 statusbar widget renders the status group
+    // as a <radiogroup aria-label="狀態列"> with <input type="radio"> per
+    // selection option; transition action buttons render as <button> in the
+    // form header. Role-based selectors are stable across themes / locales.
+    const statusRadio = (label: RegExp) =>
+      page.getByRole('radio', { name: label });
+    const actionBtn = (label: RegExp) =>
+      page.getByRole('button', { name: label });
+    const isLatestInput = page.locator('[name="is_latest"] input').first();
+
     // ---- draft 初態 ----
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Publish")'),
-    ).toBeVisible();
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Archive")'),
-    ).toBeVisible();
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Deprecate")'),
-    ).toBeHidden();
-    // statusbar 高亮 draft
-    await expect(
-      page.locator('.o_statusbar_status .btn[data-value="draft"]'),
-    ).toHaveClass(/active|btn-primary/);
+    await expect(actionBtn(/^\s*Publish\s*$/i)).toBeVisible();
+    await expect(actionBtn(/^\s*Archive\s*$/i)).toBeVisible();
+    await expect(actionBtn(/^\s*Deprecate\s*$/i)).toHaveCount(0);
+    await expect(statusRadio(/draft/i)).toBeChecked();
+    await expect(isLatestInput).not.toBeChecked();
     await page.screenshot({ path: `${SCREENSHOT_DIR}/01-draft.png` });
 
     // ---- 點 Publish ----
-    await page
-      .locator('.o_statusbar_buttons button:has-text("Publish")')
-      .click();
+    await actionBtn(/^\s*Publish\s*$/i).click();
     await page.waitForLoadState('networkidle');
-    await expect(
-      page.locator('.o_statusbar_status .btn[data-value="published"]'),
-    ).toHaveClass(/active|btn-primary/);
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Publish")'),
-    ).toBeHidden();
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Deprecate")'),
-    ).toBeVisible();
-    // is_latest checkbox / toggle 應為 True
-    // 具體 selector 依 Odoo widget；boolean field 通常是
-    // input[type=checkbox] 或 .o_boolean_toggle
-    await expect(
-      page.locator('[name="is_latest"] input').first(),
-    ).toBeChecked();
+    await expect(statusRadio(/published/i)).toBeChecked();
+    await expect(actionBtn(/^\s*Publish\s*$/i)).toHaveCount(0);
+    await expect(actionBtn(/^\s*Deprecate\s*$/i)).toBeVisible();
+    await expect(isLatestInput).toBeChecked();
     await page.screenshot({ path: `${SCREENSHOT_DIR}/02-published.png` });
 
     // ---- 點 Deprecate ----
-    await page
-      .locator('.o_statusbar_buttons button:has-text("Deprecate")')
-      .click();
+    await actionBtn(/^\s*Deprecate\s*$/i).click();
     await page.waitForLoadState('networkidle');
-    await expect(
-      page.locator('.o_statusbar_status .btn[data-value="deprecated"]'),
-    ).toHaveClass(/active|btn-primary/);
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Publish")'),
-    ).toBeVisible();  // deprecated 可 re-publish
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Deprecate")'),
-    ).toBeHidden();
-    await expect(
-      page.locator('[name="is_latest"] input').first(),
-    ).not.toBeChecked();
+    await expect(statusRadio(/deprecated/i)).toBeChecked();
+    await expect(actionBtn(/^\s*Publish\s*$/i)).toBeVisible();  // deprecated 可 re-publish
+    await expect(actionBtn(/^\s*Deprecate\s*$/i)).toHaveCount(0);
+    await expect(isLatestInput).not.toBeChecked();
     await page.screenshot({ path: `${SCREENSHOT_DIR}/03-deprecated.png` });
 
     // ---- 點 Archive ----
-    await page
-      .locator('.o_statusbar_buttons button:has-text("Archive")')
-      .click();
+    await actionBtn(/^\s*Archive\s*$/i).click();
     await page.waitForLoadState('networkidle');
-    await expect(
-      page.locator('.o_statusbar_status .btn[data-value="archived"]'),
-    ).toHaveClass(/active|btn-primary/);
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Publish")'),
-    ).toBeHidden();
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Deprecate")'),
-    ).toBeHidden();
-    await expect(
-      page.locator('.o_statusbar_buttons button:has-text("Archive")'),
-    ).toBeHidden();
+    await expect(statusRadio(/archived/i)).toBeChecked();
+    await expect(actionBtn(/^\s*Publish\s*$/i)).toHaveCount(0);
+    await expect(actionBtn(/^\s*Deprecate\s*$/i)).toHaveCount(0);
+    await expect(actionBtn(/^\s*Archive\s*$/i)).toHaveCount(0);
     await page.screenshot({ path: `${SCREENSHOT_DIR}/04-archived.png` });
   });
 });
