@@ -219,9 +219,18 @@ class TestSkillE2ELifecycleDownload(HttpCase):
         路徑由 addon 根目錄推導；目錄名 ``18.0.1.0.28`` 含 ``.``、檔名
         ``post-fix-is-latest.py`` 含 ``-``，但 ``spec_from_file_location``
         對任意路徑都 work（不依賴 Python module 名規則）。
+
+        HttpCase + ORM cache/flush ordering caveat: ``action_publish`` 的
+        ``_recompute_is_latest`` 走 ORM ``.write({'is_latest': True})``，
+        在 HttpCase 環境下可能 buffered 未 flush。若先發 raw SQL UPDATE 再
+        讀 ``skill.is_latest``，Odoo 會 lazy-flush 那筆 buffered write 回 DB，
+        覆蓋我們的 raw UPDATE → drift sample 不成立。修法：assert publish 後
+        立刻 ``flush_all()``；raw UPDATE 後 ``invalidate_recordset()`` 清快取
+        並再 flush 一次確保沒有 pending write。
         """
         skill, _ = self._make_skill('eta', '1.0.0', state='draft')
         skill.action_publish()
+        self.env.flush_all()
         self.assertTrue(skill.is_latest)
         # 製造 drift：直接 SQL 把 is_latest 改 False（繞過任何 hook）
         self.env.cr.execute(
@@ -230,6 +239,7 @@ class TestSkillE2ELifecycleDownload(HttpCase):
             [skill.id],
         )
         skill.invalidate_recordset()
+        self.env.flush_all()
         self.assertFalse(skill.is_latest, "drift sample 製造成功")
         # 呼叫 migration（動態載入避免硬綁 module path）
         import importlib.util
