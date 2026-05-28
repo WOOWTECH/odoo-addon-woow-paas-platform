@@ -969,13 +969,19 @@ class AiAssistantController(Controller):
         Returns:
             dict: Task stats (total, active, completion percentage).
         """
-        # Scope stats to projects the current user has access to
-        user = request.env.user
-        accessible_projects = request.env['project.project'].sudo().search([
-            ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
-        ])
+        # Walk ir.rule (no sudo, empty domain): project_rule_workspace_member
+        # dual-leg covers both bound (workspace member leg) and unbound
+        # (follower / creator legs) projects for the caller. A hand-rolled
+        # bound-only filter (sudo + cloud_service_id.workspace_id.access_ids
+        # walk) under-counts — unbound projects miss the chain entirely
+        # (inverse symptom of T3 / T4 sudo+empty-domain over-access).
+        accessible_projects = request.env['project.project'].search([])
         task_domain = [('project_id', 'in', accessible_projects.ids)]
-        Task = request.env['project.task'].sudo()
+        # Unify with the project-side ir.rule walk above: task ir.rule
+        # (project_task_rule_workspace_member) traverses project_id and
+        # mirrors the dual-leg the projects search already passed, so no
+        # sudo is needed here either — closes the same-method anti-pattern.
+        Task = request.env['project.task']
         total = Task.search_count(task_domain)
         done = Task.search_count(task_domain + [('stage_id.name', 'in', ('Done', 'Cancelled'))])
         active = total - done
@@ -1035,8 +1041,6 @@ class AiAssistantController(Controller):
         if action == 'list':
             return self._list_projects(workspace, cloud_service)
         elif action == 'create':
-            if not cloud_service and not workspace:
-                return {'success': False, 'error': 'cloud_service_id is required for create'}
             return self._create_project(kwargs, cloud_service=cloud_service, workspace=workspace)
         elif action == 'update':
             return self._update_project(kwargs)
@@ -1185,7 +1189,11 @@ class AiAssistantController(Controller):
             domain.append(('cloud_service_id', '=', cloud_service.id))
         elif workspace:
             domain.append(('cloud_service_id.workspace_id', '=', workspace.id))
-        projects = request.env['project.project'].sudo().search(domain)
+        # Walk ir.rule (no sudo): project_rule_workspace_member dual-leg
+        # filters bound projects by workspace membership, unbound projects
+        # by creator / follower sub-legs. The bare-URL list path (no
+        # workspace_id, no cloud_service_id) must NOT cross-tenant-leak.
+        projects = request.env['project.project'].search(domain)
         data = [{
             'id': proj.id,
             'name': proj.name,
@@ -1226,6 +1234,14 @@ class AiAssistantController(Controller):
                 vals['cloud_service_id'] = int(cs_id)
 
         project = request.env['project.project'].sudo().create(vals)
+        # D2=A: sudo().create() leaves create_uid=SUPERUSER, so the
+        # project_rule_workspace_member create_uid sub-leg never matches the
+        # caller. Subscribe the caller as a follower so the message_partner_ids
+        # sub-leg passes — required for unbound projects (no workspace member
+        # leg) and harmless for bound ones (workspace member leg still primary).
+        project.sudo().message_subscribe(
+            partner_ids=[request.env.user.partner_id.id],
+        )
         return {
             'success': True,
             'data': {
@@ -1312,7 +1328,11 @@ class AiAssistantController(Controller):
             except (ValueError, TypeError):
                 return {'success': False, 'error': 'Invalid project_id'}
 
-        tasks = request.env['project.task'].sudo().search(domain)
+        # Walk ir.rule (no sudo): project_task_rule_workspace_member dual-leg
+        # filters bound tasks by their project's workspace membership, unbound
+        # tasks by the project_id follower / creator sub-legs. The bare-URL
+        # list path (no workspace_id, no project_id) must NOT cross-tenant-leak.
+        tasks = request.env['project.task'].search(domain)
         data = [self._serialize_task(task) for task in tasks]
         return {
             'success': True,

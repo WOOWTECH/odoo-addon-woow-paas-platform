@@ -16,6 +16,7 @@
 - **skill-list cycle 6**（PR #81 follow-up — is_latest drift fix「model 層」+ 含瀏覽器 UI 的 e2e，2026-05-28）：`c36a9a1..HEAD` = 8 commits / 10 檔 / +859 -7（4 test commit + 1 fix + 1 feat migration + 1 docs test-coverage + 1 selector align）。CAQA **pass-with-medium-caveats**（high 0 / medium 2 / info 9）+ reviewer **approve with comments**（blocker 0 / major 7 / minor+nit+info 22；4-agent 無方向性分歧）。**根因修法落 model `create()` / `write()` hook**（[[invariant-recompute-on-orm-write-hook]] 抽 pattern — derived flag / 不變式不能只在 user-facing transition method 維護；ORM 任何寫入路徑（test fixture / 未來上傳 API / demo data / admin 匯入）都會 drift），配套幂等 migration `18.0.1.0.28` 對既有資料 backfill（無資料 no-op）。skill-related test **41/41 全綠**、playwright 4 階段 + 4 screenshot 視覺驗證符合 spec §④-b、不變式守線：transition method 既有 recompute 路徑（`action_publish` / `_deprecate` / `_archive_skill`）保留 belt-and-braces、`_recompute_is_latest` 內部 write `{'is_latest': ...}` 不踩 hook 條件 → 不遞迴。**tester 撞 fixture mechanics 雷**（HttpCase 內 `action_publish` 後接 raw SQL UPDATE 製造 drift sample 被 buffered ORM write flush 覆蓋 → `invalidate_recordset()` 只清 cache、不清 buffer）依 [[plan-gap-stop-and-report]] 守線停下回報 → impl 階段方案 A（`flush_all` 前後夾）落地，抽 [[httpcase-orm-flush-ordering-raw-sql]] pitfall。Phase C `MIG.1` 從硬編 `18.0.1.0.27` 改 monotonic `>= 27` —— [[phase-versioned-test-assertion]] 第三度落地（27→28 不撞紅，後續每次 bump 都不會撞）。2 caveat（C1 winner 演算雙寫雷 / C2 hook O(group_size) 單筆同步成本）+ 7 major（F1-F7 reviewer 抓，全非阻斷）+ 22 minor/nit/info 在 follow-up cycle 6 列冊；epic durable 收尾 + PR description / comment 草稿交 leader 用 tea CLI 操作。**Umbrella issue #84** 彙總 F-SK-1~9 search anchor（https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/84）。
 - **agent-runtime-pod epic F-PILOT-10**（真 LLM agent — image 真 LLM runtime + client LLM cred + teardown design，**3 PR merged**，2026-05-27）：image **PR#6 → main `6945ea5`**（真 LLM runtime：langgraph_runtime / loader / cache / url_validator）+ client **PR#76 → develop**（`agent_runtime_client` 帶 LLM cred，收 F-PILOT-8 client-side 鏈漏）+ teardown **PR#77 → develop**（design §8.4 holistic teardown，E0-CAVEAT-1 HARD gate 的設計回應）；develop = **`be6746d`**。CAQA **PASS WITH CAVEATS**（0 unconditional blocker / 1 conditional-escalation C10-1 SSRF / 5 caveat / 4 info）+ reviewer **APPROVE**（pilot stg，0 mandatory blocker，3-agent + CAQA 無方向性分歧）。**4 核心控制驗到位**：tool sandbox 無 command injection（list-args + stdin JSON + sha256-pinned entrypoint）/ fail-closed（empty-bearer 拒 + key-absent→echo 不洩 env/cred）/ credential 兩端不入 log / agent-loop DoS bound（`MAX_TOOL_ROUNDS=8`）。**empty-bearer lock-step 做對**（[[credential-claim-test-fixture-coupling]] 正面範例，對比 E0 key-absent 缺口）；mock TDD 5 切片完。**三層 gate 見下方 §F-PILOT-10 review takeaway**：Tier1 真 cluster 部署前 **C10-1 NP backstop**（paas-charts woow-k3s 已實測 ✓）/ Tier2 真 LLM 對外前 **R10-1 observability + C10-3 byte cap + C10-2 interpreter allowlist** / Tier3 一般 follow-up（C10-4/C10-5/R10-2/R10-3/R10-4）。pattern：[[plan-gap-stop-and-report]] 再現（Gap 3 hybrid + C10-1 cross-repo NP gate）。
 - **agent-runtime-pod epic F-PILOT-10 真 LLM round-trip 達成 🎉**（cluster e2e，2026-05-27，stg woow-k3s）：真 LLM 完整閉環（「你好8」12:58、**19s**、MiniMax-M2.7 真 LLM 生成、無 error、乾淨 disconnect、browser 真 LLM 回話且理解 history）。cluster + 完整 UI round-trip 串出 **8-gap chain**（mock/caqa/reviewer **全看不到**——render/deploy/真 NP/真 LLM/cold-start timing 在 mock 之下、部署狀態在靜態 review 之外，唯 cluster + 完整 round-trip 暴露）→ [[agent-runtime-fpilot10-cluster-e2e-gap-chain]] pitfall。真因聚類：**missed-forward**（G2/G6/G7，**optional value silent 漏轉** — 比 pilot required 硬 fail 更陰，contract test 須涵蓋 optional）+ **deploy gap**（G1 operator 自身 image stale ≠ pin agent-runtime image / G8 operator chart 無 extraEnv / G5 externalEgress 沒 enable）+ **transport timing**（G3 cold-start race relay 無 retry）+ **observability**（G4 真 LLM 失敗 silent close 無 error frame）。**3 道防線**（integration test render-to-pod-spec 涵蓋 optional + ensure_registry_secret real-K8s / deploy checklist 驗 running image 非 values pin / observability success-path log）+ 8-gap durable 見下方 §F-PILOT-10 cluster e2e gaps；pattern [[spawn-install-values-missed-forward]] 加 optional 深化。**[最終收尾 2026-05-27]** G8 externalEgress env ephemeral→durable（operator chart `0.1.11` + PR#79 + values-stg + survive redeploy）= F-PILOT-10 **唯一 ephemeral caveat 已解** → **cd 側全部署 durable**；**G1/G2/G5/G6/G7/G8 全 CLOSED**，剩 G3/G4 後續改善 + R10-1/C10-*/R10-*/F-PILOT-11 gate/test follow-up（後續 phase）。**F-PILOT-10 真 LLM epic 完整收口**（code + review + round-trip + 8-gap durable + 沉澱完整）。
+- **Cycle 6（decouple project frontend + controller 收尾, 2026-05-28）**：plan A+A+A signed-off（D1=A 允許完全 unbound project / D2=A controller create 後 `message_subscribe` 補 follower / D3=A modal 無 workspace 隱藏 cloud_service dropdown）→ phase agent pod 接力（tester TDD red T1-T4 → implementer 7 改動點 → CAQA round 1 BLOCKED BLOCKER A1 `_list_tasks` sudo bypass `cross-workspace-task-data-leak` family 第 2 instance → tester 補 T4 + impl `1 行` drop sudo → CAQA round 2 re-verdict APPROVED WITH CAVEATS → reviewer 4-agent verdict 無方向性分歧 APPROVE WITH CAVEATS → reporter 沉澱 → **user 拍板帶 F-DP-2 進本 PR** → tester 補 T5 + impl drop sudo + Task.sudo unify → CAQA mini re-verdict APPROVED WITH CAVEATS 不變 → **reviewer 略過**（per leader+user 拍板）→ reporter final addendum）。**累計 8 改動點 + 1 unify refactor + 15 條 test/TC 全綠**：controller `ai_assistant.py:1037-1040`（D1）+ `:1186-1190`（TC4 follow-on `_list_projects` drop sudo, 變體 A）+ `:1230-1238`（D2 message_subscribe）+ `:1325-1329`（BLOCKER A1 fix `_list_tasks` drop sudo, 變體 A）+ `:972-978`（F-DP-2 fix `api_support_stats` drop sudo + empty domain, 變體 B under-access）+ `:980-986`（Task.sudo unify, 變體 C same-method 半套狀態 close）+ frontend `CreateProjectModal.js:117-160` 三分支 dispatch + `CreateProjectModal.xml:40-63` workspace optional + dropdown + `support_service.js:267-292` `createUnboundProject`；15 條 test/TC 全綠（T1-T5 endpoint + B1-B5 backend baseline + Playwright TC1-TC5 UI）。**B1 family（`cross-workspace-task-data-leak`）controller layer 收口 progress**：5 instance 4 closed = `_list_projects` (A) + `_list_tasks` (A) + `api_support_stats` accessible_projects (B) + Task.sudo unify (C) close in PR；剩 `_get_project_stages`（CAVEAT #2，F-DP-1）= P1 follow-up（需 design）。**3 caveats 維持 follow-up**：F-DP-1（_get_project_stages design）+ F-DP-3（_check_project_access docstring）+ F-DP-4（frontend rule of three）；F-DP-2 CLOSED in PR；F-DP-5~F-DP-8 reviewer polish 維持 trivial follow-up。Pattern doc `[[orm-vs-endpoint-acl-test-coverage]]` 升級為 **5 instance critical mass + anti-pattern 三變體 family (A over-access / B under-access / C same-method 半套)** + perf justification 章節；新 pattern `[[phase-leader-brief-as-pointer-not-source]]`；3 新 pitfall `[[decouple-project-frontend-worktree-dev-pitfalls]]` + `[[orm-test-green-endpoint-leak-blindness]]`（含三變體 narrative）。Reporter sentencing 完成 + CLAUDE.md addendum landed（§Known patterns 補 3 pointer）；commit + PR 由 leader 跟 user 對焦後執行。
 
 ## Index
 
@@ -83,8 +84,17 @@
 | F-SK-7 | major | reviewer (cycle 6 F5) | 6 | 測試註解硬編「PR #81」「Plan §Phase C Task 13」脆弱 anchor（平台 / 修訂 artifact 易漂移失效）`src/tests/test_skill_is_latest_drift_regression.py:5`、`src/tests/test_skill_e2e_lifecycle_download.py:16`、`src/tests/test_agent_pod_phase_c_skill_bundle.py` | 改 in-repo anchor（檔名 + class 名），如「既有 `TestSkillAdminLifecycle` 已覆蓋」；plan task 引用補 stable summary |
 | F-SK-8 | major | reviewer (cycle 6 F6) | 6 | playwright `loginAdmin` `await page.fill('input[name="db"]', DB_NAME).catch(() => {})` 過寬吞錯 — selector timeout / element disabled / network crash 全被吞 → debug 錯位 `tests/e2e/skill/skill-admin-form.spec.ts:39` | narrow 到「element 不存在」：`const dbField = page.locator('input[name="db"]'); if (await dbField.count() > 0) await dbField.fill(DB_NAME);` |
 | F-SK-9 | major | reviewer (cycle 6 F7) | 6 | playwright `getByText(skillName, { exact: false }).first().click()` 對同名 skill 多版本 / cross-test pollution row silent wrong-row click → 開錯 form、後續 assert 失敗訊息誤導 `tests/e2e/skill/skill-admin-form.spec.ts:52` | `SKILL_E2E_NAME` 加 unique suffix（backend test 同 pattern `uuid.uuid4().hex[:8]`），或 `exact: true` + 由 fixture 注入 record id 走 data-id selector + `assert count() === 1` 顯式守線 |
+| F-DP-1 | medium | refactor (cycle 6 CAQA CAVEAT #2) | 6 | `_get_project_stages` 雙重洞：list endpoint 無 access check（read-leak） + `_ensure_default_stages` 在 list path fallback 走 `TaskType.sudo().create()` 對 attacker-supplied project_id 寫 stage（write surface）— pre-existing；`cross-workspace-task-data-leak` family 在 controller layer 剩餘 instance | dedicated design PR — `ai_assistant.py:1046, 1139-1177`；需 design「`_ensure_default_stages` 移到 explicit write endpoint」 |
+| F-DP-2 | minor | refactor (cycle 6 CAQA CAVEAT #3) | 6 | ~~`api_support_stats` `accessible_projects` 走 sudo + bound-only leg 漏 unbound~~ | ✅ **CLOSED in this PR** — `ai_assistant.py:972-986` drop sudo + empty domain（變體 B under-access close）+ Task.sudo unify（變體 C same-method 半套 close, caqa option (b) recommended）；T5 endpoint test `test_project_decouple_frontend_endpoint.py:845-1014` 鎖 own-data visibility + Bob bare-stats=0 反向 false-green |
+| F-DP-3 | info | refactor (cycle 6 CAQA CAVEAT #4) | 6 | `_check_project_access` 對 unbound project 走 follower-only check (`user_partner in project.message_partner_ids`)，與 ir.rule `project_rule_workspace_member` unbound clause 的 dual sub-leg（`message_partner_ids` OR `create_uid`）非對等鏡像 — D2=A 設計副效應：`sudo().create()` 後 `create_uid=SUPERUSER`，caller 不會走 create_uid sub-leg；message_subscribe 補 follower sub-leg → controller follower-only check 與「實際生效 leg」對齊；若未來 D2 切 D2=B (with_user create) 需同步動本 helper | reporter polish — `ai_assistant.py:48-55` docstring 補述「intentionally narrower than ir.rule unbound dual-leg：assumes D2=A subscribe-after-sudo-create idiom」 |
+| F-DP-4 | minor | refactor (cycle 6 reviewer arch-1) | 6 | Frontend 三分支 dispatch (`cs / ws / unbound`) 在 component `onSubmit` 而非 service 層 — 本 PR scope acceptable（modal 是唯一 caller，local cohesion）；rule of three：等第 2 caller 出現再抽 `supportService.createProjectAuto({workspaceId?, cloudServiceId?, ...payload})` helper | future PR — `CreateProjectModal.js:138-147`；only-if `SupportProjectsPage` / 其他組件加 create 入口時觸發 |
+| F-DP-5 | trivial | refactor test (cycle 6 reviewer M1 / comment-analyzer C1) | 6 | T1 / test 模組 docstring 引用 `ai_assistant.py:1038-1040`（dispatcher guard）+ `:1228`（sudo create）為 pre-fix 行號，post-fix 漂移 2-4 行（D1 guard 移到 :1037-1038 / D2 message_subscribe 在 :1230-1238）— test module docstring line 35-48 已用「Red expectation today (pre-implementation)」框定，可解讀但脆 | reporter polish — `test_project_decouple_frontend_endpoint.py:38,47,169-173,204,316` 改 stable function-name reference（`_create_project` / `_dispatch_project_action`）取代行號 |
+| F-DP-6 | trivial | refactor test (cycle 6 reviewer M2 / comment-analyzer C2) | 6 | T3 / T4 docstring 引用 `ai_assistant.py:1186`（_list_projects） + `:1325`（_list_tasks）為 first comment line，actual call 在 :1190 / :1329（drop sudo 後的真實 search 行）— 同 M1 性質，post-fix line drift | reporter polish — `test_project_decouple_frontend_endpoint.py:366,529,579,599,763,766` 改 function-name reference（`_list_projects` / `_list_tasks`）取代行號 |
+| F-DP-7 | trivial | refactor test (cycle 6 reviewer M3 / pr-test-analyzer minor) | 6 | T3 bound-project case 建立 project after 沒明確 `assertEqual(project.cloud_service_id, svc_alice)` 守 bound binding — 若未來 bound create path 退化為 unbound（如 cloud_service_id ignored），T3 subset / leak assertion 仍綠（B2 backend baseline + Playwright TC3 + T3 owner-survive 三層守已覆蓋，故非 must-fix） | reporter polish — `test_project_decouple_frontend_endpoint.py:497` 後加 1 行 `self.assertEqual(project.cloud_service_id, svc_alice)` |
+| F-DP-8 | trivial | refactor (cycle 6 reviewer M4 / comment-analyzer I1) | 6 | `_list_projects` 註解寫「creator / follower sub-legs」technically 正確（對 ir.rule literal）但**沒明寫 create_uid sub-leg 在 endpoint create path 被 sudo() 戳穿**；讀者交叉讀 D2=A 註解才能補完此 cross-coupling | reporter polish — `ai_assistant.py:1186-1189` 註解末加 1 句「create_uid sub-leg defeated by sudo().create() — see _create_project D2=A comment for follower compensation」 |
+| F-DP-9 | track-only (P3) | observation (cycle 6 final addendum reporter retro §5) | 6 | Variant C (same-method 半套 sudo) 是 [[orm-vs-endpoint-acl-test-coverage]] 三變體中**唯一沒有 test 抓得到**的 anti-pattern — 純靠 reviewer + pattern doc 立論一致性 audit catch。本條目追蹤未來 reviewer 1-layer audit 是否成功用 pattern doc 三變體章節抓出新出現的 variant C instance（含 false positive 也算）| open（passive observation，無 timeline；若 N 個 cycle 後無新 instance 觸發可關此 entry）— `api_support_stats:980` Task.sudo unify 是首次 close 的 variant C 反例（與 F-DP-2 同期 close）|
 
-下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12-F20 是 cycle 2。F21+ 是 cycle 3 (issue #48 Project Detail page)。F-X1+ 是 cycle 4 (MCP refactor URL redesign)。F-PA-1+ 是 cycle 5 (Agent runtime pod Phase A)。F-PA-13+ 是 cycle 5 round 1 reviewer 抓 CAQA 漏抓 4 HC 中 leader 拍板 defer 的 2 條（HC-1 / HC-2）+ round 2 hotfix 落地後 reviewer 獨立 walk 抽出的 2 條 edge case 提醒（EC-3a / EC-4a）。F-SK-1+ 是 cycle 6 skill-list（PR #81 follow-up — is_latest drift fix model 層 + 含瀏覽器 UI 的 e2e）。
+下方逐條細節 + 觸發條件 + 建議落點。F1-F11 維持 cycle 1 原文。F12-F20 是 cycle 2。F21+ 是 cycle 3 (issue #48 Project Detail page)。F-X1+ 是 cycle 4 (MCP refactor URL redesign)。F-PA-1+ 是 cycle 5 (Agent runtime pod Phase A)。F-PA-13+ 是 cycle 5 round 1 reviewer 抓 CAQA 漏抓 4 HC 中 leader 拍板 defer 的 2 條（HC-1 / HC-2）+ round 2 hotfix 落地後 reviewer 獨立 walk 抽出的 2 條 edge case 提醒（EC-3a / EC-4a）。F-SK-1+ 是 cycle 6 skill-list（PR #81 follow-up — is_latest drift fix model 層 + 含瀏覽器 UI 的 e2e）。F-DP-1+ 是 cycle 6 (decouple project frontend + controller 收尾，2026-05-28；4 CAQA caveats + 4 reviewer minor polish + 1 final addendum track-only F-DP-9 variant C audit lookback)。
 
 ---
 
@@ -814,7 +824,176 @@
 
 ---
 
-## Phase B carry-over（cross-repo — `paas-agent-runtime`）
+# Cycle 6 — Decouple Project Frontend + Controller 收尾 (2026-05-28)
+
+> Plan A+A+A signed-off 後 7 改動點 + CAQA round 1 BLOCKER A1（`_list_tasks` sudo bypass，`cross-workspace-task-data-leak` family 第 2 instance）`1 行` close + 14/14 test/TC 全綠（T1-T4 endpoint + B1-B5 backend baseline + Playwright TC1-TC5 UI）。CAQA re-verdict + reviewer 4-agent verdict 全 APPROVED WITH CAVEATS。Cycle 6 follow-up 分兩類：F-DP-1~F-DP-4 是 CAQA caveat（同 controller 同 family 漏掃 + 設計副效應）、F-DP-5~F-DP-8 是 reviewer minor polish（comment-analyzer + pr-test-analyzer，全 trivial）。
+
+## F-DP-1 — `_get_project_stages` 雙重洞（CAQA CAVEAT #2）
+
+- **Severity**: medium（data leak + write surface；pre-existing）
+- **Origin**: CAQA report `docs/tracking/caqa-report-2026-05-28-decuple-project-frontend.md` Security CAVEAT #2（line 158-189）+ §同源 sudo bypass scan
+- **Location**: `src/controllers/ai_assistant.py:1046`（endpoint @route）+ `:1139-1177`（`_get_project_stages` 內 `TaskType.sudo().search` + `_ensure_default_stages` fallback `sudo().create`）
+- **Attack vector**：
+  - **Read leak**：attacker enumerate 任意 `project_id` → 拿到該 project 的 stage list（含自訂 stage names，可能洩漏 tenant business 語意如 `"ClientX Q3 Roadmap"`）
+  - **Write surface via fallback**：attacker 命中尚無 stages 的 project_id → `_ensure_default_stages` 走 `TaskType.sudo().create()` 寫入 `New / In Progress / Done` 三 stage 並 `project_ids: [(4, project_id)]` 綁到 victim project → mass-create / clutter stage data
+- **與 cycle 6 BLOCKER A1 關係**：同 controller、同 endpoint family（`/api/support/projects/<id>/stages` 與 `/api/support/projects` 對稱），`cross-workspace-task-data-leak` B1 family 在 controller layer 剩餘 instance。Cycle 6 close `_list_projects` + `_list_tasks` 兩 instance，剩 `_get_project_stages` + `api_support_stats`（F-DP-2）。
+- **建議落點（需 design）**：
+  1. 加 access check（呼叫 `_check_project_access`，與 `_update_project` / `_delete_project` 同 idiom）
+  2. 評估是否能去 `_get_project_stages` 內的 `.sudo()`（`project.task.type` 可能無 ir.rule，需先查）
+  3. `_ensure_default_stages` 應該移到「使用者首次以 owner 身分進 project」的合法路徑（如 `_create_project` 內部 / explicit POST endpoint），不是 list endpoint 副作用
+- **何時**：P1 follow-up，建議與 F-DP-2 同期 fix；不阻擋 cycle 6 merge
+
+---
+
+## F-DP-2 — `api_support_stats` 漏 unbound leg（CAQA CAVEAT #3）✅ CLOSED in this PR
+
+- **Status**: ✅ **CLOSED in cycle 6 PR**（user 拍板帶進本 PR + caqa option (b) Task.sudo unify 同期收口）
+- **Severity (original)**: minor（UX 不一致 bug，**不是** cross-tenant leak）
+- **Origin**: CAQA report Security CAVEAT #3（line 331-360）
+- **Closure**：
+  - **Fix landed**：`src/controllers/ai_assistant.py:972-978` drop sudo + `domain=[]`（變體 B under-access close）
+  - **Task.sudo unify landed**：`src/controllers/ai_assistant.py:980-986` drop `Task.sudo()` + comment 補述 dual-leg 對等性（變體 C same-method 半套狀態 close, caqa mini re-verdict §2 對等性已驗）
+  - **Test landed**：`src/tests/test_project_decouple_frontend_endpoint.py:845-1014` `test_t5_api_support_stats_includes_unbound_owned_projects` 鎖 Alice own-data visibility (`assertGreaterEqual(alice_total, 2)`) + Bob bare-stats=0 反向 false-green 守
+  - **CAQA mini re-verdict**：APPROVED WITH CAVEATS（不變）— `docs/tracking/caqa-report-2026-05-28-decuple-project-frontend.md:717-901`
+- **Pattern doc reference**：本 closure 收進 [[orm-vs-endpoint-acl-test-coverage]] 變體 B + 變體 C critical mass（5 instance 4 closed），是該 pattern 的「同 method 一致性 + perf justification 不抵 readability」立論的 cornerstone instance
+
+---
+
+## F-DP-3 — `_check_project_access` follower-only docstring 補述（CAQA CAVEAT #4）
+
+- **Severity**: info（docstring drift；不是 leak、不是 UX bug）
+- **Origin**: CAQA report Security CAVEAT #4（line 190-214）
+- **Location**: `src/controllers/ai_assistant.py:48-55`
+- **狀況**：`_check_project_access` 對 unbound project 走 follower-only check (`user_partner in project.message_partner_ids`)，與 ir.rule `project_rule_workspace_member` unbound clause 的 **dual sub-leg**（`message_partner_ids` OR `create_uid`）非對等鏡像。
+- **為何不算漏洞**：cycle 6 D2=A 設計下，`sudo().create()` 後 `create_uid=SUPERUSER`，caller 不會走 create_uid sub-leg；message_subscribe 補 follower sub-leg → controller follower-only check 與「實際生效的 leg」對齊；若未來 D2 切 D2=B (`with_user(user).create()` 讓 `create_uid=user`)，controller follower-only check 會拒 create_uid 應該放行的 row → controller layer 比 ir.rule layer **更嚴**，安全側 fail-closed（不是 IDOR）但 UX bug（合法 owner 被擋）。
+- **建議落點（docstring 補述）**：
+  ```python
+  # _check_project_access docstring 末端加：
+  """
+  Note: This unbound check is intentionally narrower than the ir.rule
+  ``project_rule_workspace_member`` unbound dual-leg
+  (``message_partner_ids`` OR ``create_uid``). This narrower check
+  assumes the D2=A subscribe-after-sudo-create idiom — the only
+  legitimate unbound creator path goes through controller
+  ``_create_project`` which calls ``message_subscribe`` after
+  ``sudo().create()``. If D2 ever switches to D2=B
+  (``with_user(user).create()`` letting ``create_uid=user``), this
+  helper MUST be updated to mirror the dual-leg, otherwise legit
+  owners will be denied.
+  """
+  ```
+- **何時**：reporter polish；不阻擋；下個 ai_assistant.py touch PR 順手做
+
+---
+
+## F-DP-4 — Frontend 三分支 dispatch 在 component（reviewer Caveat-arch1）
+
+- **Severity**: minor（架構 future evolution；rule of three）
+- **Origin**: CAQA Architecture caveat（line 244-263）+ reviewer report §8（line 180）
+- **Location**: `src/static/src/paas/components/modal/CreateProjectModal.js:138-147`
+- **狀況**：三 mode dispatch (`cs / ws / unbound`) 寫在 component `onSubmit` 內：
+  ```js
+  let result;
+  if (this.state.cloudServiceId) {
+      result = await supportService.createProjectForService(...);
+  } else if (this.state.workspaceId) {
+      result = await supportService.createProject(...);
+  } else {
+      result = await supportService.createUnboundProject(payload);
+  }
+  ```
+- **評估**：
+  - ✅ Service 層 keep simple（3 個獨立 method，無 mode switching）
+  - ✅ Modal 是唯一三 mode 都會碰到的 caller，分支寫在 modal 內 = local cohesion
+  - ⚠️ 未來若有第 2 個 caller（如 `SupportProjectsPage` 自家 trigger create / 其他 component），會被迫複製 dispatch
+- **建議落點（rule of three）**：未來第 2 caller 出現時抽 `supportService.createProjectAuto({workspaceId?, cloudServiceId?, ...payload})`，由 service 層 dispatch；簡化 caller。本 PR 不抽。
+- **何時**：future PR，只在第 2 caller 出現時觸發
+
+---
+
+## F-DP-5 — T1 / 模組 docstring 行號 pre-fix 漂移（reviewer M1, comment-analyzer C1）
+
+- **Severity**: trivial（polish；test docstring archaeology by design）
+- **Origin**: reviewer report §7 M1（line 154）+ comment-analyzer C1（reviewer report §3）
+- **Location**: `src/tests/test_project_decouple_frontend_endpoint.py:38, 47, 169-173, 204, 316`
+- **狀況**：T1 / test 模組 docstring 引用 `ai_assistant.py:1038-1040`（dispatcher guard）+ `:1228`（sudo create）為「today's red」狀態行號。Post-fix 漂移 2-4 行（D1 guard 移到 :1037-1038 / D2 message_subscribe 在 :1230-1238）。
+- **為何不阻擋**：test module docstring line 35-48 已用「Red expectation today (pre-implementation)」框定，讀者可解讀為「TDD red 留下的 archaeology」；但脆 — 後人 grep `ai_assistant.py:1038` 對不到 actual line。
+- **建議落點（polish）**：改 **stable function-name reference** 取代 line 號。例：
+  ```
+  # before: ai_assistant.py:1038-1040
+  # after:  ai_assistant.py::_dispatch_project_action (D1 guard, pre-fix)
+  ```
+- **何時**：reporter polish；不阻擋；下個 test touch 順手做
+
+---
+
+## F-DP-6 — T3 / T4 docstring 行號 first-comment-line drift（reviewer M2, comment-analyzer C2）
+
+- **Severity**: trivial（polish；同 F-DP-5 性質）
+- **Origin**: reviewer report §7 M2（line 155）+ comment-analyzer C2
+- **Location**: `src/tests/test_project_decouple_frontend_endpoint.py:366, 529, 579, 599, 763, 766`
+- **狀況**：T3 / T4 docstring 引用 `ai_assistant.py:1186`（`_list_projects`）+ `:1325`（`_list_tasks`）是 **first comment line of fix block**，actual call 在 :1190 / :1329（drop sudo 後的真實 search 行）。讀者 grep `:1186` 看到註解 block 起點，不是 fix site。
+- **為何不阻擋**：技術正確 + accurate，只是不精確
+- **建議落點（polish）**：同 F-DP-5，改 function-name reference（`_list_projects` / `_list_tasks`）取代 line 號
+- **何時**：與 F-DP-5 同期；trivial
+
+---
+
+## F-DP-7 — T3 bound case 缺 cloud_service binding assertion（reviewer M3, pr-test-analyzer minor）
+
+- **Severity**: trivial（polish；非 must-fix）
+- **Origin**: reviewer report §7 M3（line 156）+ pr-test-analyzer minor
+- **Location**: `src/tests/test_project_decouple_frontend_endpoint.py:484-497`
+- **狀況**：T3 bound-project case 建立 project 後沒明確 `assertEqual(project.cloud_service_id, svc_alice)` 守 bound binding。若未來 bound create path 退化為 unbound（如 `cloud_service_id` ignored），T3 subset / leak assertion 仍綠（B2 backend baseline `test_ac3_bound_project_workspace_id_unchanged` + Playwright TC3 + T3 owner-survive 三層守已覆蓋，故非 must-fix）。
+- **建議落點**：1 行 polish 加在 line 497 後：
+  ```python
+  self.assertEqual(project.cloud_service_id, svc_alice)
+  ```
+- **何時**：reporter polish；不阻擋；下個 test touch 順手做
+
+---
+
+## F-DP-8 — `_list_projects` 註解可補 D2=A cross-coupling 說明（reviewer M4, comment-analyzer I1）
+
+- **Severity**: trivial（polish）
+- **Origin**: reviewer report §7 M4（line 157）+ comment-analyzer I1
+- **Location**: `src/controllers/ai_assistant.py:1186-1189`
+- **狀況**：`_list_projects` 註解寫「creator / follower sub-legs」technically 正確（對 ir.rule literal），但**沒明寫 create_uid sub-leg 在 endpoint create path 被 sudo() 戳穿**（因為 controller `_create_project` 走 sudo()，`create_uid=SUPERUSER`）。讀者交叉讀 D2=A 註解才能補完此 cross-coupling。
+- **建議落點（polish）**：在 `_list_projects` 註解末加 1 句：
+  ```
+  Note: the create_uid sub-leg is in practice defeated by ``sudo().create()``
+  in _create_project; the follower (message_partner_ids) sub-leg is the only
+  active gate for unbound projects — see _create_project D2=A comment for the
+  message_subscribe compensation.
+  ```
+- **何時**：reporter polish；不阻擋
+
+---
+
+## F-DP-9 — Track variant C audit usage（Task.sudo unify lookback，passive observation）
+
+- **Severity**: track-only (P3)
+- **Origin**: cycle 6 final addendum reporter retro §5 — variant C 是 [[orm-vs-endpoint-acl-test-coverage]] 三變體中**唯一沒有 test 抓得到**的 anti-pattern
+- **背景**：Variant C (same-method 半套 sudo) 的特殊性：
+  - A (over-access cross-tenant leak) → HttpCase cross-user test 抓
+  - B (under-access own-data invisibility) → own-data assertion test 抓
+  - **C (same-method 半套狀態)** → 不會 fail test（input-side drop sudo 後 `accessible_X.ids` 已 ir.rule filter，output-side 殘留 sudo() 在 ACL 角度 safe），純靠 reviewer + pattern doc 立論一致性 audit catch
+- **首次 close 反例**：`api_support_stats:980` Task.sudo unify（與 F-DP-2 同期 close，cycle 6 PR）— 是 variant C 在本 codebase 唯一已 close 的 instance
+- **觀察目標**：未來 reviewer 1-layer audit 是否成功用 pattern doc 三變體章節抓出新出現的 variant C instance？
+  - **Success path**：reviewer 看到 controller method 內 input drop sudo 但 output 留 sudo() → trigger 反射檢查 → 若 perf justification 不充分 → 推 unify
+  - **False positive 也算 success**：reviewer flag 一個 variant C suspect 但討論後判 acceptable（有充分 perf measurement / ORM constraint 證據）→ 證明 pattern doc 三變體章節**抓得到 surface**，false positive 是健康訊號
+  - **Failure mode**：reviewer 看到同 method 留 sudo() 沒 trigger 反射 → 直接通過 → pattern doc 三變體章節 reading-layer 失效（需要再升級 pointer 或 audit checklist）
+- **如何追蹤**：
+  - reviewer phase report 內若提到「variant C suspect」/「Task.sudo unify lookback」/「same-method sudo audit」相關 keyword → 記入本條目註腳
+  - 6 個 cycle 後（~2026 Q3-Q4）盤點：若 0 instance 觸發 → 關此 entry（pattern doc 三變體章節維護價值已驗證 / surface 漸少）；若 ≥1 instance 觸發 → 評估 pattern doc 是否需強化 audit checklist
+- **不限制條件**：本條目**不擋任何 PR / merge**，純 passive observation；維護成本接近零（reviewer 自然會引用 pattern doc，本條目只是聚焦未來統計）
+- **狀態**：open（無 timeline，passive observation by design）
+- **References**:
+  - [[orm-vs-endpoint-acl-test-coverage]] §Anti-pattern 三變體 + §Why 變體 C 不只是 perf trade-off — pattern doc full narrative
+  - `docs/tracking/caqa-report-2026-05-28-decuple-project-frontend.md` Mini Re-verdict §2（line 717-901）— Task.sudo unify 對等性驗證 + caqa option (a/b/c) reasoning（pattern doc § Perf justification 的源頭）
+  - `docs/tracking/pitfalls/orm-test-green-endpoint-leak-blindness.md` §Anti-pattern 三變體 family — variant C 為何沒 test 抓得到的詳述
+
+---
 
 > Phase B（agent-runtime pod image source）的 code / test / CI / carry-over 全在 **`paas-agent-runtime` repo**。其 carry-over SC 的 **canonical home 是該 repo 的 `docs/PHASE_B_HANDOFF.md`**（不在本 woow_paas_platform follow-ups.md 重列每條，避免 cross-repo 雙寫漂移）。本段只記 **woow_paas_platform 側需要知道的連動點 + 指標**。
 
@@ -857,12 +1036,12 @@
 - `src/models/agent_template.py` → F-PA-15 (cycle 5 round 2 EC-3a controller sudo path 對 `_check_project_ids_grantor_authority` bypass 提醒 — Phase B/C controller layer 補)
 - `src/models/agent_session.py` → F-PA-1 (cycle 5 namespace_secret hardcode → install hook hard guard)
 - `src/views/` (Phase A defer) → F-PA-4 (cycle 5 5 view files agent_template_views / agent_session_views / skill_views / project_access_views / project_external_mcp_setting incl. SSRF risk 警示)
-- `src/controllers/ai_assistant.py` → F4 / F10 / F12 / F20 / F-X2 (bound-no-workspace edge case + drift cluster) / F-PA-14 (cycle 5 round 1 HC-2 `project.sudo().create()` bypass project_access bootstrap)
+- `src/controllers/ai_assistant.py` → F4 / F10 / F12 / F20 / F-X2 (bound-no-workspace edge case + drift cluster) / F-PA-14 (cycle 5 round 1 HC-2 `project.sudo().create()` bypass project_access bootstrap) / F-DP-1 (cycle 6 `_get_project_stages` 雙重洞 line 1046 + 1139-1177) / ~~F-DP-2 (cycle 6 `api_support_stats` 漏 unbound leg line 972-986)~~ ✅ CLOSED in cycle 6 PR / F-DP-3 (cycle 6 `_check_project_access` follower-only docstring 補述 line 48-55) / F-DP-8 (cycle 6 `_list_projects` 註解 D2=A cross-coupling line 1186-1189)
 - `src/controllers/paas.py` → F19 / F20 / ~~F22 (D5 重設計)~~ RESOLVED cycle 4 / ~~F23 (unbound ACL)~~ RESOLVED cycle 4 / F25 (R-6 try/except + savepoint) / F-X2 (`_resolve_project_access` drift) / F-X4 (`_compute_sidecar_url_hint` duplication) / F-X5 (SSRF error format) / F-PA-13 (cycle 5 round 1 HC-1 `vals['cloud_service_id'] = X` write silent replace M:N)
-- `src/tests/test_*.py` → F8 / F17 / F19 / F27 (G1 / G3 / G6 test gaps) / F-X6 (cycle 4 D5 stale comment) / SC-15~SC-17 (cycle 4 test gaps)
+- `src/tests/test_*.py` → F8 / F17 / F19 / F27 (G1 / G3 / G6 test gaps) / F-X6 (cycle 4 D5 stale comment) / SC-15~SC-17 (cycle 4 test gaps) / F-DP-5 (cycle 6 T1 docstring line drift `test_project_decouple_frontend_endpoint.py:38,47,169-173,204,316`) / F-DP-6 (cycle 6 T3/T4 docstring line drift `:366,529,579,599,763,766`) / F-DP-7 (cycle 6 T3 bound assertEqual `:497`)
 - `src/static/src/paas/layout/` → F7
 - `src/static/src/paas/pages/project-detail/` → F25 (R-3 McpServersSection error display + E2E-G1 CloudServiceBindingSection rebind-from-unbound) / F28 (R-8 editor migration) / F-X3 (`McpServersTab.js:12` comment noise)
-- `src/static/src/paas/services/support_service.js` → F26 (R-9 optimistic merge order) / F-X3 (`support_service.js:454` comment noise)
+- `src/static/src/paas/services/support_service.js` → F26 (R-9 optimistic merge order) / F-X3 (`support_service.js:454` comment noise) / F-DP-4 (cycle 6 三分支 dispatch 在 `CreateProjectModal.js:138-147` — rule of three, future PR)
 - `scripts/test-addon.sh` / dev tooling → F-X8 (worktree env gap)
 
 ## Phase D enablement gate — CAQA + reviewer Phase C 彙整（flag flip 前 must-fix）

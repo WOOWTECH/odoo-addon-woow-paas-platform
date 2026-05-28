@@ -121,13 +121,10 @@ export class CreateProjectModal extends Component {
             return;
         }
 
-        if (!this.state.workspaceId) {
-            this.state.error = "Please select a workspace";
-            return;
-        }
-
-        // D5=A: cloud_service is optional. When the user picks "— No service —"
-        // we create an unbound project scoped to the workspace.
+        // D1=A: workspace is optional. Three paths:
+        //   - cloud_service picked  → bound create (service path)
+        //   - workspace picked only → workspace-scoped create (workspace path)
+        //   - neither picked        → fully unbound create (personal project)
         this.state.loading = true;
         this.state.error = null;
 
@@ -137,12 +134,17 @@ export class CreateProjectModal extends Component {
                 description: this.state.description.trim(),
             };
 
-            const result = this.state.cloudServiceId
-                ? await supportService.createProjectForService(
-                      this.state.cloudServiceId,
-                      payload,
-                  )
-                : await supportService.createProject(this.state.workspaceId, payload);
+            let result;
+            if (this.state.cloudServiceId) {
+                result = await supportService.createProjectForService(
+                    this.state.cloudServiceId,
+                    payload,
+                );
+            } else if (this.state.workspaceId) {
+                result = await supportService.createProject(this.state.workspaceId, payload);
+            } else {
+                result = await supportService.createUnboundProject(payload);
+            }
 
             if (result.success) {
                 this.props.onCreated(result.data);
