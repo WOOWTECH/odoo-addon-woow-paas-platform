@@ -192,17 +192,26 @@ class TestPhaseCAgentSessionFields(TransactionCase):
         self.assertEqual(rows.get('last_state_event_ts'), 'YES')
 
     def test_MIG1_manifest_version_bumped_to_27(self):
-        """MIG.1: __manifest__.py declares 18.0.1.0.27."""
+        """MIG.1: __manifest__.py declares >= 18.0.1.0.27 (monotonic).
+
+        用 monotonic >= 鎖 intent，不硬編當時 phase 的快照值；本次與未來
+        每次 bump 都不撞紅（phase-versioned-test-assertion pattern，
+        docs/decisions/patterns/phase-versioned-test-assertion.md）。
+        """
+        import re
         manifest_path = os.path.abspath(
             os.path.join(os.path.dirname(__file__), '..', '__manifest__.py')
         )
         with open(manifest_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        self.assertIn(
-            '"version": "18.0.1.0.27"', content,
-            "MIG.1: __manifest__.py must bump version to '18.0.1.0.27' "
-            "(currently 18.0.1.0.26). Plan §Phase C Task 13 — without the "
-            "bump Odoo ignores the new cron data + migration 27.",
+        m = re.search(r'"version":\s*"18\.0\.1\.0\.(\d+)"', content)
+        self.assertIsNotNone(
+            m, "MIG.1: manifest must declare an 18.0.1.0.N version",
+        )
+        self.assertGreaterEqual(
+            int(m.group(1)), 27,
+            "MIG.1: manifest version must be >= 18.0.1.0.27 (Phase C anchor; "
+            "monotonic — future phases may bump higher).",
         )
 
 
@@ -258,6 +267,13 @@ class TestPhaseCSkillBundleEndpoint(HttpCase):
         self.bundle_bytes = (
             b'\x1f\x8b\x08RAW-skill-bundle-bytes-' + self.suffix.encode()
         )
+        # Note (post 2026-05-28 drift fix, spec
+        # docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md):
+        # 此 fixture 直接 create({'state':'published'}) 走的是「程式化捷徑」，
+        # 修法後 Skill.create() override 會自動觸發 _recompute_is_latest 並補
+        # published_at → 該 fixture skill 現在 is_latest=True、published_at 有值。
+        # 但 download endpoint 用 state == 'published'（非 is_latest）判定，所以
+        # SB.1-6 / C-1 既有斷言不受影響。改走 action_publish 為可選 follow-up。
         self.skill = self.Skill.sudo().create({
             'name': f'deploy-{self.suffix}',
             'version': '1.0.0',
