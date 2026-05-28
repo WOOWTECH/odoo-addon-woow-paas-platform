@@ -1322,7 +1322,11 @@ class AiAssistantController(Controller):
             except (ValueError, TypeError):
                 return {'success': False, 'error': 'Invalid project_id'}
 
-        tasks = request.env['project.task'].sudo().search(domain)
+        # Walk ir.rule (no sudo): project_task_rule_workspace_member dual-leg
+        # filters bound tasks by their project's workspace membership, unbound
+        # tasks by the project_id follower / creator sub-legs. The bare-URL
+        # list path (no workspace_id, no project_id) must NOT cross-tenant-leak.
+        tasks = request.env['project.task'].search(domain)
         data = [self._serialize_task(task) for task in tasks]
         return {
             'success': True,
