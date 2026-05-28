@@ -105,6 +105,13 @@ class Skill(models.Model):
         skills = super().create(vals_list)
         for skill in skills:
             skill._anchor_bundle_attachment()
+            # Drift 防護（spec §①）：直接 create state=published（繞過
+            # action_publish）→ 補 published_at（必須在 recompute 之前，
+            # 否則排序錯）+ 重算 is_latest 不變式。
+            if skill.state == 'published':
+                if not skill.published_at:
+                    skill.published_at = fields.Datetime.now()
+                skill._recompute_is_latest(skill.project_id.id, skill.name)
         return skills
 
     def write(self, vals):
@@ -112,6 +119,14 @@ class Skill(models.Model):
         if 'bundle_attachment_id' in vals:
             for skill in self:
                 skill._anchor_bundle_attachment()
+        # Drift 防護（spec §①）：vals 含 state → 補 published_at（若結果為
+        # published 且缺）+ recompute。_recompute_is_latest 內部 write 的 vals
+        # 是 {'is_latest': ...}，不含 state → 不踩此條件，自然不遞迴。
+        if 'state' in vals:
+            for skill in self:
+                if skill.state == 'published' and not skill.published_at:
+                    skill.published_at = fields.Datetime.now()
+                skill._recompute_is_latest(skill.project_id.id, skill.name)
         return result
 
     def _anchor_bundle_attachment(self):
