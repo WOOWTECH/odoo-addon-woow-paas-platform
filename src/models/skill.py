@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from odoo import api, fields, models
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 
 
 class Skill(models.Model):
@@ -30,11 +30,21 @@ class Skill(models.Model):
         index=True,
     )
 
+    scope = fields.Selection(
+        selection=[('system', 'System'), ('user', 'User')],
+        string='Scope',
+        default='user',
+        required=True,
+        index=True,
+        help="system = platform-wide (loaded into every project's pod); "
+             "user = bound to a single project.",
+    )
+
     project_id = fields.Many2one(
         'project.project',
-        required=True,
         ondelete='cascade',
         index=True,
+        help='Set for user-scope skills; NULL for system-scope skills.',
     )
 
     # Guest project members may read the metadata (name / version / state)
@@ -96,6 +106,21 @@ class Skill(models.Model):
             'Skill name + version must be unique per project.',
         ),
     ]
+
+    @api.constrains('scope', 'project_id')
+    def _check_scope_project_consistency(self):
+        # D4 invariant (mirrors mcp_server): scope='user' iff project_id NOT NULL.
+        for record in self:
+            if record.scope == 'user' and not record.project_id:
+                raise ValidationError(
+                    "User-scope skill '%s' must be linked to a project "
+                    "(scope='user' requires project_id)." % record.name
+                )
+            if record.scope == 'system' and record.project_id:
+                raise ValidationError(
+                    "System-scope skill '%s' must not be linked to a project "
+                    "(scope='system' requires project_id=NULL)." % record.name
+                )
 
     # ------------------------------------------------------------------ #
     # HC-4 — bundle attachment anchoring                                  #
