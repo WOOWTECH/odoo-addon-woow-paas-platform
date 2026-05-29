@@ -111,6 +111,20 @@ graph LR
     D -->|"舊版 state=deprecated"| F["停止供應"]
 ```
 
+## 🌐 Scope：system vs user
+
+| scope | project_id | 載入範圍 | 上傳者 |
+|---|---|---|---|
+| `system` | NULL | **所有 project 的 pod**（platform-curated） | admin（Phase 2） |
+| `user` | 必填 | 僅該 project 的 pod | project owner/admin（Phase 2） |
+
+system skill 由 Odoo 自動 union 進每個 project 的 `_build_skill_snapshot`，並透過下載端點的
+`scope='system'` fallback leg 供應（pod 端 frozen contract 不變，wire format 相同）。
+
+> **跨 repo 註記（給 `paas-agent-runtime`）**：skills.json snapshot 現在可能含 bundle 解析為
+> system-scope（`project_id` NULL）的 entry。`{name, version, sha256}` 契約與 by-name fetch
+> 完全不變，pod 無需改動。
+
 ## 🔐 bundle attachment 不是普通附件
 
 `bundle_attachment_id` 存的是可執行 payload，屬敏感資料。系統對它做了 **row-level ACL + anchor stamping** 兩層防護，避免被跨專案越權讀取。原理見 [Skill 系統安全模型](09-security-model.md)，repo 內 pattern：`docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`。
