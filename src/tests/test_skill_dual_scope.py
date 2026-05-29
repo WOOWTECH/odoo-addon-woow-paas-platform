@@ -218,3 +218,59 @@ class TestSkillSubsetConstraint(TransactionCase):
             'skill_ids': [(6, 0, [self.p1_skill.id, self.sys_skill.id])],
         })
         self.assertTrue(tmpl.id)
+
+
+@tagged('post_install', '-at_install')
+class TestSkillPodLoading(TransactionCase):
+    """system skills union into snapshot; download dual-leg."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Skill = cls.env['woow_paas_platform.skill']
+        cls.Project = cls.env['project.project']
+        cls.Template = cls.env['woow_paas_platform.agent_template']
+
+    def setUp(self):
+        super().setUp()
+        self.suffix = uuid.uuid4().hex[:8]
+        self.project = self.Project.sudo().create({'name': f'p-{self.suffix}'})
+        self.proj_skill = self.Skill.sudo().create({
+            'name': f'proj-{self.suffix}', 'version': '0.1.0',
+            'bundle_sha256': 'a' * 64, 'scope': 'user',
+            'project_id': self.project.id, 'state': 'published',
+        })
+        self.sys_skill = self.Skill.sudo().create({
+            'name': f'sys-{self.suffix}', 'version': '0.1.0',
+            'bundle_sha256': 'b' * 64, 'scope': 'system', 'state': 'published',
+        })
+        self.template = self.Template.sudo().create({
+            'name': f't-{self.suffix}',
+            'project_ids': [(6, 0, [self.project.id])],
+            'skill_ids': [(6, 0, [self.proj_skill.id])],
+        })
+
+    def test_snapshot_unions_system_skill(self):
+        from odoo.addons.woow_paas_platform.controllers.ai_assistant import (
+            AiAssistantController,
+        )
+        snap = AiAssistantController()._build_skill_snapshot(
+            self.project, self.template)
+        names = {e['name'] for e in snap}
+        self.assertIn(self.proj_skill.name, names, "bound project skill present")
+        self.assertIn(self.sys_skill.name, names, "system skill auto-unioned")
+
+    def test_snapshot_project_name_shadows_system(self):
+        from odoo.addons.woow_paas_platform.controllers.ai_assistant import (
+            AiAssistantController,
+        )
+        # a system skill sharing the bound project skill's NAME must be shadowed
+        self.Skill.sudo().create({
+            'name': self.proj_skill.name, 'version': '9.9.9',
+            'bundle_sha256': 'c' * 64, 'scope': 'system', 'state': 'published',
+        })
+        snap = AiAssistantController()._build_skill_snapshot(
+            self.project, self.template)
+        same_name = [e for e in snap if e['name'] == self.proj_skill.name]
+        self.assertEqual(len(same_name), 1, "project skill shadows system on name")
+        self.assertEqual(same_name[0]['sha256'], 'a' * 64, "project version wins")
