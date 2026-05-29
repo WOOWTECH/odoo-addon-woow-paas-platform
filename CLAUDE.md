@@ -320,9 +320,9 @@ deploy-stg.sh
 
 ```
 woow_paas_platform/
-├── src/                          # Odoo addon 源碼（35+ models, 8 controllers, OWL app at /woow）
+├── src/                          # Odoo addon 源碼（models / controllers / OWL app at /woow，數量見各目錄）
 │   ├── __manifest__.py
-│   ├── controllers/              # HTTP / JSON API（paas、billing、dashboard、ai_assistant、smart_home、profile、ha_api、oauth2）
+│   ├── controllers/              # HTTP / JSON API（paas、billing、dashboard、ai_assistant、smart_home、profile、ha_api、oauth2、agent_runtime_skill、agent_runtime_webhook）
 │   ├── models/                   # Workspace、CloudService、Wallet/Billing、AI、MCP、OAuth2、SmartHome、Subscription、Project/Account...
 │   ├── views/                    # backend XML views + menu
 │   ├── data/                     # demo data、cron、subscription products、templates
@@ -367,6 +367,8 @@ The module provides an independent frontend application:
 | `profile.py` | `/api/me` partner self-update |
 | `ha_api.py` | Home Assistant API proxy |
 | `oauth2.py` | OAuth2 server endpoints |
+| `agent_runtime_skill.py` | agent-runtime skill bundle（`/api/agent-runtimes/skill-bundle`） |
+| `agent_runtime_webhook.py` | agent-runtime 狀態回呼（`/api/agent-runtimes/webhook/state-update`） |
 
 完整端點與 OWL hash-based 路由詳見 `docs/reference/api/`，或直接 grep `@route` 與 `src/static/src/paas/core/router.js`。
 
@@ -444,7 +446,7 @@ _CONFIG_PARAMETERS = [
 
 ## Known patterns
 
-改動以下 model 與 ACL 前必看 invariants 與 pattern docs，避免 B1-class data leak 重炸：
+改動以下 model 與 ACL 前必看 invariants 與 pattern docs，避免 B1-class data leak 重炸（完整 18 條 pattern 索引見 [`docs/decisions/patterns/README.md`](docs/decisions/patterns/README.md)）：
 
 - **CloudService / Project decoupling**：見 `docs/decisions/refactor/cloud-service-project-decouple.md`（含 7 條 Invariants）
 - **Odoo addon override std ir.rule**（任何在 `ir.model.access.csv` 給 `base.group_user` 加 project / task / Odoo std model 的 RWCU 時）：見 `docs/decisions/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
@@ -453,6 +455,9 @@ _CONFIG_PARAMETERS = [
 - **m2m write constraint grantor authority check**（model 上有 attacker-writable Many2many + ir.rule / `@api.constrains` 用該 m2m 做 subset / authority 推導時）：見 `docs/decisions/patterns/constraint-input-trust-expansion.md`
 - **Bundle attachment defense in depth**（自家 model 透過 `ir.attachment` 存敏感 / RCE-class binary payload 時）：見 `docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`（anchor stamping + ir.attachment ir.rule 兩層）
 - **ORM-level test 綠 ≠ endpoint-level secure**（任何改 controller endpoint 的 list / get / stats / aggregation 路徑 + ir.rule-protected model 時；新增 / 改動 ir.rule 收緊某 model 可見性時；寫 backend `TestCase` + `with_user()` 守 ir.rule 的 PR）：見 `docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md`（controller layer 不可 `.sudo()` 繞 ir.rule；對等補 HttpCase cross-user negative；含 34 處 `sudo().*` audit grep checklist + 5 instance critical mass + **anti-pattern 三變體 family**：A = over-access leak / B = under-access own-data invisibility / C = same-method 半套 sudo（同 method input drop sudo 但 output 留 sudo，pattern lint future-proof 失效）+ perf justification 章節（sudo() 是 security primitive 不是 perf primitive）)
+- **兩層 ACL lock-step**（同一 model 被 ir.rule + controller carve-out，或多個 endpoint 各自 access resolver 守時；任一層改 domain / 收緊，另一層必須同步，否則 silent divergence 比未修更糟）：見 `docs/decisions/patterns/two-layer-acl-lockstep.md`
+- **Unbound（可選綁定）model 的 dual-leg ir.rule**（model 有 nullable M2O 到 workspace-bearing model、unbound row 仍須對部分 user〔creator / follower〕可見時；leg 1 bound walk + leg 2 unbound carve-out，跨 workspace 仍 deny）：見 `docs/decisions/patterns/unbound-project-acl-dual-leg.md`
+- **Mixed-scope model 的 6-rule split**（同 model 混 platform public-read + workspace-scoped 兩種 scope、且需在 `base.group_user` 開 CRUD 時；按 perm direction 拆 3 條 + sub-model 鏡像，single dual-leg 不夠〔create direction 有提權面〕）：見 `docs/decisions/patterns/mcp-acl-6-rule-split.md`
 - **Phase leader brief 是 pointer，不是 source-of-truth**（適用 maestri 多 phase agent pod 工作流；非 paas-platform 直接相關，是 agent hand-off 通用紀律）：見 `docs/decisions/patterns/phase-leader-brief-as-pointer-not-source.md`（agent 接 brief 撞到與 plan signed-off / decision doc invariant / schema 實際 shape 不符 → trust source + 回報 leader 校正 brief，不照 brief 字面開工；與 [[plan-gap-stop-and-report]] 區分：那條 agent 執行中主動發現 gap、本條接任務時被動 detect brief drift）
 
 Pitfall 持久化紀錄（debug 撞牆時對照）：
@@ -558,7 +563,7 @@ export class SubscriptionCard extends Component {
 
 - Odoo version: 18.0
 - Odoo core modules: `base`, `web`, `project`, `mail`, `bus`
-- Third-party addons: `ai_base_gt`, `odoo_ai_assistant_chatgpt_connector`, `sh_subscription`, `sh_subscription_wallet`, `payment_ecpay_ecpg`, `ecpay_invoice_tw`
+- Third-party addons: 權威清單見 `src/__manifest__.py` 的 `depends`（含 ai_base_gt、odoo_ai_assistant_chatgpt_connector、sh_subscription 系列、ecpay 系列等）
 - External fonts: Google Fonts (Manrope, Outfit), Material Symbols
 
 ### PaaS Operator Service

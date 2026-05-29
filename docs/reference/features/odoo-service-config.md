@@ -13,7 +13,7 @@ related:
 
 # Odoo Service Configuration
 
-> 此檔由 `/docs:promote ccpm:odoo-service-config-enhancement` 從 ccpm PRD 升級而來。對應的 epic 為 `backlog` 狀態，本 spec 描述目標行為，實作完成後請更新 `status: active` → `implemented`。
+> 此檔由 `/docs:promote ccpm:odoo-service-config-enhancement` 從 ccpm PRD 升級而來。**本 feature 已實作落地**（epic 已 archived、對應 issues #5–#10 closed）；實作落點見 `src/data/cloud_app_templates.xml` 的 `helm_value_specs` 與 `customPostInitScripts`、`src/controllers/paas.py`。下方 Acceptance Criteria 為原始目標規格，保留作脈絡。
 
 PaaS 內 Odoo Cloud Service 的可配置設定。涵蓋租戶層（admin credentials、SMTP）與系統層（`proxy_mode`、`list_db`）兩種類別。架構決策見 [`../../decisions/refactor/odoo-service-config-enhancement.md`](../../decisions/refactor/odoo-service-config-enhancement.md)。
 
