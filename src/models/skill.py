@@ -7,7 +7,7 @@ from odoo.exceptions import UserError, ValidationError
 class Skill(models.Model):
     _name = 'woow_paas_platform.skill'
     _description = 'Project-scoped Agent Skill Bundle'
-    _order = 'project_id, name, version desc'
+    _order = 'scope, project_id, name, version desc'
 
     name = fields.Char(
         string='Skill Name',

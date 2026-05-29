@@ -62,3 +62,27 @@ def migrate(cr, version):
         "Retired legacy skill rules: %s ir_rule + %s ir_model_data rows",
         retired, cr.rowcount,
     )
+
+    # 4. Flip noupdate=false on the new skill rule xmlids so FUTURE module
+    #    updates re-apply XML-defined domain changes (same parity step as
+    #    18.0.1.0.24 did for the MCP scope-split rules). Without this, the new
+    #    rules sit in the noupdate=1 block and a later domain edit would not
+    #    take effect on -u.
+    cr.execute(
+        """
+        UPDATE ir_model_data
+        SET noupdate = false
+        WHERE module = 'woow_paas_platform'
+          AND model = 'ir.rule'
+          AND name IN (
+            'skill_rule_user_admin',
+            'skill_rule_user_member',
+            'skill_rule_user_guest',
+            'skill_rule_system_readonly'
+          )
+        """
+    )
+    _logger.info(
+        "Cleared noupdate on new skill ir.rule xmlids (%s data rows)",
+        cr.rowcount,
+    )
