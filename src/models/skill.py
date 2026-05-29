@@ -99,13 +99,21 @@ class Skill(models.Model):
         default=fields.Datetime.now,
     )
 
-    _sql_constraints = [
-        (
-            'unique_name_version_per_project',
-            'UNIQUE(project_id, name, version)',
-            'Skill name + version must be unique per project.',
-        ),
-    ]
+    def init(self):
+        # UNIQUE(project_id, name, version) cannot dedupe system skills:
+        # Postgres treats NULL project_id as distinct. Use two partial unique
+        # indexes (replaces the old _sql_constraints UNIQUE). IF NOT EXISTS so
+        # this is idempotent on every -u / fresh install.
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS skill_uniq_user_proj_name_version
+            ON woow_paas_platform_skill (project_id, name, version)
+            WHERE project_id IS NOT NULL
+        """)
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS skill_uniq_system_name_version
+            ON woow_paas_platform_skill (name, version)
+            WHERE project_id IS NULL
+        """)
 
     @api.constrains('scope', 'project_id')
     def _check_scope_project_consistency(self):

@@ -49,3 +49,39 @@ class TestSkillDualScope(TransactionCase):
         })
         self.assertFalse(sk.project_id)
         self.assertEqual(sk.scope, 'system')
+
+    def test_user_dup_same_project_name_version_rejected(self):
+        self.Skill.sudo().create({
+            'name': 'dup', 'version': '0.1.0', 'bundle_sha256': 'a' * 64,
+            'scope': 'user', 'project_id': self.project.id,
+        })
+        with self.assertRaises(Exception):  # noqa: BLE001  (IntegrityError)
+            self.Skill.sudo().create({
+                'name': 'dup', 'version': '0.1.0', 'bundle_sha256': 'b' * 64,
+                'scope': 'user', 'project_id': self.project.id,
+            })
+            self.env.flush_all()
+
+    def test_system_dup_same_name_version_rejected(self):
+        self.Skill.sudo().create({
+            'name': 'sysdup', 'version': '0.1.0', 'bundle_sha256': 'a' * 64,
+            'scope': 'system',
+        })
+        with self.assertRaises(Exception):  # noqa: BLE001
+            self.Skill.sudo().create({
+                'name': 'sysdup', 'version': '0.1.0', 'bundle_sha256': 'b' * 64,
+                'scope': 'system',
+            })
+            self.env.flush_all()
+
+    def test_cross_scope_same_name_version_allowed(self):
+        sys_sk = self.Skill.sudo().create({
+            'name': 'shared', 'version': '0.1.0', 'bundle_sha256': 'a' * 64,
+            'scope': 'system',
+        })
+        usr_sk = self.Skill.sudo().create({
+            'name': 'shared', 'version': '0.1.0', 'bundle_sha256': 'b' * 64,
+            'scope': 'user', 'project_id': self.project.id,
+        })
+        self.env.flush_all()
+        self.assertTrue(sys_sk.id and usr_sk.id)
