@@ -52,8 +52,9 @@ docker run hello-world
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/WOOWTECH/odoo-addon-woow-paas-platform.git
-cd odoo-addon-woow-paas-platform
+# 主來源為 Gitea（github.com 上的 odoo-addon-woow-paas-platform 僅為鏡像）
+git clone https://git-prod.woowtech.io/odoo-addons/woow_paas_platform.git
+cd woow_paas_platform
 ```
 
 ### 2. Set Up PaaS Operator (Optional - for full stack)
@@ -142,100 +143,13 @@ Access Odoo:
 
 ## Project Structure
 
-Understanding the codebase structure:
+完整且權威的目錄結構單一維護於專案根的 `README.md` 與 `CLAUDE.md`「Directory Structure」章節，避免在此重複手寫而漂移。請以那兩處為準。以下只列開發最常碰到的幾個切入點：
 
-```
-woow_paas_platform/
-├── src/                          # Odoo module source code
-│   ├── __manifest__.py           # Module metadata, dependencies, assets
-│   ├── __init__.py               # Python package init
-│   │
-│   ├── controllers/              # HTTP endpoints
-│   │   └── paas.py              # All API endpoints (workspace, members, cloud services)
-│   │
-│   ├── models/                   # Odoo ORM models
-│   │   ├── res_config_settings.py       # PaaS settings
-│   │   ├── workspace.py                 # Workspace model
-│   │   ├── workspace_access.py          # Workspace members & roles
-│   │   ├── cloud_app_template.py        # Application templates
-│   │   └── cloud_service.py             # Deployed services
-│   │
-│   ├── services/                  # Service layer
-│   │   └── paas_operator.py      # HTTP client for PaaS Operator
-│   │
-│   ├── views/                    # QWeb templates & XML views
-│   │   ├── paas_app.xml         # SPA entry point template
-│   │   ├── res_config_settings_views.xml
-│   │   └── menu.xml
-│   │
-│   ├── security/                 # Access control
-│   │   └── ir.model.access.csv  # Model permissions
-│   │
-│   ├── data/                     # Initial data
-│   │   └── cloud_app_templates.xml      # Default app templates
-│   │
-│   ├── static/src/               # Frontend assets
-│   │   ├── paas/                # Standalone OWL App
-│   │   │   ├── app.js           # Mount entry point
-│   │   │   ├── root.js/xml      # Root component + router
-│   │   │   ├── core/            # Router, utils
-│   │   │   ├── layout/          # AppShell, Sidebar, Header
-│   │   │   ├── components/      # Reusable UI components
-│   │   │   ├── pages/           # Page components
-│   │   │   ├── services/        # API clients
-│   │   │   └── styles/          # SCSS theme system
-│   │   └── scss/                # Backend SCSS
-│   │
-│   └── tests/                    # Odoo Python tests
-│       ├── test_cloud_api.py            # API endpoint & controller tests
-│       ├── test_cloud_app_template.py   # CloudAppTemplate model tests
-│       ├── test_cloud_service.py        # CloudService model tests
-│       └── test_paas_operator.py        # PaaSOperatorClient HTTP client tests
-│
-├── extra/paas-operator/          # PaaS Operator service (FastAPI)
-│   ├── src/
-│   │   ├── main.py              # FastAPI app + middleware
-│   │   ├── config.py            # Settings management
-│   │   ├── api/                 # API endpoints
-│   │   │   ├── releases.py      # Helm release endpoints
-│   │   │   └── namespaces.py    # Namespace management
-│   │   ├── services/
-│   │   │   └── helm.py          # Helm CLI wrapper
-│   │   └── models/
-│   │       └── schemas.py       # Pydantic models
-│   │
-│   ├── tests/                   # Operator tests
-│   │   ├── test_helm.py
-│   │   ├── test_releases.py
-│   │   └── test_namespaces.py
-│   │
-│   ├── helm/                    # Helm chart for K8s deployment
-│   │   ├── Chart.yaml
-│   │   ├── values.yaml
-│   │   └── templates/
-│   │       ├── deployment.yaml
-│   │       ├── service.yaml
-│   │       ├── secret.yaml
-│   │       ├── serviceaccount.yaml
-│   │       ├── clusterrole.yaml
-│   │       └── clusterrolebinding.yaml
-│   │
-│   ├── Dockerfile               # Container image
-│   └── requirements.txt         # Python dependencies
-│
-├── docs/                        # Documentation
-│   ├── deployment/              # Deployment guides
-│   ├── development/             # Developer guides
-│   └── spec/                    # Feature specifications
-│
-├── scripts/                     # Development scripts
-│   ├── start-dev.sh            # Start development environment
-│   ├── test-addon.sh           # Run Odoo tests
-│   └── setup-worktree-env.sh   # Worktree configuration
-│
-├── docker-compose.yml           # Local Odoo development
-└── CLAUDE.md                    # AI assistant context
-```
+- `src/controllers/` — HTTP / JSON API（共 10 個 controller，依範圍拆分；對照表見 `CLAUDE.md` 的「API Endpoints」controller 表，或直接 grep `@route`）
+- `src/models/` — Odoo ORM models
+- `src/static/src/paas/` — Standalone OWL App（`core/router.js` 為 hash-based router 入口）
+- `extra/paas-operator/` — PaaS Operator（FastAPI 包 Helm CLI，含 helm chart）
+- `docs/` — 文件，採 6 類混合結構（規則見 `docs/README.md`，非舊的 `spec/` `deployment/` `development/` 三分法）
 
 ### Key Components
 
@@ -247,13 +161,14 @@ woow_paas_platform/
 
 #### Backend (Odoo)
 - **Models**: `src/models/` (PostgreSQL ORM)
-- **Controllers**: `src/controllers/` (HTTP endpoints)
+- **Controllers**: `src/controllers/` — 10 個 controller 依範圍拆分（非單一檔），對照表見 `CLAUDE.md`「API Endpoints」controller 表
 - **Views**: `src/views/` (QWeb templates)
 
 #### PaaS Operator (FastAPI)
 - **API**: `extra/paas-operator/src/api/` (REST endpoints)
 - **Services**: `extra/paas-operator/src/services/` (Helm wrapper)
 - **Models**: `extra/paas-operator/src/models/` (Pydantic schemas)
+- **完整角色**：Operator 不只包 Helm CLI，還負責 agent-runtime spawn 與 JWT signing 等職責；全貌見 [`docs/guides/paas-skill-system/README.md`](paas-skill-system/README.md)
 
 ---
 
@@ -269,9 +184,9 @@ woow_paas_platform/
 docker compose exec web \
   odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform --stop-after-init
 
-# Run specific test file
+# Run specific test file（測試檔清單見 src/tests/；把 <test_file> 換成實際檔名，勿在此硬列）
 docker compose exec web \
-  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform.test_workspace --stop-after-init
+  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform.<test_file> --stop-after-init
 
 # Run with verbose output
 docker compose exec web \
@@ -292,11 +207,11 @@ pytest tests/ -v
 # Run with coverage
 pytest tests/ -v --cov=src --cov-report=html
 
-# Run specific test file
-pytest tests/test_helm.py -v
+# Run specific test file（實際測試檔清單見 extra/paas-operator/tests/，勿在此硬列）
+pytest tests/<test_file>.py -v
 
 # Run specific test
-pytest tests/test_releases.py::test_create_release -v
+pytest tests/<test_file>.py::<test_name> -v
 ```
 
 ### Frontend Tests (Future)
@@ -472,7 +387,7 @@ npm test
    app.include_router(my_endpoint.router, prefix="/api", tags=["my"])
    ```
 
-4. **Add tests** in `extra/paas-operator/tests/test_my_endpoint.py`
+4. **Add tests** in `extra/paas-operator/tests/`（既有測試檔可參考該目錄內容）
 
 ---
 
@@ -650,12 +565,13 @@ debugger;  // Breakpoint
 - Read [K8s Deployment Guide](deployment/k8s-setup.md) to deploy to production
 - Check [Troubleshooting Guide](deployment/troubleshooting.md) for common issues
 - Review [Cloud Services Spec](../reference/features/cloud-services.md) to understand the architecture
+- Read [PaaS Skill System 知識庫](paas-skill-system/README.md) — agent-runtime / skill-bundle JWT / pod 等子系統的漸進式載入起點
 - Explore the codebase and start contributing!
 
 ## Getting Help
 
 - **Documentation**: `docs/` directory
-- **GitHub Issues**: https://github.com/WOOWTECH/odoo-addon-woow-paas-platform/issues
+- **Issue Tracker（主）**: https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues （Gitea；github.com 上的 mirror issues 非主追蹤）
 - **Odoo Docs**: https://www.odoo.com/documentation/18.0/
 - **OWL Docs**: https://github.com/odoo/owl
 - **FastAPI Docs**: https://fastapi.tiangolo.com/

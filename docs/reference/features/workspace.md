@@ -1,3 +1,9 @@
+---
+title: Workspace Feature Specification
+category: reference
+implementation_status: partial
+---
+
 # Workspace Feature Specification
 
 > 版本: 1.0.0

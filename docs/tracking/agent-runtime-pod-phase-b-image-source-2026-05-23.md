@@ -147,7 +147,7 @@ Phase B test 經過三層環境，**只有最後一層是 authoritative gate**�
 | **真 CI（Linux + setup-python）** | Gitea runner | **唯一 authoritative** — prod pod 也是 Linux，rlimit 5 條全 enforce |
 
 - **可行做法**：聲稱「測過了」必須說清楚「哪一層測過」。本機 / container 綠不代表 CI 綠（B-5 正是本機 / container 可能綠但真 CI 連 pytest 都沒跑到）。
-- **對齊 [[verification-before-completion]] 精神**：authoritative gate（真 CI）的 output 才算數，不是 dev box 的綠。
+- **對齊 `verification-before-completion` 精神**（superpowers skill）：authoritative gate（真 CI）的 output 才算數，不是 dev box 的綠。
 - RLIMIT_AS dev/prod 差異 leader 已接受（dev 非信任邊界，不跑 untrusted skill）— 見 PHASE_B_HANDOFF.md §3。
 
 ## 6. cross-phase invariant 守線

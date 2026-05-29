@@ -83,7 +83,7 @@ graph LR
 
 ## ⚠️ 跨 repo 部署順序風險（D-CAVEAT-2 / F-PC-7）
 
-`token_use` 的嚴格驗證在 Pod 端（`paas-agent-runtime` 的 F-PC-7，已實作於 `runtime/transport/auth.py`）。**翻開 enable-gate 前，必須先把 F-PC-7 merge 到 main 並部署**，否則存在 1 小時在途 token 的空窗。狀態追蹤見 [Agent Runtime 演進史 (Phase A~G)](10-roadmap-phases.md)；實際翻 gate 步驟見 repo 的 `docs/guides/deployment/agent-runtime-pilot-flip-gate-runbook.md`。
+`token_use` 的嚴格驗證在 Pod 端（`paas-agent-runtime` 的 F-PC-7，已實作於 `runtime/transport/auth.py`）。**F-PC-7 已 merge main（PR #3）並 build 進發佈 image，stg 已滿足**；但 prod / 新環境仍須遵守 `token_use` deploy-order（**operator 簽 `token_use` 必先於 pod A 嚴格部署**，否則存在 1 小時在途 token 的空窗，D-CAVEAT-2）。狀態追蹤見 [Agent Runtime 演進史 (Phase A~G)](10-roadmap-phases.md)；實際翻 gate 步驟與 prod 上線 gate 見 repo 的 `docs/guides/deployment/agent-runtime-pilot-flip-gate-runbook.md`。
 
 ## 📚 本 repo 對應 pattern（`docs/decisions/patterns/`）
 

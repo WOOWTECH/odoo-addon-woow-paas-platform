@@ -53,6 +53,8 @@ CLAUDE.md `Known patterns` 直接以路徑引用 pitfall 檔，所以**不加 YA
 
 跨 refactor cycle 連續編號（F1, F2, F3, ...）。**新 entry 先 append 在文末（標記 `pending F#`），reporter 整理時統一指派編號並加進 Index 表格**。每條附 severity / origin / cycle / status。
 
+檔案開頭（State 段之後、`## Index` 之前）維護一個 **「Active backlog 摘要」** block：只列尚未處理（status 非 done/resolved/closed）的 F#，按系列分組 + 一句話狀態，讓讀者開頭即可掃出所有 open/pending；已 RESOLVED/CLOSED 的 F# 不在此重列，但仍完整保留在 `## Index` 表原列（不刪除、不重編號）。每次新增或關閉 F# 時須同步更新此摘要。
+
 ### issues/ — 自由結構，重視可追蹤性
 
 每筆 incident 含 **Symptom → Timeline → Root Cause → Fix（Path A/B 如有）→ Prevention**。改檔不刪原文，加 `**Update YYYY-MM-DD**:` 區塊保留 audit trail。

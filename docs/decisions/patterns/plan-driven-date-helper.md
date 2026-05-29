@@ -134,7 +134,7 @@ helper 寫 `start + cycle`，confirm 又 advance 一次變 `start + 2*cycle`（�
 2. **下次加第三個 helper（例如 paused state）一併評估是否該把 post-confirm 行為
    explicit 加進 test assertion 或 helper docstring。** 現在依賴 `_force_*_dates_from_plan`
    helper 命名隱含「create lifecycle 內、後面有 confirm」，這個約束沒有被 type 或
-   constraint 強制 — 是 [[pitfall-helper-confirm-coupling]] 的 latent risk。
+   constraint 強制 — 這是 helper 與後續 confirm hook 耦合（helper-confirm coupling）的 latent risk：helper body 算出的 pre-confirm date 與 callsite 後 confirm hook 觀察到的 post-confirm date 不一致，名稱無法強制此約束。
 
 3. **若要 unit test helper 本身（不透過 `_create_and_confirm_subscription`），
    斷言要對 pre-confirm state**，不能用 plan acceptance criterion 那條值。但

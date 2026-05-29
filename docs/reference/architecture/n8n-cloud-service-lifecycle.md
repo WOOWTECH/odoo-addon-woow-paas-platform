@@ -1,3 +1,9 @@
+---
+title: n8n Cloud Service 生命週期
+category: reference
+implementation_status: implemented
+---
+
 # n8n Cloud Service 生命週期
 
 本文件完整說明使用者在 Woow PaaS Platform 上建立一個 n8n Cloud Service 時，從前端操作到最終產生可從外部連線的 FQDN URL，整個系統在背後執行的完整流程。
@@ -646,36 +652,42 @@ n8n container 內建 Node.js runtime 但沒有 `curl`。`wget` 在處理 n8n bod
 
 ## 9. Phase 6：MCP Server 自動註冊
 
-### 9.1 自動建立 MCP Server 記錄
+> **⚠️ 已退場（DEPRECATED）**：本節描述的「服務轉 `running` 後自動建立 `McpServer` 記錄」機制已於 cycle 4（issue #49 / #51）的 MCP URL 重設計中整段拆除，`_auto_create_mcp_server()` 及其 6 個 call site 已刪除（現僅存在於 `src/tests/test_mcp_integration.py` 的 removal 斷言中）。
+>
+> 現行設計改為**使用者在 UI 透過 Add Sidecar MCP shortcut 手動建立**，由 sidecar-hint endpoint 預填 URL / transport / api_key。設計脈絡與決策見 [mcp-url-redesign](../../decisions/refactor/mcp-url-redesign.md)。
+>
+> 以下 9.1–9.3 保留作歷史對照，敘述已就現行 code 校正；標示「（已退場）」者代表該流程不再自動觸發。
 
-當服務成功轉為 `running` 狀態後，`_auto_create_mcp_server()` 方法（`src/controllers/paas.py:2040`）自動建立 `McpServer` 記錄：
+### 9.1 建立 MCP Server 記錄（已退場：原為自動建立）
+
+**（已退場）** 原本服務成功轉為 `running` 狀態後，`_auto_create_mcp_server()` 方法自動建立 `McpServer` 記錄。該方法現已移除（見本節開頭 banner）。
+
+現行 `McpServer` 記錄改由使用者手動建立（controller 的 create payload，`src/controllers/paas.py:1365`、`src/controllers/paas.py:1687`）。注意 payload 已改用 `project_id`（綁定 support project），`McpServer` model 本身沒有 `cloud_service_id` 欄位——服務關聯改透過 `server.project_id.cloud_service_id` 取得：
 
 ```python
 McpServer.create({
-    'name': f"{service.name} MCP",
-    'url': "http://svc-a1b2c3d4-mcp.paas-ws-42.svc.cluster.local:3000/mcp",
-    'transport': 'streamable_http',
+    'name': name,
+    'url': url,
+    'transport': params.get('transport', 'sse'),
+    'api_key': params.get('api_key', ''),
     'scope': 'user',
-    'cloud_service_id': service.id,
-    'auto_created': True,
-    'api_key': service.mcp_auth_token,  # AUTH_TOKEN for sidecar auth
+    'project_id': project.id,
 })
 ```
 
 ### 9.2 MCP Endpoint URL 優先順序
 
-`_build_mcp_endpoint_url()` 方法依以下優先順序建構 URL：
+controller 端 `_compute_sidecar_url_hint()`（`src/controllers/paas.py:2657`，原名 `_build_mcp_endpoint_url`，現為 UI 預填 helper）依以下優先順序建構 URL；model context 另有 twin `cloud_service._model_build_mcp_endpoint_url()`（`src/models/cloud_service.py:965`，供 cron / 非 request caller）：
 
 1. **K8s Internal URL**（最可靠）：`http://{release}-mcp.{namespace}.svc.cluster.local:{port}/mcp`
 2. **Subdomain URL**（需要 Cloudflare）：`https://{subdomain}.{paas_domain}/mcp`
 3. **Localhost fallback**：`http://localhost:{port}/mcp`
 
-### 9.3 Tool 發現與 Cron 重試
+### 9.3 Tool 發現與 Cron 重試（已退場觸發路徑）
 
-- 建立後立即嘗試 `action_sync_tools_safe()` 做 tool 發現
-- 若 sidecar 尚未就緒（Pod 重啟中），保持 `state='draft'`
-- Cron job（`_cron_retry_mcp_sync`）定期重試 `draft` 狀態的 server
-- 最多重試 10 次，超過後標記為 `error`
+- **（已退場）** 原本自動建立後立即嘗試 `action_sync_tools_safe()` 做 tool 發現；此自動觸發隨 §9.1 一併移除。
+- Cron job `_cron_retry_mcp_sync`（`src/models/mcp_server.py:205`，註冊於 `src/data/mcp_server_cron.xml`）仍存在，篩選 `auto_created=True` 且 `state='draft'` 的 server 定期重試 tool sync，最多重試 10 次，超過後標記為 `error`。
+- 但現行 production code 已無任何處設定 `auto_created=True`，故此 cron 已無對象、實質為 dormant legacy；手動建立的 server（`auto_created=False`）由使用者在 UI 觸發 sync，不走此 cron。
 
 ---
 

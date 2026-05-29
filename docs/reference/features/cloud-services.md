@@ -1,3 +1,9 @@
+---
+title: Cloud Services Specification
+category: reference
+implementation_status: implemented
+---
+
 # Cloud Services Specification
 
 ## Overview

@@ -75,6 +75,14 @@ related: [docs/decisions/xxx.md, .claude/epics/yyy/epic.md]
 | docs/ → docs/ | 相對路徑（範例：從 `plans/<quarter>/` 引用 decisions 寫 `../../decisions/<file>.md`）— CI link check 友善 |
 | 外部（GitHub / Gitea PR/issue） | 永遠用絕對 URL |
 
+**何時不可用 `[[wikilink]]`**：指向 superpowers skill 名、尚未建檔的占位（planned-but-not-yet-written），**不要**用 `[[wikilink]]` — lychee broken-link check 不檢查 `[[]]` 語法，這類連結會靜默變成永久 dangling。改用：
+
+- **inline code**（如 `` `verification-before-completion` ``）標示 skill 名或外部概念；
+- **先建 stub**（`/docs:new` 產 frontmatter，設 `status: draft`）再用 `[[wikilink]]` 指它；
+- 或對已存在的 doc 用相對 `[text](path.md)` 連結。
+
+`[[wikilink]]` 僅在目標檔**已存在**於 `docs/decisions/patterns/` 或 `docs/tracking/` 時使用。
+
 ## 工具介接
 
 - **ccpm v2**：產出在 `.claude/prds/` 與 `.claude/epics/`，不直接碰 docs/。完成後透過 `/docs:promote` 把決策 / pitfall / follow-up 落到主結構
