@@ -399,15 +399,25 @@ fi
 # --- 檢查並初始化資料庫 ---
 echo -e "${BLUE}Checking database...${NC}"
 
-# Check if Odoo has been initialized (ir_module_module table exists),
-# not just if the database exists (PostgreSQL may have auto-created it via POSTGRES_DB)
-ODOO_INITIALIZED=$(kubectl exec -n "$NAMESPACE" "statefulset/${PG_STATEFULSET}" -- \
+# issue #85 fix A: gate on whether woow_paas_platform is actually *installed*,
+# not merely whether the ir_module_module table exists. A re-deploy that rebinds
+# leftover postgres data (Retain PV / kept PVC) sees the table present but the
+# module may be uninstalled / half-init, which previously caused the install
+# step to be skipped → /woow 404. Query the module state directly instead.
+#
+# Empty string covers both fresh DB (table missing → psql error → 2>/dev/null
+# + ||echo → "") and the module-row-not-present case; "uninstalled" covers
+# half-init. Any non-"installed" value → run install. The existing
+# `odoo -i "$MODULES"` command is correct for both fresh and half-init: Odoo
+# only installs modules in the list that are currently uninstalled (base/web
+# already installed are skipped), so the install command itself needs no change.
+WOOW_MODULE_STATE=$(kubectl exec -n "$NAMESPACE" "statefulset/${PG_STATEFULSET}" -- \
     psql -U odoo -d "$DB_NAME" -tAc \
-    "SELECT 1 FROM information_schema.tables WHERE table_name='ir_module_module'" 2>/dev/null || echo "")
+    "SELECT state FROM ir_module_module WHERE name='woow_paas_platform'" 2>/dev/null || echo "")
 
-if [ "$ODOO_INITIALIZED" != "1" ]; then
-    echo -e "${YELLOW}Database '$DB_NAME' not initialized. Initializing Odoo...${NC}"
-    echo -e "${YELLOW}(First-time setup takes 1-3 minutes, please wait)${NC}"
+if [ "$WOOW_MODULE_STATE" != "installed" ]; then
+    echo -e "${YELLOW}Database '$DB_NAME' needs install (woow_paas_platform state: '${WOOW_MODULE_STATE:-not present}'). Installing Odoo modules...${NC}"
+    echo -e "${YELLOW}(First-time / re-install setup takes 1-3 minutes, please wait)${NC}"
 
     # Wait for container's pip install to complete before DB init.
     # The container entrypoint runs: pip3 install ... && exec odoo ...
@@ -461,7 +471,8 @@ if [ "$ODOO_INITIALIZED" != "1" ]; then
     kubectl rollout restart -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}"
     kubectl rollout status -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" --timeout=120s 2>/dev/null || true
 else
-    echo -e "${GREEN}Database '$DB_NAME' already initialized.${NC}"
+    # issue #85 fix A: woow_paas_platform confirmed installed → safe to skip install.
+    echo -e "${GREEN}Database '$DB_NAME' already initialized (woow_paas_platform installed).${NC}"
 fi
 
 echo ""

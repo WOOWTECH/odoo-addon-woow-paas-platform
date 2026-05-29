@@ -145,8 +145,8 @@ Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正
 # 延長沙盒 TTL
 ./.claude/skills/k8s-dev-sandbox/scripts/extend.sh <sandbox-name> [--ttl 336h]
 
-# 銷毀沙盒
-./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh <sandbox-name>
+# 銷毀沙盒（--context required，同 create.sh；--keep-data 可保留資料，預設清除 issue #85）
+./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh <sandbox-name> --context woow-k3s
 
 # 建構 CI 映像
 ./.claude/skills/k8s-dev-sandbox/scripts/build.sh [--registry <registry>] [--push]
