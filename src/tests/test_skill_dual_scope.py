@@ -85,3 +85,31 @@ class TestSkillDualScope(TransactionCase):
         })
         self.env.flush_all()
         self.assertTrue(sys_sk.id and usr_sk.id)
+
+    def test_system_is_latest_grouped_platform_wide(self):
+        v1 = self.Skill.sudo().create({
+            'name': 'syslatest', 'version': '0.1.0', 'bundle_sha256': 'a' * 64,
+            'scope': 'system', 'state': 'published',
+        })
+        v2 = self.Skill.sudo().create({
+            'name': 'syslatest', 'version': '0.2.0', 'bundle_sha256': 'b' * 64,
+            'scope': 'system', 'state': 'published',
+        })
+        v1.invalidate_recordset()
+        v2.invalidate_recordset()
+        self.assertFalse(v1.is_latest, "older system version loses is_latest")
+        self.assertTrue(v2.is_latest, "newest published system version is latest")
+
+    def test_system_and_user_is_latest_independent(self):
+        sys_sk = self.Skill.sudo().create({
+            'name': 'indep', 'version': '0.1.0', 'bundle_sha256': 'a' * 64,
+            'scope': 'system', 'state': 'published',
+        })
+        usr_sk = self.Skill.sudo().create({
+            'name': 'indep', 'version': '0.1.0', 'bundle_sha256': 'b' * 64,
+            'scope': 'user', 'project_id': self.project.id, 'state': 'published',
+        })
+        sys_sk.invalidate_recordset()
+        usr_sk.invalidate_recordset()
+        self.assertTrue(sys_sk.is_latest, "system bucket has its own latest")
+        self.assertTrue(usr_sk.is_latest, "user bucket has its own latest")

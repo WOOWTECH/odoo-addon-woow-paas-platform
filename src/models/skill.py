@@ -144,7 +144,7 @@ class Skill(models.Model):
             if skill.state == 'published':
                 if not skill.published_at:
                     skill.published_at = fields.Datetime.now()
-                skill._recompute_is_latest(skill.project_id.id, skill.name)
+                skill._recompute_is_latest()
         return skills
 
     def write(self, vals):
@@ -159,7 +159,7 @@ class Skill(models.Model):
             for skill in self:
                 if skill.state == 'published' and not skill.published_at:
                     skill.published_at = fields.Datetime.now()
-                skill._recompute_is_latest(skill.project_id.id, skill.name)
+                skill._recompute_is_latest()
         return result
 
     def _anchor_bundle_attachment(self):
@@ -202,7 +202,7 @@ class Skill(models.Model):
             'state': 'published',
             'published_at': fields.Datetime.now(),
         })
-        self._recompute_is_latest(self.project_id.id, self.name)
+        self._recompute_is_latest()
 
     def action_deprecate(self):
         """published → deprecated. Recompute hands is_latest to the next
@@ -214,7 +214,7 @@ class Skill(models.Model):
                 "(only published)." % (self.name, self.version, self.state)
             )
         self.write({'state': 'deprecated'})
-        self._recompute_is_latest(self.project_id.id, self.name)
+        self._recompute_is_latest()
 
     def action_archive_skill(self):
         """Any non-archived state → archived (terminal). Recompute is_latest.
@@ -230,24 +230,37 @@ class Skill(models.Model):
                 % (self.name, self.version)
             )
         self.write({'state': 'archived'})
-        self._recompute_is_latest(self.project_id.id, self.name)
+        self._recompute_is_latest()
 
-    def _recompute_is_latest(self, project_id, name):
-        """Invariant: at most one is_latest=True per (project_id, name),
-        and it is the most-recently-published (published_at desc, id desc)
-        skill in state 'published'."""
-        group = self.sudo().search([
-            ('project_id', '=', project_id),
-            ('name', '=', name),
-        ])
+    def _is_latest_group_domain(self):
+        """Domain for the bucket this skill competes in for the is_latest
+        pointer. System skills group platform-wide per name (project_id NULL);
+        user skills group per (project_id, name)."""
+        self.ensure_one()
+        if self.scope == 'system':
+            return [
+                ('scope', '=', 'system'),
+                ('project_id', '=', False),
+                ('name', '=', self.name),
+            ]
+        return [
+            ('scope', '=', 'user'),
+            ('project_id', '=', self.project_id.id),
+            ('name', '=', self.name),
+        ]
+
+    def _recompute_is_latest(self):
+        """Invariant: at most one is_latest=True per (scope, project, name)
+        group, and it is the most-recently-published (published_at desc,
+        id desc) skill in state 'published'."""
+        self.ensure_one()
+        group = self.sudo().search(self._is_latest_group_domain())
         published = group.filtered(lambda s: s.state == 'published')
         winner = published.sorted(
             key=lambda s: (s.published_at or datetime.min, s.id),
             reverse=True,
         )[:1]
         for skill in group:
-            # winner empty recordset → winner.id is False, which no
-            # persisted id equals, so desired is correctly False for all.
             desired = skill.id == winner.id
             if skill.is_latest != desired:
                 skill.write({'is_latest': desired})
