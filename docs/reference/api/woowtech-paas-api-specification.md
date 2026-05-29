@@ -1,3 +1,9 @@
+---
+title: WoowTech PaaS Platform - API 串接規格文件
+category: reference
+implementation_status: partial
+---
+
 # WoowTech PaaS Platform - API 串接規格文件
 
 > 基於 Stitch Design System 設計稿分析
@@ -11,10 +17,13 @@
 > - **Team Management** ✅ (使用 `/api/workspaces/<id>/members` JSON-RPC 端點)
 > - **Cloud Services** ✅ (使用 `/api/cloud/templates` 與 `/api/workspaces/<id>/services` JSON-RPC 端點)
 > - **PaaS Operator** ✅ (獨立 FastAPI 服務)
+> - **Dashboard** ✅ (使用 `/api/dashboard/summary` 端點)
+> - **Billing** ✅ (使用 `/api/billing/*` 端點：wallet / payment-methods / subscriptions / invoices / topup)
+> - **Smart Home Connect** ✅ (使用 `smart_home.py` 端點)
 >
 > 實際實作使用 **JSON-RPC (POST + action 參數)** 而非 RESTful HTTP 動詞。
 > 端點路徑為 `/api/*` 而非設計稿中的 `/paas/api/v1/*`。
-> 尚未實作的模組：Dashboard、Billing、Smart Home Connect、Security Access、Settings。
+> 尚未實作的模組：Security Access、Settings。
 
 ---
 
@@ -95,11 +104,12 @@ Actual Base URL:      /api           (實際實作)
 Authentication: Odoo Session Cookie (自動處理)
 Content-Type: application/json
 Request Type: JSON-RPC (Odoo 標準, 所有請求為 POST)
-Controller File: src/controllers/paas.py
+Controller Files: src/controllers/ 下多個 controller（paas / billing / dashboard / ai_assistant / smart_home / profile / ha_api / oauth2 / agent_runtime_*）
 ```
 
-> **Note**: 實際實作中，所有 API 端點都在單一 controller 檔案 `src/controllers/paas.py` 中，
-> 使用 `action` 參數區分操作（如 `action: "list"`, `action: "create"`）。
+> **Note**: 早期端點集中在 `src/controllers/paas.py`（以 `action` 參數區分操作，如 `action: "list"` / `"create"`）；
+> 後續模組（billing / ai_assistant / dashboard / smart_home …）改為各自 controller 檔的 path-based `@route`。
+> 完整 controller 清單見 CLAUDE.md §API Endpoints 或直接 `grep @route`。
 
 **Controller 類型說明:**
 | type 參數 | Content-Type | 適用情境 |
@@ -216,7 +226,7 @@ Response (success):
     role: "owner" | "admin" | "user" | "guest"
 ```
 
-### 4.2 Dashboard API ⬜ (未實作)
+### 4.2 Dashboard API ✅ (已實作)
 
 ```yaml
 # 取得儀表板統計
@@ -453,7 +463,7 @@ Response (success):
     message: "Domain removed"
 ```
 
-### 4.5 Smart Home Connect API ⬜ (未實作)
+### 4.5 Smart Home Connect API ✅ (已實作)
 
 ```yaml
 # 取得 Hub 清單
@@ -599,7 +609,7 @@ Response (success):
     tunnel_token: string (masked)
 ```
 
-### 4.7 Billing API ⬜ (未實作)
+### 4.7 Billing API ✅ (已實作)
 
 ```yaml
 # 取得帳單概覽

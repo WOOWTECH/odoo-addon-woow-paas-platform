@@ -1,3 +1,9 @@
+---
+title: Subscription Integration — Implementation Workflow
+category: reference
+implementation_status: implemented
+---
+
 # Subscription Integration — Implementation Workflow
 
 Based on: `docs/reference/features/subscription-integration-design.md`

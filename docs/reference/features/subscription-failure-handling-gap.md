@@ -1,13 +1,26 @@
+---
+title: Subscription Failure Handling
+category: reference
+implementation_status: implemented
+note: "Originally a documented gap (T19); the dunning path is now implemented — see frontmatter status note below and src/models/sh_subscription_fix.py."
+---
+
 # Subscription Failure Handling — Feature Gap
 
-**Status**: Gap identified during T19 e2e regression sweep (2026-04-26).
-Originally listed as "未實測：連續 6 次失敗 → 自動取消" in the `ecpay-test`
-report. On code inspection it turned out the path is **not implemented**,
-hence non-testable at present. This document captures the gap, explains
-why it exists, and proposes a concrete shape for the fix.
-
-Design decisions resolved 2026-04-26 (see § Decisions); ready for
-implementation.
+**Status**: **Implemented** (verified 2026-05-29). Originally a gap
+identified during the T19 e2e regression sweep (2026-04-26) — listed as
+"未實測：連續 6 次失敗 → 自動取消" in the `ecpay-test` report and, on the
+then-current code, **not implemented**. The dunning path has since been
+built: the consecutive-failure counter, threshold-driven auto-cancel
+(default 6) and one-shot cancellation email all live in
+`src/models/sh_subscription_fix.py` (`_sh_create_auto_invoice` →
+`_on_payment_failure`), with the schema fields in
+`src/models/sh_subscription_warning_field.py`, the back-fill in
+`src/migrations/18.0.1.0.13/post-migrate.py`, and the
+`woow_paas_platform.max_consecutive_payment_failures` config_parameter
+registered for cleanup in `src/hooks.py`. The Decisions and Proposed
+Implementation sections below are retained as the design record that the
+shipped code follows.
 
 ## Current Behavior
 

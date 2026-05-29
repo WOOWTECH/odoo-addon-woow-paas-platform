@@ -4,17 +4,20 @@ This document provides instructions for running tests in the woow_paas_platform 
 
 ## Test Structure
 
-```
-woow_paas_platform/
-├── src/tests/                       # Odoo module tests
-│   ├── test_cloud_app_template.py  # CloudAppTemplate model tests
-│   ├── test_cloud_service.py       # CloudService model tests
-│   ├── test_cloud_api.py           # API endpoint & controller tests
-│   └── test_paas_operator.py       # PaaSOperatorClient HTTP client tests
-└── extra/paas-operator/tests/      # PaaS Operator service tests
-    ├── test_helm.py                # Helm service tests
-    └── test_api.py                 # FastAPI endpoint tests
-```
+測試持續隨 cycle 增長，**不在此處逐檔列舉**（避免雙寫漂移）。權威清單請直接看目錄：
+
+- Odoo module tests：`src/tests/`（`ls src/tests/test_*.py`）
+- PaaS Operator tests：`extra/paas-operator/tests/`（含 `tests/integration/` 真 K8s 整合測試）
+
+以代表性分組速覽涵蓋面（檔名前綴，非完整清單）：
+
+| 分組 | 檔名前綴範例 | 範圍 |
+|------|------------|------|
+| cloud-service | `test_cloud_service*.py` | CloudService model / lifecycle / ACL |
+| ACL | `test_*_acl*.py`、`test_acl_*.py` | ir.rule / endpoint 跨租戶隔離 |
+| agent-pod-phase | `test_agent_pod_phase_*.py` | agent-runtime Phase A/C/D schema·wiring·hardening |
+| mcp | `test_mcp_*.py` | MCP server/tool decouple、sidecar、URL redesign |
+| integration | `extra/paas-operator/tests/integration/` | 真 K8s 契約測試（unit mock 抓不到的 drift）|
 
 ## Running PaaS Operator Tests
 
@@ -97,72 +100,21 @@ tail -f odoo.log | grep -E '(TEST|ERROR|FAIL)'
 
 ## Test Coverage
 
-### PaaS Operator Tests
+覆蓋面隨 cycle 持續擴張，**不逐檔列舉**（同 Test Structure 原則）。各檔內以 docstring / class 名描述其涵蓋範圍，請直接看原始碼。下方按代表性分組說明高層涵蓋意圖：
 
-**test_helm.py** covers:
-- Namespace validation (valid and invalid prefixes)
-- Helm command execution (success, failure, timeout)
-- Install operations with validation
-- Get release information
-- Uninstall operations
-- Release history
-- Helm version retrieval
-- Kubernetes pod status
-- Namespace creation with quotas
+### PaaS Operator Tests（`extra/paas-operator/tests/`）
 
-**test_api.py** covers:
-- Health check endpoints
-- Release CRUD operations
-- Authentication with API keys
-- Full deployment lifecycle (namespace → install → status)
-- Upgrade flow
-- Rollback flow
-- Delete/cleanup flow
+- Helm / Kubernetes service：namespace 驗證、command 執行（success/failure/timeout）、install / get / uninstall / history / version、pod status、quota namespace 建立
+- FastAPI 端點：health、release CRUD、API key 認證、完整部署生命週期（namespace → install → status）、upgrade / rollback / delete
+- agent-runtime / auth / scale / tunnels：spawn-reap、`token_use` fail-closed、scale、tunnel 端點
+- integration（`tests/integration/`）：真 K8s 契約測試，抓 unit mock 遮蔽的 workload-type / HTTP contract / RBAC drift
 
-### Odoo Module Tests
+### Odoo Module Tests（`src/tests/`）
 
-**test_cloud_app_template.py** covers:
-- Template creation with minimal/full fields
-- Category selections
-- Resource requirements
-- Default values
-- Template activation/deactivation
-- Chart version updates
-- Search and filtering
-
-**test_cloud_service.py** covers:
-- Service creation
-- State transitions (pending → deploying → running)
-- Error state handling
-- Helm configuration
-- Network configuration
-- Resource allocation
-- Workspace relationships
-- Cascade deletion
-- Timestamp fields
-- Revision management
-
-**test_cloud_api.py** covers:
-- Template listing and filtering
-- Template search
-- Service creation
-- Service listing
-- Service state updates
-- Workspace isolation
-- Error handling for non-existent resources
-- Helm values filtering based on template specs
-- Subdomain/reference_id uniqueness constraints
-- Service state transitions
-- Workspace member management
-
-**test_paas_operator.py** covers:
-- PaaSOperatorClient initialization
-- All HTTP client methods (health_check, install_release, upgrade_release, etc.)
-- Error handling (connection errors, timeouts, API errors)
-- HTTP status code handling (400, 404, 500)
-- Empty response handling
-- `get_paas_operator_client` helper function
-- Configuration from Odoo settings
+- cloud-service：CloudService 建立、state transition（pending → deploying → running）、error state、helm / network / resource 配置、workspace 關係、cascade 刪除、revision
+- API / controller：template listing·search、service CRUD、workspace isolation、helm values filtering、subdomain/reference_id 唯一性、PaaSOperatorClient HTTP 方法與錯誤處理
+- ACL / 跨租戶隔離：ir.rule + endpoint 雙層守線（見 `docs/decisions/patterns/`）
+- agent-pod-phase / mcp：Phase A/C/D schema·wiring·hardening 與 MCP decouple、sidecar、URL redesign
 
 ## Expected Test Results
 

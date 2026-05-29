@@ -16,10 +16,10 @@
 | 路徑 | 內容 |
 |------|------|
 | [`getting-started.md`](getting-started.md) | 新人快速上手（入口檔） |
-| [`development/`](development/) | 開發者技術細節（OAuth2 等） |
-| [`deployment/`](deployment/) | K8s setup、運維、troubleshooting、admin roles |
-| [`testing/`](testing/) | Odoo test、PaaS operator test、E2E test guide |
-| [`tutorials/`](tutorials/) | 完整逐步指引（cloud odoo addon management） |
+| [`development/`](development/oauth2-architecture.md) | 開發者技術細節（OAuth2 等） |
+| [`deployment/`](deployment/k8s-setup.md) | K8s setup、運維、troubleshooting、admin roles |
+| [`testing/`](testing/TESTING.md) | Odoo test、PaaS operator test、E2E test guide |
+| [`tutorials/`](tutorials/cloud-odoo-addon-management.md) | 完整逐步指引（cloud odoo addon management） |
 | [`frameworks/`](frameworks/) | Claude Code framework 使用指南（ccpm、superpowers、SuperClaude） |
 | [`paas-skill-system/`](paas-skill-system/) | PaaS Skill 系統（agent-runtime-pod）onboarding 知識庫（12 篇，含對話/串流、Pod 內部、安全模型、術語表） |
 

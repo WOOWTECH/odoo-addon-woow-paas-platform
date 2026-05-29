@@ -27,6 +27,7 @@ related:
 | **F-PC-7** | Pod 端 `token_use=='ws'` 嚴格驗證（缺或非 ws 即拒）。**翻 enable-gate 前須先 merge + 部署** |
 | **F-PC-1~7** | Phase D 修補的一組 enable-gate caveat（本指南具體用到 F-PC-6、F-PC-7） |
 | **F-PA-14** | owner-bootstrap context hint 僅 SUPERUSER 可讀，防 HTTP 注入冒充 owner |
+| **F-SK-*** | skill-list cycle 6 的 finding 編號（is_latest drift fix + e2e）。F-SK-* 定義見 [`docs/tracking/followups/follow-ups.md`](../../tracking/followups/follow-ups.md) |
 | **D-CAVEAT-1** | namespace secret **fail-closed**：未設值直接 `UserError`，不退化成弱 hash |
 | **D-CAVEAT-2** | 跨 repo 部署順序風險：F-PC-7 未先部署 → 1h 在途 token 空窗 |
 | **SC-4** | mcp / template reloader 缺 tool_set 失效 hook（改 snapshot 可能 silently 不生效） |

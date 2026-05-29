@@ -302,7 +302,7 @@ related:
 
 ### 為何這 3 條 lock 重要
 
-這三條與 [[refactor-mcp]] pattern reports §7 的 sidecar-hint 3 條 regression lock 同源 — 都是「**實作做下去之後容易順手破壞**的設計約定」。tester 寫成今天就 GREEN，是因為：
+這三條與 [test-coverage-mcp-refactor-2026-05-20.md](test-coverage-mcp-refactor-2026-05-20.md) §7（3 條今天就 GREEN 的 regression lock）的 sidecar-hint 3 條 regression lock 同源 — 都是「**實作做下去之後容易順手破壞**的設計約定」。tester 寫成今天就 GREEN，是因為：
 
 1. **如果只在 implementation 做完才寫**：reviewer 看不出設計意圖、容易被「這條本來就該過」蓋過去
 2. **如果寫成今天紅、明天綠**：tester 與 reviewer 會以為實作要主動處理這個 boundary，反而誤導

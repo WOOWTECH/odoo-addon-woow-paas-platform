@@ -128,7 +128,7 @@ collected 142 items
   - `paas-agent-runtime` repo `.gitea/workflows/test.yml`（修後版本 + 防回退 comment）+ fix commit `5b2f9ed`（B-5）
   - `docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` §3（CI gate 三度價值，本 pitfall 是第 3 次）+ §5 Learning 1 / Learning 2
 - 同 family learning（CI / verification 守線）：
-  - [[verification-before-completion]]（superpowers skill）— authoritative gate 的 output 才算數，不是 dev box 的綠
+  - `verification-before-completion`（superpowers skill）— authoritative gate 的 output 才算數，不是 dev box 的綠
   - [[tag-scoped-test-misses-full-u-failures]] — 另一個「驗綠範圍不對 → 漏抓」的 pitfall（tag-scoped vs full suite；本 pitfall 是 local/container vs 真 CI）
 - 上游原理：
   - GitHub Actions：JS action（`runs.using: node20`）在 job container 內執行時需 container 內有 node — 官方 [container-based jobs 文件](https://docs.github.com/en/actions/using-jobs/running-jobs-in-a-container) 明示 node 需求

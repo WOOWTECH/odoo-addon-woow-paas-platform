@@ -96,7 +96,7 @@ leader 寫 brief 的目的是：
 
 ### Plan-gap 守線的延伸（[[plan-gap-stop-and-report]]）
 
-[[plan-gap-stop-and-source-and-report]] 規範了「agent 撞到 plan 沒設計的決策點 → 停下回報」。本 pattern 是同 spirit 的延伸：
+[[plan-gap-stop-and-report]] 規範了「agent 撞到 plan 沒設計的決策點 → 停下回報」。本 pattern 是同 spirit 的延伸：
 
 | 情境 | 對應守線 |
 |------|---------|

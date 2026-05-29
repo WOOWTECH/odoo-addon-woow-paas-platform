@@ -19,6 +19,22 @@
 - **Cycle 6（decouple project frontend + controller 收尾, 2026-05-28）**：plan A+A+A signed-off（D1=A 允許完全 unbound project / D2=A controller create 後 `message_subscribe` 補 follower / D3=A modal 無 workspace 隱藏 cloud_service dropdown）→ phase agent pod 接力（tester TDD red T1-T4 → implementer 7 改動點 → CAQA round 1 BLOCKED BLOCKER A1 `_list_tasks` sudo bypass `cross-workspace-task-data-leak` family 第 2 instance → tester 補 T4 + impl `1 行` drop sudo → CAQA round 2 re-verdict APPROVED WITH CAVEATS → reviewer 4-agent verdict 無方向性分歧 APPROVE WITH CAVEATS → reporter 沉澱 → **user 拍板帶 F-DP-2 進本 PR** → tester 補 T5 + impl drop sudo + Task.sudo unify → CAQA mini re-verdict APPROVED WITH CAVEATS 不變 → **reviewer 略過**（per leader+user 拍板）→ reporter final addendum）。**累計 8 改動點 + 1 unify refactor + 15 條 test/TC 全綠**：controller `ai_assistant.py:1037-1040`（D1）+ `:1186-1190`（TC4 follow-on `_list_projects` drop sudo, 變體 A）+ `:1230-1238`（D2 message_subscribe）+ `:1325-1329`（BLOCKER A1 fix `_list_tasks` drop sudo, 變體 A）+ `:972-978`（F-DP-2 fix `api_support_stats` drop sudo + empty domain, 變體 B under-access）+ `:980-986`（Task.sudo unify, 變體 C same-method 半套狀態 close）+ frontend `CreateProjectModal.js:117-160` 三分支 dispatch + `CreateProjectModal.xml:40-63` workspace optional + dropdown + `support_service.js:267-292` `createUnboundProject`；15 條 test/TC 全綠（T1-T5 endpoint + B1-B5 backend baseline + Playwright TC1-TC5 UI）。**B1 family（`cross-workspace-task-data-leak`）controller layer 收口 progress**：5 instance 4 closed = `_list_projects` (A) + `_list_tasks` (A) + `api_support_stats` accessible_projects (B) + Task.sudo unify (C) close in PR；剩 `_get_project_stages`（CAVEAT #2，F-DP-1）= P1 follow-up（需 design）。**3 caveats 維持 follow-up**：F-DP-1（_get_project_stages design）+ F-DP-3（_check_project_access docstring）+ F-DP-4（frontend rule of three）；F-DP-2 CLOSED in PR；F-DP-5~F-DP-8 reviewer polish 維持 trivial follow-up。Pattern doc `[[orm-vs-endpoint-acl-test-coverage]]` 升級為 **5 instance critical mass + anti-pattern 三變體 family (A over-access / B under-access / C same-method 半套)** + perf justification 章節；新 pattern `[[phase-leader-brief-as-pointer-not-source]]`；3 新 pitfall `[[decouple-project-frontend-worktree-dev-pitfalls]]` + `[[orm-test-green-endpoint-leak-blindness]]`（含三變體 narrative）。Reporter sentencing 完成 + CLAUDE.md addendum landed（§Known patterns 補 3 pointer）；commit + PR 由 leader 跟 user 對焦後執行。
 - **deploy-tooling fix #85 + #86**（dev sandbox create/destroy/deploy-stg 腳本，2026-05-29）：create.sh init gate 改查 `woow_paas_platform.state='installed'`（**#85A** 半 init 自癒，取代「ir_module_module 表存在即 skip」）+ destroy.sh 預設砍 PVC + reclaim 綁定 PV（`--keep-data` 退場）+ **`--context` 必填守門**（MAJOR：新增破壞性 cluster-scoped `delete pv` 需防 cross-cluster 誤刪，mirror create.sh `a62b75b`）+ deploy-stg.sh `kubectl exec` 補 `-i`（**#86** here-doc web.base.url SQL 投遞）。對抗式 workflow（6 agents：#86 雙 lens **pass** / #85 雙 lens **concern → MAJOR context 守門 + PV race + stderr 遮蔽 由 leader 補修**）+ docker-desktop pre-flight 全綠（gate 四情境邏輯 / 守門 rc=1 / 自建 Retain PV 完整 destroy 機制：預設 reclaim + `--keep-data` 保留）+ **真實 woow-k3s e2e**（`dev-sandbox-stgfix85` 拋棄式，未碰現有 stg）：gate 攔到 stg image 出廠 DB `state='uninstalled'` → 裝 woow_paas_platform → `/woow` **303 非 404**；`INSERT 0 2` web.base.url+freeze 落地；destroy 揭露 filestore PVC `helm.sh/resource-policy:keep`（確切洩漏源）→ 清掉 postgres+filestore 2 PVC + 2 longhorn PV **零殘留**。docs（SKILL.md + CLAUDE.md）同步 destroy `--context` 必填 + `--keep-data`。3 follow-up **F-DT-1~3** 列冊（皆 pre-existing / reviewer nit，超出 #85/#86 scope）。
 
+## Active backlog 摘要（open / pending only — 不含已 done）
+
+> 本 block 只列**尚未處理**的 F#（status NOT done/resolved/closed），供開頭快速掃描；詳情與 origin/severity 見下方 `## Index` 同號列。**不刪除、不重編號歷史**——已 RESOLVED/CLOSED 的 F1 / F15 / F21 / F22 / F23 / F24 / F-DP-2 / F-PILOT-1 / F-PILOT-2 / F-PILOT-3 / F-PILOT-5 / F-PILOT-6 / F-PILOT-7 仍保留在 Index 表原列，僅不在此摘要重列。新增或關閉 F# 時請同步更新本摘要。
+
+| 系列 | open / pending F# | 一句話狀態 |
+|------|-------------------|-----------|
+| Cycle 1 | F2, F3, F4, F5, F6, F7, F8, F9, F10, F11 | 多為「待新 PR / 待設計」；F6→F11 串聯（sanitizer whitelist 升級觸發後一起評估） |
+| Cycle 2 | F12, F13, F14, F16, F17, F18, F19, F20 | 「待新 PR / batch / next refactor cycle」；F19 為 round 1 minor batch 集合點 |
+| Cycle 3 | F25, F26, F27, F28 | F25 已開 follow-up issue #52；F26/F27/F28 待開 polish / test / architectural issue |
+| Cycle 4 | F-X1, F-X2, F-X3, F-X4, F-X5, F-X6, F-X7, F-X8 | dedicated/cluster/future PR；F-X7 等 F-X1 cron 改 sidecar_backed 後才能 drop column |
+| Cycle 5 | F-PA-1 ~ F-PA-16（全部）| F-PA-13（Phase B/C 必修）+ F-PA-14（Phase D-F 必修）為 active 前置 hard 提醒；其餘 small PR / docstring / reporter 順手 |
+| Cycle 6 (skill-list) | F-SK-1 ~ F-SK-9（全部）| F-SK-1/2 medium caveat；F-SK-3~9 reviewer major（皆非阻斷 ship，next touch 順手 / 排線圖時處理）|
+| Cycle 6 (decouple frontend) | F-DP-1, F-DP-3, F-DP-4, F-DP-5, F-DP-6, F-DP-7, F-DP-8, F-DP-9 | F-DP-1 需 design PR（`_get_project_stages` 收口）；F-DP-3~8 reporter polish；F-DP-9 track-only passive observation |
+| deploy-tooling #85/#86 | F-DT-1, F-DT-2, F-DT-3 | 皆 pre-existing / reviewer nit，超出修正 scope；小 PR / future PR |
+| agent-runtime gap C / pilot（detail-only，不在 Index 表）| F-GC-1, F-GC-2, F-GC-3, F-PILOT-4, F-PILOT-8, F-PILOT-9, F-PILOT-10, F-PILOT-11 | F-GC-1/2/3 credential/durability hygiene 待排程；F-PILOT-4/8 operator green 但剩 cross-repo chart lock-step（E0-CAVEAT-2/3）；F-PILOT-9 未來 Phase；F-PILOT-10 code merged + round-trip 達成，剩 G3/G4 + production gate；F-PILOT-11 需 design 排程。詳見下方 `## F-PILOT` / `## F-GC-*` / `## F-PILOT-11` 段 |
+
 ## Index
 
 | # | Severity | Origin | Cycle | 主題 | Status |
@@ -109,7 +125,7 @@
   - Pattern: [[odoo-addon-std-rule-symmetric-deactivation]]
   - Pitfall: [[cross-workspace-task-data-leak]]
   - Decision invariant: [[cloud-service-project-decouple]] §Invariants 4-5
-- **下一步**：[[propose-claude-md-known-patterns]]（提議 leader / 使用者把 pattern doc 引用加進 CLAUDE.md，讓未來 dev / agent 改 ACL 時自動 surface）
+- **下一步**：把 pattern doc 引用加進 CLAUDE.md，讓未來 dev / agent 改 ACL 時自動 surface。**部分已落地**（issue #93 追蹤）：CLAUDE.md「Known patterns」段已收錄 3 條 ACL pattern 引用 + [`docs/decisions/patterns/README.md`](../../decisions/patterns/README.md)（18 條 pattern 索引）。
 
 ---
 

@@ -1,3 +1,9 @@
+---
+title: Subscription Integration Design
+category: reference
+implementation_status: implemented
+---
+
 # Subscription Integration Design
 
 Cloud Service 與 Smart Home 實體的訂閱生命週期管理。

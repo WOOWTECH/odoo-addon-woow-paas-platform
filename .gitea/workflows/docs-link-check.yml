@@ -30,13 +30,11 @@ jobs:
           fail: false
           output: ./lychee-report.md
 
-      - name: Upload report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lychee-report
-          path: ./lychee-report.md
-
+      # NOTE: artifact upload removed on purpose. actions/upload-artifact@v4
+      # (and its @actions/artifact v2 backend) is rejected by Gitea's act_runner
+      # ("not supported on GHES"), which fail-fasts the job. The lychee report is
+      # surfaced via $GITHUB_STEP_SUMMARY below instead — enough for Phase 1
+      # (warning-only). If a downloadable artifact is ever needed, use @v3.
       - name: Summarize
         if: always()
         run: |

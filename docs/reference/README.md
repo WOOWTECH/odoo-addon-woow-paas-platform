@@ -16,9 +16,9 @@
 
 | 路徑 | 內容 |
 |------|------|
-| [`api/`](api/) | API contract、JSON-RPC endpoint 規格 |
+| [`api/`](api/) | API contract：[`woowtech-paas-api-specification`](api/woowtech-paas-api-specification.md)（整站串接規格）、[`agent-runtime-ws-protocol`](api/agent-runtime-ws-protocol.md)（Agent-Runtime Pod WebSocket 協定） |
 | [`features/`](features/) | 功能規格（workspace、cloud-services、subscription-integration） |
-| [`architecture/`](architecture/) | 架構生命週期圖（n8n 等） |
+| [`architecture/`](architecture/) | 架構生命週期圖（目前：[`n8n-cloud-service-lifecycle`](architecture/n8n-cloud-service-lifecycle.md)） |
 | [`pencil/`](pencil/) | `.pen` 設計檔（圖表） |
 
 ## 命名
