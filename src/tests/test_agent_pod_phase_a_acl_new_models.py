@@ -611,9 +611,8 @@ class TestPhaseAAclSkill(_NewModelAclFixture):
         # Today no field-level restriction => assertion fails.
         with self.assertRaises(
             AccessError,
-            msg="B1.SK-6 field: guest must NOT read bundle_attachment_id. "
-                "Add groups='woow_paas_platform.group_skill_admin' or "
-                "equivalent at field level.",
+            msg="B1.SK-6 field: guest must NOT read bundle_attachment_id "
+                "(field-level groups='base.group_system' mask).",
         ):
             _ = rec.with_user(self.dave).bundle_attachment_id
 

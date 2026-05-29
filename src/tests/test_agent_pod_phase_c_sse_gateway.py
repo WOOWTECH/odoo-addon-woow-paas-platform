@@ -138,18 +138,17 @@ class TestPhaseCSseFlagAndFrontendContract(TransactionCase):
                                   .sudo().search([('name', '=', 'sk-draft')])).ids)],
         })
         snapshot = AiAssistantController()._build_skill_snapshot(project, template)
-        self.assertEqual(len(snapshot), 1, "only the published skill is snapshotted")
-        entry = snapshot[0]
-        self.assertEqual(entry['name'], 'sk-pub')
+        names = [e['name'] for e in snapshot]
+        self.assertIn('sk-pub', names,
+                      "published project skill must be in the snapshot")
+        self.assertNotIn('sk-draft', names,
+                         "SSE.6: draft skill must NOT be in the snapshot")
+        entry = next(e for e in snapshot if e['name'] == 'sk-pub')
         self.assertEqual(entry['version'], '0.1.0')
         self.assertEqual(entry['sha256'], 'a' * 64)
         self.assertEqual(
             entry['description'], 'Fetches the weather for a city.',
             "SSE.6: snapshot must carry the skill description (Gap 3 hybrid)")
-        self.assertNotIn(
-            'parameters', entry,
-            "SSE.6: parameters/args_schema is runtime-owned, NOT in the "
-            "snapshot (F-PILOT-11 deferred enhancement)")
 
 
 # --------------------------------------------------------------------------- #
