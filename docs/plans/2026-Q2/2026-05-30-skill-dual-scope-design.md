@@ -178,12 +178,12 @@ CREATE UNIQUE INDEX skill_uniq_system_name_version
 
 Phase 1 無上傳 pipeline，system skill 以 **demo 資料**種子建立，讓 stg 後台不再是 `No skills yet`：
 
-- 在模組內 commit 一個**極小 demo skill bundle**（`hello-world` system skill）的 tar.gz（root 含 `SKILL.md` + 最小 `src/`，對齊 `03-skill-design.md` 格式）。
-- 新增 demo XML（`src/data/demo/demo_system_skill.xml`，`<odoo><data noupdate="1">`，註冊在 manifest `demo` 清單）：
+- 在模組內 commit 一個**極小 demo skill bundle**（`hello-world` system skill）的 tar.gz（root 含 `SKILL.md` + 最小 `src/`，對齊 `03-skill-design.md` 格式），存於 `src/data/demo_skills/`。
+- 新增 XML（`src/data/demo_system_skill.xml`，`<odoo><data noupdate="1">`，註冊在 manifest **`data` 清單**，緊接 `data/agent_template_demo.xml`）：
   1. 建 `ir.attachment`：`datas` = 該 tar.gz 的 **base64**（impl 時產生並 inline）、`mimetype='application/gzip'`。
   2. 建 `woow_paas_platform.skill`：`scope='system'`、`project_id` 留空、`state='published'`、`name='hello-world'`、`version='0.1.0'`、`bundle_sha256` = **預算好的 sha256**（對 tar.gz raw bytes）、`bundle_attachment_id` 指向 ①。
 - 由 `skill.create()` hook 自動處理 attachment **anchor**（`res_model/res_id/public=False`）+ is_latest。
-- 因為是 **demo 資料**（非 core data），須確認 sandbox/stg 有載入 demo data（dev sandbox 預設載）；正式環境不污染。可選擇種 1–2 個（如 `hello-world` + 一個示範 metadata 較完整的）。
+- **放 `data` + `noupdate="1"`**（對齊既有 `data/agent_template_demo.xml` 慣例）：可靠地在 stg/dev-sandbox 顯示，不依賴 demo-data 開關；admins 可刪。**Trade-off**：prod 也會種一個 `hello-world` 範例 skill（可刪）。若要 prod 完全乾淨，改成新增 manifest `demo` key 並改放那裡（dev-sandbox 安裝需開 demo data）。
 
 > 此 demo skill 同時是 §⑥ 測試與 §③ pod-loading 端到端驗證的天然 fixture：published system skill 應出現在**任一** project 的 `_build_skill_snapshot`，且可被 download OR-leg 抓取。
 
@@ -235,8 +235,8 @@ Phase 1 無上傳 pipeline，system skill 以 **demo 資料**種子建立，讓 
 | `src/migrations/18.0.1.0.29/pre-migrate.py` | 新增 |
 | `src/migrations/18.0.1.0.29/post-migrate.py` | 新增 |
 | `src/__manifest__.py` | 修改：version → 18.0.1.0.29、`demo` 清單註冊 demo_system_skill.xml |
-| `src/data/demo/demo_system_skill.xml` | 新增：demo system skill（attachment + skill record） |
-| `src/data/demo/hello-world-0.1.0.tar.gz` | 新增：demo skill bundle（base64 inline 於 XML，原檔留存供參） |
+| `src/data/demo_system_skill.xml` | 新增：demo system skill（attachment + skill record，`data`+noupdate） |
+| `src/data/demo_skills/hello-world-0.1.0.tar.gz` | 新增：demo skill bundle（base64 inline 於 XML，原檔留存供參） |
 | `src/tests/test_skill_*.py` 等 | 修改既有 + 新增 dual-scope 測試 |
 | `docs/guides/paas-skill-system/*` | 修改：system skill 載入 + 跨 repo 註記 |
 | `docs/guides/paas-skill-system/10-roadmap-phases.md` | 修改：記錄 dual-scope 演進 |
