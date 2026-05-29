@@ -61,12 +61,14 @@ cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/create.sh <args
 #### `destroy <name>` - 銷毀沙盒
 
 ```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/destroy.sh <name> <args>
+cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/destroy.sh <name> --context <ctx> <args>
 ```
 
 可用選項：
 
+- `--context <name>` - **必填**：kubectl context（如 `woow-k3s`、`docker-desktop`），亦可用 `KUBE_CONTEXT` env。destroy 會做破壞性 cluster-scoped 操作（helm uninstall / delete namespace / delete pv），強制顯式指定以防 cross-cluster 誤刪（與 `create.sh` 一致，見 `fix/sandbox-scripts-context-safety`）。
 - `--force` - 跳過確認提示
+- `--keep-data` - 保留 postgres 資料（PVC + Retain/Released PV）。預設會清除資料，讓重新部署從乾淨狀態開始（issue #85）。
 
 #### `list` - 列出所有沙盒
 
@@ -154,8 +156,8 @@ BRANCH=$(git branch --show-current)
 # 2. 產生 slug（與 up 相同邏輯）
 SLUG=$(echo "$BRANCH" | sed 's|[/_]|-|g' | sed 's|--*|-|g' | cut -c1-40 | sed 's|-$||')
 
-# 3. 呼叫 destroy 腳本（--force 跳過確認）
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/destroy.sh "$SLUG" --force
+# 3. 呼叫 destroy 腳本（--force 跳過確認；--context 必填，需指定目標 cluster）
+cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/destroy.sh "$SLUG" --force --context <ctx>
 ```
 
 #### 無子命令 - 顯示使用說明
@@ -207,6 +209,7 @@ say -r 180 "沙盒操作完成了"
 
 - **專案根目錄**：所有腳本需在專案根目錄下執行
 - **kubectl 權限**：需要有效的 Kubernetes 叢集連線（`kubectl` 已設定）
+- **`--context` 必填**：`create` 與 `destroy` 為避免 cross-cluster 誤操作，須顯式指定 `--context <name>`（或 `KUBE_CONTEXT` env），未指定會直接報錯並列出可用 context。`destroy` 尤其關鍵——它含破壞性的 `delete namespace` / `delete pv`。
 - **Helm**：部分操作需要 Helm 3.13+
 - **分支偵測**：`up` / `down` 以及未提供名稱的指令會自動從 `git branch --show-current` 偵測
 - **TTL 格式**：支援 Go duration 格式，如 `24h`、`168h`、`0`（永不過期）

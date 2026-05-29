@@ -168,7 +168,7 @@ init_odoo_system_params() {
 
     kubectl wait --for=condition=ready "pod/${pg_pod}" -n "$namespace" --timeout=120s
 
-    kubectl exec -n "$namespace" "$pg_pod" -- psql -U odoo -d "$db_name" -v ON_ERROR_STOP=1 <<SQL
+    kubectl exec -i -n "$namespace" "$pg_pod" -- psql -U odoo -d "$db_name" -v ON_ERROR_STOP=1 <<SQL
 INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
 VALUES
   ('web.base.url', 'https://${hostname}', 1, NOW(), 1, NOW()),
