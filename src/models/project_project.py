@@ -53,6 +53,12 @@ class ProjectProject(models.Model):
         string='MCP Servers',
     )
 
+    skill_ids = fields.One2many(
+        'woow_paas_platform.skill',
+        'project_id',
+        string='Skills',
+    )
+
     # Phase A additive fields.
     external_mcp_allowed = fields.Boolean(
         string='External MCP Egress Allowed',

@@ -168,3 +168,53 @@ class TestSkillDualScopeAcl(TransactionCase):
             self.user_skill.with_user(self.alice).write({
                 'scope': 'system', 'project_id': False,
             })
+
+
+@tagged('post_install', '-at_install')
+class TestSkillSubsetConstraint(TransactionCase):
+    """Template bound skills ⊆ (project user skills ∪ system skills)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Skill = cls.env['woow_paas_platform.skill']
+        cls.Project = cls.env['project.project']
+        cls.Template = cls.env['woow_paas_platform.agent_template']
+
+    def setUp(self):
+        super().setUp()
+        self.suffix = uuid.uuid4().hex[:8]
+        self.p1 = self.Project.sudo().create({'name': f'p1-{self.suffix}'})
+        self.p2 = self.Project.sudo().create({'name': f'p2-{self.suffix}'})
+        self.p1_skill = self.Skill.sudo().create({
+            'name': f'p1s-{self.suffix}', 'version': '0.1.0',
+            'bundle_sha256': 'a' * 64, 'scope': 'user', 'project_id': self.p1.id,
+        })
+        self.p2_skill = self.Skill.sudo().create({
+            'name': f'p2s-{self.suffix}', 'version': '0.1.0',
+            'bundle_sha256': 'b' * 64, 'scope': 'user', 'project_id': self.p2.id,
+        })
+        self.sys_skill = self.Skill.sudo().create({
+            'name': f'sys-{self.suffix}', 'version': '0.1.0',
+            'bundle_sha256': 'c' * 64, 'scope': 'system',
+        })
+
+    def test_project_skill_ids_reverse(self):
+        self.assertIn(self.p1_skill, self.p1.skill_ids)
+        self.assertNotIn(self.p2_skill, self.p1.skill_ids)
+
+    def test_bind_cross_project_user_skill_rejected(self):
+        with self.assertRaises(ValidationError):
+            self.Template.sudo().create({
+                'name': f't-{self.suffix}',
+                'project_ids': [(6, 0, [self.p1.id])],
+                'skill_ids': [(6, 0, [self.p2_skill.id])],  # belongs to p2, not bound
+            })
+
+    def test_bind_system_skill_allowed(self):
+        tmpl = self.Template.sudo().create({
+            'name': f't-{self.suffix}',
+            'project_ids': [(6, 0, [self.p1.id])],
+            'skill_ids': [(6, 0, [self.p1_skill.id, self.sys_skill.id])],
+        })
+        self.assertTrue(tmpl.id)
