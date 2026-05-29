@@ -274,3 +274,21 @@ class TestSkillPodLoading(TransactionCase):
         same_name = [e for e in snap if e['name'] == self.proj_skill.name]
         self.assertEqual(len(same_name), 1, "project skill shadows system on name")
         self.assertEqual(same_name[0]['sha256'], 'a' * 64, "project version wins")
+
+
+@tagged('post_install', '-at_install')
+class TestDemoSystemSkill(TransactionCase):
+    """The seeded hello-world system skill is present + correctly shaped."""
+
+    def test_demo_system_skill_seeded(self):
+        sk = self.env.ref(
+            'woow_paas_platform.demo_skill_hello_world', raise_if_not_found=False)
+        self.assertTrue(sk, "demo hello-world skill must be seeded")
+        self.assertEqual(sk.scope, 'system')
+        self.assertFalse(sk.project_id)
+        self.assertEqual(sk.state, 'published')
+        self.assertTrue(sk.is_latest)
+        self.assertTrue(sk.bundle_attachment_id, "bundle attachment linked")
+        self.assertEqual(
+            sk.bundle_attachment_id.res_model, 'woow_paas_platform.skill',
+            "attachment anchored by skill.create() hook")
