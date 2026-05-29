@@ -113,3 +113,58 @@ class TestSkillDualScope(TransactionCase):
         usr_sk.invalidate_recordset()
         self.assertTrue(sys_sk.is_latest, "system bucket has its own latest")
         self.assertTrue(usr_sk.is_latest, "user bucket has its own latest")
+
+
+@tagged('post_install', '-at_install')
+class TestSkillDualScopeAcl(TransactionCase):
+    """system_readonly + user-scope leg + scope-flip lock."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Skill = cls.env['woow_paas_platform.skill']
+        cls.Project = cls.env['project.project']
+        cls.PAccess = cls.env['woow_paas_platform.project_access']
+
+    def setUp(self):
+        super().setUp()
+        self.suffix = uuid.uuid4().hex[:8]
+        self.alice = self.env['res.users'].sudo().create({
+            'name': 'Alice', 'login': f'alice-{self.suffix}',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.project = self.Project.sudo().create({'name': f'p-{self.suffix}'})
+        self.PAccess.sudo().create({
+            'project_id': self.project.id,
+            'partner_id': self.alice.partner_id.id, 'role': 'owner',
+        })
+        self.system_skill = self.Skill.sudo().create({
+            'name': f'sys-{self.suffix}', 'version': '0.1.0',
+            'bundle_sha256': 'a' * 64, 'scope': 'system', 'state': 'published',
+        })
+        self.user_skill = self.Skill.sudo().create({
+            'name': f'usr-{self.suffix}', 'version': '0.1.0',
+            'bundle_sha256': 'b' * 64, 'scope': 'user',
+            'project_id': self.project.id,
+        })
+
+    def test_group_user_can_read_system_skill(self):
+        rec = self.Skill.with_user(self.alice).search([
+            ('id', '=', self.system_skill.id)])
+        self.assertEqual(rec.ids, [self.system_skill.id],
+                         "any internal user can read a system skill")
+
+    def test_group_user_cannot_create_system_skill(self):
+        from odoo.exceptions import AccessError
+        with self.assertRaises(AccessError):
+            self.Skill.with_user(self.alice).create({
+                'name': f'evil-{self.suffix}', 'version': '0.1.0',
+                'bundle_sha256': 'c' * 64, 'scope': 'system',
+            })
+
+    def test_group_user_cannot_flip_user_skill_to_system(self):
+        from odoo.exceptions import AccessError
+        with self.assertRaises(AccessError):
+            self.user_skill.with_user(self.alice).write({
+                'scope': 'system', 'project_id': False,
+            })
