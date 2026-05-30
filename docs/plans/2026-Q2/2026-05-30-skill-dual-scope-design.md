@@ -57,7 +57,7 @@ related:
 | 方向 | skill 跟進 dual-scope（system/user） | user |
 | 切分 | 分兩期：Phase 1 地基、Phase 2 上傳 | user |
 | `scope` 預設 | `'user'`（現有 100% 為 project-scoped，保既有 fixture 綠） | research 一致收斂 |
-| scope 不可偽造 | `scope`/`project_id` 對非 admin readonly + ACL 鎖死 scope-flip | `constraint-input-trust-expansion` |
+| scope 不可偽造 | `scope`/`project_id` 對非 admin 由 `write()` guard 擋 flip（非 ACL） | `constraint-input-trust-expansion` |
 | UNIQUE 修法 | 兩條 partial unique index（`init()` 建 + migration drop 舊約束） | research（唯一健全解） |
 | is_latest（system） | 全平台每個 name 一個 latest | 設計推導 |
 | system bundle 下載 | **pods-only**，租戶不可經 `/web/content` 下載（維持 attachment deny-all） | 安全預設 |
@@ -118,7 +118,8 @@ CREATE UNIQUE INDEX skill_uniq_system_name_version
 > skill **無 FK 子 model**（只有 `agent_template` 的 M2M `agent_template_skill_rel`），所以不是 MCP 那種 server+tool 各 3 條的字面 6-rule；對應的「子資源」是 bundle `ir.attachment`（已有 HC-4 兩層防護）。實際形狀是 **3 條 user-scope rule（補 scope leg）+ 1 條 system_readonly + 1 條 admin_full + 既有 attachment pair**。
 
 - **新增 `skill_rule_system_readonly`**：domain `[('scope','=','system')]`，`base.group_user`，`perm_read=1, perm_create=0, perm_write=0, perm_unlink=0`。→ 所有內部 user 可讀 system skill metadata，但**不能偽造／改／刪** system skill。
-- **既有 3 條 project rule**（`skill_rule_project_admin/user/guest`，`ir_rules.xml:381-412`，走 `project_id.project_access_ids` walk）：各加 `('scope','=','user')` AND-leg。→ ① 不誤吃 NULL-project（system）row；② **鎖死 scope-flip**：group_user 若試圖把自己的 user skill 改成 `scope='system'`，改後該 row 不再符合 write rule 的 `scope='user'` domain → `AccessError`。
+- **既有 3 條 project rule**（`skill_rule_project_admin/user/guest`，`ir_rules.xml:381-412`，走 `project_id.project_access_ids` walk）：各加 `('scope','=','user')` AND-leg（不誤吃 NULL-project〔system〕row）。
+- **scope-flip 防護靠 `skill.write()` guard，不是 ir.rule**（實測修正 commit `8bbe1c2`）：Odoo 寫入權限檢查的是**寫入前**狀態（user skill + owner → 通過），改完才變 system，ir.rule 擋不住 flip。故 `write()` 內：非 `env.su`、非 `base.group_system` 變更 `scope`/`project_id` → `AccessError`。create 走 `scope='user'` 不受影響；admin / sudo（upload pipeline、demo seed）放行。
 - **`skill_rule_admin_full`**（`base.group_system`，full bypass）保留——對齊 `cross-workspace-task-data-leak` B1 root cause「加 group_user rule 必對等加 group_system admin_full」。
 - **bundle `ir.attachment` rule**（`ir_attachment_rule_skill_bundle_user_scope`，`ir_rules.xml:491` deny-all group_user on `res_model='woow_paas_platform.skill'` attachment）**不動**：system bundle 同樣 pods-only，租戶可讀 metadata、不可下載 binary。
 - **`ir.model.access.csv`**：**不需改動**（已驗證）。既有 `access_skill_user`（`base.group_user`，`1,1,1,1`）+ `access_skill_admin`（`base.group_system`，`1,1,1,1`），與 `mcp_server` 同 pattern：model-level 開 RWCU，**實際 scope gating 全在 record-rule（ir.rule）層**。其中 model-level `create=1` 是 Phase 2「租戶自助建立 user skill」所需；**system skill 的建立在 record-rule 層被擋**（base.group_user 的 create-applicable rule 只有 user-scope leg `scope='user'`，建立 `scope='system'` row 無任何 create-permitting rule 命中 → 拒），無需另設 model-level 限制。
@@ -216,7 +217,7 @@ Phase 1 無上傳 pipeline，system skill 以 **demo 資料**種子建立，讓 
 | `UNIQUE` 在 NULL project 失效 → system skill 重複 | 🔴 blocker | 兩條 partial unique index（§① + §⑤），含 `init()` 涵蓋 fresh install |
 | 三條 project rule 對 NULL project 全 False → system skill 對非 admin 隱形 | 🔴 blocker | `skill_rule_system_readonly`（§②） |
 | 三條 pod-loading leg 未同時上 → system skill 死/404 | 🟠 high | §③ 三條一起 ship + 對應測試 |
-| scope 可被 group_user 偽造（flip project_id→NULL）→ 跨租戶外洩 | 🟠 high | scope/project_id readonly + user-scope rule 的 scope='user' AND-leg + D4 constraint |
+| scope 可被 group_user 偽造（flip project_id→NULL）→ 跨租戶外洩 | 🟠 high | `write()` guard 擋非 admin 改 scope/project_id（ir.rule 擋不住，只檢查 pre-write 狀態）+ D4 constraint |
 | 舊 rule xmlid 與新 domain OR-combine（MAJOR-1 重炸） | 🟠 high | post-migrate two-DELETE 退役（§⑤） |
 | 4 個既有測試 forward-coupled 假綠/紅 | 🟠 high | §⑥ 明列更新 |
 | required scope 欄位 backfill 在 post → upgrade abort | 🟠 high | 在 **pre**-migrate ADD COLUMN + UPDATE（§⑤） |
