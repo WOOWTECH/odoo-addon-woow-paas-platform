@@ -111,6 +111,19 @@ graph LR
     D -->|"舊版 state=deprecated"| F["停止供應"]
 ```
 
+## ⬆️ 後台上傳 system skill
+
+平台維運者（`base.group_system`）可在後台直接上傳 system skill bundle：
+
+1. Woow PaaS → **Skills** → 右上 **⚙️ Action → 上傳 Skill**。
+2. 填 **name / version**（須與 bundle 內 SKILL.md 一致）、選填 title / description，選 `.tar.gz`。
+3. 送出 → 建立一筆 **draft** 的 system skill，停在其 form。
+4. 檢查無誤後按 **Publish** 發布（之後所有 project 的 pod 即可載入）。
+
+> Odoo 端**只儲存 bundle bytes 並計算 `bundle_sha256`**，不解壓、不解析 SKILL.md——
+> 完整解壓與 sha256 驗證在 pod 端進行。因此 name / version 由上傳者負責填對；
+> 同一 `(system, name, version)` 重複上傳會被擋下（請提升版號）。
+
 ## 🌐 Scope：system vs user
 
 | scope | project_id | 載入範圍 | 上傳者 |
