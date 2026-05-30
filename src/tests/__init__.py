@@ -55,6 +55,8 @@ from . import test_cross_workspace_task_isolation
 from . import test_mcp_project_decouple_migration
 from . import test_mcp_project_lifecycle
 from . import test_mcp_acl_isolation
+# issue #98 / F-SDS-1: mcp_server / mcp_tool scope-flip write() guard parity (TDD red)
+from . import test_mcp_scope_flip_guard
 from . import test_mcp_chat_consumption
 # issue #48: Project Detail page — project-centric endpoints (TDD red)
 from . import test_project_detail_endpoints

@@ -42,7 +42,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 兩個 context：
 
-- `woow-k3s`：woow prod / stg cluster（已設 Cloudflare WARP 可直連）
+- `woow-k3s`：woow prod / stg cluster（需要 tailscale vpn 才可連線）
 - `docker-desktop`：本機測試、開發用
 
 **IMPORTANT**: kubectl 請明確指定 `--context`。
@@ -105,10 +105,10 @@ pip install -r requirements.txt
 HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
 ```
 
-| 變數 | 為什麼 |
-|------|-------|
-| `HELM_BINARY` | macOS Homebrew 把 helm 放在 `/opt/homebrew/bin/`，operator 預設找 `/usr/local/bin/helm`，沒給就 lifespan startup 失敗 |
-| `API_KEY` / `NAMESPACE_PREFIX` | 不用設，`app_client` fixture 自動 set（`""` + `"paas-ws-test-op-"`） |
+| 變數                           | 為什麼                                                                                                                |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `HELM_BINARY`                  | macOS Homebrew 把 helm 放在 `/opt/homebrew/bin/`，operator 預設找 `/usr/local/bin/helm`，沒給就 lifespan startup 失敗 |
+| `API_KEY` / `NAMESPACE_PREFIX` | 不用設，`app_client` fixture 自動 set（`""` + `"paas-ws-test-op-"`）                                                  |
 
 Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正常 teardown 會刪；中斷或 cleanup 失敗會留下，需要時手動 `kubectl delete ns paas-ws-test-op-<x>`。詳細請見 `extra/paas-operator/tests/integration/README.md`。
 
@@ -224,11 +224,11 @@ git push origin v18.0.1.0.24
 
 **Tag 命名規則：**
 
-| 項目                              | 格式                                     | 範例             |
-| --------------------------------- | ---------------------------------------- | ---------------- |
-| Addon version (`__manifest__.py`) | `{odoo_version}.{major}.{minor}.{patch}` | `18.0.1.0.24`    |
-| Git tag (woow_paas_platform)      | `v{完整 version}`                         | `v18.0.1.0.24`   |
-| paas-odoo image tag               | `YYYYMMDD.HHmm`（自動產生）               | `20260328.1430`  |
+| 項目                              | 格式                                     | 範例            |
+| --------------------------------- | ---------------------------------------- | --------------- |
+| Addon version (`__manifest__.py`) | `{odoo_version}.{major}.{minor}.{patch}` | `18.0.1.0.24`   |
+| Git tag (woow_paas_platform)      | `v{完整 version}`                        | `v18.0.1.0.24`  |
+| paas-odoo image tag               | `YYYYMMDD.HHmm`（自動產生）              | `20260328.1430` |
 
 > **Note**: Git tag 直接使用 `__manifest__.py` 的完整版號加 `v` 前綴，不做拆解。paas-odoo image tag 使用時間戳，因為它是多個 addon 的組合打包，不應綁定單一 addon 的版本。
 
@@ -299,12 +299,12 @@ deploy-stg.sh
 
 **Image 命名規則：**
 
-| 項目 | 格式 | 範例 |
-|------|------|------|
-| STG image repo | `woow-paas-docker-local/paas-odoo-stg` | - |
-| Git tag（觸發 CI） | `stg-YYYYMMDD.HHMM` | `stg-20260329.1500` |
-| Docker image tag | `YYYYMMDD.HHMM`（CI strip `stg-`） | `20260329.1500` |
-| Sandbox namespace | `dev-sandbox-{slug}` | `dev-sandbox-stg` |
+| 項目               | 格式                                   | 範例                |
+| ------------------ | -------------------------------------- | ------------------- |
+| STG image repo     | `woow-paas-docker-local/paas-odoo-stg` | -                   |
+| Git tag（觸發 CI） | `stg-YYYYMMDD.HHMM`                    | `stg-20260329.1500` |
+| Docker image tag   | `YYYYMMDD.HHMM`（CI strip `stg-`）     | `20260329.1500`     |
+| Sandbox namespace  | `dev-sandbox-{slug}`                   | `dev-sandbox-stg`   |
 
 ## Architecture
 
@@ -349,18 +349,18 @@ The module provides an independent frontend application:
 
 實際 endpoints 分散在 `src/controllers/` 多個檔案：
 
-| Controller | 範圍 |
-|------|------|
-| `paas.py` | 主入口 `/woow`、cloud-services 端點（templates、services、plans、trial、addon-removal） |
-| `billing.py` | wallet、payment-methods、subscriptions、invoices、topup |
-| `dashboard.py` | 首頁 summary |
-| `ai_assistant.py` | AI providers / agents、chat、support |
-| `smart_home.py` | smart home 模板與裝置 |
-| `profile.py` | `/api/me` partner self-update |
-| `ha_api.py` | Home Assistant API proxy |
-| `oauth2.py` | OAuth2 server endpoints |
-| `agent_runtime_skill.py` | agent-runtime skill bundle（`/api/agent-runtimes/skill-bundle`） |
-| `agent_runtime_webhook.py` | agent-runtime 狀態回呼（`/api/agent-runtimes/webhook/state-update`） |
+| Controller                 | 範圍                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| `paas.py`                  | 主入口 `/woow`、cloud-services 端點（templates、services、plans、trial、addon-removal） |
+| `billing.py`               | wallet、payment-methods、subscriptions、invoices、topup                                 |
+| `dashboard.py`             | 首頁 summary                                                                            |
+| `ai_assistant.py`          | AI providers / agents、chat、support                                                    |
+| `smart_home.py`            | smart home 模板與裝置                                                                   |
+| `profile.py`               | `/api/me` partner self-update                                                           |
+| `ha_api.py`                | Home Assistant API proxy                                                                |
+| `oauth2.py`                | OAuth2 server endpoints                                                                 |
+| `agent_runtime_skill.py`   | agent-runtime skill bundle（`/api/agent-runtimes/skill-bundle`）                        |
+| `agent_runtime_webhook.py` | agent-runtime 狀態回呼（`/api/agent-runtimes/webhook/state-update`）                    |
 
 完整端點與 OWL hash-based 路由詳見 `docs/reference/api/`，或直接 grep `@route` 與 `src/static/src/paas/core/router.js`。
 
@@ -470,15 +470,15 @@ Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（隨 cycle 持續累
 
 `docs/` 採 **6 類混合 + 1 工具自管理區**（詳見 `docs/README.md`）。新檔前先決定類別：
 
-| 目錄 | 何時用 |
-|------|-------|
-| `docs/guides/` | 寫「如何做 X」的步驟（onboarding、deployment、testing） |
-| `docs/reference/` | 寫「是什麼 / 有什麼」的事實規格（API、feature spec） |
-| `docs/decisions/` | 寫「為什麼這樣設計」的論述（philosophy、refactor、pattern、PR review） |
-| `docs/plans/` | 啟動 epic / 大功能前寫 design+implementation 雙檔（按季度子目錄歸檔，例 `docs/plans/2026-Q2/`） |
-| `docs/tracking/` | 記錄 incident、pitfall、follow-up、test report |
-| `docs/archived/` | 不再使用但保留考古（不主動建檔） |
-| `docs/superpowers/` | obra/superpowers plugin 自動寫入區（不算主題類） |
+| 目錄                | 何時用                                                                                          |
+| ------------------- | ----------------------------------------------------------------------------------------------- |
+| `docs/guides/`      | 寫「如何做 X」的步驟（onboarding、deployment、testing）                                         |
+| `docs/reference/`   | 寫「是什麼 / 有什麼」的事實規格（API、feature spec）                                            |
+| `docs/decisions/`   | 寫「為什麼這樣設計」的論述（philosophy、refactor、pattern、PR review）                          |
+| `docs/plans/`       | 啟動 epic / 大功能前寫 design+implementation 雙檔（按季度子目錄歸檔，例 `docs/plans/2026-Q2/`） |
+| `docs/tracking/`    | 記錄 incident、pitfall、follow-up、test report                                                  |
+| `docs/archived/`    | 不再使用但保留考古（不主動建檔）                                                                |
+| `docs/superpowers/` | obra/superpowers plugin 自動寫入區（不算主題類）                                                |
 
 **工具指令**：
 
@@ -577,11 +577,11 @@ export class SubscriptionCard extends Component {
 
 本 repo 同時用三套 Claude Code framework，各自 scope 與整合點不同。**詳細使用指南漸進載入** — 需要哪套再讀對應檔，不要一次全載：
 
-| Framework | Scope / 安裝形式 | 主要用途 | 詳細指南 |
-|-----------|----------------|---------|---------|
-| **ccpm**（[automazeio/ccpm](https://github.com/automazeio/ccpm)） | Project skill — symlink `.claude/skills/ccpm` | spec-driven PM：PRD → Epic → GitHub issues → 平行 agents | [`docs/guides/frameworks/ccpm.md`](docs/guides/frameworks/ccpm.md) |
-| **superpowers**（[obra/superpowers](https://github.com/obra/superpowers)） | User-scope plugin（SessionStart hook 自動注入） | 16+ skills：brainstorming / writing-plans / TDD / debugging / code-review / worktree | [`docs/guides/frameworks/superpowers.md`](docs/guides/frameworks/superpowers.md) |
-| **SuperClaude_Framework**（[SuperClaude-Org/SuperClaude_Framework](https://github.com/SuperClaude-Org/SuperClaude_Framework)） | User-scope `~/.claude/commands/sc/*` | 30+ slash commands；本 repo 只用 `/sc:brainstorm` + ad hoc 其他 | [`docs/guides/frameworks/superclaude.md`](docs/guides/frameworks/superclaude.md) |
+| Framework                                                                                                                      | Scope / 安裝形式                                | 主要用途                                                                             | 詳細指南                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| **ccpm**（[automazeio/ccpm](https://github.com/automazeio/ccpm)）                                                              | Project skill — symlink `.claude/skills/ccpm`   | spec-driven PM：PRD → Epic → GitHub issues → 平行 agents                             | [`docs/guides/frameworks/ccpm.md`](docs/guides/frameworks/ccpm.md)               |
+| **superpowers**（[obra/superpowers](https://github.com/obra/superpowers)）                                                     | User-scope plugin（SessionStart hook 自動注入） | 16+ skills：brainstorming / writing-plans / TDD / debugging / code-review / worktree | [`docs/guides/frameworks/superpowers.md`](docs/guides/frameworks/superpowers.md) |
+| **SuperClaude_Framework**（[SuperClaude-Org/SuperClaude_Framework](https://github.com/SuperClaude-Org/SuperClaude_Framework)） | User-scope `~/.claude/commands/sc/*`            | 30+ slash commands；本 repo 只用 `/sc:brainstorm` + ad hoc 其他                      | [`docs/guides/frameworks/superclaude.md`](docs/guides/frameworks/superclaude.md) |
 
 ### 共用整合點：`/docs:promote`
 
