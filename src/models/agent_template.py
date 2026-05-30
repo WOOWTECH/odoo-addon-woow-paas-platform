@@ -143,3 +143,26 @@ class AgentTemplate(models.Model):
                         "'%s' projects and is not system-scope."
                         % (mcp.name, t.name or t.id)
                     )
+
+    @api.constrains('skill_ids', 'project_ids')
+    def _check_skill_subset(self):
+        """Bound skills must be a subset of (project user-scope skills ∪
+        scope='system'). Prevents a template from referencing user-scope skill
+        rows from projects it isn't bound to.
+        """
+        Skill = self.env['woow_paas_platform.skill']
+        for t in self:
+            if not t.skill_ids:
+                continue
+            allowed_user_scope = set(t.project_ids.mapped('skill_ids').ids)
+            allowed_system = set(
+                Skill.sudo().search([('scope', '=', 'system')]).ids
+            )
+            allowed = allowed_user_scope | allowed_system
+            for skill in t.skill_ids:
+                if skill.id not in allowed:
+                    raise ValidationError(
+                        "Skill '%s' is not bound to any of template "
+                        "'%s' projects and is not system-scope."
+                        % (skill.name, t.name or t.id)
+                    )

@@ -210,6 +210,16 @@ agentRuntime:
   webhookSecretPrevious: ""
   namespaceSecret: ""
 
+# --- AI runtime secret ---
+# The only genuine external secret (an OpenAI-compatible API key). Populated into
+# the chart Secret (secrets.yaml) ONLY when set; consumed by odoo-deployment.yaml
+# via optional secretKeyRef as WOOW_AI_API_KEY, which src/models/ai_client.py reads
+# as a fallback when the ai.config record has no key. Empty = key omitted = env
+# unset → AI calls raise at call time (fail-closed) / AI e2e skips gracefully.
+# Set at deploy via --set aiRuntime.apiKey=... (do NOT commit a real key).
+aiRuntime:
+  apiKey: ""
+
 # --- Registry credentials (stg mode) ---
 registry:
   # Docker registry server

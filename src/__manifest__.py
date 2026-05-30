@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.28",
+    "version": "18.0.1.0.29",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -48,6 +48,7 @@
         "data/ecpay_invoice_cron.xml",
         "data/agent_session_cron.xml",
         "data/agent_template_demo.xml",
+        "data/demo_system_skill.xml",
         "views/account_move_views.xml",
         "views/paas_app.xml",
         "views/oauth2_templates.xml",

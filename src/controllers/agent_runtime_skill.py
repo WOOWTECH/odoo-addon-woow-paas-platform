@@ -14,6 +14,11 @@ Secret (env ``AGENT_RUNTIME_AUTH_SECRET_CURRENT`` / ``_PREVIOUS``; OQ#1 ruling
 (b) + §6.6 dual-secret rotation window). The token's ``project_id`` claim is
 AUTHORITATIVE (HC-2 [[constraint-input-trust-expansion]]) — the query
 ``project_hash`` is never trusted for project resolution.
+
+Dual-scope (2026-05-30): a scope='system' skill (project_id NULL) is
+fetchable by ANY valid skill_bundle token — system skills are platform-
+curated and intentionally global. The project-bound leg stays strict
+(token project_id authoritative); project rows shadow system on collision.
 """
 from __future__ import annotations
 
@@ -110,11 +115,16 @@ class AgentRuntimeSkillController(Controller):
         if not project_id:
             return self._unauthorized()
 
-        skill = request.env['woow_paas_platform.skill'].sudo().search([
-            ('project_id', '=', project_id),
+        candidates = request.env['woow_paas_platform.skill'].sudo().search([
+            '&', '&',
             ('name', '=', kwargs.get('skill_name')),
             ('version', '=', kwargs.get('version')),
-        ], limit=1)
+            '|', ('project_id', '=', project_id), ('scope', '=', 'system'),
+        ])
+        # HC-2: the token's project_id is authoritative for the bound leg.
+        # On a (name, version) collision the project-owned row wins over system.
+        skill = candidates.filtered(lambda s: s.project_id.id == project_id)[:1] \
+            or candidates.filtered(lambda s: s.scope == 'system')[:1]
         if not skill or skill.state != 'published':
             return self._not_found()
 

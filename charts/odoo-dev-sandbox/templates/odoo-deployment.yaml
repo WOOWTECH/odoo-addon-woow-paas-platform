@@ -111,6 +111,15 @@ spec:
                   name: {{ include "odoo-dev-sandbox.secretName" . }}
                   key: agent-runtime-namespace-secret
                   optional: true
+            # AI runtime key (optional). src/models/ai_client.py reads this as a
+            # fallback when the ai.config record has no api_key. Missing key →
+            # env unset → AI raises at call time (fail-closed) / AI e2e skips.
+            - name: WOOW_AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "odoo-dev-sandbox.secretName" . }}
+                  key: woow-ai-api-key
+                  optional: true
           volumeMounts:
             - name: odoo-config
               mountPath: /etc/odoo/odoo.conf

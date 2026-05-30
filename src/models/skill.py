@@ -1,13 +1,13 @@
 from datetime import datetime
 
 from odoo import api, fields, models
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 
 
 class Skill(models.Model):
     _name = 'woow_paas_platform.skill'
     _description = 'Project-scoped Agent Skill Bundle'
-    _order = 'project_id, name, version desc'
+    _order = 'scope, project_id, name, version desc'
 
     name = fields.Char(
         string='Skill Name',
@@ -30,11 +30,21 @@ class Skill(models.Model):
         index=True,
     )
 
+    scope = fields.Selection(
+        selection=[('system', 'System'), ('user', 'User')],
+        string='Scope',
+        default='user',
+        required=True,
+        index=True,
+        help="system = platform-wide (loaded into every project's pod); "
+             "user = bound to a single project.",
+    )
+
     project_id = fields.Many2one(
         'project.project',
-        required=True,
         ondelete='cascade',
         index=True,
+        help='Set for user-scope skills; NULL for system-scope skills.',
     )
 
     # Guest project members may read the metadata (name / version / state)
@@ -89,13 +99,36 @@ class Skill(models.Model):
         default=fields.Datetime.now,
     )
 
-    _sql_constraints = [
-        (
-            'unique_name_version_per_project',
-            'UNIQUE(project_id, name, version)',
-            'Skill name + version must be unique per project.',
-        ),
-    ]
+    def init(self):
+        # UNIQUE(project_id, name, version) cannot dedupe system skills:
+        # Postgres treats NULL project_id as distinct. Use two partial unique
+        # indexes (replaces the old _sql_constraints UNIQUE). IF NOT EXISTS so
+        # this is idempotent on every -u / fresh install.
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS skill_uniq_user_proj_name_version
+            ON woow_paas_platform_skill (project_id, name, version)
+            WHERE project_id IS NOT NULL
+        """)
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS skill_uniq_system_name_version
+            ON woow_paas_platform_skill (name, version)
+            WHERE project_id IS NULL
+        """)
+
+    @api.constrains('scope', 'project_id')
+    def _check_scope_project_consistency(self):
+        # D4 invariant (mirrors mcp_server): scope='user' iff project_id NOT NULL.
+        for record in self:
+            if record.scope == 'user' and not record.project_id:
+                raise ValidationError(
+                    "User-scope skill '%s' must be linked to a project "
+                    "(scope='user' requires project_id)." % record.name
+                )
+            if record.scope == 'system' and record.project_id:
+                raise ValidationError(
+                    "System-scope skill '%s' must not be linked to a project "
+                    "(scope='system' requires project_id=NULL)." % record.name
+                )
 
     # ------------------------------------------------------------------ #
     # HC-4 — bundle attachment anchoring                                  #
@@ -111,7 +144,7 @@ class Skill(models.Model):
             if skill.state == 'published':
                 if not skill.published_at:
                     skill.published_at = fields.Datetime.now()
-                skill._recompute_is_latest(skill.project_id.id, skill.name)
+                skill._recompute_is_latest()
         return skills
 
     def write(self, vals):
@@ -126,7 +159,7 @@ class Skill(models.Model):
             for skill in self:
                 if skill.state == 'published' and not skill.published_at:
                     skill.published_at = fields.Datetime.now()
-                skill._recompute_is_latest(skill.project_id.id, skill.name)
+                skill._recompute_is_latest()
         return result
 
     def _anchor_bundle_attachment(self):
@@ -169,7 +202,7 @@ class Skill(models.Model):
             'state': 'published',
             'published_at': fields.Datetime.now(),
         })
-        self._recompute_is_latest(self.project_id.id, self.name)
+        self._recompute_is_latest()
 
     def action_deprecate(self):
         """published → deprecated. Recompute hands is_latest to the next
@@ -181,7 +214,7 @@ class Skill(models.Model):
                 "(only published)." % (self.name, self.version, self.state)
             )
         self.write({'state': 'deprecated'})
-        self._recompute_is_latest(self.project_id.id, self.name)
+        self._recompute_is_latest()
 
     def action_archive_skill(self):
         """Any non-archived state → archived (terminal). Recompute is_latest.
@@ -197,24 +230,37 @@ class Skill(models.Model):
                 % (self.name, self.version)
             )
         self.write({'state': 'archived'})
-        self._recompute_is_latest(self.project_id.id, self.name)
+        self._recompute_is_latest()
 
-    def _recompute_is_latest(self, project_id, name):
-        """Invariant: at most one is_latest=True per (project_id, name),
-        and it is the most-recently-published (published_at desc, id desc)
-        skill in state 'published'."""
-        group = self.sudo().search([
-            ('project_id', '=', project_id),
-            ('name', '=', name),
-        ])
+    def _is_latest_group_domain(self):
+        """Domain for the bucket this skill competes in for the is_latest
+        pointer. System skills group platform-wide per name (project_id NULL);
+        user skills group per (project_id, name)."""
+        self.ensure_one()
+        if self.scope == 'system':
+            return [
+                ('scope', '=', 'system'),
+                ('project_id', '=', False),
+                ('name', '=', self.name),
+            ]
+        return [
+            ('scope', '=', 'user'),
+            ('project_id', '=', self.project_id.id),
+            ('name', '=', self.name),
+        ]
+
+    def _recompute_is_latest(self):
+        """Invariant: at most one is_latest=True per (scope, project, name)
+        group, and it is the most-recently-published (published_at desc,
+        id desc) skill in state 'published'."""
+        self.ensure_one()
+        group = self.sudo().search(self._is_latest_group_domain())
         published = group.filtered(lambda s: s.state == 'published')
         winner = published.sorted(
             key=lambda s: (s.published_at or datetime.min, s.id),
             reverse=True,
         )[:1]
         for skill in group:
-            # winner empty recordset → winner.id is False, which no
-            # persisted id equals, so desired is correctly False for all.
             desired = skill.id == winner.id
             if skill.is_latest != desired:
                 skill.write({'is_latest': desired})

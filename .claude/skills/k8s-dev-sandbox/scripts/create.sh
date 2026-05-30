@@ -466,6 +466,101 @@ if [ "$WOOW_MODULE_STATE" != "installed" ]; then
         echo -e "${YELLOW}Database initialization may have issues. Check logs for details.${NC}"
     fi
 
+    # --- Discover the in-cluster PaaS operator so cloud-service deploys work ---
+    # operator config is per-environment (docker-desktop: paas-system/paas-operator;
+    # stg: paas-stg-system/paas-operator-stg), so we do NOT hardcode it. Env overrides
+    # win; otherwise auto-discover a paas-operator svc + its *-secret in the operator
+    # namespace and read api-key at runtime (never committed). Empty when none found →
+    # operator stays "not configured" (honest, vs a broken sentinel).
+    OPERATOR_NS="${PAAS_OPERATOR_NAMESPACE:-paas-system}"
+    OPERATOR_URL="${PAAS_OPERATOR_URL:-}"
+    OPERATOR_API_KEY="${PAAS_OPERATOR_API_KEY:-}"
+    NS_PREFIX="${PAAS_NAMESPACE_PREFIX:-paas-ws-}"
+    if [ -z "$OPERATOR_URL" ]; then
+        _op_svc=$(kubectl get svc -n "$OPERATOR_NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^paas-operator' | head -1 || true)
+        if [ -n "$_op_svc" ]; then
+            _op_port=$(kubectl get svc -n "$OPERATOR_NS" "$_op_svc" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || echo 80)
+            OPERATOR_URL="http://${_op_svc}.${OPERATOR_NS}.svc.cluster.local:${_op_port:-80}"
+            _op_secret=$(kubectl get secret -n "$OPERATOR_NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E 'paas-operator.*secret' | head -1 || true)
+            if [ -n "$_op_secret" ]; then
+                OPERATOR_API_KEY=$(kubectl get secret -n "$OPERATOR_NS" "$_op_secret" -o jsonpath='{.data.api-key}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+            fi
+            echo -e "  ${BLUE}Discovered operator:${NC} ${OPERATOR_URL} (api-key: $([ -n "$OPERATOR_API_KEY" ] && echo set || echo none))"
+        else
+            echo -e "  ${YELLOW}No paas-operator found in '${OPERATOR_NS}'; operator stays unconfigured.${NC}"
+        fi
+    fi
+
+    # --- Seed sandbox credentials so test / e2e run without manual Settings input ---
+    # operator_url/api_key (discovered above), paas_domain, namespace_prefix, topup
+    # gate, AI pointers are ir.config_parameter (cached in-process → invalidated by the
+    # rollout restart below). ECPay creds + AI gateway + subscription journal live on
+    # DB records, not ICP, so they are seeded as rows here too. All idempotent (ON
+    # CONFLICT / UPDATE-where). Runs only on fresh install; never in prod (create.sh is
+    # dev/stg-sandbox tooling). ECPay values are ECPay's PUBLIC stage test merchant
+    # creds (payment-stage.ecpay.com.tw).
+    echo -e "${BLUE}Seeding sandbox credentials (operator / paas_domain / topup / AI / ECPay / journal)...${NC}"
+    if ! kubectl exec -i -n "$NAMESPACE" "statefulset/${PG_STATEFULSET}" -- \
+        psql -U odoo -d "$DB_NAME" -v ON_ERROR_STOP=1 <<SQL
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+VALUES
+  ('woow_paas_platform.operator_url', '${OPERATOR_URL}', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.operator_api_key', '${OPERATOR_API_KEY}', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.paas_domain', '${SLUG}.woowtech.io', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.namespace_prefix', '${NS_PREFIX}', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.topup_payment_enabled', 'True', 1, NOW(), 1, NOW())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
+
+-- AI default pointers: insert only when the seeded WoowBot records exist (SELECT
+-- yields 0 rows otherwise → no-op); value = the canonical record id as text.
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+SELECT 'woow_paas_platform.default_ai_assistant_id', res_id::text, 1, NOW(), 1, NOW()
+FROM ir_model_data WHERE module = 'woow_paas_platform' AND name = 'ai_assistant_woowbot'
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
+
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+SELECT 'woow_paas_platform.default_ai_config_id', res_id::text, 1, NOW(), 1, NOW()
+FROM ir_model_data WHERE module = 'woow_paas_platform' AND name = 'ai_config_woowbot'
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
+
+-- ECPay: public stage test creds. No-op if the ECPay provider row isn't present.
+UPDATE payment_provider
+SET "MerchantID" = '3002607',
+    "HashKey" = 'pwFHCqoQZGmho4w6',
+    "HashIV" = 'EkRm7iFT261dpevs',
+    enable_ecpg = true,
+    state = 'test',
+    write_date = NOW(), write_uid = 1
+WHERE code = 'ECPay';
+
+-- WoowBot AI config: point the sandbox's default config at the internal
+-- openai-compatible test gateway so AI features work out of the box. 'test' is
+-- a dev-gateway token, not a real secret. No-op if the WoowBot config isn't present.
+UPDATE ai_config
+SET "type" = 'openai_compatible',
+    api_base_url = 'https://eugene-minimax.woowtech.io/v1',
+    api_key = 'test',
+    write_date = NOW(), write_uid = 1
+WHERE id = (SELECT res_id FROM ir_model_data
+            WHERE module = 'woow_paas_platform' AND name = 'ai_config_woowbot');
+
+-- Subscription journal: link each company's sale journal ("Customer Invoices").
+-- The post_init_hook can miss this when the sale journal isn't present yet
+-- mid-install; this runs post-install when it exists. Without it, subscription /
+-- invoice flows + their tests raise "Subscription journal is not configured".
+UPDATE res_company c
+SET sh_journal_id = (SELECT j.id FROM account_journal j
+                     WHERE j.company_id = c.id AND j.type = 'sale'
+                     ORDER BY j.id LIMIT 1)
+WHERE c.sh_journal_id IS NULL
+  AND EXISTS (SELECT 1 FROM account_journal j WHERE j.company_id = c.id AND j.type = 'sale');
+SQL
+    then
+        echo -e "${YELLOW}Credential seed had an issue (sandbox still usable; continuing).${NC}"
+    else
+        echo -e "${GREEN}Sandbox credentials seeded.${NC}"
+    fi
+
     # Restart odoo after init (--stop-after-init stops the process)
     echo -e "${BLUE}Restarting Odoo...${NC}"
     kubectl rollout restart -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}"

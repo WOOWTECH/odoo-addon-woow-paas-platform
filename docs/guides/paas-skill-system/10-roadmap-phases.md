@@ -47,6 +47,7 @@ graph LR
 - 整套 agent-runtime 仍以 **enable-gate 控制**，stg pilot 已翻 gate 驗過真 LLM round-trip（2026-05-27，F-PILOT-10），尚未對一般使用者全面開啟。
 - Pod 端 transport/skill/安全鷹架已備；**真 LLM runtime（`langgraph_runtime`）已於 F-PILOT-10 上線並完成 cluster e2e round-trip**——見 [agent-runtime Pod 內部](06-pod-internals.md)。
 - **翻 gate 的前置條件 F-PC-7**（Pod 端 `token_use` 嚴格驗證）：**已 merge main（PR #3）並 build 進發佈 image，stg 已滿足**；prod / 新環境仍須遵守 `token_use` deploy-order（先 operator 簽、後 pod A 嚴格，否則 1 小時在途 token 空窗，D-CAVEAT-2）。見 [Skill 系統安全模型](09-security-model.md)。
+- **Skill dual-scope（2026-05-30）**：skill 跟進 mcp_server 加上 `scope`（system/user）。system skill 平台級共用、所有 project 載入；上傳 pipeline 為 Phase 2。設計見 `docs/plans/2026-Q2/2026-05-30-skill-dual-scope-design.md`。
 
 ## 🧠 兩個關鍵策略名詞
 

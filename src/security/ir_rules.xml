@@ -376,12 +376,16 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
-        <!-- skill (design §3.2 — 4 rules) -->
+        <!-- skill (dual-scope — design 2026-05-30) -->
+        <!-- 3 user-scope rules (project_access walk AND scope='user') +     -->
+        <!-- 1 system_readonly (all internal users read system skills) +      -->
+        <!-- admin_full (unchanged below). Old skill_rule_project_* xmlids are -->
+        <!-- retired in migration 18.0.1.0.29 (two-DELETE) to avoid OR-combine.-->
 
-        <record id="skill_rule_project_admin" model="ir.rule">
-            <field name="name">Skill: project admin/owner full CRUD</field>
+        <record id="skill_rule_user_admin" model="ir.rule">
+            <field name="name">Skill: user-scope project admin/owner full CRUD</field>
             <field name="model_id" ref="model_woow_paas_platform_skill"/>
-            <field name="domain_force">[('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="domain_force">['&amp;', ('scope', '=', 'user'), ('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
@@ -389,10 +393,10 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
-        <record id="skill_rule_project_user" model="ir.rule">
-            <field name="name">Skill: project user read-only</field>
+        <record id="skill_rule_user_member" model="ir.rule">
+            <field name="name">Skill: user-scope project user read-only</field>
             <field name="model_id" ref="model_woow_paas_platform_skill"/>
-            <field name="domain_force">[('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'user')])]</field>
+            <field name="domain_force">['&amp;', ('scope', '=', 'user'), ('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'user')])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>
@@ -400,10 +404,21 @@
             <field name="perm_unlink" eval="False"/>
         </record>
 
-        <record id="skill_rule_project_guest" model="ir.rule">
-            <field name="name">Skill: project guest read-only</field>
+        <record id="skill_rule_user_guest" model="ir.rule">
+            <field name="name">Skill: user-scope project guest read-only</field>
             <field name="model_id" ref="model_woow_paas_platform_skill"/>
-            <field name="domain_force">[('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'guest')])]</field>
+            <field name="domain_force">['&amp;', ('scope', '=', 'user'), ('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'guest')])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="skill_rule_system_readonly" model="ir.rule">
+            <field name="name">Skill: system-scope read-only for all internal users</field>
+            <field name="model_id" ref="model_woow_paas_platform_skill"/>
+            <field name="domain_force">[('scope', '=', 'system')]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>

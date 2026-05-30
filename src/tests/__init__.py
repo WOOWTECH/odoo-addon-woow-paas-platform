@@ -90,4 +90,6 @@ from . import test_skill_admin_lifecycle                   # skill backend lifec
 from . import test_skill_admin_views                       # skill backend views smoke
 from . import test_skill_is_latest_drift_regression        # is_latest drift regression
 from . import test_skill_e2e_lifecycle_download            # e2e lifecycle ↔ download
+# feat: skill dual-scope (system/user) — schema, ACL, pod loading, migration
+from . import test_skill_dual_scope
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

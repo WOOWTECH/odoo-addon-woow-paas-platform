@@ -37,6 +37,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 SLUG=""
 MODULE="woow_paas_platform"
 KEEP_ON_FAIL=false
+E2E_SEED=false
 
 # --- 解析參數 ---
 while [[ $# -gt 0 ]]; do
@@ -47,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --keep-on-fail)
             KEEP_ON_FAIL=true
+            shift
+            ;;
+        --e2e-seed)
+            E2E_SEED=true
             shift
             ;;
         -h|--help)
@@ -60,6 +65,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --module <name>     Module to test (default: woow_paas_platform)"
             echo "  --keep-on-fail      If tests fail, extend sandbox TTL by 24h for debugging"
+            echo "  --e2e-seed          After tests pass, seed the e2e fixture (project + draft skill)"
             echo "  -h, --help          Show usage"
             echo ""
             echo "Examples:"
@@ -176,6 +182,15 @@ if [ $TEST_EXIT_CODE -eq 0 ]; then
     echo -e "${BLUE}Restarting Odoo...${NC}"
     kubectl rollout restart -n "$NAMESPACE" "deploy/${FULLNAME}-odoo"
     kubectl rollout status -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" --timeout=120s 2>/dev/null || true
+
+    # Seed the e2e fixture last — after the rollout above the pod is serving again
+    # (module tests ran with --stop-after-init). --reset because the e2e run advances
+    # the fixture to archived, so each run needs a clean draft starting point.
+    if [ "$E2E_SEED" = true ]; then
+        echo ""
+        echo -e "${BLUE}Seeding e2e fixture...${NC}"
+        "${SCRIPT_DIR}/e2e-seed.sh" "$SLUG" --reset
+    fi
 
     exit 0
 else

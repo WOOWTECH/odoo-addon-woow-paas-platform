@@ -794,13 +794,21 @@ class AiAssistantController(Controller):
         fetching the bundle lazily on first invoke. Rich args_schema in the
         snapshot is a deferred enhancement (see follow-ups §skill args_schema).
         """
+        Skill = self.env['woow_paas_platform.skill'].sudo()
+        bound = template.skill_ids.filtered(lambda s: s.state == 'published')
+        bound_names = set(bound.mapped('name'))
+        # system skills auto-load into every pod; a bound project skill with the
+        # same NAME shadows the system one (avoids pod _TOOL_CACHE name clash).
+        system = Skill.search([
+            ('scope', '=', 'system'),
+            ('state', '=', 'published'),
+            ('name', 'not in', list(bound_names)),
+        ])
         return [
             {'name': skill.name, 'version': skill.version,
              'sha256': skill.bundle_sha256,
              'description': skill.description or ''}
-            for skill in template.skill_ids.filtered(
-                lambda s: s.state == 'published'
-            )
+            for skill in (bound + system)
         ]
 
     def _persist_ai_response(self, db_name, uid, channel_id, full_response, context):
