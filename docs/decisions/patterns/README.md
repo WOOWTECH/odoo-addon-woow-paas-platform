@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 18 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 19 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -21,6 +21,7 @@
 | [[two-layer-acl-lockstep]] | 同 model 被兩層以上 enforcement 守（ir.rule + controller carve-out，或多 endpoint 各自 access resolver）：任一層改 domain / 收緊，另一層必須同步，否則 silent divergence 比未修更糟 |
 | [[unbound-project-acl-dual-leg]] | model 可選綁 workspace-bearing model（nullable M2O），unbound row 仍須對部分 user（creator / follower）可見 → dual-leg ir.rule domain（bound walk + unbound carve-out） |
 | [[mcp-acl-6-rule-split]] | 同 model 混兩種 scope（platform public-read + workspace-scoped）且需在 `base.group_user` 開 CRUD → 按 perm direction 拆 3 條 + sub-model 鏡像 = 6 條（single dual-leg 不夠，create direction 有提權面） |
+| [[scope-flip-write-guard-not-ir-rule]] | model 有 scope / tenancy 欄位（scope system/user、project_id、public）且對 `base.group_user` 可寫，要擋「窄→寬 flip」（提權 / 跨租戶外洩）→ 必須在 `write()` guard 攔 vals + 放行 sudo/admin，ir.rule 對 pre-write 判定擋不住（與 6-rule split 互補：split 守 create+可見性、guard 守 flip） |
 | [[constraint-input-trust-expansion]] | model 有 attacker-writable Many2many + ir.rule / `@api.constrains` 用該 m2m 做 subset / authority 推導時 |
 | [[attachment-row-level-acl-and-anchor-stamping]] | 自家 model 透過 `ir.attachment` 存敏感 / RCE-class binary payload → anchor stamping + ir.attachment ir.rule 兩層 |
 | [[odoo-std-field-no-override]] | 任何想動 Odoo std model 欄位型態 / shape 的 PR |
@@ -65,6 +66,7 @@
 - [phase-versioned-test-assertion](phase-versioned-test-assertion.md)
 - [plan-driven-date-helper](plan-driven-date-helper.md)
 - [plan-gap-stop-and-report](plan-gap-stop-and-report.md)
+- [scope-flip-write-guard-not-ir-rule](scope-flip-write-guard-not-ir-rule.md)
 - [sidecar-backed-flag-lifecycle](sidecar-backed-flag-lifecycle.md)
 - [spawn-install-values-missed-forward](spawn-install-values-missed-forward.md)
 - [two-layer-acl-lockstep](two-layer-acl-lockstep.md)
