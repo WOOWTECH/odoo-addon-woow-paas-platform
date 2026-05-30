@@ -325,7 +325,10 @@ if [ "$MODE" = "local" ]; then
     # extra-addons 來源：優先讀 .env 的 PAAS_CI_ADDONS_PATH（commit 928613a 後的 source of truth），
     # fallback 才用舊路徑 extra/extra-addons（已 deprecated，多數 worktree 不存在）
     if [ -z "${PAAS_CI_ADDONS_PATH:-}" ] && [ -f "${PROJECT_ROOT}/.env" ]; then
-        PAAS_CI_ADDONS_PATH="$(grep -E '^PAAS_CI_ADDONS_PATH=' "${PROJECT_ROOT}/.env" | tail -1 | cut -d= -f2-)"
+        # `|| true`：.env 沒有 PAAS_CI_ADDONS_PATH 時 grep 回傳非零，配合 set -euo
+        # pipefail 會讓整個 script 靜默中止（無錯誤訊息）。容許找不到 → 留空字串，
+        # 交由下方 fallback 處理。
+        PAAS_CI_ADDONS_PATH="$(grep -E '^PAAS_CI_ADDONS_PATH=' "${PROJECT_ROOT}/.env" | tail -1 | cut -d= -f2- || true)"
     fi
     if [ -n "${PAAS_CI_ADDONS_PATH:-}" ] && [ -d "$PAAS_CI_ADDONS_PATH" ]; then
         EXTRA_ADDONS_PATH="$PAAS_CI_ADDONS_PATH"
