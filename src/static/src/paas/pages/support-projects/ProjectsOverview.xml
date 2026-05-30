@@ -1,15 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
-    <t t-name="woow_paas_platform.AiAssistantPage">
-        <div class="o_woow_ai_assistant">
-            <!-- Page Header -->
-            <div class="o_woow_ai_header">
-                <div class="o_woow_ai_header_text">
-                    <h1>AI Assistant</h1>
-                    <p>Manage support projects, tasks, and AI-powered conversations.</p>
-                </div>
-            </div>
-
+    <t t-name="woow_paas_platform.ProjectsOverview">
+        <div class="o_woow_sp_overview">
             <!-- Stats Overview Cards -->
             <div class="o_woow_ai_stats_grid">
                 <!-- Total Tasks -->
@@ -67,45 +59,8 @@
                 </WoowCard>
             </div>
 
-            <!-- Navigation Cards Grid -->
-            <div class="o_woow_ai_nav_grid">
-                <!-- Support Projects Card -->
-                <WoowCard shadow="true" class="'o_woow_ai_nav_card'">
-                    <div class="o_woow_ai_nav_card_header">
-                        <div class="o_woow_ai_nav_icon o_woow_ai_nav_icon_blue">
-                            <WoowIcon name="'folder_open'" size="28"/>
-                        </div>
-                        <h3>Support Projects</h3>
-                    </div>
-                    <p class="o_woow_ai_nav_desc">
-                        Browse and manage support projects across your workspaces. Create new projects and track progress.
-                    </p>
-                    <div class="o_woow_ai_nav_footer">
-                        <WoowButton variant="'primary'" size="'sm'" onClick.bind="navigateToProjects">
-                            View Projects
-                        </WoowButton>
-                    </div>
-                </WoowCard>
-
-                <!-- My Support Tasks Card -->
-                <WoowCard shadow="true" class="'o_woow_ai_nav_card'">
-                    <div class="o_woow_ai_nav_card_header">
-                        <div class="o_woow_ai_nav_icon o_woow_ai_nav_icon_green">
-                            <WoowIcon name="'assignment'" size="28"/>
-                        </div>
-                        <h3>My Support Tasks</h3>
-                    </div>
-                    <p class="o_woow_ai_nav_desc">
-                        View and manage your assigned tasks. Track task status with Kanban boards and collaborate with AI.
-                    </p>
-                    <div class="o_woow_ai_nav_footer">
-                        <WoowButton variant="'primary'" size="'sm'" onClick.bind="navigateToTasks">
-                            View Tasks
-                        </WoowButton>
-                    </div>
-                </WoowCard>
-
-                <!-- AI Connection Status Card -->
+            <!-- AI Connection Status Card (full-width below the 3-stat row) -->
+            <div class="o_woow_sp_overview_connection">
                 <WoowCard shadow="true" class="'o_woow_ai_nav_card o_woow_ai_connection_card'">
                     <div class="o_woow_ai_nav_card_header">
                         <div t-att-class="'o_woow_ai_nav_icon ' + (connection.connected ? 'o_woow_ai_nav_icon_green' : 'o_woow_ai_nav_icon_gray')">

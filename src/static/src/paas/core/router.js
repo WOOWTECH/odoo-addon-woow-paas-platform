@@ -12,7 +12,6 @@ const routes = [
     { path: "workspace/:id/services/configure/:templateId", name: "Configure Service", routeName: "configure", pattern: /^workspace\/(\d+)\/services\/configure\/(\d+)$/ },
     { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers)$/ },
     { path: "workspace/:id/services/:serviceId", name: "Service Detail", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
-    { path: "ai-assistant", name: "AI Assistant", routeName: "ai-assistant" },
     // D4=C: `/woow#/projects` is the new entry for the Projects list page; the
     //        legacy `/woow#/ai-assistant/projects` route below stays active and
     //        shares the same `ai-projects` routeName so existing bookmarks

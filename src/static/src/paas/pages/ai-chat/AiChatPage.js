@@ -45,6 +45,6 @@ export class AiChatPage extends Component {
     }
 
     goBack() {
-        this.router.navigate("ai-assistant");
+        this.router.navigate("projects");
     }
 }

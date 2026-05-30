@@ -2,12 +2,12 @@
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.SupportProjectsPage">
         <div class="o_woow_sp">
+            <!-- Overview: stats + AI connection -->
+            <ProjectsOverview/>
+
             <!-- Page Header -->
             <div class="o_woow_sp_header">
                 <div class="o_woow_sp_header_left">
-                    <button class="o_woow_sp_back_btn" t-on-click="navigateBack">
-                        <WoowIcon name="'arrow_back'" size="20"/>
-                    </button>
                     <div class="o_woow_sp_header_text">
                         <h1>Support Projects</h1>
                         <p>Browse and manage support projects across your workspaces.</p>

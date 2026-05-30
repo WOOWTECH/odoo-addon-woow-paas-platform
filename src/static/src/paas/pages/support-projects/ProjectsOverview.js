@@ -2,18 +2,15 @@
 import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
-import { WoowButton } from "../../components/button/WoowButton";
-import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
 import { aiService } from "../../services/ai_service";
 
-export class AiAssistantPage extends Component {
-    static template = "woow_paas_platform.AiAssistantPage";
-    static components = { WoowCard, WoowIcon, WoowButton };
+export class ProjectsOverview extends Component {
+    static template = "woow_paas_platform.ProjectsOverview";
+    static components = { WoowCard, WoowIcon };
     static props = {};
 
     setup() {
-        this.router = router;
         this.state = useState({
             statsLoading: true,
             connectionLoading: true,
@@ -69,13 +66,5 @@ export class AiAssistantPage extends Component {
 
     get isConnectionLoading() {
         return this.state.connectionLoading;
-    }
-
-    navigateToProjects() {
-        this.router.navigate("ai-assistant/projects");
-    }
-
-    navigateToTasks() {
-        this.router.navigate("ai-assistant/tasks");
     }
 }
