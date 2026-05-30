@@ -466,6 +466,53 @@ if [ "$WOOW_MODULE_STATE" != "installed" ]; then
         echo -e "${YELLOW}Database initialization may have issues. Check logs for details.${NC}"
     fi
 
+    # --- Seed sandbox credentials so test / e2e run without manual Settings input ---
+    # operator_url/api_key, paas_domain, namespace_prefix, topup gate, AI pointers
+    # are ir.config_parameter (cached in-process → invalidated by the rollout restart
+    # below). ECPay creds + AI key live on DB records, not ICP, so they are seeded as
+    # rows here too. All idempotent (ON CONFLICT / UPDATE-where). Runs only on fresh
+    # install; never in prod (create.sh is dev/stg-sandbox tooling). ECPay values are
+    # ECPay's PUBLIC stage test merchant creds (payment-stage.ecpay.com.tw).
+    echo -e "${BLUE}Seeding sandbox credentials (operator / paas_domain / topup / AI / ECPay test creds)...${NC}"
+    if ! kubectl exec -i -n "$NAMESPACE" "statefulset/${PG_STATEFULSET}" -- \
+        psql -U odoo -d "$DB_NAME" -v ON_ERROR_STOP=1 <<SQL
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+VALUES
+  ('woow_paas_platform.operator_url', 'http://paas-operator.invalid:8000', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.operator_api_key', 'sandbox-operator-key', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.paas_domain', '${SLUG}.woowtech.io', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.namespace_prefix', 'paas-ws-', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.topup_payment_enabled', 'True', 1, NOW(), 1, NOW())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
+
+-- AI default pointers: insert only when the seeded WoowBot records exist (SELECT
+-- yields 0 rows otherwise → no-op); value = the canonical record id as text.
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+SELECT 'woow_paas_platform.default_ai_assistant_id', res_id::text, 1, NOW(), 1, NOW()
+FROM ir_model_data WHERE module = 'woow_paas_platform' AND name = 'ai_assistant_woowbot'
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
+
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+SELECT 'woow_paas_platform.default_ai_config_id', res_id::text, 1, NOW(), 1, NOW()
+FROM ir_model_data WHERE module = 'woow_paas_platform' AND name = 'ai_config_woowbot'
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
+
+-- ECPay: public stage test creds. No-op if the ECPay provider row isn't present.
+UPDATE payment_provider
+SET "MerchantID" = '3002607',
+    "HashKey" = 'pwFHCqoQZGmho4w6',
+    "HashIV" = 'EkRm7iFT261dpevs',
+    enable_ecpg = true,
+    state = 'test',
+    write_date = NOW(), write_uid = 1
+WHERE code = 'ECPay';
+SQL
+    then
+        echo -e "${YELLOW}Credential seed had an issue (sandbox still usable; continuing).${NC}"
+    else
+        echo -e "${GREEN}Sandbox credentials seeded.${NC}"
+    fi
+
     # Restart odoo after init (--stop-after-init stops the process)
     echo -e "${BLUE}Restarting Odoo...${NC}"
     kubectl rollout restart -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}"
