@@ -506,6 +506,17 @@ SET "MerchantID" = '3002607',
     state = 'test',
     write_date = NOW(), write_uid = 1
 WHERE code = 'ECPay';
+
+-- WoowBot AI config: point the sandbox's default config at the internal
+-- openai-compatible test gateway so AI features work out of the box. 'test' is
+-- a dev-gateway token, not a real secret. No-op if the WoowBot config isn't present.
+UPDATE ai_config
+SET "type" = 'openai_compatible',
+    api_base_url = 'https://eugene-minimax.woowtech.io/v1',
+    api_key = 'test',
+    write_date = NOW(), write_uid = 1
+WHERE id = (SELECT res_id FROM ir_model_data
+            WHERE module = 'woow_paas_platform' AND name = 'ai_config_woowbot');
 SQL
     then
         echo -e "${YELLOW}Credential seed had an issue (sandbox still usable; continuing).${NC}"
