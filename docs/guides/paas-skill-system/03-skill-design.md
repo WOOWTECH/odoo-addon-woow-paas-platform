@@ -73,17 +73,26 @@ tags: [coding, review]
 | `title` | Char | 顯示名稱 |
 | `description` | Text | 描述 |
 | `version` | Char（required, 預設 `0.1.0`） | semver |
-| `is_latest` | Boolean（indexed） | 是否為該 name 的最新版 |
-| `project_id` | Many2one `project.project`（required, cascade delete） | 所屬專案 |
+| `scope` | Selection（required, 預設 `user`, indexed） | `system` / `user`，決定 skill 層級 |
+| `is_latest` | Boolean（indexed） | 是否為該 name 的最新版（**scope-aware**：system 以 `(scope, name)` 跨平台分組、user 以 `(project_id, name)` 在該 project 內分組；由 `_recompute_is_latest` 透過 `_is_latest_group_domain()` 推導分組 domain） |
+| `project_id` | Many2one `project.project`（**nullable**, cascade delete） | 所屬專案。D4 由 `@api.constrains _check_scope_project_consistency` 強制：`scope=user` 必填、`scope=system` 須為 NULL（雙向） |
 | `bundle_attachment_id` | Many2one `ir.attachment`（ondelete **restrict**） | bundle 二進位 |
 | `bundle_sha256` | Char（required, readonly, indexed） | 校驗碼 |
 | `bundle_size_kb` | Integer（readonly） | 大小 |
 | `skill_metadata` | Text（readonly, JSON） | 解析後的 frontmatter |
 | `state` | Selection | `draft` / `published` / `deprecated` / `archived` |
+| `published_at` | Datetime（readonly） | 發布時間，`is_latest` / `_order` 排序依據 |
 | `uploaded_by_uid` | Many2one `res.users`（readonly） | 上傳者 |
 | `uploaded_at` | Datetime（readonly） | 上傳時間 |
 
-**唯一約束**：`UNIQUE(project_id, name, version)`，命名 `unique_name_version_per_project`（`skill.py:83-89`）。同一專案內，一個 name 的每個 version 只能有一筆 → 改版就是「新增一筆新 version」。
+**唯一約束**：由 **兩條 partial unique index** 保證，於 `skill.init()` 中建立（取代舊的單一 `UNIQUE(project_id, name, version)` / `unique_name_version_per_project`）：
+
+| index | 範圍 | 作用 |
+|---|---|---|
+| `skill_uniq_user_proj_name_version` | `(project_id, name, version)` WHERE `project_id IS NOT NULL` | 同一 project 內 name+version 唯一（user-leg） |
+| `skill_uniq_system_name_version` | `(name, version)` WHERE `project_id IS NULL` | 平台層 system skill name+version 全域唯一（system-leg） |
+
+**為什麼要拆兩條**：Postgres 視 `NULL` 為彼此相異（NULL-distinct），單一 `UNIQUE(project_id, name, version)` 對 `project_id IS NULL` 的 system skill 無法去重——多筆同 name+version 的 system skill 會被當成不同列而漏掉。因此 system-leg 必須改成只索引 `(name, version)` 並以 `WHERE project_id IS NULL` 限定。同一 (project / 平台) 內一個 name 的每個 version 只能有一筆 → 改版就是「新增一筆新 version」。
 
 ## 🔄 發布生命週期
 
@@ -107,7 +116,7 @@ graph LR
     B -->|"算 sha256 + 解析 frontmatter"| C["bundle_sha256 +<br/>skill_metadata(JSON)"]
     B -->|"state=published"| D["可供 Pod 下載"]
     D -->|"GET /skill-bundle"| E["Pod 快取並執行"]
-    A2["改版 v1.1.0"] -->|"新增一筆<br/>UNIQUE(project,name,version)"| B
+    A2["改版 v1.1.0"] -->|"新增一筆<br/>partial unique index<br/>(user/system leg)"| B
     D -->|"舊版 state=deprecated"| F["停止供應"]
 ```
 
@@ -137,6 +146,12 @@ system skill 由 Odoo 自動 union 進每個 project 的 `_build_skill_snapshot`
 > **跨 repo 註記（給 `paas-agent-runtime`）**：skills.json snapshot 現在可能含 bundle 解析為
 > system-scope（`project_id` NULL）的 entry。`{name, version, sha256}` 契約與 by-name fetch
 > 完全不變，pod 無需改動。
+
+> 🔒 **scope-flip 防護是 `write()` guard，不是 ir.rule**：非 superuser 且非 `base.group_system`
+> 的使用者若試圖變更 `scope` / `project_id`，由 `write()` 直接 raise `AccessError`。**ir.rule
+> 無法擋這件事**，因為 record rule 評估的是**寫入前（pre-write）**的狀態，攻擊者可從合法的
+> pre-write 列把 scope 翻成另一層。詳見
+> [`docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md`](../../decisions/patterns/scope-flip-write-guard-not-ir-rule.md)。
 
 ## 🔐 bundle attachment 不是普通附件
 
