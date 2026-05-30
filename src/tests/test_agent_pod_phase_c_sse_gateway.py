@@ -134,6 +134,8 @@ class TestPhaseCSseFlagAndFrontendContract(TransactionCase):
         })
         template = self.env['woow_paas_platform.agent_template'].sudo().create({
             'name': f'tmpl-{uuid.uuid4().hex[:6]}',
+            # bind the project so _check_skill_subset accepts its user-scope skills
+            'project_ids': [(6, 0, [project.id])],
             'skill_ids': [(6, 0, (published + self.env['woow_paas_platform.skill']
                                   .sudo().search([('name', '=', 'sk-draft')])).ids)],
         })

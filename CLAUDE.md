@@ -458,6 +458,7 @@ _CONFIG_PARAMETERS = [
 - **兩層 ACL lock-step**（同一 model 被 ir.rule + controller carve-out，或多個 endpoint 各自 access resolver 守時；任一層改 domain / 收緊，另一層必須同步，否則 silent divergence 比未修更糟）：見 `docs/decisions/patterns/two-layer-acl-lockstep.md`
 - **Unbound（可選綁定）model 的 dual-leg ir.rule**（model 有 nullable M2O 到 workspace-bearing model、unbound row 仍須對部分 user〔creator / follower〕可見時；leg 1 bound walk + leg 2 unbound carve-out，跨 workspace 仍 deny）：見 `docs/decisions/patterns/unbound-project-acl-dual-leg.md`
 - **Mixed-scope model 的 6-rule split**（同 model 混 platform public-read + workspace-scoped 兩種 scope、且需在 `base.group_user` 開 CRUD 時；按 perm direction 拆 3 條 + sub-model 鏡像，single dual-leg 不夠〔create direction 有提權面〕）：見 `docs/decisions/patterns/mcp-acl-6-rule-split.md`
+- **Scope / tenancy flip 必靠 write() guard（非 ir.rule）**（model 有 scope（system/user）/ project_id / public 等決定可見範圍的欄位、且對 `base.group_user` 可寫時；要擋「窄 scope→寬 scope flip」提權 / 跨租戶外洩，ir.rule 對 **pre-write** 狀態判定擋不住，必須在 model `write()` 攔 vals + 放行 sudo/admin；與 6-rule split 互補：split 守 create+可見性、guard 守 flip）：見 `docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md`
 - **Phase leader brief 是 pointer，不是 source-of-truth**（適用 maestri 多 phase agent pod 工作流；非 paas-platform 直接相關，是 agent hand-off 通用紀律）：見 `docs/decisions/patterns/phase-leader-brief-as-pointer-not-source.md`（agent 接 brief 撞到與 plan signed-off / decision doc invariant / schema 實際 shape 不符 → trust source + 回報 leader 校正 brief，不照 brief 字面開工；與 [[plan-gap-stop-and-report]] 區分：那條 agent 執行中主動發現 gap、本條接任務時被動 detect brief drift）
 
 Pitfall 持久化紀錄（debug 撞牆時對照）：

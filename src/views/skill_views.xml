@@ -108,4 +108,49 @@
         action="action_skill"
         groups="base.group_system"
         sequence="60"/>
+
+    <!-- Skill Upload Wizard -->
+    <record id="view_skill_upload_wizard_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.skill_upload_wizard.form</field>
+        <field name="model">woow_paas_platform.skill_upload_wizard</field>
+        <field name="arch" type="xml">
+            <form string="Upload Skill">
+                <p class="text-muted">
+                    Upload a <code>.tar.gz</code> skill bundle. Name / version
+                    must match the bundle's SKILL.md. The skill is created as
+                    <b>draft</b> (system scope) — publish it afterwards.
+                </p>
+                <group>
+                    <group>
+                        <field name="name"/>
+                        <field name="version"/>
+                    </group>
+                    <group>
+                        <field name="title"/>
+                    </group>
+                </group>
+                <group>
+                    <field name="description"/>
+                    <field name="bundle_file" filename="bundle_filename"
+                           widget="binary"/>
+                    <field name="bundle_filename" invisible="1"/>
+                </group>
+                <footer>
+                    <button name="action_upload" type="object"
+                            string="Upload" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary"
+                            special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_skill_upload_wizard" model="ir.actions.act_window">
+        <field name="name">Upload Skill</field>
+        <field name="res_model">woow_paas_platform.skill_upload_wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="binding_model_id" ref="model_woow_paas_platform_skill"/>
+        <field name="binding_view_types">list,form</field>
+    </record>
 </odoo>

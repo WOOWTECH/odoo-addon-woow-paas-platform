@@ -27,8 +27,8 @@ sequenceDiagram
     Pod->>Pod: 從 SKILL.md 取 skill_name + version
     Pod->>Odoo: GET /api/agent-runtimes/skill-bundle<br/>?skill_name=&version=（Bearer JWT）
     Odoo->>Odoo: _verify_skill_bundle_token()<br/>① HS256 驗章（CURRENT→PREVIOUS）<br/>② exp 未過期<br/>③ token_use == "skill_bundle"<br/>④ project_id 取自 JWT（忽略 URL）
-    Odoo->>DB: 查 project_id + name + version + state='published'
-    DB-->>Odoo: skill record
+    Odoo->>DB: 查 name + version + state='published'<br/>且 (project_id == JWT.project_id OR scope='system')
+    DB-->>Odoo: skill record（同名時 project 列覆寫 system 列）
     Odoo->>ATT: 讀 bundle_attachment_id（base64 decode）
     Odoo-->>Pod: 200 raw .tar.gz bytes
     Pod->>Pod: sha256 校驗 → 解壓 → 快取
@@ -59,7 +59,7 @@ operator 的 `sign_skill_bundle_token()` 簽出（`jwt_signer.py:94-119`），�
 2. **exp** — 過期即拒
 3. **`token_use == "skill_bundle"`** — 否則 403（`:105`）
 4. **`project_id` 取自 JWT** — 不信任 URL 的 `project_hash`（`:109`，HC-2）
-5. **查庫** — `project_id + name + version + state='published'`（`:113-119`）
+5. **查庫（雙 leg）** — `name + version + state='published'` AND `('|', project_id == JWT.project_id, scope='system')`（`:113-119`）。專案綁定的 user skill 與全平台 system skill 一起被撈出；同 `(name, version)` 碰撞時 **project 列覆寫 system 列**（避免 pod `_TOOL_CACHE` 名稱衝突）。HC-2 只約束 bound leg（project_id 取自 JWT、URL 忽略）；`scope='system'` 的 skill 可被**任何有效 skill_bundle token** 撈到，是刻意設計。
 6. **回傳** — 讀 `bundle_attachment_id`、base64 decode、回 raw bytes（`:125-133`）
 
 ## 🔑 雙 Secret 輪換
@@ -88,8 +88,8 @@ sequenceDiagram
 
 1. **簽章** — HS256（CURRENT→PREVIOUS）
 2. **token_use** — 防 ws token 盜用 → 403
-3. **project_id 權威** — URL 的 project_hash 完全忽略
-4. **state=published** — 只供應已發布版本
+3. **project_id 權威** — bound leg 的 project_id 取自 JWT，URL 的 project_hash 完全忽略
+4. **雙 leg 供應** — `state=published` 下，撈 `project_id == JWT.project_id` 或 `scope='system'`；同 `(name, version)` 時 project 列覆寫 system 列。system skill 對任何有效 token 可見
 5. **jti replay** — 由 operator 端把關（非此端點）
 
 ## 📁 相關文件

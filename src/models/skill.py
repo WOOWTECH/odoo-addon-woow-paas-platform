@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from odoo import api, fields, models
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 
 
 class Skill(models.Model):
@@ -148,6 +148,23 @@ class Skill(models.Model):
         return skills
 
     def write(self, vals):
+        # scope / project_id are immutable for non-admins: an internal user with
+        # write on their user-scope skill must not be able to flip it to
+        # scope='system' (platform-public → cross-tenant leak). ir.rule alone
+        # can't block this — Odoo checks the write rule against the PRE-write
+        # state (still scope='user'), so the transition would slip through.
+        if ('scope' in vals or 'project_id' in vals) and not self.env.su \
+                and not self.env.user.has_group('base.group_system'):
+            for skill in self:
+                if 'scope' in vals and vals['scope'] != skill.scope:
+                    raise AccessError(
+                        "Only administrators can change a skill's scope."
+                    )
+                if 'project_id' in vals \
+                        and vals.get('project_id') != skill.project_id.id:
+                    raise AccessError(
+                        "Only administrators can change a skill's project."
+                    )
         result = super().write(vals)
         if 'bundle_attachment_id' in vals:
             for skill in self:
