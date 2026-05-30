@@ -3,7 +3,7 @@ import json
 import logging
 
 from odoo import api, fields, models
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -130,6 +130,27 @@ class McpServer(models.Model):
                     "project (scope='system' requires project_id=NULL)."
                     % record.name
                 )
+
+    def write(self, vals):
+        # scope / project_id 對非 admin 不可變更：擋窄→寬 flip（user-scope →
+        # system-scope = 平台公開、載進每個租戶 pod → 跨租戶外洩）。ir.rule 擋不住
+        # —— Odoo 對 write rule 用 PRE-write 狀態判定（flip 前 row 仍是合法
+        # scope='user'、owner 仍是 workspace member），rule 放行，改完才變寬 scope。
+        # 鏡像 skill.py 的同款 guard（sibling model parity，issue #98 / F-SDS-1）。
+        # pattern: docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md
+        if ('scope' in vals or 'project_id' in vals) and not self.env.su \
+                and not self.env.user.has_group('base.group_system'):
+            for server in self:
+                if 'scope' in vals and vals['scope'] != server.scope:
+                    raise AccessError(
+                        "Only administrators can change an MCP server's scope."
+                    )
+                if 'project_id' in vals \
+                        and vals.get('project_id') != server.project_id.id:
+                    raise AccessError(
+                        "Only administrators can change an MCP server's project."
+                    )
+        return super().write(vals)
 
     def _get_mcp_client_config(self):
         """Build config dict for MultiServerMCPClient."""
