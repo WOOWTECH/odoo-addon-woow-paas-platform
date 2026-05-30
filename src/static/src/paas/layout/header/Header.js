@@ -8,7 +8,13 @@ const WORKSPACE_ROUTES = [
     "workspace-detail", "workspace-team", "marketplace", "configure", "service-detail",
 ];
 const AI_ROUTES = [
-    "ai-assistant", "ai-projects", "ai-tasks", "ai-task-detail", "ai-chat", "ai-project-kanban",
+    "ai-projects", "ai-tasks", "ai-task-detail", "ai-chat", "ai-project-kanban",
+];
+// Support sub-routes that sit under the Projects list page and need a
+// "Projects" parent crumb. `ai-projects` itself is the list page, so it gets
+// no parent crumb (the generic currentLabel push already yields "Projects").
+const SUPPORT_SUB_ROUTES = [
+    "ai-tasks", "ai-task-detail", "ai-chat", "ai-project-kanban",
 ];
 
 export class Header extends Component {
@@ -53,8 +59,8 @@ export class Header extends Component {
         const items = [{ label: "Home", path: "dashboard" }];
         if (WORKSPACE_ROUTES.includes(route)) {
             items.push({ label: "Workspaces", path: "workspaces" });
-        } else if (AI_ROUTES.includes(route)) {
-            items.push({ label: "AI Assistant", path: "ai-assistant" });
+        } else if (SUPPORT_SUB_ROUTES.includes(route)) {
+            items.push({ label: "Projects", path: "projects" });
         }
         const currentRoute = this.props.router.routes.find(r => r.routeName === route);
         const currentLabel = currentRoute ? currentRoute.name : "Dashboard";

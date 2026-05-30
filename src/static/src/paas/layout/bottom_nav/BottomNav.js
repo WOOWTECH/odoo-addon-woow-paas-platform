@@ -8,16 +8,15 @@ export class BottomNav extends Component {
     navItems = [
         { path: "dashboard", name: "Dashboard", icon: "dashboard" },
         { path: "workspaces", name: "Workspaces", icon: "workspaces" },
-        { path: "ai-assistant", name: "AI", icon: "smart_toy" },
+        { path: "projects", name: "Projects", icon: "folder" },
         { path: "billing", name: "Billing", icon: "payments" },
         { path: "settings", name: "Settings", icon: "settings" },
     ];
 
     isActive(item) {
         const current = this.props.router.current;
-        if (item.path === "ai-assistant") {
-            return current === "ai-assistant"
-                || current === "ai-projects"
+        if (item.path === "projects") {
+            return current === "ai-projects"
                 || current === "ai-tasks"
                 || current === "ai-task-detail"
                 || current === "ai-chat"

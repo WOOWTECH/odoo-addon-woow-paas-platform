@@ -29,11 +29,8 @@
             <t t-elif="router.current === 'project-detail'">
                 <ProjectDetailPage projectId="projectId"/>
             </t>
-            <t t-elif="router.current === 'ai-assistant' or router.current === 'ai-projects' or router.current === 'ai-tasks' or router.current === 'ai-task-detail' or router.current === 'ai-chat' or router.current === 'ai-project-kanban'">
-                <t t-if="router.current === 'ai-assistant'">
-                    <AiAssistantPage/>
-                </t>
-                <t t-elif="router.current === 'ai-project-kanban'">
+            <t t-elif="router.current === 'ai-projects' or router.current === 'ai-tasks' or router.current === 'ai-task-detail' or router.current === 'ai-chat' or router.current === 'ai-project-kanban'">
+                <t t-if="router.current === 'ai-project-kanban'">
                     <ProjectKanbanPage projectId="projectId"/>
                 </t>
                 <t t-elif="router.current === 'ai-projects'">

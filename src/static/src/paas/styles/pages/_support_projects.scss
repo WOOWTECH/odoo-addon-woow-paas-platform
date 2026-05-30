@@ -9,6 +9,20 @@
 }
 
 // -----------------------------------------------------------------------------
+// Overview (merged from the former AI Assistant page: 3 stat cards + AI
+// Connection card). Sits atop the Projects list; reuses the o_woow_ai_* card
+// styles from _ai_assistant.scss for the inner grids/cards.
+// -----------------------------------------------------------------------------
+.o_woow_sp_overview {
+    margin-bottom: 2rem;
+}
+
+// Single AI Connection card spans the full width below the 3-stat row.
+.o_woow_sp_overview_connection {
+    width: 100%;
+}
+
+// -----------------------------------------------------------------------------
 // Page Header
 // -----------------------------------------------------------------------------
 

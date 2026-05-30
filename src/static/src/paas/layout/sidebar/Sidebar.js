@@ -9,7 +9,6 @@ export class Sidebar extends Component {
         { path: "dashboard", name: "Dashboard", icon: "dashboard" },
         { path: "workspaces", name: "Workspaces", icon: "workspaces" },
         { path: "projects", name: "Projects", icon: "folder" },
-        { path: "ai-assistant", name: "AI Assistant", icon: "smart_toy" },
         { section: "Finance" },
         { path: "billing", name: "Billing", icon: "payments" },
         { path: "billing/invoices", name: "Invoices", icon: "receipt_long" },
@@ -20,17 +19,15 @@ export class Sidebar extends Component {
 
     /**
      * Check if a nav item is active.
-     * For ai-assistant, all sub-routes (ai-projects, ai-tasks, etc.) should highlight this item.
+     * For projects, all support sub-routes (ai-projects, ai-tasks, etc.) should highlight this item.
      * @param {Object} item - Navigation item
      * @returns {boolean}
      */
     isActive(item) {
         const current = this.props.router.current;
         if (item.path === "projects") {
-            return current === "ai-projects" || current === "ai-project-kanban";
-        }
-        if (item.path === "ai-assistant") {
-            return current === "ai-assistant"
+            return current === "ai-projects"
+                || current === "ai-project-kanban"
                 || current === "ai-tasks"
                 || current === "ai-task-detail"
                 || current === "ai-chat";
