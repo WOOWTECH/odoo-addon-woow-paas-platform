@@ -51,6 +51,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 PR / Issue / Comment 描述一律使用 zh-tw 繁體中文。
 
+## Browser Automation
+
+E2E 測試依場景選工具（皆 `--headed`，看得到瀏覽器）：
+
+1. **UX 流程 / 操作類**（點擊、填表、導航）→ `playwright-cli`（`open --headed`）
+2. **UI 畫面渲染 / 視覺驗證**（截圖、CSS）→ `agent-browser --headed`
+
+本地 e2e / 整合測試一律走 `k8s-dev-sandbox` skill，不要用 docker compose。
+
 ## Development Commands
 
 ### Run Odoo with this addon
@@ -103,26 +112,9 @@ HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
 
 Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正常 teardown 會刪；中斷或 cleanup 失敗會留下，需要時手動 `kubectl delete ns paas-ws-test-op-<x>`。詳細請見 `extra/paas-operator/tests/integration/README.md`。
 
-### Docker Development (Recommended)
+### K8s Dev Sandbox (Recommended)
 
-使用 Worktree Development 腳本來管理開發環境：
-
-```bash
-# 啟動開發環境（自動設定 .env 並啟動 Docker）
-./scripts/start-dev.sh
-
-# 執行測試
-./scripts/test-addon.sh
-
-# 清理環境
-./scripts/cleanup-worktree.sh
-```
-
-詳細說明請參考下方 [Worktree Development](#worktree-development) 章節。
-
-**Test URL**: http://localhost (NOT :8069, to enable websocket)
-
-### K8s Dev Sandbox
+本機開發與測試的首選方式（namespace 隔離、可跑測試、產出可存取環境）。
 
 部署獨立的開發沙盒環境到 Kubernetes：
 
@@ -332,7 +324,7 @@ woow_paas_platform/
 │   ├── paas-operator/            # FastAPI service 包 Helm CLI（含 helm chart）
 │   └── cloudflare/               # Cloudflare 整合
 ├── charts/odoo-dev-sandbox/      # K8s dev sandbox Helm chart
-├── scripts/                      # Worktree 開發腳本（start-dev、test-addon、setup-worktree-env、cleanup）
+├── scripts/                      # 本機輔助腳本（保留；本機環境請改用 k8s-dev-sandbox）
 ├── docs/                         # 6 類 docs（guides / reference / decisions / plans / tracking / archived + superpowers）
 └── .claude/skills/               # Project skills（ccpm、k8s-dev-sandbox、deploy-stg、deploy-local、build-operator、ecpay、playwright-cli、setup-end-to-end）
 ```
@@ -618,101 +610,3 @@ ccpm 或 superpowers 的長期價值產出，透過 `/docs:promote` 升級到 `d
 - **superpowers** 是輔助工具集（owns `docs/superpowers/` 工具自管理區）
 - **SuperClaude** 是 ad hoc command 庫（產出多在 `claudedocs/` git-ignored，唯 `/sc:brainstorm` 透過 `/brainstorm-sc-to-ccpm` 接 ccpm）
 - **superpowers `brainstorming`** 與 **`/sc:brainstorm`** 功能重疊：本 repo 統一走 `/brainstorm-sc-to-ccpm`（SuperClaude 路徑，與 ccpm schema 對齊較好）
-
-## Worktree Development
-
-此專案支援 git worktree 並行測試，每個 worktree 可以獨立運行自己的 Docker 環境。
-
-### 快速開始
-
-```bash
-# 1. 建立 worktree
-git worktree add ../woow_paas_platform.worktrees/epic-feature -b epic/feature
-
-# 2. 切換到 worktree
-cd ../woow_paas_platform.worktrees/epic-feature
-
-# 3. 自動設定環境並啟動
-./scripts/start-dev.sh
-```
-
-### 環境配置
-
-每個 worktree 會自動配置：
-
-- **唯一的 port**（8069 + 目錄 hash）- 避免衝突
-- **獨立的資料庫名稱**（`woow_<branch>`）- 資料隔離
-- **獨立的 Docker 容器**（基於 `COMPOSE_PROJECT_NAME`）
-
-所有配置透過 `.env` 檔案管理（由 `scripts/setup-worktree-env.sh` 自動生成）。
-
-### 可用腳本
-
-```bash
-# 設定環境變數（.env）
-./scripts/setup-worktree-env.sh
-
-# 啟動開發環境
-./scripts/start-dev.sh
-
-# 執行測試
-./scripts/test-addon.sh
-
-# 清理環境
-./scripts/cleanup-worktree.sh
-```
-
-### 並行測試範例
-
-同時運行多個 worktree：
-
-```bash
-# Terminal 1 - 主專案
-cd /path/to/woow_paas_platform
-./scripts/start-dev.sh
-# → http://localhost:8069 (woow_main)
-
-# Terminal 2 - Feature A
-cd ../woow_paas_platform.worktrees/epic-feature-a
-./scripts/start-dev.sh
-# → http://localhost:8234 (woow_epic_feature_a)
-
-# Terminal 3 - Feature B
-cd ../woow_paas_platform.worktrees/fix-bug-123
-./scripts/start-dev.sh
-# → http://localhost:8501 (woow_fix_bug_123)
-```
-
-每個實例使用各自的資料庫，互不干擾。
-
-### 共享 PostgreSQL（可選）
-
-如果希望節省資源，可以讓所有 worktree 共享一個 PostgreSQL 容器：
-
-```bash
-# 1. 首次啟動共享資料庫（在主專案目錄執行一次）
-docker compose -f docker-compose.shared-db.yml up -d
-
-# 2. 在每個 worktree 設定環境（使用 --shared-db 參數）
-./scripts/setup-worktree-env.sh --shared-db
-
-# 3. 啟動（不會建立獨立的 PostgreSQL）
-./scripts/start-dev.sh
-```
-
-### VS Code 本機開發
-
-使用本機 VS Code（不使用 Dev Container）：
-
-- 每個 worktree 可以開啟獨立的 VS Code 視窗
-- Odoo 服務運行在 Docker 容器中
-- 支援遠端調試（Python debugger attach to container）
-
-推薦擴充套件已配置在 `.vscode/extensions.json`。
-
-### 重要提醒
-
-- **網址測試**：使用 `http://localhost`（不是 `:8069`）以啟用 websocket
-- **自動配置**：環境變數由腳本自動生成，請勿手動修改 `.env`
-- **資料庫名稱**：基於 branch 名稱，將 `/` 和 `-` 轉為 `_`
-- **Port 範圍**：8069-9068（基於目錄路徑 hash 計算）
