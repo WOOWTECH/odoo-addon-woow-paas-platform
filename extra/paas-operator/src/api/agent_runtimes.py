@@ -20,11 +20,12 @@ from fastapi import APIRouter
 from src.config import settings
 from src.models.schemas import (
     InvalidateMcpRequest,
+    InvalidateSkillsRequest,
     ResumeRequest,
     SpawnOrAttachRequest,
     SyncWorkspacesRequest,
 )
-from src.services import jwt_signer, mcp_invalidator
+from src.services import jwt_signer, mcp_invalidator, skill_invalidator
 from src.services.helm import HelmException, HelmService, KubernetesService
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,13 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
             "SKILL_BUNDLE_TOKEN": skill_bundle_token,
         },
         "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
+        # Layer 3 (cold-start half): forward the skill_snapshot so the chart
+        # renders skills.json WITH the real snapshot at install. Without this the
+        # ConfigMap stays the chart default ("{}") and a cold-started pod binds no
+        # skill tool until a later invalidate-skills lands (the pilot {} symptom).
+        # Same missed-forward class as projectId / externalEgress
+        # ([[spawn-install-values-missed-forward]]).
+        "configMap": {"skillsSnapshot": json.dumps(request.skill_snapshot)},
     }
     # F-PILOT-5: forward the Odoo namespace so the pod's NetworkPolicy ingress
     # (Odoo->pod WS) + egress (pod->Odoo skill-bundle) point at Odoo's real ns,
@@ -248,6 +256,23 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
             )
         # else: attach — pod already running, no install / no re-sign.
         pod_state = "active"
+        # Layer 3 fix: the cold-start render of skills.json goes stale once a
+        # skill is published AFTER spawn (attach/resume do NO install). Patch the
+        # skills.json ConfigMap with the fresh snapshot Odoo sends on every chat
+        # so the running pod hot-reloads the new skill set (symmetric with the
+        # cold-start configMap.skillsSnapshot forward in _build_install_values).
+        # BEST-EFFORT: the pod keeps its cached snapshot if this fails, so a
+        # transient ConfigMap-patch error must NOT block a healthy pod's chat.
+        try:
+            skill_invalidator.invalidate(
+                project_hash=request.project_hash,
+                skill_snapshot=request.skill_snapshot,
+            )
+        except Exception:
+            logger.warning(
+                "skills.json refresh failed for %s on attach — pod keeps its "
+                "cached snapshot", request.project_hash, exc_info=True,
+            )
 
     # Readiness poll (mocked in unit tests; real k8s in integration suite).
     k8s_service.get_pods(
@@ -308,6 +333,18 @@ def invalidate_mcp(project_hash: str, request: InvalidateMcpRequest):
     """Patch the pod's mcp.json ConfigMap with a fresh snapshot (§5.4)."""
     return mcp_invalidator.invalidate(
         project_hash=project_hash, mcp_snapshot=request.mcp_snapshot,
+    )
+
+
+@router.post("/{project_hash}/invalidate-skills", summary="Invalidate pod skills.json")
+def invalidate_skills(project_hash: str, request: InvalidateSkillsRequest):
+    """Patch the pod's skills.json ConfigMap with a fresh snapshot (§5.4).
+
+    Symmetric with invalidate-mcp; pushes a skill published AFTER spawn to a
+    running pod (Layer 3 — attach is a no-op so the cold-start render is stale).
+    """
+    return skill_invalidator.invalidate(
+        project_hash=project_hash, skill_snapshot=request.skill_snapshot,
     )
 
 
