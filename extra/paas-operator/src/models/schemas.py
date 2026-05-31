@@ -418,6 +418,16 @@ class InvalidateMcpRequest(BaseModel):
     mcp_snapshot: Dict[str, Any] = Field(default_factory=dict)
 
 
+class InvalidateSkillsRequest(BaseModel):
+    """Request to invalidate a pod's skills.json ConfigMap snapshot.
+
+    Symmetric with :class:`InvalidateMcpRequest`; the snapshot is the
+    list[{name, version, sha256, description}] the Odoo controller builds.
+    """
+
+    skill_snapshot: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class SyncWorkspacesRequest(BaseModel):
     """Request to re-render a pod's NetworkPolicy egress allowlist."""
 
