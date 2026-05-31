@@ -90,7 +90,7 @@ if not template:
 return template or None
 ```
 
-**安全性說明**：第 4 條沿用 method 開頭的 `.sudo()`。default template 經把關必為 `is_public`（既有 ir.rule `agent_template_rule_public_readonly` 本就讓全體 internal user 可讀），sudo 僅做 read，內容（system_prompt / model_config / skills）全由 admin 策展 → 不構成越權讀取。三條件（`is_default 概念` 由 config_parameter 承載 + `is_public` + `published`）防禦性全列，避免未來把關漂移造成 silent 漏洞。
+**安全性說明**：第 4 條沿用 method 開頭的 `.sudo()`。「哪個是預設」由 config_parameter 承載（admin 設定）；resolution 端再驗兩個合格條件 `is_public AND published`。default template 經把關必為 `is_public`（既有 ir.rule `agent_template_rule_public_readonly` 本就讓全體 internal user 可讀），sudo 僅做 read，內容（system_prompt / model_config / skills）全由 admin 策展 → 不構成越權讀取。兩個合格條件即使 UI 端已限制仍在 resolution 防禦性重驗，避免未來把關漂移造成 silent 漏洞。
 
 **防呆**：`int(default_id)` 可能因髒值 raise；`.exists()` 處理 template 已刪。實作時 `int()` 包在合理防護下（值非數字 → 視同沒設，不 crash chat）。
 
