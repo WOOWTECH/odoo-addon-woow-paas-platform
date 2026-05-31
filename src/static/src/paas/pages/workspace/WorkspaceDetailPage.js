@@ -8,6 +8,7 @@ import { SmartHomeCard } from "../../components/smart-home/SmartHomeCard";
 import { CreateSmartHomeModal } from "../../components/smart-home/CreateSmartHomeModal";
 import { workspaceService } from "../../services/workspace_service";
 import { cloudService, getDomain } from "../../services/cloud_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { getRoleBadgeClass, formatDate } from "../../services/utils";
 
@@ -67,6 +68,10 @@ export class WorkspaceDetailPage extends Component {
 
         if (workspaceResult.success) {
             this.state.workspace = workspaceResult.data;
+            breadcrumbService.set("workspace-detail", [
+                { label: "Workspaces", path: "workspaces" },
+                { label: this.state.workspace.name, path: null },
+            ]);
         } else {
             this.state.error = workspaceResult.error || "Failed to load workspace";
         }

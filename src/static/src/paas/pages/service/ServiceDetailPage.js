@@ -15,6 +15,7 @@ import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 
 /**
@@ -93,12 +94,29 @@ export class ServiceDetailPage extends Component {
 
         if (result.success) {
             this.state.service = result.data;
+            this._publishBreadcrumb();
             this.startPollingIfNeeded();
         } else {
             this.state.error = result.error || "Failed to load service";
         }
 
         this.state.loading = false;
+    }
+
+    /**
+     * 麵包屑軌跡：Workspaces → {所屬工作區}(連回該工作區) → {服務名}。
+     * 中間段連回服務真正所屬的工作區（服務的唯一入口來源），修正舊版父層
+     * 標籤寫死「Services」、卻導去工作區詳情、文字與落點對不上的問題。
+     * 服務序列化未必帶 workspace 名稱，缺時退守泛用標籤「Workspace」。
+     */
+    _publishBreadcrumb() {
+        const service = this.state.service;
+        if (!service) return;
+        breadcrumbService.set("service-detail", [
+            { label: "Workspaces", path: "workspaces" },
+            { label: service.workspace_name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: service.name, path: null },
+        ]);
     }
 
     startPollingIfNeeded() {

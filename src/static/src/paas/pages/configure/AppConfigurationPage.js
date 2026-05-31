@@ -7,6 +7,8 @@ import { HelmValueForm } from "../../components/config/HelmValueForm";
 import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddonSelector";
 import { PlanSelector } from "../../components/subscription/PlanSelector";
 import { cloudService } from "../../services/cloud_service";
+import { workspaceService } from "../../services/workspace_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 
 /**
@@ -59,6 +61,7 @@ export class AppConfigurationPage extends Component {
 
         if (result.success) {
             this.state.template = result.data;
+            this._publishBreadcrumb();
             // Initialize helm values with defaults
             this.initializeHelmValues(result.data);
             // Load available subscription plans. fetchPlans returns
@@ -112,6 +115,20 @@ export class AppConfigurationPage extends Component {
         }
 
         this.state.helmValues = helmValues;
+    }
+
+    /**
+     * 麵包屑軌跡：Workspaces → {工作區} → App Marketplace(連回市集) → Configure {模板名}。
+     * 此頁是從市集點模板進來的設定頁，父層接回市集；工作區名取自快取，缺則退守。
+     */
+    _publishBreadcrumb() {
+        const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
+        breadcrumbService.set("configure", [
+            { label: "Workspaces", path: "workspaces" },
+            { label: ws?.name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: "App Marketplace", path: `workspace/${this.props.workspaceId}/services/marketplace` },
+            { label: `Configure ${this.state.template.name}`, path: null },
+        ]);
     }
 
     get template() {
