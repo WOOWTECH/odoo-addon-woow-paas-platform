@@ -753,7 +753,13 @@ class AiAssistantController(Controller):
         )
 
     def _resolve_agent_template(self, project):
-        """Resolve the agent_template bound to a project (prefer published)."""
+        """Resolve the agent_template for a project (prefer published).
+
+        Order: project-bound published → project-bound any →
+        project.agent_template_id → platform default (Settings
+        ``default_agent_template_id``). The platform default is the LAST
+        fallback so a project's own binding always wins (design 決策 A).
+        """
         AgentTemplate = request.env['woow_paas_platform.agent_template'].sudo()
         template = AgentTemplate.search([
             ('project_ids', 'in', project.id),
@@ -765,6 +771,23 @@ class AiAssistantController(Controller):
             ], limit=1)
         if not template and project.agent_template_id:
             template = project.agent_template_id
+        if not template:
+            # ④ platform default from Settings (config_parameter). Last
+            # fallback so a project's own binding wins. config_parameter has
+            # no DB constraint, so re-validate is_public + published here — a
+            # stale / unpublished / non-public / garbage value is treated as
+            # "no default" (fail-loud via the no_template branch upstream).
+            default_id = request.env['ir.config_parameter'].sudo().get_param(
+                'woow_paas_platform.default_agent_template_id'
+            )
+            if default_id:
+                try:
+                    candidate = AgentTemplate.browse(int(default_id)).exists()
+                except (ValueError, TypeError):
+                    candidate = AgentTemplate.browse()  # empty recordset
+                if candidate and candidate.is_public \
+                        and candidate.state == 'published':
+                    template = candidate
         return template or None
 
     def _get_project_access_role(self, project, user):
