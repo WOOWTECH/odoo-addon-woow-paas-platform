@@ -144,3 +144,23 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
             self._resolve(project),
             "A config id pointing at a deleted template must resolve to None.",
         )
+
+    def test_d6_project_bound_public_default_is_refused(self):
+        """SECURITY: a public+published template that is bound to a project
+        must NOT be served as the global default — otherwise that tenant's
+        user-scope MCP/skill bindings would broadcast cluster-wide into other
+        tenants' pods (the snapshot builders do not filter by project). Such a
+        default is treated as unqualified (None, fail-closed)."""
+        bound_project = self._make_project('Owner Tenant Project')
+        tmpl = self.AgentTemplate.create({
+            'name': 'Tenant-Bound Public Template',
+            'is_public': True, 'state': 'published',
+            'project_ids': [(4, bound_project.id)],
+        })
+        self._set_default(tmpl.id)
+        consumer = self._make_project('Consumer Project')
+        self.assertIsNone(
+            self._resolve(consumer),
+            "A project-bound template must be refused as the global default "
+            "even when public+published (cross-tenant MCP/skill leak guard).",
+        )

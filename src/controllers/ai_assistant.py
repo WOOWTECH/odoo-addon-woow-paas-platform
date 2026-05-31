@@ -785,8 +785,21 @@ class AiAssistantController(Controller):
                     candidate = AgentTemplate.browse(int(default_id)).exists()
                 except (ValueError, TypeError):
                     candidate = AgentTemplate.browse()  # empty recordset
+                # A platform default is served via .sudo() to EVERY project
+                # that lacks its own binding, across all workspaces. is_public
+                # is NOT the same as tenant-neutral: a public published template
+                # may still carry project_ids / mcp_server_ids / skill_ids (the
+                # _check_visibility_consistency constraint only restricts the
+                # is_public=False case). A project-bound template used as the
+                # global default would broadcast that tenant's user-scope MCP
+                # servers and skills into every other tenant's pod (the snapshot
+                # builders do not filter by project). So require the default to
+                # be genuinely unbound (no project_ids) in addition to
+                # public+published — fail-closed: an unqualified default is
+                # treated as no default.
                 if candidate and candidate.is_public \
-                        and candidate.state == 'published':
+                        and candidate.state == 'published' \
+                        and not candidate.project_ids:
                     template = candidate
         return template or None
 
