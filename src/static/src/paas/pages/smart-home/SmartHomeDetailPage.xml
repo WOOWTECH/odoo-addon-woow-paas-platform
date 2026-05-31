@@ -25,16 +25,7 @@
 
             <!-- Smart Home Content -->
             <t t-elif="home">
-                <!-- Breadcrumb / Back Navigation -->
-                <div class="o_woow_breadcrumb">
-                    <button class="o_woow_back_btn" t-on-click="goBack">
-                        <WoowIcon name="'arrow_back'" size="20"/>
-                    </button>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent">Workspace</span>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_current" t-esc="home.name"/>
-                </div>
+                <!-- 麵包屑統一由全域 Header 呈現（見 SmartHomeDetailPage._publishBreadcrumb）-->
 
                 <!-- Header Section -->
                 <div class="o_woow_smart_home_detail_header">

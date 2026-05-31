@@ -25,16 +25,7 @@
 
             <!-- Configuration Form -->
             <t t-elif="template">
-                <!-- Breadcrumb / Back Navigation -->
-                <div class="o_woow_breadcrumb">
-                    <button class="o_woow_back_btn" t-on-click="goBack">
-                        <WoowIcon name="'arrow_back'" size="20"/>
-                    </button>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack">Marketplace</span>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_current">Configure <t t-esc="template.name"/></span>
-                </div>
+                <!-- 麵包屑統一由全域 Header 呈現（見 AppConfigurationPage._publishBreadcrumb）-->
 
                 <!-- Header Section -->
                 <WoowCard shadow="true" class="'o_woow_configure_header'">
