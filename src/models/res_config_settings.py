@@ -45,6 +45,13 @@ class ResConfigSettings(models.TransientModel):
         config_parameter='woow_paas_platform.default_ai_assistant_id',
         help='Default AI assistant for automatic replies',
     )
+    woow_default_agent_template_id = fields.Many2one(
+        'woow_paas_platform.agent_template',
+        string='Default Agent Template',
+        config_parameter='woow_paas_platform.default_agent_template_id',
+        help='Platform-wide fallback template used by any project that has no '
+             'template of its own (agent-runtime pod chat).',
+    )
 
     # Subscription Billing
     woow_subscription_journal_id = fields.Many2one(
