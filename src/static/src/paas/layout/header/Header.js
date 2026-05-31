@@ -2,6 +2,7 @@
 import { Component, onMounted, useState } from "@odoo/owl";
 import { billingService } from "../../services/billing_service";
 import { profileService } from "../../services/profile_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { formatPoints } from "../../utils/billing_helpers";
 
 const WORKSPACE_ROUTES = [
@@ -24,6 +25,8 @@ export class Header extends Component {
     setup() {
         this.billingService = billingService;
         this.profileService = useState(profileService);
+        // 訂閱 breadcrumb store，詳情頁 publish 軌跡時 Header 才會重新渲染。
+        this.breadcrumbService = useState(breadcrumbService);
         onMounted(() => {
             billingService.fetchWallet();
             profileService.fetch();
@@ -56,6 +59,15 @@ export class Header extends Component {
 
     get breadcrumbItems() {
         const route = this.props.router.current;
+
+        // 詳情頁若已 publish 帶記錄名的軌跡，優先採用（Home 一律自動補在最前）。
+        const trail = this.breadcrumbService.trailFor(route);
+        if (trail) {
+            return [{ label: "Home", path: "dashboard" }, ...trail];
+        }
+
+        // Fallback：未 publish 軌跡的頁面（list / billing / settings 等）沿用
+        // 依 routeName 推算的泛用麵包屑。
         const items = [{ label: "Home", path: "dashboard" }];
         if (WORKSPACE_ROUTES.includes(route)) {
             items.push({ label: "Workspaces", path: "workspaces" });

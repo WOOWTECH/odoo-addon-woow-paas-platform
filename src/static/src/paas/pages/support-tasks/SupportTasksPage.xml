@@ -9,7 +9,7 @@
                         <WoowIcon name="'arrow_back'" size="20"/>
                     </button>
                     <div class="o_woow_support_tasks_title">
-                        <h1>My Support Tasks</h1>
+                        <h1>Tasks</h1>
                         <p>View and manage tasks across all projects.</p>
                     </div>
                 </div>

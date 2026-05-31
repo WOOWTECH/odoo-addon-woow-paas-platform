@@ -7,6 +7,7 @@ import { StatusBadge } from "../../components/common/StatusBadge";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { workspaceService } from "../../services/workspace_service";
 import { getDomain } from "../../services/cloud_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { formatPoints } from "../../utils/billing_helpers";
 
@@ -72,12 +73,26 @@ export class SmartHomeDetailPage extends Component {
 
         if (result.success) {
             this.state.home = result.data;
+            this._publishBreadcrumb();
             this.startPollingIfNeeded();
         } else {
             this.state.error = result.error || "Failed to load smart home";
         }
 
         this.state.loading = false;
+    }
+
+    /**
+     * 麵包屑軌跡：Workspaces → {所屬工作區}(連回工作區) → {Smart Home 名稱}。
+     * 工作區名從 workspaceService 清單快取取得，deep-link 缺快取時退守「Workspace」。
+     */
+    _publishBreadcrumb() {
+        const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
+        breadcrumbService.set("smarthome-detail", [
+            { label: "Workspaces", path: "workspaces" },
+            { label: ws?.name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: this.state.home.name, path: null },
+        ]);
     }
 
     startPollingIfNeeded() {

@@ -4,6 +4,7 @@ import { WoowIcon } from "../../components/icon/WoowIcon";
 import { CreateTaskModal } from "../../components/modal/CreateTaskModal";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { formatDate } from "../../services/utils";
 
 export class ProjectKanbanPage extends Component {
@@ -46,6 +47,11 @@ export class ProjectKanbanPage extends Component {
         await Promise.all([
             supportService.fetchProjectStages(this.props.projectId),
             supportService.fetchAllTasks({ project_id: this.props.projectId }),
+        ]);
+        // 麵包屑軌跡：Projects → {專案名}（看板是專案的主工作視圖，末段即專案本身）
+        breadcrumbService.set("ai-project-kanban", [
+            { label: "Projects", path: "projects" },
+            { label: this.projectName, path: null },
         ]);
     }
 
@@ -136,7 +142,9 @@ export class ProjectKanbanPage extends Component {
     }
 
     navigateBack() {
-        this.router.navigate("ai-assistant/projects");
+        // 統一回 canonical 的 Projects 列表入口（#/projects），與卡片進入點一致，
+        // 不再導去舊的 ai-assistant/projects URL。
+        this.router.navigate("projects");
     }
 
     // ==================== Drag and Drop ====================

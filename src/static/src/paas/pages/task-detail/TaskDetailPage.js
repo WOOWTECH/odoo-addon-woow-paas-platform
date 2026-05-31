@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { AiChat } from "../../components/ai-chat/AiChat";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { safeHtml } from "../../services/html_sanitize";
 import { formatDate, getInitials, getPriorityStars } from "../../services/utils";
 
@@ -41,6 +42,7 @@ export class TaskDetailPage extends Component {
                     data.description = safeHtml(data.description);
                 }
                 this.state.task = data;
+                this._publishBreadcrumb(data);
             } else {
                 this.state.error = result.error || "Failed to load task";
             }
@@ -53,6 +55,23 @@ export class TaskDetailPage extends Component {
 
     setTab(tabName) {
         this.state.activeTab = tabName;
+    }
+
+    /**
+     * 麵包屑軌跡：Projects → {所屬專案}(連回該專案看板) → {任務名}。
+     * 父層動態反映任務真正所屬的專案，點下去回到該專案看板，而非舊版寫死
+     * 導去全域任務清單、丟失專案脈絡的行為。任務未綁定專案時略過專案段。
+     */
+    _publishBreadcrumb(task) {
+        const trail = [{ label: "Projects", path: "projects" }];
+        if (task.project_id) {
+            trail.push({
+                label: task.project_name || "Project",
+                path: `ai-assistant/projects/${task.project_id}`,
+            });
+        }
+        trail.push({ label: task.name, path: null });
+        breadcrumbService.set("ai-task-detail", trail);
     }
 
     goBack() {
