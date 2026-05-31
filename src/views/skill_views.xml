@@ -6,6 +6,11 @@
         <field name="model">woow_paas_platform.skill</field>
         <field name="arch" type="xml">
             <list string="Skills" create="false">
+                <header>
+                    <button name="action_open_upload_wizard" type="object"
+                            string="Upload Skill" display="always"
+                            class="btn-primary" icon="fa-cloud-upload"/>
+                </header>
                 <field name="project_id"/>
                 <field name="name"/>
                 <field name="version"/>
@@ -93,9 +98,9 @@
                 No skills yet
             </p>
             <p>
-                Skills are project-scoped agent bundles uploaded via the
-                agent-runtime API. Manage their publish / deprecate / archive
-                lifecycle here.
+                Click <b>Upload Skill</b> to add your first system skill bundle
+                (a <code>.tar.gz</code>), or push one through the agent-runtime
+                API. Manage their publish / deprecate / archive lifecycle here.
             </p>
         </field>
     </record>

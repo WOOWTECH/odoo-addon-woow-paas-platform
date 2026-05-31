@@ -249,6 +249,24 @@ class Skill(models.Model):
         self.write({'state': 'archived'})
         self._recompute_is_latest()
 
+    def action_open_upload_wizard(self):
+        """Open the system-skill upload wizard.
+
+        Bound to a ``display="always"`` button in the skill list-view header
+        so the empty-state list (``create="false"``, no record to select) still
+        exposes an upload entry point — the binding contextual action only
+        surfaces in the post-selection ⚙ Actions menu (F-SKU-1 / issue #102).
+        Returns the action dict directly (no XML id resolved at list-arch load
+        time); safe to call on an empty recordset.
+        """
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Upload Skill',
+            'res_model': 'woow_paas_platform.skill_upload_wizard',
+            'view_mode': 'form',
+            'target': 'new',
+        }
+
     def _is_latest_group_domain(self):
         """Domain for the bucket this skill competes in for the is_latest
         pointer. System skills group platform-wide per name (project_id NULL);

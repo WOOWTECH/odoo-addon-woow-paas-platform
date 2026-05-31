@@ -444,6 +444,52 @@ class TestSpawnOrAttach:
             # helm must NOT also race to create the (already labelled) namespace
             assert mock_helm.install.call_args.kwargs.get("create_namespace") is False
 
+    def test_spawn_or_attach_refreshes_skills_configmap_on_attach(self, client):
+        """Layer 3 (running-pod half): on ATTACH (release exists, replicas>0) the
+        operator does NO install, so the cold-start skills.json render goes stale
+        — a skill published AFTER spawn never reaches the running pod. The attach
+        path MUST patch skills.json with the fresh skill_snapshot Odoo sends on
+        every chat (via skill_invalidator) or running pods bind no new skill.
+        """
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.skill_invalidator") as mock_skill_inv:
+            mock_helm.get.return_value = MagicMock()            # release exists → attach
+            mock_k8s.get_deployment_replicas.return_value = 1   # running → attach (not resume)
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            mock_skill_inv.invalidate.assert_called_once()
+            call = mock_skill_inv.invalidate.call_args
+            sent = call.kwargs.get("skill_snapshot")
+            if sent is None and len(call.args) >= 2:
+                sent = call.args[1]
+            assert sent == _SPAWN_BODY["skill_snapshot"], (
+                "attach must forward the fresh skill_snapshot to skill_invalidator"
+            )
+
+    def test_attach_survives_skill_refresh_failure(self, client):
+        """The skills.json refresh on attach is BEST-EFFORT (the pod keeps its
+        cached snapshot). A transient ConfigMap-patch failure must NOT 500 the
+        attach — a healthy running pod must still be able to start a chat."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.skill_invalidator") as mock_skill_inv:
+            mock_helm.get.return_value = MagicMock()
+            mock_k8s.get_deployment_replicas.return_value = 1
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_skill_inv.invalidate.side_effect = RuntimeError("kubectl blip")
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["pod_state"] == "active"
+
     def test_build_install_values_carries_all_chart_required_keys(self):
         """Contract test (operator <-> agent-runtime chart values). The chart's
         _helpers.tpl ``agent-runtime.validate`` fails the install at RENDER time
@@ -551,6 +597,23 @@ class TestSpawnOrAttach:
         assert values["networkPolicy"]["egressWorkspaceIds"] == _SPAWN_BODY["project_workspace_ids"]
         assert values["agentRuntime"]["externalEgress"]["enabled"] is True
 
+    def test_build_install_values_forwards_skill_snapshot_for_cold_start(self):
+        """Layer 3 (cold-start half): the chart renders skills.json from
+        ``configMap.skillsSnapshot`` (default ``"{}"``). _build_install_values
+        MUST forward the request's skill_snapshot so a cold-started pod mounts the
+        REAL snapshot at startup — otherwise skills.json is always the empty chart
+        default and the LLM never binds a skill tool (the pilot ``{}`` symptom).
+        Same missed-forward class as projectId / externalEgress
+        ([[spawn-install-values-missed-forward]]).
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert values["configMap"]["skillsSnapshot"] == json.dumps(
+            _SPAWN_BODY["skill_snapshot"]
+        )
+
     def test_spawn_or_attach_cold_start_passes_repo_and_auth_to_install(self, client):
         """gap C: cold-start install fetches the chart from the PRIVATE classic
         Helm repo — repo URL / chart version / read credentials are plumbed from
@@ -631,10 +694,15 @@ class TestSpawnOrAttach:
             assert "auth" not in values
 
     def test_spawn_or_attach_attach_existing_is_noop(self, client):
-        """S.2: release already running (replicas=1) → no re-install."""
+        """S.2: release already running (replicas=1) → no re-install.
+
+        (Attach now also refreshes skills.json via skill_invalidator — Layer 3;
+        mocked here so the no-install invariant stays the assertion under test.)
+        """
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
              patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
-             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.skill_invalidator"):
             mock_helm.get.return_value = MagicMock(status="deployed")
             mock_k8s.get_deployment_replicas.return_value = 1
             mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
@@ -652,7 +720,8 @@ class TestSpawnOrAttach:
         call_order = []
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
              patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
-             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.skill_invalidator"):
             mock_helm.get.return_value = MagicMock(status="deployed")
             mock_k8s.get_deployment_replicas.return_value = 0  # reaped
             mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
@@ -761,6 +830,24 @@ class TestInvalidateMcp:
             resp = client.post(
                 f"/api/agent-runtimes/{_HASH}/invalidate-mcp",
                 json={"mcp_snapshot": {"servers": {}}},
+            )
+            assert resp.status_code == 200, resp.text
+            mock_inv.invalidate.assert_called_once()
+
+
+class TestInvalidateSkills:
+    """S.7 — POST /{hash}/invalidate-skills delegates to skill_invalidator
+    (symmetric with invalidate-mcp; refreshes a running pod's skills.json so a
+    skill published AFTER spawn reaches the pod — the Layer 3 fix)."""
+
+    def test_invalidate_skills_delegates(self, client):
+        with patch("src.api.agent_runtimes.skill_invalidator") as mock_inv:
+            mock_inv.invalidate.return_value = {"status": "ok"}
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/invalidate-skills",
+                json={"skill_snapshot": [
+                    {"name": "deploy", "version": "1.0.0", "sha256": "ab"},
+                ]},
             )
             assert resp.status_code == 200, resp.text
             mock_inv.invalidate.assert_called_once()
@@ -920,6 +1007,36 @@ class TestMcpInvalidator:
                 or mock_k8s.replace_configmap.called
             )
             assert patched, "invalidator must patch/replace the mcp.json ConfigMap"
+
+
+class TestSkillInvalidator:
+    """M.2 — patch the skills.json ConfigMap for a project namespace
+    (symmetric with mcp_invalidator)."""
+
+    def test_invalidator_patches_configmap(self):
+        from src.services import skill_invalidator
+
+        with patch.object(skill_invalidator, "k8s_service", create=True) as mock_k8s:
+            skill_invalidator.invalidate(
+                project_hash=_HASH,
+                skill_snapshot=[{"name": "deploy", "version": "1.0.0", "sha256": "ab"}],
+            )
+            patched = (
+                mock_k8s.patch_configmap.called
+                or mock_k8s.apply_manifest.called
+                or mock_k8s.replace_configmap.called
+            )
+            assert patched, "invalidator must patch/replace the skills.json ConfigMap"
+
+    def test_skill_invalidator_namespace_tracks_names(self):
+        """skill_invalidator targets the SAME project ns as _names (mirror the
+        mcp_invalidator guard) or the ConfigMap patch lands on the wrong ns."""
+        from src.api import agent_runtimes
+        from src.services import skill_invalidator
+
+        with patch("src.api.agent_runtimes.settings.namespace_prefix", "paas-ws-stg-"):
+            ns, _ = agent_runtimes._names("abc")
+            assert skill_invalidator._namespace("abc") == ns == "paas-ws-stg-pa-abc"
 
 
 # --------------------------------------------------------------------------- #
