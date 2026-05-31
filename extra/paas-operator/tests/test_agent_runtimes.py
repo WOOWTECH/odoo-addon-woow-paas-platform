@@ -454,6 +454,7 @@ class TestSpawnOrAttach:
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
              patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
              patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.mcp_invalidator"), \
              patch("src.api.agent_runtimes.skill_invalidator") as mock_skill_inv:
             mock_helm.get.return_value = MagicMock()            # release exists → attach
             mock_k8s.get_deployment_replicas.return_value = 1   # running → attach (not resume)
@@ -479,6 +480,7 @@ class TestSpawnOrAttach:
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
              patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
              patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.mcp_invalidator"), \
              patch("src.api.agent_runtimes.skill_invalidator") as mock_skill_inv:
             mock_helm.get.return_value = MagicMock()
             mock_k8s.get_deployment_replicas.return_value = 1
@@ -489,6 +491,49 @@ class TestSpawnOrAttach:
             resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
             assert resp.status_code == 200, resp.text
             assert resp.json()["pod_state"] == "active"
+
+    def test_spawn_or_attach_refreshes_mcp_configmap_on_attach(self, client):
+        """MCP parity: attach must patch mcp.json with the fresh mcp_snapshot Odoo
+        sends each chat (mcp_invalidator), or a running pod never sees an updated
+        MCP server binding (get_mcp_snapshot reads the stale ConfigMap)."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.skill_invalidator"), \
+             patch("src.api.agent_runtimes.mcp_invalidator") as mock_mcp_inv:
+            mock_helm.get.return_value = MagicMock()
+            mock_k8s.get_deployment_replicas.return_value = 1
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            mock_mcp_inv.invalidate.assert_called_once()
+            call = mock_mcp_inv.invalidate.call_args
+            sent = call.kwargs.get("mcp_snapshot")
+            if sent is None and len(call.args) >= 2:
+                sent = call.args[1]
+            assert sent == _SPAWN_BODY["mcp_snapshot"], (
+                "attach must forward the fresh mcp_snapshot to mcp_invalidator"
+            )
+
+    def test_attach_survives_mcp_refresh_failure(self, client):
+        """MCP refresh on attach is BEST-EFFORT too — a ConfigMap-patch failure
+        must not 500 a healthy pod's chat."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.skill_invalidator"), \
+             patch("src.api.agent_runtimes.mcp_invalidator") as mock_mcp_inv:
+            mock_helm.get.return_value = MagicMock()
+            mock_k8s.get_deployment_replicas.return_value = 1
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_mcp_inv.invalidate.side_effect = RuntimeError("kubectl blip")
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
 
     def test_build_install_values_carries_all_chart_required_keys(self):
         """Contract test (operator <-> agent-runtime chart values). The chart's
@@ -614,6 +659,21 @@ class TestSpawnOrAttach:
             _SPAWN_BODY["skill_snapshot"]
         )
 
+    def test_build_install_values_forwards_mcp_snapshot_for_cold_start(self):
+        """MCP parity with the skill cold-start forward: the chart renders mcp.json
+        from configMap.mcpSnapshot (default "{}"); _build_install_values MUST
+        forward request.mcp_snapshot so a cold-started pod mounts the real MCP
+        server set at startup (get_mcp_snapshot consumes it). Same missed-forward
+        class ([[spawn-install-values-missed-forward]]).
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert values["configMap"]["mcpSnapshot"] == json.dumps(
+            _SPAWN_BODY["mcp_snapshot"]
+        )
+
     def test_spawn_or_attach_cold_start_passes_repo_and_auth_to_install(self, client):
         """gap C: cold-start install fetches the chart from the PRIVATE classic
         Helm repo — repo URL / chart version / read credentials are plumbed from
@@ -702,6 +762,7 @@ class TestSpawnOrAttach:
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
              patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
              patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.mcp_invalidator"), \
              patch("src.api.agent_runtimes.skill_invalidator"):
             mock_helm.get.return_value = MagicMock(status="deployed")
             mock_k8s.get_deployment_replicas.return_value = 1
@@ -721,6 +782,7 @@ class TestSpawnOrAttach:
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
              patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
              patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.mcp_invalidator"), \
              patch("src.api.agent_runtimes.skill_invalidator"):
             mock_helm.get.return_value = MagicMock(status="deployed")
             mock_k8s.get_deployment_replicas.return_value = 0  # reaped
