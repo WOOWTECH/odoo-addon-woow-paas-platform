@@ -15,7 +15,9 @@ related:
 
 > contract 的 Pod 那一端。程式碼在 `woow-paas-agent-runtime` repo（`runtime/`）。這篇補齊 [Agent 對話與串流](02-conversation-streaming.md) 裡「Pod 內怎麼跑」的細節。
 
-> 🚧 **重要狀態（誠實標註）**：transport（WS / 認證 / envelope）、skill 載入與執行、熱重載、安全機制**都已實作**；但**真正的 agent loop `runtime/langgraph_runtime.py` 目前是 Phase B stub**：`initialize()` 是 no-op、`stream()` 只 yield 一個 `done`。langchain / langgraph 已是依賴、`stream()` 的契約簽名已定，但**實際的 LLM graph 調用待後續 phase**。換言之，今天若 `use_agent_runtime=True` 接上，Pod 會完成認證、收訊息，但 agent 還不會真的回話。
+> ✅ **狀態（2026-05 更新）**：transport（WS / 認證 / envelope）、skill 載入與執行、熱重載、安全機制、**以及真正的 agent loop `runtime/langgraph_runtime.py` 都已實作並上線**（F-PILOT-10，image ≥ `v1.1.0`）。`stream()` 會 `_resolve_tool_set`（skill lazy tools + MCP tools）→ `ChatOpenAI.bind_tools` → `astream` → 逐 delta yield `text_chunk`，遇 `tool_calls` 則執行並串 §4b tool frame，直到無 tool_call（`MAX_TOOL_ROUNDS` 上限）。`initialize()` 仍是 no-op（LLM client 於 `stream()` 內按 env 即時建）；無 `LLM_API_KEY` → echo fallback。`use_agent_runtime=True` 接上後 agent 會用真 LLM 回話（stg F-PILOT-10 cluster e2e 已驗）。
+>
+> ⚠️ 注意：snapshot 真正送達 pod 是 **PR #104（skill）/ #106（mcp）** 才補上的 operator 端 missed-forward（cold-start `configMap.{skills,mcp}Snapshot` forward + attach refresh）；在那之前 pod 的 `skills.json` / `mcp.json` ConfigMap 一直是 chart 預設 `"{}"`，agent 雖會回話卻綁不到任何 skill/MCP tool。
 
 ## 🗂️ 模組地圖
 
@@ -27,7 +29,7 @@ graph TB
         EN["envelope.py<br/>協定 v1.0"]
     end
     subgraph R["runtime"]
-        LG["langgraph_runtime.py<br/>agent loop（⚠️ Phase B stub）"]
+        LG["langgraph_runtime.py<br/>agent loop（真 LLM，F-PILOT-10）"]
     end
     subgraph SK["skills/"]
         LO["loader.py<br/>SKILL.md→StructuredTool"]
@@ -118,13 +120,13 @@ graph TB
 
 > 這 9 種回程 type 對應 [Agent 對話與串流](02-conversation-streaming.md) 裡 Odoo 把 envelope 轉成 SSE 的那張表。
 
-## 🧠 Agent loop（`langgraph_runtime.py`）— ⚠️ Phase B stub
+## 🧠 Agent loop（`langgraph_runtime.py`）— ✅ 真 LLM（F-PILOT-10）
 
 - module singleton `runtime = LangGraphRuntime()`
-- `stream(thread_id, user_message, history, template_id, invoker_role) → AsyncIterator[Event]`（契約已定）
-- `Event` dataclass：`type` / `payload` / `full_response` / `usage`
-- **現況**：`initialize()` no-op；`stream()` 只 `yield Event(type="done")`。真正的「resolve tools → LangGraph `astream` → 逐 event yield」待後續 phase（`langgraph_runtime.py:37-54`）
-- 已知缺陷 **SC-5**：stub 自己 yield done、ws_server 又補一個 done → 雙 done；契約上 ws_server 才是 done 唯一 producer，後續要移除 stub 的 yield（`docs/PHASE_B_HANDOFF.md:19-27`）
+- `stream(thread_id, user_message, history, template_id, invoker_role) → AsyncIterator[Event]`
+- `Event` dataclass：`type` / `payload` / `full_response` / `usage`（`top_level` 放 §4b tool frame 欄位）
+- **現況**：`initialize()` no-op（LLM client 於 `stream()` 內按 env 即時建）；`stream()` 是真 agent loop —— `_resolve_tool_set`（skill lazy tools + MCP tools）→ `ChatOpenAI.bind_tools` → `astream` 逐 delta yield `text_chunk`，遇 `tool_calls` 經 `_run_tool` 執行並串 `tool_call`/`tool_result`/`tool_error` frame，把結果餵回再續，直到無 tool_call（`MAX_TOOL_ROUNDS` 上限）；無 `LLM_API_KEY` → echo fallback（`langgraph_runtime.py:165-301`）
+- **SC-5 雙-done 已解**：真 `stream()` **不送 done**（最後一個 event 帶累積 `full_response` / `usage`），`done` 由 ws_server 唯一合成 —— 契約符合，stub 階段的雙-done 不再存在
 
 ## 🧩 Skill 載入與執行
 
