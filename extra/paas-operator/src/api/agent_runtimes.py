@@ -122,13 +122,16 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
             "SKILL_BUNDLE_TOKEN": skill_bundle_token,
         },
         "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
-        # Layer 3 (cold-start half): forward the skill_snapshot so the chart
-        # renders skills.json WITH the real snapshot at install. Without this the
-        # ConfigMap stays the chart default ("{}") and a cold-started pod binds no
-        # skill tool until a later invalidate-skills lands (the pilot {} symptom).
-        # Same missed-forward class as projectId / externalEgress
-        # ([[spawn-install-values-missed-forward]]).
-        "configMap": {"skillsSnapshot": json.dumps(request.skill_snapshot)},
+        # Layer 3 (cold-start half): forward the skill + mcp snapshots so the chart
+        # renders skills.json / mcp.json WITH the real snapshots at install. Without
+        # this the ConfigMaps stay the chart default ("{}") and a cold-started pod
+        # binds no skill tool / sees no MCP server until a later invalidate lands
+        # (the pilot {} symptom). Same missed-forward class as projectId /
+        # externalEgress ([[spawn-install-values-missed-forward]]).
+        "configMap": {
+            "skillsSnapshot": json.dumps(request.skill_snapshot),
+            "mcpSnapshot": json.dumps(request.mcp_snapshot),
+        },
     }
     # F-PILOT-5: forward the Odoo namespace so the pod's NetworkPolicy ingress
     # (Odoo->pod WS) + egress (pod->Odoo skill-bundle) point at Odoo's real ns,
@@ -271,6 +274,16 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
         except Exception:
             logger.warning(
                 "skills.json refresh failed for %s on attach — pod keeps its "
+                "cached snapshot", request.project_hash, exc_info=True,
+            )
+        try:
+            mcp_invalidator.invalidate(
+                project_hash=request.project_hash,
+                mcp_snapshot=request.mcp_snapshot,
+            )
+        except Exception:
+            logger.warning(
+                "mcp.json refresh failed for %s on attach — pod keeps its "
                 "cached snapshot", request.project_hash, exc_info=True,
             )
 
