@@ -1182,6 +1182,34 @@ class KubernetesService:
         result = self._run_command(args)
         return {"message": f"Secret {secret_name} patched"}
 
+    def patch_configmap(
+        self,
+        namespace: str,
+        configmap_name: str,
+        data: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """Merge-patch a ConfigMap's ``data`` field.
+
+        Touches ONLY ``data`` (strategic merge), so existing labels / annotations
+        — including the Helm ownership metadata (``app.kubernetes.io/managed-by:
+        Helm`` + ``meta.helm.sh/release-*``) that the chart-created ConfigMap
+        carries — are preserved. A full ``kubectl apply`` would replace the object
+        and strip that metadata, breaking the next ``helm upgrade`` with an
+        ownership conflict.
+        """
+        validate_namespace(namespace)
+
+        patch_data = {"data": data}
+        args = [
+            "patch", "configmap", configmap_name,
+            "--namespace", namespace,
+            "--type=merge",
+            f"--patch={json.dumps(patch_data)}",
+        ]
+
+        self._run_command(args)
+        return {"message": f"ConfigMap {configmap_name} patched"}
+
     @staticmethod
     def _is_base64(s: str) -> bool:
         """Check if a string is already base64-encoded."""
