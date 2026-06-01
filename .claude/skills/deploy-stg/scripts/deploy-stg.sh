@@ -190,15 +190,16 @@ if [ -z "$IMAGE_OVERRIDE" ]; then
     fi
 fi
 
-# Warn (do not fail) when the agent-runtime secrets are absent: legacy AI chat
-# still deploys fine, but the in-task agent-runtime pod path (test-echo skill)
-# will fail closed without them. create.sh consumes these from the environment.
-if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -z "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] || [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; then
-    echo -e "${YELLOW}Warning: agent-runtime secrets not fully set — pod path / state-sync may fail.${NC}" >&2
-    echo -e "${YELLOW}  Set all three before deploy if you need them:${NC}" >&2
-    echo -e "${YELLOW}    export AGENT_RUNTIME_AUTH_SECRET_CURRENT=<same as operator paas-operator-stg-agent-runtime-auth/current>${NC}" >&2
-    echo -e "${YELLOW}    export AGENT_RUNTIME_NAMESPACE_SECRET=<odoo-side namespace-hash secret>${NC}" >&2
-    echo -e "${YELLOW}    export AGENT_RUNTIME_WEBHOOK_SECRET=<same as operator webhook secret; else agent_session.state stuck 'absent'>${NC}" >&2
+# Agent-runtime enablement: only the NAMESPACE secret must be supplied by the
+# deployer — it is Odoo-side only and acts as the "enable agent-runtime" switch.
+# create.sh (stg) auto-sources AUTH + WEBHOOK from the operator's canonical
+# secret (paas-operator-stg-agent-runtime-auth) and fail-fasts if it cannot, so
+# they are NOT re-warned here. Without the namespace secret the in-task pod path
+# / state-sync simply stays disabled; legacy AI chat deploys fine either way.
+if [ -z "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
+    echo -e "${YELLOW}Note: AGENT_RUNTIME_NAMESPACE_SECRET not set — agent-runtime pod path / state-sync stays disabled (legacy AI chat unaffected).${NC}" >&2
+    echo -e "${YELLOW}  To enable: export AGENT_RUNTIME_NAMESPACE_SECRET=<odoo-side namespace-hash secret>${NC}" >&2
+    echo -e "${YELLOW}  (AUTH + WEBHOOK auto-source from the operator secret; export AGENT_RUNTIME_AUTH_SECRET_CURRENT / AGENT_RUNTIME_WEBHOOK_SECRET to override.)${NC}" >&2
 fi
 
 # --- Resolve addon ref ---
