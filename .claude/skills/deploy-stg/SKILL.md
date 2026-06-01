@@ -40,6 +40,22 @@ usage: |
 tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>
 ```
 
+**Agent-runtime（test-echo skill / agent pod）所需 env（選用，但要用就必帶）：**
+
+若 stg 需要在任務 chat 內 spawn agent-runtime pod（執行 skill），deploy 前須先 export 這兩個 env，`create.sh` stg mode 會把它們經 temp values file 注入（不進 git、不進 shell 歷史）：
+
+```bash
+# 與 operator 端 paas-operator-stg-agent-runtime-auth/current 同一把 HS256 key
+# （pod 用它驗證 Odoo 簽發的 skill-bundle token；不一致 → 抓 bundle 時 401）
+export AGENT_RUNTIME_AUTH_SECRET_CURRENT=<同 operator auth/current>
+
+# Odoo 端算 per-project namespace hash 用（未設 → spawn 時 "namespace secret not configured" fail-closed）
+export AGENT_RUNTIME_NAMESPACE_SECRET=<odoo 端固定值>
+```
+
+> 不設這兩個 env 仍可部署、legacy AI chat 正常，但 agent-runtime pod 路徑（test-echo 等 skill）會失敗。deploy-stg 偵測到缺漏時會印警告。
+> 對應 NetworkPolicy（`networkPolicy.allowAgentRuntimePods=true`，開放 odoo ↔ `paas-ws-*-pa-*` pod 雙向流量）已在 `create.sh` stg mode 寫死，無需手動設定。
+
 ## 執行流程
 
 ### Step 1: 檢查前置條件
