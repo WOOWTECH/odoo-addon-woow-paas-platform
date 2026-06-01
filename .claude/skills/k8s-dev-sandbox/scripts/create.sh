@@ -259,6 +259,43 @@ if [ "$MODE" = "stg" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowAgentRuntimePods=true"
 fi
 
+# Single source of truth for the operator-shared agent-runtime secrets (stg).
+# AUTH (current) + WEBHOOK (webhook-current) MUST byte-match the operator's; re-
+# supplying them by hand is what let the Odoo side drift (a mismatch 401s the
+# skill-bundle fetch / state-update webhook and strands agent_session.state at
+# 'absent'). So auto-source them from the operator's canonical k8s secret unless
+# the deployer overrode them explicitly. The NAMESPACE secret is Odoo-side only,
+# cannot be sourced from the operator, and therefore doubles as the "enable
+# agent-runtime" signal. This whole block runs BEFORE any helm operation, so the
+# fail-fast exit changes no resources (notably it cannot trip the failed-upgrade
+# namespace teardown).
+if [ "$MODE" = "stg" ] && [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
+    _ar_op_ns="${PAAS_OPERATOR_NAMESPACE:-paas-stg-system}"
+    _ar_op_secret="paas-operator-stg-agent-runtime-auth"
+    if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ]; then
+        AGENT_RUNTIME_AUTH_SECRET_CURRENT="$(kubectl get secret -n "$_ar_op_ns" "$_ar_op_secret" -o jsonpath='{.data.current}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+        [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && echo -e "  ${BLUE}Auto-sourced agent-runtime auth secret from ${_ar_op_ns}/${_ar_op_secret}.${NC}"
+    fi
+    if [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; then
+        AGENT_RUNTIME_WEBHOOK_SECRET="$(kubectl get secret -n "$_ar_op_ns" "$_ar_op_secret" -o jsonpath='{.data.webhook-current}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ] && echo -e "  ${BLUE}Auto-sourced agent-runtime webhook secret from ${_ar_op_ns}/${_ar_op_secret}.${NC}"
+    fi
+    _ar_missing=""
+    [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && _ar_missing="${_ar_missing} auth"
+    [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ] && _ar_missing="${_ar_missing} webhook"
+    if [ -n "$_ar_missing" ]; then
+        if ! kubectl get secret -n "$_ar_op_ns" "$_ar_op_secret" >/dev/null 2>&1; then
+            echo -e "${RED}Operator secret ${_ar_op_ns}/${_ar_op_secret} not found — wrong kubectl context, or operator not deployed on this cluster?${NC}" >&2
+        fi
+        echo -e "${RED}Agent-runtime enabled (namespace secret set) but could not resolve:${_ar_missing}.${NC}" >&2
+        echo -e "${RED}Tried operator secret ${_ar_op_ns}/${_ar_op_secret} (keys: current / webhook-current).${NC}" >&2
+        echo -e "${YELLOW}Fix: ensure that secret + keys exist on this cluster's context, or export${NC}" >&2
+        echo -e "${YELLOW}     AGENT_RUNTIME_AUTH_SECRET_CURRENT / AGENT_RUNTIME_WEBHOOK_SECRET explicitly.${NC}" >&2
+        echo -e "${YELLOW}Aborting before any helm operation — no resources were changed.${NC}" >&2
+        exit 1
+    fi
+fi
+
 # STG mode: agent-runtime shared secrets via temp file (avoid shell history /
 # git). Sourced from env so the value never lands in the command line. These
 # MUST match the operator-side AGENT_RUNTIME_* contract:
@@ -271,7 +308,11 @@ fi
 #     state-update webhook with it. MUST equal the operator's webhook secret;
 #     empty → every state-update 401s → agent_session.state stuck 'absent'
 #     (chat still works — the webhook is off the chat path).
-if [ "$MODE" = "stg" ] && { [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] || [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; }; then
+# Gated on the NAMESPACE secret only (the single "enable agent-runtime" signal,
+# matching the auto-source block above) — NOT an OR over all three. Otherwise a
+# stale/accidental AGENT_RUNTIME_AUTH_SECRET_CURRENT in the env would trigger a
+# half-configured agent-runtime values file (auth without namespace/webhook).
+if [ "$MODE" = "stg" ] && [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
     _AGENT_RUNTIME_VALUES=$(mktemp)
     trap "rm -f ${_REGISTRY_VALUES:-} $_AGENT_RUNTIME_VALUES" EXIT
     {
@@ -550,7 +591,12 @@ if [ "$WOOW_MODULE_STATE" != "installed" ]; then
     # win; otherwise auto-discover a paas-operator svc + its *-secret in the operator
     # namespace and read api-key at runtime (never committed). Empty when none found →
     # operator stays "not configured" (honest, vs a broken sentinel).
-    OPERATOR_NS="${PAAS_OPERATOR_NAMESPACE:-paas-system}"
+    # stg has its own operator (paas-stg-system/paas-operator-stg); only
+    # docker-desktop/dev lives in paas-system. Defaulting to paas-system for stg
+    # seeded the WRONG operator_url/api_key — Odoo then called the non-stg operator
+    # (no stg webhook secret, wrong paas-ws-stg- namespace prefix). Make the
+    # default mode-aware; PAAS_OPERATOR_NAMESPACE still overrides either way.
+    OPERATOR_NS="${PAAS_OPERATOR_NAMESPACE:-$([ "$MODE" = "stg" ] && echo paas-stg-system || echo paas-system)}"
     OPERATOR_URL="${PAAS_OPERATOR_URL:-}"
     OPERATOR_API_KEY="${PAAS_OPERATOR_API_KEY:-}"
     NS_PREFIX="${PAAS_NAMESPACE_PREFIX:-paas-ws-}"
