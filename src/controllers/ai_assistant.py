@@ -72,8 +72,10 @@ def backfill_existing_projects_use_agent_runtime(env):
     Toggle-INDEPENDENT on purpose: the toggle is brand-new (defaults off) at
     upgrade time, so gating on it would no-op. A platform with operator + a
     valid default template configured is already running agent runtime → it is
-    safe (and intended, plan 決策 3) to backfill. Returns the number of
-    projects flipped (0 when the platform is not ready).
+    safe (and intended, plan 決策 3) to backfill. Returns the number of existing
+    projects flipped to True — 0 means there was nothing to flip: either the
+    platform is not ready (no side effect), or every existing project is already
+    enabled (toggle still gets set ON).
     """
     from ..services.agent_runtime_client import get_agent_runtime_client
     if get_agent_runtime_client(env) is None:

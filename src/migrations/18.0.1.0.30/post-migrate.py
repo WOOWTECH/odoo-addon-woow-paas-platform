@@ -24,5 +24,6 @@ def migrate(cr, version):
     flipped = backfill_existing_projects_use_agent_runtime(env)
     _logger.info(
         "18.0.1.0.30 auto-enable backfill: flipped %s existing project(s) "
-        "(0 = platform not yet configured, no-op).", flipped,
+        "(0 = nothing to flip: platform not configured, or all projects "
+        "already enabled).", flipped,
     )
