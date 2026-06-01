@@ -347,22 +347,52 @@ fi
 if [ "$MODE" = "local" ]; then
     SRC_PATH="${PROJECT_ROOT}/src"
     # extra-addons 來源：優先讀 .env 的 PAAS_CI_ADDONS_PATH（commit 928613a 後的 source of truth），
-    # fallback 才用舊路徑 extra/extra-addons（已 deprecated，多數 worktree 不存在）
+    # fallback 才看舊路徑 extra/extra-addons（已 deprecated，多數 worktree 不存在）。
     if [ -z "${PAAS_CI_ADDONS_PATH:-}" ] && [ -f "${PROJECT_ROOT}/.env" ]; then
         # `|| true`：.env 沒有 PAAS_CI_ADDONS_PATH 時 grep 回傳非零，配合 set -euo
         # pipefail 會讓整個 script 靜默中止（無錯誤訊息）。容許找不到 → 留空字串，
         # 交由下方 fallback 處理。
         PAAS_CI_ADDONS_PATH="$(grep -E '^PAAS_CI_ADDONS_PATH=' "${PROJECT_ROOT}/.env" | tail -1 | cut -d= -f2- || true)"
     fi
-    if [ -n "${PAAS_CI_ADDONS_PATH:-}" ] && [ -d "$PAAS_CI_ADDONS_PATH" ]; then
-        EXTRA_ADDONS_PATH="$PAAS_CI_ADDONS_PATH"
-    else
+
+    # 解析 extra-addons 來源並轉成絕對路徑（k8s hostPath 強制絕對；.env.example
+    # 的預設是相對 PROJECT_ROOT 的路徑）。三段優先序：
+    #   1) PAAS_CI_ADDONS_PATH（相對則相對 PROJECT_ROOT 解析）
+    #   2) 舊 fallback extra/extra-addons（deprecated）
+    #   3) 都找不到 → 不掛 extra-addons-ext（chart 該 volume 為 optional）+ 明確警告。
+    # 關鍵：絕不把「不存在的路徑」塞給 helm — 那會讓 kubelet 卡在 FailedMount /
+    # ContainerCreating（靜默 hang，難 debug），是本次修正的根因。
+    EXTRA_ADDONS_PATH=""
+    _raw_ci_path="${PAAS_CI_ADDONS_PATH:-}"
+    if [ -n "$_raw_ci_path" ]; then
+        case "$_raw_ci_path" in
+            /*) _resolved="$_raw_ci_path" ;;                  # 已是絕對路徑
+            *)  _resolved="${PROJECT_ROOT}/${_raw_ci_path}" ;; # 相對 → 接 PROJECT_ROOT
+        esac
+        if [ -d "$_resolved" ]; then
+            # 收斂成正規絕對路徑（去掉 ../ 等），k8s hostPath 才吃得乾淨
+            EXTRA_ADDONS_PATH="$(cd "$_resolved" && pwd)"
+        else
+            echo -e "${RED}PAAS_CI_ADDONS_PATH 指向的目錄不存在：${NC}" >&2
+            echo -e "  raw:      ${_raw_ci_path}" >&2
+            echo -e "  resolved: ${_resolved}" >&2
+            echo -e "${YELLOW}請修正 .env 的 PAAS_CI_ADDONS_PATH（絕對路徑，或相對 ${PROJECT_ROOT} 的路徑）。${NC}" >&2
+            exit 1
+        fi
+    elif [ -d "${PROJECT_ROOT}/extra/extra-addons" ]; then
         EXTRA_ADDONS_PATH="${PROJECT_ROOT}/extra/extra-addons"
     fi
-    HELM_INSTALL_ARGS+=(
-        --set "codeMount.hostPath=$SRC_PATH"
-        --set "codeMount.extraAddonsHostPath=$EXTRA_ADDONS_PATH"
-    )
+
+    HELM_INSTALL_ARGS+=( --set "codeMount.hostPath=$SRC_PATH" )
+    if [ -n "$EXTRA_ADDONS_PATH" ]; then
+        HELM_INSTALL_ARGS+=( --set "codeMount.extraAddonsHostPath=$EXTRA_ADDONS_PATH" )
+    else
+        # 不掛 ext addons：chart 的 extra-addons-ext volume 為 optional，pod 仍會起；
+        # 若 addon 有第三方相依（如 ai_base_gt），Odoo 會在 install 時給清楚的
+        # 「module not available」錯誤，遠比 kubelet FailedMount 靜默 hang 好 debug。
+        echo -e "${YELLOW}未設定 PAAS_CI_ADDONS_PATH 且無 extra/extra-addons fallback；不掛載第三方 addons。${NC}" >&2
+        echo -e "${YELLOW}若本 addon 有第三方相依，請在 .env 設 PAAS_CI_ADDONS_PATH 指向 paas-odoo-ci/addons。${NC}" >&2
+    fi
 fi
 
 # 執行 Helm
