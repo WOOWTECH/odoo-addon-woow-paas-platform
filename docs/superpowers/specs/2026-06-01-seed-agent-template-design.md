@@ -88,7 +88,7 @@ project chat (use_agent_runtime=True)
 | 檔案 | 改動 |
 |------|------|
 | `src/data/agent_template_default.xml` | **新檔**：seed `agent_template_default` |
-| `src/hooks.py` | 加 `_ensure_default_agent_template(env)`，於 `post_init_hook` 末尾呼叫 |
+| `src/hooks.py` | 加 `_ensure_default_agent_template(env)`，於 `post_init_hook` **最前面**呼叫（避開 early return）|
 | `src/__manifest__.py` | data list 加新檔（置於 `agent_template_demo.xml` 後）；版號 `18.0.1.0.29 → 18.0.1.0.30` |
 | `src/tests/test_default_agent_template.py` | 追加 S-1~S-4 |
 
@@ -164,8 +164,11 @@ def _ensure_default_agent_template(env):
         )
 ```
 
-於既有 `post_init_hook(env)` 末尾加一行 `_ensure_default_agent_template(env)`（不影響原本
-的 subscription journal 設定）。抽成獨立函式，是為了 S-2/S-3 可直接單測 set/不覆寫兩支。
+在既有 `post_init_hook(env)` 的**最前面**（docstring 之後、`company = env.ref(...)` 之前）插入
+`_ensure_default_agent_template(env)`。**必須放最前面、不可加在末尾**——`post_init_hook` 有兩個
+early `return`（無 company / journal 已設），加在末尾在既有環境（journal 常態已設）會被略過。
+兩者關注點獨立，把 agent-template 呼叫排在最前面即保證它必執行。抽成獨立函式，是為了 S-2/S-3
+可直接單測 set/不覆寫兩支。
 
 ### 3. `src/__manifest__.py`
 
