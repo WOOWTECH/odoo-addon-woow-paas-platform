@@ -114,6 +114,11 @@
                                     <field name="woow_default_agent_template_id"
                                            class="col-lg-6"/>
                                 </div>
+                                <div class="row mt8">
+                                    <label for="woow_default_enable_agent_runtime" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_default_enable_agent_runtime"
+                                           class="col-lg-6"/>
+                                </div>
                                 <div class="mt8">
                                     <button name="action_test_ai_connection"
                                             type="object"
