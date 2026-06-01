@@ -27,21 +27,17 @@ def _configmap_name(project_hash: str) -> str:
 
 
 def invalidate(project_hash, mcp_snapshot):
-    """Patch/replace the mcp.json ConfigMap for the project namespace."""
+    """Merge-patch the mcp.json ConfigMap for the project namespace.
+
+    Uses a ``data``-only merge patch (NOT ``kubectl apply``) so the chart-created
+    ConfigMap's Helm ownership metadata survives — else the next ``helm upgrade``
+    hits an ownership conflict.
+    """
     namespace = _namespace(project_hash)
-    manifest = {
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {
-            "name": _configmap_name(project_hash),
-            "namespace": namespace,
-            "labels": {
-                "app.kubernetes.io/instance": f"agent-pa-{project_hash}",
-                "app.kubernetes.io/component": "agent-runtime-mcp",
-            },
-        },
-        "data": {"mcp.json": json.dumps(mcp_snapshot)},
-    }
-    result = k8s_service.apply_manifest(manifest)
+    result = k8s_service.patch_configmap(
+        namespace=namespace,
+        configmap_name=_configmap_name(project_hash),
+        data={"mcp.json": json.dumps(mcp_snapshot)},
+    )
     logger.info("Invalidated mcp.json ConfigMap for %s", namespace)
     return result
