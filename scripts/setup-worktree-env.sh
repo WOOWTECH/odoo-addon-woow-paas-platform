@@ -114,6 +114,28 @@ if [ ! -f .env.example ]; then
     exit 1
 fi
 
+# 5b. 探索第三方 addon 路徑（paas-odoo-ci/addons）→ 寫絕對路徑。
+# 硬編相對 ../../../ 會因 clone/worktree 深度不同（例如 .maestri/floors/ 多兩層）
+# 解析到錯誤目錄。改為從 PROJECT_ROOT 向上找「含 ai_base_gt 的
+# woow-paas-repo/paas-odoo-ci/addons」——ai_base_gt 存在代表該目錄真的有第三方
+# 依賴，藉此跳過同名但空殼的目錄。找不到才退回相對預設並警告。
+_DEFAULT_CI_ADDONS="../../../woow-paas-repo/paas-odoo-ci/addons"
+CI_ADDONS_PATH=""
+_probe="$PROJECT_ROOT"
+while [ "$_probe" != "/" ]; do
+    if [ -d "$_probe/woow-paas-repo/paas-odoo-ci/addons/ai_base_gt" ]; then
+        CI_ADDONS_PATH="$_probe/woow-paas-repo/paas-odoo-ci/addons"
+        break
+    fi
+    _probe="$(dirname "$_probe")"
+done
+if [ -n "$CI_ADDONS_PATH" ]; then
+    echo -e "${BLUE}ℹ️  PAAS_CI_ADDONS_PATH（自動探索）：$CI_ADDONS_PATH${NC}"
+else
+    CI_ADDONS_PATH="$_DEFAULT_CI_ADDONS"
+    echo -e "${YELLOW}⚠️  警告：向上找不到含第三方依賴（ai_base_gt）的 woow-paas-repo/paas-odoo-ci/addons；PAAS_CI_ADDONS_PATH 退回相對預設 '$_DEFAULT_CI_ADDONS'。若建 sandbox 時模組裝不起來（缺 ai_base_gt 等依賴），請手動把 .env 的 PAAS_CI_ADDONS_PATH 改成絕對路徑。${NC}"
+fi
+
 # 6. 寫入 .env 檔案
 cat > .env <<EOF
 # Worktree 配置（自動生成於 $(date -u +"%Y-%m-%dT%H:%M:%SZ")）
@@ -152,8 +174,9 @@ PGADMIN_DEFAULT_PASSWORD=admin
 DEBUG_PORT=5678
 
 # 第三方 addon 路徑（mount 進 /mnt/extra-addons-ext）
-# 預設指向 paas-odoo-ci repo 的 addons/；不同 checkout 位置請改絕對路徑
-PAAS_CI_ADDONS_PATH=../../../woow-paas-repo/paas-odoo-ci/addons
+# 由上方 5b 自動向上探索 paas-odoo-ci/addons 並寫成絕對路徑（避免相對深度誤判）；
+# 探索失敗則為相對預設，屆時請手動改為絕對路徑。
+PAAS_CI_ADDONS_PATH=$CI_ADDONS_PATH
 EOF
 
 # 7. 顯示配置摘要
