@@ -599,7 +599,13 @@ if [ "$WOOW_MODULE_STATE" != "installed" ]; then
     OPERATOR_NS="${PAAS_OPERATOR_NAMESPACE:-$([ "$MODE" = "stg" ] && echo paas-stg-system || echo paas-system)}"
     OPERATOR_URL="${PAAS_OPERATOR_URL:-}"
     OPERATOR_API_KEY="${PAAS_OPERATOR_API_KEY:-}"
-    NS_PREFIX="${PAAS_NAMESPACE_PREFIX:-paas-ws-}"
+    NS_PREFIX="${PAAS_NAMESPACE_PREFIX:-$([ "$MODE" = "stg" ] && echo paas-ws-stg- || echo paas-ws-)}"
+    # stg: auto-enable agent runtime for new projects by default. Gated at
+    # runtime by _agent_runtime_autoenable_ready (operator url+key + a valid
+    # default agent template), so it is a no-op until the platform is ready.
+    # Other modes keep the model default (off) — local/docker-desktop must not
+    # auto-spawn agent pods during ordinary testing.
+    DEFAULT_ENABLE_AR="$([ "$MODE" = "stg" ] && echo True || echo False)"
     if [ -z "$OPERATOR_URL" ]; then
         _op_svc=$(kubectl get svc -n "$OPERATOR_NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^paas-operator' | head -1 || true)
         if [ -n "$_op_svc" ]; then
@@ -632,7 +638,8 @@ VALUES
   ('woow_paas_platform.operator_api_key', '${OPERATOR_API_KEY}', 1, NOW(), 1, NOW()),
   ('woow_paas_platform.paas_domain', '${SLUG}.woowtech.io', 1, NOW(), 1, NOW()),
   ('woow_paas_platform.namespace_prefix', '${NS_PREFIX}', 1, NOW(), 1, NOW()),
-  ('woow_paas_platform.topup_payment_enabled', 'True', 1, NOW(), 1, NOW())
+  ('woow_paas_platform.topup_payment_enabled', 'True', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.default_enable_agent_runtime', '${DEFAULT_ENABLE_AR}', 1, NOW(), 1, NOW())
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
 
 -- AI default pointers: insert only when the seeded WoowBot records exist (SELECT
