@@ -324,7 +324,7 @@ def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundT
 
 
 @router.post("/{project_hash}/reap", summary="Scale a project pod to zero")
-def reap(project_hash: str):
+def reap(project_hash: str, background_tasks: BackgroundTasks):
     """Idempotently scale the pod to 0 + stamp reaped-since annotation."""
     namespace, release = _names(project_hash)
 
@@ -342,6 +342,12 @@ def reap(project_hash: str):
         patch='{"metadata":{"annotations":{"agent.woow.tw/reaped-since":"%s"}}}'
         % reaped_at,
         patch_type="merge",
+    )
+    background_tasks.add_task(
+        webhook_dispatcher.notify_state_update,
+        settings.odoo_base_url,
+        project_hash,
+        "reaped",
     )
     return {"action": "reaped"}
 

@@ -877,6 +877,20 @@ class TestReap:
             assert resp.status_code == 200, resp.text
             assert resp.json()["action"] == "not_found"
 
+    def test_reap_notifies_odoo_reaped(self, client):
+        """reap enqueues a §5.5 state-update notify with new_state='reaped'."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.webhook_dispatcher") as mock_wh:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.get_deployment_replicas.return_value = 1
+            resp = client.post(f"/api/agent-runtimes/{_HASH}/reap")
+        assert resp.status_code == 200, resp.text
+        mock_wh.notify_state_update.assert_called_once()
+        called_args = list(mock_wh.notify_state_update.call_args.args) + \
+            list(mock_wh.notify_state_update.call_args.kwargs.values())
+        assert "reaped" in called_args
+
 
 class TestResume:
     """S.5 / §2.11.1 — dedicated resume re-signs token + patches env before scale."""
