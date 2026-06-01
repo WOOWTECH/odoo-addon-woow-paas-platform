@@ -109,3 +109,67 @@ class TestAutoEnableReadiness(TransactionCase):
         })
         self.ICP.set_param(_DEFTMPL, str(draft.id))
         self.assertFalse(self.mod._agent_runtime_autoenable_ready(self.env))
+
+
+@tagged('post_install', '-at_install')
+class TestAutoEnableOnCreate(TransactionCase):
+    """C-*: _create_project flips use_agent_runtime only when ready."""
+
+    def setUp(self):
+        super().setUp()
+        from odoo.addons.woow_paas_platform.controllers import ai_assistant
+        self.mod = ai_assistant
+        self.controller = ai_assistant.AiAssistantController()
+        self.ICP = self.env['ir.config_parameter'].sudo()
+        self.AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+
+    def _set_ready(self):
+        self.ICP.set_param(_TOGGLE, 'True')
+        self.ICP.set_param(_URL, 'http://paas-operator:8000')
+        self.ICP.set_param(_KEY, 'secret-key')
+        tmpl = self.AgentTemplate.create({
+            'name': 'Platform Default', 'is_public': True, 'state': 'published',
+        })
+        self.ICP.set_param(_DEFTMPL, str(tmpl.id))
+
+    def _create(self, name):
+        test_env = self.env
+
+        class _Req:
+            env = test_env
+
+        with patch.object(self.mod, 'request', _Req()):
+            return self.controller._create_project({'name': name})
+
+    def test_c1_ready_platform_auto_enables(self):
+        self._set_ready()
+        res = self._create('c1-ready')
+        self.assertTrue(res['success'])
+        project = self.env['project.project'].browse(res['data']['id'])
+        self.assertTrue(
+            project.use_agent_runtime,
+            "On a ready platform a newly created project must auto-enable "
+            "use_agent_runtime.",
+        )
+
+    def test_c2_toggle_off_does_not_enable(self):
+        self._set_ready()
+        self.ICP.set_param(_TOGGLE, 'False')
+        res = self._create('c2-toggleoff')
+        project = self.env['project.project'].browse(res['data']['id'])
+        self.assertFalse(
+            project.use_agent_runtime,
+            "Toggle off → no auto-enable even if operator + default template "
+            "are configured.",
+        )
+
+    def test_c3_not_ready_does_not_enable(self):
+        # toggle on but operator unconfigured → fail-safe stays off
+        self.ICP.set_param(_TOGGLE, 'True')
+        res = self._create('c3-notready')
+        project = self.env['project.project'].browse(res['data']['id'])
+        self.assertFalse(
+            project.use_agent_runtime,
+            "Unready platform must NOT auto-enable (would guarantee "
+            "spawn_failed/no_template).",
+        )

@@ -1301,6 +1301,12 @@ class AiAssistantController(Controller):
             if cs_id:
                 vals['cloud_service_id'] = int(cs_id)
 
+        # Server-decided auto-enable (plan 決策 1+2). use_agent_runtime is NEVER
+        # read from user params — only flipped here when the platform is ready,
+        # so there is no attacker-writable path to widen agent-runtime scope.
+        if _agent_runtime_autoenable_ready(request.env):
+            vals['use_agent_runtime'] = True
+
         project = request.env['project.project'].sudo().create(vals)
         # D2=A: sudo().create() leaves create_uid=SUPERUSER, so the
         # project_rule_workspace_member create_uid sub-leg never matches the
