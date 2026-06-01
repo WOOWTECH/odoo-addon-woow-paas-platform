@@ -48,3 +48,64 @@ class TestAutoEnableUninstallCleanup(TransactionCase):
             "default_enable_agent_runtime must be in _CONFIG_PARAMETERS so "
             "uninstall removes it.",
         )
+
+
+@tagged('post_install', '-at_install')
+class TestAutoEnableReadiness(TransactionCase):
+    """R-*: _agent_runtime_autoenable_ready — fail-safe gate matrix."""
+
+    def setUp(self):
+        super().setUp()
+        from odoo.addons.woow_paas_platform.controllers import ai_assistant
+        self.mod = ai_assistant
+        self.ICP = self.env['ir.config_parameter'].sudo()
+        self.AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+
+    def _make_valid_default(self):
+        tmpl = self.AgentTemplate.create({
+            'name': 'Platform Default', 'is_public': True, 'state': 'published',
+        })
+        self.ICP.set_param(_DEFTMPL, str(tmpl.id))
+        return tmpl
+
+    def _set_ready(self):
+        """All three readiness conditions satisfied."""
+        self.ICP.set_param(_TOGGLE, 'True')
+        self.ICP.set_param(_URL, 'http://paas-operator:8000')
+        self.ICP.set_param(_KEY, 'secret-key')
+        self._make_valid_default()
+
+    def test_r1_all_conditions_met_is_ready(self):
+        self._set_ready()
+        self.assertTrue(self.mod._agent_runtime_autoenable_ready(self.env))
+
+    def test_r2_toggle_off_not_ready(self):
+        self._set_ready()
+        self.ICP.set_param(_TOGGLE, 'False')
+        self.assertFalse(self.mod._agent_runtime_autoenable_ready(self.env))
+
+    def test_r3_operator_url_missing_not_ready(self):
+        self._set_ready()
+        self.ICP.set_param(_URL, '')
+        self.assertFalse(self.mod._agent_runtime_autoenable_ready(self.env))
+
+    def test_r4_operator_key_missing_not_ready(self):
+        self._set_ready()
+        self.ICP.set_param(_KEY, '')
+        self.assertFalse(self.mod._agent_runtime_autoenable_ready(self.env))
+
+    def test_r5_no_default_template_not_ready(self):
+        self._set_ready()
+        self.ICP.set_param(_DEFTMPL, '')
+        self.assertFalse(self.mod._agent_runtime_autoenable_ready(self.env))
+
+    def test_r6_invalid_default_template_not_ready(self):
+        # draft template = not a valid platform default
+        self.ICP.set_param(_TOGGLE, 'True')
+        self.ICP.set_param(_URL, 'http://paas-operator:8000')
+        self.ICP.set_param(_KEY, 'secret-key')
+        draft = self.AgentTemplate.create({
+            'name': 'Draft', 'is_public': True, 'state': 'draft',
+        })
+        self.ICP.set_param(_DEFTMPL, str(draft.id))
+        self.assertFalse(self.mod._agent_runtime_autoenable_ready(self.env))

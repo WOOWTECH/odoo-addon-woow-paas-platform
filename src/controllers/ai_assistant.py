@@ -15,6 +15,53 @@ from odoo.http import request, route, Controller
 _logger = logging.getLogger(__name__)
 
 
+def _platform_default_agent_template(env):
+    """Return the platform default agent_template if valid, else empty.
+
+    Valid = config_parameter set + record exists + is_public + published +
+    project-unbound. Mirrors the _resolve_agent_template ④ guard exactly so a
+    project-bound template can never leak that tenant's MCP/skill bindings
+    cluster-wide when served as the global default.
+    """
+    AgentTemplate = env['woow_paas_platform.agent_template'].sudo()
+    default_id = env['ir.config_parameter'].sudo().get_param(
+        'woow_paas_platform.default_agent_template_id'
+    )
+    if not default_id:
+        return AgentTemplate.browse()
+    try:
+        candidate = AgentTemplate.browse(int(default_id)).exists()
+    except (ValueError, TypeError):
+        return AgentTemplate.browse()
+    if candidate and candidate.is_public \
+            and candidate.state == 'published' \
+            and not candidate.project_ids:
+        return candidate
+    return AgentTemplate.browse()
+
+
+def _agent_runtime_autoenable_ready(env):
+    """True when a project created now should auto-enable use_agent_runtime.
+
+    Fail-safe gate (plan 決策 2): platform toggle ON **and** operator
+    configured (url+api_key) **and** a valid platform default template — so
+    auto-enable never lands a project in a guaranteed no_template /
+    spawn_failed state. Users never write use_agent_runtime; this is the only
+    place that flips it on the /woow create path.
+    """
+    from ..services.agent_runtime_client import get_agent_runtime_client
+    ICP = env['ir.config_parameter'].sudo()
+    toggle = (ICP.get_param(
+        'woow_paas_platform.default_enable_agent_runtime') or '').strip().lower()
+    if toggle not in ('true', '1'):
+        return False
+    if get_agent_runtime_client(env) is None:
+        return False
+    if not _platform_default_agent_template(env):
+        return False
+    return True
+
+
 class AiAssistantController(Controller):
     """Controller for AI assistant and support API endpoints."""
 
@@ -773,34 +820,11 @@ class AiAssistantController(Controller):
             template = project.agent_template_id
         if not template:
             # ④ platform default from Settings (config_parameter). Last
-            # fallback so a project's own binding wins. config_parameter has
-            # no DB constraint, so re-validate is_public + published here — a
-            # stale / unpublished / non-public / garbage value is treated as
-            # "no default" (fail-loud via the no_template branch upstream).
-            default_id = request.env['ir.config_parameter'].sudo().get_param(
-                'woow_paas_platform.default_agent_template_id'
-            )
-            if default_id:
-                try:
-                    candidate = AgentTemplate.browse(int(default_id)).exists()
-                except (ValueError, TypeError):
-                    candidate = AgentTemplate.browse()  # empty recordset
-                # A platform default is served via .sudo() to EVERY project
-                # that lacks its own binding, across all workspaces. is_public
-                # is NOT the same as tenant-neutral: a public published template
-                # may still carry project_ids / mcp_server_ids / skill_ids (the
-                # _check_visibility_consistency constraint only restricts the
-                # is_public=False case). A project-bound template used as the
-                # global default would broadcast that tenant's user-scope MCP
-                # servers and skills into every other tenant's pod (the snapshot
-                # builders do not filter by project). So require the default to
-                # be genuinely unbound (no project_ids) in addition to
-                # public+published — fail-closed: an unqualified default is
-                # treated as no default.
-                if candidate and candidate.is_public \
-                        and candidate.state == 'published' \
-                        and not candidate.project_ids:
-                    template = candidate
+            # fallback so a project's own binding wins. The validity guard
+            # (public + published + project-unbound, cross-tenant leak guard)
+            # lives in _platform_default_agent_template so the create-path
+            # readiness check and this resolution agree by construction.
+            template = _platform_default_agent_template(request.env)
         return template or None
 
     def _get_project_access_role(self, project, user):
