@@ -458,6 +458,29 @@ class TestKubernetesService:
         assert "-f" in cmd_args
 
     @patch("subprocess.run")
+    def test_patch_configmap_merge_patches_data_only(self, mock_run, k8s_service):
+        """patch_configmap merge-patches ONLY the data field so the chart-created
+        ConfigMap's Helm ownership metadata (managed-by:Helm + meta.helm.sh/*) is
+        preserved — a full kubectl apply would strip it and break helm upgrade
+        (ownership conflict)."""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        k8s_service.patch_configmap(
+            "paas-ws-pa-abc123", "agent-pa-abc123-skills", {"skills.json": "[]"},
+        )
+
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "patch" in cmd and "configmap" in cmd
+        assert "agent-pa-abc123-skills" in cmd
+        assert "--type=merge" in cmd
+        patch_arg = next(a for a in cmd if a.startswith("--patch="))
+        body = json.loads(patch_arg[len("--patch="):])
+        assert body == {"data": {"skills.json": "[]"}}, (
+            "patch body must touch ONLY data (no metadata/labels/annotations)"
+        )
+
+    @patch("subprocess.run")
     def test_delete_service(self, mock_run, k8s_service):
         """Test delete a K8s Service."""
         mock_run.return_value = Mock(returncode=0, stdout="", stderr="")

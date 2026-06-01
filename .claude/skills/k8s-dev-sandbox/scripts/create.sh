@@ -237,6 +237,30 @@ if [ "$MODE" = "stg" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowEgressToNamespaces[0]=paas-stg-system"
     EXTRA_ARGS="$EXTRA_ARGS --set odoo.filestore.persistence.storageClass=longhorn-delete"
     EXTRA_ARGS="$EXTRA_ARGS --set postgres.storage.storageClass=longhorn-delete"
+    # Agent-runtime enablement: open the bidirectional NetworkPolicy to the
+    # dynamic paas-ws-*-pa-* pod namespaces (labelled paas-managed=true by the
+    # operator). Without this the odoo->pod WS round-trip is dropped/refused
+    # because the ipBlock-except above excludes the cluster pod CIDR.
+    EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowAgentRuntimePods=true"
+fi
+
+# STG mode: agent-runtime shared secrets via temp file (avoid shell history /
+# git). Sourced from env so the value never lands in the command line. These
+# MUST match the operator-side AGENT_RUNTIME_* contract:
+#   - AGENT_RUNTIME_AUTH_SECRET_CURRENT: identical to the operator's
+#     paas-operator-stg-agent-runtime-auth/current (pod verifies Odoo-signed
+#     skill-bundle tokens with it — a mismatch yields 401 on bundle fetch).
+#   - AGENT_RUNTIME_NAMESPACE_SECRET: Odoo-side only; derives the per-project
+#     namespace hash (fail-closed when unset → "namespace secret not configured").
+if [ "$MODE" = "stg" ] && { [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; }; then
+    _AGENT_RUNTIME_VALUES=$(mktemp)
+    trap "rm -f ${_REGISTRY_VALUES:-} $_AGENT_RUNTIME_VALUES" EXIT
+    {
+        echo "agentRuntime:"
+        [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && echo "  authSecretCurrent: \"${AGENT_RUNTIME_AUTH_SECRET_CURRENT}\""
+        [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] && echo "  namespaceSecret: \"${AGENT_RUNTIME_NAMESPACE_SECRET}\""
+    } > "$_AGENT_RUNTIME_VALUES"
+    EXTRA_ARGS="$EXTRA_ARGS -f $_AGENT_RUNTIME_VALUES"
 fi
 
 if [ "$PGADMIN" = true ]; then

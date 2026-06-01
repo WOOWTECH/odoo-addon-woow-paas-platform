@@ -31,26 +31,21 @@ def _configmap_name(project_hash: str) -> str:
 
 
 def invalidate(project_hash, skill_snapshot):
-    """Patch/replace the skills.json ConfigMap for the project namespace.
+    """Merge-patch the skills.json ConfigMap for the project namespace.
 
     ``skill_snapshot`` is the list[{name, version, sha256, description}] the
     Odoo controller builds (``_build_skill_snapshot``); the pod's
     ``_snapshot_skill_entries`` tolerates a bare list.
+
+    Uses a ``data``-only merge patch (NOT ``kubectl apply``) so the chart-created
+    ConfigMap's Helm ownership metadata survives — else the next ``helm upgrade``
+    hits an ownership conflict.
     """
     namespace = _namespace(project_hash)
-    manifest = {
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {
-            "name": _configmap_name(project_hash),
-            "namespace": namespace,
-            "labels": {
-                "app.kubernetes.io/instance": f"agent-pa-{project_hash}",
-                "app.kubernetes.io/component": "agent-runtime-skills",
-            },
-        },
-        "data": {"skills.json": json.dumps(skill_snapshot)},
-    }
-    result = k8s_service.apply_manifest(manifest)
+    result = k8s_service.patch_configmap(
+        namespace=namespace,
+        configmap_name=_configmap_name(project_hash),
+        data={"skills.json": json.dumps(skill_snapshot)},
+    )
     logger.info("Invalidated skills.json ConfigMap for %s", namespace)
     return result

@@ -1070,6 +1070,24 @@ class TestMcpInvalidator:
             )
             assert patched, "invalidator must patch/replace the mcp.json ConfigMap"
 
+    def test_invalidator_preserves_helm_ownership(self):
+        """The mcp.json ConfigMap is Helm-owned (chart-created). invalidate must
+        MERGE-PATCH the data field only (patch_configmap), NOT a full kubectl apply
+        — apply strips managed-by:Helm + meta.helm.sh/* and breaks helm upgrade."""
+        from src.services import mcp_invalidator
+
+        with patch.object(mcp_invalidator, "k8s_service", create=True) as mock_k8s:
+            mcp_invalidator.invalidate(project_hash=_HASH, mcp_snapshot={"servers": {}})
+            mock_k8s.patch_configmap.assert_called_once()
+            mock_k8s.apply_manifest.assert_not_called()
+            call = mock_k8s.patch_configmap.call_args
+            data = call.kwargs.get("data")
+            if data is None:
+                data = call.args[2]
+            assert set(data.keys()) == {"mcp.json"}, (
+                "patch must touch ONLY data['mcp.json'] (no metadata)"
+            )
+
 
 class TestSkillInvalidator:
     """M.2 — patch the skills.json ConfigMap for a project namespace
@@ -1089,6 +1107,27 @@ class TestSkillInvalidator:
                 or mock_k8s.replace_configmap.called
             )
             assert patched, "invalidator must patch/replace the skills.json ConfigMap"
+
+    def test_invalidator_preserves_helm_ownership(self):
+        """The skills.json ConfigMap is Helm-owned (chart-created). invalidate must
+        MERGE-PATCH the data field only (patch_configmap), NOT a full kubectl apply
+        — apply strips managed-by:Helm + meta.helm.sh/* and breaks helm upgrade."""
+        from src.services import skill_invalidator
+
+        with patch.object(skill_invalidator, "k8s_service", create=True) as mock_k8s:
+            skill_invalidator.invalidate(
+                project_hash=_HASH,
+                skill_snapshot=[{"name": "deploy", "version": "1.0.0", "sha256": "ab"}],
+            )
+            mock_k8s.patch_configmap.assert_called_once()
+            mock_k8s.apply_manifest.assert_not_called()
+            call = mock_k8s.patch_configmap.call_args
+            data = call.kwargs.get("data")
+            if data is None:
+                data = call.args[2]
+            assert set(data.keys()) == {"skills.json"}, (
+                "patch must touch ONLY data['skills.json'] (no metadata)"
+            )
 
     def test_skill_invalidator_namespace_tracks_names(self):
         """skill_invalidator targets the SAME project ns as _names (mirror the
