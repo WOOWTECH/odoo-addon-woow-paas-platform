@@ -7,7 +7,9 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import time
+from datetime import datetime, timezone
 
 import httpx
 
@@ -16,6 +18,7 @@ logger = logging.getLogger(__name__)
 _WEBHOOK_PATH = "/api/agent-runtimes/webhook/state-update"
 _MAX_ATTEMPTS = 3
 _BASE_BACKOFF_SECONDS = 1
+_ENV_WEBHOOK_SECRET = "AGENT_RUNTIME_WEBHOOK_SECRET"
 
 
 def _http_post(url, data=None, headers=None, timeout=None):
@@ -50,3 +53,43 @@ def dispatch_state_update(odoo_base_url, payload, secret):
             time.sleep(backoff)
             backoff *= 2
     return response
+
+
+def _webhook_secret() -> str:
+    """Current outbound webhook signing secret (mirrors jwt_signer._current_secret)."""
+    return os.environ.get(_ENV_WEBHOOK_SECRET, "")
+
+
+def notify_state_update(odoo_base_url, project_hash, new_state, pod_ws_url=None):
+    """Best-effort §5.5 state-update notify. No-op when unconfigured; never raises.
+
+    Designed to run inside a FastAPI BackgroundTask: it must NEVER raise into the
+    request path. Skips entirely when odoo_base_url or the webhook secret is unset
+    (an unsigned webhook would 401 anyway).
+    """
+    secret = _webhook_secret()
+    if not odoo_base_url or not secret:
+        logger.info(
+            "state-update notify skipped (odoo_base_url/secret unset) for %s -> %s",
+            project_hash, new_state,
+        )
+        return
+    payload = {
+        "project_hash": project_hash,
+        "new_state": new_state,
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if pod_ws_url:
+        payload["pod_ws_url"] = pod_ws_url
+    try:
+        resp = dispatch_state_update(odoo_base_url, payload, secret)
+        if resp is not None and resp.status_code >= 400:
+            logger.warning(
+                "state-update notify got HTTP %s for %s -> %s",
+                resp.status_code, project_hash, new_state,
+            )
+    except Exception:
+        logger.warning(
+            "state-update notify failed for %s -> %s", project_hash, new_state,
+            exc_info=True,
+        )

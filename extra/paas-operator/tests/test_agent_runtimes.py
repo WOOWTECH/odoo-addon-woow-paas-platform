@@ -1048,6 +1048,45 @@ class TestWebhookDispatcher:
             )
         assert attempts["n"] >= 3, "dispatcher must retry the 5xx responses"
 
+    def test_notify_state_update_reads_env_secret_and_posts(self, monkeypatch):
+        """W.3: notify_state_update signs with AGENT_RUNTIME_WEBHOOK_SECRET env + sends ts/state/url."""
+        from src.services import webhook_dispatcher
+        monkeypatch.setenv("AGENT_RUNTIME_WEBHOOK_SECRET", "wh-secret-1")
+        captured = {}
+
+        def _fake_dispatch(odoo_base_url, payload, secret):
+            captured["url"] = odoo_base_url
+            captured["payload"] = payload
+            captured["secret"] = secret
+            resp = MagicMock()
+            resp.status_code = 200
+            return resp
+
+        with patch.object(webhook_dispatcher, "dispatch_state_update", _fake_dispatch):
+            webhook_dispatcher.notify_state_update(
+                "http://odoo.local", _HASH, "active", pod_ws_url="ws://pod:8000/v1/chat",
+            )
+        assert captured["secret"] == "wh-secret-1"
+        assert captured["payload"]["project_hash"] == _HASH
+        assert captured["payload"]["new_state"] == "active"
+        assert captured["payload"]["pod_ws_url"] == "ws://pod:8000/v1/chat"
+        assert captured["payload"]["ts"].endswith("Z")
+
+    def test_notify_state_update_noop_without_secret(self, monkeypatch):
+        """W.4: empty webhook secret -> no dispatch (fail-safe, never sends unsigned)."""
+        from src.services import webhook_dispatcher
+        monkeypatch.delenv("AGENT_RUNTIME_WEBHOOK_SECRET", raising=False)
+        with patch.object(webhook_dispatcher, "dispatch_state_update") as mock_dispatch:
+            webhook_dispatcher.notify_state_update("http://odoo.local", _HASH, "active")
+        mock_dispatch.assert_not_called()
+
+    def test_notify_state_update_swallows_exceptions(self, monkeypatch):
+        """W.5: a dispatch error must never propagate (best-effort, off chat path)."""
+        from src.services import webhook_dispatcher
+        monkeypatch.setenv("AGENT_RUNTIME_WEBHOOK_SECRET", "wh-secret-1")
+        with patch.object(webhook_dispatcher, "dispatch_state_update", side_effect=RuntimeError("boom")):
+            webhook_dispatcher.notify_state_update("http://odoo.local", _HASH, "active")  # must not raise
+
 
 # --------------------------------------------------------------------------- #
 # M.* — mcp_invalidator (ConfigMap patch)                                       #
