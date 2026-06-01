@@ -307,6 +307,17 @@ def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundT
     # §5.5 state-sync: best-effort, off the chat critical path. Runs AFTER the
     # response is sent; notify_state_update no-ops when the webhook secret is
     # unset and never raises (so a failed callback never breaks spawn/chat).
+    #
+    # DELIBERATE: this fires on EVERY spawn-or-attach — including plain attach
+    # (steady state, pod already running, pod_state="active") — NOT only on
+    # cold-start/resume transitions. It is the self-heal mechanism: the Odoo
+    # agent_session row is created (state='absent') mid-request and may not be
+    # committed yet when a cold-start webhook fires (so that first webhook can
+    # 404), and the drift cron skips state='absent'. Re-notifying on every
+    # attach converges the row to 'active' on the next chat turn. Do NOT
+    # "optimize" this to transition-only — that reintroduces the stuck-'absent'
+    # bug this change fixes. See docs/superpowers/plans/
+    # 2026-06-01-agent-runtime-state-sync-webhook.md.
     background_tasks.add_task(
         webhook_dispatcher.notify_state_update,
         settings.odoo_base_url,
