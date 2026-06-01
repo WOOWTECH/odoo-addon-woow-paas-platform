@@ -15,6 +15,82 @@ from odoo.http import request, route, Controller
 _logger = logging.getLogger(__name__)
 
 
+def _platform_default_agent_template(env):
+    """Return the platform default agent_template if valid, else empty.
+
+    Valid = config_parameter set + record exists + is_public + published +
+    project-unbound. Mirrors the _resolve_agent_template ④ guard exactly so a
+    project-bound template can never leak that tenant's MCP/skill bindings
+    cluster-wide when served as the global default.
+    """
+    AgentTemplate = env['woow_paas_platform.agent_template'].sudo()
+    default_id = env['ir.config_parameter'].sudo().get_param(
+        'woow_paas_platform.default_agent_template_id'
+    )
+    if not default_id:
+        return AgentTemplate.browse()
+    try:
+        candidate = AgentTemplate.browse(int(default_id)).exists()
+    except (ValueError, TypeError):
+        return AgentTemplate.browse()
+    if candidate and candidate.is_public \
+            and candidate.state == 'published' \
+            and not candidate.project_ids:
+        return candidate
+    return AgentTemplate.browse()
+
+
+def _agent_runtime_autoenable_ready(env):
+    """True when a project created now should auto-enable use_agent_runtime.
+
+    Fail-safe gate (plan 決策 2): platform toggle ON **and** operator
+    configured (url+api_key) **and** a valid platform default template — so
+    auto-enable never lands a project in a guaranteed no_template /
+    spawn_failed state. Users never write use_agent_runtime; this is the only
+    place that flips it on the /woow create path.
+    """
+    from ..services.agent_runtime_client import get_agent_runtime_client
+    ICP = env['ir.config_parameter'].sudo()
+    toggle = (ICP.get_param(
+        'woow_paas_platform.default_enable_agent_runtime') or '').strip().lower()
+    if toggle not in ('true', '1'):
+        return False
+    if get_agent_runtime_client(env) is None:
+        return False
+    if not _platform_default_agent_template(env):
+        return False
+    return True
+
+
+def backfill_existing_projects_use_agent_runtime(env):
+    """One-time backfill for migration 18.0.1.0.30.
+
+    On a platform that already has agent runtime fully configured (operator
+    url+api_key + a valid platform default template), turn on the new-project
+    default toggle and flip every existing project's use_agent_runtime to True.
+
+    Toggle-INDEPENDENT on purpose: the toggle is brand-new (defaults off) at
+    upgrade time, so gating on it would no-op. A platform with operator + a
+    valid default template configured is already running agent runtime → it is
+    safe (and intended, plan 決策 3) to backfill. Returns the number of existing
+    projects flipped to True — 0 means there was nothing to flip: either the
+    platform is not ready (no side effect), or every existing project is already
+    enabled (toggle still gets set ON).
+    """
+    from ..services.agent_runtime_client import get_agent_runtime_client
+    if get_agent_runtime_client(env) is None:
+        return 0
+    if not _platform_default_agent_template(env):
+        return 0
+    env['ir.config_parameter'].sudo().set_param(
+        'woow_paas_platform.default_enable_agent_runtime', 'True')
+    projects = env['project.project'].sudo().search([
+        ('use_agent_runtime', '!=', True)])
+    if projects:
+        projects.write({'use_agent_runtime': True})
+    return len(projects)
+
+
 class AiAssistantController(Controller):
     """Controller for AI assistant and support API endpoints."""
 
@@ -773,34 +849,11 @@ class AiAssistantController(Controller):
             template = project.agent_template_id
         if not template:
             # ④ platform default from Settings (config_parameter). Last
-            # fallback so a project's own binding wins. config_parameter has
-            # no DB constraint, so re-validate is_public + published here — a
-            # stale / unpublished / non-public / garbage value is treated as
-            # "no default" (fail-loud via the no_template branch upstream).
-            default_id = request.env['ir.config_parameter'].sudo().get_param(
-                'woow_paas_platform.default_agent_template_id'
-            )
-            if default_id:
-                try:
-                    candidate = AgentTemplate.browse(int(default_id)).exists()
-                except (ValueError, TypeError):
-                    candidate = AgentTemplate.browse()  # empty recordset
-                # A platform default is served via .sudo() to EVERY project
-                # that lacks its own binding, across all workspaces. is_public
-                # is NOT the same as tenant-neutral: a public published template
-                # may still carry project_ids / mcp_server_ids / skill_ids (the
-                # _check_visibility_consistency constraint only restricts the
-                # is_public=False case). A project-bound template used as the
-                # global default would broadcast that tenant's user-scope MCP
-                # servers and skills into every other tenant's pod (the snapshot
-                # builders do not filter by project). So require the default to
-                # be genuinely unbound (no project_ids) in addition to
-                # public+published — fail-closed: an unqualified default is
-                # treated as no default.
-                if candidate and candidate.is_public \
-                        and candidate.state == 'published' \
-                        and not candidate.project_ids:
-                    template = candidate
+            # fallback so a project's own binding wins. The validity guard
+            # (public + published + project-unbound, cross-tenant leak guard)
+            # lives in _platform_default_agent_template so the create-path
+            # readiness check and this resolution agree by construction.
+            template = _platform_default_agent_template(request.env)
         return template or None
 
     def _get_project_access_role(self, project, user):
@@ -1276,6 +1329,12 @@ class AiAssistantController(Controller):
             cs_id = params.get('cloud_service_id')
             if cs_id:
                 vals['cloud_service_id'] = int(cs_id)
+
+        # Server-decided auto-enable (plan 決策 1+2). use_agent_runtime is NEVER
+        # read from user params — only flipped here when the platform is ready,
+        # so there is no attacker-writable path to widen agent-runtime scope.
+        if _agent_runtime_autoenable_ready(request.env):
+            vals['use_agent_runtime'] = True
 
         project = request.env['project.project'].sudo().create(vals)
         # D2=A: sudo().create() leaves create_uid=SUPERUSER, so the

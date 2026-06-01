@@ -55,6 +55,18 @@ class ResConfigSettings(models.TransientModel):
              'published, project-unbound template qualifies — a project-bound '
              'template would leak that tenant MCP/skill bindings cluster-wide.',
     )
+    woow_default_enable_agent_runtime = fields.Boolean(
+        string='Auto-enable Agent Runtime for New Projects',
+        config_parameter='woow_paas_platform.default_enable_agent_runtime',
+        default=False,
+        help='When ON, a project created from /woow automatically turns on '
+             'its Agent Runtime Pod — but only if the platform is ready '
+             '(PaaS Operator URL + API Key set and a valid Default Agent '
+             'Template selected above). When the platform is not ready the '
+             'flag stays off so a new project never lands in a guaranteed '
+             'spawn-failure state. Users never set this per project; it is a '
+             'platform-wide default decided here.',
+    )
 
     # Subscription Billing
     woow_subscription_journal_id = fields.Many2one(

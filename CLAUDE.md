@@ -79,7 +79,7 @@ E2E 測試依場景選工具（皆 `--headed`，看得到瀏覽器）：
 
 ```bash
 # Odoo module tests
-./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init
+./odoo-bin -c odoo.conf --test-enable --test-tags /woow_paas_platform --stop-after-init
 
 # PaaS Operator unit tests (mocked k8s, default pytest skips -m integration)
 cd extra/paas-operator
