@@ -193,11 +193,12 @@ fi
 # Warn (do not fail) when the agent-runtime secrets are absent: legacy AI chat
 # still deploys fine, but the in-task agent-runtime pod path (test-echo skill)
 # will fail closed without them. create.sh consumes these from the environment.
-if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -z "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
-    echo -e "${YELLOW}Warning: agent-runtime secrets not set — the agent-runtime pod path (test-echo skill) will fail.${NC}" >&2
-    echo -e "${YELLOW}  Set both before deploy if you need it:${NC}" >&2
+if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -z "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] || [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; then
+    echo -e "${YELLOW}Warning: agent-runtime secrets not fully set — pod path / state-sync may fail.${NC}" >&2
+    echo -e "${YELLOW}  Set all three before deploy if you need them:${NC}" >&2
     echo -e "${YELLOW}    export AGENT_RUNTIME_AUTH_SECRET_CURRENT=<same as operator paas-operator-stg-agent-runtime-auth/current>${NC}" >&2
     echo -e "${YELLOW}    export AGENT_RUNTIME_NAMESPACE_SECRET=<odoo-side namespace-hash secret>${NC}" >&2
+    echo -e "${YELLOW}    export AGENT_RUNTIME_WEBHOOK_SECRET=<same as operator webhook secret; else agent_session.state stuck 'absent'>${NC}" >&2
 fi
 
 # --- Resolve addon ref ---

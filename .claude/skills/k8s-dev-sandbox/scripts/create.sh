@@ -252,13 +252,19 @@ fi
 #     skill-bundle tokens with it — a mismatch yields 401 on bundle fetch).
 #   - AGENT_RUNTIME_NAMESPACE_SECRET: Odoo-side only; derives the per-project
 #     namespace hash (fail-closed when unset → "namespace secret not configured").
-if [ "$MODE" = "stg" ] && { [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; }; then
+#   - AGENT_RUNTIME_WEBHOOK_SECRET: Odoo verifies the operator-signed §5.5
+#     state-update webhook with it. MUST equal the operator's webhook secret;
+#     empty → every state-update 401s → agent_session.state stuck 'absent'
+#     (chat still works — the webhook is off the chat path).
+if [ "$MODE" = "stg" ] && { [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] || [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; }; then
     _AGENT_RUNTIME_VALUES=$(mktemp)
     trap "rm -f ${_REGISTRY_VALUES:-} $_AGENT_RUNTIME_VALUES" EXIT
     {
         echo "agentRuntime:"
         [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && echo "  authSecretCurrent: \"${AGENT_RUNTIME_AUTH_SECRET_CURRENT}\""
         [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] && echo "  namespaceSecret: \"${AGENT_RUNTIME_NAMESPACE_SECRET}\""
+        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ] && echo "  webhookSecret: \"${AGENT_RUNTIME_WEBHOOK_SECRET}\""
+        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ] && echo "  webhookSecretPrevious: \"${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS}\""
     } > "$_AGENT_RUNTIME_VALUES"
     EXTRA_ARGS="$EXTRA_ARGS -f $_AGENT_RUNTIME_VALUES"
 fi

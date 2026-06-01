@@ -42,7 +42,7 @@ tea login add --name gitea --url https://git-prod.woowtech.io --token <your-toke
 
 **Agent-runtime（test-echo skill / agent pod）所需 env（選用，但要用就必帶）：**
 
-若 stg 需要在任務 chat 內 spawn agent-runtime pod（執行 skill），deploy 前須先 export 這兩個 env，`create.sh` stg mode 會把它們經 temp values file 注入（不進 git、不進 shell 歷史）：
+若 stg 需要在任務 chat 內 spawn agent-runtime pod（執行 skill）並讓 `agent_session.state` 正確同步，deploy 前須先 export 這三個 env，`create.sh` stg mode 會把它們經 temp values file 注入（不進 git、不進 shell 歷史）：
 
 ```bash
 # 與 operator 端 paas-operator-stg-agent-runtime-auth/current 同一把 HS256 key
@@ -51,9 +51,14 @@ export AGENT_RUNTIME_AUTH_SECRET_CURRENT=<同 operator auth/current>
 
 # Odoo 端算 per-project namespace hash 用（未設 → spawn 時 "namespace secret not configured" fail-closed）
 export AGENT_RUNTIME_NAMESPACE_SECRET=<odoo 端固定值>
+
+# 與 operator 端 webhook secret 同一把：Odoo 用它驗證 operator 簽的 §5.5 state-update
+# webhook（不一致/未設 → state-update 一律 401 → agent_session.state 卡在 'absent'）。
+# chat 不受影響（webhook 不在 chat 路徑上），但後台狀態 / observability 會失準。
+export AGENT_RUNTIME_WEBHOOK_SECRET=<同 operator webhook secret>
 ```
 
-> 不設這兩個 env 仍可部署、legacy AI chat 正常，但 agent-runtime pod 路徑（test-echo 等 skill）會失敗。deploy-stg 偵測到缺漏時會印警告。
+> 不設這些 env 仍可部署、legacy AI chat 正常；缺 auth/namespace → agent-runtime pod 路徑（test-echo 等 skill）失敗，缺 webhook → `agent_session.state` 同步失效（chat 仍正常）。deploy-stg 偵測到缺漏時會印警告。
 > 對應 NetworkPolicy（`networkPolicy.allowAgentRuntimePods=true`，開放 odoo ↔ `paas-ws-*-pa-*` pod 雙向流量）已在 `create.sh` stg mode 寫死，無需手動設定。
 
 ## 執行流程
