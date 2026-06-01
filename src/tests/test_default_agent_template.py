@@ -252,3 +252,23 @@ class TestSeededDefaultAgentTemplate(TransactionCase):
             str(stored), str(other.id),
             "helper must not overwrite an already-set default",
         )
+
+    def test_post_init_pointed_default_at_seed_on_install(self):
+        """S-5 (install wiring invariant): on a real install post_init_hook
+        auto-pointed the LIVE default_agent_template_id config_parameter at the
+        seeded template. Unlike S-2/S-3 (which unlink/set the param and call the
+        helper directly), this reads the unmodified post-install value, so it
+        guards the glue S-2..S-4 bypass: that post_init_hook actually calls the
+        helper AND the data file loads before the hook (env.ref resolves). If
+        this goes red while S-2/S-3 stay green, the helper call was dropped from
+        post_init_hook or the seed no longer loads — i.e. the out-of-the-box
+        contract silently regressed. TransactionCase rollback isolates it from
+        sibling tests that mutate the same param.
+        """
+        seed = self.env.ref('woow_paas_platform.agent_template_default')
+        stored = self.env['ir.config_parameter'].sudo().get_param(_PARAM)
+        self.assertEqual(
+            str(stored), str(seed.id),
+            "post_init_hook must auto-point the platform default at the seed on "
+            "a fresh install (out-of-the-box contract).",
+        )
