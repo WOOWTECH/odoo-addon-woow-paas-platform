@@ -15,7 +15,7 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 
 from src.config import settings
 from src.models.schemas import (
@@ -25,7 +25,12 @@ from src.models.schemas import (
     SpawnOrAttachRequest,
     SyncWorkspacesRequest,
 )
-from src.services import jwt_signer, mcp_invalidator, skill_invalidator
+from src.services import (
+    jwt_signer,
+    mcp_invalidator,
+    skill_invalidator,
+    webhook_dispatcher,
+)
 from src.services.helm import HelmException, HelmService, KubernetesService
 
 logger = logging.getLogger(__name__)
@@ -222,7 +227,7 @@ def _resume_pod(namespace, release, project_hash, project_id, workspace_ids):
 
 
 @router.post("/spawn-or-attach", summary="Spawn, attach, or resume a project pod")
-def spawn_or_attach(request: SpawnOrAttachRequest):
+def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundTasks):
     """Cold start / attach / resume the project's agent-runtime pod."""
     namespace, release = _names(request.project_hash)
     started = time.time()
@@ -299,6 +304,27 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
         invoker_user_id=request.invoker_user_id,
         invoker_role=request.invoker_role,
     )
+    # §5.5 state-sync: best-effort, off the chat critical path. Runs AFTER the
+    # response is sent; notify_state_update no-ops when the webhook secret is
+    # unset and never raises (so a failed callback never breaks spawn/chat).
+    #
+    # DELIBERATE: this fires on EVERY spawn-or-attach — including plain attach
+    # (steady state, pod already running, pod_state="active") — NOT only on
+    # cold-start/resume transitions. It is the self-heal mechanism: the Odoo
+    # agent_session row is created (state='absent') mid-request and may not be
+    # committed yet when a cold-start webhook fires (so that first webhook can
+    # 404), and the drift cron skips state='absent'. Re-notifying on every
+    # attach converges the row to 'active' on the next chat turn. Do NOT
+    # "optimize" this to transition-only — that reintroduces the stuck-'absent'
+    # bug this change fixes. See docs/superpowers/plans/
+    # 2026-06-01-agent-runtime-state-sync-webhook.md.
+    background_tasks.add_task(
+        webhook_dispatcher.notify_state_update,
+        settings.odoo_base_url,
+        request.project_hash,
+        pod_state,
+        _pod_ws_url(namespace, release),
+    )
     return {
         "pod_ws_url": _pod_ws_url(namespace, release),
         "ws_token": ws_token,
@@ -309,7 +335,7 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
 
 
 @router.post("/{project_hash}/reap", summary="Scale a project pod to zero")
-def reap(project_hash: str):
+def reap(project_hash: str, background_tasks: BackgroundTasks):
     """Idempotently scale the pod to 0 + stamp reaped-since annotation."""
     namespace, release = _names(project_hash)
 
@@ -327,6 +353,12 @@ def reap(project_hash: str):
         patch='{"metadata":{"annotations":{"agent.woow.tw/reaped-since":"%s"}}}'
         % reaped_at,
         patch_type="merge",
+    )
+    background_tasks.add_task(
+        webhook_dispatcher.notify_state_update,
+        settings.odoo_base_url,
+        project_hash,
+        "reaped",
     )
     return {"action": "reaped"}
 

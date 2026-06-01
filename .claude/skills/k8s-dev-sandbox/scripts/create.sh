@@ -218,6 +218,15 @@ if [ -n "$IMAGE_TAG" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set odoo.image.repository=$IMAGE_REPO --set odoo.image.tag=$IMAGE_TAG_ONLY"
 fi
 
+# Emit a value as a single-quoted YAML scalar — robust to ", \, $ and backtick in
+# secrets / passwords. Only ' is special inside single-quoted YAML, escaped by
+# doubling. (Double-quoted scalars silently broke helm parsing on values with " or \.)
+yaml_sq() {
+    local v=$1
+    v=${v//\'/\'\'}
+    printf "'%s'" "$v"
+}
+
 # STG mode: pass registry credentials via temp file to avoid shell history exposure
 if [ "$MODE" = "stg" ] && [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
     _REGISTRY_VALUES=$(mktemp)
@@ -225,8 +234,8 @@ if [ "$MODE" = "stg" ] && [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
     cat > "$_REGISTRY_VALUES" <<REGEOF
 registry:
   server: jcr-prod.woowtech.io
-  username: "${JCR_USER}"
-  password: "${JCR_PASS}"
+  username: $(yaml_sq "$JCR_USER")
+  password: $(yaml_sq "$JCR_PASS")
 REGEOF
     EXTRA_ARGS="$EXTRA_ARGS -f $_REGISTRY_VALUES"
 fi
@@ -234,6 +243,12 @@ fi
 # STG mode: allow cloudflare tunnel ingress + egress to paas-operator
 if [ "$MODE" = "stg" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowIngressFromNamespaces[0]=paas-stg-cloudflare-system"
+    # Allow the operator (paas-stg-system) to reach Odoo INBOUND — the §5.5
+    # state-update webhook is an operator->Odoo POST. Odoo egress to the operator
+    # is already open (allowEgressToNamespaces below, for the spawn call), but the
+    # reverse ingress was not, so every webhook hit a K3s NP RST (refused) and the
+    # agent_session.state stayed stuck 'absent'. The chart mirrors this on egress.
+    EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowIngressFromNamespaces[1]=paas-stg-system"
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowEgressToNamespaces[0]=paas-stg-system"
     EXTRA_ARGS="$EXTRA_ARGS --set odoo.filestore.persistence.storageClass=longhorn-delete"
     EXTRA_ARGS="$EXTRA_ARGS --set postgres.storage.storageClass=longhorn-delete"
@@ -252,13 +267,19 @@ fi
 #     skill-bundle tokens with it — a mismatch yields 401 on bundle fetch).
 #   - AGENT_RUNTIME_NAMESPACE_SECRET: Odoo-side only; derives the per-project
 #     namespace hash (fail-closed when unset → "namespace secret not configured").
-if [ "$MODE" = "stg" ] && { [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; }; then
+#   - AGENT_RUNTIME_WEBHOOK_SECRET: Odoo verifies the operator-signed §5.5
+#     state-update webhook with it. MUST equal the operator's webhook secret;
+#     empty → every state-update 401s → agent_session.state stuck 'absent'
+#     (chat still works — the webhook is off the chat path).
+if [ "$MODE" = "stg" ] && { [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] || [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; }; then
     _AGENT_RUNTIME_VALUES=$(mktemp)
     trap "rm -f ${_REGISTRY_VALUES:-} $_AGENT_RUNTIME_VALUES" EXIT
     {
         echo "agentRuntime:"
-        [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && echo "  authSecretCurrent: \"${AGENT_RUNTIME_AUTH_SECRET_CURRENT}\""
-        [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] && echo "  namespaceSecret: \"${AGENT_RUNTIME_NAMESPACE_SECRET}\""
+        [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && echo "  authSecretCurrent: $(yaml_sq "$AGENT_RUNTIME_AUTH_SECRET_CURRENT")"
+        [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] && echo "  namespaceSecret: $(yaml_sq "$AGENT_RUNTIME_NAMESPACE_SECRET")"
+        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ] && echo "  webhookSecret: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET")"
+        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ] && echo "  webhookSecretPrevious: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS")"
     } > "$_AGENT_RUNTIME_VALUES"
     EXTRA_ARGS="$EXTRA_ARGS -f $_AGENT_RUNTIME_VALUES"
 fi

@@ -406,6 +406,32 @@ class TestSpawnOrAttach:
                 "SKILL_BUNDLE_TOKEN must be passed to helm install as pod env"
             )
 
+    def test_spawn_or_attach_notifies_odoo_state(self, client):
+        """S.N: spawn-or-attach enqueues a §5.5 state-update notify with the pod_state."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.webhook_dispatcher") as mock_wh:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt.token"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+
+        assert resp.status_code == 200, resp.text
+        # BackgroundTasks run after the response within the TestClient request.
+        mock_wh.notify_state_update.assert_called_once()
+        call = mock_wh.notify_state_update.call_args
+        called_args = list(call.args) + list(call.kwargs.values())
+        assert "spawning" in called_args, (
+            "cold-start must notify Odoo with pod_state='spawning'"
+        )
+
     def test_spawn_cold_start_labels_namespace_for_odoo_netpol(self, client):
         """Cold start must pre-create the agent-runtime namespace carrying the
         ``paas-managed=true`` LABEL: the Odoo NetworkPolicy authorises pod<->Odoo
@@ -851,6 +877,20 @@ class TestReap:
             assert resp.status_code == 200, resp.text
             assert resp.json()["action"] == "not_found"
 
+    def test_reap_notifies_odoo_reaped(self, client):
+        """reap enqueues a §5.5 state-update notify with new_state='reaped'."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.webhook_dispatcher") as mock_wh:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.get_deployment_replicas.return_value = 1
+            resp = client.post(f"/api/agent-runtimes/{_HASH}/reap")
+        assert resp.status_code == 200, resp.text
+        mock_wh.notify_state_update.assert_called_once()
+        called_args = list(mock_wh.notify_state_update.call_args.args) + \
+            list(mock_wh.notify_state_update.call_args.kwargs.values())
+        assert "reaped" in called_args
+
 
 class TestResume:
     """S.5 / §2.11.1 — dedicated resume re-signs token + patches env before scale."""
@@ -1047,6 +1087,45 @@ class TestWebhookDispatcher:
                 secret="s",
             )
         assert attempts["n"] >= 3, "dispatcher must retry the 5xx responses"
+
+    def test_notify_state_update_reads_env_secret_and_posts(self, monkeypatch):
+        """W.3: notify_state_update signs with AGENT_RUNTIME_WEBHOOK_SECRET env + sends ts/state/url."""
+        from src.services import webhook_dispatcher
+        monkeypatch.setenv("AGENT_RUNTIME_WEBHOOK_SECRET", "wh-secret-1")
+        captured = {}
+
+        def _fake_dispatch(odoo_base_url, payload, secret):
+            captured["url"] = odoo_base_url
+            captured["payload"] = payload
+            captured["secret"] = secret
+            resp = MagicMock()
+            resp.status_code = 200
+            return resp
+
+        with patch.object(webhook_dispatcher, "dispatch_state_update", _fake_dispatch):
+            webhook_dispatcher.notify_state_update(
+                "http://odoo.local", _HASH, "active", pod_ws_url="ws://pod:8000/v1/chat",
+            )
+        assert captured["secret"] == "wh-secret-1"
+        assert captured["payload"]["project_hash"] == _HASH
+        assert captured["payload"]["new_state"] == "active"
+        assert captured["payload"]["pod_ws_url"] == "ws://pod:8000/v1/chat"
+        assert captured["payload"]["ts"].endswith("Z")
+
+    def test_notify_state_update_noop_without_secret(self, monkeypatch):
+        """W.4: empty webhook secret -> no dispatch (fail-safe, never sends unsigned)."""
+        from src.services import webhook_dispatcher
+        monkeypatch.delenv("AGENT_RUNTIME_WEBHOOK_SECRET", raising=False)
+        with patch.object(webhook_dispatcher, "dispatch_state_update") as mock_dispatch:
+            webhook_dispatcher.notify_state_update("http://odoo.local", _HASH, "active")
+        mock_dispatch.assert_not_called()
+
+    def test_notify_state_update_swallows_exceptions(self, monkeypatch):
+        """W.5: a dispatch error must never propagate (best-effort, off chat path)."""
+        from src.services import webhook_dispatcher
+        monkeypatch.setenv("AGENT_RUNTIME_WEBHOOK_SECRET", "wh-secret-1")
+        with patch.object(webhook_dispatcher, "dispatch_state_update", side_effect=RuntimeError("boom")):
+            webhook_dispatcher.notify_state_update("http://odoo.local", _HASH, "active")  # must not raise
 
 
 # --------------------------------------------------------------------------- #
