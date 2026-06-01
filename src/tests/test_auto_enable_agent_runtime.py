@@ -33,3 +33,18 @@ class TestAutoEnableToggleSetting(TransactionCase):
             "Settings field must persist True to the '%s' config_parameter."
             % _TOGGLE,
         )
+
+
+@tagged('post_install', '-at_install')
+class TestAutoEnableUninstallCleanup(TransactionCase):
+    """The new config_parameter must be in hooks._CONFIG_PARAMETERS so an
+    addon uninstall clears it (CLAUDE.md: config_parameter is not auto-cleaned).
+    """
+
+    def test_toggle_param_in_uninstall_cleanup_list(self):
+        from odoo.addons.woow_paas_platform import hooks
+        self.assertIn(
+            _TOGGLE, hooks._CONFIG_PARAMETERS,
+            "default_enable_agent_runtime must be in _CONFIG_PARAMETERS so "
+            "uninstall removes it.",
+        )
