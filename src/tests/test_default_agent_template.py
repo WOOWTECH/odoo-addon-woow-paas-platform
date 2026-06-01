@@ -11,14 +11,16 @@ Covers:
   D-3  default points at an unpublished template → treated as unset (None).
   D-4  default points at a non-public template → treated as unset (None).
   D-5  config_parameter holds a stale/garbage value → no crash, returns None.
+  D-6  project-bound public template as default → refused (cross-tenant guard).
 """
 from unittest.mock import patch
 
-from odoo.tests.common import TransactionCase
+from odoo.tests.common import TransactionCase, tagged
 
 _PARAM = 'woow_paas_platform.default_agent_template_id'
 
 
+@tagged('post_install', '-at_install')
 class TestDefaultAgentTemplateSettings(TransactionCase):
     """S-1: the Settings Many2one persists to ir.config_parameter."""
 
@@ -40,8 +42,9 @@ class TestDefaultAgentTemplateSettings(TransactionCase):
         )
 
 
+@tagged('post_install', '-at_install')
 class TestDefaultAgentTemplateResolution(TransactionCase):
-    """D-1..D-5: _resolve_agent_template platform-default fallback.
+    """D-1..D-6: _resolve_agent_template platform-default fallback.
 
     The method lives on the controller and reads ``request.env``; we
     instantiate the controller and patch its module-level ``request`` so
@@ -58,8 +61,11 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
 
     def _resolve(self, project):
         """Call _resolve_agent_template with request.env bound to test env."""
+        test_env = self.env
+
         class _Req:
-            env = self.env
+            env = test_env
+
         with patch.object(self._ai_assistant, 'request', _Req()):
             return self.controller._resolve_agent_template(project)
 
@@ -84,7 +90,6 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
     def test_d2_project_binding_wins_over_default(self):
         own = self.AgentTemplate.create({
             'name': 'Own Template', 'is_public': True, 'state': 'published',
-            'project_ids': [(6, 0, [])],
         })
         default = self.AgentTemplate.create({
             'name': 'Default Woow Template',
