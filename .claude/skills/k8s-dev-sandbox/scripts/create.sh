@@ -218,6 +218,15 @@ if [ -n "$IMAGE_TAG" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set odoo.image.repository=$IMAGE_REPO --set odoo.image.tag=$IMAGE_TAG_ONLY"
 fi
 
+# Emit a value as a single-quoted YAML scalar — robust to ", \, $ and backtick in
+# secrets / passwords. Only ' is special inside single-quoted YAML, escaped by
+# doubling. (Double-quoted scalars silently broke helm parsing on values with " or \.)
+yaml_sq() {
+    local v=$1
+    v=${v//\'/\'\'}
+    printf "'%s'" "$v"
+}
+
 # STG mode: pass registry credentials via temp file to avoid shell history exposure
 if [ "$MODE" = "stg" ] && [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
     _REGISTRY_VALUES=$(mktemp)
@@ -225,8 +234,8 @@ if [ "$MODE" = "stg" ] && [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
     cat > "$_REGISTRY_VALUES" <<REGEOF
 registry:
   server: jcr-prod.woowtech.io
-  username: "${JCR_USER}"
-  password: "${JCR_PASS}"
+  username: $(yaml_sq "$JCR_USER")
+  password: $(yaml_sq "$JCR_PASS")
 REGEOF
     EXTRA_ARGS="$EXTRA_ARGS -f $_REGISTRY_VALUES"
 fi
@@ -261,10 +270,10 @@ if [ "$MODE" = "stg" ] && { [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [
     trap "rm -f ${_REGISTRY_VALUES:-} $_AGENT_RUNTIME_VALUES" EXIT
     {
         echo "agentRuntime:"
-        [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && echo "  authSecretCurrent: \"${AGENT_RUNTIME_AUTH_SECRET_CURRENT}\""
-        [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] && echo "  namespaceSecret: \"${AGENT_RUNTIME_NAMESPACE_SECRET}\""
-        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ] && echo "  webhookSecret: \"${AGENT_RUNTIME_WEBHOOK_SECRET}\""
-        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ] && echo "  webhookSecretPrevious: \"${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS}\""
+        [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && echo "  authSecretCurrent: $(yaml_sq "$AGENT_RUNTIME_AUTH_SECRET_CURRENT")"
+        [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ] && echo "  namespaceSecret: $(yaml_sq "$AGENT_RUNTIME_NAMESPACE_SECRET")"
+        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ] && echo "  webhookSecret: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET")"
+        [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ] && echo "  webhookSecretPrevious: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS")"
     } > "$_AGENT_RUNTIME_VALUES"
     EXTRA_ARGS="$EXTRA_ARGS -f $_AGENT_RUNTIME_VALUES"
 fi
