@@ -406,6 +406,32 @@ class TestSpawnOrAttach:
                 "SKILL_BUNDLE_TOKEN must be passed to helm install as pod env"
             )
 
+    def test_spawn_or_attach_notifies_odoo_state(self, client):
+        """S.N: spawn-or-attach enqueues a §5.5 state-update notify with the pod_state."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.webhook_dispatcher") as mock_wh:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt.token"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+
+        assert resp.status_code == 200, resp.text
+        # BackgroundTasks run after the response within the TestClient request.
+        mock_wh.notify_state_update.assert_called_once()
+        call = mock_wh.notify_state_update.call_args
+        called_args = list(call.args) + list(call.kwargs.values())
+        assert "spawning" in called_args, (
+            "cold-start must notify Odoo with pod_state='spawning'"
+        )
+
     def test_spawn_cold_start_labels_namespace_for_odoo_netpol(self, client):
         """Cold start must pre-create the agent-runtime namespace carrying the
         ``paas-managed=true`` LABEL: the Odoo NetworkPolicy authorises pod<->Odoo

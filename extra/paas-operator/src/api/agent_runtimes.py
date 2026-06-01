@@ -15,7 +15,7 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 
 from src.config import settings
 from src.models.schemas import (
@@ -25,7 +25,12 @@ from src.models.schemas import (
     SpawnOrAttachRequest,
     SyncWorkspacesRequest,
 )
-from src.services import jwt_signer, mcp_invalidator, skill_invalidator
+from src.services import (
+    jwt_signer,
+    mcp_invalidator,
+    skill_invalidator,
+    webhook_dispatcher,
+)
 from src.services.helm import HelmException, HelmService, KubernetesService
 
 logger = logging.getLogger(__name__)
@@ -222,7 +227,7 @@ def _resume_pod(namespace, release, project_hash, project_id, workspace_ids):
 
 
 @router.post("/spawn-or-attach", summary="Spawn, attach, or resume a project pod")
-def spawn_or_attach(request: SpawnOrAttachRequest):
+def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundTasks):
     """Cold start / attach / resume the project's agent-runtime pod."""
     namespace, release = _names(request.project_hash)
     started = time.time()
@@ -298,6 +303,16 @@ def spawn_or_attach(request: SpawnOrAttachRequest):
         channel_id=request.channel_id,
         invoker_user_id=request.invoker_user_id,
         invoker_role=request.invoker_role,
+    )
+    # §5.5 state-sync: best-effort, off the chat critical path. Runs AFTER the
+    # response is sent; notify_state_update no-ops when the webhook secret is
+    # unset and never raises (so a failed callback never breaks spawn/chat).
+    background_tasks.add_task(
+        webhook_dispatcher.notify_state_update,
+        settings.odoo_base_url,
+        request.project_hash,
+        pod_state,
+        _pod_ws_url(namespace, release),
     )
     return {
         "pod_ws_url": _pod_ws_url(namespace, release),
