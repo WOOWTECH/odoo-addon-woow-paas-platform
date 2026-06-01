@@ -95,4 +95,6 @@ from . import test_skill_e2e_lifecycle_download            # e2e lifecycle ↔ d
 # feat: skill dual-scope (system/user) — schema, ACL, pod loading, migration
 from . import test_skill_dual_scope
 from . import test_skill_upload_wizard
+# feat: platform default agent template (Settings fallback)
+from . import test_default_agent_template
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
