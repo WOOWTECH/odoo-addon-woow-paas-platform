@@ -62,6 +62,33 @@ def _agent_runtime_autoenable_ready(env):
     return True
 
 
+def backfill_existing_projects_use_agent_runtime(env):
+    """One-time backfill for migration 18.0.1.0.30.
+
+    On a platform that already has agent runtime fully configured (operator
+    url+api_key + a valid platform default template), turn on the new-project
+    default toggle and flip every existing project's use_agent_runtime to True.
+
+    Toggle-INDEPENDENT on purpose: the toggle is brand-new (defaults off) at
+    upgrade time, so gating on it would no-op. A platform with operator + a
+    valid default template configured is already running agent runtime → it is
+    safe (and intended, plan 決策 3) to backfill. Returns the number of
+    projects flipped (0 when the platform is not ready).
+    """
+    from ..services.agent_runtime_client import get_agent_runtime_client
+    if get_agent_runtime_client(env) is None:
+        return 0
+    if not _platform_default_agent_template(env):
+        return 0
+    env['ir.config_parameter'].sudo().set_param(
+        'woow_paas_platform.default_enable_agent_runtime', 'True')
+    projects = env['project.project'].sudo().search([
+        ('use_agent_runtime', '!=', True)])
+    if projects:
+        projects.write({'use_agent_runtime': True})
+    return len(projects)
+
+
 class AiAssistantController(Controller):
     """Controller for AI assistant and support API endpoints."""
 

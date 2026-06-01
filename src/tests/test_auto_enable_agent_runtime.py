@@ -173,3 +173,50 @@ class TestAutoEnableOnCreate(TransactionCase):
             "Unready platform must NOT auto-enable (would guarantee "
             "spawn_failed/no_template).",
         )
+
+
+@tagged('post_install', '-at_install')
+class TestBackfillExistingProjects(TransactionCase):
+    """B-*: backfill_existing_projects_use_agent_runtime (migration helper)."""
+
+    def setUp(self):
+        super().setUp()
+        from odoo.addons.woow_paas_platform.controllers import ai_assistant
+        self.mod = ai_assistant
+        self.ICP = self.env['ir.config_parameter'].sudo()
+        self.AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+
+    def _make_ready_platform(self):
+        # NOTE: backfill is toggle-INDEPENDENT (toggle is off at upgrade time);
+        # readiness = operator configured + valid default template.
+        self.ICP.set_param(_URL, 'http://paas-operator:8000')
+        self.ICP.set_param(_KEY, 'secret-key')
+        tmpl = self.AgentTemplate.create({
+            'name': 'Platform Default', 'is_public': True, 'state': 'published',
+        })
+        self.ICP.set_param(_DEFTMPL, str(tmpl.id))
+
+    def test_b1_ready_flips_existing_and_sets_toggle(self):
+        self._make_ready_platform()
+        proj = self.env['project.project'].sudo().create(
+            {'name': 'b1-existing'})
+        self.assertFalse(proj.use_agent_runtime)
+        flipped = self.mod.backfill_existing_projects_use_agent_runtime(self.env)
+        self.assertGreaterEqual(flipped, 1)
+        self.assertTrue(
+            proj.use_agent_runtime,
+            "Backfill on a ready platform must flip existing projects.",
+        )
+        self.assertEqual(
+            self.ICP.get_param(_TOGGLE), 'True',
+            "Backfill must also turn the new-project default toggle ON so the "
+            "create path stays consistent post-migration.",
+        )
+
+    def test_b2_not_ready_is_noop(self):
+        # operator unconfigured → backfill must do nothing
+        proj = self.env['project.project'].sudo().create(
+            {'name': 'b2-existing'})
+        flipped = self.mod.backfill_existing_projects_use_agent_runtime(self.env)
+        self.assertEqual(flipped, 0)
+        self.assertFalse(proj.use_agent_runtime)
