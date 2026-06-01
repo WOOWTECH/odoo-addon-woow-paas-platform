@@ -12,6 +12,13 @@ Covers:
   D-4  default points at a non-public template → treated as unset (None).
   D-5  config_parameter holds a stale/garbage value → no crash, returns None.
   D-6  project-bound public template as default → refused (cross-tenant guard).
+
+Fixture note: agent_template state is created/bound through ``.sudo()`` because
+``agent_template._check_project_ids_grantor_authority`` requires the acting user
+to hold owner/admin role on every bound project (and bypasses for superuser).
+These tests exercise the *resolution* logic, not the bind-time ACL, so seeding
+state as superuser is correct. Resolution itself is still driven through the
+real ``request.env`` (non-sudo) — the controller method does its own ``.sudo()``.
 """
 from unittest.mock import patch
 
@@ -25,12 +32,12 @@ class TestDefaultAgentTemplateSettings(TransactionCase):
     """S-1: the Settings Many2one persists to ir.config_parameter."""
 
     def test_s1_settings_field_round_trips_to_config_parameter(self):
-        tmpl = self.env['woow_paas_platform.agent_template'].create({
+        tmpl = self.env['woow_paas_platform.agent_template'].sudo().create({
             'name': 'Default Woow Template',
             'is_public': True,
             'state': 'published',
         })
-        settings = self.env['res.config.settings'].create({
+        settings = self.env['res.config.settings'].sudo().create({
             'woow_default_agent_template_id': tmpl.id,
         })
         settings.execute()
@@ -56,7 +63,9 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
         from odoo.addons.woow_paas_platform.controllers import ai_assistant
         self._ai_assistant = ai_assistant
         self.controller = ai_assistant.AiAssistantController()
-        self.AgentTemplate = self.env['woow_paas_platform.agent_template']
+        # sudo for fixture seeding (bypasses grantor-authority constraint on
+        # project_ids — we are setting up state, not testing the bind ACL).
+        self.AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
         self.ICP = self.env['ir.config_parameter'].sudo()
 
     def _resolve(self, project):
@@ -73,7 +82,7 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
         self.ICP.set_param(_PARAM, str(template_id))
 
     def _make_project(self, name='Resolve Test Project'):
-        return self.env['project.project'].create({'name': name})
+        return self.env['project.project'].sudo().create({'name': name})
 
     def test_d1_no_binding_valid_default_returns_default(self):
         tmpl = self.AgentTemplate.create({
