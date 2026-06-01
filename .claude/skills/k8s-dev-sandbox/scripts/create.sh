@@ -243,6 +243,12 @@ fi
 # STG mode: allow cloudflare tunnel ingress + egress to paas-operator
 if [ "$MODE" = "stg" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowIngressFromNamespaces[0]=paas-stg-cloudflare-system"
+    # Allow the operator (paas-stg-system) to reach Odoo INBOUND — the §5.5
+    # state-update webhook is an operator->Odoo POST. Odoo egress to the operator
+    # is already open (allowEgressToNamespaces below, for the spawn call), but the
+    # reverse ingress was not, so every webhook hit a K3s NP RST (refused) and the
+    # agent_session.state stayed stuck 'absent'. The chart mirrors this on egress.
+    EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowIngressFromNamespaces[1]=paas-stg-system"
     EXTRA_ARGS="$EXTRA_ARGS --set networkPolicy.allowEgressToNamespaces[0]=paas-stg-system"
     EXTRA_ARGS="$EXTRA_ARGS --set odoo.filestore.persistence.storageClass=longhorn-delete"
     EXTRA_ARGS="$EXTRA_ARGS --set postgres.storage.storageClass=longhorn-delete"
