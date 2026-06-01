@@ -23,6 +23,8 @@ agent-runtime 是 **flag-gated dual-mode rollout**（`ai_assistant.py` §5.6）�
 | 4 | **`AGENT_RUNTIME_NAMESPACE_SECRET` 未注入** | 紅字 `namespace secret is not configured ... fail-closed` | chart 有 env（`odoo-deployment.yaml:108`，`optional:true`）但 secret 缺 key → env 空 → `agent_session._get_namespace_secret()` fail-closed。create.sh 從沒產這個 secret 值 | patch secret 加 key（驗證）+ create.sh 從 env 注入（持久） |
 | 5 | **NetworkPolicy 沒開 agent pod 路徑** | `[Errno 111] Connect refused 10.43.x:8000` | chart 有 `allowAgentRuntimePods` flag（`network-policy.yaml:48/96`，用 `paas-managed:true` 開雙向）但 stg 沒啟用；Odoo egress 的 `ipBlock 0.0.0.0/0 except 10.0.0.0/8` 把 pod CIDR 排除 | patch NP（驗證）+ create.sh `--set networkPolicy.allowAgentRuntimePods=true`（持久） |
 
+> 註（2026-06-01）：gap #3「project 無 agent_template」對**新環境**已緩解——module 自 fresh install 起 seed 一筆 tenant-neutral 平台預設（`agent_template_default`，public+published+unbound）並由 `post_init` 自動指向 `default_agent_template_id`，resolver 第 4 條 fallback 直接生效 → 不再需要逐 project 手動綁 template（admin 只需補 `ai_config_woowbot` 的 api_key）。見 [`docs/superpowers/specs/2026-06-01-seed-agent-template-design.md`](../../superpowers/specs/2026-06-01-seed-agent-template-design.md)。上方 5 層 gap chain 為歷史 debug 紀錄，保留不動。
+
 ### 為什麼難 debug：refused ≠ timeout 的關鍵分辨
 
 Gap 5 一度誤導：NetworkPolicy 擋通常是 **timeout**（封包丟棄），但這裡是 **Connection refused**。差點排除 NP 嫌疑。實證才釐清：
