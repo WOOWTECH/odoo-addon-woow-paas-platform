@@ -3,6 +3,8 @@
 > 來源：stg debug session 2026-05-31。症狀是 `stg.woowtech.io/woow` 的 AI 任務 chat「找不到 skill / 看不到 agent-runtime pod」，使用者已知 #104 merged 卻無效。逐層追下來發現是 **5 個獨立的啟用條件全部沒到位**，且每修好一層才會暴露下一層 —— 任何單層修復都「看起來沒動靜」，因為前一層還擋著。最終 task 4 chat 收到「agent runtime round-trip 已接通」確認端到端打通。
 >
 > 同 epic 既有 e2e gap chain（pilot / F-PILOT-10）記錄在 [[agent-runtime-pilot-e2e-gap-chain]] / [[agent-runtime-fpilot10-cluster-e2e-gap-chain]]；本篇是 **stg 環境啟用** 視角的 gap chain（環境設定缺漏，非 code bug）。
+>
+> **第 6 層（2026-06-01）**：下方 5 層讓 *pod round-trip* 通；要讓 operator→Odoo 的 §5.5 **狀態回寫 webhook** 也通（`agent_session.state` 不卡 `absent`），還需另 3 個部署層（operator→Odoo NetworkPolicy ingress、webhook secret 兩端對齊、operator 探索指對顆），且接通過程踩到一次「helm upgrade 衝突 → create.sh 刪 namespace → DB 全失」的 hazard——見 [[agent-runtime-webhook-statesync-deploy-hazards]]。
 
 ## Symptom
 
