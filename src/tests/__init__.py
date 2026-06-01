@@ -97,4 +97,6 @@ from . import test_skill_dual_scope
 from . import test_skill_upload_wizard
 # feat: platform default agent template (Settings fallback)
 from . import test_default_agent_template
+# feat: auto-enable agent runtime on project creation (platform toggle + migration)
+from . import test_auto_enable_agent_runtime
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
