@@ -139,8 +139,35 @@ _CONFIG_PARAMETERS = [
 ]
 
 
+def _ensure_default_agent_template(env):
+    """Point the platform-default agent template at the seeded system template
+    on first install, WITHOUT clobbering an admin's existing choice.
+
+    Idempotent: only sets the config_parameter when it is currently empty, so
+    re-running -u (post_init fires on every update) never overrides a value the
+    admin picked in Settings. The seeded template is tenant-neutral (public,
+    published, unbound, no user-scope skills/mcp) so broadcasting it as the
+    cluster-wide default is safe.
+    """
+    ICP = env['ir.config_parameter'].sudo()
+    key = 'woow_paas_platform.default_agent_template_id'
+    if ICP.get_param(key):
+        return  # admin already chose (or a prior install set it) — don't clobber
+    template = env.ref(
+        'woow_paas_platform.agent_template_default', raise_if_not_found=False,
+    )
+    if template:
+        ICP.set_param(key, str(template.id))
+        _logger.info(
+            "Auto-pointed platform default agent template -> %s (id=%s)",
+            template.name, template.id,
+        )
+
+
 def post_init_hook(env):
-    """Ensure subscription journal is configured on the main company."""
+    """Auto-point the platform default agent template, then ensure the
+    subscription journal is configured on the main company."""
+    _ensure_default_agent_template(env)
     company = env.ref('base.main_company', raise_if_not_found=False)
     if not company:
         return
