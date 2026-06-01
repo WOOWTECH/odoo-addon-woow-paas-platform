@@ -13,6 +13,8 @@
 
 - 不在 `agent_template` model 加 `is_default` boolean 欄位 / write 互斥 / DB constraint（改用 config_parameter，唯一性天然保證）。
 - 不改 seed（`agent_template_demo.xml`）——「哪個 template 當預設、綁哪個 ai.config」屬營運資料，於各環境（stg）手動設定。新環境開箱即用留待日後單獨評估（牽涉 `ai.config` 的 seed 化）。
+
+> 後續實作（2026-06-01）：此處刻意延後的「新環境開箱即用 / `ai.config` seed 化」已由 seed 工作完成——見 [`docs/superpowers/specs/2026-06-01-seed-agent-template-design.md`](2026-06-01-seed-agent-template-design.md)（seed `agent_template_default`〔public+published+unbound，ref `ai_config_woowbot`〕+ `post_init` auto-point，branch `feat/seed-agent-tpl`）。上面這條 YAGNI 是 #112 當下的決策，保留作歷史脈絡。
 - 不加 settings onchange 警告（resolution 端已 fail-loud）。
 - 不動既有 4 條 agent_template ir.rule。
 

@@ -48,6 +48,7 @@
         "data/ecpay_invoice_cron.xml",
         "data/agent_session_cron.xml",
         "data/agent_template_demo.xml",
+        "data/agent_template_default.xml",
         "data/demo_system_skill.xml",
         "views/account_move_views.xml",
         "views/paas_app.xml",
