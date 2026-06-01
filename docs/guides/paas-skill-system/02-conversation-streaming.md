@@ -98,7 +98,7 @@ sequenceDiagram
 
 | 傳給 Pod | 來源（`ai_assistant.py`） | 內容 |
 |---|---|---|
-| `agent_template` | `_resolve_agent_template`（優先 `state=published`）`:755` | 該 project 綁定的 agent 範本 |
+| `agent_template` | `_resolve_agent_template`（優先 `state=published`）`:755` | 該 project 綁定的 agent 範本；無自綁時取平台預設（config_parameter `default_agent_template_id` / 內建 seed `agent_template_default`）|
 | `mcp_snapshot` | `_build_mcp_snapshot` `:778` | `{servers:{name:{url, transport}}}` |
 | `skill_snapshot` | `_build_skill_snapshot` `:785` | 範本已發布 skills 的 `name`/`version`/`sha` |
 | `invoker_role` | `_get_project_access_role`（預設 `guest`）`:770` | 觸發者在該 project 的角色 |

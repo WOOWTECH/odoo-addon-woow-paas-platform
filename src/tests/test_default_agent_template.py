@@ -178,3 +178,97 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
             "A project-bound template must be refused as the global default "
             "even when public+published (cross-tenant MCP/skill leak guard).",
         )
+
+    def test_seed_default_resolves_end_to_end(self):
+        """S-4: the shipped agent_template_default, when set as the platform
+        default, is returned by _resolve_agent_template for an unbound project
+        (seed meets the resolver's public+published+unbound qualification)."""
+        seed = self.env.ref('woow_paas_platform.agent_template_default')
+        self._set_default(seed.id)
+        project = self._make_project('Seed Resolve Project')
+        self.assertEqual(
+            self._resolve(project), seed,
+            "an unbound project must fall back to the seeded platform default",
+        )
+
+
+@tagged('post_install', '-at_install')
+class TestSeededDefaultAgentTemplate(TransactionCase):
+    """Seed group (spec S-1..S-3): the shipped agent_template_default record
+    and the post_init auto-point helper."""
+
+    def test_seed_record_is_resolver_qualified(self):
+        """S-1: agent_template_default exists and is public + published +
+        unbound + bound to ai_config_woowbot, with NO user-scope skill/mcp
+        (tenant-neutral — safe to broadcast as the cluster-wide default)."""
+        tmpl = self.env.ref(
+            'woow_paas_platform.agent_template_default',
+            raise_if_not_found=False,
+        )
+        self.assertTrue(tmpl, "seed record agent_template_default must exist")
+        self.assertTrue(tmpl.is_public, "seed must be public")
+        self.assertEqual(tmpl.state, 'published', "seed must be published")
+        self.assertFalse(tmpl.project_ids, "seed must be unbound (tenant-neutral)")
+        self.assertFalse(tmpl.skill_ids, "seed must bind no user-scope skills")
+        self.assertFalse(tmpl.mcp_server_ids, "seed must bind no user-scope mcp")
+        self.assertEqual(
+            tmpl.model_config_id,
+            self.env.ref('woow_paas_platform.ai_config_woowbot'),
+            "seed must reuse the existing WoowBot ai.config",
+        )
+
+    def test_ensure_default_sets_param_when_unset(self):
+        """S-2: with the config_parameter unset, the helper points it at the
+        seeded template."""
+        from odoo.addons.woow_paas_platform.hooks import (
+            _ensure_default_agent_template,
+        )
+        # truly unset: remove any existing param row
+        self.env['ir.config_parameter'].sudo().search(
+            [('key', '=', _PARAM)]
+        ).unlink()
+        _ensure_default_agent_template(self.env)
+        tmpl = self.env.ref('woow_paas_platform.agent_template_default')
+        stored = self.env['ir.config_parameter'].sudo().get_param(_PARAM)
+        self.assertEqual(
+            str(stored), str(tmpl.id),
+            "helper must point the unset default at the seeded template",
+        )
+
+    def test_ensure_default_does_not_clobber_existing(self):
+        """S-3: with the config_parameter already set, the helper leaves it
+        untouched (respects an admin's manual choice)."""
+        from odoo.addons.woow_paas_platform.hooks import (
+            _ensure_default_agent_template,
+        )
+        other = self.env['woow_paas_platform.agent_template'].sudo().create({
+            'name': 'Admin Picked Template',
+            'is_public': True, 'state': 'published',
+        })
+        self.env['ir.config_parameter'].sudo().set_param(_PARAM, str(other.id))
+        _ensure_default_agent_template(self.env)
+        stored = self.env['ir.config_parameter'].sudo().get_param(_PARAM)
+        self.assertEqual(
+            str(stored), str(other.id),
+            "helper must not overwrite an already-set default",
+        )
+
+    def test_post_init_pointed_default_at_seed_on_install(self):
+        """S-5 (install wiring invariant): on a real install post_init_hook
+        auto-pointed the LIVE default_agent_template_id config_parameter at the
+        seeded template. Unlike S-2/S-3 (which unlink/set the param and call the
+        helper directly), this reads the unmodified post-install value, so it
+        guards the glue S-2..S-4 bypass: that post_init_hook actually calls the
+        helper AND the data file loads before the hook (env.ref resolves). If
+        this goes red while S-2/S-3 stay green, the helper call was dropped from
+        post_init_hook or the seed no longer loads — i.e. the out-of-the-box
+        contract silently regressed. TransactionCase rollback isolates it from
+        sibling tests that mutate the same param.
+        """
+        seed = self.env.ref('woow_paas_platform.agent_template_default')
+        stored = self.env['ir.config_parameter'].sudo().get_param(_PARAM)
+        self.assertEqual(
+            str(stored), str(seed.id),
+            "post_init_hook must auto-point the platform default at the seed on "
+            "a fresh install (out-of-the-box contract).",
+        )

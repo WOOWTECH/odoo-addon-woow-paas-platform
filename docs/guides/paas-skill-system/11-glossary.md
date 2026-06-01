@@ -49,7 +49,7 @@ related:
 Pod 內負責載入、執行 Skills 與跑對話 agent loop 的 runtime 程序。程式碼在 `woow-paas-agent-runtime` repo。
 
 **agent_template**
-每個 project 綁定的 agent 範本（`woow_paas_platform.agent_template`），含 `mcp_server_ids`、skills、`state`。對話時 `_resolve_agent_template` 優先取 `state=published` 的範本。見 [Agent 對話與串流](02-conversation-streaming.md)。
+每個 project 綁定的 agent 範本（`woow_paas_platform.agent_template`），含 `mcp_server_ids`、skills、`state`。對話時 `_resolve_agent_template` 優先取 `state=published` 的範本；project 無自綁時 fallback 到平台預設（Settings 的 `default_agent_template_id`；module 內建 seed `agent_template_default`，public+published+unbound）。見 [Agent 對話與串流](02-conversation-streaming.md)。
 
 **AgentSession**
 Odoo model，記錄一個 project 對應的 Pod 狀態（namespace hash、state、`pod_ws_url`、`last_synced_at`）。

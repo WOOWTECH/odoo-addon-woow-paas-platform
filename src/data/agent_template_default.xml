@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- SEED.2: the platform-default agent_template — a real, published,
+         tenant-neutral system template that ships with the module so a fresh
+         environment is usable out of the box.
+         - is_public=True + state='published' + NO project_ids → meets the
+           resolver's qualification (public + published + unbound).
+         - NO skill_ids / mcp_server_ids → tenant-neutral: broadcasting it via
+           .sudo() to every project that lacks its own template leaks no tenant
+           user-scope binding (system-scope skills auto-load in the pod anyway).
+         - model_config_id → ai_config_woowbot (shared placeholder ai.config;
+           admin supplies the real api_key there, on a group_system field).
+         - noupdate="1": admin curation of system_prompt survives module update.
+         - xmlid is a frozen contract: woow_paas_platform.agent_template_default.
+         Distinct from agent_template_demo (the inert draft placeholder), which
+         is left untouched. -->
+    <data noupdate="1">
+        <record id="agent_template_default" model="woow_paas_platform.agent_template">
+            <field name="name">Default Agent Template</field>
+            <field name="title">Woow Assistant</field>
+            <field name="description">Platform-default agent-runtime template. Tenant-neutral (unbound, no user-scope skills/mcp) so it is safe as the cluster-wide fallback for any project without its own template. Admin supplies the real LLM api_key on the bound ai.config (WoowBot Config).</field>
+            <field name="system_prompt">You are the Woow PaaS platform assistant, running inside a project's agent runtime. Help the user operate their workspace: answer questions about the platform, run the skills available to you, and assist with their tasks. Be concise, professional, and supportive. Act only within the scope of the current project. When you are unsure or lack a capability, say so honestly rather than guessing or fabricating an answer.</field>
+            <field name="is_public" eval="True"/>
+            <field name="state">published</field>
+            <field name="model_config_id" ref="ai_config_woowbot"/>
+        </record>
+    </data>
+</odoo>
