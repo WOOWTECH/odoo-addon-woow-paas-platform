@@ -160,14 +160,27 @@ echo ""
 echo -e "${BLUE}Running tests for module: ${MODULE} in sandbox: ${NAMESPACE}${NC}"
 echo ""
 
-# Disable errexit so we can capture the exit code from kubectl exec
+# `/$MODULE` (slash-prefixed) selects the module's tests. A bare `$MODULE` is
+# parsed by Odoo as a *tag name* — no test carries that tag, so it matches 0
+# tests (silent false green). See docs/tracking/pitfalls/sandbox-module-test-false-green.md.
+# Disable errexit so we can capture the exit code from kubectl exec (tee keeps
+# the live log; PIPESTATUS[0] is kubectl's real exit code, not tee's).
+TEST_LOG="$(mktemp)"
 set +e
 kubectl exec -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" -- \
-    odoo -u "$MODULE" --test-enable --test-tags "$MODULE" --stop-after-init \
+    odoo -u "$MODULE" --test-enable --test-tags "/$MODULE" --stop-after-init \
     --http-port=18069 --gevent-port=18072 --log-level=test \
-    -d "$DB_NAME" -c /etc/odoo/odoo.conf
-TEST_EXIT_CODE=$?
+    -d "$DB_NAME" -c /etc/odoo/odoo.conf 2>&1 | tee "$TEST_LOG"
+TEST_EXIT_CODE=${PIPESTATUS[0]}
 set -e
+
+# False-green guard: exit 0 with 0 collected tests (uninstalled module → `-u`
+# is a no-op, or a non-matching tag) must NOT be reported as passing.
+if grep -qE "of 0 tests when loading database" "$TEST_LOG"; then
+    echo -e "${RED}❌ 0 tests ran — module likely not installed (install with -i first) or tag mismatch. Treating as failure.${NC}"
+    TEST_EXIT_CODE=1
+fi
+rm -f "$TEST_LOG"
 
 echo ""
 
