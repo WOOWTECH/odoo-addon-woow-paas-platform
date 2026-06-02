@@ -16,28 +16,8 @@ _logger = logging.getLogger(__name__)
 
 
 def _platform_default_agent_template(env):
-    """Return the platform default agent_template if valid, else empty.
-
-    Valid = config_parameter set + record exists + is_public + published +
-    project-unbound. Mirrors the _resolve_agent_template ④ guard exactly so a
-    project-bound template can never leak that tenant's MCP/skill bindings
-    cluster-wide when served as the global default.
-    """
-    AgentTemplate = env['woow_paas_platform.agent_template'].sudo()
-    default_id = env['ir.config_parameter'].sudo().get_param(
-        'woow_paas_platform.default_agent_template_id'
-    )
-    if not default_id:
-        return AgentTemplate.browse()
-    try:
-        candidate = AgentTemplate.browse(int(default_id)).exists()
-    except (ValueError, TypeError):
-        return AgentTemplate.browse()
-    if candidate and candidate.is_public \
-            and candidate.state == 'published' \
-            and not candidate.project_ids:
-        return candidate
-    return AgentTemplate.browse()
+    """Delegate to the single source on agent_session (spec Refactor①)."""
+    return env['woow_paas_platform.agent_session']._platform_default_agent_template()
 
 
 def _agent_runtime_autoenable_ready(env):
@@ -829,32 +809,8 @@ class AiAssistantController(Controller):
         )
 
     def _resolve_agent_template(self, project):
-        """Resolve the agent_template for a project (prefer published).
-
-        Order: project-bound published → project-bound any →
-        project.agent_template_id → platform default (Settings
-        ``default_agent_template_id``). The platform default is the LAST
-        fallback so a project's own binding always wins (design 決策 A).
-        """
-        AgentTemplate = request.env['woow_paas_platform.agent_template'].sudo()
-        template = AgentTemplate.search([
-            ('project_ids', 'in', project.id),
-            ('state', '=', 'published'),
-        ], limit=1)
-        if not template:
-            template = AgentTemplate.search([
-                ('project_ids', 'in', project.id),
-            ], limit=1)
-        if not template and project.agent_template_id:
-            template = project.agent_template_id
-        if not template:
-            # ④ platform default from Settings (config_parameter). Last
-            # fallback so a project's own binding wins. The validity guard
-            # (public + published + project-unbound, cross-tenant leak guard)
-            # lives in _platform_default_agent_template so the create-path
-            # readiness check and this resolution agree by construction.
-            template = _platform_default_agent_template(request.env)
-        return template or None
+        return request.env['woow_paas_platform.agent_session'] \
+            ._resolve_agent_template(project)
 
     def _get_project_access_role(self, project, user):
         """Return the user's project_access role string (default 'guest')."""
@@ -865,40 +821,12 @@ class AiAssistantController(Controller):
         return access.role if access else 'guest'
 
     def _build_mcp_snapshot(self, project, template):
-        """Serialise the template's bound MCP servers for the pod ConfigMap."""
-        servers = {}
-        for mcp in template.mcp_server_ids:
-            servers[mcp.name] = {'url': mcp.url or '', 'transport': mcp.transport}
-        return {'servers': servers}
+        return request.env['woow_paas_platform.agent_session'] \
+            ._build_mcp_snapshot(project, template)
 
     def _build_skill_snapshot(self, project, template):
-        """Serialise the template's published skills for the pod.
-
-        Carries name / version / sha256 (bundle integrity) + ``description``
-        (host-owned metadata) so the pod can register a StructuredTool with a
-        meaningful tool description WITHOUT fetching the bundle (F-PILOT-10
-        Gap 3 hybrid). The tool args_schema (``parameters``) is intentionally
-        NOT here: it is runtime-owned ("host 不檢", design §skill parameters)
-        and the pod uses the single-string ``input`` fallback at registration,
-        fetching the bundle lazily on first invoke. Rich args_schema in the
-        snapshot is a deferred enhancement (see follow-ups §skill args_schema).
-        """
-        Skill = template.env['woow_paas_platform.skill'].sudo()
-        bound = template.skill_ids.filtered(lambda s: s.state == 'published')
-        bound_names = set(bound.mapped('name'))
-        # system skills auto-load into every pod; a bound project skill with the
-        # same NAME shadows the system one (avoids pod _TOOL_CACHE name clash).
-        system = Skill.search([
-            ('scope', '=', 'system'),
-            ('state', '=', 'published'),
-            ('name', 'not in', list(bound_names)),
-        ])
-        return [
-            {'name': skill.name, 'version': skill.version,
-             'sha256': skill.bundle_sha256,
-             'description': skill.description or ''}
-            for skill in (bound + system)
-        ]
+        return request.env['woow_paas_platform.agent_session'] \
+            ._build_skill_snapshot(project, template)
 
     def _persist_ai_response(self, db_name, uid, channel_id, full_response, context):
         """Persist the assembled agent-runtime response to the channel."""
