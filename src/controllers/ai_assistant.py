@@ -141,6 +141,32 @@ class AiAssistantController(Controller):
             status=200,
         )
 
+    @staticmethod
+    def _agent_error_sse_data(envelope: dict) -> dict:
+        """把 agent-runtime 的 §4a error envelope 映射成瀏覽器 SSE error frame。
+
+        #129 兩層契約 lock-step：agent-runtime 在 error payload 加了 additive 欄位
+        ``code``（前端用來查 friendly 訊息）與 ``retryable``（前端用來決定是否顯示
+        「重試」），SSE gateway 必須對等轉發；否則瀏覽器只會拿到原始英文 ``error``
+        字串，且 ``llm_empty_response`` 這類可重試錯誤無法和終態失敗區分。
+
+        純函式（不碰 request / env）以利不依賴 live pod 的單元測試。缺欄位時退回與
+        ``_sse_error_response`` 一致的最小 frame，既有消費者忽略多餘欄位不受影響。
+        """
+        payload = envelope.get('payload', {}) if isinstance(envelope, dict) else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        data = {
+            'error': payload.get('error') or 'Agent runtime error',
+            'done': True,
+        }
+        code = payload.get('code')
+        if code:
+            data['error_code'] = code
+        if payload.get('retryable'):
+            data['retryable'] = True
+        return data
+
     # ==================== AI Provider / Agent API ====================
 
     @route('/api/ai/providers', auth='user', methods=['POST'], type='json')
@@ -796,12 +822,10 @@ class AiAssistantController(Controller):
                         yield 'data: ' + json.dumps(done_payload) + '\n\n'
                         break
                     elif etype == 'error':
-                        err = envelope.get('payload', {}).get(
-                            'error', 'Agent runtime error',
-                        )
-                        yield 'data: ' + json.dumps({
-                            'error': err, 'done': True,
-                        }) + '\n\n'
+                        # #129：轉發 runtime 的 error_code + retryable（lock-step）。
+                        yield 'data: ' + json.dumps(
+                            self._agent_error_sse_data(envelope)
+                        ) + '\n\n'
                         break
             except Exception as exc:
                 _logger.exception(

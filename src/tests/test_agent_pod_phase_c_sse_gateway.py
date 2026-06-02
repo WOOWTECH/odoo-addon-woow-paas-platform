@@ -274,3 +274,74 @@ class TestPhaseCSseDualMode(HttpCase):
             "assistant yields 'no_agent'. This locks production behaviour "
             "unchanged while the flag is off. Got frame=%r." % frame,
         )
+
+
+# --------------------------------------------------------------------------- #
+# SSE.7 — #129 error envelope → browser SSE forwarding (code + retryable)       #
+# --------------------------------------------------------------------------- #
+@tagged('post_install', '-at_install')
+class TestPhaseCSseErrorForwarding(TransactionCase):
+    """SSE.7 — agent-runtime §4a error envelope must reach the browser with its
+    additive ``code`` (→ error_code, friendly-message lookup) and ``retryable``
+    (→ retry affordance). Two-layer lock-step with paas-agent-runtime #129: the
+    runtime added these fields; the SSE gateway must forward them or the browser
+    only ever sees the raw English ``error`` and cannot distinguish a retryable
+    empty-response from a terminal failure.
+
+    Pure-function probes on ``AiAssistantController._agent_error_sse_data`` — the
+    full WS→SSE relay needs a live pod, but the mapping that introduced the gap
+    is a pure dict transform and is unit-testable in isolation.
+    """
+
+    def _map(self, envelope):
+        from odoo.addons.woow_paas_platform.controllers.ai_assistant import (
+            AiAssistantController,
+        )
+        return AiAssistantController._agent_error_sse_data(envelope)
+
+    def test_SSE7_empty_response_forwards_code_and_retryable(self):
+        """llm_empty_response（#129 round-2 空串流）→ 帶 error_code + retryable=True。"""
+        data = self._map({
+            'type': 'error',
+            'payload': {
+                'error': 'LLM returned an empty response',
+                'code': 'llm_empty_response',
+                'fatal': True,
+                'retryable': True,
+            },
+        })
+        self.assertEqual(data['error'], 'LLM returned an empty response')
+        self.assertEqual(
+            data.get('error_code'), 'llm_empty_response',
+            "SSE.7: runtime payload.code MUST forward as error_code so the "
+            "frontend ERROR_MESSAGES lookup + friendly zh-tw message works. "
+            "Got %r." % data,
+        )
+        self.assertIs(
+            data.get('retryable'), True,
+            "SSE.7: payload.retryable MUST forward so the browser shows 「重試」. "
+            "Got %r." % data,
+        )
+        self.assertTrue(data['done'])
+
+    def test_SSE7_non_retryable_error_omits_retryable(self):
+        """llm_error（不可重試）→ 帶 error_code 但不帶 retryable（前端不誤導重試）。"""
+        data = self._map({
+            'type': 'error',
+            'payload': {'error': 'boom', 'code': 'llm_error', 'fatal': True},
+        })
+        self.assertEqual(data.get('error_code'), 'llm_error')
+        self.assertNotIn(
+            'retryable', data,
+            "SSE.7: when runtime omits retryable, the SSE frame must not invent "
+            "it (additive-only). Got %r." % data,
+        )
+
+    def test_SSE7_missing_payload_degrades_safely(self):
+        """缺 payload / 非 dict → 退回最小可見 frame，不 crash、不靜默。"""
+        for envelope in ({'type': 'error'}, {'type': 'error', 'payload': None}, {}):
+            data = self._map(envelope)
+            self.assertEqual(data.get('error'), 'Agent runtime error')
+            self.assertTrue(data['done'])
+            self.assertNotIn('error_code', data)
+            self.assertNotIn('retryable', data)
