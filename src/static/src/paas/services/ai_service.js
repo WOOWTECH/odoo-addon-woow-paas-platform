@@ -32,6 +32,16 @@ import { jsonRpc } from "./rpc";
  */
 
 /**
+ * @typedef {Object} AgentStatus
+ * @property {boolean} ready - Whether the platform agent runtime is ready to use
+ * @property {boolean} enabled - Whether agent runtime auto-enable is turned on
+ * @property {boolean} operator_configured - Whether the PaaS operator is configured
+ * @property {string} template_name - Platform default agent template name
+ * @property {string} model_name - Agent template model name
+ * @property {string} reason - Human-readable reason when not ready
+ */
+
+/**
  * AI Service
  * Handles all API calls related to AI assistants, chat, and streaming
  * @type {Object}
@@ -47,6 +57,8 @@ export const aiService = reactive({
     error: null,
     /** @type {ConnectionStatus|null} */
     connectionStatus: null,
+    /** @type {AgentStatus|null} */
+    agentStatus: null,
 
     /**
      * Fetch all available AI assistants
@@ -156,6 +168,43 @@ export const aiService = reactive({
             return { success: false, error: err.message };
         } finally {
             this.operationLoading.connectionStatus = false;
+        }
+    },
+
+    /**
+     * Fetch platform agent runtime status (config-only; no live operator ping)
+     * @returns {Promise<{success: boolean, data?: AgentStatus, error?: string}>}
+     */
+    async fetchAgentStatus() {
+        this.operationLoading.agentStatus = true;
+        try {
+            const result = await jsonRpc("/api/ai/agent-status", {});
+            if (result.success) {
+                this.agentStatus = result.data;
+                return { success: true, data: this.agentStatus };
+            } else {
+                this.agentStatus = {
+                    ready: false,
+                    enabled: false,
+                    operator_configured: false,
+                    template_name: "",
+                    model_name: "",
+                    reason: "",
+                };
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            this.agentStatus = {
+                ready: false,
+                enabled: false,
+                operator_configured: false,
+                template_name: "",
+                model_name: "",
+                reason: "",
+            };
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.agentStatus = false;
         }
     },
 

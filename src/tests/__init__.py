@@ -101,4 +101,6 @@ from . import test_default_agent_template
 from . import test_auto_enable_agent_runtime
 # fix: platform-default agent template must stay project-unbound (write-time guard)
 from . import test_agent_template_default_bind_guard
+# feat: platform Agent runtime status endpoint (Projects-overview Agent card, gitea #126)
+from . import test_agent_status_endpoint
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

@@ -14,6 +14,7 @@ export class ProjectsOverview extends Component {
         this.state = useState({
             statsLoading: true,
             connectionLoading: true,
+            agentLoading: true,
         });
         this.supportService = useState(supportService);
         this.aiService = useState(aiService);
@@ -22,6 +23,7 @@ export class ProjectsOverview extends Component {
             await Promise.all([
                 this._loadStats(),
                 this._loadConnectionStatus(),
+                this._loadAgentStatus(),
             ]);
         });
     }
@@ -48,6 +50,17 @@ export class ProjectsOverview extends Component {
         }
     }
 
+    async _loadAgentStatus() {
+        this.state.agentLoading = true;
+        try {
+            await aiService.fetchAgentStatus();
+        } catch (err) {
+            console.warn("Failed to load agent status:", err);
+        } finally {
+            this.state.agentLoading = false;
+        }
+    }
+
     get stats() {
         return this.supportService.stats;
     }
@@ -60,11 +73,26 @@ export class ProjectsOverview extends Component {
         };
     }
 
+    get agent() {
+        return this.aiService.agentStatus || {
+            ready: false,
+            enabled: false,
+            operator_configured: false,
+            template_name: "",
+            model_name: "",
+            reason: "",
+        };
+    }
+
     get isStatsLoading() {
         return this.state.statsLoading;
     }
 
     get isConnectionLoading() {
         return this.state.connectionLoading;
+    }
+
+    get isAgentLoading() {
+        return this.state.agentLoading;
     }
 }

@@ -59,7 +59,7 @@
                 </WoowCard>
             </div>
 
-            <!-- AI Connection Status Card (full-width below the 3-stat row) -->
+            <!-- Status cards (AI Connection | Agent) — 2-col grid, stacks on narrow -->
             <div class="o_woow_sp_overview_connection">
                 <WoowCard shadow="true" class="'o_woow_ai_nav_card o_woow_ai_connection_card'">
                     <div class="o_woow_ai_nav_card_header">
@@ -95,6 +95,46 @@
                             <t t-else="">
                                 <p class="o_woow_ai_nav_desc">
                                     Configure an AI provider in Settings to enable AI-powered conversations.
+                                </p>
+                            </t>
+                        </div>
+                    </t>
+                </WoowCard>
+
+                <WoowCard shadow="true" class="'o_woow_ai_nav_card o_woow_ai_connection_card'">
+                    <div class="o_woow_ai_nav_card_header">
+                        <div t-att-class="'o_woow_ai_nav_icon ' + (agent.ready ? 'o_woow_ai_nav_icon_green' : 'o_woow_ai_nav_icon_gray')">
+                            <WoowIcon name="'memory'" size="28"/>
+                        </div>
+                        <h3>Agent</h3>
+                    </div>
+                    <t t-if="isAgentLoading">
+                        <p class="o_woow_ai_nav_desc o_woow_ai_stat_loading">
+                            Checking agent status...
+                        </p>
+                    </t>
+                    <t t-else="">
+                        <div class="o_woow_ai_connection_status">
+                            <div class="o_woow_ai_status_row">
+                                <span class="o_woow_ai_status_label">Status</span>
+                                <span t-att-class="'o_woow_ai_status_badge ' + (agent.ready ? 'o_woow_ai_status_connected' : 'o_woow_ai_status_disconnected')">
+                                    <t t-if="agent.ready">Ready</t>
+                                    <t t-else="">Not Ready</t>
+                                </span>
+                            </div>
+                            <t t-if="agent.ready">
+                                <div class="o_woow_ai_status_row">
+                                    <span class="o_woow_ai_status_label">Template</span>
+                                    <span class="o_woow_ai_status_value"><t t-esc="agent.template_name"/></span>
+                                </div>
+                                <div class="o_woow_ai_status_row">
+                                    <span class="o_woow_ai_status_label">Model</span>
+                                    <span class="o_woow_ai_status_value"><t t-esc="agent.model_name"/></span>
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <p class="o_woow_ai_nav_desc">
+                                    <t t-esc="agent.reason or 'Agent runtime status unavailable.'"/>
                                 </p>
                             </t>
                         </div>

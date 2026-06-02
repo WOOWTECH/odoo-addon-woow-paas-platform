@@ -1057,6 +1057,71 @@ class AiAssistantController(Controller):
             },
         }
 
+    # ==================== Agent Runtime Status ====================
+
+    @route('/api/ai/agent-status', auth='user', methods=['POST'], type='json')
+    def api_ai_agent_status(self, **kwargs: Any) -> dict[str, Any]:
+        """Report the platform Agent runtime configuration status.
+
+        Config-only readiness check (no operator /health ping, no network):
+        every flag is a fast DB/config read computed with the SAME primitives
+        the auto-enable gate (``_agent_runtime_autoenable_ready``) uses, so the
+        Projects-overview Agent card stays in lock-step with whether a newly
+        created project would actually auto-enable agent runtime.
+
+        ``ready`` is True only when all four conditions hold:
+          - the platform toggle ``default_enable_agent_runtime`` is on,
+          - a valid (tenant-neutral) platform default agent_template exists,
+          - that template's bound ``ai.config`` carries an API key,
+          - the operator (url + api_key) is configured.
+
+        The platform default template is tenant-neutral by invariant
+        (unbound + no user-scope bindings), so exposing its name / model is
+        platform-level info — safe to surface to any logged-in user.
+
+        Returns:
+            dict: ``{'success': True, 'data': {ready, enabled,
+                operator_configured, template_name, model_name, reason}}``.
+                ``reason`` is '' when ready, else the first failing reason.
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        ICP = request.env['ir.config_parameter'].sudo()
+        enabled = (ICP.get_param(
+            'woow_paas_platform.default_enable_agent_runtime') or ''
+        ).strip().lower() in ('true', '1')
+        template = _platform_default_agent_template(request.env)
+        has_key = bool(
+            template and template.model_config_id
+            and template.model_config_id.api_key
+        )
+        operator_configured = get_agent_runtime_client(request.env) is not None
+        ready = enabled and bool(template) and has_key and operator_configured
+
+        if not enabled:
+            reason = 'Agent runtime 未啟用'
+        elif not template:
+            reason = '無預設 Agent Template'
+        elif not has_key:
+            reason = 'Template 未設 API key'
+        elif not operator_configured:
+            reason = 'Operator 未設定'
+        else:
+            reason = ''
+
+        return {
+            'success': True,
+            'data': {
+                'ready': ready,
+                'enabled': enabled,
+                'operator_configured': operator_configured,
+                'template_name': template.name if template else '',
+                'model_name': (
+                    template.model_config_id.model or ''
+                ) if template and template.model_config_id else '',
+                'reason': reason,
+            },
+        }
+
     # ==================== Support Stats API ====================
 
     @route('/api/support/stats', auth='user', methods=['POST'], type='json')
