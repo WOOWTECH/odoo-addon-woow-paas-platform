@@ -10,6 +10,7 @@ Pod identity (design §2.7 / §2.10):
                  env-scoped) — derived so it always nests inside validate_namespace
     release    = agent-pa-{hash}
 """
+import hashlib
 import json
 import logging
 import time
@@ -181,6 +182,41 @@ def _chart_source_kwargs() -> dict:
     }
 
 
+# Stamped on the deployment metadata so attach/resume can tell whether the LLM
+# credential was set or rotated AFTER cold-start (provisioning used to be
+# cold-start-only — a key added later never reached the pod, which then echoed
+# forever; see pitfall agent-runtime-llm-key-after-coldstart).
+_LLM_CHECKSUM_ANNOTATION = "agent.woow.tw/llm-checksum"
+
+
+def _llm_secret_string_data(request: SpawnOrAttachRequest) -> Optional[dict]:
+    """Desired ``stringData`` for the per-release LLM Secret, or None when keyless.
+
+    A keyless request (the echo agent that never calls an LLM) provisions no
+    Secret — the pod's ``LLM_API_KEY`` secretKeyRef is ``optional`` and resolves
+    empty, so the pod falls back to echo.
+    """
+    if not request.api_key:
+        return None
+    string_data = {"LLM_API_KEY": request.api_key}
+    if request.llm_model_config:
+        string_data["LLM_MODEL_CONFIG"] = json.dumps(request.llm_model_config)
+    return string_data
+
+
+def _llm_checksum(request: SpawnOrAttachRequest) -> str:
+    """Stable fingerprint of the LLM credential payload ("none" when keyless).
+
+    A SHA-256 digest of the canonical Secret payload — never the plaintext key —
+    so it is safe to store as a deployment annotation and to compare on attach.
+    """
+    string_data = _llm_secret_string_data(request)
+    if not string_data:
+        return "none"
+    canonical = json.dumps(string_data, sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def _provision_llm_secret(namespace: str, release: str, request: SpawnOrAttachRequest) -> None:
     """Provision the per-release LLM credential Secret (design §8.2 / F-PILOT-8).
 
@@ -190,12 +226,14 @@ def _provision_llm_secret(namespace: str, release: str, request: SpawnOrAttachRe
     confined to that tenant (INV-2). The chart secretKeyRefs ``LLM_API_KEY`` from
     it (no plaintext in the pod spec — T8.2, paas-charts). A request without an
     api_key (e.g. the echo agent that never calls an LLM) provisions no Secret.
+
+    ``apply_manifest`` is idempotent, so this is safe to call on every
+    spawn-or-attach (cold-start AND attach/resume) to converge a key that was
+    set or rotated after the pod already existed.
     """
-    if not request.api_key:
+    string_data = _llm_secret_string_data(request)
+    if not string_data:
         return
-    string_data = {"LLM_API_KEY": request.api_key}
-    if request.llm_model_config:
-        string_data["LLM_MODEL_CONFIG"] = json.dumps(request.llm_model_config)
     k8s_service.apply_manifest({
         "apiVersion": "v1",
         "kind": "Secret",
@@ -207,6 +245,35 @@ def _provision_llm_secret(namespace: str, release: str, request: SpawnOrAttachRe
         "type": "Opaque",
         "stringData": string_data,
     })
+
+
+def _read_llm_checksum(namespace: str, release: str) -> Optional[str]:
+    """Current LLM-credential checksum stamped on the deployment (None if absent)."""
+    try:
+        return k8s_service.get_deployment_annotation(
+            namespace, release, _LLM_CHECKSUM_ANNOTATION,
+        )
+    except HelmException:
+        # Best-effort: a read failure must not block chat. Treating it as
+        # "unknown" lets the caller converge on the next turn.
+        return None
+
+
+def _stamp_llm_checksum(namespace: str, release: str, checksum: str) -> None:
+    """Record the LLM-credential checksum on the deployment *metadata*.
+
+    A metadata annotation (NOT a pod-template annotation) records state without
+    triggering a rollout; the rollout is done explicitly by the caller only when
+    the credential actually changed.
+    """
+    k8s_service.patch_deployment(
+        namespace=namespace,
+        deployment_name=release,
+        patch=json.dumps(
+            {"metadata": {"annotations": {_LLM_CHECKSUM_ANNOTATION: checksum}}}
+        ),
+        patch_type="merge",
+    )
 
 
 def _resume_pod(namespace, release, project_hash, project_id, workspace_ids):
@@ -253,16 +320,43 @@ def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundT
             create_namespace=False,  # ns already applied with paas-managed label
             **_chart_source_kwargs(),
         )
+        # Stamp the LLM-credential checksum so a later attach can tell whether
+        # the key was set/rotated post-spawn. Stamping here (where the pod is
+        # already coming up with the right Secret) makes the first attach a
+        # no-op instead of a needless restart.
+        _stamp_llm_checksum(namespace, release, _llm_checksum(request))
         pod_state = "spawning"
     else:
+        # An LLM key set or rotated AFTER cold-start used to never reach the pod:
+        # provisioning was cold-start-only, and attach/resume neither
+        # re-provisioned the Secret nor restarted the pod, so the pod stayed
+        # keyless and echoed forever (pitfall: agent-runtime-llm-key-after-
+        # coldstart). Detect a credential change via the deployment checksum and
+        # converge it here. A deployment with no stamp yet (spawned before this
+        # fix) reads None != desired and self-heals on its next chat turn.
+        desired_checksum = _llm_checksum(request)
+        llm_changed = _read_llm_checksum(namespace, release) != desired_checksum
+        if llm_changed:
+            _provision_llm_secret(namespace, release, request)
+
         replicas = k8s_service.get_deployment_replicas(namespace, release)
         if replicas == 0:
-            # Resume — re-sign + patch env before scale-1 (§2.11.1).
+            # Resume — re-sign + patch env before scale-1 (§2.11.1). The pod
+            # comes up fresh and reads the (re-applied) Secret, so a credential
+            # change needs no extra restart on this path.
             _resume_pod(
                 namespace, release, request.project_hash,
                 request.project_id, request.project_workspace_ids,
             )
-        # else: attach — pod already running, no install / no re-sign.
+        elif llm_changed:
+            # Attach + the LLM credential changed: LLM_API_KEY is injected via
+            # secretKeyRef at pod start and is NOT hot-reloaded, so roll the pod
+            # to pick up the new Secret.
+            k8s_service.rollout_restart_deployment(namespace, release)
+        # else: attach — pod already running, credential unchanged, no re-sign.
+
+        if llm_changed:
+            _stamp_llm_checksum(namespace, release, desired_checksum)
         pod_state = "active"
         # Layer 3 fix: the cold-start render of skills.json goes stale once a
         # skill is published AFTER spawn (attach/resume do NO install). Patch the
