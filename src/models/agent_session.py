@@ -178,3 +178,124 @@ class AgentSession(models.Model):
             if 'pod_ws_url' in status:
                 vals['pod_ws_url'] = status['pod_ws_url'] or False
             session.write(vals)
+
+    # ----------------------------------------------------------------- #
+    # Snapshot / resolve — single source shared by chat (controller) and #
+    # on-publish push (#111). Down-sunk from ai_assistant.py (spec ①).   #
+    # ----------------------------------------------------------------- #
+    @api.model
+    def _platform_default_agent_template(self):
+        """Platform default template if valid, else empty recordset.
+
+        Valid = config_parameter set + exists + is_public + published +
+        project-unbound (cross-tenant MCP/skill leak guard)."""
+        AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+        default_id = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.default_agent_template_id')
+        if not default_id:
+            return AgentTemplate.browse()
+        try:
+            candidate = AgentTemplate.browse(int(default_id)).exists()
+        except (ValueError, TypeError):
+            return AgentTemplate.browse()
+        if candidate and candidate.is_public \
+                and candidate.state == 'published' \
+                and not candidate.project_ids:
+            return candidate
+        return AgentTemplate.browse()
+
+    @api.model
+    def _resolve_agent_template(self, project):
+        """project-bound published → project-bound any → project.agent_template_id
+        → platform default. Last fallback so a project's own binding wins."""
+        AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+        template = AgentTemplate.search([
+            ('project_ids', 'in', project.id),
+            ('state', '=', 'published'),
+        ], limit=1)
+        if not template:
+            template = AgentTemplate.search([
+                ('project_ids', 'in', project.id),
+            ], limit=1)
+        if not template and project.agent_template_id:
+            template = project.agent_template_id
+        if not template:
+            template = self._platform_default_agent_template()
+        # 既有 D-1..D-6 契約：無命中回 None（非 empty recordset），鎖定於
+        # test_default_agent_template 的 assertIsNone。所有 caller
+        # （_stream_agent_runtime / _push_snapshot_to_running_pods）皆用
+        # `if not template`，None 與 empty recordset 等價 → 回 None 不影響
+        # 功能又保既有測試契約。
+        return template or None
+
+    @api.model
+    def _build_mcp_snapshot(self, project, template):
+        """Serialise the template's bound MCP servers (name → url/transport)."""
+        servers = {}
+        for mcp in template.mcp_server_ids:
+            servers[mcp.name] = {'url': mcp.url or '', 'transport': mcp.transport}
+        return {'servers': servers}
+
+    @api.model
+    def _build_skill_snapshot(self, project, template):
+        """Serialise the template's published skills + system skills for the pod
+        (name/version/sha256/description; system shadowed by same-name bound)."""
+        Skill = self.env['woow_paas_platform.skill'].sudo()
+        bound = template.skill_ids.filtered(lambda s: s.state == 'published')
+        bound_names = set(bound.mapped('name'))
+        system = Skill.search([
+            ('scope', '=', 'system'),
+            ('state', '=', 'published'),
+            ('name', 'not in', list(bound_names)),
+        ])
+        return [
+            {'name': skill.name, 'version': skill.version,
+             'sha256': skill.bundle_sha256,
+             'description': skill.description or ''}
+            for skill in (bound + system)
+        ]
+
+    @api.model
+    def _push_snapshot_to_running_pods(self, kind, scope, project_id=None):
+        """#111: best-effort on-publish push of a fresh snapshot to running pods.
+
+        kind ∈ {'skill','mcp'}. system scope → all active sessions (cross
+        project); user scope → only that project's session. Only state='active'
+        pods (a 'spawning' cold-start carries the latest snapshot already;
+        'reaped'/'absent' have no pod). Single-pod failure is logged and
+        skipped — never aborts the publish (issue #111 明訂 best-effort);
+        next chat's attach refresh is the fallback. ConfigMap kubelet
+        propagation means "instant" is best-effort.
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(self.env)
+        if not client:
+            return
+        domain = [('state', '=', 'active')]
+        if scope == 'user':
+            if not project_id:
+                return
+            domain.append(('project_id', '=', project_id))
+        sessions = self.sudo().search(domain)
+        for session in sessions:
+            project = session.project_id
+            if not project or not project.use_agent_runtime:
+                continue
+            project_hash = session.project_namespace_hash
+            if not project_hash:
+                continue
+            template = self._resolve_agent_template(project)
+            if not template:
+                continue
+            try:
+                if kind == 'skill':
+                    snapshot = self._build_skill_snapshot(project, template)
+                    client.invalidate_skills(project_hash, snapshot)
+                else:
+                    snapshot = self._build_mcp_snapshot(project, template)
+                    client.invalidate_mcp(project_hash, snapshot)
+            except Exception as exc:
+                _logger.warning(
+                    'on-publish %s push failed for agent_session %s: %s',
+                    kind, session.id, exc)
+                continue

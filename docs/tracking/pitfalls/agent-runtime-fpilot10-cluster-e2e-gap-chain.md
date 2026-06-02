@@ -24,7 +24,7 @@ operator 新邏輯沒生效（stale image）→ pod ImagePullBackOff（imagePull
 |---|-----|------|------|------|-------|
 | **G1** | operator 新 forward 邏輯沒生效 | **operator 自身 image stale**：pin agent-runtime image/chart version 升的是「operator 部署**出去**的 pod 用什麼」，**不是 operator 自己跑什麼**；operator deployment 還跑舊 image，PR 的新 forward 邏輯沒進去 | 升 operator **自身** image（`operator-v*` tag → rebuild → pin operator deployment） | paas-cd/ci | **deploy gap** |
 | **G2** | pod ImagePullBackOff | operator(stale，G1) 沒 forward `imagePullSecrets` value **+ chart 無 default backstop** → pod 拉私有 jcr-prod image 失敗 | operator forward（待 G1）+ **chart 補 default backstop**（operator 沒傳時 chart 仍帶得到） | paas-platform(operator) + paas-charts | **missed-forward（+ chart default）** |
-| **G3** | 第一次 connect refused | **cold-start race**：odoo `_stream_agent_runtime` 太早 connect（pod 還沒 ready），relay **無 retry** → 第一次必失敗 | odoo relay 加 cold-start retry（connect 失敗退避重試到 pod ready） | paas-platform(odoo) | **transport timing** |
+| **G3** ✅ **CLOSED** | 第一次 connect refused | **cold-start race**：odoo `_stream_agent_runtime` 太早 connect（pod 還沒 ready），relay **無 retry** → 第一次必失敗 | ✅ **CLOSED（#123，feat/reine-code-start，2026-06-02）**：odoo relay WS connect bounded retry + backoff（deadline 60s；retry 只包 connect 不重送 user_message，保留 `__aenter__/__aexit__` 清理）+ 期間推 `status:spawning` 進度 event；配套 client spawn idempotent retry + timeout 分級(spawn 90s/invalidate 10s)。plan `docs/superpowers/plans/2026-06-02-agent-runtime-coldstart-onpublish.md` | paas-platform(odoo) | **transport timing** |
 | **G4** | pod 連上但無回覆、靜默斷線 | **image silent close**：真 LLM 失敗（egress 不通 / config 錯）pod **沒送 error frame**、直接 close WS → 前端只見斷線無因；degradation 路徑零 observability（= R10-1） | image：LLM 失敗送 error frame + degradation/ success 路徑補 log | paas-agent-runtime image | **observability** |
 | **G5** | 真 LLM egress 被擋 | chart NP `externalEgress` **沒 enable**：echo 不需外網從沒行使，真 LLM 要打 `api.minimax`/openai → pod egress 被自身 NP default-deny 擋 | chart NP `externalEgress.enabled=true` + except-CIDR（LLM 通 + `169.254` metadata 仍擋，C10-1） | paas-charts + deploy | **deploy/egress config** |
 | **G6** | pod 無 model config | **chart 漏 wire** `LLM_MODEL_CONFIG` env：operator 傳了，chart template 沒把它映射進 pod env → pod `_load_llm_model_config` 拿不到 model/api_base | chart 補 `LLM_MODEL_CONFIG` env 映射 | paas-charts | **chart 漏 wire（missed-forward chart 半）** |
@@ -35,7 +35,7 @@ operator 新邏輯沒生效（stale image）→ pod ImagePullBackOff（imagePull
 
 - **missed-forward class**（operator `_build_install_values` 系統漏轉，與 pilot 同 class **再現**）：**G2 / G6（chart 半）/ G7**。⚠ **關鍵深化**：這次漏轉的是 chart **optional** value（imagePullSecrets / LLM_MODEL_CONFIG / externalEgress），漏轉 **silent**（chart 用 default/empty、pod 照起但行為錯），不像 pilot 撞 **required** value 的硬 render fail。→ contract test 必須**涵蓋 optional**，見 [[spawn-install-values-missed-forward]]。
 - **deploy gap**：**G1**（operator 自身 image stale）/ **G8**（operator chart 無 extraEnv）/ **G5**（externalEgress 沒 enable，egress config 半）。
-- **transport timing**：**G3**（cold-start race，relay 無 retry）。
+- **transport timing**：**G3**（cold-start race，relay 無 retry）✅ **CLOSED（#123，2026-06-02）** — relay WS connect bounded retry + backoff（deadline 60s）+ `status:spawning` 進度 + client spawn idempotent retry + timeout 分級。
 - **observability**：**G4**（真 LLM 失敗 silent close、無 error frame、零 log）。
 
 > G5 + G7 是 **externalEgress 的兩半**：G7 = operator 沒 forward（missed-forward），G5 = chart NP 沒 enable（deploy config）。兩半都到位 egress 才通。

@@ -3,8 +3,8 @@ title: /woow AI Chat（agent-runtime）資料流與 Secret 關係
 category: guides
 status: active
 created: 2026-06-01
-updated: 2026-06-01
-tags: [paas, agent-runtime, chat, sse, websocket, secret, state-sync]
+updated: 2026-06-02
+tags: [paas, agent-runtime, chat, sse, websocket, secret, state-sync, cold-start-retry, on-publish-push]
 related:
   - ../paas-skill-system/02-conversation-streaming.md
   - ../paas-skill-system/08-webhook-ws-token.md
@@ -97,14 +97,18 @@ sequenceDiagram
 進入串流前（cursor 還有效時）先備齊 ORM 資料，再進 `generate()` generator：
 
 1. `_check_project_access` project 存取檢查（`ai_assistant.py:653`）。
-2. `_resolve_agent_template(project)` 解析要用哪個 agent 範本（`ai_assistant.py:659`，方法定義在 `ai_assistant.py:831`，順序：project 綁定的 published → project 綁定的任意 → `project.agent_template_id` → 平台預設）。
-3. `_build_mcp_snapshot` / `_build_skill_snapshot` 組 MCP 與 skill 快照（`ai_assistant.py:668-669`）。
+2. `_resolve_agent_template(project)` 解析要用哪個 agent 範本（順序：project 綁定的 published → project 綁定的任意 → `project.agent_template_id` → 平台預設）。
+3. `_build_mcp_snapshot` / `_build_skill_snapshot` 組 MCP 與 skill 快照。
+
+   > 🧩 **single source（#111 refactor，2026-06-02）**：`_platform_default_agent_template` / `_resolve_agent_template` / `_build_mcp_snapshot` / `_build_skill_snapshot` 這四個方法已**下沉到 `woow_paas_platform.agent_session` model**（`@api.model`），讓 chat（controller）與 on-publish 推送（§4.5）**共用同一份 snapshot/resolve 邏輯**。controller `ai_assistant.py` 的同名方法現在是 thin delegate（行為等價，呼叫 `request.env['woow_paas_platform.agent_session']._resolve_agent_template(...)` 等）。
 4. `client.spawn_or_attach(...)` 呼叫 operator 把 pod 起來 / 接上（`ai_assistant.py:687`）。
 5. **從回應物件**讀 pod 位址：`pod_ws_url = runtime_info.get('pod_ws_url')`（`ai_assistant.py:704`）。
 
    > 🔑 **關鍵**：pod 的 WS 位址來自**這次 spawn 的即時回應**，**不是**讀任何 DB 欄位（不是 `agent_session.pod_ws_url`）。這正是為什麼 [§5](#5-目前現況--已知缺口) 的 `agent_session.state` 卡死也不影響 chat。
 6. `auth_token = runtime_info.get('auth_token') or runtime_info.get('ws_token')`（`ai_assistant.py:705`）— 對 operator 回的兩個等值欄位都相容。
-7. `async with websockets.connect(pod_ws_url, extra_headers={'Authorization': f'Bearer {auth_token}'})`（`ai_assistant.py:724`）連上 pod，先送一筆 `user_message` envelope，再 `async for` 把 pod 回來的 envelope 逐筆轉成 SSE。
+7. 連上 pod（`websockets.connect(pod_ws_url, extra_headers={'Authorization': f'Bearer {auth_token}'})`），先送一筆 `user_message` envelope，再 `async for` 把 pod 回來的 envelope 逐筆轉成 SSE。
+
+   > 🔁 **cold-start WS connect bounded retry（#123 / F-ARL-1 / pitfall G3，2026-06-02）**：cold-start 時 `spawn_or_attach` 可能回 `pod_state="spawning"`，pod 還沒 WS-ready，第一次 connect 會 `ConnectionRefusedError`。`relay()` 現在把 **connect** 包進退避重試迴圈（backoff `1→2→…→5s`，deadline **60s**）：connect 失敗就推一筆 `status:spawning` 進度 event（前端轉黃色「AI 啟動中…」非紅錯誤）後重試；逾 deadline 才送 fatal `error`。**retry 只包 connect**（連上後的 `send(user_message)` + drain loop 不在 retry 範圍）→ mid-stream 斷線**絕不重送 `user_message`**。connect 成功後仍走 `try/finally` 的 `cm.__aexit__(...)`，保留 §1.5 的 F-PC-6 aclose 清理語意。配套 client 側（`agent_runtime_client.py`）：`spawn_or_attach` 對 idempotent spawn 做 bounded retry（transient timeout/connection 重試、4xx 不 retry）+ per-call timeout 分級（spawn 90s / invalidate 10s / 其餘 default 30s）。
 
 ### 1.5 envelope → SSE 對照（`ai_assistant.py:763-796`）
 
@@ -211,6 +215,28 @@ handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:224`�
 - `_cron_drift_detection`（`src/models/agent_session.py:148`），cron 定義在 `src/data/agent_session_cron.xml`（每 5 分鐘）。
 - 它重新同步「state ∈ `['spawning','active','reaped','degraded']` 且 `last_synced_at` 過舊（> 10 分鐘）」的 session，做法是反向呼叫 operator 的 `get_status`（`agent_session.py:159-180`）。
 - ⚠️ **它刻意排除 `'absent'`**（`agent_session.py:160`）。這點與 §5 的現況缺口直接相關。
+
+### 4.5 skill / mcp on-publish 即時推送（#111）
+
+平常 pod 是在下一次 chat 的 `spawn_or_attach`（attach 路徑）才刷新到最新 skill/mcp 快照。#111 補一條**發布即推**（best-effort）的捷徑：admin 一發布 skill / 改 MCP server，就把最新快照主動推給**正在跑的** pod，不用等下一次對話。
+
+```text
+skill.write(state 變動)         ┐
+mcp_server.write(name/url/transport 變動) ┘
+   → agent_session._push_snapshot_to_running_pods(kind, scope, project_id)
+       → 列舉 state='active' 的 agent_session
+           · scope='system' → 所有 active session（跨 project）
+           · scope='user'   → 只該 project_id 的 session
+       → 對每筆：_resolve_agent_template(project) → _build_skill_snapshot / _build_mcp_snapshot（§1.4 共用方法）
+       → client.invalidate_skills(project_hash, snapshot)  （kind='skill'）
+         client.invalidate_mcp(project_hash, snapshot)     （kind='mcp'）
+```
+
+- **觸發點**：
+  - `skill.write` 的 `state` 變動分支（publish / deprecate / archive）→ 推 `kind='skill'`（`src/models/skill.py`）。`_recompute_is_latest` 內部只寫 `is_latest`（不含 `state`）故不重入、不遞迴。
+  - `mcp_server.write` 變動到 **snapshot 欄位**（`name` / `url` / `transport`）才推 `kind='mcp'`（`src/models/mcp_server.py`）。`active` / `state` / `state_message` / tool 變動**不改** `_build_mcp_snapshot` 的輸出（它只序列化 server 的 name/url/transport）→ **不觸發**；**`mcp_tool` 同理不在 snapshot 內，不觸發**（避免無謂推送）。
+- **best-effort 紀律**（沿用 §4.4 drift cron 範式）：`get_agent_runtime_client(env)` 回 `None`（operator 未設定）→ 整個推送 no-op；只推 `state='active'`（`spawning` 的 cold-start 本來就會帶到最新快照、`reaped`/`absent` 沒 pod）；**逐筆 try/except，單一 pod 失敗只 log warning 後 continue，絕不中斷發布**。推送失敗的 fallback 是下一次 chat 的 attach 刷新（ConfigMap kubelet 傳播本來就是「best-effort instant」）。
+- client 側 `invalidate_skills` / `invalidate_mcp` 用短 timeout（10s，§1.4 timeout 分級）避免 hang 住發布交易。
 
 ---
 

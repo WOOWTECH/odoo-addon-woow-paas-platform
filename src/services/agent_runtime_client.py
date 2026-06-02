@@ -7,13 +7,20 @@ shared signing secret which lives in the injected env).
 """
 import json
 import logging
+import time
 
 import requests
+from requests import exceptions as _req_exc
 
 _logger = logging.getLogger(__name__)
 
 _PREFIX = '/api/agent-runtimes'
 _TIMEOUT = 30
+_SPAWN_TIMEOUT = 90      # cold-start helm install + image pull headroom (#123)
+_INVALIDATE_TIMEOUT = 10  # best-effort on-publish push, don't hang (#123/#111)
+
+_SPAWN_MAX_RETRIES = 2          # total attempts = 1 + 2 (#123 cold-start)
+_SPAWN_RETRY_BACKOFF = 2.0      # seconds, linear between attempts
 
 # LLM model-config defaults — mirror ``ai_client.AIClient.from_assistant``
 # (models/ai_client.py:121-125) so the pod's ChatOpenAI sees the same values the
@@ -81,13 +88,13 @@ class AgentRuntimeClient:
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
 
-    def _request(self, method, path, json_body=None):
+    def _request(self, method, path, json_body=None, timeout=None):
         url = self.base_url + _PREFIX + path
         resp = requests.request(
             method, url,
             json=json_body,
             headers={'X-API-Key': self.api_key, 'Content-Type': 'application/json'},
-            timeout=_TIMEOUT,
+            timeout=timeout if timeout is not None else _TIMEOUT,
         )
         if not resp.ok:
             raise AgentRuntimeOperatorError(
@@ -129,7 +136,26 @@ class AgentRuntimeClient:
             body['api_key'] = api_key
         if llm_model_config:
             body['llm_model_config'] = llm_model_config
-        return self._request('POST', '/spawn-or-attach', body)
+        # F-ARL-1 / #123: cold-start spawn can exceed even the 90s headroom or
+        # hit a transient connection error while helm install + image pull are
+        # in flight. spawn-or-attach is IDEMPOTENT (operator _release_exists →
+        # attach), so retrying transient timeout / connection errors is safe.
+        # 4xx/5xx (AgentRuntimeOperatorError) are NOT retried — surface them.
+        last_exc = None
+        for attempt in range(_SPAWN_MAX_RETRIES + 1):
+            try:
+                return self._request('POST', '/spawn-or-attach', body,
+                                     timeout=_SPAWN_TIMEOUT)
+            except (_req_exc.Timeout, _req_exc.ConnectionError) as exc:
+                last_exc = exc
+                if attempt < _SPAWN_MAX_RETRIES:
+                    _logger.warning(
+                        'spawn-or-attach transient error (attempt %s/%s): %s',
+                        attempt + 1, _SPAWN_MAX_RETRIES + 1, exc)
+                    time.sleep(_SPAWN_RETRY_BACKOFF)
+                    continue
+                raise
+        raise last_exc  # unreachable, defensive
 
     def reap(self, project_hash):
         return self._request('POST', f'/{project_hash}/reap')
@@ -141,6 +167,14 @@ class AgentRuntimeClient:
         return self._request(
             'POST', f'/{project_hash}/invalidate-mcp',
             {'mcp_snapshot': mcp_snapshot or {}},
+            timeout=_INVALIDATE_TIMEOUT,
+        )
+
+    def invalidate_skills(self, project_hash, skill_snapshot=None):
+        return self._request(
+            'POST', f'/{project_hash}/invalidate-skills',
+            {'skill_snapshot': skill_snapshot or []},
+            timeout=_INVALIDATE_TIMEOUT,
         )
 
     def sync_workspaces(self, project_hash, workspace_ids):

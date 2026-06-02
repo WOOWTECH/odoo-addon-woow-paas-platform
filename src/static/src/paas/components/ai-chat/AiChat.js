@@ -55,7 +55,7 @@ export class AiChat extends Component {
       selectedAssistantId: null,
       uploadingFile: false,
       error: null,
-      connectionState: "idle", // idle | connecting | connected | streaming | error | reconnecting
+      connectionState: "idle", // idle | connecting | spawning | connected | streaming | error | reconnecting
     });
 
     this.messageListRef = useRef("messageList");
@@ -209,6 +209,15 @@ export class AiChat extends Component {
           this.state.error = ERROR_MESSAGES[data.error_code] || data.error;
           this.state.connectionState = "error";
           this.closeStream();
+          return;
+        }
+
+        // #123 cold-start: pod 啟動中的進度 event（非錯誤）
+        if (data.type === "status" && data.payload?.stage === "spawning") {
+          this._reconnectAttempts = 0;
+          this._consecutiveParseErrors = 0;
+          this.state.connectionState = "spawning";
+          this.state.error = null;
           return;
         }
 
@@ -743,6 +752,12 @@ export class AiChat extends Component {
       connecting: {
         color: "yellow",
         text: "連線中...",
+        visible: true,
+        animate: "blink",
+      },
+      spawning: {
+        color: "yellow",
+        text: "AI 啟動中…（首次啟動需數十秒）",
         visible: true,
         animate: "blink",
       },
