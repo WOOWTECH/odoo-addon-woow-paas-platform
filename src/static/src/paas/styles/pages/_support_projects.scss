@@ -17,9 +17,18 @@
     margin-bottom: 2rem;
 }
 
-// Single AI Connection card spans the full width below the 3-stat row.
+// Status cards (AI Connection | Agent) sit side by side below the 3-stat row.
+// 2-col grid on wide screens, collapses to a single column on narrow ones.
 .o_woow_sp_overview_connection {
     width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+    align-items: start;
+
+    @media (max-width: 640px) {
+        grid-template-columns: 1fr;
+    }
 }
 
 // -----------------------------------------------------------------------------
