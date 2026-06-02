@@ -105,4 +105,6 @@ from . import test_agent_template_default_bind_guard
 from . import test_agent_runtime_snapshot_refactor
 # feat: #123 cold-start retry — client timeout 分級 + spawn retry + WS connect retry
 from . import test_agent_runtime_coldstart_retry
+# feat: #111 on-publish push — invalidate_skills + agent_session 推送協調 + skill/mcp 觸發
+from . import test_agent_runtime_onpublish_push
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
