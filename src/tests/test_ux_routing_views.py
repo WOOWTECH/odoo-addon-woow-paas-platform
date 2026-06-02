@@ -54,14 +54,27 @@ class TestRouterAlias(TransactionCase):
         )
 
     def test_ac20_router_keeps_ai_assistant_for_bookmarks(self):
-        """AC #20 regression: ``/woow#/ai-assistant`` must still work."""
+        """AC #20 (updated for commit 1d90953): the *bare* ``/woow#/ai-assistant``
+        route was intentionally removed — it now resolves to the not-found page.
+        The ``ai-assistant/*`` sub-paths (projects/tasks/chat) stay registered so
+        existing deep bookmarks keep resolving to the merged Projects pages.
+
+        We assert the sub-paths survive (that is the live bookmark-compat
+        contract); a hard assertion on the obsolete bare route would re-break on
+        the legitimate 1d90953 evolution (phase-versioned-test-assertion family,
+        F-ARC-1 / gitea #131).
+        """
         router_src = _AssetReader.read('static/src/paas/core/router.js')
-        self.assertRegex(
-            router_src,
-            r"""path\s*:\s*['"]ai-assistant['"]""",
-            "AC #20 regression: `ai-assistant` route must be preserved "
-            "as alias (avoid bookmark breakage)",
-        )
+        self.assertTrue(router_src, "router.js not found")
+        for subpath in ('ai-assistant/projects', 'ai-assistant/tasks',
+                        'ai-assistant/chat'):
+            self.assertRegex(
+                router_src,
+                rf"""path\s*:\s*['"]{subpath}""",
+                f"AC #20: `{subpath}` sub-path must stay registered so "
+                "existing bookmarks keep resolving (bare `ai-assistant` was "
+                "intentionally removed in 1d90953)",
+            )
 
 
 class TestSidebarEntry(TransactionCase):

@@ -6,6 +6,8 @@ import secrets
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+from werkzeug.wrappers import Response as WerkzeugResponse
+
 from odoo import fields
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase
@@ -590,7 +592,11 @@ class TestAuthorizeEndpointPkce(TransactionCase):
         def fake_render(template, ctx):
             captured['template'] = template
             captured['ctx'] = ctx
-            return MagicMock(name='render-result')
+            # The @route wrapper runs Response.load() on the return value, which
+            # rejects a bare MagicMock (TypeError, http.py). Return a real
+            # Response so the wrapper passes; assertions read `captured`, which
+            # is populated above (F-ARC-1 / gitea #131).
+            return WerkzeugResponse()
 
         request_mock = MagicMock()
         request_mock.env = self.env
@@ -611,11 +617,13 @@ class TestAuthorizeEndpointPkce(TransactionCase):
         def fake_render(template, ctx):
             captured['render_template'] = template
             captured['render_ctx'] = ctx
-            return MagicMock(name='render-result')
+            # See _call_authorize_get: return a real Response so the @route
+            # wrapper's Response.load() accepts it (F-ARC-1 / gitea #131).
+            return WerkzeugResponse()
 
         def fake_redirect(url, local=False):
             captured['redirect_url'] = url
-            return MagicMock(name='redirect-result')
+            return WerkzeugResponse(status=302)
 
         request_mock = MagicMock()
         request_mock.env = self.env
