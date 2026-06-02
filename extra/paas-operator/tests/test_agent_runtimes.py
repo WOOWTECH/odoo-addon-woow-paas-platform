@@ -484,6 +484,7 @@ class TestSpawnOrAttach:
              patch("src.api.agent_runtimes.skill_invalidator") as mock_skill_inv:
             mock_helm.get.return_value = MagicMock()            # release exists → attach
             mock_k8s.get_deployment_replicas.return_value = 1   # running → attach (not resume)
+            mock_k8s.get_deployment_annotation.return_value = "none"  # keyless → LLM unchanged
             mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
             mock_signer.sign_ws_token.return_value = "ws.jwt"
 
@@ -512,6 +513,7 @@ class TestSpawnOrAttach:
             mock_k8s.get_deployment_replicas.return_value = 1
             mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
             mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_k8s.get_deployment_annotation.return_value = "none"  # keyless → LLM unchanged
             mock_skill_inv.invalidate.side_effect = RuntimeError("kubectl blip")
 
             resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
@@ -531,6 +533,7 @@ class TestSpawnOrAttach:
             mock_k8s.get_deployment_replicas.return_value = 1
             mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
             mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_k8s.get_deployment_annotation.return_value = "none"  # keyless → LLM unchanged
 
             resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
             assert resp.status_code == 200, resp.text
@@ -556,6 +559,7 @@ class TestSpawnOrAttach:
             mock_k8s.get_deployment_replicas.return_value = 1
             mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
             mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_k8s.get_deployment_annotation.return_value = "none"  # keyless → LLM unchanged
             mock_mcp_inv.invalidate.side_effect = RuntimeError("kubectl blip")
 
             resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
@@ -792,6 +796,7 @@ class TestSpawnOrAttach:
              patch("src.api.agent_runtimes.skill_invalidator"):
             mock_helm.get.return_value = MagicMock(status="deployed")
             mock_k8s.get_deployment_replicas.return_value = 1
+            mock_k8s.get_deployment_annotation.return_value = "none"  # keyless → LLM unchanged
             mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
             mock_signer.sign_ws_token.return_value = "ws.jwt.token"
             mock_signer.sign_skill_bundle_token.return_value = "skill.jwt.token"
@@ -812,6 +817,7 @@ class TestSpawnOrAttach:
              patch("src.api.agent_runtimes.skill_invalidator"):
             mock_helm.get.return_value = MagicMock(status="deployed")
             mock_k8s.get_deployment_replicas.return_value = 0  # reaped
+            mock_k8s.get_deployment_annotation.return_value = "none"  # keyless → LLM unchanged
             mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
             mock_signer.sign_ws_token.return_value = "ws.jwt.token"
             mock_signer.sign_skill_bundle_token.side_effect = (
@@ -843,6 +849,108 @@ class TestSpawnOrAttach:
             assert call_order.index("patch_env") < call_order.index("scale"), (
                 "env patch must happen BEFORE scale-1 (§2.11.1 race avoidance)"
             )
+
+    def test_attach_provisions_and_restarts_when_key_set_after_coldstart(self, client):
+        """Regression: an LLM key set/rotated AFTER cold-start must reach the pod.
+
+        Provisioning used to be cold-start-only; attach neither re-provisioned the
+        Secret nor restarted the pod, so a key added later never became the pod's
+        LLM_API_KEY and the pod echoed forever (pitfall:
+        agent-runtime-llm-key-after-coldstart). On attach, a changed credential
+        checksum must (1) re-apply the per-release LLM Secret, (2) rolling-restart
+        the pod (the secretKeyRef env is read only at pod start), and (3) re-stamp
+        the checksum annotation.
+        """
+        body = {**_SPAWN_BODY, "api_key": "sk-live-xyz",
+                "llm_model_config": {"model": "MiniMax-M2.7"}}
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.mcp_invalidator"), \
+             patch("src.api.agent_runtimes.skill_invalidator"):
+            mock_helm.get.return_value = MagicMock(status="deployed")  # release exists
+            mock_k8s.get_deployment_replicas.return_value = 1          # running → attach
+            mock_k8s.get_deployment_annotation.return_value = "none"   # spawned keyless
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=body)
+            assert resp.status_code == 200, resp.text
+
+            # (1) LLM Secret re-applied with the now-present key
+            llm_secrets = [
+                c.args[0] for c in mock_k8s.apply_manifest.call_args_list
+                if c.args and isinstance(c.args[0], dict)
+                and c.args[0].get("kind") == "Secret"
+                and c.args[0].get("metadata", {}).get("name", "").endswith("-llm")
+            ]
+            assert llm_secrets, "attach must re-provision the {release}-llm Secret when the key appears"
+            assert llm_secrets[0]["stringData"]["LLM_API_KEY"] == "sk-live-xyz"
+            # (2) pod rolled to pick up the new secretKeyRef env
+            mock_k8s.rollout_restart_deployment.assert_called_once()
+            # (3) checksum re-stamped (a merge patch carrying the annotation)
+            stamp = [
+                c for c in mock_k8s.patch_deployment.call_args_list
+                if "agent.woow.tw/llm-checksum" in json.dumps([c.args, c.kwargs], default=str)
+            ]
+            assert stamp, "attach must re-stamp the llm-checksum annotation"
+
+    def test_attach_no_restart_when_llm_checksum_unchanged(self, client):
+        """Steady state: when the credential checksum already matches, attach must
+        NOT re-provision or restart — otherwise every chat would churn the pod."""
+        from src.api.agent_runtimes import _llm_checksum
+        from src.models.schemas import SpawnOrAttachRequest
+        body = {**_SPAWN_BODY, "api_key": "sk-live-xyz",
+                "llm_model_config": {"model": "MiniMax-M2.7"}}
+        current = _llm_checksum(SpawnOrAttachRequest(**body))
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.mcp_invalidator"), \
+             patch("src.api.agent_runtimes.skill_invalidator"):
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.get_deployment_replicas.return_value = 1
+            mock_k8s.get_deployment_annotation.return_value = current  # already in sync
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=body)
+            assert resp.status_code == 200, resp.text
+
+            mock_k8s.rollout_restart_deployment.assert_not_called()
+            llm_secrets = [
+                c.args[0] for c in mock_k8s.apply_manifest.call_args_list
+                if c.args and isinstance(c.args[0], dict)
+                and c.args[0].get("kind") == "Secret"
+                and c.args[0].get("metadata", {}).get("name", "").endswith("-llm")
+            ]
+            assert not llm_secrets, "unchanged credential must NOT re-provision the Secret"
+
+    def test_cold_start_stamps_llm_checksum(self, client):
+        """Cold start must stamp the llm-checksum annotation so the FIRST attach is
+        a no-op (a matching checksum) instead of a needless restart."""
+        body = {**_SPAWN_BODY, "api_key": "sk-live-xyz",
+                "llm_model_config": {"model": "MiniMax-M2.7"}}
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=body)
+            assert resp.status_code == 200, resp.text
+
+            stamp = [
+                c for c in mock_k8s.patch_deployment.call_args_list
+                if "agent.woow.tw/llm-checksum" in json.dumps([c.args, c.kwargs], default=str)
+            ]
+            assert stamp, "cold start must stamp the llm-checksum annotation after install"
 
 
 class TestReap:
