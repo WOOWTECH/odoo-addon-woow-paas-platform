@@ -170,6 +170,13 @@ class AgentRuntimeClient:
             timeout=_INVALIDATE_TIMEOUT,
         )
 
+    def invalidate_skills(self, project_hash, skill_snapshot=None):
+        return self._request(
+            'POST', f'/{project_hash}/invalidate-skills',
+            {'skill_snapshot': skill_snapshot or []},
+            timeout=_INVALIDATE_TIMEOUT,
+        )
+
     def sync_workspaces(self, project_hash, workspace_ids):
         return self._request(
             'POST', f'/{project_hash}/sync-workspaces',
