@@ -3,11 +3,16 @@
     <data noupdate="1">
         <!-- Demo/starter system skill: available to every project's pod.
              noupdate so admins may delete it; bundle bytes inlined as base64,
-             sha256 must match the raw tar.gz bytes the pod fetches. -->
+             sha256 must match the raw tar.gz bytes the pod fetches.
+             CONTRACT: the tar root MUST contain SKILL.md directly (no wrapper
+             dir) — agent-runtime cache.py reads dest/SKILL.md after extract.
+             See src/data/demo_skills/hello-world-0.1.0.tar.gz; if you re-pack,
+             update both the base64 above and bundle_sha256 below, and bump the
+             manifest + add a migration (noupdate records don't auto-update). -->
         <record id="demo_attachment_hello_world" model="ir.attachment">
             <field name="name">hello-world-0.1.0.tar.gz</field>
             <field name="mimetype">application/gzip</field>
-            <field name="datas">H4sIAAwhGmoAA+2ZXW/TMBSGs0kIEa7h+qwIDSSaOYmTrJWKVBBiHZ2AbYLtqjKttwbyNcddtyHuueAHcM+v4V/hlKGmpVvXKQli8SNZia34Ix/v8dtTrdOnnhdWhyHzeko+IIQcy4LR0f59FPw5ImRgE3TLQDY2ENYxIB0jCyuAclrPBIOYEyaWQgeHNKAXXzfsU+pdMs7kTUHWy8yNW/dvK8uKskW68HoH9uCcpE25I4ohypEoSf3H1YZs7u5un58mPb6LcnfqkqVx+71u6GskijyqRSw8pgEJulRZWlZWvv18ePYVuhncpOQi3pCTDUp6lK3lFwfm6l9HU/q3bGQocJLxOmZScv2bCHzu+rShO+sI1RyjZmgYOyZa19dt1XKg3XrW3H6+0Xr3QjshnDNtllwbzbetZmv/bHNz76jVerml4hrsiE7t/cs6pTSu/uvnUFZSql/La455+k8qk/o3HV3o38prQWlKrv/0+9c6O69a7bbmZ7wBiOdhY7yI/7NMw5b+rxCk/ys1af2PvWC2cWCu/v/yf87o95/0f/kz2//VHGxbliP9340nrf98dv8r6N+2p/d/XZf7fyFUq1U1ID6tQ+pLUI8pi90wqAPSdA2pPRp3mRvxUVMTetQPIT6NOfUh/uR6HvA+4XDIKOWxOKcwiCnTVDLg/ZDVYRiGw2rkEX4QMl9NZnwAG8ls8H40m9oE3w1cn3jnQ4/GJMfE9cgHjwIPgYoVnYKIHR9pl2syWmTGpP+PWR5u6xr5XxubUv+FIP1/qZnt/7ONA4vnf23T0aX/L4KZ/t9CVs0yDEP6/xtPWv9C9bnkgBfP/4ovUJf53yKYfv9axyduoEWnGc6xeP7XNnTp/4pB+r9SM63/sQfMLg5cI//rYOn/CmG2/zPE+zLl//8lYFr/2e/+8/WvG3g6/ysCgNz/i6BHD4ANgkdJxrbjBtGA1yHmDBpQqTyG6tOkUlcTR8AoH7AADiqj1O0T+DzuAiGD1dE3tPplpSK1LJFIJP8BvwAUzWJcADAAAA==</field>
+            <field name="datas">H4sIAAAAAAACA+2Vz0vDMBTHe85f8ayHKdia1rZCQWE3xd08eJS4vq3R/ChJujLE/922KI7BPLnJIJ/LywvJ+yaE983jw/1sFssq2COU0iLLYIjXRT7Gnu9IaVoUkORpvyilWZIBTfqZIgAaHIDWOmb6o2C7RIW713U1ovj9khuXguBIiKKIKCaxhBqF0FGnjajICo3lWpVA4ySmpEI7N7xx49QUKpQa7No6lGDfuBDgauZgaRCd7ccIrUUTE9a6WpsSOq27qBHMLbSRZFA8hbtBDZ5GNTIFyRWXTHyVHmuyFeOCvQgEpwH7E62hMfoV5y4mgeePsGZ+uW+Noe/zfHf/D8lW/6d5EkDu+/8g7y8ZV3Gz/jf/T9Js6/2v8izz/n8IKlyAadXZ4NjPXDWtK8E6AzcQhucQ3Q5JSaDHoGuNgkU4WvcFvP9sAW1gMv4ck4+T0Luzx+PxHAGfm7THaAAOAAA=</field>
         </record>
 
         <record id="demo_skill_hello_world" model="woow_paas_platform.skill">
@@ -17,7 +22,7 @@
             <field name="version">0.1.0</field>
             <field name="scope">system</field>
             <field name="state">published</field>
-            <field name="bundle_sha256">54699fc4bff4dce604f01d9d3d2319cbb0a77c8b870780b6dde314a1ee4d99d2</field>
+            <field name="bundle_sha256">6a8e7f87270a60dd50a276d88a97069b2171ba7f3178e5a5f92302534df71f72</field>
             <field name="bundle_attachment_id" ref="demo_attachment_hello_world"/>
             <field name="skill_metadata">{"name": "hello-world", "version": "0.1.0", "description": "A demo system skill that greets the user.", "author": "woow-platform"}</field>
         </record>
