@@ -221,7 +221,12 @@ class AgentSession(models.Model):
             template = project.agent_template_id
         if not template:
             template = self._platform_default_agent_template()
-        return template or AgentTemplate.browse()
+        # 既有 D-1..D-6 契約：無命中回 None（非 empty recordset），鎖定於
+        # test_default_agent_template 的 assertIsNone。所有 caller
+        # （_stream_agent_runtime / _push_snapshot_to_running_pods）皆用
+        # `if not template`，None 與 empty recordset 等價 → 回 None 不影響
+        # 功能又保既有測試契約。
+        return template or None
 
     @api.model
     def _build_mcp_snapshot(self, project, template):

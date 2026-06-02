@@ -838,7 +838,12 @@ class AiAssistantController(Controller):
         )
 
     def _resolve_agent_template(self, project):
-        return request.env['woow_paas_platform.agent_session'] \
+        # Delegate via project.env (NOT request.env): existing unit tests call
+        # AiAssistantController()._build_*/_resolve_* directly with no HTTP
+        # request context, so request.env would raise "object is not bound".
+        # project.env carries the same registry/cursor; model methods sudo()
+        # internally so user context is irrelevant. (single source: spec ①)
+        return project.env['woow_paas_platform.agent_session'] \
             ._resolve_agent_template(project)
 
     def _get_project_access_role(self, project, user):
@@ -850,11 +855,13 @@ class AiAssistantController(Controller):
         return access.role if access else 'guest'
 
     def _build_mcp_snapshot(self, project, template):
-        return request.env['woow_paas_platform.agent_session'] \
+        # project.env (not request.env) — see _resolve_agent_template note.
+        return project.env['woow_paas_platform.agent_session'] \
             ._build_mcp_snapshot(project, template)
 
     def _build_skill_snapshot(self, project, template):
-        return request.env['woow_paas_platform.agent_session'] \
+        # project.env (not request.env) — see _resolve_agent_template note.
+        return project.env['woow_paas_platform.agent_session'] \
             ._build_skill_snapshot(project, template)
 
     def _persist_ai_response(self, db_name, uid, channel_id, full_response, context):
