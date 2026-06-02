@@ -21,6 +21,8 @@ const ERROR_MESSAGES = {
   no_message: "找不到訊息，請重新傳送。",
   access_denied: "您無權存取此聊天頻道。",
   csrf_error: "請求驗證失敗，請重新整理頁面。",
+  // #129: agent-runtime 空回應（MiniMax 等串流異常）→ 可安全重試。
+  llm_empty_response: "AI 暫時沒有回應，請點「重試」再試一次。",
 };
 
 /**
@@ -55,6 +57,9 @@ export class AiChat extends Component {
       selectedAssistantId: null,
       uploadingFile: false,
       error: null,
+      // #129: 是否顯示「重試」鈕。預設 true（保留既有行為，零回歸）；agent-runtime
+      // error frame 帶 retryable:false 時才隱藏（如不可重試的終態失敗）。
+      errorRetryable: true,
       connectionState: "idle", // idle | connecting | spawning | connected | streaming | error | reconnecting
     });
 
@@ -197,6 +202,7 @@ export class AiChat extends Component {
     this.closeStream();
     this.state.streaming = true;
     this.state.streamingText = "";
+    this.state.errorRetryable = true; // #129: 每次串流重置，避免上一輪 retryable:false 殘留
 
     const url = aiService.getStreamUrl(this.props.channelId);
     this.eventSource = new EventSource(url);
@@ -207,6 +213,9 @@ export class AiChat extends Component {
 
         if (data.error) {
           this.state.error = ERROR_MESSAGES[data.error_code] || data.error;
+          // #129: 尊重 runtime 的 retryable 提示（如 llm_empty_response → true）。
+          // 僅在明確 false 時隱藏「重試」；欄位缺省維持 true（不回歸）。
+          this.state.errorRetryable = data.retryable !== false;
           this.state.connectionState = "error";
           this.closeStream();
           return;
@@ -287,7 +296,11 @@ export class AiChat extends Component {
             : null;
           const hadContent = this.state.streamingText || toolCalls;
 
-          // Add the complete AI message to the list
+          // Add the complete AI message to the list.
+          // #129 INVARIANT: 最終訊息以 done frame 的 full_response 為準（streamingText
+          // 僅作 fallback）。故前端「不依賴逐 delta」——runtime 端不論逐 token 串流或
+          // 單一大 text_chunk 一次到位（如 disable_streaming 路徑），最終提交都正確。
+          // 改這段前請保持此不變量（對應 SSE gateway done.full_response 累積）。
           if (hadContent) {
             const aiMsg = this._createAiMessage(
               data.full_response || this.state.streamingText,
