@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Agent Template List View -->
+    <record id="view_agent_template_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.agent_template.list</field>
+        <field name="model">woow_paas_platform.agent_template</field>
+        <field name="arch" type="xml">
+            <list string="Agent Templates">
+                <field name="name"/>
+                <field name="title" optional="show"/>
+                <field name="is_public" widget="boolean_toggle"/>
+                <field name="model_config_id" optional="show"/>
+                <field name="skill_ids" widget="many2many_tags" optional="hide"/>
+                <field name="mcp_server_ids" widget="many2many_tags" optional="hide"/>
+                <field name="project_ids" widget="many2many_tags" optional="show"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'published'"
+                       decoration-warning="state == 'deprecated'"
+                       decoration-muted="state == 'archived'"
+                       decoration-info="state == 'draft'"/>
+                <field name="created_by_uid" string="Created By" optional="hide"/>
+                <field name="created_at" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Agent Template Form View -->
+    <record id="view_agent_template_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.agent_template.form</field>
+        <field name="model">woow_paas_platform.agent_template</field>
+        <field name="arch" type="xml">
+            <form string="Agent Template">
+                <header>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="draft,published,deprecated,archived"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="Template Name"/></h1>
+                        <h3><field name="title" placeholder="Display Title"/></h3>
+                    </div>
+                    <div class="alert alert-info" role="alert"
+                         invisible="is_public or project_ids">
+                        Bind a project before publishing: a private template
+                        with no bound project cannot leave <strong>Draft</strong>.
+                    </div>
+                    <group>
+                        <group string="Configuration">
+                            <field name="is_public"/>
+                            <field name="model_config_id"/>
+                        </group>
+                        <group string="Audit">
+                            <field name="created_by_uid" string="Created By"/>
+                            <field name="created_at"/>
+                        </group>
+                    </group>
+                    <group string="System Prompt">
+                        <field name="system_prompt" nolabel="1"
+                               placeholder="Base system prompt prepended to all LangGraph threads using this template."/>
+                    </group>
+                    <group string="Description">
+                        <field name="description" nolabel="1"
+                               placeholder="Human-readable summary of what this template is for."/>
+                    </group>
+                    <notebook>
+                        <page string="Bindings" name="bindings">
+                            <div class="alert alert-warning" role="alert">
+                                <strong>Platform-default invariant:</strong> the
+                                template selected as the platform-wide default
+                                (Settings → Default Agent Template) must stay
+                                project-unbound. Binding it to a project is
+                                rejected and would otherwise silently disable the
+                                agent-runtime default fallback cluster-wide.
+                            </div>
+                            <group>
+                                <field name="project_ids"
+                                       widget="many2many_tags"
+                                       options="{'no_create': True}"/>
+                                <field name="skill_ids"
+                                       widget="many2many_tags"
+                                       options="{'no_create': True}"/>
+                                <field name="mcp_server_ids"
+                                       widget="many2many_tags"
+                                       options="{'no_create': True}"/>
+                            </group>
+                        </page>
+                        <page string="Model Overrides" name="model_overrides">
+                            <field name="model_overrides" nolabel="1"
+                                   placeholder='{"model": "...", "temperature": 0.7, "max_tokens": 4096}'/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Agent Template Search View -->
+    <record id="view_agent_template_search" model="ir.ui.view">
+        <field name="name">woow_paas_platform.agent_template.search</field>
+        <field name="model">woow_paas_platform.agent_template</field>
+        <field name="arch" type="xml">
+            <search string="Agent Templates">
+                <field name="name"/>
+                <field name="title"/>
+                <field name="system_prompt"/>
+                <field name="model_config_id"/>
+                <field name="project_ids"/>
+                <separator/>
+                <filter name="public" string="Public (System)"
+                        domain="[('is_public', '=', True)]"/>
+                <filter name="private" string="Private"
+                        domain="[('is_public', '=', False)]"/>
+                <separator/>
+                <filter name="unbound" string="Unbound (no project)"
+                        domain="[('project_ids', '=', False)]"/>
+                <filter name="bound" string="Bound (has project)"
+                        domain="[('project_ids', '!=', False)]"/>
+                <separator/>
+                <filter name="draft" string="Draft"
+                        domain="[('state', '=', 'draft')]"/>
+                <filter name="published" string="Published"
+                        domain="[('state', '=', 'published')]"/>
+                <filter name="deprecated" string="Deprecated"
+                        domain="[('state', '=', 'deprecated')]"/>
+                <filter name="archived" string="Archived"
+                        domain="[('state', '=', 'archived')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_state" string="State"
+                            context="{'group_by': 'state'}"/>
+                    <filter name="group_public" string="Visibility"
+                            context="{'group_by': 'is_public'}"/>
+                    <filter name="group_model_config" string="LLM Provider Config"
+                            context="{'group_by': 'model_config_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Agent Template Action -->
+    <record id="action_agent_template" model="ir.actions.act_window">
+        <field name="name">Agent Templates</field>
+        <field name="res_model">woow_paas_platform.agent_template</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_agent_template_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first agent template
+            </p>
+            <p>
+                An agent template bundles a system prompt, an LLM provider
+                config, and the skills / MCP servers an agent runtime can use.
+                Public (system) templates are the cluster-wide fallback; private
+                templates bind to specific projects. Manage their
+                draft / published / deprecated / archived lifecycle here.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu under Woow PaaS (admin only) -->
+    <menuitem
+        id="menu_agent_templates"
+        name="Agent Templates"
+        parent="menu_woow_paas_platform_root"
+        action="action_agent_template"
+        groups="base.group_system"
+        sequence="55"/>
+</odoo>

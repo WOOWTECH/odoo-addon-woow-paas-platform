@@ -38,6 +38,7 @@
         "views/cloud_odoo_addon_views.xml",
         "views/mcp_server_views.xml",
         "views/skill_views.xml",
+        "views/agent_template_views.xml",
         "views/ai_assistant_views.xml",
         "views/topup_plan_views.xml",
         "views/res_config_settings_views.xml",
