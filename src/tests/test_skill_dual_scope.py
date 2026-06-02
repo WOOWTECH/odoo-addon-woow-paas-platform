@@ -292,3 +292,31 @@ class TestDemoSystemSkill(TransactionCase):
         self.assertEqual(
             sk.bundle_attachment_id.res_model, 'woow_paas_platform.skill',
             "attachment anchored by skill.create() hook")
+
+    def test_demo_bundle_root_level_skill_md(self):
+        """Tar root must hold SKILL.md directly (no wrapper dir).
+
+        agent-runtime cache.py reads ``dest/SKILL.md`` after extraction; a
+        wrapper dir (``hello-world/SKILL.md``) makes the pod raise
+        ``No such file: .../SKILL.md`` on every invoke. Guards the 2026-06-02
+        re-pack regression and the bundle_sha256-matches-bytes contract.
+        """
+        import base64
+        import hashlib
+        import io
+        import tarfile
+
+        sk = self.env.ref('woow_paas_platform.demo_skill_hello_world')
+        raw = base64.b64decode(sk.bundle_attachment_id.datas)
+        self.assertEqual(
+            hashlib.sha256(raw).hexdigest(), sk.bundle_sha256,
+            "bundle_sha256 must match the attachment bytes the pod fetches")
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as tar:
+            names = tar.getnames()
+        self.assertIn(
+            'SKILL.md', names,
+            "SKILL.md must sit at tar root (cache.py reads dest/SKILL.md)")
+        self.assertFalse(
+            any(n == 'hello-world' or n.startswith('hello-world/')
+                for n in names),
+            "bundle must NOT wrap contents in a dir; pack contents, not the dir")
