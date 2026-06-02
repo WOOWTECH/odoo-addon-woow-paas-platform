@@ -249,3 +249,48 @@ class AgentSession(models.Model):
              'description': skill.description or ''}
             for skill in (bound + system)
         ]
+
+    @api.model
+    def _push_snapshot_to_running_pods(self, kind, scope, project_id=None):
+        """#111: best-effort on-publish push of a fresh snapshot to running pods.
+
+        kind ∈ {'skill','mcp'}. system scope → all active sessions (cross
+        project); user scope → only that project's session. Only state='active'
+        pods (a 'spawning' cold-start carries the latest snapshot already;
+        'reaped'/'absent' have no pod). Single-pod failure is logged and
+        skipped — never aborts the publish (issue #111 明訂 best-effort);
+        next chat's attach refresh is the fallback. ConfigMap kubelet
+        propagation means "instant" is best-effort.
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(self.env)
+        if not client:
+            return
+        domain = [('state', '=', 'active')]
+        if scope == 'user':
+            if not project_id:
+                return
+            domain.append(('project_id', '=', project_id))
+        sessions = self.sudo().search(domain)
+        for session in sessions:
+            project = session.project_id
+            if not project or not project.use_agent_runtime:
+                continue
+            project_hash = session.project_namespace_hash
+            if not project_hash:
+                continue
+            template = self._resolve_agent_template(project)
+            if not template:
+                continue
+            try:
+                if kind == 'skill':
+                    snapshot = self._build_skill_snapshot(project, template)
+                    client.invalidate_skills(project_hash, snapshot)
+                else:
+                    snapshot = self._build_mcp_snapshot(project, template)
+                    client.invalidate_mcp(project_hash, snapshot)
+            except Exception as exc:
+                _logger.warning(
+                    'on-publish %s push failed for agent_session %s: %s',
+                    kind, session.id, exc)
+                continue
