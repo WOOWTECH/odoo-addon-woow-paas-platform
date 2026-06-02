@@ -1,9 +1,10 @@
 /** @odoo-module **/
-import { Component, useState, onMounted } from "@odoo/owl";
+import { Component, useState, onMounted, useExternalListener } from "@odoo/owl";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { CreateTaskModal } from "../../components/modal/CreateTaskModal";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
+import { aiService } from "../../services/ai_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { formatDate } from "../../services/utils";
 
@@ -17,14 +18,85 @@ export class ProjectKanbanPage extends Component {
     setup() {
         this.router = router;
         this.supportService = useState(supportService);
+        this.aiService = useState(aiService);
         this.state = useState({
             showCreateModal: false,
             defaultStageId: null,
+            // Status pills (header, right of Create Task)
+            connectionLoading: true,
+            agentLoading: true,
+            agentPodLoading: true,
+            openStatusPopover: null, // 'connection' | 'agent' | null
+        });
+
+        // Close any open status popover on an outside click. Pill / popover
+        // clicks stopPropagation, so only true outside clicks reach this.
+        useExternalListener(window, "click", () => {
+            this.state.openStatusPopover = null;
         });
 
         onMounted(async () => {
             await this._loadData();
+            // Status pills load independently of the kanban board so a slow
+            // operator never blocks the board render.
+            this._loadStatuses();
         });
+    }
+
+    async _loadStatuses() {
+        // Stage 1 — config readiness (fast DB/config reads; gates the pills).
+        this.state.connectionLoading = true;
+        this.state.agentLoading = true;
+        await Promise.all([
+            this.aiService.fetchConnectionStatus(),
+            this.aiService.fetchAgentStatus(this.props.projectId),
+        ]);
+        this.state.connectionLoading = false;
+        this.state.agentLoading = false;
+        // Stage 2 — live pod lifecycle (augments the Agent pill; non-blocking).
+        this.state.agentPodLoading = true;
+        await this.aiService.fetchAgentPodStatus(this.props.projectId);
+        this.state.agentPodLoading = false;
+    }
+
+    toggleStatusPopover(which, ev) {
+        if (ev) {
+            ev.stopPropagation();
+        }
+        this.state.openStatusPopover =
+            this.state.openStatusPopover === which ? null : which;
+    }
+
+    get connection() {
+        return this.aiService.connectionStatus || {
+            connected: false, provider_name: "", model_name: "",
+        };
+    }
+
+    get agent() {
+        return this.aiService.agentStatus || {
+            ready: false, enabled: false, operator_configured: false,
+            template_name: "", model_name: "", reason: "",
+        };
+    }
+
+    get agentPod() {
+        return this.aiService.agentPodStatus || { state: "" };
+    }
+
+    get isConnectionLoading() {
+        return this.state.connectionLoading;
+    }
+
+    get isAgentLoading() {
+        return this.state.agentLoading;
+    }
+
+    /** Short zh-tw label for the live pod state — only shown once the Agent is
+     *  config-ready (running / idle / not-yet-spawned). Empty otherwise. */
+    get agentLiveLabel() {
+        const map = { active: "運行中", reaped: "閒置", absent: "未啟動" };
+        return map[this.agentPod.state] || "";
     }
 
     openCreateModal(stageId = null) {
