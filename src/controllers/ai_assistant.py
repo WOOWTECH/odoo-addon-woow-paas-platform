@@ -823,9 +823,26 @@ class AiAssistantController(Controller):
                         break
                     elif etype == 'error':
                         # #129：轉發 runtime 的 error_code + retryable（lock-step）。
-                        yield 'data: ' + json.dumps(
-                            self._agent_error_sse_data(envelope)
-                        ) + '\n\n'
+                        error_data = self._agent_error_sse_data(envelope)
+                        # Defense-in-depth (graceful degradation): a retryable
+                        # error (e.g. llm_empty_response when the post-tool
+                        # summary is empty) ends the turn via THIS branch, not
+                        # 'done', so the done-path persist above never runs and
+                        # any text streamed this turn vanishes on reload. Persist
+                        # it here too, but CONDITIONALLY — only a retryable error
+                        # WITH accumulated text — so a half-streamed / fatally
+                        # errored response is never stored. (full_response holds
+                        # only text_chunk content; a tool_result-only turn leaves
+                        # it empty and this no-ops — that case's durable fix is
+                        # the runtime surfacing its summary as text_chunk+done,
+                        # which this branch complements, not replaces.)
+                        if error_data.get('retryable') and full_response:
+                            saved_message_id = self._persist_ai_response(
+                                db_name, uid, channel_id, full_response, context,
+                            )
+                            if saved_message_id:
+                                error_data['message_id'] = saved_message_id
+                        yield 'data: ' + json.dumps(error_data) + '\n\n'
                         break
             except Exception as exc:
                 _logger.exception(

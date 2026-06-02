@@ -216,6 +216,35 @@ export class AiChat extends Component {
           // #129: 尊重 runtime 的 retryable 提示（如 llm_empty_response → true）。
           // 僅在明確 false 時隱藏「重試」；欄位缺省維持 true（不回歸）。
           this.state.errorRetryable = data.retryable !== false;
+          // Defense-in-depth (graceful degradation): a retryable error (e.g.
+          // llm_empty_response when the runtime's post-tool summary comes back
+          // empty) arrives BEFORE the done frame, so a tool_result / text
+          // already streamed this turn never reaches the done branch (the only
+          // place that lands streaming into messages) and closeStream() below
+          // would wipe the transient — the bubble flashes then vanishes.
+          // Salvage it (mirrors the done branch + the onerror partial-text
+          // handler) so the user still SEES what ran and keeps the retry button.
+          // Session-only — NOT persisted; the root fix is the runtime surfacing
+          // its summary as text_chunk+done. Only on retryable errors: a fatal /
+          // non-retryable error should not surface partial output.
+          if (this.state.errorRetryable) {
+            const toolCalls = this.state.streamingToolCalls.length
+              ? [...this.state.streamingToolCalls]
+              : null;
+            if (this.state.streamingText || toolCalls) {
+              // message_id is set only when the SSE bridge's error branch
+              // conditionally persisted (defense-in-depth ②); otherwise it is
+              // absent and the salvaged message is session-only.
+              const aiMsg = this._createAiMessage(
+                this.state.streamingText,
+                data.message_id,
+              );
+              if (toolCalls) {
+                aiMsg.toolCalls = toolCalls;
+              }
+              this.state.messages.push(aiMsg);
+            }
+          }
           this.state.connectionState = "error";
           this.closeStream();
           return;
