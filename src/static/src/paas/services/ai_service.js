@@ -32,6 +32,16 @@ import { jsonRpc } from "./rpc";
  */
 
 /**
+ * @typedef {Object} AgentStatus
+ * @property {boolean} ready - Whether the platform agent runtime is ready to use
+ * @property {boolean} enabled - Whether agent runtime auto-enable is turned on
+ * @property {boolean} operator_configured - Whether the PaaS operator is configured
+ * @property {string} template_name - Platform default agent template name
+ * @property {string} model_name - Agent template model name
+ * @property {string} reason - Human-readable reason when not ready
+ */
+
+/**
  * AI Service
  * Handles all API calls related to AI assistants, chat, and streaming
  * @type {Object}
@@ -47,6 +57,10 @@ export const aiService = reactive({
     error: null,
     /** @type {ConnectionStatus|null} */
     connectionStatus: null,
+    /** @type {AgentStatus|null} */
+    agentStatus: null,
+    /** @type {{state: string, pod_ws_url?: string, reason?: string}|null} */
+    agentPodStatus: null,
 
     /**
      * Fetch all available AI assistants
@@ -156,6 +170,71 @@ export const aiService = reactive({
             return { success: false, error: err.message };
         } finally {
             this.operationLoading.connectionStatus = false;
+        }
+    },
+
+    /**
+     * Fetch agent runtime status (config-only; no live operator ping).
+     * @param {number} [projectId=0] - When >0, per-project readiness (this
+     *   project's use_agent_runtime + resolved template + key + operator);
+     *   when 0, platform-level readiness.
+     * @returns {Promise<{success: boolean, data?: AgentStatus, error?: string}>}
+     */
+    async fetchAgentStatus(projectId = 0) {
+        this.operationLoading.agentStatus = true;
+        try {
+            const result = await jsonRpc("/api/ai/agent-status", projectId ? { project_id: projectId } : {});
+            if (result.success) {
+                this.agentStatus = result.data;
+                return { success: true, data: this.agentStatus };
+            } else {
+                this.agentStatus = {
+                    ready: false,
+                    enabled: false,
+                    operator_configured: false,
+                    template_name: "",
+                    model_name: "",
+                    reason: "",
+                };
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            this.agentStatus = {
+                ready: false,
+                enabled: false,
+                operator_configured: false,
+                template_name: "",
+                model_name: "",
+                reason: "",
+            };
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.agentStatus = false;
+        }
+    },
+
+    /**
+     * Fetch live per-project agent pod lifecycle (stage 2). Spawn-on-demand,
+     * so 'reaped'/'absent' on a healthy idle project is expected, not an error.
+     * Degrades to {state: 'unknown'} on operator/network failure.
+     * @param {number} projectId - project.project ID
+     * @returns {Promise<{success: boolean, data?: object, error?: string}>}
+     */
+    async fetchAgentPodStatus(projectId) {
+        this.operationLoading.agentPodStatus = true;
+        try {
+            const result = await jsonRpc("/api/ai/agent-pod-status", { project_id: projectId });
+            if (result.success) {
+                this.agentPodStatus = result.data;
+                return { success: true, data: this.agentPodStatus };
+            }
+            this.agentPodStatus = { state: "unknown" };
+            return { success: false, error: result.error };
+        } catch (err) {
+            this.agentPodStatus = { state: "unknown" };
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.agentPodStatus = false;
         }
     },
 

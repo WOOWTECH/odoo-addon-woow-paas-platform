@@ -107,4 +107,6 @@ from . import test_agent_runtime_snapshot_refactor
 from . import test_agent_runtime_coldstart_retry
 # feat: #111 on-publish push — invalidate_skills + agent_session 推送協調 + skill/mcp 觸發
 from . import test_agent_runtime_onpublish_push
+# feat: platform Agent runtime status endpoint (Projects-overview Agent card, gitea #126)
+from . import test_agent_status_endpoint
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader

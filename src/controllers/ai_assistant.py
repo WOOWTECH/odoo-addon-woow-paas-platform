@@ -1021,6 +1021,162 @@ class AiAssistantController(Controller):
             },
         }
 
+    # ==================== Agent Runtime Status ====================
+
+    @route('/api/ai/agent-status', auth='user', methods=['POST'], type='json')
+    def api_ai_agent_status(
+        self, project_id: int = 0, **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Report Agent runtime configuration readiness (config-only).
+
+        Two scopes, selected by ``project_id``:
+
+        * **platform** (``project_id`` omitted) — the Settings-level gate, in
+          lock-step with ``_agent_runtime_autoenable_ready``: platform toggle
+          on + tenant-neutral platform default template (+ its api_key) +
+          operator configured. The platform default is tenant-neutral by
+          invariant (unbound, no user-scope bindings), so its name / model is
+          platform-level info — safe to surface to any logged-in user.
+
+        * **project** (``project_id`` given) — whether *this project* can chat
+          with its agent right now, mirroring the gates ``_stream_agent_runtime``
+          walks before spawn: the per-project ``use_agent_runtime`` flag +
+          ``_resolve_agent_template`` (project binding → platform default
+          fallback) + that template's api_key + operator configured. ACL: the
+          caller must pass ``_check_project_access`` or the row is denied — the
+          same leg the chat stream enforces, so a per-project status query can
+          never leak another tenant's template/model (B1-class guard).
+
+        Config-only either way: no operator /health ping, no pod spawn. Live
+        pod lifecycle is a separate call (``/api/ai/agent-pod-status``).
+
+        Returns:
+            dict: ``{'success': True, 'data': {scope, ready, enabled,
+                operator_configured, template_name, model_name, reason}}``.
+                ``reason`` is '' when ready, else the first failing reason.
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        operator_configured = get_agent_runtime_client(request.env) is not None
+
+        if project_id:
+            project = request.env['project.project'].sudo().browse(int(project_id))
+            if not project.exists():
+                return {'success': False, 'error': 'Project not found'}
+            # ACL: mirror _stream_agent_runtime / ir.rule — deny before reading
+            # the resolved template, else a cross-tenant status leak reopens.
+            if not self._check_project_access(project):
+                return {'success': False, 'error': 'Access denied'}
+            enabled = bool(project.use_agent_runtime)
+            template = self._resolve_agent_template(project)
+            has_key = bool(
+                template and template.model_config_id
+                and template.model_config_id.api_key
+            )
+            ready = enabled and bool(template) and has_key and operator_configured
+            if not enabled:
+                reason = '此專案未啟用 Agent runtime'
+            elif not template:
+                reason = '無 Agent Template'
+            elif not has_key:
+                reason = 'Template 未設 API key'
+            elif not operator_configured:
+                reason = 'Operator 未設定'
+            else:
+                reason = ''
+            scope = 'project'
+        else:
+            ICP = request.env['ir.config_parameter'].sudo()
+            enabled = (ICP.get_param(
+                'woow_paas_platform.default_enable_agent_runtime') or ''
+            ).strip().lower() in ('true', '1')
+            template = _platform_default_agent_template(request.env)
+            has_key = bool(
+                template and template.model_config_id
+                and template.model_config_id.api_key
+            )
+            ready = enabled and bool(template) and has_key and operator_configured
+            if not enabled:
+                reason = 'Agent runtime 未啟用'
+            elif not template:
+                reason = '無預設 Agent Template'
+            elif not has_key:
+                reason = 'Template 未設 API key'
+            elif not operator_configured:
+                reason = 'Operator 未設定'
+            else:
+                reason = ''
+            scope = 'platform'
+
+        return {
+            'success': True,
+            'data': {
+                'scope': scope,
+                'ready': ready,
+                'enabled': enabled,
+                'operator_configured': operator_configured,
+                'template_name': template.name if template else '',
+                'model_name': (
+                    template.model_config_id.model or ''
+                ) if template and template.model_config_id else '',
+                'reason': reason,
+            },
+        }
+
+    @route('/api/ai/agent-pod-status', auth='user', methods=['POST'], type='json')
+    def api_ai_agent_pod_status(
+        self, project_id: int = 0, **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Live per-project agent pod lifecycle (stage 2 of the kanban pill).
+
+        Thin read-through to the operator ``GET /{hash}/status`` →
+        ``state ∈ {absent, active, reaped}``. Distinct from
+        ``/api/ai/agent-status`` (config-only): this reflects whether a pod is
+        actually running *right now*. Pods are spawn-on-demand, so a healthy
+        idle project reports ``reaped`` / ``absent`` — expected, not an error.
+
+        Side-effect-free: we do NOT call the client's ``_project_hash`` (which
+        would create an agent_session row); a project that never chatted has no
+        session → reported ``absent`` without touching the DB. ACL mirrors the
+        chat stream (``_check_project_access``) so pod state never leaks across
+        tenants. Operator unreachable / unconfigured degrades to ``unknown``
+        (HTTP 200) rather than surfacing a 500 to the kanban header.
+        """
+        if not project_id:
+            return {'success': False, 'error': 'project_id is required'}
+        project = request.env['project.project'].sudo().browse(int(project_id))
+        if not project.exists():
+            return {'success': False, 'error': 'Project not found'}
+        if not self._check_project_access(project):
+            return {'success': False, 'error': 'Access denied'}
+
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(request.env)
+        if not client:
+            return {'success': True, 'data': {
+                'state': 'unknown', 'reason': 'Operator 未設定',
+            }}
+
+        session = request.env['woow_paas_platform.agent_session'].sudo().search(
+            [('project_id', '=', project.id)], limit=1,
+        )
+        if not session or not session.project_namespace_hash:
+            # Never spawned — no session row. A status poll must not create one.
+            return {'success': True, 'data': {'state': 'absent'}}
+        try:
+            status = client.get_status(session.project_namespace_hash)
+        except Exception as exc:
+            _logger.warning(
+                'agent pod status failed for project %s: %s', project.id, exc,
+            )
+            return {'success': True, 'data': {'state': 'unknown'}}
+        return {
+            'success': True,
+            'data': {
+                'state': status.get('state') or 'unknown',
+                'pod_ws_url': status.get('pod_ws_url'),
+            },
+        }
+
     # ==================== Support Stats API ====================
 
     @route('/api/support/stats', auth='user', methods=['POST'], type='json')

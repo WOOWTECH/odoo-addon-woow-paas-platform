@@ -58,49 +58,6 @@
                     </div>
                 </WoowCard>
             </div>
-
-            <!-- AI Connection Status Card (full-width below the 3-stat row) -->
-            <div class="o_woow_sp_overview_connection">
-                <WoowCard shadow="true" class="'o_woow_ai_nav_card o_woow_ai_connection_card'">
-                    <div class="o_woow_ai_nav_card_header">
-                        <div t-att-class="'o_woow_ai_nav_icon ' + (connection.connected ? 'o_woow_ai_nav_icon_green' : 'o_woow_ai_nav_icon_gray')">
-                            <WoowIcon name="'smart_toy'" size="28"/>
-                        </div>
-                        <h3>AI Connection</h3>
-                    </div>
-                    <t t-if="isConnectionLoading">
-                        <p class="o_woow_ai_nav_desc o_woow_ai_stat_loading">
-                            Checking connection status...
-                        </p>
-                    </t>
-                    <t t-else="">
-                        <div class="o_woow_ai_connection_status">
-                            <div class="o_woow_ai_status_row">
-                                <span class="o_woow_ai_status_label">Status</span>
-                                <span t-att-class="'o_woow_ai_status_badge ' + (connection.connected ? 'o_woow_ai_status_connected' : 'o_woow_ai_status_disconnected')">
-                                    <t t-if="connection.connected">Connected</t>
-                                    <t t-else="">Not Connected</t>
-                                </span>
-                            </div>
-                            <t t-if="connection.connected">
-                                <div class="o_woow_ai_status_row">
-                                    <span class="o_woow_ai_status_label">Provider</span>
-                                    <span class="o_woow_ai_status_value"><t t-esc="connection.provider_name"/></span>
-                                </div>
-                                <div class="o_woow_ai_status_row">
-                                    <span class="o_woow_ai_status_label">Model</span>
-                                    <span class="o_woow_ai_status_value"><t t-esc="connection.model_name"/></span>
-                                </div>
-                            </t>
-                            <t t-else="">
-                                <p class="o_woow_ai_nav_desc">
-                                    Configure an AI provider in Settings to enable AI-powered conversations.
-                                </p>
-                            </t>
-                        </div>
-                    </t>
-                </WoowCard>
-            </div>
         </div>
     </t>
 </templates>
