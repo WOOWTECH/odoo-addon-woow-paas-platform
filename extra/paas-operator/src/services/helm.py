@@ -885,6 +885,29 @@ class KubernetesService:
         output = result.stdout.strip()
         return int(output) if output else 0
 
+    def get_deployment_annotation(
+        self, namespace: str, deployment_name: str, annotation_key: str
+    ) -> Optional[str]:
+        """Return a metadata annotation value on a deployment (None if absent).
+
+        Used by the agent-runtime lifecycle to detect whether the LLM credential
+        changed since the pod was spawned: the checksum is stamped as a
+        *metadata* annotation (which, unlike a pod-template annotation, does not
+        trigger a rollout), and attach/resume compares against it.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "deployment", deployment_name,
+            "--namespace", namespace,
+            "--output", "json",
+        ]
+        result = self._run_command(args)
+        data = json.loads(result.stdout)
+        return (
+            data.get("metadata", {}).get("annotations", {}).get(annotation_key)
+        )
+
     def set_deployment_env(
         self, namespace: str, deployment_name: str, env: Dict[str, str]
     ) -> None:
