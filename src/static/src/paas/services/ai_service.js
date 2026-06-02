@@ -59,6 +59,8 @@ export const aiService = reactive({
     connectionStatus: null,
     /** @type {AgentStatus|null} */
     agentStatus: null,
+    /** @type {{state: string, pod_ws_url?: string, reason?: string}|null} */
+    agentPodStatus: null,
 
     /**
      * Fetch all available AI assistants
@@ -172,13 +174,16 @@ export const aiService = reactive({
     },
 
     /**
-     * Fetch platform agent runtime status (config-only; no live operator ping)
+     * Fetch agent runtime status (config-only; no live operator ping).
+     * @param {number} [projectId=0] - When >0, per-project readiness (this
+     *   project's use_agent_runtime + resolved template + key + operator);
+     *   when 0, platform-level readiness.
      * @returns {Promise<{success: boolean, data?: AgentStatus, error?: string}>}
      */
-    async fetchAgentStatus() {
+    async fetchAgentStatus(projectId = 0) {
         this.operationLoading.agentStatus = true;
         try {
-            const result = await jsonRpc("/api/ai/agent-status", {});
+            const result = await jsonRpc("/api/ai/agent-status", projectId ? { project_id: projectId } : {});
             if (result.success) {
                 this.agentStatus = result.data;
                 return { success: true, data: this.agentStatus };
@@ -205,6 +210,31 @@ export const aiService = reactive({
             return { success: false, error: err.message };
         } finally {
             this.operationLoading.agentStatus = false;
+        }
+    },
+
+    /**
+     * Fetch live per-project agent pod lifecycle (stage 2). Spawn-on-demand,
+     * so 'reaped'/'absent' on a healthy idle project is expected, not an error.
+     * Degrades to {state: 'unknown'} on operator/network failure.
+     * @param {number} projectId - project.project ID
+     * @returns {Promise<{success: boolean, data?: object, error?: string}>}
+     */
+    async fetchAgentPodStatus(projectId) {
+        this.operationLoading.agentPodStatus = true;
+        try {
+            const result = await jsonRpc("/api/ai/agent-pod-status", { project_id: projectId });
+            if (result.success) {
+                this.agentPodStatus = result.data;
+                return { success: true, data: this.agentPodStatus };
+            }
+            this.agentPodStatus = { state: "unknown" };
+            return { success: false, error: result.error };
+        } catch (err) {
+            this.agentPodStatus = { state: "unknown" };
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.agentPodStatus = false;
         }
     },
 

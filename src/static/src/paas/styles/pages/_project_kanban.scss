@@ -71,6 +71,9 @@
 .o_woow_kanban__page_header_right {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.75rem;
 }
 
 .o_woow_kanban__create_btn {
@@ -90,6 +93,138 @@
     &:hover {
         background: darken($woow-primary, 8%);
     }
+}
+
+// -----------------------------------------------------------------------------
+// Status pills (AI Connection | Agent) — right of Create Task, wrap below on
+// narrow screens (header_right is flex-wrap). Click a pill → detail popover.
+// -----------------------------------------------------------------------------
+
+.o_woow_kanban__status_pills {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.o_woow_status_pill_wrap {
+    position: relative;
+}
+
+.o_woow_status_pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $woow-text-secondary;
+    background: $woow-card-light;
+    border: 1px solid $woow-border-light;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+        color: $woow-text-primary;
+        border-color: rgba($woow-primary, 0.3);
+        background: rgba($woow-primary, 0.05);
+    }
+}
+
+.o_woow_status_pill_label {
+    line-height: 1;
+}
+
+.o_woow_status_pill_dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: #9ca3af;
+
+    &.is-on { background: #16a34a; }
+    &.is-off { background: #9ca3af; }
+    &.is-loading {
+        background: #d1d5db;
+        animation: o_woow_pill_pulse 1s ease-in-out infinite;
+    }
+}
+
+@keyframes o_woow_pill_pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+}
+
+// Live pod sub-badge inside the Agent pill (running / idle / not-yet-spawned).
+.o_woow_status_pill_live {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(107, 114, 128, 0.15);
+    color: #6b7280;
+
+    &.live-active { background: rgba(22, 163, 74, 0.15); color: #15803d; }
+    &.live-reaped { background: rgba(245, 158, 11, 0.15); color: #b45309; }
+    &.live-absent { background: rgba(107, 114, 128, 0.15); color: #6b7280; }
+}
+
+// Detail popover (opens below the pill, anchored to its right edge).
+.o_woow_status_popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 50;
+    min-width: 220px;
+    padding: 12px 14px;
+    background: $woow-card-light;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.o_woow_status_popover_title {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    margin-bottom: 8px;
+}
+
+.o_woow_status_row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 4px 0;
+    font-size: 0.8125rem;
+}
+
+.o_woow_status_k {
+    color: $woow-text-secondary;
+}
+
+.o_woow_status_v {
+    color: $woow-text-primary;
+    font-weight: 600;
+    text-align: right;
+}
+
+.o_woow_status_badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 999px;
+
+    &.is-on { background: rgba(22, 163, 74, 0.12); color: #15803d; }
+    &.is-off { background: rgba(107, 114, 128, 0.12); color: $woow-text-secondary; }
+}
+
+.o_woow_status_hint {
+    margin: 4px 0 0;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    line-height: 1.4;
 }
 
 .o_woow_kanban__column_add_btn {
