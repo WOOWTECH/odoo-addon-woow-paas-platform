@@ -97,3 +97,38 @@ class TestPushCoordination(TransactionCase):
         with patch(_CLIENT_MOD + '.get_agent_runtime_client', return_value=fake):
             self.Session._push_snapshot_to_running_pods('skill', 'system')
         self.assertEqual(fake.invalidate_skills.call_count, 0)  # 只推 active
+
+
+@tagged('post_install', '-at_install')
+class TestSkillPublishTriggersPush(TransactionCase):
+    def setUp(self):
+        super().setUp()
+        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
+        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        ICP = self.env['ir.config_parameter'].sudo()
+        ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
+        ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')
+
+    def test_system_skill_publish_calls_push(self):
+        skill = self.env['woow_paas_platform.skill'].sudo().create({
+            'name': f'sk-{uuid.uuid4().hex[:6]}', 'version': '1.0.0',
+            'scope': 'system', 'state': 'draft', 'bundle_sha256': 'a' * 64})
+        Session = self.env['woow_paas_platform.agent_session']
+        with patch.object(type(Session), '_push_snapshot_to_running_pods') as push:
+            skill.action_publish()
+            push.assert_called()
+            # scope='system' 傳遞正確
+            args = push.call_args.args
+            self.assertEqual(args[0], 'skill')
+            self.assertEqual(args[1], 'system')
+
+    def test_recompute_is_latest_does_not_trigger_push(self):
+        """_recompute_is_latest 內部 write 的是 is_latest（不含 state）→ 不推送，
+        不遞迴。"""
+        skill = self.env['woow_paas_platform.skill'].sudo().create({
+            'name': f'sk-{uuid.uuid4().hex[:6]}', 'version': '1.0.0',
+            'scope': 'system', 'state': 'published', 'bundle_sha256': 'a' * 64})
+        Session = self.env['woow_paas_platform.agent_session']
+        with patch.object(type(Session), '_push_snapshot_to_running_pods') as push:
+            skill._recompute_is_latest()
+            push.assert_not_called()

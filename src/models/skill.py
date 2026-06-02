@@ -177,6 +177,13 @@ class Skill(models.Model):
                 if skill.state == 'published' and not skill.published_at:
                     skill.published_at = fields.Datetime.now()
                 skill._recompute_is_latest()
+                # #111: state change (publish/deprecate/archive) alters which
+                # skills load into running pods → push fresh snapshot best-
+                # effort. _recompute_is_latest writes only is_latest (no
+                # 'state') so it never re-enters this branch (no recursion).
+                self.env['woow_paas_platform.agent_session'] \
+                    ._push_snapshot_to_running_pods(
+                        'skill', skill.scope, skill.project_id.id or None)
         return result
 
     def _anchor_bundle_attachment(self):
