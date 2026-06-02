@@ -14,6 +14,8 @@ _logger = logging.getLogger(__name__)
 
 _PREFIX = '/api/agent-runtimes'
 _TIMEOUT = 30
+_SPAWN_TIMEOUT = 90      # cold-start helm install + image pull headroom (#123)
+_INVALIDATE_TIMEOUT = 10  # best-effort on-publish push, don't hang (#123/#111)
 
 # LLM model-config defaults — mirror ``ai_client.AIClient.from_assistant``
 # (models/ai_client.py:121-125) so the pod's ChatOpenAI sees the same values the
@@ -81,13 +83,13 @@ class AgentRuntimeClient:
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
 
-    def _request(self, method, path, json_body=None):
+    def _request(self, method, path, json_body=None, timeout=None):
         url = self.base_url + _PREFIX + path
         resp = requests.request(
             method, url,
             json=json_body,
             headers={'X-API-Key': self.api_key, 'Content-Type': 'application/json'},
-            timeout=_TIMEOUT,
+            timeout=timeout if timeout is not None else _TIMEOUT,
         )
         if not resp.ok:
             raise AgentRuntimeOperatorError(
@@ -129,7 +131,8 @@ class AgentRuntimeClient:
             body['api_key'] = api_key
         if llm_model_config:
             body['llm_model_config'] = llm_model_config
-        return self._request('POST', '/spawn-or-attach', body)
+        return self._request('POST', '/spawn-or-attach', body,
+                             timeout=_SPAWN_TIMEOUT)
 
     def reap(self, project_hash):
         return self._request('POST', f'/{project_hash}/reap')
@@ -141,6 +144,7 @@ class AgentRuntimeClient:
         return self._request(
             'POST', f'/{project_hash}/invalidate-mcp',
             {'mcp_snapshot': mcp_snapshot or {}},
+            timeout=_INVALIDATE_TIMEOUT,
         )
 
     def sync_workspaces(self, project_hash, workspace_ids):

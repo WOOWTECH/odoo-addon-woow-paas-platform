@@ -103,4 +103,6 @@ from . import test_auto_enable_agent_runtime
 from . import test_agent_template_default_bind_guard
 # refactor: snapshot/resolve 下沉到 agent_session model (#123/#111 共用 refactor)
 from . import test_agent_runtime_snapshot_refactor
+# feat: #123 cold-start retry — client timeout 分級 + spawn retry + WS connect retry
+from . import test_agent_runtime_coldstart_retry
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
