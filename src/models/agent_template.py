@@ -121,6 +121,48 @@ class AgentTemplate(models.Model):
                         % (tmpl.name or tmpl.id, proj.display_name or proj.id)
                     )
 
+    @api.constrains('project_ids')
+    def _check_not_platform_default_when_bound(self):
+        """The template configured as the platform-wide default
+        (``ir.config_parameter['woow_paas_platform.default_agent_template_id']``)
+        must stay project-unbound.
+
+        A project-bound default is silently rejected by
+        ``_platform_default_agent_template`` (cross-tenant MCP/skill leak guard,
+        mirrored by ``_resolve_agent_template`` ④). That rejection has no error
+        surface: it just makes the readiness gate's "valid default" condition
+        False and the resolution fallback vanish, so auto-enable / default
+        resolution quietly stop working for EVERY project cluster-wide. Failing
+        loud at bind time keeps the seeded-default tenant-neutral invariant
+        enforceable instead of leaving it to manifest as a silent outage.
+
+        Not bypassed for superuser/admin on purpose: there is no legitimate path
+        that binds a project to the configured default — the seed ships unbound,
+        and any binder (UI, backend, sudo) is breaking the invariant. The
+        reverse direction (selecting an already-bound template as the default)
+        is guarded by the ``res.config.settings`` field domain.
+        """
+        default_raw = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.default_agent_template_id')
+        if not default_raw:
+            return
+        try:
+            default_id = int(default_raw)
+        except (ValueError, TypeError):
+            return
+        for tmpl in self:
+            if tmpl.id == default_id and tmpl.project_ids:
+                raise ValidationError(
+                    "Agent template '%s' is the platform-wide default "
+                    "(Settings → Default Agent Template) and must stay "
+                    "project-unbound: binding it to a project turns it into a "
+                    "tenant-bound template, which silently disables the "
+                    "agent-runtime default fallback for every project. Bind a "
+                    "different template to this project, or change the platform "
+                    "default first."
+                    % (tmpl.name or tmpl.id)
+                )
+
     @api.constrains('mcp_server_ids', 'project_ids')
     def _check_mcp_subset(self):
         """Bound MCP servers must be a subset of (project user-scope ∪
