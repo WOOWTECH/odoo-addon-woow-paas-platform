@@ -1,9 +1,12 @@
 """#123 cold-start retry: client timeout 分級 + spawn retry + WS connect retry."""
+import json as _json
 import os
+import re
+import sys
 import uuid
 from unittest.mock import MagicMock, patch
 
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 _CLIENT_MOD = "odoo.addons.woow_paas_platform.services.agent_runtime_client"
 _ENV_NAMESPACE_SECRET = 'AGENT_RUNTIME_NAMESPACE_SECRET'
@@ -114,3 +117,111 @@ class TestSpawnRetry(TransactionCase):
                     agent_template=MagicMock(id=1, model_config_id=None),
                     mcp_snapshot={}, skill_snapshot=[])
             self.assertEqual(mock_requests.request.call_count, 1)  # no retry on 4xx
+
+
+class _RetryFakeWSConn:
+    def __init__(self, frames):
+        self._frames = list(frames)
+        self.closed = False
+        self.sent = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        import asyncio
+        await asyncio.sleep(0)
+        self.closed = True
+        return False
+
+    async def send(self, message):
+        self.sent.append(message)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._frames:
+            return self._frames.pop(0)
+        raise StopAsyncIteration
+
+
+def _make_retry_ws(fail_times, conn):
+    import types
+    mod = types.ModuleType("websockets")
+    mod._attempts = 0
+
+    def connect(uri, *args, **kwargs):
+        mod._attempts += 1
+        if mod._attempts <= fail_times:
+            raise ConnectionRefusedError("pod not ready (simulated)")
+        return conn
+
+    mod.connect = connect
+    return mod
+
+
+@tagged('post_install', '-at_install')
+class TestWsConnectRetry(HttpCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.admin = cls.env.ref('base.user_admin')
+
+    def setUp(self):
+        super().setUp()
+        s = uuid.uuid4().hex[:8]
+        Project = self.env['project.project'].sudo()
+        self.project = Project.create({'name': f'wsr-{s}'})
+        self.project.message_subscribe(partner_ids=[self.admin.partner_id.id])
+        self.project.write({'use_agent_runtime': True})
+        self.env['woow_paas_platform.agent_template'].sudo().create({
+            'name': f'tmpl-{s}', 'is_public': True, 'state': 'published',
+            'project_ids': [(6, 0, [self.project.id])]})
+        self.channel = self.env['discuss.channel'].sudo().create({
+            'name': f'wsr-ch-{s}', 'channel_type': 'channel',
+            'channel_partner_ids': [(4, self.admin.partner_id.id)]})
+        self.env['project.task'].sudo().create({
+            'name': f'wsr-task-{s}', 'project_id': self.project.id,
+            'channel_id': self.channel.id})
+
+    def _csrf_token(self):
+        for page in ('/woow', '/web'):
+            resp = self.url_open(page, timeout=15)
+            if resp.status_code != 200:
+                continue
+            m = re.search(r'csrf_token[\"\']?\s*[:=]\s*[\"\']([^\"\']+)[\"\']',
+                          resp.text)
+            if m:
+                return m.group(1)
+        self.fail("csrf token not found (fixture issue)")
+
+    def _fake_client(self):
+        client = MagicMock()
+        client.spawn_or_attach.return_value = {
+            'pod_ws_url': 'ws://pod.local:8000/v1/chat',
+            'auth_token': 'tok', 'pod_state': 'spawning', 'spawn_age_ms': 5}
+        return client
+
+    def test_connect_retries_then_streams_done(self):
+        conn = _RetryFakeWSConn(frames=[
+            _json.dumps({'type': 'text_chunk', 'payload': {'content': 'hi'}}),
+            _json.dumps({'type': 'done', 'payload': {}}),
+        ])
+        fake = _make_retry_ws(fail_times=2, conn=conn)
+        prev = sys.modules.get('websockets')
+        sys.modules['websockets'] = fake
+        self.addCleanup(lambda: sys.modules.__setitem__('websockets', prev)
+                        if prev else sys.modules.pop('websockets', None))
+        self.authenticate('admin', 'admin')
+        token = self._csrf_token()
+        url = f'/api/ai/stream/{self.channel.id}?csrf_token={token}'
+        with patch(_CLIENT_MOD + '.get_agent_runtime_client',
+                   return_value=self._fake_client()):
+            resp = self.url_open(url, timeout=25)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('"stage": "spawning"', resp.text)   # 進度 event 有出
+        self.assertIn('"done": true', resp.text)          # 最終仍成功
+        self.assertEqual(fake._attempts, 3)               # 2 fail + 1 success
+        self.assertTrue(conn.sent)                         # user_message 有送
+        self.assertEqual(len(conn.sent), 1)               # 只送一次（不重送）

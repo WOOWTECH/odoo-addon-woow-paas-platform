@@ -701,12 +701,39 @@ class AiAssistantController(Controller):
                 return
 
             async def relay():
-                async with websockets.connect(
-                    pod_ws_url,
-                    extra_headers={'Authorization': f'Bearer {auth_token}'},
-                    ping_interval=30,
-                    ping_timeout=60,
-                ) as ws:
+                # F-ARL-1 / #123 G3: pod may not be WS-ready right after
+                # spawn-or-attach returns pod_state="spawning". Retry only the
+                # CONNECT (not send/drain) with backoff up to a deadline, so a
+                # mid-stream disconnect never re-sends user_message. Keep the
+                # __aenter__/__aexit__ pair so the F-PC-6 aclose() cleanup still
+                # closes the socket on the done/error break.
+                cm = None
+                ws = None
+                backoff = 1.0
+                start = loop.time()
+                deadline = start + 60
+                while ws is None:
+                    try:
+                        cm = websockets.connect(
+                            pod_ws_url,
+                            extra_headers={'Authorization': f'Bearer {auth_token}'},
+                            ping_interval=30,
+                            ping_timeout=60,
+                        )
+                        ws = await cm.__aenter__()
+                    except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
+                        cm = None
+                        if loop.time() >= deadline:
+                            yield {'type': 'error', 'payload': {
+                                'error': 'agent 啟動逾時，請稍後再試',
+                                'fatal': True}}
+                            return
+                        yield {'type': 'status', 'payload': {
+                            'stage': 'spawning',
+                            'elapsed_ms': int((loop.time() - start) * 1000)}}
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, 5)
+                try:
                     await ws.send(json.dumps({
                         'version': '1.0',
                         'type': 'user_message',
@@ -730,6 +757,8 @@ class AiAssistantController(Controller):
                         if envelope.get('type') == 'error' and \
                                 envelope.get('payload', {}).get('fatal'):
                             return
+                finally:
+                    await cm.__aexit__(None, None, None)
 
             loop = asyncio.new_event_loop()
             try:
