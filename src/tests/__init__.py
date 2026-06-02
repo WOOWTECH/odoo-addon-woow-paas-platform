@@ -99,4 +99,6 @@ from . import test_skill_upload_wizard
 from . import test_default_agent_template
 # feat: auto-enable agent runtime on project creation (platform toggle + migration)
 from . import test_auto_enable_agent_runtime
+# fix: platform-default agent template must stay project-unbound (write-time guard)
+from . import test_agent_template_default_bind_guard
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
