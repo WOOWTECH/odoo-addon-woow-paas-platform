@@ -53,6 +53,16 @@ class TestPushCoordination(TransactionCase):
     def _active_session(self):
         project = self.env['project.project'].sudo().create(
             {'name': f'ps-{uuid.uuid4().hex[:6]}', 'use_agent_runtime': True})
+        # 與 seeded platform default 解耦：明確綁一個 published template，讓
+        # _resolve_agent_template 第一個 search 就命中。否則測試隱式依賴 seed
+        # 的 agent_template_default + post_init_hook 設 default_agent_template_id，
+        # seed 缺失/未發布/綁 project 時 push 不觸發 → 假紅（且原因誤導）。
+        self.env['woow_paas_platform.agent_template'].sudo().create({
+            'name': f'tmpl-{uuid.uuid4().hex[:6]}',
+            'is_public': True,
+            'state': 'published',
+            'project_ids': [(6, 0, [project.id])],
+        })
         session = self.Session.create({'project_id': project.id})
         session.write({'state': 'active'})
         return project, session
