@@ -132,3 +132,38 @@ class TestSkillPublishTriggersPush(TransactionCase):
         with patch.object(type(Session), '_push_snapshot_to_running_pods') as push:
             skill._recompute_is_latest()
             push.assert_not_called()
+
+
+@tagged('post_install', '-at_install')
+class TestMcpChangeTriggersPush(TransactionCase):
+    def setUp(self):
+        super().setUp()
+        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
+        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        ICP = self.env['ir.config_parameter'].sudo()
+        ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
+        ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')
+
+    def _mcp(self, **kw):
+        vals = {'name': f'mcp-{uuid.uuid4().hex[:6]}', 'scope': 'system',
+                'transport': 'sse', 'url': 'https://a.example/sse'}
+        vals.update(kw)
+        return self.env['woow_paas_platform.mcp_server'].sudo().create(vals)
+
+    def test_url_change_calls_mcp_push(self):
+        server = self._mcp()
+        Session = self.env['woow_paas_platform.agent_session']
+        with patch.object(type(Session), '_push_snapshot_to_running_pods') as push:
+            server.write({'url': 'https://b.example/sse'})
+            push.assert_called()
+            args = push.call_args.args
+            self.assertEqual(args[0], 'mcp')
+            self.assertEqual(args[1], 'system')
+
+    def test_non_snapshot_field_change_no_push(self):
+        """state_message 不在 snapshot（snapshot 只有 name/url/transport）→ 不推。"""
+        server = self._mcp()
+        Session = self.env['woow_paas_platform.agent_session']
+        with patch.object(type(Session), '_push_snapshot_to_running_pods') as push:
+            server.write({'state_message': 'hello'})
+            push.assert_not_called()

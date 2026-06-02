@@ -150,7 +150,18 @@ class McpServer(models.Model):
                     raise AccessError(
                         "Only administrators can change an MCP server's project."
                     )
-        return super().write(vals)
+        result = super().write(vals)
+        # #111 parity: mcp snapshot 只序列化 server 的 name/url/transport
+        # (_build_mcp_snapshot)，故僅這些欄位變動才改 pod 看到的 mcp.json →
+        # 觸發 best-effort 推送。active/state/state_message/tool 變動不改 snapshot
+        # 故不推（mcp_tool 同理不觸發）。
+        _MCP_SNAPSHOT_FIELDS = {'name', 'url', 'transport'}
+        if _MCP_SNAPSHOT_FIELDS & set(vals):
+            Session = self.env['woow_paas_platform.agent_session']
+            for server in self:
+                Session._push_snapshot_to_running_pods(
+                    'mcp', server.scope, server.project_id.id or None)
+        return result
 
     def _get_mcp_client_config(self):
         """Build config dict for MultiServerMCPClient."""
