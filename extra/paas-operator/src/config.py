@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     # `agentRuntime.externalEgress.enabled`; default OFF (closed egress = secure),
     # explicit per-environment opt-in via env AGENT_RUNTIME_EXTERNAL_EGRESS_ENABLED.
     agent_runtime_external_egress_enabled: bool = False  # forward to chart when real-LLM pods need outbound
+    # Task 1a: probe SHAPE selector forwarded to the chart's top-level `probe.style`
+    # when set. Empty (default) => operator forwards NOTHING => chart keeps its own
+    # default (probe.style=tcpSocket), so image <= 1.1.x and existing pods are
+    # unaffected. Set "httpGet" (per-environment opt-in via env
+    # AGENT_RUNTIME_PROBE_STYLE) once the pod image is >= 1.2.0, which serves
+    # /livez + /readyz; chart 0.2.0 fail-closes on any value other than
+    # tcpSocket/httpGet. Mirrors the externalEgress forward pattern.
+    agent_runtime_probe_style: str = ""  # "" = no forward; "httpGet" for image >= 1.2.0
 
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management

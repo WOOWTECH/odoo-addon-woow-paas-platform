@@ -644,6 +644,47 @@ class TestSpawnOrAttach:
             values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
         assert values.get("agentRuntime", {}).get("externalEgress", {}).get("enabled") is not True
 
+    def test_build_install_values_forwards_probe_style_when_set(self):
+        """Task 1a (issue: operator probe.style passthrough). When this environment
+        opts in (settings.agent_runtime_probe_style == "httpGet") the operator MUST
+        forward the chart's TOP-LEVEL ``probe.style`` so chart 0.2.0 renders httpGet
+        probes (/livez + /readyz) instead of its tcpSocket default. The chart reads
+        TOP-LEVEL ``probe.style`` (values.yaml) — NOT ``agentRuntime.probe.style``.
+        Same missed-forward class as externalEgress ([[spawn-install-values-missed-forward]]).
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        with patch("src.api.agent_runtimes.settings.agent_runtime_probe_style", "httpGet"):
+            values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert values.get("probe", {}).get("style") == "httpGet"
+
+    def test_build_install_values_omits_probe_style_when_unset(self):
+        """Backward-compat default: unset (empty) => operator forwards NO probe key,
+        so chart 0.2.0 keeps its own default probe.style=tcpSocket and image <= 1.1.x
+        / existing pods are unaffected. Absence is the guarantee (stronger than the
+        egress 'is not True' check), matching the omit-odooNamespace idiom.
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        with patch("src.api.agent_runtimes.settings.agent_runtime_probe_style", ""):
+            values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+        assert "probe" not in values
+
+    def test_build_install_values_rejects_invalid_probe_style(self):
+        """Fail-loud on a typo'd style (e.g. Fleet sets 'htpGet'): the operator
+        raises BEFORE helm install with a clear message rather than forwarding an
+        invalid value. Defense-in-depth complementing the chart's own fail-closed
+        validation, and chart-version-independent. Only {tcpSocket, httpGet} accepted.
+        """
+        from src.api.agent_runtimes import _build_install_values
+        from src.models.schemas import SpawnOrAttachRequest
+
+        with patch("src.api.agent_runtimes.settings.agent_runtime_probe_style", "htpGet"):
+            with pytest.raises(ValueError):
+                _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
+
     def test_build_install_values_forwards_all_consumed_chart_values(self):
         """Forward-completeness contract (operator <-> chart 0.1.4). Beyond the
         RENDER-required keys, the chart consumes a set of OPTIONAL values the
@@ -660,6 +701,7 @@ class TestSpawnOrAttach:
         with patch("src.api.agent_runtimes.settings.odoo_base_url",
                    "http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.local:8069"), \
              patch("src.api.agent_runtimes.settings.agent_runtime_external_egress_enabled", True), \
+             patch("src.api.agent_runtimes.settings.agent_runtime_probe_style", "httpGet"), \
              patch.dict(os.environ, {"AGENT_RUNTIME_AUTH_SECRET_CURRENT": "k-cur"}):
             values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
         # required (chart _helpers.tpl validate)
@@ -671,6 +713,7 @@ class TestSpawnOrAttach:
         assert values["networkPolicy"]["odooNamespace"] == "dev-sandbox-stg"
         assert values["networkPolicy"]["egressWorkspaceIds"] == _SPAWN_BODY["project_workspace_ids"]
         assert values["agentRuntime"]["externalEgress"]["enabled"] is True
+        assert values["probe"]["style"] == "httpGet"
 
     def test_build_install_values_forwards_skill_snapshot_for_cold_start(self):
         """Layer 3 (cold-start half): the chart renders skills.json from
