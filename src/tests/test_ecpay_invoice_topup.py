@@ -56,10 +56,17 @@ class TestEcpayInvoiceTopup(TransactionCase):
     def _ensure_active_payment_method(self):
         method = self.provider.payment_method_ids[:1]
         if not method:
-            method = self.env['payment.method'].search(
-                [('code', '=', 'ecpay')], limit=1,
-            )
-        if method and not method.active:
+            # active_test=False: the ecpay payment.method ships inactive (Odoo
+            # only flips a method active when a provider enabling it is saved),
+            # so a default search (active_test=True) misses it under the sandbox
+            # full-module install and leaves the required payment_method_id null
+            # on the tx → NotNullViolation in setUp (F-ARC-1 / gitea #131).
+            method = self.env['payment.method'].with_context(
+                active_test=False,
+            ).search([('code', '=', 'ecpay')], limit=1)
+        if not method:
+            self.skipTest("ecpay payment.method not installed")
+        if not method.active:
             self.env.cr.execute(
                 "UPDATE payment_method SET active = TRUE WHERE id = %s",
                 [method.id],

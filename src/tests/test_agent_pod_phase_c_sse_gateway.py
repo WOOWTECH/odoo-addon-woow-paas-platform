@@ -180,10 +180,16 @@ class TestPhaseCSseDualMode(HttpCase):
             'channel_partner_ids': [(4, self.admin.partner_id.id)],
         })
         # Task binds channel → project so the SSE generator resolves project.
+        # ai_auto_reply=False makes the "no opted-in assistant" premise explicit:
+        # project.task.ai_auto_reply defaults to True, and the sandbox full-module
+        # DB seeds default_ai_assistant_id (create.sh), so a default-True task
+        # would resolve the seeded assistant → 'no_message' instead of the legacy
+        # 'no_agent' this test locks (F-ARC-1 / gitea #131).
         self.task = self.Task.sudo().create({
             'name': f'sse-task-{self.suffix}',
             'project_id': self.project.id,
             'channel_id': self.channel.id,
+            'ai_auto_reply': False,
         })
 
     # ----- helpers -------------------------------------------------------- #

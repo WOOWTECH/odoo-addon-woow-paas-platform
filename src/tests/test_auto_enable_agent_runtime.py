@@ -122,6 +122,12 @@ class TestAutoEnableOnCreate(TransactionCase):
         self.controller = ai_assistant.AiAssistantController()
         self.ICP = self.env['ir.config_parameter'].sudo()
         self.AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+        # Fail-isolation: the sandbox full-module DB seeds operator_url/api_key/
+        # default_agent_template_id globally (create.sh), so this test's assumed
+        # "unconfigured" baseline does not hold unless we clear them. Tests that
+        # need a ready platform call _set_ready() (F-ARC-1 / gitea #131).
+        for _key in (_TOGGLE, _URL, _KEY, _DEFTMPL):
+            self.ICP.set_param(_key, '')
 
     def _set_ready(self):
         self.ICP.set_param(_TOGGLE, 'True')
@@ -185,6 +191,11 @@ class TestBackfillExistingProjects(TransactionCase):
         self.mod = ai_assistant
         self.ICP = self.env['ir.config_parameter'].sudo()
         self.AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+        # Fail-isolation against sandbox seed (see TestAutoEnableOnCreate.setUp):
+        # b2 asserts a noop on an unconfigured platform; b1 calls
+        # _make_ready_platform() to set up readiness (F-ARC-1 / gitea #131).
+        for _key in (_TOGGLE, _URL, _KEY, _DEFTMPL):
+            self.ICP.set_param(_key, '')
 
     def _make_ready_platform(self):
         # NOTE: backfill is toggle-INDEPENDENT (toggle is off at upgrade time);

@@ -27,6 +27,16 @@ class TestSmartHomeTemplate(TransactionCase):
             'sh_no_of_billing_cycle': -1,
         })
 
+        # Self-contained internal (base.group_user) member for the ACL tests.
+        # Do NOT use env.ref('base.user_demo'): the sandbox full-module DB is
+        # installed with --without-demo=all, so base.user_demo does not exist
+        # and env.ref would raise (F-ARC-1 / gitea #131).
+        self.portal_user = self.env['res.users'].create({
+            'name': 'SH ACL Test User',
+            'login': 'sh_acl_test_user',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+
     def test_create_minimal(self):
         """A template needs only a name to be created."""
         tmpl = self.SHTemplate.create({'name': 'HA Test'})
@@ -120,7 +130,7 @@ class TestSmartHomeTemplate(TransactionCase):
 
         # Use base.group_user (internal user). Portal users sit lower but
         # the same read row applies — see ir.model.access.csv.
-        portal_uid = self.env.ref('base.user_demo').id
+        portal_uid = self.portal_user.id
         tmpl_as_portal = self.SHTemplate.with_user(portal_uid).browse(tmpl.id)
         # Reading should not raise
         self.assertEqual(tmpl_as_portal.name, 'ACL Read')
@@ -129,7 +139,7 @@ class TestSmartHomeTemplate(TransactionCase):
         """Non-admin users cannot mutate templates."""
         tmpl = self.SHTemplate.create({'name': 'ACL Write'})
 
-        portal_uid = self.env.ref('base.user_demo').id
+        portal_uid = self.portal_user.id
         tmpl_as_portal = self.SHTemplate.with_user(portal_uid).browse(tmpl.id)
         with self.assertRaises(AccessError):
             tmpl_as_portal.write({'name': 'Hacked'})
