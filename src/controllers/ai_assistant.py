@@ -648,6 +648,25 @@ class AiAssistantController(Controller):
             },
         )
 
+    @staticmethod
+    def _build_runtime_user_message_payload(channel_id, body, history,
+                                            template_id, invoker_role,
+                                            invoker_user_id, system_context):
+        """user_message envelope payload (ws-protocol §3) + additive
+        ``system_context`` (spec 2026-06-04 D5). Key omitted when falsy so
+        empty-context turns keep the exact legacy payload shape."""
+        payload = {
+            'channel_id': channel_id,
+            'body': body,
+            'history': history,
+            'template_id': template_id,
+            'invoker_role': invoker_role,
+            'invoker_user_id': invoker_user_id,
+        }
+        if system_context:
+            payload['system_context'] = system_context
+        return payload
+
     def _stream_agent_runtime(self, channel, project, channel_id):
         """Agent-runtime pod transport branch (§5.6, flag-gated).
 
@@ -676,6 +695,8 @@ class AiAssistantController(Controller):
         mcp_snapshot = self._build_mcp_snapshot(project, template)
         skill_snapshot = self._build_skill_snapshot(project, template)
         history = channel._get_chat_history(limit=20)
+        system_context = request.env['woow_paas_platform.agent_session'] \
+            ._build_runtime_system_context(channel, template)
         last_message = request.env['mail.message'].sudo().search([
             ('res_id', '=', channel_id),
             ('model', '=', 'discuss.channel'),
@@ -768,14 +789,9 @@ class AiAssistantController(Controller):
                         'request_id': request_id,
                         'sequence_number': 0,
                         'timestamp': _dt.utcnow().isoformat() + 'Z',
-                        'payload': {
-                            'channel_id': channel_id,
-                            'body': user_message,
-                            'history': history,
-                            'template_id': template_id,
-                            'invoker_role': invoker_role,
-                            'invoker_user_id': uid,
-                        },
+                        'payload': self._build_runtime_user_message_payload(
+                            channel_id, user_message, history, template_id,
+                            invoker_role, uid, system_context),
                     }))
                     async for raw in ws:
                         envelope = json.loads(raw)

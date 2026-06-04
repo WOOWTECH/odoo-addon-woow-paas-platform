@@ -12,7 +12,7 @@ import re
 import uuid
 from unittest.mock import MagicMock, patch
 
-from odoo.tests.common import HttpCase, tagged
+from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 
 @tagged('post_install', '-at_install')
@@ -142,3 +142,68 @@ class TestLegacySseContextWiring(HttpCase):
         self.assertEqual(resp.status_code, 200)  # SSE error frame, not 403
         self.assertIn('access_denied', resp.text)
         self.assertNotIn('Ctx Project', resp.text)
+
+
+@tagged('post_install', '-at_install')
+class TestRuntimeSystemContext(TransactionCase):
+    """C path: per-turn system_context string + payload shape (additive)."""
+
+    def setUp(self):
+        super().setUp()
+        env = self.env
+        self.Session = env['woow_paas_platform.agent_session']
+        self.project = env['project.project'].sudo().create({
+            'name': 'RT Project',
+            'description': '<p>rt project desc</p>',
+        })
+        self.channel = env['discuss.channel'].sudo().create({
+            'name': 'rt-ch', 'channel_type': 'channel'})
+        self.task = env['project.task'].sudo().create({
+            'name': 'RT Task',
+            'project_id': self.project.id,
+            'channel_id': self.channel.id,
+        })
+        self.template = env['woow_paas_platform.agent_template'].sudo().create({
+            'name': 'rt-tmpl',
+            'system_prompt': 'BASE PROMPT — be helpful.',
+        })
+
+    def test_runtime_context_prefixes_template_system_prompt(self):
+        ctx = self.Session._build_runtime_system_context(
+            self.channel, self.template)
+        self.assertTrue(ctx.startswith('BASE PROMPT — be helpful.'))
+        self.assertIn('### Project', ctx)
+        self.assertIn('- Name: RT Task', ctx)
+
+    def test_runtime_context_without_template_prompt(self):
+        self.template.sudo().write({'system_prompt': False})
+        ctx = self.Session._build_runtime_system_context(
+            self.channel, self.template)
+        self.assertTrue(ctx.startswith('## Background Context'))
+
+    def test_runtime_context_all_empty(self):
+        self.template.sudo().write({'system_prompt': False})
+        orphan = self.env['discuss.channel'].sudo().create({
+            'name': 'rt-orphan', 'channel_type': 'channel'})
+        self.assertEqual(
+            self.Session._build_runtime_system_context(orphan, self.template),
+            '')
+
+    def test_user_message_payload_shape(self):
+        from odoo.addons.woow_paas_platform.controllers.ai_assistant import (
+            AiAssistantController,
+        )
+        build = AiAssistantController._build_runtime_user_message_payload
+        payload = build(7, 'hi', [{'role': 'user', 'content': 'x'}],
+                        42, 'owner', 2, 'CTX STRING')
+        self.assertEqual(payload['channel_id'], 7)
+        self.assertEqual(payload['template_id'], 42)
+        self.assertEqual(payload['system_context'], 'CTX STRING')
+        # additive contract: falsy context → key OMITTED (old-pod shape)
+        payload_empty = build(7, 'hi', [], 42, 'owner', 2, '')
+        self.assertNotIn('system_context', payload_empty)
+        self.assertEqual(
+            set(payload_empty), {
+                'channel_id', 'body', 'history', 'template_id',
+                'invoker_role', 'invoker_user_id'},
+            'payload base shape must stay identical to ws-protocol §3')

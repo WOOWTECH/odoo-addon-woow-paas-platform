@@ -381,6 +381,18 @@ class AgentSession(models.Model):
             return ''
 
     @api.model
+    def _build_runtime_system_context(self, channel, template):
+        """C-path composition (D5): template.system_prompt + unified
+        context as ONE string, assembled Odoo-side per turn. Also closes
+        the pre-existing gap where the pod never received
+        agent_template.system_prompt at all."""
+        parts = [
+            (template.system_prompt or '').strip() if template else '',
+            self._build_system_context(channel),
+        ]
+        return '\n\n'.join(p for p in parts if p).strip()
+
+    @api.model
     def _build_system_context_unsafe(self, channel):
         task = self.env['project.task'].sudo().search(
             [('channel_id', '=', channel.id)], limit=1)
