@@ -3,7 +3,7 @@ title: /woow AI Chat（agent-runtime）資料流與 Secret 關係
 category: guides
 status: active
 created: 2026-06-01
-updated: 2026-06-02
+updated: 2026-06-05
 tags: [paas, agent-runtime, chat, sse, websocket, secret, state-sync, cold-start-retry, on-publish-push]
 related:
   - ../paas-skill-system/02-conversation-streaming.md
@@ -174,6 +174,25 @@ handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:224`�
   `namespace_prefix` 來自 operator 設定 `settings.namespace_prefix`（預設 `"paas-ws-"`，`extra/paas-operator/src/config.py:18`；stg 環境 env-scoped 成 `paas-ws-stg-`）。
 
 > 🔑 **為什麼一把共用 key 能讓每個 project 有獨立 pod**：key 相同，但 `project_id` 這個輸入不同 → HMAC 出不同 hash → 不同 namespace / release / pod。**隔離來自「輸入不同」，不是「key 不同」。**
+
+### 3.1 並發分層：pod 是 per-project 共用，Odoo worker 是 per 串流連線
+
+「SSE 每對話佔 1 worker」常被誤讀成「每個人 / 每個 task 一個 pod」。兩件事在不同層，**容量要分開計算**：
+
+| 層 | 單位 | 隨什麼成長 | 同一 task 兩人同時對話 |
+|---|---|---|---|
+| agent pod（K8s） | **1 project = 1 pod**，該 project 下所有 task、所有人（internal + portal）共用；pod 內部用 LangGraph `thread_id = channel_id`（per-task channel）區隔每條對話串的記憶 | project 數 | 同一個 pod |
+| Odoo HTTP worker | **1 條開著的 SSE（`GET /api/ai/stream/...`）= 佔 1 個 worker**，直到該次串流結束 | 同時收串流的連線數 | 2 個 worker |
+
+```text
+瀏覽器 A ──SSE──▶ ┐
+                   Odoo（每條 SSE 佔 1 個 HTTP worker）──WS──▶ agent pod（per-project 共用 1 個）
+瀏覽器 B ──SSE──▶ ┘
+```
+
+- **pod 數不隨人數 / task 數成長**（per-user → per-project 是 epic 中已拍板的 pivot）。
+- **同時串流人數**的上限受 Odoo worker 數限制（design doc 既有約束：100 active 對話 = 100 worker slot，`docs/plans/2026-Q2/agent-runtime-pod-design.md:129`）；對外開放（如 portal task 頁 chat）時要看的是這個維度，**不是** pod 資源。
+- 量大時的演進路徑是瀏覽器側改 bus WebSocket 推播（整則訊息、非逐字），釋放 worker——見 `docs/superpowers/specs/2026-06-05-portal-task-agent-chat-design.md` 的風險節。
 
 ---
 
