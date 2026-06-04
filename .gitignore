@@ -46,3 +46,6 @@ claudedocs/
 !charts/*/values.yaml
 !charts/*/values-*.yaml
 .maestri
+
+# Local symlink to meeting notes (absolute path, machine-specific — never commit)
+docs/meeting
