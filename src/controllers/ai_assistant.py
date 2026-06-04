@@ -81,10 +81,23 @@ class AiAssistantController(Controller):
     def _check_channel_access(self, channel):
         """Verify the current user has access to the channel.
 
-        Returns True if the user's partner is a member of the channel.
+        Internal users: channel membership (unchanged).
+        Portal users (``user.share``): membership AND the task-level portal
+        predicate re-validated on EVERY request — stale channel membership
+        after un-share must not keep the door open (design spec §安全模型 7).
+        Portal users may only use task-bound channels.
         """
-        user_partner = request.env.user.partner_id
-        return user_partner in channel.channel_partner_ids
+        user = request.env.user
+        user_partner = user.partner_id
+        if user_partner not in channel.channel_partner_ids:
+            return False
+        if user.share:
+            task = request.env['project.task'].sudo().search(
+                [('channel_id', '=', channel.id)], limit=1)
+            if not task:
+                return False
+            return task._portal_partner_can_access(user_partner)
+        return True
 
     def _check_workspace_access(self, workspace):
         """Verify the current user is a member of the workspace.
@@ -106,6 +119,12 @@ class AiAssistantController(Controller):
           re-opens the IDOR surface where the rule layer denies but the
           controller layer still serves the row.
         """
+        user = request.env.user
+        if user.share:
+            # Positive-only portal leg (two-layer-acl-lockstep Layer 2).
+            # Placed FIRST so portal users can never reach the internal
+            # fail-open branches below (F4 stays internal-scoped).
+            return project.sudo()._portal_partner_can_access(user.partner_id)
         if not project.cloud_service_id:
             user_partner = request.env.user.partner_id
             return user_partner in project.message_partner_ids
@@ -119,6 +138,9 @@ class AiAssistantController(Controller):
         Returns True if the task has no project/cloud_service or the user
         is a member of the associated workspace.
         """
+        if request.env.user.share:
+            return task.sudo()._portal_partner_can_access(
+                request.env.user.partner_id)
         if not task.project_id:
             return True
         return self._check_project_access(task.project_id)
