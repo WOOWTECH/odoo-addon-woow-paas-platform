@@ -111,7 +111,9 @@ class _ContextFixture:
         })
         self.project = Project.sudo().create({
             'name': 'Ctx Project',
-            'description': '<p>Project <b>HTML</b> description</p>',
+            # <i> 而非 <b>：html2plaintext 會把 <b> 轉成 markdown 粗體 *...*
+            # 破壞下方 assertIn（2026-06-05 plan-gap 修正）；<i> 無標記。
+            'description': '<p>Project <i>HTML</i> description</p>',
             'cloud_service_id': self.svc_primary.id,
         })
         self.channel = Channel.sudo().create({
@@ -145,7 +147,7 @@ class TestAgentContextBuilder(TransactionCase, _ContextFixture):
         self.assertIn('Task HTML description', ctx)
         # HTML must be flattened, tags never reach the prompt
         self.assertNotIn('<p>', ctx)
-        self.assertNotIn('<b>', ctx)
+        self.assertNotIn('<i>', ctx)
 
     def test_description_truncated_with_marker(self):
         self.project.sudo().write({
