@@ -129,20 +129,9 @@
                             </div>
                         </setting>
                     </block>
-                    <block title="MCP Servers" name="mcp_servers">
-                        <setting string="MCP Server Management"
-                                 help="Manage MCP (Model Context Protocol) servers that provide external tools for AI Assistants.">
-                            <div class="content-group">
-                                <div class="mt8">
-                                    <button name="%(action_mcp_server)d"
-                                            type="action"
-                                            string="Manage MCP Servers"
-                                            class="btn-link"
-                                            icon="fa-arrow-right"/>
-                                </div>
-                            </div>
-                        </setting>
-                    </block>
+                    <!-- MCP Servers 區塊已移除（會議決議 2026-06-03 議題 D）：
+                         MCP 管理入口統一收斂到 Project > Configuration > MCP Servers，
+                         PaaS Settings 不再保留捷徑按鈕（action_mcp_server 本身保留不動） -->
                 </app>
             </xpath>
         </field>
