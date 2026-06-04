@@ -110,3 +110,5 @@ from . import test_agent_runtime_onpublish_push
 # feat: platform Agent runtime status endpoint (Projects-overview Agent card, gitea #126)
 from . import test_agent_status_endpoint
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
+# feat: agent context enrichment (spec 2026-06-04 — TDD)
+from . import test_agent_context_builder
