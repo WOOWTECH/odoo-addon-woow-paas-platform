@@ -105,14 +105,18 @@
         </field>
     </record>
 
-    <!-- Menu under Woow PaaS (admin only) -->
+    <!-- Menu under Project > Configuration, admin only（會議決議 2026-06-03
+         議題 D：Skill 設定 by project，移到原生 Project 模組）。
+         groups=base.group_system 必須保留（test_skill_admin_views.py 守線）；
+         注意：實際可見性 = base.group_system 且能 render 父選單
+         project.menu_project_config（project.group_project_manager）兩者皆備 -->
     <menuitem
         id="menu_skills"
         name="Skills"
-        parent="menu_woow_paas_platform_root"
+        parent="project.menu_project_config"
         action="action_skill"
         groups="base.group_system"
-        sequence="60"/>
+        sequence="91"/>
 
     <!-- Skill Upload Wizard -->
     <record id="view_skill_upload_wizard_form" model="ir.ui.view">

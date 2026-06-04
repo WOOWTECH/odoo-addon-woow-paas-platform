@@ -124,7 +124,7 @@ graph LR
 
 平台維運者（`base.group_system`）可在後台直接上傳 system skill bundle：
 
-1. Woow PaaS → **Skills** → 右上 **⚙️ Action → 上傳 Skill**。
+1. Project → Configuration → **Skills** → 右上 **⚙️ Action → 上傳 Skill**。
 2. 填 **name / version**（須與 bundle 內 SKILL.md 一致）、選填 title / description，選 `.tar.gz`。
 3. 送出 → 建立一筆 **draft** 的 system skill，停在其 form。
 4. 檢查無誤後按 **Publish** 發布（之後所有 project 的 pod 即可載入）。
