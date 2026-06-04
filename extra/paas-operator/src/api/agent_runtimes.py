@@ -109,6 +109,13 @@ def _derive_odoo_namespace() -> Optional[str]:
     return None
 
 
+# chart 0.2.0 probe.style allow-set. The chart itself fail-closes on anything else
+# (_helpers.tpl validate), but the operator validates too so a Fleet typo fails loud
+# with a clear message instead of a cryptic helm template abort on every cold start —
+# and stays correct regardless of the deployed chart version.
+_VALID_PROBE_STYLES = {"tcpSocket", "httpGet"}
+
+
 def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str):
     """Helm values for a cold-start install (injects SKILL_BUNDLE_TOKEN env)."""
     values = {
@@ -164,6 +171,22 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
     # default. See [[spawn-install-values-missed-forward]] + the forward-contract test.
     if settings.agent_runtime_external_egress_enabled:
         values.setdefault("agentRuntime", {})["externalEgress"] = {"enabled": True}
+    # Task 1a: forward the chart's TOP-LEVEL `probe.style` when this environment
+    # opts in, so chart 0.2.0 renders httpGet probes (/livez + /readyz) for image
+    # >= 1.2.0 instead of its tcpSocket default. Omitted when unset so the chart
+    # keeps its own default (tcpSocket) — backward compatible for image <= 1.1.x and
+    # existing pods. NOTE the chart reads the TOP-LEVEL `probe.style` key, NOT nested
+    # under agentRuntime. Validated here (fail-loud on a typo) on top of the chart's
+    # own fail-closed. Same missed-forward class as externalEgress
+    # ([[spawn-install-values-missed-forward]]).
+    probe_style = settings.agent_runtime_probe_style
+    if probe_style:
+        if probe_style not in _VALID_PROBE_STYLES:
+            raise ValueError(
+                f"Invalid AGENT_RUNTIME_PROBE_STYLE={probe_style!r}; "
+                f"must be one of {sorted(_VALID_PROBE_STYLES)}"
+            )
+        values["probe"] = {"style": probe_style}
     return values
 
 
