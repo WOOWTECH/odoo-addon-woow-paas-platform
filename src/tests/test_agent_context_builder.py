@@ -109,3 +109,66 @@ class TestAgentContextBuilder(TransactionCase, _ContextFixture):
         self.assertIn('- Name: Ctx Project', ctx)
         self.assertNotIn('- Description:', ctx.split('### Cloud Services')[0]
                          .split('### Task')[0].split('### Project')[1])
+
+
+class TestAgentContextServices(TransactionCase, _ContextFixture):
+    """Cloud Services section — base whitelist, dedup, cap, exclusions."""
+
+    def setUp(self):
+        super().setUp()
+        self._seed_context_graph()
+
+    def test_service_base_fields_and_url(self):
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertIn('### Cloud Services', ctx)
+        self.assertIn('#### Primary Svc (Primary)', ctx)
+        self.assertIn('- Application: Tmpl Ctx', ctx)
+        self.assertIn('- Category: web', ctx)
+        self.assertIn('- Status:', ctx)
+        # external URL = subdomain + paas_domain config param
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.paas_domain', 'paas.test')
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertIn('- URL: https://primary-svc.paas.test', ctx)
+
+    def test_primary_extras_dedup_and_order(self):
+        self.task.sudo().write({'extra_cloud_service_ids': [
+            (4, self.svc_primary.id), (4, self.svc_extra.id)]})
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertEqual(ctx.count('Primary Svc'), 1)
+        self.assertIn('Extra Svc', ctx)
+        self.assertLess(ctx.index('Primary Svc'), ctx.index('Extra Svc'))
+
+    def test_services_capped_at_five(self):
+        Service = self.env['woow_paas_platform.cloud_service']
+        extras = Service.sudo().create([{
+            'name': f'Bulk Svc {i}',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'subdomain': f'bulk-{i}',
+        } for i in range(6)])
+        self.task.sudo().write({
+            'extra_cloud_service_ids': [(6, 0, extras.ids)]})
+        ctx = self.Session._build_system_context(self.channel)
+        # primary + 4 extras = 5 blocks max
+        self.assertEqual(ctx.count('#### '), 5)
+        self.assertIn('#### Primary Svc (Primary)', ctx)
+
+    def test_error_message_never_injected(self):
+        self.svc_primary.sudo().write({
+            'state': 'error',
+            'error_message': 'stacktrace ns=paas-secret-ns pod crashed',
+        })
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertNotIn('paas-secret-ns', ctx)
+        self.assertNotIn('- Error:', ctx)
+
+    def test_unbound_keeps_project_task_sections(self):
+        """D7: no services → project/task sections still injected."""
+        self.task.sudo().write({'extra_cloud_service_ids': [(5, 0, 0)]})
+        self.project.sudo().write({'cloud_service_id': False,
+                                   'cloud_service_ids': [(5, 0, 0)]})
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertIn('### Project', ctx)
+        self.assertIn('### Task', ctx)
+        self.assertNotIn('### Cloud Services', ctx)
