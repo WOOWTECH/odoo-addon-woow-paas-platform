@@ -509,11 +509,13 @@ class AiAssistantController(Controller):
         if assistant.context_id:
             system_prompt = assistant.context_id.context or ''
 
-        # Append cloud service context if the channel is linked to a task
-        # whose project is bound to a cloud service
-        cloud_context = self._get_cloud_service_context_for_channel(channel)
-        if cloud_context:
-            system_prompt = (system_prompt + '\n\n' + cloud_context).strip()
+        # Unified background context (project / task / cloud services) —
+        # single source with the chatter + agent-runtime paths
+        # (spec 2026-06-04-agent-context-enrichment D1).
+        context_block = request.env['woow_paas_platform.agent_session'] \
+            ._build_system_context(channel)
+        if context_block:
+            system_prompt = (system_prompt + '\n\n' + context_block).strip()
 
         history = channel._get_chat_history(limit=20)
         messages = client.build_messages(
@@ -969,45 +971,6 @@ class AiAssistantController(Controller):
             except (ValueError, TypeError):
                 _logger.warning('Invalid default_ai_assistant_id value: %r', assistant_id)
         return None
-
-    def _get_cloud_service_context_for_channel(self, channel) -> str:
-        """Build cloud service context for AI system prompt.
-
-        Looks up the task linked to this channel, then the project's
-        cloud service, and assembles relevant context.
-
-        Returns:
-            A formatted context string, or empty string if not applicable.
-        """
-        task = request.env['project.task'].sudo().search([
-            ('channel_id', '=', channel.id),
-        ], limit=1)
-        if not task or not task.project_id or not task.project_id.cloud_service_id:
-            return ''
-
-        service = task.project_id.cloud_service_id
-        template = service.template_id
-
-        parts = ['## Cloud Service Information']
-        if template:
-            parts.append(f'- Application: {template.name}')
-            if template.category:
-                parts.append(f'- Category: {template.category}')
-            if template.description:
-                parts.append(f'- Description: {template.description}')
-
-        parts.append(f'- Service Name: {service.name}')
-        parts.append(f'- Status: {service.state or "unknown"}')
-
-        if service.subdomain:
-            parts.append(f'- URL: https://{service.subdomain}')
-        if service.error_message:
-            parts.append(f'- Error: {service.error_message}')
-
-        if service.helm_values:
-            parts.append(f'- Configuration (Helm Values):\n```json\n{service.helm_values}\n```')
-
-        return '\n'.join(parts)
 
     def _get_user_mcp_tools_for_channel(self, channel):
         """Get user-scope MCP tools from the project linked to this channel.
