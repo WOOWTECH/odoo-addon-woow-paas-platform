@@ -2475,6 +2475,10 @@ def _compute_effective_quota_cpu(self):
 
 - LangGraph thread checkpoint 切 template 時的 schema migration（同 thread 切不同 template，tool set 變動的記憶處理）— §5 拍板
 - `agent.assistant.context_id` 既有的 system prompt source（PR #46 之前）vs 新 `agent_template.system_prompt` 取代邏輯 — §7 拍板
+
+  > 2026-06-05 已拍板：兩者並用 — legacy 路徑保留 `assistant.context_id` 前綴，
+  > runtime 路徑以 `agent_template.system_prompt` 為 `system_context` 前綴
+  > per-turn 送入 pod（spec 2026-06-04-agent-context-enrichment D5）。
 - Pod 端如何即時收到 template 改動（hot reload vs cold reload）— §5 拍板（與 sync-workspaces 類似機制）
 - ai.config 內 api_key 的 group_system 守線在 per-project agent_template binding 下不變（user 看不到 api_key）— 確認 §1.3 invariant 守住，**不阻塞** § 4 sign-off
 - Backend admin 後台對 system template (is_public=True) 的特殊 UI — 留 implementation 階段
@@ -2582,6 +2586,10 @@ def _compute_effective_quota_cpu(self):
 - `correlation_id`：optional；同一 tool_call 鏈內保持（用於 multi-step tool 追蹤）
 - `sequence_number`：monotonic int per request_id（從 0 開始遞增），防 out-of-order delivery 或重複；Odoo 收 envelope 時根據 sequence_number 排序 / 去重
 - `version`：protocol version；v1 = `"1.0"`，後續 v1.1 / v2 需向後相容（new types 可加，既有 types schema 不刪 field）
+
+> v1.1（2026-06-05，spec agent-context-enrichment D5）：`payload.system_context`
+> （optional string）additive 加入 `user_message`。相容性：舊 pod 忽略未知欄位；
+> 欄位缺席時新 pod 行為 = v1.0（不注入 SystemMessage）。required 欄位不變。
 
 **Error envelope 細部**：
 
