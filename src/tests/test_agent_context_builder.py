@@ -172,3 +172,61 @@ class TestAgentContextServices(TransactionCase, _ContextFixture):
         self.assertIn('### Project', ctx)
         self.assertIn('### Task', ctx)
         self.assertNotIn('### Cloud Services', ctx)
+
+
+class TestAgentContextConfigKeys(TransactionCase, _ContextFixture):
+    """agent_context_keys extraction (D4 fail-closed) + 2nd-layer sanitizer."""
+
+    HELM = json.dumps({
+        'replicaCount': 3,
+        'image': {'tag': 'v1.2.3', 'pullSecret': 'reg-cred-xyz'},
+        'db': {'password': 'super-secret-pw-123', 'host': 'db.internal'},
+        'n8n_api_key': 'n8n-leak-aaaa',
+    })
+
+    def setUp(self):
+        super().setUp()
+        self._seed_context_graph()
+        self.svc_primary.sudo().write({'helm_values': self.HELM})
+
+    def test_fail_closed_without_keys(self):
+        """No agent_context_keys → NO Configuration at all (D4)."""
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertNotIn('- Configuration:', ctx)
+        self.assertNotIn('replicaCount', ctx)
+        self.assertNotIn('super-secret-pw-123', ctx)
+
+    def test_whitelisted_keys_extracted(self):
+        self.template.sudo().write({
+            'agent_context_keys': '["replicaCount", "image.tag"]'})
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertIn('- Configuration:', ctx)
+        self.assertIn('replicaCount', ctx)
+        self.assertIn('v1.2.3', ctx)
+        # not whitelisted → absent even though non-secret
+        self.assertNotIn('db.internal', ctx)
+        self.assertNotIn('reg-cred-xyz', ctx)
+
+    def test_second_layer_sanitizer_redacts_whitelisted_secret(self):
+        """Backoffice mistake: whitelisting a secret-bearing path must
+        still be redacted by _sanitize_obj (defence in depth)."""
+        self.template.sudo().write({
+            'agent_context_keys': '["db", "n8n_api_key"]'})
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertNotIn('super-secret-pw-123', ctx)
+        self.assertNotIn('n8n-leak-aaaa', ctx)
+        self.assertIn('***REDACTED***', ctx)
+        # non-secret sibling inside the whitelisted subtree survives
+        self.assertIn('db.internal', ctx)
+
+    def test_invalid_keys_json_fails_closed(self):
+        self.template.sudo().write({'agent_context_keys': 'not-json{'})
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertNotIn('- Configuration:', ctx)
+
+    def test_oversized_config_dropped(self):
+        self.template.sudo().write({'agent_context_keys': '["blob"]'})
+        self.svc_primary.sudo().write({'helm_values': json.dumps({
+            'blob': 'y' * 2000})})
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertNotIn('- Configuration:', ctx)

@@ -34,6 +34,47 @@ def _compute_project_namespace_hash(project_id, secret):
     return base64.b32encode(digest[:10]).decode('ascii').lower()
 
 
+# D9 sanitizer (moved from discuss_channel.py — single source since the
+# unified builder is the only AI-prompt producer). Key names matching the
+# pattern get their value replaced before injection into the AI prompt.
+_SECRET_KEY_PATTERN = re.compile(
+    r'password|passwd|secret|token|api[_-]?key|credential',
+    re.IGNORECASE,
+)
+_REDACTED = '***REDACTED***'
+
+# Hard blacklist: even when a helm_values key does not match the pattern,
+# these literal names must never reach the AI prompt.
+_HELM_VALUE_BLACKLIST = ('n8n_api_key', 'n8n_owner_password', 'mcp_auth_token')
+
+
+def _sanitize_obj(obj, depth=0):
+    if depth > 5:
+        return _REDACTED
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k in _HELM_VALUE_BLACKLIST or _SECRET_KEY_PATTERN.search(k or ''):
+                out[k] = _REDACTED
+            else:
+                out[k] = _sanitize_obj(v, depth + 1)
+        return out
+    if isinstance(obj, list):
+        return [_sanitize_obj(item, depth + 1) for item in obj]
+    return obj
+
+
+def _sanitize_helm_values(helm_values_json):
+    """Return a JSON string of helm_values with sensitive values redacted."""
+    if not helm_values_json:
+        return ''
+    try:
+        data = json.loads(helm_values_json)
+    except (ValueError, TypeError):
+        return ''
+    return json.dumps(_sanitize_obj(data))
+
+
 # ---- unified system-context builder ----
 # spec: docs/superpowers/specs/2026-06-04-agent-context-enrichment-design.md
 # pod has ZERO input truncation (confirmed w/ paas-agent-runtime repo), so
@@ -441,6 +482,59 @@ class AgentSession(models.Model):
         return '\n'.join(lines)
 
     @api.model
+    def _ctx_parse_context_keys(self, template):
+        """Parse template.agent_context_keys. Fail-closed on any problem."""
+        raw = template.agent_context_keys if template else False
+        if not raw:
+            return []
+        try:
+            keys = json.loads(raw)
+        except (ValueError, TypeError):
+            _logger.warning(
+                'agent_context_keys JSON parse failed for template %s',
+                template.id)
+            return []
+        if not isinstance(keys, list) \
+                or not all(isinstance(k, str) for k in keys):
+            _logger.warning(
+                'agent_context_keys must be a JSON list of strings '
+                '(template %s)', template.id)
+            return []
+        return keys
+
+    @api.model
     def _ctx_service_config(self, service):
-        """Placeholder until Task 3 (agent_context_keys extraction)."""
-        return ''
+        """helm_values subset: ONLY the template-whitelisted key paths
+        (D4 fail-closed), then 2nd-layer sanitized (D3). Oversized or
+        unparsable → '' (drop, log)."""
+        keys = self._ctx_parse_context_keys(service.template_id)
+        if not keys or not service.helm_values:
+            return ''
+        try:
+            data = json.loads(service.helm_values)
+        except (ValueError, TypeError):
+            _logger.warning(
+                'helm_values JSON parse failed for cloud_service %s',
+                service.id)
+            return ''
+        subset = {}
+        for path in keys:
+            node = data
+            found = True
+            for part in path.split('.'):
+                if isinstance(node, dict) and part in node:
+                    node = node[part]
+                else:
+                    found = False
+                    break
+            if found:
+                subset[path] = node
+        if not subset:
+            return ''
+        sanitized = json.dumps(_sanitize_obj(subset))
+        if len(sanitized) > CTX_CONFIG_CAP:
+            _logger.warning(
+                'agent context config for cloud_service %s exceeds %s chars'
+                ' — dropped', service.id, CTX_CONFIG_CAP)
+            return ''
+        return sanitized
