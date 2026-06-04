@@ -230,3 +230,63 @@ class TestAgentContextConfigKeys(TransactionCase, _ContextFixture):
             'blob': 'y' * 2000})})
         ctx = self.Session._build_system_context(self.channel)
         self.assertNotIn('- Configuration:', ctx)
+
+
+class TestAgentContextBudget(TransactionCase, _ContextFixture):
+    """Trim ladder (spec §3) + never-raise error handling."""
+
+    def setUp(self):
+        super().setUp()
+        self._seed_context_graph()
+
+    def _inflate(self, project_chars=0, task_chars=0, config_items=0):
+        if project_chars:
+            self.project.sudo().write(
+                {'description': '<p>' + 'p' * project_chars + '</p>'})
+        if task_chars:
+            self.task.sudo().write(
+                {'description': '<p>' + 't' * task_chars + '</p>'})
+        if config_items:
+            self.template.sudo().write(
+                {'agent_context_keys': json.dumps(
+                    [f'k{i}' for i in range(config_items)])})
+            self.svc_primary.sudo().write({'helm_values': json.dumps(
+                {f'k{i}': 'v' * 80 for i in range(config_items)})})
+
+    def test_under_budget_keeps_everything(self):
+        self._inflate(project_chars=100, task_chars=100, config_items=3)
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertIn('- Configuration:', ctx)
+        self.assertIn('- Description: ' + 'p' * 100, ctx)
+
+    def test_over_budget_drops_config_first(self):
+        # 1500+1500 desc caps + many services push > 8000 with configs
+        Service = self.env['woow_paas_platform.cloud_service']
+        extras = Service.sudo().create([{
+            'name': f'Budget Svc {i}',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'subdomain': f'budget-{i}',
+        } for i in range(4)])
+        self.task.sudo().write({
+            'extra_cloud_service_ids': [(6, 0, extras.ids)]})
+        self.template.sudo().write({'agent_context_keys': '["pad"]'})
+        pad = json.dumps({'pad': 'z' * 900})
+        (self.svc_primary + extras).sudo().write({'helm_values': pad})
+        self._inflate(project_chars=2000, task_chars=2000)
+        ctx = self.Session._build_system_context(self.channel)
+        self.assertLessEqual(len(ctx), 8000)
+        # config dropped first; names/base set survive
+        self.assertNotIn('- Configuration:', ctx)
+        self.assertIn('- Name: Ctx Project', ctx)
+        self.assertIn('- Name: Ctx Task', ctx)
+        self.assertIn('#### Primary Svc (Primary)', ctx)
+
+    def test_builder_never_raises(self):
+        Session = self.env['woow_paas_platform.agent_session']
+        with patch.object(
+            type(Session), '_build_system_context_unsafe',
+            side_effect=RuntimeError('boom'),
+        ):
+            ctx = Session._build_system_context(self.channel)
+        self.assertEqual(ctx, '')
