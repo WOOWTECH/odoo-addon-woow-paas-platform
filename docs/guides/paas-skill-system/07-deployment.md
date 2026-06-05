@@ -3,7 +3,7 @@ title: Agent Runtime Pod 部署機制
 category: guides
 status: active
 created: 2026-05-25
-updated: 2026-05-25
+updated: 2026-06-05
 tags: [paas, skill-system, deployment, kubernetes, helm]
 related:
   - README.md
@@ -94,8 +94,13 @@ sequenceDiagram
     Note over K8s: PVC 保留
     Odoo->>Op: DELETE /{project_hash}
     Op->>K8s: helm uninstall
-    Note over K8s: namespace 與所有資源刪除
+    Note over K8s: release 資源含 PVC 刪除；空 namespace 保留（供 cold-start 復用）
 ```
+
+> 🔴 DELETE = helm uninstall，**PVC 連帶刪除**（chart 無 keep policy；只含可重抓的 skill cache）、
+> **空 namespace 保留**（operator 預建 ns、install 帶 `create_namespace=False`，uninstall 不碰 ns）。
+> 這也是 **image 升版唯一路徑**（reap/resume 不重 render image），完整程序見
+> [agent-runtime image 升版 SOP](../deployment/agent-runtime-image-upgrade-sop.md)。
 
 ## 🔄 同步 workspace egress（Sync-workspaces）
 
@@ -127,3 +132,4 @@ sequenceDiagram
 - [Skill 運行時生命週期](05-skill-runtime-lifecycle.md) — Pod 內部視角
 - [Webhook 回呼與 ws_token](08-webhook-ws-token.md) — Pod 怎麼回報
 - [Skill 系統安全模型](09-security-model.md) · [PaaS Skill 術語表](11-glossary.md)
+- [agent-runtime image 升版 SOP](../deployment/agent-runtime-image-upgrade-sop.md) — operator/platform 視角升版 runbook（tag 注入鏈、DELETE reap 程序）

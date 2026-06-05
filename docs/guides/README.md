@@ -17,7 +17,7 @@
 |------|------|
 | [`getting-started.md`](getting-started.md) | 新人快速上手（入口檔） |
 | [`development/`](development/oauth2-architecture.md) | 開發者技術細節（[OAuth2 架構](development/oauth2-architecture.md)、[/woow AI Chat（agent-runtime）資料流與 Secret 關係](development/agent-runtime-chat-architecture.md) 等） |
-| [`deployment/`](deployment/k8s-setup.md) | K8s setup、運維、troubleshooting、admin roles |
+| [`deployment/`](deployment/k8s-setup.md) | K8s setup、運維、troubleshooting、admin roles；runbook（[agent-runtime image 升版 SOP](deployment/agent-runtime-image-upgrade-sop.md)、[agent-runtime pilot flip-gate](deployment/agent-runtime-pilot-flip-gate-runbook.md)） |
 | [`testing/`](testing/TESTING.md) | Odoo test、PaaS operator test、E2E test guide |
 | [`tutorials/`](tutorials/cloud-odoo-addon-management.md) | 完整逐步指引（cloud odoo addon management） |
 | [`frameworks/`](frameworks/) | Claude Code framework 使用指南（ccpm、superpowers、SuperClaude） |
