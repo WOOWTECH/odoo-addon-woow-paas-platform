@@ -674,6 +674,25 @@ class CloudService(models.Model):
 
 ---
 
+## Agent Context 揭露白名單
+
+task agent chat 會把綁定 cloud service 的資訊注入 AI system context
+（spec `docs/superpowers/specs/2026-06-04-agent-context-enrichment-design.md`）。
+
+**基礎集（永遠注入）**：`template.name` / `template.category` /
+`template.description`、`service.name` / `state` / 外部 URL
+（`subdomain` + `paas_domain`）。
+
+**Configuration（fail-closed opt-in）**：`cloud_app_template.agent_context_keys`
+（JSON list，dot-notation key paths）指定可揭露的 `helm_values` 子集；未設定
+即完全不注入。取出子集仍過 `_sanitize_helm_values` 第二層遮罩。
+
+**永不注入**：`helm_values`（全文）、`error_message`、`helm_namespace`、
+`helm_release_name`、`mcp_auth_token`、`n8n_api_key`、`n8n_owner_password`、
+`n8n_owner_email`、`deploy_params`。
+
+---
+
 ## API Design
 
 > **Implementation Note**: 實際實作使用 Odoo JSON-RPC (POST + `action` 參數) 而非 RESTful endpoints。

@@ -13,6 +13,11 @@ mode (current code in src/models/discuss_channel.py:216-274) lacks:
 Implementation will refactor ``_get_cloud_service_context`` to take the
 task into account (or new helper) and to gate every secret-bearing
 field by ``_sanitize_helm_values``.
+
+2026-06-05 update: _get_cloud_service_context now delegates to the unified
+agent_session._build_system_context (spec 2026-06-04). AC #19 rewritten per
+D7 (unbound still injects project/task); AC #15/16 fixtures opt-in via
+template.agent_context_keys per D4 (fail-closed helm_values whitelist).
 """
 from odoo.tests.common import TransactionCase
 
@@ -143,14 +148,24 @@ class TestPrimaryAndExtrasMerge(TransactionCase, _ChatterFixture):
             "AC #17: no primary service present, prompt must not mention one",
         )
 
-    # ---------------- AC #19 ---------------- #
+    # ---------------- AC #19 (rewritten — spec 2026-06-04 D7) -------- #
     def test_ac19_unbound_no_extras_no_service_section(self):
-        """AC #19 (regression): unbound + no extras → empty / no service block."""
+        """AC #19 (D7 rewrite): unbound + no extras → NO Cloud Services
+        block, but project/task background sections ARE injected."""
         context = self.channel_unbound._get_cloud_service_context()
-        self.assertFalse(
-            context,
-            "AC #19: when neither primary nor extras exist, context must "
-            f"be falsy; got {context!r}",
+        self.assertNotIn(
+            '### Cloud Services', context,
+            "AC #19: no service bound → no Cloud Services section",
+        )
+        self.assertNotIn('#### ', context,
+                         "AC #19: no service blocks at all")
+        self.assertIn(
+            'Project Unbound', context,
+            "AC #19/D7: project section must be injected even unbound",
+        )
+        self.assertIn(
+            'Task Unbound', context,
+            "AC #19/D7: task section must be injected even unbound",
         )
 
 
@@ -188,6 +203,7 @@ class TestHelmValuesSanitizer(TransactionCase, _ChatterFixture):
         value replaced with ***REDACTED***.
         """
         secret_value = 'super-secret-pw-123'
+        self.template.sudo().write({'agent_context_keys': '["db", "app"]'})
         self.svc_primary.sudo().write({
             'helm_values': (
                 '{"db": {"password": "%s"}, '
@@ -212,6 +228,7 @@ class TestHelmValuesSanitizer(TransactionCase, _ChatterFixture):
 
     def test_ac15_token_and_api_key_patterns_redacted(self):
         """AC #15: additional patterns (token, api_key, credential)."""
+        self.template.sudo().write({'agent_context_keys': '["auth"]'})
         self.svc_primary.sudo().write({
             'helm_values': (
                 '{"auth": {"token": "tk-9999", '
@@ -234,6 +251,8 @@ class TestHelmValuesSanitizer(TransactionCase, _ChatterFixture):
         """
         # Put the *literal* blacklisted field names inside helm_values to
         # simulate the case where a future chart leaks them into values.
+        self.template.sudo().write({'agent_context_keys': (
+            '["n8n_api_key", "n8n_owner_password", "mcp_auth_token"]')})
         self.svc_primary.sudo().write({
             'helm_values': (
                 '{"n8n_api_key": "n8n-leak-aaaa", '

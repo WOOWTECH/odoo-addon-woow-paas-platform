@@ -88,16 +88,25 @@ streams the pod's reply frames back to the browser as SSE:
     ],
     "template_id": 2,
     "invoker_role": "owner",
-    "invoker_user_id": 2
+    "invoker_user_id": 2,
+    "system_context": "<Odoo 端組好的完整 system prompt>"
   }
 }
 ```
 
 - `history`: recent turns, oldest→newest, `role ∈ {user, assistant}`, plaintext.
 - `template_id`: the resolved `agent_template`; the pod fetches its
-  system_prompt / model config / bound skills+MCP via the skill-bundle endpoint
+  model config / bound skills+MCP via the skill-bundle endpoint
   (§5) using `SKILL_BUNDLE_TOKEN` (do **not** trust query params — token is
   authoritative).
+
+| field | type | required | meaning |
+|-------|------|----------|---------|
+| `system_context` | string | optional（v1.1 additive） | Odoo 端組好的完整 system prompt（template system_prompt + project/task/cloud-service 背景）。缺席 = 維持 v1.0 行為（pod 不注入 SystemMessage）。 |
+
+system prompt 由 Odoo 端 per-turn 組裝後經 `user_message.payload.system_context`
+傳入（v1.1 additive 欄位，見上）；pod 不另行拉取 system_prompt（歷史上
+skill-bundle endpoint 從未提供 system_prompt，舊描述有誤）。
 
 ## 4. Outbound — Pod → Odoo (reply frames) — **THIS IS WHAT 1.0.0 IS MISSING**
 
