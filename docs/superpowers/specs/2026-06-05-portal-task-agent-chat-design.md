@@ -199,3 +199,15 @@ status：頁面 render 帶初始值 → OWL polling agent-pod-status（10s、隱
 - Chat 架構鳥瞰：[`docs/guides/development/agent-runtime-chat-architecture.md`](../../guides/development/agent-runtime-chat-architecture.md)
 - ACL patterns：[`orm-vs-endpoint-acl-test-coverage`](../../decisions/patterns/orm-vs-endpoint-acl-test-coverage.md)、[`two-layer-acl-lockstep`](../../decisions/patterns/two-layer-acl-lockstep.md)
 - 先行案例：`/Users/eugene/Documents/woow/AREA-odoo/woow-addons/Woow_odoo_task_ai_solver`（repo 外部參考）
+
+---
+
+## 實作後記（2026-06-05，實作完成後對齊）
+
+實作全數落地（commits `8eba9ea..7edd749`，902 tests 全綠），與本 spec 的偏差如下（含理由，追蹤位置見括號）：
+
+1. **§安全模型 5「deny / not-found 統一錯誤訊息」未實作**：本節寫「與現有 /api/ai/* 慣例一致」是**對現況的誤述**——既有 endpoint 實際區分 `Channel not found` / `Access denied`。統一化波及 /woow 前端對映與既有測試，維持現狀（F-PORTAL-2 列冊）。
+2. **§錯誤處理「SSE 中斷與 /woow 同行為」縮減**：portal 端有 partial-text salvage 與錯誤提示，但**無 /woow 的自動重連**（指數退避）；composer 立即恢復可重送。刻意的極簡 scope（F-PORTAL-3 連動）。
+3. **`ai_chat_core` 抽取範圍**：落地為「`ai_stream.js` SSE 協議 consumer + 既有 service 檔直接進 frontend bundle 共用」（rpc / ai_service / markdown_parser / html_sanitize / agent_pod_state）；訊息列表 UI 核心未抽（rule-of-three，F-PORTAL-3）。
+4. **安全模型新增一條 spec 未預見的硬規則**：portal leg 放行的 access helper 同時是 mutation endpoint 的閘 → 新增 `_portal_write_denied()` fail-closed guard（share user 一律拒寫；對抗式審查 critical 發現，`2cece77` + `47a1773`）。
+5. **lockstep 配對表修正**：原生 task rule 的 collaborator leg 是 **partner 精確比對**（無 child_of 家族展開），predicate 已對齊（`63eec6b`）；follower leg 維持 child_of（原生語意）。child_of 展開未帶 `active_test=False`（原生含 archived partner），分歧方向為多 deny（safe），已接受並註記於 model docstring。
