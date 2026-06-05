@@ -152,10 +152,13 @@ class AiAssistantController(Controller):
         widen access for ``user.share`` portal users, but they were designed
         to gate ONLY the read-only agent endpoints (chat / status). Those same
         helpers are also the sole authorization gate for the sudo-browsed
-        write/delete/create endpoints (``_update_project``, ``_delete_project``,
-        ``_create_task``, ``_update_task``, ``_delete_task``) — and because the
-        records are sudo-browsed the native read-only portal ir.rule never gets
-        a second say. Read-mode share is read-only by design (spec §非目標:
+        write/delete/create endpoints (``_create_project``, ``_update_project``,
+        ``_delete_project``, ``_create_task``, ``_update_task``,
+        ``_delete_task``) — and because the records are sudo-browsed (or, for
+        ``_create_project``, the row does not yet exist and no workspace gate
+        runs when both workspace_id and cloud_service_id are 0) the native
+        read-only portal ir.rule never gets a second say. Read-mode share is
+        read-only by design (spec §非目標:
         edit-mode project_sharing is a separate epic), so portal/share users
         must be denied on every mutation path. Returns an error dict when the
         caller must abort, else ``None``.
@@ -1521,6 +1524,9 @@ class AiAssistantController(Controller):
 
     def _create_project(self, params: dict, cloud_service=None, workspace=None) -> dict[str, Any]:
         """Create a new project bound to a cloud service."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         name = (params.get('name') or '').strip()
         if not name:
             return {'success': False, 'error': 'Project name is required'}

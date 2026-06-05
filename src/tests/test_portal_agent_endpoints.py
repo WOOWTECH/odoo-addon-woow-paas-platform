@@ -1,10 +1,11 @@
 """Endpoint-level portal access tests (HttpCase — \"ORM 綠 ≠ endpoint secure\").
 
 Cross-user negatives for every portal-reachable AI endpoint:
-chat/history, chat/post, agent-status, agent-pod-status.
+chat/history, chat/post, chat/upload, agent-status, agent-pod-status.
 (SSE /api/ai/stream is covered in test_portal_agent_page.py Task 3.)
 """
 import json
+import re
 import uuid
 
 from odoo.tests.common import HttpCase, tagged
@@ -63,6 +64,39 @@ class TestPortalAgentEndpoints(HttpCase):
         self.assertEqual(resp.status_code, 200)
         return resp.json().get('result') or {}
 
+    def _csrf_token(self):
+        """Fetch a csrf token bound to the current authenticated session.
+
+        ``/api/ai/chat/upload`` is a framework-csrf-protected ``type='http'``
+        POST, so the multipart body must carry a valid token; without it the
+        request is rejected at the csrf layer BEFORE the access gate, which
+        would make an access-denied assertion meaningless.
+        """
+        for page in ('/my', '/web'):
+            resp = self.url_open(page, timeout=15)
+            if resp.status_code != 200:
+                continue
+            m = re.search(
+                r'csrf_token[\"\']?\s*[:=]\s*[\"\']([^\"\']+)[\"\']', resp.text)
+            if m:
+                return m.group(1)
+        self.fail('csrf token could not be extracted — fixture issue')
+
+    def _upload(self, channel_id):
+        """POST a small multipart file to /api/ai/chat/upload as the current
+        (already-authenticated) session. Returns the parsed JSON dict."""
+        token = self._csrf_token()
+        resp = self.url_open(
+            '/api/ai/chat/upload',
+            data={'channel_id': str(channel_id), 'csrf_token': token},
+            files={'file': ('note.txt', b'hello-portal', 'text/plain')},
+            timeout=20,
+        )
+        try:
+            return resp.status_code, resp.json()
+        except ValueError:
+            return resp.status_code, {}
+
     # ---- chat history / post --------------------------------------------- #
 
     def test_history_shared_portal_ok(self):
@@ -101,6 +135,51 @@ class TestPortalAgentEndpoints(HttpCase):
         self.assertFalse(res.get('success'))
         # restore for other tests (class-level fixture)
         self.task.message_subscribe(partner_ids=[self.partner_alice.id])
+
+    # ---- chat upload (write-type: sudo ir.attachment + message_post) ----- #
+
+    def test_upload_shared_portal_ok(self):
+        """Shared portal user can attach a file to the task channel."""
+        self.authenticate(self.alice.login, PASSWORD)
+        status, res = self._upload(self.channel.id)
+        self.assertEqual(status, 200, res)
+        self.assertTrue(res.get('success'), res)
+
+    def test_upload_member_but_unshared_denied(self):
+        """Stale channel membership without task share must NOT allow upload.
+
+        Same single authorization gate (``_check_channel_access``) as
+        chat/history & chat/post — but upload is write-type (sudo creates an
+        ir.attachment on the channel + posts a message), so a leak here is an
+        injection surface, not merely a read leak.
+        """
+        self.authenticate(self.bob.login, PASSWORD)
+        before = self.env['ir.attachment'].sudo().search_count([
+            ('res_model', '=', 'discuss.channel'),
+            ('res_id', '=', self.channel.id)])
+        status, res = self._upload(self.channel.id)
+        self.assertEqual(status, 403, res)
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+        after = self.env['ir.attachment'].sudo().search_count([
+            ('res_model', '=', 'discuss.channel'),
+            ('res_id', '=', self.channel.id)])
+        self.assertEqual(after, before,
+                         'unshared member must not inject an attachment')
+
+    def test_upload_revoked_share_denied(self):
+        """Un-share revokes upload access on the NEXT request despite
+        retained channel membership."""
+        self.authenticate(self.alice.login, PASSWORD)
+        self.task.message_unsubscribe(partner_ids=[self.partner_alice.id])
+        try:
+            status, res = self._upload(self.channel.id)
+            self.assertEqual(status, 403, res)
+            self.assertFalse(res.get('success'), res)
+            self.assertEqual(res.get('error'), 'Access denied')
+        finally:
+            # restore for other tests (class-level fixture)
+            self.task.message_subscribe(partner_ids=[self.partner_alice.id])
 
     # ---- agent status ------------------------------------------------------ #
 
@@ -202,6 +281,29 @@ class TestPortalCrudWriteDenied(HttpCase):
         )
         self.assertEqual(resp.status_code, 200)
         return resp.json().get('result') or {}
+
+    # ---- project create --------------------------------------------------- #
+
+    def test_project_create_share_denied(self):
+        """Read-mode share must NOT be able to create a brand-new project.
+
+        ``api_support_projects`` with neither workspace_id nor cloud_service_id
+        runs no ``_check_workspace_access`` gate and dispatches straight to
+        ``_create_project`` (sudo create + caller self-subscribe). A share user
+        only granted a single task must not be able to spawn a fresh unbound
+        project and become its follower.
+        """
+        self.authenticate(self.alice.login, PASSWORD)
+        before = self.env['project.project'].sudo().search_count(
+            [('name', '=', 'INJECTED PROJECT')])
+        res = self._rpc('/api/support/projects', {
+            'action': 'create', 'name': 'INJECTED PROJECT'})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+        after = self.env['project.project'].sudo().search_count(
+            [('name', '=', 'INJECTED PROJECT')])
+        self.assertEqual(after, before,
+                         'share user must not be able to create a project')
 
     # ---- project update / delete ----------------------------------------- #
 
