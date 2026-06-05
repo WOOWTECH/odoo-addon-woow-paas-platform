@@ -116,6 +116,8 @@ from . import test_portal_agent_access
 from . import test_portal_agent_endpoints
 # test: portal task agent chat — SSE gate chain + portal page rendering (HttpCase)
 from . import test_portal_agent_page
+# fix: portal stream persist — _persist_ai_response must run with system identity (HttpCase regression)
+from . import test_portal_agent_persist
 # feat: portal task agent chat — minimal task-context hook (TransactionCase)
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
 # feat: agent context enrichment (spec 2026-06-04 — TDD)
