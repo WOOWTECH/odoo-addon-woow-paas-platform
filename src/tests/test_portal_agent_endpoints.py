@@ -151,3 +151,129 @@ class TestPortalAgentEndpoints(HttpCase):
         self.authenticate(self.alice.login, PASSWORD)
         res = self._rpc('/api/ai/chat/history', {'channel_id': ch.id})
         self.assertFalse(res.get('success'))
+
+
+@tagged('post_install', '-at_install')
+class TestPortalCrudWriteDenied(HttpCase):
+    """Read-mode share must NOT widen into project/task CRUD write/delete.
+
+    The portal leg in ``_check_project_access`` / ``_check_task_access`` was
+    introduced to widen ONLY the read-only agent endpoints (chat, status).
+    Those same two helpers are also the sole authorization gate for the sudo
+    write/delete/create endpoints (``api_support_projects`` update/delete,
+    ``api_support_tasks`` create, ``api_support_task_detail`` update/delete);
+    the records are sudo-browsed so the native read-only portal ir.rule does
+    NOT apply. A read-mode shared portal user must be denied on every mutation
+    path (design spec §非目標: edit-mode out of scope; native read-mode share
+    is read-only). These are the missing endpoint negatives.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        suffix = uuid.uuid4().hex[:8]
+        cls.suffix = suffix
+        Partner = cls.env['res.partner']
+        User = cls.env['res.users']
+        portal_group = cls.env.ref('base.group_portal')
+
+        cls.partner_alice = Partner.create({
+            'name': f'CW Alice {suffix}', 'email': f'cw-a-{suffix}@t.example'})
+        cls.alice = User.create({
+            'login': f'cw_alice_{suffix}', 'name': 'Alice', 'password': PASSWORD,
+            'partner_id': cls.partner_alice.id,
+            'groups_id': [(6, 0, [portal_group.id])]})
+
+        cls.project = cls.env['project.project'].create({
+            'name': f'CW Proj {suffix}', 'privacy_visibility': 'portal'})
+        cls.task = cls.env['project.task'].create({
+            'name': f'CW Task {suffix}', 'project_id': cls.project.id,
+            'ai_auto_reply': False})
+        # Alice is shared on the task (read-mode share semantics).
+        cls.task.message_subscribe(partner_ids=[cls.partner_alice.id])
+
+    def _rpc(self, url, params):
+        resp = self.url_open(
+            url,
+            data=json.dumps({'jsonrpc': '2.0', 'method': 'call',
+                             'params': params, 'id': 1}),
+            headers={'Content-Type': 'application/json'},
+            timeout=20,
+        )
+        self.assertEqual(resp.status_code, 200)
+        return resp.json().get('result') or {}
+
+    # ---- project update / delete ----------------------------------------- #
+
+    def test_project_update_share_denied(self):
+        self.authenticate(self.alice.login, PASSWORD)
+        original = self.project.name
+        res = self._rpc('/api/support/projects', {
+            'action': 'update', 'project_id': self.project.id,
+            'name': 'HIJACKED'})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+        self.project.invalidate_recordset(['name'])
+        self.assertEqual(self.project.name, original,
+                         'share user must not be able to rename the project')
+
+    def test_project_delete_share_denied(self):
+        self.authenticate(self.alice.login, PASSWORD)
+        res = self._rpc('/api/support/projects', {
+            'action': 'delete', 'project_id': self.project.id})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+        self.project.invalidate_recordset(['active'])
+        self.assertTrue(self.project.active,
+                        'share user must not be able to archive the project')
+
+    # ---- task create ------------------------------------------------------ #
+
+    def test_task_create_share_denied(self):
+        self.authenticate(self.alice.login, PASSWORD)
+        before = self.env['project.task'].sudo().search_count(
+            [('project_id', '=', self.project.id)])
+        res = self._rpc('/api/support/tasks', {
+            'action': 'create', 'project_id': self.project.id,
+            'name': 'injected task'})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+        after = self.env['project.task'].sudo().search_count(
+            [('project_id', '=', self.project.id)])
+        self.assertEqual(after, before,
+                         'share user must not be able to inject tasks')
+
+    # ---- task update / delete (api_support_task_detail) ------------------- #
+
+    def test_task_update_share_denied(self):
+        self.authenticate(self.alice.login, PASSWORD)
+        original = self.task.name
+        res = self._rpc(f'/api/support/tasks/detail/{self.task.id}', {
+            'action': 'update', 'name': 'HIJACKED',
+            'chat_enabled': True, 'ai_auto_reply': True})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+        self.task.invalidate_recordset(['name', 'chat_enabled', 'ai_auto_reply'])
+        self.assertEqual(self.task.name, original,
+                         'share user must not be able to rewrite the task')
+        self.assertFalse(self.task.chat_enabled,
+                         'share user must not flip chat_enabled')
+
+    def test_task_delete_share_denied(self):
+        self.authenticate(self.alice.login, PASSWORD)
+        res = self._rpc(f'/api/support/tasks/detail/{self.task.id}', {
+            'action': 'delete'})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+        self.task.invalidate_recordset(['active'])
+        self.assertTrue(self.task.active,
+                        'share user must not be able to archive the task')
+
+    # ---- read-mode chat/status still works (no over-correction) ---------- #
+
+    def test_task_get_share_still_allowed(self):
+        """Guard is write-only — read-mode 'get' must remain accessible."""
+        self.authenticate(self.alice.login, PASSWORD)
+        res = self._rpc(f'/api/support/tasks/detail/{self.task.id}', {
+            'action': 'get'})
+        self.assertTrue(res.get('success'), res)

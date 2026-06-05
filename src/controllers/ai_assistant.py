@@ -145,6 +145,25 @@ class AiAssistantController(Controller):
             return True
         return self._check_project_access(task.project_id)
 
+    def _portal_write_denied(self):
+        """Fail-closed guard for project/task CRUD write/delete/create paths.
+
+        The portal legs in ``_check_project_access`` / ``_check_task_access``
+        widen access for ``user.share`` portal users, but they were designed
+        to gate ONLY the read-only agent endpoints (chat / status). Those same
+        helpers are also the sole authorization gate for the sudo-browsed
+        write/delete/create endpoints (``_update_project``, ``_delete_project``,
+        ``_create_task``, ``_update_task``, ``_delete_task``) — and because the
+        records are sudo-browsed the native read-only portal ir.rule never gets
+        a second say. Read-mode share is read-only by design (spec §非目標:
+        edit-mode project_sharing is a separate epic), so portal/share users
+        must be denied on every mutation path. Returns an error dict when the
+        caller must abort, else ``None``.
+        """
+        if request.env.user.share:
+            return {'success': False, 'error': 'Access denied'}
+        return None
+
     def _sse_error_response(self, error: str, error_code: str) -> Response:
         """Build a structured SSE error response (HTTP 200)."""
         _logger.warning('SSE error [%s]: %s (user=%s)', error_code, error, request.env.user.login)
@@ -1545,6 +1564,9 @@ class AiAssistantController(Controller):
 
     def _update_project(self, params: dict) -> dict[str, Any]:
         """Update an existing project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         project_id = params.get('project_id')
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
@@ -1582,6 +1604,9 @@ class AiAssistantController(Controller):
 
     def _delete_project(self, params: dict) -> dict[str, Any]:
         """Delete (archive) a project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         project_id = params.get('project_id')
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
@@ -1628,6 +1653,9 @@ class AiAssistantController(Controller):
 
     def _create_task(self, workspace, params: dict) -> dict[str, Any]:
         """Create a new task in a project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         name = (params.get('name') or '').strip()
         project_id = params.get('project_id')
 
@@ -1686,6 +1714,9 @@ class AiAssistantController(Controller):
 
     def _update_task(self, task, params: dict) -> dict[str, Any]:
         """Update an existing task."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         vals = {}
         if 'name' in params:
             name = (params['name'] or '').strip()
@@ -1713,6 +1744,9 @@ class AiAssistantController(Controller):
 
     def _delete_task(self, task) -> dict[str, Any]:
         """Delete (archive) a task."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         task.write({'active': False})
         return {'success': True, 'data': {'id': task.id}}
 
