@@ -144,3 +144,44 @@ class ProjectTask(models.Model):
                 if not task.channel_id:
                     task._create_chat_channel()
         return result
+
+    def _portal_partner_can_access(self, partner):
+        """Portal-leg access predicate — Python mirror of the native ir.rule
+        ``project.project_task_rule_portal`` (two-layer-acl-lockstep Layer 2).
+
+        Layer 1 (ir.rule, native, UNTOUCHED by this addon —
+        project.project_task_rule_portal, project_security.xml:211-220):
+            project_id.privacy_visibility = 'portal' AND active
+            AND ( message_partner_ids child_of user.commercial_partner   # follower leg
+                  OR project.collaborator_ids any (                      # collaborator leg
+                        partner_id == user.partner_id                    #   EXACT — no family
+                        AND limited_access == False) )
+
+        Lock-step mapping (any divergence re-opens the IDOR surface):
+        - follower leg  → ``message_partner_ids & allowed`` where ``allowed`` is
+          the child_of(commercial) family — native ``child_of`` semantics.
+        - collaborator leg → ``c.partner_id == partner`` EXACT comparison against
+          the user's own partner. Native compares ``partner_id == user.partner_id``
+          (NO family expansion); using the family here would be intra-tenant
+          over-access (a child partner inheriting the collaborator's grant).
+
+        Positive-only: portal users must never fall through to the internal
+        fail-open legs in the controller helpers (F4).
+        """
+        self.ensure_one()
+        task = self.sudo()
+        project = task.project_id
+        if not project or project.privacy_visibility != 'portal' or not task.active:
+            return False
+        commercial = partner.commercial_partner_id
+        # Native child_of expands the commercial family INCLUDING archived
+        # partners (the ORM walks parent_id with active_test=False under the
+        # hood). We keep active_test=True: the divergence is "more deny"
+        # (archived family members not matched) — the safe direction, an
+        # accepted deviation.
+        allowed = self.env['res.partner'].sudo().search(
+            [('id', 'child_of', commercial.id)])
+        if task.message_partner_ids & allowed:
+            return True
+        return bool(project.collaborator_ids.filtered(
+            lambda c: c.partner_id == partner and not c.limited_access))

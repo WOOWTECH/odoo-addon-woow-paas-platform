@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+  <t t-name="woow_paas_platform.PortalAgentStatus">
+    <div class="o_woow_portal_agent_status card mb-3">
+      <div class="card-body py-3">
+        <h6 class="card-title d-flex align-items-center mb-2">
+          AI Agent
+          <span t-attf-class="badge ms-2 {{ podStateClass }}" t-esc="podLabel"/>
+        </h6>
+        <div t-if="state.error" class="text-muted small" t-esc="state.error"/>
+        <t t-elif="state.agent">
+          <div class="small text-muted" t-if="state.agent.template_name">
+            Agent：<span t-esc="state.agent.template_name"/>
+          </div>
+          <div class="small text-muted" t-if="state.agent.model_name">
+            AI Connection：<span t-esc="state.agent.model_name"/>
+          </div>
+          <div class="small text-warning"
+               t-if="!state.agent.ready and state.agent.reason"
+               t-esc="state.agent.reason"/>
+        </t>
+        <div t-else="" class="text-muted small">載入中…</div>
+      </div>
+    </div>
+  </t>
+
+</templates>

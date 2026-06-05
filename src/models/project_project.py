@@ -165,3 +165,45 @@ class ProjectProject(models.Model):
                     'role': 'owner',
                 })
         return projects
+
+    def _portal_partner_can_access(self, partner):
+        """Portal-leg project predicate (two-layer-acl-lockstep Layer 2).
+
+        Mirror of ``project.project_project_rule_portal`` PLUS a deliberate
+        task-leg extension: a partner shared on ANY active task of this
+        project may read the project's agent status / chat with the project
+        agent on that task. Required because chat & agent status are
+        project-scoped while native share can be task-scoped. This widens
+        ONLY the controller-computed agent endpoints — the project record
+        itself stays invisible (native ir.rule untouched). See design spec
+        §安全模型.
+
+        Lock-step leg mapping (mirror project_security.xml):
+        - follower leg → ``message_partner_ids & allowed`` (child_of(commercial)
+          family — native ``project_project_rule_portal`` semantics).
+        - collaborator leg → ``c.partner_id == partner`` EXACT, mirroring the
+          native task-rule collaborator leg (partner_id == user.partner_id, NO
+          family expansion); the family form was intra-tenant over-access.
+        - task-leg extension → follower-style ``message_partner_ids in allowed``
+          on the project's active tasks (intentional widen; keeps the native
+          task follower child_of semantics, NOT the collaborator exact form).
+        """
+        self.ensure_one()
+        project = self.sudo()
+        if project.privacy_visibility != 'portal':
+            return False
+        commercial = partner.commercial_partner_id
+        # child_of keeps active_test=True (more-deny vs native archived-inclusive
+        # expansion — accepted safe-direction deviation; see task predicate).
+        allowed = self.env['res.partner'].sudo().search(
+            [('id', 'child_of', commercial.id)])
+        if project.message_partner_ids & allowed:
+            return True
+        if project.collaborator_ids.filtered(
+                lambda c: c.partner_id == partner and not c.limited_access):
+            return True
+        return bool(self.env['project.task'].sudo().search_count([
+            ('project_id', '=', project.id),
+            ('active', '=', True),
+            ('message_partner_ids', 'in', allowed.ids),
+        ]))

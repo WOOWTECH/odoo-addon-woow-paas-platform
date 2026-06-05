@@ -154,6 +154,139 @@ class TestPhaseCSseFlagAndFrontendContract(TransactionCase):
 
 
 # --------------------------------------------------------------------------- #
+# SSE.8 / SSE.9 / SSE.10 — frontend polish contract (adversarial-review        #
+#                          medium/low findings, source-level assertions)        #
+# --------------------------------------------------------------------------- #
+@tagged('post_install', '-at_install')
+class TestPhaseCSseFrontendPolishContract(TransactionCase):
+    """SSE.8-SSE.10 — adversarial-review polish findings, asserted at the
+    frontend source level (these are pure JS/manifest contracts that need no
+    live pod). Same family as SSE.2's "frozen frontend contract" probe.
+
+    SSE.8  (F1) — pod state → zh-tw label mapping is a SINGLE shared module
+           (``services/agent_pod_state.js``), wired into web.assets_frontend,
+           imported by BOTH the portal status component AND the /woow
+           ProjectKanbanPage. No inline hand-written ``運行中``/``啟動中`` map
+           may remain in those two consumers (duplicate-drift was the finding).
+    SSE.9  (F2) — the portal task chat must wrap USER message html in the same
+           ``safeHtml`` DOMPurify path /woow AiChat uses (defence-in-depth);
+           AI messages keep going through ``parseMarkdown`` (already sanitised)
+           and must NOT be double-wrapped.
+    SSE.10 (F3) — ``openAiStream`` dispatch (the typed-event branch block, not
+           just JSON.parse) is inside the try/catch so a handler-time exception
+           routes to ``onParseError`` — restoring the original AiChat onmessage
+           equivalence (handler faults counted toward parse-error recovery).
+    """
+
+    _BASE = ('..', 'static', 'src')
+
+    def _read(self, *parts):
+        path = os.path.abspath(os.path.join(os.path.dirname(__file__), *parts))
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    # ----- SSE.8 (F1) shared pod-state label module ----------------------- #
+    def test_SSE8_shared_pod_state_label_module(self):
+        shared = self._read(
+            *self._BASE, 'paas', 'services', 'agent_pod_state.js')
+        self.assertIn(
+            'export const POD_STATE_LABEL', shared,
+            "SSE.8(F1): shared module must export POD_STATE_LABEL.")
+        self.assertIn(
+            'export function podStateLabel', shared,
+            "SSE.8(F1): shared module must export podStateLabel(state) helper.")
+        # the merged map must cover every state both consumers can show, incl.
+        # spawning + unknown (ProjectKanbanPage's old inline map dropped these).
+        for state in ('absent', 'spawning', 'active', 'reaped', 'unknown'):
+            self.assertIn(
+                state, shared,
+                f"SSE.8(F1): shared map missing '{state}' state.")
+
+        # both consumers import from the shared module ...
+        portal = self._read(
+            *self._BASE, 'portal', 'portal_agent_status.js')
+        kanban = self._read(
+            *self._BASE, 'paas', 'pages', 'project-kanban',
+            'ProjectKanbanPage.js')
+        for src, who in ((portal, 'portal_agent_status.js'),
+                         (kanban, 'ProjectKanbanPage.js')):
+            self.assertIn(
+                'agent_pod_state', src,
+                f"SSE.8(F1): {who} must import the shared agent_pod_state "
+                "module instead of hand-rolling the label map.")
+        # ... and no longer carry their OWN inline {active: "運行中"} map.
+        self.assertNotIn(
+            'const map = { active: "運行中"', kanban,
+            "SSE.8(F1): ProjectKanbanPage must drop its inline pod-state map "
+            "(the duplicate that drifted, missing spawning/unknown).")
+        self.assertNotIn(
+            'const POD_STATE_LABEL = {', portal,
+            "SSE.8(F1): portal_agent_status must drop its inline "
+            "POD_STATE_LABEL map and use the shared module.")
+
+        # shared module is wired into the frontend bundle (portal uses it).
+        manifest = self._read('..', '__manifest__.py')
+        self.assertIn(
+            'services/agent_pod_state.js', manifest,
+            "SSE.8(F1): agent_pod_state.js must be listed in "
+            "web.assets_frontend (the portal bundle), beside ai_stream.js.")
+
+    # ----- SSE.9 (F2) portal user-message sanitize ------------------------ #
+    def test_SSE9_portal_user_message_sanitized(self):
+        chat = self._read(*self._BASE, 'portal', 'portal_task_chat.js')
+        self.assertIn(
+            'safeHtml', chat,
+            "SSE.9(F2): portal task chat must import + use safeHtml for USER "
+            "message html (defence-in-depth, same as /woow AiChat).")
+        # the two user-message construction sites must wrap body in safeHtml:
+        #   history mapping ``m.is_ai ? parseMarkdown(m.body) : <user branch>``
+        #   send() push        ``html: <user branch>`` from res.data.body
+        self.assertIn(
+            'safeHtml(m.body)', chat,
+            "SSE.9(F2): history user branch must be safeHtml(m.body), not raw "
+            "m.body.")
+        self.assertIn(
+            'safeHtml(res.data.body)', chat,
+            "SSE.9(F2): sent user message must be safeHtml(res.data.body), not "
+            "raw res.data.body.")
+        # AI messages stay on parseMarkdown (already sanitised) — must NOT be
+        # double-wrapped in safeHtml.
+        self.assertNotIn(
+            'safeHtml(parseMarkdown', chat,
+            "SSE.9(F2): AI markdown must not be double-sanitised "
+            "(parseMarkdown already runs DOMPurify).")
+
+    # ----- SSE.10 (F3) stream dispatch equivalence ------------------------ #
+    def test_SSE10_stream_dispatch_inside_try_catch(self):
+        stream = self._read(*self._BASE, 'paas', 'services', 'ai_stream.js')
+        # The catch must route handler-time exceptions to onParseError ...
+        self.assertIn(
+            'handlers.onParseError?.(event.data, err)', stream,
+            "SSE.10(F3): catch must call onParseError(event.data, err).")
+        # ... AND the catch must come AFTER the whole dispatch block, so a
+        # handler fault is caught too (original AiChat onmessage equivalence).
+        # We anchor on the LAST dispatch branch's handler call (onDone) inside
+        # the function body — NOT the JSDoc mention. The dispatch onDone call
+        # is uniquely written as ``handlers.onDone?.(`` whereas the doc comment
+        # writes ``onDone(data)``.
+        dispatch_marker = 'handlers.onDone?.('
+        self.assertIn(
+            dispatch_marker, stream,
+            "SSE.10(F3): expected the onDone dispatch branch "
+            "(handlers.onDone?.(...)).")
+        catch_call_idx = stream.index('handlers.onParseError?.(event.data, err)')
+        dispatch_idx = stream.index(dispatch_marker)
+        self.assertLess(
+            dispatch_idx, catch_call_idx,
+            "SSE.10(F3): the typed-event dispatch (through handlers.onDone) "
+            "must sit INSIDE the same try whose catch calls onParseError — "
+            "i.e. dispatch comes BEFORE the onParseError catch in source. Today "
+            "the catch only guards JSON.parse and returns before dispatch, so a "
+            "handler-time exception escapes uncounted. Restore the original "
+            "AiChat onmessage equivalence by widening the try to cover dispatch.")
+
+
+# --------------------------------------------------------------------------- #
 # SSE.3 / SSE.4 / SSE.5 — dual-mode dispatch behaviour                          #
 # --------------------------------------------------------------------------- #
 @tagged('post_install', '-at_install')

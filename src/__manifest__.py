@@ -53,6 +53,7 @@
         "data/demo_system_skill.xml",
         "views/account_move_views.xml",
         "views/paas_app.xml",
+        "views/portal_templates.xml",
         "views/oauth2_templates.xml",
         "views/oauth_client_views.xml",
         "data/oauth_clients.xml",
@@ -83,6 +84,17 @@
             # JS and XML files
             "woow_paas_platform/static/src/paas/**/*.js",
             "woow_paas_platform/static/src/paas/**/*.xml",
+        ],
+        "web.assets_frontend": [
+            "woow_paas_platform/static/src/paas/lib/purify.min.js",
+            "woow_paas_platform/static/src/paas/lib/marked.min.js",
+            "woow_paas_platform/static/src/paas/services/rpc.js",
+            "woow_paas_platform/static/src/paas/services/markdown_parser.js",
+            "woow_paas_platform/static/src/paas/services/ai_service.js",
+            "woow_paas_platform/static/src/paas/services/ai_stream.js",
+            "woow_paas_platform/static/src/paas/services/agent_pod_state.js",
+            "woow_paas_platform/static/src/paas/services/html_sanitize.js",
+            "woow_paas_platform/static/src/portal/**/*",
         ],
     },
     # Note: Python dependencies are defined in requirements.txt (single source of truth).

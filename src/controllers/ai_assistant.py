@@ -81,10 +81,23 @@ class AiAssistantController(Controller):
     def _check_channel_access(self, channel):
         """Verify the current user has access to the channel.
 
-        Returns True if the user's partner is a member of the channel.
+        Internal users: channel membership (unchanged).
+        Portal users (``user.share``): membership AND the task-level portal
+        predicate re-validated on EVERY request — stale channel membership
+        after un-share must not keep the door open (design spec §安全模型 7).
+        Portal users may only use task-bound channels.
         """
-        user_partner = request.env.user.partner_id
-        return user_partner in channel.channel_partner_ids
+        user = request.env.user
+        user_partner = user.partner_id
+        if user_partner not in channel.channel_partner_ids:
+            return False
+        if user.share:
+            task = request.env['project.task'].sudo().search(
+                [('channel_id', '=', channel.id)], limit=1)
+            if not task:
+                return False
+            return task._portal_partner_can_access(user_partner)
+        return True
 
     def _check_workspace_access(self, workspace):
         """Verify the current user is a member of the workspace.
@@ -106,6 +119,12 @@ class AiAssistantController(Controller):
           re-opens the IDOR surface where the rule layer denies but the
           controller layer still serves the row.
         """
+        user = request.env.user
+        if user.share:
+            # Positive-only portal leg (two-layer-acl-lockstep Layer 2).
+            # Placed FIRST so portal users can never reach the internal
+            # fail-open branches below (F4 stays internal-scoped).
+            return project.sudo()._portal_partner_can_access(user.partner_id)
         if not project.cloud_service_id:
             user_partner = request.env.user.partner_id
             return user_partner in project.message_partner_ids
@@ -119,9 +138,34 @@ class AiAssistantController(Controller):
         Returns True if the task has no project/cloud_service or the user
         is a member of the associated workspace.
         """
+        if request.env.user.share:
+            return task.sudo()._portal_partner_can_access(
+                request.env.user.partner_id)
         if not task.project_id:
             return True
         return self._check_project_access(task.project_id)
+
+    def _portal_write_denied(self):
+        """Fail-closed guard for project/task CRUD write/delete/create paths.
+
+        The portal legs in ``_check_project_access`` / ``_check_task_access``
+        widen access for ``user.share`` portal users, but they were designed
+        to gate ONLY the read-only agent endpoints (chat / status). Those same
+        helpers are also the sole authorization gate for the sudo-browsed
+        write/delete/create endpoints (``_create_project``, ``_update_project``,
+        ``_delete_project``, ``_create_task``, ``_update_task``,
+        ``_delete_task``) — and because the records are sudo-browsed (or, for
+        ``_create_project``, the row does not yet exist and no workspace gate
+        runs when both workspace_id and cloud_service_id are 0) the native
+        read-only portal ir.rule never gets a second say. Read-mode share is
+        read-only by design (spec §非目標:
+        edit-mode project_sharing is a separate epic), so portal/share users
+        must be denied on every mutation path. Returns an error dict when the
+        caller must abort, else ``None``.
+        """
+        if request.env.user.share:
+            return {'success': False, 'error': 'Access denied'}
+        return None
 
     def _sse_error_response(self, error: str, error_code: str) -> Response:
         """Build a structured SSE error response (HTTP 200)."""
@@ -1300,6 +1344,15 @@ class AiAssistantController(Controller):
         Returns:
             dict: Response with stage list sorted by sequence.
         """
+        # Read-mode share users have no stages UI; this endpoint sudo-reads and
+        # may sudo auto-CREATE stages for any project_id with no row-level gate
+        # (full per-project access carve-out is follow-up F-DP-1). Fail closed
+        # for share users so they can neither read another tenant's stage names
+        # nor trigger the sudo auto-create side effect. Internal behaviour is
+        # unchanged.
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         stages = self._get_project_stages(project_id)
         return {
             'success': True,
@@ -1450,6 +1503,9 @@ class AiAssistantController(Controller):
 
     def _create_project(self, params: dict, cloud_service=None, workspace=None) -> dict[str, Any]:
         """Create a new project bound to a cloud service."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         name = (params.get('name') or '').strip()
         if not name:
             return {'success': False, 'error': 'Project name is required'}
@@ -1502,6 +1558,9 @@ class AiAssistantController(Controller):
 
     def _update_project(self, params: dict) -> dict[str, Any]:
         """Update an existing project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         project_id = params.get('project_id')
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
@@ -1539,6 +1598,9 @@ class AiAssistantController(Controller):
 
     def _delete_project(self, params: dict) -> dict[str, Any]:
         """Delete (archive) a project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         project_id = params.get('project_id')
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
@@ -1585,6 +1647,9 @@ class AiAssistantController(Controller):
 
     def _create_task(self, workspace, params: dict) -> dict[str, Any]:
         """Create a new task in a project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         name = (params.get('name') or '').strip()
         project_id = params.get('project_id')
 
@@ -1643,6 +1708,9 @@ class AiAssistantController(Controller):
 
     def _update_task(self, task, params: dict) -> dict[str, Any]:
         """Update an existing task."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         vals = {}
         if 'name' in params:
             name = (params['name'] or '').strip()
@@ -1670,6 +1738,9 @@ class AiAssistantController(Controller):
 
     def _delete_task(self, task) -> dict[str, Any]:
         """Delete (archive) a task."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         task.write({'active': False})
         return {'success': True, 'data': {'id': task.id}}
 

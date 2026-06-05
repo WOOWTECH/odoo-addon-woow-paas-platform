@@ -10,6 +10,7 @@ import {
 } from "@odoo/owl";
 import { AiMentionDropdown } from "../ai-mention/AiMentionDropdown";
 import { aiService } from "../../services/ai_service";
+import { openAiStream } from "../../services/ai_stream";
 import { safeHtml } from "../../services/html_sanitize";
 import { parseMarkdown } from "../../services/markdown_parser";
 import { renderMermaidBlocks } from "../../services/mermaid_loader";
@@ -204,135 +205,17 @@ export class AiChat extends Component {
     this.state.streamingText = "";
     this.state.errorRetryable = true; // #129: 每次串流重置，避免上一輪 retryable:false 殘留
 
-    const url = aiService.getStreamUrl(this.props.channelId);
-    this.eventSource = new EventSource(url);
-
-    this.eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-
-        if (data.error) {
-          this.state.error = ERROR_MESSAGES[data.error_code] || data.error;
-          // #129: 尊重 runtime 的 retryable 提示（如 llm_empty_response → true）。
-          // 僅在明確 false 時隱藏「重試」；欄位缺省維持 true（不回歸）。
-          this.state.errorRetryable = data.retryable !== false;
-          // Defense-in-depth (graceful degradation): a retryable error (e.g.
-          // llm_empty_response when the runtime's post-tool summary comes back
-          // empty) arrives BEFORE the done frame, so a tool_result / text
-          // already streamed this turn never reaches the done branch (the only
-          // place that lands streaming into messages) and closeStream() below
-          // would wipe the transient — the bubble flashes then vanishes.
-          // Salvage it (mirrors the done branch + the onerror partial-text
-          // handler) so the user still SEES what ran and keeps the retry button.
-          // Session-only — NOT persisted; the root fix is the runtime surfacing
-          // its summary as text_chunk+done. Only on retryable errors: a fatal /
-          // non-retryable error should not surface partial output.
-          if (this.state.errorRetryable) {
-            const toolCalls = this.state.streamingToolCalls.length
-              ? [...this.state.streamingToolCalls]
-              : null;
-            if (this.state.streamingText || toolCalls) {
-              // message_id is set only when the SSE bridge's error branch
-              // conditionally persisted (defense-in-depth ②); otherwise it is
-              // absent and the salvaged message is session-only.
-              const aiMsg = this._createAiMessage(
-                this.state.streamingText,
-                data.message_id,
-              );
-              if (toolCalls) {
-                aiMsg.toolCalls = toolCalls;
-              }
-              this.state.messages.push(aiMsg);
-            }
-          }
-          this.state.connectionState = "error";
-          this.closeStream();
-          return;
-        }
-
-        // #123 cold-start: pod 啟動中的進度 event（非錯誤）
-        if (data.type === "status" && data.payload?.stage === "spawning") {
-          this._reconnectAttempts = 0;
-          this._consecutiveParseErrors = 0;
-          this.state.connectionState = "spawning";
-          this.state.error = null;
-          return;
-        }
-
-        // Handle MCP tool call events
-        if (data.type === "tool_call") {
-          this._reconnectAttempts = 0;
-          this._consecutiveParseErrors = 0;
-          if (this.state.connectionState !== "streaming") {
-            this.state.connectionState = "streaming";
-          }
-          this.state.streamingToolCalls.push({
-            id: ++this._toolCallCounter,
-            tool: data.tool,
-            args: data.args || {},
-            result: null,
-            expanded: false,
-          });
-          this.scrollToBottom();
-          return;
-        }
-
-        if (data.type === "tool_result") {
-          this._reconnectAttempts = 0;
-          this._consecutiveParseErrors = 0;
-          const tc = [...this.state.streamingToolCalls]
-            .reverse()
-            .find((t) => t.tool === data.tool && t.result === null);
-          if (tc) {
-            tc.result = data.result || "";
-          }
-          this.scrollToBottom();
-          return;
-        }
-
-        if (data.type === "tool_error") {
-          this._reconnectAttempts = 0;
-          this._consecutiveParseErrors = 0;
-          const tc = [...this.state.streamingToolCalls]
-            .reverse()
-            .find((t) => t.tool === data.tool && t.result === null);
-          if (tc) {
-            tc.result = null;
-            tc.error = data.error || "Tool execution failed";
-          }
-          this.scrollToBottom();
-          return;
-        }
-
-        if (data.chunk) {
-          this._reconnectAttempts = 0;
-          this._consecutiveParseErrors = 0;
-          if (this.state.connectionState !== "streaming") {
-            this.state.connectionState = "streaming";
-          }
-          this.state.streamingText += data.chunk;
-          this.scrollToBottom();
-        }
-
-        if (data.warning) {
-          this.state.error = data.warning;
-        }
-
-        if (data.done) {
-          // Capture tool calls before closeStream resets them
+    this.eventSource = openAiStream(this.props.channelId, {
+      onError: (data) => {
+        this.state.error = ERROR_MESSAGES[data.error_code] || data.error;
+        this.state.errorRetryable = data.retryable !== false;
+        if (this.state.errorRetryable) {
           const toolCalls = this.state.streamingToolCalls.length
             ? [...this.state.streamingToolCalls]
             : null;
-          const hadContent = this.state.streamingText || toolCalls;
-
-          // Add the complete AI message to the list.
-          // #129 INVARIANT: 最終訊息以 done frame 的 full_response 為準（streamingText
-          // 僅作 fallback）。故前端「不依賴逐 delta」——runtime 端不論逐 token 串流或
-          // 單一大 text_chunk 一次到位（如 disable_streaming 路徑），最終提交都正確。
-          // 改這段前請保持此不變量（對應 SSE gateway done.full_response 累積）。
-          if (hadContent) {
+          if (this.state.streamingText || toolCalls) {
             const aiMsg = this._createAiMessage(
-              data.full_response || this.state.streamingText,
+              this.state.streamingText,
               data.message_id,
             );
             if (toolCalls) {
@@ -340,46 +223,121 @@ export class AiChat extends Component {
             }
             this.state.messages.push(aiMsg);
           }
-          this.closeStream();
-          this.state.connectionState = "connected";
-          // Auto-hide after 2 seconds
-          this._connectedTimer = setTimeout(() => {
-            if (this.state.connectionState === "connected") {
-              this.state.connectionState = "idle";
-            }
-          }, 2000);
-          this.scrollToBottom();
         }
-      } catch (parseErr) {
-        console.error("Failed to parse SSE data:", event.data, parseErr);
+        this.state.connectionState = "error";
+        this.closeStream();
+      },
+      onSpawning: () => {
+        this._reconnectAttempts = 0;
+        this._consecutiveParseErrors = 0;
+        this.state.connectionState = "spawning";
+        this.state.error = null;
+      },
+      onToolCall: (data) => {
+        this._reconnectAttempts = 0;
+        this._consecutiveParseErrors = 0;
+        if (this.state.connectionState !== "streaming") {
+          this.state.connectionState = "streaming";
+        }
+        this.state.streamingToolCalls.push({
+          id: ++this._toolCallCounter,
+          tool: data.tool,
+          args: data.args || {},
+          result: null,
+          expanded: false,
+        });
+        this.scrollToBottom();
+      },
+      onToolResult: (data) => {
+        this._reconnectAttempts = 0;
+        this._consecutiveParseErrors = 0;
+        const tc = [...this.state.streamingToolCalls]
+          .reverse()
+          .find((t) => t.tool === data.tool && t.result === null);
+        if (tc) {
+          tc.result = data.result || "";
+        }
+        this.scrollToBottom();
+      },
+      onToolError: (data) => {
+        this._reconnectAttempts = 0;
+        this._consecutiveParseErrors = 0;
+        const tc = [...this.state.streamingToolCalls]
+          .reverse()
+          .find((t) => t.tool === data.tool && t.result === null);
+        if (tc) {
+          tc.result = null;
+          tc.error = data.error || "Tool execution failed";
+        }
+        this.scrollToBottom();
+      },
+      onChunk: (data) => {
+        this._reconnectAttempts = 0;
+        this._consecutiveParseErrors = 0;
+        if (this.state.connectionState !== "streaming") {
+          this.state.connectionState = "streaming";
+        }
+        this.state.streamingText += data.chunk;
+        this.scrollToBottom();
+      },
+      onWarning: (data) => {
+        this.state.error = data.warning;
+      },
+      onDone: (data) => {
+        const toolCalls = this.state.streamingToolCalls.length
+          ? [...this.state.streamingToolCalls]
+          : null;
+        const hadContent = this.state.streamingText || toolCalls;
+        // #129 INVARIANT: 最終訊息以 done frame 的 full_response 為準
+        // （streamingText 僅作 fallback）— 不依賴逐 delta。
+        if (hadContent) {
+          const aiMsg = this._createAiMessage(
+            data.full_response || this.state.streamingText,
+            data.message_id,
+          );
+          if (toolCalls) {
+            aiMsg.toolCalls = toolCalls;
+          }
+          this.state.messages.push(aiMsg);
+        }
+        this.closeStream();
+        this.state.connectionState = "connected";
+        this._connectedTimer = setTimeout(() => {
+          if (this.state.connectionState === "connected") {
+            this.state.connectionState = "idle";
+          }
+        }, 2000);
+        this.scrollToBottom();
+      },
+      onParseError: (raw, err) => {
+        console.error("Failed to parse SSE data:", raw, err);
         this._consecutiveParseErrors++;
         if (this._consecutiveParseErrors >= 3) {
           this.state.error = "接收 AI 回覆時發生資料錯誤，請重新整理頁面。";
           this.state.connectionState = "error";
           this.closeStream();
         }
-      }
-    };
-
-    this.eventSource.onerror = (event) => {
-      console.error("SSE connection error:", event);
-      const hadContent = !!this.state.streamingText;
-      const partialText = this.state.streamingText;
-      this.closeStream();
-      if (hadContent) {
-        this.state.messages.push(
-          this._createAiMessage(
-            partialText + "\n\n⚠️ (回覆因連線中斷而不完整)",
-          ),
-        );
-        this.state.error =
-          "AI 回覆因連線中斷而不完整，您可以重新傳送訊息以取得完整回覆。";
-        this.state.connectionState = "error";
-      } else {
-        this.state.connectionState = "reconnecting";
-        this._scheduleReconnect();
-      }
-    };
+      },
+      onConnectionError: (event) => {
+        console.error("SSE connection error:", event);
+        const hadContent = !!this.state.streamingText;
+        const partialText = this.state.streamingText;
+        this.closeStream();
+        if (hadContent) {
+          this.state.messages.push(
+            this._createAiMessage(
+              partialText + "\n\n⚠️ (回覆因連線中斷而不完整)",
+            ),
+          );
+          this.state.error =
+            "AI 回覆因連線中斷而不完整，您可以重新傳送訊息以取得完整回覆。";
+          this.state.connectionState = "error";
+        } else {
+          this.state.connectionState = "reconnecting";
+          this._scheduleReconnect();
+        }
+      },
+    });
   }
 
   /**

@@ -8,3 +8,4 @@ from . import profile
 from . import dashboard
 from . import agent_runtime_skill
 from . import agent_runtime_webhook
+from . import portal

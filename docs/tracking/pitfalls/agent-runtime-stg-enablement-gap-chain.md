@@ -59,3 +59,16 @@ Gap 5 一度誤導：NetworkPolicy 擋通常是 **timeout**（封包丟棄），
   - [[cross-repo-artifact-landing-assumption]] —— chart 落點假設錯；本篇是「環境啟用條件假設已到位、實際全空」。
 - 關鍵 code 落點：dual-mode gate `src/controllers/ai_assistant.py:384`（`use_agent_runtime` 分支）/ `:755`（`_resolve_agent_template`）/ `:802`（system skill union 進 snapshot）；`src/models/agent_session.py`（`_get_namespace_secret` fail-closed）；chart `charts/odoo-dev-sandbox/templates/{odoo-deployment,secrets,network-policy}.yaml`。
 - 部署機制：operator 走 `paas-app-bundle-cd`（Fleet），**非** deploy-stg；deploy-stg 走 CI build Odoo image + create.sh（見 `CLAUDE.md` §Deploy Staging）。
+
+## 本機 dev-sandbox（docker-desktop）變體 — 2026-06-05 portal E2E 重演
+
+同一條 chain 在**本機 dev sandbox** 重演（portal-task-agent-chat E2E），逐關訊號與 stg 略有不同，對照如下：
+
+| 對應 stg gap | 本機訊號 | 根因（本機版） | 處置 |
+|---|---|---|---|
+| （前置，stg 沒有）| module 根本沒裝（`ir_module_module` 無 `ai_base_gt` row）| Floor `.env` 相對路徑掛到空 ext-addons 目錄 | 見 [[floor-env-relative-path-empty-ext-addons]]（修 `.env` 絕對路徑 + 重建）|
+| #4 namespace secret 未注入 | chat 回 `Pod spawn failed: Agent runtime namespace secret is not configured`（fail-closed 正確發聲）| sandbox secret **沒有任何 agent-runtime key**（chart env `optional: true` 故 pod 照常啟動；F-GC-2：create.sh fresh `--set` 不帶 agentRuntime）| `kubectl patch secret` 補 `agent-runtime-namespace-secret` + restart odoo |
+| #1 operator image 過舊 | chat 回 `paas-operator POST /spawn-or-attach → 404: Not Found` | 本機 `paas-system` 的 `paas-operator:latest` 是 90 天前本地 build（早於 agent-runtime epic）| 本機升級需 rebuild image + helm upgrade 補 agent-runtime env/creds（chart repo Gitea token 等）— 屬環境 provisioning |
+| #2/#3/#5 | 未走到（被 #1 擋住）| — | — |
+
+**結論／紀律**：本機 dev sandbox 的 E2E **預期只驗到 spawn 邊界**（UI 渲染、ACL 鏈、SSE 開啟、錯誤呈現、composer 恢復）；完整 agent 串流的 E2E 正規路徑是 merge 後 deploy-stg（stg operator 由 Fleet 管理、五層已驗）。在本機追完整串流 = 重新 provision 整套 operator 環境，投資報酬極低，**果斷停在 spawn 邊界並記錄**。

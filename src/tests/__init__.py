@@ -110,6 +110,13 @@ from . import test_agent_runtime_coldstart_retry
 from . import test_agent_runtime_onpublish_push
 # feat: platform Agent runtime status endpoint (Projects-overview Agent card, gitea #126)
 from . import test_agent_status_endpoint
+# feat: portal task agent chat — model-layer portal access predicates (two-layer-acl-lockstep Layer 2)
+from . import test_portal_agent_access
+# feat: portal task agent chat — endpoint-level portal access (HttpCase, ORM-vs-endpoint)
+from . import test_portal_agent_endpoints
+# test: portal task agent chat — SSE gate chain + portal page rendering (HttpCase)
+from . import test_portal_agent_page
+# feat: portal task agent chat — minimal task-context hook (TransactionCase)
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
 # feat: agent context enrichment (spec 2026-06-04 — TDD)
 from . import test_agent_context_builder
