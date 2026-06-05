@@ -101,12 +101,20 @@ sequenceDiagram
 3. `_build_mcp_snapshot` / `_build_skill_snapshot` 組 MCP 與 skill 快照。
 
    > 🧩 **single source（#111 refactor，2026-06-02）**：`_platform_default_agent_template` / `_resolve_agent_template` / `_build_mcp_snapshot` / `_build_skill_snapshot` 這四個方法已**下沉到 `woow_paas_platform.agent_session` model**（`@api.model`），讓 chat（controller）與 on-publish 推送（§4.5）**共用同一份 snapshot/resolve 邏輯**。controller `ai_assistant.py` 的同名方法現在是 thin delegate（行為等價，呼叫 `request.env['woow_paas_platform.agent_session']._resolve_agent_template(...)` 等）。
-4. `client.spawn_or_attach(...)` 呼叫 operator 把 pod 起來 / 接上（`ai_assistant.py:687`）。
-5. **從回應物件**讀 pod 位址：`pod_ws_url = runtime_info.get('pod_ws_url')`（`ai_assistant.py:704`）。
+4. **組 per-turn system_context**（spawn 之前、cursor 仍有效時預取）：
+
+   - **system_context（per-turn）**：`agent_session._build_runtime_system_context()`
+     把 `agent_template.system_prompt` + 統一背景 context（Project / Task /
+     Cloud Services 白名單，見 spec 2026-06-04-agent-context-enrichment）組成
+     單一字串，放進 `user_message.payload.system_context`（additive；空值省略
+     key）。pod 端原樣 `SystemMessage(content=...)`，不驗內容、零 truncation —
+     長度由 Odoo 端 `CTX_TOTAL_CAP=8000` 把關。
+5. `client.spawn_or_attach(...)` 呼叫 operator 把 pod 起來 / 接上（`ai_assistant.py:687`）。
+6. **從回應物件**讀 pod 位址：`pod_ws_url = runtime_info.get('pod_ws_url')`（`ai_assistant.py:704`）。
 
    > 🔑 **關鍵**：pod 的 WS 位址來自**這次 spawn 的即時回應**，**不是**讀任何 DB 欄位（不是 `agent_session.pod_ws_url`）。這正是為什麼 [§5](#5-目前現況--已知缺口) 的 `agent_session.state` 卡死也不影響 chat。
-6. `auth_token = runtime_info.get('auth_token') or runtime_info.get('ws_token')`（`ai_assistant.py:705`）— 對 operator 回的兩個等值欄位都相容。
-7. 連上 pod（`websockets.connect(pod_ws_url, extra_headers={'Authorization': f'Bearer {auth_token}'})`），先送一筆 `user_message` envelope，再 `async for` 把 pod 回來的 envelope 逐筆轉成 SSE。
+7. `auth_token = runtime_info.get('auth_token') or runtime_info.get('ws_token')`（`ai_assistant.py:705`）— 對 operator 回的兩個等值欄位都相容。
+8. 連上 pod（`websockets.connect(pod_ws_url, extra_headers={'Authorization': f'Bearer {auth_token}'})`），先送一筆 `user_message` envelope（payload 含 `system_context`），再 `async for` 把 pod 回來的 envelope 逐筆轉成 SSE。
 
    > 🔁 **cold-start WS connect bounded retry（#123 / F-ARL-1 / pitfall G3，2026-06-02）**：cold-start 時 `spawn_or_attach` 可能回 `pod_state="spawning"`，pod 還沒 WS-ready，第一次 connect 會 `ConnectionRefusedError`。`relay()` 現在把 **connect** 包進退避重試迴圈（backoff `1→2→…→5s`，deadline **60s**）：connect 失敗就推一筆 `status:spawning` 進度 event（前端轉黃色「AI 啟動中…」非紅錯誤）後重試；逾 deadline 才送 fatal `error`。**retry 只包 connect**（連上後的 `send(user_message)` + drain loop 不在 retry 範圍）→ mid-stream 斷線**絕不重送 `user_message`**。connect 成功後仍走 `try/finally` 的 `cm.__aexit__(...)`，保留 §1.5 的 F-PC-6 aclose 清理語意。配套 client 側（`agent_runtime_client.py`）：`spawn_or_attach` 對 idempotent spawn 做 bounded retry（transient timeout/connection 重試、4xx 不 retry）+ per-call timeout 分級（spawn 90s / invalidate 10s / 其餘 default 30s）。
 

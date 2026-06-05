@@ -90,6 +90,7 @@ from . import test_agent_pod_phase_d_sse_aclose            # F-PC-6
 from . import test_agent_pod_phase_d_enablement            # WS3 UI + seed
 from . import test_skill_admin_lifecycle                   # skill backend lifecycle
 from . import test_skill_admin_views                       # skill backend views smoke
+from . import test_project_form_mcp_skill_tab              # 雙層架構: project form 內嵌 MCP/Skill
 from . import test_skill_is_latest_drift_regression        # is_latest drift regression
 from . import test_skill_e2e_lifecycle_download            # e2e lifecycle ↔ download
 # feat: skill dual-scope (system/user) — schema, ACL, pod loading, migration
@@ -116,5 +117,7 @@ from . import test_portal_agent_endpoints
 # test: portal task agent chat — SSE gate chain + portal page rendering (HttpCase)
 from . import test_portal_agent_page
 # feat: portal task agent chat — minimal task-context hook (TransactionCase)
-from . import test_agent_task_context
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
+# feat: agent context enrichment (spec 2026-06-04 — TDD)
+from . import test_agent_context_builder
+from . import test_agent_context_endpoint

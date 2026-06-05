@@ -16,4 +16,79 @@
         </field>
     </record>
 
+    <!-- 雙層架構第二層（會議決議 2026-06-03 議題 D「在 Project 點進去的
+         setting 旁新增一欄」）：per-project 的 MCP / Skill 綁定住在 project
+         form 的原生 Settings tab；Project > Configuration 選單維持全域目錄
+         （scope='system'）。設計依據：docs/decisions/refactor/
+         mcp-skill-two-layer-config-entry.md。
+         - MCP 內嵌 list 帶 default_scope='user'：model default 是 'system'，
+           不帶會撞 D4 constraint（scope='user' ⟺ project_id 有值）。
+         - Skill 內嵌 list create/delete=false：skill 是 bundle-backed，
+           只能走 upload wizard / agent-runtime API 建立（F-SKU-1 紀律）。
+         - record-level 安全不在此層：沿用 6-rule split + scope-flip write
+           guard + api_key field-level ACL，內嵌 list 經 ORM 讀取一樣被
+           ir.rule 過濾。 -->
+    <record id="view_project_form_inherit_mcp_skill" model="ir.ui.view">
+        <field name="name">project.project.form.inherit.woow.mcp_skill</field>
+        <field name="model">project.project</field>
+        <field name="inherit_id" ref="project.edit_project"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@name='settings']" position="inside">
+                <separator string="MCP Servers"/>
+                <!-- scope / project_id 刻意不出現在 list 與 inline form：
+                     scope 由 context default_scope='user' 固定、project_id 由
+                     One2many inverse 自動帶 — 把 scope-flip 的 UI 面整個收掉
+                     （record-level 仍由 dual-leg rule create 方向 + write guard
+                     守，這裡是 defense in depth）。inline form 必須存在：不給
+                     的話 row dialog 會 fallback 到 view_mcp_server_form，那裡
+                     scope/project_id 可編輯。api_key 有 field-level
+                     groups='base.group_system'，非 admin 在任何 view 都讀不到。 -->
+                <field name="mcp_server_ids"
+                       nolabel="1"
+                       context="{'default_scope': 'user'}">
+                    <list>
+                        <field name="name"/>
+                        <field name="url"/>
+                        <field name="transport"/>
+                        <field name="state" widget="badge"
+                               decoration-success="state == 'connected'"
+                               decoration-danger="state == 'error'"
+                               decoration-muted="state == 'draft'"/>
+                        <field name="tool_count"/>
+                    </list>
+                    <form string="Project MCP Server">
+                        <group>
+                            <group string="Connection">
+                                <field name="name"/>
+                                <field name="url" placeholder="https://mcp.example.com/sse"/>
+                                <field name="transport"/>
+                                <field name="api_key" password="True"/>
+                            </group>
+                            <group string="Configuration">
+                                <field name="headers_json" placeholder='{"X-Custom": "value"}'/>
+                                <field name="description"/>
+                                <field name="active"/>
+                            </group>
+                        </group>
+                    </form>
+                </field>
+                <separator string="Skills"/>
+                <field name="skill_ids"
+                       nolabel="1">
+                    <list create="false" delete="false">
+                        <field name="name"/>
+                        <field name="version"/>
+                        <field name="state" widget="badge"
+                               decoration-success="state == 'published'"
+                               decoration-warning="state == 'deprecated'"
+                               decoration-muted="state == 'archived'"
+                               decoration-info="state == 'draft'"/>
+                        <field name="is_latest" widget="boolean_toggle" readonly="1"/>
+                        <field name="uploaded_at"/>
+                    </list>
+                </field>
+            </xpath>
+        </field>
+    </record>
+
 </odoo>

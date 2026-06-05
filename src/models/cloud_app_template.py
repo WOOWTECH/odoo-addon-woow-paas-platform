@@ -47,6 +47,14 @@ class CloudAppTemplate(models.Model):
         string='Tags',
         help='JSON array of tags (e.g., ["postgresql", "database", "sql"])',
     )
+    agent_context_keys = fields.Text(
+        string='Agent Context Keys',
+        help='JSON list of helm_values key paths (dot notation) that are '
+             'safe to expose to the project AI agent, e.g. '
+             '["replicaCount", "image.tag"]. Empty = expose no '
+             'configuration (fail-closed). Extracted values still pass '
+             'the secret sanitizer as a second layer.',
+    )
     # Subscription plans available for this template
     subscription_plan_ids = fields.Many2many(
         'sh.subscription.plan',

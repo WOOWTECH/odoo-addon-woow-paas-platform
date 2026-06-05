@@ -553,17 +553,13 @@ class AiAssistantController(Controller):
         if assistant.context_id:
             system_prompt = assistant.context_id.context or ''
 
-        # Append cloud service context if the channel is linked to a task
-        # whose project is bound to a cloud service
-        cloud_context = self._get_cloud_service_context_for_channel(channel)
-        if cloud_context:
-            system_prompt = (system_prompt + '\n\n' + cloud_context).strip()
-
-        # Minimal task context (feat-enrich-agent-context will absorb this).
-        task_ctx = request.env['project.task']._agent_task_context_for_channel(
-            channel)
-        if task_ctx:
-            system_prompt = (system_prompt + '\n\n' + task_ctx).strip()
+        # Unified background context (project / task / cloud services) —
+        # single source with the chatter + agent-runtime paths
+        # (spec 2026-06-04-agent-context-enrichment D1).
+        context_block = request.env['woow_paas_platform.agent_session'] \
+            ._build_system_context(channel)
+        if context_block:
+            system_prompt = (system_prompt + '\n\n' + context_block).strip()
 
         history = channel._get_chat_history(limit=20)
         messages = client.build_messages(
@@ -696,6 +692,25 @@ class AiAssistantController(Controller):
             },
         )
 
+    @staticmethod
+    def _build_runtime_user_message_payload(channel_id, body, history,
+                                            template_id, invoker_role,
+                                            invoker_user_id, system_context):
+        """user_message envelope payload (ws-protocol §3) + additive
+        ``system_context`` (spec 2026-06-04 D5). Key omitted when falsy so
+        empty-context turns keep the exact legacy payload shape."""
+        payload = {
+            'channel_id': channel_id,
+            'body': body,
+            'history': history,
+            'template_id': template_id,
+            'invoker_role': invoker_role,
+            'invoker_user_id': invoker_user_id,
+        }
+        if system_context:
+            payload['system_context'] = system_context
+        return payload
+
     def _stream_agent_runtime(self, channel, project, channel_id):
         """Agent-runtime pod transport branch (§5.6, flag-gated).
 
@@ -724,6 +739,8 @@ class AiAssistantController(Controller):
         mcp_snapshot = self._build_mcp_snapshot(project, template)
         skill_snapshot = self._build_skill_snapshot(project, template)
         history = channel._get_chat_history(limit=20)
+        system_context = request.env['woow_paas_platform.agent_session'] \
+            ._build_runtime_system_context(channel, template)
         last_message = request.env['mail.message'].sudo().search([
             ('res_id', '=', channel_id),
             ('model', '=', 'discuss.channel'),
@@ -731,8 +748,6 @@ class AiAssistantController(Controller):
         ], order='id desc', limit=1)
         user_message = last_message.body or '' if last_message else ''
         request_id = str(uuid.uuid4())
-        task_context = request.env['project.task'] \
-            ._agent_task_context_for_channel(channel)
 
         # ⑥ spawn-or-attach the project pod
         from ..services.agent_runtime_client import get_agent_runtime_client
@@ -818,15 +833,9 @@ class AiAssistantController(Controller):
                         'request_id': request_id,
                         'sequence_number': 0,
                         'timestamp': _dt.utcnow().isoformat() + 'Z',
-                        'payload': {
-                            'channel_id': channel_id,
-                            'body': user_message,
-                            'history': history,
-                            'template_id': template_id,
-                            'invoker_role': invoker_role,
-                            'invoker_user_id': uid,
-                            'task_context': task_context,
-                        },
+                        'payload': self._build_runtime_user_message_payload(
+                            channel_id, user_message, history, template_id,
+                            invoker_role, uid, system_context),
                     }))
                     async for raw in ws:
                         envelope = json.loads(raw)
@@ -1022,45 +1031,6 @@ class AiAssistantController(Controller):
             except (ValueError, TypeError):
                 _logger.warning('Invalid default_ai_assistant_id value: %r', assistant_id)
         return None
-
-    def _get_cloud_service_context_for_channel(self, channel) -> str:
-        """Build cloud service context for AI system prompt.
-
-        Looks up the task linked to this channel, then the project's
-        cloud service, and assembles relevant context.
-
-        Returns:
-            A formatted context string, or empty string if not applicable.
-        """
-        task = request.env['project.task'].sudo().search([
-            ('channel_id', '=', channel.id),
-        ], limit=1)
-        if not task or not task.project_id or not task.project_id.cloud_service_id:
-            return ''
-
-        service = task.project_id.cloud_service_id
-        template = service.template_id
-
-        parts = ['## Cloud Service Information']
-        if template:
-            parts.append(f'- Application: {template.name}')
-            if template.category:
-                parts.append(f'- Category: {template.category}')
-            if template.description:
-                parts.append(f'- Description: {template.description}')
-
-        parts.append(f'- Service Name: {service.name}')
-        parts.append(f'- Status: {service.state or "unknown"}')
-
-        if service.subdomain:
-            parts.append(f'- URL: https://{service.subdomain}')
-        if service.error_message:
-            parts.append(f'- Error: {service.error_message}')
-
-        if service.helm_values:
-            parts.append(f'- Configuration (Helm Values):\n```json\n{service.helm_values}\n```')
-
-        return '\n'.join(parts)
 
     def _get_user_mcp_tools_for_channel(self, channel):
         """Get user-scope MCP tools from the project linked to this channel.

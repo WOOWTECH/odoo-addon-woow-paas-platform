@@ -48,6 +48,10 @@
                                 <field name="helm_value_specs" nolabel="1"
                                        placeholder="JSON schema for configurable values"/>
                             </group>
+                            <group string="Agent Context Keys">
+                                <field name="agent_context_keys" nolabel="1"
+                                       placeholder='["replicaCount", "image.tag"]'/>
+                            </group>
                         </page>
                         <page string="Description" name="description">
                             <field name="full_description" nolabel="1"

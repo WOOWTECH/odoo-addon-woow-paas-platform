@@ -87,12 +87,41 @@
         </field>
     </record>
 
+    <!-- Skill Search View（雙層架構：Configuration 選單 = 全域目錄。
+         default filter 鎖 system scope 完成 catalog 語意；admin 移除 filter
+         仍可管理 user-scope（soft filter，非 hard domain — 與 MCP action 的
+         hard domain 不對稱是刻意的：Skills 選單 admin-only、MCP 選單 PM 可見）-->
+    <record id="view_skill_search" model="ir.ui.view">
+        <field name="name">woow_paas_platform.skill.search</field>
+        <field name="model">woow_paas_platform.skill</field>
+        <field name="arch" type="xml">
+            <search string="Skills">
+                <field name="name"/>
+                <field name="project_id"/>
+                <filter name="filter_scope_system" string="System (Global)"
+                        domain="[('scope', '=', 'system')]"/>
+                <filter name="filter_scope_user" string="Project-scoped"
+                        domain="[('scope', '=', 'user')]"/>
+                <separator/>
+                <filter name="filter_published" string="Published"
+                        domain="[('state', '=', 'published')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_by_project" string="Project"
+                            context="{'group_by': 'project_id'}"/>
+                    <filter name="group_by_state" string="State"
+                            context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
     <!-- Skill Action -->
     <record id="action_skill" model="ir.actions.act_window">
         <field name="name">Skills</field>
         <field name="res_model">woow_paas_platform.skill</field>
         <field name="view_mode">list,form</field>
-        <field name="context">{'create': False}</field>
+        <field name="search_view_id" ref="view_skill_search"/>
+        <field name="context">{'create': False, 'search_default_filter_scope_system': 1}</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
                 No skills yet
@@ -105,14 +134,18 @@
         </field>
     </record>
 
-    <!-- Menu under Woow PaaS (admin only) -->
+    <!-- Menu under Project > Configuration, admin only（會議決議 2026-06-03
+         議題 D：Skill 設定 by project，移到原生 Project 模組）。
+         groups=base.group_system 必須保留（test_skill_admin_views.py 守線）；
+         注意：實際可見性 = base.group_system 且能 render 父選單
+         project.menu_project_config（project.group_project_manager）兩者皆備 -->
     <menuitem
         id="menu_skills"
         name="Skills"
-        parent="menu_woow_paas_platform_root"
+        parent="project.menu_project_config"
         action="action_skill"
         groups="base.group_system"
-        sequence="60"/>
+        sequence="91"/>
 
     <!-- Skill Upload Wizard -->
     <record id="view_skill_upload_wizard_form" model="ir.ui.view">

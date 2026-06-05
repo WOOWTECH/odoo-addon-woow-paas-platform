@@ -1,52 +1,9 @@
-import json
 import logging
-import re
 
 from odoo import models
 from odoo.tools import html2plaintext
 
 _logger = logging.getLogger(__name__)
-
-# D9 sanitizer: key names whose value gets replaced with the redacted sentinel
-# before injection into the AI system prompt. Pattern is case-insensitive and
-# substring-matched, so e.g. `client_secret` matches via `secret`.
-_SECRET_KEY_PATTERN = re.compile(
-    r'password|passwd|secret|token|api[_-]?key|credential',
-    re.IGNORECASE,
-)
-_REDACTED = '***REDACTED***'
-
-# Hard blacklist: even when a helm_values key does not match the pattern (e.g.
-# a future chart renames an obviously-sensitive field), these literal names
-# must never reach the AI prompt.
-_HELM_VALUE_BLACKLIST = ('n8n_api_key', 'n8n_owner_password', 'mcp_auth_token')
-
-
-def _sanitize_obj(obj, depth=0):
-    if depth > 5:
-        return _REDACTED
-    if isinstance(obj, dict):
-        out = {}
-        for k, v in obj.items():
-            if k in _HELM_VALUE_BLACKLIST or _SECRET_KEY_PATTERN.search(k or ''):
-                out[k] = _REDACTED
-            else:
-                out[k] = _sanitize_obj(v, depth + 1)
-        return out
-    if isinstance(obj, list):
-        return [_sanitize_obj(item, depth + 1) for item in obj]
-    return obj
-
-
-def _sanitize_helm_values(helm_values_json):
-    """Return a JSON string of helm_values with sensitive values redacted."""
-    if not helm_values_json:
-        return ''
-    try:
-        data = json.loads(helm_values_json)
-    except (ValueError, TypeError):
-        return ''
-    return json.dumps(_sanitize_obj(data))
 
 
 class DiscussChannel(models.Model):
@@ -257,55 +214,16 @@ class DiscussChannel(models.Model):
         )
 
     def _get_cloud_service_context(self) -> str:
-        """Build cloud service context for AI system prompt.
+        """Unified background context (project / task / cloud services).
 
-        Injects the task's primary service (project's cloud_service_id) first,
-        then any extra linked services. The primary is de-duplicated out of
-        extras so a user that adds the primary to extras does not get the
-        block twice. Returns '' when neither primary nor extras exist.
+        Delegates to agent_session._build_system_context — the single
+        source for all three chat paths (spec
+        2026-06-04-agent-context-enrichment D1). Method name kept as the
+        chatter-path hook consumed by _post_ai_reply and locked by
+        test_chatter_service_injection.py.
         """
-        task = self.env['project.task'].sudo().search([
-            ('channel_id', '=', self.id),
-        ], limit=1)
-        if not task:
-            return ''
-
-        primary = task.primary_cloud_service_id
-        extras = task.extra_cloud_service_ids - primary  # dedup primary out
-
-        sections = []
-        if primary:
-            sections.append(self._format_cloud_service_block(primary, role='Primary'))
-        for svc in extras:
-            sections.append(self._format_cloud_service_block(svc, role='Extra'))
-
-        if not sections:
-            return ''
-
-        return '## Cloud Service Information\n\n' + '\n\n'.join(sections)
-
-    @staticmethod
-    def _format_cloud_service_block(service, role: str) -> str:
-        template = service.template_id
-        parts = [f'### {role} Service']
-        if template:
-            parts.append(f'- Application: {template.name}')
-            if template.category:
-                parts.append(f'- Category: {template.category}')
-            if template.description:
-                parts.append(f'- Description: {template.description}')
-        parts.append(f'- Service Name: {service.name}')
-        parts.append(f'- Status: {service.state or "unknown"}')
-        if service.subdomain:
-            parts.append(f'- URL: https://{service.subdomain}')
-        if service.error_message:
-            parts.append(f'- Error: {service.error_message}')
-        sanitized = _sanitize_helm_values(service.helm_values)
-        if sanitized:
-            parts.append(
-                f'- Configuration (Helm Values):\n```json\n{sanitized}\n```'
-            )
-        return '\n'.join(parts)
+        return self.env['woow_paas_platform.agent_session'] \
+            ._build_system_context(self)
 
     def _get_user_mcp_tools(self):
         """Get user-scope MCP tools from the project linked to this channel.

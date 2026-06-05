@@ -32,6 +32,50 @@ class TestSkillAdminViews(TransactionCase):
             "menu_skills must be restricted to base.group_system",
         )
 
+    def test_skill_menu_relocated_under_project_config(self):
+        """會議決議 2026-06-03 議題 D：Skill 設定 by project，後台選單
+        從 Woow PaaS root 移到原生 Project > Configuration 之下。"""
+        menu = self.env.ref('woow_paas_platform.menu_skills')
+        project_config = self.env.ref('project.menu_project_config')
+        old_root = self.env.ref(
+            'woow_paas_platform.menu_woow_paas_platform_root')
+        self.assertEqual(
+            menu.parent_id, project_config,
+            "menu_skills must live under Project > Configuration",
+        )
+        self.assertNotEqual(
+            menu.parent_id, old_root,
+            "menu_skills must no longer hang under the Woow PaaS root menu",
+        )
+
+    def test_mcp_menu_relocated_under_project_config(self):
+        """同上決議：MCP Servers 選單也移到 Project > Configuration。
+        （此前 menu_mcp_servers 無任何測試覆蓋，一併補上守線。）"""
+        menu = self.env.ref('woow_paas_platform.menu_mcp_servers')
+        project_config = self.env.ref('project.menu_project_config')
+        old_root = self.env.ref(
+            'woow_paas_platform.menu_woow_paas_platform_root')
+        self.assertEqual(
+            menu.parent_id, project_config,
+            "menu_mcp_servers must live under Project > Configuration",
+        )
+        self.assertNotEqual(
+            menu.parent_id, old_root,
+            "menu_mcp_servers must no longer hang under the Woow PaaS root "
+            "menu",
+        )
+
+    def test_settings_view_has_no_mcp_block(self):
+        """PaaS Settings 頁不再保留 Manage MCP Servers 捷徑區塊
+        （MCP 入口統一收斂到 Project > Configuration）。"""
+        view = self.env.ref(
+            'woow_paas_platform.res_config_settings_view_form')
+        self.assertNotIn(
+            'mcp_servers', view.arch_db or '',
+            "res.config.settings form must no longer carry the MCP Servers "
+            "settings block",
+        )
+
     def test_skill_list_has_always_visible_upload_button(self):
         """F-SKU-1 / issue #102: the create=false skill list must expose an
         always-visible Upload Skill button in its header so the empty-state
