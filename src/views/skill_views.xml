@@ -87,12 +87,41 @@
         </field>
     </record>
 
+    <!-- Skill Search View（雙層架構：Configuration 選單 = 全域目錄。
+         default filter 鎖 system scope 完成 catalog 語意；admin 移除 filter
+         仍可管理 user-scope（soft filter，非 hard domain — 與 MCP action 的
+         hard domain 不對稱是刻意的：Skills 選單 admin-only、MCP 選單 PM 可見）-->
+    <record id="view_skill_search" model="ir.ui.view">
+        <field name="name">woow_paas_platform.skill.search</field>
+        <field name="model">woow_paas_platform.skill</field>
+        <field name="arch" type="xml">
+            <search string="Skills">
+                <field name="name"/>
+                <field name="project_id"/>
+                <filter name="filter_scope_system" string="System (Global)"
+                        domain="[('scope', '=', 'system')]"/>
+                <filter name="filter_scope_user" string="Project-scoped"
+                        domain="[('scope', '=', 'user')]"/>
+                <separator/>
+                <filter name="filter_published" string="Published"
+                        domain="[('state', '=', 'published')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_by_project" string="Project"
+                            context="{'group_by': 'project_id'}"/>
+                    <filter name="group_by_state" string="State"
+                            context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
     <!-- Skill Action -->
     <record id="action_skill" model="ir.actions.act_window">
         <field name="name">Skills</field>
         <field name="res_model">woow_paas_platform.skill</field>
         <field name="view_mode">list,form</field>
-        <field name="context">{'create': False}</field>
+        <field name="search_view_id" ref="view_skill_search"/>
+        <field name="context">{'create': False, 'search_default_filter_scope_system': 1}</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
                 No skills yet
