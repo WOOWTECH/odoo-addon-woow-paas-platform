@@ -136,3 +136,52 @@ class TestPortalAgentPage(PortalAgentFixture):
         self.authenticate(self.bob.login, PASSWORD)
         resp = self.url_open(f'/my/tasks/{self.task.id}', timeout=20)
         self.assertNotIn('woow_paas_platform.PortalTaskChat', resp.text)
+
+    def test_share_user_non_portal_project_no_chat_block(self):
+        """Share user reaching a NON-portal project task via access_token must
+        NOT get the chat block rendered.
+
+        The chat/status APIs gate on ``_portal_partner_can_access`` which
+        requires ``privacy_visibility == 'portal'`` — so for a non-portal
+        project every call is rejected. Rendering the chat UI would surface a
+        dead control; the page-level UX gate suppresses it for share users.
+        Internal visitors are unaffected (gate keys on ``user.share``).
+        """
+        suffix = self.suffix
+        # use_agent_runtime ON but visibility != 'portal'.
+        token = uuid.uuid4().hex
+        proj_np = self.env['project.project'].sudo().create({
+            'name': f'NP Proj {suffix}', 'privacy_visibility': 'employees',
+            'use_agent_runtime': True, 'access_token': token})
+        task_np = self.env['project.task'].sudo().create({
+            'name': f'NP Task {suffix}', 'project_id': proj_np.id,
+            'ai_auto_reply': False})
+        self.authenticate(self.alice.login, PASSWORD)
+        resp = self.url_open(
+            f'/my/projects/{proj_np.id}/task/{task_np.id}'
+            f'?access_token={token}', timeout=20)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('woow_paas_platform.PortalTaskChat', resp.text,
+                         'share user must not see chat block on non-portal '
+                         'project (API would reject every call)')
+
+    def test_share_user_portal_project_chat_block_renders(self):
+        """Positive control: a portal-visible project (same access_token route,
+        same non-public share user) DOES render the chat block — proving the
+        non-portal suppression above is keyed on visibility, not the token
+        path being broken."""
+        suffix = self.suffix
+        token = uuid.uuid4().hex
+        proj_p = self.env['project.project'].sudo().create({
+            'name': f'P Proj {suffix}', 'privacy_visibility': 'portal',
+            'use_agent_runtime': True, 'access_token': token})
+        task_p = self.env['project.task'].sudo().create({
+            'name': f'P Task {suffix}', 'project_id': proj_p.id,
+            'ai_auto_reply': False})
+        self.authenticate(self.alice.login, PASSWORD)
+        resp = self.url_open(
+            f'/my/projects/{proj_p.id}/task/{task_p.id}'
+            f'?access_token={token}', timeout=20)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('woow_paas_platform.PortalTaskChat', resp.text,
+                      'portal-visible project SHOULD render chat block')

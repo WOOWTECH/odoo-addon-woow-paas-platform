@@ -1374,6 +1374,15 @@ class AiAssistantController(Controller):
         Returns:
             dict: Response with stage list sorted by sequence.
         """
+        # Read-mode share users have no stages UI; this endpoint sudo-reads and
+        # may sudo auto-CREATE stages for any project_id with no row-level gate
+        # (full per-project access carve-out is follow-up F-DP-1). Fail closed
+        # for share users so they can neither read another tenant's stage names
+        # nor trigger the sudo auto-create side effect. Internal behaviour is
+        # unchanged.
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         stages = self._get_project_stages(project_id)
         return {
             'success': True,

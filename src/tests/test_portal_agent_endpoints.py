@@ -104,6 +104,9 @@ class TestPortalAgentEndpoints(HttpCase):
         res = self._rpc('/api/ai/chat/history',
                         {'channel_id': self.channel.id})
         self.assertTrue(res.get('success'), res)
+        # Content contract: history returns a message list + count key.
+        self.assertIsInstance(res.get('data'), list, res)
+        self.assertIn('count', res, res)
 
     def test_history_member_but_unshared_denied(self):
         """Stale channel membership without task share must be denied."""
@@ -118,6 +121,9 @@ class TestPortalAgentEndpoints(HttpCase):
         res = self._rpc('/api/ai/chat/post',
                         {'channel_id': self.channel.id, 'body': 'hello'})
         self.assertTrue(res.get('success'), res)
+        # Content contract: post echoes the created message id.
+        self.assertIsInstance(res.get('data'), dict, res)
+        self.assertTrue(res['data'].get('id'), res)
 
     def test_post_member_but_unshared_denied(self):
         self.authenticate(self.bob.login, PASSWORD)
@@ -130,11 +136,15 @@ class TestPortalAgentEndpoints(HttpCase):
         """Un-share revokes access on the NEXT request despite membership."""
         self.authenticate(self.alice.login, PASSWORD)
         self.task.message_unsubscribe(partner_ids=[self.partner_alice.id])
-        res = self._rpc('/api/ai/chat/post',
-                        {'channel_id': self.channel.id, 'body': 'hi'})
-        self.assertFalse(res.get('success'))
-        # restore for other tests (class-level fixture)
-        self.task.message_subscribe(partner_ids=[self.partner_alice.id])
+        try:
+            res = self._rpc('/api/ai/chat/post',
+                            {'channel_id': self.channel.id, 'body': 'hi'})
+            self.assertFalse(res.get('success'))
+            self.assertEqual(res.get('error'), 'Access denied')
+        finally:
+            # restore for other tests even if an assertion above fails
+            # (class-level fixture shared with the rest of the suite).
+            self.task.message_subscribe(partner_ids=[self.partner_alice.id])
 
     # ---- chat upload (write-type: sudo ir.attachment + message_post) ----- #
 
@@ -230,6 +240,58 @@ class TestPortalAgentEndpoints(HttpCase):
         self.authenticate(self.alice.login, PASSWORD)
         res = self._rpc('/api/ai/chat/history', {'channel_id': ch.id})
         self.assertFalse(res.get('success'))
+        self.assertEqual(res.get('error'), 'Access denied')
+
+    # ---- task-leg cross-project over-access -------------------------------- #
+
+    def test_agent_status_task_share_no_cross_project_leak(self):
+        """Project predicate task-leg extension must stay project-scoped.
+
+        Alice is shared on a task in this project (project A). She must NOT be
+        able to read agent-status for an UNRELATED project B via the task-leg
+        widen — the ``search_count`` is anchored on ``project_id == B`` so a
+        task share on A can never satisfy B's leg.
+        """
+        project_b = self.env['project.project'].sudo().create({
+            'name': f'EP Proj B {self.suffix}', 'privacy_visibility': 'portal'})
+        # Alice has a task share in project A (self.project) only, nothing in B.
+        self.authenticate(self.alice.login, PASSWORD)
+        res = self._rpc('/api/ai/agent-status', {'project_id': project_b.id})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+
+    # ---- cross-user task get (api_support_task_detail action='get') -------- #
+
+    def test_task_get_cross_user_denied(self):
+        """Bob (no share on Alice's task) must be denied on get.
+
+        ``api_support_task_detail`` sudo-browses the task then gates on
+        ``_check_task_access`` → portal predicate. Bob is a channel member but
+        NOT a task follower → exact portal deny (the read-side of the same gate
+        the write-deny tests cover).
+        """
+        self.authenticate(self.bob.login, PASSWORD)
+        res = self._rpc(f'/api/support/tasks/detail/{self.task.id}',
+                        {'action': 'get'})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+
+    # ---- platform-scope agent-status (project_id omitted) ------------------ #
+
+    def test_agent_status_platform_scope_portal_ok(self):
+        """Platform-scope status (project_id omitted) is by-design visible to
+        any logged-in user, including portal/share users.
+
+        The platform default agent_template is tenant-neutral by invariant
+        (unbound, no user-scope bindings — see Known patterns "Seeded 平台預設
+        agent_template 的 tenant-neutral invariant"), so its name/model is
+        platform-level info and carries no per-tenant leak. Locks this
+        intentional behaviour against an over-zealous future portal clamp.
+        """
+        self.authenticate(self.alice.login, PASSWORD)
+        res = self._rpc('/api/ai/agent-status', {})
+        self.assertTrue(res.get('success'), res)
+        self.assertEqual(res['data']['scope'], 'platform')
 
 
 @tagged('post_install', '-at_install')
@@ -370,6 +432,33 @@ class TestPortalCrudWriteDenied(HttpCase):
         self.task.invalidate_recordset(['active'])
         self.assertTrue(self.task.active,
                         'share user must not be able to archive the task')
+
+    # ---- project stages (sudo read + sudo auto-create) ------------------- #
+
+    def test_project_stages_share_denied(self):
+        """``api_support_project_stages`` sudo-reads and may sudo-CREATE stages
+        for ANY project_id with no access check (F-DP-1 surface). A read-mode
+        share user has no stages-UI need → must be denied, and must not be able
+        to trigger sudo stage auto-creation.
+        """
+        self.authenticate(self.alice.login, PASSWORD)
+        before = self.env['project.task.type'].sudo().search_count(
+            [('project_ids', 'in', [self.project.id])])
+        res = self._rpc(f'/api/support/projects/{self.project.id}/stages', {})
+        self.assertFalse(res.get('success'), res)
+        self.assertEqual(res.get('error'), 'Access denied')
+        after = self.env['project.task.type'].sudo().search_count(
+            [('project_ids', 'in', [self.project.id])])
+        self.assertEqual(after, before,
+                         'share user must not trigger sudo stage creation')
+
+    def test_project_stages_internal_still_works(self):
+        """Internal user behaviour is unchanged (regression): admin still gets
+        the stage list (auto-created when none exist)."""
+        self.authenticate('admin', 'admin')
+        res = self._rpc(f'/api/support/projects/{self.project.id}/stages', {})
+        self.assertTrue(res.get('success'), res)
+        self.assertIsInstance(res.get('data'), list)
 
     # ---- read-mode chat/status still works (no over-correction) ---------- #
 

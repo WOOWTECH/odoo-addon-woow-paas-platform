@@ -48,14 +48,23 @@ class PaasProjectCustomerPortal(ProjectCustomerPortal):
         """
         task = task.sudo()
         project = task.project_id
+        user = request.env.user
+        agent_enabled = bool(project and project.use_agent_runtime)
+        # UX gate (defense in depth): a share user reaching this page via an
+        # access_token to a NON-portal project would see the chat/status UI,
+        # but every chat/status API call gates on
+        # ``_portal_partner_can_access`` which requires
+        # ``privacy_visibility == 'portal'`` → all calls are rejected. Suppress
+        # the dead control for share users. Internal visitors are unaffected.
+        if user.share and project and project.privacy_visibility != 'portal':
+            agent_enabled = False
         values = {
-            'paas_agent_enabled': bool(project and project.use_agent_runtime),
+            'paas_agent_enabled': agent_enabled,
             'paas_project_id': project.id if project else False,
             'paas_channel_id': False,
         }
         if not values['paas_agent_enabled']:
             return values
-        user = request.env.user
         if user._is_public():
             return values
         channel = task._create_chat_channel()

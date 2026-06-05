@@ -75,6 +75,72 @@ class TestPortalAgentAccess(TransactionCase):
         self.assertFalse(
             self.task._portal_partner_can_access(self.partner_alice))
 
+    def test_task_collaborator_leg_exact_match_no_family(self):
+        """Collaborator leg mirrors native exact ``partner_id == user.partner``
+        (project_security.xml:216-219), NOT the child_of(commercial) family.
+
+        A child partner under Alice's commercial family must NOT inherit
+        Alice's collaborator grant — that would be intra-tenant over-access
+        relative to the native ir.rule (which compares user.partner_id
+        exactly). The follower leg keeps child_of (native semantics).
+        """
+        child = self.env['res.partner'].create({
+            'name': 'Alice Child',
+            'parent_id': self.partner_alice.id,
+        })
+        self.env['project.collaborator'].create({
+            'project_id': self.project.id,
+            'partner_id': self.partner_alice.id,
+        })
+        # Alice herself: allowed via exact collaborator match.
+        self.assertTrue(
+            self.task._portal_partner_can_access(self.partner_alice))
+        # Her child partner: collaborator leg must NOT match (no family
+        # expansion). No follower share either → overall denied.
+        self.assertFalse(
+            self.task._portal_partner_can_access(child),
+            'child partner must not inherit collaborator grant via family')
+
+    def test_project_collaborator_leg_exact_match_no_family(self):
+        """Project predicate collaborator leg: same exact-match invariant."""
+        child = self.env['res.partner'].create({
+            'name': 'Alice Child P',
+            'parent_id': self.partner_alice.id,
+        })
+        self.env['project.collaborator'].create({
+            'project_id': self.project.id,
+            'partner_id': self.partner_alice.id,
+        })
+        self.assertTrue(
+            self.project._portal_partner_can_access(self.partner_alice))
+        self.assertFalse(
+            self.project._portal_partner_can_access(child),
+            'child partner must not inherit collaborator grant via family')
+
+    def test_task_follower_leg_keeps_family_child_of(self):
+        """Follower leg retains native child_of(commercial) semantics: a
+        child partner of a FOLLOWER commercial family is granted, while an
+        unrelated family is denied (proves the precision change is scoped to
+        the collaborator leg only)."""
+        child = self.env['res.partner'].create({
+            'name': 'Alice Follower Child',
+            'parent_id': self.partner_alice.id,
+        })
+        # Subscribe the PARENT commercial partner as follower; child shares
+        # the commercial family → child_of expansion must grant the child.
+        self.task.message_subscribe(partner_ids=[self.partner_alice.id])
+        self.assertTrue(
+            self.task._portal_partner_can_access(child),
+            'follower leg must keep native child_of family expansion')
+        # An unrelated commercial family (Bob) must NOT be granted.
+        unrelated = self.env['res.partner'].create({
+            'name': 'Bob Family Child',
+            'parent_id': self.partner_bob.id,
+        })
+        self.assertFalse(
+            self.task._portal_partner_can_access(unrelated),
+            'unrelated family must not be granted via follower leg')
+
     def test_task_archived_denied(self):
         self.task.message_subscribe(partner_ids=[self.partner_alice.id])
         self.task.active = False
