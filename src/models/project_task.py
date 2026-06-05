@@ -171,3 +171,24 @@ class ProjectTask(models.Model):
             return True
         return bool(project.collaborator_ids.filtered(
             lambda c: c.partner_id in allowed and not c.limited_access))
+
+    @api.model
+    def _agent_task_context_for_channel(self, channel):
+        """Minimal task context (name + plain-text description) for the AI.
+
+        Deliberately tiny: the full context-enrichment pipeline belongs to
+        the ``feat-enrich-agent-context`` branch; when that lands this hook
+        is expected to be absorbed by it (merge-coordination point — see
+        docs/superpowers/plans/2026-06-05-portal-task-agent-chat.md).
+        """
+        from odoo.tools import html2plaintext
+        task = self.sudo().search([('channel_id', '=', channel.id)], limit=1)
+        if not task:
+            return ''
+        desc = html2plaintext(task.description or '').strip()
+        if len(desc) > 2000:
+            desc = desc[:2000] + '…'
+        parts = [f'Current task: {task.name}']
+        if desc:
+            parts.append(f'Task description: {desc}')
+        return '\n'.join(parts)

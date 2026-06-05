@@ -556,6 +556,12 @@ class AiAssistantController(Controller):
         if cloud_context:
             system_prompt = (system_prompt + '\n\n' + cloud_context).strip()
 
+        # Minimal task context (feat-enrich-agent-context will absorb this).
+        task_ctx = request.env['project.task']._agent_task_context_for_channel(
+            channel)
+        if task_ctx:
+            system_prompt = (system_prompt + '\n\n' + task_ctx).strip()
+
         history = channel._get_chat_history(limit=20)
         messages = client.build_messages(
             system_prompt=system_prompt,
@@ -722,6 +728,8 @@ class AiAssistantController(Controller):
         ], order='id desc', limit=1)
         user_message = last_message.body or '' if last_message else ''
         request_id = str(uuid.uuid4())
+        task_context = request.env['project.task'] \
+            ._agent_task_context_for_channel(channel)
 
         # ⑥ spawn-or-attach the project pod
         from ..services.agent_runtime_client import get_agent_runtime_client
@@ -814,6 +822,7 @@ class AiAssistantController(Controller):
                             'template_id': template_id,
                             'invoker_role': invoker_role,
                             'invoker_user_id': uid,
+                            'task_context': task_context,
                         },
                     }))
                     async for raw in ws:

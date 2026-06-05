@@ -115,4 +115,6 @@ from . import test_portal_agent_access
 from . import test_portal_agent_endpoints
 # test: portal task agent chat — SSE gate chain + portal page rendering (HttpCase)
 from . import test_portal_agent_page
+# feat: portal task agent chat — minimal task-context hook (TransactionCase)
+from . import test_agent_task_context
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
