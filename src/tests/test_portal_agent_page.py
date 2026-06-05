@@ -86,3 +86,53 @@ class TestPortalSseGate(PortalAgentFixture):
             f'/api/ai/stream/{self.channel.id}?csrf_token={token}', timeout=30)
         frame = self._first_sse_frame(resp)
         self.assertEqual(frame.get('error_code'), 'access_denied', frame)
+
+
+@tagged('post_install', '-at_install')
+class TestPortalAgentPage(PortalAgentFixture):
+
+    def test_task_page_renders_chat_and_status_anchors(self):
+        self.authenticate(self.alice.login, PASSWORD)
+        resp = self.url_open(f'/my/tasks/{self.task.id}', timeout=20)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('woow_paas_platform.PortalAgentStatus', resp.text)
+        self.assertIn('woow_paas_platform.PortalTaskChat', resp.text)
+
+    def test_task_page_auto_joins_portal_partner(self):
+        # Carol: shared on task but NOT yet a channel member.
+        suffix = self.suffix
+        partner_carol = self.env['res.partner'].create({
+            'name': f'PG Carol {suffix}', 'email': f'pg-c-{suffix}@t.example'})
+        carol = self.env['res.users'].create({
+            'login': f'pg_carol_{suffix}', 'name': 'Carol',
+            'password': PASSWORD, 'partner_id': partner_carol.id,
+            'groups_id': [(6, 0, [self.env.ref('base.group_portal').id])]})
+        self.task.message_subscribe(partner_ids=[partner_carol.id])
+        self.assertNotIn(partner_carol,
+                         self.channel.sudo().channel_partner_ids)
+        self.authenticate(carol.login, PASSWORD)
+        resp = self.url_open(f'/my/tasks/{self.task.id}', timeout=20)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(partner_carol,
+                      self.channel.sudo().channel_partner_ids)
+
+    def test_task_page_no_agent_block_when_runtime_disabled(self):
+        self.project.use_agent_runtime = False
+        self.authenticate(self.alice.login, PASSWORD)
+        resp = self.url_open(f'/my/tasks/{self.task.id}', timeout=20)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('woow_paas_platform.PortalTaskChat', resp.text)
+        self.project.use_agent_runtime = True
+
+    def test_project_page_renders_status_anchor(self):
+        self.project.message_subscribe(partner_ids=[self.partner_alice.id])
+        self.authenticate(self.alice.login, PASSWORD)
+        resp = self.url_open(f'/my/projects/{self.project.id}', timeout=20)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('woow_paas_platform.PortalAgentStatus', resp.text)
+
+    def test_unshared_portal_user_cannot_open_task_page(self):
+        """Native portal access regression — Bob has no share at all."""
+        self.authenticate(self.bob.login, PASSWORD)
+        resp = self.url_open(f'/my/tasks/{self.task.id}', timeout=20)
+        self.assertNotIn('woow_paas_platform.PortalTaskChat', resp.text)

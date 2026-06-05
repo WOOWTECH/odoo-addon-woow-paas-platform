@@ -53,6 +53,7 @@
         "data/demo_system_skill.xml",
         "views/account_move_views.xml",
         "views/paas_app.xml",
+        "views/portal_templates.xml",
         "views/oauth2_templates.xml",
         "views/oauth_client_views.xml",
         "data/oauth_clients.xml",
