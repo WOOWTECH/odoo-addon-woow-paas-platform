@@ -968,7 +968,19 @@ class AiAssistantController(Controller):
             ._build_skill_snapshot(project, template)
 
     def _persist_ai_response(self, db_name, uid, channel_id, full_response, context):
-        """Persist the assembled agent-runtime response to the channel."""
+        """Persist the assembled agent-runtime response to the channel.
+
+        Runs with SYSTEM identity (SUPERUSER_ID), NOT the streaming user's
+        uid: access was already gated at stream entry (_check_channel_access
+        incl. the portal leg), and the stored message is a system artefact
+        authored by OdooBot. A PORTAL (share) initiator's uid-bound env
+        cannot even read discuss.channel / create mail.message (ir.rule), so
+        the uid env silently dropped the reply — live stream worked, history
+        lost on reload (2026-06-05 stg e2e finding). This is NOT a
+        list-and-return sudo bypass ([[orm-vs-endpoint-acl-test-coverage]]
+        L2): nothing is read back to the caller beyond the new message id.
+        ``uid`` is kept for log attribution only.
+        """
         if not full_response:
             return None
         try:
@@ -976,7 +988,8 @@ class AiAssistantController(Controller):
             from odoo import api as odoo_api
             registry = odoo.registry(db_name)
             with registry.cursor() as new_cr:
-                new_env = odoo_api.Environment(new_cr, uid, context)
+                new_env = odoo_api.Environment(
+                    new_cr, odoo.SUPERUSER_ID, context)
                 author_id = new_env.ref('base.partner_root').id
                 new_channel = new_env['discuss.channel'].browse(channel_id)
                 msg = new_channel.with_context(
@@ -991,8 +1004,9 @@ class AiAssistantController(Controller):
                 return msg.id
         except Exception as exc:
             _logger.exception(
-                'Failed to persist agent-runtime response for channel %s: %s',
-                channel_id, exc,
+                'Failed to persist agent-runtime response for channel %s '
+                '(initiator uid %s): %s',
+                channel_id, uid, exc,
             )
             return None
 
