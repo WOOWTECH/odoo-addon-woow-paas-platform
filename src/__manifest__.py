@@ -85,6 +85,15 @@
             "woow_paas_platform/static/src/paas/**/*.js",
             "woow_paas_platform/static/src/paas/**/*.xml",
         ],
+        "web.assets_frontend": [
+            "woow_paas_platform/static/src/paas/lib/purify.min.js",
+            "woow_paas_platform/static/src/paas/lib/marked.min.js",
+            "woow_paas_platform/static/src/paas/services/rpc.js",
+            "woow_paas_platform/static/src/paas/services/markdown_parser.js",
+            "woow_paas_platform/static/src/paas/services/ai_service.js",
+            "woow_paas_platform/static/src/paas/services/ai_stream.js",
+            "woow_paas_platform/static/src/portal/**/*",
+        ],
     },
     # Note: Python dependencies are defined in requirements.txt (single source of truth).
     # pre_init_hook reads requirements.txt and auto-installs missing packages.
