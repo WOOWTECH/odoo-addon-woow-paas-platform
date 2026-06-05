@@ -96,6 +96,8 @@ from . import test_skill_e2e_lifecycle_download            # e2e lifecycle ↔ d
 # feat: skill dual-scope (system/user) — schema, ACL, pod loading, migration
 from . import test_skill_dual_scope
 from . import test_skill_upload_wizard
+# feat: skill binding UX — two-layer admin management (2026-06-05)
+from . import test_skill_binding_admin
 # feat: platform default agent template (Settings fallback)
 from . import test_default_agent_template
 # feat: auto-enable agent runtime on project creation (platform toggle + migration)
