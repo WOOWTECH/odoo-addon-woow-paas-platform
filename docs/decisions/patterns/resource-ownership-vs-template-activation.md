@@ -3,7 +3,7 @@ title: 資源歸屬 vs 配置啟用雙關聯模型
 category: decisions
 status: active
 created: 2026-06-05T14:07:54Z
-updated: 2026-06-05T14:07:54Z
+updated: 2026-06-05T14:35:00Z
 related:
   - ../../plans/2026-Q2/agent-runtime-pod-design.md
   - ../../plans/2026-Q2/2026-05-30-skill-dual-scope-design.md
@@ -36,10 +36,16 @@ skill_ids = fields.Many2many('woow_paas_platform.skill',
 ```
 
 `mcp_server` 完全平行：`project_project.py:50`（O2M）+ `agent_template.py:41`（M2M）。
-資源 model 自身帶 `scope`（system/user）與 `state`（draft/published/...）兩個正交維度
-（`skill.py:33` / `skill.py:73`；`mcp_server.py:49` / `mcp_server.py:79`），並由
-consistency constraint 強制 `scope='user'` ⟺ `project_id` 有值（`skill.py:118`，註解明言
-mirrors mcp_server）。
+資源 model 自身帶 `scope`（system/user）維度，由 consistency constraint 強制
+`scope='user'` ⟺ `project_id` 有值（`skill.py:118`，註解明言 mirrors mcp_server）。
+
+第二個維度兩邊**只有欄位名相同、語意不同**（見下方不對稱節）：
+
+- `skill.state`（`skill.py:73`）= **發佈生命週期**（draft/published/deprecated/archived），
+  決定可否生效；
+- `mcp_server.state`（`mcp_server.py:79`）= **連線健康狀態**（draft/connected/error，
+  readonly、由 sync 回寫）— MCP 沒有發佈生命週期，啟用開關是 `active` boolean
+  （`mcp_server.py:46`）。
 
 兩條關聯回答的是**不同的問題**：
 
@@ -72,10 +78,22 @@ Pod 實際載入的集合由 `_build_skill_snapshot`（`agent_session.py:299-315
   授權的 project leg。
 - `scope` 與 `state` 是正交過濾：`scope='system'` 但 `state='draft'` 的 skill 不進任何 pod。
 
-**MCP 的不對稱**（如實記錄，避免誤推平行）：`_build_mcp_snapshot`
-（`agent_session.py:291-296`）**只**序列化 template 綁定的 MCP servers，**沒有** system
-scope 自動聯集。skill 與 mcp_server 的「歸屬 + 配置 + subset constraint」三件結構平行，
-但 **snapshot 聯集規則不平行** — 改 snapshot 邏輯時兩邊分開查證，不要互相類推。
+**MCP 的三個不對稱**（如實記錄，避免誤推平行）— 「歸屬 + 配置 + subset constraint」
+三件結構平行，但生效語意不平行，改 snapshot / filter 邏輯時兩邊分開查證：
+
+1. **無 system 自動聯集**：`_build_mcp_snapshot`（`agent_session.py:291-296`）**只**
+   序列化 template 綁定的 MCP servers；skill 是 bound ∪ system。
+2. **無生效 filter**：skill snapshot 過濾 `state='published'`；MCP snapshot **連
+   `active` / `state` 都不過濾** — template 綁了就進 pod 的 mcp.json（error / archived
+   也進，pod 端自行面對連線失敗）。背景：MCP 的 `state` 是連線健康狀態而非發佈
+   生命週期（見上），所以「published filter」在 MCP 上沒有對應物。
+3. **存在第二條 legacy 消費路徑，語意是「歸屬即啟用」**：legacy chat 路徑
+   `discuss_channel._get_user_mcp_tools`（`discuss_channel.py:240-242`）與前端 API
+   （`paas.py:1340` / `:1550` / `:1668`）**直接吃 `project.mcp_server_ids`、不經
+   template**，filter `scope='user' and active and state='connected'`（API 端僅
+   `active`）。即 dual-mode rollout（`use_agent_runtime`）的兩面：**legacy 路徑 =
+   單層（歸屬即啟用、有嚴格 filter）；pod 路徑 = 兩層（template 配置挑選、無
+   filter）**。skill 先天只有兩層模型一條路，沒有這條歷史路徑。
 
 ## Options
 
@@ -153,8 +171,10 @@ project」的 user-scope 資源（cross-tenant 防線）。「⊆」語意本身
    「agent 可用」即是誤導。
 4. **繞過 subset constraint 直接 `sudo()` 寫 template 綁定** → constraint 是 cross-tenant
    防線的一部分，sudo 路徑（seeding / migration）寫入前自行負責等價驗證。
-5. **拿 skill 的 snapshot 規則類推 MCP（或反之）** → 兩者只有「三件套結構」平行，
-   system 自動聯集行為不同（skill 有、MCP 無）。
+5. **拿 skill 的 snapshot 規則類推 MCP（或反之）** → 兩者只有「三件套結構」平行：
+   system 聯集（skill 有、MCP 無）、生效 filter（skill 過濾 published、MCP 無 filter）、
+   `state` 語意（發佈生命週期 vs 連線健康）、消費路徑數（skill 一條、MCP 另有 legacy
+   歸屬即啟用路徑）皆不同。
 
 ## 程式碼錨點
 
@@ -168,7 +188,8 @@ project」的 user-scope 資源（cross-tenant 防線）。「⊆」語意本身
 | subset constraint | `src/models/agent_template.py:189`（skill）、`:166`（mcp） |
 | template 解析鏈 | `src/models/agent_session.py:267` |
 | skill snapshot（bound ∪ system） | `src/models/agent_session.py:299` |
-| mcp snapshot（bound only，無 system 聯集） | `src/models/agent_session.py:291` |
+| mcp snapshot（bound only，無 system 聯集、無 filter） | `src/models/agent_session.py:291` |
+| mcp legacy 路徑（歸屬即啟用，不經 template） | `src/models/discuss_channel.py:240`、`src/controllers/paas.py:1340` |
 | bundle 下載授權 legs | `src/controllers/agent_runtime_skill.py:118` |
 
 ## 相關
