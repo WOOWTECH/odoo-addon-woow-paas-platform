@@ -93,6 +93,7 @@
             "woow_paas_platform/static/src/paas/services/ai_service.js",
             "woow_paas_platform/static/src/paas/services/ai_stream.js",
             "woow_paas_platform/static/src/paas/services/agent_pod_state.js",
+            "woow_paas_platform/static/src/paas/services/html_sanitize.js",
             "woow_paas_platform/static/src/portal/**/*",
         ],
     },
