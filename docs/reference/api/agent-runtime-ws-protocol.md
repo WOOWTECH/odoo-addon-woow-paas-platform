@@ -102,7 +102,7 @@ streams the pod's reply frames back to the browser as SSE:
 
 | field | type | required | meaning |
 |-------|------|----------|---------|
-| `system_context` | string | optional（v1.1 additive） | Odoo 端組好的完整 system prompt（template system_prompt + project/task/cloud-service 背景）。缺席 = 維持 v1.0 行為（pod 不注入 SystemMessage）。 |
+| `system_context` | string | optional（v1.1 additive） | Odoo 端組好的完整 system prompt（template system_prompt + project/task/cloud-service 背景）。缺席**或空字串** = 維持 v1.0 行為（pod 不注入 SystemMessage；空字串視同缺席，不注入空 SystemMessage）。Odoo 端 falsy 時直接省略此 key（`_build_runtime_user_message_payload`），payload 維持 v1.0 shape。 |
 
 system prompt 由 Odoo 端 per-turn 組裝後經 `user_message.payload.system_context`
 傳入（v1.1 additive 欄位，見上）；pod 不另行拉取 system_prompt（歷史上
