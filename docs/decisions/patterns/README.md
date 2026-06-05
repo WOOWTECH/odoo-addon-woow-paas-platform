@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 19 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 20 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -25,6 +25,12 @@
 | [[constraint-input-trust-expansion]] | model 有 attacker-writable Many2many + ir.rule / `@api.constrains` 用該 m2m 做 subset / authority 推導時 |
 | [[attachment-row-level-acl-and-anchor-stamping]] | 自家 model 透過 `ir.attachment` 存敏感 / RCE-class binary payload → anchor stamping + ir.attachment ir.rule 兩層 |
 | [[odoo-std-field-no-override]] | 任何想動 Odoo std model 欄位型態 / shape 的 PR |
+
+### 資料模型 / relation 設計（新增 agent 資源類型或動 binding 模型前）
+
+| pattern | 何時觸發 / 必看 |
+|---|---|
+| [[resource-ownership-vs-template-activation]] | 平台資源（skill / mcp_server）同時要「屬於誰」與「哪個 agent 啟用」兩種語意 → 歸屬 = 資源端 M2O FK（1:N）+ 配置 = template 端 M2M + subset constraint 黏合；新增第三種資源類型照抄 4 件套；看到「project O2M 與 template M2M 好像重複」或想讓 agent 隱式全吃 project 資源時必讀 |
 
 ### ORM 寫入 / lifecycle / cleanup
 
@@ -66,6 +72,7 @@
 - [phase-versioned-test-assertion](phase-versioned-test-assertion.md)
 - [plan-driven-date-helper](plan-driven-date-helper.md)
 - [plan-gap-stop-and-report](plan-gap-stop-and-report.md)
+- [resource-ownership-vs-template-activation](resource-ownership-vs-template-activation.md)
 - [scope-flip-write-guard-not-ir-rule](scope-flip-write-guard-not-ir-rule.md)
 - [sidecar-backed-flag-lifecycle](sidecar-backed-flag-lifecycle.md)
 - [spawn-install-values-missed-forward](spawn-install-values-missed-forward.md)
