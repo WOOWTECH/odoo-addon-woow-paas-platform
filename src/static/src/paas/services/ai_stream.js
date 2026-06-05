@@ -21,41 +21,44 @@ export function openAiStream(channelId, handlers) {
   const url = aiService.getStreamUrl(channelId);
   const es = new EventSource(url);
   es.onmessage = (event) => {
-    let data;
+    // The whole body — JSON.parse AND the typed-event dispatch — is wrapped in
+    // one try/catch so a handler-time exception (not just a parse fault) routes
+    // to onParseError. This restores the original AiChat onmessage equivalence:
+    // both parse errors and dispatch faults count toward the consumer's
+    // _consecutiveParseErrors recovery, instead of escaping uncaught.
     try {
-      data = JSON.parse(event.data);
+      const data = JSON.parse(event.data);
+      if (data.error) {
+        handlers.onError?.(data);
+        return;
+      }
+      if (data.type === "status" && data.payload?.stage === "spawning") {
+        handlers.onSpawning?.(data);
+        return;
+      }
+      if (data.type === "tool_call") {
+        handlers.onToolCall?.(data);
+        return;
+      }
+      if (data.type === "tool_result") {
+        handlers.onToolResult?.(data);
+        return;
+      }
+      if (data.type === "tool_error") {
+        handlers.onToolError?.(data);
+        return;
+      }
+      if (data.chunk) {
+        handlers.onChunk?.(data);
+      }
+      if (data.warning) {
+        handlers.onWarning?.(data);
+      }
+      if (data.done) {
+        handlers.onDone?.(data);
+      }
     } catch (err) {
       handlers.onParseError?.(event.data, err);
-      return;
-    }
-    if (data.error) {
-      handlers.onError?.(data);
-      return;
-    }
-    if (data.type === "status" && data.payload?.stage === "spawning") {
-      handlers.onSpawning?.(data);
-      return;
-    }
-    if (data.type === "tool_call") {
-      handlers.onToolCall?.(data);
-      return;
-    }
-    if (data.type === "tool_result") {
-      handlers.onToolResult?.(data);
-      return;
-    }
-    if (data.type === "tool_error") {
-      handlers.onToolError?.(data);
-      return;
-    }
-    if (data.chunk) {
-      handlers.onChunk?.(data);
-    }
-    if (data.warning) {
-      handlers.onWarning?.(data);
-    }
-    if (data.done) {
-      handlers.onDone?.(data);
     }
   };
   es.onerror = (event) => handlers.onConnectionError?.(event);

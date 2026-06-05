@@ -7,6 +7,7 @@ import { supportService } from "../../services/support_service";
 import { aiService } from "../../services/ai_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { formatDate } from "../../services/utils";
+import { podStateLabel } from "../../services/agent_pod_state";
 
 export class ProjectKanbanPage extends Component {
     static template = "woow_paas_platform.ProjectKanbanPage";
@@ -93,10 +94,11 @@ export class ProjectKanbanPage extends Component {
     }
 
     /** Short zh-tw label for the live pod state — only shown once the Agent is
-     *  config-ready (running / idle / not-yet-spawned). Empty otherwise. */
+     *  config-ready. Empty fallback for unknown states (XML guards display with
+     *  ``t-if``). Label字面與 portal 共用 services/agent_pod_state.js，避免漂移
+     *  （舊版手寫 map 缺 spawning/unknown，已由共用模組補齊）。 */
     get agentLiveLabel() {
-        const map = { active: "運行中", reaped: "閒置", absent: "未啟動" };
-        return map[this.agentPod.state] || "";
+        return podStateLabel(this.agentPod.state, "");
     }
 
     openCreateModal(stageId = null) {

@@ -4,6 +4,7 @@ import { registry } from "@web/core/registry";
 import { aiService } from "../paas/services/ai_service";
 import { openAiStream } from "../paas/services/ai_stream";
 import { parseMarkdown } from "../paas/services/markdown_parser";
+import { safeHtml } from "../paas/services/html_sanitize";
 
 export class PortalTaskChat extends Component {
   static template = "woow_paas_platform.PortalTaskChat";
@@ -54,7 +55,9 @@ export class PortalTaskChat extends Component {
       id: m.id,
       isAi: m.is_ai,
       authorName: m.author_name,
-      html: m.is_ai ? parseMarkdown(m.body) : m.body,
+      // AI 訊息走 parseMarkdown（內含 DOMPurify），user 訊息走 safeHtml
+      // 縱深防禦（與 /woow AiChat 同源），勿重複包 AI 訊息。
+      html: m.is_ai ? parseMarkdown(m.body) : safeHtml(m.body),
       date: m.date,
     };
   }
@@ -76,7 +79,7 @@ export class PortalTaskChat extends Component {
       id: res.data.id,
       isAi: false,
       authorName: res.data.author_name,
-      html: res.data.body,
+      html: safeHtml(res.data.body),
       date: res.data.date,
     });
     this.state.input = "";

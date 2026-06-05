@@ -2,14 +2,8 @@
 import { Component, onMounted, onWillStart, onWillUnmount, useState } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { aiService } from "../paas/services/ai_service";
+import { podStateLabel } from "../paas/services/agent_pod_state";
 
-const POD_STATE_LABEL = {
-  absent: "未啟動",
-  spawning: "啟動中",
-  active: "運行中",
-  reaped: "閒置",
-  unknown: "未知",
-};
 const POLL_MS = 10000;
 
 export class PortalAgentStatus extends Component {
@@ -47,7 +41,7 @@ export class PortalAgentStatus extends Component {
   }
 
   get podLabel() {
-    return POD_STATE_LABEL[this.state.pod?.state] || POD_STATE_LABEL.unknown;
+    return podStateLabel(this.state.pod?.state);
   }
 
   get podStateClass() {
