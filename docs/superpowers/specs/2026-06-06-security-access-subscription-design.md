@@ -158,6 +158,13 @@ sa_max_routes / sa_max_access_policies / sa_max_custom_domains / sa_max_email_ru
 另加 `GET /api/routes/availability?hostname=` —— 查 CF 端同名 record；與 Odoo DB
 UNIQUE 檢查構成雙層（「設定 route 前先反饋」需求的落點）。
 
+> **契約以 plan + 程式為準（drift note）**：本 spec 此處與 §4 為 design 草擬
+> 值，最終實作已飄移，**讀者請勿據本段建 client**。實際 operator endpoint 的
+> query 參數名是 `subdomain`（非 `hostname`），見
+> `extra/paas-operator/src/api/routes.py:check_route_availability`；BFF 對外是
+> `POST /api/security-access/routes/check`、`prefix` 取自 JSON body（非 GET
+> query），見 `src/controllers/security_access.py:api_route_check`。
+
 ### 設計原則
 
 1. **命名 stamping 在 operator 層強制**：create payload 必帶 `canonical_name`，
@@ -276,6 +283,11 @@ GET    /api/security-access/templates/<id>/plans         方案列表（含 quot
 GET    /api/security-access/routes/check?prefix=         availability 反饋
        ↑ subdomain 是全平台 flat namespace，本來就不是 workspace 視角的查詢
 ```
+
+> **drift note**：上面 `GET .../routes/check?prefix=` 是草擬寫法；實作為
+> `POST /api/security-access/routes/check`、`prefix` 在 JSON body（見 §2 的
+> drift note 與 `src/controllers/security_access.py:api_route_check`）。契約以
+> plan + 程式為準。
 
 前端 `services/security_access.js` 沿用 `{success, data, error}` envelope；
 SCSS `.o_woow_sa_*` 前綴 + 既有變數體系；`StatusBadge` 加 SA 狀態映射。
