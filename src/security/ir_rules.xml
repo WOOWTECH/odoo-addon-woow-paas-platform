@@ -91,15 +91,42 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
-        <!-- SecurityAccess: only workspace members may see / mutate.
-             Symmetric ir.rule that SmartHome historically lacks (G-M2) —
-             controller gating alone is insufficient because ORM-walking
-             surfaces (backend views, m2o widgets) bypass controllers.
-             See docs/decisions/patterns/two-layer-acl-lockstep.md. -->
+        <!-- SecurityAccess: read/write split so the ir.rule layer is in
+             lock-step with the BFF (controllers/security_access.py), which
+             gates every mutation behind role owner/admin + the subscription
+             _check_operation_allowed guard. The earlier single any-member
+             full-CRUD rule (mirroring cloud_service) left the Odoo backend
+             form (editable route list + Provision button) as an un-gated
+             ORM-walking bypass: a role='user' member could provision tunnels
+             / edit routes straight from the backend, skipping both the role
+             gate AND the subscription check. Split into:
+               - read rule: ALL workspace members (any role) — needed so a
+                 plain 'user' member can still list/get via the BFF.
+               - write/create/unlink rule: owner/admin members only, via the
+                 'any' operator binding user_id+role to the SAME access row
+                 (cross-tuple satisfaction otherwise lets a 'user' pass by
+                 matching role on the owner's row).
+               - admin bypass: group_system full CRUD (backend ops).
+             See docs/decisions/patterns/two-layer-acl-lockstep.md +
+             paas-workspace-member-acl-tightening.md. The backend menu/action
+             is additionally restricted to base.group_system (see
+             security_access_views.xml) — the /woow frontend is the tenant
+             entry point, not the Odoo backend. -->
         <record id="security_access_rule_workspace_member" model="ir.rule">
-            <field name="name">SecurityAccess: workspace member access only</field>
+            <field name="name">SecurityAccess: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access"/>
             <field name="domain_force">[('workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="security_access_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SecurityAccess: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access"/>
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
@@ -107,12 +134,47 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
-        <!-- SecurityAccessRoute: walk parent SA's workspace. -->
+        <record id="security_access_rule_admin_full" model="ir.rule">
+            <field name="name">SecurityAccess: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- SecurityAccessRoute: same read/write split, walking the parent
+             SA's workspace.access_ids. The route list on the backend SA form
+             is the concrete bypass surface this closes for non-owner/admin. -->
         <record id="security_access_route_rule_workspace_member" model="ir.rule">
-            <field name="name">SecurityAccessRoute: workspace member access only</field>
+            <field name="name">SecurityAccessRoute: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_route"/>
             <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="security_access_route_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SecurityAccessRoute: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_route"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="security_access_route_rule_admin_full" model="ir.rule">
+            <field name="name">SecurityAccessRoute: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_route"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
             <field name="perm_create" eval="True"/>

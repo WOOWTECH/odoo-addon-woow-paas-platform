@@ -89,11 +89,19 @@
         </field>
     </record>
 
-    <!-- Action + Menu -->
+    <!-- Action + Menu (platform ops only).
+         The /woow frontend (BFF, role owner/admin + subscription gate) is the
+         tenant entry point. The backend SA form exposes an editable route
+         list + Provision button that walk the ORM directly, bypassing the BFF
+         gates; restricting the action/menu to base.group_system removes that
+         discoverable bypass surface for plain base.group_user members. The
+         ir.rule read/write split (ir_rules.xml) is the authoritative defence
+         even if the action is reached by URL. -->
     <record id="action_security_access" model="ir.actions.act_window">
         <field name="name">Security Access</field>
         <field name="res_model">woow_paas_platform.security_access</field>
         <field name="view_mode">list,form</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
                 No Security Access instances yet
@@ -110,5 +118,6 @@
         name="Instances"
         parent="menu_security_access"
         action="action_security_access"
+        groups="base.group_system"
         sequence="5"/>
 </odoo>

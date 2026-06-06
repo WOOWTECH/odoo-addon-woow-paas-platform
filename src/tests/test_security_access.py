@@ -674,6 +674,81 @@ class TestSecurityAccessAcl(TransactionCase):
                 self.mallory).search([('id', '=', self.route.id)])
         self.assertEqual(len(visible), 0)
 
+    def _add_user_member(self):
+        """role='user' 一般 member（非 owner/admin），用來測 read/write 拆分。"""
+        carol = self.env['res.users'].create({
+            'name': 'SA Carol', 'login': 'sa_acl_carol',
+            'email': 'sa_acl_carol@test.example',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id,
+            'user_id': carol.id, 'role': 'user',
+        })
+        return carol
+
+    def test_user_role_member_can_read_but_not_write_sa(self):
+        """ir.rule read/write 拆分：role='user' member 可讀 SA，但 backend
+        ORM write 必須被 ir.rule 擋（與 BFF owner/admin gate lock-step，封住
+        後台旁路面）。"""
+        from odoo.exceptions import AccessError
+        carol = self._add_user_member()
+        # read OK（read rule 對所有 member 開放）
+        visible = self.env['woow_paas_platform.security_access'].with_user(
+            carol).search([('id', '=', self.sa.id)])
+        self.assertEqual(len(visible), 1)
+        # write DENY（manage rule 只給 owner/admin）
+        with self.assertRaises(AccessError):
+            self.sa.with_user(carol).write({'name': 'Hijacked Name'})
+
+    def test_user_role_member_cannot_create_or_unlink_sa(self):
+        from odoo.exceptions import AccessError
+        carol = self._add_user_member()
+        with self.assertRaises(AccessError):
+            self.env['woow_paas_platform.security_access'].with_user(
+                carol).create({
+                    'name': 'Carol GW', 'workspace_id': self.workspace.id,
+                })
+        with self.assertRaises(AccessError):
+            self.sa.with_user(carol).unlink()
+
+    def test_user_role_member_cannot_mutate_routes(self):
+        """backend SA form 的 editable route list 旁路面：role='user' member
+        不得 create/write/unlink route。"""
+        from odoo.exceptions import AccessError
+        carol = self._add_user_member()
+        # read OK
+        visible = self.env[
+            'woow_paas_platform.security_access_route'].with_user(
+                carol).search([('id', '=', self.route.id)])
+        self.assertEqual(len(visible), 1)
+        # create DENY
+        with self.assertRaises(AccessError):
+            self.env[
+                'woow_paas_platform.security_access_route'].with_user(
+                    carol).create({
+                        'security_access_id': self.sa.id,
+                        'subdomain_prefix': 'carol-route',
+                    })
+        # write DENY (non-primary write attempt; even prefix-immutable guard
+        # is after ACL, so AccessError fires first on a plain field)
+        with self.assertRaises(AccessError):
+            self.route.with_user(carol).write(
+                {'service_url': 'http://evil:80'})
+
+    def test_owner_can_mutate_sa_and_routes(self):
+        """正向：owner（alice）可 write SA + create route（不被新 manage rule 誤擋）。
+        sa 為 pending 無 tunnel → route create 不觸發 operator sync。"""
+        self.sa.with_user(self.alice).write({'name': 'Owner Renamed'})
+        self.assertEqual(self.sa.name, 'Owner Renamed')
+        new_route = self.env[
+            'woow_paas_platform.security_access_route'].with_user(
+                self.alice).create({
+                    'security_access_id': self.sa.id,
+                    'subdomain_prefix': 'owner-route',
+                })
+        self.assertTrue(new_route.exists())
+
     def test_tunnel_token_field_masked_for_non_system(self):
         """tunnel_token groups='base.group_system' field mask。"""
         self.sa.sudo().write({'tunnel_token': 'super-secret'})
