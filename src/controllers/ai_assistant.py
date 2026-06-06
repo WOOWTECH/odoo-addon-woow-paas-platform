@@ -12,6 +12,8 @@ from werkzeug.wrappers import Response
 
 from odoo.http import request, route, Controller
 
+from .paas import _portal_project_settings_editable
+
 _logger = logging.getLogger(__name__)
 
 
@@ -1575,6 +1577,18 @@ class AiAssistantController(Controller):
         denied = self._portal_write_denied()
         if denied:
             return denied
+        # two-layer-acl-lockstep invariant #4 (spec §3/§6): portal project
+        # settings are read-only unless the platform flag is on. This is the
+        # third write endpoint and must share the same gate as
+        # paas.py:api_support_project_detail / mcp_servers — otherwise an
+        # internal owner/admin could mutate name/description here with the flag
+        # off (fail-closed default). Runs AFTER the share-write deny so a
+        # read-mode share user keeps the existing 'Access denied' semantics
+        # (test_project_update_share_denied). create/delete are intentionally
+        # not gated (not part of the "project settings page" scope; meeting
+        # left undecided).
+        if not _portal_project_settings_editable(request.env):
+            return {'success': False, 'error': 'Permission denied'}
         project_id = params.get('project_id')
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
