@@ -70,6 +70,11 @@ class TestSsrfCheckOnMcpUrlCreate(HttpCase):
 
     def setUp(self):
         super().setUp()
+        # skill-binding-ux：portal settings flag 預設 fail-closed off — 本
+        # class 打 MCP write endpoint，需開 flag 保留正向行為守線（flag-off
+        # denied 守線在 test_portal_settings_flag.py）。
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.portal_project_settings_editable', 'True')
         self.alice = _new_user(self.env, 'ssrf_alice', 'Alice (SSRF)')
         self.ws = self.Workspace.sudo().create({
             'name': 'SSRF WS', 'owner_id': self.alice.id,
@@ -362,6 +367,11 @@ class TestLegacySsrfCheckOnMcpUrlCreate(HttpCase):
 
     def setUp(self):
         super().setUp()
+        # skill-binding-ux：portal settings flag 預設 fail-closed off — 本
+        # class 打 MCP write endpoint，需開 flag 保留正向行為守線（flag-off
+        # denied 守線在 test_portal_settings_flag.py）。
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.portal_project_settings_editable', 'True')
         self.alice = _new_user(self.env, 'hc1_alice', 'Alice (HC-1)')
         self.ws = self.Workspace.sudo().create({
             'name': 'HC-1 WS', 'owner_id': self.alice.id,

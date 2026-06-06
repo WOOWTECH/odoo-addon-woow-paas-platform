@@ -26,6 +26,14 @@ class TestProjectFormMcpSkillTab(TransactionCase):
         cls.arch = cls.env['project.project'].get_view(
             view.id, 'form')['arch']
         cls.tree = etree.fromstring(cls.arch)
+        # get_view post-processing consumes the `groups=` attribute (the node
+        # is kept for users who have the group, but the attribute is stripped)
+        # — so `groups=` intent is asserted against the stored inherit arch,
+        # like test_skill_admin_views asserts against view.arch. Node presence
+        # / non-group attributes are fine to read off get_view's `cls.tree`.
+        inherit = cls.env.ref(
+            'woow_paas_platform.view_project_form_inherit_mcp_skill')
+        cls.inherit_tree = etree.fromstring(inherit.arch)
 
     def test_settings_tab_has_mcp_server_list(self):
         """MCP 內嵌 list 必須住在原生 Settings tab 內。"""
@@ -155,6 +163,47 @@ class TestProjectFormMcpSkillTab(TransactionCase):
             "non-member internal user must not see the project's "
             "user-scope MCP servers (dual-leg rule fail-closed)",
         )
+
+    def test_skill_block_has_admin_upload_button(self):
+        """§2.1 — Upload 按鈕（groups=base.group_system）。get_view 渲染後
+        節點存在；groups= 屬性被 post-processing 吃掉，故對 stored arch 斷言。"""
+        self.assertTrue(
+            self.tree.xpath(
+                "//page[@name='settings']"
+                "//button[@name='action_open_skill_upload_wizard']"),
+            "project form must expose Upload Skill")
+        button = self.inherit_tree.xpath(
+            "//button[@name='action_open_skill_upload_wizard']")
+        self.assertTrue(button)
+        self.assertEqual(button[0].get('groups'), 'base.group_system')
+
+    def test_skill_embedded_list_shows_is_effective(self):
+        self.assertTrue(self.tree.xpath(
+            "//field[@name='skill_ids']//field[@name='is_effective']"))
+
+    def test_skill_embedded_list_still_lifecycle_safe(self):
+        """守 F-SKU-1：create/delete 仍鎖死（不因本次強化鬆動）。"""
+        node = self.tree.xpath("//field[@name='skill_ids']/list")[0]
+        self.assertEqual(node.get('create'), 'false')
+        self.assertEqual(node.get('delete'), 'false')
+
+    def test_agent_template_section_present(self):
+        """§2.3 — resolved template 顯示 + fork 按鈕 + 條件唯讀 m2m。
+        節點存在斷言走 get_view；groups= 屬性走 stored arch（同上）。"""
+        self.assertTrue(self.tree.xpath(
+            "//field[@name='resolved_agent_template_id']"))
+        self.assertTrue(self.tree.xpath(
+            "//button[@name='action_create_dedicated_agent_template']"))
+        self.assertTrue(self.tree.xpath(
+            "//field[@name='resolved_template_skill_ids']"))
+        fork = self.inherit_tree.xpath(
+            "//button[@name='action_create_dedicated_agent_template']")
+        self.assertTrue(fork)
+        self.assertEqual(fork[0].get('groups'), 'base.group_system')
+        m2m = self.inherit_tree.xpath(
+            "//field[@name='resolved_template_skill_ids']")
+        self.assertTrue(m2m)
+        self.assertEqual(m2m[0].get('groups'), 'base.group_system')
 
     def test_skill_catalog_action_defaults_system_filter(self):
         """Configuration > Skills = 全域目錄：action 必須帶

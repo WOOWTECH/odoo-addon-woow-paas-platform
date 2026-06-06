@@ -86,6 +86,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.main import app
+from src.services import jwt_signer as jwt_signer_module
 
 
 # --------------------------------------------------------------------------- #
@@ -1635,3 +1636,187 @@ class TestPilotGapLlmCredential:
                 "absent (echo pilot main path). Found apply_manifest call(s): %r"
                 % (llm_secret, llm_secret_applies)
             )
+
+
+# --------------------------------------------------------------------------- #
+# T.* — SKILL_BUNDLE_TOKEN TTL config (issue #155 stopgap)                       #
+#                                                                               #
+# The skill_bundle_token's exp was hard-coded to 3600s at both operator signing #
+# points (cold-start install + resume re-sign), neither of which passed         #
+# exp_seconds. A pod outliving 1h then 401'd forever on skill-bundle fetch (no  #
+# reap trigger exists in-repo → pods can live indefinitely). Stopgap: the TTL   #
+# is config-driven (settings.skill_bundle_token_ttl_seconds, default 7 days)    #
+# and BOTH signing points must honour it.                                       #
+#                                                                               #
+# These tests use the REAL jwt_signer (not the MagicMock the other spawn tests  #
+# use) so the actual signed JWT can be decoded and exp-iat asserted against the #
+# configured TTL — locking INTENT (exp-iat == config value), never a hard-coded #
+# 604800 literal scattered across assertions.                                   #
+# --------------------------------------------------------------------------- #
+class TestSkillBundleTokenTtl:
+    """#155: skill_bundle_token TTL is config-driven and honoured at both
+    operator signing points (cold-start install + resume re-sign)."""
+
+    _SECRET = "ttl-test-secret-cccccccccccccccccccc"
+
+    def test_config_default_is_seven_days(self):
+        """T.0: the default TTL is 7 days (604800s) — the stopgap target."""
+        from src.config import settings
+        assert settings.skill_bundle_token_ttl_seconds == 604800, (
+            "default skill_bundle_token_ttl_seconds must be 7 days (604800s)"
+        )
+
+    def test_cold_start_token_exp_matches_config_ttl(self, client):
+        """T.1: the SKILL_BUNDLE_TOKEN baked into the cold-start install values
+        carries exp-iat == settings.skill_bundle_token_ttl_seconds.
+
+        jwt_signer is NOT mocked here — we decode the real JWT the operator
+        injects and assert its lifetime against the config value (intent lock,
+        not a 604800 literal)."""
+        from src.config import settings
+
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch.object(jwt_signer_module, "_current_secret",
+                          return_value=self._SECRET):
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get",
+                stderr="release: not found")
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [
+                MagicMock(phase="Running", ready="1/1")
+            ]
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach",
+                               json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            # The token rides in the helm install values env.SKILL_BUNDLE_TOKEN
+            install_values = mock_helm.install.call_args.kwargs["values"]
+            token = install_values["env"]["SKILL_BUNDLE_TOKEN"]
+            claims = _decode_jwt_payload(token)
+            assert claims["token_use"] == "skill_bundle"
+            assert claims["exp"] - claims["iat"] == (
+                settings.skill_bundle_token_ttl_seconds
+            ), (
+                "cold-start SKILL_BUNDLE_TOKEN lifetime must equal the configured "
+                "TTL (got exp-iat=%d, config=%d)"
+                % (claims["exp"] - claims["iat"],
+                   settings.skill_bundle_token_ttl_seconds)
+            )
+
+    def test_resume_token_exp_matches_config_ttl(self, client):
+        """T.2: the re-signed SKILL_BUNDLE_TOKEN on the resume path (replicas=0)
+        carries exp-iat == settings.skill_bundle_token_ttl_seconds.
+
+        jwt_signer is NOT mocked — we capture the token patched into pod env
+        via set_deployment_env and decode it."""
+        from src.config import settings
+
+        captured = {}
+
+        def _capture_env(namespace, release, env):
+            if "SKILL_BUNDLE_TOKEN" in env:
+                captured["token"] = env["SKILL_BUNDLE_TOKEN"]
+
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.mcp_invalidator"), \
+             patch("src.api.agent_runtimes.skill_invalidator"), \
+             patch.object(jwt_signer_module, "_current_secret",
+                          return_value=self._SECRET):
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.get_deployment_replicas.return_value = 0  # reaped → resume
+            mock_k8s.get_deployment_annotation.return_value = "none"
+            mock_k8s.get_pods.return_value = [
+                MagicMock(phase="Running", ready="1/1")
+            ]
+            mock_k8s.set_deployment_env.side_effect = _capture_env
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach",
+                               json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            assert "token" in captured, (
+                "resume must patch pod env with a fresh SKILL_BUNDLE_TOKEN"
+            )
+            claims = _decode_jwt_payload(captured["token"])
+            assert claims["token_use"] == "skill_bundle"
+            assert claims["exp"] - claims["iat"] == (
+                settings.skill_bundle_token_ttl_seconds
+            ), (
+                "resume re-signed SKILL_BUNDLE_TOKEN lifetime must equal the "
+                "configured TTL (got exp-iat=%d, config=%d)"
+                % (claims["exp"] - claims["iat"],
+                   settings.skill_bundle_token_ttl_seconds)
+            )
+
+    def test_env_override_changes_signed_ttl(self, client):
+        """T.3: SKILL_BUNDLE_TOKEN_TTL_SECONDS env overrides the config default,
+        and the override flows through to the actual signed cold-start token.
+
+        Settings reads env at instantiation, so we build a fresh Settings under
+        a patched env and patch the api module's `settings` to it (the cold-start
+        path reads settings.skill_bundle_token_ttl_seconds at sign time)."""
+        override = 123456  # distinct from both 3600 and 604800
+
+        from src.config import Settings
+        with patch.dict("os.environ",
+                        {"SKILL_BUNDLE_TOKEN_TTL_SECONDS": str(override)}):
+            overridden = Settings()
+        assert overridden.skill_bundle_token_ttl_seconds == override, (
+            "env SKILL_BUNDLE_TOKEN_TTL_SECONDS must override the config default"
+        )
+
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.settings", overridden), \
+             patch.object(jwt_signer_module, "_current_secret",
+                          return_value=self._SECRET):
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get",
+                stderr="release: not found")
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [
+                MagicMock(phase="Running", ready="1/1")
+            ]
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach",
+                               json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            install_values = mock_helm.install.call_args.kwargs["values"]
+            token = install_values["env"]["SKILL_BUNDLE_TOKEN"]
+            claims = _decode_jwt_payload(token)
+            assert claims["exp"] - claims["iat"] == override, (
+                "the env-overridden TTL must flow through to the signed token "
+                "(got exp-iat=%d, expected %d)"
+                % (claims["exp"] - claims["iat"], override)
+            )
+
+    @pytest.mark.parametrize("bad_ttl", ["0", "-1", "-604800"])
+    def test_non_positive_ttl_rejected_at_config_load(self, bad_ttl):
+        """T.4: a non-positive SKILL_BUNDLE_TOKEN_TTL_SECONDS (0 / negative) is
+        rejected at Settings load (gt=0), not silently accepted.
+
+        A non-positive TTL would sign an already-expired skill_bundle_token →
+        every skill-bundle fetch 401s. Fail closed at config load instead of
+        deferring the failure to runtime."""
+        from pydantic import ValidationError
+        from src.config import Settings
+
+        with patch.dict("os.environ",
+                        {"SKILL_BUNDLE_TOKEN_TTL_SECONDS": bad_ttl}):
+            with pytest.raises(ValidationError):
+                Settings()
+
+    def test_positive_ttl_lower_bound_boundary_accepted(self):
+        """T.5: the smallest valid TTL (1s) passes the gt=0 bound — the guard
+        rejects only non-positive values, not the legitimate boundary."""
+        from src.config import Settings
+
+        with patch.dict("os.environ",
+                        {"SKILL_BUNDLE_TOKEN_TTL_SECONDS": "1"}):
+            assert Settings().skill_bundle_token_ttl_seconds == 1

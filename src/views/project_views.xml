@@ -73,6 +73,15 @@
                     </form>
                 </field>
                 <separator string="Skills"/>
+                <!-- 歸屬列表（ownership）：create/delete 仍鎖死（F-SKU-1：
+                     bundle-backed 只能走 wizard）。Upload 按鈕（admin）開
+                     wizard 預填本 project；is_effective 標示「真生效」—
+                     歸屬 ≠ 生效（ownership-vs-activation anti-pattern #3
+                     的 UI mitigation）。 -->
+                <button name="action_open_skill_upload_wizard" type="object"
+                        string="Upload Skill" class="btn-primary"
+                        icon="fa-cloud-upload"
+                        groups="base.group_system"/>
                 <field name="skill_ids"
                        nolabel="1">
                     <list create="false" delete="false">
@@ -84,9 +93,43 @@
                                decoration-muted="state == 'archived'"
                                decoration-info="state == 'draft'"/>
                         <field name="is_latest" widget="boolean_toggle" readonly="1"/>
+                        <field name="is_effective" readonly="1"/>
                         <field name="uploaded_at"/>
                     </list>
                 </field>
+                <separator string="Agent Template"/>
+                <!-- 生效層（activation）：resolved template 顯示；dedicated
+                     才可編輯綁定（compute+inverse 把守，view readonly 是 UX
+                     層）；shared / platform_default 走 copy-on-write fork。
+                     groups=base.group_system 是 UI 收斂非安全邊界 — model
+                     層授權沿用 agent_template ir.rule（spec §2 語意釐清）。 -->
+                <group>
+                    <group>
+                        <field name="resolved_agent_template_id" readonly="1"/>
+                        <field name="agent_template_binding_status" readonly="1"/>
+                    </group>
+                    <group>
+                        <button name="action_create_dedicated_agent_template"
+                                type="object"
+                                string="Create Dedicated Template"
+                                class="btn-primary"
+                                groups="base.group_system"
+                                invisible="agent_template_binding_status in ('dedicated', 'none')"/>
+                    </group>
+                </group>
+                <div class="alert alert-info" role="alert"
+                     invisible="agent_template_binding_status != 'none'">
+                    No agent template resolves for this project. Configure the
+                    platform default in Settings → Woow PaaS first.
+                </div>
+                <field name="resolved_template_skill_ids"
+                       widget="many2many_tags"
+                       groups="base.group_system"
+                       readonly="agent_template_binding_status != 'dedicated'"
+                       options="{'no_create': True}"
+                       domain="['|', ('scope', '=', 'system'),
+                                '&amp;', ('scope', '=', 'user'),
+                                ('project_id', '=', id)]"/>
             </xpath>
         </field>
     </record>

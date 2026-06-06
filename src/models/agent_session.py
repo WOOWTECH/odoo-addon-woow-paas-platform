@@ -265,9 +265,23 @@ class AgentSession(models.Model):
 
     @api.model
     def _resolve_agent_template(self, project):
-        """project-bound published → project-bound any → project.agent_template_id
-        → platform default. Last fallback so a project's own binding wins."""
+        """explicit dedicated pick → project-bound published → project-bound
+        any → project.agent_template_id → platform default. Last fallback so
+        a project's own binding wins.
+
+        The explicit-pick leg disambiguates the case where MORE THAN ONE
+        published template binds the project (e.g. a copy-on-write fork
+        created while the source shared template still lists this project):
+        the generic search(limit=1) below would pick by `_order` (name),
+        which is non-deterministic w.r.t. intent. When the project carries an
+        explicit `agent_template_id` that is itself project-bound + published,
+        honour it so the dedicated fork wins resolution without rewriting the
+        shared source's project_ids (spec §2.3 step 3 / invariant 2)."""
         AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+        explicit = project.agent_template_id
+        if explicit and explicit.state == 'published' \
+                and project in explicit.project_ids:
+            return explicit
         template = AgentTemplate.search([
             ('project_ids', 'in', project.id),
             ('state', '=', 'published'),
@@ -296,22 +310,36 @@ class AgentSession(models.Model):
         return {'servers': servers}
 
     @api.model
-    def _build_skill_snapshot(self, project, template):
-        """Serialise the template's published skills + system skills for the pod
-        (name/version/sha256/description; system shadowed by same-name bound)."""
+    def _effective_skill_ids(self, project, template=None):
+        """Effective skills for a project's pod, as a recordset:
+        (resolved-template bound, state='published') ∪ (scope='system',
+        state='published', same-name shadowed by bound). Single source of
+        truth — `_build_skill_snapshot` serialises THIS recordset and the
+        skill.is_effective compute does membership against it; a second
+        copy of the formula is the ownership-vs-activation anti-pattern #3
+        drift (see docs/decisions/patterns/
+        resource-ownership-vs-template-activation.md)."""
         Skill = self.env['woow_paas_platform.skill'].sudo()
-        bound = template.skill_ids.filtered(lambda s: s.state == 'published')
-        bound_names = set(bound.mapped('name'))
+        if template is None:
+            template = self._resolve_agent_template(project)
+        bound = (template.skill_ids if template else Skill.browse()) \
+            .filtered(lambda s: s.state == 'published')
         system = Skill.search([
             ('scope', '=', 'system'),
             ('state', '=', 'published'),
-            ('name', 'not in', list(bound_names)),
+            ('name', 'not in', bound.mapped('name')),
         ])
+        return bound + system
+
+    @api.model
+    def _build_skill_snapshot(self, project, template):
+        """Serialise the effective skill set for the pod (name/version/
+        sha256/description; system shadowed by same-name bound)."""
         return [
             {'name': skill.name, 'version': skill.version,
              'sha256': skill.bundle_sha256,
              'description': skill.description or ''}
-            for skill in (bound + system)
+            for skill in self._effective_skill_ids(project, template=template)
         ]
 
     @api.model

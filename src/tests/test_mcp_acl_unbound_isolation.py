@@ -731,6 +731,13 @@ class TestAiAssistantEndpointUnboundNonFollower(HttpCase):
 
     def setUp(self):
         super().setUp()
+        # skill-binding-ux：portal settings flag 預設 fail-closed off — 本
+        # class 打 write endpoint（action=update），需開 flag 才能走過 flag
+        # gate、真正驗到 _check_project_access 非 follower 守線（否則 flag
+        # gate 先回 'Access denied' → 假綠繞過 ACL 守線）。flag-off denied
+        # 守線在 test_portal_settings_flag.py。
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.portal_project_settings_editable', 'True')
         Workspace = self.env['woow_paas_platform.workspace']
         Project = self.env['project.project']
         WorkspaceAccess = self.env['woow_paas_platform.workspace_access']

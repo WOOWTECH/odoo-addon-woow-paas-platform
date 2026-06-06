@@ -208,3 +208,26 @@ class AgentTemplate(models.Model):
                         "'%s' projects and is not system-scope."
                         % (skill.name, t.name or t.id)
                     )
+
+    def write(self, vals):
+        result = super().write(vals)
+        # Binding change alters what loads into running pods → best-effort
+        # push (#111 semantics: per-pod failure logged, never aborts).
+        # Projects resolving via the manual M2O are included; the unbound
+        # platform default is not walked (it binds system resources only —
+        # skill-state pushes already cover system-wide changes; next chat
+        # attach refresh is the fallback).
+        if 'skill_ids' in vals or 'mcp_server_ids' in vals:
+            Session = self.env['woow_paas_platform.agent_session']
+            for template in self:
+                projects = template.project_ids | self.env[
+                    'project.project'].sudo().search([
+                        ('agent_template_id', '=', template.id)])
+                for project in projects:
+                    if 'skill_ids' in vals:
+                        Session._push_snapshot_to_running_pods(
+                            'skill', 'user', project.id)
+                    if 'mcp_server_ids' in vals:
+                        Session._push_snapshot_to_running_pods(
+                            'mcp', 'user', project.id)
+        return result

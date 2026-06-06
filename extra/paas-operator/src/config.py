@@ -1,5 +1,6 @@
 """Application configuration."""
 import os
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,6 +60,27 @@ class Settings(BaseSettings):
     # /livez + /readyz; chart 0.2.0 fail-closes on any value other than
     # tcpSocket/httpGet. Mirrors the externalEgress forward pattern.
     agent_runtime_probe_style: str = ""  # "" = no forward; "httpGet" for image >= 1.2.0
+    # issue #155 stopgap: SKILL_BUNDLE_TOKEN is signed at pod spawn/resume and baked
+    # into the pod env; its exp was hard-coded to 3600s and no in-repo reap trigger
+    # exists, so a pod outliving 1h 401'd forever on skill-bundle fetch. Make the TTL
+    # config-driven; default 7 days (604800s) so a long-lived pod keeps a valid token.
+    # The real fix (401 -> refresh) is a separate design. Env-overridable per
+    # environment via SKILL_BUNDLE_TOKEN_TTL_SECONDS, set by the operator deployment
+    # (the operator's own Deployment env lives cross-repo in paas-app-bundle-cd Fleet
+    # CD values — NOT rendered by any chart in this repo).
+    # SECURITY (F-GC-1 re-review): SKILL_BUNDLE_TOKEN is injected as a *plain env*
+    # value into the pod spec (not secretKeyRef), so it is readable via
+    # `kubectl get pod -o yaml` / `describe`. F-GC-1 was filed minor/pilot-acceptable
+    # on the premise that the token was short-lived (exp 1h) + re-signed on resume,
+    # so the plaintext exposure window was ≤1h. This default TTL (7 days) widens that
+    # window from ≤1h to ≤7d — a 168x increase — which invalidates the "≤1h so
+    # acceptable" premise. F-GC-1's risk rating (plain env vs secretKeyRef) MUST be
+    # re-reviewed and may need its severity raised; see follow-ups.md F-GC-1.
+    # gt=0 rejects non-positive TTLs (negative / 0 would sign an already-expired
+    # token → every skill-bundle fetch 401s); fail closed at config load.
+    skill_bundle_token_ttl_seconds: int = Field(
+        default=604800, gt=0  # 7 days; env SKILL_BUNDLE_TOKEN_TTL_SECONDS
+    )
 
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management

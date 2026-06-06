@@ -28,7 +28,7 @@
 | Configuration → MCP Servers | `scope='system'`（action hard domain，維持） | 繼承父選單 `project.group_project_manager`（PM 唯讀目錄） | `system_readonly` rule 擋；admin via `admin_full` |
 | Configuration → Skills | 全部 scope，**default soft filter** `search_default_filter_scope_system`（admin 移除 filter 仍可管 user-scope） | `base.group_system`（admin-only，維持） | publish / deprecate 生命週期 = ops 職權 |
 | project form Settings tab | 該 project 的 `mcp_server_ids` / `skill_ids`（One2many 內嵌 list） | 跟著 project form 的存取；record-level 由既有 ir.rule 過濾 | MCP：dual-leg rule（member/follower CRUD）；Skill：唯讀 list（bundle-backed） |
-| 前台 /woow 齒輪 | （會議議題 H：MCP 設定拿掉、名稱/描述唯讀 — 另案） | — | — |
+| 前台 /woow 齒輪 | 已落地（2026-06-05 skill-binding-ux）：前台唯讀由 `woow_paas_platform.portal_project_settings_editable` flag gate（預設 off），三支寫入 endpoint（`paas.py` detail/mcp 兩支 + `ai_assistant.py` project update）+ OWL 渲染 lock-step | flag off（預設）= 零寫入；flag on 恢復既有 owner/admin 編輯 | flag off：唯讀；flag on：沿用既有 role gate |
 | Portal user | 兩個 model 的 ACL CSV 無 portal 行 = **零權限 fail-closed**（invariant） | — | — |
 
 ### MCP（hard domain）與 Skill（soft filter）的刻意不對稱
