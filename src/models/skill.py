@@ -29,6 +29,14 @@ class Skill(models.Model):
         default=False,
         index=True,
     )
+    is_effective = fields.Boolean(
+        string='Active in Pod',
+        compute='_compute_is_effective',
+        help="Loaded into the owning project's agent pod? user-scope: member "
+             "of agent_session._effective_skill_ids(project) — ownership "
+             "alone does NOT activate a skill (anti-pattern #3); system: "
+             "published (auto-loaded platform-wide).",
+    )
 
     scope = fields.Selection(
         selection=[('system', 'System'), ('user', 'User')],
@@ -302,6 +310,23 @@ class Skill(models.Model):
             'view_mode': 'form',
             'target': 'new',
         }
+
+    def _compute_is_effective(self):
+        # One resolve+search per project (not per row) — N+1 guard.
+        Session = self.env['woow_paas_platform.agent_session']
+        effective_by_project = {}
+        for skill in self:
+            if skill.scope == 'system':
+                skill.is_effective = skill.state == 'published'
+                continue
+            project = skill.project_id
+            if not project:
+                skill.is_effective = False
+                continue
+            if project.id not in effective_by_project:
+                effective_by_project[project.id] = set(
+                    Session._effective_skill_ids(project).ids)
+            skill.is_effective = skill.id in effective_by_project[project.id]
 
     def _is_latest_group_domain(self):
         """Domain for the bucket this skill competes in for the is_latest

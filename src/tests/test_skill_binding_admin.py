@@ -117,3 +117,32 @@ class TestSkillRepoint(TransactionCase):
             sk.write({'scope': 'system', 'project_id': False})
         self.assertIn(
             ('skill', 'system'), {c.args[:2] for c in push.call_args_list})
+
+
+@tagged('post_install', '-at_install')
+class TestSkillIsEffective(TransactionCase):
+    """§2.1 — is_effective 與 _effective_skill_ids 同源（anti-pattern #3
+    mitigation）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.project = cls.env['project.project'].sudo().create({'name': 'FE'})
+        cls.bound = _mk_skill(cls.env, name='fe-bound', scope='user',
+                              project_id=cls.project.id, state='published')
+        cls.unbound = _mk_skill(cls.env, name='fe-unbound', scope='user',
+                                project_id=cls.project.id, state='published')
+        cls.sys_pub = _mk_skill(cls.env, name='fe-sys', state='published')
+        cls.sys_draft = _mk_skill(cls.env, name='fe-sys-draft')
+        cls.env['woow_paas_platform.agent_template'].sudo().create({
+            'name': 'FE Tpl',
+            'project_ids': [(6, 0, [cls.project.id])],
+            'skill_ids': [(6, 0, [cls.bound.id])],
+            'state': 'published',
+        })
+
+    def test_is_effective_matrix(self):
+        self.assertTrue(self.bound.is_effective)      # bound published
+        self.assertFalse(self.unbound.is_effective)   # 歸屬≠生效
+        self.assertTrue(self.sys_pub.is_effective)    # system published
+        self.assertFalse(self.sys_draft.is_effective)  # draft
