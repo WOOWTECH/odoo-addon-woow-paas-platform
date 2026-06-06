@@ -44,7 +44,7 @@
             <button t-att-class="'o_woow_sa_detail__tab' +
                       (state.activeTab === tab.key ? ' o_woow_sa_detail__tab--active' : '')"
                     t-on-click="() => this.switchTab(tab.key)">
-              <WoowIcon t-att-name="tab.icon" size="16"/>
+              <WoowIcon name="tab.icon" size="16"/>
               <t t-esc="tab.label"/>
               <span t-if="tab.comingSoon" class="o_woow_sa_detail__tab_dot"/>
             </button>

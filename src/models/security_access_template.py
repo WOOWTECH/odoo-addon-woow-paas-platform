@@ -49,6 +49,51 @@ class SecurityAccessTemplate(models.Model):
         help='Whether this template is offered to end users',
     )
 
+    @api.model
+    def _ensure_default_template_links(self):
+        """Heal the seed template's plan links on upgraded databases.
+
+        Called by a ``<function>`` element in subscription_template_links.xml
+        (function elements run on every -u regardless of noupdate). Why this
+        exists: ``security_access_default`` was historically seeded with
+        noupdate=1 — the ir.model.data noupdate flag is *sticky*, so on DBs
+        that got the record under that flag, every later record-level update
+        in -u (including the links file's m2m write) is silently skipped and
+        the template ends up plan-less. Fresh installs never hit this.
+
+        Idempotent and admin-respecting: flips the sticky noupdate flag to
+        False (aligning with the smart_home/cloud_app noupdate=0 convention)
+        and only fills in the four default plans when the template currently
+        has none — an admin-curated plan list is never overwritten.
+        """
+        template = self.env.ref(
+            'woow_paas_platform.security_access_default',
+            raise_if_not_found=False,
+        )
+        if not template:
+            return
+        imd = self.env['ir.model.data'].sudo().search([
+            ('module', '=', 'woow_paas_platform'),
+            ('name', '=', 'security_access_default'),
+            ('model', '=', self._name),
+        ], limit=1)
+        if imd and imd.noupdate:
+            imd.noupdate = False
+        if template.subscription_plan_ids:
+            return
+        plans = self.env['sh.subscription.plan']
+        for xml_id in (
+            'woow_paas_platform.plan_security_access_entry_monthly',
+            'woow_paas_platform.plan_security_access_entry_yearly',
+            'woow_paas_platform.plan_security_access_pro_monthly',
+            'woow_paas_platform.plan_security_access_pro_yearly',
+        ):
+            plan = self.env.ref(xml_id, raise_if_not_found=False)
+            if plan:
+                plans |= plan
+        if plans:
+            template.subscription_plan_ids = [(6, 0, plans.ids)]
+
     @api.constrains('subscription_plan_ids')
     def _check_no_cross_service_type_plans(self):
         """A plan must belong to one service type only (three-way lockstep).

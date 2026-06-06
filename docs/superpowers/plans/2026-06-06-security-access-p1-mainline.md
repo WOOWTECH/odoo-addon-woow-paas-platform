@@ -2511,12 +2511,12 @@ git commit -m "feat: add workspace-scoped acl and ir rules for security access"
 - Create: `src/views/security_access_views.xml`、`src/views/security_access_template_views.xml`
 - Modify: `src/views/menu.xml`、`src/__manifest__.py`
 
-- [ ] **Step 1: template seed** — 建 `src/data/security_access_templates.xml`：
+- [ ] **Step 1: template seed** — 建 `src/data/security_access_templates.xml`（**noupdate="0"**，對齊 smart_home/cloud_app templates 慣例；noupdate=1 會讓 ir.model.data flag sticky，-u 時 links file 的 m2m write 被跳過 → 升級 DB 拿到零 plan template）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <odoo>
-    <data noupdate="1">
+    <data noupdate="0">
         <record id="security_access_default" model="woow_paas_platform.security_access_template">
             <field name="name">Security Access</field>
             <field name="slug">security-access</field>
@@ -4756,7 +4756,9 @@ export class SecurityAccessDetailPage extends Component {
             <button t-att-class="'o_woow_sa_detail__tab' +
                       (state.activeTab === tab.key ? ' o_woow_sa_detail__tab--active' : '')"
                     t-on-click="() => this.switchTab(tab.key)">
-              <WoowIcon t-att-name="tab.icon" size="16"/>
+              <WoowIcon name="tab.icon" size="16"/>
+              <!-- 注意：OWL component 的 props 本身就是 expression，
+                   不可用 t-att- 前綴（會 OwlError 整頁 crash） -->
               <t t-esc="tab.label"/>
               <span t-if="tab.comingSoon" class="o_woow_sa_detail__tab_dot"/>
             </button>
