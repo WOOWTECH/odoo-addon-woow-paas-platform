@@ -40,15 +40,20 @@
                 <div class="o_woow_project_detail__sections">
                     <BasicInfoSection
                         project="state.project"
+                        editable="!!state.project.portal_editable"
                         onUpdated="(updated) => this.onProjectUpdated(updated)"/>
 
-                    <CloudServiceBindingSection
-                        project="state.project"
-                        onUpdated="(updated) => this.onProjectUpdated(updated)"/>
+                    <!-- 會議 2026-06-03 議題 H：flag off（預設）時 binding 與
+                         MCP section 整個不渲染；flag on 完整恢復（spec §3）。 -->
+                    <t t-if="state.project.portal_editable">
+                        <CloudServiceBindingSection
+                            project="state.project"
+                            onUpdated="(updated) => this.onProjectUpdated(updated)"/>
 
-                    <McpServersSection
-                        project="state.project"
-                        onListChanged="(mcps) => this.onMcpListChanged(mcps)"/>
+                        <McpServersSection
+                            project="state.project"
+                            onListChanged="(mcps) => this.onMcpListChanged(mcps)"/>
+                    </t>
                 </div>
             </t>
         </div>
