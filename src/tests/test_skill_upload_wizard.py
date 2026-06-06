@@ -9,11 +9,13 @@ from odoo.tests import tagged
 from odoo.tests.common import TransactionCase
 
 
-def _make_targz(files, links=None):
+def _make_targz(files, links=None, special=None):
     """Build an in-memory .tar.gz from {path: text} and return raw bytes.
 
     ``links`` is an optional {link_path: target} mapping; each is added as a
     symlink member (used by the security negative tests).
+    ``special`` is an optional {path: typeflag} mapping for device / FIFO /
+    other special-file members (used by the special-file negative tests).
     """
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as tf:
@@ -26,6 +28,11 @@ def _make_targz(files, links=None):
             info = tarfile.TarInfo(name=link_path)
             info.type = tarfile.SYMTYPE
             info.linkname = target
+            tf.addfile(info)
+        for path, typeflag in (special or {}).items():
+            info = tarfile.TarInfo(name=path)
+            info.type = typeflag
+            info.size = 0
             tf.addfile(info)
     return buf.getvalue()
 
@@ -232,15 +239,189 @@ class TestSkillUploadWizard(TransactionCase):
         self.assertIn('symlink', str(cm.exception))
 
     def test_member_count_bomb_rejected(self):
-        files = {'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
-                 'scripts/main.py': 'x = 1\n'}
-        for i in range(2100):
-            files['f%d.txt' % i] = 'x'
-        raw = _make_targz(files)
+        # issue #154 follow-up M1: the cap must be enforced by STREAMING
+        # iteration (early-abort), not by materialising the whole member list
+        # first (tar.getmembers() on a million-member bomb is itself the DoS).
+        # Monkeypatch a tiny cap and build only cap+5 members so the fixture
+        # stays cheap; assert the scan stops at cap+1 instead of reading all.
+        from odoo.addons.woow_paas_platform.wizard import (
+            skill_bundle_validation as sbv)
+        original_cap = sbv.MAX_MEMBER_COUNT
+        sbv.MAX_MEMBER_COUNT = 5
+        # Count how many members the streaming scan actually reads via the
+        # path-traversal check, which the loop body runs once per member.
+        seen = []
+        original_is_traversal = sbv._is_path_traversal
+
+        def _counting(name):
+            seen.append(name)
+            return original_is_traversal(name)
+
+        sbv._is_path_traversal = _counting
+        try:
+            files = {'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+                     'scripts/main.py': 'x = 1\n'}
+            for i in range(10):  # 12 members total, far above the cap of 5
+                files['f%d.txt' % i] = 'x'
+            raw = _make_targz(files)
+            wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+            with self.assertRaises(UserError) as cm:
+                wiz.action_upload()
+            self.assertIn('member cap', str(cm.exception))
+            # Early-abort: the loop body runs for at most cap+1 members (the
+            # +1 is the member that trips the cap), never the full 12.
+            self.assertLessEqual(
+                len(seen), sbv.MAX_MEMBER_COUNT + 1,
+                "member-count guard must early-abort, not materialise all "
+                "members (read %d, cap+1=%d)" % (
+                    len(seen), sbv.MAX_MEMBER_COUNT + 1))
+            self.assertLess(
+                len(seen), 12, "must not have scanned the whole bomb")
+        finally:
+            sbv.MAX_MEMBER_COUNT = original_cap
+            sbv._is_path_traversal = original_is_traversal
+
+    def test_member_name_too_long_rejected(self):
+        # M1: a member with a pathologically long name is a getmembers()
+        # amplification vector; reject it before reading the body.
+        from odoo.addons.woow_paas_platform.wizard import (
+            skill_bundle_validation as sbv)
+        original = sbv.MAX_MEMBER_NAME_LENGTH
+        sbv.MAX_MEMBER_NAME_LENGTH = 64
+        try:
+            raw = _make_targz({
+                'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+                'scripts/main.py': 'x = 1\n',
+                ('a' * 200 + '.txt'): 'x',
+            })
+            wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+            with self.assertRaises(UserError) as cm:
+                wiz.action_upload()
+            self.assertIn('characters', str(cm.exception))
+        finally:
+            sbv.MAX_MEMBER_NAME_LENGTH = original
+
+    def test_fifo_member_rejected(self):
+        # M2: a FIFO member makes the runtime's data extract filter raise
+        # SpecialFileError and abort the whole bundle on the pod; reject it
+        # at upload time.
+        raw = _make_targz(
+            {'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+             'scripts/main.py': 'x = 1\n'},
+            special={'a_fifo': tarfile.FIFOTYPE},
+        )
         wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
         with self.assertRaises(UserError) as cm:
             wiz.action_upload()
-        self.assertIn('member', str(cm.exception))
+        self.assertIn('special files', str(cm.exception))
+        self.assertFalse(self.Skill.search(
+            [('name', '=', f'up-{self.suffix}')]))
+
+    def test_device_member_rejected(self):
+        # M2: char-device member, same SpecialFileError abort risk as FIFO.
+        raw = _make_targz(
+            {'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+             'scripts/main.py': 'x = 1\n'},
+            special={'a_dev': tarfile.CHRTYPE},
+        )
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('special files', str(cm.exception))
+
+    def test_malformed_yaml_tab_indent_rejected(self):
+        # M3: a tab-indented frontmatter line makes yaml.safe_load raise a
+        # ScannerError on the pod (loader.parse_skill_frontmatter); the wizard
+        # mirrors that parser and rejects it up front. Skip when PyYAML is
+        # absent (stdlib fallback cannot detect YAML grammar errors — a
+        # documented contract gap, but production always has PyYAML).
+        from odoo.addons.woow_paas_platform.wizard import (
+            skill_bundle_validation as sbv)
+        if sbv.yaml is None:
+            self.skipTest("PyYAML unavailable; stdlib fallback cannot detect "
+                          "YAML grammar errors")
+        raw = _make_targz({
+            'SKILL.md': '---\nname: x\n\tbad: y\ndescription: d\n---\n# X\n',
+            'scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(name='x', bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('not valid YAML', str(cm.exception))
+        self.assertFalse(self.Skill.search([('name', '=', 'x')]))
+
+    def test_malformed_yaml_unterminated_quote_rejected(self):
+        # M3: an unterminated quote is a ScannerError on the pod too.
+        from odoo.addons.woow_paas_platform.wizard import (
+            skill_bundle_validation as sbv)
+        if sbv.yaml is None:
+            self.skipTest("PyYAML unavailable; stdlib fallback cannot detect "
+                          "YAML grammar errors")
+        raw = _make_targz({
+            'SKILL.md': '---\nname: "unterminated\ndescription: d\n---\n# X\n',
+            'scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(name='x', bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('not valid YAML', str(cm.exception))
+
+    def test_frontmatter_inline_comment_no_false_mismatch(self):
+        # M3 (also fixes should-fix S2): `name: foo # comment` must parse to
+        # `foo`, not `foo # comment`, so it does NOT raise a spurious
+        # name-mismatch warning against the wizard name `foo`. Requires the
+        # yaml path (stdlib fallback keeps the comment in the value).
+        from odoo.addons.woow_paas_platform.wizard import (
+            skill_bundle_validation as sbv)
+        if sbv.yaml is None:
+            self.skipTest("PyYAML unavailable; stdlib fallback keeps the "
+                          "inline comment in the value")
+        raw = _make_targz({
+            'SKILL.md': '---\nname: foo # the slug\ndescription: bar\n---\n# X\n',
+            'scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(name='foo', bundle_file=base64.b64encode(raw))
+        action = wiz.action_upload()
+        # Compliant + name matches -> plain act_window, no warning notification.
+        self.assertEqual(action['type'], 'ir.actions.act_window')
+        skill = self.Skill.search([('name', '=', 'foo')], limit=1)
+        self.assertEqual(len(skill), 1)
+
+    def test_in_bounds_relative_symlink_still_rejected(self):
+        # should-fix S1: the runtime's data filter PERMITS in-bounds relative
+        # links, but the wizard deliberately hard-blocks ALL links
+        # (defense-in-depth). Pin that intentional over-block, and assert the
+        # message is honest about being stricter than the runtime.
+        raw = _make_targz(
+            {'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+             'scripts/main.py': 'x = 1\n'},
+            links={'alias.py': 'scripts/main.py'},  # in-bounds, relative
+        )
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        msg = str(cm.exception)
+        self.assertIn('link member', msg)
+        self.assertIn('stricter than the runtime', msg)
+        self.assertFalse(self.Skill.search(
+            [('name', '=', f'up-{self.suffix}')]))
+
+    def test_skill_md_as_directory_rejected(self):
+        # N2: a DIRTYPE member named SKILL.md must report "exists as a
+        # directory, not a file", not the generic "not present at any level".
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w:gz') as tf:
+            di = tarfile.TarInfo(name='SKILL.md')
+            di.type = tarfile.DIRTYPE
+            tf.addfile(di)
+            data = b'x = 1\n'
+            fi = tarfile.TarInfo(name='scripts/main.py')
+            fi.size = len(data)
+            tf.addfile(fi, io.BytesIO(data))
+        wiz = self._new_wizard(bundle_file=base64.b64encode(buf.getvalue()))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('exists as a directory', str(cm.exception))
 
     def test_multiple_violations_listed_at_once(self):
         # wrapper dir + missing name in the SAME bundle: the error must
