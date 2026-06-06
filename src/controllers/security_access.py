@@ -433,6 +433,14 @@ class SecurityAccessController(Controller):
             client = get_paas_operator_client(request.env)
             if client:
                 result = client.check_route_availability(prefix)
+                # Operator returns status: free / taken / unknown. unknown
+                # means the CF API errored (no longer silently "available").
+                if result.get("status") == "unknown":
+                    return {"success": True,
+                            "data": {"prefix": prefix, "available": False,
+                                     "reason": "Could not confirm availability "
+                                               "(Cloudflare check unavailable); "
+                                               "try again."}}
                 if not result.get("available", True):
                     return {"success": True,
                             "data": {"prefix": prefix, "available": False,

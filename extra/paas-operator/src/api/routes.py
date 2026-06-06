@@ -86,11 +86,29 @@ async def check_route_availability(subdomain: str):
             detail="Cloudflare API token is required",
         )
     hostname = f"{subdomain}.{cloudflare_service.domain}"
-    existing = await cloudflare_service.get_dns_record(hostname)
+    # raise_on_error=True so a CF API error (401/403/429/5xx) is NOT silently
+    # reported as "available" (fail-open). On error we surface an explicit
+    # unknown state with the reason; the Odoo side keeps the DB UNIQUE
+    # constraint + CF-side create failure as the authoritative guards.
+    try:
+        existing = await cloudflare_service.get_dns_record(
+            hostname, raise_on_error=True
+        )
+    except CloudflareException as e:
+        logger.error(f"Availability check could not determine status: {e.message}")
+        return {
+            "subdomain": subdomain,
+            "hostname": hostname,
+            "available": None,
+            "status": "unknown",
+            "reason": "Cloudflare availability check failed; "
+                      "could not confirm the subdomain is free.",
+        }
     return {
         "subdomain": subdomain,
         "hostname": hostname,
         "available": existing is None,
+        "status": "free" if existing is None else "taken",
     }
 
 

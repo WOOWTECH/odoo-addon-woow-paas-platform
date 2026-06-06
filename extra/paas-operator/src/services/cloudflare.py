@@ -111,14 +111,27 @@ class CloudflareService:
 
     # ==================== DNS Record Management ====================
 
-    async def get_dns_record(self, hostname: str) -> Optional[dict]:
+    async def get_dns_record(
+        self, hostname: str, raise_on_error: bool = False
+    ) -> Optional[dict]:
         """Get a DNS record by hostname.
 
         Args:
             hostname: Full hostname (e.g., 'myapp.domain.com')
+            raise_on_error: when True, a non-200 Cloudflare response (401/403/
+                429/5xx) raises CloudflareException instead of collapsing to
+                None. Callers that interpret None as "no record exists" (e.g.
+                the availability check) MUST set this — otherwise an API error
+                is silently reported as "subdomain free" (fail-open). Internal
+                create/delete callers keep the legacy None behaviour.
 
         Returns:
-            DNS record dict if found, None otherwise
+            DNS record dict if found, None if confirmed absent (or, when
+            raise_on_error is False, on API error).
+
+        Raises:
+            CloudflareException: only when raise_on_error and the API returns
+                a non-200 / unsuccessful response.
         """
         if not self.dns_enabled:
             return None
@@ -134,10 +147,23 @@ class CloudflareService:
             if response.status_code != 200:
                 logger.error(f"Failed to get DNS record: {response.status_code}")
                 logger.debug(f"Response details: {response.text}")
+                if raise_on_error:
+                    raise CloudflareException(
+                        f"Cloudflare DNS lookup failed for {hostname}: "
+                        f"{response.text}",
+                        status_code=response.status_code,
+                    )
                 return None
 
             data = response.json()
-            if data.get("success") and data.get("result"):
+            if not data.get("success"):
+                if raise_on_error:
+                    raise CloudflareException(
+                        f"Cloudflare API error looking up {hostname}: "
+                        f"{data.get('errors', 'Unknown error')}"
+                    )
+                return None
+            if data.get("result"):
                 return data["result"][0] if data["result"] else None
 
             return None
