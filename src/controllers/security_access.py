@@ -295,6 +295,16 @@ class SecurityAccessController(Controller):
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {"success": False, "error": "Plan not found"}
+        # Plan must belong to THIS SA's template — symmetric with the _create
+        # path's `plan not in template.subscription_plan_ids` gate. The role
+        # gate above only checks who may change the plan, not whether the plan
+        # belongs here; without this an owner could switch to another SA
+        # template's (or an orphan) plan, producing a subscription/invoice line
+        # inconsistent with the instance's template. Skip only when the SA has
+        # no template (admin/legacy records created outside the BFF).
+        if sa.template_id and plan not in sa.template_id.subscription_plan_ids:
+            return {"success": False,
+                    "error": "Selected plan is not available for this template"}
 
         # sudo: workspace owners typically lack ACL on
         # sh.subscription.subscription; the workspace+role check above already

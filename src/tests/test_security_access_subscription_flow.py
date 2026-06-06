@@ -346,6 +346,51 @@ class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
         self.assertFalse(res['success'])
         self.assertIn('permission', res['error'].lower())
 
+    def test_change_plan_rejects_plan_not_in_template(self):
+        """change-plan 帶入不屬於本 SA template 的 plan 須被拒（與 _create
+        路徑對稱）。role gate 只擋誰能改，不擋 plan 歸屬。"""
+        # SA bound to its template; give it an active subscription on plan.
+        sa = self.SecurityAccess.create({
+            'name': 'Bound Trio GW', 'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+        })
+        partner = self.workspace.owner_id.partner_id
+        sa._create_and_confirm_subscription(partner, self.plan)
+        self.assertEqual(sa.subscription_id.state, 'in_progress')
+        # A plan that exists but is NOT in this SA's template.
+        foreign_plan = self.env['sh.subscription.plan'].create({
+            'name': 'Foreign Trio Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 75, 'sh_no_of_billing_cycle': -1,
+        })
+        self.env.invalidate_all()
+        with _patch_request(self.env(user=self.owner)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=sa.id,
+                plan_id=foreign_plan.id)
+        self.assertFalse(res['success'])
+        self.assertIn('not available for this template',
+                      (res.get('error') or '').lower())
+        # subscription unchanged (still on the original plan).
+        self.assertEqual(sa.subscription_id.sh_subscription_plan_id, self.plan)
+
+    def test_change_plan_accepts_sibling_plan_in_template(self):
+        """同 template 內的另一 plan（plan_b）change-plan 不得被新檢查誤擋。"""
+        sa = self.SecurityAccess.create({
+            'name': 'Sibling Trio GW', 'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+        })
+        partner = self.workspace.owner_id.partner_id
+        sa._create_and_confirm_subscription(partner, self.plan)
+        self.env.invalidate_all()
+        with _patch_request(self.env(user=self.owner)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=sa.id,
+                plan_id=self.plan_b.id)
+        # Must NOT be blocked by the template-ownership gate (plan_b is in
+        # the template); any failure must be unrelated business logic.
+        self.assertNotIn('not available for this template',
+                         (res.get('error') or '').lower())
+
     def test_change_plan_owner_passes_role_and_acl_gate(self):
         """Workspace owner (base.group_user only) clears both the role gate
         and the sh.subscription.subscription ACL via the endpoint's sudo

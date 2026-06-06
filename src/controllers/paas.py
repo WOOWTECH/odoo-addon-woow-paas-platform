@@ -916,6 +916,17 @@ class PaasController(Controller):
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {'success': False, 'error': 'Plan not found'}
+        # Plan must belong to THIS service's template — symmetric with the
+        # create path's gate (api_deploy_service: `plan not in
+        # template.subscription_plan_ids`). The role check above only gates who
+        # may change the plan, not whether the plan belongs here; without this
+        # an owner could switch to another template's (or an orphan) plan,
+        # producing a subscription/invoice line inconsistent with the service's
+        # template. Lock-step with the SA-side change-plan guard.
+        svc_template = service.template_id.sudo()
+        if svc_template.subscription_plan_ids and plan not in svc_template.subscription_plan_ids:
+            return {'success': False,
+                    'error': 'Plan not available for this template'}
 
         old_sub = service.sudo().subscription_id
         _logger.info(
