@@ -4,6 +4,7 @@ from . import ecpay_invoice_cron
 from . import res_partner_invoice
 from . import sh_subscription_fix
 from . import sh_subscription_warning_field
+from . import sh_subscription_plan_sa_quota
 from . import subscription_lifecycle_mixin
 from . import subscription_lifecycle_cron
 from . import low_balance_warning_cron
@@ -13,6 +14,7 @@ from . import workspace_access
 from . import project_access
 from . import cloud_app_template
 from . import smart_home_template
+from . import security_access_template
 from . import cloud_service
 from . import cloud_odoo_addon
 from . import ai_config

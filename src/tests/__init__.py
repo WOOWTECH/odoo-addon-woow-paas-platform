@@ -8,6 +8,7 @@ from . import test_cloud_api
 from . import test_paas_operator
 from . import test_smart_home
 from . import test_smart_home_template
+from . import test_security_access_template
 from . import test_smart_home_subscription_flow
 from . import test_oauth2
 from . import test_ha_api
