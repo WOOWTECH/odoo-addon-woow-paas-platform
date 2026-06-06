@@ -7,6 +7,8 @@
 **Branch**: `feature/project-setting`
 **Components**: `project.project`, `woow_paas_platform.mcp_server`, `woow_paas_platform.cloud_service`, `controllers/paas.py` (support endpoints), `static/src/paas/pages/` (new project-detail page + service McpServersTab redirect), `static/src/paas/services/support_service.js`, `static/src/paas/core/router.js`
 
+> **Superseded（partial）2026-06-05**：D10 / AC#1-3 / #14 / #16 的前台編輯行為改由 `woow_paas_platform.portal_project_settings_editable` flag gate，預設 off（唯讀）。flag on 時本設計行為完整保留。見 `docs/superpowers/specs/2026-06-05-skill-binding-ux-design.md`。
+
 ## Context
 
 PR #47 完成 schema 解耦：`mcp.server` 從 `cloud_service_id` 改掛 `project_id`，`CloudService` 成為 `project.project` 的 optional binding（unbound / bound to 1 cloud service，1:1 with UNIQUE constraint）。AI chat 消費鏈也已遷移走 `task → project → mcp_server_ids`。Staging（stg-20260519.0115）已驗證 schema 正確。

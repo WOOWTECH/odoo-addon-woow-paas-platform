@@ -152,7 +152,7 @@ self.ensure_one()
 
 ## 非目標（Non-goals / YAGNI）
 
-- **`/woow` 前台 user skill 上傳**（OWL section + multipart endpoint + project-role gate）——獨立後續 phase。
+- **`/woow` 前台 user skill 上傳**（OWL section + multipart endpoint + project-role gate）——獨立後續 phase。（2026-06-05：本項由 skill-binding-ux 決議取消 — 後台 wizard 已支援 user-scope，見 `docs/superpowers/specs/2026-06-05-skill-binding-ux-design.md`。）
 - **Odoo 端 bundle 解壓 / SKILL.md 解析 / 結構驗證**——pod 負責。
 - **從 bundle 自動帶出 name/version**——admin 手填（使用者決策）。
 - **後台手動 create skill**（非 wizard 路徑）——維持 `create="false"`。

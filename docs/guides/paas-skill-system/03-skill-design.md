@@ -138,7 +138,7 @@ graph LR
 | scope | project_id | 載入範圍 | 上傳者 |
 |---|---|---|---|
 | `system` | NULL | **所有 project 的 pod**（platform-curated） | admin（Phase 2） |
-| `user` | 必填 | 僅該 project 的 pod | project owner/admin（Phase 2） |
+| `user` | 必填 | 僅該 project 的 pod | admin（後台 wizard — project form『Upload Skill』入口或 Configuration 選單） |
 
 system skill 由 Odoo 自動 union 進每個 project 的 `_build_skill_snapshot`，並透過下載端點的
 `scope='system'` fallback leg 供應（pod 端 frozen contract 不變，wire format 相同）。
