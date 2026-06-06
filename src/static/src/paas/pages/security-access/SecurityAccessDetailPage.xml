@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.SecurityAccessDetailPage">
+    <div class="o_woow_sa_detail">
+      <div t-if="state.loading" class="o_woow_sa_detail__loading">Loading...</div>
+      <div t-elif="state.error" class="o_woow_error_message">
+        <WoowIcon name="'error'" size="16"/>
+        <span t-esc="state.error"/>
+      </div>
+      <t t-elif="state.sa">
+        <!-- Header（mockup：icon + nickname + badge + hostname + delete） -->
+        <div class="o_woow_sa_detail__header">
+          <div class="o_woow_sa_detail__icon">
+            <WoowIcon name="'verified_user'" size="32"/>
+          </div>
+          <div class="o_woow_sa_detail__title">
+            <t t-if="!state.editingName">
+              <h1 t-on-click="startEditName"><t t-esc="state.sa.name"/></h1>
+            </t>
+            <t t-else="">
+              <input type="text" class="o_woow_input" t-model="state.nameDraft"
+                     t-on-keyup.enter="saveName" t-on-blur="saveName"/>
+            </t>
+            <StatusBadge status="state.sa.state"/>
+            <div class="o_woow_sa_detail__hostname">
+              <WoowIcon name="'language'" size="14"/>
+              <a t-att-href="'https://' + state.sa.primary_hostname"
+                 target="_blank"><t t-esc="state.sa.primary_hostname"/></a>
+            </div>
+          </div>
+          <div class="o_woow_sa_detail__actions">
+            <WoowButton t-if="state.sa.state === 'pending' or state.sa.state === 'error'"
+                        variant="'primary'" onClick.bind="provision">Provision</WoowButton>
+            <WoowButton variant="'danger'"
+                        onClick="() => state.showDeleteConfirm = true">
+              <WoowIcon name="'delete'" size="16"/>
+            </WoowButton>
+          </div>
+        </div>
+
+        <!-- Tab bar（橫向可捲動，對齊 mockup） -->
+        <div class="o_woow_sa_detail__tabs">
+          <t t-foreach="tabs" t-as="tab" t-key="tab.key">
+            <button t-att-class="'o_woow_sa_detail__tab' +
+                      (state.activeTab === tab.key ? ' o_woow_sa_detail__tab--active' : '')"
+                    t-on-click="() => this.switchTab(tab.key)">
+              <WoowIcon t-att-name="tab.icon" size="16"/>
+              <t t-esc="tab.label"/>
+              <span t-if="tab.comingSoon" class="o_woow_sa_detail__tab_dot"/>
+            </button>
+          </t>
+        </div>
+
+        <!-- Overview -->
+        <div t-if="state.activeTab === 'overview'" class="o_woow_sa_detail__body">
+          <WoowCard shadow="true">
+            <h3>Status</h3>
+            <div class="o_woow_sa_detail__grid">
+              <div><label>State</label><StatusBadge status="state.sa.state"/></div>
+              <div><label>Connector</label><StatusBadge status="state.sa.tunnel_status"/></div>
+              <div><label>Hostname</label><t t-esc="state.sa.primary_hostname"/></div>
+            </div>
+          </WoowCard>
+          <WoowCard shadow="true" t-if="state.sa.subscription">
+            <h3>Subscription</h3>
+            <div class="o_woow_sa_detail__grid">
+              <div><label>Plan</label><t t-esc="state.sa.subscription.plan_name"/></div>
+              <div><label>Next payment</label><t t-esc="state.sa.subscription.next_payment"/></div>
+              <div t-if="state.sa.subscription.is_trial">
+                <label>Trial ends</label>
+                <t t-esc="state.sa.subscription.trial_end_date"/>
+                <WoowButton variant="'primary'" size="'sm'"
+                            onClick="() => state.showSkipTrialModal = true">
+                  Skip Trial
+                </WoowButton>
+              </div>
+            </div>
+          </WoowCard>
+        </div>
+
+        <!-- Configuration（record 自身設定 + 接入教學） -->
+        <div t-if="state.activeTab === 'configuration'" class="o_woow_sa_detail__body">
+          <WoowCard shadow="true">
+            <h3>Connector Setup</h3>
+            <p>Run the Cloudflare Tunnel connector on your host, then point
+               your reverse proxy (e.g. Nginx Proxy Manager) at port 80.
+               All application routes forward to it with the Host header
+               preserved.</p>
+            <div class="o_woow_sa_detail__code">
+              <code>docker run cloudflare/cloudflared:latest tunnel run --token &lt;TOKEN&gt;</code>
+            </div>
+            <p class="o_woow_sa_detail__hint">
+              Get the tunnel token from your Home Assistant integration or
+              ask your workspace owner. See the NPM setup guide for the
+              reverse-proxy walkthrough.
+            </p>
+          </WoowCard>
+          <WoowCard shadow="true">
+            <h3>Identity</h3>
+            <div class="o_woow_sa_detail__grid">
+              <div><label>Canonical name</label><t t-esc="state.sa.canonical_name"/></div>
+              <div><label>Created</label><t t-esc="state.sa.created_at"/></div>
+            </div>
+          </WoowCard>
+        </div>
+
+        <!-- Application（routes 管理） -->
+        <div t-if="state.activeTab === 'application'" class="o_woow_sa_detail__body">
+          <WoowCard shadow="true">
+            <h3>Application Routes</h3>
+            <p>Each route maps a public subdomain to your host. Traffic is
+               forwarded to the service URL with the Host header set.</p>
+            <table class="o_woow_sa_detail__routes">
+              <thead>
+                <tr><th>Hostname</th><th>Service</th><th>Host header</th><th></th></tr>
+              </thead>
+              <tbody>
+                <t t-foreach="state.sa.routes" t-as="route" t-key="route.id">
+                  <tr>
+                    <td>
+                      <t t-esc="route.hostname"/>
+                      <span t-if="route.is_primary" class="o_woow_badge">Primary</span>
+                    </td>
+                    <td><t t-esc="route.service_url"/></td>
+                    <td><t t-esc="route.http_host_header ? 'Yes' : 'No'"/></td>
+                    <td>
+                      <WoowButton t-if="!route.is_primary" variant="'danger'"
+                                  size="'sm'" onClick="() => this.removeRoute(route)">
+                        <WoowIcon name="'delete'" size="14"/>
+                      </WoowButton>
+                    </td>
+                  </tr>
+                </t>
+              </tbody>
+            </table>
+            <!-- Add route：prefix 即時 availability 反饋 -->
+            <div class="o_woow_sa_detail__add_route">
+              <input type="text" class="o_woow_input"
+                     placeholder="subdomain prefix (e.g. waltek-ha)"
+                     t-att-value="state.newRoutePrefix"
+                     t-on-input="onPrefixInput"/>
+              <input type="text" class="o_woow_input"
+                     placeholder="service URL (default from platform)"
+                     t-model="state.newRouteServiceUrl"/>
+              <WoowButton variant="'primary'" onClick.bind="addRoute"
+                          disabled="state.prefixCheck and !state.prefixCheck.available">
+                Add Route
+              </WoowButton>
+            </div>
+            <div t-if="state.prefixChecking" class="o_woow_sa_detail__hint">Checking availability...</div>
+            <div t-elif="state.prefixCheck and state.prefixCheck.available"
+                 class="o_woow_sa_detail__hint o_woow_sa_detail__hint--ok">
+              ✓ Available
+            </div>
+            <div t-elif="state.prefixCheck and !state.prefixCheck.available"
+                 class="o_woow_sa_detail__hint o_woow_sa_detail__hint--error">
+              ✗ Not available: <t t-esc="state.prefixCheck.reason"/>
+            </div>
+          </WoowCard>
+        </div>
+
+        <!-- Coming Soon tabs (P2-P4) -->
+        <div t-if="state.activeTab === 'access' or state.activeTab === 'email' or state.activeTab === 'domains'"
+             class="o_woow_sa_detail__body">
+          <WoowCard shadow="true">
+            <div class="o_woow_sa_detail__coming_soon">
+              <WoowIcon name="'construction'" size="48"/>
+              <h3>Coming Soon</h3>
+              <p>This feature is on the roadmap and will be enabled in an
+                 upcoming release.</p>
+            </div>
+          </WoowCard>
+        </div>
+
+        <!-- Modals -->
+        <SkipTrialModal t-if="state.showSkipTrialModal"
+            service="state.sa"
+            loadEstimate="loadSkipTrialEstimate"
+            confirmSkip="confirmSkipTrial"
+            onClose="() => state.showSkipTrialModal = false"
+            onSkipped="onTrialSkipped"/>
+
+        <div t-if="state.showDeleteConfirm" class="o_woow_modal_backdrop">
+          <div class="o_woow_modal">
+            <div class="o_woow_modal_header"><h2>Delete Security Access?</h2></div>
+            <div class="o_woow_modal_body">
+              <p>This permanently deletes the tunnel, all application routes
+                 and DNS records on Cloudflare. Your connector will be
+                 disconnected immediately. This cannot be undone.</p>
+            </div>
+            <div class="o_woow_modal_footer">
+              <WoowButton variant="'secondary'"
+                          onClick="() => state.showDeleteConfirm = false">Cancel</WoowButton>
+              <WoowButton variant="'danger'" onClick.bind="deleteSa">Delete</WoowButton>
+            </div>
+          </div>
+        </div>
+      </t>
+    </div>
+  </t>
+</templates>
