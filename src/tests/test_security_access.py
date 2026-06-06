@@ -228,6 +228,66 @@ class TestSecurityAccess(TransactionCase):
             with self.assertRaises(UserError):
                 route.write({'subdomain_prefix': 'renamed'})
 
+    def test_route_create_sync_failure_rolls_back_db_row(self):
+        """create sync 失敗 → 整筆 route 不落 DB（無幽靈 route）。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        sa = self._make_active_sa()
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.side_effect = PaaSOperatorError('cf down')
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            with self.assertRaises(PaaSOperatorError):
+                self.Route.create({
+                    'security_access_id': sa.id,
+                    'subdomain_prefix': 'ghost-route',
+                })
+        # DB row must NOT survive the failed sync.
+        self.assertFalse(self.Route.search(
+            [('subdomain_prefix', '=', 'ghost-route')]))
+
+    def test_route_unlink_sync_failure_rolls_back_keeps_row(self):
+        """unlink sync 失敗（最嚴重方向）→ DB row 保留，不留對外服務孤兒。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        sa = self._make_active_sa()
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            route = self.Route.create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': 'doomed-route',
+            })
+            route_id = route.id
+            mock_client.sync_tunnel_routes.side_effect = PaaSOperatorError(
+                'cf down')
+            with self.assertRaises(PaaSOperatorError):
+                route.unlink()
+        # Row must survive — CF teardown failed, so the DB must still reference
+        # it so a later sync can finish (no public orphan stranded).
+        self.assertTrue(self.Route.browse(route_id).exists())
+
+    def test_route_write_sync_failure_rolls_back_service_url(self):
+        """write sync 失敗 → service_url 回滾，DB 與 CF 不分歧。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        sa = self._make_active_sa()
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            route = self.Route.create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': 'rewrite-route',
+                'service_url': 'http://localhost:80',
+            })
+            mock_client.sync_tunnel_routes.side_effect = PaaSOperatorError(
+                'cf down')
+            with self.assertRaises(PaaSOperatorError):
+                route.write({'service_url': 'http://localhost:9999'})
+        self.assertEqual(route.service_url, 'http://localhost:80')
+
 
 class TestSecurityAccessLifecycleHooks(TransactionCase):
     """_do_suspend / _do_resume / _do_cleanup / unlink 清理鏈."""

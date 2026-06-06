@@ -602,11 +602,18 @@ class SecurityAccessRoute(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        routes = super().create(vals_list)
-        # one sync per affected SA (declarative full-state push)
-        for sa in routes.mapped('security_access_id'):
-            if sa.state == 'active' and sa.tunnel_id:
-                sa._sync_routes_to_operator()
+        # Atomicity: the route row and its Cloudflare ingress must land (or
+        # not land) together. A bare create+sync that swallows the sync error
+        # at the controller leaves the row committed in the DB but absent in
+        # CF — a "ghost route" that a later successful sync silently pushes
+        # public. Wrap both in a savepoint and re-raise so the controller's
+        # try/except reports a truthful failure with the DB row rolled back.
+        with self.env.cr.savepoint():
+            routes = super().create(vals_list)
+            # one sync per affected SA (declarative full-state push)
+            for sa in routes.mapped('security_access_id'):
+                if sa.state == 'active' and sa.tunnel_id:
+                    sa._sync_routes_to_operator()
         return routes
 
     def write(self, vals):
@@ -624,11 +631,15 @@ class SecurityAccessRoute(models.Model):
                         "Subdomain prefix is immutable. Delete the route "
                         "and create a new one to rename."
                     )
-        result = super().write(vals)
-        if any(k in vals for k in ('service_url', 'http_host_header')):
-            for sa in self.mapped('security_access_id'):
-                if sa.state == 'active' and sa.tunnel_id:
-                    sa._sync_routes_to_operator()
+        # Atomicity (see create): keep the DB service_url/header in lock-step
+        # with the CF ingress. On sync failure roll the write back and surface
+        # the error rather than committing a DB↔CF divergence.
+        with self.env.cr.savepoint():
+            result = super().write(vals)
+            if any(k in vals for k in ('service_url', 'http_host_header')):
+                for sa in self.mapped('security_access_id'):
+                    if sa.state == 'active' and sa.tunnel_id:
+                        sa._sync_routes_to_operator()
         return result
 
     def unlink(self):
@@ -639,10 +650,19 @@ class SecurityAccessRoute(models.Model):
                 "together with the Security Access instance."
             )
         affected = self.mapped('security_access_id')
-        result = super().unlink()
-        for sa in affected:
-            if sa.exists() and sa.state == 'active' and sa.tunnel_id:
-                sa._sync_routes_to_operator()
+        # Atomicity — the most dangerous direction: super().unlink() drops the
+        # DB row, then the sync removes it from CF. If the sync fails without a
+        # rollback, the route is gone from the DB but its DNS/ingress still
+        # serves publicly, and no later sync can ever reach it (no DB row to
+        # drive the desired-state push) — a permanent orphan. The savepoint
+        # rolls the unlink back on sync failure so the row survives and the
+        # public route is never left stranded; the re-raised error reaches the
+        # controller as a truthful failure.
+        with self.env.cr.savepoint():
+            result = super().unlink()
+            for sa in affected:
+                if sa.exists() and sa.state == 'active' and sa.tunnel_id:
+                    sa._sync_routes_to_operator()
         return result
 
     def to_dict(self):
