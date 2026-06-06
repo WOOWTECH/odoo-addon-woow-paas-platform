@@ -14,7 +14,7 @@
             <field name="require_pkce" eval="True"/>
             <field name="redirect_uris">https://my.home-assistant.io/redirect/oauth</field>
             <field name="grant_types">authorization_code,refresh_token</field>
-            <field name="scopes">smarthome:read smarthome:tunnel workspace:read</field>
+            <field name="scopes">smarthome:read smarthome:tunnel workspace:read security-access:read security-access:tunnel</field>
             <field name="is_active" eval="True"/>
         </record>
 
