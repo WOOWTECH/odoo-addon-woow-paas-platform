@@ -4,7 +4,7 @@ SmartHome historically lacked cron coverage; SecurityAccess must be in the
 cron's scan list so expired/cancelled subscriptions suspend the gateway and
 renewed subscriptions resume it — same lifecycle CloudService / SmartHome get.
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
@@ -122,6 +122,44 @@ class TestSecurityAccessCron(TransactionCase):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
         self.assertEqual(sa.state, 'active')
+
+    def test_cron_cleans_up_long_cancelled_sa(self):
+        """branch 4：sub=cancel 且超過 cleanup_months 門檻 → cron 呼叫
+        _do_cleanup（刪 tunnel、state→deleting）。鎖住「cron 真的會在到期後
+        觸發 cleanup」這條連線（門檻 write_date/30.0 + 觸發條件回歸）。"""
+        sa = self._make_sa_with_sub('cancel')
+        # Push the subscription's write_date well past the default 6-month
+        # (≈180d) cleanup threshold. write_date is auto-managed, so force it
+        # via SQL then drop the ORM cache so the cron reads the old value.
+        old_dt = datetime.now() - timedelta(days=400)
+        self.env.cr.execute(
+            "UPDATE sh_subscription_subscription SET write_date = %s "
+            "WHERE id = %s",
+            (old_dt, sa.subscription_id.id),
+        )
+        self.env.invalidate_all()
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            self.CronModel._cron_enforce_subscription_lifecycle()
+        sa.invalidate_recordset()
+        # cleanup ran: tunnel deleted, state → deleting.
+        mock_client.delete_tunnel.assert_called_once_with('tun-cron')
+        self.assertEqual(sa.state, 'deleting')
+        self.assertFalse(sa.tunnel_id)
+
+    def test_cron_does_not_cleanup_recently_cancelled_sa(self):
+        """branch 4 門檻 negative：剛 cancel（未過 cleanup_months）→ 只 suspend
+        不 cleanup（tunnel 仍在），鎖住門檻計算別把近期取消的也清掉。"""
+        sa = self._make_sa_with_sub('cancel')  # write_date = now (recent)
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            self.CronModel._cron_enforce_subscription_lifecycle()
+        sa.invalidate_recordset()
+        mock_client.delete_tunnel.assert_not_called()
+        self.assertEqual(sa.state, 'suspended')
+        self.assertEqual(sa.tunnel_id, 'tun-cron')
 
     def test_cron_does_not_flip_deleting_back_to_suspended(self):
         """已清理（deleting）的 SA，後續 cron（sub 仍 cancel）不得翻回 suspended。
