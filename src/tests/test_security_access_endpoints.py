@@ -65,7 +65,23 @@ class TestSecurityAccessEndpoints(HttpCase):
             headers={'Content-Type': 'application/json'},
         )
         body = response.json()
+        # Stash the raw body so callers can distinguish a structured
+        # {success: False, error: ...} rejection from an endpoint crash
+        # (JSON-RPC error → body has 'error', no 'result'). Without this
+        # check a negative test would false-green if the gate started raising
+        # a 500 instead of returning a structured denial.
+        self._last_body = body
         return body.get('result') or {}
+
+    def _assert_structured_denial(self, res):
+        """Negative-path rejection must be a structured {success:False,error}
+        envelope, NOT a JSON-RPC error (endpoint crash)."""
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed (JSON-RPC error) instead of "
+                         "returning a structured denial: %s"
+                         % self._last_body.get('error'))
+        self.assertFalse(res.get('success'))
+        self.assertIn('error', res)
 
     def test_member_can_list(self):
         self.authenticate(self.alice.login, self.alice.login)
@@ -80,7 +96,7 @@ class TestSecurityAccessEndpoints(HttpCase):
         res = self._rpc(
             f'/api/workspaces/{self.workspace.id}/security-accesses',
             {'action': 'list'})
-        self.assertFalse(res.get('success'))
+        self._assert_structured_denial(res)
 
     def test_non_member_get_denied(self):
         self.authenticate(self.mallory.login, self.mallory.login)
@@ -88,7 +104,7 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}',
             {'action': 'get'})
-        self.assertFalse(res.get('success'))
+        self._assert_structured_denial(res)
 
     def test_non_member_routes_list_denied(self):
         self.authenticate(self.mallory.login, self.mallory.login)
@@ -96,7 +112,7 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/routes',
             {'action': 'list'})
-        self.assertFalse(res.get('success'))
+        self._assert_structured_denial(res)
 
     def test_non_member_delete_denied_and_record_survives(self):
         """寫路徑 negative：刪除被拒且 record 仍在（防注入面）。"""
@@ -105,7 +121,7 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}',
             {'action': 'delete'})
-        self.assertFalse(res.get('success'))
+        self._assert_structured_denial(res)
         self.assertTrue(self.sa.exists())
 
     def test_member_but_not_admin_cannot_mutate(self):
@@ -130,3 +146,58 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}',
             {'action': 'delete'})
         self.assertFalse(mutate.get('success'))
+
+    # ---- subscription trio + routes write endpoints (sudo-cascade面) ----
+
+    def test_non_member_change_plan_denied(self):
+        """最高風險寫入面：非 member 打 /change-plan 被拒（HttpCase L3）。"""
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/change-plan',
+            {'plan_id': 1})
+        self._assert_structured_denial(res)
+
+    def test_non_member_skip_trial_denied(self):
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/skip-trial', {})
+        self._assert_structured_denial(res)
+
+    def test_member_user_role_change_plan_denied(self):
+        """role='user' 一般 member 打 /change-plan 應 Insufficient permissions。"""
+        suffix = uuid.uuid4().hex[:6]
+        dave = _new_user(self.env, f'sa_ep_dave_{suffix}')
+        self.env['woow_paas_platform.workspace_access'].sudo().create({
+            'workspace_id': self.workspace.id,
+            'user_id': dave.id, 'role': 'user',
+        })
+        self.authenticate(dave.login, dave.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/change-plan',
+            {'plan_id': 1})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+
+    def test_non_member_routes_create_denied_no_route(self):
+        """非 member 打 /routes action=create 被拒且不產生 route。"""
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/routes',
+            {'action': 'create', 'subdomain_prefix': 'ep-intruder-route',
+             'service_url': 'http://localhost:80'})
+        self._assert_structured_denial(res)
+        self.assertFalse(self.env[
+            'woow_paas_platform.security_access_route'].sudo().search(
+                [('subdomain_prefix', '=', 'ep-intruder-route')]))
+
+    def test_non_member_routes_delete_denied(self):
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/routes',
+            {'action': 'delete', 'route_id': 999999})
+        self._assert_structured_denial(res)

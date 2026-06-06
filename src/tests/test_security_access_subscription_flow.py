@@ -192,3 +192,212 @@ class TestSecurityAccessPlanEndpoints(TransactionCase):
         with _patch_request(self.env):
             res = self.controller.api_sa_template_plans(empty.id)
         self.assertFalse(res['success'])
+
+
+class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
+    """Controller-layer role/ACL guards for the subscription trio + routes.
+
+    orm-vs-endpoint-acl-test-coverage (variant A/C): the sudo-cascade write
+    endpoints (skip-trial / skip-trial-estimate / change-plan) and the route
+    create/delete mutations must each be paired with a controller-level
+    negative so a future role-gate drop or half-sudo can't widen access
+    silently. Mirrors test_smart_home_subscription_flow's role-gate suite;
+    uses the _patch_request style (no HttpCase needed).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.controller = SecurityAccessController()
+        self.SecurityAccess = self.env['woow_paas_platform.security_access']
+        self.WorkspaceAccess = self.env[
+            'woow_paas_platform.workspace_access']
+        self.owner = self.env['res.users'].create({
+            'name': 'SA Trio Owner', 'login': 'sa_trio_owner',
+            'email': 'sa_trio_owner@test.example',
+        })
+        base_user = self.env.ref('base.group_user')
+        self.owner.groups_id = [(6, 0, [base_user.id])]
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'SA Trio WS', 'owner_id': self.owner.id,
+        })
+        self.plan = self.env['sh.subscription.plan'].create({
+            'name': 'SA Trio Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_routes': 3,
+        })
+        self.plan_b = self.env['sh.subscription.plan'].create({
+            'name': 'SA Trio Plan B', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 200, 'sh_no_of_billing_cycle': -1,
+            'sa_max_routes': 5,
+        })
+        self.template = self.env[
+            'woow_paas_platform.security_access_template'].create({
+                'name': 'SA Trio Tmpl',
+                'subscription_plan_ids': [(6, 0, [self.plan.id,
+                                                  self.plan_b.id])],
+            })
+        self.sa = self.SecurityAccess.create({
+            'name': 'Trio Gateway', 'workspace_id': self.workspace.id,
+        })
+        # journal 設定（_create_and_confirm_subscription 前置）
+        company = self.env.company.sudo()
+        if not company.sh_journal_id:
+            journal = self.env['account.journal'].sudo().search(
+                [('type', '=', 'sale')], limit=1)
+            if journal:
+                company.sh_journal_id = journal.id
+
+    def _add_member(self, login, role):
+        user = self.env['res.users'].create({
+            'name': login, 'login': login,
+            'email': '%s@test.example' % login,
+        })
+        user.groups_id = [(6, 0, [self.env.ref('base.group_user').id])]
+        self.WorkspaceAccess.create({
+            'workspace_id': self.workspace.id,
+            'user_id': user.id, 'role': role,
+        })
+        return user
+
+    def _outsider(self, login):
+        user = self.env['res.users'].create({
+            'name': login, 'login': login,
+            'email': '%s@test.example' % login,
+        })
+        user.groups_id = [(6, 0, [self.env.ref('base.group_user').id])]
+        return user
+
+    # ---- skip-trial-estimate ----
+
+    def test_skip_trial_estimate_non_member_denied(self):
+        outsider = self._outsider('sa_est_outsider')
+        with _patch_request(self.env(user=outsider)):
+            res = self.controller.api_sa_skip_trial_estimate(
+                workspace_id=self.workspace.id, sa_id=self.sa.id)
+        self.assertFalse(res['success'])
+
+    def test_skip_trial_estimate_member_user_role_denied(self):
+        member = self._add_member('sa_est_member', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_sa_skip_trial_estimate(
+                workspace_id=self.workspace.id, sa_id=self.sa.id)
+        self.assertFalse(res['success'])
+        self.assertIn('permission', res['error'].lower())
+
+    def test_skip_trial_estimate_admin_invokes_mixin(self):
+        admin_member = self._add_member('sa_est_admin', 'admin')
+        sentinel = {'total': 100.0, 'sufficient': True}
+        with patch.object(
+            type(self.sa), '_skip_trial_estimate', return_value=sentinel,
+        ) as mocked, _patch_request(self.env(user=admin_member)):
+            res = self.controller.api_sa_skip_trial_estimate(
+                workspace_id=self.workspace.id, sa_id=self.sa.id)
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(res['data'], sentinel)
+        mocked.assert_called_once()
+
+    # ---- skip-trial ----
+
+    def test_skip_trial_non_member_denied(self):
+        outsider = self._outsider('sa_skip_outsider')
+        with _patch_request(self.env(user=outsider)):
+            res = self.controller.api_sa_skip_trial(
+                workspace_id=self.workspace.id, sa_id=self.sa.id)
+        self.assertFalse(res['success'])
+
+    def test_skip_trial_member_user_role_denied(self):
+        member = self._add_member('sa_skip_member', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_sa_skip_trial(
+                workspace_id=self.workspace.id, sa_id=self.sa.id)
+        self.assertFalse(res['success'])
+        self.assertIn('permission', res['error'].lower())
+
+    def test_skip_trial_admin_invokes_mixin(self):
+        admin_member = self._add_member('sa_skip_admin', 'admin')
+        invoice_sentinel = {'invoice_id': 7, 'amount': 100.0}
+        with patch.object(
+            type(self.sa), '_skip_trial', return_value=invoice_sentinel,
+        ) as mocked, patch.object(
+            type(self.sa), '_get_subscription_info', return_value={'id': 1},
+        ), _patch_request(self.env(user=admin_member)):
+            res = self.controller.api_sa_skip_trial(
+                workspace_id=self.workspace.id, sa_id=self.sa.id)
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(res['data']['invoice'], invoice_sentinel)
+        mocked.assert_called_once()
+
+    # ---- change-plan ----
+
+    def test_change_plan_non_member_denied(self):
+        outsider = self._outsider('sa_cp_outsider')
+        with _patch_request(self.env(user=outsider)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                plan_id=self.plan_b.id)
+        self.assertFalse(res['success'])
+
+    def test_change_plan_member_user_role_denied(self):
+        member = self._add_member('sa_cp_member', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                plan_id=self.plan_b.id)
+        self.assertFalse(res['success'])
+        self.assertIn('permission', res['error'].lower())
+
+    def test_change_plan_owner_passes_role_and_acl_gate(self):
+        """Workspace owner (base.group_user only) clears both the role gate
+        and the sh.subscription.subscription ACL via the endpoint's sudo
+        cascade; the failure mode (if any) is downstream business logic,
+        never 'Insufficient permissions' / 'not allowed to access'."""
+        manager_group = self.env.ref(
+            'sh_subscription.group_manager_sh_subscription',
+            raise_if_not_found=False)
+        if manager_group:
+            self.assertNotIn(manager_group, self.owner.groups_id)
+        partner = self.workspace.owner_id.partner_id
+        self.sa._create_and_confirm_subscription(partner, self.plan)
+        self.assertEqual(self.sa.subscription_id.state, 'in_progress')
+        self.env.invalidate_all()
+        with _patch_request(self.env(user=self.owner)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                plan_id=self.plan_b.id)
+        error_text = (res.get('error') or '').lower()
+        self.assertNotIn('insufficient permissions', error_text, res)
+        self.assertNotIn('not allowed to access', error_text, res)
+        self.assertNotIn('sh.subscription.subscription', error_text, res)
+
+    # ---- routes create/delete cross-user negatives ----
+
+    def test_routes_create_non_member_denied_and_no_route(self):
+        outsider = self._outsider('sa_rt_outsider')
+        with _patch_request(self.env(user=outsider)):
+            res = self.controller.api_security_access_routes(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                action='create', subdomain_prefix='intruder-route',
+                service_url='http://localhost:80')
+        self.assertFalse(res['success'])
+        # No route leaked into the DB.
+        self.assertFalse(self.env[
+            'woow_paas_platform.security_access_route'].sudo().search(
+                [('subdomain_prefix', '=', 'intruder-route')]))
+
+    def test_routes_create_member_user_role_denied(self):
+        member = self._add_member('sa_rt_member', 'user')
+        with _patch_request(self.env(user=member)):
+            res = self.controller.api_security_access_routes(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                action='create', subdomain_prefix='member-route',
+                service_url='http://localhost:80')
+        self.assertFalse(res['success'])
+        self.assertIn('permission', res['error'].lower())
+
+    def test_routes_delete_non_member_denied(self):
+        outsider = self._outsider('sa_rtdel_outsider')
+        with _patch_request(self.env(user=outsider)):
+            res = self.controller.api_security_access_routes(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                action='delete', route_id=999999)
+        self.assertFalse(res['success'])
