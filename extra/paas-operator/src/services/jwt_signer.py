@@ -102,6 +102,12 @@ def sign_skill_bundle_token(
     project_id,
     workspace_ids,
     secret=None,
+    # FOOTGUN (issue #155): skill_bundle path callers MUST pass the config TTL
+    # explicitly (settings.skill_bundle_token_ttl_seconds). This 1h default is a
+    # backward-compat fallback ONLY — relying on it silently reintroduces the #155
+    # "pod outlives 1h then 401s forever on skill-bundle fetch" bug. Both production
+    # callers (cold-start install + resume re-sign in api/agent_runtimes.py) already
+    # pass exp_seconds; do NOT add a caller that omits it.
     exp_seconds=3600,
 ):
     """Sign a per-pod-lifetime skill-bundle token.

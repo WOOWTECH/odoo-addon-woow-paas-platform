@@ -1795,3 +1795,28 @@ class TestSkillBundleTokenTtl:
                 "(got exp-iat=%d, expected %d)"
                 % (claims["exp"] - claims["iat"], override)
             )
+
+    @pytest.mark.parametrize("bad_ttl", ["0", "-1", "-604800"])
+    def test_non_positive_ttl_rejected_at_config_load(self, bad_ttl):
+        """T.4: a non-positive SKILL_BUNDLE_TOKEN_TTL_SECONDS (0 / negative) is
+        rejected at Settings load (gt=0), not silently accepted.
+
+        A non-positive TTL would sign an already-expired skill_bundle_token →
+        every skill-bundle fetch 401s. Fail closed at config load instead of
+        deferring the failure to runtime."""
+        from pydantic import ValidationError
+        from src.config import Settings
+
+        with patch.dict("os.environ",
+                        {"SKILL_BUNDLE_TOKEN_TTL_SECONDS": bad_ttl}):
+            with pytest.raises(ValidationError):
+                Settings()
+
+    def test_positive_ttl_lower_bound_boundary_accepted(self):
+        """T.5: the smallest valid TTL (1s) passes the gt=0 bound — the guard
+        rejects only non-positive values, not the legitimate boundary."""
+        from src.config import Settings
+
+        with patch.dict("os.environ",
+                        {"SKILL_BUNDLE_TOKEN_TTL_SECONDS": "1"}):
+            assert Settings().skill_bundle_token_ttl_seconds == 1

@@ -1,5 +1,6 @@
 """Application configuration."""
 import os
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,7 +68,19 @@ class Settings(BaseSettings):
     # environment via SKILL_BUNDLE_TOKEN_TTL_SECONDS, set by the operator deployment
     # (the operator's own Deployment env lives cross-repo in paas-app-bundle-cd Fleet
     # CD values — NOT rendered by any chart in this repo).
-    skill_bundle_token_ttl_seconds: int = 604800  # 7 days; env SKILL_BUNDLE_TOKEN_TTL_SECONDS
+    # SECURITY (F-GC-1 re-review): SKILL_BUNDLE_TOKEN is injected as a *plain env*
+    # value into the pod spec (not secretKeyRef), so it is readable via
+    # `kubectl get pod -o yaml` / `describe`. F-GC-1 was filed minor/pilot-acceptable
+    # on the premise that the token was short-lived (exp 1h) + re-signed on resume,
+    # so the plaintext exposure window was ≤1h. This default TTL (7 days) widens that
+    # window from ≤1h to ≤7d — a 168x increase — which invalidates the "≤1h so
+    # acceptable" premise. F-GC-1's risk rating (plain env vs secretKeyRef) MUST be
+    # re-reviewed and may need its severity raised; see follow-ups.md F-GC-1.
+    # gt=0 rejects non-positive TTLs (negative / 0 would sign an already-expired
+    # token → every skill-bundle fetch 401s); fail closed at config load.
+    skill_bundle_token_ttl_seconds: int = Field(
+        default=604800, gt=0  # 7 days; env SKILL_BUNDLE_TOKEN_TTL_SECONDS
+    )
 
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
