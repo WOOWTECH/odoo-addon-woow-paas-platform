@@ -143,6 +143,7 @@ class SecurityAccess(models.Model):
                 if record.canonical_name else False
             )
 
+    @api.depends('route_ids')
     def _compute_route_count(self):
         for record in self:
             record.route_count = len(record.route_ids)
