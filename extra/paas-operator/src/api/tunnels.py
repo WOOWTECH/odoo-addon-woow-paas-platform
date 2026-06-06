@@ -7,6 +7,9 @@ from src.config import settings
 from src.models.schemas import (
     TunnelCreateRequest,
     TunnelCreateResponse,
+    TunnelRoutesSyncRequest,
+    TunnelRoutesSyncResponse,
+    TunnelRouteSyncResult,
     TunnelStatusResponse,
     TunnelTokenResponse,
 )
@@ -281,4 +284,65 @@ async def delete_tunnel(tunnel_id: str):
         raise HTTPException(
             status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete tunnel: {e.message}",
+        )
+
+
+@router.put(
+    "/{tunnel_id}/routes",
+    response_model=TunnelRoutesSyncResponse,
+    summary="Declaratively sync a dedicated tunnel's routes (ingress + DNS)",
+)
+async def sync_tunnel_routes(tunnel_id: str, request: TunnelRoutesSyncRequest):
+    """Replace the tunnel's ingress rules and reconcile DNS records.
+
+    Declarative full sync: the request body is the complete desired route
+    list. Ingress is replaced wholesale (plus catch-all 404); DNS records
+    pointing at this tunnel are created/kept/deleted to match. Idempotent —
+    used by Security Access for route CRUD, suspend (service_url=
+    http_status:503) and resume.
+    """
+    if not cloudflare_service.api_token or not cloudflare_service.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cloudflare API token and account ID are required for tunnel management",
+        )
+
+    domain = cloudflare_service.domain
+    rules = [
+        {
+            "hostname": f"{r.subdomain}.{domain}",
+            "service": r.service_url,
+            "http_host_header": r.http_host_header,
+        }
+        for r in request.routes
+    ]
+
+    try:
+        await cloudflare_service.configure_tunnel_ingress(
+            tunnel_id=tunnel_id, rules=rules,
+        )
+        dns_map = await cloudflare_service.reconcile_tunnel_dns(
+            tunnel_id=tunnel_id,
+            subdomains=[r.subdomain for r in request.routes],
+            comment=request.comment,
+        )
+        logger.info(
+            f"Tunnel {tunnel_id} routes synced: {len(request.routes)} route(s)"
+        )
+        return TunnelRoutesSyncResponse(
+            tunnel_id=tunnel_id,
+            routes=[
+                TunnelRouteSyncResult(
+                    subdomain=r.subdomain,
+                    hostname=f"{r.subdomain}.{domain}",
+                    dns_record_id=dns_map.get(r.subdomain),
+                )
+                for r in request.routes
+            ],
+        )
+    except CloudflareException as e:
+        logger.error(f"Failed to sync tunnel routes: {e.message}")
+        raise HTTPException(
+            status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sync tunnel routes: {e.message}",
         )
