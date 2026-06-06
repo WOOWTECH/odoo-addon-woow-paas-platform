@@ -113,6 +113,63 @@ class TestHaApiSecurityAccess(HttpCase):
             token)
         self.assertEqual(resp.status_code, 403)
 
+    def test_get_access_owner_omits_tunnel_token(self):
+        """sa_get_access（security-access:read，較低 scope）回傳完整 to_dict()，
+        owner 200 且 body 絕不含 tunnel_token。
+
+        這條低-scope 全序列化端點先前無正向守線：未來 to_dict() 一旦新增敏感
+        欄位（或把 tunnel_token 加回）會在這個端點靜默外洩給只有 read scope 的
+        client。鎖住 token-not-in-body（鏡像 smart_home get_home 覆蓋）。
+        """
+        token = self._make_token(self.user, 'security-access:read')
+        resp = self._get(
+            f'/api/security-access/accesses/{self.sa.id}', token)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['access']['name'], 'HA Gateway')
+        self.assertNotIn('tunnel_token', str(data))
+        # tok-ha-secret 絕不可從 read-scope detail 端點外洩
+        self.assertNotIn('tok-ha-secret', str(data))
+
+    def test_outsider_cannot_get_foreign_sa_detail(self):
+        """sa_get_access 各自的 cross-user negative（非僅靠 tunnel-token 間接守）。
+
+        三個 read 端點（detail / status / tunnel-token）共用 _get_sa_with_access；
+        每個 get 端點都需自己的 outsider 403，鎖死 resolver 不可被拆開後某端點
+        失去守線（orm-vs-endpoint-acl-test-coverage：每 get endpoint 對等
+        negative）。
+        """
+        token = self._make_token(self.outsider, 'security-access:read')
+        resp = self._get(
+            f'/api/security-access/accesses/{self.sa.id}', token)
+        self.assertEqual(resp.status_code, 403)
+
+    def test_outsider_cannot_get_foreign_sa_status(self):
+        """sa_get_status 各自的 cross-user negative。
+
+        status 端點在低 scope 下會觸發 action_refresh_status()（寫 DB / 打
+        operator），外人必須在 resolver 就被擋（403），絕不進到 refresh。"""
+        token = self._make_token(self.outsider, 'security-access:read')
+        resp = self._get(
+            f'/api/security-access/accesses/{self.sa.id}/status', token)
+        self.assertEqual(resp.status_code, 403)
+
+    def test_list_workspaces_scopes_to_member(self):
+        """sa_list_workspaces：member 看得到自己的 workspace，外人看不到。
+
+        鏡像 smart_home 的 workspace 列表覆蓋；先前此端點完全無測試。"""
+        member_tok = self._make_token(self.user, 'workspace:read')
+        resp = self._get('/api/security-access/workspaces', member_tok)
+        self.assertEqual(resp.status_code, 200)
+        ws_ids = [w['id'] for w in resp.json()['workspaces']]
+        self.assertIn(self.workspace.id, ws_ids)
+
+        out_tok = self._make_token(self.outsider, 'workspace:read')
+        resp = self._get('/api/security-access/workspaces', out_tok)
+        self.assertEqual(resp.status_code, 200)
+        out_ws_ids = [w['id'] for w in resp.json()['workspaces']]
+        self.assertNotIn(self.workspace.id, out_ws_ids)
+
     def test_ha_client_allows_sa_scopes(self):
         """G-H3 守線：public client 必須被授權新 scope，否則 refresh fail。"""
         allowed = self.client_rec.get_allowed_scopes()
