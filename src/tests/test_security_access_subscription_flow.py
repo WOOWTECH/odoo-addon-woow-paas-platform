@@ -14,13 +14,21 @@ from odoo.addons.woow_paas_platform.controllers.security_access import (
     SecurityAccessController,
 )
 
-# controller._check_route_prefix 用 function-local import
-# `from ..services.paas_operator import get_paas_operator_client`，每次呼叫從
-# services.paas_operator 模組現抓 attribute。patch 必須打在「來源模組」上，
-# 打 models.security_access namespace 的那份 copy 不影響 controller 實際讀的名字
-# （否則 mock 變死碼、controller fall through 到真實 client → false confidence）。
+# 兩條呼叫路徑、兩個 patch target（namespace 不同，缺一不可）：
+# 1. controller._check_route_prefix 用 function-local import
+#    `from ..services.paas_operator import get_paas_operator_client`，每次
+#    呼叫從 services.paas_operator 模組現抓 attribute → patch 來源模組。
+# 2. model 的 route create/write/unlink → _sync_routes_to_operator 用的是
+#    models/security_access.py 頂部 import 進自己 namespace 的那份 copy →
+#    patch 來源模組不影響它，必須另 patch model namespace。
+# 只 patch 其中一個會讓另一條路徑 fall through 到真實 client（在 sandbox 有
+# 設定 operator URL 時直接打 HTTP，被 Odoo BlockedRequest 擋下而紅）。
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.services.paas_operator.'
+    'get_paas_operator_client'
+)
+MOCK_GET_CLIENT_MODEL = (
+    'odoo.addons.woow_paas_platform.models.security_access.'
     'get_paas_operator_client'
 )
 
@@ -105,12 +113,12 @@ class TestSecurityAccessControllerFlow(TransactionCase):
             'name': 'Check Gateway', 'workspace_id': self.workspace.id,
         })
         sa.write({'state': 'active', 'tunnel_id': 'tun-x'})
-        with patch(MOCK_GET_CLIENT) as mock_get_client:
-            mock_client = MagicMock()
-            mock_client.sync_tunnel_routes.return_value = {'routes': []}
-            mock_client.check_route_availability.return_value = {
-                'available': True}
-            mock_get_client.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.check_route_availability.return_value = {
+            'available': True}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mock_client):
             self.env['woow_paas_platform.security_access_route'].create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': 'check-taken',
@@ -122,12 +130,13 @@ class TestSecurityAccessControllerFlow(TransactionCase):
 
     def test_route_quota_enforced_at_controller(self):
         """plan sa_max_routes=1：第二條自訂 route 在 controller 層被擋。"""
-        with _patch_request(self.env), patch(MOCK_GET_CLIENT) as mock_gc:
-            mock_client = MagicMock()
-            mock_client.sync_tunnel_routes.return_value = {'routes': []}
-            mock_client.check_route_availability.return_value = {
-                'available': True}
-            mock_gc.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.check_route_availability.return_value = {
+            'available': True}
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mock_client), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mock_client):
             res = self.controller._create_security_access(
                 workspace=self.workspace, name='Quota GW',
                 plan_id=self.plan.id, template_id=self.template.id,
