@@ -69,6 +69,7 @@ async def create_tunnel(request: TunnelCreateRequest):
 
         # Step 4: Create DNS record
         dns_record_id = None
+        dns_failed = False
         if cloudflare_service.dns_enabled:
             # Extract subdomain from hostname
             domain = settings.cloudflare_domain
@@ -83,6 +84,12 @@ async def create_tunnel(request: TunnelCreateRequest):
                     tunnel_id=tunnel_id,
                 )
             except CloudflareException as e:
+                # DNS was ENABLED but creation failed: surface dns_failed=True
+                # so the caller (Odoo) can tell this apart from dns_record_id
+                # being None because DNS is intentionally disabled. Without the
+                # flag the caller would mark the SA active with no resolvable
+                # hostname and rely entirely on a later re-sync to self-heal.
+                dns_failed = True
                 logger.warning(
                     f"DNS record creation failed for {request.hostname}: {e.message}. "
                     "Tunnel is created but DNS must be configured manually."
@@ -99,6 +106,7 @@ async def create_tunnel(request: TunnelCreateRequest):
             tunnel_token=tunnel_token,
             hostname=request.hostname,
             dns_record_id=dns_record_id,
+            dns_failed=dns_failed,
         )
 
     except CloudflareException as e:

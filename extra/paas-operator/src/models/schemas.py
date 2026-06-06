@@ -215,6 +215,16 @@ class TunnelCreateResponse(BaseModel):
     dns_record_id: Optional[str] = Field(
         None, description="DNS record ID if created"
     )
+    dns_failed: bool = Field(
+        False,
+        description=(
+            "True when DNS was enabled but the record creation failed, so "
+            "dns_record_id is None for an error reason (vs None because DNS "
+            "is intentionally disabled). Lets the caller distinguish the two "
+            "and alert/re-sync rather than silently treating the tunnel as "
+            "fully reachable."
+        ),
+    )
 
 
 class TunnelStatusResponse(BaseModel):

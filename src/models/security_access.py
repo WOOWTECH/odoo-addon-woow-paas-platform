@@ -336,6 +336,19 @@ class SecurityAccess(models.Model):
                 'deployed_at': fields.Datetime.now(),
             })
 
+            if result.get('dns_failed'):
+                # Operator created the tunnel but DNS record creation FAILED
+                # (distinct from DNS being disabled, where dns_failed is False
+                # and dns_record_id is None by design). The explicit re-sync
+                # below normally heals this by re-asserting the primary route's
+                # DNS, but log it so a never-converging case is observable
+                # instead of an "active" SA silently having no resolvable host.
+                _logger.warning(
+                    "[SA] operator reported DNS creation failure for sa=%s "
+                    "canonical=%s; relying on re-sync to converge",
+                    self.id, self.canonical_name,
+                )
+
             # Primary route record mirrors the ingress rule created above.
             # Skip the route-create override's sync (sa_skip_route_sync): it
             # would fire a first PUT /routes that lacks http_host_header, and
