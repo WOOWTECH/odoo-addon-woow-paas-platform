@@ -122,3 +122,21 @@ class TestSecurityAccessCron(TransactionCase):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
         self.assertEqual(sa.state, 'active')
+
+    def test_cron_does_not_flip_deleting_back_to_suspended(self):
+        """已清理（deleting）的 SA，後續 cron（sub 仍 cancel）不得翻回 suspended。
+
+        branch 4 / _do_suspend 對 'deleting' 須 no-op，避免逆向狀態抖動
+        （finding：deleting→suspended state thrash）。
+        """
+        sa = self._make_sa_with_sub('cancel')
+        # 模擬已經跑過 cleanup 的終態：tunnel 已清、state=deleting
+        sa.write({'state': 'deleting', 'tunnel_id': False})
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            self.CronModel._cron_enforce_subscription_lifecycle()
+        sa.invalidate_recordset()
+        self.assertEqual(sa.state, 'deleting')
+        # 不應對 operator 重打 suspend 的 503 sync
+        mock_client.sync_tunnel_routes.assert_not_called()

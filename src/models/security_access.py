@@ -420,7 +420,11 @@ class SecurityAccess(models.Model):
             self.id, self.state,
             self.subscription_id.id if self.subscription_id else None,
         )
-        if self.state == 'suspended':
+        # 'deleting' is terminal-ish (cleanup already ran): never flip it back
+        # to 'suspended' — that reverse transition makes a cleaned-up record
+        # re-advertise as merely suspended and triggers needless re-cleanup
+        # churn on every cron pass while the subscription stays cancelled.
+        if self.state in ('suspended', 'deleting'):
             return
         if self.tunnel_id:
             try:
@@ -460,11 +464,30 @@ class SecurityAccess(models.Model):
                      self.id, restore_state)
 
     def _do_cleanup(self):
-        """Cron-driven permanent removal of Cloudflare resources."""
+        """Cron-driven permanent removal of Cloudflare resources.
+
+        Only mark 'deleting' once the tunnel is actually gone. If
+        _cleanup_cloudflare failed it deliberately keeps tunnel_id (re-entrant
+        retry); writing 'deleting' then would be a misleading success signal
+        that hides a still-live CF tunnel and lets ops mistake "clean" for
+        "clean failed". Land in 'error' + error_message instead, fail-loud and
+        observable like _do_suspend / _do_resume."""
         self.ensure_one()
         _logger.info("[SA] _do_cleanup sa=%s tunnel=%s",
                      self.id, self.tunnel_id)
         self._cleanup_cloudflare()
+        if self.tunnel_id:
+            # cleanup did not finish — tunnel still live in Cloudflare
+            self.write({
+                'state': 'error',
+                'error_message': "Cloudflare cleanup failed; tunnel still "
+                                 "live. Will retry on the next cron pass.",
+            })
+            _logger.warning(
+                "[SA] _do_cleanup incomplete sa=%s tunnel=%s (state=error)",
+                self.id, self.tunnel_id,
+            )
+            return
         self.write({'state': 'deleting'})
 
     def _cleanup_cloudflare(self):

@@ -416,6 +416,31 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
             sa._cleanup_cloudflare()
         self.assertFalse(sa.tunnel_id)
 
+    def test_cleanup_failure_state_is_error_not_deleting(self):
+        """cleanup 失敗（tunnel 仍 live）不得寫 'deleting' 假性成功，須 'error'。"""
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        mock_client.delete_tunnel.side_effect = Exception('cf down')
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_cleanup()
+        self.assertEqual(sa.state, 'error')
+        self.assertTrue(sa.error_message)
+        self.assertEqual(sa.tunnel_id, 'tun-lc')
+
+    def test_suspend_early_returns_on_deleting(self):
+        """deleting 是 terminal-ish：_do_suspend 不得把它翻回 suspended。"""
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_cleanup()  # tunnel cleared, state -> deleting
+        self.assertEqual(sa.state, 'deleting')
+        mock_client.sync_tunnel_routes.reset_mock()
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_suspend()
+        # state stays 'deleting'; no reverse transition to 'suspended'
+        self.assertEqual(sa.state, 'deleting')
+        mock_client.sync_tunnel_routes.assert_not_called()
+
     def test_direct_unlink_triggers_cf_cleanup(self):
         """direct-unlink-bypass-cleanup-hook 守線：直接 unlink 也要清 CF。"""
         mock_client = self._sync_mock()

@@ -89,7 +89,11 @@ class SubscriptionLifecycleCron(models.AbstractModel):
             if not sub.sh_end_date:
                 return
             days_expired = (today - sub.sh_end_date).days
-            if days_expired > grace_days and entity.state != 'suspended':
+            # 'deleting' is terminal-ish (cleanup already ran) — excluding it
+            # here, alongside 'suspended', avoids the reverse
+            # 'deleting'→'suspended' state thrash on every subsequent pass.
+            if (days_expired > grace_days
+                    and entity.state not in ('suspended', 'deleting')):
                 entity._do_suspend()
                 _logger.info(
                     "[SUB_CRON] suspended %s %s (expired %d days, grace=%d)",
@@ -99,7 +103,9 @@ class SubscriptionLifecycleCron(models.AbstractModel):
 
         # 4. Cancelled → suspend + check cleanup
         if sub.state == 'cancel':
-            if entity.state != 'suspended':
+            # See branch 3: never re-suspend a record already cleaned up
+            # ('deleting'); that reverse transition is the state thrash.
+            if entity.state not in ('suspended', 'deleting'):
                 entity._do_suspend()
                 _logger.info(
                     "[SUB_CRON] suspended %s %s (cancelled)",
