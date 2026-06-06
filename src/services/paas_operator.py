@@ -736,10 +736,25 @@ class PaaSOperatorClient:
             subdomain: subdomain prefix (without domain)
 
         Returns:
-            Dict with subdomain, hostname, available (bool)
+            Dict with:
+              - ``subdomain``: the queried prefix
+              - ``hostname``: the full FQDN that was checked
+              - ``status``: one of ``free`` / ``taken`` / ``unknown``.
+                ``unknown`` means the Cloudflare API errored (401/403/429/5xx)
+                and availability could NOT be determined — it is NOT "free".
+              - ``available``: ``bool | None``. ``True``/``False`` for
+                ``free``/``taken``; ``None`` when ``status == 'unknown'``
+                (the operator deliberately does NOT fail open).
+              - ``reason``: present only on ``unknown``, a human message.
+
+            Callers MUST branch on ``status`` and treat ``unknown`` /
+            ``available is None`` as fail-closed (see
+            controllers/security_access.py:_check_route_prefix). Do not treat
+            ``available`` as a plain bool.
 
         Raises:
-            PaaSOperatorError: If the availability check fails
+            PaaSOperatorError: If the request itself fails (transport / non-2xx
+                outside the operator's handled ``unknown`` path).
         """
         return self._request(
             'GET',
