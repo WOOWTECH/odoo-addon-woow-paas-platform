@@ -35,18 +35,6 @@ operator，前端複用 detail-tab 框架，HA component 串接需平行 API**�
 | HA 串接 | 在 PaaS 端提供平行於 `/api/smarthome/*` 的 `/api/security-access/*` + 串接文件；**不修改 `woow_paas_smart_home` component 原始碼** |
 | mockup 取捨 | header 的「Rollback」按鈕在 SA 無對應語義（屬 Cloud Service 部署回滾）→ 不做；「Domain」按鈕 = 跳 Domains tab |
 
-## 名詞對照（與 Cloudflare 後台用語）
-
-| Cloudflare Zero Trust 後台 | 本設計 | 說明 |
-|---|---|---|
-| 已發布應用程式路由（Published Application Routes / Public Hostnames，hostname → service） | **Application Route**（`security_access.route`，Configuration tab） | tunnel ingress 規則。路由的 hostname 只能掛在「已連線至 Cloudflare 的網域（zone）」上 |
-| ingress 的 catch-all / `http_status:*` 回應 | 503 凍結機制 | suspend = 每條 route 的 service 換成 `http_status:503` |
-| 已連線網域（zone） | 平台 base domain（預先接好）/ **Custom Domain**（Domains tab，客戶網域接入） | Custom Domain 是 Application Route 的**前置條件層**：CNAME 軌不進平台帳號（別名借道 primary route）；full_zone 軌（NS 委派）成為平台帳號內的 zone |
-
-v2 擴充方向（本次不做）：full_zone 軌的客戶網域成為帳號內 zone 後，可允許直接在其上
-開 Application Route（如 `ha.acme.com → localhost:80`），不繞 primary 別名；屆時
-`custom_domain` 加 `route` 關聯即可演進。
-
 ## 非目標
 
 - Access Control 獨立加購計費（名額計數、$7/名額）——等定價拍板
@@ -58,6 +46,18 @@ v2 擴充方向（本次不做）：full_zone 軌的客戶網域成為帳號內 
 ---
 
 ## §1 資料模型
+
+### 術語對照（本設計 ↔ Cloudflare dashboard）
+
+實作與 review 時對照用，避免混淆（特別是 Application Route 與 Custom Domain 不是同一件事）：
+
+| 本設計術語 | 子模型 | Cloudflare dashboard 位置（zh-tw 介面名） | 本質 |
+|---|---|---|---|
+| **Application Route**（Configuration tab） | `security_access.route` | Zero Trust → Networks → Tunnels → 該 tunnel →「**已發布應用程式路由**」（public hostname） | hostname → service 的 tunnel ingress 轉送規則；hostname 只能用**我們帳號內 zone** 的網域（平台 base domain subdomain） |
+| **Custom Domain**（Domains tab） | `security_access.custom_domain` | CNAME 軌：SSL/TLS → 「**自訂主機名稱**」（Custom Hostnames, Cloudflare for SaaS）；full_zone 軌：帳號內新增 **zone** | 把**客戶外部網域**接進我們帳號的「接入機制」；接進來後流量仍落在某條 application route（v1 = primary route） |
+| **Tunnel** | 主模型 `tunnel_id` | Zero Trust → Networks → Tunnels | 每訂閱戶一條（`paas-sa-{hash}` 命名）；與平台 infra tunnel（如 `prod-paas-dev`，服務 K8s cluster）**不同層**，靠命名前綴區分 |
+| **Access Policy**（Access tab） | `security_access.access_policy` | Zero Trust → Access → Applications + Policies | 受保護 hostname 的身分驗證閘 |
+| **Email Rule**（Email tab） | `security_access.email_rule` | 該 zone → Email →「**電子郵件路由**」（Email Routing） | full_zone 網域的收信轉寄規則 |
 
 ### 主模型 `woow_paas_platform.security_access`
 
