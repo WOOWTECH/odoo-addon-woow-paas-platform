@@ -751,6 +751,64 @@ class CloudflareService:
 
             logger.info(f"Tunnel {tunnel_id} configured successfully")
 
+    async def configure_tunnel_ingress(
+        self, tunnel_id: str, rules: List[dict]
+    ) -> None:
+        """Replace a dedicated tunnel's full ingress rule list.
+
+        Multi-route counterpart of ``configure_tunnel`` (which only expresses
+        a single hostname). Each rule dict: {hostname, service,
+        http_host_header}. A catch-all 404 rule is appended automatically.
+
+        Args:
+            tunnel_id: The tunnel ID.
+            rules: Desired ingress rules, order preserved.
+
+        Raises:
+            CloudflareException: If configuration update fails.
+        """
+        url = f"{self._tunnels_url(tunnel_id)}/configurations"
+
+        ingress_rules = []
+        for rule in rules:
+            entry = {"hostname": rule["hostname"], "service": rule["service"]}
+            if rule.get("http_host_header"):
+                entry["originRequest"] = {"httpHostHeader": rule["hostname"]}
+            ingress_rules.append(entry)
+        ingress_rules.append({"service": "http_status:404"})
+
+        payload = {"config": {"ingress": ingress_rules}}
+
+        logger.info(
+            f"Configuring tunnel {tunnel_id} ingress with {len(rules)} route(s)"
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                url,
+                headers=self._headers,
+                json=payload,
+                timeout=30.0,
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Failed to configure tunnel ingress: "
+                    f"{response.status_code} - {response.text}"
+                )
+                raise CloudflareException(
+                    f"Failed to configure tunnel ingress: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            logger.info(f"Tunnel {tunnel_id} ingress configured successfully")
+
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get the status and connection info for a Cloudflare Tunnel.
 
