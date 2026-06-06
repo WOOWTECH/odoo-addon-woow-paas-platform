@@ -36,7 +36,7 @@ Phase 1（dual-scope 地基）已讓 `woow_paas_platform.skill` 支援 system/us
 
 | 決策 | 結果 | 來源 |
 |------|------|------|
-| 範圍 | **只做後台 wizard（system skill）**；`/woow` 前台 user skill 為獨立後續 phase | user |
+| 範圍 | **只做後台 wizard（system skill）**；`/woow` 前台 user skill 為獨立後續 phase（2026-06-05：後台 wizard 已擴充支援 user-scope 上傳，前台上傳由 skill-binding-ux 決議取消 — 見 `docs/superpowers/specs/2026-06-05-skill-binding-ux-design.md`） | user |
 | Odoo 是否解析 bundle | **否**——只存 bytes + 算 sha256，不解壓不讀 SKILL.md | user |
 | name/version 來源 | **wizard 欄位由 admin 填**（非從 bundle 提取） | user |
 | 重複上傳（同 scope+name+version） | **硬錯誤** `UserError`，要求改版號（尊重 bundle immutability + partial unique index） | user |
