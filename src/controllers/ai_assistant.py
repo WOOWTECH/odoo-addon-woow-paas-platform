@@ -1586,9 +1586,12 @@ class AiAssistantController(Controller):
         # read-mode share user keeps the existing 'Access denied' semantics
         # (test_project_update_share_denied). create/delete are intentionally
         # not gated (not part of the "project settings page" scope; meeting
-        # left undecided).
+        # left undecided). Denial wording is 'Access denied' — THIS endpoint's
+        # convention, locked by AC #42
+        # (test_mcp_acl_unbound_isolation:'endpoint denial wording must remain
+        # Access denied'); paas.py's gates use its own 'Permission denied'.
         if not _portal_project_settings_editable(request.env):
-            return {'success': False, 'error': 'Permission denied'}
+            return {'success': False, 'error': 'Access denied'}
         project_id = params.get('project_id')
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
