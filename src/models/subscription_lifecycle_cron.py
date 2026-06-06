@@ -34,6 +34,7 @@ class SubscriptionLifecycleCron(models.AbstractModel):
         for Model in [
             self.env['woow_paas_platform.cloud_service'],
             self.env['woow_paas_platform.smart_home'],
+            self.env['woow_paas_platform.security_access'],
         ]:
             entities = Model.search([('subscription_id', '!=', False)])
             _logger.info(
