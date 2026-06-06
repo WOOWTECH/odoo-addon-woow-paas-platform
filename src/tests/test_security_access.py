@@ -167,3 +167,116 @@ class TestSecurityAccess(TransactionCase):
             })
             with self.assertRaises(UserError):
                 route.write({'subdomain_prefix': 'renamed'})
+
+
+class TestSecurityAccessLifecycleHooks(TransactionCase):
+    """_do_suspend / _do_resume / _do_cleanup / unlink 清理鏈."""
+
+    def setUp(self):
+        super().setUp()
+        self.SecurityAccess = self.env['woow_paas_platform.security_access']
+        self.Route = self.env['woow_paas_platform.security_access_route']
+        self.workspace = self.env['woow_paas_platform.workspace'].create(
+            {'name': 'SA LC WS'})
+
+    def _make_active_sa_with_routes(self, mock_client):
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa = self.SecurityAccess.create({
+                'name': 'LC Gateway',
+                'workspace_id': self.workspace.id,
+            })
+            sa.write({'state': 'active', 'tunnel_id': 'tun-lc'})
+            self.Route.create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': sa.canonical_name,
+                'is_primary': True,
+            })
+            self.Route.create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': 'lc-custom',
+                'service_url': 'http://localhost:80',
+            })
+        return sa
+
+    def _sync_mock(self):
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        return mock_client
+
+    def test_suspend_overrides_all_routes_to_503(self):
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        mock_client.sync_tunnel_routes.reset_mock()
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_suspend()
+        self.assertEqual(sa.state, 'suspended')
+        self.assertEqual(sa.pre_suspend_state, 'active')
+        kwargs = mock_client.sync_tunnel_routes.call_args.kwargs
+        # 全部 route（含 primary）都 503；service_url 原值保留在 DB
+        self.assertTrue(all(
+            r['service_url'] == 'http_status:503' for r in kwargs['routes']))
+        self.assertEqual(len(kwargs['routes']), 2)
+        self.assertEqual(
+            sa.route_ids.filtered(lambda r: not r.is_primary).service_url,
+            'http://localhost:80')
+
+    def test_suspend_idempotent(self):
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_suspend()
+            calls_after_first = mock_client.sync_tunnel_routes.call_count
+            sa._do_suspend()  # second call must early-return
+        self.assertEqual(
+            mock_client.sync_tunnel_routes.call_count, calls_after_first)
+
+    def test_suspend_failure_sets_error_no_silent_retry(self):
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        mock_client.sync_tunnel_routes.side_effect = Exception('cf down')
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_suspend()
+        self.assertEqual(sa.state, 'error')
+
+    def test_resume_restores_service_urls(self):
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_suspend()
+            mock_client.sync_tunnel_routes.reset_mock()
+            sa._do_resume()
+        self.assertEqual(sa.state, 'active')
+        kwargs = mock_client.sync_tunnel_routes.call_args.kwargs
+        urls = {r['subdomain']: r['service_url'] for r in kwargs['routes']}
+        self.assertEqual(urls['lc-custom'], 'http://localhost:80')
+        self.assertNotIn('http_status:503', urls.values())
+
+    def test_cleanup_deletes_tunnel(self):
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_cleanup()
+        mock_client.delete_tunnel.assert_called_once_with('tun-lc')
+        self.assertEqual(sa.state, 'deleting')
+        self.assertFalse(sa.tunnel_id)
+
+    def test_cleanup_reentrant_on_failure(self):
+        """cleanup 失敗 → tunnel_id 保留，重跑可續刪（冪等重入）。"""
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        mock_client.delete_tunnel.side_effect = Exception('cf down')
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_cleanup()
+        self.assertEqual(sa.tunnel_id, 'tun-lc')  # kept for retry
+        mock_client.delete_tunnel.side_effect = None
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._cleanup_cloudflare()
+        self.assertFalse(sa.tunnel_id)
+
+    def test_direct_unlink_triggers_cf_cleanup(self):
+        """direct-unlink-bypass-cleanup-hook 守線：直接 unlink 也要清 CF。"""
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa.with_context(sa_force_delete_primary=True).unlink()
+        mock_client.delete_tunnel.assert_called_once_with('tun-lc')
