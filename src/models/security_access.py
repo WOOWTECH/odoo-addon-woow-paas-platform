@@ -178,13 +178,12 @@ class SecurityAccess(models.Model):
         # through write() nor pop these keys, so a workspace member calling ORM
         # create directly could squat a victim-namespace canonical_name
         # (decides tunnel name, primary subdomain_prefix, DNS comment stamp and
-        # the public FQDN). Strip both keys from caller vals unless the caller
-        # is su/system — the canonical_name is then computed once below, and
-        # reference_id falls back to its uuid4 default. Closes the create+write
-        # immutable chain symmetrically (mirrors the write() guard condition).
-        privileged = self.env.su or self.env.user.has_group(
-            'base.group_system')
-        if not privileged:
+        # the public FQDN). Strip both keys from caller vals — for EVERYONE
+        # incl. superuser, gated only by the same context escape hatch as the
+        # write() guard (no env.su exemption, else su-env tests false-green).
+        # canonical_name is then computed once below; reference_id falls back
+        # to its uuid4 default. Closes the create+write immutable chain.
+        if not self.env.context.get('sa_internal_identity_write'):
             for vals in vals_list:
                 vals.pop('canonical_name', None)
                 vals.pop('reference_id', None)
@@ -192,18 +191,26 @@ class SecurityAccess(models.Model):
         for record in records:
             if not record.canonical_name:
                 # compute ONCE and store; never recompute (name is mutable).
-                # sudo: the write() guard below blocks canonical_name writes
-                # for non-system users — this initial assignment is the one
-                # legitimate internal write.
-                record.sudo().write({
+                # The write() guard below blocks canonical_name writes for
+                # everyone (incl. superuser) — this initial assignment is the
+                # one legitimate internal write, opted in via the context
+                # escape hatch (not an env.su exemption: see write() comment).
+                record.with_context(
+                    sa_internal_identity_write=True,
+                ).write({
                     'canonical_name': record._generate_canonical_name(),
                 })
         return records
 
     def write(self, vals):
         # canonical_name / reference_id are identity anchors — subdomain &
-        # tunnel naming derive from them; drift would break routing.
-        if not self.env.su and not self.env.user.has_group('base.group_system'):
+        # tunnel naming derive from them; drift would break routing. Hard
+        # invariant for EVERYONE including superuser: an env.su exemption would
+        # silently skip this guard in TransactionCase (su env) and any sudo()'d
+        # path, giving false-green tests (same trap the route prefix guard
+        # documents). The context key is the single deliberate escape hatch —
+        # only the create-time initial assignment sets it.
+        if not self.env.context.get('sa_internal_identity_write'):
             for forbidden in ('canonical_name', 'reference_id'):
                 if forbidden in vals:
                     raise UserError(

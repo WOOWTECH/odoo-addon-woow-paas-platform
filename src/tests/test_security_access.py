@@ -39,6 +39,29 @@ class TestSecurityAccess(TransactionCase):
         sa.write({'name': 'Renamed Gateway'})
         self.assertEqual(sa.canonical_name, original)
 
+    def test_canonical_name_write_guard_fires_under_su(self):
+        """write() guard 對 su env 也生效（無 env.su 豁免，否則 su-env 測試假綠）。
+
+        TransactionCase 預設就是 su env；若 guard 仍給 su 豁免，這條會假綠
+        （沒打到 guard 分支）。改用 context escape hatch 後，su 也須被擋。
+        """
+        sa = self._make_sa()
+        with self.assertRaises(UserError):
+            sa.write({'canonical_name': 'paas-sa-hijack-su'})
+        with self.assertRaises(UserError):
+            sa.write({'reference_id': 'hijack-ref-su'})
+
+    def test_canonical_name_injection_stripped_under_su(self):
+        """su env 直接 create 注入 canonical_name 也須被剝離（改自動生成）。"""
+        injected = 'paas-sa-victim-su'
+        sa = self.SecurityAccess.create({
+            'name': 'SU Injected GW',
+            'workspace_id': self.workspace.id,
+            'canonical_name': injected,
+        })
+        self.assertNotEqual(sa.canonical_name, injected)
+        self.assertTrue(sa.canonical_name.startswith('paas-sa-'))
+
     def test_primary_hostname_combines_domain(self):
         self.env['ir.config_parameter'].sudo().set_param(
             'woow_paas_platform.paas_domain', 'stg.woowtech.io')
