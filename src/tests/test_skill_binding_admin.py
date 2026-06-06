@@ -64,3 +64,56 @@ class TestEffectiveSkillHelper(TransactionCase):
         self.assertNotIn(self.sys_draft, eff)
         # system 同名被 bound 遮蔽
         self.assertNotIn(self.sys_pub, eff)
+
+
+from unittest.mock import patch
+
+
+@tagged('post_install', '-at_install')
+class TestSkillRepoint(TransactionCase):
+    """§1 — admin 改 scope/project 時新舊兩組 is_latest 都重算 + push。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.proj_a = cls.env['project.project'].sudo().create({'name': 'RP A'})
+        cls.proj_b = cls.env['project.project'].sudo().create({'name': 'RP B'})
+
+    def _mk(self, **vals):
+        return _mk_skill(self.env, **vals)
+
+    def test_repoint_recomputes_old_and_new_group(self):
+        # 舊組（proj_a, 'mv'）兩版：v2 是 is_latest
+        v1 = self._mk(name='mv', version='1.0.0', scope='user',
+                      project_id=self.proj_a.id, state='published')
+        v2 = self._mk(name='mv', version='2.0.0', scope='user',
+                      project_id=self.proj_a.id, state='published')
+        v1._recompute_is_latest()
+        self.assertTrue(v2.is_latest)
+        # v2 搬去 proj_b → 舊組 winner 應回到 v1；新組 winner = v2
+        v2.write({'project_id': self.proj_b.id})
+        self.assertTrue(v1.is_latest, "old group must re-elect its winner")
+        self.assertTrue(v2.is_latest, "new group winner is the mover")
+
+    def test_repoint_pushes_snapshot_to_both_projects(self):
+        sk = self._mk(name='mv2', scope='user',
+                      project_id=self.proj_a.id, state='published')
+        with patch.object(
+            type(self.env['woow_paas_platform.agent_session']),
+            '_push_snapshot_to_running_pods',
+        ) as push:
+            sk.write({'project_id': self.proj_b.id})
+        pushed = {c.args[:3] for c in push.call_args_list}
+        self.assertIn(('skill', 'user', self.proj_a.id), pushed)
+        self.assertIn(('skill', 'user', self.proj_b.id), pushed)
+
+    def test_scope_flip_by_admin_pushes_system_wide(self):
+        sk = self._mk(name='mv3', scope='user',
+                      project_id=self.proj_a.id, state='published')
+        with patch.object(
+            type(self.env['woow_paas_platform.agent_session']),
+            '_push_snapshot_to_running_pods',
+        ) as push:
+            sk.write({'scope': 'system', 'project_id': False})
+        self.assertIn(
+            ('skill', 'system'), {c.args[:2] for c in push.call_args_list})

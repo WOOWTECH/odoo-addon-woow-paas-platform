@@ -165,6 +165,16 @@ class Skill(models.Model):
                     raise AccessError(
                         "Only administrators can change a skill's project."
                     )
+        # Re-point (admin path): capture pre-write group keys — after
+        # super().write the record sits in the NEW group and the OLD group
+        # can no longer be derived from self (spec §1 / Lens-2 finding).
+        regroup = 'scope' in vals or 'project_id' in vals
+        old_groups = []
+        if regroup:
+            old_groups = [
+                (s._is_latest_group_domain(), s.scope, s.project_id.id)
+                for s in self
+            ]
         result = super().write(vals)
         if 'bundle_attachment_id' in vals:
             for skill in self:
@@ -184,6 +194,25 @@ class Skill(models.Model):
                 self.env['woow_paas_platform.agent_session'] \
                     ._push_snapshot_to_running_pods(
                         'skill', skill.scope, skill.project_id.id or None)
+        if regroup:
+            Session = self.env['woow_paas_platform.agent_session']
+            for skill, (old_domain, old_scope, old_pid) in zip(
+                    self, old_groups):
+                if skill._is_latest_group_domain() == old_domain:
+                    continue  # value written but group unchanged
+                self._recompute_is_latest_for(old_domain)
+                skill._recompute_is_latest()
+                # System flip (either direction) touches every pod; a
+                # user→user move touches the old and the new project pods.
+                # _recompute_is_latest_for writes only is_latest → never
+                # re-enters this branch (no recursion).
+                if 'system' in (old_scope, skill.scope):
+                    Session._push_snapshot_to_running_pods('skill', 'system')
+                else:
+                    Session._push_snapshot_to_running_pods(
+                        'skill', 'user', old_pid)
+                    Session._push_snapshot_to_running_pods(
+                        'skill', 'user', skill.project_id.id)
         return result
 
     def _anchor_bundle_attachment(self):
@@ -293,10 +322,16 @@ class Skill(models.Model):
 
     def _recompute_is_latest(self):
         """Invariant: at most one is_latest=True per (scope, project, name)
-        group, and it is the most-recently-published (published_at desc,
-        id desc) skill in state 'published'."""
+        group — recompute the group this skill currently sits in."""
         self.ensure_one()
-        group = self.sudo().search(self._is_latest_group_domain())
+        self._recompute_is_latest_for(self._is_latest_group_domain())
+
+    @api.model
+    def _recompute_is_latest_for(self, group_domain):
+        """Group-key-explicit recompute. Needed for scope/project re-point:
+        after write the record is in the NEW group, so the OLD group's
+        winner can only be re-elected from a domain captured pre-write."""
+        group = self.sudo().search(group_domain)
         published = group.filtered(lambda s: s.state == 'published')
         winner = published.sorted(
             key=lambda s: (s.published_at or datetime.min, s.id),
