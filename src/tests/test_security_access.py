@@ -80,6 +80,7 @@ class TestSecurityAccess(TransactionCase):
             'tunnel_name': 'paas-sa-x-y',
             'dns_record_id': 'rec-primary',
         }
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
         sa.action_provision()
@@ -92,6 +93,9 @@ class TestSecurityAccess(TransactionCase):
         primary = sa.route_ids.filtered('is_primary')
         self.assertEqual(len(primary), 1)
         self.assertEqual(primary.subdomain_prefix, sa.canonical_name)
+        # provision 只對 operator sync 一次（sa_skip_route_sync 略過
+        # route-create override 的多餘 sync；只留帶 http_host_header 的顯式 sync）
+        self.assertEqual(mock_client.sync_tunnel_routes.call_count, 1)
 
     @patch(MOCK_GET_CLIENT)
     def test_provision_error_sets_error_state(self, mock_get_client):

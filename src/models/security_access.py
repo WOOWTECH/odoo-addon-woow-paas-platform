@@ -287,7 +287,14 @@ class SecurityAccess(models.Model):
             })
 
             # Primary route record mirrors the ingress rule created above.
-            self.env['woow_paas_platform.security_access_route'].create({
+            # Skip the route-create override's sync (sa_skip_route_sync): it
+            # would fire a first PUT /routes that lacks http_host_header, and
+            # the explicit re-sync just below supersedes it — two operator
+            # round-trips for one declarative result. Keep only the explicit
+            # one (it carries the originRequest/http_host_header semantics).
+            self.env['woow_paas_platform.security_access_route'].with_context(
+                sa_skip_route_sync=True,
+            ).create({
                 'security_access_id': self.id,
                 'subdomain_prefix': self.canonical_name,
                 'service_url': default_url,
@@ -655,10 +662,14 @@ class SecurityAccessRoute(models.Model):
         # try/except reports a truthful failure with the DB row rolled back.
         with self.env.cr.savepoint():
             routes = super().create(vals_list)
-            # one sync per affected SA (declarative full-state push)
-            for sa in routes.mapped('security_access_id'):
-                if sa.state == 'active' and sa.tunnel_id:
-                    sa._sync_routes_to_operator()
+            # one sync per affected SA (declarative full-state push).
+            # action_provision sets sa_skip_route_sync because it issues its
+            # own explicit, http_host_header-carrying re-sync right after — so
+            # this override's sync would be a redundant extra operator call.
+            if not self.env.context.get('sa_skip_route_sync'):
+                for sa in routes.mapped('security_access_id'):
+                    if sa.state == 'active' and sa.tunnel_id:
+                        sa._sync_routes_to_operator()
         return routes
 
     def write(self, vals):
