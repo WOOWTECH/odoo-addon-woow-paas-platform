@@ -99,6 +99,20 @@ class TestHaApiSecurityAccess(HttpCase):
             token)
         self.assertEqual(resp.status_code, 403)
 
+    def test_outsider_cannot_list_foreign_workspace_accesses(self):
+        """sa_list_accesses 用 _check_workspace_access 直接擋（非 _get_sa_with_access）。
+
+        orm-vs-endpoint-acl-test-coverage pattern：每個 list 端點都需一條
+        token-bearing 外人 vs 外部 workspace 的 cross-user negative，鎖住
+        list gate 與 detail gate 各自獨立的迴歸守線（鏡像 smart_home 的
+        test_home_not_visible_in_other_workspace / test_no_workspace_access）。
+        """
+        token = self._make_token(self.outsider, 'security-access:read')
+        resp = self._get(
+            f'/api/security-access/workspaces/{self.workspace.id}/accesses',
+            token)
+        self.assertEqual(resp.status_code, 403)
+
     def test_ha_client_allows_sa_scopes(self):
         """G-H3 守線：public client 必須被授權新 scope，否則 refresh fail。"""
         allowed = self.client_rec.get_allowed_scopes()
