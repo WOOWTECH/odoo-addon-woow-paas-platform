@@ -3,6 +3,7 @@ from . import ai_assistant
 from . import billing
 from . import oauth2
 from . import smart_home
+from . import security_access
 from . import ha_api
 from . import profile
 from . import dashboard
