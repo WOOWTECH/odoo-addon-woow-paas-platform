@@ -256,9 +256,20 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}/security-accesses',
             {'action': 'create', 'name': 'Owner Created GW',
              'template_id': 999999, 'plan_id': 999999})
-        # role gate cleared → not a permission denial (downstream template
-        # validation fails instead).
+        # Guard against false-green: _rpc returns {} on a JSON-RPC error
+        # (endpoint crash), which would silently satisfy the assertions below
+        # (None→'' has no 'permission'/'template'). Require a structured body so
+        # a future create path that crashes AFTER the gate is caught, not
+        # mistaken for "gate passed".
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed (JSON-RPC error) instead of "
+                         "returning a structured result: %s"
+                         % self._last_body.get('error'))
+        # role gate cleared → not a permission denial …
         self.assertNotIn('permission', (res.get('error') or '').lower())
+        # … and the failure IS the downstream template validation, positively
+        # locking that the gate let us reach business logic.
+        self.assertIn('template', (res.get('error') or '').lower())
 
     # ---- detail refresh_status / provision / update dispatch role gate ----
 
@@ -320,6 +331,62 @@ class TestSecurityAccessEndpoints(HttpCase):
         self.assertIn('permission', (res.get('error') or '').lower())
         # name unchanged
         self.assertNotEqual(self.sa.name, 'Renamed By Member')
+
+    # ---- owner positive write paths (A/B 變體 half-coverage 補正向) ----
+
+    def test_owner_detail_update_renames(self):
+        """owner action='update' 改 name 必須真的寫進去（正向）。
+
+        既有覆蓋只有 role='user' member 的 update-denied negative
+        (test_member_user_role_update_denied)；缺 owner 正向，未來把 update
+        改成靜默 no-op 不會被任何測試抓到。
+        """
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}',
+            {'action': 'update', 'name': 'Renamed By Owner'})
+        self.assertTrue(res.get('success'), res.get('error'))
+        self.sa.invalidate_recordset(['name'])
+        self.assertEqual(self.sa.name, 'Renamed By Owner')
+
+    def test_owner_route_update_writes_service_url_and_is_protected(self):
+        """owner /routes action='update' 改 service_url + is_protected 正向。
+
+        _update_route 的 is_protected 寫入分支先前完全無測試；service_url 正向
+        亦無。self.sa 未 provision（無 tunnel_id），route write 不觸發 operator
+        sync，可純驗 ORM 寫入結果。
+        """
+        route = self.env[
+            'woow_paas_platform.security_access_route'].sudo().create({
+                'security_access_id': self.sa.id,
+                'subdomain_prefix': 'ep-owner-update',
+                'service_url': 'http://localhost:80',
+                'is_protected': False,
+            })
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/routes',
+            {'action': 'update', 'route_id': route.id,
+             'service_url': 'http://localhost:9000', 'is_protected': True})
+        self.assertTrue(res.get('success'), res.get('error'))
+        self.assertEqual(res['data']['service_url'], 'http://localhost:9000')
+        self.assertTrue(res['data']['is_protected'])
+        route.invalidate_recordset(['service_url', 'is_protected'])
+        self.assertEqual(route.service_url, 'http://localhost:9000')
+        self.assertTrue(route.is_protected)
+
+    def test_route_check_endpoint_requires_prefix(self):
+        """platform-level api_route_check：缺 prefix → 結構化 400 分支。
+
+        只有 helper _check_route_prefix 被直接呼叫測到；endpoint dispatch 本身
+        與 'prefix is required' 分支先前未被任何測試走到。
+        """
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc('/api/security-access/routes/check', {})
+        self._assert_structured_denial(res)
+        self.assertIn('prefix', (res.get('error') or '').lower())
 
     def test_owner_refresh_status_passes_role_gate(self):
         """owner 打 action='refresh_status'（無 tunnel_id）通過 role gate。
