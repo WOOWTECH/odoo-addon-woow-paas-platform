@@ -1152,10 +1152,11 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 
 ## F-GC-1 — SKILL_BUNDLE_TOKEN secretKeyRef hardening（gap C pilot）
 
-- **Severity**: minor（security hardening；pilot 可接受現狀）
+- **Severity**: minor（security hardening；pilot 可接受現狀）— ⚠️ **TTL 拉長後此 pilot-接受理由需重審，可能上調 severity**（見下方「為何 pilot 接受」更新）。
 - **Origin**: agent-runtime-pod epic gap C（operator chart install + WS transport，2026-05-25，PR #63）
 - **問題**: operator 把 `SKILL_BUNDLE_TOKEN` 以 **plain env value** 注入 pod（install 走 helm `values.env.SKILL_BUNDLE_TOKEN`、resume 走 `kubectl set env`）→ token 明文落 pod spec（`kubectl get pod -o yaml` / `describe` 可見）。
-- **為何 pilot 接受**: token 短壽（exp 1h）+ 每次 resume 重簽重注 → 明文風險窗 ≤1h 且輪替；且 plain env 是 operator resume（`kubectl set env`）機制的硬相容需求 — secretKeyRef 會被 `kubectl set env` 的 plain value 覆蓋成 drift。leader 已認同 plain env、secretKeyRef 列此 follow-up。
+- **為何 pilot 接受（原始論證）**: token 短壽（exp 1h）+ 每次 resume 重簽重注 → 明文風險窗 ≤1h 且輪替；且 plain env 是 operator resume（`kubectl set env`）機制的硬相容需求 — secretKeyRef 會被 `kubectl set env` 的 plain value 覆蓋成 drift。leader 已認同 plain env、secretKeyRef 列此 follow-up。
+- **⚠️ 接受理由需重審（issue #155 TTL config 化後，2026-06-06）**: 上述「明文風險窗 ≤1h 故可接受」前提已被打掉。issue #155 stopgap 把 `SKILL_BUNDLE_TOKEN` 的 TTL 改 config-driven（`skill_bundle_token_ttl_seconds`，env `SKILL_BUNDLE_TOKEN_TTL_SECONDS`），**預設 7 天（604800s）** — 明文暴露窗從 ≤1h 擴大到 ≤7d（168 倍）。原本 minor/pilot-可接受是建立在短壽輪替上的，TTL 拉長後 plain env vs secretKeyRef 的 risk 評級需重審，**可能上調 severity**；secretKeyRef hardening 的排程優先序應一併重評。
 - **hardening 方案（redesign，非 chart-only）**: operator 改為管 per-release K8s Secret（存 token）+ resume 時 patch 該 Secret；chart 改 `env.valueFrom.secretKeyRef`。需 operator + chart lock-step。
 - **owner**: paas-platform（operator）+ paas-charts（chart）；**待 leader 排程**。
 - 對照: [[agent-runtime-operator-chart-install-contract]] §Q2b / §替代方案、design §6.5。

@@ -100,6 +100,10 @@
     # Note: Python dependencies are defined in requirements.txt (single source of truth).
     # pre_init_hook reads requirements.txt and auto-installs missing packages.
     # Helm chart and Dockerfile.dev also read from the same file.
+    # external_dependencies: skill_bundle_validation mirrors the runtime's
+    # yaml.safe_load frontmatter parse; declaring 'yaml' makes the module fail at
+    # install time (not at first skill upload) if PyYAML is somehow absent.
+    "external_dependencies": {"python": ["yaml"]},
     "pre_init_hook": "pre_init_hook",
     "post_init_hook": "post_init_hook",
     "uninstall_hook": "uninstall_hook",
