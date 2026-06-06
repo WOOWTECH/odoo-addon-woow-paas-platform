@@ -518,15 +518,38 @@ class SecurityAccess(models.Model):
         )
         if self.state != 'suspended':
             return
-        if self.tunnel_id:
-            try:
-                self._sync_routes_to_operator()
-            except Exception as e:
-                _logger.warning("[SA] _do_resume failed sa=%s: %s", self.id, e)
-                self.write({'state': 'error'})
-                return
+        if not self.tunnel_id:
+            # Never successfully provisioned (suspended while pending/
+            # provisioning/error before a tunnel existed). pre_suspend_state
+            # was coerced to 'active' by _do_suspend's fallback, which would
+            # mislead the UI into showing "running" with no tunnel. Restore to
+            # 'pending' so the user is prompted to (re-)provision.
+            self.write({'state': 'pending', 'pre_suspend_state': False})
+            _logger.info(
+                "[SA] _do_resume sa=%s no tunnel → restored to 'pending'",
+                self.id,
+            )
+            return
+        try:
+            self._sync_routes_to_operator()
+        except Exception as e:
+            _logger.warning("[SA] _do_resume failed sa=%s: %s", self.id, e)
+            self.write({'state': 'error'})
+            return
         restore_state = self.pre_suspend_state or 'active'
-        self.write({'state': restore_state, 'pre_suspend_state': False})
+        resume_vals = {'pre_suspend_state': False}
+        if restore_state == 'error':
+            # The re-sync above just succeeded, so the tunnel/ingress is
+            # healthy right now — restoring the stale pre-suspend 'error'
+            # would leave a working service permanently flagged 'error' (cron
+            # branch 2 only resumes 'suspended', so it never gets revisited)
+            # with a misleading old error_message. Heal to 'active' instead.
+            resume_vals['state'] = 'active'
+            resume_vals['error_message'] = False
+            restore_state = 'active'
+        else:
+            resume_vals['state'] = restore_state
+        self.write(resume_vals)
         _logger.info("[SA] _do_resume done sa=%s state=%s",
                      self.id, restore_state)
 

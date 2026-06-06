@@ -528,6 +528,41 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
         self.assertEqual(urls['lc-custom'], 'http://localhost:80')
         self.assertNotIn('http_status:503', urls.values())
 
+    def test_resume_from_error_heals_to_active(self):
+        """在 'error' 態被 suspend（pre_suspend_state='error'），resume 成功
+        re-sync 後 tunnel 已健康 → 須還原成 'active' 並清空舊 error_message，
+        不得永久卡 'error'（finding：tunnel 正常但 state 誤導 error）。"""
+        mock_client = self._sync_mock()
+        sa = self._make_active_sa_with_routes(mock_client)
+        sa.write({'state': 'error', 'error_message': 'stale pre-suspend error'})
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_suspend()
+            self.assertEqual(sa.pre_suspend_state, 'error')
+            sa._do_resume()
+        self.assertEqual(sa.state, 'active')
+        self.assertFalse(sa.error_message)
+
+    def test_resume_without_tunnel_restores_pending_not_active(self):
+        """從未 provision（無 tunnel_id）的 SA 被 suspend→resume，不得標成
+        'active'（會顯示「運作中」卻無 tunnel），須還原成 'pending'。"""
+        mock_client = self._sync_mock()
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa = self.SecurityAccess.create({
+                'name': 'Unprovisioned GW',
+                'workspace_id': self.workspace.id,
+            })
+        self.assertFalse(sa.tunnel_id)
+        self.assertEqual(sa.state, 'pending')
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa._do_suspend()
+            self.assertEqual(sa.state, 'suspended')
+            # no tunnel → suspend issued no 503 sync
+            mock_client.sync_tunnel_routes.assert_not_called()
+            sa._do_resume()
+        self.assertEqual(sa.state, 'pending')
+        # resume on a tunnel-less SA must not push an operator sync either
+        mock_client.sync_tunnel_routes.assert_not_called()
+
     def test_cleanup_deletes_tunnel(self):
         mock_client = self._sync_mock()
         sa = self._make_active_sa_with_routes(mock_client)
