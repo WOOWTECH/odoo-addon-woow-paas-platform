@@ -426,10 +426,26 @@ class SecurityAccess(models.Model):
 
     def unlink(self):
         """Direct-unlink guard: Cloudflare resources must never outlive the
-        record (cloud-service-unlink-override-cleanup pattern)."""
+        record (cloud-service-unlink-override-cleanup pattern).
+
+        Fail-loud if cleanup left a live tunnel. _cleanup_cloudflare swallows
+        operator/CF errors and deliberately keeps tunnel_id for a retry; if we
+        unconditionally unlinked we would drop the DB row while a billed,
+        token-still-valid tunnel lives on in Cloudflare with no DB reference
+        left to drive a retry — a permanent orphan. Raise instead so the
+        controller surfaces a truthful failure and both the DB row and the CF
+        tunnel survive for the user / cron _do_cleanup to retry. This aligns
+        the direct-delete path with the fail-loud contract _do_cleanup already
+        establishes for the cron path."""
         for record in self:
             if record.tunnel_id:
                 record._cleanup_cloudflare()
+            if record.tunnel_id:
+                raise UserError(
+                    "Cloudflare cleanup failed; the tunnel is still live and "
+                    "billed. The record was kept so the deletion can be "
+                    "retried. Please try again shortly."
+                )
         # primary route's own unlink guard would block the cascade — force it
         # since the whole SA (and its routes) is being torn down.
         self.route_ids.with_context(sa_force_delete_primary=True).unlink()
@@ -758,9 +774,17 @@ class SecurityAccessRoute(models.Model):
             # action_provision sets sa_skip_route_sync because it issues its
             # own explicit, http_host_header-carrying re-sync right after — so
             # this override's sync would be a redundant extra operator call.
+            #
+            # Sync whenever a tunnel exists, including state=='error': a
+            # stage-2 provision failure lands the SA in 'error' with a live
+            # tunnel_id, yet the subscription stays active so the BFF still
+            # lets owners CRUD routes. Skipping the push for 'error' (sync is
+            # an idempotent full-state push) would silently diverge the DB
+            # from Cloudflare until someone re-provisions, while the endpoint
+            # reports success — so include 'error' here (and in write/unlink).
             if not self.env.context.get('sa_skip_route_sync'):
                 for sa in routes.mapped('security_access_id'):
-                    if sa.state == 'active' and sa.tunnel_id:
+                    if sa.state in ('active', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
         return routes
 
@@ -794,7 +818,7 @@ class SecurityAccessRoute(models.Model):
             result = super().write(vals)
             if any(k in vals for k in ('service_url', 'http_host_header')):
                 for sa in self.mapped('security_access_id'):
-                    if sa.state == 'active' and sa.tunnel_id:
+                    if sa.state in ('active', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
         return result
 
@@ -821,7 +845,8 @@ class SecurityAccessRoute(models.Model):
         with self.env.cr.savepoint():
             result = super().unlink()
             for sa in affected:
-                if sa.exists() and sa.state == 'active' and sa.tunnel_id:
+                if (sa.exists() and sa.state in ('active', 'error')
+                        and sa.tunnel_id):
                     sa._sync_routes_to_operator()
         return result
 
