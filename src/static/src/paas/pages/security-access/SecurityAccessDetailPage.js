@@ -155,13 +155,6 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
-  copyToken() {
-    // tunnel token 只給 system group 看（field-mask），前端顯示
-    // Configuration tab 的接入教學以 primary_hostname 與 docker 指令為主；
-    // token 由 HA component / 後台管道取得。此按鈕複製 hostname。
-    navigator.clipboard.writeText(this.state.sa.primary_hostname);
-  }
-
   // ---- Application tab：routes ----
   onPrefixInput(ev) {
     this.state.newRoutePrefix = ev.target.value.trim().toLowerCase();
