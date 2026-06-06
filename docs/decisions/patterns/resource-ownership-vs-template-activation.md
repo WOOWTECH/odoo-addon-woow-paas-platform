@@ -72,8 +72,14 @@ Pod 實際載入的集合由**單一公式來源** `_effective_skill_ids`（`age
             ∪ （scope='system' 且 state='published' 的 skills，同名被前者遮蔽）
 ```
 
-- template 由 `_resolve_agent_template`（`agent_session.py:267-288`）解析：
-  project-bound published → project-bound any → `project.agent_template_id` → 平台 default。
+- template 由 `_resolve_agent_template`（`agent_session.py:267-302`）解析，五段優先序：
+  0. **explicit dedicated pick**（Task 5 新增，commit `19ad754`）：`project.agent_template_id`
+     指向的 template 若 `state='published'` 且該 project 已在它的 `project_ids` 內 → 直接優先採用。
+     用意是讓 copy-on-write dedicated fork **確定性勝出**——當不只一筆 published template 綁本
+     project（如共用來源 template 仍列著本 project、又生出專屬 fork）時，下面第 1 段的
+     `search(limit=1)` 會落到 `_order`（name）排序的 tie-break，與「project 自己指定哪一筆」的意圖
+     脫鉤；本段在不改寫共用來源 `project_ids` 的前提下讓 fork 贏（spec §2.3 step 3 / invariant 2）。
+  1. project-bound published → 2. project-bound any → 3. `project.agent_template_id` → 4. 平台 default。
 - **`project.skill_ids`（歸屬層）不直接進 snapshot** — project 名下的 skill 沒被 resolved
   template 綁定就不會載入。它只有兩個間接角色：subset constraint 的上界、bundle 下載
   授權的 project leg。
@@ -206,7 +212,7 @@ project」的 user-scope 資源（cross-tenant 防線）。「⊆」語意本身
 | 生效集合單一公式（recordset） | `src/models/agent_session.py:313`（`_effective_skill_ids`） |
 | skill snapshot（序列化生效集合，bound ∪ system） | `src/models/agent_session.py:335` |
 | skill `is_effective` UI 欄位（同源 membership） | `src/models/skill.py:32` / compute `:318` |
-| template 解析鏈 | `src/models/agent_session.py:267` |
+| template 解析鏈（5 段：explicit-pick → bound-published → bound-any → m2o → 平台 default） | `src/models/agent_session.py:267-302`（explicit-pick leg `:282-284`） |
 | mcp snapshot（bound only，無 system 聯集、無 filter） | `src/models/agent_session.py:305` |
 | mcp legacy 路徑（歸屬即啟用，不經 template） | `src/models/discuss_channel.py:240`、`src/controllers/paas.py:1351` |
 | 後台 project form Skills 區塊（歸屬列表 + `is_effective` 欄 + Upload 鈕） | `src/views/project_views.xml:75` |

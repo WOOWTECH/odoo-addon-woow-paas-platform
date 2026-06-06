@@ -32,7 +32,8 @@ skill 在三層都「看得到但動不了」，使用者卡住的根因：
 3. **「綁定」其實有兩層**（ownership vs activation，詳見 pattern doc）：
    - 歸屬層：`skill.project_id` M2O（project form 的 Skills 列表是它的 O2M 反向）
    - 生效層：`agent_template.skill_ids` M2M — pod 實際載入由
-     `_build_skill_snapshot`（`src/models/agent_session.py:299-315`）決定：
+     `_build_skill_snapshot`（`src/models/agent_session.py:335-343`，序列化
+     `_effective_skill_ids` 單一公式 `:313-332`）決定：
      resolved template 綁定的 published skills ∪ system published skills（同名遮蔽）。
    - **歸屬 ≠ 生效**：project 名下的 user-scope skill 沒被 resolved template 綁定
      就不進 pod；目前無任何自動同步，UI 也沒有任何生效狀態提示。
@@ -44,6 +45,14 @@ skill 在三層都「看得到但動不了」，使用者卡住的根因：
 會議決議（2026-06-03）：MCP/Skill 設定移到 Project 層級由**後台**設定（議題 D、F：
 我們幫客人開好 project、挑好 skill/MCP）；前台齒輪**拿掉** Cloud Service binding
 與 MCP 設定、name/Description **保留但唯讀**（議題 H）。
+
+**實作中發現的 plan gap（Task 5，resolver 契約擴充，commit `19ad754`）**：§2.3 的 copy-on-write
+fork 一旦建立，會出現「同一 project 被不只一筆 published template 綁定」的中間態（共用來源
+template 仍列著本 project、又生出專屬 fork）。原 `_resolve_agent_template` 第一段
+`search(limit=1)` 落到 `_order`（name）排序 tie-break，與「project 自己指定哪一筆」的意圖脫鉤，
+fork 不保證勝出。根因修法是在解析鏈最前面加 **explicit-pick leg**：`project.agent_template_id`
+若 published 且本 project 已在它的 `project_ids` → 直接優先採用（不改寫共用來源的 `project_ids`）。
+此 leg 是 resolver 契約的擴充而非 UI 層補丁，故記於 pattern doc 解析鏈敘述（見必讀前置 pattern）。
 
 ## 目標
 
@@ -161,7 +170,7 @@ skill 在三層都「看得到但動不了」，使用者卡住的根因：
 
 - 顯示 **resolved template**：`project.project` 加 computed M2O
   `resolved_agent_template_id`（store=False，compute 呼叫既有
-  `_resolve_agent_template`，`agent_session.py:267-288`）+ 共用狀態提示
+  `_resolve_agent_template`，`agent_session.py:267-302`，含 explicit-pick leg）+ 共用狀態提示
   （computed selection：`dedicated` / `shared` / `platform_default` / `none`）。
 - **dedicated**（template 只綁本 project）→ 可直接編輯綁定：editable related
   M2M 呈現 `resolved template.skill_ids`，widget `many2many_tags`，domain =
