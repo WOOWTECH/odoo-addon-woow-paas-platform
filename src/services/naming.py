@@ -24,3 +24,8 @@ def make_service_subdomain(slug: str, reference_id: str, name: str) -> str:
 def make_smarthome_subdomain(slug: str, reference_id: str, name: str) -> str:
     """Generate smart home subdomain: paas-sm-{ws_hash}-{sm_hash}."""
     return f"paas-sm-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
+
+
+def make_security_access_subdomain(slug: str, reference_id: str, name: str) -> str:
+    """Generate security access subdomain: paas-sa-{ws_hash}-{sa_hash}."""
+    return f"paas-sa-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
