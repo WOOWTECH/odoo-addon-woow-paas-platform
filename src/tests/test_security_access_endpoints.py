@@ -160,7 +160,7 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}',
             {'action': 'delete'})
-        self.assertFalse(mutate.get('success'))
+        self._assert_structured_denial(mutate)
 
     # ---- subscription trio + routes write endpoints (sudo-cascade面) ----
 
@@ -216,3 +216,121 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}/routes',
             {'action': 'delete', 'route_id': 999999})
         self._assert_structured_denial(res)
+
+    # ---- collection create dispatch role gate ----
+
+    def test_member_user_role_create_dispatch_denied(self):
+        """role='user' 成員打 collection action='create' 必須被結構化拒絕。
+
+        Locks the role gate in api_security_accesses (create branch). SA
+        建立是會開計費 tunnel 的入口，這個 gate 是一般 member 與『私自開
+        billed tunnel』之間唯一防線；前面的測試只直接呼叫 helper，從未經過
+        dispatch 本身的 role 檢查。
+        """
+        suffix = uuid.uuid4().hex[:6]
+        eve = _new_user(self.env, f'sa_ep_eve_{suffix}')
+        self.env['woow_paas_platform.workspace_access'].sudo().create({
+            'workspace_id': self.workspace.id,
+            'user_id': eve.id, 'role': 'user',
+        })
+        self.authenticate(eve.login, eve.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}/security-accesses',
+            {'action': 'create', 'name': 'Eve Gateway',
+             'template_id': 1, 'plan_id': 1})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        # no SA created for the gated member
+        self.assertFalse(self.env[
+            'woow_paas_platform.security_access'].sudo().search(
+                [('name', '=', 'Eve Gateway')]))
+
+    def test_owner_create_dispatch_passes_role_gate(self):
+        """owner 打 collection action='create' 通過 role gate（正向）。
+
+        owner 不應被 role gate 擋；缺 template/plan 時的失敗必須是下游業務
+        邏輯錯誤，而非 'Insufficient permissions'（確認 gate 已放行）。
+        """
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}/security-accesses',
+            {'action': 'create', 'name': 'Owner Created GW',
+             'template_id': 999999, 'plan_id': 999999})
+        # role gate cleared → not a permission denial (downstream template
+        # validation fails instead).
+        self.assertNotIn('permission', (res.get('error') or '').lower())
+
+    # ---- detail refresh_status / provision / update dispatch role gate ----
+
+    def test_member_user_role_refresh_status_denied(self):
+        """role='user' member 打 action='refresh_status' 須被結構化拒絕。
+
+        refresh_status 在 tunnel_id 存在時會 sa.write(...)，SA write ir.rule
+        只放行 owner/admin。把它放在 owner/admin gate 之後可避免對 member
+        直接外洩 AccessError 內部細節（model/rule 技術名）。
+        """
+        suffix = uuid.uuid4().hex[:6]
+        frank = _new_user(self.env, f'sa_ep_frank_{suffix}')
+        self.env['woow_paas_platform.workspace_access'].sudo().create({
+            'workspace_id': self.workspace.id,
+            'user_id': frank.id, 'role': 'user',
+        })
+        self.authenticate(frank.login, frank.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}',
+            {'action': 'refresh_status'})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+
+    def test_member_user_role_provision_denied(self):
+        """role='user' member 打 action='provision' 須被結構化拒絕。
+
+        provision 開計費 tunnel；P1 安全收緊重點是避免一般 member 從 BFF
+        觸發 provision。鎖住 detail dispatch 的 provision role gate。
+        """
+        suffix = uuid.uuid4().hex[:6]
+        grace = _new_user(self.env, f'sa_ep_grace_{suffix}')
+        self.env['woow_paas_platform.workspace_access'].sudo().create({
+            'workspace_id': self.workspace.id,
+            'user_id': grace.id, 'role': 'user',
+        })
+        self.authenticate(grace.login, grace.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}',
+            {'action': 'provision'})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+
+    def test_member_user_role_update_denied(self):
+        """role='user' member 打 action='update' 須被結構化拒絕。"""
+        suffix = uuid.uuid4().hex[:6]
+        heidi = _new_user(self.env, f'sa_ep_heidi_{suffix}')
+        self.env['woow_paas_platform.workspace_access'].sudo().create({
+            'workspace_id': self.workspace.id,
+            'user_id': heidi.id, 'role': 'user',
+        })
+        self.authenticate(heidi.login, heidi.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}',
+            {'action': 'update', 'name': 'Renamed By Member'})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        # name unchanged
+        self.assertNotEqual(self.sa.name, 'Renamed By Member')
+
+    def test_owner_refresh_status_passes_role_gate(self):
+        """owner 打 action='refresh_status'（無 tunnel_id）通過 role gate。
+
+        self.sa 未 provision（tunnel_id 空），action_refresh_status 提早
+        return 不打 operator，所以 owner 應拿到 success（確認 gate 放行且
+        read-ish 行為對 owner 正常）。
+        """
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}',
+            {'action': 'refresh_status'})
+        self.assertTrue(res.get('success'), res.get('error'))

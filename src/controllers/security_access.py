@@ -72,19 +72,29 @@ class SecurityAccessController(Controller):
 
         if action == "get":
             return {"success": True, "data": sa.to_dict()}
-        elif action == "refresh_status":
-            try:
-                sa.action_refresh_status()
-            except Exception as e:
-                return {"success": False, "error": str(e)}
-            return {"success": True, "data": sa.to_dict()}
 
-        # mutations below require owner/admin
+        # mutations below require owner/admin. refresh_status is grouped here
+        # (not with read 'get'): when tunnel_id is set, action_refresh_status
+        # does sa.write(...) which the SA write ir.rule
+        # (security_access_rule_owner_admin_manage) only grants to
+        # owner/admin — a role='user' member would hit a raw AccessError that
+        # str(e) would then leak (model technical name / rule name) and make
+        # behaviour state-dependent (succeeds while unprovisioned, fails once
+        # provisioned). Gate it consistently with the other mutations.
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": "Insufficient permissions"}
 
-        if action == "update":
+        if action == "refresh_status":
+            try:
+                sa.action_refresh_status()
+            except Exception:
+                _logger.exception(
+                    "[SA] refresh_status failed sa=%s", sa.id)
+                return {"success": False,
+                        "error": "Failed to refresh status. Please try again."}
+            return {"success": True, "data": sa.to_dict()}
+        elif action == "update":
             vals = {}
             if kwargs.get("name"):
                 vals["name"] = kwargs["name"]
