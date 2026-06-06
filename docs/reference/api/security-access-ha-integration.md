@@ -191,7 +191,7 @@ Response（`200`，`security_access.to_dict()` 完整輸出）：
     "tunnel_id": "f3a1...",
     "tunnel_name": "paas-sa-7f3a2b-c1d4e9",
     "tunnel_status": "connected",
-    "tunnel_uptime": "3h12m",
+    "tunnel_uptime": "2026-06-06T08:30:00Z",
     "connector_id": "c0ffee...",
     "connector_type": "cloudflared",
     "primary_hostname": "paas-sa-7f3a2b-c1d4e9.paas.example.com",
@@ -229,6 +229,10 @@ Response（`200`，`security_access.to_dict()` 完整輸出）：
 
 - `tunnel_token` **不在** `to_dict()`（欄位 `groups='base.group_system'`），
   detail 端點不洩漏。要 tunnel 憑證走 §2.4。
+- `tunnel_uptime` **不是已計算好的時長字串**，而是 connector 連線「開啟時間」
+  的 ISO timestamp（Cloudflare `opened_at`，如 `2026-06-06T08:30:00Z`，
+  原樣存入、原樣輸出）。要顯示 uptime 時長，由 consumer 端自行
+  `now() - opened_at` 計算；勿把它當成 `"3h12m"` 之類的時長直接解析。
 - `routes[]` 是每筆 `SecurityAccessRoute.to_dict()`（6 欄 + `hostname`
   compute）。`is_primary=true` 那筆為 provision 時自動建立、不可刪，其
   `subdomain_prefix` 等於 `canonical_name`。

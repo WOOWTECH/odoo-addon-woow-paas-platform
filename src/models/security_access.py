@@ -104,7 +104,12 @@ class SecurityAccess(models.Model):
         string='Tunnel Status',
         default='disconnected',
     )
-    tunnel_uptime = fields.Char(string='Uptime')
+    tunnel_uptime = fields.Char(
+        string='Connector Opened At',
+        help="Connector connection open time (Cloudflare opened_at ISO "
+             "timestamp), NOT a pre-computed duration. Consumers derive the "
+             "uptime as now() - opened_at.",
+    )
 
     primary_hostname = fields.Char(
         string='Primary Hostname',
