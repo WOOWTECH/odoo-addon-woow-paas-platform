@@ -220,6 +220,11 @@ class OAuth2Controller(Controller):
             'smarthome:read': 'Read your Smart Home and Workspace data',
             'smarthome:tunnel': 'Access tunnel connections to your devices',
             'workspace:read': 'Read your Workspace information',
+            'security-access:read':
+                'Read your Security Access services and subscription',
+            'security-access:tunnel':
+                'Access the Cloudflare Tunnel token for your Security '
+                'Access connector',
         }
 
         scopes_display = [

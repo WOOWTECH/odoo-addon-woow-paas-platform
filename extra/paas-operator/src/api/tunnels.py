@@ -7,6 +7,9 @@ from src.config import settings
 from src.models.schemas import (
     TunnelCreateRequest,
     TunnelCreateResponse,
+    TunnelRoutesSyncRequest,
+    TunnelRoutesSyncResponse,
+    TunnelRouteSyncResult,
     TunnelStatusResponse,
     TunnelTokenResponse,
 )
@@ -66,6 +69,7 @@ async def create_tunnel(request: TunnelCreateRequest):
 
         # Step 4: Create DNS record
         dns_record_id = None
+        dns_failed = False
         if cloudflare_service.dns_enabled:
             # Extract subdomain from hostname
             domain = settings.cloudflare_domain
@@ -80,6 +84,12 @@ async def create_tunnel(request: TunnelCreateRequest):
                     tunnel_id=tunnel_id,
                 )
             except CloudflareException as e:
+                # DNS was ENABLED but creation failed: surface dns_failed=True
+                # so the caller (Odoo) can tell this apart from dns_record_id
+                # being None because DNS is intentionally disabled. Without the
+                # flag the caller would mark the SA active with no resolvable
+                # hostname and rely entirely on a later re-sync to self-heal.
+                dns_failed = True
                 logger.warning(
                     f"DNS record creation failed for {request.hostname}: {e.message}. "
                     "Tunnel is created but DNS must be configured manually."
@@ -96,6 +106,7 @@ async def create_tunnel(request: TunnelCreateRequest):
             tunnel_token=tunnel_token,
             hostname=request.hostname,
             dns_record_id=dns_record_id,
+            dns_failed=dns_failed,
         )
 
     except CloudflareException as e:
@@ -281,4 +292,76 @@ async def delete_tunnel(tunnel_id: str):
         raise HTTPException(
             status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete tunnel: {e.message}",
+        )
+
+
+@router.put(
+    "/{tunnel_id}/routes",
+    response_model=TunnelRoutesSyncResponse,
+    summary="Declaratively sync a dedicated tunnel's routes (ingress + DNS)",
+)
+async def sync_tunnel_routes(tunnel_id: str, request: TunnelRoutesSyncRequest):
+    """Replace the tunnel's ingress rules and reconcile DNS records.
+
+    Declarative full sync: the request body is the complete desired route
+    list. Ingress is replaced wholesale (plus catch-all 404); DNS records
+    pointing at this tunnel are created/kept/deleted to match. Idempotent —
+    used by Security Access for route CRUD, suspend (service_url=
+    http_status:503) and resume.
+
+    NOT atomic across the two stages. ``configure_tunnel_ingress`` runs first,
+    then ``reconcile_tunnel_dns`` (create-loop then delete-loop, each raising
+    on the first failure). There is no compensating action: if ingress
+    succeeds and reconcile then fails partway, the ingress and some DNS
+    records are already mutated while this call returns 500. Convergence is by
+    design left to the caller's next idempotent re-sync (the desired state is
+    re-asserted in full), since the Cloudflare API offers no transaction to
+    roll the partial mutation back. Callers (Odoo SecurityAccess) keep the
+    driving DB row so a re-sync can always reach the records — a 500 here means
+    "CF may be partially changed; re-sync to converge", not "nothing changed".
+    """
+    if not cloudflare_service.api_token or not cloudflare_service.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cloudflare API token and account ID are required for tunnel management",
+        )
+
+    domain = cloudflare_service.domain
+    rules = [
+        {
+            "hostname": f"{r.subdomain}.{domain}",
+            "service": r.service_url,
+            "http_host_header": r.http_host_header,
+        }
+        for r in request.routes
+    ]
+
+    try:
+        await cloudflare_service.configure_tunnel_ingress(
+            tunnel_id=tunnel_id, rules=rules,
+        )
+        dns_map = await cloudflare_service.reconcile_tunnel_dns(
+            tunnel_id=tunnel_id,
+            subdomains=[r.subdomain for r in request.routes],
+            comment=request.comment,
+        )
+        logger.info(
+            f"Tunnel {tunnel_id} routes synced: {len(request.routes)} route(s)"
+        )
+        return TunnelRoutesSyncResponse(
+            tunnel_id=tunnel_id,
+            routes=[
+                TunnelRouteSyncResult(
+                    subdomain=r.subdomain,
+                    hostname=f"{r.subdomain}.{domain}",
+                    dns_record_id=dns_map.get(r.subdomain),
+                )
+                for r in request.routes
+            ],
+        )
+    except CloudflareException as e:
+        logger.error(f"Failed to sync tunnel routes: {e.message}")
+        raise HTTPException(
+            status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sync tunnel routes: {e.message}",
         )

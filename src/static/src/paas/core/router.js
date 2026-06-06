@@ -8,6 +8,7 @@ const routes = [
     { path: "workspace/:id", name: "Workspace Detail", routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
     { path: "workspace/:id/team", name: "Workspace Team", routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },
     { path: "workspace/:id/smarthome/:homeId", name: "Smart Home Detail", routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)$/ },
+    { path: "workspace/:id/security-access/:saId/:tab", name: "Security Access Detail", routeName: "security-access-detail", pattern: /^workspace\/(\d+)\/security-access\/(\d+)\/(overview|configuration|application|access|email|domains)$/ },
     { path: "workspace/:id/services/marketplace", name: "App Marketplace", routeName: "marketplace", pattern: /^workspace\/(\d+)\/services\/marketplace$/ },
     { path: "workspace/:id/services/configure/:templateId", name: "Configure Service", routeName: "configure", pattern: /^workspace\/(\d+)\/services\/configure\/(\d+)$/ },
     { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers)$/ },
@@ -87,6 +88,11 @@ export const router = reactive({
                             }
                         } else if (route.routeName === 'smarthome-detail') {
                             this.params.homeId = match[2];
+                        } else if (route.routeName === 'security-access-detail') {
+                            this.params.saId = match[2];
+                            if (match[3]) {
+                                this.params.tab = match[3];
+                            }
                         }
                     }
                     // For AI routes, map the first capture to the correct param name

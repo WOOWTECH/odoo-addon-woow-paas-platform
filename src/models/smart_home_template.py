@@ -67,27 +67,34 @@ class SmartHomeTemplate(models.Model):
         invoices whose product name contradicts the actual service the
         customer is using — an accounting trap, not a feature.
 
-        Symmetrical check lives on cloud_app_template; both fire on write so
-        the conflict is caught regardless of which side is edited last.
+        Three-way symmetric check with cloud_app_template and
+        security_access_template; all fire on write so the conflict is
+        caught regardless of which side is edited last.
         """
         if not self:
             return
-        CloudTemplate = self.env['woow_paas_platform.cloud_app_template']
         for record in self:
             if not record.subscription_plan_ids:
                 continue
-            conflicts = CloudTemplate.search([
-                ('subscription_plan_ids', 'in', record.subscription_plan_ids.ids),
-            ])
-            if conflicts:
-                shared = record.subscription_plan_ids & conflicts.subscription_plan_ids
-                raise ValidationError(
-                    "Plan(s) %s are already linked to Cloud App Template(s) %s. "
-                    "A subscription plan must belong to a single service type — "
-                    "its product determines the invoice line text, so sharing "
-                    "would produce invoices that don't match the actual service."
-                    % (
-                        ', '.join(shared.mapped('name')),
-                        ', '.join(conflicts.mapped('name')),
+            for other_model, label in [
+                ('woow_paas_platform.cloud_app_template', 'Cloud App Template'),
+                ('woow_paas_platform.security_access_template',
+                 'Security Access Template'),
+            ]:
+                conflicts = self.env[other_model].search([
+                    ('subscription_plan_ids', 'in',
+                     record.subscription_plan_ids.ids),
+                ])
+                if conflicts:
+                    shared = (record.subscription_plan_ids
+                              & conflicts.subscription_plan_ids)
+                    raise ValidationError(
+                        "Plan(s) %s are already linked to %s(s) %s. "
+                        "A subscription plan must belong to a single service "
+                        "type — its product determines the invoice line text."
+                        % (
+                            ', '.join(shared.mapped('name')),
+                            label,
+                            ', '.join(conflicts.mapped('name')),
+                        )
                     )
-                )

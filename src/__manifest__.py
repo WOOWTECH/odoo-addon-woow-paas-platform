@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.33",
+    "version": "18.0.1.0.34",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -22,6 +22,7 @@
         "security/ir_rules.xml",
         "data/cloud_app_templates.xml",
         "data/smart_home_templates.xml",
+        "data/security_access_templates.xml",
         "data/topup_plans.xml",
         "data/subscription_products.xml",
         "data/subscription_template_links.xml",
@@ -34,6 +35,8 @@
         "views/ai_config_views.xml",
         "views/cloud_app_template_views.xml",
         "views/smart_home_template_views.xml",
+        "views/security_access_template_views.xml",
+        "views/security_access_views.xml",
         "views/cloud_service_views.xml",
         "views/cloud_odoo_addon_views.xml",
         "views/mcp_server_views.xml",
@@ -57,6 +60,7 @@
         "views/oauth2_templates.xml",
         "views/oauth_client_views.xml",
         "data/oauth_clients.xml",
+        "data/oauth_scope_updates.xml",
     ],
     "assets": {
         "web.assets_backend": [

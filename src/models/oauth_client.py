@@ -169,6 +169,34 @@ class OAuthClient(models.Model):
         return {s.strip() for s in self.scopes.split() if s.strip()}
 
     @api.model
+    def _ensure_ha_smart_home_sa_scopes(self) -> None:
+        """Idempotently grant Security Access scopes to the HA public client.
+
+        ``oauth_clients.xml`` is ``noupdate="1"`` so editing the seed XML
+        never reaches existing databases. This method merges the Security
+        Access scopes into the seeded HA client and is invoked from two
+        places that together cover both install and upgrade:
+
+        - ``hooks.py:post_init_hook`` — fresh install path.
+        - ``data/oauth_scope_updates.xml`` ``<function>`` — runs on every
+          ``-u`` (upgrade path; noupdate-independent).
+
+        Missing client scopes break OAuth token refresh for the HA
+        component (G-H3), so this must run idempotently on upgrades.
+        """
+        required = ('security-access:read', 'security-access:tunnel')
+        client = self.env.ref(
+            'woow_paas_platform.oauth_client_ha_smart_home',
+            raise_if_not_found=False,
+        )
+        if not client:
+            return
+        granted = set((client.scopes or '').split())
+        missing = [s for s in required if s not in granted]
+        if missing:
+            client.scopes = ' '.join(sorted(granted | set(missing)))
+
+    @api.model
     def generate_client_credentials(self) -> dict[str, str]:
         """Generate a new client_id and client_secret pair.
 

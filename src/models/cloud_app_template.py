@@ -192,28 +192,38 @@ class CloudAppTemplate(models.Model):
         """Symmetrical to smart_home_template — a plan belongs to one service type only.
 
         Triggered when an admin edits a CloudAppTemplate; rejects the change if
-        any of the chosen plans is already attached to a SmartHomeTemplate.
-        Without this check, the SH-side constrains alone wouldn't catch
-        edits made on the CS side.
+        any of the chosen plans is already attached to a SmartHomeTemplate or a
+        SecurityAccessTemplate. Without this check, the other-side constrains
+        alone wouldn't catch edits made on the CS side.
+
+        Three-way symmetric check with smart_home_template and
+        security_access_template; all fire on write so the conflict is
+        caught regardless of which side is edited last.
         """
         if not self:
             return
-        SHTemplate = self.env['woow_paas_platform.smart_home_template']
         for record in self:
             if not record.subscription_plan_ids:
                 continue
-            conflicts = SHTemplate.search([
-                ('subscription_plan_ids', 'in', record.subscription_plan_ids.ids),
-            ])
-            if conflicts:
-                shared = record.subscription_plan_ids & conflicts.subscription_plan_ids
-                raise ValidationError(
-                    "Plan(s) %s are already linked to Smart Home Template(s) %s. "
-                    "A subscription plan must belong to a single service type — "
-                    "its product determines the invoice line text, so sharing "
-                    "would produce invoices that don't match the actual service."
-                    % (
-                        ', '.join(shared.mapped('name')),
-                        ', '.join(conflicts.mapped('name')),
+            for other_model, label in [
+                ('woow_paas_platform.smart_home_template', 'Smart Home Template'),
+                ('woow_paas_platform.security_access_template',
+                 'Security Access Template'),
+            ]:
+                conflicts = self.env[other_model].search([
+                    ('subscription_plan_ids', 'in',
+                     record.subscription_plan_ids.ids),
+                ])
+                if conflicts:
+                    shared = (record.subscription_plan_ids
+                              & conflicts.subscription_plan_ids)
+                    raise ValidationError(
+                        "Plan(s) %s are already linked to %s(s) %s. "
+                        "A subscription plan must belong to a single service "
+                        "type — its product determines the invoice line text."
+                        % (
+                            ', '.join(shared.mapped('name')),
+                            label,
+                            ', '.join(conflicts.mapped('name')),
+                        )
                     )
-                )

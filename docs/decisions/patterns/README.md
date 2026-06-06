@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 20 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 23 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -22,6 +22,7 @@
 | [[unbound-project-acl-dual-leg]] | model 可選綁 workspace-bearing model（nullable M2O），unbound row 仍須對部分 user（creator / follower）可見 → dual-leg ir.rule domain（bound walk + unbound carve-out） |
 | [[mcp-acl-6-rule-split]] | 同 model 混兩種 scope（platform public-read + workspace-scoped）且需在 `base.group_user` 開 CRUD → 按 perm direction 拆 3 條 + sub-model 鏡像 = 6 條（single dual-leg 不夠，create direction 有提權面） |
 | [[scope-flip-write-guard-not-ir-rule]] | model 有 scope / tenancy 欄位（scope system/user、project_id、public）且對 `base.group_user` 可寫，要擋「窄→寬 flip」（提權 / 跨租戶外洩）→ 必須在 `write()` guard 攔 vals + 放行 sudo/admin，ir.rule 對 pre-write 判定擋不住（與 6-rule split 互補：split 守 create+可見性、guard 守 flip） |
+| [[su-env-exempt-guard-false-green]] | 守「不可變 identity anchor」（subdomain_prefix / canonical_name / reference_id）的 model `create()` / `write()` guard：**不可**用 `not env.su` / `not has_group()` 豁免（`TransactionCase` 是 su env → deny 分支跑不到 → 假綠 + sudo 路徑靜默繞過）→ 改 context-key escape hatch 無條件擋所有人，且 create + write 雙向覆蓋（與 scope-flip 分野：那條值可 gated 改、本條值不可變） |
 | [[constraint-input-trust-expansion]] | model 有 attacker-writable Many2many + ir.rule / `@api.constrains` 用該 m2m 做 subset / authority 推導時 |
 | [[attachment-row-level-acl-and-anchor-stamping]] | 自家 model 透過 `ir.attachment` 存敏感 / RCE-class binary payload → anchor stamping + ir.attachment ir.rule 兩層 |
 | [[odoo-std-field-no-override]] | 任何想動 Odoo std model 欄位型態 / shape 的 PR |
@@ -41,6 +42,7 @@
 | [[sidecar-backed-flag-lifecycle]] | 同 model 既有系統 / lifecycle 建立的 row 也有 user-managed row、兩者 cleanup / sync 行為不同 → schema boolean flag 標誌物理依賴，cleanup filter + create path 對等遵守契約 |
 | [[spawn-install-values-missed-forward]] | 有組裝點把上游資料 → 下游 helm install values / config，下游硬性 `required`：撞「缺一個 value」時通常系統性漏轉多個 → 修一個就全盤對齊 + 加 contract test |
 | [[plan-driven-date-helper]] | subscription 日期由 plan 強制覆寫（trial / non-trial path），且與第三方 onchange 有 post-confirm coupling 時 |
+| [[two-stage-remote-provision-idempotency]] | provision method 先建遠端資源（CF tunnel / 雲端 DNS / SaaS 帳號 / k8s ns）再跑後續步驟，且 UI 把 retry 掛在 `error` 上 → 第二段失敗讓遠端資源孤兒掛著、retry 重跑第一段在雲端再建一條（永久孤兒 / 計費外洩）→ 遠端建立步驟必須被 stored-id guard 包住，每條失敗路徑保留 stored id 讓 retry 安全（單段 method 的免-guard 安全是單段性換來的，加段就要買回來） |
 
 ### 測試紀律（multi-phase / credential 硬化）
 
@@ -48,6 +50,7 @@
 |---|---|
 | [[phase-versioned-test-assertion]] | phase test 硬編當時 schema 快照值（manifest version `== "x"` / constraint 名 / 欄位 count），後續 phase 合法演進同塊 schema 時撞 test-vs-test red → 改用 monotonic `>=` / 存在性斷言鎖 intent |
 | [[credential-claim-test-fixture-coupling]] | 硬化共用 credential 路徑（token 加 required claim / secret optional→required fail-closed）→ 所有自建該 credential 的 test fixture 都 forward-coupled，須 lock-step 補，否則紅（好：暴露）或假綠（壞：繞過 gate） |
+| [[unittest-mock-dual-namespace-patch]] | 用 `unittest.mock.patch` 攔一個被多 module 共用的 helper（client factory / `requests.post` / `uuid4`），且各 module 用不同 import 形式（頂部 `from m import name` vs function-local import）→ `patch` 是 rebind namespace attribute 非改寫 function，一個 symbol 經 N 個 namespace 使用就要 N 個 patch target；少打一個讓那條路徑 fall through 真 client（false confidence 或 BlockedRequest 紅）；fix 半套 mock 是「補上缺的」非「搬去別處」 |
 
 ### Agent / hand-off 紀律（maestri 多 phase agent pod 工作流）
 
@@ -76,5 +79,8 @@
 - [scope-flip-write-guard-not-ir-rule](scope-flip-write-guard-not-ir-rule.md)
 - [sidecar-backed-flag-lifecycle](sidecar-backed-flag-lifecycle.md)
 - [spawn-install-values-missed-forward](spawn-install-values-missed-forward.md)
+- [su-env-exempt-guard-false-green](su-env-exempt-guard-false-green.md)
 - [two-layer-acl-lockstep](two-layer-acl-lockstep.md)
+- [two-stage-remote-provision-idempotency](two-stage-remote-provision-idempotency.md)
 - [unbound-project-acl-dual-leg](unbound-project-acl-dual-leg.md)
+- [unittest-mock-dual-namespace-patch](unittest-mock-dual-namespace-patch.md)

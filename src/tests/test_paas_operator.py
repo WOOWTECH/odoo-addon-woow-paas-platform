@@ -329,6 +329,83 @@ class TestPaaSOperatorClient(TransactionCase):
         self.assertIn('Internal Server Error', context.exception.detail)
 
 
+class TestSecurityAccessClientMethods(TransactionCase):
+    """sync_tunnel_routes / check_route_availability HTTP contract."""
+
+    def _make_client(self):
+        from ..services.paas_operator import PaaSOperatorClient
+        return PaaSOperatorClient(base_url='http://op:8000', api_key='k')
+
+    def test_sync_tunnel_routes_contract(self):
+        """sync_tunnel_routes builds the declarative PUT route-sync request."""
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {
+                'tunnel_id': 'tun-1',
+                'routes': [{
+                    'subdomain': 'a',
+                    'hostname': 'a.woowtech.io',
+                    'dns_record_id': 'rec-a',
+                }],
+            }
+            result = client.sync_tunnel_routes(
+                'tun-1',
+                routes=[{
+                    'subdomain': 'a',
+                    'service_url': 'http://localhost:80',
+                    'http_host_header': True,
+                }],
+                comment='paas-sa-x-y',
+            )
+        mock_req.assert_called_once_with(
+            'PUT', '/api/tunnels/tun-1/routes',
+            data={
+                'routes': [{
+                    'subdomain': 'a',
+                    'service_url': 'http://localhost:80',
+                    'http_host_header': True,
+                }],
+                'comment': 'paas-sa-x-y',
+            },
+            timeout=120,
+        )
+        self.assertEqual(result['routes'][0]['dns_record_id'], 'rec-a')
+
+    def test_sync_tunnel_routes_omits_comment_when_absent(self):
+        """sync_tunnel_routes leaves comment out of the body when not provided."""
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {'tunnel_id': 'tun-1', 'routes': []}
+            client.sync_tunnel_routes(
+                'tun-1',
+                routes=[{'subdomain': 'a', 'service_url': 'http://localhost:80',
+                         'http_host_header': True}],
+            )
+        mock_req.assert_called_once_with(
+            'PUT', '/api/tunnels/tun-1/routes',
+            data={
+                'routes': [{'subdomain': 'a', 'service_url': 'http://localhost:80',
+                            'http_host_header': True}],
+            },
+            timeout=120,
+        )
+
+    def test_check_route_availability_contract(self):
+        """check_route_availability builds the GET availability query."""
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {
+                'subdomain': 'a',
+                'hostname': 'a.woowtech.io',
+                'available': True,
+            }
+            result = client.check_route_availability('a')
+        mock_req.assert_called_once_with(
+            'GET', '/api/routes/availability', params={'subdomain': 'a'},
+        )
+        self.assertTrue(result['available'])
+
+
 class TestGetPaaSOperatorClient(TransactionCase):
     """Test get_paas_operator_client helper function."""
 

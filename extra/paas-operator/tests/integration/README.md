@@ -72,6 +72,29 @@ Each test gets its own namespace (`paas-ws-test-op-{uuid8}`) created and torn
 down by the `test_namespace` fixture. Failed cleanup never bleeds across
 tests because namespaces are always uniquely named.
 
+## Known gap: Cloudflare-backed endpoints have no integration coverage
+
+The Security Access tunnel/route endpoints
+(`PUT /api/tunnels/{id}/routes`, `POST /api/routes/availability`,
+tunnel create/delete) are currently exercised **only by mocked unit tests**
+(`tests/test_tunnel_routes_sync.py`, `tests/test_route_availability.py`).
+They are not in `tests/integration/`, which today is K8s/Helm-oriented
+(`test_scale.py`) and has no Cloudflare credentials.
+
+This is the exact BUG-8-class blind spot the section above warns about:
+a change in the Cloudflare API response shape (e.g. the fields
+`configure_tunnel_ingress` / `reconcile_tunnel_dns` parse out of
+`/cfd_tunnel/.../configurations` or `/dns_records`) would pass the mocked
+suite and only surface in production.
+
+Follow-up to close it: add a contract test that runs against a disposable
+Cloudflare **sandbox zone** + a throwaway tunnel, gated behind a
+`CLOUDFLARE_*` env / pytest marker so a default `pytest` run still skips it
+(same pattern as the `integration` marker skipping when `kubectl
+cluster-info` fails). Until that exists, treat any change under
+`src/services/cloudflare.py` or `src/api/{tunnels,routes}.py` as
+contract-risky and verify the live CF response shape by hand.
+
 ## Adding a test
 
 1. Pick or write a fixture in `conftest.py` that lays down the K8s state

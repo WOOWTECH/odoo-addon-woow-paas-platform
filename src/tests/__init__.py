@@ -8,9 +8,15 @@ from . import test_cloud_api
 from . import test_paas_operator
 from . import test_smart_home
 from . import test_smart_home_template
+from . import test_security_access_template
+from . import test_security_access
+from . import test_security_access_lifecycle
+from . import test_security_access_subscription_flow
+from . import test_security_access_endpoints
 from . import test_smart_home_subscription_flow
 from . import test_oauth2
 from . import test_ha_api
+from . import test_ha_api_security_access
 from . import test_naming
 from . import test_mcp_integration
 from . import test_subscription_lifecycle

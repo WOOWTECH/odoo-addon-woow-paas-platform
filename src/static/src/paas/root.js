@@ -17,6 +17,7 @@ import { AiChatPage } from "./pages/ai-chat/AiChatPage";
 import { ProjectKanbanPage } from "./pages/project-kanban/ProjectKanbanPage";
 import { ProjectDetailPage } from "./pages/project-detail/ProjectDetailPage";
 import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
+import { SecurityAccessDetailPage } from "./pages/security-access/SecurityAccessDetailPage";
 import { BillingOverviewPage } from "./pages/billing/BillingOverviewPage";
 import { InvoiceListPage } from "./pages/billing/InvoiceListPage";
 import { InvoiceDetailPage } from "./pages/billing/InvoiceDetailPage";
@@ -48,6 +49,7 @@ export class Root extends Component {
         ProjectKanbanPage,
         ProjectDetailPage,
         SmartHomeDetailPage,
+        SecurityAccessDetailPage,
         BillingOverviewPage,
         InvoiceListPage,
         InvoiceDetailPage,
@@ -102,6 +104,14 @@ export class Root extends Component {
 
     get homeId() {
         return this.router.params.homeId ? parseInt(this.router.params.homeId, 10) : null;
+    }
+
+    get securityAccessId() {
+        return this.router.params.saId ? parseInt(this.router.params.saId, 10) : null;
+    }
+
+    get securityAccessTab() {
+        return this.router.params.tab || 'overview';
     }
 
     get invoiceId() {
