@@ -268,3 +268,37 @@ class TestDedicatedTemplateFork(TransactionCase):
     def test_inverse_rejected_on_shared(self):
         with self.assertRaises(UserError):
             self.proj.resolved_template_skill_ids = [(4, self.sys_skill.id)]
+
+
+@tagged('post_install', '-at_install')
+class TestTemplateBindingPush(TransactionCase):
+    """§2.3 連帶 — template 綁定變更 best-effort push（#111 語意）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.proj = cls.env['project.project'].sudo().create({'name': 'TP'})
+        cls.skill = _mk_skill(cls.env, name='tp-sys', state='published')
+        cls.tpl = cls.env['woow_paas_platform.agent_template'].sudo().create({
+            'name': 'TP Tpl',
+            'project_ids': [(6, 0, [cls.proj.id])],
+            'state': 'published',
+        })
+
+    def test_skill_binding_change_pushes(self):
+        with patch.object(
+            type(self.env['woow_paas_platform.agent_session']),
+            '_push_snapshot_to_running_pods',
+        ) as push:
+            self.tpl.write({'skill_ids': [(4, self.skill.id)]})
+        self.assertIn(
+            ('skill', 'user', self.proj.id),
+            {c.args[:3] for c in push.call_args_list})
+
+    def test_non_binding_write_does_not_push(self):
+        with patch.object(
+            type(self.env['woow_paas_platform.agent_session']),
+            '_push_snapshot_to_running_pods',
+        ) as push:
+            self.tpl.write({'description': 'no push'})
+        push.assert_not_called()
