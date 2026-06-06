@@ -4730,8 +4730,10 @@ export class SecurityAccessDetailPage extends Component {
               <h1 t-on-click="startEditName"><t t-esc="state.sa.name"/></h1>
             </t>
             <t t-else="">
+              <!-- OWL 不支援 .enter key modifier（Vue 語法會 OwlError 整頁
+                   crash）— 用 t-on-keydown handler 內讀 ev.key -->
               <input type="text" class="o_woow_input" t-model="state.nameDraft"
-                     t-on-keyup.enter="saveName" t-on-blur="saveName"/>
+                     t-on-keydown="onNameKeydown" t-on-blur="saveName"/>
             </t>
             <StatusBadge status="state.sa.state"/>
             <div class="o_woow_sa_detail__hostname">

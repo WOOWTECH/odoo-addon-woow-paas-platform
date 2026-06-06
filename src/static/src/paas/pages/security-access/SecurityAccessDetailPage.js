@@ -112,6 +112,15 @@ export class SecurityAccessDetailPage extends Component {
     this.state.editingName = true;
   }
 
+  onNameKeydown(ev) {
+    // OWL has no .enter event modifier (that's Vue syntax) — key check
+    // lives in the handler. Blur delegates the save to t-on-blur=saveName
+    // so there is exactly one save path.
+    if (ev.key === "Enter") {
+      ev.target.blur();
+    }
+  }
+
   async saveName() {
     const res = await securityAccessService.update(
       this.props.workspaceId, this.props.saId,
