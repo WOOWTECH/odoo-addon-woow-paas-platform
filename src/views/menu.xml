@@ -20,4 +20,11 @@
         name="Smart Home"
         parent="menu_woow_paas_platform_root"
         sequence="40"/>
+
+    <!-- Security Access 子選單群組 -->
+    <menuitem
+        id="menu_security_access"
+        name="Security Access"
+        parent="menu_woow_paas_platform_root"
+        sequence="50"/>
 </odoo>

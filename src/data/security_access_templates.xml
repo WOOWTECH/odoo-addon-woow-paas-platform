@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <data noupdate="1">
+        <record id="security_access_default" model="woow_paas_platform.security_access_template">
+            <field name="name">Security Access</field>
+            <field name="slug">security-access</field>
+            <field name="description">Zero Trust tunnel with self-managed reverse-proxy routing</field>
+            <field name="full_description">One Cloudflare Tunnel, multiple custom subdomains. All traffic is routed to the reverse proxy (e.g. Nginx Proxy Manager) on your own host at localhost:80 — you decide how each subdomain maps to your internal services.</field>
+        </record>
+    </data>
+</odoo>
