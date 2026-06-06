@@ -201,9 +201,46 @@ class SecurityAccess(models.Model):
     # ------------------------------------------------------------------ #
 
     def action_provision(self):
-        """Provision: create dedicated tunnel + primary route."""
+        """Provision: create dedicated tunnel + primary route.
+
+        Idempotency guard: this is a two-stage provision (create_tunnel, then
+        a re-sync that carries http_host_header). If stage 2 fails the record
+        lands in 'error' but the tunnel already exists in Cloudflare and
+        tunnel_id is stored. A retry from the 'error' state must NOT call
+        create_tunnel again — that would leave the first tunnel orphaned in CF
+        (live token, billed, no DB reference). When tunnel_id is already set we
+        only re-run the declarative route sync and restore the active state.
+        """
         self.ensure_one()
         client = self._get_operator_client()
+
+        # Already has a live tunnel (e.g. retry after a stage-2 sync failure):
+        # never recreate it, just finish the route sync.
+        if self.tunnel_id:
+            self.write({'state': 'provisioning', 'error_message': False})
+            try:
+                self._sync_routes_to_operator()
+                self.write({'state': 'active'})
+            except PaaSOperatorConnectionError as e:
+                self.write({
+                    'state': 'error',
+                    'error_message':
+                        f"Cannot connect to PaaS Operator: {e.message}",
+                })
+                _logger.error(
+                    "[SA] provision re-sync connection error sa=%s: %s",
+                    self.id, e.message,
+                )
+            except PaaSOperatorError as e:
+                self.write({
+                    'state': 'error',
+                    'error_message': f"Route sync failed: {e.message}",
+                })
+                _logger.error(
+                    "[SA] provision re-sync error sa=%s: %s",
+                    self.id, e.message,
+                )
+            return
 
         self.write({'state': 'provisioning', 'error_message': False})
 

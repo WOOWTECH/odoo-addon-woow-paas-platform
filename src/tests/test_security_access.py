@@ -83,6 +83,66 @@ class TestSecurityAccess(TransactionCase):
         self.assertEqual(sa.state, 'error')
         self.assertIn('boom', sa.error_message)
 
+    @patch(MOCK_GET_CLIENT)
+    def test_provision_retry_after_tunnel_exists_does_not_recreate(
+            self, mock_get_client):
+        """Idempotency guard: re-provision with a live tunnel_id must only
+        re-sync routes, never call create_tunnel again (else orphan CF tunnel).
+        """
+        mock_client = MagicMock()
+        mock_client.create_tunnel.return_value = {
+            'tunnel_id': 'tun-sa-1',
+            'tunnel_token': 'tok-secret',
+            'tunnel_name': 'paas-sa-x-y',
+            'dns_record_id': 'rec-primary',
+        }
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_get_client.return_value = mock_client
+        sa = self._make_sa()
+        # First provision succeeds end-to-end.
+        sa.action_provision()
+        self.assertEqual(sa.state, 'active')
+        self.assertEqual(mock_client.create_tunnel.call_count, 1)
+        original_tunnel = sa.tunnel_id
+
+        # Simulate a stale 'error' state on the same record, then retry.
+        sa.write({'state': 'error'})
+        mock_client.create_tunnel.reset_mock()
+        sa.action_provision()
+        # No second tunnel created; tunnel_id unchanged; back to active.
+        mock_client.create_tunnel.assert_not_called()
+        self.assertEqual(sa.tunnel_id, original_tunnel)
+        self.assertEqual(sa.state, 'active')
+
+    @patch(MOCK_GET_CLIENT)
+    def test_provision_resync_failure_keeps_tunnel_for_retry(
+            self, mock_get_client):
+        """Stage-2 re-sync failure must land in 'error' WITHOUT orphaning:
+        tunnel_id stays so the next retry finishes via the idempotent path."""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        mock_client = MagicMock()
+        mock_client.create_tunnel.return_value = {
+            'tunnel_id': 'tun-sa-2',
+            'tunnel_token': 'tok-secret',
+            'tunnel_name': 'paas-sa-x-y',
+            'dns_record_id': 'rec-primary',
+        }
+        mock_client.sync_tunnel_routes.side_effect = PaaSOperatorError('cf 503')
+        mock_get_client.return_value = mock_client
+        sa = self._make_sa()
+        sa.action_provision()
+        self.assertEqual(sa.state, 'error')
+        # tunnel was created and its id retained (no orphan, retry-able)
+        self.assertEqual(sa.tunnel_id, 'tun-sa-2')
+        # retry succeeds without recreating the tunnel
+        mock_client.sync_tunnel_routes.side_effect = None
+        mock_client.create_tunnel.reset_mock()
+        sa.action_provision()
+        mock_client.create_tunnel.assert_not_called()
+        self.assertEqual(sa.state, 'active')
+
     # ---- routes ----
 
     def _make_active_sa(self):
