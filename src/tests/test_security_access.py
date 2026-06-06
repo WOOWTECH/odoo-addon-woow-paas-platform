@@ -170,6 +170,79 @@ class TestSecurityAccess(TransactionCase):
         mock_client.create_tunnel.assert_not_called()
         self.assertEqual(sa.state, 'active')
 
+    @patch(MOCK_GET_CLIENT)
+    def test_provision_stage2_non_operator_error_fails_loud(
+            self, mock_get_client):
+        """Stage-2 非 operator 例外（route create UNIQUE 撞庫）也須 fail-loud
+        到 'error'，不得留在假性 'active' 而 CF 有 live tunnel、DB 無對齊。
+
+        重現：先用 sa1 佔走 canonical_name 對應的 primary prefix，再 provision
+        sa2 但讓它算出同一個 canonical_name → primary route create 撞 UNIQUE →
+        非 PaaSOperatorError 例外。修前窄 except 會放行例外、state 卡在
+        'active'；修後 broad except 寫 'error'。
+        """
+        mock_client = MagicMock()
+        mock_client.create_tunnel.return_value = {
+            'tunnel_id': 'tun-stage2',
+            'tunnel_token': 'tok-secret',
+            'tunnel_name': 'paas-sa-x-y',
+            'dns_record_id': 'rec-primary',
+        }
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_get_client.return_value = mock_client
+        sa = self._make_sa()
+        # Squat the SA's own canonical_name as a route prefix so the primary
+        # route create inside action_provision hits the UNIQUE constraint.
+        self.Route.with_context(sa_skip_route_sync=True).create({
+            'security_access_id': sa.id,
+            'subdomain_prefix': sa.canonical_name,
+            'is_primary': True,
+        })
+        # Drop the primary so the re-sync self-heal path isn't the one tested;
+        # we want the FIRST-provision branch's UNIQUE clash. Re-create a
+        # NON-primary squatter on the canonical prefix on a sibling SA.
+        sa.route_ids.with_context(sa_force_delete_primary=True).unlink()
+        sibling = self.SecurityAccess.create({
+            'name': 'Squatter', 'workspace_id': self.workspace.id,
+        })
+        self.Route.with_context(sa_skip_route_sync=True).create({
+            'security_access_id': sibling.id,
+            'subdomain_prefix': sa.canonical_name,
+            'is_primary': True,
+        })
+        sa.action_provision()
+        # tunnel was created (id stored) but primary route create clashed →
+        # must NOT remain 'active'; must fail loud to 'error'.
+        self.assertEqual(sa.state, 'error')
+        self.assertTrue(sa.error_message)
+        self.assertEqual(sa.tunnel_id, 'tun-stage2')
+
+    @patch(MOCK_GET_CLIENT)
+    def test_provision_retry_rebuilds_missing_primary_route(
+            self, mock_get_client):
+        """active+tunnel_id 但無 primary route 的不可自癒態：retry 須補建 primary。
+
+        模擬 stage-2 失敗後落入「tunnel 已存、primary route 沒建成」的狀態，
+        再次 provision（走 re-sync 分支）必須偵測並補建 primary route，而非
+        推一份只有 catch-all 404 的 ingress。
+        """
+        mock_client = MagicMock()
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_get_client.return_value = mock_client
+        sa = self._make_sa()
+        # Simulate the broken state: live tunnel, no primary route.
+        sa.write({'state': 'error', 'tunnel_id': 'tun-orphan'})
+        self.assertFalse(sa.route_ids.filtered('is_primary'))
+        sa.action_provision()
+        # primary route rebuilt from canonical_name + sync pushed it.
+        primary = sa.route_ids.filtered('is_primary')
+        self.assertEqual(len(primary), 1)
+        self.assertEqual(primary.subdomain_prefix, sa.canonical_name)
+        self.assertEqual(sa.state, 'active')
+        sync_kwargs = mock_client.sync_tunnel_routes.call_args.kwargs
+        subs = [r['subdomain'] for r in sync_kwargs['routes']]
+        self.assertIn(sa.canonical_name, subs)
+
     # ---- routes ----
 
     def _make_active_sa(self):

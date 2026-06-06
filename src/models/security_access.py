@@ -257,6 +257,23 @@ class SecurityAccess(models.Model):
         if self.tunnel_id:
             self.write({'state': 'provisioning', 'error_message': False})
             try:
+                # Self-heal: a first provision can land state=active +
+                # tunnel_id but die before/while creating the primary route
+                # record (e.g. UNIQUE clash or a ValidationError). Without the
+                # primary row _build_route_payload would push a tunnel that
+                # serves only the catch-all 404. Rebuild it from the stored
+                # canonical_name (the immutable primary subdomain) before
+                # re-syncing so the retry path is genuinely self-curing rather
+                # than freezing an "active but no primary route" state.
+                if not self.route_ids.filtered('is_primary'):
+                    self.env[
+                        'woow_paas_platform.security_access_route'
+                    ].with_context(sa_skip_route_sync=True).create({
+                        'security_access_id': self.id,
+                        'subdomain_prefix': self.canonical_name,
+                        'service_url': self._get_default_service_url(),
+                        'is_primary': True,
+                    })
                 self._sync_routes_to_operator()
                 self.write({'state': 'active'})
             except PaaSOperatorConnectionError as e:
@@ -277,6 +294,18 @@ class SecurityAccess(models.Model):
                 _logger.error(
                     "[SA] provision re-sync error sa=%s: %s",
                     self.id, e.message,
+                )
+            except Exception as e:
+                # Any non-operator failure (route rebuild ValidationError,
+                # DB error, …) must also fail loud into 'error' — tunnel_id
+                # is retained so the next retry can finish (symmetric with the
+                # broad except in the first-provision branch below).
+                self.write({
+                    'state': 'error',
+                    'error_message': f"Provision re-sync failed: {e}",
+                })
+                _logger.exception(
+                    "[SA] provision re-sync unexpected error sa=%s", self.id,
                 )
             return
 
@@ -339,6 +368,21 @@ class SecurityAccess(models.Model):
                 'error_message': f"Tunnel creation failed: {e.message}",
             })
             _logger.error("[SA] provision error: %s", e.message)
+        except Exception as e:
+            # Stage-2 (write / primary-route create / re-sync) can raise
+            # non-operator exceptions: a ValidationError from
+            # _check_prefix_format, a DB IntegrityError, or a UNIQUE clash on
+            # the primary route. The narrow operator-only excepts above would
+            # let those propagate while state was already flipped to 'active'
+            # and tunnel_id stored — silent CF↔DB drift. Catch everything and
+            # fail loud into 'error' (tunnel_id is retained, so the idempotent
+            # retry-from-error path can finish without orphaning the tunnel),
+            # mirroring _do_suspend / _do_resume / _do_cleanup's bare except.
+            self.write({
+                'state': 'error',
+                'error_message': f"Provisioning failed: {e}",
+            })
+            _logger.exception("[SA] provision unexpected error sa=%s", self.id)
 
     def action_refresh_status(self):
         """Refresh tunnel connector status from the PaaS Operator."""
