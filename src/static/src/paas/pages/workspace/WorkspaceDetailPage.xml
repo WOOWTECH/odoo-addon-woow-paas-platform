@@ -189,9 +189,9 @@
                     onClose.bind="closeCreateSmartHomeModal"
                     onCreated.bind="onSmartHomeCreated"/>
 
-                <!-- Security Access Section -->
-                <section class="o_woow_security_accesses_section">
-                    <div class="o_woow_security_accesses_section_header">
+                <!-- Security Access Section (reuses styled smart-home section classes) -->
+                <section class="o_woow_smart_homes_section">
+                    <div class="o_woow_smart_homes_section_header">
                         <h2>Security Access</h2>
                         <WoowButton
                             variant="'primary'"
@@ -212,7 +212,7 @@
 
                     <!-- Empty State -->
                     <t t-elif="!hasSecurityAccesses and !state.loadingSecurityAccesses">
-                        <div class="o_woow_security_accesses_empty">
+                        <div class="o_woow_smart_homes_empty">
                             <WoowIcon name="'shield'" size="48"/>
                             <h3>Set Up Zero Trust Access</h3>
                             <p>Expose your services securely with a Cloudflare Tunnel — no open ports, no public IP.</p>
@@ -228,21 +228,19 @@
 
                     <!-- Security Access List -->
                     <t t-if="hasSecurityAccesses">
-                        <div class="o_woow_security_accesses_grid">
+                        <div class="o_woow_smart_homes_grid">
                             <t t-foreach="state.securityAccesses" t-as="sa" t-key="sa.id">
-                                <WoowCard shadow="true" class="'o_woow_security_access_row'">
-                                    <div class="o_woow_security_access_row_inner" t-on-click="() => this.openSecurityAccess(sa.id)">
-                                        <div class="o_woow_security_access_row_icon">
+                                <WoowCard shadow="true" class="'o_woow_security_access_card'">
+                                    <div class="o_woow_security_access_card_inner" t-on-click="() => this.openSecurityAccess(sa.id)">
+                                        <div class="o_woow_security_access_card_head">
                                             <WoowIcon name="'verified_user'" size="24"/>
+                                            <span class="o_woow_security_access_card_name" t-esc="sa.name"/>
                                         </div>
-                                        <div class="o_woow_security_access_row_main">
-                                            <span class="o_woow_security_access_row_name" t-esc="sa.name"/>
-                                            <span class="o_woow_security_access_row_sub" t-esc="sa.primary_hostname"/>
-                                        </div>
-                                        <div class="o_woow_security_access_row_meta">
-                                            <span class="o_woow_security_access_row_routes">
+                                        <span class="o_woow_security_access_card_host" t-esc="sa.primary_hostname"/>
+                                        <div class="o_woow_security_access_card_meta">
+                                            <span class="o_woow_security_access_card_routes">
                                                 <WoowIcon name="'route'" size="14"/>
-                                                <t t-esc="sa.routes.length"/>
+                                                <t t-esc="sa.routes.length"/> routes
                                             </span>
                                             <StatusBadge status="sa.state"/>
                                         </div>
