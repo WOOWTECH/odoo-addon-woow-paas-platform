@@ -102,3 +102,67 @@ class TestReconcileTunnelDns:
         )
         mock_delete.assert_called_once_with("rec-c")
         assert result == {"a": "rec-a", "b": "rec-b"}
+
+
+from unittest.mock import patch as sync_patch
+
+from fastapi.testclient import TestClient
+
+from src.main import app
+
+
+@pytest.fixture
+def client():
+    with sync_patch("src.main.settings") as mock_settings:
+        mock_settings.api_key = "test-api-key"
+        mock_settings.namespace_prefix = "paas-ws-"
+        yield TestClient(app, headers={"X-API-Key": "test-api-key"})
+
+
+class TestTunnelRoutesSyncEndpoint:
+    @sync_patch("src.api.tunnels.cloudflare_service")
+    def test_sync_routes_happy_path(self, mock_cf, client):
+        mock_cf.api_token = "t"
+        mock_cf.account_id = "a"
+        mock_cf.domain = "woowtech.io"
+        mock_cf.configure_tunnel_ingress = AsyncMock(return_value=None)
+        mock_cf.reconcile_tunnel_dns = AsyncMock(
+            return_value={"a": "rec-a", "b": "rec-b"}
+        )
+
+        response = client.put(
+            "/api/tunnels/tun-1/routes",
+            json={
+                "routes": [
+                    {"subdomain": "a", "service_url": "http://localhost:80",
+                     "http_host_header": True},
+                    {"subdomain": "b", "service_url": "http_status:503",
+                     "http_host_header": False},
+                ],
+                "comment": "paas-sa-x-y",
+            },
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["tunnel_id"] == "tun-1"
+        assert {r["subdomain"]: r["dns_record_id"] for r in data["routes"]} == {
+            "a": "rec-a", "b": "rec-b",
+        }
+        # ingress rules built from routes with FQDN hostnames
+        ingress_call = mock_cf.configure_tunnel_ingress.call_args
+        assert ingress_call.kwargs["tunnel_id"] == "tun-1"
+        assert ingress_call.kwargs["rules"][0]["hostname"] == "a.woowtech.io"
+        # dns reconcile stamped with comment
+        dns_call = mock_cf.reconcile_tunnel_dns.call_args
+        assert dns_call.kwargs["comment"] == "paas-sa-x-y"
+
+    @sync_patch("src.api.tunnels.cloudflare_service")
+    def test_sync_routes_requires_credentials(self, mock_cf, client):
+        mock_cf.api_token = None
+        mock_cf.account_id = None
+        response = client.put(
+            "/api/tunnels/tun-1/routes",
+            json={"routes": [{"subdomain": "a",
+                              "service_url": "http://localhost:80"}]},
+        )
+        assert response.status_code == 400

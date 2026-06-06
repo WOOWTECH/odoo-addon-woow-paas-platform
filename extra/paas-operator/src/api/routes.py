@@ -67,6 +67,33 @@ async def list_routes():
         )
 
 
+# NOTE: declared before any path-param route (e.g. DELETE /{subdomain}) so
+# FastAPI does not match "availability" as a {subdomain} value.
+@router.get(
+    "/availability",
+    summary="Check whether a subdomain is free in the platform zone",
+)
+async def check_route_availability(subdomain: str):
+    """Check Cloudflare-side DNS for an existing record on this subdomain.
+
+    Second layer of the two-layer availability check (first layer is the
+    Odoo DB UNIQUE constraint) — catches drift and records created outside
+    the platform (e.g. infra tunnels, manual records).
+    """
+    if not cloudflare_service.api_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cloudflare API token is required",
+        )
+    hostname = f"{subdomain}.{cloudflare_service.domain}"
+    existing = await cloudflare_service.get_dns_record(hostname)
+    return {
+        "subdomain": subdomain,
+        "hostname": hostname,
+        "available": existing is None,
+    }
+
+
 @router.post(
     "",
     response_model=RouteResponse,
