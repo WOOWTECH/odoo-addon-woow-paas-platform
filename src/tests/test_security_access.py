@@ -243,6 +243,63 @@ class TestSecurityAccess(TransactionCase):
         subs = [r['subdomain'] for r in sync_kwargs['routes']]
         self.assertIn(sa.canonical_name, subs)
 
+    # ---- refresh status ----
+
+    @patch(MOCK_GET_CLIENT)
+    def test_refresh_status_connected(self, mock_get_client):
+        """connections 非空 → connected + 解析 connector_*/uptime（鏡像 SmartHome）。"""
+        mock_client = MagicMock()
+        mock_client.get_tunnel_status.return_value = {
+            'connections': [{
+                'connector_id': 'conn-123',
+                'type': 'cloudflared',
+                'opened_at': '2026-06-06T08:30:00Z',
+            }],
+        }
+        mock_get_client.return_value = mock_client
+        sa = self._make_sa()
+        sa.write({'state': 'active', 'tunnel_id': 'tun-refresh'})
+        sa.action_refresh_status()
+        self.assertEqual(sa.tunnel_status, 'connected')
+        self.assertEqual(sa.connector_id, 'conn-123')
+        self.assertEqual(sa.connector_type, 'cloudflared')
+        self.assertEqual(sa.tunnel_uptime, '2026-06-06T08:30:00Z')
+        mock_client.get_tunnel_status.assert_called_once_with('tun-refresh')
+
+    @patch(MOCK_GET_CLIENT)
+    def test_refresh_status_disconnected(self, mock_get_client):
+        """connections 空 → disconnected。"""
+        mock_client = MagicMock()
+        mock_client.get_tunnel_status.return_value = {'connections': []}
+        mock_get_client.return_value = mock_client
+        sa = self._make_sa()
+        sa.write({'state': 'active', 'tunnel_id': 'tun-disc'})
+        sa.action_refresh_status()
+        self.assertEqual(sa.tunnel_status, 'disconnected')
+
+    @patch(MOCK_GET_CLIENT)
+    def test_refresh_status_operator_error_sets_error_status(
+            self, mock_get_client):
+        """get_tunnel_status 拋 PaaSOperatorError → tunnel_status='error'。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        mock_client = MagicMock()
+        mock_client.get_tunnel_status.side_effect = PaaSOperatorError('cf down')
+        mock_get_client.return_value = mock_client
+        sa = self._make_sa()
+        sa.write({'state': 'active', 'tunnel_id': 'tun-err'})
+        sa.action_refresh_status()
+        self.assertEqual(sa.tunnel_status, 'error')
+        self.assertIn('cf down', sa.error_message)
+
+    def test_refresh_status_noop_without_tunnel(self):
+        """無 tunnel_id → 直接 return，不呼叫 operator。"""
+        sa = self._make_sa()
+        with patch(MOCK_GET_CLIENT) as mock_get_client:
+            sa.action_refresh_status()
+            mock_get_client.assert_not_called()
+
     # ---- routes ----
 
     def _make_active_sa(self):
