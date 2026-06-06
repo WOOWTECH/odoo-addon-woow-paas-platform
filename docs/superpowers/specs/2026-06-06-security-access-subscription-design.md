@@ -4,7 +4,8 @@
 > 來源：`docs/meeting/docs/2026-06-06 Security Access 開發需求文件.md`（27 份會議記錄彙整）
 > 研究依據：6-agent 平行探勘（Smart Home 後端 / Cloud Service 訂閱 / operator+cloudflare /
 > 前端 OWL / HA component 合約 / 訂閱基礎設施），結論已整合進本文。
-> UI 依據：detail page 5-tab mockup（header+Access / Email / Domains 三張）+
+> UI 依據：detail page mockup（header+Access / Email / Domains 三張；mockup 為 5 tab，
+> 拍板後拆為 6 tab：Configuration 留給 record 自身設定、Application 管 routes）+
 > dashboard「Explore More Services」三卡 mockup。
 
 ## 背景
@@ -22,7 +23,7 @@ operator，前端複用 detail-tab 框架，HA component 串接需平行 API**�
 
 | # | 決議 |
 |---|---|
-| 範圍 | detail page **5 tab 全做**：Overview / Configuration / Access / Email / Domains |
+| 範圍 | detail page **6 tab 全做**：Overview / Configuration / Application / Access / Email / Domains（Configuration = security_access record 自身設定；Application = application routes 管理） |
 | 凍結策略 | **503 凍結**：到期把所有 route ingress 改指 `http_status:503`，DNS / tunnel / Access / token 全保留；恢復訂閱還原 `service_url`（沿用 SmartHome suspend pattern） |
 | Access Control 計費 | **訂閱內含、不另計費**；plan flag 留加值空間，正式定價（$10/月+$7/名額案）拍板後 follow-up |
 | 方案限額 | 四維度全建模：`max_routes` / `max_access_policies` / `max_custom_domains` / `max_email_rules` |
@@ -45,19 +46,26 @@ operator，前端複用 detail-tab 框架，HA component 串接需平行 API**�
 
 ---
 
-## §1 資料模型
-
-### 術語對照（本設計 ↔ Cloudflare dashboard）
+## 名詞對照（與 Cloudflare 後台用語）
 
 實作與 review 時對照用，避免混淆（特別是 Application Route 與 Custom Domain 不是同一件事）：
 
 | 本設計術語 | 子模型 | Cloudflare dashboard 位置（zh-tw 介面名） | 本質 |
 |---|---|---|---|
-| **Application Route**（Configuration tab） | `security_access.route` | Zero Trust → Networks → Tunnels → 該 tunnel →「**已發布應用程式路由**」（public hostname） | hostname → service 的 tunnel ingress 轉送規則；hostname 只能用**我們帳號內 zone** 的網域（平台 base domain subdomain） |
-| **Custom Domain**（Domains tab） | `security_access.custom_domain` | CNAME 軌：SSL/TLS → 「**自訂主機名稱**」（Custom Hostnames, Cloudflare for SaaS）；full_zone 軌：帳號內新增 **zone** | 把**客戶外部網域**接進我們帳號的「接入機制」；接進來後流量仍落在某條 application route（v1 = primary route） |
+| **Application Route**（Application tab） | `security_access.route` | Zero Trust → Networks → Tunnels → 該 tunnel →「**已發布應用程式路由**」（Published Application Routes / Public Hostnames） | hostname → service 的 tunnel ingress 轉送規則；hostname 只能掛在「**已連線至 Cloudflare 的網域（我們帳號內 zone）**」上（平台 base domain subdomain） |
+| **503 凍結機制** | （lifecycle hook） | ingress 的 `http_status:*` 回應類型 | suspend = 每條 route 的 service 換成 `http_status:503` |
+| **Custom Domain**（Domains tab） | `security_access.custom_domain` | CNAME 軌：SSL/TLS → 「**自訂主機名稱**」（Custom Hostnames, Cloudflare for SaaS）；full_zone 軌：帳號內新增 **zone**（已連線網域） | 把**客戶外部網域**接進我們帳號的「接入機制」，是 Application Route 的**前置條件層**：CNAME 軌不進平台帳號（別名借道 primary route）；full_zone 軌（NS 委派）成為平台帳號內的 zone |
 | **Tunnel** | 主模型 `tunnel_id` | Zero Trust → Networks → Tunnels | 每訂閱戶一條（`paas-sa-{hash}` 命名）；與平台 infra tunnel（如 `prod-paas-dev`，服務 K8s cluster）**不同層**，靠命名前綴區分 |
 | **Access Policy**（Access tab） | `security_access.access_policy` | Zero Trust → Access → Applications + Policies | 受保護 hostname 的身分驗證閘 |
 | **Email Rule**（Email tab） | `security_access.email_rule` | 該 zone → Email →「**電子郵件路由**」（Email Routing） | full_zone 網域的收信轉寄規則 |
+
+v2 擴充方向（本次不做）：full_zone 軌的客戶網域成為帳號內 zone 後，可允許直接在其上
+開 Application Route（如 `ha.acme.com → localhost:80`），不繞 primary 別名；屆時
+`custom_domain` 加 `route` 關聯即可演進。
+
+---
+
+## §1 資料模型
 
 ### 主模型 `woow_paas_platform.security_access`
 
@@ -212,6 +220,7 @@ dunning 連續失敗自動取消、`_force_*_dates_from_plan` 日期強制）。
 #/workspace/:wsId/security-access                       列表
 #/workspace/:wsId/security-access/:id/overview          detail（tab 為路徑段）
 #/workspace/:wsId/security-access/:id/configuration
+#/workspace/:wsId/security-access/:id/application
 #/workspace/:wsId/security-access/:id/access
 #/workspace/:wsId/security-access/:id/email
 #/workspace/:wsId/security-access/:id/domains
@@ -225,12 +234,13 @@ dunning 連續失敗自動取消、`_force_*_dates_from_plan` 日期強制）。
 （trial 或立即付費 + wallet 餘額預估）→ detail 頁輪詢 provisioning → active。
 三元件原件複用、零新建。
 
-### 5 Tab
+### 6 Tab
 
 | Tab | 內容 |
 |---|---|
-| Overview | 狀態、方案層級 + 下次扣款日（FR-7）、tunnel connector 連線狀態、primary hostname、接入教學（token 複製、Docker/HAOS 啟動指令、NPM 反向代理教學連結 FR-8） |
-| Configuration | routes 列表：新增（prefix 輸入**即時 availability check**）、service_url（預設值自後台設定）、Host header 開關、每列「受保護」toggle |
+| Overview | 狀態、方案層級 + 下次扣款日（FR-7）、tunnel connector 連線狀態、primary hostname |
+| Configuration | **security_access record 自身設定**：nickname 編輯、tunnel 接入資訊（token 複製、Docker/HAOS 啟動指令、NPM 反向代理教學連結 FR-8） |
+| Application | **application routes 管理**：新增（prefix 輸入**即時 availability check**）、service_url（預設值自後台設定）、Host header 開關、每列「受保護」toggle |
 | Access | 照 mockup：保護總開關、Login Methods 四 toggle、Access Policies CRUD（名稱/allow-block/規則/session）、Default session duration |
 | Email | 照 mockup：Email Routing 開關（網域未 full_zone 時鎖住並導向 Domains tab 升級）、Routing Rules CRUD、Catch-all、Destinations（驗證狀態） |
 | Domains | 照 mockup：網域清單（DNS/SSL badge）、Add Domain → CNAME+TXT 指示卡、Verify、Set primary、「升級 NS 委派」流程（顯示分配 nameservers，解鎖 Email） |
@@ -246,7 +256,7 @@ Header：icon + nickname（可編輯）+ 狀態 badge + primary hostname 連結 
 ```
 GET    /api/security-access                      列表（ir.rule 過濾，不 sudo）
 POST   /api/security-access                      建立（plan + quota 檢查）
-GET    /api/security-access/<id>                 detail（5 tab 全部資料）
+GET    /api/security-access/<id>                 detail（6 tab 全部資料）
 PATCH  /api/security-access/<id>                 nickname / access 設定
 DELETE /api/security-access/<id>                 刪除（連動清理鏈）
 POST/PATCH/DELETE /api/security-access/<id>/routes
@@ -310,7 +320,7 @@ GET /api/security-access/<id>/token  tunnel token（高權限 scope）
 | Lifecycle cron | SA 在掃描清單、expired→suspend、renewed→resume、cancel→cleanup | 「漏掛 cron = 永不執行」silent gap |
 | Operator unit | 4 組新 endpoints、availability、命名 stamping 驗證、fail-fast credential 驗證（mock httpx） | HTTP contract |
 | Operator integration | 既有 `-m integration` 不回歸；CF 真實 API staging smoke script（手動、文件化） | CF 無本地模擬 |
-| E2E（merge 後） | deploy-stg + 新 operator image：playwright-cli `--headed` 訂閱流程 → 5 tab → availability 反饋 → 凍結/恢復；HA API OAuth curl smoke | 全鏈驗證 |
+| E2E（merge 後） | deploy-stg + 新 operator image：playwright-cli `--headed` 訂閱流程 → 6 tab → availability 反饋 → 凍結/恢復；HA API OAuth curl smoke | 全鏈驗證 |
 
 測試紀律：斷言用 `>=` / 存在性鎖 intent，不硬編 schema 快照
 （`phase-versioned-test-assertion` pattern，避免 P2-P4 演進撞 test-vs-test red）。
