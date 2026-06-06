@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+from odoo.exceptions import AccessError, UserError
 from odoo.tests import TransactionCase, tagged
 
 
@@ -64,9 +67,6 @@ class TestEffectiveSkillHelper(TransactionCase):
         self.assertNotIn(self.sys_draft, eff)
         # system 同名被 bound 遮蔽
         self.assertNotIn(self.sys_pub, eff)
-
-
-from unittest.mock import patch
 
 
 @tagged('post_install', '-at_install')
@@ -148,9 +148,6 @@ class TestSkillIsEffective(TransactionCase):
         self.assertFalse(self.sys_draft.is_effective)  # draft
 
 
-from odoo.exceptions import UserError
-
-
 @tagged('post_install', '-at_install')
 class TestWizardUserScope(TransactionCase):
     """§2.2 — wizard per-scope 上傳與查重。"""
@@ -197,9 +194,6 @@ class TestWizardUserScope(TransactionCase):
 
     def test_default_scope_stays_system_without_context(self):
         self.assertEqual(self._wiz().scope, 'system')
-
-
-from odoo.exceptions import AccessError
 
 
 @tagged('post_install', '-at_install')
@@ -268,6 +262,35 @@ class TestDedicatedTemplateFork(TransactionCase):
     def test_inverse_rejected_on_shared(self):
         with self.assertRaises(UserError):
             self.proj.resolved_template_skill_ids = [(4, self.sys_skill.id)]
+
+    def test_fork_does_not_clobber_platform_default(self):
+        """fork 只動本 project 的 explicit pick，不得改寫平台預設 template
+        指向或把它綁進 project（default-agent-template-project-bind-silent-
+        autoenable pitfall 守線：平台預設必須維持 unbound + 指向不變）。"""
+        # 合格平台預設：unbound + published + public（tenant-neutral）。
+        platform_default = self.env['woow_paas_platform.agent_template'] \
+            .sudo().create({
+                'name': 'FK Platform Default',
+                'state': 'published',
+                'is_public': True,
+            })
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.default_agent_template_id',
+            str(platform_default.id))
+
+        self.proj.action_create_dedicated_agent_template()
+
+        self.assertEqual(
+            self.env['ir.config_parameter'].sudo().get_param(
+                'woow_paas_platform.default_agent_template_id'),
+            str(platform_default.id),
+            "fork 不得改寫 default_agent_template_id 指向。",
+        )
+        platform_default.invalidate_recordset()
+        self.assertFalse(
+            platform_default.project_ids,
+            "fork 不得把平台預設 template 綁進 project（必須維持 unbound）。",
+        )
 
 
 @tagged('post_install', '-at_install')
