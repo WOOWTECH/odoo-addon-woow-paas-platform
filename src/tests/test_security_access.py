@@ -280,3 +280,69 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             sa.with_context(sa_force_delete_primary=True).unlink()
         mock_client.delete_tunnel.assert_called_once_with('tun-lc')
+
+
+class TestSecurityAccessAcl(TransactionCase):
+    """workspace-scoped ir.rule：非 member 看不到、member 看得到。"""
+
+    def setUp(self):
+        super().setUp()
+        User = self.env['res.users']
+        self.alice = User.create({
+            'name': 'SA Alice', 'login': 'sa_acl_alice',
+            'email': 'sa_acl_alice@test.example',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.mallory = User.create({
+            'name': 'SA Mallory', 'login': 'sa_acl_mallory',
+            'email': 'sa_acl_mallory@test.example',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'SA ACL WS', 'owner_id': self.alice.id,
+        })
+        # workspace owner 是否自動有 access record 依 workspace model 實作；
+        # 保險起見明確建 alice 的 access（若已存在改用 search 確認）
+        Access = self.env['woow_paas_platform.workspace_access']
+        if not Access.search([('workspace_id', '=', self.workspace.id),
+                              ('user_id', '=', self.alice.id)]):
+            Access.create({
+                'workspace_id': self.workspace.id,
+                'user_id': self.alice.id, 'role': 'owner',
+            })
+        self.sa = self.env['woow_paas_platform.security_access'].create({
+            'name': 'ACL Gateway', 'workspace_id': self.workspace.id,
+        })
+        self.route = self.env[
+            'woow_paas_platform.security_access_route'].create({
+                'security_access_id': self.sa.id,
+                'subdomain_prefix': self.sa.canonical_name,
+                'is_primary': True,
+            })
+
+    def test_member_can_read(self):
+        visible = self.env['woow_paas_platform.security_access'].with_user(
+            self.alice).search([('id', '=', self.sa.id)])
+        self.assertEqual(len(visible), 1)
+
+    def test_non_member_cannot_read(self):
+        visible = self.env['woow_paas_platform.security_access'].with_user(
+            self.mallory).search([('id', '=', self.sa.id)])
+        self.assertEqual(len(visible), 0)
+
+    def test_non_member_cannot_read_routes(self):
+        """子模型 walk security_access_id.workspace_id 的 rule 也要生效。"""
+        visible = self.env[
+            'woow_paas_platform.security_access_route'].with_user(
+                self.mallory).search([('id', '=', self.route.id)])
+        self.assertEqual(len(visible), 0)
+
+    def test_tunnel_token_field_masked_for_non_system(self):
+        """tunnel_token groups='base.group_system' field mask。"""
+        self.sa.sudo().write({'tunnel_token': 'super-secret'})
+        sa_as_alice = self.env[
+            'woow_paas_platform.security_access'].with_user(
+                self.alice).browse(self.sa.id)
+        from odoo.exceptions import AccessError
+        with self.assertRaises(AccessError):
+            _ = sa_as_alice.tunnel_token

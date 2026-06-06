@@ -91,6 +91,34 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
+        <!-- SecurityAccess: only workspace members may see / mutate.
+             Symmetric ir.rule that SmartHome historically lacks (G-M2) —
+             controller gating alone is insufficient because ORM-walking
+             surfaces (backend views, m2o widgets) bypass controllers.
+             See docs/decisions/patterns/two-layer-acl-lockstep.md. -->
+        <record id="security_access_rule_workspace_member" model="ir.rule">
+            <field name="name">SecurityAccess: workspace member access only</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access"/>
+            <field name="domain_force">[('workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- SecurityAccessRoute: walk parent SA's workspace. -->
+        <record id="security_access_route_rule_workspace_member" model="ir.rule">
+            <field name="name">SecurityAccessRoute: workspace member access only</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_route"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
         <!-- Task: workspace member (bound project) or project member (unbound) — full CRUD.
              Odoo's `task_visibility_rule_project_user` only applies to users with
              project.group_project_user; this rule grants the same surface to plain
