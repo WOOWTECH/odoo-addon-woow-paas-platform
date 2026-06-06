@@ -39,6 +39,17 @@ _SSRF_BLOCKED_IPV6 = frozenset({
 _SSRF_ALLOWED_SCHEMES = frozenset({'http', 'https'})
 
 
+PORTAL_SETTINGS_FLAG = 'woow_paas_platform.portal_project_settings_editable'
+
+
+def _portal_project_settings_editable(env) -> bool:
+    """Feature flag（2026-06-03 議題 H）：portal project settings 預設唯讀。
+    Param 缺值 = off（fail-closed）。ai_assistant.py import 共用 —
+    two-layer-acl-lockstep：三支寫入 endpoint 必須同一開關。"""
+    return (env['ir.config_parameter'].sudo().get_param(
+        PORTAL_SETTINGS_FLAG) or '').strip().lower() in ('true', '1')
+
+
 def _validate_mcp_url(url: str) -> str | None:
     """Minimal SSRF guard: reject non-http(s) schemes + cloud metadata IPs."""
     if not url:
@@ -1541,6 +1552,8 @@ class PaasController(Controller):
         if action == 'get':
             return {'success': True, 'data': self._format_project_detail(project)}
         if action == 'update':
+            if not _portal_project_settings_editable(request.env):
+                return {'success': False, 'error': 'Permission denied'}
             if access.role not in (ROLE_OWNER, ROLE_ADMIN):
                 return {'success': False, 'error': 'Permission denied'}
             return self._update_support_project(project, kw)
@@ -1563,6 +1576,7 @@ class PaasController(Controller):
             'workspace_id': project.workspace_id.id if project.workspace_id else False,
             'workspace_name': project.workspace_id.name if project.workspace_id else '',
             'mcp_server_ids': [self._format_mcp_server(s) for s in servers],
+            'portal_editable': _portal_project_settings_editable(request.env),
             'task_count': project.task_count,
             'open_task_count': project.open_task_count,
             'created_date': project.create_date.isoformat() if project.create_date else None,
@@ -1627,8 +1641,11 @@ class PaasController(Controller):
         write_actions = (
             'create', 'update', 'delete', 'sync', 'test', 'sidecar-hint',
         )
-        if action in write_actions and access.role not in (ROLE_OWNER, ROLE_ADMIN):
-            return {'success': False, 'error': 'Permission denied'}
+        if action in write_actions:
+            if not _portal_project_settings_editable(request.env):
+                return {'success': False, 'error': 'Permission denied'}
+            if access.role not in (ROLE_OWNER, ROLE_ADMIN):
+                return {'success': False, 'error': 'Permission denied'}
 
         if action == 'sidecar-hint':
             return self._compute_project_sidecar_hint(project)

@@ -98,6 +98,8 @@ from . import test_skill_dual_scope
 from . import test_skill_upload_wizard
 # feat: skill binding UX — two-layer admin management (2026-06-05)
 from . import test_skill_binding_admin
+# feat: skill binding UX — portal read-only flag gate (HttpCase, endpoint-level)
+from . import test_portal_settings_flag
 # feat: platform default agent template (Settings fallback)
 from . import test_default_agent_template
 # feat: auto-enable agent runtime on project creation (platform toggle + migration)
