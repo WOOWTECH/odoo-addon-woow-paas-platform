@@ -136,3 +136,45 @@ class TestSecurityAccessControllerFlow(TransactionCase):
                                                'http://localhost:80', True)
         self.assertFalse(r2['success'])
         self.assertIn('quota', r2['error'].lower())
+
+
+class TestSecurityAccessPlanEndpoints(TransactionCase):
+    """templates / plans / skip-trial-estimate 端點."""
+
+    def setUp(self):
+        super().setUp()
+        self.controller = SecurityAccessController()
+        self.plan = self.env['sh.subscription.plan'].create({
+            'name': 'SA Plans EP', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sh_trial': True, 'sh_trial_duration': 7, 'sh_trial_unit': 'day',
+            'sa_max_routes': 3,
+        })
+        self.template = self.env[
+            'woow_paas_platform.security_access_template'].create({
+                'name': 'SA Plans Tmpl',
+                'subscription_plan_ids': [(6, 0, [self.plan.id])],
+            })
+
+    def test_list_templates(self):
+        with _patch_request(self.env):
+            res = self.controller.api_sa_templates()
+        self.assertTrue(res['success'])
+        names = [t['name'] for t in res['data']]
+        self.assertIn('SA Plans Tmpl', names)
+
+    def test_template_plans_include_quota(self):
+        with _patch_request(self.env):
+            res = self.controller.api_sa_template_plans(self.template.id)
+        self.assertTrue(res['success'])
+        plan_data = res['data'][0]
+        self.assertEqual(plan_data['max_routes'], 3)
+        self.assertTrue(plan_data['has_trial'])
+
+    def test_template_without_plans_hard_fails(self):
+        empty = self.env[
+            'woow_paas_platform.security_access_template'].create({
+                'name': 'Empty Tmpl'})
+        with _patch_request(self.env):
+            res = self.controller.api_sa_template_plans(empty.id)
+        self.assertFalse(res['success'])

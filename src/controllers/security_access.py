@@ -166,6 +166,173 @@ class SecurityAccessController(Controller):
             return {"success": False, "error": "prefix is required"}
         return self._check_route_prefix(prefix)
 
+    # ==================== Templates / Plans (platform-level) ============
+
+    @route(
+        "/api/security-access/templates",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_sa_templates(self, **kwargs: Any) -> dict[str, Any]:
+        """Catalog data — sudo justified (mirrors smart_home templates)."""
+        Template = request.env[
+            "woow_paas_platform.security_access_template"].sudo()
+        templates = Template.search([("is_active", "=", True)])
+        return {"success": True, "data": [
+            {"id": t.id, "name": t.name, "slug": t.slug,
+             "description": t.description}
+            for t in templates
+        ]}
+
+    @route(
+        "/api/security-access/templates/<int:template_id>/plans",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_sa_template_plans(self, template_id: int,
+                              **kwargs: Any) -> dict[str, Any]:
+        # sudo: catalog data, portal users lack plan ACL (mirrors smart_home)
+        Template = request.env[
+            "woow_paas_platform.security_access_template"].sudo()
+        template = Template.browse(template_id)
+        if not template.exists() or not template.is_active:
+            return {"success": False,
+                    "error": "Security Access template not found or inactive"}
+        if not template.subscription_plan_ids:
+            return {"success": False,
+                    "error": "Template has no subscription plans configured"}
+        return {"success": True, "data": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "price": p.sh_plan_price,
+                "duration": p.sh_duration,
+                "unit": p.sh_unit,
+                "has_trial": p.sh_trial,
+                "trial_duration": p.sh_trial_duration if p.sh_trial else 0,
+                "trial_unit": p.sh_trial_unit if p.sh_trial else None,
+                "max_routes": p.sa_max_routes,
+                "max_access_policies": p.sa_max_access_policies,
+                "max_custom_domains": p.sa_max_custom_domains,
+                "max_email_rules": p.sa_max_email_rules,
+            }
+            for p in template.subscription_plan_ids
+        ]}
+
+    # ==================== Subscription trio ====================
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/security-accesses/<int:sa_id>/skip-trial-estimate",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_sa_skip_trial_estimate(self, workspace_id: int, sa_id: int,
+                                   **kwargs: Any) -> dict[str, Any]:
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return {"success": False,
+                    "error": "Workspace not found or access denied"}
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Insufficient permissions"}
+        sa = self._get_sa_or_error(sa_id, workspace)
+        if not sa:
+            return {"success": False, "error": "Security access not found"}
+        try:
+            return {"success": True, "data": sa._skip_trial_estimate()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/security-accesses/<int:sa_id>/skip-trial",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_sa_skip_trial(self, workspace_id: int, sa_id: int,
+                          **kwargs: Any) -> dict[str, Any]:
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return {"success": False,
+                    "error": "Workspace not found or access denied"}
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Insufficient permissions"}
+        sa = self._get_sa_or_error(sa_id, workspace)
+        if not sa:
+            return {"success": False, "error": "Security access not found"}
+        try:
+            invoice_info = sa._skip_trial()
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True, "data": {
+            "invoice": invoice_info,
+            "subscription": sa._get_subscription_info(),
+        }}
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/security-accesses/<int:sa_id>/change-plan",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_sa_change_plan(self, workspace_id: int, sa_id: int,
+                           plan_id: int | None = None,
+                           **kwargs: Any) -> dict[str, Any]:
+        """完全鏡像 smart_home.api_smarthome_change_plan 的流程與 sudo 理由：
+        refund 計算 → 退 wallet → close 舊訂閱 → 開新訂閱。"""
+        if not plan_id:
+            return {"success": False, "error": "plan_id is required"}
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return {"success": False,
+                    "error": "Workspace not found or access denied"}
+        sa = self._get_sa_or_error(sa_id, workspace)
+        if not sa:
+            return {"success": False, "error": "Security access not found"}
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Insufficient permissions"}
+
+        # sudo: portal users lack ACL on sh.subscription.plan; catalog data,
+        # and the workspace+role check above already gates who can change a
+        # security access, so this widening is narrow and intentional
+        # (mirrors smart_home.api_smarthome_change_plan).
+        Plan = request.env["sh.subscription.plan"].sudo()
+        plan = Plan.browse(plan_id)
+        if not plan.exists():
+            return {"success": False, "error": "Plan not found"}
+
+        # sudo: workspace owners typically lack ACL on
+        # sh.subscription.subscription; the workspace+role check above already
+        # gates who drives change_plan, so this narrow widening mirrors
+        # smart_home.api_smarthome_change_plan's cascade.
+        old_sub = sa.sudo().subscription_id
+        if not old_sub or old_sub.state != "in_progress":
+            return {"success": False, "error": "No active subscription"}
+        if not old_sub.sh_trial:
+            if not old_sub.sh_end_date or not old_sub.sh_start_date:
+                return {"success": False,
+                        "error": "Subscription dates are incomplete"}
+
+        refund = old_sub._compute_unused_refund()
+        partner = old_sub.sh_partner_id
+        if refund > 0:
+            # sudo: crediting wallet points writes loyalty.card.points which
+            # portal users can't write; same narrow widening as the role-gated
+            # cascade above (mirrors smart_home.api_smarthome_change_plan).
+            partner.sudo().add_wallet_points(
+                amount=refund,
+                description="Plan change refund: %s"
+                            % old_sub.sh_subscription_plan_id.name,
+            )
+            partner.invalidate_recordset(['wallet_balance'])
+        # sudo: closing the old subscription needs sh.subscription.subscription
+        # write ACL workspace owners lack; continuation of the gated cascade.
+        old_sub.sudo().write({
+            "state": "close",
+            "sh_reason": "Plan changed to: %s" % plan.name,
+        })
+        sa._create_and_confirm_subscription(partner, plan)
+        return {"success": True, "data": {
+            "refund_amount": refund,
+            "new_plan": plan.name,
+            "subscription": sa._get_subscription_info(),
+        }}
+
     # ==================== Private Helpers ====================
 
     def _get_workspace_or_error(self, workspace_id: int):
