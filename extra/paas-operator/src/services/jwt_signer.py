@@ -29,7 +29,13 @@ from threading import Lock
 _ISS = "paas-operator"
 _AUD = "agent-runtime"
 
-# 1h token exp + 5 min clock-skew buffer = 65 min replay-cache TTL (§6.6).
+# Replay-cache TTL is sized for the ws_token only (1h exp + 5 min clock-skew
+# buffer = 65 min, §6.6). The operator's verify_token / jti cache verifies
+# ws_tokens; the skill_bundle_token does NOT flow through this cache (it is
+# verified Odoo-side, never re-presented to the operator), so the issue #155
+# 7-day skill_bundle_token TTL does NOT widen this cache window and carries no
+# memory-growth risk here. verify_token has no production caller in this repo
+# today — it is the operator-side helper, unit-tested in test_agent_runtimes.py.
 _JTI_TTL_SECONDS = 65 * 60
 _JTI_SEEN: dict[str, float] = {}
 _JTI_LOCK = Lock()

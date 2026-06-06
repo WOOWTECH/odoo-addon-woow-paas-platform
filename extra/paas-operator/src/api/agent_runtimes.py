@@ -309,6 +309,9 @@ def _resume_pod(namespace, release, project_hash, project_id, workspace_ids):
         project_hash=project_hash,
         project_id=project_id,
         workspace_ids=workspace_ids,
+        # issue #155: same config-driven TTL as the cold-start sign so a resumed
+        # pod also outlives the old hard-coded 1h skill-bundle token.
+        exp_seconds=settings.skill_bundle_token_ttl_seconds,
     )
     k8s_service.set_deployment_env(
         namespace, release, {"SKILL_BUNDLE_TOKEN": skill_bundle_token},
@@ -334,6 +337,9 @@ def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundT
             project_hash=request.project_hash,
             project_id=request.project_id,
             workspace_ids=request.project_workspace_ids,
+            # issue #155: TTL is config-driven (default 7 days) so a pod outliving
+            # the old hard-coded 1h does not 401 forever on skill-bundle fetch.
+            exp_seconds=settings.skill_bundle_token_ttl_seconds,
         )
         helm_service.install(
             namespace=namespace,

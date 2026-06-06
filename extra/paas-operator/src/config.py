@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # /livez + /readyz; chart 0.2.0 fail-closes on any value other than
     # tcpSocket/httpGet. Mirrors the externalEgress forward pattern.
     agent_runtime_probe_style: str = ""  # "" = no forward; "httpGet" for image >= 1.2.0
+    # issue #155 stopgap: SKILL_BUNDLE_TOKEN is signed at pod spawn/resume and baked
+    # into the pod env; its exp was hard-coded to 3600s and no in-repo reap trigger
+    # exists, so a pod outliving 1h 401'd forever on skill-bundle fetch. Make the TTL
+    # config-driven; default 7 days (604800s) so a long-lived pod keeps a valid token.
+    # The real fix (401 -> refresh) is a separate design. Env-overridable per
+    # environment via SKILL_BUNDLE_TOKEN_TTL_SECONDS, set by the operator deployment
+    # (the operator's own Deployment env lives cross-repo in paas-app-bundle-cd Fleet
+    # CD values — NOT rendered by any chart in this repo).
+    skill_bundle_token_ttl_seconds: int = 604800  # 7 days; env SKILL_BUNDLE_TOKEN_TTL_SECONDS
 
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
