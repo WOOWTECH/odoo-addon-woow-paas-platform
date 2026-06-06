@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
 
@@ -8,6 +8,11 @@ class Skill(models.Model):
     _name = 'woow_paas_platform.skill'
     _description = 'Project-scoped Agent Skill Bundle'
     _order = 'scope, project_id, name, version desc'
+    # Same-name skills (cross-scope or cross-version) are indistinguishable by
+    # ``name`` alone in the M2M tag picker; let it match on version too so an
+    # admin can type "0.2.0" to find the right row. scope is NOT searchable
+    # text (it is a label, surfaced via display_name) — issue #156 D2.
+    _rec_names_search = ['name', 'version']
 
     name = fields.Char(
         string='Skill Name',
@@ -17,6 +22,16 @@ class Skill(models.Model):
     )
     title = fields.Char(string='Display Title')
     description = fields.Text()
+
+    # Disambiguates same-name skills in the M2M tag picker / form (issue #156).
+    # Explicitly declared (Odoo's BaseModel ships a magic display_name) so we
+    # control the compute + depends; store=False because it is derived purely
+    # from name/version/scope. The pod wire contract uses ``name`` only —
+    # display_name MUST NOT enter any snapshot serialisation path.
+    display_name = fields.Char(
+        compute='_compute_display_name',
+        store=False,
+    )
 
     version = fields.Char(
         string='Version',
@@ -331,6 +346,28 @@ class Skill(models.Model):
                 effective_by_project[project.id] = set(
                     Session._effective_skill_ids(project).ids)
             skill.is_effective = skill.id in effective_by_project[project.id]
+
+    @api.depends('name', 'version', 'scope')
+    def _compute_display_name(self):
+        """Render ``name vX.Y.Z (Scope)`` so the M2M tag picker / form can
+        tell two same-name skills apart by version + scope label (issue #156
+        D1). The scope label dict is built ONCE for the whole recordset (the
+        selection is static — never a per-record query). title deliberately
+        does not participate: the slug ``name`` is the pod-facing identity and
+        the disambiguator must key off it, not a free-text display title.
+
+        This is a human-facing label only — ``name`` remains the pod wire
+        contract; display_name never reaches a snapshot.
+        """
+        scope_labels = dict(
+            self._fields['scope']._description_selection(self.env))
+        for skill in self:
+            skill.display_name = _(
+                '%(name)s v%(version)s (%(scope)s)',
+                name=skill.name or '',
+                version=skill.version or '',
+                scope=scope_labels.get(skill.scope, skill.scope or ''),
+            )
 
     def _is_latest_group_domain(self):
         """Domain for the bucket this skill competes in for the is_latest
