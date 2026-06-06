@@ -232,6 +232,22 @@ class SecurityAccess(models.Model):
         create_tunnel again — that would leave the first tunnel orphaned in CF
         (live token, billed, no DB reference). When tunnel_id is already set we
         only re-run the declarative route sync and restore the active state.
+
+        tunnel_token ACL note: the write below sets tunnel_token, which is a
+        ``groups='base.group_system'`` field. This method runs in the CALLER's
+        context (the controller invokes it WITHOUT .sudo()), mirroring
+        smart_home.action_provision exactly. Consequences:
+        - the field-group write only succeeds for a system/admin caller; a
+          plain base.group_user owner triggering provision would hit
+          AccessError on the tunnel_token write. That is the intended
+          fail-closed behaviour — the token must never be written (or read)
+          by a non-system principal.
+        - do NOT "fix" a portal AccessError here by wrapping the whole method
+          in .sudo(): that would widen the token write/read surface to any
+          workspace owner and defeat the groups= field mask. The defence is
+          deliberately layered: groups= on the field + to_dict() omits the
+          token + a dedicated sudo'd tunnel-token endpoint is the only read
+          path. The with_user provision test locks this semantic.
         """
         self.ensure_one()
         client = self._get_operator_client()

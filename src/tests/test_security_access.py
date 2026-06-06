@@ -548,3 +548,34 @@ class TestSecurityAccessAcl(TransactionCase):
         with self.assertRaises(UserError):
             self.sa.with_user(self.alice).write(
                 {'canonical_name': 'paas-sa-hijack-0000'})
+
+    def test_provision_writes_token_under_system_context(self):
+        """system/admin context 下 provision 可寫 group_system 的 tunnel_token。"""
+        mock_client = MagicMock()
+        mock_client.create_tunnel.return_value = {
+            'tunnel_id': 'tun-acl-1', 'tunnel_token': 'tok-acl-secret',
+            'tunnel_name': 'paas-sa-x', 'dns_record_id': 'rec-1',
+        }
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            self.sa.action_provision()  # default TransactionCase = su/admin
+        self.assertEqual(self.sa.state, 'active')
+        self.assertEqual(self.sa.sudo().tunnel_token, 'tok-acl-secret')
+
+    def test_provision_token_write_fails_closed_for_non_system_owner(self):
+        """field-group 語意鎖：非 system 的 workspace owner 觸發 provision，
+        tunnel_token（groups='base.group_system'）寫入應 fail-closed（AccessError），
+        而非被某人改 sudo 後悄悄放行。鏡像 smart_home 的非 sudo provision 行為。"""
+        from odoo.exceptions import AccessError
+        mock_client = MagicMock()
+        mock_client.create_tunnel.return_value = {
+            'tunnel_id': 'tun-acl-2', 'tunnel_token': 'tok-acl-secret-2',
+            'tunnel_name': 'paas-sa-y', 'dns_record_id': 'rec-2',
+        }
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        sa_as_alice = self.env[
+            'woow_paas_platform.security_access'].with_user(self.alice).browse(
+                self.sa.id)
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            with self.assertRaises(AccessError):
+                sa_as_alice.action_provision()
