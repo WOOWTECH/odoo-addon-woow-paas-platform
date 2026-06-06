@@ -9,8 +9,12 @@ from odoo.tests import tagged
 from odoo.tests.common import TransactionCase
 
 
-def _make_targz(files):
-    """Build an in-memory .tar.gz from {path: text} and return raw bytes."""
+def _make_targz(files, links=None):
+    """Build an in-memory .tar.gz from {path: text} and return raw bytes.
+
+    ``links`` is an optional {link_path: target} mapping; each is added as a
+    symlink member (used by the security negative tests).
+    """
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as tf:
         for path, content in files.items():
@@ -18,7 +22,25 @@ def _make_targz(files):
             info = tarfile.TarInfo(name=path)
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
+        for link_path, target in (links or {}).items():
+            info = tarfile.TarInfo(name=link_path)
+            info.type = tarfile.SYMTYPE
+            info.linkname = target
+            tf.addfile(info)
     return buf.getvalue()
+
+
+# A compliant bundle: SKILL.md at tar root with name + description, plus the
+# default entrypoint scripts/main.py present.
+def _compliant_skill_md(name='demo', description='A demo skill'):
+    return (
+        '---\n'
+        'name: %s\n'
+        'description: %s\n'
+        'version: 0.1.0\n'
+        '---\n'
+        '# Demo\n'
+    ) % (name, description)
 
 
 @tagged('post_install', '-at_install')
@@ -35,9 +57,16 @@ class TestSkillUploadWizard(TransactionCase):
     def setUp(self):
         super().setUp()
         self.suffix = uuid.uuid4().hex[:8]
+        # Default fixture is a compliant bundle: root SKILL.md with name +
+        # description and the default entrypoint scripts/main.py present, so
+        # the happy-path tests pass the new structural validation. The wizard
+        # name (up-<suffix>) intentionally differs from the frontmatter name
+        # only where a test overrides it; the base SKILL.md uses the wizard
+        # name to avoid a spurious name-mismatch warning.
         self.raw = _make_targz({
-            'SKILL.md': '---\nname: demo\nversion: 0.1.0\n---\n# Demo\n',
-            'src/main.py': 'def run(x=""):\n    return x\n',
+            'SKILL.md': _compliant_skill_md(
+                name=f'up-{self.suffix}', description='via wizard'),
+            'scripts/main.py': 'def run(x=""):\n    return x\n',
         })
 
     def _new_wizard(self, **overrides):
@@ -103,14 +132,177 @@ class TestSkillUploadWizard(TransactionCase):
         self.assertEqual(action['res_model'], 'woow_paas_platform.skill')
         self.assertEqual(action['res_id'], skill.id)
 
-    def test_upload_does_not_extract_bundle(self):
-        # Feed non-tar.gz random bytes: Odoo must NOT try to parse it.
-        # The skill is still created; sha256 is computed over the raw bytes.
+    def test_non_gzip_junk_rejected(self):
+        # (Was test_upload_does_not_extract_bundle.) issue #154 flips the
+        # behaviour: non-tar.gz junk is now rejected at upload time with a
+        # UserError, and NO skill / attachment row is created.
         junk = b'this is not a tar gz at all \x00\x01\x02'
         wiz = self._new_wizard(bundle_file=base64.b64encode(junk))
-        wiz.action_upload()
+        with self.assertRaises(UserError):
+            wiz.action_upload()
+        self.assertFalse(
+            self.Skill.search([('name', '=', f'up-{self.suffix}')]),
+            "broken bundle must not create a skill row")
+
+    # --- Hard rejections (one negative per rule) ---------------------------
+
+    def test_skill_md_under_wrapper_dir_rejected(self):
+        raw = _make_targz({
+            'mypkg/SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+            'mypkg/scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        msg = str(cm.exception)
+        self.assertIn('SKILL.md', msg)
+        self.assertIn("wrapper dir 'mypkg/'", msg)
+        self.assertFalse(self.Skill.search(
+            [('name', '=', f'up-{self.suffix}')]))
+
+    def test_missing_skill_md_rejected(self):
+        raw = _make_targz({'scripts/main.py': 'x = 1\n'})
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('SKILL.md', str(cm.exception))
+
+    def test_missing_name_rejected(self):
+        raw = _make_targz({
+            'SKILL.md': '---\ndescription: no name here\n---\n# X\n',
+            'scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('name', str(cm.exception))
+
+    def test_missing_description_rejected(self):
+        raw = _make_targz({
+            'SKILL.md': '---\nname: x\n---\n# X\n',
+            'scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('description', str(cm.exception))
+
+    def test_empty_name_value_counts_as_missing(self):
+        raw = _make_targz({
+            'SKILL.md': '---\nname:\ndescription: d\n---\n# X\n',
+            'scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('name', str(cm.exception))
+
+    def test_path_traversal_member_rejected(self):
+        raw = _make_targz({
+            'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+            'scripts/main.py': 'x = 1\n',
+            '../evil.py': 'pwn = 1\n',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('..', str(cm.exception))
+
+    def test_absolute_path_member_rejected(self):
+        raw = _make_targz({
+            'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+            '/etc/evil.py': 'pwn = 1\n',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('escapes bundle root', str(cm.exception))
+
+    def test_symlink_member_rejected(self):
+        raw = _make_targz(
+            {
+                'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+                'scripts/main.py': 'x = 1\n',
+            },
+            links={'link.py': '/etc/passwd'},
+        )
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('symlink', str(cm.exception))
+
+    def test_member_count_bomb_rejected(self):
+        files = {'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+                 'scripts/main.py': 'x = 1\n'}
+        for i in range(2100):
+            files['f%d.txt' % i] = 'x'
+        raw = _make_targz(files)
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        self.assertIn('member', str(cm.exception))
+
+    def test_multiple_violations_listed_at_once(self):
+        # wrapper dir + missing name in the SAME bundle: the error must
+        # mention both, not just the first one.
+        raw = _make_targz({
+            'mypkg/SKILL.md': '---\ndescription: d\n---\n# X\n',
+            'mypkg/scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        with self.assertRaises(UserError) as cm:
+            wiz.action_upload()
+        msg = str(cm.exception)
+        self.assertIn('SKILL.md', msg)
+        self.assertIn('name', msg)
+
+    # --- Soft warnings (skill IS created, notification returned) -----------
+
+    def _assert_warning_action(self, action):
+        self.assertEqual(action['type'], 'ir.actions.client')
+        self.assertEqual(action['tag'], 'display_notification')
+        self.assertEqual(action['params']['type'], 'warning')
+        self.assertTrue(action['params']['sticky'])
+        nxt = action['params']['next']
+        self.assertEqual(nxt['type'], 'ir.actions.act_window')
+        self.assertEqual(nxt['res_model'], 'woow_paas_platform.skill')
+        return nxt
+
+    def test_warn_missing_entrypoint_still_creates(self):
+        # Compliant SKILL.md but no scripts/main.py present.
+        raw = _make_targz({
+            'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        action = wiz.action_upload()
         skill = self.Skill.search([('name', '=', f'up-{self.suffix}')], limit=1)
-        self.assertEqual(skill.state, 'draft')
-        self.assertEqual(
-            skill.bundle_sha256, hashlib.sha256(junk).hexdigest(),
-            "Odoo stores bytes verbatim and does not validate bundle structure")
+        self.assertEqual(len(skill), 1)
+        nxt = self._assert_warning_action(action)
+        self.assertEqual(nxt['res_id'], skill.id)
+        self.assertIn('entrypoint', action['params']['message'])
+
+    def test_warn_appledouble_still_creates(self):
+        raw = _make_targz({
+            'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
+            'scripts/main.py': 'x = 1\n',
+            '._SKILL.md': 'junk',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        action = wiz.action_upload()
+        skill = self.Skill.search([('name', '=', f'up-{self.suffix}')], limit=1)
+        self.assertEqual(len(skill), 1)
+        self._assert_warning_action(action)
+        self.assertIn('COPYFILE_DISABLE=1', action['params']['message'])
+
+    def test_warn_name_mismatch_still_creates(self):
+        # frontmatter name differs from the wizard-entered name.
+        raw = _make_targz({
+            'SKILL.md': _compliant_skill_md(name='something-else'),
+            'scripts/main.py': 'x = 1\n',
+        })
+        wiz = self._new_wizard(bundle_file=base64.b64encode(raw))
+        action = wiz.action_upload()
+        skill = self.Skill.search([('name', '=', f'up-{self.suffix}')], limit=1)
+        self.assertEqual(len(skill), 1)
+        self._assert_warning_action(action)
+        self.assertIn('something-else', action['params']['message'])
