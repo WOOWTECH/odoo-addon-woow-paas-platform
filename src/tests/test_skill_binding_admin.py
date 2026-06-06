@@ -197,3 +197,74 @@ class TestWizardUserScope(TransactionCase):
 
     def test_default_scope_stays_system_without_context(self):
         self.assertEqual(self._wiz().scope, 'system')
+
+
+from odoo.exceptions import AccessError
+
+
+@tagged('post_install', '-at_install')
+class TestDedicatedTemplateFork(TransactionCase):
+    """§2.3 — copy-on-write fork 與 resolved 狀態。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.proj = cls.env['project.project'].sudo().create({'name': 'FK'})
+        cls.other = cls.env['project.project'].sudo().create({'name': 'FK2'})
+        cls.sys_skill = _mk_skill(cls.env, name='fk-sys', state='published')
+        cls.other_skill = _mk_skill(
+            cls.env, name='fk-other', scope='user',
+            project_id=cls.other.id, state='published')
+        # 共用 template：綁兩個 project、綁 system + other 的 user skill
+        cls.shared = cls.env['woow_paas_platform.agent_template'].sudo() \
+            .create({
+                'name': 'FK Shared',
+                'project_ids': [(6, 0, [cls.proj.id, cls.other.id])],
+                'skill_ids': [(6, 0, [cls.sys_skill.id, cls.other_skill.id])],
+                'state': 'published',
+            })
+
+    def test_binding_status_shared_then_dedicated(self):
+        self.assertEqual(self.proj.agent_template_binding_status, 'shared')
+        self.proj.action_create_dedicated_agent_template()
+        self.proj.invalidate_recordset()
+        self.assertEqual(self.proj.agent_template_binding_status, 'dedicated')
+
+    def test_fork_filters_foreign_user_scope(self):
+        self.proj.action_create_dedicated_agent_template()
+        fork = self.proj.resolved_agent_template_id
+        self.assertNotEqual(fork, self.shared)
+        self.assertIn(self.sys_skill, fork.skill_ids)       # system 帶入
+        self.assertNotIn(self.other_skill, fork.skill_ids)  # 他租戶過濾
+        self.assertEqual(fork.project_ids, self.proj)
+        self.assertEqual(fork.state, 'published')
+        self.assertFalse(fork.is_public)
+        # 來源未被改動
+        self.assertIn(self.other_skill, self.shared.skill_ids)
+
+    def test_fork_requires_admin(self):
+        user = self.env['res.users'].sudo().create({
+            'name': 'FK User', 'login': 'fk_user',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        with self.assertRaises(AccessError):
+            self.proj.with_user(user).action_create_dedicated_agent_template()
+
+    def test_fork_blocked_when_already_dedicated(self):
+        self.proj.action_create_dedicated_agent_template()
+        self.proj.invalidate_recordset()
+        with self.assertRaises(UserError):
+            self.proj.action_create_dedicated_agent_template()
+
+    def test_inverse_skill_binding_writes_through_on_dedicated(self):
+        self.proj.action_create_dedicated_agent_template()
+        self.proj.invalidate_recordset()
+        own = _mk_skill(self.env, name='fk-own', scope='user',
+                        project_id=self.proj.id, state='published')
+        fork = self.proj.resolved_agent_template_id
+        self.proj.resolved_template_skill_ids = [(4, own.id)]
+        self.assertIn(own, fork.skill_ids)
+
+    def test_inverse_rejected_on_shared(self):
+        with self.assertRaises(UserError):
+            self.proj.resolved_template_skill_ids = [(4, self.sys_skill.id)]

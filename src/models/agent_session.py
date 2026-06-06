@@ -265,9 +265,23 @@ class AgentSession(models.Model):
 
     @api.model
     def _resolve_agent_template(self, project):
-        """project-bound published → project-bound any → project.agent_template_id
-        → platform default. Last fallback so a project's own binding wins."""
+        """explicit dedicated pick → project-bound published → project-bound
+        any → project.agent_template_id → platform default. Last fallback so
+        a project's own binding wins.
+
+        The explicit-pick leg disambiguates the case where MORE THAN ONE
+        published template binds the project (e.g. a copy-on-write fork
+        created while the source shared template still lists this project):
+        the generic search(limit=1) below would pick by `_order` (name),
+        which is non-deterministic w.r.t. intent. When the project carries an
+        explicit `agent_template_id` that is itself project-bound + published,
+        honour it so the dedicated fork wins resolution without rewriting the
+        shared source's project_ids (spec §2.3 step 3 / invariant 2)."""
         AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
+        explicit = project.agent_template_id
+        if explicit and explicit.state == 'published' \
+                and project in explicit.project_ids:
+            return explicit
         template = AgentTemplate.search([
             ('project_ids', 'in', project.id),
             ('state', '=', 'published'),
