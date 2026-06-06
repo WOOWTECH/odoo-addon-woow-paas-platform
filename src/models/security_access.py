@@ -173,6 +173,21 @@ class SecurityAccess(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        # Identity anchors must not be attacker-injectable at create time.
+        # The write() guard only covers writes; super().create() does not run
+        # through write() nor pop these keys, so a workspace member calling ORM
+        # create directly could squat a victim-namespace canonical_name
+        # (decides tunnel name, primary subdomain_prefix, DNS comment stamp and
+        # the public FQDN). Strip both keys from caller vals unless the caller
+        # is su/system — the canonical_name is then computed once below, and
+        # reference_id falls back to its uuid4 default. Closes the create+write
+        # immutable chain symmetrically (mirrors the write() guard condition).
+        privileged = self.env.su or self.env.user.has_group(
+            'base.group_system')
+        if not privileged:
+            for vals in vals_list:
+                vals.pop('canonical_name', None)
+                vals.pop('reference_id', None)
         records = super().create(vals_list)
         for record in records:
             if not record.canonical_name:

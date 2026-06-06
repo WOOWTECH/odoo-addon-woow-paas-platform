@@ -466,3 +466,33 @@ class TestSecurityAccessAcl(TransactionCase):
         from odoo.exceptions import AccessError
         with self.assertRaises(AccessError):
             _ = sa_as_alice.tunnel_token
+
+    def test_canonical_name_injection_stripped_on_create(self):
+        """非 su/system user 直接 ORM create 注入的 canonical_name 必須被忽略
+        （改用自動生成值），不得搶註受害者命名空間。"""
+        injected = 'paas-sa-victimwshash-deadbeef'
+        sa = self.env['woow_paas_platform.security_access'].with_user(
+            self.alice).create({
+                'name': 'Injected Gateway',
+                'workspace_id': self.workspace.id,
+                'canonical_name': injected,
+            })
+        self.assertNotEqual(sa.canonical_name, injected)
+        self.assertTrue(sa.canonical_name.startswith('paas-sa-'))
+
+    def test_reference_id_injection_stripped_on_create(self):
+        """注入的 reference_id 也必須被剝離，改用 uuid4 default。"""
+        sa = self.env['woow_paas_platform.security_access'].with_user(
+            self.alice).create({
+                'name': 'Injected Ref Gateway',
+                'workspace_id': self.workspace.id,
+                'reference_id': 'attacker-controlled-ref',
+            })
+        self.assertNotEqual(sa.reference_id, 'attacker-controlled-ref')
+        self.assertTrue(sa.reference_id)
+
+    def test_canonical_name_write_blocked_for_non_system_user(self):
+        """write() guard：非 su/system user 改 canonical_name 應 UserError。"""
+        with self.assertRaises(UserError):
+            self.sa.with_user(self.alice).write(
+                {'canonical_name': 'paas-sa-hijack-0000'})
