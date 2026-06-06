@@ -696,6 +696,57 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def sync_tunnel_routes(
+        self,
+        tunnel_id: str,
+        routes: List[Dict[str, Any]],
+        comment: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Declaratively sync a dedicated tunnel's full route list.
+
+        Replaces the tunnel ingress (plus catch-all 404) and reconciles DNS
+        records. Idempotent — Security Access uses this for route CRUD,
+        suspend (service_url='http_status:503') and resume.
+
+        Args:
+            tunnel_id: Cloudflare Tunnel ID
+            routes: list of dicts {subdomain, service_url, http_host_header}
+            comment: canonical name stamped on DNS records (traceability)
+
+        Returns:
+            Dict with tunnel_id and routes (each with dns_record_id)
+
+        Raises:
+            PaaSOperatorError: If the route sync fails
+        """
+        data: Dict[str, Any] = {'routes': routes}
+        if comment:
+            data['comment'] = comment
+        return self._request(
+            'PUT',
+            f'/api/tunnels/{tunnel_id}/routes',
+            data=data,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def check_route_availability(self, subdomain: str) -> Dict[str, Any]:
+        """Check Cloudflare-side whether a subdomain is free in the zone.
+
+        Args:
+            subdomain: subdomain prefix (without domain)
+
+        Returns:
+            Dict with subdomain, hostname, available (bool)
+
+        Raises:
+            PaaSOperatorError: If the availability check fails
+        """
+        return self._request(
+            'GET',
+            '/api/routes/availability',
+            params={'subdomain': subdomain},
+        )
+
 
 def get_paas_operator_client(env) -> Optional[PaaSOperatorClient]:
     """Get a configured PaaS Operator client from Odoo settings.
