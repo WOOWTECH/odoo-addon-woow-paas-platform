@@ -467,9 +467,19 @@ class SecurityAccessController(Controller):
                                      "reason": "DNS record already exists"}}
         except Exception as e:
             _logger.warning("[SA] CF availability check failed: %s", e)
-            # fail-open to DB-only result: CF check is best-effort feedback;
-            # the DB UNIQUE constraint + CF-side create error still protect
-            # the actual create path.
+            # fail-CLOSED, symmetric with the status=='unknown' branch above.
+            # Operator-unreachable (PaaSOperatorConnectionError / timeout) is a
+            # strictly more severe failure than a transient CF API error, so it
+            # must not be MORE permissive: returning available=True here would
+            # let a user reserve a prefix the platform could not confirm is
+            # free, during exactly the window an attacker could race a squat.
+            # The actual create path stays authoritative (DB UNIQUE + CF-side
+            # create error); this pre-check is best-effort UX feedback and must
+            # not pose as a permissive authority.
+            return {"success": True,
+                    "data": {"prefix": prefix, "available": False,
+                             "reason": "Could not confirm availability "
+                                       "(operator unavailable); try again."}}
         return {"success": True,
                 "data": {"prefix": prefix, "available": True}}
 

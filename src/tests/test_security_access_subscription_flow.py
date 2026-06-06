@@ -151,6 +151,76 @@ class TestSecurityAccessControllerFlow(TransactionCase):
         self.assertFalse(r2['success'])
         self.assertIn('quota', r2['error'].lower())
 
+    def test_route_quota_enforced_at_orm_backstop(self):
+        """plan sa_max_routes=1：直接以 ORM create 第二條 route 撞 quota，
+        必須由 model @api.constrains _check_route_quota（two-layer 第二層）
+        擋下並 raise ValidationError。
+
+        controller 層測試（test_route_quota_enforced_at_controller）會在第二
+        條 route 進到 ORM 前就先擋，所以那條測試從不觸發 backstop。本測試繞過
+        controller，直接打 ORM，鎖住 backstop 不被誤改（>/>= off-by-one、漏算
+        primary、整條被移除）而靜默放行超額 route。
+        """
+        from odoo.exceptions import ValidationError
+        sa = self.SecurityAccess.create({
+            'name': 'ORM Quota GW', 'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+        })
+        partner = self.workspace.owner_id.partner_id
+        sa._create_and_confirm_subscription(partner, self.plan)
+        self.assertEqual(sa.subscription_id.sh_subscription_plan_id.sa_max_routes,
+                         1)
+        Route = self.env['woow_paas_platform.security_access_route']
+        # SA not active / no tunnel → create override skips operator sync, so
+        # we exercise the ORM constraint without touching the operator client.
+        Route.create({
+            'security_access_id': sa.id,
+            'subdomain_prefix': 'orm-quota-r1',
+        })
+        with self.assertRaises(ValidationError) as cm:
+            Route.create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': 'orm-quota-r2',
+            })
+        self.assertIn('quota', str(cm.exception).lower())
+
+    def test_route_check_unknown_fails_closed(self):
+        """operator 回 status=='unknown'（CF API 出錯）→ controller 必須回
+        available:False + reason 含 'try again'（fail-closed）。
+
+        operator 端的 unknown 語義有自己的測試，但使用者實際撞到的 gate 是
+        Odoo controller 把 unknown 翻成 available:False 這段轉譯，回退到舊的
+        silently-available 行為會讓 attacker 在 CF 短暫 5xx/429 時搶註已被佔
+        用的 prefix。鎖住此轉譯。
+        """
+        mock_client = MagicMock()
+        mock_client.check_route_availability.return_value = {
+            'subdomain': 'unk-prefix', 'available': None, 'status': 'unknown'}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client), \
+                _patch_request(self.env):
+            res = self.controller._check_route_prefix('unk-prefix')
+        self.assertTrue(res['success'])
+        self.assertFalse(res['data']['available'])
+        self.assertIn('try again', res['data']['reason'].lower())
+
+    def test_route_check_operator_unreachable_fails_closed(self):
+        """operator 整個連不上（client 拋例外）→ controller 必須 fail-closed
+        回 available:False + reason 含 'try again'。
+
+        operator-unreachable 比 CF 暫時報錯更嚴重，不可反而更寬鬆。此測試鎖住
+        except 路徑與 unknown 路徑方向一致（皆 fail-closed），避免維護者誤把
+        這裡當成可放行的 best-effort。
+        """
+        mock_client = MagicMock()
+        mock_client.check_route_availability.side_effect = RuntimeError(
+            'operator unreachable')
+        with patch(MOCK_GET_CLIENT, return_value=mock_client), \
+                _patch_request(self.env):
+            res = self.controller._check_route_prefix('unreach-prefix')
+        self.assertTrue(res['success'])
+        self.assertFalse(res['data']['available'])
+        self.assertIn('try again', res['data']['reason'].lower())
+
 
 class TestSecurityAccessPlanEndpoints(TransactionCase):
     """templates / plans / skip-trial-estimate 端點."""
