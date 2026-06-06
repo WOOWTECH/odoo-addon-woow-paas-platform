@@ -451,20 +451,33 @@ class SecurityAccessController(Controller):
         try:
             from ..services.paas_operator import get_paas_operator_client
             client = get_paas_operator_client(request.env)
-            if client:
-                result = client.check_route_availability(prefix)
-                # Operator returns status: free / taken / unknown. unknown
-                # means the CF API errored (no longer silently "available").
-                if result.get("status") == "unknown":
-                    return {"success": True,
-                            "data": {"prefix": prefix, "available": False,
-                                     "reason": "Could not confirm availability "
-                                               "(Cloudflare check unavailable); "
-                                               "try again."}}
-                if not result.get("available", True):
-                    return {"success": True,
-                            "data": {"prefix": prefix, "available": False,
-                                     "reason": "DNS record already exists"}}
+            if not client:
+                # Operator NOT configured -> get_paas_operator_client returns
+                # None (only logs a warning). This is "cannot confirm", not
+                # "free": treat it the same as the operator-unreachable except
+                # branch below (fail-CLOSED). Falling through to available=True
+                # here would be MORE permissive for the un-configured case than
+                # for the configured-but-unreachable case, contradicting that
+                # branch's own contract and handing the user a prefix the
+                # platform never confirmed is free.
+                return {"success": True,
+                        "data": {"prefix": prefix, "available": False,
+                                 "reason": "Could not confirm availability "
+                                           "(operator not configured); "
+                                           "try again later."}}
+            result = client.check_route_availability(prefix)
+            # Operator returns status: free / taken / unknown. unknown
+            # means the CF API errored (no longer silently "available").
+            if result.get("status") == "unknown":
+                return {"success": True,
+                        "data": {"prefix": prefix, "available": False,
+                                 "reason": "Could not confirm availability "
+                                           "(Cloudflare check unavailable); "
+                                           "try again."}}
+            if not result.get("available", True):
+                return {"success": True,
+                        "data": {"prefix": prefix, "available": False,
+                                 "reason": "DNS record already exists"}}
         except Exception as e:
             _logger.warning("[SA] CF availability check failed: %s", e)
             # fail-CLOSED, symmetric with the status=='unknown' branch above.

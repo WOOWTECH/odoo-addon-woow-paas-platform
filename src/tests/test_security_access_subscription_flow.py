@@ -221,6 +221,23 @@ class TestSecurityAccessControllerFlow(TransactionCase):
         self.assertFalse(res['data']['available'])
         self.assertIn('try again', res['data']['reason'].lower())
 
+    def test_route_check_operator_not_configured_fails_closed(self):
+        """operator 完全未設定（get_paas_operator_client 回 None）→ controller
+        必須 fail-closed 回 available:False，而非靜默掉到 available:True。
+
+        未設定是『無法確認』，不是『free』；它比 configured-but-unreachable
+        嚴重度不低，故不可反而更寬鬆地放行。鎖住 `if not client` 分支與
+        unknown / unreachable 兩條 fail-closed 路徑方向一致，防回歸成 silently
+        available（attacker 趁 operator 未設好的視窗搶 squat 一個其實已被佔用
+        的 prefix）。
+        """
+        with patch(MOCK_GET_CLIENT, return_value=None), \
+                _patch_request(self.env):
+            res = self.controller._check_route_prefix('noop-prefix')
+        self.assertTrue(res['success'])
+        self.assertFalse(res['data']['available'])
+        self.assertIn('try again', res['data']['reason'].lower())
+
 
 class TestSecurityAccessPlanEndpoints(TransactionCase):
     """templates / plans / skip-trial-estimate 端點."""
