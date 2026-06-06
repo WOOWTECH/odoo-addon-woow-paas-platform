@@ -317,6 +317,23 @@ class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
             'sh_plan_price': 200, 'sh_no_of_billing_cycle': -1,
             'sa_max_routes': 5,
         })
+        # _create_and_confirm_subscription resolves the subscription product
+        # from product.template(sh_product_subscribe, sh_subscription_plan_id);
+        # without one it raises "No subscription product found". Both plans need
+        # a product: change-plan opens a NEW subscription on the *target* plan
+        # (plan_b), so the sibling/owner gate tests provision on plan then
+        # switch to plan_b — both legs hit the mixin. Mirrors the controller
+        # class setUp above.
+        self.product = self.env['product.product'].create({
+            'name': 'SA Trio Product', 'type': 'service',
+            'sh_product_subscribe': True,
+            'sh_subscription_plan_id': self.plan.id,
+        })
+        self.product_b = self.env['product.product'].create({
+            'name': 'SA Trio Product B', 'type': 'service',
+            'sh_product_subscribe': True,
+            'sh_subscription_plan_id': self.plan_b.id,
+        })
         self.template = self.env[
             'woow_paas_platform.security_access_template'].create({
                 'name': 'SA Trio Tmpl',

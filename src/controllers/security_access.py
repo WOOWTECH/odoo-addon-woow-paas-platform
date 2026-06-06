@@ -312,7 +312,15 @@ class SecurityAccessController(Controller):
         # template's (or an orphan) plan, producing a subscription/invoice line
         # inconsistent with the instance's template. Skip only when the SA has
         # no template (admin/legacy records created outside the BFF).
-        if sa.template_id and plan not in sa.template_id.subscription_plan_ids:
+        #
+        # sudo on the template read for the SAME reason the `Plan` browse above
+        # is sudo'd and the _create path sudo's its Template: the M2M walk lands
+        # in sh.subscription.plan, which workspace owners (base.group_user) have
+        # no ACL on — reading sa.template_id.subscription_plan_ids un-sudo'd
+        # raises AccessError on that catalog model instead of evaluating the
+        # gate. The workspace+role check above already gates who reaches here.
+        if sa.template_id and plan not in sa.sudo(
+        ).template_id.subscription_plan_ids:
             return {"success": False,
                     "error": "Selected plan is not available for this template"}
 

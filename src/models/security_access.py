@@ -3,7 +3,7 @@ import re
 import uuid
 
 from odoo import api, fields, models
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 
 from ..services.naming import make_security_access_subdomain
 
@@ -301,6 +301,15 @@ class SecurityAccess(models.Model):
                     "[SA] provision re-sync error sa=%s: %s",
                     self.id, e.message,
                 )
+            except AccessError:
+                # A field-group (tunnel_token) AccessError is the deliberate
+                # fail-closed signal for a non-system caller — it must propagate
+                # to the caller, NOT be downgraded to a silent state='error'
+                # (which would mask the security denial and report a benign
+                # provisioning failure instead). Re-raise; see the tunnel_token
+                # ACL note in the method docstring. Symmetric with the
+                # first-provision branch below.
+                raise
             except Exception as e:
                 # Any non-operator failure (route rebuild ValidationError,
                 # DB error, …) must also fail loud into 'error' — tunnel_id
@@ -356,15 +365,30 @@ class SecurityAccess(models.Model):
             # the explicit re-sync just below supersedes it — two operator
             # round-trips for one declarative result. Keep only the explicit
             # one (it carries the originRequest/http_host_header semantics).
-            self.env['woow_paas_platform.security_access_route'].with_context(
-                sa_skip_route_sync=True,
-            ).create({
-                'security_access_id': self.id,
-                'subdomain_prefix': self.canonical_name,
-                'service_url': default_url,
-                'is_primary': True,
-                'dns_record_id': result.get('dns_record_id'),
-            })
+            #
+            # Idempotent on the primary route: a primary row keyed on
+            # canonical_name may already exist (re-provision after the
+            # tunnel_id was cleared, or a row pre-seeded out of band). Creating
+            # a second one would clash on the global UNIQUE(subdomain_prefix)
+            # and flip an otherwise-healthy provision into 'error'. Mirror the
+            # tunnel_id retry branch above: create when absent, otherwise
+            # re-stamp the fresh tunnel's dns_record_id onto the existing
+            # primary route so the re-sync below reconciles against current
+            # state instead of a stale DNS anchor.
+            primary = self.route_ids.filtered('is_primary')
+            if not primary:
+                self.env[
+                    'woow_paas_platform.security_access_route'
+                ].with_context(sa_skip_route_sync=True).create({
+                    'security_access_id': self.id,
+                    'subdomain_prefix': self.canonical_name,
+                    'service_url': default_url,
+                    'is_primary': True,
+                    'dns_record_id': result.get('dns_record_id'),
+                })
+            elif result.get('dns_record_id'):
+                primary.with_context(sa_skip_route_sync=True).write(
+                    {'dns_record_id': result.get('dns_record_id')})
 
             # Re-sync so the primary rule carries http_host_header
             # (create_tunnel's single-rule config doesn't set originRequest).
@@ -387,6 +411,19 @@ class SecurityAccess(models.Model):
                 'error_message': f"Tunnel creation failed: {e.message}",
             })
             _logger.error("[SA] provision error: %s", e.message)
+        except AccessError:
+            # The stage-2 tunnel_token write is a groups='base.group_system'
+            # field write; for a non-system caller it raises AccessError. That
+            # is the deliberate fail-closed defense (see the tunnel_token ACL
+            # note in the docstring) — a non-system principal must never write
+            # the token. Re-raise so the denial surfaces to the caller; do NOT
+            # downgrade it to a silent state='error' (which would mask the
+            # security boundary as an ordinary provisioning failure and let the
+            # endpoint claim a benign error). The with_user provision test locks
+            # this. (create_tunnel already ran here, but the controller never
+            # drives provision as a bare portal user — system/admin context or a
+            # narrowly-sudo'd path is the only legitimate caller.)
+            raise
         except Exception as e:
             # Stage-2 (write / primary-route create / re-sync) can raise
             # non-operator exceptions: a ValidationError from

@@ -131,6 +131,13 @@ class TestSecurityAccessCron(TransactionCase):
         # Push the subscription's write_date well past the default 6-month
         # (≈180d) cleanup threshold. write_date is auto-managed, so force it
         # via SQL then drop the ORM cache so the cron reads the old value.
+        #
+        # flush_all() first: the create()+write() above leave the subscription
+        # dirty in the ORM. Without draining those pending writes, the later
+        # read of sub.write_date auto-flushes the dirty record and re-stamps
+        # write_date back to *now* — silently undoing the SQL override (the
+        # cron then sees months_since_cancel≈0 and never reaches cleanup).
+        self.env.flush_all()
         old_dt = datetime.now() - timedelta(days=400)
         self.env.cr.execute(
             "UPDATE sh_subscription_subscription SET write_date = %s "
