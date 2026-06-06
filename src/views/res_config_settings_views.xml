@@ -95,6 +95,12 @@
                             </div>
                         </setting>
                     </block>
+                    <block title="Portal" name="portal_settings">
+                        <setting string="Portal Project Settings Editable"
+                                 help="Allow /woow portal owners/admins to edit project settings (name/description/binding/MCP). OFF = read-only portal (meeting 2026-06-03 topic H).">
+                            <field name="woow_portal_project_settings_editable"/>
+                        </setting>
+                    </block>
                     <block title="AI Assistant Configuration" name="ai_assistant">
                         <setting string="AI Configuration"
                                  help="Select the AI configuration and assistant for AI features.">
