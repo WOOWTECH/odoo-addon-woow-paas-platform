@@ -90,6 +90,21 @@ class TestSecurityAccessEndpoints(HttpCase):
             {'action': 'list'})
         self.assertTrue(res.get('success'))
         self.assertEqual(res.get('count'), 1)
+        # to_dict() must never leak the (group_system-masked) tunnel_token in
+        # the BFF JSON envelope — symmetric with the HA-API守線
+        # (test_ha_api_security_access.py). Guards against a future
+        # to_dict() that adds the field by construction.
+        self.assertNotIn('tunnel_token', str(res))
+
+    def test_member_get_omits_tunnel_token(self):
+        """owner action='get' 的 to_dict() envelope 不得含 tunnel_token。"""
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}',
+            {'action': 'get'})
+        self.assertTrue(res.get('success'))
+        self.assertNotIn('tunnel_token', str(res))
 
     def test_non_member_list_denied(self):
         self.authenticate(self.mallory.login, self.mallory.login)
