@@ -146,3 +146,54 @@ class TestSkillIsEffective(TransactionCase):
         self.assertFalse(self.unbound.is_effective)   # 歸屬≠生效
         self.assertTrue(self.sys_pub.is_effective)    # system published
         self.assertFalse(self.sys_draft.is_effective)  # draft
+
+
+from odoo.exceptions import UserError
+
+
+@tagged('post_install', '-at_install')
+class TestWizardUserScope(TransactionCase):
+    """§2.2 — wizard per-scope 上傳與查重。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Wizard = cls.env['woow_paas_platform.skill_upload_wizard']
+        cls.proj = cls.env['project.project'].sudo().create({'name': 'WZ'})
+        cls.proj2 = cls.env['project.project'].sudo().create({'name': 'WZ2'})
+        cls.bundle = 'aGVsbG8='  # b64("hello")
+
+    def _wiz(self, **vals):
+        base = {'name': 'wz-skill', 'version': '1.0.0',
+                'bundle_file': self.bundle}
+        base.update(vals)
+        return self.Wizard.create(base)
+
+    def test_user_scope_upload_binds_project(self):
+        action = self._wiz(scope='user', project_id=self.proj.id) \
+            .action_upload()
+        skill = self.env['woow_paas_platform.skill'].browse(action['res_id'])
+        self.assertEqual(skill.scope, 'user')
+        self.assertEqual(skill.project_id, self.proj)
+        self.assertEqual(skill.state, 'draft')
+
+    def test_user_scope_requires_project(self):
+        with self.assertRaises(UserError):
+            self._wiz(scope='user').action_upload()
+
+    def test_system_scope_rejects_project(self):
+        with self.assertRaises(UserError):
+            self._wiz(scope='system', project_id=self.proj.id).action_upload()
+
+    def test_dedupe_is_per_scope_and_project(self):
+        self._wiz(scope='user', project_id=self.proj.id).action_upload()
+        # 同 project 同名版 → 擋
+        with self.assertRaises(UserError):
+            self._wiz(scope='user', project_id=self.proj.id).action_upload()
+        # 不同 project 同名版 → 放行
+        self._wiz(scope='user', project_id=self.proj2.id).action_upload()
+        # system 同名版（user 已存在）→ 放行（不同 scope 桶）
+        self._wiz(scope='system').action_upload()
+
+    def test_default_scope_stays_system_without_context(self):
+        self.assertEqual(self._wiz().scope, 'system')

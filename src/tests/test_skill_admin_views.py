@@ -104,3 +104,18 @@ class TestSkillAdminViews(TransactionCase):
             action['res_model'], 'woow_paas_platform.skill_upload_wizard')
         self.assertEqual(action['target'], 'new')
         self.assertEqual(action['type'], 'ir.actions.act_window')
+
+    def test_skill_form_scope_project_editable_for_admin(self):
+        """§1 — form 對 admin 暴露 scope + 條件式 project_id（存在性斷言，
+        不鎖整段 arch — phase-versioned-test-assertion 紀律）。"""
+        arch = self.env.ref('woow_paas_platform.view_skill_form').arch
+        self.assertIn('name="scope"', arch)
+        self.assertIn('groups="base.group_system"', arch)
+        self.assertIn("invisible=\"scope != 'user'\"", arch)
+        self.assertIn("required=\"scope == 'user'\"", arch)
+
+    def test_wizard_form_exposes_scope_project(self):
+        arch = self.env.ref(
+            'woow_paas_platform.view_skill_upload_wizard_form').arch
+        self.assertIn('name="scope"', arch)
+        self.assertIn('name="project_id"', arch)

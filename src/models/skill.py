@@ -309,6 +309,10 @@ class Skill(models.Model):
             'res_model': 'woow_paas_platform.skill_upload_wizard',
             'view_mode': 'form',
             'target': 'new',
+            'context': {
+                k: v for k, v in self.env.context.items()
+                if k in ('default_scope', 'default_project_id')
+            },
         }
 
     def _compute_is_effective(self):
