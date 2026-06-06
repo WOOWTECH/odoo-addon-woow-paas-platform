@@ -7,6 +7,7 @@ from ..services.naming import (
     make_namespace,
     make_service_subdomain,
     make_smarthome_subdomain,
+    make_security_access_subdomain,
 )
 
 
@@ -101,3 +102,41 @@ class TestNaming(unittest.TestCase):
         self.assertTrue(svc.startswith('paas-cs-'))
         self.assertTrue(sm.startswith('paas-sm-'))
         self.assertNotEqual(svc, sm)
+
+
+class TestSecurityAccessNaming(unittest.TestCase):
+    """make_security_access_subdomain: paas-sa-{ws_hash}-{res_hash}."""
+
+    def test_sa_subdomain_format(self):
+        """Test SA subdomain follows paas-sa-{ws_hash}-{res_hash} format."""
+        result = make_security_access_subdomain('my-ws', 'ref-123', 'My SA')
+        self.assertEqual(
+            result,
+            f"paas-sa-{generate_ws_hash('my-ws')}-{generate_resource_hash('ref-123', 'My SA')}",
+        )
+        self.assertTrue(result.startswith('paas-sa-'))
+        # prefix + 8 hex + hyphen + 8 hex
+        self.assertEqual(len(result), len('paas-sa-') + 8 + 1 + 8)
+
+    def test_sa_subdomain_deterministic(self):
+        """Test that same inputs always produce the same subdomain."""
+        a = make_security_access_subdomain('ws', 'r1', 'n1')
+        b = make_security_access_subdomain('ws', 'r1', 'n1')
+        self.assertEqual(a, b)
+
+    def test_sa_prefix_distinct_from_sm_cs(self):
+        """Test SA prefix differs from smarthome and cloud service (namespace isolation)."""
+        sa = make_security_access_subdomain('ws', 'r', 'n')
+        sm = make_smarthome_subdomain('ws', 'r', 'n')
+        cs = make_service_subdomain('ws', 'r', 'n')
+        # Same hash, different prefix -> three resource types stay isolated.
+        self.assertNotEqual(sa, sm)
+        self.assertNotEqual(sa, cs)
+
+    def test_sa_subdomain_k8s_valid(self):
+        """Test SA subdomain meets K8s/DNS naming constraints."""
+        sd = make_security_access_subdomain('ws-slug', 'ref-id', 'sa-name')
+        self.assertLessEqual(len(sd), 63)
+        self.assertEqual(sd, sd.lower())
+        import re
+        self.assertTrue(re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', sd))

@@ -111,14 +111,27 @@ class CloudflareService:
 
     # ==================== DNS Record Management ====================
 
-    async def get_dns_record(self, hostname: str) -> Optional[dict]:
+    async def get_dns_record(
+        self, hostname: str, raise_on_error: bool = False
+    ) -> Optional[dict]:
         """Get a DNS record by hostname.
 
         Args:
             hostname: Full hostname (e.g., 'myapp.domain.com')
+            raise_on_error: when True, a non-200 Cloudflare response (401/403/
+                429/5xx) raises CloudflareException instead of collapsing to
+                None. Callers that interpret None as "no record exists" (e.g.
+                the availability check) MUST set this — otherwise an API error
+                is silently reported as "subdomain free" (fail-open). Internal
+                create/delete callers keep the legacy None behaviour.
 
         Returns:
-            DNS record dict if found, None otherwise
+            DNS record dict if found, None if confirmed absent (or, when
+            raise_on_error is False, on API error).
+
+        Raises:
+            CloudflareException: only when raise_on_error and the API returns
+                a non-200 / unsuccessful response.
         """
         if not self.dns_enabled:
             return None
@@ -134,10 +147,23 @@ class CloudflareService:
             if response.status_code != 200:
                 logger.error(f"Failed to get DNS record: {response.status_code}")
                 logger.debug(f"Response details: {response.text}")
+                if raise_on_error:
+                    raise CloudflareException(
+                        f"Cloudflare DNS lookup failed for {hostname}: "
+                        f"{response.text}",
+                        status_code=response.status_code,
+                    )
                 return None
 
             data = response.json()
-            if data.get("success") and data.get("result"):
+            if not data.get("success"):
+                if raise_on_error:
+                    raise CloudflareException(
+                        f"Cloudflare API error looking up {hostname}: "
+                        f"{data.get('errors', 'Unknown error')}"
+                    )
+                return None
+            if data.get("result"):
                 return data["result"][0] if data["result"] else None
 
             return None
@@ -202,13 +228,15 @@ class CloudflareService:
             return True
 
     async def create_dns_record_for_tunnel(
-        self, subdomain: str, tunnel_id: str
+        self, subdomain: str, tunnel_id: str, comment: Optional[str] = None
     ) -> Optional[str]:
         """Create a CNAME DNS record pointing to a specific tunnel.
 
         Args:
             subdomain: Subdomain to create (e.g., 'myapp' for myapp.domain.com)
             tunnel_id: The tunnel ID to point the CNAME at.
+            comment: Optional canonical name stamped on the DNS record for
+                traceability (e.g., 'paas-sa-{workspace}-{name}').
 
         Returns:
             DNS record ID if created, None if DNS is disabled.
@@ -230,7 +258,20 @@ class CloudflareService:
         if existing:
             logger.info(f"DNS record for {hostname} already exists")
             if existing.get("content") != cname_target:
-                await self._update_dns_record(existing["id"], hostname)
+                # The record points at a DIFFERENT tunnel; repoint it at THIS
+                # tunnel's target. Must pass cname_target explicitly — letting
+                # _update_dns_record fall back to the shared default target
+                # would "fix" the record into pointing at the shared tunnel
+                # instead of this per-tunnel one, producing a routing black
+                # hole that no error surfaces (the record_id is still returned
+                # and stored as if correct).
+                logger.info(
+                    f"Repointing DNS record {hostname} from "
+                    f"{existing.get('content')} -> {cname_target}"
+                )
+                await self._update_dns_record(
+                    existing["id"], hostname, content=cname_target
+                )
             return existing["id"]
 
         logger.info(f"Creating DNS record: {hostname} -> {cname_target}")
@@ -242,6 +283,8 @@ class CloudflareService:
             "ttl": 1,
             "proxied": True,
         }
+        if comment:
+            payload["comment"] = comment
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -269,22 +312,31 @@ class CloudflareService:
             logger.info(f"DNS record created: {hostname} (ID: {record_id})")
             return record_id
 
-    async def _update_dns_record(self, record_id: str, hostname: str) -> bool:
+    async def _update_dns_record(
+        self, record_id: str, hostname: str, content: Optional[str] = None
+    ) -> bool:
         """Update an existing DNS record.
 
         Args:
             record_id: DNS record ID
             hostname: Full hostname
+            content: CNAME target to point at. Defaults to the shared tunnel
+                target (``_tunnel_cname_target``) for the legacy single-tunnel
+                callers (``create_dns_record``). Per-tunnel callers
+                (``create_dns_record_for_tunnel``) MUST pass the dedicated
+                tunnel's target so a repoint lands on the correct tunnel rather
+                than silently on the shared one.
 
         Returns:
             True if update was successful
         """
-        logger.info(f"Updating DNS record: {hostname} -> {self._tunnel_cname_target}")
+        target = content or self._tunnel_cname_target
+        logger.info(f"Updating DNS record: {hostname} -> {target}")
 
         payload = {
             "type": "CNAME",
             "name": hostname,
-            "content": self._tunnel_cname_target,
+            "content": target,
             "ttl": 1,
             "proxied": True,
         }
@@ -343,6 +395,96 @@ class CloudflareService:
 
             logger.info(f"DNS record deleted: {hostname}")
             return True
+
+    async def _list_dns_records_by_content(self, content: str) -> List[dict]:
+        """List CNAME records in the zone whose content equals ``content``.
+
+        Used to find every record pointing at a dedicated tunnel
+        ({tunnel_id}.cfargotunnel.com) for declarative reconciliation.
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                self._dns_records_url,
+                headers=self._headers,
+                params={"type": "CNAME", "content": content, "per_page": 100},
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to list DNS records: {response.text}",
+                    status_code=response.status_code,
+                )
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+            return data.get("result", [])
+
+    async def _delete_dns_record_by_id(self, record_id: str) -> bool:
+        """Delete a DNS record by its Cloudflare record ID."""
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{self._dns_records_url}/{record_id}",
+                headers=self._headers,
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to delete DNS record {record_id}: {response.text}",
+                    status_code=response.status_code,
+                )
+            return True
+
+    async def reconcile_tunnel_dns(
+        self,
+        tunnel_id: str,
+        subdomains: List[str],
+        comment: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        """Make the zone's DNS records for a dedicated tunnel match ``subdomains``.
+
+        Declarative: creates missing CNAMEs, keeps matching ones, deletes
+        records that point at this tunnel but are no longer desired.
+        Idempotent — safe to call repeatedly (suspend/resume don't change
+        hostnames, so reconcile is a no-op there).
+
+        Returns:
+            Mapping of subdomain -> DNS record ID.
+        """
+        if not self.dns_enabled:
+            logger.info("DNS management disabled, skipping reconcile")
+            return {s: None for s in subdomains}
+
+        cname_target = self._tunnel_cname_target_for(tunnel_id)
+        existing = await self._list_dns_records_by_content(cname_target)
+        existing_by_sub = {}
+        for rec in existing:
+            # rec["name"] is the FQDN; strip the zone domain suffix
+            name = rec.get("name", "")
+            if name.endswith(f".{self.domain}"):
+                existing_by_sub[name[: -(len(self.domain) + 1)]] = rec
+
+        desired = set(subdomains)
+        result: Dict[str, Optional[str]] = {}
+
+        for sub in subdomains:
+            if sub in existing_by_sub:
+                result[sub] = existing_by_sub[sub]["id"]
+            else:
+                result[sub] = await self.create_dns_record_for_tunnel(
+                    subdomain=sub, tunnel_id=tunnel_id, comment=comment,
+                )
+
+        for sub, rec in existing_by_sub.items():
+            if sub not in desired:
+                logger.info(
+                    f"Reconcile: deleting stale DNS record {rec['name']} "
+                    f"(tunnel {tunnel_id})"
+                )
+                await self._delete_dns_record_by_id(rec["id"])
+
+        return result
 
     # ==================== Tunnel Configuration ====================
 
@@ -750,6 +892,64 @@ class CloudflareService:
                 )
 
             logger.info(f"Tunnel {tunnel_id} configured successfully")
+
+    async def configure_tunnel_ingress(
+        self, tunnel_id: str, rules: List[dict]
+    ) -> None:
+        """Replace a dedicated tunnel's full ingress rule list.
+
+        Multi-route counterpart of ``configure_tunnel`` (which only expresses
+        a single hostname). Each rule dict: {hostname, service,
+        http_host_header}. A catch-all 404 rule is appended automatically.
+
+        Args:
+            tunnel_id: The tunnel ID.
+            rules: Desired ingress rules, order preserved.
+
+        Raises:
+            CloudflareException: If configuration update fails.
+        """
+        url = f"{self._tunnels_url(tunnel_id)}/configurations"
+
+        ingress_rules = []
+        for rule in rules:
+            entry = {"hostname": rule["hostname"], "service": rule["service"]}
+            if rule.get("http_host_header"):
+                entry["originRequest"] = {"httpHostHeader": rule["hostname"]}
+            ingress_rules.append(entry)
+        ingress_rules.append({"service": "http_status:404"})
+
+        payload = {"config": {"ingress": ingress_rules}}
+
+        logger.info(
+            f"Configuring tunnel {tunnel_id} ingress with {len(rules)} route(s)"
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                url,
+                headers=self._headers,
+                json=payload,
+                timeout=30.0,
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Failed to configure tunnel ingress: "
+                    f"{response.status_code} - {response.text}"
+                )
+                raise CloudflareException(
+                    f"Failed to configure tunnel ingress: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            logger.info(f"Tunnel {tunnel_id} ingress configured successfully")
 
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get the status and connection info for a Cloudflare Tunnel.

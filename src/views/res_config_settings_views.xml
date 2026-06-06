@@ -43,6 +43,17 @@
                                 </div>
                             </div>
                         </setting>
+                        <setting string="Security Access"
+                                 help="Default reverse proxy target for new application routes.">
+                            <div class="content-group">
+                                <div class="row mt16">
+                                    <label for="woow_sa_default_service_url" class="col-lg-3 o_light_label"/>
+                                    <field name="woow_sa_default_service_url"
+                                           placeholder="http://localhost:80"
+                                           class="col-lg-6"/>
+                                </div>
+                            </div>
+                        </setting>
                     </block>
                     <block title="Subscription Lifecycle" name="subscription_lifecycle">
                         <setting string="Subscription Journal"

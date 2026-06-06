@@ -215,6 +215,16 @@ class TunnelCreateResponse(BaseModel):
     dns_record_id: Optional[str] = Field(
         None, description="DNS record ID if created"
     )
+    dns_failed: bool = Field(
+        False,
+        description=(
+            "True when DNS was enabled but the record creation failed, so "
+            "dns_record_id is None for an error reason (vs None because DNS "
+            "is intentionally disabled). Lets the caller distinguish the two "
+            "and alert/re-sync rather than silently treating the tunnel as "
+            "fully reachable."
+        ),
+    )
 
 
 class TunnelStatusResponse(BaseModel):
@@ -432,3 +442,36 @@ class SyncWorkspacesRequest(BaseModel):
     """Request to re-render a pod's NetworkPolicy egress allowlist."""
 
     project_workspace_ids: List[int] = Field(default_factory=list)
+
+
+# Security Access — multi-route dedicated tunnel sync (security-access P1)
+
+
+class TunnelRouteSpec(BaseModel):
+    """One desired ingress route on a dedicated tunnel."""
+
+    subdomain: str = Field(..., description="Subdomain under the platform zone")
+    service_url: str = Field(..., description="Backend service URL or http_status:NNN")
+    http_host_header: bool = Field(
+        True, description="Send the public hostname as HTTP Host header to origin"
+    )
+
+
+class TunnelRoutesSyncRequest(BaseModel):
+    """Declarative full sync of a dedicated tunnel's routes."""
+
+    routes: List[TunnelRouteSpec] = Field(..., min_length=1)
+    comment: Optional[str] = Field(
+        None, description="Canonical name stamped on DNS records for traceability"
+    )
+
+
+class TunnelRouteSyncResult(BaseModel):
+    subdomain: str
+    hostname: str
+    dns_record_id: Optional[str] = None
+
+
+class TunnelRoutesSyncResponse(BaseModel):
+    tunnel_id: str
+    routes: List[TunnelRouteSyncResult]

@@ -136,6 +136,7 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.topup_payment_enabled',
     'woow_paas_platform.portal_project_settings_editable',
     'woow_paas_platform.max_consecutive_payment_failures',
+    'woow_paas_platform.sa_default_service_url',
     # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
     # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
 ]
@@ -166,10 +167,21 @@ def _ensure_default_agent_template(env):
         )
 
 
+def _ensure_ha_client_sa_scopes(env):
+    """Grant the HA public client the Security Access scopes (fresh-install
+    path). oauth_clients.xml is noupdate=1 so the seed XML scope change does
+    not reach existing databases; the idempotent merge lives on the
+    oauth_client model and is also wired into data/oauth_scope_updates.xml so
+    the upgrade (-u) path is covered too (G-H3: missing client scopes break
+    HA token refresh)."""
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_sa_scopes()
+
+
 def post_init_hook(env):
     """Auto-point the platform default agent template, then ensure the
     subscription journal is configured on the main company."""
     _ensure_default_agent_template(env)
+    _ensure_ha_client_sa_scopes(env)
     company = env.ref('base.main_company', raise_if_not_found=False)
     if not company:
         return

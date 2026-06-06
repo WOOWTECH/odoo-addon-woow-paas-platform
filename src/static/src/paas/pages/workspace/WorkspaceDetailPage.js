@@ -6,7 +6,10 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { ServiceCard } from "../../components/service-card/ServiceCard";
 import { SmartHomeCard } from "../../components/smart-home/SmartHomeCard";
 import { CreateSmartHomeModal } from "../../components/smart-home/CreateSmartHomeModal";
+import { CreateSecurityAccessModal } from "../../components/modal/CreateSecurityAccessModal";
+import { StatusBadge } from "../../components/common/StatusBadge";
 import { workspaceService } from "../../services/workspace_service";
+import { securityAccessService } from "../../services/security_access";
 import { cloudService, getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
@@ -14,7 +17,7 @@ import { getRoleBadgeClass, formatDate } from "../../services/utils";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
-    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal };
+    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, StatusBadge };
     static props = {
         workspaceId: { type: Number },
     };
@@ -32,10 +35,15 @@ export class WorkspaceDetailPage extends Component {
             loadingSmartHomes: true,
             smartHomesError: null,
             showCreateSmartHomeModal: false,
+            securityAccesses: [],
+            loadingSecurityAccesses: true,
+            securityAccessesError: null,
+            showCreateSecurityAccessModal: false,
         });
         this.router = useState(router);
         this.servicesPollingInterval = null;
         this.smartHomesPollingInterval = null;
+        this.securityAccessesPollingInterval = null;
 
         onWillStart(async () => {
             this.state.domain = await getDomain();
@@ -48,6 +56,7 @@ export class WorkspaceDetailPage extends Component {
         onWillUnmount(() => {
             this.stopServicesPolling();
             this.stopSmartHomesPolling();
+            this.stopSecurityAccessesPolling();
         });
     }
 
@@ -55,15 +64,18 @@ export class WorkspaceDetailPage extends Component {
         this.state.loading = true;
         this.state.loadingServices = true;
         this.state.loadingSmartHomes = true;
+        this.state.loadingSecurityAccesses = true;
         this.state.error = null;
         this.state.servicesError = null;
         this.state.smartHomesError = null;
+        this.state.securityAccessesError = null;
 
-        // Load workspace, services, and smart homes in parallel
-        const [workspaceResult, servicesResult, smartHomesResult] = await Promise.all([
+        // Load workspace, services, smart homes, and security accesses in parallel
+        const [workspaceResult, servicesResult, smartHomesResult, securityAccessesResult] = await Promise.all([
             workspaceService.getWorkspace(this.props.workspaceId),
             this.fetchServices(),
             this.fetchSmartHomes(),
+            this.fetchSecurityAccesses(),
         ]);
 
         if (workspaceResult.success) {
@@ -79,10 +91,12 @@ export class WorkspaceDetailPage extends Component {
         this.state.loading = false;
         this.state.loadingServices = false;
         this.state.loadingSmartHomes = false;
+        this.state.loadingSecurityAccesses = false;
 
-        // Start polling if there are pending services or smart homes
+        // Start polling if there are pending services, smart homes, or security accesses
         this.startServicesPolling();
         this.startSmartHomesPolling();
+        this.startSecurityAccessesPolling();
     }
 
     async fetchServices() {
@@ -193,6 +207,75 @@ export class WorkspaceDetailPage extends Component {
         this.router.navigate(`workspace/${this.props.workspaceId}/smarthome/${homeId}`);
     }
 
+    // Security Access methods
+    async fetchSecurityAccesses() {
+        try {
+            const result = await securityAccessService.fetchList(this.props.workspaceId);
+            if (result.success) {
+                this.state.securityAccesses = result.data;
+                this.state.securityAccessesError = null;
+                return { success: true };
+            } else {
+                this.state.securityAccessesError = result.error;
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            this.state.securityAccessesError = err.message;
+            return { success: false, error: err.message };
+        }
+    }
+
+    startSecurityAccessesPolling() {
+        const hasPending = this.state.securityAccesses.some(sa =>
+            ["pending", "provisioning", "deleting"].includes(sa.state)
+        );
+
+        if (hasPending && !this.securityAccessesPollingInterval) {
+            this.securityAccessesPollingInterval = setInterval(async () => {
+                await this.fetchSecurityAccesses();
+
+                const stillPending = this.state.securityAccesses.some(sa =>
+                    ["pending", "provisioning", "deleting"].includes(sa.state)
+                );
+
+                if (!stillPending) {
+                    this.stopSecurityAccessesPolling();
+                }
+            }, 5000);
+        }
+    }
+
+    stopSecurityAccessesPolling() {
+        if (this.securityAccessesPollingInterval) {
+            clearInterval(this.securityAccessesPollingInterval);
+            this.securityAccessesPollingInterval = null;
+        }
+    }
+
+    get hasSecurityAccesses() {
+        return this.state.securityAccesses && this.state.securityAccesses.length > 0;
+    }
+
+    openCreateSecurityAccessModal() {
+        this.state.showCreateSecurityAccessModal = true;
+    }
+
+    closeCreateSecurityAccessModal() {
+        this.state.showCreateSecurityAccessModal = false;
+    }
+
+    async onSecurityAccessCreated(sa) {
+        this.state.showCreateSecurityAccessModal = false;
+        await this.fetchSecurityAccesses();
+        this.startSecurityAccessesPolling();
+        // 建立後直接進 detail 看 provisioning 進度
+        this.openSecurityAccess(sa.id);
+    }
+
+    openSecurityAccess(saId) {
+        this.router.navigate(`workspace/${this.props.workspaceId}/security-access/${saId}/overview`);
+    }
+
     get workspace() {
         return this.state.workspace;
     }
@@ -261,9 +344,11 @@ export class WorkspaceDetailPage extends Component {
         {
             name: "Security Access",
             description: "Setup Zero Trust Tunnels.",
-            icon: "security",
+            icon: "shield",
+            // 'emerald' is the existing green-toned card style
+            // (o_woow_service_card_emerald); there is no 'green' variant.
             color: "emerald",
-            action: "marketplace",
+            action: "security-access",
         },
         {
             name: "Smart Home",

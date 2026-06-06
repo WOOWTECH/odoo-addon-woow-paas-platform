@@ -32,6 +32,16 @@ class ResConfigSettings(models.TransientModel):
         help='Prefix for Kubernetes namespaces created by PaaS (e.g., paas-ws- or paas-ws-stg-)',
     )
 
+    # Security Access
+    woow_sa_default_service_url = fields.Char(
+        string='SA Default Service URL',
+        config_parameter='woow_paas_platform.sa_default_service_url',
+        default='http://localhost:80',
+        help='Default reverse-proxy target for new Security Access '
+             'application routes. Users are expected to run a Host-header '
+             'aware reverse proxy (e.g. NPM) at this address.',
+    )
+
     # AI Configuration (using ai_base_gt models)
     woow_ai_config_id = fields.Many2one(
         'ai.config',

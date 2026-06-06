@@ -23,6 +23,9 @@
             <t t-elif="router.current === 'smarthome-detail'">
                 <SmartHomeDetailPage workspaceId="workspaceId" homeId="homeId"/>
             </t>
+            <t t-elif="router.current === 'security-access-detail'">
+                <SecurityAccessDetailPage workspaceId="workspaceId" saId="securityAccessId" tab="securityAccessTab"/>
+            </t>
             <t t-elif="router.current === 'service-detail'">
                 <ServiceDetailPage workspaceId="workspaceId" serviceId="serviceId" initialTab="serviceTab"/>
             </t>

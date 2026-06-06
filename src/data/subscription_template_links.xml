@@ -29,5 +29,23 @@
                    eval="[(6, 0, [ref('plan_smarthome_monthly'), ref('plan_smarthome_yearly')])]"/>
         </record>
 
+        <!-- Link security_access_template to its subscription plans -->
+        <record id="security_access_default" model="woow_paas_platform.security_access_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_security_access_entry_monthly'),
+                                  ref('plan_security_access_entry_yearly'),
+                                  ref('plan_security_access_pro_monthly'),
+                                  ref('plan_security_access_pro_yearly')])]"/>
+        </record>
+
+        <!-- Healer for upgraded DBs where security_access_default was created
+             under the historical noupdate=1 seed: the sticky ir.model.data
+             flag makes -u skip the record above, leaving the template
+             plan-less. function elements run on every -u regardless of
+             noupdate; the method flips the flag and back-fills the default
+             plans only when none are linked (admin-curated lists untouched). -->
+        <function model="woow_paas_platform.security_access_template"
+                  name="_ensure_default_template_links"/>
+
     </data>
 </odoo>

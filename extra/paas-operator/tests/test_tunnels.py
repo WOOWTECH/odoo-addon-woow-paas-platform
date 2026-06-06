@@ -86,6 +86,9 @@ class TestCreateTunnel:
         assert response.status_code == 201
         data = response.json()
         assert data["dns_record_id"] is None
+        # DNS intentionally disabled -> dns_failed must stay False so the
+        # caller does NOT treat the missing record as an error.
+        assert data["dns_failed"] is False
 
         mock_cf.configure_tunnel.assert_called_once_with(
             tunnel_id="tun-789",
@@ -122,6 +125,10 @@ class TestCreateTunnel:
         data = response.json()
         assert data["tunnel_id"] == "tun-456"
         assert data["dns_record_id"] is None
+        # DNS was ENABLED but creation raised -> dns_failed must be True so the
+        # caller can distinguish this error from the dns-disabled case above
+        # and alert/re-sync instead of trusting the tunnel is reachable.
+        assert data["dns_failed"] is True
 
     @patch("src.api.tunnels.cloudflare_service")
     def test_create_tunnel_api_failure(self, mock_cf, client):
