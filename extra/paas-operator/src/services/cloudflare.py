@@ -202,13 +202,15 @@ class CloudflareService:
             return True
 
     async def create_dns_record_for_tunnel(
-        self, subdomain: str, tunnel_id: str
+        self, subdomain: str, tunnel_id: str, comment: Optional[str] = None
     ) -> Optional[str]:
         """Create a CNAME DNS record pointing to a specific tunnel.
 
         Args:
             subdomain: Subdomain to create (e.g., 'myapp' for myapp.domain.com)
             tunnel_id: The tunnel ID to point the CNAME at.
+            comment: Optional canonical name stamped on the DNS record for
+                traceability (e.g., 'paas-sa-{workspace}-{name}').
 
         Returns:
             DNS record ID if created, None if DNS is disabled.
@@ -242,6 +244,8 @@ class CloudflareService:
             "ttl": 1,
             "proxied": True,
         }
+        if comment:
+            payload["comment"] = comment
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -343,6 +347,96 @@ class CloudflareService:
 
             logger.info(f"DNS record deleted: {hostname}")
             return True
+
+    async def _list_dns_records_by_content(self, content: str) -> List[dict]:
+        """List CNAME records in the zone whose content equals ``content``.
+
+        Used to find every record pointing at a dedicated tunnel
+        ({tunnel_id}.cfargotunnel.com) for declarative reconciliation.
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                self._dns_records_url,
+                headers=self._headers,
+                params={"type": "CNAME", "content": content, "per_page": 100},
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to list DNS records: {response.text}",
+                    status_code=response.status_code,
+                )
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+            return data.get("result", [])
+
+    async def _delete_dns_record_by_id(self, record_id: str) -> bool:
+        """Delete a DNS record by its Cloudflare record ID."""
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{self._dns_records_url}/{record_id}",
+                headers=self._headers,
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to delete DNS record {record_id}: {response.text}",
+                    status_code=response.status_code,
+                )
+            return True
+
+    async def reconcile_tunnel_dns(
+        self,
+        tunnel_id: str,
+        subdomains: List[str],
+        comment: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        """Make the zone's DNS records for a dedicated tunnel match ``subdomains``.
+
+        Declarative: creates missing CNAMEs, keeps matching ones, deletes
+        records that point at this tunnel but are no longer desired.
+        Idempotent — safe to call repeatedly (suspend/resume don't change
+        hostnames, so reconcile is a no-op there).
+
+        Returns:
+            Mapping of subdomain -> DNS record ID.
+        """
+        if not self.dns_enabled:
+            logger.info("DNS management disabled, skipping reconcile")
+            return {s: None for s in subdomains}
+
+        cname_target = self._tunnel_cname_target_for(tunnel_id)
+        existing = await self._list_dns_records_by_content(cname_target)
+        existing_by_sub = {}
+        for rec in existing:
+            # rec["name"] is the FQDN; strip the zone domain suffix
+            name = rec.get("name", "")
+            if name.endswith(f".{self.domain}"):
+                existing_by_sub[name[: -(len(self.domain) + 1)]] = rec
+
+        desired = set(subdomains)
+        result: Dict[str, Optional[str]] = {}
+
+        for sub in subdomains:
+            if sub in existing_by_sub:
+                result[sub] = existing_by_sub[sub]["id"]
+            else:
+                result[sub] = await self.create_dns_record_for_tunnel(
+                    subdomain=sub, tunnel_id=tunnel_id, comment=comment,
+                )
+
+        for sub, rec in existing_by_sub.items():
+            if sub not in desired:
+                logger.info(
+                    f"Reconcile: deleting stale DNS record {rec['name']} "
+                    f"(tunnel {tunnel_id})"
+                )
+                await self._delete_dns_record_by_id(rec["id"])
+
+        return result
 
     # ==================== Tunnel Configuration ====================
 
