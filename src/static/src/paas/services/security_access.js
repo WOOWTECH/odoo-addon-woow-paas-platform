@@ -203,4 +203,27 @@ export const securityAccessService = {
       return { success: false, error: err.message };
     }
   },
+
+  // Client binding for the change-plan BFF endpoint
+  // (`api_sa_change_plan` in controllers/security_access.py). The backend
+  // refund→wallet→close-old→open-new cascade is complete and covered by
+  // backend tests; this method exists so the endpoint is not orphaned at the
+  // service boundary (mirrors cloud_service.changePlan + this service's own
+  // skipTrial). NOTE: no SA detail-page UI triggers this yet — wiring a plan
+  // picker / refund-preview modal is a deliberate follow-up (the tenant-facing
+  // self-serve plan-change UX is not in P1 scope; until then change-plan is
+  // driven from backend/admin only).
+  async changePlan(workspaceId, saId, planId) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/change-plan`,
+        { plan_id: planId },
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
 };
