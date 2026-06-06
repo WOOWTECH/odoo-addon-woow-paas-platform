@@ -300,6 +300,17 @@ async def sync_tunnel_routes(tunnel_id: str, request: TunnelRoutesSyncRequest):
     pointing at this tunnel are created/kept/deleted to match. Idempotent —
     used by Security Access for route CRUD, suspend (service_url=
     http_status:503) and resume.
+
+    NOT atomic across the two stages. ``configure_tunnel_ingress`` runs first,
+    then ``reconcile_tunnel_dns`` (create-loop then delete-loop, each raising
+    on the first failure). There is no compensating action: if ingress
+    succeeds and reconcile then fails partway, the ingress and some DNS
+    records are already mutated while this call returns 500. Convergence is by
+    design left to the caller's next idempotent re-sync (the desired state is
+    re-asserted in full), since the Cloudflare API offers no transaction to
+    roll the partial mutation back. Callers (Odoo SecurityAccess) keep the
+    driving DB row so a re-sync can always reach the records — a 500 here means
+    "CF may be partially changed; re-sync to converge", not "nothing changed".
     """
     if not cloudflare_service.api_token or not cloudflare_service.account_id:
         raise HTTPException(
