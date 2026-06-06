@@ -258,7 +258,20 @@ class CloudflareService:
         if existing:
             logger.info(f"DNS record for {hostname} already exists")
             if existing.get("content") != cname_target:
-                await self._update_dns_record(existing["id"], hostname)
+                # The record points at a DIFFERENT tunnel; repoint it at THIS
+                # tunnel's target. Must pass cname_target explicitly — letting
+                # _update_dns_record fall back to the shared default target
+                # would "fix" the record into pointing at the shared tunnel
+                # instead of this per-tunnel one, producing a routing black
+                # hole that no error surfaces (the record_id is still returned
+                # and stored as if correct).
+                logger.info(
+                    f"Repointing DNS record {hostname} from "
+                    f"{existing.get('content')} -> {cname_target}"
+                )
+                await self._update_dns_record(
+                    existing["id"], hostname, content=cname_target
+                )
             return existing["id"]
 
         logger.info(f"Creating DNS record: {hostname} -> {cname_target}")
@@ -299,22 +312,31 @@ class CloudflareService:
             logger.info(f"DNS record created: {hostname} (ID: {record_id})")
             return record_id
 
-    async def _update_dns_record(self, record_id: str, hostname: str) -> bool:
+    async def _update_dns_record(
+        self, record_id: str, hostname: str, content: Optional[str] = None
+    ) -> bool:
         """Update an existing DNS record.
 
         Args:
             record_id: DNS record ID
             hostname: Full hostname
+            content: CNAME target to point at. Defaults to the shared tunnel
+                target (``_tunnel_cname_target``) for the legacy single-tunnel
+                callers (``create_dns_record``). Per-tunnel callers
+                (``create_dns_record_for_tunnel``) MUST pass the dedicated
+                tunnel's target so a repoint lands on the correct tunnel rather
+                than silently on the shared one.
 
         Returns:
             True if update was successful
         """
-        logger.info(f"Updating DNS record: {hostname} -> {self._tunnel_cname_target}")
+        target = content or self._tunnel_cname_target
+        logger.info(f"Updating DNS record: {hostname} -> {target}")
 
         payload = {
             "type": "CNAME",
             "name": hostname,
-            "content": self._tunnel_cname_target,
+            "content": target,
             "ttl": 1,
             "proxied": True,
         }

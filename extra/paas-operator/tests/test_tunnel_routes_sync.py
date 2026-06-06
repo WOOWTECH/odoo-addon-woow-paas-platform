@@ -76,6 +76,80 @@ class TestConfigureTunnelIngress:
                 )
 
 
+class TestCreateDnsRecordForTunnel:
+    """Exercise the REAL create_dns_record_for_tunnel against a patched httpx
+    client (not a mock of the method itself) so the comment-stamping and the
+    per-tunnel CNAME target actually land in the outgoing payload — guards the
+    BUG-8-class CF contract that method-level mocks in the endpoint tests hide.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_stamps_comment_and_per_tunnel_target(self, cf_service):
+        """New record → POST payload carries comment + this tunnel's target."""
+        captured = {}
+
+        class FakeResponse:
+            status_code = 201
+
+            @staticmethod
+            def json():
+                return {"success": True, "result": {"id": "rec-new"}}
+
+        async def fake_post(url, headers=None, json=None, timeout=None):
+            captured["payload"] = json
+            return FakeResponse()
+
+        with patch.object(cf_service, "get_dns_record",
+                          new=AsyncMock(return_value=None)), \
+             patch("httpx.AsyncClient.post",
+                   new=AsyncMock(side_effect=fake_post)):
+            rec_id = await cf_service.create_dns_record_for_tunnel(
+                subdomain="a", tunnel_id="tun-1", comment="paas-sa-x-y",
+            )
+
+        assert rec_id == "rec-new"
+        assert captured["payload"]["comment"] == "paas-sa-x-y"
+        assert captured["payload"]["content"] == "tun-1.cfargotunnel.com"
+        assert captured["payload"]["name"] == "a"
+
+    @pytest.mark.asyncio
+    async def test_repoint_existing_uses_per_tunnel_target_not_shared(
+        self, cf_service
+    ):
+        """Existing CNAME pointing at the WRONG tunnel must be repointed at
+        THIS tunnel's target — not silently "fixed" onto the shared default
+        (which would be a routing black hole). Regression guard for the
+        _update_dns_record content-parameter fix.
+        """
+        cf_service.tunnel_id = "shared-tunnel"  # the shared/default target
+        existing = {"id": "rec-1", "content": "other-tunnel.cfargotunnel.com"}
+        captured = {}
+
+        class FakeResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"success": True}
+
+        async def fake_put(url, headers=None, json=None, timeout=None):
+            captured["payload"] = json
+            return FakeResponse()
+
+        with patch.object(cf_service, "get_dns_record",
+                          new=AsyncMock(return_value=existing)), \
+             patch("httpx.AsyncClient.put",
+                   new=AsyncMock(side_effect=fake_put)):
+            rec_id = await cf_service.create_dns_record_for_tunnel(
+                subdomain="a", tunnel_id="tun-1",
+            )
+
+        assert rec_id == "rec-1"
+        # MUST land on the dedicated tunnel, NOT the shared default.
+        assert captured["payload"]["content"] == "tun-1.cfargotunnel.com"
+        assert captured["payload"]["content"] != "shared-tunnel.cfargotunnel.com"
+
+
 class TestReconcileTunnelDns:
     @pytest.mark.asyncio
     async def test_creates_missing_deletes_extra(self, cf_service):
