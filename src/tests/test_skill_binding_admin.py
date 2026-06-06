@@ -1,7 +1,31 @@
+import base64
+import io
+import tarfile
 from unittest.mock import patch
 
 from odoo.exceptions import AccessError, UserError
 from odoo.tests import TransactionCase, tagged
+
+
+def _compliant_bundle_b64(name='wz-skill'):
+    """Build a base64 .tar.gz that passes the wizard's structural validation
+    (issue #154): root SKILL.md with name + description + default entrypoint
+    scripts/main.py. frontmatter name matches the wizard name so no soft
+    warning fires and action_upload returns the plain act_window.
+    """
+    files = {
+        'SKILL.md': (
+            '---\nname: %s\ndescription: bound skill\n---\n# X\n' % name),
+        'scripts/main.py': 'def run(x=""):\n    return x\n',
+    }
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as tf:
+        for path, content in files.items():
+            data = content.encode('utf-8')
+            info = tarfile.TarInfo(name=path)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    return base64.b64encode(buf.getvalue())
 
 
 def _mk_skill(env, **vals):
@@ -158,7 +182,10 @@ class TestWizardUserScope(TransactionCase):
         cls.Wizard = cls.env['woow_paas_platform.skill_upload_wizard']
         cls.proj = cls.env['project.project'].sudo().create({'name': 'WZ'})
         cls.proj2 = cls.env['project.project'].sudo().create({'name': 'WZ2'})
-        cls.bundle = 'aGVsbG8='  # b64("hello")
+        # issue #154: the wizard now validates tar structure on upload, so the
+        # fixture must be a compliant bundle (was b64("hello"), which is not a
+        # gzip tar). frontmatter name matches the wizard name (wz-skill).
+        cls.bundle = _compliant_bundle_b64(name='wz-skill')
 
     def _wiz(self, **vals):
         base = {'name': 'wz-skill', 'version': '1.0.0',
