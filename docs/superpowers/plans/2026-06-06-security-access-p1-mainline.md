@@ -2041,7 +2041,14 @@ class SecurityAccessRoute(models.Model):
         return routes
 
     def write(self, vals):
-        if 'subdomain_prefix' in vals and not self.env.su:
+        # Hard invariant for everyone incl. superuser: hostname / DNS /
+        # ingress all derive from the prefix, and no internal path
+        # legitimately renames it (delete + recreate is the rename). The
+        # context key is an escape hatch for future data-repair migrations
+        # only — an `env.su` exemption would silently skip this guard in
+        # TransactionCase (su env) and any sudo()'d controller path.
+        if 'subdomain_prefix' in vals and not self.env.context.get(
+                'sa_internal_prefix_write'):
             for route in self:
                 if route.subdomain_prefix != vals['subdomain_prefix']:
                     raise UserError(
