@@ -14,8 +14,13 @@ from odoo.addons.woow_paas_platform.controllers.security_access import (
     SecurityAccessController,
 )
 
+# controller._check_route_prefix 用 function-local import
+# `from ..services.paas_operator import get_paas_operator_client`，每次呼叫從
+# services.paas_operator 模組現抓 attribute。patch 必須打在「來源模組」上，
+# 打 models.security_access namespace 的那份 copy 不影響 controller 實際讀的名字
+# （否則 mock 變死碼、controller fall through 到真實 client → false confidence）。
 MOCK_GET_CLIENT = (
-    'odoo.addons.woow_paas_platform.models.security_access.'
+    'odoo.addons.woow_paas_platform.services.paas_operator.'
     'get_paas_operator_client'
 )
 
