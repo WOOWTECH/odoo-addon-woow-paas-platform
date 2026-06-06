@@ -1321,7 +1321,17 @@ class PaasController(Controller):
 
         if action == 'list':
             return self._list_mcp_servers(service)
-        elif action == 'create':
+
+        # Legacy service-centric write endpoint must honour the same portal
+        # settings flag as the project-centric route (two-layer-acl-lockstep:
+        # 三支寫入 endpoint 必須同一開關). Without this gate, flag-off lets a
+        # workspace owner/admin RPC past read-only via the legacy route.
+        write_actions = ('create', 'update', 'delete', 'sync', 'test')
+        if action in write_actions:
+            if not _portal_project_settings_editable(request.env):
+                return {'success': False, 'error': 'Permission denied'}
+
+        if action == 'create':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
             return self._create_mcp_server(service, kw)

@@ -23,6 +23,10 @@ class TestPortalSettingsFlagOff(TestProjectDetailFixture):
     def _url_mcp(self, project_id):
         return f'/api/support-projects/{project_id}/mcp-servers'
 
+    def _url_legacy_mcp(self, workspace_id, service_id):
+        return (f'/api/workspaces/{workspace_id}/services/'
+                f'{service_id}/mcp-servers')
+
     def test_get_still_works_and_reports_readonly(self):
         self.authenticate('pd_alice', 'pd_alice')
         res = self._post(self._url_detail(self.project_w1_basic.id),
@@ -44,6 +48,19 @@ class TestPortalSettingsFlagOff(TestProjectDetailFixture):
             'action': 'create', 'name': 'X',
             'url': 'https://mcp.example.com/sse',
         })
+        self.assertFalse(res['success'])
+        self.assertEqual(res['error'], 'Permission denied')
+
+    def test_legacy_mcp_create_denied_for_owner(self):
+        """Legacy service-centric write route must honour the same flag —
+        flag-off owner cannot RPC past read-only via the legacy endpoint
+        (two-layer-acl-lockstep 第三/四支 endpoint 同款 gate)。"""
+        self.authenticate('pd_alice', 'pd_alice')
+        res = self._post(
+            self._url_legacy_mcp(self.ws_w1.id, self.service_w1_a.id), {
+                'action': 'create', 'name': 'X',
+                'url': 'https://mcp.example.com/sse',
+            })
         self.assertFalse(res['success'])
         self.assertEqual(res['error'], 'Permission denied')
 
