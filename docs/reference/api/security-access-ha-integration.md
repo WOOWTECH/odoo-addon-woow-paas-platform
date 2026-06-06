@@ -27,7 +27,7 @@ Security Access 端點是 Smart Home 端點的鏡像：相同認證模型、相�
 
 > **命名慣例（範例值）**：本文件 JSON 範例的 `canonical_name` 一律是
 > `paas-sa-{ws_hash}-{res_hash}` 形式（見 `src/services/naming.py:
-> make_security_access_subdomain`），例如 `paas-sa-7f3a2b-c1d4e9`。`tunnel_name`
+> make_security_access_subdomain`），例如 `paas-sa-7f3a2b9c-c1d4e9f0`。`tunnel_name`
 > 等於 `canonical_name`（`action_provision` 以 `name=self.canonical_name`
 > 建 tunnel）。範例 hash 為佔位，實際值由 workspace slug + reference_id + 暱稱
 > 雜湊而得，請勿假設可讀字串。
@@ -138,9 +138,9 @@ Response（`200`）：
     {
       "id": 5,
       "name": "Front Door NVR",
-      "canonical_name": "paas-sa-7f3a2b-c1d4e9",
+      "canonical_name": "paas-sa-7f3a2b9c-c1d4e9f0",
       "state": "active",
-      "primary_hostname": "paas-sa-7f3a2b-c1d4e9.paas.example.com",
+      "primary_hostname": "paas-sa-7f3a2b9c-c1d4e9f0.paas.example.com",
       "tunnel_status": "connected",
       "plan_name": "Security Access Pro",
       "next_payment": "2026-07-06"
@@ -185,24 +185,24 @@ Response（`200`，`security_access.to_dict()` 完整輸出）：
   "access": {
     "id": 5,
     "name": "Front Door NVR",
-    "canonical_name": "paas-sa-7f3a2b-c1d4e9",
+    "canonical_name": "paas-sa-7f3a2b9c-c1d4e9f0",
     "workspace_id": 12,
     "state": "active",
     "tunnel_id": "f3a1...",
-    "tunnel_name": "paas-sa-7f3a2b-c1d4e9",
+    "tunnel_name": "paas-sa-7f3a2b9c-c1d4e9f0",
     "tunnel_status": "connected",
     "tunnel_uptime": "2026-06-06T08:30:00Z",
     "connector_id": "c0ffee...",
     "connector_type": "cloudflared",
-    "primary_hostname": "paas-sa-7f3a2b-c1d4e9.paas.example.com",
+    "primary_hostname": "paas-sa-7f3a2b9c-c1d4e9f0.paas.example.com",
     "error_message": "",
     "deployed_at": "2026-06-06T08:30:00",
     "created_at": "2026-06-06T08:29:41",
     "routes": [
       {
         "id": 9,
-        "subdomain_prefix": "paas-sa-7f3a2b-c1d4e9",
-        "hostname": "paas-sa-7f3a2b-c1d4e9.paas.example.com",
+        "subdomain_prefix": "paas-sa-7f3a2b9c-c1d4e9f0",
+        "hostname": "paas-sa-7f3a2b9c-c1d4e9f0.paas.example.com",
         "service_url": "http://localhost:80",
         "http_host_header": true,
         "is_primary": true,
@@ -261,7 +261,7 @@ Response（`200`）：
 {
   "tunnel_token": "eyJ...",
   "tunnel_id": "f3a1...",
-  "primary_hostname": "paas-sa-7f3a2b-c1d4e9.paas.example.com"
+  "primary_hostname": "paas-sa-7f3a2b9c-c1d4e9f0.paas.example.com"
 }
 ```
 
@@ -292,12 +292,19 @@ Response：同 §2.3（完整 `to_dict()`，差別是 `tunnel_status` / `tunnel_
 
 ## 3. 錯誤碼
 
-| 狀況                      | HTTP | body                                                            |
-| ------------------------- | ---- | -------------------------------------------------------------- |
-| Bearer 缺失 / 失效        | 401  | `{"error":"Unauthorized","detail":"..."}`                      |
-| scope 不足                | 403  | `{"error":"Forbidden","detail":"..."}`                         |
-| workspace 無 access       | 403  | `{"error":"Forbidden","detail":"No access to this workspace"}` |
-| SA 不存在 / 跨 workspace  | 404  | `{"error":"Not Found","detail":"Security access not found"}`   |
+| 狀況                                        | HTTP | body                                                                                          |
+| ------------------------------------------- | ---- | --------------------------------------------------------------------------------------------- |
+| Bearer 缺失 / 失效                          | 401  | `{"error":"Unauthorized","detail":"..."}`                                                     |
+| scope 不足                                  | 403  | `{"error":"Forbidden","detail":"..."}`                                                        |
+| workspace 無 access（列表端點 §2.2）        | 403  | `{"error":"Forbidden","detail":"No access to this workspace"}`                                |
+| workspace 無 access（detail/token/status）  | 403  | `{"error":"Forbidden","detail":"No access to the workspace containing this security access"}` |
+| SA 不存在 / 跨 workspace                    | 404  | `{"error":"Not Found","detail":"Security access not found"}`                                  |
+
+> `detail` 字串依端點而異：列表端點（§2.2 `sa_list_accesses`）直接驗
+> workspace，回 `No access to this workspace`；detail / tunnel-token / status
+> （§2.3–§2.5）走 `_get_sa_with_access`，回 `No access to the workspace
+> containing this security access`。component 端若要斷言 `detail`，請依端點
+> 取對應字串（或只斷言 HTTP 403）。
 
 > 安全設計：`_get_sa_with_access` 先 `sudo().browse().exists()` 確認存在再驗
 > workspace access；不存在回 404、存在但跨 workspace 回 403。
