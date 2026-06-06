@@ -251,21 +251,30 @@ Header：icon + nickname（可編輯）+ 狀態 badge + primary hostname 連結 
 ### Odoo Controller（backend-for-frontend）
 
 新 `src/controllers/security_access.py`，鏡像 `smart_home.py` 門控
-（`_get_workspace_or_error` + mutation 才查 owner/admin role）：
+（`_get_workspace_or_error` + mutation 才查 owner/admin role）。
+
+**路徑慣例**：BFF 走 workspace 前綴（鏡像 `/api/workspaces/<ws>/smarthomes`），
+平台層資源不掛 workspace（鏡像 `/api/smart-home/templates`）——與 HA API 的
+`/api/security-access/*`（§5）天然區隔，不撞路徑：
 
 ```
-GET    /api/security-access                      列表（ir.rule 過濾，不 sudo）
-POST   /api/security-access                      建立（plan + quota 檢查）
-GET    /api/security-access/<id>                 detail（6 tab 全部資料）
-PATCH  /api/security-access/<id>                 nickname / access 設定
-DELETE /api/security-access/<id>                 刪除（連動清理鏈）
-POST/PATCH/DELETE /api/security-access/<id>/routes
-GET    /api/security-access/routes/check?prefix=  availability 反饋
-POST/PATCH/DELETE /api/security-access/<id>/policies
-POST   /api/security-access/<id>/domains（+ verify / set-primary / upgrade-zone / DELETE）
-POST/PATCH/DELETE /api/security-access/<id>/email/rules
-POST   /api/security-access/<id>/email/destinations（+ resend-verify / DELETE）
-GET    /api/security-access/plans                方案列表（含 quota）
+# workspace-scoped（session auth + _get_workspace_or_error）
+GET/POST  /api/workspaces/<ws>/security-accesses                  列表（ir.rule 過濾，不 sudo）/ 建立（plan + quota 檢查）
+GET/PATCH/DELETE /api/workspaces/<ws>/security-accesses/<id>      detail（6 tab 全部資料）/ nickname·access 設定 / 刪除（連動清理鏈）
+POST/PATCH/DELETE /api/workspaces/<ws>/security-accesses/<id>/routes（/<rid>）
+POST/PATCH/DELETE /api/workspaces/<ws>/security-accesses/<id>/policies（/<pid>）
+POST   /api/workspaces/<ws>/security-accesses/<id>/domains（/<did> + verify / set-primary / upgrade-zone / DELETE）
+POST/PATCH/DELETE /api/workspaces/<ws>/security-accesses/<id>/email/rules（/<rid>）
+POST   /api/workspaces/<ws>/security-accesses/<id>/email/destinations（+ resend-verify / DELETE）
+POST   /api/workspaces/<ws>/security-accesses/<id>/change-plan
+POST   /api/workspaces/<ws>/security-accesses/<id>/skip-trial-estimate、/skip-trial
+       ↑ 訂閱三件組直接鏡像 smarthomes 既有端點
+
+# 平台層（不掛 workspace）
+GET    /api/security-access/templates                    template 列表
+GET    /api/security-access/templates/<id>/plans         方案列表（含 quota）
+GET    /api/security-access/routes/check?prefix=         availability 反饋
+       ↑ subdomain 是全平台 flat namespace，本來就不是 workspace 視角的查詢
 ```
 
 前端 `services/security_access.js` 沿用 `{success, data, error}` envelope；
@@ -282,11 +291,16 @@ Security Access 來源；本次**不改 component**，只在 PaaS 端備好 API 
 新 endpoints 加在 `src/controllers/ha_api.py` 同檔案（直接共用 `_authenticate` /
 `_get_user_workspaces` / `_check_workspace_access`，不複製邏輯）：
 
+路徑形狀**完全鏡像** `/api/smarthome/*` 的三層結構（workspaces → instances →
+token/status），component 未來擴展時 contract 形狀一致：
+
 ```
-GET /api/security-access             列出可存取 SA 服務（id、nickname、canonical_name、
-                                     primary_hostname、state、方案層級、下次扣款日 ← FR-9 sensor）
-GET /api/security-access/<id>        detail（含 connector 連線狀態）
-GET /api/security-access/<id>/token  tunnel token（高權限 scope）
+GET /api/security-access/workspaces                     可存取的 workspaces（鏡像 /api/smarthome/workspaces）
+GET /api/security-access/workspaces/<ws>/accesses       該 workspace 的 SA 服務（id、nickname、canonical_name、
+                                                        primary_hostname、state、方案層級、下次扣款日 ← FR-9 sensor）
+GET /api/security-access/accesses/<id>                  detail（鏡像 …/homes/<id>）
+GET /api/security-access/accesses/<id>/tunnel-token     tunnel token（高權限 scope）
+GET /api/security-access/accesses/<id>/status           connector 連線狀態
 ```
 
 - OAuth2 scope：鏡像 smarthome scope 命名慣例新增 SA scope（read 與 token/secret 分級），
