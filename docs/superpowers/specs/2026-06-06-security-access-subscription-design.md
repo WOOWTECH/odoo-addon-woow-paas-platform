@@ -35,6 +35,18 @@ operator，前端複用 detail-tab 框架，HA component 串接需平行 API**�
 | HA 串接 | 在 PaaS 端提供平行於 `/api/smarthome/*` 的 `/api/security-access/*` + 串接文件；**不修改 `woow_paas_smart_home` component 原始碼** |
 | mockup 取捨 | header 的「Rollback」按鈕在 SA 無對應語義（屬 Cloud Service 部署回滾）→ 不做；「Domain」按鈕 = 跳 Domains tab |
 
+## 名詞對照（與 Cloudflare 後台用語）
+
+| Cloudflare Zero Trust 後台 | 本設計 | 說明 |
+|---|---|---|
+| 已發布應用程式路由（Published Application Routes / Public Hostnames，hostname → service） | **Application Route**（`security_access.route`，Configuration tab） | tunnel ingress 規則。路由的 hostname 只能掛在「已連線至 Cloudflare 的網域（zone）」上 |
+| ingress 的 catch-all / `http_status:*` 回應 | 503 凍結機制 | suspend = 每條 route 的 service 換成 `http_status:503` |
+| 已連線網域（zone） | 平台 base domain（預先接好）/ **Custom Domain**（Domains tab，客戶網域接入） | Custom Domain 是 Application Route 的**前置條件層**：CNAME 軌不進平台帳號（別名借道 primary route）；full_zone 軌（NS 委派）成為平台帳號內的 zone |
+
+v2 擴充方向（本次不做）：full_zone 軌的客戶網域成為帳號內 zone 後，可允許直接在其上
+開 Application Route（如 `ha.acme.com → localhost:80`），不繞 primary 別名；屆時
+`custom_domain` 加 `route` 關聯即可演進。
+
 ## 非目標
 
 - Access Control 獨立加購計費（名額計數、$7/名額）——等定價拍板
