@@ -491,3 +491,94 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             {'access_enabled': True})
         self._assert_structured_denial(res)
         self.assertFalse(self.sa.sudo().access_enabled)
+
+    # ---- role='user' member negatives (endpoint-layer role gate) ----
+    #
+    # The non-member cases above are blocked at _get_workspace_or_error, BEFORE
+    # the role gate ever runs — so they do NOT exercise the controller role
+    # check (security_access.py:587 / 619: role not in [OWNER, ADMIN]) nor the
+    # _check_operation_allowed write gate. A role='user' member passes the
+    # workspace gate and is stopped ONLY by the role gate, which is otherwise
+    # endpoint-untested (TestSecurityAccessAccessControl calls the private
+    # helpers directly, bypassing it). Without these a future drop of the role
+    # gate would let a plain member flip access_enabled / add an allow policy
+    # via the BFF, caught only by the ir.rule layer. Mirrors every P1 sibling
+    # endpoint's role='user' variant (two-layer-acl-lockstep).
+
+    def _add_user_member(self):
+        suffix = uuid.uuid4().hex[:6]
+        u = _new_user(self.env, f'sa_ac_user_{suffix}')
+        self.env['woow_paas_platform.workspace_access'].sudo().create({
+            'workspace_id': self.workspace.id, 'user_id': u.id, 'role': 'user'})
+        return u
+
+    def test_member_user_access_config_denied(self):
+        """role='user' member 打 access-config 須被 role gate 結構化拒絕，
+        且 access_enabled 不得被翻開。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-config',
+            {'access_enabled': True})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        self.assertFalse(self.sa.sudo().access_enabled)
+
+    def test_member_user_policy_create_denied_and_none_made(self):
+        """role='user' member 不得經 BFF create allow policy（繞過 role gate
+        開放受保護 hostname）。"""
+        before = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'member-inject', 'decision': 'allow',
+             'rule_type': 'email_domain', 'rule_value': 'evil.com'})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        after = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        self.assertEqual(after, before)
+
+    def test_member_user_policy_update_denied(self):
+        """role='user' member 不得改既有 policy 的 decision（CF allow/deny 認證
+        閘）。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'update', 'policy_id': self.pol.id, 'decision': 'deny'})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        self.assertEqual(self.pol.sudo().decision, 'allow')
+
+    def test_member_user_policy_delete_denied(self):
+        """role='user' member 不得 delete 既有 policy（例如移除一條 deny 規則
+        以放寬存取）。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'delete', 'policy_id': self.pol.id})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        self.assertTrue(self.pol.sudo().exists())
+
+    def test_member_user_policy_list_allowed(self):
+        """正向對照：role='user' member 仍可 list（action='list' 在 role gate
+        之前 return，與 non-member 被 workspace gate 擋不同）——確保 negatives
+        鎖的是 role gate 而非把整個 endpoint 鎖死。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'list'})
+        self.assertTrue(res.get('success'), res.get('error'))
