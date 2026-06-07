@@ -1115,3 +1115,85 @@ class CloudflareService:
                         f"Failed to delete DNS record {record_name}: "
                         f"{delete_response.status_code}"
                     )
+
+    # ==================== Cloudflare Access (Zero Trust) ====================
+
+    @property
+    def _access_base(self) -> str:
+        return f"{self.BASE_URL}/accounts/{self.account_id}/access"
+
+    async def list_identity_providers(self) -> List[dict]:
+        """List the account's Access identity providers.
+
+        Returns list of {id, name, type}. Needs token scope
+        'Access: Organizations, Identity Providers and Groups (Read)' —
+        a 403 here means that scope is missing.
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._access_base}/identity_providers",
+                headers=self._headers,
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to list identity providers: {response.text}",
+                    status_code=response.status_code,
+                )
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown')}"
+                )
+            return data.get("result", [])
+
+    async def create_reusable_policy(
+        self,
+        name: str,
+        decision: str,
+        include: List[dict],
+        exclude: Optional[List[dict]] = None,
+        require: Optional[List[dict]] = None,
+    ) -> str:
+        """Create a reusable Access policy; return its id."""
+        payload = {
+            "name": name,
+            "decision": decision,
+            "include": include,
+            "exclude": exclude or [],
+            "require": require or [],
+            "reusable": True,
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self._access_base}/policies",
+                headers=self._headers,
+                json=payload,
+                timeout=30.0,
+            )
+            if response.status_code not in (200, 201):
+                raise CloudflareException(
+                    f"Failed to create access policy: {response.text}",
+                    status_code=response.status_code,
+                )
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown')}"
+                )
+            return data["result"]["id"]
+
+    async def delete_reusable_policy(self, policy_id: str) -> bool:
+        """Delete a reusable Access policy by id."""
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{self._access_base}/policies/{policy_id}",
+                headers=self._headers,
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to delete access policy {policy_id}: {response.text}",
+                    status_code=response.status_code,
+                )
+            return True
