@@ -129,3 +129,5 @@ from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as mo
 # feat: agent context enrichment (spec 2026-06-04 — TDD)
 from . import test_agent_context_builder
 from . import test_agent_context_endpoint
+# feat: security access P2 — access control (access_policy submodel + sync + ACL)
+from . import test_security_access_access_policy

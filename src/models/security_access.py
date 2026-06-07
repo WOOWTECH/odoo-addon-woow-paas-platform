@@ -118,6 +118,33 @@ class SecurityAccess(models.Model):
              'from the stored canonical_name, not from the nickname.',
     )
 
+    # Access Control（P2；服務層共用設定）
+    access_enabled = fields.Boolean(
+        string='Access Protection Enabled',
+        default=False,
+        help='Master toggle: gate protected routes behind Cloudflare Access.',
+    )
+    session_duration = fields.Selection(
+        selection=[
+            ('30m', '30 minutes'), ('1h', '1 hour'), ('8h', '8 hours'),
+            ('24h', '24 hours'), ('168h', '7 days'),
+        ],
+        string='Default Session Duration',
+        default='24h',
+        help='How long users stay authenticated before re-login.',
+    )
+    login_google = fields.Boolean(string='Login: Google', default=False)
+    login_email_otp = fields.Boolean(string='Login: Email OTP', default=False)
+    access_app_id = fields.Char(
+        string='CF Access App ID', copy=False,
+        help='Cloudflare Access Application id for this SA (set on sync).',
+    )
+    access_policy_ids = fields.One2many(
+        comodel_name='woow_paas_platform.security_access_access_policy',
+        inverse_name='security_access_id',
+        string='Access Policies',
+    )
+
     route_ids = fields.One2many(
         comodel_name='woow_paas_platform.security_access_route',
         inverse_name='security_access_id',
@@ -222,7 +249,18 @@ class SecurityAccess(models.Model):
                     raise UserError(
                         "Field '%s' is immutable after creation." % forbidden
                     )
-        return super().write(vals)
+        result = super().write(vals)
+        # P2: any change to the shared Access config (master toggle, login
+        # methods, session duration) re-pushes the full desired Access state.
+        # Mirrors the route-sub-model's declarative re-sync — idempotent, and
+        # only fires once the SA is actually live (active + tunnel) so a
+        # config edit on a pending SA doesn't hit the operator prematurely.
+        if any(k in vals for k in ('access_enabled', 'login_google',
+                                   'login_email_otp', 'session_duration')):
+            for record in self:
+                if record.state == 'active' and record.tunnel_id:
+                    record._sync_access_to_operator()
+        return result
 
     # ------------------------------------------------------------------ #
     #  Provision / status / delete                                       #
@@ -548,6 +586,65 @@ class SecurityAccess(models.Model):
                 route.dns_record_id = rec_id
 
     # ------------------------------------------------------------------ #
+    #  Access sync (declarative)                                          #
+    # ------------------------------------------------------------------ #
+
+    def _build_access_payload(self):
+        """Desired-state payload for operator's /api/access/sync."""
+        self.ensure_one()
+        domain = self._get_paas_domain()
+        login_idp_types = []
+        if self.login_google:
+            login_idp_types.append('google')
+        if self.login_email_otp:
+            login_idp_types.append('onetimepin')
+        protected = [
+            f"{r.subdomain_prefix}.{domain}"
+            for r in self.route_ids.filtered('is_protected')
+        ]
+        return {
+            'enabled': bool(self.access_enabled),
+            'canonical_name': self.canonical_name,
+            'app_name': self.name or self.canonical_name,
+            'primary_hostname': self.primary_hostname,
+            'protected_hostnames': protected,
+            'session_duration': self.session_duration or '24h',
+            'login_idp_types': login_idp_types,
+            'policies': [{
+                'name': p.name, 'decision': p.decision,
+                'rule_type': p.rule_type, 'rule_value': p.rule_value,
+                'precedence': p.sequence,
+            } for p in self.access_policy_ids.sorted(
+                key=lambda x: (x.sequence, x.id))],
+            'existing_app_id': self.access_app_id or None,
+            'existing_policy_ids': [
+                p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id
+            ],
+        }
+
+    def _sync_access_to_operator(self):
+        """Push the full desired Access state to the operator (idempotent)."""
+        self.ensure_one()
+        if not self.tunnel_id:
+            return
+        client = self._get_operator_client()
+        result = client.sync_access_app(self._build_access_payload())
+        # write back CF ids
+        self.access_app_id = result.get('app_id') or False
+        returned = result.get('policy_ids') or []
+        # map returned policy ids back onto policy rows in order
+        policies = self.access_policy_ids.sorted(
+            key=lambda x: (x.sequence, x.id))
+        for pol, cf_id in zip(policies, returned):
+            if pol.cf_policy_id != cf_id:
+                pol.cf_policy_id = cf_id
+        if not result.get('app_id'):
+            # torn down → clear stale cf ids
+            for pol in self.access_policy_ids:
+                if pol.cf_policy_id:
+                    pol.cf_policy_id = False
+
+    # ------------------------------------------------------------------ #
     #  Subscription lifecycle: suspend / resume / cleanup                #
     # ------------------------------------------------------------------ #
 
@@ -659,6 +756,22 @@ class SecurityAccess(models.Model):
         self.ensure_one()
         if not self.tunnel_id:
             return
+        # P2: tear down Cloudflare Access (app + reusable policies) first, while
+        # the tunnel still exists (the operator needs the tunnel context to
+        # reconcile). Wrapped in its own try so an Access teardown failure does
+        # NOT abort the tunnel delete below — the tunnel is the billed resource
+        # and must always get its delete attempt. enabled=False makes the sync
+        # idempotent (re-running on an already-torn-down app is a no-op).
+        if self.access_app_id and self.tunnel_id:
+            try:
+                client = self._get_operator_client()
+                payload = self._build_access_payload()
+                payload['enabled'] = False
+                client.sync_access_app(payload)
+                self.access_app_id = False
+            except Exception as e:
+                _logger.warning("[SA] access teardown failed sa=%s: %s",
+                                self.id, e)
         try:
             client = self._get_operator_client()
             client.delete_tunnel(self.tunnel_id)
@@ -694,6 +807,11 @@ class SecurityAccess(models.Model):
             'deployed_at': self.deployed_at.isoformat() if self.deployed_at else '',
             'created_at': self.create_date.isoformat() if self.create_date else '',
             'routes': [r.to_dict() for r in self.route_ids],
+            'access_enabled': self.access_enabled,
+            'session_duration': self.session_duration,
+            'login_google': self.login_google,
+            'login_email_otp': self.login_email_otp,
+            'access_policies': [p.to_dict() for p in self.access_policy_ids],
             'subscription': self._get_subscription_info(),
         }
 
@@ -837,6 +955,13 @@ class SecurityAccessRoute(models.Model):
                 for sa in routes.mapped('security_access_id'):
                     if sa.state in ('active', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
+            # P2: a newly-created is_protected route adds an app destination —
+            # re-push the full Access state (only when Access is on + live).
+            for sa in routes.filtered('is_protected').mapped(
+                    'security_access_id'):
+                if (sa.access_enabled and sa.state == 'active'
+                        and sa.tunnel_id):
+                    sa._sync_access_to_operator()
         return routes
 
     def write(self, vals):
@@ -871,6 +996,15 @@ class SecurityAccessRoute(models.Model):
                 for sa in self.mapped('security_access_id'):
                     if sa.state in ('active', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
+            # P2: toggling a route's is_protected changes the SA's protected
+            # hostname set (app destinations) — re-push the full Access state.
+            # Only when Access is enabled (otherwise there is no app to update);
+            # active + tunnel is the same liveness gate as the route sync.
+            if 'is_protected' in vals:
+                for sa in self.mapped('security_access_id'):
+                    if (sa.access_enabled and sa.state == 'active'
+                            and sa.tunnel_id):
+                        sa._sync_access_to_operator()
         return result
 
     def unlink(self):
@@ -881,6 +1015,11 @@ class SecurityAccessRoute(models.Model):
                 "together with the Security Access instance."
             )
         affected = self.mapped('security_access_id')
+        # P2: capture which SAs are losing an is_protected route — their app
+        # destination set shrinks, so they need an Access re-sync after the
+        # unlink (computed before super().unlink() drops the rows).
+        protected_affected = self.filtered('is_protected').mapped(
+            'security_access_id')
         # Atomicity scope — the most dangerous direction: super().unlink()
         # drops the DB row, then the sync removes it from CF. The savepoint
         # rolls the unlink back on sync failure so the row survives — without
@@ -899,6 +1038,10 @@ class SecurityAccessRoute(models.Model):
                 if (sa.exists() and sa.state in ('active', 'error')
                         and sa.tunnel_id):
                     sa._sync_routes_to_operator()
+            for sa in protected_affected:
+                if (sa.exists() and sa.access_enabled
+                        and sa.state == 'active' and sa.tunnel_id):
+                    sa._sync_access_to_operator()
         return result
 
     def to_dict(self):
