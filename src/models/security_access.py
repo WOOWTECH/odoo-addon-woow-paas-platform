@@ -253,12 +253,16 @@ class SecurityAccess(models.Model):
         # P2: any change to the shared Access config (master toggle, login
         # methods, session duration) re-pushes the full desired Access state.
         # Mirrors the route-sub-model's declarative re-sync — idempotent, and
-        # only fires once the SA is actually live (active + tunnel) so a
-        # config edit on a pending SA doesn't hit the operator prematurely.
+        # only fires once the SA has a live tunnel so a config edit on a pending
+        # SA doesn't hit the operator prematurely. The liveness gate is
+        # ('active', 'error') + tunnel_id, IDENTICAL to the route sync gate: a
+        # stage-2 provision failure leaves the SA in 'error' with a live tunnel
+        # while the subscription stays active (BFF still permits CRUD), so an
+        # access edit in that state must converge CF, not silently diverge it.
         if any(k in vals for k in ('access_enabled', 'login_google',
                                    'login_email_otp', 'session_duration')):
             for record in self:
-                if record.state == 'active' and record.tunnel_id:
+                if record.state in ('active', 'error') and record.tunnel_id:
                     record._sync_access_to_operator()
         return result
 
@@ -319,6 +323,15 @@ class SecurityAccess(models.Model):
                         'is_primary': True,
                     })
                 self._sync_routes_to_operator()
+                # P2: if Access was configured (enabled + policies) on the SA
+                # while it was still pending, the config-write trigger never
+                # fired (no live tunnel then). The tunnel exists now, so push
+                # the full Access state here too — otherwise an active SA with
+                # access_enabled=True stays silently inert (no CF Access app,
+                # no protected destinations) until some access field is
+                # re-toggled. _sync_access_to_operator no-ops without a tunnel.
+                if self.access_enabled:
+                    self._sync_access_to_operator()
                 self.write({'state': 'active'})
             except PaaSOperatorConnectionError as e:
                 self.write({
@@ -431,6 +444,15 @@ class SecurityAccess(models.Model):
             # Re-sync so the primary rule carries http_host_header
             # (create_tunnel's single-rule config doesn't set originRequest).
             self._sync_routes_to_operator()
+
+            # P2: push Access config too if it was set pre-provision. The
+            # configure-then-provision flow lets a user enable Access + add
+            # policies on a 'pending' SA (BFF gates on subscription state, not
+            # provisioning state); those writes never reach the operator because
+            # the write trigger requires a live tunnel. Now that the tunnel
+            # exists, converge CF so the SA isn't left active-but-inert.
+            if self.access_enabled:
+                self._sync_access_to_operator()
 
             _logger.info(
                 "[SA] provisioned sa=%s canonical=%s tunnel=%s",
@@ -701,6 +723,13 @@ class SecurityAccess(models.Model):
             return
         try:
             self._sync_routes_to_operator()
+            # P2: re-assert the Access state on resume too. Suspend only
+            # 503-freezes route ingress (it does not tear the Access app down),
+            # but resuming is also the convergence point for any Access config
+            # that was edited while suspended or set pre-provision — push the
+            # full desired state so CF destinations match the live route set.
+            if self.access_enabled:
+                self._sync_access_to_operator()
         except Exception as e:
             _logger.warning("[SA] _do_resume failed sa=%s: %s", self.id, e)
             self.write({'state': 'error'})
@@ -957,9 +986,12 @@ class SecurityAccessRoute(models.Model):
                         sa._sync_routes_to_operator()
             # P2: a newly-created is_protected route adds an app destination —
             # re-push the full Access state (only when Access is on + live).
+            # Same liveness gate as the route sync above: ('active', 'error') +
+            # tunnel, so an SA stuck in 'error' with a live tunnel still
+            # converges its Access destinations instead of silently diverging.
             for sa in routes.filtered('is_protected').mapped(
                     'security_access_id'):
-                if (sa.access_enabled and sa.state == 'active'
+                if (sa.access_enabled and sa.state in ('active', 'error')
                         and sa.tunnel_id):
                     sa._sync_access_to_operator()
         return routes
@@ -999,10 +1031,13 @@ class SecurityAccessRoute(models.Model):
             # P2: toggling a route's is_protected changes the SA's protected
             # hostname set (app destinations) — re-push the full Access state.
             # Only when Access is enabled (otherwise there is no app to update);
-            # active + tunnel is the same liveness gate as the route sync.
+            # ('active', 'error') + tunnel is the SAME liveness gate as the
+            # route sync above, so an is_protected toggle on an SA stuck in
+            # 'error' with a live tunnel converges the Access destinations
+            # instead of leaving them stale vs the protected route set.
             if 'is_protected' in vals:
                 for sa in self.mapped('security_access_id'):
-                    if (sa.access_enabled and sa.state == 'active'
+                    if (sa.access_enabled and sa.state in ('active', 'error')
                             and sa.tunnel_id):
                         sa._sync_access_to_operator()
         return result
@@ -1039,8 +1074,11 @@ class SecurityAccessRoute(models.Model):
                         and sa.tunnel_id):
                     sa._sync_routes_to_operator()
             for sa in protected_affected:
+                # Same ('active', 'error') + tunnel liveness gate as the route
+                # sync, so removing a protected route from an SA stuck in
+                # 'error' still shrinks its Access destinations in CF.
                 if (sa.exists() and sa.access_enabled
-                        and sa.state == 'active' and sa.tunnel_id):
+                        and sa.state in ('active', 'error') and sa.tunnel_id):
                     sa._sync_access_to_operator()
         return result
 
