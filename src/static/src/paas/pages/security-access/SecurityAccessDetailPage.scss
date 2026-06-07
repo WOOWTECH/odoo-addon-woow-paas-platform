@@ -133,6 +133,23 @@
   }
 }
 
+// Access tab (P2) — master toggle row + policy header
+.o_woow_sa_access {
+  &__master {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  &__policy_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+}
+
 // Security Access list card (Workspace detail page — reuses smart-home grid)
 .o_woow_security_access_card_inner {
   display: flex;

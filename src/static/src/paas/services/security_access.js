@@ -139,6 +139,62 @@ export const securityAccessService = {
     }
   },
 
+  async updateAccessConfig(workspaceId, saId, vals) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/access-config`,
+        vals,
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async createPolicy(workspaceId, saId, vals) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/access-policies`,
+        { action: "create", ...vals },
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async updatePolicy(workspaceId, saId, policyId, vals) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/access-policies`,
+        { action: "update", policy_id: policyId, ...vals },
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  async deletePolicy(workspaceId, saId, policyId) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/access-policies`,
+        { action: "delete", policy_id: policyId },
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
   async checkRoutePrefix(prefix) {
     try {
       const result = await jsonRpc(
