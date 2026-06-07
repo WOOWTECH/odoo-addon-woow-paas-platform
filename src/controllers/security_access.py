@@ -647,6 +647,7 @@ class SecurityAccessController(Controller):
                 sa.write(vals)
             return {"success": True, "data": sa.to_dict()}
         except Exception as e:
+            _logger.exception("[SA] Failed to update access config: %s", e)
             return {"success": False, "error": str(e)}
 
     def _create_policy(self, sa, kwargs) -> dict[str, Any]:
@@ -677,6 +678,7 @@ class SecurityAccessController(Controller):
             })
             return {"success": True, "data": pol.to_dict()}
         except Exception as e:
+            _logger.exception("[SA] Failed to create access policy: %s", e)
             return {"success": False, "error": str(e)}
 
     def _update_policy(self, sa, policy_id, kwargs) -> dict[str, Any]:
@@ -694,6 +696,7 @@ class SecurityAccessController(Controller):
                 pol.write(vals)
             return {"success": True, "data": pol.to_dict()}
         except Exception as e:
+            _logger.exception("[SA] Failed to update access policy: %s", e)
             return {"success": False, "error": str(e)}
 
     def _delete_policy(self, sa, policy_id) -> dict[str, Any]:
@@ -704,4 +707,5 @@ class SecurityAccessController(Controller):
             pol.unlink()
             return {"success": True, "data": {"message": "Policy deleted"}}
         except Exception as e:
+            _logger.exception("[SA] Failed to delete access policy: %s", e)
             return {"success": False, "error": str(e)}
