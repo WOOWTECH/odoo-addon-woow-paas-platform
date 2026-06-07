@@ -148,6 +148,63 @@ class TestAccessSync(TransactionCase):
         self.assertFalse(payload['enabled'])
         self.assertEqual(payload['existing_app_id'], 'app-1')
 
+    def test_policy_create_sync_failure_rolls_back_db_row(self):
+        """create 的 Access re-sync 失敗 → 整筆 policy 不落 DB（無幽靈 policy），
+        與 route 子模型 savepoint 對齊。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            mc.sync_access_app.side_effect = PaaSOperatorError('cf down')
+            with self.assertRaises(PaaSOperatorError):
+                self.Policy.create({
+                    'security_access_id': sa.id, 'name': 'ghost-pol',
+                    'decision': 'allow', 'rule_type': 'email_domain',
+                    'rule_value': 'ghost.com'})
+        self.assertFalse(self.Policy.search(
+            [('name', '=', 'ghost-pol')]))
+
+    def test_policy_write_sync_failure_rolls_back_decision(self):
+        """write 的 Access re-sync 失敗 → decision 回滾，DB 與 CF 不分歧。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            pol = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'flip-pol',
+                'decision': 'allow', 'rule_type': 'email_domain',
+                'rule_value': 'flip.com'})
+            mc.sync_access_app.side_effect = PaaSOperatorError('cf down')
+            with self.assertRaises(PaaSOperatorError):
+                pol.write({'decision': 'deny'})
+        self.assertEqual(pol.decision, 'allow')
+
+    def test_policy_unlink_sync_failure_rolls_back_keeps_row(self):
+        """unlink 的 Access re-sync 失敗 → DB row 保留（下次 idempotent
+        re-sync 可收斂），與 route 子模型最嚴重方向對齊。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            pol = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'doomed-pol',
+                'decision': 'deny', 'rule_type': 'email_domain',
+                'rule_value': 'doomed.com'})
+            pol_id = pol.id
+            mc.sync_access_app.side_effect = PaaSOperatorError('cf down')
+            with self.assertRaises(PaaSOperatorError):
+                pol.unlink()
+        self.assertTrue(self.Policy.browse(pol_id).exists())
+
 
 class TestAccessLifecycle(TransactionCase):
     def setUp(self):

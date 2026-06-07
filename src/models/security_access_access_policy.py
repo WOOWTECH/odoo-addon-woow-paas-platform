@@ -80,30 +80,47 @@ class SecurityAccessAccessPolicy(models.Model):
                     "Access policy quota exceeded: plan '%s' allows %d "
                     "polic(ies)." % (sub.sh_subscription_plan_id.name, quota))
 
+    # Atomicity scope: mirror the route sub-model's savepoint so a
+    # create/write/unlink whose Access re-sync raises rolls the DB row back and
+    # re-raises, rather than leaving a committed policy row the operator never
+    # received. The guarantee is Odoo-side ONLY — sync_access_app is a
+    # declarative full-state push with no compensating action, so a
+    # mid-reconcile operator failure can still leave Cloudflare partially
+    # mutated; that residual CF↔DB divergence converges via the next idempotent
+    # full-state re-sync, not via this savepoint (same scope the route model
+    # documents). A stale policy row alone is not served publicly, so the
+    # window is benign relative to routes, but keeping the savepoint matters
+    # for parity: a Task-10 BFF that catches the sync error and reports success
+    # would otherwise leave the row committed while CF was never updated.
+
     @api.model_create_multi
     def create(self, vals_list):
-        policies = super().create(vals_list)
-        for sa in policies.mapped('security_access_id'):
-            if sa.access_enabled and sa.state == 'active' and sa.tunnel_id:
-                sa._sync_access_to_operator()
+        with self.env.cr.savepoint():
+            policies = super().create(vals_list)
+            for sa in policies.mapped('security_access_id'):
+                if sa.access_enabled and sa.state == 'active' and sa.tunnel_id:
+                    sa._sync_access_to_operator()
         return policies
 
     def write(self, vals):
-        result = super().write(vals)
-        if any(k in vals for k in ('name', 'decision', 'rule_type',
-                                   'rule_value', 'sequence')):
-            for sa in self.mapped('security_access_id'):
-                if sa.access_enabled and sa.state == 'active' and sa.tunnel_id:
-                    sa._sync_access_to_operator()
+        with self.env.cr.savepoint():
+            result = super().write(vals)
+            if any(k in vals for k in ('name', 'decision', 'rule_type',
+                                       'rule_value', 'sequence')):
+                for sa in self.mapped('security_access_id'):
+                    if sa.access_enabled and sa.state == 'active' \
+                            and sa.tunnel_id:
+                        sa._sync_access_to_operator()
         return result
 
     def unlink(self):
         affected = self.mapped('security_access_id')
-        result = super().unlink()
-        for sa in affected:
-            if sa.exists() and sa.access_enabled and sa.state == 'active' \
-                    and sa.tunnel_id:
-                sa._sync_access_to_operator()
+        with self.env.cr.savepoint():
+            result = super().unlink()
+            for sa in affected:
+                if sa.exists() and sa.access_enabled and sa.state == 'active' \
+                        and sa.tunnel_id:
+                    sa._sync_access_to_operator()
         return result
 
     def to_dict(self):
