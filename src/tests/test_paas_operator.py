@@ -447,3 +447,47 @@ class TestGetPaaSOperatorClient(TransactionCase):
         self.assertIsInstance(client, PaaSOperatorClient)
         self.assertEqual(client.base_url, 'http://localhost:8000')
         self.assertEqual(client.api_key, 'test-key')
+
+
+class TestSecurityAccessAccessClientMethods(TransactionCase):
+    """sync_access_app / list_identity_providers HTTP contract."""
+
+    def _make_client(self):
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorClient,
+        )
+        return PaaSOperatorClient(base_url='http://op:8000', api_key='k')
+
+    def test_sync_access_contract(self):
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {
+                'app_id': 'app-1', 'policy_ids': ['pol-1'],
+                'allowed_idps': ['idp-g']}
+            result = client.sync_access_app({
+                'enabled': True, 'canonical_name': 'paas-sa-x-y',
+                'app_name': 'gw', 'primary_hostname': 'paas-sa-x-y.woowtech.io',
+                'protected_hostnames': ['paas-sa-x-y.woowtech.io'],
+                'session_duration': '8h', 'login_idp_types': ['google'],
+                'policies': [], 'existing_app_id': None,
+                'existing_policy_ids': []})
+        mock_req.assert_called_once_with(
+            'PUT', '/api/access/sync', data={
+                'enabled': True, 'canonical_name': 'paas-sa-x-y',
+                'app_name': 'gw', 'primary_hostname': 'paas-sa-x-y.woowtech.io',
+                'protected_hostnames': ['paas-sa-x-y.woowtech.io'],
+                'session_duration': '8h', 'login_idp_types': ['google'],
+                'policies': [], 'existing_app_id': None,
+                'existing_policy_ids': []},
+            timeout=120)
+        self.assertEqual(result['app_id'], 'app-1')
+
+    def test_list_identity_providers_contract(self):
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {'identity_providers': [
+                {'id': 'idp-g', 'name': 'G', 'type': 'google'}]}
+            result = client.list_identity_providers()
+        mock_req.assert_called_once_with(
+            'GET', '/api/access/identity-providers')
+        self.assertEqual(result['identity_providers'][0]['type'], 'google')

@@ -729,6 +729,23 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def sync_access_app(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Declaratively sync one SA's Cloudflare Access config.
+
+        payload keys: enabled, canonical_name, app_name, primary_hostname,
+        protected_hostnames, session_duration, login_idp_types, policies,
+        existing_app_id, existing_policy_ids. Returns {app_id, policy_ids,
+        allowed_idps}. Idempotent.
+        """
+        return self._request(
+            'PUT', '/api/access/sync', data=payload,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def list_identity_providers(self) -> Dict[str, Any]:
+        """List account Access IdPs ({identity_providers: [{id,name,type}]})."""
+        return self._request('GET', '/api/access/identity-providers')
+
     def check_route_availability(self, subdomain: str) -> Dict[str, Any]:
         """Check Cloudflare-side whether a subdomain is free in the zone.
 

@@ -475,3 +475,70 @@ class TunnelRouteSyncResult(BaseModel):
 class TunnelRoutesSyncResponse(BaseModel):
     tunnel_id: str
     routes: List[TunnelRouteSyncResult]
+
+
+# Security Access — Cloudflare Access (Zero Trust) sync (security-access P2)
+
+
+class AccessPolicySpec(BaseModel):
+    """One desired Access policy (reusable) on an SA's Access App."""
+
+    name: str = Field(..., description="Policy display name")
+    decision: str = Field(..., description="allow | deny")
+    rule_type: str = Field(
+        ..., description="email_domain | email_list | ip_range"
+    )
+    rule_value: str = Field(
+        ...,
+        description="domain (no @) / comma-separated emails / CIDR, per rule_type",
+    )
+    precedence: int = Field(1, description="Evaluation order; lower first")
+
+
+class AccessSyncRequest(BaseModel):
+    """Declarative full-state sync of one SA's Cloudflare Access config.
+
+    enabled=False → operator tears down the app + its reusable policies.
+    """
+
+    enabled: bool = Field(..., description="Master Access protection toggle")
+    canonical_name: str = Field(
+        ..., description="SA canonical name; stamped on app/policy names"
+    )
+    app_name: str = Field(..., description="Access Application display name")
+    primary_hostname: str = Field(
+        ..., description="App primary domain (SA primary hostname)"
+    )
+    protected_hostnames: List[str] = Field(
+        default_factory=list,
+        description="Hostnames to protect (app destinations); subset of routes",
+    )
+    session_duration: str = Field(
+        "24h", description='Go duration string, e.g. "8h" / "24h"'
+    )
+    login_idp_types: List[str] = Field(
+        default_factory=list,
+        description='IdP types to allow, e.g. ["google", "onetimepin"]; '
+                    "empty = all available",
+    )
+    policies: List[AccessPolicySpec] = Field(default_factory=list)
+    existing_app_id: Optional[str] = Field(None)
+    existing_policy_ids: Optional[List[str]] = Field(None)
+
+
+class AccessSyncResponse(BaseModel):
+    app_id: Optional[str] = Field(None, description="CF Access App id (None if disabled/torn down)")
+    policy_ids: List[str] = Field(default_factory=list)
+    allowed_idps: List[str] = Field(
+        default_factory=list, description="Resolved IdP ids set on the app"
+    )
+
+
+class IdentityProviderInfo(BaseModel):
+    id: str
+    name: str
+    type: str
+
+
+class IdentityProvidersResponse(BaseModel):
+    identity_providers: List[IdentityProviderInfo]
