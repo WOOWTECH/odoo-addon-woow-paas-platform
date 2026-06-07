@@ -1197,3 +1197,150 @@ class CloudflareService:
                     status_code=response.status_code,
                 )
             return True
+
+    async def _resolve_idp_ids(self, idp_types: List[str]) -> List[str]:
+        """Map IdP type strings (google/onetimepin) to account IdP ids.
+
+        Empty input → empty list (= app shows all available IdPs). A type
+        with no matching IdP on the account is skipped (logged), not fatal.
+        """
+        if not idp_types:
+            return []
+        idps = await self.list_identity_providers()
+        by_type = {}
+        for idp in idps:
+            by_type.setdefault(idp.get("type"), idp.get("id"))
+        resolved = []
+        for t in idp_types:
+            idp_id = by_type.get(t)
+            if idp_id:
+                resolved.append(idp_id)
+            else:
+                logger.warning(
+                    "Access: login method '%s' has no IdP on the account; "
+                    "skipping (configure it in Zero Trust → Settings → "
+                    "Authentication).", t,
+                )
+        return resolved
+
+    async def _delete_access_app(self, app_id: str) -> None:
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{self._access_base}/apps/{app_id}",
+                headers=self._headers, timeout=30.0,
+            )
+            if response.status_code not in (200, 404):
+                raise CloudflareException(
+                    f"Failed to delete access app {app_id}: {response.text}",
+                    status_code=response.status_code,
+                )
+
+    async def sync_access_app(
+        self,
+        canonical_name: str,
+        app_name: str,
+        primary_hostname: str,
+        protected_hostnames: List[str],
+        session_duration: str,
+        login_idp_types: List[str],
+        policies: List[dict],
+        enabled: bool = True,
+        existing_app_id: Optional[str] = None,
+        existing_policy_ids: Optional[List[str]] = None,
+    ) -> dict:
+        """Declaratively reconcile one SA's Cloudflare Access config.
+
+        Strategy (simple + idempotent): always delete the SA's previous
+        reusable policies (existing_policy_ids) then recreate from the desired
+        list; create-or-update the single per-SA Access App referencing them.
+        enabled=False → tear down app + policies, return empty.
+
+        Returns {app_id, policy_ids, allowed_idps}.
+        """
+        existing_policy_ids = existing_policy_ids or []
+
+        # Teardown path: disabled or no protected hostnames → remove everything.
+        if not enabled or not protected_hostnames:
+            if existing_app_id:
+                await self._delete_access_app(existing_app_id)
+            for pid in existing_policy_ids:
+                try:
+                    await self.delete_reusable_policy(pid)
+                except CloudflareException as e:
+                    logger.warning("Access teardown: policy %s delete failed: %s",
+                                   pid, e.message)
+            return {"app_id": None, "policy_ids": [], "allowed_idps": []}
+
+        # Recreate reusable policies from desired state (delete-old-then-create).
+        for pid in existing_policy_ids:
+            try:
+                await self.delete_reusable_policy(pid)
+            except CloudflareException as e:
+                logger.warning("Access resync: stale policy %s delete failed: %s",
+                               pid, e.message)
+        new_policy_ids = []
+        for idx, p in enumerate(policies):
+            include = self._build_access_rule(p["rule_type"], p["rule_value"])
+            pid = await self.create_reusable_policy(
+                name=f"{canonical_name}: {p['name']}",
+                decision=p["decision"],
+                include=include,
+            )
+            new_policy_ids.append((pid, p.get("precedence", idx + 1)))
+
+        allowed_idps = await self._resolve_idp_ids(login_idp_types)
+
+        app_payload = {
+            "name": app_name,
+            "type": "self_hosted",
+            "domain": primary_hostname,
+            "destinations": [{"type": "public", "uri": h}
+                             for h in protected_hostnames],
+            "session_duration": session_duration,
+            "allowed_idps": allowed_idps,
+            "auto_redirect_to_identity": False,
+            "app_launcher_visible": False,
+            "policies": [{"id": pid, "precedence": prec}
+                         for pid, prec in new_policy_ids],
+        }
+
+        async with httpx.AsyncClient() as client:
+            if existing_app_id:
+                response = await client.put(
+                    f"{self._access_base}/apps/{existing_app_id}",
+                    headers=self._headers, json=app_payload, timeout=30.0,
+                )
+            else:
+                response = await client.post(
+                    f"{self._access_base}/apps",
+                    headers=self._headers, json=app_payload, timeout=30.0,
+                )
+            if response.status_code not in (200, 201):
+                raise CloudflareException(
+                    f"Failed to sync access app: {response.text}",
+                    status_code=response.status_code,
+                )
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown')}"
+                )
+            app_id = data["result"]["id"]
+
+        return {
+            "app_id": app_id,
+            "policy_ids": [pid for pid, _ in new_policy_ids],
+            "allowed_idps": allowed_idps,
+        }
+
+    @staticmethod
+    def _build_access_rule(rule_type: str, rule_value: str) -> List[dict]:
+        """Map (rule_type, rule_value) to a Cloudflare Access include rule list."""
+        if rule_type == "email_domain":
+            return [{"email_domain": {"domain": rule_value.lstrip("@").strip()}}]
+        if rule_type == "email_list":
+            emails = [e.strip() for e in rule_value.split(",") if e.strip()]
+            return [{"email": {"email": e}} for e in emails]
+        if rule_type == "ip_range":
+            return [{"ip": {"ip": rule_value.strip()}}]
+        raise CloudflareException(f"Unknown access rule_type: {rule_type}")
