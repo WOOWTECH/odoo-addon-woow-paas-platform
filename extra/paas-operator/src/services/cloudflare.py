@@ -1198,30 +1198,41 @@ class CloudflareService:
                 )
             return True
 
-    async def _resolve_idp_ids(self, idp_types: List[str]) -> List[str]:
+    async def _resolve_idp_ids(
+        self, idp_types: List[str]
+    ) -> tuple[List[str], List[str]]:
         """Map IdP type strings (google/onetimepin) to account IdP ids.
 
-        Empty input → empty list (= app shows all available IdPs). A type
-        with no matching IdP on the account is skipped (logged), not fatal.
+        Empty input → empty list (= app shows all available IdPs). A requested
+        type with no matching IdP on the account is skipped (logged) — but it
+        is also collected and returned so the caller can surface the silent
+        downgrade. Returns ``(resolved_ids, unresolved_types)``.
+
+        Security note: a requested-but-missing type that is silently dropped to
+        ``[]`` flips the app to "all available IdPs" (login restriction widened,
+        opposite of intent). Reporting ``unresolved_types`` lets Odoo/the BFF
+        warn the user instead of letting the widening go unnoticed.
         """
         if not idp_types:
-            return []
+            return [], []
         idps = await self.list_identity_providers()
         by_type = {}
         for idp in idps:
             by_type.setdefault(idp.get("type"), idp.get("id"))
         resolved = []
+        unresolved = []
         for t in idp_types:
             idp_id = by_type.get(t)
             if idp_id:
                 resolved.append(idp_id)
             else:
+                unresolved.append(t)
                 logger.warning(
                     "Access: login method '%s' has no IdP on the account; "
                     "skipping (configure it in Zero Trust → Settings → "
                     "Authentication).", t,
                 )
-        return resolved
+        return resolved, unresolved
 
     async def _delete_access_app(self, app_id: str) -> None:
         async with httpx.AsyncClient() as client:
@@ -1269,7 +1280,8 @@ class CloudflareService:
                 except CloudflareException as e:
                     logger.warning("Access teardown: policy %s delete failed: %s",
                                    pid, e.message)
-            return {"app_id": None, "policy_ids": [], "allowed_idps": []}
+            return {"app_id": None, "policy_ids": [], "allowed_idps": [],
+                    "unresolved_idp_types": []}
 
         # Recreate reusable policies from desired state (delete-old-then-create).
         for pid in existing_policy_ids:
@@ -1279,58 +1291,86 @@ class CloudflareService:
                 logger.warning("Access resync: stale policy %s delete failed: %s",
                                pid, e.message)
         new_policy_ids = []
-        for idx, p in enumerate(policies):
-            include = self._build_access_rule(p["rule_type"], p["rule_value"])
-            pid = await self.create_reusable_policy(
-                name=f"{canonical_name}: {p['name']}",
-                decision=p["decision"],
-                include=include,
-            )
-            new_policy_ids.append((pid, p.get("precedence", idx + 1)))
+        # Compensating-cleanup scope: this is a two-stage remote provision
+        # (create N reusable policies, then PUT/POST the app referencing them).
+        # If the app update fails, the policies just created are NOT returned to
+        # the caller (the function raises), so Odoo's savepoint rolls back the
+        # DB row and the next idempotent re-sync only knows the OLD cf_policy_ids
+        # — these would be permanent Cloudflare orphans, never reconciled. Wrap
+        # the whole create+update window and best-effort delete this batch on
+        # failure before re-raising, so a partial failure leaves no orphans.
+        try:
+            for idx, p in enumerate(policies):
+                include = self._build_access_rule(
+                    p["rule_type"], p["rule_value"])
+                pid = await self.create_reusable_policy(
+                    name=f"{canonical_name}: {p['name']}",
+                    decision=p["decision"],
+                    include=include,
+                )
+                new_policy_ids.append((pid, p.get("precedence", idx + 1)))
 
-        allowed_idps = await self._resolve_idp_ids(login_idp_types)
+            allowed_idps, unresolved_idps = await self._resolve_idp_ids(
+                login_idp_types)
 
-        app_payload = {
-            "name": app_name,
-            "type": "self_hosted",
-            "domain": primary_hostname,
-            "destinations": [{"type": "public", "uri": h}
-                             for h in protected_hostnames],
-            "session_duration": session_duration,
-            "allowed_idps": allowed_idps,
-            "auto_redirect_to_identity": False,
-            "app_launcher_visible": False,
-            "policies": [{"id": pid, "precedence": prec}
-                         for pid, prec in new_policy_ids],
-        }
+            app_payload = {
+                "name": app_name,
+                "type": "self_hosted",
+                "domain": primary_hostname,
+                "destinations": [{"type": "public", "uri": h}
+                                 for h in protected_hostnames],
+                "session_duration": session_duration,
+                "allowed_idps": allowed_idps,
+                "auto_redirect_to_identity": False,
+                "app_launcher_visible": False,
+                "policies": [{"id": pid, "precedence": prec}
+                             for pid, prec in new_policy_ids],
+            }
 
-        async with httpx.AsyncClient() as client:
-            if existing_app_id:
-                response = await client.put(
-                    f"{self._access_base}/apps/{existing_app_id}",
-                    headers=self._headers, json=app_payload, timeout=30.0,
-                )
-            else:
-                response = await client.post(
-                    f"{self._access_base}/apps",
-                    headers=self._headers, json=app_payload, timeout=30.0,
-                )
-            if response.status_code not in (200, 201):
-                raise CloudflareException(
-                    f"Failed to sync access app: {response.text}",
-                    status_code=response.status_code,
-                )
-            data = response.json()
-            if not data.get("success"):
-                raise CloudflareException(
-                    f"Cloudflare API error: {data.get('errors', 'Unknown')}"
-                )
-            app_id = data["result"]["id"]
+            async with httpx.AsyncClient() as client:
+                if existing_app_id:
+                    response = await client.put(
+                        f"{self._access_base}/apps/{existing_app_id}",
+                        headers=self._headers, json=app_payload, timeout=30.0,
+                    )
+                else:
+                    response = await client.post(
+                        f"{self._access_base}/apps",
+                        headers=self._headers, json=app_payload, timeout=30.0,
+                    )
+                if response.status_code not in (200, 201):
+                    raise CloudflareException(
+                        f"Failed to sync access app: {response.text}",
+                        status_code=response.status_code,
+                    )
+                data = response.json()
+                if not data.get("success"):
+                    raise CloudflareException(
+                        f"Cloudflare API error: {data.get('errors', 'Unknown')}"
+                    )
+                app_id = data["result"]["id"]
+        except Exception:
+            # App update failed after policies were created → reclaim them so
+            # they don't linger as Cloudflare orphans (the caller's DB rollback
+            # would otherwise lose all reference to this batch).
+            for pid, _ in new_policy_ids:
+                try:
+                    await self.delete_reusable_policy(pid)
+                except CloudflareException as ce:
+                    logger.warning(
+                        "Access rollback: orphan policy %s delete failed: %s",
+                        pid, ce.message)
+            raise
 
         return {
             "app_id": app_id,
             "policy_ids": [pid for pid, _ in new_policy_ids],
             "allowed_idps": allowed_idps,
+            # Requested login methods with no matching account IdP. Non-empty
+            # here means the resolved set was narrowed (or, if it became empty,
+            # the app silently fell back to "all available IdPs") — the caller
+            # must surface this so the login-restriction widening is visible.
+            "unresolved_idp_types": unresolved_idps,
         }
 
     @staticmethod

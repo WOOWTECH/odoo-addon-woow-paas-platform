@@ -532,6 +532,11 @@ class AccessSyncResponse(BaseModel):
     allowed_idps: List[str] = Field(
         default_factory=list, description="Resolved IdP ids set on the app"
     )
+    unresolved_idp_types: List[str] = Field(
+        default_factory=list,
+        description="Requested login methods with no matching account IdP "
+                    "(silently dropped → login restriction widened to all IdPs)",
+    )
 
 
 class IdentityProviderInfo(BaseModel):
