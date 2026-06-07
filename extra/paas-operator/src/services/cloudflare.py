@@ -1266,7 +1266,7 @@ class CloudflareService:
         list; create-or-update the single per-SA Access App referencing them.
         enabled=False → tear down app + policies, return empty.
 
-        Returns {app_id, policy_ids, allowed_idps}.
+        Returns {app_id, policy_ids, allowed_idps, unresolved_idp_types}.
         """
         existing_policy_ids = existing_policy_ids or []
 
