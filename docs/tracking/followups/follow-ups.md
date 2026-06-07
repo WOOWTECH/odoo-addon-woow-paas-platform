@@ -3,6 +3,7 @@
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
 **State as of 2026-06-07**：
+- **Security Access P1 主線 + stg 一起發佈 + 真 Cloudflare E2E（2026-06-07，PR #159 merged → develop）**：訂閱/Tunnel/多 route 宣告式同步/503 凍結/後台/前端 6-tab/HA API 平行串接。6-phase ultracode workflow（73 commits、Odoo 1055 tests 0 failed、operator unit 154 + integration 7）+ 5-lens × 4 輪 loop-until-dry 對抗式審查（52 confirmed：1 critical provision 冪等孤兒 tunnel / 15 major / 36 minor 全修）。知識持久化 5 篇（3 pattern + 2 pitfall：`[[unittest-mock-dual-namespace-patch]]` / `[[su-env-exempt-guard-false-green]]` / `[[two-stage-remote-provision-idempotency]]` / `[[seed-noupdate-sticky-template-links]]` / `[[owl-template-crash-class-syntax]]`）。**stg 發佈鏈（4-agent canvas 協作：paas-platform / paas-app-bundle-cd / woow-paas-charts / deploy-stg）**：operator image `20260606.2308`（含 #159 SA + #158 TTL stopgap，image-only Fleet bump，chart 0.1.13 不動，PR paas-app-bundle-cd#9）→ addon deploy-stg（develop `c45ffdb`）→ dev-sandbox-stg → **真 Cloudflare E2E 5/6 PASS**（provision 真 tunnel + primary route DNS `paas-sa-…woowtech.io` dig 解析 CF edge ✓ / `PUT /routes` 宣告式同步 + DNS reconcile ✓ / availability 雙層 ✓ / 刪除 unlink 連動清 CF tunnel+DNS ✓；503 凍結依交辦 SKIP），advisory 2（token DNS scope）閉環、清理乾淨。**F-SA-1 + F-SA-2 新增**（見 §F-SA；皆 stg 環境 / 平台命名慣例層，超出 SA P1 範圍，已開 gitea issue + priority:high）。
 - **F-SBX-5 已修（feat/skill-binding-ambiguity，2026-06-07，issue #156）**：skill 同名歧義 + 雙綁撞名修復，四層 lock-step —— ① `skill._compute_display_name` 後綴 version+scope（`test-echo v0.1.0 (System)`，`_rec_names_search=['name','version']`，後綴不進 wire）② `agent_template._check_no_duplicate_skill_name`（@api.constrains('skill_ids')，**不放行 superuser**，一條守全 3 寫入路徑：form 直寫/inverse/fork）③ `_build_skill_snapshot` dict-by-name dedup（user 蓋 system、與 bundle endpoint tie-break 同向、絕不 raise；`_effective_skill_ids` frozen 未動）④ 保守 migration `18.0.1.0.34`（(user,system) 配對自動刪 system rel、同 scope 同名 AMBIGUOUS 只 warning 留人工）。23 個新測試（display_name 7 / constraint 8 / dedup 5 / migration 3）+ 全套 1405 tests 0 fail 0 error（dev-sandbox 實跑，migration 另做 odoo-shell E2E 注入實證 + 冪等）。pitfall doc：[`skill-same-name-dual-bind-snapshot-collision`](../pitfalls/skill-same-name-dual-bind-snapshot-collision.md)（含存量鎖死預期行為 + 同 scope 人工清理 snippet + is_effective 雙 True 已知顯示行為）。**附帶發現（未修，tooling）**：`k8s-dev-sandbox/scripts/test.sh:110` 以 `${SLUG}-odoo-dev-sandbox` 組資源名，長 branch slug 被 helm 截斷（實際 `...-odoo-dev-sandb`）→ secret 查無 exit 2；workaround 直接 kubectl exec 正確資源名。
 - **PR #153 skill binding UX stg 驗證（deploy-stg，2026-06-06）**：image `20260606.1010`（develop@`939b3a3`）部署 + PR #153 未結事項「pod 真載入 skill + 完整串流」**首次全鏈路驗通**（wizard user-scope 上傳 → copy-on-write fork 兩層綁定 → 同名 shadow system → snapshot push → pod ConfigMap reload → lazy fetch 200+SHA256 → atomic extract → frontmatter parse → subprocess exit 0 → tool_result/text_chunk/done）。E2E 逐層揭露 3 發現（皆非 PR #153 回歸）：**F-SBC-1 新增**（stg seed bundle 三重違規 + wizard 缺上傳結構驗證，issue **#154**）、**F-SKT-1 再確認**（31h pod **first-fetch** 也 401——不只 re-fetch，issue **#155**）、**F-ARL-4 新增**（LLM tool-call 一律空 kwargs，**paas-agent-runtime#23**）。驗證 artifacts 留 stg project 27 'PR153-skill-verify'（含合規 bundle 參考件 test-echo 0.1.2）。
 - **Portal task agent chat（share read-mode 擴充，2026-06-05）**：原生 portal task/project 頁加 agent chat + status（spec / plan：`2026-06-05-portal-task-agent-chat-*`）。workflow 執行 T1-T7 TDD + 兩輪對抗式審查：ACL round 抓 **1 critical + 2 high**（portal leg 誤成 5 個 sudo-browse mutation endpoint 的唯一閘 → read-mode portal user 可封存/改名 project、注入 task；修 `_portal_write_denied()` fail-closed guard `2cece77`，含攻擊重現測試）；final round 再抓 `_create_project` 漏網 + chat/upload 零測試覆蓋（`47a1773`）；polish round 收 lockstep 精確化（collaborator leg 原生是 exact partner、非 child_of 家族）+ `project_stages` portal guard + 測試假綠強化（`63eec6b`）+ 前端 label 共用 / safeHtml 縱深 / ai_stream try-catch 等價（`7c307be`）。E2E（headed）抓到 `html_sanitize` 漏進 frontend bundle（`7edd749`）並重演本機版 enablement gap chain（[[floor-env-relative-path-empty-ext-addons]] + gap-chain pitfall 本機變體節；**F-GC-2 實證再現**）。全模組 902 tests 全綠。**F-PORTAL-1~3 新增**（見 §Portal task agent chat follow-ups）。
@@ -1568,3 +1569,41 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - **F-PORTAL-1 — portal invoker_role 'guest' 語意（design note，medium-forward）**：portal user 走 chat 時 `_get_project_access_role` 回 `'guest'`（無 project_access row）→ spawn payload `invoker_role='guest'`。design §4.3 矩陣定義 guest 為 read-only（不可 invoke / 不可觸發 spawn），但 controller 與 pod 目前皆未 enforce，portal chat 因此可用。**若未來 pod 端開始 enforce invoke 矩陣，portal user 需要明確 role 對映**（或 share 時自動建 project_access row），否則 portal chat 會**無錯誤訊息地靜默失效**（同 [[agent-runtime-stg-enablement-gap-chain]] class 失敗模式）。owner：paas-platform + paas-agent-runtime lock-step。來源：portal-task-agent-chat plan Task 9。
 - **F-PORTAL-2 — deny / not-found 統一錯誤訊息未實作（low，spec 偏差列冊）**：spec §安全模型 5 要求「deny 與 not-found 回同樣錯誤防 ID 列舉」，但既有 `/api/ai/*` 實際區分 `Channel not found` / `Access denied`（spec 對現況描述有誤；plan §風險 6 已自承維持現狀）。影響：portal user 可探知某 channel/project id 存在但無權（輕微存在性洩漏）。統一化會波及 /woow 前端 `ERROR_MESSAGES` 對映與既有測試 → 留待專輪收口。spec 已加實作後記對齊。
 - **F-PORTAL-3 — portal chat UI 與 AiChat 的共用層第二階段（low，rule-of-three 待機）**：本輪抽出 `ai_stream.js`（SSE 協議 consumer）+ 直接共用 `ai_service` / `markdown_parser` / `html_sanitize` / `agent_pod_state`；**訊息列表 push / scrollToBottom / streaming 暫存渲染 / 中斷 salvage 仍在 `PortalTaskChat` 與 `AiChat` 各一份**（final review medium），且 portal 端刻意無自動重連（scope 縮減，spec 實作後記記錄）。第三個 chat surface 出現時（如後台 form chat 分頁 epic）再抽 `ai_chat_core` 完整版，避免過早抽象。
+
+## F-SA — Security Access P1 follow-ups（2026-06-07）
+
+> Security Access P1 真 Cloudflare E2E（deploy-stg 在 dev-sandbox-stg）抓到的兩條，
+> 性質皆**超出 SA P1 範圍**——是 stg 環境設定 + 平台跨服務命名慣例層，非 SA code bug。
+> SA P1 本身判定完成（真環境 5/6 PASS、資源在 woowtech.io 正常運作、清理鏈乾淨）。
+> 決定性約束：**Cloudflare universal/wildcard SSL 只覆蓋一層 `*.woowtech.io`，
+> `*.stg.woowtech.io`（sub-subdomain）沒有有效憑證**——stg 服務只能落在 `*.woowtech.io`，
+> stg/prod 隔離靠「名稱前綴」而非 subdomain 層級。
+
+- **F-SA-1**（OPEN，**priority:high**，scope=stg 環境 config / **跨服務**，gitea issue 見下）：
+  **stg Odoo `paas_domain` 應從 `stg.woowtech.io` 改為 `woowtech.io`**。根因：`*.stg.woowtech.io`
+  無 Cloudflare wildcard SSL，stg 把 service hostname 放在 `.stg.woowtech.io` 那層本就拿不到
+  有效憑證。SA provision 把它暴露出來——`create_tunnel` 收 Odoo 全名建了
+  `.stg.woowtech.io` DNS（23:39:29），同一次 `PUT /routes` reconcile 因 operator
+  `CLOUDFLARE_DOMAIN=woowtech.io` 把它刪掉改建 `.woowtech.io`（23:39:30）→ Odoo 顯示的
+  `primary_hostname` 懸空、實際 DNS/ingress 全在 `*.woowtech.io`。**不只 SA**：stg 上所有走
+  tunnel 的服務（smart home `create_tunnel` 全名、cloud service MCP route）都受同一 domain
+  不一致影響（smart home 在 stg 也是沒 SSL 的 `.stg`）。prod 無此問題（Odoo 與 operator
+  皆 `woowtech.io`）。修法：stg Odoo `ir.config_parameter['woow_paas_platform.paas_domain']`
+  → `woowtech.io`（dev-sandbox-stg 的 sandbox/Helm values 或 Settings）。owner=deploy-stg /
+  stg 環境維運。prod 不動。
+
+- **F-SA-2**（OPEN，**priority:high**，scope=平台跨服務命名慣例 + SA code 硬化，gitea issue 見下）：
+  **(a) 環境前綴命名慣例**：stg/prod 共用 `woowtech.io` zone（SSL 約束所致），需靠
+  hostname **名稱前綴**區分環境，方向 `paas-stg-sa-{hash}` / `paas-stg-sm-…`（operator
+  namespace 已是 `paas-ws-stg-`，但 Cloudflare hostname 這端尚未統一加 stg）。屬
+  `services/naming.py` 的 `paas-cs-`/`paas-sm-`/`paas-sa-` 三者共同的跨服務慣例，宜**整批**
+  讓 naming 吃環境前綴（從 config_parameter / operator namespace prefix 推導），**SA 單獨先加
+  會與其他未標記服務不一致**，故不在 SA P1 內單做。**(b) SA code 硬化（併入 a 一起做）**：
+  SA provision 打 operator 兩次有**兩個 domain source of truth**——`create_tunnel` 用 Odoo
+  傳的全 hostname、`PUT /routes` 只傳 prefix 由 operator 接自己的 `CLOUDFLARE_DOMAIN`，兩值不等
+  即分歧（F-SA-1 的直接成因）。根治：讓 `sync_tunnel_routes` / `PUT /api/tunnels/{id}/routes`
+  也吃 **Odoo 傳的全 hostname**（與 `create_tunnel` 一致），SA 全程以 Odoo domain 為單一
+  source of truth、operator `CLOUDFLARE_DOMAIN` 設什麼都不影響 SA。一旦 (a) 的環境前綴落地、
+  全 hostname 要一起傳，故 (a)(b) 合併一個 PR 做免兩次白工。owner=platform（本 repo addon +
+  operator）。次要 nit（同 PR 順手）：① CF tunnel soft-delete 後 operator `GET` 仍回 200
+  inactive（未映射 deleted_at，觀測性）② route `to_dict()` 不含 `dns_record_id`（DB 有存）。
