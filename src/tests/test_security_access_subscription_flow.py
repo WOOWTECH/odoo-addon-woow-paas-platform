@@ -645,6 +645,35 @@ class TestSecurityAccessAccessControl(TransactionCase):
         self.assertNotEqual(pol.cf_policy_id, 'attacker-set')
         self.assertEqual(pol.security_access_id.id, sa.id)
 
+    def test_create_policy_whitelist_only(self):
+        """_create_policy must drop client-controlled cf_policy_id and pin
+        security_access_id to the gated SA — never trust the client's value.
+        Create-path analogue of test_update_policy_whitelist_only: send a
+        forged cf_policy_id + security_access_id pointing at ANOTHER SA and
+        assert the created row keeps cf_policy_id empty and is pinned to sa."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        # A second SA whose id the attacker tries to smuggle in.
+        other_sa = self.SA.create({
+            'name': 'Other GW', 'workspace_id': self.workspace.id})
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._create_policy(sa, {
+                'name': 'corp', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'acme.com',
+                'cf_policy_id': 'attacker-set',
+                'security_access_id': other_sa.id})
+        self.assertTrue(res['success'], res.get('error'))
+        pol = sa.access_policy_ids.filtered(lambda p: p.name == 'corp')
+        self.assertEqual(len(pol), 1)
+        # cf_policy_id is server-owned: the forged value was dropped (the row
+        # only gets a cf id from the operator's returned policy_ids on sync).
+        self.assertNotEqual(pol.cf_policy_id, 'attacker-set')
+        # security_access_id pinned to the gated SA, NOT the smuggled other_sa.
+        self.assertEqual(pol.security_access_id.id, sa.id)
+        self.assertNotIn(pol, other_sa.access_policy_ids)
+
     def test_delete_policy(self):
         mc = self._mock()
         sa = self._active_sa(mc)
