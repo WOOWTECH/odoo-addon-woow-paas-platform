@@ -205,6 +205,134 @@ class TestAccessSync(TransactionCase):
                 pol.unlink()
         self.assertTrue(self.Policy.browse(pol_id).exists())
 
+    def test_enable_writeback_maps_cf_policy_id_onto_row(self):
+        """zip writeback branch: the returned ['pol-1'] must land on the policy
+        row's cf_policy_id (the next idempotent re-sync sends it as
+        existing_policy_ids to delete the stale CF policy). If the zip order
+        were swapped or the mapping deleted, this assertion fails."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            pol = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'corp', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+        # mock returns policy_ids=['pol-1'] → written back onto the single row.
+        self.assertEqual(pol.cf_policy_id, 'pol-1')
+
+    def test_disable_writeback_clears_app_and_policy_cf_ids(self):
+        """Teardown writeback branch (app_id=None): disabling must clear
+        access_app_id to False AND wipe every policy's stale cf_policy_id, so a
+        later resync doesn't try to delete already-gone CF policies. Drives the
+        `if not result.get('app_id')` branch the prior tests never exercised
+        (their mock always returned app_id='app-1')."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            pol = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'corp', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+            self.assertEqual(pol.cf_policy_id, 'pol-1')
+            self.assertEqual(sa.access_app_id, 'app-1')
+            # Now flip the mock to a real teardown shape (app_id=None) and
+            # disable: the writeback must clear both the app id and the stale
+            # policy cf id.
+            mc.sync_access_app.return_value = {
+                'app_id': None, 'policy_ids': [], 'allowed_idps': []}
+            sa.write({'access_enabled': False})
+        self.assertFalse(sa.access_app_id)
+        self.assertFalse(pol.cf_policy_id)
+
+    def test_error_state_with_live_tunnel_still_syncs_access(self):
+        """F-MODEL-2: access-sync liveness gate must match route-sync —
+        ('active','error') + tunnel. An SA stuck in 'error' with a live tunnel
+        (stage-2 provision failure) must still push Access config, else CF
+        destinations go stale vs the protected route set with no converge
+        trigger. Pre-fix this was gated on state=='active' only and would skip."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            # Drop into 'error' but keep the live tunnel (stage-2 failure shape).
+            sa.write({'state': 'error'})
+            mc.sync_access_app.reset_mock()
+            # An access config edit in 'error' state must still reach operator.
+            sa.write({'session_duration': '8h'})
+            config_synced = mc.sync_access_app.called
+            mc.sync_access_app.reset_mock()
+            # And an is_protected route toggle in 'error' state too.
+            r2 = self.Route.create({'security_access_id': sa.id,
+                                    'subdomain_prefix': 'err-extra',
+                                    'is_protected': False})
+            r2.write({'is_protected': True})
+            route_toggle_synced = mc.sync_access_app.called
+        self.assertTrue(config_synced,
+                        "access config edit in 'error' state must sync")
+        self.assertTrue(route_toggle_synced,
+                        "is_protected toggle in 'error' state must sync access")
+
+
+class TestProvisionPushesAccess(TransactionCase):
+    """F-MODEL-1: configure-then-provision must push Access at provision time.
+
+    A user can enable Access + add policies on a 'pending' SA (the BFF gates on
+    subscription state, not provisioning state). Those writes never reach the
+    operator (no live tunnel yet). action_provision / _do_resume must therefore
+    re-sync Access once the tunnel exists, else the SA lands active-but-inert:
+    access_enabled=True with no CF Access app, silently, until a field re-toggle.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.SA = self.env['woow_paas_platform.security_access']
+        self.Policy = self.env[
+            'woow_paas_platform.security_access_access_policy']
+        self.workspace = self.env['woow_paas_platform.workspace'].create(
+            {'name': 'PPA WS'})
+
+    def _mock(self):
+        m = MagicMock()
+        m.create_tunnel.return_value = {
+            'tunnel_id': 'tun-ppa', 'tunnel_token': 'tok',
+            'tunnel_name': 'paas-sa-x-y', 'dns_record_id': 'rec-1'}
+        m.sync_tunnel_routes.return_value = {'routes': []}
+        m.sync_access_app.return_value = {
+            'app_id': 'app-ppa', 'policy_ids': ['pol-ppa'], 'allowed_idps': []}
+        return m
+
+    def test_first_provision_pushes_preconfigured_access(self):
+        mc = self._mock()
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa = self.SA.create({'name': 'PPA GW',
+                                  'workspace_id': self.workspace.id})
+            # Configure Access while still pending (no tunnel) — must NOT sync.
+            sa.write({'access_enabled': True, 'login_google': True})
+            self.Policy.create({
+                'security_access_id': sa.id, 'name': 'corp', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+            self.assertFalse(mc.sync_access_app.called,
+                             "pending SA must not push Access prematurely")
+            # Now provision: tunnel comes up → Access must be pushed.
+            sa.action_provision()
+        self.assertEqual(sa.state, 'active')
+        self.assertTrue(mc.sync_access_app.called,
+                        "provision must push pre-configured Access")
+        payload = mc.sync_access_app.call_args.args[0]
+        self.assertTrue(payload['enabled'])
+        self.assertEqual(sa.access_app_id, 'app-ppa')
+
+    def test_provision_without_access_enabled_does_not_sync_access(self):
+        """Negative: access_enabled=False at provision → no Access push (the
+        gate must be access_enabled, not unconditional)."""
+        mc = self._mock()
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa = self.SA.create({'name': 'PPA GW2',
+                                  'workspace_id': self.workspace.id})
+            sa.action_provision()
+        self.assertEqual(sa.state, 'active')
+        self.assertFalse(mc.sync_access_app.called)
+
 
 class TestAccessLifecycle(TransactionCase):
     def setUp(self):
@@ -245,6 +373,11 @@ class TestAccessLifecycle(TransactionCase):
         payload = mc.sync_access_app.call_args.args[0]
         self.assertFalse(payload['enabled'])
         self.assertEqual(payload['existing_app_id'], 'app-al')
+        # _cleanup_cloudflare must also CLEAR the stored app id once the
+        # teardown succeeded — otherwise the DB keeps a stale CF app id that a
+        # later resync would PUT-update against a deleted app. The mock didn't
+        # raise, so access_app_id must be False now.
+        self.assertFalse(sa.access_app_id)
 
 
 class TestAccessPolicyAcl(TransactionCase):
@@ -326,7 +459,8 @@ class TestAccessPolicyAcl(TransactionCase):
 
     def test_owner_can_mutate_policy(self):
         """正向：owner（alice）可 create/write/unlink policy（不被 manage rule 誤擋）。
-        sa 為 pending 無 tunnel → 不觸發 operator sync。"""
+        sa 為 pending 無 tunnel → 不觸發 operator sync（由
+        test_pending_sa_policy_mutation_does_not_sync 直接 assert_not_called 鎖）。"""
         new_pol = self.env[
             'woow_paas_platform.security_access_access_policy'].with_user(
                 self.alice).create({
@@ -338,3 +472,29 @@ class TestAccessPolicyAcl(TransactionCase):
         self.assertEqual(new_pol.decision, 'deny')
         new_pol.with_user(self.alice).unlink()
         self.assertFalse(new_pol.exists())
+
+    def test_pending_sa_policy_mutation_does_not_sync(self):
+        """F-TEST-SKIPGUARD: the non-active/no-tunnel skip-sync guard
+        (security_access_access_policy.py create/write/unlink: access_enabled +
+        state=='active' + tunnel_id) must be directly asserted. self.sa is
+        pending with no tunnel even when access_enabled — a regression dropping
+        the liveness guard would call the operator. Patch the client and assert
+        sync_access_app was NEVER called across create/write/unlink."""
+        from unittest.mock import MagicMock, patch as _patch
+        mc = MagicMock()
+        # access_enabled=True so ONLY the state/tunnel legs of the guard hold
+        # the line; this isolates exactly the liveness guard under test.
+        self.sa.write({'access_enabled': True})
+        with _patch(MOCK_GET_CLIENT, return_value=mc):
+            pol = self.env[
+                'woow_paas_platform.security_access_access_policy'].create({
+                    'security_access_id': self.sa.id, 'name': 'pend-pol',
+                    'decision': 'allow', 'rule_type': 'email_domain',
+                    'rule_value': 'pend.com'})
+            pol.write({'decision': 'deny'})
+            pol.unlink()
+        mc.sync_access_app.assert_not_called()
+        # main-model access-config write on a pending SA must also skip sync.
+        with _patch(MOCK_GET_CLIENT, return_value=mc):
+            self.sa.write({'session_duration': '8h'})
+        mc.sync_access_app.assert_not_called()
