@@ -1,6 +1,6 @@
 # Design: Security Access 訂閱服務（Cloudflare Tunnel + Access Control + 自有網域 + Email Routing）
 
-> 狀態：P1 implemented（plan: docs/superpowers/plans/2026-06-06-security-access-p1-mainline.md）；P2 Access / P3 Domains / P4 Email 待開。
+> 狀態：P1 + P2(Access Control) implemented（plans: `docs/superpowers/plans/2026-06-06-security-access-p1-mainline.md` + `docs/superpowers/plans/2026-06-07-security-access-p2-access-control.md`）；P3 Domains / P4 Email 待開。
 > 來源：`docs/meeting/docs/2026-06-06 Security Access 開發需求文件.md`（27 份會議記錄彙整）
 > 研究依據：6-agent 平行探勘（Smart Home 後端 / Cloud Service 訂閱 / operator+cloudflare /
 > 前端 OWL / HA component 合約 / 訂閱基礎設施），結論已整合進本文。
