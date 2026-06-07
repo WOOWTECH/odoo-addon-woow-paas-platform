@@ -126,6 +126,17 @@
     &--error { color: #dc2626; }
   }
 
+  // Inline hint next to a Protected checkbox when Access is disabled: the
+  // route is marked protected but it has no Cloudflare effect until the
+  // Access master toggle is on.
+  &__protect_hint {
+    display: inline-block;
+    margin-left: 0.5rem;
+    color: #d97706;
+    font-size: 0.75rem;
+    font-style: italic;
+  }
+
   &__coming_soon {
     text-align: center;
     padding: 3rem 1rem;
