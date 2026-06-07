@@ -401,3 +401,73 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}',
             {'action': 'refresh_status'})
         self.assertTrue(res.get('success'), res.get('error'))
+
+
+@tagged('post_install', '-at_install')
+class TestSecurityAccessAccessEndpoints(HttpCase):
+    """Cross-user negatives for the P2 Access Control endpoints.
+
+    Mirrors the route/detail negatives: a non-member打 access-config /
+    access-policies must be rejected at the controller gate (workspace →
+    role → _check_operation_allowed), and no policy row may be created nor
+    any access field flipped as a side effect of the denied call.
+    """
+
+    def setUp(self):
+        super().setUp()
+        suffix = uuid.uuid4().hex[:6]
+        self.alice = _new_user(self.env, f'sa_ac_alice_{suffix}')
+        self.mallory = _new_user(self.env, f'sa_ac_mallory_{suffix}')
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo().create({
+            'name': f'SA AC WS {suffix}', 'owner_id': self.alice.id})
+        Access = self.env['woow_paas_platform.workspace_access'].sudo()
+        if not Access.search([('workspace_id', '=', self.workspace.id),
+                              ('user_id', '=', self.alice.id)]):
+            Access.create({'workspace_id': self.workspace.id,
+                           'user_id': self.alice.id, 'role': 'owner'})
+        self.sa = self.env['woow_paas_platform.security_access'].sudo().create({
+            'name': 'AC EP GW', 'workspace_id': self.workspace.id})
+        self.pol = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo().create({
+                'security_access_id': self.sa.id, 'name': 'p',
+                'decision': 'allow', 'rule_type': 'email_domain',
+                'rule_value': 'a.com'})
+
+    def _rpc(self, url, params=None):
+        r = self.url_open(url, data=json.dumps({'jsonrpc': '2.0',
+                          'method': 'call', 'params': params or {}}),
+                          headers={'Content-Type': 'application/json'})
+        return r.json().get('result') or {}
+
+    def test_non_member_policy_list_denied(self):
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'list'})
+        self.assertFalse(res.get('success'))
+
+    def test_non_member_policy_create_denied_and_none_made(self):
+        before = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'inject', 'decision': 'allow',
+             'rule_type': 'email_domain', 'rule_value': 'evil.com'})
+        self.assertFalse(res.get('success'))
+        after = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        self.assertEqual(after, before)
+
+    def test_non_member_access_config_denied(self):
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-config',
+            {'access_enabled': True})
+        self.assertFalse(res.get('success'))
+        self.assertFalse(self.sa.sudo().access_enabled)
