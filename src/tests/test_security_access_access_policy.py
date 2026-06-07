@@ -227,10 +227,17 @@ class TestAccessLifecycle(TransactionCase):
             sa = self.SA.create({'name': 'AL GW',
                                  'workspace_id': self.workspace.id})
             sa.write({'state': 'active', 'tunnel_id': 'tun-al',
-                      'access_enabled': True, 'access_app_id': 'app-al'})
+                      'access_enabled': True})
             self.Route.create({'security_access_id': sa.id,
                                'subdomain_prefix': sa.canonical_name,
                                'is_primary': True})
+            # Set access_app_id LAST: both the access_enabled write and the
+            # route create above fire _sync_access_to_operator, whose mock
+            # returns app_id=None and writes it back (= the real operator's
+            # teardown shape). Writing access_app_id alone does NOT re-trigger
+            # sync (not in the write() trigger keys), so it survives to
+            # _do_cleanup — mirroring an SA that already has a live CF app.
+            sa.write({'access_app_id': 'app-al'})
             mc.sync_access_app.reset_mock()
             sa._do_cleanup()
         # cleanup 應呼叫 access teardown（enabled=False payload）
