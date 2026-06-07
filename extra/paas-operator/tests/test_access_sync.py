@@ -212,3 +212,63 @@ class TestSyncAccessApp:
         assert len(deleted["policies"]) == 2
         assert result["app_id"] is None
         assert result["policy_ids"] == []
+
+
+from unittest.mock import patch as sync_patch
+from fastapi.testclient import TestClient
+from src.main import app
+
+
+@pytest.fixture
+def client():
+    with sync_patch("src.main.settings") as mock_settings:
+        mock_settings.api_key = "test-api-key"
+        mock_settings.namespace_prefix = "paas-ws-"
+        yield TestClient(app, headers={"X-API-Key": "test-api-key"})
+
+
+class TestAccessEndpoints:
+    @sync_patch("src.api.access.cloudflare_service")
+    def test_sync_access_happy_path(self, mock_cf, client):
+        mock_cf.api_token = "t"
+        mock_cf.account_id = "a"
+        mock_cf.sync_access_app = AsyncMock(return_value={
+            "app_id": "app-1", "policy_ids": ["pol-1"],
+            "allowed_idps": ["idp-g", "idp-otp"]})
+        resp = client.put("/api/access/sync", json={
+            "enabled": True, "canonical_name": "paas-sa-x-y", "app_name": "gw",
+            "primary_hostname": "paas-sa-x-y.woowtech.io",
+            "protected_hostnames": ["paas-sa-x-y.woowtech.io"],
+            "session_duration": "8h", "login_idp_types": ["google", "onetimepin"],
+            "policies": [{"name": "corp", "decision": "allow",
+                          "rule_type": "email_domain", "rule_value": "acme.com",
+                          "precedence": 1}],
+        })
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["app_id"] == "app-1"
+        assert data["policy_ids"] == ["pol-1"]
+        call = mock_cf.sync_access_app.call_args
+        assert call.kwargs["login_idp_types"] == ["google", "onetimepin"]
+
+    @sync_patch("src.api.access.cloudflare_service")
+    def test_sync_requires_credentials(self, mock_cf, client):
+        mock_cf.api_token = None
+        mock_cf.account_id = None
+        resp = client.put("/api/access/sync", json={
+            "enabled": True, "canonical_name": "x", "app_name": "x",
+            "primary_hostname": "x.woowtech.io", "protected_hostnames": [],
+            "session_duration": "8h", "login_idp_types": [], "policies": []})
+        assert resp.status_code == 400
+
+    @sync_patch("src.api.access.cloudflare_service")
+    def test_list_idps(self, mock_cf, client):
+        mock_cf.api_token = "t"
+        mock_cf.account_id = "a"
+        mock_cf.list_identity_providers = AsyncMock(return_value=[
+            {"id": "idp-g", "name": "Google", "type": "google"},
+            {"id": "idp-otp", "name": "OTP", "type": "onetimepin"}])
+        resp = client.get("/api/access/identity-providers")
+        assert resp.status_code == 200
+        types = [i["type"] for i in resp.json()["identity_providers"]]
+        assert "google" in types and "onetimepin" in types

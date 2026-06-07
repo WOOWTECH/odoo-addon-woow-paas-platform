@@ -522,6 +522,8 @@ class AccessSyncRequest(BaseModel):
                     "empty = all available",
     )
     policies: List[AccessPolicySpec] = Field(default_factory=list)
+    existing_app_id: Optional[str] = Field(None)
+    existing_policy_ids: Optional[List[str]] = Field(None)
 
 
 class AccessSyncResponse(BaseModel):
