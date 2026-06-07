@@ -2060,7 +2060,7 @@ git commit -m "feat: add access tab service methods and handlers"
                   <tr>
                     <td>
                       <t t-esc="pol.name"/>
-                      <span t-att-class="'o_woow_badge ' + (pol.decision === 'deny' ? 'o_woow_badge_error' : 'o_woow_badge_ok')">
+                      <span t-att-class="'o_woow_badge ' + (pol.decision === 'deny' ? 'o_woow_badge_gray' : 'o_woow_badge_green')">
                         <t t-esc="pol.decision === 'deny' ? 'Block' : 'Allow'"/>
                       </span>
                     </td>
