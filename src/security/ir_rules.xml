@@ -181,6 +181,42 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
+        <!-- SecurityAccessAccessPolicy (P2): walk parent SA's workspace
+             membership. Unlike the SecurityAccess/Route read/write split (those
+             models back a Provision button + editable route list on the
+             backend SA form, an un-gated ORM bypass for non-owner members),
+             access_policy has NO backend form/menu — the SA backend menu is
+             group_system-only (security_access_views.xml) and the only mutation
+             entry point is the /woow BFF, which gates every write behind
+             role=owner/admin + the subscription _check_operation_allowed guard
+             (controllers/security_access.py, Task 10). So a single
+             workspace-member full-CRUD rule is sufficient here: the second
+             enforcement layer lives in the controller, in lock-step with this
+             rule (two-layer-acl-lockstep). The admin_full bypass mirrors the
+             route sub-model so a group_system admin outside the workspace is
+             not locked out by the member-scoped domain. -->
+        <record id="security_access_access_policy_rule_workspace_member" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicy: workspace member access only</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="security_access_access_policy_rule_admin_full" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicy: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
         <!-- Task: workspace member (bound project) or project member (unbound) — full CRUD.
              Odoo's `task_visibility_rule_project_user` only applies to users with
              project.group_project_user; this rule grants the same surface to plain
