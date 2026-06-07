@@ -181,24 +181,50 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
-        <!-- SecurityAccessAccessPolicy (P2): walk parent SA's workspace
-             membership. Unlike the SecurityAccess/Route read/write split (those
-             models back a Provision button + editable route list on the
-             backend SA form, an un-gated ORM bypass for non-owner members),
-             access_policy has NO backend form/menu — the SA backend menu is
-             group_system-only (security_access_views.xml) and the only mutation
-             entry point is the /woow BFF, which gates every write behind
-             role=owner/admin + the subscription _check_operation_allowed guard
-             (controllers/security_access.py, Task 10). So a single
-             workspace-member full-CRUD rule is sufficient here: the second
-             enforcement layer lives in the controller, in lock-step with this
-             rule (two-layer-acl-lockstep). The admin_full bypass mirrors the
-             route sub-model so a group_system admin outside the workspace is
-             not locked out by the member-scoped domain. -->
+        <!-- SecurityAccessAccessPolicy (P2): SAME read/write split as the
+             SecurityAccess/Route sub-models, walking the parent SA's
+             workspace.access_ids. Access policies ARE the Cloudflare Access
+             allow/deny authentication gate — a MORE sensitive resource than
+             routes — so the ir.rule layer must itself encode the owner/admin
+             role restriction, not lean solely on the BFF.
+
+             Earlier design used a single member full-CRUD rule, justified by
+             "the only mutation path is the /woow BFF (Task 10), which gates
+             every write behind role=owner/admin + _check_operation_allowed".
+             But that BFF is NOT present in this slice (no access-policy
+             @route, no role guard in the policy model write()), so a single
+             full-CRUD rule let a plain role='user' workspace member directly
+             ORM-create/edit/delete access policies — e.g. add an 'allow
+             email_domain' rule to open a protected hostname, or delete a
+             'deny' rule — skipping BOTH the owner/admin role gate AND the
+             subscription _check_operation_allowed check. two-layer-acl-lockstep
+             means the rule must encode the role restriction too. Split into:
+               - read rule: ALL workspace members (any role) — needed so a
+                 plain 'user' member can still list/get via the BFF.
+               - write/create/unlink rule: owner/admin members only, via the
+                 'any' operator binding user_id+role to the SAME access row
+                 (cross-tuple satisfaction otherwise lets a 'user' pass by
+                 matching role on the owner's row).
+               - admin bypass: group_system full CRUD (backend ops) so a
+                 group_system admin outside the workspace is not locked out by
+                 the member-scoped domain.
+             See docs/decisions/patterns/two-layer-acl-lockstep.md +
+             paas-workspace-member-acl-tightening.md. -->
         <record id="security_access_access_policy_rule_workspace_member" model="ir.rule">
-            <field name="name">SecurityAccessAccessPolicy: workspace member access only</field>
+            <field name="name">SecurityAccessAccessPolicy: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
             <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="security_access_access_policy_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicy: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>

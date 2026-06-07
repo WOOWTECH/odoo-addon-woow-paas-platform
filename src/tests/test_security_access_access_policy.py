@@ -219,3 +219,58 @@ class TestAccessPolicyAcl(TransactionCase):
         v = self.env['woow_paas_platform.security_access_access_policy'
                      ].with_user(self.mallory).search([('id', '=', self.pol.id)])
         self.assertEqual(len(v), 0)
+
+    def _add_user_member(self):
+        """role='user' 一般 member（非 owner/admin），測 read/write 拆分。"""
+        carol = self.env['res.users'].create({
+            'name': 'AP Carol', 'login': 'ap_acl_carol',
+            'email': 'ap_acl_carol@test.example',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])]})
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.ws.id, 'user_id': carol.id, 'role': 'user'})
+        return carol
+
+    def test_user_role_member_can_read_but_not_write_policy(self):
+        """ir.rule read/write 拆分（與 SA/Route 對齊）：role='user' member
+        可讀 policy，但 ORM write 必須被 ir.rule 擋——access policy 是 CF Access
+        allow/deny 認證閘，比 route 更敏感，不可讓一般 member 直接改 decision。"""
+        from odoo.exceptions import AccessError
+        carol = self._add_user_member()
+        # read OK（member read rule 對所有 member 開放）
+        visible = self.env[
+            'woow_paas_platform.security_access_access_policy'].with_user(
+                carol).search([('id', '=', self.pol.id)])
+        self.assertEqual(len(visible), 1)
+        # write DENY（manage rule 只給 owner/admin）—— 例如把 deny 改 allow
+        with self.assertRaises(AccessError):
+            self.pol.with_user(carol).write({'decision': 'deny'})
+
+    def test_user_role_member_cannot_create_or_unlink_policy(self):
+        """role='user' member 不得 ORM-create 新 allow policy（開放受保護
+        hostname）或 unlink 既有 deny policy，繞過 owner/admin role gate。"""
+        from odoo.exceptions import AccessError
+        carol = self._add_user_member()
+        with self.assertRaises(AccessError):
+            self.env[
+                'woow_paas_platform.security_access_access_policy'].with_user(
+                    carol).create({
+                        'security_access_id': self.sa.id, 'name': 'evil',
+                        'decision': 'allow', 'rule_type': 'email_domain',
+                        'rule_value': 'attacker.com'})
+        with self.assertRaises(AccessError):
+            self.pol.with_user(carol).unlink()
+
+    def test_owner_can_mutate_policy(self):
+        """正向：owner（alice）可 create/write/unlink policy（不被 manage rule 誤擋）。
+        sa 為 pending 無 tunnel → 不觸發 operator sync。"""
+        new_pol = self.env[
+            'woow_paas_platform.security_access_access_policy'].with_user(
+                self.alice).create({
+                    'security_access_id': self.sa.id, 'name': 'owner-pol',
+                    'decision': 'allow', 'rule_type': 'email_domain',
+                    'rule_value': 'owner.com'})
+        self.assertTrue(new_pol.exists())
+        new_pol.with_user(self.alice).write({'decision': 'deny'})
+        self.assertEqual(new_pol.decision, 'deny')
+        new_pol.with_user(self.alice).unlink()
+        self.assertFalse(new_pol.exists())
