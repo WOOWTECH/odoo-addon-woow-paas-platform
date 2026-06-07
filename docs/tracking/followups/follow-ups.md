@@ -3,7 +3,7 @@
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
 **State as of 2026-06-07**：
-- **Security Access P1 主線 + stg 一起發佈 + 真 Cloudflare E2E（2026-06-07，PR #159 merged → develop）**：訂閱/Tunnel/多 route 宣告式同步/503 凍結/後台/前端 6-tab/HA API 平行串接。6-phase ultracode workflow（73 commits、Odoo 1055 tests 0 failed、operator unit 154 + integration 7）+ 5-lens × 4 輪 loop-until-dry 對抗式審查（52 confirmed：1 critical provision 冪等孤兒 tunnel / 15 major / 36 minor 全修）。知識持久化 5 篇（3 pattern + 2 pitfall：`[[unittest-mock-dual-namespace-patch]]` / `[[su-env-exempt-guard-false-green]]` / `[[two-stage-remote-provision-idempotency]]` / `[[seed-noupdate-sticky-template-links]]` / `[[owl-template-crash-class-syntax]]`）。**stg 發佈鏈（4-agent canvas 協作：paas-platform / paas-app-bundle-cd / woow-paas-charts / deploy-stg）**：operator image `20260606.2308`（含 #159 SA + #158 TTL stopgap，image-only Fleet bump，chart 0.1.13 不動，PR paas-app-bundle-cd#9）→ addon deploy-stg（develop `c45ffdb`）→ dev-sandbox-stg → **真 Cloudflare E2E 5/6 PASS**（provision 真 tunnel + primary route DNS `paas-sa-…woowtech.io` dig 解析 CF edge ✓ / `PUT /routes` 宣告式同步 + DNS reconcile ✓ / availability 雙層 ✓ / 刪除 unlink 連動清 CF tunnel+DNS ✓；503 凍結依交辦 SKIP），advisory 2（token DNS scope）閉環、清理乾淨。**F-SA-1 + F-SA-2 新增**（見 §F-SA；皆 stg 環境 / 平台命名慣例層，超出 SA P1 範圍，已開 gitea issue + priority:high）。
+- **Security Access P1 主線 + stg 一起發佈 + 真 Cloudflare E2E（2026-06-07，PR #159 merged → develop）**：訂閱/Tunnel/多 route 宣告式同步/503 凍結/後台/前端 6-tab/HA API 平行串接。6-phase ultracode workflow（73 commits、Odoo 1055 tests 0 failed、operator unit 154 + integration 7）+ 5-lens × 4 輪 loop-until-dry 對抗式審查（52 confirmed：1 critical provision 冪等孤兒 tunnel / 15 major / 36 minor 全修）。知識持久化 5 篇（3 pattern + 2 pitfall：`[[unittest-mock-dual-namespace-patch]]` / `[[su-env-exempt-guard-false-green]]` / `[[two-stage-remote-provision-idempotency]]` / `[[seed-noupdate-sticky-template-links]]` / `[[owl-template-crash-class-syntax]]`）。**stg 發佈鏈（4-agent canvas 協作：paas-platform / paas-app-bundle-cd / woow-paas-charts / deploy-stg）**：operator image `20260606.2308`（含 #159 SA + #158 TTL stopgap，image-only Fleet bump，chart 0.1.13 不動，PR paas-app-bundle-cd#9）→ addon deploy-stg（develop `c45ffdb`）→ dev-sandbox-stg → **真 Cloudflare E2E 5/6 PASS**（provision 真 tunnel + primary route DNS `paas-sa-…woowtech.io` dig 解析 CF edge ✓ / `PUT /routes` 宣告式同步 + DNS reconcile ✓ / availability 雙層 ✓ / 刪除 unlink 連動清 CF tunnel+DNS ✓；503 凍結依交辦 SKIP），advisory 2（token DNS scope）閉環、清理乾淨。**F-SA-1 + F-SA-2 新增**（見 §F-SA；皆 stg 環境 / 平台命名慣例層，超出 SA P1 範圍，gitea #162/#163，priority:high）。
 - **Portal task agent chat（share read-mode 擴充，2026-06-05）**：原生 portal task/project 頁加 agent chat + status（spec / plan：`2026-06-05-portal-task-agent-chat-*`）。workflow 執行 T1-T7 TDD + 兩輪對抗式審查：ACL round 抓 **1 critical + 2 high**（portal leg 誤成 5 個 sudo-browse mutation endpoint 的唯一閘 → read-mode portal user 可封存/改名 project、注入 task；修 `_portal_write_denied()` fail-closed guard `2cece77`，含攻擊重現測試）；final round 再抓 `_create_project` 漏網 + chat/upload 零測試覆蓋（`47a1773`）；polish round 收 lockstep 精確化（collaborator leg 原生是 exact partner、非 child_of 家族）+ `project_stages` portal guard + 測試假綠強化（`63eec6b`）+ 前端 label 共用 / safeHtml 縱深 / ai_stream try-catch 等價（`7c307be`）。E2E（headed）抓到 `html_sanitize` 漏進 frontend bundle（`7edd749`）並重演本機版 enablement gap chain（[[floor-env-relative-path-empty-ext-addons]] + gap-chain pitfall 本機變體節；**F-GC-2 實證再現**）。全模組 902 tests 全綠。**F-PORTAL-1~3 新增**（見 §Portal task agent chat follow-ups）。
 - Cycle 1（cloud-service ↔ project decouple, 2026-05-17）：F1-F11，B1 已 RESOLVED、PR APPROVED WITH CAVEATS
 - Cycle 2（mcp cloud_service_id → project_id decouple, 2026-05-18）：F12-F20 新增，PR APPROVED WITH CAVEATS round 2，4 BLOCKER/MAJOR 全 close
@@ -1567,7 +1567,7 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 > `*.stg.woowtech.io`（sub-subdomain）沒有有效憑證**——stg 服務只能落在 `*.woowtech.io`，
 > stg/prod 隔離靠「名稱前綴」而非 subdomain 層級。
 
-- **F-SA-1**（OPEN，**priority:high**，scope=stg 環境 config / **跨服務**，gitea issue 見下）：
+- **F-SA-1**（OPEN，**priority:high**，scope=stg 環境 config / **跨服務**，gitea **#162**）：
   **stg Odoo `paas_domain` 應從 `stg.woowtech.io` 改為 `woowtech.io`**。根因：`*.stg.woowtech.io`
   無 Cloudflare wildcard SSL，stg 把 service hostname 放在 `.stg.woowtech.io` 那層本就拿不到
   有效憑證。SA provision 把它暴露出來——`create_tunnel` 收 Odoo 全名建了
@@ -1580,7 +1580,7 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   → `woowtech.io`（dev-sandbox-stg 的 sandbox/Helm values 或 Settings）。owner=deploy-stg /
   stg 環境維運。prod 不動。
 
-- **F-SA-2**（OPEN，**priority:high**，scope=平台跨服務命名慣例 + SA code 硬化，gitea issue 見下）：
+- **F-SA-2**（OPEN，**priority:high**，scope=平台跨服務命名慣例 + SA code 硬化，gitea **#163**）：
   **(a) 環境前綴命名慣例**：stg/prod 共用 `woowtech.io` zone（SSL 約束所致），需靠
   hostname **名稱前綴**區分環境，方向 `paas-stg-sa-{hash}` / `paas-stg-sm-…`（operator
   namespace 已是 `paas-ws-stg-`，但 Cloudflare hostname 這端尚未統一加 stg）。屬
