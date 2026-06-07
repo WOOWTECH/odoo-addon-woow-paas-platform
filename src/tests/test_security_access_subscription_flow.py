@@ -550,3 +550,112 @@ class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
                 workspace_id=self.workspace.id, sa_id=self.sa.id,
                 action='delete', route_id=999999)
         self.assertFalse(res['success'])
+
+
+class TestSecurityAccessAccessControl(TransactionCase):
+    """access-config / policy CRUD controller helpers."""
+
+    def setUp(self):
+        super().setUp()
+        self.controller = SecurityAccessController()
+        self.SA = self.env['woow_paas_platform.security_access']
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'AC Ctrl WS', 'owner_id': self.env.user.id})
+        Access = self.env['woow_paas_platform.workspace_access']
+        if not Access.search([('workspace_id', '=', self.workspace.id),
+                              ('user_id', '=', self.env.user.id)]):
+            Access.create({'workspace_id': self.workspace.id,
+                           'user_id': self.env.user.id, 'role': 'owner'})
+
+    def _active_sa(self, mc):
+        with patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            sa = self.SA.create({'name': 'AC GW',
+                                 'workspace_id': self.workspace.id})
+            sa.write({'state': 'active', 'tunnel_id': 'tun-ac'})
+            self.env['woow_paas_platform.security_access_route'].create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': sa.canonical_name, 'is_primary': True})
+        return sa
+
+    def _mock(self):
+        mc = MagicMock()
+        mc.sync_tunnel_routes.return_value = {'routes': []}
+        mc.sync_access_app.return_value = {'app_id': 'app-1',
+                                           'policy_ids': ['pol-1'],
+                                           'allowed_idps': ['idp-g']}
+        return mc
+
+    def test_update_access_config(self):
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._update_access_config(sa, {
+                'access_enabled': True, 'login_google': True,
+                'login_email_otp': True, 'session_duration': '8h'})
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertTrue(sa.access_enabled)
+        self.assertEqual(sa.session_duration, '8h')
+
+    def test_create_policy(self):
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            sa.write({'access_enabled': True})
+            res = self.controller._create_policy(sa, {
+                'name': 'corp', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(len(sa.access_policy_ids), 1)
+
+    def test_create_policy_invalid_rule_rejected(self):
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._create_policy(sa, {
+                'name': 'bad', 'decision': 'allow',
+                'rule_type': 'ip_range', 'rule_value': 'nope'})
+        self.assertFalse(res['success'])
+
+    def test_update_policy_whitelist_only(self):
+        """_update_policy must not let client-controlled keys (cf_policy_id /
+        security_access_id) reach write(); only the field whitelist applies."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            pol = self.env[
+                'woow_paas_platform.security_access_access_policy'].create({
+                    'security_access_id': sa.id, 'name': 'corp',
+                    'decision': 'allow', 'rule_type': 'email_domain',
+                    'rule_value': 'acme.com'})
+            res = self.controller._update_policy(sa, pol.id, {
+                'name': 'renamed', 'cf_policy_id': 'attacker-set',
+                'security_access_id': 999999})
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(pol.name, 'renamed')
+        # client-supplied non-whitelisted keys were ignored
+        self.assertNotEqual(pol.cf_policy_id, 'attacker-set')
+        self.assertEqual(pol.security_access_id.id, sa.id)
+
+    def test_delete_policy(self):
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            pol = self.env[
+                'woow_paas_platform.security_access_access_policy'].create({
+                    'security_access_id': sa.id, 'name': 'corp',
+                    'decision': 'allow', 'rule_type': 'email_domain',
+                    'rule_value': 'acme.com'})
+            res = self.controller._delete_policy(sa, pol.id)
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(len(sa.access_policy_ids), 0)
