@@ -213,6 +213,248 @@ class TestSyncAccessApp:
         assert result["app_id"] is None
         assert result["policy_ids"] == []
 
+    @pytest.mark.asyncio
+    async def test_enabled_but_no_protected_hostnames_tears_down(self, cf_service):
+        """enabled=True but zero protected hostnames is a reachable state (Access
+        toggled on, no is_protected route). It must hit the SAME teardown branch
+        as enabled=False — never fall through to app creation with an empty
+        destinations list (CF would reject, or worse build an app protecting
+        nothing). Locks the second teardown trigger (`not protected_hostnames`)."""
+        deleted = {"app": [], "policies": []}
+        created = {"app": False, "policies": []}
+
+        async def fake_delete(url, headers=None, timeout=None):
+            if "/apps/" in url:
+                deleted["app"].append(url)
+            elif "/policies/" in url:
+                deleted["policies"].append(url)
+            class R:
+                status_code = 200
+                @staticmethod
+                def json():
+                    return {"success": True, "result": {"id": "x"}}
+            return R()
+
+        async def fake_post(url, headers=None, json=None, timeout=None):
+            if "/policies" in url:
+                created["policies"].append(json)
+            else:
+                created["app"] = True
+            class R:
+                status_code = 201
+                @staticmethod
+                def json():
+                    return {"success": True, "result": {"id": "should-not"}}
+            return R()
+
+        with patch("httpx.AsyncClient.delete",
+                   new=AsyncMock(side_effect=fake_delete)), \
+             patch("httpx.AsyncClient.post",
+                   new=AsyncMock(side_effect=fake_post)):
+            result = await cf_service.sync_access_app(
+                canonical_name="paas-sa-x-y", app_name="my-gw",
+                primary_hostname="paas-sa-x-y.woowtech.io",
+                protected_hostnames=[], session_duration="8h",
+                login_idp_types=["google"],
+                policies=[{"name": "corp", "decision": "allow",
+                           "rule_type": "email_domain", "rule_value": "acme.com",
+                           "precedence": 1}],
+                enabled=True,
+                existing_app_id="app-old", existing_policy_ids=["pol-a"])
+        # Teardown branch taken, NOT app creation.
+        assert result["app_id"] is None
+        assert result["policy_ids"] == []
+        assert created["app"] is False
+        assert created["policies"] == []
+        assert len(deleted["app"]) == 1
+        assert len(deleted["policies"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_app_update_failure_reclaims_new_policies(self, cf_service):
+        """If the app PUT/POST fails AFTER reusable policies were created, those
+        just-created policies must be best-effort deleted before re-raising —
+        otherwise the caller's DB rollback loses all reference to them and they
+        become permanent Cloudflare orphans (no future re-sync ever reclaims
+        them). Locks the two-stage compensating-cleanup guard."""
+        created_pids = []
+        deleted_pids = []
+
+        async def fake_get(url, headers=None, timeout=None, params=None):
+            class R:
+                status_code = 200
+                @staticmethod
+                def json():
+                    if "identity_providers" in url:
+                        return {"success": True, "result": [
+                            {"id": "idp-g", "name": "G", "type": "google"}]}
+                    return {"success": True, "result": []}
+            return R()
+
+        async def fake_post(url, headers=None, json=None, timeout=None):
+            if "/policies" in url:
+                pid = f"pol-new-{len(created_pids)}"
+                created_pids.append(pid)
+                class RP:
+                    status_code = 201
+                    @staticmethod
+                    def json():
+                        return {"success": True, "result": {"id": pid}}
+                return RP()
+            # App POST (create-new path) fails with 500.
+            class RA:
+                status_code = 500
+                text = "cf boom"
+                @staticmethod
+                def json():
+                    return {"success": False}
+            return RA()
+
+        async def fake_delete(url, headers=None, timeout=None):
+            if "/policies/" in url:
+                deleted_pids.append(url.rsplit("/", 1)[-1])
+            class R:
+                status_code = 200
+                @staticmethod
+                def json():
+                    return {"success": True, "result": {"id": "x"}}
+            return R()
+
+        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=fake_get)), \
+             patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=fake_post)), \
+             patch("httpx.AsyncClient.delete",
+                   new=AsyncMock(side_effect=fake_delete)):
+            with pytest.raises(CloudflareException):
+                await cf_service.sync_access_app(
+                    canonical_name="paas-sa-x-y", app_name="my-gw",
+                    primary_hostname="paas-sa-x-y.woowtech.io",
+                    protected_hostnames=["paas-sa-x-y.woowtech.io"],
+                    session_duration="8h", login_idp_types=["google"],
+                    policies=[{"name": "corp", "decision": "allow",
+                               "rule_type": "email_domain",
+                               "rule_value": "acme.com", "precedence": 1}],
+                    enabled=True,
+                    existing_app_id=None, existing_policy_ids=[])
+        # The policy created in this batch was reclaimed (no orphan).
+        assert created_pids, "expected a reusable policy to have been created"
+        assert set(deleted_pids) == set(created_pids)
+
+
+class TestBuildAccessRule:
+    """_build_access_rule maps (rule_type, value) → the CF include shape that
+    actually decides who passes Access auth. A wrong key would silently
+    allow/deny the wrong principals, so every branch is pinned here."""
+
+    def test_email_domain(self):
+        assert CloudflareService._build_access_rule(
+            "email_domain", "@acme.com ") == [
+            {"email_domain": {"domain": "acme.com"}}]
+
+    def test_email_list_splits_and_strips(self):
+        assert CloudflareService._build_access_rule(
+            "email_list", " a@x.com , b@y.com ,") == [
+            {"email": {"email": "a@x.com"}},
+            {"email": {"email": "b@y.com"}}]
+
+    def test_ip_range(self):
+        assert CloudflareService._build_access_rule(
+            "ip_range", " 203.0.113.0/24 ") == [
+            {"ip": {"ip": "203.0.113.0/24"}}]
+
+    def test_unknown_rule_type_raises(self):
+        with pytest.raises(CloudflareException):
+            CloudflareService._build_access_rule("nope", "whatever")
+
+
+class TestResolveIdpIds:
+    """_resolve_idp_ids security-relevant branch: a requested login method with
+    no matching account IdP is silently dropped → if that empties the set the
+    app falls back to ALL IdPs (auth surface widened). The caller must learn of
+    it, so the unresolved types are returned, not just logged."""
+
+    @pytest.fixture
+    def cf_service(self):
+        svc = CloudflareService()
+        svc.api_token = "test-token"
+        svc.account_id = "test-account"
+        svc.zone_id = "test-zone"
+        svc.domain = "woowtech.io"
+        svc.enabled = True
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_missing_type_reported_not_silently_dropped(self, cf_service):
+        # Account only has Google; user requested google + onetimepin.
+        async def fake_list():
+            return [{"id": "idp-g", "name": "Google", "type": "google"}]
+
+        with patch.object(cf_service, "list_identity_providers",
+                          new=AsyncMock(side_effect=fake_list)):
+            resolved, unresolved = await cf_service._resolve_idp_ids(
+                ["google", "onetimepin"])
+        assert resolved == ["idp-g"]
+        assert unresolved == ["onetimepin"]
+
+    @pytest.mark.asyncio
+    async def test_all_requested_missing_widens_to_all_and_reports(
+            self, cf_service):
+        # User requested ONLY Google but account has no Google IdP →
+        # resolved=[] (= app shows all IdPs). This is the fail-open widening
+        # the reviewer flagged: it must surface in unresolved.
+        async def fake_list():
+            return [{"id": "idp-otp", "name": "OTP", "type": "onetimepin"}]
+
+        with patch.object(cf_service, "list_identity_providers",
+                          new=AsyncMock(side_effect=fake_list)):
+            resolved, unresolved = await cf_service._resolve_idp_ids(["google"])
+        assert resolved == []
+        assert unresolved == ["google"]
+
+    @pytest.mark.asyncio
+    async def test_empty_request_is_not_unresolved(self, cf_service):
+        resolved, unresolved = await cf_service._resolve_idp_ids([])
+        assert resolved == []
+        assert unresolved == []
+
+    @pytest.mark.asyncio
+    async def test_sync_propagates_unresolved_to_result(self, cf_service):
+        """End-to-end: sync_access_app surfaces unresolved_idp_types in its
+        return so Odoo can persist/warn on the silent login widening."""
+        async def fake_get(url, headers=None, timeout=None, params=None):
+            class R:
+                status_code = 200
+                @staticmethod
+                def json():
+                    if "identity_providers" in url:
+                        return {"success": True, "result": [
+                            {"id": "idp-g", "name": "G", "type": "google"}]}
+                    return {"success": True, "result": []}
+            return R()
+
+        async def fake_post(url, headers=None, json=None, timeout=None):
+            class R:
+                status_code = 201
+                @staticmethod
+                def json():
+                    if "/policies" in url:
+                        return {"success": True, "result": {"id": "pol-x"}}
+                    return {"success": True, "result": {"id": "app-x"}}
+            return R()
+
+        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=fake_get)), \
+             patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=fake_post)):
+            result = await cf_service.sync_access_app(
+                canonical_name="paas-sa-x-y", app_name="gw",
+                primary_hostname="paas-sa-x-y.woowtech.io",
+                protected_hostnames=["paas-sa-x-y.woowtech.io"],
+                session_duration="8h",
+                login_idp_types=["google", "onetimepin"],
+                policies=[{"name": "corp", "decision": "allow",
+                           "rule_type": "email_domain", "rule_value": "acme.com",
+                           "precedence": 1}],
+                enabled=True, existing_app_id=None, existing_policy_ids=[])
+        assert result["allowed_idps"] == ["idp-g"]
+        assert result["unresolved_idp_types"] == ["onetimepin"]
+
 
 from unittest.mock import patch as sync_patch
 from fastapi.testclient import TestClient
@@ -250,6 +492,31 @@ class TestAccessEndpoints:
         assert data["policy_ids"] == ["pol-1"]
         call = mock_cf.sync_access_app.call_args
         assert call.kwargs["login_idp_types"] == ["google", "onetimepin"]
+
+    @sync_patch("src.api.access.cloudflare_service")
+    def test_sync_forwards_existing_ids(self, mock_cf, client):
+        """The endpoint reads existing_app_id / existing_policy_ids off the
+        request and forwards them to the service. They decide PUT-update vs
+        POST-create and which stale policies get deleted — a getattr typo that
+        dropped them to None would force every sync into create-new + orphan the
+        old policies. Lock the route-level passthrough end-to-end."""
+        mock_cf.api_token = "t"
+        mock_cf.account_id = "a"
+        mock_cf.sync_access_app = AsyncMock(return_value={
+            "app_id": "app-existing", "policy_ids": ["pol-z"],
+            "allowed_idps": [], "unresolved_idp_types": []})
+        resp = client.put("/api/access/sync", json={
+            "enabled": True, "canonical_name": "paas-sa-x-y", "app_name": "gw",
+            "primary_hostname": "paas-sa-x-y.woowtech.io",
+            "protected_hostnames": ["paas-sa-x-y.woowtech.io"],
+            "session_duration": "8h", "login_idp_types": [],
+            "policies": [],
+            "existing_app_id": "app-existing",
+            "existing_policy_ids": ["pol-old-1", "pol-old-2"]})
+        assert resp.status_code == 200, resp.text
+        call = mock_cf.sync_access_app.call_args
+        assert call.kwargs["existing_app_id"] == "app-existing"
+        assert call.kwargs["existing_policy_ids"] == ["pol-old-1", "pol-old-2"]
 
     @sync_patch("src.api.access.cloudflare_service")
     def test_sync_requires_credentials(self, mock_cf, client):
