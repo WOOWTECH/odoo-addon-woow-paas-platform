@@ -437,7 +437,27 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
         r = self.url_open(url, data=json.dumps({'jsonrpc': '2.0',
                           'method': 'call', 'params': params or {}}),
                           headers={'Content-Type': 'application/json'})
-        return r.json().get('result') or {}
+        body = r.json()
+        # Stash the raw body so _assert_structured_denial can tell a
+        # structured {success: False} rejection apart from an endpoint
+        # crash (JSON-RPC error → body has 'error', no 'result'). Without
+        # this the negatives below would false-green if a future refactor
+        # made access-config / access-policies raise (e.g. a dropped
+        # .sudo() → AccessError) before the gate returns its envelope:
+        # {}.get('success') is None and assertFalse(None) still passes.
+        # Mirrors P1's _rpc / _assert_structured_denial守則.
+        self._last_body = body
+        return body.get('result') or {}
+
+    def _assert_structured_denial(self, res):
+        """Negative-path rejection must be a structured {success:False,error}
+        envelope, NOT a JSON-RPC error (endpoint crash)."""
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed (JSON-RPC error) instead of "
+                         "returning a structured denial: %s"
+                         % self._last_body.get('error'))
+        self.assertFalse(res.get('success'))
+        self.assertIn('error', res)
 
     def test_non_member_policy_list_denied(self):
         self.authenticate(self.mallory.login, self.mallory.login)
@@ -445,7 +465,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'list'})
-        self.assertFalse(res.get('success'))
+        self._assert_structured_denial(res)
 
     def test_non_member_policy_create_denied_and_none_made(self):
         before = self.env[
@@ -457,7 +477,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'create', 'name': 'inject', 'decision': 'allow',
              'rule_type': 'email_domain', 'rule_value': 'evil.com'})
-        self.assertFalse(res.get('success'))
+        self._assert_structured_denial(res)
         after = self.env[
             'woow_paas_platform.security_access_access_policy'].sudo(
             ).search_count([('security_access_id', '=', self.sa.id)])
@@ -469,5 +489,5 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/access-config',
             {'access_enabled': True})
-        self.assertFalse(res.get('success'))
+        self._assert_structured_denial(res)
         self.assertFalse(self.sa.sudo().access_enabled)
