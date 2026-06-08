@@ -608,14 +608,24 @@ class TestSecurityAccessAccessControl(TransactionCase):
         smuggle {'access_app_id': 'attacker-app'} and repoint the SA at an
         arbitrary CF Access app — the next idempotent resync would PUT-update
         someone else's app. Send forged server-owned keys (access_app_id /
-        state / tunnel_id) alongside a whitelisted one and assert only the
-        whitelisted field took effect while the forged keys were dropped.
+        state / tunnel_id / access_unresolved_idp_types) alongside a whitelisted
+        one and assert only the whitelisted field took effect while the forged
+        keys were dropped.
         Access-config analogue of test_create/update_policy_whitelist_only."""
         mc = self._mock()
         sa = self._active_sa(mc)
+        # Seed the fail-open warning signal so we can prove a forged blank does
+        # NOT clear it. access_unresolved_idp_types is server-owned (set only by
+        # _sync_access_to_operator from the operator's reply) and has NO model
+        # write() immutable guard — the controller whitelist is its sole defense.
+        # If an owner could smuggle {'access_unresolved_idp_types': ''} they
+        # could erase the "login restriction silently widened to all IdPs"
+        # warning, masking a fail-open auth-widening from anyone watching the UI.
+        sa.access_unresolved_idp_types = 'google'
         orig_app_id = sa.access_app_id
         orig_state = sa.state
         orig_tunnel = sa.tunnel_id
+        orig_unresolved = sa.access_unresolved_idp_types
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
@@ -623,7 +633,8 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 'session_duration': '8h',
                 'access_app_id': 'attacker-app',
                 'state': 'deleting',
-                'tunnel_id': 'attacker-tunnel'})
+                'tunnel_id': 'attacker-tunnel',
+                'access_unresolved_idp_types': ''})
         self.assertTrue(res['success'], res.get('error'))
         # whitelisted field took effect
         self.assertEqual(sa.session_duration, '8h')
@@ -632,6 +643,9 @@ class TestSecurityAccessAccessControl(TransactionCase):
         self.assertEqual(sa.access_app_id, orig_app_id)
         self.assertEqual(sa.state, orig_state)
         self.assertEqual(sa.tunnel_id, orig_tunnel)
+        # the forged blank did NOT clear the fail-open widening warning
+        self.assertEqual(sa.access_unresolved_idp_types, orig_unresolved)
+        self.assertEqual(sa.access_unresolved_idp_types, 'google')
 
     def test_create_policy(self):
         mc = self._mock()
