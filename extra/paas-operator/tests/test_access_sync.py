@@ -711,6 +711,45 @@ class TestAccessEndpoints:
         assert resp.status_code == 400
 
     @sync_patch("src.api.access.cloudflare_service")
+    def test_sync_access_cloudflare_exception_passes_status(self, mock_cf,
+                                                            client):
+        """CloudflareException→HTTPException translation: the endpoint maps
+        e.status_code through (HTTPException(status_code=e.status_code or 500)).
+        This is the operator's error contract the Odoo client relies on to
+        translate operator failures into PaaSOperatorError; the service-level
+        reclaim paths are tested, but this route-layer exception→HTTP boundary
+        was uncovered. A regression that swallowed the status or 500'd
+        everything would break the client's status-aware handling. Assert a
+        502 from the service surfaces as a 502 at the route."""
+        mock_cf.api_token = "t"
+        mock_cf.account_id = "a"
+        mock_cf.sync_access_app = AsyncMock(
+            side_effect=CloudflareException("cf bad gateway", status_code=502))
+        resp = client.put("/api/access/sync", json={
+            "enabled": True, "canonical_name": "paas-sa-x-y", "app_name": "gw",
+            "primary_hostname": "paas-sa-x-y.woowtech.io",
+            "protected_hostnames": ["paas-sa-x-y.woowtech.io"],
+            "session_duration": "8h", "login_idp_types": [], "policies": []})
+        assert resp.status_code == 502, resp.text
+
+    @sync_patch("src.api.access.cloudflare_service")
+    def test_sync_access_cloudflare_exception_defaults_to_500(self, mock_cf,
+                                                              client):
+        """status_code=None fallback branch: a CloudflareException with no
+        status (e.status_code is None) must fall back to 500, not crash. Locks
+        the `or status.HTTP_500_INTERNAL_SERVER_ERROR` half of the mapping."""
+        mock_cf.api_token = "t"
+        mock_cf.account_id = "a"
+        mock_cf.sync_access_app = AsyncMock(
+            side_effect=CloudflareException("cf unknown error"))
+        resp = client.put("/api/access/sync", json={
+            "enabled": True, "canonical_name": "paas-sa-x-y", "app_name": "gw",
+            "primary_hostname": "paas-sa-x-y.woowtech.io",
+            "protected_hostnames": ["paas-sa-x-y.woowtech.io"],
+            "session_duration": "8h", "login_idp_types": [], "policies": []})
+        assert resp.status_code == 500, resp.text
+
+    @sync_patch("src.api.access.cloudflare_service")
     def test_list_idps(self, mock_cf, client):
         mock_cf.api_token = "t"
         mock_cf.account_id = "a"
