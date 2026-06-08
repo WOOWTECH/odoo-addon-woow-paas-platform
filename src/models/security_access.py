@@ -647,10 +647,26 @@ class SecurityAccess(models.Model):
             } for p in self.access_policy_ids.sorted(
                 key=lambda x: (x.sequence, x.id))],
             'existing_app_id': self.access_app_id or None,
-            'existing_policy_ids': [
-                p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id
-            ],
+            'existing_policy_ids': self._build_existing_policy_ids(),
         }
+
+    def _build_existing_policy_ids(self):
+        """CF reusable-policy ids the operator must delete-then-recreate.
+
+        Normally just the surviving rows' cf_policy_id. But a policy unlink runs
+        super().unlink() before the resync, so the just-deleted rows' cf ids are
+        already gone from the DB — they would never enter this list and the
+        operator (whose only delete path is this list) would leak them as
+        permanent CF orphans. unlink() captures those doomed ids and passes them
+        via context so they are reaped on the same resync."""
+        ids = [
+            p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id
+        ]
+        for cf_id in self.env.context.get(
+                'sa_unlinked_cf_policy_ids') or []:
+            if cf_id and cf_id not in ids:
+                ids.append(cf_id)
+        return ids
 
     def _sync_access_to_operator(self):
         """Push the full desired Access state to the operator (idempotent)."""

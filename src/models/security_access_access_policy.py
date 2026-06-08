@@ -127,12 +127,27 @@ class SecurityAccessAccessPolicy(models.Model):
 
     def unlink(self):
         affected = self.mapped('security_access_id')
+        # Capture each doomed row's cf_policy_id BEFORE super().unlink() wipes
+        # it. The operator deletes reusable policies only via existing_policy_ids
+        # (delete-old-then-create), which _build_access_payload derives from the
+        # SURVIVING rows. Once the row is gone its cf id never enters that list,
+        # so the operator never deletes the policy → permanent CF orphan, one
+        # leaked per unlink. Inject the captured ids per-SA on the resync so the
+        # operator reaps them.
+        doomed_by_sa = {}
+        for pol in self:
+            if pol.cf_policy_id and pol.security_access_id:
+                doomed_by_sa.setdefault(
+                    pol.security_access_id.id, []).append(pol.cf_policy_id)
         with self.env.cr.savepoint():
             result = super().unlink()
             for sa in affected:
                 if (sa.exists() and sa.access_enabled
                         and sa.state in ('active', 'error') and sa.tunnel_id):
-                    sa._sync_access_to_operator()
+                    doomed = doomed_by_sa.get(sa.id) or []
+                    sa.with_context(
+                        sa_unlinked_cf_policy_ids=doomed
+                    )._sync_access_to_operator()
         return result
 
     def to_dict(self):

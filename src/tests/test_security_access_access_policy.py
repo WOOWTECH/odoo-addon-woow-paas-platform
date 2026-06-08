@@ -148,6 +148,70 @@ class TestAccessSync(TransactionCase):
         self.assertFalse(payload['enabled'])
         self.assertEqual(payload['existing_app_id'], 'app-1')
 
+    def test_unlink_carries_deleted_policy_cf_id_to_existing_ids(self):
+        """Individual policy unlink must NOT orphan its CF reusable policy.
+
+        The operator deletes reusable policies only via existing_policy_ids
+        (delete-old-then-create). existing_policy_ids is built from the SURVIVING
+        rows' cf_policy_id (_build_access_payload). Pre-fix unlink() ran
+        super().unlink() BEFORE the resync, so the deleted row's cf_policy_id was
+        already gone from the DB and never entered existing_policy_ids — the
+        operator never deleted it → permanent Cloudflare orphan, one leaked per
+        unlink.
+
+        Capture the doomed cf_policy_id before deletion and inject it into the
+        resync's existing_policy_ids so the operator reaps it."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            p1 = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'p1', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+            p2 = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'p2', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+            # Stamp distinct CF ids so the assertion is unambiguous.
+            p1.cf_policy_id = 'cf-a'
+            p2.cf_policy_id = 'cf-b'
+            mc.sync_access_app.reset_mock()
+            p2.unlink()
+        self.assertTrue(mc.sync_access_app.called)
+        payload = mc.sync_access_app.call_args.args[0]
+        # The deleted row's cf id MUST be in existing_policy_ids so the operator
+        # deletes it (it survives no longer, so the surviving-row build alone
+        # would omit it).
+        self.assertIn('cf-b', payload['existing_policy_ids'],
+                      "deleted policy's cf_policy_id must reach the operator "
+                      "for deletion, else it leaks as a CF orphan")
+        # The surviving row's id is still there (normal delete-old-then-create).
+        self.assertIn('cf-a', payload['existing_policy_ids'])
+        # The desired policy set no longer includes the deleted one.
+        self.assertEqual([p['name'] for p in payload['policies']], ['p1'])
+
+    def test_unlink_all_policies_carries_every_cf_id(self):
+        """Deleting the LAST policy (whole set unlinked at once) must still
+        carry every doomed cf_policy_id into existing_policy_ids — none survive,
+        so the surviving-row build yields an empty list and all would leak."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            p1 = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'p1', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+            p2 = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'p2', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+            p1.cf_policy_id = 'cf-a'
+            p2.cf_policy_id = 'cf-b'
+            mc.sync_access_app.reset_mock()
+            (p1 + p2).unlink()
+        self.assertTrue(mc.sync_access_app.called)
+        payload = mc.sync_access_app.call_args.args[0]
+        self.assertEqual(set(payload['existing_policy_ids']), {'cf-a', 'cf-b'})
+        self.assertEqual(payload['policies'], [])
+
     def test_policy_create_sync_failure_rolls_back_db_row(self):
         """create 的 Access re-sync 失敗 → 整筆 policy 不落 DB（無幽靈 policy），
         與 route 子模型 savepoint 對齊。"""
