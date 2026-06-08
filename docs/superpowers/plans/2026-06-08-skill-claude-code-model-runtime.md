@@ -83,7 +83,7 @@ bash:execute(cmd: str, timeout_seconds: int = <host cap>) -> {
 - [ ] **R3: `skill:load_skill` tool** — 單測：回 body/workdir/files schema 正確；呼叫 `ensure_skill_cached`（mock）；skill 不存在的錯誤路徑。
 - [ ] **R4: `bash:execute` tool + `spawn_bash`** — 單測：在 workdir 跑 `echo`/`ls` 得 stdout、exit_code；stdout 超 cap → `truncated=true`；timeout 行為。
 - [ ] **R5: 移除 skill-as-tool + entrypoint 預設 + 保留 body** — 改 `loader.py`；toolset 改組（R1-R4 接上）；移除舊 subprocess per-skill 執行路徑。確認 MCP 整合不回歸。
-- [ ] **R6（安全，issue #26）：bash 異 UID + 祕密隔離** — 單測/整合：`ps` 驗 bash UID ≠ agent UID；bash 內 `printenv LLM_API_KEY`/任意 `*_KEY|*_SECRET|*_TOKEN` → 空；`cat /proc/1/environ` → EACCES；`cat /run/secrets/agent-runtime-auth-secret/*` → EACCES。chart securityContext / UID 設定（`woow-paas-charts` 跨 repo）。
+- [ ] **R6（安全，issue #26）：bash 異 UID 經 sidecar container** — **決策已定（user + owner）：sidecar container**（同 pod、k8s `securityContext.runAsUser` 給異 uid + PID ns 隔離；agent 非 root 無法 in-process setuid）。**chart PR 由 canvas agent 開到 `woow-paas-charts`**。子項：① runtime/image：sidecar image（bash + pip）；② chart：sidecar container spec + 共享 `/workspace` PVC（fsGroup 讓兩 container 可寫）+ agent↔sidecar 指令通道（`/workspace` 上 socket/file queue）；③ 祕密檔 0400 owner=agent uid、sidecar uid 不在其 group。測試：`ps` 驗 sidecar uid ≠ agent uid；sidecar bash `printenv LLM_API_KEY`/任意 `*_KEY|*_SECRET|*_TOKEN` → 空；`cat /proc/<agent-pid>/environ` → 不可見（PID ns 隔離）/ EACCES；`curl 169.254.169.254` → NetworkPolicy 擋。
 - [ ] **R7: 端到端冒煙** — 上傳純知識 skill → 對話依 SKILL.md 指令回應（不跑 script）；上傳帶 script skill → agent `load_skill` → `bash` 跑 script → 結果回對話。
 
 > canvas owner 已表示可直接草「roster 注入 system_context 獨立函式 + 走 subprocess_runner 的 bash StructuredTool（不動 loop）+ untrusted-bash 隔離設計」的最小實作藍圖 — R1-R6 可由其主導。

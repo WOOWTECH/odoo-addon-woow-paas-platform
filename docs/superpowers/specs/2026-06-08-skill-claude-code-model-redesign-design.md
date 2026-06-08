@@ -274,11 +274,17 @@ create_agent）**，故**不能**用官方 middleware。官方那套唯一省到
   短命 sandbox pod，需解 cold-start，見
   `docs/tracking/pitfalls/agent-runtime-coldstart-cpu-throttle-timeout.md`）。
 
-### 6.5 「同 pod」邊界的精確定義（影響 §6.3 有效性）
+### 6.5 「同 pod」邊界的精確定義（已定案：sidecar container）
 
-bash runner 預設跑在 **agent 同 container、同 PID/NET/IPC namespace**（最省事，本期選擇）。故
-`/proc/<agent-pid>` 可達 → §6.3.1 的「異 UID」是唯一擋 `/proc` env 還原的手段。若未來要更強隔離，
-改 sidecar container（分離 PID namespace）或獨立 pod（§6.4）。
+**決策（user + runtime owner 拍板）**：bash runner 跑在**同 pod 的 sidecar container**，由 k8s
+`securityContext.runAsUser` 宣告式給**異於 agent 的 uid**，並取得 **PID namespace 隔離**（sidecar
+預設不共享 agent 的 PID ns）。理由：agent container 非 root（`USER 10001`、無 `CAP_SETUID`）→
+**程序內無法 setuid**，sidecar 是達成異 UID 最乾淨且不破壞非 root 姿態的路徑；sidecar 仍在同一個
+pod，符合「同 pod」決定。
+
+此選擇比「同 container + 異 uid」更強：PID ns 隔離讓 bash **看不到** `/proc/<agent-pid>`（不只
+靠檔案權限擋讀）。代價：需 image + chart 改動（加 sidecar container、共享 `/workspace` PVC、agent↔
+sidecar 的指令通道），由 **canvas agent 開 PR 到 `woow-paas-charts`**（Drop B 跨 repo）。
 
 ## 7. Bundle 合約（新 SKILL.md 合約）
 
@@ -390,10 +396,10 @@ readOnlyRootFs 與 `/workspace`/`/tmp` RW 的相容。
 
 ## 11. Open Questions（待 canvas agent 於 writing-plans 階段定）
 
-- bash 異 UID 的隔離原語：`os.setuid`（preexec_fn）vs 容器內 `runuser`/`su-exec` vs 在
-  securityContext 層給 bash 另一 container/UID？前置：該 UID 是否已在 image 建立（`/etc/passwd`）、
-  `/workspace` 對其可寫（fsGroup）。→ 此決策直接決定 §6.3.1 可行性，須在 plan 鎖定並於 §10 加
-  對應 assertion。
+- ~~bash 異 UID 的隔離原語~~ **已定案：sidecar container**（§6.5）。k8s `securityContext.runAsUser`
+  給異 uid + PID ns 隔離；chart PR 由 canvas agent 開到 `woow-paas-charts`。待 plan 階段定的細節：
+  sidecar 與 agent 的指令通道（共享 `/workspace` 上的 socket / file queue？）、`/workspace` PVC 對兩
+  container 的 fsGroup 可寫設定、sidecar image 內容（含 bash + pip）。
 - `SKILL_BUNDLE_TOKEN` 本期能否從 env 改 secret volume mount（§6.3.4）。
 - `/workspace` securityContext / fsGroup 設定（agent 與 bash 異 UID 同時可寫）。
 - **`LLM_API_KEY` blast radius**：是平台共用 key 還是 per-workspace？canvas owner 三方判定 uncertain，
