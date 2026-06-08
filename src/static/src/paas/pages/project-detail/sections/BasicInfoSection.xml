@@ -35,7 +35,8 @@
                 <t t-else="">
                     <div class="o_woow_project_detail__value">
                         <span t-esc="props.project.name"/>
-                        <button class="o_woow_project_detail__edit_btn"
+                        <button t-if="props.editable"
+                                class="o_woow_project_detail__edit_btn"
                                 t-on-click="startEditName">
                             <WoowIcon name="'edit'" size="16"/>
                         </button>
@@ -92,7 +93,8 @@
                              class="o_woow_project_detail__rich_view"
                              t-out="descriptionMarkup"/>
                         <span t-else="" class="o_woow_project_detail__placeholder">No description</span>
-                        <button class="o_woow_project_detail__edit_btn"
+                        <button t-if="props.editable"
+                                class="o_woow_project_detail__edit_btn"
                                 t-on-click="startEditDescription">
                             <WoowIcon name="'edit'" size="16"/>
                         </button>

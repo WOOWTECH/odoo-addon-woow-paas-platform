@@ -98,6 +98,16 @@ class ResConfigSettings(models.TransientModel):
              'processing is still being configured.',
     )
 
+    # Portal (/woow) Project Settings
+    woow_portal_project_settings_editable = fields.Boolean(
+        string='Portal Project Settings Editable',
+        config_parameter='woow_paas_platform.portal_project_settings_editable',
+        help='When ON, /woow portal owners/admins can edit project name/'
+             'description, cloud-service binding and user-scope MCP servers. '
+             'Default OFF: portal project settings are read-only and managed '
+             'from the backend (2026-06-03 meeting, topic H).',
+    )
+
     # Subscription Lifecycle Settings
     woow_subscription_grace_days = fields.Integer(
         string='Subscription Grace Period (Days)',

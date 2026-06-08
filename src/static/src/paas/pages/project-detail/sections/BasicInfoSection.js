@@ -12,6 +12,7 @@ export class BasicInfoSection extends Component {
     static props = {
         project: { type: Object },
         onUpdated: { type: Function },
+        editable: { type: Boolean, optional: true },
     };
 
     setup() {

@@ -1,4 +1,4 @@
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 
@@ -208,3 +208,66 @@ class AgentTemplate(models.Model):
                         "'%s' projects and is not system-scope."
                         % (skill.name, t.name or t.id)
                     )
+
+    @api.constrains('skill_ids')
+    def _check_no_duplicate_skill_name(self):
+        """Reject binding two skills that share the same ``name``.
+
+        An agent pod loads skills by name (the snapshot wire contract keys off
+        ``name``, not id/version/scope), so two same-named bindings collide:
+        the pod can only keep one and the choice is opaque to the admin. Fail
+        loud at bind time instead of silently dropping one downstream.
+
+        Checks the FULL ``skill_ids`` set per template (not a write delta) so a
+        same-name pair introduced via either leg of an M2M write is caught.
+
+        NOT bypassed for superuser/admin on purpose — same rationale as
+        ``_check_not_platform_default_when_bound``: there is no legitimate path
+        that binds two same-named skills to one template, so a sudo / backend /
+        cron binder hitting this is breaking the invariant, not exercising a
+        privileged shortcut. The snapshot builder still dedupes defensively for
+        any legacy stock rows that predate this guard (those cannot be created
+        through the ORM once this constraint is live).
+
+        The message lists only the conflicting name(s) plus unbind guidance; it
+        deliberately does not reveal which skill id/sha would win or how the
+        downstream dedup resolves the tie.
+        """
+        for t in self:
+            name_counts = {}
+            for skill in t.skill_ids:
+                name_counts[skill.name] = name_counts.get(skill.name, 0) + 1
+            duplicates = sorted(
+                name for name, count in name_counts.items() if count > 1)
+            if duplicates:
+                raise ValidationError(_(
+                    "Agent template '%(tmpl)s' binds multiple skills with the "
+                    "same name: %(names)s. An agent pod loads skills by name, "
+                    "so two same-named bindings would collide. Unbind all but "
+                    "one version (keep the one you want the pod to load).",
+                    tmpl=t.name or t.id,
+                    names=', '.join(duplicates),
+                ))
+
+    def write(self, vals):
+        result = super().write(vals)
+        # Binding change alters what loads into running pods → best-effort
+        # push (#111 semantics: per-pod failure logged, never aborts).
+        # Projects resolving via the manual M2O are included; the unbound
+        # platform default is not walked (it binds system resources only —
+        # skill-state pushes already cover system-wide changes; next chat
+        # attach refresh is the fallback).
+        if 'skill_ids' in vals or 'mcp_server_ids' in vals:
+            Session = self.env['woow_paas_platform.agent_session']
+            for template in self:
+                projects = template.project_ids | self.env[
+                    'project.project'].sudo().search([
+                        ('agent_template_id', '=', template.id)])
+                for project in projects:
+                    if 'skill_ids' in vals:
+                        Session._push_snapshot_to_running_pods(
+                            'skill', 'user', project.id)
+                    if 'mcp_server_ids' in vals:
+                        Session._push_snapshot_to_running_pods(
+                            'mcp', 'user', project.id)
+        return result

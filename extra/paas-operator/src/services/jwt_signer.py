@@ -29,7 +29,13 @@ from threading import Lock
 _ISS = "paas-operator"
 _AUD = "agent-runtime"
 
-# 1h token exp + 5 min clock-skew buffer = 65 min replay-cache TTL (§6.6).
+# Replay-cache TTL is sized for the ws_token only (1h exp + 5 min clock-skew
+# buffer = 65 min, §6.6). The operator's verify_token / jti cache verifies
+# ws_tokens; the skill_bundle_token does NOT flow through this cache (it is
+# verified Odoo-side, never re-presented to the operator), so the issue #155
+# 7-day skill_bundle_token TTL does NOT widen this cache window and carries no
+# memory-growth risk here. verify_token has no production caller in this repo
+# today — it is the operator-side helper, unit-tested in test_agent_runtimes.py.
 _JTI_TTL_SECONDS = 65 * 60
 _JTI_SEEN: dict[str, float] = {}
 _JTI_LOCK = Lock()
@@ -96,6 +102,12 @@ def sign_skill_bundle_token(
     project_id,
     workspace_ids,
     secret=None,
+    # FOOTGUN (issue #155): skill_bundle path callers MUST pass the config TTL
+    # explicitly (settings.skill_bundle_token_ttl_seconds). This 1h default is a
+    # backward-compat fallback ONLY — relying on it silently reintroduces the #155
+    # "pod outlives 1h then 401s forever on skill-bundle fetch" bug. Both production
+    # callers (cold-start install + resume re-sign in api/agent_runtimes.py) already
+    # pass exp_seconds; do NOT add a caller that omits it.
     exp_seconds=3600,
 ):
     """Sign a per-pod-lifetime skill-bundle token.

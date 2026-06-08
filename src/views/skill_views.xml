@@ -64,7 +64,13 @@
                         <group string="Identity">
                             <field name="title" readonly="1"/>
                             <field name="is_latest" readonly="1"/>
-                            <field name="project_id" readonly="1"/>
+                            <field name="scope" groups="base.group_system"/>
+                            <field name="project_id"
+                                   groups="base.group_system"
+                                   invisible="scope != 'user'"
+                                   required="scope == 'user'"/>
+                            <field name="project_id" readonly="1"
+                                   groups="!base.group_system"/>
                         </group>
                         <group string="Bundle">
                             <field name="bundle_sha256" readonly="1"/>
@@ -156,12 +162,17 @@
                 <p class="text-muted">
                     Upload a <code>.tar.gz</code> skill bundle. Name / version
                     must match the bundle's SKILL.md. The skill is created as
-                    <b>draft</b> (system scope) — publish it afterwards.
+                    <b>draft</b> — publish it afterwards. User-scope skills
+                    bind to a single project; system skills load platform-wide.
                 </p>
                 <group>
                     <group>
                         <field name="name"/>
                         <field name="version"/>
+                        <field name="scope"/>
+                        <field name="project_id"
+                               invisible="scope != 'user'"
+                               required="scope == 'user'"/>
                     </group>
                     <group>
                         <field name="title"/>

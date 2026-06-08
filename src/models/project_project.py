@@ -1,4 +1,5 @@
 from odoo import SUPERUSER_ID, api, fields, models
+from odoo.exceptions import AccessError, UserError
 
 
 class ProjectProject(models.Model):
@@ -77,6 +78,39 @@ class ProjectProject(models.Model):
         string='Agent Template',
         ondelete='set null',
     )
+
+    # ------------------------------------------------------------------ #
+    # Skill binding UX（spec 2026-06-05）— resolved template 顯示 + fork  #
+    # ------------------------------------------------------------------ #
+    resolved_agent_template_id = fields.Many2one(
+        'woow_paas_platform.agent_template',
+        string='Resolved Agent Template',
+        compute='_compute_resolved_agent_template',
+        help='Template the agent runtime resolves for this project '
+             '(project-bound published → any bound → manual M2O → '
+             'platform default).',
+    )
+    agent_template_binding_status = fields.Selection(
+        selection=[
+            ('dedicated', 'Dedicated'),
+            ('shared', 'Shared'),
+            ('platform_default', 'Platform Default'),
+            ('none', 'None'),
+        ],
+        string='Template Binding Status',
+        compute='_compute_resolved_agent_template',
+    )
+    resolved_template_skill_ids = fields.Many2many(
+        'woow_paas_platform.skill',
+        string='Template Bound Skills',
+        compute='_compute_resolved_template_skills',
+        inverse='_inverse_resolved_template_skills',
+        help='skill_ids of the resolved template. Editable only when the '
+             'template is dedicated to this project — compute+inverse '
+             'instead of a related chain through the non-stored computed '
+             'M2O (spec §2.3 implementation note).',
+    )
+
     project_access_ids = fields.One2many(
         'woow_paas_platform.project_access',
         'project_id',
@@ -113,6 +147,115 @@ class ProjectProject(models.Model):
     def _compute_workspace_id(self):
         for project in self:
             project.workspace_id = project.cloud_service_id.workspace_id
+
+    # ------------------------------------------------------------------ #
+    # Skill binding UX（spec 2026-06-05 §2.3）— resolved template +       #
+    # copy-on-write fork                                                   #
+    # ------------------------------------------------------------------ #
+    @api.depends('agent_template_id', 'agent_template_id.state',
+                 'agent_template_id.project_ids')
+    def _compute_resolved_agent_template(self):
+        # Non-stored display field; depend at least on the explicit pick so
+        # the fork written by action_create_dedicated_agent_template
+        # (self.agent_template_id = fork) invalidates the cached resolution
+        # in the same transaction. Shared→dedicated flips that come from
+        # OTHER templates binding the project (search legs in
+        # _resolve_agent_template) aren't auto-tracked — the form re-reads on
+        # reload, which the fork action triggers (tag: reload).
+        Session = self.env['woow_paas_platform.agent_session']
+        default_raw = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.default_agent_template_id') or ''
+        default_id = int(default_raw) if default_raw.isdigit() else 0
+        for project in self:
+            template = Session._resolve_agent_template(project)
+            project.resolved_agent_template_id = template or False
+            if not template:
+                project.agent_template_binding_status = 'none'
+            elif template.id == default_id:
+                project.agent_template_binding_status = 'platform_default'
+            elif template.project_ids == project:
+                project.agent_template_binding_status = 'dedicated'
+            else:
+                # bound to several projects, or an unbound manual pick —
+                # treat both as shared (read-only + fork offered).
+                project.agent_template_binding_status = 'shared'
+
+    @api.depends('resolved_agent_template_id')
+    def _compute_resolved_template_skills(self):
+        for project in self:
+            template = project.resolved_agent_template_id
+            project.resolved_template_skill_ids = \
+                template.skill_ids if template else False
+
+    def _inverse_resolved_template_skills(self):
+        for project in self:
+            if project.agent_template_binding_status != 'dedicated':
+                raise UserError(
+                    "Skill bindings can only be edited on a dedicated "
+                    "template — use 'Create Dedicated Template' first.")
+            project.resolved_agent_template_id.skill_ids = [
+                (6, 0, project.resolved_template_skill_ids.ids)]
+
+    def action_create_dedicated_agent_template(self):
+        """Copy-on-write fork (spec §2.3). ONE copy(default=) call: m2m
+        fields default to copy=True, so a bare copy() would leak the
+        source's project_ids/skill_ids/mcp_server_ids into the fork and
+        trip _check_project_ids_grantor_authority / subset constraints on
+        an intermediate state. default= makes every constraint validate
+        the FINAL values at create time (anti-pattern #4: no sudo bypass).
+        """
+        self.ensure_one()
+        if not self.env.user.has_group('base.group_system'):
+            raise AccessError(
+                "Only administrators can create a dedicated agent template.")
+        if self.agent_template_binding_status == 'dedicated':
+            raise UserError("This project already has a dedicated template.")
+        source = self.resolved_agent_template_id
+        if not source:
+            raise UserError(
+                "No agent template resolves for this project — configure "
+                "the platform default in Settings → Woow PaaS first.")
+        allowed_skills = source.skill_ids.filtered(
+            lambda s: s.scope == 'system'
+            or (s.scope == 'user' and s.project_id == self))
+        allowed_mcp = source.mcp_server_ids.filtered(
+            lambda m: m.scope == 'system'
+            or (m.scope == 'user' and m.project_id == self))
+        fork = source.copy(default={
+            'name': "%s — %s" % (source.name, self.name),
+            'project_ids': [(6, 0, [self.id])],
+            'skill_ids': [(6, 0, allowed_skills.ids)],
+            'mcp_server_ids': [(6, 0, allowed_mcp.ids)],
+            'is_public': False,
+            'state': 'published',
+        })
+        # Load-bearing: the source shared template still lists this project,
+        # so two published templates now bind it. _resolve_agent_template's
+        # generic search(limit=1) would tie-break by name — non-deterministic
+        # w.r.t. intent. Setting the explicit M2O makes the fork win via the
+        # resolver's explicit-pick leg WITHOUT rewriting the shared source's
+        # project_ids (invariant 2: never write the shared template).
+        self.agent_template_id = fork
+        Session = self.env['woow_paas_platform.agent_session']
+        Session._push_snapshot_to_running_pods('skill', 'user', self.id)
+        Session._push_snapshot_to_running_pods('mcp', 'user', self.id)
+        return {'type': 'ir.actions.client', 'tag': 'reload'}
+
+    def action_open_skill_upload_wizard(self):
+        """Project-form entry: upload wizard prefilled as a user-scope
+        skill owned by this project (spec §2.1)."""
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Upload Skill',
+            'res_model': 'woow_paas_platform.skill_upload_wizard',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {
+                'default_scope': 'user',
+                'default_project_id': self.id,
+            },
+        }
 
     # ------------------------------------------------------------------ #
     # project_access bootstrap on create                                  #

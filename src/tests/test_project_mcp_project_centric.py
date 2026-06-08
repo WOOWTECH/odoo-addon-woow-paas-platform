@@ -98,6 +98,11 @@ class TestProjectMcpFixture(HttpCase):
     def setUp(self):
         super().setUp()
 
+        # skill-binding-ux：flag-on 保留既有正向行為守線（flag-off denied
+        # 守線在 test_portal_settings_flag.py）。
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.portal_project_settings_editable', 'True')
+
         # ---- Users -------------------------------------------------- #
         self.alice = _new_user(self.env, 'pmc_alice', 'Alice (PMC)')
         self.bob = _new_user(self.env, 'pmc_bob', 'Bob (PMC)')

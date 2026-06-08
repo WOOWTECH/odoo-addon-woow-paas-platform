@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
 
@@ -8,6 +8,11 @@ class Skill(models.Model):
     _name = 'woow_paas_platform.skill'
     _description = 'Project-scoped Agent Skill Bundle'
     _order = 'scope, project_id, name, version desc'
+    # Same-name skills (cross-scope or cross-version) are indistinguishable by
+    # ``name`` alone in the M2M tag picker; let it match on version too so an
+    # admin can type "0.2.0" to find the right row. scope is NOT searchable
+    # text (it is a label, surfaced via display_name) — issue #156 D2.
+    _rec_names_search = ['name', 'version']
 
     name = fields.Char(
         string='Skill Name',
@@ -17,6 +22,16 @@ class Skill(models.Model):
     )
     title = fields.Char(string='Display Title')
     description = fields.Text()
+
+    # Disambiguates same-name skills in the M2M tag picker / form (issue #156).
+    # Explicitly declared (Odoo's BaseModel ships a magic display_name) so we
+    # control the compute + depends; store=False because it is derived purely
+    # from name/version/scope. The pod wire contract uses ``name`` only —
+    # display_name MUST NOT enter any snapshot serialisation path.
+    display_name = fields.Char(
+        compute='_compute_display_name',
+        store=False,
+    )
 
     version = fields.Char(
         string='Version',
@@ -28,6 +43,14 @@ class Skill(models.Model):
         string='Is Latest Published',
         default=False,
         index=True,
+    )
+    is_effective = fields.Boolean(
+        string='Active in Pod',
+        compute='_compute_is_effective',
+        help="Loaded into the owning project's agent pod? user-scope: member "
+             "of agent_session._effective_skill_ids(project) — ownership "
+             "alone does NOT activate a skill (anti-pattern #3); system: "
+             "published (auto-loaded platform-wide).",
     )
 
     scope = fields.Selection(
@@ -165,6 +188,16 @@ class Skill(models.Model):
                     raise AccessError(
                         "Only administrators can change a skill's project."
                     )
+        # Re-point (admin path): capture pre-write group keys — after
+        # super().write the record sits in the NEW group and the OLD group
+        # can no longer be derived from self (spec §1 / Lens-2 finding).
+        regroup = 'scope' in vals or 'project_id' in vals
+        old_groups = []
+        if regroup:
+            old_groups = [
+                (s._is_latest_group_domain(), s.scope, s.project_id.id)
+                for s in self
+            ]
         result = super().write(vals)
         if 'bundle_attachment_id' in vals:
             for skill in self:
@@ -184,6 +217,25 @@ class Skill(models.Model):
                 self.env['woow_paas_platform.agent_session'] \
                     ._push_snapshot_to_running_pods(
                         'skill', skill.scope, skill.project_id.id or None)
+        if regroup:
+            Session = self.env['woow_paas_platform.agent_session']
+            for skill, (old_domain, old_scope, old_pid) in zip(
+                    self, old_groups):
+                if skill._is_latest_group_domain() == old_domain:
+                    continue  # value written but group unchanged
+                self._recompute_is_latest_for(old_domain)
+                skill._recompute_is_latest()
+                # System flip (either direction) touches every pod; a
+                # user→user move touches the old and the new project pods.
+                # _recompute_is_latest_for writes only is_latest → never
+                # re-enters this branch (no recursion).
+                if 'system' in (old_scope, skill.scope):
+                    Session._push_snapshot_to_running_pods('skill', 'system')
+                else:
+                    Session._push_snapshot_to_running_pods(
+                        'skill', 'user', old_pid)
+                    Session._push_snapshot_to_running_pods(
+                        'skill', 'user', skill.project_id.id)
         return result
 
     def _anchor_bundle_attachment(self):
@@ -272,7 +324,50 @@ class Skill(models.Model):
             'res_model': 'woow_paas_platform.skill_upload_wizard',
             'view_mode': 'form',
             'target': 'new',
+            'context': {
+                k: v for k, v in self.env.context.items()
+                if k in ('default_scope', 'default_project_id')
+            },
         }
+
+    def _compute_is_effective(self):
+        # One resolve+search per project (not per row) — N+1 guard.
+        Session = self.env['woow_paas_platform.agent_session']
+        effective_by_project = {}
+        for skill in self:
+            if skill.scope == 'system':
+                skill.is_effective = skill.state == 'published'
+                continue
+            project = skill.project_id
+            if not project:
+                skill.is_effective = False
+                continue
+            if project.id not in effective_by_project:
+                effective_by_project[project.id] = set(
+                    Session._effective_skill_ids(project).ids)
+            skill.is_effective = skill.id in effective_by_project[project.id]
+
+    @api.depends('name', 'version', 'scope')
+    def _compute_display_name(self):
+        """Render ``name vX.Y.Z (Scope)`` so the M2M tag picker / form can
+        tell two same-name skills apart by version + scope label (issue #156
+        D1). The scope label dict is built ONCE for the whole recordset (the
+        selection is static — never a per-record query). title deliberately
+        does not participate: the slug ``name`` is the pod-facing identity and
+        the disambiguator must key off it, not a free-text display title.
+
+        This is a human-facing label only — ``name`` remains the pod wire
+        contract; display_name never reaches a snapshot.
+        """
+        scope_labels = dict(
+            self._fields['scope']._description_selection(self.env))
+        for skill in self:
+            skill.display_name = _(
+                '%(name)s v%(version)s (%(scope)s)',
+                name=skill.name or '',
+                version=skill.version or '',
+                scope=scope_labels.get(skill.scope, skill.scope or ''),
+            )
 
     def _is_latest_group_domain(self):
         """Domain for the bucket this skill competes in for the is_latest
@@ -293,10 +388,16 @@ class Skill(models.Model):
 
     def _recompute_is_latest(self):
         """Invariant: at most one is_latest=True per (scope, project, name)
-        group, and it is the most-recently-published (published_at desc,
-        id desc) skill in state 'published'."""
+        group — recompute the group this skill currently sits in."""
         self.ensure_one()
-        group = self.sudo().search(self._is_latest_group_domain())
+        self._recompute_is_latest_for(self._is_latest_group_domain())
+
+    @api.model
+    def _recompute_is_latest_for(self, group_domain):
+        """Group-key-explicit recompute. Needed for scope/project re-point:
+        after write the record is in the NEW group, so the OLD group's
+        winner can only be re-elected from a domain captured pre-write."""
+        group = self.sudo().search(group_domain)
         published = group.filtered(lambda s: s.state == 'published')
         winner = published.sorted(
             key=lambda s: (s.published_at or datetime.min, s.id),

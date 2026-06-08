@@ -197,7 +197,7 @@ Phase 1 無上傳 pipeline，system skill 以 **demo 資料**種子建立，讓 
 - **共用解析 helper**（skill model method，backend wizard 與 frontend controller 共用）：
   - 接 tar.gz → **解壓前 size cap**（reuse ai_assistant 10MB 或另定）→ **絕不 `extractall`**（zip-bomb / path-traversal / symlink 防護）→ `extractfile(SKILL.md)` 設 byte cap → parse frontmatter（**極簡手寫 parser**，零依賴；契約只要 `name`/`version`，其餘原樣存 `skill_metadata` JSON；PyYAML 在 Odoo image 是否可用待確認，預設不依賴）→ 算 sha256（**對實際被服務的 raw bytes**，須與 pod `resp.read()` 一致）+ size_kb → 建 `ir.attachment`（**sudo**，因 frontend 走 base.group_user 而 attachment 受 HC-4 rule 管）→ anchor → create skill（draft）。
 - **Backend wizard**（`TransientModel` + binary 欄位）：建 **system** skill，gated `base.group_system`；掛在 Skills list header button。後台 list action 加 `domain=[('scope','=','system')]`（鏡像 `mcp_server_views.xml:98`，admin 不看每個租戶的 user skill）。
-- **/woow 前台**（multipart endpoint，`/api/.../skills`）：建 **user** skill，gated project role（owner/admin，reuse `_resolve_project_access`）。鏡像 MCP 的前台 section pattern（如 `McpServersSection`）。
+- **/woow 前台**（multipart endpoint，`/api/.../skills`）：建 **user** skill，gated project role（owner/admin，reuse `_resolve_project_access`）。鏡像 MCP 的前台 section pattern（如 `McpServersSection`）。（2026-06-05 更新：user skill 建立改走後台 wizard〔scope/project 擴充〕，前台上傳不做 — 見 `docs/superpowers/specs/2026-06-05-skill-binding-ux-design.md`。）
 - **Phase 2 待決**：frontmatter schema / SKILL.md 位置慣例（top-level only vs single-root-dir）/ version 是否強制 semver / 重複上傳行為（hard error vs auto-bump）/ 上傳後 draft vs auto-publish / 前台 CSRF / max size。
 
 ---
