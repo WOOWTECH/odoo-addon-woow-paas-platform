@@ -237,7 +237,7 @@ create_agent）**，故**不能**用官方 middleware。官方那套唯一省到
 | 祕密 | 位置/形式 | 被竊後果 |
 | --- | --- | --- |
 | `LLM_API_KEY` | env（`langgraph_runtime.py:263`，平台 operator provision） | 平台 LLM key 外洩 → billing 盜用 |
-| `SKILL_BUNDLE_TOKEN`/`SHARED_SECRET` | env（`cache.py:99`，TTL 已放寬至 7 天） | bundle fetch bearer → 抓其他 skill bundle |
+| `SKILL_BUNDLE_TOKEN` | env（`cache.py:99`，plain env、TTL 已放寬至 7 天） | bundle fetch bearer → 抓其他 skill bundle（`SHARED_SECRET` 僅為其 fallback，prod chart 不注入該值，runtime owner 校正） |
 | auth 簽章祕密 | 掛載檔 `/run/secrets/agent-runtime-auth-secret`（`auth.py:26,52`） | 偽造 WS token |
 
 **同 pod 不是對抗 untrusted code 的硬隔離邊界。** 本期以 §6.3 defense-in-depth 壓低風險，殘留以
@@ -264,9 +264,11 @@ create_agent）**，故**不能**用官方 middleware。官方那套唯一省到
 
 ### 6.4 誠實標註的已知限制（本期不解，列未來硬化）
 
-- **網路 egress 無隔離**：bash 與 agent 同 network namespace；agent 本需連 LLM provider 故 egress
-  開著 → bash 可直連 provider（用偷到的 key）、打雲端 metadata endpoint（169.254.169.254）、外送
-  資料。**env scrub / 異 UID 擋不住網路向量。**
+- **網路 egress（runtime owner 校正後收斂）**：chart NetworkPolicy 已 except 雲端 metadata
+  endpoint（169.254.169.254），且 `externalEgress` 預設 false → metadata 旁路**已擋**、預設無對外
+  egress。殘留風險僅在「LLM provider egress 被開啟時」：bash 與 agent 同 network namespace，可循該
+  已開路徑直連 provider（用偷到的 key）或外送資料。**env scrub / 異 UID 擋不住此網路向量**（須靠
+  network namespace 隔離，方案 B/C）。
 - **IPC / Unix socket / `/dev/shm`**：同 pod 不隔離；agent 開的 socket / shared memory bash 可達。
 - 真正封住以上需 PID/NET/IPC namespace 隔離或獨立 sandbox（方案 B：gVisor/Kata；方案 C：每次起
   短命 sandbox pod，需解 cold-start，見
@@ -375,8 +377,9 @@ sticky DB）兩路皆驗 `skill.bundle_sha256` == 新 sha。
 - **安全（對抗式）**：bash 子行程 UID **≠** agent UID（`ps -eo pid,uid` 驗）；bash 內
   `printenv LLM_API_KEY` / 任意 `*_KEY|*_SECRET|*_TOKEN` → 空；`cat /proc/<agent-pid>/environ` →
   EACCES；`cat /run/secrets/agent-runtime-auth-secret/*` → EACCES。
-- **已知限制記錄性測試**：bash `curl 169.254.169.254` / 外連 → 目前**可達**（明確標記為已知風險，
-  非回歸失敗），佐證 §6.4。
+- **網路向量測試**：bash `curl 169.254.169.254`（metadata）→ 應**被 NetworkPolicy 擋**（runtime owner
+  校正：已 except + externalEgress 預設 false）；若 LLM provider egress 開啟，該路徑對 bash 仍可達 →
+  記錄性斷言（已知限制，非回歸失敗），佐證 §6.4。
 
 **E2E（k8s-dev-sandbox / deploy-stg）**——前置 checklist：`/workspace` PVC RW mount 存在、pod
 securityContext（agent UID 10001、bash 異 UID、`/workspace` 對兩 UID 可寫或 fsGroup 處理）、
