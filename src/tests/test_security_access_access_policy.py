@@ -622,8 +622,6 @@ class TestAccessLifecycle(TransactionCase):
         early-returns once tunnel_id is gone). Land in 'error' instead, keeping
         access_app_id set so cleanup stays re-entrant / observable."""
         mc = self._mock()
-        # Access teardown raises; tunnel delete is fine.
-        mc.sync_access_app.side_effect = Exception("operator down")
         with patch(MOCK_GET_CLIENT, return_value=mc):
             sa = self.SA.create({'name': 'AL GW err',
                                  'workspace_id': self.workspace.id})
@@ -633,7 +631,12 @@ class TestAccessLifecycle(TransactionCase):
                                'subdomain_prefix': sa.canonical_name,
                                'is_primary': True})
             sa.write({'access_app_id': 'app-al-err'})
+            # Arm the teardown failure AFTER setup (the setup writes above also
+            # fire _sync_access_to_operator; arming earlier would blow up the
+            # setup instead of the cleanup we're exercising). Tunnel delete is
+            # fine; only the Access teardown sync raises.
             mc.sync_access_app.reset_mock()
+            mc.sync_access_app.side_effect = Exception("operator down")
             sa._do_cleanup()
         # tunnel delete succeeded → tunnel_id cleared
         self.assertFalse(sa.tunnel_id)

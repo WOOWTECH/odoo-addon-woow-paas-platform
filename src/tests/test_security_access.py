@@ -567,10 +567,15 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
                 'name': 'Disable-While-Suspended GW',
                 'workspace_id': self.workspace.id})
             sa.write({'state': 'active', 'tunnel_id': 'tun-dws',
-                      'access_enabled': True, 'access_app_id': 'app-dws'})
+                      'access_enabled': True})
             self.Route.create({'security_access_id': sa.id,
                                'subdomain_prefix': sa.canonical_name,
                                'is_primary': True})
+            # Set access_app_id LAST: the access_enabled write + route create
+            # both fire _sync_access_to_operator (mock returns app_id=None,
+            # written back), so set the live app id after all sync triggers —
+            # mirrors an SA that already holds a live CF app.
+            sa.write({'access_app_id': 'app-dws'})
             sa._do_suspend()
             self.assertEqual(sa.state, 'suspended')
             # Disable Access while suspended: the write trigger must NOT fire

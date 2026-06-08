@@ -625,27 +625,36 @@ class TestSecurityAccessAccessControl(TransactionCase):
         orig_app_id = sa.access_app_id
         orig_state = sa.state
         orig_tunnel = sa.tunnel_id
+        orig_session = sa.session_duration
         orig_unresolved = sa.access_unresolved_idp_types
+        # Send ONLY forged server-owned keys (no whitelisted field): the
+        # whitelist must drop them ALL → vals ends empty → no write() → no
+        # _sync_access_to_operator. Isolating the sync this way avoids the
+        # legit-sync writeback (which rewrites access_app_id /
+        # access_unresolved_idp_types from the operator reply) muddying the
+        # "forged key never reached write()" assertion. The positive path
+        # (a whitelisted field DOES take effect) is covered by
+        # test_update_access_config.
+        mc.sync_access_app.reset_mock()
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._update_access_config(sa, {
-                'session_duration': '8h',
                 'access_app_id': 'attacker-app',
                 'state': 'deleting',
                 'tunnel_id': 'attacker-tunnel',
                 'access_unresolved_idp_types': ''})
         self.assertTrue(res['success'], res.get('error'))
-        # whitelisted field took effect
-        self.assertEqual(sa.session_duration, '8h')
-        # forged server-owned keys were dropped (never reached write())
-        self.assertNotEqual(sa.access_app_id, 'attacker-app')
+        # every forged server-owned key was dropped (none reached write())
         self.assertEqual(sa.access_app_id, orig_app_id)
         self.assertEqual(sa.state, orig_state)
         self.assertEqual(sa.tunnel_id, orig_tunnel)
+        self.assertEqual(sa.session_duration, orig_session)
         # the forged blank did NOT clear the fail-open widening warning
         self.assertEqual(sa.access_unresolved_idp_types, orig_unresolved)
         self.assertEqual(sa.access_unresolved_idp_types, 'google')
+        # vals ended empty → no operator sync fired
+        mc.sync_access_app.assert_not_called()
 
     def test_create_policy(self):
         mc = self._mock()
