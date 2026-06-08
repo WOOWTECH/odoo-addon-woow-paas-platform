@@ -1184,14 +1184,20 @@ class CloudflareService:
             return data["result"]["id"]
 
     async def delete_reusable_policy(self, policy_id: str) -> bool:
-        """Delete a reusable Access policy by id."""
+        """Delete a reusable Access policy by id.
+
+        Cloudflare's DELETE on Access policies/apps replies **202 Accepted**
+        (body ``{"success": true, "result": {"id": ...}}``), not 200 — and 404
+        when already gone. Treat all three as success; anything else is a real
+        failure. (Mocked tests returned 200, masking this until a live CF call.)
+        """
         async with httpx.AsyncClient() as client:
             response = await client.delete(
                 f"{self._access_base}/policies/{policy_id}",
                 headers=self._headers,
                 timeout=30.0,
             )
-            if response.status_code != 200:
+            if response.status_code not in (200, 202, 404):
                 raise CloudflareException(
                     f"Failed to delete access policy {policy_id}: {response.text}",
                     status_code=response.status_code,
@@ -1240,7 +1246,11 @@ class CloudflareService:
                 f"{self._access_base}/apps/{app_id}",
                 headers=self._headers, timeout=30.0,
             )
-            if response.status_code not in (200, 404):
+            # CF replies 202 Accepted on a successful Access-app delete (not
+            # 200); 404 = already gone. Anything else is a real failure. Reading
+            # 202 as failure made teardown raise *after* CF actually deleted the
+            # app, aborting the subsequent policy cleanup → orphan policies.
+            if response.status_code not in (200, 202, 404):
                 raise CloudflareException(
                     f"Failed to delete access app {app_id}: {response.text}",
                     status_code=response.status_code,
@@ -1283,13 +1293,12 @@ class CloudflareService:
             return {"app_id": None, "policy_ids": [], "allowed_idps": [],
                     "unresolved_idp_types": []}
 
-        # Recreate reusable policies from desired state (delete-old-then-create).
-        for pid in existing_policy_ids:
-            try:
-                await self.delete_reusable_policy(pid)
-            except CloudflareException as e:
-                logger.warning("Access resync: stale policy %s delete failed: %s",
-                               pid, e.message)
+        # Resync strategy (detach-before-delete): create the NEW reusable
+        # policies, point the app at them (which detaches the OLD ones), and
+        # only THEN delete the old policies (deferred to after a successful app
+        # update, below). Deleting old policies first — while the app still
+        # references them — makes Cloudflare reject the delete as "in use",
+        # silently orphaning them.
         new_policy_ids = []
         # Compensating-cleanup scope: this is a two-stage remote provision
         # (create N reusable policies, then PUT/POST the app referencing them).
@@ -1361,6 +1370,20 @@ class CloudflareService:
                         "Access rollback: orphan policy %s delete failed: %s",
                         pid, ce.message)
             raise
+
+        # App now references only the new policies → the OLD ones are detached
+        # and safe to delete. Best-effort: a leftover policy is undesirable but
+        # must not fail an otherwise-successful sync. Skip ids we just created
+        # (defensive; create always returns fresh ids).
+        new_ids = {pid for pid, _ in new_policy_ids}
+        for pid in existing_policy_ids:
+            if pid in new_ids:
+                continue
+            try:
+                await self.delete_reusable_policy(pid)
+            except CloudflareException as e:
+                logger.warning("Access resync: old policy %s delete failed: %s",
+                               pid, e.message)
 
         return {
             "app_id": app_id,
