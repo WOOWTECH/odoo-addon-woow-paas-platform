@@ -110,6 +110,8 @@ class TestReusablePolicyCrud:
         policy in stg (mocked tests previously hard-coded 200, masking it)."""
         class FakeResponse:
             status_code = status
+            text = ""  # raise branch formats response.text; keep present so a
+                       # reverted fix reds with CloudflareException, not AttributeError
             @staticmethod
             def json():
                 return {"success": True, "result": {"id": "pol-1"}}
@@ -119,6 +121,7 @@ class TestReusablePolicyCrud:
             ok = await cf_service.delete_reusable_policy("pol-1")
         assert ok is True
 
+    @pytest.mark.asyncio
     async def test_delete_reusable_policy_raises_on_real_error(self, cf_service):
         class FakeResponse:
             status_code = 500
@@ -477,6 +480,76 @@ class TestSyncAccessApp:
         # Returned ids are the FRESH set, never the un-deletable stale id.
         assert result["policy_ids"] == ["pol-fresh"]
         assert "pol-stuck" not in result["policy_ids"]
+
+    @pytest.mark.asyncio
+    async def test_resync_old_policy_transient_error_does_not_fail_sync(self, cf_service):
+        """Old-policy cleanup runs on the SUCCESS path (after the app PUT already
+        committed CF's desired state). A NON-CloudflareException there — e.g. a
+        transient httpx transport error, which is NOT a CloudflareException —
+        must NOT propagate and fail the converged sync: that would roll back the
+        caller's DB write-back of the new app/policy ids into CF↔DB divergence
+        plus compounding orphans (the exact class this fix eliminates). The sync
+        must still return the new app_id and surface the un-deleted id via
+        orphaned_policy_ids. Catching only CloudflareException would red this."""
+        async def fake_get(url, headers=None, timeout=None, params=None):
+            class R:
+                status_code = 200
+                @staticmethod
+                def json():
+                    if "identity_providers" in url:
+                        return {"success": True, "result": [
+                            {"id": "idp-g", "name": "G", "type": "google"}]}
+                    return {"success": True, "result": []}
+            return R()
+
+        async def fake_delete(url, headers=None, timeout=None):
+            # Old reusable policy delete blows up with a transport-style error
+            # (NOT a CloudflareException).
+            if url.rsplit("/", 1)[-1] == "pol-old":
+                raise RuntimeError("connection reset")  # stand-in for httpx error
+            class R:
+                status_code = 202
+                @staticmethod
+                def json():
+                    return {"success": True, "result": {"id": "x"}}
+            return R()
+
+        async def fake_post(url, headers=None, json=None, timeout=None):
+            class R:
+                status_code = 201
+                @staticmethod
+                def json():
+                    return {"success": True, "result": {"id": "pol-fresh"}}
+            return R()
+
+        async def fake_put(url, headers=None, json=None, timeout=None):
+            class R:
+                status_code = 200
+                @staticmethod
+                def json():
+                    return {"success": True, "result": {"id": "app-existing"}}
+            return R()
+
+        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=fake_get)), \
+             patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=fake_post)), \
+             patch("httpx.AsyncClient.put", new=AsyncMock(side_effect=fake_put)), \
+             patch("httpx.AsyncClient.delete",
+                   new=AsyncMock(side_effect=fake_delete)):
+            result = await cf_service.sync_access_app(
+                canonical_name="paas-sa-x-y", app_name="gw",
+                primary_hostname="paas-sa-x-y.woowtech.io",
+                protected_hostnames=["paas-sa-x-y.woowtech.io"],
+                session_duration="8h", login_idp_types=["google"],
+                policies=[{"name": "corp", "decision": "allow",
+                           "rule_type": "email_domain", "rule_value": "acme.com",
+                           "precedence": 1}],
+                enabled=True, existing_app_id="app-existing",
+                existing_policy_ids=["pol-old"])
+        # Sync converged despite the transient delete error (did NOT raise).
+        assert result["app_id"] == "app-existing"
+        assert result["policy_ids"] == ["pol-fresh"]
+        # The un-deletable old policy is surfaced, not silently dropped.
+        assert result["orphaned_policy_ids"] == ["pol-old"]
 
     @pytest.mark.asyncio
     async def test_app_put_update_failure_reclaims_new_policies(self, cf_service):

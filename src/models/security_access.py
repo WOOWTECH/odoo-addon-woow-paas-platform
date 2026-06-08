@@ -695,6 +695,15 @@ class SecurityAccess(models.Model):
             return
         client = self._get_operator_client()
         result = client.sync_access_app(self._build_access_payload())
+        # Surface old reusable policies the operator could not delete after
+        # repointing the app — permanent Cloudflare orphans (cost/clutter) that
+        # no later re-sync reconciles, so make them observable in the log.
+        orphaned = result.get('orphaned_policy_ids') or []
+        if orphaned:
+            _logger.warning(
+                "Security Access %s (id=%s): operator left %d orphan CF Access "
+                "policy(ies) after sync: %s", self.canonical_name, self.id,
+                len(orphaned), ', '.join(orphaned))
         # write back CF ids
         self.access_app_id = result.get('app_id') or False
         returned = result.get('policy_ids') or []

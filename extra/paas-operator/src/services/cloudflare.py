@@ -1284,14 +1284,20 @@ class CloudflareService:
         if not enabled or not protected_hostnames:
             if existing_app_id:
                 await self._delete_access_app(existing_app_id)
+            orphaned = []
             for pid in existing_policy_ids:
+                # Best-effort: a leftover policy must not fail teardown. Catch
+                # broadly — a transient httpx transport error is not a
+                # CloudflareException; collect failures so the caller can observe
+                # the orphan (the SA clears its ids on teardown regardless).
                 try:
                     await self.delete_reusable_policy(pid)
-                except CloudflareException as e:
-                    logger.warning("Access teardown: policy %s delete failed: %s",
-                                   pid, e.message)
+                except Exception as e:
+                    orphaned.append(pid)
+                    logger.warning("Access teardown: policy %s delete failed "
+                                   "(left as orphan): %s", pid, e)
             return {"app_id": None, "policy_ids": [], "allowed_idps": [],
-                    "unresolved_idp_types": []}
+                    "unresolved_idp_types": [], "orphaned_policy_ids": orphaned}
 
         # Resync strategy (detach-before-delete): create the NEW reusable
         # policies, point the app at them (which detaches the OLD ones), and
@@ -1363,27 +1369,37 @@ class CloudflareService:
             # they don't linger as Cloudflare orphans (the caller's DB rollback
             # would otherwise lose all reference to this batch).
             for pid, _ in new_policy_ids:
+                # Best-effort reclaim: one delete error must not abort cleanup of
+                # the rest. Catch broadly (transient httpx errors are not
+                # CloudflareException); the original failure is re-raised below.
                 try:
                     await self.delete_reusable_policy(pid)
-                except CloudflareException as ce:
+                except Exception as ce:
                     logger.warning(
                         "Access rollback: orphan policy %s delete failed: %s",
-                        pid, ce.message)
+                        pid, ce)
             raise
 
         # App now references only the new policies → the OLD ones are detached
         # and safe to delete. Best-effort: a leftover policy is undesirable but
-        # must not fail an otherwise-successful sync. Skip ids we just created
+        # must NOT fail an otherwise-successful sync — the app PUT already
+        # committed CF's desired state, and raising here would roll back the
+        # caller's DB write-back into CF↔DB divergence. Catch broadly (a
+        # transient httpx transport error is not a CloudflareException) and
+        # collect failures so the caller can observe the orphan (mirrors the
+        # unresolved_idp_types signal channel). Skip ids we just created
         # (defensive; create always returns fresh ids).
         new_ids = {pid for pid, _ in new_policy_ids}
+        orphaned = []
         for pid in existing_policy_ids:
             if pid in new_ids:
                 continue
             try:
                 await self.delete_reusable_policy(pid)
-            except CloudflareException as e:
-                logger.warning("Access resync: old policy %s delete failed: %s",
-                               pid, e.message)
+            except Exception as e:
+                orphaned.append(pid)
+                logger.warning("Access resync: old policy %s delete failed "
+                               "(left as orphan): %s", pid, e)
 
         return {
             "app_id": app_id,
@@ -1394,6 +1410,9 @@ class CloudflareService:
             # the app silently fell back to "all available IdPs") — the caller
             # must surface this so the login-restriction widening is visible.
             "unresolved_idp_types": unresolved_idps,
+            # Old reusable policies that could not be deleted after the app was
+            # repointed — permanent CF orphans the caller should log/alert on.
+            "orphaned_policy_ids": orphaned,
         }
 
     @staticmethod
