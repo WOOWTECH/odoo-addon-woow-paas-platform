@@ -93,12 +93,24 @@ class SecurityAccessAccessPolicy(models.Model):
     # for parity: a Task-10 BFF that catches the sync error and reports success
     # would otherwise leave the row committed while CF was never updated.
 
+    # Access re-sync liveness gate is ('active', 'error') + tunnel_id, IDENTICAL
+    # to the SA config write (security_access.py write()) and the route
+    # sub-model create/write/unlink gates. A stage-2 provision failure leaves
+    # the SA in 'error' with a live tunnel while the subscription stays active
+    # (the BFF still permits policy CRUD), so a policy mutation in that state
+    # must converge Cloudflare's reusable policies, not silently diverge them —
+    # the DB row commits and the endpoint reports success, but a 'active'-only
+    # gate would skip the push and leave CF's allow/deny set stale with no
+    # later converge trigger (a pure policy edit doesn't touch the SA fields
+    # that fire the SA-level re-sync).
+
     @api.model_create_multi
     def create(self, vals_list):
         with self.env.cr.savepoint():
             policies = super().create(vals_list)
             for sa in policies.mapped('security_access_id'):
-                if sa.access_enabled and sa.state == 'active' and sa.tunnel_id:
+                if (sa.access_enabled and sa.state in ('active', 'error')
+                        and sa.tunnel_id):
                     sa._sync_access_to_operator()
         return policies
 
@@ -108,8 +120,8 @@ class SecurityAccessAccessPolicy(models.Model):
             if any(k in vals for k in ('name', 'decision', 'rule_type',
                                        'rule_value', 'sequence')):
                 for sa in self.mapped('security_access_id'):
-                    if sa.access_enabled and sa.state == 'active' \
-                            and sa.tunnel_id:
+                    if (sa.access_enabled and sa.state in ('active', 'error')
+                            and sa.tunnel_id):
                         sa._sync_access_to_operator()
         return result
 
@@ -118,8 +130,8 @@ class SecurityAccessAccessPolicy(models.Model):
         with self.env.cr.savepoint():
             result = super().unlink()
             for sa in affected:
-                if sa.exists() and sa.access_enabled and sa.state == 'active' \
-                        and sa.tunnel_id:
+                if (sa.exists() and sa.access_enabled
+                        and sa.state in ('active', 'error') and sa.tunnel_id):
                     sa._sync_access_to_operator()
         return result
 

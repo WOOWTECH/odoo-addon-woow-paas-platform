@@ -272,6 +272,43 @@ class TestAccessSync(TransactionCase):
         self.assertTrue(route_toggle_synced,
                         "is_protected toggle in 'error' state must sync access")
 
+    def test_error_state_policy_crud_still_syncs_access(self):
+        """F-MODEL-2 (policy sub-model leg): the policy create/write/unlink
+        liveness gate must match the SA/route gate — ('active','error') +
+        tunnel. An SA stuck in 'error' with a live tunnel (stage-2 provision
+        failure) must still push Access on a policy mutation, else CF's
+        reusable allow/deny set diverges from the DB with no converge trigger
+        (a pure policy edit doesn't touch the SA fields that fire the SA-level
+        re-sync). Pre-fix the policy gate was state=='active' only and would
+        silently skip every CF push here while the endpoint reported success."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            # Drop into 'error' but keep the live tunnel (stage-2 failure shape).
+            sa.write({'state': 'error'})
+            # create in 'error' must reach operator.
+            mc.sync_access_app.reset_mock()
+            pol = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'err-pol',
+                'decision': 'allow', 'rule_type': 'email_domain',
+                'rule_value': 'err.com'})
+            create_synced = mc.sync_access_app.called
+            # write in 'error' must reach operator.
+            mc.sync_access_app.reset_mock()
+            pol.write({'decision': 'deny'})
+            write_synced = mc.sync_access_app.called
+            # unlink in 'error' must reach operator.
+            mc.sync_access_app.reset_mock()
+            pol.unlink()
+            unlink_synced = mc.sync_access_app.called
+        self.assertTrue(create_synced,
+                        "policy create in 'error' state must sync access")
+        self.assertTrue(write_synced,
+                        "policy write in 'error' state must sync access")
+        self.assertTrue(unlink_synced,
+                        "policy unlink in 'error' state must sync access")
+
 
 class TestProvisionPushesAccess(TransactionCase):
     """F-MODEL-1: configure-then-provision must push Access at provision time.
