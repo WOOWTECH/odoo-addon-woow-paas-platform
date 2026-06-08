@@ -257,7 +257,22 @@ class SecurityAccess(models.Model):
                     raise UserError(
                         "Field '%s' is immutable after creation." % forbidden
                     )
-        result = super().write(vals)
+        # Atomicity scope: mirror the route/policy sub-models' savepoint so a
+        # config write whose Access re-sync raises rolls the super().write()
+        # back and re-raises, rather than leaving access_enabled=True committed
+        # in the DB while CF was never updated (a fail-OPEN divergence: the row
+        # + UI say 'protected' but no CF Access App exists, so the routes are
+        # publicly reachable). The BFF (_update_access_config) catches the
+        # propagating exception and reports {success:False} WITHOUT re-raising,
+        # so Odoo's JSON-RPC handler does NOT roll the transaction back — hence
+        # the explicit savepoint here is the only thing that undoes the already-
+        # applied write on sync failure. The guarantee is Odoo-side ONLY:
+        # sync_access_app is a declarative full-state push with no compensating
+        # action, so a mid-reconcile operator failure can still leave CF
+        # partially mutated; that residual CF↔DB divergence converges via the
+        # next idempotent full-state re-sync, not via this savepoint (same scope
+        # the route/policy sub-models document).
+        #
         # P2: any change to the shared Access config (master toggle, login
         # methods, session duration) re-pushes the full desired Access state.
         # Mirrors the route-sub-model's declarative re-sync — idempotent, and
@@ -267,11 +282,16 @@ class SecurityAccess(models.Model):
         # stage-2 provision failure leaves the SA in 'error' with a live tunnel
         # while the subscription stays active (BFF still permits CRUD), so an
         # access edit in that state must converge CF, not silently diverge it.
-        if any(k in vals for k in ('access_enabled', 'login_google',
-                                   'login_email_otp', 'session_duration')):
-            for record in self:
-                if record.state in ('active', 'error') and record.tunnel_id:
-                    record._sync_access_to_operator()
+        gated = any(k in vals for k in ('access_enabled', 'login_google',
+                                        'login_email_otp', 'session_duration'))
+        if gated:
+            with self.env.cr.savepoint():
+                result = super().write(vals)
+                for record in self:
+                    if record.state in ('active', 'error') and record.tunnel_id:
+                        record._sync_access_to_operator()
+            return result
+        result = super().write(vals)
         return result
 
     # ------------------------------------------------------------------ #

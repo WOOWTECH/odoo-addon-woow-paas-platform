@@ -148,6 +148,34 @@ class TestAccessSync(TransactionCase):
         self.assertFalse(payload['enabled'])
         self.assertEqual(payload['existing_app_id'], 'app-1')
 
+    def test_config_write_sync_failure_rolls_back_access_enabled(self):
+        """SA-level config write 的 Access re-sync 失敗 → super().write() 回滾，
+        access_enabled 不會留在 DB 為 True（fail-OPEN 分歧：row/UI 說 protected
+        但 CF 從沒建 Access app）。與 route/policy 子模型 savepoint 對齊。
+
+        Pre-fix SecurityAccess.write() 先無條件 super().write() 再 sync，整段不在
+        savepoint 內：BFF (_update_access_config) catch 例外回 {success:False} 但
+        不 re-raise，JSON-RPC handler 不 rollback → access_enabled=True 已 commit
+        卻無 CF app，路由公開可達。本測直接驅動 model.write 並 assert 回滾。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        # access_enabled starts False on a freshly-provisioned SA.
+        self.assertFalse(sa.access_enabled)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            mc.sync_access_app.side_effect = PaaSOperatorError('cf down')
+            with self.assertRaises(PaaSOperatorError):
+                sa.write({'access_enabled': True})
+        # Must have rolled back: enabling Access while CF sync failed must NOT
+        # leave the toggle committed (else fail-OPEN divergence).
+        sa.invalidate_recordset()
+        self.assertFalse(sa.access_enabled,
+                         "access_enabled must roll back when the CF sync "
+                         "raises, else the row claims 'protected' with no CF "
+                         "Access app (fail-OPEN)")
+
     def test_unlink_carries_deleted_policy_cf_id_to_existing_ids(self):
         """Individual policy unlink must NOT orphan its CF reusable policy.
 
