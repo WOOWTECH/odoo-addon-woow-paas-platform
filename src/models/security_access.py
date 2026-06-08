@@ -144,6 +144,14 @@ class SecurityAccess(models.Model):
         inverse_name='security_access_id',
         string='Access Policies',
     )
+    access_unresolved_idp_types = fields.Char(
+        string='Unresolved Login Methods', copy=False,
+        help='Requested login methods (e.g. google) with no matching '
+             'Cloudflare account IdP at the last sync. Non-empty means the '
+             'login restriction silently widened — if it emptied the resolved '
+             'set, the Access app falls back to ALL available IdPs. Surfaced '
+             'so the fail-open widening is visible, not dropped on the floor.',
+    )
 
     route_ids = fields.One2many(
         comodel_name='woow_paas_platform.security_access_route',
@@ -654,6 +662,16 @@ class SecurityAccess(models.Model):
         # write back CF ids
         self.access_app_id = result.get('app_id') or False
         returned = result.get('policy_ids') or []
+        # Persist the operator's fail-open login-widening signal: requested
+        # login methods (e.g. google) with no matching CF account IdP are
+        # silently dropped, and if that empties the resolved set the Access app
+        # falls back to ALL IdPs. The operator goes to lengths to surface this
+        # (cloudflare.py sync_access_app return) — store it so it's observable
+        # via to_dict() instead of being dropped on the floor.
+        unresolved = result.get('unresolved_idp_types') or []
+        new_unresolved = ', '.join(unresolved) if unresolved else False
+        if self.access_unresolved_idp_types != new_unresolved:
+            self.access_unresolved_idp_types = new_unresolved
         # map returned policy ids back onto policy rows in order
         policies = self.access_policy_ids.sorted(
             key=lambda x: (x.sequence, x.id))
@@ -840,6 +858,10 @@ class SecurityAccess(models.Model):
             'session_duration': self.session_duration,
             'login_google': self.login_google,
             'login_email_otp': self.login_email_otp,
+            # Fail-open login-widening signal from the last sync: non-empty
+            # means requested login methods had no matching CF IdP and the
+            # restriction silently widened. Surfaced so the UI can warn.
+            'access_unresolved_idp_types': self.access_unresolved_idp_types or '',
             'access_policies': [p.to_dict() for p in self.access_policy_ids],
             'subscription': self._get_subscription_info(),
         }

@@ -735,7 +735,10 @@ class PaaSOperatorClient:
         payload keys: enabled, canonical_name, app_name, primary_hostname,
         protected_hostnames, session_duration, login_idp_types, policies,
         existing_app_id, existing_policy_ids. Returns {app_id, policy_ids,
-        allowed_idps}. Idempotent.
+        allowed_idps, unresolved_idp_types}. unresolved_idp_types lists
+        requested login methods with no matching CF account IdP — a fail-open
+        login-widening signal the caller persists (SA.access_unresolved_idp_types).
+        Idempotent.
         """
         return self._request(
             'PUT', '/api/access/sync', data=payload,

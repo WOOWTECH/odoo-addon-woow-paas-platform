@@ -283,6 +283,34 @@ class TestAccessSync(TransactionCase):
         self.assertFalse(sa.access_app_id)
         self.assertFalse(pol.cf_policy_id)
 
+    def test_unresolved_idp_types_persisted_and_surfaced(self):
+        """The operator surfaces unresolved_idp_types (requested login methods
+        with no matching CF account IdP — a fail-open login-widening signal:
+        if the resolved set empties, the Access app falls back to ALL IdPs).
+        The SA writeback must persist it and to_dict() must expose it, else the
+        security signal the operator goes to lengths to produce is dropped on
+        the floor and the user is never warned. Drive a sync whose result
+        carries unresolved_idp_types and assert it lands on the field + dict."""
+        mc = self._mock()
+        mc.sync_access_app.return_value = {
+            'app_id': 'app-1', 'policy_ids': [],
+            'allowed_idps': ['idp-otp'],
+            'unresolved_idp_types': ['google']}
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True, 'login_google': True})
+        self.assertEqual(sa.access_unresolved_idp_types, 'google')
+        self.assertEqual(sa.to_dict()['access_unresolved_idp_types'], 'google')
+        # A later clean sync (all IdPs resolved) must clear the stale warning.
+        mc.sync_access_app.return_value = {
+            'app_id': 'app-1', 'policy_ids': [],
+            'allowed_idps': ['idp-g', 'idp-otp'],
+            'unresolved_idp_types': []}
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'session_duration': '8h'})
+        self.assertFalse(sa.access_unresolved_idp_types)
+        self.assertEqual(sa.to_dict()['access_unresolved_idp_types'], '')
+
     def test_error_state_with_live_tunnel_still_syncs_access(self):
         """F-MODEL-2: access-sync liveness gate must match route-sync —
         ('active','error') + tunnel. An SA stuck in 'error' with a live tunnel
