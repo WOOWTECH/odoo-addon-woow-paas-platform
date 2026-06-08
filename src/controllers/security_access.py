@@ -444,9 +444,17 @@ class SecurityAccessController(Controller):
                     "error": "Failed to create security access. Please try again."}
 
     def _check_route_prefix(self, prefix: str) -> dict[str, Any]:
-        """Two-layer availability: Odoo DB first, then Cloudflare DNS."""
+        """Format check first, then two-layer availability: Odoo DB, Cloudflare DNS."""
         Route = request.env[
             "woow_paas_platform.security_access_route"].sudo()
+        # Fail-fast on format using the SAME validator the create/write
+        # constraint uses (single source of truth) so availability never
+        # reports a prefix as "Available" that create would then reject.
+        fmt_err = Route._subdomain_prefix_error(prefix)
+        if fmt_err:
+            return {"success": True,
+                    "data": {"prefix": prefix, "available": False,
+                             "reason": fmt_err}}
         # sudo justified: existence check across ALL workspaces is the very
         # point of a flat-namespace availability check; returns only a
         # boolean, no record data crosses the tenant boundary.

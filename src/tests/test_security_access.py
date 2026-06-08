@@ -341,13 +341,34 @@ class TestSecurityAccess(TransactionCase):
 
     def test_route_prefix_validation(self):
         sa = self._make_active_sa()
-        for bad in ['-bad', 'bad-', 'Bad', 'a b', 'paas-evil', 'svc-evil', 'ab']:
+        # Bad format: leading/trailing hyphen, uppercase, space, too short, and
+        # — the focus of this change — anything containing a DOT (a dot would
+        # split the single DNS label into multiple labels) or other symbols.
+        bad_prefixes = [
+            '-bad', 'bad-', 'Bad', 'a b', 'ab',
+            'a.b', 'sub.domain', 'has.dot', 'under_score', 'sym!bol',
+        ]
+        for bad in bad_prefixes:
             with self.assertRaises(ValidationError, msg=bad):
                 with self.env.cr.savepoint():
                     self.Route.create({
                         'security_access_id': sa.id,
                         'subdomain_prefix': bad,
                     })
+
+    def test_route_prefix_reserved_now_allowed(self):
+        """Reserved-prefix block removed: a user route MAY now start with
+        'paas-' / 'svc-' (only the DNS-label format rule applies). Locks the
+        intentional relaxation so it isn't silently re-added."""
+        sa = self._make_active_sa()
+        with patch(MOCK_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = MagicMock()
+            for ok in ['paas-evil', 'svc-evil', 'my-app', 'test', 'app2']:
+                route = self.Route.create({
+                    'security_access_id': sa.id,
+                    'subdomain_prefix': ok,
+                })
+                self.assertEqual(route.subdomain_prefix, ok)
 
     def test_route_prefix_unique_across_platform(self):
         sa = self._make_active_sa()
