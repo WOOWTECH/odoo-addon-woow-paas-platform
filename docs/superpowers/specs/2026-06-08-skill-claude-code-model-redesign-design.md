@@ -111,7 +111,10 @@ Odoo 端（本 repo）：
 
 - 強隔離沙箱（gVisor/Kata 方案 B、ephemeral pod 方案 C）— 列未來工作，另 issue 追蹤。
 - 把手刻 agent loop 換成 LangGraph `create_agent` — 與本次正交，不動（亦因此不能用官方
-  `AgentMiddleware`，見 §4.1）。
+  `AgentMiddleware`，見 §4.1）。canvas owner 裁決：create_agent 對本 skill 需求零新增價值，卻要動
+  已被 #129/#23/#52 穿刺的關鍵 loop。**backlog 一張 create_agent spike**，待 {resume（disconnect
+  後 in-flight turn 不丟，`ws_server.py:309`）、CANCEL（`envelope.py:32` 已有 type，手刻 loop 無法乾淨
+  中斷）、HITL、或同時疊 2+ 橫切關注} 第一個成真需求時再評估遷移。
 - executable→knowledge 的資料遷移相容層 — 早期無依賴，直接替換。
 - kind 分流 — 明確不做。
 - bash 跑在獨立 network namespace / sidecar / PID namespace 隔離 — 列未來硬化。
@@ -123,13 +126,17 @@ Odoo 端（本 repo）：
 ### 4.1 Skill 浮現（progressive disclosure）— skill-roster 注入（自刻）
 
 **BLOCKER 釐清**：LangChain 官方文件的 `SkillMiddleware(AgentMiddleware)` / `wrap_model_call`
-綁定 `create_agent` 的 middleware pipeline；本 runtime **未裝 `langchain` meta-package、無
-middleware 模組、且手刻 bind_tools loop（Non-Goal 不改 create_agent）**，故**不能**用官方
-middleware。改**自刻**：
+也是「你自己 subclass + 自己寫注入邏輯」、且只能掛進 `create_agent` 的 middleware pipeline；本
+runtime **未裝 `langchain` meta-package、無 middleware 模組、且手刻 bind_tools loop（Non-Goal 不改
+create_agent）**，故**不能**用官方 middleware。官方那套唯一省到的是 agent loop（見 §3 為何不遷）。
+改**自刻**，並採 canvas owner 的 refinement：
 
-- 在 `langgraph_runtime` 的 `_history_to_messages`（`:364`）之後、`astream` 之前，於 messages 最前
-  prepend 一個 `SystemMessage`，內容為該 workspace 所有 effective skill 的 roster（progressive
-  disclosure：只放 `name + description`，不放全文）。
+- roster 組裝寫成**獨立、可單測的純函式** `build_skill_roster(effective_skills) -> str`（progressive
+  disclosure：只放 `name + description`，不放全文），**不塞進 `_llm_stream` 函式體**（該路徑已被
+  #129/#23/#52 反覆穿刺，避免續腫）。
+- 注入點：**複用既有 `system_context` 機制** —— runtime 本就把 Odoo per-turn 傳來的 `system_context`
+  原樣置頂為 `SystemMessage`（見 `langgraph_runtime.py` 檔頭 agent-context-enrichment）。
+  `build_skill_roster` 的輸出**併入該 `system_context`**（roster 段 + 既有背景），不另開 prepend 路徑。
 - **注入格式**（明確化，供 runtime 實作與測試對齊）：markdown bullet list，例
   ```
   ## Available skills
@@ -199,7 +206,8 @@ middleware。改**自刻**：
 
 **新增**
 
-- 自刻 skill-roster system-prompt 注入（§4.1，在 `langgraph_runtime` 注入點）。
+- 自刻 `build_skill_roster(effective_skills) -> str` 純函式（獨立可單測），輸出併入既有
+  `system_context`（§4.1）；**不寫進 `_llm_stream` 函式體**。
 - `skill:load_skill` tool（§4.2，呼叫 `ensure_skill_cached` + 讀 body/檔案清單）。
 - `bash:execute` tool（§4.2）。其 runner：**複用** `subprocess_runner` 的 `_safe_env` /
   `_set_rlimits` / `_capped_*`，**新增「異 UID」執行**（§6.3）。建議在 `subprocess_runner` 內擴一個
@@ -237,10 +245,13 @@ middleware。改**自刻**：
 
 ### 6.3 本期緩解（defense-in-depth）
 
-1. **bash 子行程 UID 必須異於 agent process UID（關鍵）**。agent 跑 `USER 10001`；若 bash 也跑
-   10001，攻擊者可 `cat /proc/<agent-pid>/environ` 直接還原 `LLM_API_KEY` → env scrub 形同虛設。
+1. **bash 子行程 UID 必須異於 agent process UID（關鍵）**。agent 跑 `USER 10001`（且通常是
+   container PID 1）；若 bash 也跑 10001：
+   - 攻擊者可 `cat /proc/1/environ` 直接還原 `LLM_API_KEY` → env scrub 形同虛設；
+   - **`RLIMIT_NPROC=16` 是 per-UID 累計**（`subprocess_runner.py:42`）→ 同 UID 的 untrusted bash
+     fork 與 runtime 自身**共用同一份配額**，fork-bomb 可餓死 runtime（DoS，canvas owner 確認）。
    bash 須以**另一個非特權 UID**（如 `nobody`/65534 或專用 `skillrunner` UID）執行，且該 UID 無
-   `CAP_SYS_PTRACE` / `CAP_DAC_READ_SEARCH`。
+   `CAP_SYS_PTRACE` / `CAP_DAC_READ_SEARCH`。異 UID 同時封住上述 `/proc` 旁路與 NPROC 共用 DoS。
 2. **env allowlist**：複用 `subprocess_runner._safe_env`（已是 positive allowlist，只放
    PATH/HOME/LANG/PROJECT_HASH）。新增測試覆蓋任意 `LLM_*`/`*_KEY`/`*_SECRET`/`*_TOKEN` 前綴皆不存在。
 3. **掛載祕密檔權限**：`/run/secrets/agent-runtime-auth-secret`（及建議改掛 secret volume 的
@@ -382,6 +393,11 @@ readOnlyRootFs 與 `/workspace`/`/tmp` RW 的相容。
   對應 assertion。
 - `SKILL_BUNDLE_TOKEN` 本期能否從 env 改 secret volume mount（§6.3.4）。
 - `/workspace` securityContext / fsGroup 設定（agent 與 bash 異 UID 同時可寫）。
+- **`LLM_API_KEY` blast radius**：是平台共用 key 還是 per-workspace？canvas owner 三方判定 uncertain，
+  須查 operator `agent_runtimes.py::_build_install_values` 才能定（決定 §6.2 嚴重度）。
+- **AUTH secret env 名不一致（adjacent latent bug，runtime 自身）**：chart 注入 `AUTH_SECRET_PATH`
+  （`deployment.yaml:107`），runtime 只讀 `AUTH_SECRET_DIR`（`auth.py:52`，註明測試用），生產靠
+  `_DEFAULT_SECRET_DIR` 硬編碼預設路徑剛好相同才 work；非本提案範圍，但動 secret mount 時須一併修。
 
 ## 12. References
 
