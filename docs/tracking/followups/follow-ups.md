@@ -2,7 +2,8 @@
 
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
-**State as of 2026-06-07**：
+**State as of 2026-06-08**：
+- **Security Access P2 Access Control（Cloudflare Zero Trust）+ stg 發佈 + 真 Cloudflare 寫路徑 E2E（2026-06-08，PR #165 merged → develop）**：Access App / reusable Policy CRUD / Login Methods（Google + Email OTP）/ 逐 route is_protected / session duration。5-phase ultracode workflow（48 commits、Odoo 0 failed of 1107、operator 175）+ 5-lens loop-until-dry 對抗式審查（rounds 1-5，19 confirmed 全修）。**stg operator image-only Fleet bump**（`20260608.0307`，PR paas-app-bundle-cd#10）→ pod 起、Access endpoints live。**真 Cloudflare Access 寫路徑 E2E（operator 級，直接打 `PUT /api/access/sync`）**：CREATE app+policy+IdP 綁定 ✓ / idempotent re-sync ✓ — 但抓到 **operator delete 路徑 3 bug**（CF DELETE 回 202 被誤判失敗 + 孤兒 + in-use 刪序），**修復 PR #166 merged**（develop `38220bb`、image `20260608.0541`、Fleet bump PR paas-app-bundle-cd#11）→ **live 重驗 teardown 全綠**（CREATE/RE-SYNC/TEARDOWN 全 200、`orphaned=[]`、CF 零殘留）。知識持久化：[[operator-cf-access-delete-202-mock-contract]]（pitfall）。**token scope 前置**：stg token 加帳戶級 Access:Apps&Policies(Edit) + Access:Org/IdP(Read)（F-SA-3 RESOLVED）。**F-SA-3 / F-SA-4 新增**（見 §F-SA P2；F-SA-4=prod token 同前置，priority:high）。
 - **Security Access P1 主線 + stg 一起發佈 + 真 Cloudflare E2E（2026-06-07，PR #159 merged → develop）**：訂閱/Tunnel/多 route 宣告式同步/503 凍結/後台/前端 6-tab/HA API 平行串接。6-phase ultracode workflow（73 commits、Odoo 1055 tests 0 failed、operator unit 154 + integration 7）+ 5-lens × 4 輪 loop-until-dry 對抗式審查（52 confirmed：1 critical provision 冪等孤兒 tunnel / 15 major / 36 minor 全修）。知識持久化 5 篇（3 pattern + 2 pitfall：`[[unittest-mock-dual-namespace-patch]]` / `[[su-env-exempt-guard-false-green]]` / `[[two-stage-remote-provision-idempotency]]` / `[[seed-noupdate-sticky-template-links]]` / `[[owl-template-crash-class-syntax]]`）。**stg 發佈鏈（4-agent canvas 協作：paas-platform / paas-app-bundle-cd / woow-paas-charts / deploy-stg）**：operator image `20260606.2308`（含 #159 SA + #158 TTL stopgap，image-only Fleet bump，chart 0.1.13 不動，PR paas-app-bundle-cd#9）→ addon deploy-stg（develop `c45ffdb`）→ dev-sandbox-stg → **真 Cloudflare E2E 5/6 PASS**（provision 真 tunnel + primary route DNS `paas-sa-…woowtech.io` dig 解析 CF edge ✓ / `PUT /routes` 宣告式同步 + DNS reconcile ✓ / availability 雙層 ✓ / 刪除 unlink 連動清 CF tunnel+DNS ✓；503 凍結依交辦 SKIP），advisory 2（token DNS scope）閉環、清理乾淨。**F-SA-1 + F-SA-2 新增**（見 §F-SA；皆 stg 環境 / 平台命名慣例層，超出 SA P1 範圍，gitea #162/#163，priority:high）。
 - **F-SBX-5 已修（feat/skill-binding-ambiguity，2026-06-07，issue #156）**：skill 同名歧義 + 雙綁撞名修復，四層 lock-step —— ① `skill._compute_display_name` 後綴 version+scope（`test-echo v0.1.0 (System)`，`_rec_names_search=['name','version']`，後綴不進 wire）② `agent_template._check_no_duplicate_skill_name`（@api.constrains('skill_ids')，**不放行 superuser**，一條守全 3 寫入路徑：form 直寫/inverse/fork）③ `_build_skill_snapshot` dict-by-name dedup（user 蓋 system、與 bundle endpoint tie-break 同向、絕不 raise；`_effective_skill_ids` frozen 未動）④ 保守 migration `18.0.1.0.34`（(user,system) 配對自動刪 system rel、同 scope 同名 AMBIGUOUS 只 warning 留人工）。23 個新測試（display_name 7 / constraint 8 / dedup 5 / migration 3）+ 全套 1405 tests 0 fail 0 error（dev-sandbox 實跑，migration 另做 odoo-shell E2E 注入實證 + 冪等）。pitfall doc：[`skill-same-name-dual-bind-snapshot-collision`](../pitfalls/skill-same-name-dual-bind-snapshot-collision.md)（含存量鎖死預期行為 + 同 scope 人工清理 snippet + is_effective 雙 True 已知顯示行為）。**附帶發現（未修，tooling）**：`k8s-dev-sandbox/scripts/test.sh:110` 以 `${SLUG}-odoo-dev-sandbox` 組資源名，長 branch slug 被 helm 截斷（實際 `...-odoo-dev-sandb`）→ secret 查無 exit 2；workaround 直接 kubectl exec 正確資源名。
 - **PR #153 skill binding UX stg 驗證（deploy-stg，2026-06-06）**：image `20260606.1010`（develop@`939b3a3`）部署 + PR #153 未結事項「pod 真載入 skill + 完整串流」**首次全鏈路驗通**（wizard user-scope 上傳 → copy-on-write fork 兩層綁定 → 同名 shadow system → snapshot push → pod ConfigMap reload → lazy fetch 200+SHA256 → atomic extract → frontmatter parse → subprocess exit 0 → tool_result/text_chunk/done）。E2E 逐層揭露 3 發現（皆非 PR #153 回歸）：**F-SBC-1 新增**（stg seed bundle 三重違規 + wizard 缺上傳結構驗證，issue **#154**）、**F-SKT-1 再確認**（31h pod **first-fetch** 也 401——不只 re-fetch，issue **#155**）、**F-ARL-4 新增**（LLM tool-call 一律空 kwargs，**paas-agent-runtime#23**）。驗證 artifacts 留 stg project 27 'PR153-skill-verify'（含合規 bundle 參考件 test-echo 0.1.2）。
@@ -1607,3 +1608,29 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   全 hostname 要一起傳，故 (a)(b) 合併一個 PR 做免兩次白工。owner=platform（本 repo addon +
   operator）。次要 nit（同 PR 順手）：① CF tunnel soft-delete 後 operator `GET` 仍回 200
   inactive（未映射 deleted_at，觀測性）② route `to_dict()` 不含 `dns_record_id`（DB 有存）。
+
+## F-SA — Security Access P2 Access Control follow-ups（2026-06-08）
+
+> P2 Access Control（Cloudflare Zero Trust）live stg 寫路徑 E2E 抓到的 token scope 前置 +
+> operator delete-path bug（後者已修，見 [[operator-cf-access-delete-202-mock-contract]]）。
+
+- **F-SA-3**（**RESOLVED for stg**，2026-06-08；scope=Cloudflare token 前置）：
+  **P2 Access 寫路徑需「Access: Apps and Policies (Edit)」在帳戶 (Account) scope，不是區域 (Zone)**。
+  operator 的 Access app/policy 是帳戶級 endpoint（`/accounts/{aid}/access/{apps,policies}`）。
+  stg token `woow-paas-stg` 一開始把該權限加在**區域**層 → create policy 回 `code 10000
+  Authentication error`；改成**帳戶**層後 live 寫測全綠。IdP 列表也是帳戶級，需「Access:
+  Organizations, Identity Providers and Groups (Read)」（亦已加）。stg token 現有：Account
+  Tunnel(Edit) + Account Access:Org/IdP(Read) + Account Access:Apps&Policies(Edit) + Zone
+  Email Routing(Edit) + Zone DNS(Edit)。**留檔供 prod 與其他環境對照**。
+
+- **F-SA-4**（**token scope DONE 2026-06-08；operator bump 仍 OPEN**，priority:high，scope=prod 上線前置）：
+  **prod 要啟用 P2 Access 前置兩件，token 部分已完成。**
+  - ① **prod token scope（✅ DONE 2026-06-08）**：prod Cloudflare token `woow-paas`（**與 stg
+    `woow-paas-stg` 不同 token**）已設帳戶級「Access: Apps and Policies (Edit)」+「Access:
+    Organizations/IdP (Read)」+ Tunnel(Edit) + Zone DNS/Email(Edit)，與 stg 已驗通設定一致
+    （視覺比對；未 live 驗，因 prod operator 尚無 Access endpoint，見 ②）。性質同 P1 advisory-2 DNS scope。
+  - ② **prod operator image bump（OPEN）**：prod operator（`paas-system/paas-operator`）目前跑
+    **`20260525.0054`——pre-P1/P2 的舊 image，連 Access endpoint 都沒有**。bump 到 `20260608.0541`+
+    才有 P2 Access endpoints **且**含 delete-path 修復（PR #166）；一併也帶上 P1 operator 變更（prod 落後多版）。
+    走 Fleet image-only（`paas-operator/values-prod.yaml`，paas-app-bundle-cd）。bump 後可比照 stg 做
+    operator 級 live 寫測閉環（含 token live 驗證）。owner=platform / prod 維運。
