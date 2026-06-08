@@ -136,6 +136,43 @@ class TestAccessSync(TransactionCase):
         hosts = payload['protected_hostnames']
         self.assertIn(f"as-extra.{sa._get_paas_domain()}", hosts)
 
+    def test_protected_route_unlink_resyncs_access(self):
+        """unlink leg parity: removing an is_protected route shrinks the CF
+        Access app's destination set, so SecurityAccessRoute.unlink() must fire
+        an Access re-sync with the shrunk protected_hostnames. This leg has its
+        own compute-before-unlink logic (protected_affected captured BEFORE
+        super().unlink() drops the rows) — exactly the ordering-sensitive code
+        the policy-unlink path needed a dedicated test to lock. The create leg
+        (test_enable_access_syncs_app) and the is_protected WRITE-toggle leg
+        (test_protected_route_toggle_resyncs) are covered; this closes the
+        unlink leg. A regression dropping the re-sync (or the protected_affected
+        pre-capture) would leave CF still protecting a deleted route's hostname
+        with no converge trigger, and every other test stays green."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            # Add a second protected route alongside the protected primary.
+            r2 = self.Route.create({'security_access_id': sa.id,
+                                    'subdomain_prefix': 'as-protected',
+                                    'is_protected': True})
+            r2_host = f"as-protected.{sa._get_paas_domain()}"
+            # Sanity: the extra protected route is in the destination set now.
+            self.assertIn(
+                r2_host, mc.sync_access_app.call_args.args[0]['protected_hostnames'])
+            mc.sync_access_app.reset_mock()
+            r2.unlink()
+        self.assertTrue(mc.sync_access_app.called,
+                        "unlinking a protected route must re-sync Access")
+        payload = mc.sync_access_app.call_args.args[0]
+        # The deleted route's hostname must be GONE from the shrunk set.
+        self.assertNotIn(r2_host, payload['protected_hostnames'],
+                         "deleted protected route must be removed from the CF "
+                         "Access app destinations")
+        # The surviving protected primary is still there.
+        self.assertIn(f"{sa.canonical_name}.{sa._get_paas_domain()}",
+                      payload['protected_hostnames'])
+
     def test_disable_access_tears_down(self):
         mc = self._mock()
         sa = self._active_sa(mc)
