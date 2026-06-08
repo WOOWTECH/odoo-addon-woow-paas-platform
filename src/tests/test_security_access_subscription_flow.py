@@ -660,6 +660,45 @@ class TestSecurityAccessAccessControl(TransactionCase):
         self.assertTrue(res['success'], res.get('error'))
         self.assertEqual(len(sa.access_policy_ids), 1)
 
+    def test_policy_quota_enforced_at_controller(self):
+        """plan sa_max_access_policies=1：第二條 policy 在 controller 層
+        (_create_policy) 被擋，回 structured {success:False} 且 error 含 'quota'。
+
+        Policies 的 quota 與 routes 一樣有兩層：controller _create_policy
+        (len(sa.access_policy_ids) >= quota → structured error) 與 model
+        @api.constrains _check_policy_quota (count > quota → ValidationError)。
+        Routes 兩層都有測（test_route_quota_enforced_at_controller +
+        _at_orm_backstop），但 policies 修前只測了 ORM backstop
+        (test_policy_quota_enforced)；controller 這條 structured-error code path
+        無測，是 two-layer-quota 半套覆蓋的反例。鎖住它：移除/弱化 controller
+        層 gate（error message 漂移、或 gate 被拿掉只剩 per-row ORM）會被抓到。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        plan = self.env['sh.subscription.plan'].create({
+            'name': 'AC Policy Quota Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_access_policies': 1})
+        sub = self.env['sh.subscription.subscription'].create({
+            'sh_partner_id': self.env.user.partner_id.id,
+            'state': 'in_progress'})
+        sub.sh_subscription_plan_id = plan.id
+        sa.subscription_id = sub.id
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            sa.write({'access_enabled': True})
+            r1 = self.controller._create_policy(sa, {
+                'name': 'p1', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+            self.assertTrue(r1['success'], r1.get('error'))
+            r2 = self.controller._create_policy(sa, {
+                'name': 'p2', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+        self.assertFalse(r2['success'])
+        self.assertIn('quota', r2['error'].lower())
+        # the over-quota policy must not have landed
+        self.assertEqual(len(sa.access_policy_ids), 1)
+
     def test_create_policy_invalid_rule_rejected(self):
         mc = self._mock()
         sa = self._active_sa(mc)
