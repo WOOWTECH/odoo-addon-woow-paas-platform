@@ -19,6 +19,17 @@ const TABS = [
   { key: "domains", label: "Domains", icon: "language", comingSoon: true },
 ];
 
+// Cloudflare-internal IdP type strings (as persisted in
+// access_unresolved_idp_types by the operator / _build_access_payload) →
+// the SAME user-facing labels the login-method toggles use (XML li_google /
+// li_otp). The fail-open widening warning must name the methods the user
+// actually selected by those labels; surfacing the raw 'onetimepin' (a string
+// the user never picked by that name) weakens the warning's actionability.
+const IDP_TYPE_LABELS = {
+  onetimepin: "Email OTP",
+  google: "Google",
+};
+
 /**
  * SecurityAccessDetailPage Component
  *
@@ -212,6 +223,23 @@ export class SecurityAccessDetailPage extends Component {
   }
 
   // ---- Access tab：config + policies + route protection ----
+  // Map the persisted comma-joined CF type string to user-facing labels so the
+  // fail-open widening warning names the SAME methods the toggles do (e.g.
+  // 'onetimepin' → 'Email OTP'). Unknown types pass through verbatim rather
+  // than being dropped, so a future CF type still surfaces (just unmapped).
+  get unresolvedIdpLabels() {
+    const raw = this.state.sa && this.state.sa.access_unresolved_idp_types;
+    if (!raw) {
+      return "";
+    }
+    return raw
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => t)
+      .map((t) => IDP_TYPE_LABELS[t] || t)
+      .join(", ");
+  }
+
   async saveAccessConfig(vals) {
     const res = await securityAccessService.updateAccessConfig(
       this.props.workspaceId, this.props.saId, vals);

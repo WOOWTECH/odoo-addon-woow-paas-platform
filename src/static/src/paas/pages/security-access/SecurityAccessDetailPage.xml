@@ -221,7 +221,7 @@
               <span>
                 These login methods have no matching Cloudflare identity provider
                 and were ignored:
-                <strong t-esc="state.sa.access_unresolved_idp_types"/>.
+                <strong t-esc="unresolvedIdpLabels"/>.
                 Access may have fallen back to allowing all available login
                 methods. Add the matching identity provider in your Cloudflare
                 Zero Trust account, then re-save to re-apply the restriction.
