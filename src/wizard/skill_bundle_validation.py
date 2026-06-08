@@ -21,10 +21,7 @@ pod 首次 invoke 才以 tool_error 浮現，正是本驗證要消滅的 UX 黑�
    （``_parse_frontmatter_stdlib``），只認扁平 ``key: value``。此 fallback **無法偵測
    YAML 文法錯**（已知契約缺口）—— 它不會 raise，壞文法的 frontmatter 會被當成
    「缺 name/description」或部分誤判；正常部署有 yaml，不走此路徑。
-3. **entrypoint 預設值**：loader.py ``parse_skill_frontmatter`` 取
-   ``data.get("entrypoint", "scripts/main.py")``。本模組同樣預設 ``scripts/main.py``，
-   並讀 frontmatter 自訂 ``entrypoint``。
-4. **解壓防護**：cache.py ``_atomic_extract`` 用 ``tar.extractall(filter="data")``。
+3. **解壓防護**：cache.py ``_atomic_extract`` 用 ``tar.extractall(filter="data")``。
    Python ``data`` filter 的語意（已實測 ``tarfile._get_filtered_attrs``）：
    - 擋 path traversal / 絕對路徑（``OutsideDestinationError`` / ``AbsolutePathError``）。
    - member type 只放行 ``isreg`` / ``islnk`` / ``isdir`` / ``issym``；其餘
@@ -56,9 +53,6 @@ try:
     import yaml
 except ImportError:  # pragma: no cover - 正常部署有 pyyaml（requirements.txt 宣告）
     yaml = None
-
-# --- entrypoint 預設（鏡像 loader.py parse_skill_frontmatter）---
-DEFAULT_ENTRYPOINT = "scripts/main.py"
 
 # --- zip-bomb caps（wizard-side 自訂；runtime cache.py 無顯式數值 cap）---
 # 上游已有 10MB raw cap + SHA256；這幾個是 defense-in-depth 的二級防線。
@@ -126,7 +120,7 @@ def _is_allowed_member_type(member):
 
 def parse_frontmatter_min(skill_md_text):
     """解析 SKILL.md frontmatter，語意對齊 loader.parse_skill_frontmatter
-    對 name / description / entrypoint 的讀法。
+    對 name / description 的讀法。
 
     主要路徑用 ``yaml.safe_load`` 精確鏡像 runtime；若 yaml 不可用退回 stdlib
     最小解析（見 module docstring fallback 缺口說明）。
@@ -263,7 +257,6 @@ def _scan_members(result, tar, wizard_name):
     total_size = 0
     member_count = 0
     appledouble_hits = []
-    file_paths = set()  # 普通檔的正規化相對路徑，供 entrypoint / SKILL.md 檢查
     skill_md_member = None  # root SKILL.md
     nested_skill_md_member = None  # 單層 wrapper dir 下的 SKILL.md（歸因用）
     aborted = False  # 是否因 cap 提早中止（中止後結構檢查不完整，避免誤報）
@@ -303,7 +296,7 @@ def _scan_members(result, tar, wizard_name):
                     "Unsafe member path escapes bundle root: '%s' "
                     "(contains '..' or absolute path)." % name
                 )
-                # 不信任此 member 的其他屬性，不納入 file_paths
+                # 不信任此 member 的其他屬性，跳過
                 continue
 
             # member type 白名單（鏡像 data filter）：先擋 special files，再擋 link。
@@ -335,7 +328,6 @@ def _scan_members(result, tar, wizard_name):
                     aborted = True
                     break
                 norm = posixpath.normpath(name)
-                file_paths.add(norm)
                 if norm == "SKILL.md":
                     skill_md_member = member
                 elif (
@@ -400,19 +392,10 @@ def _scan_members(result, tar, wizard_name):
 
     # === 以下為軟警告（bundle 結構合格、skill 照建）===
 
-    # 軟警告 A：entrypoint 檔不存在
-    entrypoint = (frontmatter.get("entrypoint") or DEFAULT_ENTRYPOINT)
-    entrypoint_norm = posixpath.normpath(str(entrypoint))
-    if entrypoint_norm not in file_paths:
-        result.warnings.append(
-            "Declared entrypoint '%s' is not present in the bundle; the pod "
-            "will fail to launch this skill until the file is added." % entrypoint
-        )
-
-    # 軟警告 B：AppleDouble
+    # 軟警告 A：AppleDouble
     _append_appledouble_warning(result, appledouble_hits)
 
-    # 軟警告 C：frontmatter name 與 wizard 填的 name 不一致
+    # 軟警告 B：frontmatter name 與 wizard 填的 name 不一致
     fm_name = frontmatter.get("name")
     if wizard_name and fm_name and fm_name != wizard_name:
         result.warnings.append(
