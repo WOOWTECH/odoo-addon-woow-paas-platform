@@ -782,8 +782,19 @@ class SecurityAccess(models.Model):
             # but resuming is also the convergence point for any Access config
             # that was edited while suspended or set pre-provision — push the
             # full desired state so CF destinations match the live route set.
-            if self.access_enabled:
-                self._sync_access_to_operator()
+            #
+            # Converge BOTH directions: an `if self.access_enabled` guard would
+            # only re-assert the ENABLE direction. If access_enabled was flipped
+            # to False while suspended (the SA write() trigger doesn't fire in
+            # 'suspended' — state not in ('active','error')), a guarded resume
+            # would skip the teardown and the CF Access app + reusable policies
+            # would survive forever, permanently diverging from the user's
+            # disable intent with no later converge trigger. _sync is idempotent:
+            # an enabled=False payload carries existing_app_id so the operator
+            # tears the app down; with no app it is a harmless no-op. A live
+            # tunnel is guaranteed here (the `not self.tunnel_id` branch above
+            # already returned), so push unconditionally.
+            self._sync_access_to_operator()
         except Exception as e:
             _logger.warning("[SA] _do_resume failed sa=%s: %s", self.id, e)
             self.write({'state': 'error'})
