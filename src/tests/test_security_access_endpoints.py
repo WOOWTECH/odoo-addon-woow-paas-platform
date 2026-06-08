@@ -582,3 +582,73 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'list'})
         self.assertTrue(res.get('success'), res.get('error'))
+
+    # ---- owner positive write paths (A/B 變體 half-coverage 補正向) ----
+    #
+    # The positive mutating paths for access-config / access-policies were
+    # only ever exercised by calling controller helpers directly
+    # (test_security_access_subscription_flow.py: _update_access_config /
+    # _create_policy / _update_policy / _delete_policy), which BYPASS the full
+    # @route dispatch — neither the owner/admin role gate nor the
+    # sa._check_operation_allowed(operation='write') gate is run on a SUCCESSFUL
+    # owner mutation through the actual route. Mirrors the sibling endpoints'
+    # owner-positive tests (test_owner_detail_update_renames /
+    # test_owner_route_update_writes_service_url_and_is_protected). A future
+    # change that made access-config / access-policies a silent no-op AFTER the
+    # gate, or that broke the gate's positive-pass for owners, would otherwise
+    # go uncaught at the endpoint layer. self.sa has NO subscription so
+    # _check_operation_allowed passes (active/unrestricted), and it has no
+    # tunnel so the write does not reach the operator — pure end-to-end gate +
+    # ORM-effect verification.
+
+    def test_owner_access_config_flips_enabled(self):
+        """owner 經 @route 打 access-config 翻開 access_enabled，正向通過 role
+        + _check_operation_allowed gate 並真的寫進 DB。"""
+        self.assertFalse(self.sa.sudo().access_enabled)
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-config',
+            {'access_enabled': True, 'session_duration': '8h'})
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed instead of returning a result: %s"
+                         % self._last_body.get('error'))
+        self.assertTrue(res.get('success'), res.get('error'))
+        self.sa.invalidate_recordset(['access_enabled', 'session_duration'])
+        self.assertTrue(self.sa.sudo().access_enabled)
+        self.assertEqual(self.sa.sudo().session_duration, '8h')
+
+    def test_owner_policy_create_update_delete_through_route(self):
+        """owner 經 @route 對 access-policies 做 create→update→delete 全程，
+        每步都通過 role + _check_operation_allowed gate 並真的生效。"""
+        self.authenticate(self.alice.login, self.alice.login)
+        # create
+        created = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'owner-pol', 'decision': 'allow',
+             'rule_type': 'email_domain', 'rule_value': 'owner.com'})
+        self.assertNotIn('error', self._last_body,
+                         "create crashed: %s" % self._last_body.get('error'))
+        self.assertTrue(created.get('success'), created.get('error'))
+        new_id = created['data']['id']
+        pol = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo().browse(
+                new_id)
+        self.assertTrue(pol.exists())
+        self.assertEqual(pol.decision, 'allow')
+        # update: flip decision allow→deny
+        updated = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'update', 'policy_id': new_id, 'decision': 'deny'})
+        self.assertTrue(updated.get('success'), updated.get('error'))
+        pol.invalidate_recordset(['decision'])
+        self.assertEqual(pol.decision, 'deny')
+        # delete
+        deleted = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'delete', 'policy_id': new_id})
+        self.assertTrue(deleted.get('success'), deleted.get('error'))
+        self.assertFalse(pol.exists())
