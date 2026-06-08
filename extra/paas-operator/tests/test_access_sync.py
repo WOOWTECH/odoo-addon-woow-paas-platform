@@ -117,7 +117,8 @@ class TestReusablePolicyCrud:
 class TestSyncAccessApp:
     @pytest.mark.asyncio
     async def test_enabled_creates_app_and_policies(self, cf_service):
-        calls = {"app_put": None, "policy_posts": [], "list_apps": True}
+        calls = {"app_put": None, "app_post": None, "policy_posts": [],
+                 "list_apps": True}
 
         async def fake_get(url, headers=None, timeout=None, params=None):
             class R:
@@ -143,6 +144,10 @@ class TestSyncAccessApp:
                     return {"success": True, "result": {"id": "app-new"}}
             if "/policies" in url:
                 calls["policy_posts"].append(json)
+            else:
+                # The app create-POST body — this is what actually decides
+                # protection, captured here so the test can assert its shape.
+                calls["app_post"] = json
             return R()
 
         async def fake_put(url, headers=None, json=None, timeout=None):
@@ -171,18 +176,41 @@ class TestSyncAccessApp:
                 login_idp_types=["google", "onetimepin"],
                 policies=[{"name": "corp", "decision": "allow",
                            "rule_type": "email_domain", "rule_value": "acme.com",
-                           "precedence": 1}],
+                           "precedence": 1},
+                          {"name": "block-bad", "decision": "deny",
+                           "rule_type": "email_domain",
+                           "rule_value": "bad.com", "precedence": 5}],
                 existing_app_id=None,
                 existing_policy_ids=[],
             )
         # allowed_idps resolved from types
         assert set(result["allowed_idps"]) == {"idp-g", "idp-otp"}
-        # one reusable policy created
-        assert len(calls["policy_posts"]) == 1
+        # two reusable policies created (allow precedence 1, deny precedence 5)
+        assert len(calls["policy_posts"]) == 2
         assert calls["policy_posts"][0]["include"] == [
             {"email_domain": {"domain": "acme.com"}}]
         assert result["app_id"]
-        assert result["policy_ids"] == ["pol-new"]
+        # The app create-POST body is the security-load-bearing shape: it
+        # decides protection. A regression that dropped a protected_hostname
+        # from destinations (app protecting nothing), reordered precedence
+        # (block-before-allow inversion), flipped auto_redirect_to_identity to
+        # True, or changed type would pass every other assertion green — so
+        # pin the body explicitly here.
+        app = calls["app_post"]
+        assert app is not None, "app create-POST body was not captured"
+        assert app["type"] == "self_hosted"
+        assert app["session_duration"] == "8h"
+        assert app["auto_redirect_to_identity"] is False
+        # destinations must map EVERY protected hostname (none dropped).
+        dest_uris = [d["uri"] for d in app["destinations"]]
+        assert dest_uris == ["paas-sa-x-y.woowtech.io", "waltek-ha.woowtech.io"]
+        assert all(d["type"] == "public" for d in app["destinations"])
+        # allowed_idps on the app match the resolved set.
+        assert set(app["allowed_idps"]) == {"idp-g", "idp-otp"}
+        # policies carry the caller's precedence in order (allow 1, deny 5):
+        # a block-before-allow inversion or reorder would flip these values.
+        precedences = [p["precedence"] for p in app["policies"]]
+        assert precedences == [1, 5]
 
     @pytest.mark.asyncio
     async def test_disabled_tears_down(self, cf_service):
