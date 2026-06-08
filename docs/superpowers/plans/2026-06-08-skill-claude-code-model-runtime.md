@@ -88,6 +88,16 @@ bash:execute(cmd: str, timeout_seconds: int = <host cap>) -> {
 
 > canvas owner 已表示可直接草「roster 注入 system_context 獨立函式 + 走 subprocess_runner 的 bash StructuredTool（不動 loop）+ untrusted-bash 隔離設計」的最小實作藍圖 — R1-R6 可由其主導。
 
+## Drop B 多-agent 分工（canvas 上已有對口 owner agent）
+
+| Agent | repo | Drop B 責任 |
+| --- | --- | --- |
+| **paas-agent-runtime** | paas-agent-runtime | R4/R5/R7 執行模型切換 + **sidecar image**（bash+pip）+ agent↔sidecar **指令通道**設計（socket/file queue on `/workspace`）+ 定義 sidecar 介面合約 |
+| **paas-charts** | woow-paas-charts | chart **sidecar container spec**（R6 chart 半）：`securityContext.runAsUser`=異 uid、PID ns 隔離、共享 `/workspace` PVC（fsGroup 兩 container 可寫）、祕密檔 0400 owner=agent uid sidecar 不在其 group。**依 runtime 定義的 sidecar 介面合約填具體** |
+| **paas-cd** | paas-app-bundle-cd（Fleet） | 新 image + chart values rollout（agent-runtime 走 Fleet，非 deploy-stg；見 pitfall `agent-runtime-stg-enablement-gap-chain`） |
+
+**依賴序**：runtime 定 sidecar 介面（image 名/command/掛載/通道）→ paas-charts 據此填 chart → paas-cd rollout。chart agent 可先 recon chart 結構（sidecar 模式、fsGroup/PVC 共享、securityContext）不卡此依賴。
+
 ## 跨 repo 部署（spec §9）
 
-runtime（本計畫）先 land + pod rollout，Odoo 計畫的 Task 3-4（demo re-pack + migration）再合併部署；Task 1（移除 warning A）可先行。
+runtime + chart 先 land、經 paas-cd Fleet rollout pod；Odoo 計畫 Task 3-4（demo re-pack + migration）再合併部署；Odoo Task 1（移除 warning A）可先行（已完成）。
