@@ -537,6 +537,11 @@ class AccessSyncResponse(BaseModel):
         description="Requested login methods with no matching account IdP "
                     "(silently dropped → login restriction widened to all IdPs)",
     )
+    orphaned_policy_ids: List[str] = Field(
+        default_factory=list,
+        description="Old reusable policies that could not be deleted after the "
+                    "app was repointed — permanent CF orphans to log/alert on",
+    )
 
 
 class IdentityProviderInfo(BaseModel):
