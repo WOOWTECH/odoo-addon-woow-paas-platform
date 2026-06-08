@@ -599,6 +599,40 @@ class TestSecurityAccessAccessControl(TransactionCase):
         self.assertTrue(sa.access_enabled)
         self.assertEqual(sa.session_duration, '8h')
 
+    def test_update_access_config_whitelist_only(self):
+        """_update_access_config's whitelist is the SOLE defense for the
+        server-owned access_app_id: the model write() immutable guard covers
+        only canonical_name/reference_id, NOT access_app_id (a plain writable
+        Char), and the owner/admin role gate doesn't help (an owner may
+        legitimately call access-config). Absent the whitelist, an owner could
+        smuggle {'access_app_id': 'attacker-app'} and repoint the SA at an
+        arbitrary CF Access app — the next idempotent resync would PUT-update
+        someone else's app. Send forged server-owned keys (access_app_id /
+        state / tunnel_id) alongside a whitelisted one and assert only the
+        whitelisted field took effect while the forged keys were dropped.
+        Access-config analogue of test_create/update_policy_whitelist_only."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        orig_app_id = sa.access_app_id
+        orig_state = sa.state
+        orig_tunnel = sa.tunnel_id
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._update_access_config(sa, {
+                'session_duration': '8h',
+                'access_app_id': 'attacker-app',
+                'state': 'deleting',
+                'tunnel_id': 'attacker-tunnel'})
+        self.assertTrue(res['success'], res.get('error'))
+        # whitelisted field took effect
+        self.assertEqual(sa.session_duration, '8h')
+        # forged server-owned keys were dropped (never reached write())
+        self.assertNotEqual(sa.access_app_id, 'attacker-app')
+        self.assertEqual(sa.access_app_id, orig_app_id)
+        self.assertEqual(sa.state, orig_state)
+        self.assertEqual(sa.tunnel_id, orig_tunnel)
+
     def test_create_policy(self):
         mc = self._mock()
         sa = self._active_sa(mc)
