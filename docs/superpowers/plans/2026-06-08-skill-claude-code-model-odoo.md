@@ -154,6 +154,9 @@ git commit -m "docs: 上傳精靈 docstring 對齊 Claude Code skill 合約"
 **Files:**
 - Modify: `src/data/demo_skills/hello-world-0.1.0.tar.gz`（重建位元）
 - Modify: `src/data/demo_system_skill.xml`（base64 / sha256 / metadata / 刪註解）
+- Modify: `src/tests/test_skill_dual_scope.py`（移除 `test_demo_bundle_entrypoint_runnable`，行約 324-357 — 該測試斷言舊 subprocess/entrypoint 合約，re-pack 後必紅）
+
+> **測試耦合（grep 補抓）**：`test_skill_dual_scope.py::test_demo_bundle_entrypoint_runnable` 斷言 demo bundle 有 `scripts/main.py` + frontmatter `entrypoint: scripts/main.py` 且可被 subprocess 執行。新模型下 demo 改純 SKILL.md → 此測試失效，須**整條移除**（其守的 issue #139 subprocess 合約已不存在）。若仍想守「demo bundle 通過驗證」，可新增一條輕量斷言：解壓後 root 有 SKILL.md、frontmatter 含 name/description、`validate_skill_bundle` 回 0 errors/warnings。
 
 > **前置**：此 task 須在 runtime 新模型部署後再合併（spec §9），否則舊 runtime 跑這個無 script 的 demo 會 `SKILL_NOT_FOUND`。
 
@@ -217,11 +220,18 @@ Expected: `errors: []` 且 `warnings: []`。
             <field name="skill_metadata">{"name": "hello-world", "version": "0.1.0", "description": "A demo system skill that greets the user.", "author": "woow-platform"}</field>
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: 移除過時的 entrypoint-runnable 測試**
+
+在 `src/tests/test_skill_dual_scope.py` **整條移除** `test_demo_bundle_entrypoint_runnable`（約行 324-357，含其 docstring 與 subprocess 執行斷言）。該測試守的是 issue #139 的舊 subprocess 合約，新模型下 demo 無 `scripts/main.py` 故必失效。可選：新增輕量替代斷言（解壓後 root 有 SKILL.md、frontmatter 含 name/description、`validate_skill_bundle` 0 errors/warnings）。
+
+Run（確認 dual_scope 測試類別仍綠）：`./odoo-bin -c odoo.conf --test-enable --test-tags /woow_paas_platform:TestSkillDualScope --stop-after-init`
+Expected: PASS（不再有 entrypoint-runnable 紅）。
+
+- [ ] **Step 5: Commit**
 
 ```bash
 rm -f scripts/_repack_demo_skill.py
-git add src/data/demo_skills/hello-world-0.1.0.tar.gz src/data/demo_system_skill.xml
+git add src/data/demo_skills/hello-world-0.1.0.tar.gz src/data/demo_system_skill.xml src/tests/test_skill_dual_scope.py
 git commit -m "feat: demo skill 重打包為純 SKILL.md（Claude Code 模型）"
 ```
 
@@ -324,6 +334,23 @@ git commit -m "feat: migration 18.0.1.0.35 就地升級 demo skill 為純 SKILL.
 ```
 
 ---
+
+## Task 5: Operator forward `skillRunner.enabled`（✅ 完成，paas-cd recon 發現的 land blocker）
+
+**Files:**
+- Modify: `extra/paas-operator/src/config.py`（加 `agent_runtime_skill_runner_enabled`）
+- Modify: `extra/paas-operator/src/api/agent_runtimes.py`（`_build_install_values` forward）
+- Modify: `extra/paas-operator/tests/test_agent_runtimes.py`（forward-contract test）
+
+**背景**：paas-cd land recon 發現 operator 未 forward `skillRunner.enabled` → 在 chart values 開 true 會 **silent no-op**（pod cold-start 無 sidecar）。屬 `_build_install_values` 既有 "missed-forward" pattern 第 6 instance（前例：externalEgress、probe.style）。
+
+- [x] config 加 `agent_runtime_skill_runner_enabled: bool = False`（env `AGENT_RUNTIME_SKILL_RUNNER_ENABLED`）
+- [x] `_build_install_values`：`if settings.agent_runtime_skill_runner_enabled: values["skillRunner"] = {"enabled": True}`（仿 externalEgress）
+- [x] forward-contract test（forwards_when_enabled + omits_when_disabled）
+- [x] 驗證：operator 單元套件 193 passed、零回歸；commit `a900a19`
+- 安全 additive、default off、可獨立先 land；land 時 paas-cd 設 `AGENT_RUNTIME_SKILL_RUNNER_ENABLED=true`
+
+**#6 另一半（不在本 repo，待 relay）**：operator **部署 chart** 須 expose `AGENT_RUNTIME_SKILL_RUNNER_ENABLED` env passthrough（operator chart 0.1.13→0.1.14）→ paas-charts / paas-cd 負責；否則本 task 的 operator code 在 land 時讀不到該 env。
 
 ## Self-Review（plan author 自檢，已執行）
 
