@@ -187,6 +187,14 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
                 f"must be one of {sorted(_VALID_PROBE_STYLES)}"
             )
         values["probe"] = {"style": probe_style}
+    # skill bash sidecar (Drop B): forward skillRunner.enabled so the chart renders
+    # the bash-runner sidecar container. Omitted (chart's single-container default)
+    # when disabled. 6th instance of the missed-forward class — the chart renders the
+    # sidecar but the operator must set the value ([[spawn-install-values-missed-forward]]).
+    # Gated OFF until the Drop B image (bash_bridge daemon) + sidecar-aware chart land,
+    # else the sidecar would crashloop on an image without the bridge.
+    if settings.agent_runtime_skill_runner_enabled:
+        values["skillRunner"] = {"enabled": True}
     return values
 
 

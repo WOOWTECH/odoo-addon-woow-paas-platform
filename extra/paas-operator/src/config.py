@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # /livez + /readyz; chart 0.2.0 fail-closes on any value other than
     # tcpSocket/httpGet. Mirrors the externalEgress forward pattern.
     agent_runtime_probe_style: str = ""  # "" = no forward; "httpGet" for image >= 1.2.0
+    # skill bash sidecar (Drop B): forward the chart's `skillRunner.enabled` so the
+    # agent-runtime pod cold-starts WITH the bash-runner sidecar. Default OFF — the
+    # sidecar requires the Drop B agent-runtime image (bash_bridge daemon) + the
+    # sidecar-aware chart; enabling it on an older image would crashloop. Explicit
+    # per-environment opt-in via env AGENT_RUNTIME_SKILL_RUNNER_ENABLED, flipped at
+    # the coordinated Drop B land. Mirrors the externalEgress forward pattern.
+    agent_runtime_skill_runner_enabled: bool = False  # forward skillRunner.enabled to chart
     # issue #155 stopgap: SKILL_BUNDLE_TOKEN is signed at pod spawn/resume and baked
     # into the pod env; its exp was hard-coded to 3600s and no in-repo reap trigger
     # exists, so a pod outliving 1h 401'd forever on skill-bundle fetch. Make the TTL
