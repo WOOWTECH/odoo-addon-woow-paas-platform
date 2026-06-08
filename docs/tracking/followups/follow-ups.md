@@ -1623,10 +1623,14 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   Tunnel(Edit) + Account Access:Org/IdP(Read) + Account Access:Apps&Policies(Edit) + Zone
   Email Routing(Edit) + Zone DNS(Edit)。**留檔供 prod 與其他環境對照**。
 
-- **F-SA-4**（OPEN，**priority:high**，scope=prod 上線前置）：
-  **prod 要啟用 P2 Access 前，prod Cloudflare token（`paas-operator-fleet-secrets`）需確認
-  帳戶級「Access: Apps and Policies (Edit)」+「Access: Organizations/IdP (Read)」scope**（同
-  F-SA-3，性質同 P1 advisory-2 的 DNS scope）。prod 與 stg 是**不同 token**；stg 已驗、prod
-  尚未。上 prod 順序：① 確認 prod token scope ② operator image 已含 delete-path 修復
-  （`20260608.0541`+，PR #166）③ prod Fleet bump（image-only，paas-operator/values-prod.yaml）。
-  owner=platform / prod 維運。
+- **F-SA-4**（**token scope DONE 2026-06-08；operator bump 仍 OPEN**，priority:high，scope=prod 上線前置）：
+  **prod 要啟用 P2 Access 前置兩件，token 部分已完成。**
+  - ① **prod token scope（✅ DONE 2026-06-08）**：prod Cloudflare token `woow-paas`（**與 stg
+    `woow-paas-stg` 不同 token**）已設帳戶級「Access: Apps and Policies (Edit)」+「Access:
+    Organizations/IdP (Read)」+ Tunnel(Edit) + Zone DNS/Email(Edit)，與 stg 已驗通設定一致
+    （視覺比對；未 live 驗，因 prod operator 尚無 Access endpoint，見 ②）。性質同 P1 advisory-2 DNS scope。
+  - ② **prod operator image bump（OPEN）**：prod operator（`paas-system/paas-operator`）目前跑
+    **`20260525.0054`——pre-P1/P2 的舊 image，連 Access endpoint 都沒有**。bump 到 `20260608.0541`+
+    才有 P2 Access endpoints **且**含 delete-path 修復（PR #166）；一併也帶上 P1 operator 變更（prod 落後多版）。
+    走 Fleet image-only（`paas-operator/values-prod.yaml`，paas-app-bundle-cd）。bump 後可比照 stg 做
+    operator 級 live 寫測閉環（含 token live 驗證）。owner=platform / prod 維運。
