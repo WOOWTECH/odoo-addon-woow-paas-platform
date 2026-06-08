@@ -128,6 +128,39 @@ class TestSecurityAccessControllerFlow(TransactionCase):
         self.assertTrue(res['success'])
         self.assertFalse(res['data']['available'])
 
+    def test_route_check_rejects_bad_format_before_db_cf(self):
+        """Availability fail-fast: a bad-format prefix (dot / symbol / uppercase)
+        returns available=False with the format reason WITHOUT touching the DB
+        collision search or the Cloudflare check — so the UI never shows
+        'Available' for a prefix the create constraint would reject (the
+        availability↔create asymmetry this fixes)."""
+        mock_client = MagicMock()
+        # If the operator were reached, it would say available — prove we do NOT.
+        mock_client.check_route_availability.return_value = {'available': True}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mock_client):
+            with _patch_request(self.env):
+                for bad in ['has.dot', 'sub.domain', 'Bad', 'under_score', '-x']:
+                    res = self.controller._check_route_prefix(bad)
+                    self.assertTrue(res['success'], bad)
+                    self.assertFalse(res['data']['available'], bad)
+                    self.assertIn('hyphen', res['data']['reason'].lower(), bad)
+        # never consulted the operator for a malformed prefix
+        mock_client.check_route_availability.assert_not_called()
+
+    def test_route_check_reserved_prefix_now_available(self):
+        """Reserved-prefix block removed: 'paas-'/'svc-' prefixes are no longer
+        rejected by format, so availability defers to DB/CF like any other."""
+        mock_client = MagicMock()
+        mock_client.check_route_availability.return_value = {'available': True}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mock_client):
+            with _patch_request(self.env):
+                res = self.controller._check_route_prefix('paas-custom')
+        self.assertTrue(res['success'])
+        self.assertTrue(res['data']['available'])
+        mock_client.check_route_availability.assert_called_once()
+
     def test_route_quota_enforced_at_controller(self):
         """plan sa_max_routes=1：第二條自訂 route 在 controller 層被擋。"""
         mock_client = MagicMock()

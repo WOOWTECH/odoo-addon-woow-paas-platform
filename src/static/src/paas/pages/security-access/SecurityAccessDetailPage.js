@@ -30,6 +30,16 @@ const IDP_TYPE_LABELS = {
   google: "Google",
 };
 
+// Subdomain prefix = ONE DNS label. MUST mirror the backend _PREFIX_RE
+// (models/security_access.py) + _subdomain_prefix_error exactly: 3-63 chars of
+// lowercase letters, digits and hyphens only — NO dots/symbols/uppercase, and
+// no leading/trailing hyphen. Front-end check gives immediate feedback; the
+// model constraint + availability endpoint enforce the same rule server-side.
+const SUBDOMAIN_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+const SUBDOMAIN_HINT =
+  "Use lowercase letters, digits and hyphens only (no dots or symbols); " +
+  "3-63 chars, no leading/trailing hyphen.";
+
 /**
  * SecurityAccessDetailPage Component
  *
@@ -176,10 +186,20 @@ export class SecurityAccessDetailPage extends Component {
     this.state.newRoutePrefix = ev.target.value.trim().toLowerCase();
     this.state.prefixCheck = null;
     clearTimeout(this.prefixCheckTimer);
-    if (this.state.newRoutePrefix.length >= 3) {
-      // debounce 500ms — 即時 availability 反饋（spec：設定前可反饋）
-      this.prefixCheckTimer = setTimeout(() => this.checkPrefix(), 500);
+    const prefix = this.state.newRoutePrefix;
+    if (prefix.length < 3) {
+      return;
     }
+    // Format gate BEFORE the availability call (mirrors the server fail-fast):
+    // a bad-format prefix (dots, symbols, uppercase, leading/trailing hyphen)
+    // gets immediate "not available" feedback instead of a green tick that the
+    // create call would then reject.
+    if (!SUBDOMAIN_RE.test(prefix)) {
+      this.state.prefixCheck = { available: false, reason: SUBDOMAIN_HINT };
+      return;
+    }
+    // debounce 500ms — 即時 availability 反饋（spec：設定前可反饋）
+    this.prefixCheckTimer = setTimeout(() => this.checkPrefix(), 500);
   }
 
   async checkPrefix() {
@@ -194,6 +214,12 @@ export class SecurityAccessDetailPage extends Component {
 
   async addRoute() {
     if (!this.state.newRoutePrefix) {
+      return;
+    }
+    // Block submit on bad format (defense in depth with onPrefixInput + the
+    // server constraint) so a forced click can't bypass the front-end gate.
+    if (!SUBDOMAIN_RE.test(this.state.newRoutePrefix)) {
+      this.state.prefixCheck = { available: false, reason: SUBDOMAIN_HINT };
       return;
     }
     const vals = { subdomain_prefix: this.state.newRoutePrefix };

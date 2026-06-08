@@ -15,10 +15,10 @@ from ..services.paas_operator import (
 
 _logger = logging.getLogger(__name__)
 
-# 3-63 chars, lowercase alphanumeric + hyphen, no leading/trailing hyphen
+# A subdomain prefix is a SINGLE DNS label: 3-63 chars of lowercase letters,
+# digits and hyphens only — NO dots (a dot would split it into multiple labels)
+# and no other symbols/uppercase/spaces; must not start or end with a hyphen.
 _PREFIX_RE = re.compile(r'^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$')
-# Platform-internal naming conventions users must not squat on
-_RESERVED_PREFIXES = ('paas-', 'svc-')
 
 
 class SecurityAccess(models.Model):
@@ -1012,22 +1012,32 @@ class SecurityAccessRoute(models.Model):
                 if route.subdomain_prefix else False
             )
 
+    @api.model
+    def _subdomain_prefix_error(self, prefix):
+        """Single source of truth for subdomain-prefix validation.
+
+        Shared by the create/write constraint (`_check_prefix_format`) AND the
+        availability endpoint (`controllers/security_access._check_route_prefix`)
+        so the two layers never diverge — previously availability only checked
+        DB/Cloudflare collision and reported a bad-format prefix as "Available",
+        then create rejected it. Returns a human-readable error message, or
+        None when the prefix is valid.
+        """
+        prefix = prefix or ''
+        if not _PREFIX_RE.match(prefix):
+            return (
+                "Subdomain must be 3-63 chars of lowercase letters, digits and "
+                "hyphens only — no dots or other symbols, and must not start or "
+                "end with a hyphen."
+            )
+        return None
+
     @api.constrains('subdomain_prefix', 'is_primary')
     def _check_prefix_format(self):
         for route in self:
-            prefix = route.subdomain_prefix or ''
-            if not _PREFIX_RE.match(prefix):
-                raise ValidationError(
-                    "Subdomain prefix must be 3-63 chars of lowercase "
-                    "letters, digits and hyphens, and must not start or "
-                    "end with a hyphen: %r" % prefix
-                )
-            if not route.is_primary and prefix.startswith(_RESERVED_PREFIXES):
-                raise ValidationError(
-                    "Subdomain prefix must not start with a reserved "
-                    "platform prefix (%s): %r"
-                    % (', '.join(_RESERVED_PREFIXES), prefix)
-                )
+            err = self._subdomain_prefix_error(route.subdomain_prefix)
+            if err:
+                raise ValidationError("%s: %r" % (err, route.subdomain_prefix or ''))
 
     @api.constrains('security_access_id')
     def _check_route_quota(self):
