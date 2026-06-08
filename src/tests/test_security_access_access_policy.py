@@ -220,6 +220,45 @@ class TestAccessSync(TransactionCase):
         # mock returns policy_ids=['pol-1'] → written back onto the single row.
         self.assertEqual(pol.cf_policy_id, 'pol-1')
 
+    def test_enable_writeback_maps_cf_policy_id_multi_policy(self):
+        """Multi-policy writeback ordering: with ONE policy a swapped/mis-ordered
+        zip is indistinguishable from a correct one, so test_enable_writeback_*
+        can't actually fail for the reason it guards. The real risk is 2+
+        policies — _sync_access_to_operator writes back via
+        zip(access_policy_ids.sorted((sequence,id)), returned), relying on the
+        operator returning policy_ids in the SAME (sequence,id) order
+        _build_access_payload sent them. A regression writing back against an
+        unsorted recordset (or an operator return-order change) would stamp the
+        wrong cf_policy_id onto each row, and the next resync's
+        existing_policy_ids would delete the WRONG CF reusable policy.
+
+        Two policies with differing sequence; the mock returns ids in the
+        (sequence,id) order the payload is built in. Assert each row gets ITS
+        matching id, not the other's."""
+        mc = self._mock()
+        # Returned ids in the (sequence,id) order _build_access_payload sends:
+        # the low-sequence policy first, the high-sequence one second.
+        mc.sync_access_app.return_value = {
+            'app_id': 'app-1', 'policy_ids': ['cf-low', 'cf-high'],
+            'allowed_idps': ['idp-g']}
+        sa = self._active_sa(mc)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa.write({'access_enabled': True})
+            # Create high-sequence FIRST so creation-order != sorted-order:
+            # only a correct (sequence,id) sort in the writeback maps the ids
+            # right; an unsorted recordset would zip them backwards.
+            pol_high = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'high', 'decision': 'deny',
+                'rule_type': 'email_domain', 'rule_value': 'high.com',
+                'sequence': 20})
+            pol_low = self.Policy.create({
+                'security_access_id': sa.id, 'name': 'low', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'low.com',
+                'sequence': 5})
+        # low-sequence row gets the first returned id, high-sequence the second.
+        self.assertEqual(pol_low.cf_policy_id, 'cf-low')
+        self.assertEqual(pol_high.cf_policy_id, 'cf-high')
+
     def test_disable_writeback_clears_app_and_policy_cf_ids(self):
         """Teardown writeback branch (app_id=None): disabling must clear
         access_app_id to False AND wipe every policy's stale cf_policy_id, so a
