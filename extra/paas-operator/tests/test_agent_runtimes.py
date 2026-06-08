@@ -645,35 +645,33 @@ class TestSpawnOrAttach:
             values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
         assert values.get("agentRuntime", {}).get("externalEgress", {}).get("enabled") is not True
 
-    def test_build_install_values_forwards_skill_runner_when_enabled(self):
-        """skill bash sidecar (Drop B): the chart gates the bash-runner sidecar
-        behind ``skillRunner.enabled``. operator MUST forward it from
-        ``settings.agent_runtime_skill_runner_enabled`` — 6th instance of the
-        missed-forward class (chart renders the sidecar, operator never set it →
-        pod cold-starts WITHOUT the sidecar → bash:execute unrunnable). Off by
-        default until the Drop B agent-runtime image + chart land. See
-        [[spawn-install-values-missed-forward]].
+    def test_build_install_values_sets_skill_runner_true_when_enabled(self):
+        """skill bash sidecar (Drop B): operator sets skillRunner.enabled EXPLICITLY
+        from ``settings.agent_runtime_skill_runner_enabled``. When the env opts in
+        (land), the value is True → chart renders the bash-runner sidecar.
         """
         from src.api.agent_runtimes import _build_install_values
         from src.models.schemas import SpawnOrAttachRequest
 
         with patch("src.api.agent_runtimes.settings.agent_runtime_skill_runner_enabled", True):
             values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
-        assert values.get("skillRunner", {}).get("enabled") is True
+        assert values["skillRunner"]["enabled"] is True
 
-    def test_build_install_values_omits_skill_runner_when_disabled(self):
-        """Default = no bash sidecar. operator does NOT set skillRunner so the chart
-        keeps its single-container default; the sidecar is an explicit per-environment
-        opt-in (AGENT_RUNTIME_SKILL_RUNNER_ENABLED), gated until the Drop B image +
-        chart are deployed (else the sidecar would crashloop on an image lacking the
-        bash_bridge daemon).
+    def test_build_install_values_sets_skill_runner_false_when_disabled(self):
+        """Default (and incident kill switch): operator sets skillRunner.enabled
+        EXPLICITLY False — NOT omitted. The agent-runtime chart defaults
+        skillRunner.enabled=true once the sidecar-aware chartVersion lands, so an
+        omit-when-disabled forward would let the chart default win (sidecar stuck ON,
+        operator unable to disable). Explicit False makes the operator env
+        authoritative: env=false disables the sidecar fleet-wide WITHOUT a chart
+        rollback (paas-cd land recon). Default off until the coordinated Drop B land.
         """
         from src.api.agent_runtimes import _build_install_values
         from src.models.schemas import SpawnOrAttachRequest
 
         with patch("src.api.agent_runtimes.settings.agent_runtime_skill_runner_enabled", False):
             values = _build_install_values(SpawnOrAttachRequest(**_SPAWN_BODY), "tok")
-        assert "skillRunner" not in values
+        assert values["skillRunner"]["enabled"] is False
 
     def test_build_install_values_forwards_probe_style_when_set(self):
         """Task 1a (issue: operator probe.style passthrough). When this environment
