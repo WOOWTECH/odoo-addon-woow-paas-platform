@@ -208,6 +208,25 @@
                      t-on-change="onEmailOtpToggle"/>
               <label for="li_otp" class="o_woow_checkbox_label">Email OTP</label>
             </div>
+            <!-- Fail-open login-widening warning: the operator could not match
+                 some requested login method to a Cloudflare account IdP and
+                 silently dropped it. If that emptied the resolved set, Access
+                 falls back to ALL available IdPs (the login restriction widened
+                 — the opposite of intent). Surface it so the user can fix the
+                 account-level IdP config. The backend persists this signal in
+                 access_unresolved_idp_types specifically so the UI can warn. -->
+            <div t-if="state.sa.access_unresolved_idp_types"
+                 class="o_woow_sa_access__idp_warning" role="alert">
+              <WoowIcon name="'warning'" size="16"/>
+              <span>
+                These login methods have no matching Cloudflare identity provider
+                and were ignored:
+                <strong t-esc="state.sa.access_unresolved_idp_types"/>.
+                Access may have fallen back to allowing all available login
+                methods. Add the matching identity provider in your Cloudflare
+                Zero Trust account, then re-save to re-apply the restriction.
+              </span>
+            </div>
           </WoowCard>
 
           <WoowCard shadow="true" t-if="state.sa.access_enabled">
