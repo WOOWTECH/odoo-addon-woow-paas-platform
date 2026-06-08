@@ -126,10 +126,60 @@
     &--error { color: #dc2626; }
   }
 
+  // Inline hint next to a Protected checkbox when Access is disabled: the
+  // route is marked protected but it has no Cloudflare effect until the
+  // Access master toggle is on.
+  &__protect_hint {
+    display: inline-block;
+    margin-left: 0.5rem;
+    color: #d97706;
+    font-size: 0.75rem;
+    font-style: italic;
+  }
+
   &__coming_soon {
     text-align: center;
     padding: 3rem 1rem;
     color: $woow-text-secondary;
+  }
+}
+
+// Access tab (P2) — master toggle row + policy header
+.o_woow_sa_access {
+  &__master {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  &__policy_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+
+  // Fail-open login-widening warning banner: shown when the operator could not
+  // resolve some requested login method to a Cloudflare IdP (the restriction
+  // may have silently widened to all IdPs). Amber to match the protect_hint.
+  &__idp_warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid #fcd34d;
+    border-radius: 8px;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+
+    .material-symbols-outlined {
+      flex: 0 0 auto;
+      color: #d97706;
+    }
   }
 }
 

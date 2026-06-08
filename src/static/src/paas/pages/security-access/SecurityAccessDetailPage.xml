@@ -114,7 +114,7 @@
                forwarded to the service URL with the Host header set.</p>
             <table class="o_woow_sa_detail__routes">
               <thead>
-                <tr><th>Hostname</th><th>Service</th><th>Host header</th><th></th></tr>
+                <tr><th>Hostname</th><th>Service</th><th>Protected</th><th>Host header</th><th></th></tr>
               </thead>
               <tbody>
                 <t t-foreach="state.sa.routes" t-as="route" t-key="route.id">
@@ -124,6 +124,21 @@
                       <span t-if="route.is_primary" class="o_woow_badge">Primary</span>
                     </td>
                     <td><t t-esc="route.service_url"/></td>
+                    <td>
+                      <input type="checkbox" class="o_woow_checkbox"
+                             t-att-checked="route.is_protected"
+                             t-att-title="state.sa.access_enabled ? '' : 'Marking a route Protected has no effect until Access is enabled in the Access tab.'"
+                             t-on-change="(ev) => this.toggleRouteProtected(route, ev)"/>
+                      <!-- P2: the toggle is always live (so routes can be
+                           pre-marked before Access is enabled), but its CF
+                           effect only kicks in once Access is on. Surface that
+                           coupling so a checked box on a disabled SA isn't
+                           mistaken for active protection. -->
+                      <span t-if="route.is_protected and !state.sa.access_enabled"
+                            class="o_woow_sa_detail__protect_hint">
+                        Enable Access to apply
+                      </span>
+                    </td>
                     <td><t t-esc="route.http_host_header ? 'Yes' : 'No'"/></td>
                     <td>
                       <WoowButton t-if="!route.is_primary" variant="'danger'"
@@ -161,8 +176,106 @@
           </WoowCard>
         </div>
 
-        <!-- Coming Soon tabs (P2-P4) -->
-        <div t-if="state.activeTab === 'access' or state.activeTab === 'email' or state.activeTab === 'domains'"
+        <!-- Access (P2) -->
+        <div t-if="state.activeTab === 'access'" class="o_woow_sa_detail__body">
+          <WoowCard shadow="true">
+            <div class="o_woow_sa_access__master">
+              <div>
+                <h3>Cloudflare Access protection</h3>
+                <p>Visitors to <t t-esc="state.sa.primary_hostname"/> must
+                   authenticate before protected routes load.</p>
+              </div>
+              <label class="o_woow_checkbox_group">
+                <input type="checkbox" class="o_woow_checkbox"
+                       t-att-checked="state.sa.access_enabled"
+                       t-on-change="onMasterToggle"/>
+              </label>
+            </div>
+          </WoowCard>
+
+          <WoowCard shadow="true" t-if="state.sa.access_enabled">
+            <h3>Login Methods</h3>
+            <p>How visitors prove who they are (managed at account level).</p>
+            <div class="o_woow_checkbox_group">
+              <input type="checkbox" class="o_woow_checkbox" id="li_google"
+                     t-att-checked="state.sa.login_google"
+                     t-on-change="onGoogleToggle"/>
+              <label for="li_google" class="o_woow_checkbox_label">Google</label>
+            </div>
+            <div class="o_woow_checkbox_group">
+              <input type="checkbox" class="o_woow_checkbox" id="li_otp"
+                     t-att-checked="state.sa.login_email_otp"
+                     t-on-change="onEmailOtpToggle"/>
+              <label for="li_otp" class="o_woow_checkbox_label">Email OTP</label>
+            </div>
+            <!-- Fail-open login-widening warning: the operator could not match
+                 some requested login method to a Cloudflare account IdP and
+                 silently dropped it. If that emptied the resolved set, Access
+                 falls back to ALL available IdPs (the login restriction widened
+                 — the opposite of intent). Surface it so the user can fix the
+                 account-level IdP config. The backend persists this signal in
+                 access_unresolved_idp_types specifically so the UI can warn. -->
+            <div t-if="state.sa.access_unresolved_idp_types"
+                 class="o_woow_sa_access__idp_warning" role="alert">
+              <WoowIcon name="'warning'" size="16"/>
+              <span>
+                These login methods have no matching Cloudflare identity provider
+                and were ignored:
+                <strong t-esc="unresolvedIdpLabels"/>.
+                Access may have fallen back to allowing all available login
+                methods. Add the matching identity provider in your Cloudflare
+                Zero Trust account, then re-save to re-apply the restriction.
+              </span>
+            </div>
+          </WoowCard>
+
+          <WoowCard shadow="true" t-if="state.sa.access_enabled">
+            <div class="o_woow_sa_access__policy_header">
+              <h3>Access Policies</h3>
+              <WoowButton variant="'primary'" size="'sm'"
+                          onClick.bind="openAddPolicy">+ Add Policy</WoowButton>
+            </div>
+            <p>Rules are evaluated top to bottom. Block rules win over allow.</p>
+            <table class="o_woow_sa_detail__routes">
+              <tbody>
+                <t t-foreach="state.sa.access_policies" t-as="pol" t-key="pol.id">
+                  <tr>
+                    <td>
+                      <t t-esc="pol.name"/>
+                      <span t-att-class="'o_woow_badge ' + (pol.decision === 'deny' ? 'o_woow_badge_gray' : 'o_woow_badge_green')">
+                        <t t-esc="pol.decision === 'deny' ? 'Block' : 'Allow'"/>
+                      </span>
+                    </td>
+                    <td><t t-esc="pol.rule_type"/>: <t t-esc="pol.rule_value"/></td>
+                    <td>
+                      <WoowButton variant="'secondary'" size="'sm'"
+                                  onClick="() => this.openEditPolicy(pol)">Edit</WoowButton>
+                      <WoowButton variant="'danger'" size="'sm'"
+                                  onClick="() => this.deletePolicy(pol)">
+                        <WoowIcon name="'delete'" size="14"/>
+                      </WoowButton>
+                    </td>
+                  </tr>
+                </t>
+              </tbody>
+            </table>
+          </WoowCard>
+
+          <WoowCard shadow="true" t-if="state.sa.access_enabled">
+            <h3>Default session duration</h3>
+            <p>How long users stay authenticated before re-login.</p>
+            <select class="o_woow_input" t-on-change="onSessionDurationChange">
+              <option value="30m" t-att-selected="state.sa.session_duration === '30m'">30 minutes</option>
+              <option value="1h" t-att-selected="state.sa.session_duration === '1h'">1 hour</option>
+              <option value="8h" t-att-selected="state.sa.session_duration === '8h'">8 hours</option>
+              <option value="24h" t-att-selected="state.sa.session_duration === '24h'">24 hours</option>
+              <option value="168h" t-att-selected="state.sa.session_duration === '168h'">7 days</option>
+            </select>
+          </WoowCard>
+        </div>
+
+        <!-- Coming Soon tabs (P3-P4) -->
+        <div t-if="state.activeTab === 'email' or state.activeTab === 'domains'"
              class="o_woow_sa_detail__body">
           <WoowCard shadow="true">
             <div class="o_woow_sa_detail__coming_soon">
@@ -181,6 +294,12 @@
             confirmSkip="confirmSkipTrial"
             onClose="() => state.showSkipTrialModal = false"
             onSkipped="onTrialSkipped"/>
+
+        <AddPolicyModal t-if="state.showPolicyModal"
+            workspaceId="props.workspaceId" saId="props.saId"
+            policy="state.editingPolicy"
+            onClose="() => state.showPolicyModal = false"
+            onSaved.bind="onPolicySaved"/>
 
         <div t-if="state.showDeleteConfirm" class="o_woow_modal_backdrop">
           <div class="o_woow_modal">

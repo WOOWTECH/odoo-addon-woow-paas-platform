@@ -567,3 +567,145 @@ class SecurityAccessController(Controller):
             return {"success": True, "data": {"message": "Route deleted"}}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # ==================== Access Control ====================
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/security-accesses/<int:sa_id>/access-config",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_sa_access_config(self, workspace_id: int, sa_id: int,
+                             **kwargs: Any) -> dict[str, Any]:
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return {"success": False,
+                    "error": "Workspace not found or access denied"}
+        sa = self._get_sa_or_error(sa_id, workspace)
+        if not sa:
+            return {"success": False, "error": "Security access not found"}
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Insufficient permissions"}
+        try:
+            sa._check_operation_allowed(operation='write')
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        return self._update_access_config(sa, kwargs)
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/security-accesses/<int:sa_id>/access-policies",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_sa_access_policies(self, workspace_id: int, sa_id: int,
+                               action: str = "list",
+                               **kwargs: Any) -> dict[str, Any]:
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return {"success": False,
+                    "error": "Workspace not found or access denied"}
+        sa = self._get_sa_or_error(sa_id, workspace)
+        if not sa:
+            return {"success": False, "error": "Security access not found"}
+
+        if action == "list":
+            # No .sudo(): ir.rule filters access_policy_ids to workspace
+            # members (orm-vs-endpoint-acl-test-coverage pattern). A non-member
+            # never reaches here (_get_workspace_or_error gates first), and a
+            # member sees only their own SA's policies via the row-level rule.
+            return {"success": True,
+                    "data": [p.to_dict() for p in sa.access_policy_ids]}
+
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Insufficient permissions"}
+        try:
+            sa._check_operation_allowed(operation='write')
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+        if action == "create":
+            return self._create_policy(sa, kwargs)
+        elif action == "update":
+            return self._update_policy(sa, kwargs.get("policy_id"), kwargs)
+        elif action == "delete":
+            return self._delete_policy(sa, kwargs.get("policy_id"))
+        return {"success": False, "error": f"Unknown action: {action}"}
+
+    # ---- Access Control helpers ----
+
+    def _update_access_config(self, sa, kwargs) -> dict[str, Any]:
+        # Whitelist only: never pass raw kwargs to write() — access_app_id and
+        # other server-owned fields must not be client-settable.
+        vals = {}
+        for f in ("access_enabled", "login_google", "login_email_otp"):
+            if f in kwargs:
+                vals[f] = bool(kwargs[f])
+        if kwargs.get("session_duration"):
+            vals["session_duration"] = kwargs["session_duration"]
+        try:
+            if vals:
+                sa.write(vals)
+            return {"success": True, "data": sa.to_dict()}
+        except Exception as e:
+            _logger.exception("[SA] Failed to update access config: %s", e)
+            return {"success": False, "error": str(e)}
+
+    def _create_policy(self, sa, kwargs) -> dict[str, Any]:
+        if not kwargs.get("name"):
+            return {"success": False, "error": "name is required"}
+        # two-layer quota: constraint re-checks at ORM layer (lock-step with
+        # the model's _check_policy_quota). sudo on subscription_id read only:
+        # portal owners lack ACL on sh.subscription.subscription.
+        sub = sa.sudo().subscription_id
+        if sub and sub.sh_subscription_plan_id:
+            quota = sub.sh_subscription_plan_id.sa_max_access_policies
+            if len(sa.access_policy_ids) >= quota:
+                return {"success": False,
+                        "error": "Access policy quota exceeded: plan allows "
+                                 "%d polic(ies)" % quota}
+        Policy = request.env[
+            "woow_paas_platform.security_access_access_policy"]
+        # Whitelist only: cf_policy_id / security_access_id are server-owned;
+        # security_access_id is pinned to the gated SA, never from kwargs.
+        try:
+            pol = Policy.create({
+                "security_access_id": sa.id,
+                "name": kwargs["name"],
+                "decision": kwargs.get("decision", "allow"),
+                "rule_type": kwargs.get("rule_type", "email_domain"),
+                "rule_value": kwargs.get("rule_value", ""),
+                "sequence": kwargs.get("sequence", 10),
+            })
+            return {"success": True, "data": pol.to_dict()}
+        except Exception as e:
+            _logger.exception("[SA] Failed to create access policy: %s", e)
+            return {"success": False, "error": str(e)}
+
+    def _update_policy(self, sa, policy_id, kwargs) -> dict[str, Any]:
+        pol = sa.access_policy_ids.filtered(lambda p: p.id == policy_id)
+        if not pol:
+            return {"success": False, "error": "Policy not found"}
+        # Whitelist only: drop cf_policy_id / security_access_id and any other
+        # key the client tries to smuggle through.
+        vals = {}
+        for f in ("name", "decision", "rule_type", "rule_value", "sequence"):
+            if f in kwargs:
+                vals[f] = kwargs[f]
+        try:
+            if vals:
+                pol.write(vals)
+            return {"success": True, "data": pol.to_dict()}
+        except Exception as e:
+            _logger.exception("[SA] Failed to update access policy: %s", e)
+            return {"success": False, "error": str(e)}
+
+    def _delete_policy(self, sa, policy_id) -> dict[str, Any]:
+        pol = sa.access_policy_ids.filtered(lambda p: p.id == policy_id)
+        if not pol:
+            return {"success": False, "error": "Policy not found"}
+        try:
+            pol.unlink()
+            return {"success": True, "data": {"message": "Policy deleted"}}
+        except Exception as e:
+            _logger.exception("[SA] Failed to delete access policy: %s", e)
+            return {"success": False, "error": str(e)}

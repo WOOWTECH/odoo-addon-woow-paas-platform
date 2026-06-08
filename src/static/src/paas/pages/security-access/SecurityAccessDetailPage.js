@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
+import { AddPolicyModal } from "../../components/modal/AddPolicyModal";
 import { securityAccessService } from "../../services/security_access";
 import { router } from "../../core/router";
 
@@ -13,10 +14,21 @@ const TABS = [
   { key: "overview", label: "Overview", icon: "info" },
   { key: "configuration", label: "Configuration", icon: "settings" },
   { key: "application", label: "Application", icon: "route" },
-  { key: "access", label: "Access", icon: "shield", comingSoon: true },
+  { key: "access", label: "Access", icon: "shield" },
   { key: "email", label: "Email", icon: "mail", comingSoon: true },
   { key: "domains", label: "Domains", icon: "language", comingSoon: true },
 ];
+
+// Cloudflare-internal IdP type strings (as persisted in
+// access_unresolved_idp_types by the operator / _build_access_payload) →
+// the SAME user-facing labels the login-method toggles use (XML li_google /
+// li_otp). The fail-open widening warning must name the methods the user
+// actually selected by those labels; surfacing the raw 'onetimepin' (a string
+// the user never picked by that name) weakens the warning's actionability.
+const IDP_TYPE_LABELS = {
+  onetimepin: "Email OTP",
+  google: "Google",
+};
 
 /**
  * SecurityAccessDetailPage Component
@@ -34,6 +46,7 @@ export class SecurityAccessDetailPage extends Component {
   static template = "woow_paas_platform.SecurityAccessDetailPage";
   static components = {
     WoowCard, WoowButton, WoowIcon, StatusBadge, SkipTrialModal,
+    AddPolicyModal,
   };
   static props = {
     workspaceId: { type: Number },
@@ -58,6 +71,9 @@ export class SecurityAccessDetailPage extends Component {
       prefixChecking: false,
       showSkipTrialModal: false,
       showDeleteConfirm: false,
+      // Access tab — policy modal
+      showPolicyModal: false,
+      editingPolicy: null,
     });
     this.pollingInterval = null;
     this.prefixCheckTimer = null;
@@ -199,6 +215,86 @@ export class SecurityAccessDetailPage extends Component {
   async removeRoute(route) {
     const res = await securityAccessService.deleteRoute(
       this.props.workspaceId, this.props.saId, route.id);
+    if (res.success) {
+      await this.loadDetail();
+    } else {
+      this.state.error = res.error;
+    }
+  }
+
+  // ---- Access tab：config + policies + route protection ----
+  // Map the persisted comma-joined CF type string to user-facing labels so the
+  // fail-open widening warning names the SAME methods the toggles do (e.g.
+  // 'onetimepin' → 'Email OTP'). Unknown types pass through verbatim rather
+  // than being dropped, so a future CF type still surfaces (just unmapped).
+  get unresolvedIdpLabels() {
+    const raw = this.state.sa && this.state.sa.access_unresolved_idp_types;
+    if (!raw) {
+      return "";
+    }
+    return raw
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => t)
+      .map((t) => IDP_TYPE_LABELS[t] || t)
+      .join(", ");
+  }
+
+  async saveAccessConfig(vals) {
+    const res = await securityAccessService.updateAccessConfig(
+      this.props.workspaceId, this.props.saId, vals);
+    if (res.success) {
+      this.state.sa = res.data;
+    } else {
+      this.state.error = res.error;
+    }
+  }
+
+  onMasterToggle(ev) {
+    this.saveAccessConfig({ access_enabled: ev.target.checked });
+  }
+
+  onGoogleToggle(ev) {
+    this.saveAccessConfig({ login_google: ev.target.checked });
+  }
+
+  onEmailOtpToggle(ev) {
+    this.saveAccessConfig({ login_email_otp: ev.target.checked });
+  }
+
+  onSessionDurationChange(ev) {
+    this.saveAccessConfig({ session_duration: ev.target.value });
+  }
+
+  openAddPolicy() {
+    this.state.editingPolicy = null;
+    this.state.showPolicyModal = true;
+  }
+
+  openEditPolicy(policy) {
+    this.state.editingPolicy = policy;
+    this.state.showPolicyModal = true;
+  }
+
+  async onPolicySaved() {
+    this.state.showPolicyModal = false;
+    await this.loadDetail();
+  }
+
+  async deletePolicy(policy) {
+    const res = await securityAccessService.deletePolicy(
+      this.props.workspaceId, this.props.saId, policy.id);
+    if (res.success) {
+      await this.loadDetail();
+    } else {
+      this.state.error = res.error;
+    }
+  }
+
+  async toggleRouteProtected(route, ev) {
+    const res = await securityAccessService.updateRoute(
+      this.props.workspaceId, this.props.saId, route.id,
+      { is_protected: ev.target.checked });
     if (res.success) {
       await this.loadDetail();
     } else {

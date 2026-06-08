@@ -401,3 +401,254 @@ class TestSecurityAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}',
             {'action': 'refresh_status'})
         self.assertTrue(res.get('success'), res.get('error'))
+
+
+@tagged('post_install', '-at_install')
+class TestSecurityAccessAccessEndpoints(HttpCase):
+    """Cross-user negatives for the P2 Access Control endpoints.
+
+    Mirrors the route/detail negatives: a non-member打 access-config /
+    access-policies must be rejected at the controller gate (workspace →
+    role → _check_operation_allowed), and no policy row may be created nor
+    any access field flipped as a side effect of the denied call.
+    """
+
+    def setUp(self):
+        super().setUp()
+        suffix = uuid.uuid4().hex[:6]
+        self.alice = _new_user(self.env, f'sa_ac_alice_{suffix}')
+        self.mallory = _new_user(self.env, f'sa_ac_mallory_{suffix}')
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo().create({
+            'name': f'SA AC WS {suffix}', 'owner_id': self.alice.id})
+        Access = self.env['woow_paas_platform.workspace_access'].sudo()
+        if not Access.search([('workspace_id', '=', self.workspace.id),
+                              ('user_id', '=', self.alice.id)]):
+            Access.create({'workspace_id': self.workspace.id,
+                           'user_id': self.alice.id, 'role': 'owner'})
+        self.sa = self.env['woow_paas_platform.security_access'].sudo().create({
+            'name': 'AC EP GW', 'workspace_id': self.workspace.id})
+        self.pol = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo().create({
+                'security_access_id': self.sa.id, 'name': 'p',
+                'decision': 'allow', 'rule_type': 'email_domain',
+                'rule_value': 'a.com'})
+
+    def _rpc(self, url, params=None):
+        r = self.url_open(url, data=json.dumps({'jsonrpc': '2.0',
+                          'method': 'call', 'params': params or {}}),
+                          headers={'Content-Type': 'application/json'})
+        body = r.json()
+        # Stash the raw body so _assert_structured_denial can tell a
+        # structured {success: False} rejection apart from an endpoint
+        # crash (JSON-RPC error → body has 'error', no 'result'). Without
+        # this the negatives below would false-green if a future refactor
+        # made access-config / access-policies raise (e.g. a dropped
+        # .sudo() → AccessError) before the gate returns its envelope:
+        # {}.get('success') is None and assertFalse(None) still passes.
+        # Mirrors P1's _rpc / _assert_structured_denial守則.
+        self._last_body = body
+        return body.get('result') or {}
+
+    def _assert_structured_denial(self, res):
+        """Negative-path rejection must be a structured {success:False,error}
+        envelope, NOT a JSON-RPC error (endpoint crash)."""
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed (JSON-RPC error) instead of "
+                         "returning a structured denial: %s"
+                         % self._last_body.get('error'))
+        self.assertFalse(res.get('success'))
+        self.assertIn('error', res)
+
+    def test_non_member_policy_list_denied(self):
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'list'})
+        self._assert_structured_denial(res)
+
+    def test_non_member_policy_create_denied_and_none_made(self):
+        before = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'inject', 'decision': 'allow',
+             'rule_type': 'email_domain', 'rule_value': 'evil.com'})
+        self._assert_structured_denial(res)
+        after = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        self.assertEqual(after, before)
+
+    def test_non_member_access_config_denied(self):
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-config',
+            {'access_enabled': True})
+        self._assert_structured_denial(res)
+        self.assertFalse(self.sa.sudo().access_enabled)
+
+    # ---- role='user' member negatives (endpoint-layer role gate) ----
+    #
+    # The non-member cases above are blocked at _get_workspace_or_error, BEFORE
+    # the role gate ever runs — so they do NOT exercise the controller role
+    # check (security_access.py:587 / 619: role not in [OWNER, ADMIN]) nor the
+    # _check_operation_allowed write gate. A role='user' member passes the
+    # workspace gate and is stopped ONLY by the role gate, which is otherwise
+    # endpoint-untested (TestSecurityAccessAccessControl calls the private
+    # helpers directly, bypassing it). Without these a future drop of the role
+    # gate would let a plain member flip access_enabled / add an allow policy
+    # via the BFF, caught only by the ir.rule layer. Mirrors every P1 sibling
+    # endpoint's role='user' variant (two-layer-acl-lockstep).
+
+    def _add_user_member(self):
+        suffix = uuid.uuid4().hex[:6]
+        u = _new_user(self.env, f'sa_ac_user_{suffix}')
+        self.env['woow_paas_platform.workspace_access'].sudo().create({
+            'workspace_id': self.workspace.id, 'user_id': u.id, 'role': 'user'})
+        return u
+
+    def test_member_user_access_config_denied(self):
+        """role='user' member 打 access-config 須被 role gate 結構化拒絕，
+        且 access_enabled 不得被翻開。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-config',
+            {'access_enabled': True})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        self.assertFalse(self.sa.sudo().access_enabled)
+
+    def test_member_user_policy_create_denied_and_none_made(self):
+        """role='user' member 不得經 BFF create allow policy（繞過 role gate
+        開放受保護 hostname）。"""
+        before = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'member-inject', 'decision': 'allow',
+             'rule_type': 'email_domain', 'rule_value': 'evil.com'})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        after = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        self.assertEqual(after, before)
+
+    def test_member_user_policy_update_denied(self):
+        """role='user' member 不得改既有 policy 的 decision（CF allow/deny 認證
+        閘）。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'update', 'policy_id': self.pol.id, 'decision': 'deny'})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        self.assertEqual(self.pol.sudo().decision, 'allow')
+
+    def test_member_user_policy_delete_denied(self):
+        """role='user' member 不得 delete 既有 policy（例如移除一條 deny 規則
+        以放寬存取）。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'delete', 'policy_id': self.pol.id})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        self.assertTrue(self.pol.sudo().exists())
+
+    def test_member_user_policy_list_allowed(self):
+        """正向對照：role='user' member 仍可 list（action='list' 在 role gate
+        之前 return，與 non-member 被 workspace gate 擋不同）——確保 negatives
+        鎖的是 role gate 而非把整個 endpoint 鎖死。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'list'})
+        self.assertTrue(res.get('success'), res.get('error'))
+
+    # ---- owner positive write paths (A/B 變體 half-coverage 補正向) ----
+    #
+    # The positive mutating paths for access-config / access-policies were
+    # only ever exercised by calling controller helpers directly
+    # (test_security_access_subscription_flow.py: _update_access_config /
+    # _create_policy / _update_policy / _delete_policy), which BYPASS the full
+    # @route dispatch — neither the owner/admin role gate nor the
+    # sa._check_operation_allowed(operation='write') gate is run on a SUCCESSFUL
+    # owner mutation through the actual route. Mirrors the sibling endpoints'
+    # owner-positive tests (test_owner_detail_update_renames /
+    # test_owner_route_update_writes_service_url_and_is_protected). A future
+    # change that made access-config / access-policies a silent no-op AFTER the
+    # gate, or that broke the gate's positive-pass for owners, would otherwise
+    # go uncaught at the endpoint layer. self.sa has NO subscription so
+    # _check_operation_allowed passes (active/unrestricted), and it has no
+    # tunnel so the write does not reach the operator — pure end-to-end gate +
+    # ORM-effect verification.
+
+    def test_owner_access_config_flips_enabled(self):
+        """owner 經 @route 打 access-config 翻開 access_enabled，正向通過 role
+        + _check_operation_allowed gate 並真的寫進 DB。"""
+        self.assertFalse(self.sa.sudo().access_enabled)
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-config',
+            {'access_enabled': True, 'session_duration': '8h'})
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed instead of returning a result: %s"
+                         % self._last_body.get('error'))
+        self.assertTrue(res.get('success'), res.get('error'))
+        self.sa.invalidate_recordset(['access_enabled', 'session_duration'])
+        self.assertTrue(self.sa.sudo().access_enabled)
+        self.assertEqual(self.sa.sudo().session_duration, '8h')
+
+    def test_owner_policy_create_update_delete_through_route(self):
+        """owner 經 @route 對 access-policies 做 create→update→delete 全程，
+        每步都通過 role + _check_operation_allowed gate 並真的生效。"""
+        self.authenticate(self.alice.login, self.alice.login)
+        # create
+        created = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'owner-pol', 'decision': 'allow',
+             'rule_type': 'email_domain', 'rule_value': 'owner.com'})
+        self.assertNotIn('error', self._last_body,
+                         "create crashed: %s" % self._last_body.get('error'))
+        self.assertTrue(created.get('success'), created.get('error'))
+        new_id = created['data']['id']
+        pol = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo().browse(
+                new_id)
+        self.assertTrue(pol.exists())
+        self.assertEqual(pol.decision, 'allow')
+        # update: flip decision allow→deny
+        updated = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'update', 'policy_id': new_id, 'decision': 'deny'})
+        self.assertTrue(updated.get('success'), updated.get('error'))
+        pol.invalidate_recordset(['decision'])
+        self.assertEqual(pol.decision, 'deny')
+        # delete
+        deleted = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'delete', 'policy_id': new_id})
+        self.assertTrue(deleted.get('success'), deleted.get('error'))
+        self.assertFalse(pol.exists())

@@ -550,3 +550,237 @@ class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
                 workspace_id=self.workspace.id, sa_id=self.sa.id,
                 action='delete', route_id=999999)
         self.assertFalse(res['success'])
+
+
+class TestSecurityAccessAccessControl(TransactionCase):
+    """access-config / policy CRUD controller helpers."""
+
+    def setUp(self):
+        super().setUp()
+        self.controller = SecurityAccessController()
+        self.SA = self.env['woow_paas_platform.security_access']
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'AC Ctrl WS', 'owner_id': self.env.user.id})
+        Access = self.env['woow_paas_platform.workspace_access']
+        if not Access.search([('workspace_id', '=', self.workspace.id),
+                              ('user_id', '=', self.env.user.id)]):
+            Access.create({'workspace_id': self.workspace.id,
+                           'user_id': self.env.user.id, 'role': 'owner'})
+
+    def _active_sa(self, mc):
+        with patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            sa = self.SA.create({'name': 'AC GW',
+                                 'workspace_id': self.workspace.id})
+            sa.write({'state': 'active', 'tunnel_id': 'tun-ac'})
+            self.env['woow_paas_platform.security_access_route'].create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': sa.canonical_name, 'is_primary': True})
+        return sa
+
+    def _mock(self):
+        mc = MagicMock()
+        mc.sync_tunnel_routes.return_value = {'routes': []}
+        mc.sync_access_app.return_value = {'app_id': 'app-1',
+                                           'policy_ids': ['pol-1'],
+                                           'allowed_idps': ['idp-g']}
+        return mc
+
+    def test_update_access_config(self):
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._update_access_config(sa, {
+                'access_enabled': True, 'login_google': True,
+                'login_email_otp': True, 'session_duration': '8h'})
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertTrue(sa.access_enabled)
+        self.assertEqual(sa.session_duration, '8h')
+
+    def test_update_access_config_whitelist_only(self):
+        """_update_access_config's whitelist is the SOLE defense for the
+        server-owned access_app_id: the model write() immutable guard covers
+        only canonical_name/reference_id, NOT access_app_id (a plain writable
+        Char), and the owner/admin role gate doesn't help (an owner may
+        legitimately call access-config). Absent the whitelist, an owner could
+        smuggle {'access_app_id': 'attacker-app'} and repoint the SA at an
+        arbitrary CF Access app — the next idempotent resync would PUT-update
+        someone else's app. Send forged server-owned keys (access_app_id /
+        state / tunnel_id / access_unresolved_idp_types) alongside a whitelisted
+        one and assert only the whitelisted field took effect while the forged
+        keys were dropped.
+        Access-config analogue of test_create/update_policy_whitelist_only."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        # Seed the fail-open warning signal so we can prove a forged blank does
+        # NOT clear it. access_unresolved_idp_types is server-owned (set only by
+        # _sync_access_to_operator from the operator's reply) and has NO model
+        # write() immutable guard — the controller whitelist is its sole defense.
+        # If an owner could smuggle {'access_unresolved_idp_types': ''} they
+        # could erase the "login restriction silently widened to all IdPs"
+        # warning, masking a fail-open auth-widening from anyone watching the UI.
+        sa.access_unresolved_idp_types = 'google'
+        orig_app_id = sa.access_app_id
+        orig_state = sa.state
+        orig_tunnel = sa.tunnel_id
+        orig_session = sa.session_duration
+        orig_unresolved = sa.access_unresolved_idp_types
+        # Send ONLY forged server-owned keys (no whitelisted field): the
+        # whitelist must drop them ALL → vals ends empty → no write() → no
+        # _sync_access_to_operator. Isolating the sync this way avoids the
+        # legit-sync writeback (which rewrites access_app_id /
+        # access_unresolved_idp_types from the operator reply) muddying the
+        # "forged key never reached write()" assertion. The positive path
+        # (a whitelisted field DOES take effect) is covered by
+        # test_update_access_config.
+        mc.sync_access_app.reset_mock()
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._update_access_config(sa, {
+                'access_app_id': 'attacker-app',
+                'state': 'deleting',
+                'tunnel_id': 'attacker-tunnel',
+                'access_unresolved_idp_types': ''})
+        self.assertTrue(res['success'], res.get('error'))
+        # every forged server-owned key was dropped (none reached write())
+        self.assertEqual(sa.access_app_id, orig_app_id)
+        self.assertEqual(sa.state, orig_state)
+        self.assertEqual(sa.tunnel_id, orig_tunnel)
+        self.assertEqual(sa.session_duration, orig_session)
+        # the forged blank did NOT clear the fail-open widening warning
+        self.assertEqual(sa.access_unresolved_idp_types, orig_unresolved)
+        self.assertEqual(sa.access_unresolved_idp_types, 'google')
+        # vals ended empty → no operator sync fired
+        mc.sync_access_app.assert_not_called()
+
+    def test_create_policy(self):
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            sa.write({'access_enabled': True})
+            res = self.controller._create_policy(sa, {
+                'name': 'corp', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(len(sa.access_policy_ids), 1)
+
+    def test_policy_quota_enforced_at_controller(self):
+        """plan sa_max_access_policies=1：第二條 policy 在 controller 層
+        (_create_policy) 被擋，回 structured {success:False} 且 error 含 'quota'。
+
+        Policies 的 quota 與 routes 一樣有兩層：controller _create_policy
+        (len(sa.access_policy_ids) >= quota → structured error) 與 model
+        @api.constrains _check_policy_quota (count > quota → ValidationError)。
+        Routes 兩層都有測（test_route_quota_enforced_at_controller +
+        _at_orm_backstop），但 policies 修前只測了 ORM backstop
+        (test_policy_quota_enforced)；controller 這條 structured-error code path
+        無測，是 two-layer-quota 半套覆蓋的反例。鎖住它：移除/弱化 controller
+        層 gate（error message 漂移、或 gate 被拿掉只剩 per-row ORM）會被抓到。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        plan = self.env['sh.subscription.plan'].create({
+            'name': 'AC Policy Quota Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_access_policies': 1})
+        sub = self.env['sh.subscription.subscription'].create({
+            'sh_partner_id': self.env.user.partner_id.id,
+            'state': 'in_progress'})
+        sub.sh_subscription_plan_id = plan.id
+        sa.subscription_id = sub.id
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            sa.write({'access_enabled': True})
+            r1 = self.controller._create_policy(sa, {
+                'name': 'p1', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+            self.assertTrue(r1['success'], r1.get('error'))
+            r2 = self.controller._create_policy(sa, {
+                'name': 'p2', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+        self.assertFalse(r2['success'])
+        self.assertIn('quota', r2['error'].lower())
+        # the over-quota policy must not have landed
+        self.assertEqual(len(sa.access_policy_ids), 1)
+
+    def test_create_policy_invalid_rule_rejected(self):
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._create_policy(sa, {
+                'name': 'bad', 'decision': 'allow',
+                'rule_type': 'ip_range', 'rule_value': 'nope'})
+        self.assertFalse(res['success'])
+
+    def test_update_policy_whitelist_only(self):
+        """_update_policy must not let client-controlled keys (cf_policy_id /
+        security_access_id) reach write(); only the field whitelist applies."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            pol = self.env[
+                'woow_paas_platform.security_access_access_policy'].create({
+                    'security_access_id': sa.id, 'name': 'corp',
+                    'decision': 'allow', 'rule_type': 'email_domain',
+                    'rule_value': 'acme.com'})
+            res = self.controller._update_policy(sa, pol.id, {
+                'name': 'renamed', 'cf_policy_id': 'attacker-set',
+                'security_access_id': 999999})
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(pol.name, 'renamed')
+        # client-supplied non-whitelisted keys were ignored
+        self.assertNotEqual(pol.cf_policy_id, 'attacker-set')
+        self.assertEqual(pol.security_access_id.id, sa.id)
+
+    def test_create_policy_whitelist_only(self):
+        """_create_policy must drop client-controlled cf_policy_id and pin
+        security_access_id to the gated SA — never trust the client's value.
+        Create-path analogue of test_update_policy_whitelist_only: send a
+        forged cf_policy_id + security_access_id pointing at ANOTHER SA and
+        assert the created row keeps cf_policy_id empty and is pinned to sa."""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        # A second SA whose id the attacker tries to smuggle in.
+        other_sa = self.SA.create({
+            'name': 'Other GW', 'workspace_id': self.workspace.id})
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._create_policy(sa, {
+                'name': 'corp', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'acme.com',
+                'cf_policy_id': 'attacker-set',
+                'security_access_id': other_sa.id})
+        self.assertTrue(res['success'], res.get('error'))
+        pol = sa.access_policy_ids.filtered(lambda p: p.name == 'corp')
+        self.assertEqual(len(pol), 1)
+        # cf_policy_id is server-owned: the forged value was dropped (the row
+        # only gets a cf id from the operator's returned policy_ids on sync).
+        self.assertNotEqual(pol.cf_policy_id, 'attacker-set')
+        # security_access_id pinned to the gated SA, NOT the smuggled other_sa.
+        self.assertEqual(pol.security_access_id.id, sa.id)
+        self.assertNotIn(pol, other_sa.access_policy_ids)
+
+    def test_delete_policy(self):
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            pol = self.env[
+                'woow_paas_platform.security_access_access_policy'].create({
+                    'security_access_id': sa.id, 'name': 'corp',
+                    'decision': 'allow', 'rule_type': 'email_domain',
+                    'rule_value': 'acme.com'})
+            res = self.controller._delete_policy(sa, pol.id)
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(len(sa.access_policy_ids), 0)

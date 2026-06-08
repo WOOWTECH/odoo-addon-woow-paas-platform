@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api import (
+    access,
     agent_runtimes,
     init,
     namespaces,
@@ -168,6 +169,7 @@ app.include_router(tunnels.router)
 app.include_router(init.router)
 app.include_router(odoo_modules.router)
 app.include_router(agent_runtimes.router)
+app.include_router(access.router)
 
 
 # Root endpoint

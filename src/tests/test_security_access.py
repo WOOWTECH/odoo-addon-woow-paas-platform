@@ -478,6 +478,12 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
     def _sync_mock(self):
         mock_client = MagicMock()
         mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        # _do_resume now pushes Access unconditionally (both enable+disable
+        # convergence directions) when a tunnel exists, so the mock must return
+        # a real teardown-shape dict, not a bare MagicMock the writeback chokes
+        # on. enabled SAs are exercised in the dedicated convergence test below.
+        mock_client.sync_access_app.return_value = {
+            'app_id': None, 'policy_ids': [], 'allowed_idps': []}
         return mock_client
 
     def test_suspend_overrides_all_routes_to_503(self):
@@ -541,6 +547,53 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
             sa._do_resume()
         self.assertEqual(sa.state, 'active')
         self.assertFalse(sa.error_message)
+
+    def test_resume_converges_disable_done_while_suspended(self):
+        """disable-while-suspended must be torn down at resume.
+
+        While state=='suspended' the SA write() Access trigger does NOT fire
+        (state not in ('active','error')), so flipping access_enabled→False on
+        a suspended SA never reaches the operator. If _do_resume only converged
+        the ENABLE direction (`if self.access_enabled`), the CF Access app +
+        reusable policies would survive forever, diverging from the user's
+        disable intent with no later converge trigger. Resume must push the
+        full desired state (enabled=False → operator teardown via
+        existing_app_id) regardless of access_enabled's value."""
+        mock_client = self._sync_mock()
+        mock_client.sync_access_app.return_value = {
+            'app_id': None, 'policy_ids': [], 'allowed_idps': []}
+        with patch(MOCK_GET_CLIENT, return_value=mock_client):
+            sa = self.SecurityAccess.create({
+                'name': 'Disable-While-Suspended GW',
+                'workspace_id': self.workspace.id})
+            sa.write({'state': 'active', 'tunnel_id': 'tun-dws',
+                      'access_enabled': True})
+            self.Route.create({'security_access_id': sa.id,
+                               'subdomain_prefix': sa.canonical_name,
+                               'is_primary': True})
+            # Set access_app_id LAST: the access_enabled write + route create
+            # both fire _sync_access_to_operator (mock returns app_id=None,
+            # written back), so set the live app id after all sync triggers —
+            # mirrors an SA that already holds a live CF app.
+            sa.write({'access_app_id': 'app-dws'})
+            sa._do_suspend()
+            self.assertEqual(sa.state, 'suspended')
+            # Disable Access while suspended: the write trigger must NOT fire
+            # (suspended state), so no sync happens here.
+            mock_client.sync_access_app.reset_mock()
+            sa.write({'access_enabled': False})
+            mock_client.sync_access_app.assert_not_called()
+            # Resume must converge the disable: push enabled=False teardown.
+            sa._do_resume()
+        self.assertTrue(mock_client.sync_access_app.called,
+                        "resume must push Access even when disabling")
+        payload = mock_client.sync_access_app.call_args.args[0]
+        self.assertFalse(payload['enabled'],
+                         "disable-while-suspended must reach CF as enabled=False")
+        self.assertEqual(payload['existing_app_id'], 'app-dws',
+                         "teardown must carry the live CF app id so it is reaped")
+        # writeback cleared the stored app id (operator returned app_id=None)
+        self.assertFalse(sa.access_app_id)
 
     def test_resume_without_tunnel_restores_pending_not_active(self):
         """從未 provision（無 tunnel_id）的 SA 被 suspend→resume，不得標成
