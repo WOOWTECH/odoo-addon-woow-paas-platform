@@ -483,6 +483,64 @@ class TestAccessLifecycle(TransactionCase):
         # raise, so access_app_id must be False now.
         self.assertFalse(sa.access_app_id)
 
+    def test_cleanup_access_teardown_failure_does_not_report_clean(self):
+        """Ordering-dependent orphan guard: if the Access teardown
+        (enabled=False sync) FAILS but the subsequent tunnel delete SUCCEEDS,
+        _do_cleanup must NOT write 'deleting'. Pre-fix the Access failure was
+        swallowed and only tunnel_id gated the 'deleting' write, so the SA
+        reported clean while access_app_id (the CF Access app + reusable
+        policies) lingered forever with no retry path (the next cleanup
+        early-returns once tunnel_id is gone). Land in 'error' instead, keeping
+        access_app_id set so cleanup stays re-entrant / observable."""
+        mc = self._mock()
+        # Access teardown raises; tunnel delete is fine.
+        mc.sync_access_app.side_effect = Exception("operator down")
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa = self.SA.create({'name': 'AL GW err',
+                                 'workspace_id': self.workspace.id})
+            sa.write({'state': 'active', 'tunnel_id': 'tun-al-err',
+                      'access_enabled': True})
+            self.Route.create({'security_access_id': sa.id,
+                               'subdomain_prefix': sa.canonical_name,
+                               'is_primary': True})
+            sa.write({'access_app_id': 'app-al-err'})
+            mc.sync_access_app.reset_mock()
+            sa._do_cleanup()
+        # tunnel delete succeeded → tunnel_id cleared
+        self.assertFalse(sa.tunnel_id)
+        # but Access teardown failed → app id still set (no orphan-and-forget)
+        self.assertEqual(sa.access_app_id, 'app-al-err')
+        # must NOT report a false clean: state is 'error', not 'deleting'
+        self.assertEqual(sa.state, 'error')
+        self.assertTrue(sa.error_message)
+
+    def test_cleanup_retries_access_teardown_after_tunnel_gone(self):
+        """Re-entrancy: a second _do_cleanup pass (after tunnel_id was already
+        cleared by a prior partial cleanup) must still RETRY the Access teardown
+        and, on success, clear access_app_id and reach 'deleting'. Pre-fix
+        _cleanup_cloudflare early-returned on `not tunnel_id`, so a lingering
+        Access app could never be reaped."""
+        mc = self._mock()
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            sa = self.SA.create({'name': 'AL GW retry',
+                                 'workspace_id': self.workspace.id})
+            # Partial-cleanup shape: tunnel already gone, Access app lingering.
+            sa.write({'state': 'error', 'tunnel_id': False,
+                      'access_enabled': True, 'access_app_id': 'app-linger'})
+            self.Route.create({'security_access_id': sa.id,
+                               'subdomain_prefix': sa.canonical_name,
+                               'is_primary': True})
+            mc.sync_access_app.reset_mock()
+            sa._do_cleanup()
+        # retried the teardown despite tunnel_id already gone
+        self.assertTrue(mc.sync_access_app.called)
+        payload = mc.sync_access_app.call_args.args[0]
+        self.assertFalse(payload['enabled'])
+        self.assertEqual(payload['existing_app_id'], 'app-linger')
+        # teardown succeeded → app id cleared, cleanup now complete
+        self.assertFalse(sa.access_app_id)
+        self.assertEqual(sa.state, 'deleting')
+
 
 class TestAccessPolicyAcl(TransactionCase):
     def setUp(self):

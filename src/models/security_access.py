@@ -782,16 +782,27 @@ class SecurityAccess(models.Model):
         _logger.info("[SA] _do_cleanup sa=%s tunnel=%s",
                      self.id, self.tunnel_id)
         self._cleanup_cloudflare()
-        if self.tunnel_id:
-            # cleanup did not finish — tunnel still live in Cloudflare
+        if self.tunnel_id or self.access_app_id:
+            # cleanup did not finish — either the tunnel is still live in
+            # Cloudflare, OR the Access teardown failed while the tunnel delete
+            # succeeded (ordering-dependent orphan: a stale access_app_id means
+            # the CF Access app + reusable policies still exist). Either way,
+            # writing 'deleting' would be a misleading success signal that hides
+            # a lingering CF resource and lets ops mistake "clean" for "clean
+            # failed". Land in 'error' + error_message instead, fail-loud and
+            # re-entrant: the next cron pass re-runs _cleanup_cloudflare, which
+            # retries whichever leg is still outstanding.
             self.write({
                 'state': 'error',
-                'error_message': "Cloudflare cleanup failed; tunnel still "
-                                 "live. Will retry on the next cron pass.",
+                'error_message': "Cloudflare cleanup failed; %s still live. "
+                                 "Will retry on the next cron pass." % (
+                                     'tunnel' if self.tunnel_id
+                                     else 'Access app'),
             })
             _logger.warning(
-                "[SA] _do_cleanup incomplete sa=%s tunnel=%s (state=error)",
-                self.id, self.tunnel_id,
+                "[SA] _do_cleanup incomplete sa=%s tunnel=%s app=%s "
+                "(state=error)",
+                self.id, self.tunnel_id, self.access_app_id,
             )
             return
         self.write({'state': 'deleting'})
@@ -801,15 +812,22 @@ class SecurityAccess(models.Model):
         every DNS record pointing at the tunnel, then deletes the tunnel
         (token invalidated)."""
         self.ensure_one()
-        if not self.tunnel_id:
+        if not self.tunnel_id and not self.access_app_id:
             return
-        # P2: tear down Cloudflare Access (app + reusable policies) first, while
-        # the tunnel still exists (the operator needs the tunnel context to
-        # reconcile). Wrapped in its own try so an Access teardown failure does
-        # NOT abort the tunnel delete below — the tunnel is the billed resource
-        # and must always get its delete attempt. enabled=False makes the sync
-        # idempotent (re-running on an already-torn-down app is a no-op).
-        if self.access_app_id and self.tunnel_id:
+        # P2: tear down Cloudflare Access (app + reusable policies) first.
+        # Wrapped in its own try so an Access teardown failure does NOT abort
+        # the tunnel delete below — the tunnel is the billed resource and must
+        # always get its delete attempt. enabled=False makes the sync
+        # idempotent (re-running on an already-torn-down app is a no-op). The
+        # Access teardown sync (enabled=False) only needs existing_app_id +
+        # existing_policy_ids, NOT the tunnel, so we still attempt it even when
+        # tunnel_id is already gone — a prior partial cleanup (tunnel deleted,
+        # Access teardown failed) would otherwise leave the Access app/policies
+        # as permanent orphans with no retry path. access_app_id is only
+        # cleared on a successful teardown, so a failure keeps it set and
+        # _do_cleanup lands the SA in 'error' (re-entrant) instead of reporting
+        # a false clean.
+        if self.access_app_id:
             try:
                 client = self._get_operator_client()
                 payload = self._build_access_payload()
@@ -819,6 +837,8 @@ class SecurityAccess(models.Model):
             except Exception as e:
                 _logger.warning("[SA] access teardown failed sa=%s: %s",
                                 self.id, e)
+        if not self.tunnel_id:
+            return
         try:
             client = self._get_operator_client()
             client.delete_tunnel(self.tunnel_id)
