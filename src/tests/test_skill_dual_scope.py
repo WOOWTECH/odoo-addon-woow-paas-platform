@@ -321,49 +321,31 @@ class TestDemoSystemSkill(TransactionCase):
                 for n in names),
             "bundle must NOT wrap contents in a dir; pack contents, not the dir")
 
-    def test_demo_bundle_entrypoint_runnable(self):
-        """Bundle entrypoint must be runnable per the subprocess contract.
+    def test_demo_bundle_is_valid_skill_md_only(self):
+        """Claude Code model: the seeded demo bundle is SKILL.md-only (no
+        executable entrypoint). The SKILL.md body is the skill's instructions
+        (injected via load_skill on the pod); there is no scripts/main.py.
 
-        Regression guard for issue #139: the bundle shipped ``src/main.py`` with
-        only a ``def run()``, while agent-runtime ``loader.py`` defaults the
-        entrypoint to ``scripts/main.py`` and ``subprocess_runner.py`` runs
-        ``python3 <entrypoint>``, feeding input_args as JSON on stdin and taking
-        stdout as the tool_result. A bare ``def run()`` at the wrong path yields
-        ``SKILL_NOT_FOUND`` (or, path fixed, empty stdout). Assert the canonical
-        path exists, the frontmatter declares it, and the script actually greets
-        when executed under the real contract.
+        Replaces the old issue #139 ``test_demo_bundle_entrypoint_runnable``,
+        which asserted the now-removed subprocess/entrypoint contract. Guard
+        instead that the bundle stays a structurally-valid knowledge skill:
+        SKILL.md at the tar root and zero upload-validation errors/warnings.
         """
         import base64
         import io
-        import os
-        import subprocess
-        import sys
         import tarfile
-        import tempfile
+
+        from odoo.addons.woow_paas_platform.wizard.skill_bundle_validation import (
+            validate_skill_bundle)
 
         sk = self.env.ref('woow_paas_platform.demo_skill_hello_world')
         raw = base64.b64decode(sk.bundle_attachment_id.datas)
-        with tempfile.TemporaryDirectory() as tmp:
-            with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as tar:
-                names = tar.getnames()
-                tar.extractall(tmp, filter='data')
-            self.assertIn(
-                'scripts/main.py', names,
-                "entrypoint must live at the loader-default scripts/main.py")
-            with open(os.path.join(tmp, 'SKILL.md'), encoding='utf-8') as fh:
-                skill_md = fh.read()
-            self.assertIn(
-                'entrypoint: scripts/main.py', skill_md,
-                "SKILL.md frontmatter should declare the entrypoint explicitly")
-            # input_args arrive as JSON on stdin; stdout becomes the tool_result
-            named = subprocess.run(
-                [sys.executable, 'scripts/main.py'],
-                input=b'{"input": "Eugene"}',
-                capture_output=True, cwd=tmp, timeout=30)
-            self.assertEqual(named.returncode, 0, named.stderr)
-            self.assertEqual(named.stdout.decode('utf-8'), 'Hello, Eugene!')
-            blank = subprocess.run(
-                [sys.executable, 'scripts/main.py'],
-                input=b'{}', capture_output=True, cwd=tmp, timeout=30)
-            self.assertEqual(blank.returncode, 0, blank.stderr)
-            self.assertEqual(blank.stdout.decode('utf-8'), 'Hello, world!')
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as tar:
+            names = tar.getnames()
+        self.assertIn('SKILL.md', names,
+                      "demo bundle must carry SKILL.md at the tar root")
+        result = validate_skill_bundle(raw, wizard_name='hello-world')
+        self.assertEqual(result.errors, [],
+                         "demo bundle must pass structural validation")
+        self.assertEqual(result.warnings, [],
+                         "SKILL.md-only demo bundle must produce no warnings")
