@@ -135,3 +135,5 @@ from . import test_agent_context_builder
 from . import test_agent_context_endpoint
 # feat: security access P2 — access control (access_policy submodel + sync + ACL)
 from . import test_security_access_access_policy
+# feat: security access P2.5 — per-route access (Service-wide → per-route migration)
+from . import test_security_access_p2_5_migration
