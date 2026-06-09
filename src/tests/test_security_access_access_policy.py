@@ -729,14 +729,27 @@ class TestAccessPolicyAcl(TransactionCase):
         self.assertEqual(len(v), 0)
 
     def test_cross_workspace_owner_cannot_write_policy(self):
-        """跨 workspace owner 不可改 A 的 policy（write rule 走 SA→ws→
-        access_ids any owner/admin 只匹配 A 的 access 列，mallory 不在其中）。"""
+        """跨 workspace owner (mallory) 不可改 A 的 policy。
+
+        精確守線範圍：mallory 在 workspace A **沒有任何 access 列**（只在 B 是
+        owner），所以 write rule domain（security_access_id.workspace_id.
+        access_ids any [user_id, role in owner/admin]）的 EXISTS 子查詢在 A 完
+        全無命中 → deny。擋的是『持有別 workspace owner 身分卻跨來改 A』的非
+        member 提權，**不是** any-clause 的 cross-tuple 弱化。
+        cross-tuple 弱化（同 workspace 內 role='user' member 靠 owner 那列
+        湊滿 user_id+role）由 test_user_role_member_can_read_but_not_write_policy
+        / test_user_role_member_cannot_create_or_unlink_policy 守（那兩條才真正
+        測到 'any' 把 user_id 與 role 鎖在同一列）。"""
         from odoo.exceptions import AccessError
         self._make_other_workspace_route()
         with self.assertRaises(AccessError):
             self.pol.with_user(self.mallory).write({'decision': 'deny'})
 
     def test_cross_workspace_owner_cannot_unlink_policy(self):
+        """跨 workspace owner (mallory) 不可 unlink A 的 policy — 同
+        test_cross_workspace_owner_cannot_write_policy 的範圍：mallory 在 A 無
+        access 列的非 member deny，非 any-clause cross-tuple 弱化（後者由同
+        workspace role='user' member 的 cannot-create-or-unlink 測試守）。"""
         from odoo.exceptions import AccessError
         self._make_other_workspace_route()
         with self.assertRaises(AccessError):
