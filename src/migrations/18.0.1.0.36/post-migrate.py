@@ -1,4 +1,4 @@
-"""18.0.1.0.35 — re-pack demo hello-world skill bundle: SKILL.md-only.
+"""18.0.1.0.36 — re-pack demo hello-world skill bundle: SKILL.md-only.
 
 Claude Code model (skill execution redesign): a skill no longer needs an
 executable entrypoint. The demo hello-world bundle becomes SKILL.md-only — the
@@ -6,6 +6,13 @@ SKILL.md body is the skill's instructions, injected into the agent context via
 ``load_skill``; there is no ``scripts/main.py``. The 18.0.1.0.33 re-pack had
 shipped an executable ``scripts/main.py`` for the (now removed) subprocess
 contract.
+
+Version note: this migration was authored as 18.0.1.0.35 but bumped to
+18.0.1.0.36 because the Security Access P1/P2 work (#169) had already claimed
+18.0.1.0.35 on develop. Sharing the version would let this migration be SKIPPED
+on a DB already upgraded to .35 (Odoo only runs migrations on a version
+INCREASE) — the demo would stay an executable bundle and break on the new
+runtime. .36 guarantees the upgrade path runs it.
 
 ``demo_skill_hello_world`` is ``noupdate="1"``, so a module upgrade does NOT
 overwrite the existing attachment via the XML data file. This migration updates
@@ -38,7 +45,7 @@ def migrate(cr, version):
     )
     if not skill:
         _logger.info(
-            "18.0.1.0.35 demo-bundle re-pack: demo_skill_hello_world absent "
+            "18.0.1.0.36 demo-bundle re-pack: demo_skill_hello_world absent "
             "(admin-deleted or fresh install) — nothing to migrate."
         )
         return
@@ -49,7 +56,7 @@ def migrate(cr, version):
 
     if skill.bundle_sha256 == new_sha:
         _logger.info(
-            "18.0.1.0.35 demo-bundle re-pack: already SKILL.md-only bundle "
+            "18.0.1.0.36 demo-bundle re-pack: already SKILL.md-only bundle "
             "(sha %s) — no-op.",
             new_sha,
         )
@@ -61,7 +68,7 @@ def migrate(cr, version):
         attachment.write({"datas": base64.b64encode(raw).decode("ascii")})
     skill.write({"bundle_sha256": new_sha})
     _logger.info(
-        "18.0.1.0.35 demo-bundle re-pack: updated demo_skill_hello_world to "
+        "18.0.1.0.36 demo-bundle re-pack: updated demo_skill_hello_world to "
         "SKILL.md-only bundle (sha %s -> %s).",
         old_sha,
         new_sha,
