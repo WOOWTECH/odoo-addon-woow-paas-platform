@@ -334,7 +334,6 @@ class HAIntegrationController(Controller):
                 'name': sa.name,
                 'canonical_name': sa.canonical_name or '',
                 'state': sa.state,
-                'primary_hostname': sa.primary_hostname or '',
                 'tunnel_status': sa.tunnel_status or 'disconnected',
                 'plan_name': sub_info['plan_name'] if sub_info else None,
                 'next_payment': sub_info['next_payment'] if sub_info else None,
@@ -372,7 +371,6 @@ class HAIntegrationController(Controller):
         return _json_response({
             'tunnel_token': sa.tunnel_token or '',
             'tunnel_id': sa.tunnel_id or '',
-            'primary_hostname': sa.primary_hostname or '',
         })
 
     @route(

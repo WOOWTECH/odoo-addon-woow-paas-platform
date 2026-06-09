@@ -62,12 +62,23 @@ class TestSecurityAccess(TransactionCase):
         self.assertNotEqual(sa.canonical_name, injected)
         self.assertTrue(sa.canonical_name.startswith('paas-sa-'))
 
-    def test_primary_hostname_combines_domain(self):
-        self.env['ir.config_parameter'].sudo().set_param(
-            'woow_paas_platform.paas_domain', 'stg.woowtech.io')
+    def test_no_primary_hostname_field(self):
+        """A Security Access is a Cloudflare Tunnel (N routes), not a single
+        host — the SA-level primary_hostname field was removed. Lock that it
+        stays gone so it isn't silently re-added as a singular-hostname concept."""
         sa = self._make_sa()
+        self.assertNotIn('primary_hostname', sa._fields)
+
+    def test_platform_default_hostname_derived_on_demand(self):
+        """The few internal CF consumers derive a hostname from the platform
+        default (is_primary) route / canonical_name — never an SA field."""
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io')
+        sa = self._make_sa()
+        # No route yet → falls back to {canonical_name}.{domain}
         self.assertEqual(
-            sa.primary_hostname, f"{sa.canonical_name}.stg.woowtech.io")
+            sa._platform_default_hostname(),
+            f"{sa.canonical_name}.woowtech.io")
 
     # ---- provision ----
 
@@ -250,11 +261,15 @@ class TestSecurityAccess(TransactionCase):
         """connections 非空 → connected + 解析 connector_*/uptime（鏡像 SmartHome）。"""
         mock_client = MagicMock()
         mock_client.get_tunnel_status.return_value = {
-            'connections': [{
-                'connector_id': 'conn-123',
-                'type': 'cloudflared',
-                'opened_at': '2026-06-06T08:30:00Z',
-            }],
+            'connections': [
+                {
+                    'connector_id': 'conn-123',
+                    'type': 'cloudflared',
+                    'client_version': 'cloudflared 2025.5.1',
+                    'opened_at': '2026-06-06T08:30:00Z',
+                },
+                {'connector_id': 'conn-456', 'type': 'cloudflared'},
+            ],
         }
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
@@ -263,6 +278,8 @@ class TestSecurityAccess(TransactionCase):
         self.assertEqual(sa.tunnel_status, 'connected')
         self.assertEqual(sa.connector_id, 'conn-123')
         self.assertEqual(sa.connector_type, 'cloudflared')
+        self.assertEqual(sa.connector_version, 'cloudflared 2025.5.1')
+        self.assertEqual(sa.edge_connection_count, 2)
         self.assertEqual(sa.tunnel_uptime, '2026-06-06T08:30:00Z')
         mock_client.get_tunnel_status.assert_called_once_with('tun-refresh')
 

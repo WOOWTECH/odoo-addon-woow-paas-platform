@@ -236,11 +236,11 @@
                                             <WoowIcon name="'verified_user'" size="24"/>
                                             <span class="o_woow_security_access_card_name" t-esc="sa.name"/>
                                         </div>
-                                        <span class="o_woow_security_access_card_host" t-esc="sa.primary_hostname"/>
+                                        <span class="o_woow_security_access_card_host">Cloudflare Tunnel</span>
                                         <div class="o_woow_security_access_card_meta">
                                             <span class="o_woow_security_access_card_routes">
                                                 <WoowIcon name="'route'" size="14"/>
-                                                <t t-esc="sa.routes.length"/> routes
+                                                <t t-esc="(sa.routes or []).length"/> routes
                                             </span>
                                             <StatusBadge status="sa.state"/>
                                         </div>

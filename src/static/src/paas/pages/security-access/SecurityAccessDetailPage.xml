@@ -24,10 +24,11 @@
                      t-on-keydown="onNameKeydown" t-on-blur="saveName"/>
             </t>
             <StatusBadge status="state.sa.state"/>
-            <div class="o_woow_sa_detail__hostname">
-              <WoowIcon name="'language'" size="14"/>
-              <a t-att-href="'https://' + state.sa.primary_hostname"
-                 target="_blank"><t t-esc="state.sa.primary_hostname"/></a>
+            <!-- A Security Access IS a Cloudflare Tunnel (N routes, no single
+                 "primary hostname"). Show the service type, not a hostname. -->
+            <div class="o_woow_sa_detail__type">
+              <WoowIcon name="'hub'" size="14"/>
+              <span>Cloudflare Tunnel</span>
             </div>
           </div>
           <div class="o_woow_sa_detail__actions">
@@ -60,7 +61,28 @@
             <div class="o_woow_sa_detail__grid">
               <div><label>State</label><StatusBadge status="state.sa.state"/></div>
               <div><label>Connector</label><StatusBadge status="state.sa.tunnel_status"/></div>
-              <div><label>Hostname</label><t t-esc="state.sa.primary_hostname"/></div>
+              <div><label>Routes</label><t t-esc="(state.sa.routes or []).length"/></div>
+            </div>
+          </WoowCard>
+          <!-- Tunnel Information (a Security Access IS a Cloudflare Tunnel) -->
+          <WoowCard shadow="true" t-if="state.sa.tunnel_id">
+            <h3>Tunnel Information</h3>
+            <div class="o_woow_sa_detail__grid">
+              <div><label>Tunnel ID</label>
+                <span class="o_woow_sa_detail__mono"><t t-esc="state.sa.tunnel_id"/></span></div>
+              <div><label>Tunnel Name</label><t t-esc="state.sa.tunnel_name"/></div>
+              <div t-if="state.sa.connector_type">
+                <label>Connector Type</label><t t-esc="state.sa.connector_type"/></div>
+              <div t-if="state.sa.connector_id">
+                <label>Connector ID</label>
+                <span class="o_woow_sa_detail__mono"><t t-esc="state.sa.connector_id"/></span></div>
+              <div t-if="state.sa.connector_version">
+                <label>Connector Version</label><t t-esc="state.sa.connector_version"/></div>
+              <div><label>Edge Connections</label>
+                <t t-esc="state.sa.edge_connection_count or 0"/></div>
+              <div><label>Status</label><StatusBadge status="state.sa.tunnel_status"/></div>
+              <div t-if="state.sa.tunnel_uptime">
+                <label>Connector Opened</label><t t-esc="state.sa.tunnel_uptime"/></div>
             </div>
           </WoowCard>
           <WoowCard shadow="true" t-if="state.sa.subscription">
@@ -182,8 +204,8 @@
             <div class="o_woow_sa_access__master">
               <div>
                 <h3>Cloudflare Access protection</h3>
-                <p>Visitors to <t t-esc="state.sa.primary_hostname"/> must
-                   authenticate before protected routes load.</p>
+                <p>Visitors must authenticate before protected application
+                   routes load.</p>
               </div>
               <label class="o_woow_checkbox_group">
                 <input type="checkbox" class="o_woow_checkbox"

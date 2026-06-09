@@ -29,12 +29,13 @@
                             <field name="template_id"/>
                             <field name="reference_id" readonly="1"/>
                             <field name="canonical_name" readonly="1"/>
-                            <field name="primary_hostname" readonly="1"/>
                         </group>
                         <group string="Tunnel">
                             <field name="tunnel_id" readonly="1"/>
                             <field name="tunnel_status" readonly="1"/>
                             <field name="connector_type" readonly="1"/>
+                            <field name="connector_version" readonly="1"/>
+                            <field name="edge_connection_count" readonly="1"/>
                             <field name="deployed_at" readonly="1"/>
                         </group>
                     </group>
