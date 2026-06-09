@@ -69,6 +69,33 @@ class TestSecurityAccess(TransactionCase):
         sa = self._make_sa()
         self.assertNotIn('primary_hostname', sa._fields)
 
+    def test_no_sa_level_access_fields(self):
+        """P2.5: Access is per-route now. The SA-level service-wide Access
+        fields were removed — lock them gone so they aren't silently re-added
+        as a service-wide concept (mirrors the primary_hostname removal test).
+        These now live on SecurityAccessRoute (per-route)."""
+        sa = self._make_sa()
+        for f in ('access_enabled', 'login_google', 'login_email_otp',
+                  'session_duration', 'access_app_id',
+                  'access_unresolved_idp_types', 'access_policy_ids'):
+            self.assertNotIn(
+                f, sa._fields,
+                "SA-level Access field %r must be removed (P2.5 per-route)" % f)
+        # And they MUST exist on the route sub-model.
+        route_fields = self.Route._fields
+        for f in ('is_protected', 'login_google', 'login_email_otp',
+                  'session_duration', 'access_app_id',
+                  'access_unresolved_idp_types', 'access_policy_ids'):
+            self.assertIn(
+                f, route_fields,
+                "per-route Access field %r must exist on the route" % f)
+        # to_dict must not leak SA-level access keys.
+        sa_dict = sa.to_dict()
+        for k in ('access_enabled', 'login_google', 'session_duration',
+                  'access_policies', 'access_unresolved_idp_types'):
+            self.assertNotIn(k, sa_dict,
+                             "SA to_dict must not expose %r (P2.5)" % k)
+
     def test_platform_default_hostname_derived_on_demand(self):
         """The few internal CF consumers derive a hostname from the platform
         default (is_primary) route / canonical_name — never an SA field."""
@@ -587,51 +614,50 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
         self.assertFalse(sa.error_message)
 
     def test_resume_converges_disable_done_while_suspended(self):
-        """disable-while-suspended must be torn down at resume.
+        """P2.5: per-route disable-while-suspended must be torn down at resume.
 
-        While state=='suspended' the SA write() Access trigger does NOT fire
-        (state not in ('active','error')), so flipping access_enabled→False on
-        a suspended SA never reaches the operator. If _do_resume only converged
-        the ENABLE direction (`if self.access_enabled`), the CF Access app +
-        reusable policies would survive forever, diverging from the user's
-        disable intent with no later converge trigger. Resume must push the
-        full desired state (enabled=False → operator teardown via
-        existing_app_id) regardless of access_enabled's value."""
+        While state=='suspended' the route write() Access trigger does NOT fire
+        (state not in ('active','error')), so flipping a route's is_protected→
+        False on a suspended SA never reaches the operator. _do_resume re-syncs
+        EVERY route unconditionally (_sync_all_routes_access). A route still
+        carrying a stored access_app_id but now is_protected=False sends an
+        enabled=False payload at resume, so the CF Access app is reaped rather
+        than diverging forever from the user's disable intent."""
         mock_client = self._sync_mock()
-        mock_client.sync_access_app.return_value = {
-            'app_id': None, 'policy_ids': [], 'allowed_idps': []}
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             sa = self.SecurityAccess.create({
                 'name': 'Disable-While-Suspended GW',
                 'workspace_id': self.workspace.id})
-            sa.write({'state': 'active', 'tunnel_id': 'tun-dws',
-                      'access_enabled': True})
-            self.Route.create({'security_access_id': sa.id,
-                               'subdomain_prefix': sa.canonical_name,
-                               'is_primary': True})
-            # Set access_app_id LAST: the access_enabled write + route create
-            # both fire _sync_access_to_operator (mock returns app_id=None,
-            # written back), so set the live app id after all sync triggers —
-            # mirrors an SA that already holds a live CF app.
-            sa.write({'access_app_id': 'app-dws'})
+            sa.write({'state': 'active', 'tunnel_id': 'tun-dws'})
+            # A protected route that holds a live CF app id.
+            mock_client.sync_access_app.return_value = {
+                'app_id': 'app-dws', 'policy_ids': [], 'allowed_idps': []}
+            route = self.Route.create({'security_access_id': sa.id,
+                                       'subdomain_prefix': sa.canonical_name,
+                                       'is_primary': True,
+                                       'is_protected': True})
+            self.assertEqual(route.access_app_id, 'app-dws')
             sa._do_suspend()
             self.assertEqual(sa.state, 'suspended')
-            # Disable Access while suspended: the write trigger must NOT fire
-            # (suspended state), so no sync happens here.
+            # Disable this route while suspended: the write trigger must NOT
+            # fire (suspended state), so no sync happens here. is_protected goes
+            # False but access_app_id is retained (no teardown reached operator).
             mock_client.sync_access_app.reset_mock()
-            sa.write({'access_enabled': False})
+            mock_client.sync_access_app.return_value = {
+                'app_id': None, 'policy_ids': [], 'allowed_idps': []}
+            route.write({'is_protected': False})
             mock_client.sync_access_app.assert_not_called()
             # Resume must converge the disable: push enabled=False teardown.
             sa._do_resume()
         self.assertTrue(mock_client.sync_access_app.called,
-                        "resume must push Access even when disabling")
+                        "resume must push per-route Access even when disabling")
         payload = mock_client.sync_access_app.call_args.args[0]
         self.assertFalse(payload['enabled'],
                          "disable-while-suspended must reach CF as enabled=False")
         self.assertEqual(payload['existing_app_id'], 'app-dws',
                          "teardown must carry the live CF app id so it is reaped")
         # writeback cleared the stored app id (operator returned app_id=None)
-        self.assertFalse(sa.access_app_id)
+        self.assertFalse(route.access_app_id)
 
     def test_resume_without_tunnel_restores_pending_not_active(self):
         """從未 provision（無 tunnel_id）的 SA 被 suspend→resume，不得標成
