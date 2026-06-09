@@ -215,6 +215,35 @@ class TestRouteAccessSync(TransactionCase):
         self.assertFalse(payload['enabled'])
         self.assertEqual(payload['existing_app_id'], captured_app)
 
+    def test_protected_route_unlink_teardown_failure_rolls_back_keeps_row(self):
+        """刪 protected route 時 Access teardown 失敗 → fail loud + 保留 row。
+
+        _teardown_route_access 內部吞 Exception 回 False。修前 unlink() 忽略回傳
+        值 → row 已被 super().unlink() 刪除 → 該 route 的 CF Access app +
+        reusable policies 永久孤兒、無 error 信號、無重試錨點（且 SA cleanup 的
+        route_ids.filtered('access_app_id') 掃不到已刪 row）。修後 unlink 對
+        teardown 失敗 raise → savepoint rollback → row 保留，與 sibling 的
+        route-sync leg / policy unlink resync 對稱（[[two-stage-remote-
+        provision-idempotency]]：每條失敗路徑保留 stored id 讓 retry 安全）。
+        """
+        mc = self._mock()
+        sa, route = self._active_sa(mc, protected=True)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            r2 = self.Route.create({'security_access_id': sa.id,
+                                    'subdomain_prefix': 'as-teardown-fail',
+                                    'is_protected': True})
+            self.assertEqual(r2.access_app_id, 'app-1')
+            r2_id = r2.id
+            # teardown 的 sync_access_app（enabled=False）失敗
+            mc.sync_access_app.side_effect = Exception('cf access down')
+            with self.assertRaises(Exception):
+                r2.unlink()
+        # row 必須存活 — teardown 失敗，DB 仍須引用它以保留重試錨點
+        self.assertTrue(self.Route.browse(r2_id).exists(),
+                        "failed Access teardown must keep the route row")
+        self.assertEqual(self.Route.browse(r2_id).access_app_id, 'app-1',
+                         "stored access_app_id retained as retry anchor")
+
     def test_login_session_change_resyncs_route(self):
         """改 route 自己的 login_*/session_duration → re-sync 該 route。"""
         mc = self._mock()

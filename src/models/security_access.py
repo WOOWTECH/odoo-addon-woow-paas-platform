@@ -1178,15 +1178,39 @@ class SecurityAccessRoute(models.Model):
                     sa._sync_routes_to_operator()
             # P2.5: tear down each deleted protected route's own Access app
             # using the ids captured before the unlink (the rows are gone now).
+            #
+            # Fail-loud on teardown failure, do NOT swallow it. _teardown_route_
+            # access best-effort-catches and returns False (not raise), but here
+            # the row is already gone via super().unlink(); ignoring the False
+            # would leave the route's CF Access app + reusable policies as
+            # permanent orphans with NO retry anchor (the deleted row can never
+            # re-enter _cleanup_cloudflare's route_ids.filtered('access_app_id'))
+            # and NO error signal. Instead, raise so the savepoint rolls the
+            # unlink back: the row (+ its access_app_id) survives as the retry
+            # anchor, mirroring the sibling route-sync leg and policy-unlink
+            # resync, and consistent with _cleanup_cloudflare's `if ok:` honour
+            # of the same True/False teardown contract ([[two-stage-remote-
+            # provision-idempotency]]: every failure path keeps the stored id so
+            # retry is safe).
+            failed = []
             for info in teardown_by_route.values():
                 sa = info['sa']
                 if not sa.exists():
                     continue
-                sa._teardown_route_access(
+                ok = sa._teardown_route_access(
                     app_id=info['app_id'],
                     policy_ids=info['policy_ids'],
                     app_name=info['app_name'],
                     hostname=info['hostname'],
+                )
+                if not ok:
+                    failed.append(info['app_name'] or info['app_id'])
+            if failed:
+                raise UserError(
+                    "Cloudflare Access teardown failed for route(s): %s. The "
+                    "route was kept so the deletion can be retried; its Access "
+                    "app is still live in Cloudflare." % ', '.join(
+                        str(f) for f in failed)
                 )
         return result
 
