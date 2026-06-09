@@ -1107,8 +1107,22 @@ class SecurityAccessRoute(models.Model):
             # updates the app; is_protected=False tears it down. The route sync
             # carries the liveness gate (no-op without a live tunnel), so the
             # write trigger just forwards. Done per route in self.
-            if any(k in vals for k in ('is_protected', 'login_google',
-                                       'login_email_otp', 'session_duration')):
+            #
+            # sa_skip_route_sync: bulk row moves (migration / provision-time)
+            # set this so the write only re-homes DB state and does NOT call the
+            # operator — CF converges via the explicit re-sync those flows issue,
+            # not per-write here. Symmetric with create()/policy create+write+
+            # unlink, which already honour the key. WITHOUT this guard the P2.5
+            # migration's login/session re-home (post-migrate.py writes
+            # login_google/login_email_otp/session_duration under the key) would
+            # fire a live per-route CF Access app build mid-upgrade on stg's
+            # active+live-tunnel SAs, defeating the deferral to Phase 5 — and an
+            # unreachable operator during the upgrade window would re-raise the
+            # savepoint and abort the whole migration.
+            if (not self.env.context.get('sa_skip_route_sync')
+                    and any(k in vals for k in (
+                        'is_protected', 'login_google',
+                        'login_email_otp', 'session_duration'))):
                 for route in self:
                     route._sync_access_to_operator()
         return result

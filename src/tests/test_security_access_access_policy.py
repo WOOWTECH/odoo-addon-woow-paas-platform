@@ -240,6 +240,32 @@ class TestRouteAccessSync(TransactionCase):
                                'is_protected': False})
         mc.sync_access_app.assert_not_called()
 
+    def test_write_honors_sa_skip_route_sync_on_live_protected_route(self):
+        """sa_skip_route_sync route.write() 不可呼 operator，即使 SA 有 live
+        tunnel + protected route。
+
+        鏡像 create()/policy 的對稱性：migration 的 login/session re-home
+        （post-migrate.py 用 sa_skip_route_sync 寫 login_google/login_email_otp/
+        session_duration）必須只搬 DB state，不在升級途中對 live stg SA 觸發
+        per-route CF Access app 建立，也不會因 operator 不可達而中斷整個
+        migration。修前 write() 無視該 context key → 對 active+tunnel 的
+        protected route 無條件 _sync_access_to_operator → 此測試紅。
+        """
+        mc = self._mock()
+        sa, route = self._active_sa(mc, protected=True)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            mc.sync_access_app.reset_mock()
+            route.with_context(sa_skip_route_sync=True).write({
+                'login_google': True,
+                'login_email_otp': True,
+                'session_duration': '8h',
+            })
+        mc.sync_access_app.assert_not_called()
+        # DB state 仍寫入（只是不打 operator）
+        self.assertTrue(route.login_google)
+        self.assertTrue(route.login_email_otp)
+        self.assertEqual(route.session_duration, '8h')
+
     def test_unlink_carries_deleted_policy_cf_id(self):
         """個別 policy unlink 不可孤兒：刪前捕捉 cf_policy_id 注入
         existing_policy_ids。"""
