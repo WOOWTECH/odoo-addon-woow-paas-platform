@@ -1,7 +1,7 @@
 ---
 title: Skill Claude Code 模型 — 跨 repo LAND runbook
 date: 2026-06-08
-status: ready-for-land-window
+status: STG-landed-verified · prod-pending（2026-06-09）
 spec: docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md
 interface_contract: paas-agent-runtime/docs/specs/skill-bash-sidecar-interface.md (a8affca)
 security: woow-paas/paas-agent-runtime#26
@@ -11,6 +11,29 @@ security: woow-paas/paas-agent-runtime#26
 
 所有實作完成、四個跨組件 gap 全收尾、gate 鏈單一真相源、全部 fail-closed default。
 本 runbook 是 land 窗口的部署依賴鏈與步驟。
+
+## Land 狀態（2026-06-09）
+
+### ✅ STG 已上線並完整驗證
+
+- **merged**：runtime PR #27（Drop A）+ #28（Drop B）→ main；charts PR #20（agent-runtime 0.4.0）+ #21（operator 0.1.14）→ main；Odoo PR #170 → develop。
+- **images published**：`agent-runtime:1.4.0`（digest e0a8dd05，含 bash_bridge）、`paas-operator:20260609.0233`（git tag operator-v20260609.0233 ↔ cce58a3，含 skillRunner forward）。
+- **STG Fleet flip**：paas-app-bundle-cd **PR #12** merged（operator config skillRunner.enabled=true + agent_runtime_image_tag=1.4.0 + chart 0.4.0 / operator 0.1.14）。
+- **STG 驗證全綠**（活 pod，project CTX-Verify-147 / ns paas-ws-stg-pa-nrxh4a5ml2dovwha）：
+  - infra：2 container、sidecar runAsUser=10002、both ready、liveness pass、agent env `AGENT_RUNTIME_SKILL_RUNNER_ENABLED=true`、operator rolled、`shareProcessNamespace` unset、roRoot、supplementalGroups=[10003]。
+  - 功能：bash:execute 端到端回傳 `hello-sidecar`。
+  - bridge log corroboration：cmd 走異 UID sidecar（peer_uid=10001、cwd=project hash 目錄、exit 0、bytes=14）。
+
+### ⏸️ Prod 待辦（user 暫緩，改天）
+
+1. **paas-cd prod Fleet flip**：同 STG（operator prod 部署 chart 0.1.14 + image cce58a3 + env true + image_tag 1.4.0 + chart 0.4.0）。artifact 全部已 publish、不必重 build。
+2. **podPidsLimit**（4 node，與 prod 一起做）：k3s `pod-max-pids=4096` 滾動重啟。⚠️ 3/4 control-plane/etcd → quorum 風險、需 node SSH access。第 3 道兜底、非 blocker。
+3. 驗 prod fresh spawn 起 sidecar（同 STG 流程）。
+
+### ⏸️ 其他待辦
+
+- **paas-odoo addon 發佈**（validation 移除 entrypoint + demo 純 SKILL.md + migration 18.0.1.0.35）：走 `v18.0.1.0.35` tag → paas-odoo image。origin 有 `chore/bump-manifest-18.0.1.0.35` branch，**Odoo addon release 歸屬待 user 與團隊確認**（不卡 bash 功能）。Odoo PR #170 已 merge 進 develop。
+- **paas-agent-runtime PR #25**（#23 tool-call args trace 續作，open）：與 skill 功能無耦合，留給 canvas agent 自行 merge。
 
 ## 安全性質（為何 land 低風險）
 
