@@ -181,7 +181,6 @@ class SecurityAccess(models.Model):
     #  Computes / helpers                                                #
     # ------------------------------------------------------------------ #
 
-    @api.depends('canonical_name')
     def _platform_default_hostname(self):
         """Hostname of the platform-auto-created (is_primary) route, derived on
         demand. Prefers the live route's computed hostname; falls back to

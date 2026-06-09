@@ -603,8 +603,10 @@ if [ "$WOOW_MODULE_STATE" != "installed" ]; then
     # Smart Home hostnames are created by the operator under that domain, and
     # `*.stg.woowtech.io` (sub-subdomain) has no Cloudflare wildcard SSL, so a
     # mismatch yields dangling hostnames (F-SA-1). Discovered from the operator
-    # deployment below; falls back to per-sandbox isolation only when no operator
-    # is reachable (pure local dev that never provisions real CF resources).
+    # deployment below. Falls back to the per-sandbox `{slug}.woowtech.io` only
+    # when no operator deployment exposes CLOUDFLARE_DOMAIN; NOTE this fallback
+    # is purely a display/compute default — if such a sandbox is later pointed
+    # at a real CF-enabled operator, set PAAS_DOMAIN (or re-seed) to match it.
     PAAS_DOMAIN_VALUE="${PAAS_DOMAIN:-}"
     NS_PREFIX="${PAAS_NAMESPACE_PREFIX:-$([ "$MODE" = "stg" ] && echo paas-ws-stg- || echo paas-ws-)}"
     # stg: auto-enable agent runtime for new projects by default. Gated at
@@ -623,21 +625,25 @@ if [ "$WOOW_MODULE_STATE" != "installed" ]; then
                 OPERATOR_API_KEY=$(kubectl get secret -n "$OPERATOR_NS" "$_op_secret" -o jsonpath='{.data.api-key}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
             fi
             echo -e "  ${BLUE}Discovered operator:${NC} ${OPERATOR_URL} (api-key: $([ -n "$OPERATOR_API_KEY" ] && echo set || echo none))"
-            # Align paas_domain with the operator's CLOUDFLARE_DOMAIN (F-SA-1):
-            # the operator creates tunnel/route hostnames under that domain, so
-            # Odoo must compute the same. Read it from the operator deployment env.
-            if [ -z "$PAAS_DOMAIN_VALUE" ]; then
-                _op_deploy=$(kubectl get deploy -n "$OPERATOR_NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^paas-operator' | head -1 || true)
-                if [ -n "$_op_deploy" ]; then
-                    _cf_domain=$(kubectl get deploy -n "$OPERATOR_NS" "$_op_deploy" -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null | grep '^CLOUDFLARE_DOMAIN=' | head -1 | cut -d= -f2- || true)
-                    if [ -n "$_cf_domain" ]; then
-                        PAAS_DOMAIN_VALUE="$_cf_domain"
-                        echo -e "  ${BLUE}Discovered paas_domain:${NC} ${PAAS_DOMAIN_VALUE} (from operator CLOUDFLARE_DOMAIN)"
-                    fi
-                fi
-            fi
         else
             echo -e "  ${YELLOW}No paas-operator found in '${OPERATOR_NS}'; operator stays unconfigured.${NC}"
+        fi
+    fi
+
+    # Align paas_domain with the operator's CLOUDFLARE_DOMAIN (F-SA-1): the
+    # operator creates tunnel/route hostnames under that domain, so Odoo must
+    # compute the same or the UI shows dangling hostnames. Read it from the
+    # operator deployment env. Done OUTSIDE the OPERATOR_URL discovery block so
+    # it still runs when the operator URL was supplied via PAAS_OPERATOR_URL
+    # (which would otherwise skip discovery and leave paas_domain mis-aligned).
+    if [ -z "$PAAS_DOMAIN_VALUE" ]; then
+        _op_deploy=$(kubectl get deploy -n "$OPERATOR_NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^paas-operator' | head -1 || true)
+        if [ -n "$_op_deploy" ]; then
+            _cf_domain=$(kubectl get deploy -n "$OPERATOR_NS" "$_op_deploy" -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null | grep '^CLOUDFLARE_DOMAIN=' | head -1 | cut -d= -f2- || true)
+            if [ -n "$_cf_domain" ]; then
+                PAAS_DOMAIN_VALUE="$_cf_domain"
+                echo -e "  ${BLUE}Discovered paas_domain:${NC} ${PAAS_DOMAIN_VALUE} (from operator CLOUDFLARE_DOMAIN)"
+            fi
         fi
     fi
 

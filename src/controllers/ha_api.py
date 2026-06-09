@@ -368,6 +368,12 @@ class HAIntegrationController(Controller):
         sa = self._get_sa_with_access(user, sa_id)
         if isinstance(sa, Response):
             return sa
+        # Asymmetry with smart home's tunnel-token (which returns a single
+        # `subdomain` FQDN) is intentional: a Security Access is a Cloudflare
+        # Tunnel with N application routes and no single hostname, so there is
+        # no one FQDN to return here. Consumers that need route hostnames read
+        # them from the access detail (to_dict `routes`), not from this token
+        # endpoint.
         return _json_response({
             'tunnel_token': sa.tunnel_token or '',
             'tunnel_id': sa.tunnel_id or '',
