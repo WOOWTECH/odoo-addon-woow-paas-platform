@@ -18,6 +18,62 @@ from src.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# issue #29: the private Helm repo token is passed via ``--password`` on the helm
+# argv. Redact credential values BEFORE they reach the "Executing:" log line and
+# HelmException.command, so the token never persists in operator stdout / log
+# aggregation / SIEM. (The argv is still briefly visible via /proc/<pid>/cmdline
+# during the subprocess lifetime — a narrower, transient exposure tracked as a
+# follow-up; this change kills the persistent, broadly-readable log leak.)
+_SECRET_VALUE_FLAGS = frozenset({"--password", "--username"})
+_SECRET_SET_KEY_HINTS = ("password", "token", "secret", "key", "credential")
+
+
+def _redact_cmd(cmd: List[str]) -> List[str]:
+    """Return a copy of a CLI argv with credential values masked for logging.
+
+    Handles ``--password value`` / ``--password=value`` (and ``--username``),
+    plus ``--set key=value`` / ``--set-string`` where the key hints at a secret
+    (future-proofing — the operator currently passes secrets via ``--values``
+    file, whose path is non-sensitive, not via ``--set``).
+    """
+    redacted: List[str] = []
+    mask_next = False  # next token is a bare credential value
+    set_next = False   # next token is a `--set key=value` pair
+    for tok in cmd:
+        if mask_next:
+            redacted.append("<redacted>")
+            mask_next = False
+            continue
+        if set_next:
+            set_next = False
+            key = tok.split("=", 1)[0]
+            if "=" in tok and any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
+                redacted.append(f"{key}=<redacted>")
+            else:
+                redacted.append(tok)
+            continue
+        if tok in _SECRET_VALUE_FLAGS:
+            redacted.append(tok)
+            mask_next = True
+            continue
+        if tok in ("--set", "--set-string"):
+            redacted.append(tok)
+            set_next = True
+            continue
+        if "=" in tok and tok.split("=", 1)[0] in _SECRET_VALUE_FLAGS:
+            redacted.append(f"{tok.split('=', 1)[0]}=<redacted>")
+            continue
+        # Bare `KEY=value` positional (e.g. `kubectl set env … SKILL_BUNDLE_TOKEN=<tok>`)
+        # whose key hints at a secret — issue #29 audit found resume injects the
+        # signed SKILL_BUNDLE_TOKEN via kubectl set env, also logged via _run_command.
+        if "=" in tok and not tok.startswith("-"):
+            key = tok.split("=", 1)[0]
+            if any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
+                redacted.append(f"{key}=<redacted>")
+                continue
+        redacted.append(tok)
+    return redacted
+
 
 def validate_namespace(namespace: str) -> None:
     """Validate that namespace starts with allowed prefix."""
@@ -74,7 +130,10 @@ class HelmService:
             HelmException: If command fails
         """
         cmd = [self.helm_bin] + args
-        logger.info(f"Executing: {' '.join(cmd)}")
+        # issue #29: redact the repo token (--password) before logging / before it
+        # lands in HelmException.command. NEVER log/raise the raw cmd.
+        safe_cmd = " ".join(_redact_cmd(cmd))
+        logger.info(f"Executing: {safe_cmd}")
 
         try:
             result = subprocess.run(
@@ -89,7 +148,7 @@ class HelmService:
             if result.returncode != 0:
                 raise HelmException(
                     message=f"Helm command failed with code {result.returncode}",
-                    command=" ".join(cmd),
+                    command=safe_cmd,
                     stderr=result.stderr,
                 )
 
@@ -98,13 +157,13 @@ class HelmService:
         except subprocess.TimeoutExpired as e:
             raise HelmException(
                 message=f"Helm command timed out after {self.timeout}s",
-                command=" ".join(cmd),
+                command=safe_cmd,
                 stderr=str(e),
             )
         except FileNotFoundError:
             raise HelmException(
                 message=f"Helm binary not found: {self.helm_bin}",
-                command=" ".join(cmd),
+                command=safe_cmd,
                 stderr="",
             )
 
@@ -478,7 +537,10 @@ class KubernetesService:
             KubectlException: If command fails or times out
         """
         cmd = [self.kubectl_bin] + args
-        logger.info(f"Executing: {' '.join(cmd)}")
+        # issue #29 audit: `kubectl set env … SKILL_BUNDLE_TOKEN=<tok>` (resume)
+        # passes a secret on argv; redact before logging / raising.
+        safe_cmd = " ".join(_redact_cmd(cmd))
+        logger.info(f"Executing: {safe_cmd}")
 
         try:
             result = subprocess.run(
@@ -492,7 +554,7 @@ class KubernetesService:
             if result.returncode != 0:
                 raise KubectlException(
                     message=f"kubectl command failed with code {result.returncode}",
-                    command=" ".join(cmd),
+                    command=safe_cmd,
                     stderr=result.stderr,
                 )
 
@@ -501,13 +563,13 @@ class KubernetesService:
         except subprocess.TimeoutExpired as e:
             raise KubectlException(
                 message="kubectl command timed out after 30s",
-                command=" ".join(cmd),
+                command=safe_cmd,
                 stderr=str(e),
             )
         except FileNotFoundError:
             raise KubectlException(
                 message=f"kubectl binary not found: {self.kubectl_bin}",
-                command=" ".join(cmd),
+                command=safe_cmd,
                 stderr="",
             )
 

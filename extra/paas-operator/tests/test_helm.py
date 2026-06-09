@@ -353,6 +353,73 @@ class TestHelmService:
         assert "v3.13" in result
 
 
+class TestCommandRedaction:
+    """issue #29: credential values must be redacted before they reach the
+    'Executing:' log line / HelmException.command — never persist secrets in
+    operator stdout. The real subprocess still receives the true values."""
+
+    def test_redact_masks_helm_password_and_username(self):
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "helm", "install", "x", "--repo", "https://r",
+            "--username", "eugene", "--password", "deadbeef40hextoken",
+        ]))
+        assert "deadbeef40hextoken" not in joined
+        assert "eugene" not in joined
+        assert "--password <redacted>" in joined
+        assert "--username <redacted>" in joined
+        assert "--repo https://r" in joined  # non-secret preserved
+
+    def test_redact_masks_equals_form(self):
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd(["helm", "install", "--password=secrettok"]))
+        assert "secrettok" not in joined
+        assert "--password=<redacted>" in joined
+
+    def test_redact_masks_kubectl_set_env_token(self):
+        # issue #29 audit: resume injects the signed SKILL_BUNDLE_TOKEN via
+        # `kubectl set env`, also logged through _run_command.
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "kubectl", "set", "env", "deployment/x", "--namespace", "paas-ws-x",
+            "SKILL_BUNDLE_TOKEN=signed.jwt.value", "PROJECT_HASH=abc",
+        ]))
+        assert "signed.jwt.value" not in joined
+        assert "SKILL_BUNDLE_TOKEN=<redacted>" in joined
+        assert "PROJECT_HASH=abc" in joined  # non-secret env preserved
+
+    def test_redact_masks_set_secret_key(self):
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "helm", "install", "--set", "auth.currentKey=topsecret",
+            "--set", "image.tag=1.4.0",
+        ]))
+        assert "topsecret" not in joined
+        assert "auth.currentKey=<redacted>" in joined
+        assert "image.tag=1.4.0" in joined  # non-secret --set preserved
+
+    def test_redact_preserves_non_secrets(self):
+        from src.services.helm import _redact_cmd
+        cmd = ["helm", "install", "rel", "agent-runtime", "--namespace",
+               "paas-ws-x", "--version", "0.4.0", "--values", "/tmp/abc.yaml",
+               "--output", "json"]
+        assert _redact_cmd(cmd) == cmd
+
+    @patch("subprocess.run")
+    def test_run_command_logs_redacted_but_subprocess_gets_real(self, mock_run, caplog):
+        import logging
+        from src.services.helm import HelmService
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="{}", stderr="")
+        with caplog.at_level(logging.INFO):
+            HelmService()._run_command(["install", "x", "--password", "TOPSECRETTOKEN"])
+        # log is redacted
+        assert "TOPSECRETTOKEN" not in caplog.text
+        assert "<redacted>" in caplog.text
+        # subprocess still received the real token (functionality intact)
+        assert "TOPSECRETTOKEN" in mock_run.call_args[0][0]
+
+
 class TestKubernetesService:
     """Test cases for KubernetesService."""
 
