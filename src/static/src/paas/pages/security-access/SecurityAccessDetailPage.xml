@@ -143,7 +143,6 @@
                   <tr>
                     <td>
                       <t t-esc="route.hostname"/>
-                      <span t-if="route.is_primary" class="o_woow_badge">Primary</span>
                     </td>
                     <td><t t-esc="route.service_url"/></td>
                     <td>
