@@ -427,9 +427,16 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
                            'user_id': self.alice.id, 'role': 'owner'})
         self.sa = self.env['woow_paas_platform.security_access'].sudo().create({
             'name': 'AC EP GW', 'workspace_id': self.workspace.id})
+        # P2.5: Access config + policies are per-route. The SA-level BFF bridge
+        # operates on the primary route, so seed one (the SA has no tunnel, so
+        # no operator sync fires).
+        self.route = self.env[
+            'woow_paas_platform.security_access_route'].sudo().create({
+                'security_access_id': self.sa.id,
+                'subdomain_prefix': 'ac-ep-primary', 'is_primary': True})
         self.pol = self.env[
             'woow_paas_platform.security_access_access_policy'].sudo().create({
-                'security_access_id': self.sa.id, 'name': 'p',
+                'route_id': self.route.id, 'name': 'p',
                 'decision': 'allow', 'rule_type': 'email_domain',
                 'rule_value': 'a.com'})
 
@@ -490,7 +497,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}/access-config',
             {'access_enabled': True})
         self._assert_structured_denial(res)
-        self.assertFalse(self.sa.sudo().access_enabled)
+        self.assertFalse(self.route.sudo().is_protected)
 
     # ---- role='user' member negatives (endpoint-layer role gate) ----
     #
@@ -523,7 +530,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             {'access_enabled': True})
         self._assert_structured_denial(res)
         self.assertIn('permission', (res.get('error') or '').lower())
-        self.assertFalse(self.sa.sudo().access_enabled)
+        self.assertFalse(self.route.sudo().is_protected)
 
     def test_member_user_policy_create_denied_and_none_made(self):
         """role='user' member 不得經 BFF create allow policy（繞過 role gate
@@ -602,9 +609,10 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
     # ORM-effect verification.
 
     def test_owner_access_config_flips_enabled(self):
-        """owner 經 @route 打 access-config 翻開 access_enabled，正向通過 role
-        + _check_operation_allowed gate 並真的寫進 DB。"""
-        self.assertFalse(self.sa.sudo().access_enabled)
+        """owner 經 @route 打 access-config 翻開 protection（P2.5 bridge：寫進
+        primary route 的 is_protected / session_duration），正向通過 role +
+        _check_operation_allowed gate 並真的寫進 DB。"""
+        self.assertFalse(self.route.sudo().is_protected)
         self.authenticate(self.alice.login, self.alice.login)
         res = self._rpc(
             f'/api/workspaces/{self.workspace.id}'
@@ -614,9 +622,9 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
                          "endpoint crashed instead of returning a result: %s"
                          % self._last_body.get('error'))
         self.assertTrue(res.get('success'), res.get('error'))
-        self.sa.invalidate_recordset(['access_enabled', 'session_duration'])
-        self.assertTrue(self.sa.sudo().access_enabled)
-        self.assertEqual(self.sa.sudo().session_duration, '8h')
+        self.route.invalidate_recordset(['is_protected', 'session_duration'])
+        self.assertTrue(self.route.sudo().is_protected)
+        self.assertEqual(self.route.sudo().session_duration, '8h')
 
     def test_owner_policy_create_update_delete_through_route(self):
         """owner 經 @route 對 access-policies 做 create→update→delete 全程，

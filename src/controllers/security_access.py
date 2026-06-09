@@ -616,12 +616,19 @@ class SecurityAccessController(Controller):
             return {"success": False, "error": "Security access not found"}
 
         if action == "list":
-            # No .sudo(): ir.rule filters access_policy_ids to workspace
-            # members (orm-vs-endpoint-acl-test-coverage pattern). A non-member
-            # never reaches here (_get_workspace_or_error gates first), and a
-            # member sees only their own SA's policies via the row-level rule.
+            # No .sudo(): ir.rule filters policies to workspace members
+            # (orm-vs-endpoint-acl-test-coverage pattern). A non-member never
+            # reaches here (_get_workspace_or_error gates first), and a member
+            # sees only their own SA's policies via the row-level rule.
+            #
+            # P2.5 bridge: policies bind to routes now. Until the Phase-3 BFF
+            # exposes per-route policy CRUD, list every policy across the SA's
+            # routes (walk via the stored related security_access_id).
+            policies = request.env[
+                "woow_paas_platform.security_access_access_policy"].search(
+                    [("security_access_id", "=", sa.id)])
             return {"success": True,
-                    "data": [p.to_dict() for p in sa.access_policy_ids]}
+                    "data": [p.to_dict() for p in policies]}
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
@@ -640,19 +647,40 @@ class SecurityAccessController(Controller):
         return {"success": False, "error": f"Unknown action: {action}"}
 
     # ---- Access Control helpers ----
+    #
+    # P2.5 bridge: Access config + policies are per-route now (each protected
+    # route is its own Cloudflare Access app). The Phase-3 BFF will expose
+    # per-route endpoints; until then these SA-level helpers operate on the
+    # SA's primary (is_primary) route so the existing UI/contract keeps working.
+    # The migration likewise re-homes legacy SA-level policies onto the primary
+    # route, so this bridge is consistent with the migrated data.
+
+    def _sa_access_route(self, sa):
+        """The route these SA-level Access helpers act on (P2.5 bridge): the
+        primary route. Returns an empty recordset if the SA has no route yet
+        (pre-provision) so callers can surface a clean error."""
+        return sa.route_ids.filtered("is_primary")[:1]
 
     def _update_access_config(self, sa, kwargs) -> dict[str, Any]:
         # Whitelist only: never pass raw kwargs to write() — access_app_id and
-        # other server-owned fields must not be client-settable.
+        # other server-owned fields must not be client-settable. P2.5 maps the
+        # legacy SA-level master toggle (access_enabled) onto the primary
+        # route's is_protected.
+        route = self._sa_access_route(sa)
+        if not route:
+            return {"success": False,
+                    "error": "No application route to configure yet"}
         vals = {}
-        for f in ("access_enabled", "login_google", "login_email_otp"):
+        if "access_enabled" in kwargs:
+            vals["is_protected"] = bool(kwargs["access_enabled"])
+        for f in ("login_google", "login_email_otp"):
             if f in kwargs:
                 vals[f] = bool(kwargs[f])
         if kwargs.get("session_duration"):
             vals["session_duration"] = kwargs["session_duration"]
         try:
             if vals:
-                sa.write(vals)
+                route.write(vals)
             return {"success": True, "data": sa.to_dict()}
         except Exception as e:
             _logger.exception("[SA] Failed to update access config: %s", e)
@@ -661,23 +689,29 @@ class SecurityAccessController(Controller):
     def _create_policy(self, sa, kwargs) -> dict[str, Any]:
         if not kwargs.get("name"):
             return {"success": False, "error": "name is required"}
+        route = self._sa_access_route(sa)
+        if not route:
+            return {"success": False,
+                    "error": "No application route to attach a policy to yet"}
         # two-layer quota: constraint re-checks at ORM layer (lock-step with
-        # the model's _check_policy_quota). sudo on subscription_id read only:
-        # portal owners lack ACL on sh.subscription.subscription.
+        # the model's _check_policy_quota — an SA-LEVEL total). sudo on
+        # subscription_id read only: portal owners lack ACL on the subscription.
         sub = sa.sudo().subscription_id
+        Policy = request.env[
+            "woow_paas_platform.security_access_access_policy"]
         if sub and sub.sh_subscription_plan_id:
             quota = sub.sh_subscription_plan_id.sa_max_access_policies
-            if len(sa.access_policy_ids) >= quota:
+            existing = Policy.search_count(
+                [("security_access_id", "=", sa.id)])
+            if existing >= quota:
                 return {"success": False,
                         "error": "Access policy quota exceeded: plan allows "
                                  "%d polic(ies)" % quota}
-        Policy = request.env[
-            "woow_paas_platform.security_access_access_policy"]
         # Whitelist only: cf_policy_id / security_access_id are server-owned;
-        # security_access_id is pinned to the gated SA, never from kwargs.
+        # route_id is pinned to the gated SA's primary route, never from kwargs.
         try:
             pol = Policy.create({
-                "security_access_id": sa.id,
+                "route_id": route.id,
                 "name": kwargs["name"],
                 "decision": kwargs.get("decision", "allow"),
                 "rule_type": kwargs.get("rule_type", "email_domain"),
@@ -689,12 +723,20 @@ class SecurityAccessController(Controller):
             _logger.exception("[SA] Failed to create access policy: %s", e)
             return {"success": False, "error": str(e)}
 
+    def _sa_policy(self, sa, policy_id):
+        """A policy under this SA (any of its routes), looked up via the stored
+        related security_access_id so it cannot reach across SAs."""
+        return request.env[
+            "woow_paas_platform.security_access_access_policy"].search(
+                [("id", "=", policy_id),
+                 ("security_access_id", "=", sa.id)], limit=1)
+
     def _update_policy(self, sa, policy_id, kwargs) -> dict[str, Any]:
-        pol = sa.access_policy_ids.filtered(lambda p: p.id == policy_id)
+        pol = self._sa_policy(sa, policy_id)
         if not pol:
             return {"success": False, "error": "Policy not found"}
-        # Whitelist only: drop cf_policy_id / security_access_id and any other
-        # key the client tries to smuggle through.
+        # Whitelist only: drop cf_policy_id / security_access_id / route_id and
+        # any other key the client tries to smuggle through.
         vals = {}
         for f in ("name", "decision", "rule_type", "rule_value", "sequence"):
             if f in kwargs:
@@ -708,7 +750,7 @@ class SecurityAccessController(Controller):
             return {"success": False, "error": str(e)}
 
     def _delete_policy(self, sa, policy_id) -> dict[str, Any]:
-        pol = sa.access_policy_ids.filtered(lambda p: p.id == policy_id)
+        pol = self._sa_policy(sa, policy_id)
         if not pol:
             return {"success": False, "error": "Policy not found"}
         try:

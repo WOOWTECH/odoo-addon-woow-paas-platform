@@ -620,6 +620,8 @@ class TestSecurityAccessAccessControl(TransactionCase):
         return mc
 
     def test_update_access_config(self):
+        """P2.5 bridge: access-config writes the SA's PRIMARY route's
+        is_protected / login / session (not an SA-level field)."""
         mc = self._mock()
         sa = self._active_sa(mc)
         with _patch_request(self.env), \
@@ -629,45 +631,32 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 'access_enabled': True, 'login_google': True,
                 'login_email_otp': True, 'session_duration': '8h'})
         self.assertTrue(res['success'], res.get('error'))
-        self.assertTrue(sa.access_enabled)
-        self.assertEqual(sa.session_duration, '8h')
+        route = sa.route_ids.filtered('is_primary')
+        self.assertTrue(route.is_protected)
+        self.assertEqual(route.session_duration, '8h')
 
     def test_update_access_config_whitelist_only(self):
-        """_update_access_config's whitelist is the SOLE defense for the
-        server-owned access_app_id: the model write() immutable guard covers
-        only canonical_name/reference_id, NOT access_app_id (a plain writable
-        Char), and the owner/admin role gate doesn't help (an owner may
-        legitimately call access-config). Absent the whitelist, an owner could
-        smuggle {'access_app_id': 'attacker-app'} and repoint the SA at an
-        arbitrary CF Access app — the next idempotent resync would PUT-update
-        someone else's app. Send forged server-owned keys (access_app_id /
-        state / tunnel_id / access_unresolved_idp_types) alongside a whitelisted
-        one and assert only the whitelisted field took effect while the forged
-        keys were dropped.
-        Access-config analogue of test_create/update_policy_whitelist_only."""
+        """P2.5: _update_access_config's whitelist is the SOLE defense for the
+        server-owned per-route access_app_id / access_unresolved_idp_types: the
+        route write() immutable guard covers only subdomain_prefix, NOT these
+        (plain writable Chars), and the owner/admin role gate doesn't help (an
+        owner may legitimately call access-config). Absent the whitelist, an
+        owner could smuggle {'access_app_id': 'attacker-app'} onto the route and
+        repoint it at an arbitrary CF Access app. Send forged server-owned keys
+        and assert none reached the route write()."""
         mc = self._mock()
         sa = self._active_sa(mc)
-        # Seed the fail-open warning signal so we can prove a forged blank does
-        # NOT clear it. access_unresolved_idp_types is server-owned (set only by
-        # _sync_access_to_operator from the operator's reply) and has NO model
-        # write() immutable guard — the controller whitelist is its sole defense.
-        # If an owner could smuggle {'access_unresolved_idp_types': ''} they
-        # could erase the "login restriction silently widened to all IdPs"
-        # warning, masking a fail-open auth-widening from anyone watching the UI.
-        sa.access_unresolved_idp_types = 'google'
-        orig_app_id = sa.access_app_id
+        route = sa.route_ids.filtered('is_primary')
+        # Seed the per-route fail-open warning so a forged blank can't clear it.
+        route.access_unresolved_idp_types = 'google'
+        orig_app_id = route.access_app_id
         orig_state = sa.state
         orig_tunnel = sa.tunnel_id
-        orig_session = sa.session_duration
-        orig_unresolved = sa.access_unresolved_idp_types
+        orig_session = route.session_duration
+        orig_unresolved = route.access_unresolved_idp_types
         # Send ONLY forged server-owned keys (no whitelisted field): the
-        # whitelist must drop them ALL → vals ends empty → no write() → no
-        # _sync_access_to_operator. Isolating the sync this way avoids the
-        # legit-sync writeback (which rewrites access_app_id /
-        # access_unresolved_idp_types from the operator reply) muddying the
-        # "forged key never reached write()" assertion. The positive path
-        # (a whitelisted field DOES take effect) is covered by
-        # test_update_access_config.
+        # whitelist must drop them ALL → vals ends empty → no route write() → no
+        # operator sync. The positive path is covered by test_update_access_config.
         mc.sync_access_app.reset_mock()
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
@@ -679,28 +668,37 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 'access_unresolved_idp_types': ''})
         self.assertTrue(res['success'], res.get('error'))
         # every forged server-owned key was dropped (none reached write())
-        self.assertEqual(sa.access_app_id, orig_app_id)
+        self.assertEqual(route.access_app_id, orig_app_id)
         self.assertEqual(sa.state, orig_state)
         self.assertEqual(sa.tunnel_id, orig_tunnel)
-        self.assertEqual(sa.session_duration, orig_session)
+        self.assertEqual(route.session_duration, orig_session)
         # the forged blank did NOT clear the fail-open widening warning
-        self.assertEqual(sa.access_unresolved_idp_types, orig_unresolved)
-        self.assertEqual(sa.access_unresolved_idp_types, 'google')
+        self.assertEqual(route.access_unresolved_idp_types, orig_unresolved)
+        self.assertEqual(route.access_unresolved_idp_types, 'google')
         # vals ended empty → no operator sync fired
         mc.sync_access_app.assert_not_called()
 
+    def _sa_policies(self, sa):
+        return self.env[
+            'woow_paas_platform.security_access_access_policy'].search(
+                [('security_access_id', '=', sa.id)])
+
     def test_create_policy(self):
+        """P2.5 bridge: _create_policy pins the new policy to the SA's primary
+        route (route_id), surfaced via the stored related security_access_id."""
         mc = self._mock()
         sa = self._active_sa(mc)
+        route = sa.route_ids.filtered('is_primary')
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
-            sa.write({'access_enabled': True})
+            route.write({'is_protected': True})
             res = self.controller._create_policy(sa, {
                 'name': 'corp', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'acme.com'})
         self.assertTrue(res['success'], res.get('error'))
-        self.assertEqual(len(sa.access_policy_ids), 1)
+        self.assertEqual(len(self._sa_policies(sa)), 1)
+        self.assertEqual(self._sa_policies(sa).route_id, route)
 
     def test_policy_quota_enforced_at_controller(self):
         """plan sa_max_access_policies=1：第二條 policy 在 controller 層
@@ -728,7 +726,6 @@ class TestSecurityAccessAccessControl(TransactionCase):
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
-            sa.write({'access_enabled': True})
             r1 = self.controller._create_policy(sa, {
                 'name': 'p1', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'a.com'})
@@ -739,7 +736,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         self.assertFalse(r2['success'])
         self.assertIn('quota', r2['error'].lower())
         # the over-quota policy must not have landed
-        self.assertEqual(len(sa.access_policy_ids), 1)
+        self.assertEqual(len(self._sa_policies(sa)), 1)
 
     def test_create_policy_invalid_rule_rejected(self):
         mc = self._mock()
@@ -753,38 +750,45 @@ class TestSecurityAccessAccessControl(TransactionCase):
         self.assertFalse(res['success'])
 
     def test_update_policy_whitelist_only(self):
-        """_update_policy must not let client-controlled keys (cf_policy_id /
-        security_access_id) reach write(); only the field whitelist applies."""
+        """P2.5: _update_policy must not let client-controlled keys
+        (cf_policy_id / route_id) reach write(); only the field whitelist
+        applies. route_id is server-owned now (pins the CF Access app)."""
         mc = self._mock()
         sa = self._active_sa(mc)
+        route = sa.route_ids.filtered('is_primary')
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             pol = self.env[
                 'woow_paas_platform.security_access_access_policy'].create({
-                    'security_access_id': sa.id, 'name': 'corp',
+                    'route_id': route.id, 'name': 'corp',
                     'decision': 'allow', 'rule_type': 'email_domain',
                     'rule_value': 'acme.com'})
             res = self.controller._update_policy(sa, pol.id, {
                 'name': 'renamed', 'cf_policy_id': 'attacker-set',
-                'security_access_id': 999999})
+                'route_id': 999999})
         self.assertTrue(res['success'], res.get('error'))
         self.assertEqual(pol.name, 'renamed')
         # client-supplied non-whitelisted keys were ignored
         self.assertNotEqual(pol.cf_policy_id, 'attacker-set')
-        self.assertEqual(pol.security_access_id.id, sa.id)
+        self.assertEqual(pol.route_id, route)
 
     def test_create_policy_whitelist_only(self):
-        """_create_policy must drop client-controlled cf_policy_id and pin
-        security_access_id to the gated SA — never trust the client's value.
-        Create-path analogue of test_update_policy_whitelist_only: send a
-        forged cf_policy_id + security_access_id pointing at ANOTHER SA and
-        assert the created row keeps cf_policy_id empty and is pinned to sa."""
+        """P2.5: _create_policy must drop client-controlled cf_policy_id and pin
+        route_id to the gated SA's primary route — never trust the client's
+        value. Send a forged cf_policy_id + route_id pointing at ANOTHER SA's
+        route and assert the created row keeps cf_policy_id empty and is pinned
+        to sa's primary route."""
         mc = self._mock()
         sa = self._active_sa(mc)
-        # A second SA whose id the attacker tries to smuggle in.
+        route = sa.route_ids.filtered('is_primary')
+        # A second SA + route whose id the attacker tries to smuggle in.
         other_sa = self.SA.create({
             'name': 'Other GW', 'workspace_id': self.workspace.id})
+        other_route = self.env[
+            'woow_paas_platform.security_access_route'].create({
+                'security_access_id': other_sa.id,
+                'subdomain_prefix': 'other-route'})
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
@@ -792,28 +796,30 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 'name': 'corp', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'acme.com',
                 'cf_policy_id': 'attacker-set',
-                'security_access_id': other_sa.id})
+                'route_id': other_route.id})
         self.assertTrue(res['success'], res.get('error'))
-        pol = sa.access_policy_ids.filtered(lambda p: p.name == 'corp')
+        pol = self._sa_policies(sa).filtered(lambda p: p.name == 'corp')
         self.assertEqual(len(pol), 1)
         # cf_policy_id is server-owned: the forged value was dropped (the row
         # only gets a cf id from the operator's returned policy_ids on sync).
         self.assertNotEqual(pol.cf_policy_id, 'attacker-set')
-        # security_access_id pinned to the gated SA, NOT the smuggled other_sa.
+        # route_id pinned to the gated SA's primary route, NOT other_route.
+        self.assertEqual(pol.route_id, route)
         self.assertEqual(pol.security_access_id.id, sa.id)
-        self.assertNotIn(pol, other_sa.access_policy_ids)
+        self.assertNotIn(pol, other_route.access_policy_ids)
 
     def test_delete_policy(self):
         mc = self._mock()
         sa = self._active_sa(mc)
+        route = sa.route_ids.filtered('is_primary')
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             pol = self.env[
                 'woow_paas_platform.security_access_access_policy'].create({
-                    'security_access_id': sa.id, 'name': 'corp',
+                    'route_id': route.id, 'name': 'corp',
                     'decision': 'allow', 'rule_type': 'email_domain',
                     'rule_value': 'acme.com'})
             res = self.controller._delete_policy(sa, pol.id)
         self.assertTrue(res['success'], res.get('error'))
-        self.assertEqual(len(sa.access_policy_ids), 0)
+        self.assertEqual(len(self._sa_policies(sa)), 0)
