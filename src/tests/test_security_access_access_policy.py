@@ -585,8 +585,21 @@ class TestRouteAccessCleanup(TransactionCase):
 
 
 class TestAccessPolicyAcl(TransactionCase):
-    """policy ir.rule 經 stored related security_access_id walk 仍可用
-    (Phase 1 不破壞；Phase 2 正式處理)。"""
+    """policy ir.rule (P2.5 Phase 2) — 3 條 access_policy rule 經 stored related
+    security_access_id walk (security_access_id.workspace_id.access_ids...) 在
+    read / create / write / unlink + cross-workspace 全路徑正確。
+
+    為何 related-store walk 足夠（不需改成 route_id.security_access_id...walk）:
+    security_access_id 是 store=True related on route_id.security_access_id，
+    materialise 成真實 DB 欄位。create 時 Odoo 先 super().create() 物化 row、
+    recompute + flush stored related 欄位，**才**對 create 動作跑
+    _apply_ir_rules（用 SQL 依 rule domain 重讀 row 過濾）。所以 create ir.rule
+    檢查讀到的 security_access_id 欄位已 populate，不是 stale/null。
+    test_create_with_route_materialises_related_for_ir_rule 與
+    test_owner_create_with_route_passes_create_rule 是這條時序的守線：
+    若 related store 在 create ir.rule 檢查前未 flush，owner create 會被
+    _owner_admin_manage rule (domain 走 security_access_id) 誤判跨/null SA 而擋。
+    """
 
     def setUp(self):
         super().setUp()
@@ -671,3 +684,88 @@ class TestAccessPolicyAcl(TransactionCase):
         self.assertEqual(new_pol.decision, 'deny')
         new_pol.with_user(self.alice).unlink()
         self.assertFalse(new_pol.exists())
+
+    # --- create-time related-store materialisation (Phase 2 timing守線) --- #
+    def test_create_with_route_materialises_related_for_ir_rule(self):
+        """create policy 帶 route_id → stored related security_access_id 在
+        create ir.rule 檢查前已 populate（非 stale/null）。沒被 admin sudo 繞:
+        以 owner alice (base.group_user, 非 group_system) create，必須通過走
+        security_access_id 的 _owner_admin_manage create rule。若 related store
+        在 create 階段尚未 flush，rule domain 比對到 null SA → AccessError，本
+        測試紅。綠證明 related-store walk 在 create 路徑安全（不需改 walk）。"""
+        Policy = self.env[
+            'woow_paas_platform.security_access_access_policy']
+        pol = Policy.with_user(self.alice).create({
+            'route_id': self.route.id, 'name': 'rel-store',
+            'decision': 'allow', 'rule_type': 'email_domain',
+            'rule_value': 'rel.com'})
+        # stored related materialised to the route's SA (the real DB column the
+        # ir.rule domain traversed at create time).
+        self.assertEqual(pol.security_access_id, self.sa)
+
+    # --- cross-workspace deny (B1-class data leak 守線) --- #
+    def _make_other_workspace_route(self):
+        """獨立 workspace B（owner=mallory）+ 自己的 SA + route，與 alice 的
+        workspace A 無交集。workspace.create 會自動給 owner_id 一筆 owner
+        workspace_access，所以 mallory 對 B 是 owner、對 A 無任何 access。"""
+        wsB = self.env['woow_paas_platform.workspace'].create({
+            'name': 'AP ACL WS-B', 'owner_id': self.mallory.id})
+        saB = self.env['woow_paas_platform.security_access'].create({
+            'name': 'AP ACL GW-B', 'workspace_id': wsB.id})
+        routeB = self.env[
+            'woow_paas_platform.security_access_route'].create({
+                'security_access_id': saB.id,
+                'subdomain_prefix': 'ap-acl-route-b'})
+        return wsB, saB, routeB
+
+    def test_cross_workspace_owner_cannot_read_policy(self):
+        """B workspace 的 owner (mallory) 不可讀 A workspace route 的 policy。
+        mallory 在 B 有 owner role，但 walk A.policy.security_access_id.
+        workspace_id.access_ids 不含 mallory → search 不可見。"""
+        self._make_other_workspace_route()
+        v = self.env[
+            'woow_paas_platform.security_access_access_policy'].with_user(
+                self.mallory).search([('id', '=', self.pol.id)])
+        self.assertEqual(len(v), 0)
+
+    def test_cross_workspace_owner_cannot_write_policy(self):
+        """跨 workspace owner 不可改 A 的 policy（write rule 走 SA→ws→
+        access_ids any owner/admin 只匹配 A 的 access 列，mallory 不在其中）。"""
+        from odoo.exceptions import AccessError
+        self._make_other_workspace_route()
+        with self.assertRaises(AccessError):
+            self.pol.with_user(self.mallory).write({'decision': 'deny'})
+
+    def test_cross_workspace_owner_cannot_unlink_policy(self):
+        from odoo.exceptions import AccessError
+        self._make_other_workspace_route()
+        with self.assertRaises(AccessError):
+            self.pol.with_user(self.mallory).unlink()
+
+    def test_cross_workspace_cannot_create_policy_on_foreign_route(self):
+        """B 的 owner 不可在 A 的 route 上 create policy（create rule 走
+        security_access_id→A.workspace→access_ids any owner/admin，mallory 不在
+        → AccessError）。擋的是「持有自己 workspace 卻往別人 route 灌 policy」
+        的跨租戶提權面。"""
+        from odoo.exceptions import AccessError
+        self._make_other_workspace_route()
+        with self.assertRaises(AccessError):
+            self.env[
+                'woow_paas_platform.security_access_access_policy'].with_user(
+                    self.mallory).create({
+                        'route_id': self.route.id, 'name': 'cross-evil',
+                        'decision': 'allow', 'rule_type': 'email_domain',
+                        'rule_value': 'attacker.com'})
+
+    def test_owner_create_with_route_passes_create_rule(self):
+        """正向對照：A 的 owner 在自己 route 上 create policy 成功，且新 row
+        security_access_id 正確（與上面 cross-workspace create-deny 對稱，確保
+        deny 不是因為 rule 把所有 create 都擋掉的假綠）。"""
+        Policy = self.env[
+            'woow_paas_platform.security_access_access_policy']
+        pol = Policy.with_user(self.alice).create({
+            'route_id': self.route.id, 'name': 'own-create',
+            'decision': 'allow', 'rule_type': 'email_domain',
+            'rule_value': 'own.com'})
+        self.assertTrue(pol.exists())
+        self.assertEqual(pol.security_access_id, self.sa)
