@@ -128,20 +128,41 @@ def migrate(cr, version):
             # none are protected, park on the primary route as an inert carrier
             # so nothing is dropped. Idempotent: NULL route_id only.
             targets = protected or primary
-            for pol in legacy_pols:
-                first = targets[:1]
-                pol.with_context(sa_skip_route_sync=True).write(
-                    {'route_id': first.id})
-                moved_policies += 1
-                # multiple protected routes → copy the same policy to each
-                # additional one (behaviour-equivalent fan-out). sa_skip_route_
-                # sync so the copy does not call the operator during migration.
-                for extra in targets[1:]:
-                    pol.with_context(sa_skip_route_sync=True).copy(default={
-                        'route_id': extra.id,
-                        'cf_policy_id': False,
-                    })
-                    copied_policies += 1
+            # sa_skip_route_sync (context): the row moves must NOT call the
+            # operator (CF converges via the Phase 5 re-sync, not per-row here).
+            # sa_skip_policy_quota (CURSOR flag): the fan-out copies the OLD
+            # single shared app's policy set onto EACH protected route
+            # (behaviour-equivalent re-home, not a user adding capacity). The
+            # per-SA quota was sized for the old single-app model (set counted
+            # once); fanning the same set across M routes multiplies the count
+            # under the same budget, so an SA with a real subscription near its
+            # quota would trip @api.constrains _check_policy_quota and abort the
+            # migration. The quota constraint ALSO fires from the deferred
+            # recompute of the stored related security_access_id at flush time,
+            # in a context-stripped env — so the bypass flag is set on the
+            # transaction cursor (shared across all envs) rather than the
+            # context, and cleared in a finally so it never leaks past the move.
+            cr.sa_skip_policy_quota = True
+            try:
+                for pol in legacy_pols:
+                    first = targets[:1]
+                    pol.with_context(sa_skip_route_sync=True).write(
+                        {'route_id': first.id})
+                    moved_policies += 1
+                    # multiple protected routes → copy the same policy to each
+                    # additional one (behaviour-equivalent fan-out).
+                    for extra in targets[1:]:
+                        pol.with_context(sa_skip_route_sync=True).copy(default={
+                            'route_id': extra.id,
+                            'cf_policy_id': False,
+                        })
+                        copied_policies += 1
+                # Force any pending recompute (and its constraint re-fire) to
+                # run NOW, while the bypass flag is still set — a recompute
+                # deferred past the finally would re-trip the quota.
+                env.flush_all()
+            finally:
+                cr.sa_skip_policy_quota = False
 
         # ---- 3. clear orphan SA-level access_app_id + log it ----
         if 'access_app_id' in cols:

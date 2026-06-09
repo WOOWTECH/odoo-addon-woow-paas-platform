@@ -189,3 +189,58 @@ class TestP2_5Migration(TransactionCase):
             self.assertEqual(r2_pols.name, 'shared')
         finally:
             self._drop_legacy_columns()
+
+    def test_migration_fan_out_bypasses_policy_quota(self):
+        """fan-out copy() 不可撞 _check_policy_quota → 不中斷 migration。
+
+        quota 是 per-SA 總量，為 OLD 單一共享 app 模型設計（policy set 算一次）。
+        把同一 set fan-out 到 M 條 route 會在同預算下乘 M 倍，N×M 可能 > quota。
+        migration 是 behaviour-equivalent 的 re-home，不是使用者新增配額，所以
+        fan-out 必須跳過 quota 檢查，否則「多 protected route + 近 quota」的 stg
+        測試資料會在升級途中觸發 ValidationError 中斷整個 migrate()。
+
+        本測試用真實 subscription（plan quota=1）+ 1 legacy policy × 2 protected
+        route：fan-out 後總量 2 > 1。修前 copy() 觸發 @api.constrains 拋
+        ValidationError → migrate() abort（紅）；修後 migration 內跳過 quota。
+        """
+        self._add_legacy_columns()
+        self._make_route_id_nullable()
+        try:
+            sa = self.SA.create({'name': 'MIG GW Quota',
+                                 'workspace_id': self.workspace.id})
+            # 真實 subscription，policy quota=1（per-SA 總量）。route quota 給足
+            # （sa_max_routes=5）以免第二條 route 撞到無關的 route 配額，本測試
+            # 只針對 policy quota 的 fan-out bypass。
+            plan = self.env['sh.subscription.plan'].create({
+                'name': 'MIG Plan', 'sh_duration': 1, 'sh_unit': 'month',
+                'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+                'sa_max_routes': 5, 'sa_max_access_policies': 1})
+            sub = self.env['sh.subscription.subscription'].create({
+                'sh_partner_id': self.env.user.partner_id.id,
+                'state': 'in_progress'})
+            sub.sh_subscription_plan_id = plan.id
+            sa.subscription_id = sub.id
+            r1 = self.Route.create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': sa.canonical_name,
+                'is_primary': True, 'is_protected': True})
+            r2 = self.Route.create({
+                'security_access_id': sa.id, 'subdomain_prefix': 'mig-q-r2',
+                'is_protected': True})
+            pol = self.Policy.create({
+                'route_id': r1.id, 'name': 'shared-q', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+            self._null_policy_route(pol, sa)
+            self._set_legacy(sa, session_duration='24h')
+            self.SA.invalidate_model()
+            self.Policy.invalidate_model()
+            # 修前：fan-out 第 2 筆 copy 觸發 quota（2 > 1）→ ValidationError abort
+            self.migrate(self.env.cr, '18.0.1.0.37')
+            r1_pols = self.Policy.search([('route_id', '=', r1.id)])
+            r2_pols = self.Policy.search([('route_id', '=', r2.id)])
+            self.assertEqual(len(r1_pols), 1)
+            self.assertEqual(len(r2_pols), 1,
+                             "fan-out must land on both routes despite quota")
+            self.assertEqual(r2_pols.name, 'shared-q')
+        finally:
+            self._drop_legacy_columns()

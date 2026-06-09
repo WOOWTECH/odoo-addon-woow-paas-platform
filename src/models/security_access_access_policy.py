@@ -90,6 +90,26 @@ class SecurityAccessAccessPolicy(models.Model):
         # a per-SA allowance, not per-route), so count every policy across all
         # of the SA's routes via the stored related security_access_id. Policies
         # now bind to routes, but the budget is still pooled per Security Access.
+        #
+        # sa_skip_policy_quota: the P2.5 migration fan-out copies the OLD single
+        # shared app's legacy policy set onto EACH protected route (behaviour-
+        # equivalent re-home, not a user adding capacity). The quota was a per-SA
+        # total designed for the old single-app model where the set was counted
+        # once; fanning the same set across M routes multiplies the count under
+        # the same budget, so an SA with a real subscription near its quota would
+        # trip this constraint and abort the migration. The migration runs the
+        # re-home + fan-out under this key so the constraint is bypassed for that
+        # one-shot data move; normal user-driven create/write keep enforcing it.
+        # sa_skip_policy_quota lives on the transaction CURSOR, not the context:
+        # this constraint also fires from the deferred recompute of the stored
+        # related security_access_id at flush time, and that recompute re-browses
+        # the records in a context-STRIPPED env, so a context-only flag is
+        # silently dropped on those passes (the fan-out copy would still abort).
+        # The cursor is shared by every env in the transaction, so a flag set on
+        # it survives the recompute env reconstruction. Set + cleared by the
+        # migration around its one-shot data move.
+        if getattr(self.env.cr, 'sa_skip_policy_quota', False):
+            return
         for pol in self:
             sa = pol.security_access_id
             sub = sa.sudo().subscription_id
