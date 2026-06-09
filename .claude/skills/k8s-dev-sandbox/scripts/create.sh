@@ -599,6 +599,13 @@ if [ "$WOOW_MODULE_STATE" != "installed" ]; then
     OPERATOR_NS="${PAAS_OPERATOR_NAMESPACE:-$([ "$MODE" = "stg" ] && echo paas-stg-system || echo paas-system)}"
     OPERATOR_URL="${PAAS_OPERATOR_URL:-}"
     OPERATOR_API_KEY="${PAAS_OPERATOR_API_KEY:-}"
+    # paas_domain MUST equal the operator's CLOUDFLARE_DOMAIN — Security Access /
+    # Smart Home hostnames are created by the operator under that domain, and
+    # `*.stg.woowtech.io` (sub-subdomain) has no Cloudflare wildcard SSL, so a
+    # mismatch yields dangling hostnames (F-SA-1). Discovered from the operator
+    # deployment below; falls back to per-sandbox isolation only when no operator
+    # is reachable (pure local dev that never provisions real CF resources).
+    PAAS_DOMAIN_VALUE="${PAAS_DOMAIN:-}"
     NS_PREFIX="${PAAS_NAMESPACE_PREFIX:-$([ "$MODE" = "stg" ] && echo paas-ws-stg- || echo paas-ws-)}"
     # stg: auto-enable agent runtime for new projects by default. Gated at
     # runtime by _agent_runtime_autoenable_ready (operator url+key + a valid
@@ -616,6 +623,19 @@ if [ "$WOOW_MODULE_STATE" != "installed" ]; then
                 OPERATOR_API_KEY=$(kubectl get secret -n "$OPERATOR_NS" "$_op_secret" -o jsonpath='{.data.api-key}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
             fi
             echo -e "  ${BLUE}Discovered operator:${NC} ${OPERATOR_URL} (api-key: $([ -n "$OPERATOR_API_KEY" ] && echo set || echo none))"
+            # Align paas_domain with the operator's CLOUDFLARE_DOMAIN (F-SA-1):
+            # the operator creates tunnel/route hostnames under that domain, so
+            # Odoo must compute the same. Read it from the operator deployment env.
+            if [ -z "$PAAS_DOMAIN_VALUE" ]; then
+                _op_deploy=$(kubectl get deploy -n "$OPERATOR_NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^paas-operator' | head -1 || true)
+                if [ -n "$_op_deploy" ]; then
+                    _cf_domain=$(kubectl get deploy -n "$OPERATOR_NS" "$_op_deploy" -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null | grep '^CLOUDFLARE_DOMAIN=' | head -1 | cut -d= -f2- || true)
+                    if [ -n "$_cf_domain" ]; then
+                        PAAS_DOMAIN_VALUE="$_cf_domain"
+                        echo -e "  ${BLUE}Discovered paas_domain:${NC} ${PAAS_DOMAIN_VALUE} (from operator CLOUDFLARE_DOMAIN)"
+                    fi
+                fi
+            fi
         else
             echo -e "  ${YELLOW}No paas-operator found in '${OPERATOR_NS}'; operator stays unconfigured.${NC}"
         fi
@@ -636,7 +656,7 @@ INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid,
 VALUES
   ('woow_paas_platform.operator_url', '${OPERATOR_URL}', 1, NOW(), 1, NOW()),
   ('woow_paas_platform.operator_api_key', '${OPERATOR_API_KEY}', 1, NOW(), 1, NOW()),
-  ('woow_paas_platform.paas_domain', '${SLUG}.woowtech.io', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.paas_domain', '${PAAS_DOMAIN_VALUE:-${SLUG}.woowtech.io}', 1, NOW(), 1, NOW()),
   ('woow_paas_platform.namespace_prefix', '${NS_PREFIX}', 1, NOW(), 1, NOW()),
   ('woow_paas_platform.topup_payment_enabled', 'True', 1, NOW(), 1, NOW()),
   ('woow_paas_platform.default_enable_agent_runtime', '${DEFAULT_ENABLE_AR}', 1, NOW(), 1, NOW())
