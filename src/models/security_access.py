@@ -130,40 +130,15 @@ class SecurityAccess(models.Model):
     # domain) it is derived on demand from the platform-default route via
     # _platform_default_hostname(); it is never surfaced as "the hostname".
 
-    # Access Control（P2；服務層共用設定）
-    access_enabled = fields.Boolean(
-        string='Access Protection Enabled',
-        default=False,
-        help='Master toggle: gate protected routes behind Cloudflare Access.',
-    )
-    session_duration = fields.Selection(
-        selection=[
-            ('30m', '30 minutes'), ('1h', '1 hour'), ('8h', '8 hours'),
-            ('24h', '24 hours'), ('168h', '7 days'),
-        ],
-        string='Default Session Duration',
-        default='24h',
-        help='How long users stay authenticated before re-login.',
-    )
-    login_google = fields.Boolean(string='Login: Google', default=False)
-    login_email_otp = fields.Boolean(string='Login: Email OTP', default=False)
-    access_app_id = fields.Char(
-        string='CF Access App ID', copy=False,
-        help='Cloudflare Access Application id for this SA (set on sync).',
-    )
-    access_policy_ids = fields.One2many(
-        comodel_name='woow_paas_platform.security_access_access_policy',
-        inverse_name='security_access_id',
-        string='Access Policies',
-    )
-    access_unresolved_idp_types = fields.Char(
-        string='Unresolved Login Methods', copy=False,
-        help='Requested login methods (e.g. google) with no matching '
-             'Cloudflare account IdP at the last sync. Non-empty means the '
-             'login restriction silently widened — if it emptied the resolved '
-             'set, the Access app falls back to ALL available IdPs. Surfaced '
-             'so the fail-open widening is visible, not dropped on the floor.',
-    )
+    # Access Control（P2.5；下放到 route 子模型 per-route）
+    #
+    # P2.5 removed the SA-LEVEL service-wide Access fields (access_enabled /
+    # login_google / login_email_otp / session_duration / access_app_id /
+    # access_unresolved_idp_types / access_policy_ids). Access is now per-route:
+    # each Application Route is its own Cloudflare Access application with its
+    # own protection toggle (route.is_protected), login methods, session and
+    # policy set. See SecurityAccessRoute below. The only SA-level Access helper
+    # that survives is _teardown_route_access (tears down a deleted route's app).
 
     route_ids = fields.One2many(
         comodel_name='woow_paas_platform.security_access_route',
@@ -276,40 +251,11 @@ class SecurityAccess(models.Model):
                     raise UserError(
                         "Field '%s' is immutable after creation." % forbidden
                     )
-        # Atomicity scope: mirror the route/policy sub-models' savepoint so a
-        # config write whose Access re-sync raises rolls the super().write()
-        # back and re-raises, rather than leaving access_enabled=True committed
-        # in the DB while CF was never updated (a fail-OPEN divergence: the row
-        # + UI say 'protected' but no CF Access App exists, so the routes are
-        # publicly reachable). The BFF (_update_access_config) catches the
-        # propagating exception and reports {success:False} WITHOUT re-raising,
-        # so Odoo's JSON-RPC handler does NOT roll the transaction back — hence
-        # the explicit savepoint here is the only thing that undoes the already-
-        # applied write on sync failure. The guarantee is Odoo-side ONLY:
-        # sync_access_app is a declarative full-state push with no compensating
-        # action, so a mid-reconcile operator failure can still leave CF
-        # partially mutated; that residual CF↔DB divergence converges via the
-        # next idempotent full-state re-sync, not via this savepoint (same scope
-        # the route/policy sub-models document).
-        #
-        # P2: any change to the shared Access config (master toggle, login
-        # methods, session duration) re-pushes the full desired Access state.
-        # Mirrors the route-sub-model's declarative re-sync — idempotent, and
-        # only fires once the SA has a live tunnel so a config edit on a pending
-        # SA doesn't hit the operator prematurely. The liveness gate is
-        # ('active', 'error') + tunnel_id, IDENTICAL to the route sync gate: a
-        # stage-2 provision failure leaves the SA in 'error' with a live tunnel
-        # while the subscription stays active (BFF still permits CRUD), so an
-        # access edit in that state must converge CF, not silently diverge it.
-        gated = any(k in vals for k in ('access_enabled', 'login_google',
-                                        'login_email_otp', 'session_duration'))
-        if gated:
-            with self.env.cr.savepoint():
-                result = super().write(vals)
-                for record in self:
-                    if record.state in ('active', 'error') and record.tunnel_id:
-                        record._sync_access_to_operator()
-            return result
+        # P2.5: the SA layer no longer carries any service-wide Access config —
+        # Access is per-route now, so a route's create/write/unlink fires its
+        # OWN _sync_access_to_operator. There is no SA-level access write trigger
+        # any more (the route/policy sub-models own the savepoint + liveness
+        # gate). A plain write here only persists SA identity/tunnel/state fields.
         result = super().write(vals)
         return result
 
@@ -370,15 +316,13 @@ class SecurityAccess(models.Model):
                         'is_primary': True,
                     })
                 self._sync_routes_to_operator()
-                # P2: if Access was configured (enabled + policies) on the SA
-                # while it was still pending, the config-write trigger never
-                # fired (no live tunnel then). The tunnel exists now, so push
-                # the full Access state here too — otherwise an active SA with
-                # access_enabled=True stays silently inert (no CF Access app,
-                # no protected destinations) until some access field is
-                # re-toggled. _sync_access_to_operator no-ops without a tunnel.
-                if self.access_enabled:
-                    self._sync_access_to_operator()
+                # P2.5: if any route was set is_protected (+ policies) on the SA
+                # while it was still pending, the route Access sync never reached
+                # the operator (no live tunnel then). The tunnel exists now, so
+                # push every protected route's own Access app here — otherwise a
+                # route marked protected stays silently inert (no CF Access app)
+                # until some route access field is re-toggled.
+                self._sync_all_routes_access()
                 self.write({'state': 'active'})
             except PaaSOperatorConnectionError as e:
                 self.write({
@@ -492,14 +436,13 @@ class SecurityAccess(models.Model):
             # (create_tunnel's single-rule config doesn't set originRequest).
             self._sync_routes_to_operator()
 
-            # P2: push Access config too if it was set pre-provision. The
-            # configure-then-provision flow lets a user enable Access + add
-            # policies on a 'pending' SA (BFF gates on subscription state, not
-            # provisioning state); those writes never reach the operator because
-            # the write trigger requires a live tunnel. Now that the tunnel
-            # exists, converge CF so the SA isn't left active-but-inert.
-            if self.access_enabled:
-                self._sync_access_to_operator()
+            # P2.5: push per-route Access too if any route was set protected
+            # pre-provision. The configure-then-provision flow lets a user mark
+            # a route protected (+ add policies) on a 'pending' SA (BFF gates on
+            # subscription state, not provisioning state); those route syncs
+            # never reached the operator (no live tunnel). Now that the tunnel
+            # exists, converge each protected route's CF Access app.
+            self._sync_all_routes_access()
 
             _logger.info(
                 "[SA] provisioned sa=%s canonical=%s tunnel=%s",
@@ -662,100 +605,62 @@ class SecurityAccess(models.Model):
                 route.dns_record_id = rec_id
 
     # ------------------------------------------------------------------ #
-    #  Access sync (declarative)                                          #
+    #  Access sync (declarative; P2.5 per-route — see SecurityAccessRoute) #
     # ------------------------------------------------------------------ #
 
-    def _build_access_payload(self):
-        """Desired-state payload for operator's /api/access/sync."""
+    def _sync_all_routes_access(self):
+        """P2.5 convergence point: push every protected route's own Access app.
+
+        Called once the tunnel is live (provision / resume) so per-route Access
+        that was configured on a 'pending' SA — when no route sync could reach
+        the operator — gets pushed, AND so a route disabled while suspended is
+        torn down at resume. The route sync still requires a live tunnel; the
+        sa_force_access_sync context bypasses only the state half of the gate
+        because these convergence points run before the SA state is settled to
+        'active'/'error'. Each route builds its own single-route payload, so an
+        unprotected route with no stored app id is a cheap no-op."""
         self.ensure_one()
-        domain = self._get_paas_domain()
-        login_idp_types = []
-        if self.login_google:
-            login_idp_types.append('google')
-        if self.login_email_otp:
-            login_idp_types.append('onetimepin')
-        protected = [
-            f"{r.subdomain_prefix}.{domain}"
-            for r in self.route_ids.filtered('is_protected')
-        ]
-        return {
-            'enabled': bool(self.access_enabled),
-            'canonical_name': self.canonical_name,
-            'app_name': self.name or self.canonical_name,
-            # operator schema key (Access app domain) — derived from the
-            # platform-default route, not an SA-level "primary hostname" field
-            'primary_hostname': self._platform_default_hostname(),
-            'protected_hostnames': protected,
-            'session_duration': self.session_duration or '24h',
-            'login_idp_types': login_idp_types,
-            'policies': [{
-                'name': p.name, 'decision': p.decision,
-                'rule_type': p.rule_type, 'rule_value': p.rule_value,
-                'precedence': p.sequence,
-            } for p in self.access_policy_ids.sorted(
-                key=lambda x: (x.sequence, x.id))],
-            'existing_app_id': self.access_app_id or None,
-            'existing_policy_ids': self._build_existing_policy_ids(),
-        }
+        for route in self.route_ids:
+            route.with_context(sa_force_access_sync=True)._sync_access_to_operator()
 
-    def _build_existing_policy_ids(self):
-        """CF reusable-policy ids the operator must delete-then-recreate.
-
-        Normally just the surviving rows' cf_policy_id. But a policy unlink runs
-        super().unlink() before the resync, so the just-deleted rows' cf ids are
-        already gone from the DB — they would never enter this list and the
-        operator (whose only delete path is this list) would leak them as
-        permanent CF orphans. unlink() captures those doomed ids and passes them
-        via context so they are reaped on the same resync."""
-        ids = [
-            p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id
-        ]
-        for cf_id in self.env.context.get(
-                'sa_unlinked_cf_policy_ids') or []:
-            if cf_id and cf_id not in ids:
-                ids.append(cf_id)
-        return ids
-
-    def _sync_access_to_operator(self):
-        """Push the full desired Access state to the operator (idempotent)."""
+    def _teardown_route_access(self, app_id, policy_ids, app_name, hostname):
+        """Tear down ONE route's Cloudflare Access app (+ reusable policies)
+        when the route row no longer exists (deleted) or during SA cleanup. The
+        route may be gone, so the caller passes the captured ids; we build a
+        minimal enabled=False payload here. Best-effort — a teardown failure is
+        logged, not raised, so it does not abort the surrounding unlink/cleanup.
+        Returns True on a clean teardown (so the caller may clear the stored
+        app_id), False on failure (so a surviving route keeps its id and the SA
+        lands re-entrant in 'error' instead of reporting a false clean)."""
         self.ensure_one()
-        if not self.tunnel_id:
-            return
-        client = self._get_operator_client()
-        result = client.sync_access_app(self._build_access_payload())
-        # Surface old reusable policies the operator could not delete after
-        # repointing the app — permanent Cloudflare orphans (cost/clutter) that
-        # no later re-sync reconciles, so make them observable in the log.
-        orphaned = result.get('orphaned_policy_ids') or []
-        if orphaned:
+        if not app_id and not policy_ids:
+            return True
+        try:
+            client = self._get_operator_client()
+            result = client.sync_access_app({
+                'enabled': False,
+                'canonical_name': self.canonical_name,
+                'app_name': app_name or self.canonical_name,
+                'primary_hostname': hostname or '',
+                'protected_hostnames': [],
+                'session_duration': '24h',
+                'login_idp_types': [],
+                'policies': [],
+                'existing_app_id': app_id or None,
+                'existing_policy_ids': policy_ids or [],
+            })
+            orphaned = result.get('orphaned_policy_ids') or []
+            if orphaned:
+                _logger.warning(
+                    "[SA] route access teardown sa=%s app=%s left %d orphan "
+                    "policy(ies): %s", self.id, app_id, len(orphaned),
+                    ', '.join(orphaned))
+            return True
+        except Exception as e:
             _logger.warning(
-                "Security Access %s (id=%s): operator left %d orphan CF Access "
-                "policy(ies) after sync: %s", self.canonical_name, self.id,
-                len(orphaned), ', '.join(orphaned))
-        # write back CF ids
-        self.access_app_id = result.get('app_id') or False
-        returned = result.get('policy_ids') or []
-        # Persist the operator's fail-open login-widening signal: requested
-        # login methods (e.g. google) with no matching CF account IdP are
-        # silently dropped, and if that empties the resolved set the Access app
-        # falls back to ALL IdPs. The operator goes to lengths to surface this
-        # (cloudflare.py sync_access_app return) — store it so it's observable
-        # via to_dict() instead of being dropped on the floor.
-        unresolved = result.get('unresolved_idp_types') or []
-        new_unresolved = ', '.join(unresolved) if unresolved else False
-        if self.access_unresolved_idp_types != new_unresolved:
-            self.access_unresolved_idp_types = new_unresolved
-        # map returned policy ids back onto policy rows in order
-        policies = self.access_policy_ids.sorted(
-            key=lambda x: (x.sequence, x.id))
-        for pol, cf_id in zip(policies, returned):
-            if pol.cf_policy_id != cf_id:
-                pol.cf_policy_id = cf_id
-        if not result.get('app_id'):
-            # torn down → clear stale cf ids
-            for pol in self.access_policy_ids:
-                if pol.cf_policy_id:
-                    pol.cf_policy_id = False
+                "[SA] route access teardown failed sa=%s app=%s: %s",
+                self.id, app_id, e)
+            return False
 
     # ------------------------------------------------------------------ #
     #  Subscription lifecycle: suspend / resume / cleanup                #
@@ -814,24 +719,20 @@ class SecurityAccess(models.Model):
             return
         try:
             self._sync_routes_to_operator()
-            # P2: re-assert the Access state on resume too. Suspend only
-            # 503-freezes route ingress (it does not tear the Access app down),
-            # but resuming is also the convergence point for any Access config
-            # that was edited while suspended or set pre-provision — push the
-            # full desired state so CF destinations match the live route set.
+            # P2.5: re-assert per-route Access on resume too. Suspend only
+            # 503-freezes route ingress (it does not tear Access apps down), but
+            # resuming is also the convergence point for any per-route Access
+            # config edited while suspended or set pre-provision — push every
+            # route's own desired state so CF matches the live route set.
             #
-            # Converge BOTH directions: an `if self.access_enabled` guard would
-            # only re-assert the ENABLE direction. If access_enabled was flipped
-            # to False while suspended (the SA write() trigger doesn't fire in
-            # 'suspended' — state not in ('active','error')), a guarded resume
-            # would skip the teardown and the CF Access app + reusable policies
-            # would survive forever, permanently diverging from the user's
-            # disable intent with no later converge trigger. _sync is idempotent:
-            # an enabled=False payload carries existing_app_id so the operator
-            # tears the app down; with no app it is a harmless no-op. A live
-            # tunnel is guaranteed here (the `not self.tunnel_id` branch above
-            # already returned), so push unconditionally.
-            self._sync_access_to_operator()
+            # Converge BOTH directions per route: _sync_access_to_operator is
+            # idempotent. A route flipped is_protected→False while suspended (no
+            # write trigger fired — state not in ('active','error')) still
+            # carries a stored access_app_id, so its resume sync sends an
+            # enabled=False teardown payload; a route still protected re-asserts
+            # its app. A live tunnel is guaranteed here (the `not tunnel_id`
+            # branch above returned), so push unconditionally.
+            self._sync_all_routes_access()
         except Exception as e:
             _logger.warning("[SA] _do_resume failed sa=%s: %s", self.id, e)
             self.write({'state': 'error'})
@@ -866,16 +767,19 @@ class SecurityAccess(models.Model):
         _logger.info("[SA] _do_cleanup sa=%s tunnel=%s",
                      self.id, self.tunnel_id)
         self._cleanup_cloudflare()
-        if self.tunnel_id or self.access_app_id:
+        # P2.5: a lingering per-route Access app is a stale route.access_app_id.
+        lingering_access = self.route_ids.filtered('access_app_id')
+        if self.tunnel_id or lingering_access:
             # cleanup did not finish — either the tunnel is still live in
-            # Cloudflare, OR the Access teardown failed while the tunnel delete
-            # succeeded (ordering-dependent orphan: a stale access_app_id means
-            # the CF Access app + reusable policies still exist). Either way,
-            # writing 'deleting' would be a misleading success signal that hides
-            # a lingering CF resource and lets ops mistake "clean" for "clean
-            # failed". Land in 'error' + error_message instead, fail-loud and
-            # re-entrant: the next cron pass re-runs _cleanup_cloudflare, which
-            # retries whichever leg is still outstanding.
+            # Cloudflare, OR one of the per-route Access teardowns failed while
+            # the tunnel delete succeeded (ordering-dependent orphan: a stale
+            # route.access_app_id means that route's CF Access app + reusable
+            # policies still exist). Either way, writing 'deleting' would be a
+            # misleading success signal that hides a lingering CF resource and
+            # lets ops mistake "clean" for "clean failed". Land in 'error' +
+            # error_message instead, fail-loud and re-entrant: the next cron
+            # pass re-runs _cleanup_cloudflare, which retries whichever leg is
+            # still outstanding.
             self.write({
                 'state': 'error',
                 'error_message': "Cloudflare cleanup failed; %s still live. "
@@ -884,9 +788,9 @@ class SecurityAccess(models.Model):
                                      else 'Access app'),
             })
             _logger.warning(
-                "[SA] _do_cleanup incomplete sa=%s tunnel=%s app=%s "
+                "[SA] _do_cleanup incomplete sa=%s tunnel=%s lingering_access=%s "
                 "(state=error)",
-                self.id, self.tunnel_id, self.access_app_id,
+                self.id, self.tunnel_id, lingering_access.ids,
             )
             return
         self.write({'state': 'deleting'})
@@ -896,31 +800,36 @@ class SecurityAccess(models.Model):
         every DNS record pointing at the tunnel, then deletes the tunnel
         (token invalidated)."""
         self.ensure_one()
-        if not self.tunnel_id and not self.access_app_id:
+        access_routes = self.route_ids.filtered('access_app_id')
+        if not self.tunnel_id and not access_routes:
             return
-        # P2: tear down Cloudflare Access (app + reusable policies) first.
-        # Wrapped in its own try so an Access teardown failure does NOT abort
-        # the tunnel delete below — the tunnel is the billed resource and must
-        # always get its delete attempt. enabled=False makes the sync
-        # idempotent (re-running on an already-torn-down app is a no-op). The
-        # Access teardown sync (enabled=False) only needs existing_app_id +
-        # existing_policy_ids, NOT the tunnel, so we still attempt it even when
-        # tunnel_id is already gone — a prior partial cleanup (tunnel deleted,
-        # Access teardown failed) would otherwise leave the Access app/policies
-        # as permanent orphans with no retry path. access_app_id is only
-        # cleared on a successful teardown, so a failure keeps it set and
-        # _do_cleanup lands the SA in 'error' (re-entrant) instead of reporting
-        # a false clean.
-        if self.access_app_id:
-            try:
-                client = self._get_operator_client()
-                payload = self._build_access_payload()
-                payload['enabled'] = False
-                client.sync_access_app(payload)
-                self.access_app_id = False
-            except Exception as e:
-                _logger.warning("[SA] access teardown failed sa=%s: %s",
-                                self.id, e)
+        # P2.5: tear down each route's own Cloudflare Access app (+ reusable
+        # policies) first. Per-route now — loop every route that still carries an
+        # access_app_id and push its own enabled=False teardown. Each is wrapped
+        # (best-effort inside _route_teardown via _teardown_route_access) so one
+        # Access teardown failure does NOT abort the tunnel delete below — the
+        # tunnel is the billed resource and must always get its delete attempt.
+        # The teardown only needs existing_app_id + existing_policy_ids, NOT the
+        # tunnel, so we still attempt it even when tunnel_id is already gone — a
+        # prior partial cleanup (tunnel deleted, an Access teardown failed) would
+        # otherwise leave that route's Access app/policies as permanent orphans
+        # with no retry path. A route's access_app_id is cleared only on a
+        # successful teardown, so a failure keeps it set and _do_cleanup lands
+        # the SA in 'error' (re-entrant) instead of reporting a false clean.
+        for route in access_routes:
+            pol_ids = [p.cf_policy_id for p in route.access_policy_ids
+                       if p.cf_policy_id]
+            ok = self._teardown_route_access(
+                app_id=route.access_app_id,
+                policy_ids=pol_ids,
+                app_name=route.subdomain_prefix,
+                hostname=route.hostname,
+            )
+            if ok:
+                route.access_app_id = False
+                for pol in route.access_policy_ids:
+                    if pol.cf_policy_id:
+                        pol.cf_policy_id = False
         if not self.tunnel_id:
             return
         try:
@@ -958,16 +867,11 @@ class SecurityAccess(models.Model):
             'error_message': self.error_message or '',
             'deployed_at': self.deployed_at.isoformat() if self.deployed_at else '',
             'created_at': self.create_date.isoformat() if self.create_date else '',
+            # P2.5: Access config is per-route now. Each route's to_dict()
+            # carries its own is_protected / login methods / session / policies
+            # / fail-open signal. The SA layer no longer exposes service-wide
+            # Access fields.
             'routes': [r.to_dict() for r in self.route_ids],
-            'access_enabled': self.access_enabled,
-            'session_duration': self.session_duration,
-            'login_google': self.login_google,
-            'login_email_otp': self.login_email_otp,
-            # Fail-open login-widening signal from the last sync: non-empty
-            # means requested login methods had no matching CF IdP and the
-            # restriction silently widened. Surfaced so the UI can warn.
-            'access_unresolved_idp_types': self.access_unresolved_idp_types or '',
-            'access_policies': [p.to_dict() for p in self.access_policy_ids],
             'subscription': self._get_subscription_info(),
         }
 
@@ -1026,10 +930,44 @@ class SecurityAccessRoute(models.Model):
     is_protected = fields.Boolean(
         string='Protected',
         default=False,
-        help='Per-route Access protection toggle. Wired to Cloudflare '
-             'Access in P2 — stored but inert in P1.',
+        help='Per-route Access protection toggle (P2.5). True = this route is '
+             'its own Cloudflare Access application; False = publicly reachable '
+             'through the tunnel with no Access gate.',
     )
     dns_record_id = fields.Char(string='DNS Record ID')
+
+    # ------------------------------------------------------------------ #
+    #  P2.5 per-route Access config (three pieces: policies / login /    #
+    #  session) + CF Access app id, all downshifted from the SA layer.   #
+    # ------------------------------------------------------------------ #
+    session_duration = fields.Selection(
+        selection=[
+            ('30m', '30 minutes'), ('1h', '1 hour'), ('8h', '8 hours'),
+            ('24h', '24 hours'), ('168h', '7 days'),
+        ],
+        string='Session Duration',
+        default='24h',
+        help='How long users stay authenticated before re-login (this route).',
+    )
+    login_google = fields.Boolean(string='Login: Google', default=False)
+    login_email_otp = fields.Boolean(string='Login: Email OTP', default=False)
+    access_app_id = fields.Char(
+        string='CF Access App ID', copy=False,
+        help='Cloudflare Access Application id for THIS route (set on sync).',
+    )
+    access_policy_ids = fields.One2many(
+        comodel_name='woow_paas_platform.security_access_access_policy',
+        inverse_name='route_id',
+        string='Access Policies',
+    )
+    access_unresolved_idp_types = fields.Char(
+        string='Unresolved Login Methods', copy=False,
+        help='Requested login methods (e.g. google) with no matching '
+             'Cloudflare account IdP at the last sync of THIS route. Non-empty '
+             'means the login restriction silently widened — if it emptied the '
+             'resolved set, the Access app falls back to ALL available IdPs. '
+             'Surfaced so the fail-open widening is visible, not dropped.',
+    )
 
     @api.depends('subdomain_prefix')
     def _compute_hostname(self):
@@ -1121,16 +1059,14 @@ class SecurityAccessRoute(models.Model):
                 for sa in routes.mapped('security_access_id'):
                     if sa.state in ('active', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
-            # P2: a newly-created is_protected route adds an app destination —
-            # re-push the full Access state (only when Access is on + live).
-            # Same liveness gate as the route sync above: ('active', 'error') +
-            # tunnel, so an SA stuck in 'error' with a live tunnel still
-            # converges its Access destinations instead of silently diverging.
-            for sa in routes.filtered('is_protected').mapped(
-                    'security_access_id'):
-                if (sa.access_enabled and sa.state in ('active', 'error')
-                        and sa.tunnel_id):
-                    sa._sync_access_to_operator()
+            # P2.5: a newly-created is_protected route is its own Cloudflare
+            # Access application — push its own Access state. The route sync
+            # carries its own liveness gate (no-op without a live tunnel / when
+            # not protected), so just call it on every fresh route; an
+            # unprotected route's sync is a cheap no-op.
+            if not self.env.context.get('sa_skip_route_sync'):
+                for route in routes:
+                    route._sync_access_to_operator()
         return routes
 
     def write(self, vals):
@@ -1165,18 +1101,16 @@ class SecurityAccessRoute(models.Model):
                 for sa in self.mapped('security_access_id'):
                     if sa.state in ('active', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
-            # P2: toggling a route's is_protected changes the SA's protected
-            # hostname set (app destinations) — re-push the full Access state.
-            # Only when Access is enabled (otherwise there is no app to update);
-            # ('active', 'error') + tunnel is the SAME liveness gate as the
-            # route sync above, so an is_protected toggle on an SA stuck in
-            # 'error' with a live tunnel converges the Access destinations
-            # instead of leaving them stale vs the protected route set.
-            if 'is_protected' in vals:
-                for sa in self.mapped('security_access_id'):
-                    if (sa.access_enabled and sa.state in ('active', 'error')
-                            and sa.tunnel_id):
-                        sa._sync_access_to_operator()
+            # P2.5: toggling is_protected, or changing this route's own login
+            # methods / session duration, changes its own Cloudflare Access app
+            # — re-push THIS route's Access state. is_protected=True builds/
+            # updates the app; is_protected=False tears it down. The route sync
+            # carries the liveness gate (no-op without a live tunnel), so the
+            # write trigger just forwards. Done per route in self.
+            if any(k in vals for k in ('is_protected', 'login_google',
+                                       'login_email_otp', 'session_duration')):
+                for route in self:
+                    route._sync_access_to_operator()
         return result
 
     def unlink(self):
@@ -1187,11 +1121,29 @@ class SecurityAccessRoute(models.Model):
                 "together with the Security Access instance."
             )
         affected = self.mapped('security_access_id')
-        # P2: capture which SAs are losing an is_protected route — their app
-        # destination set shrinks, so they need an Access re-sync after the
-        # unlink (computed before super().unlink() drops the rows).
-        protected_affected = self.filtered('is_protected').mapped(
-            'security_access_id')
+        # P2.5: a protected route is its OWN Cloudflare Access app. Deleting the
+        # route must tear that app (+ its reusable policies) down, but
+        # super().unlink() drops the row first, taking access_app_id and every
+        # policy cf_policy_id with it — after that the operator has no id to
+        # delete and the app/policies leak as permanent CF orphans. Capture each
+        # doomed route's teardown ids BEFORE the unlink, then push an
+        # enabled=False teardown sync carrying them.
+        teardown_by_route = {}
+        for route in self:
+            if not route.is_protected:
+                continue
+            sa = route.security_access_id
+            if not (sa and sa.state in ('active', 'error') and sa.tunnel_id):
+                continue
+            pol_ids = [p.cf_policy_id for p in route.access_policy_ids
+                       if p.cf_policy_id]
+            teardown_by_route[route.id] = {
+                'sa': sa,
+                'app_id': route.access_app_id or None,
+                'policy_ids': pol_ids,
+                'app_name': route.subdomain_prefix,
+                'hostname': route.hostname,
+            }
         # Atomicity scope — the most dangerous direction: super().unlink()
         # drops the DB row, then the sync removes it from CF. The savepoint
         # rolls the unlink back on sync failure so the row survives — without
@@ -1210,14 +1162,131 @@ class SecurityAccessRoute(models.Model):
                 if (sa.exists() and sa.state in ('active', 'error')
                         and sa.tunnel_id):
                     sa._sync_routes_to_operator()
-            for sa in protected_affected:
-                # Same ('active', 'error') + tunnel liveness gate as the route
-                # sync, so removing a protected route from an SA stuck in
-                # 'error' still shrinks its Access destinations in CF.
-                if (sa.exists() and sa.access_enabled
-                        and sa.state in ('active', 'error') and sa.tunnel_id):
-                    sa._sync_access_to_operator()
+            # P2.5: tear down each deleted protected route's own Access app
+            # using the ids captured before the unlink (the rows are gone now).
+            for info in teardown_by_route.values():
+                sa = info['sa']
+                if not sa.exists():
+                    continue
+                sa._teardown_route_access(
+                    app_id=info['app_id'],
+                    policy_ids=info['policy_ids'],
+                    app_name=info['app_name'],
+                    hostname=info['hostname'],
+                )
         return result
+
+    # ------------------------------------------------------------------ #
+    #  P2.5 per-route Access sync (declarative; one CF Access app/route)  #
+    # ------------------------------------------------------------------ #
+
+    def _build_existing_policy_ids(self):
+        """CF reusable-policy ids the operator must delete-then-recreate for
+        THIS route. Normally the surviving rows' cf_policy_id; a policy unlink
+        runs super().unlink() before the resync, so the just-deleted rows' cf
+        ids are already gone from the DB — they would never enter this list and
+        the operator (whose only delete path is this list) would leak them as
+        permanent CF orphans. unlink() captures those doomed ids and passes them
+        via context so they are reaped on the same resync."""
+        self.ensure_one()
+        ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
+        for cf_id in self.env.context.get('sa_unlinked_cf_policy_ids') or []:
+            if cf_id and cf_id not in ids:
+                ids.append(cf_id)
+        return ids
+
+    def _build_access_payload(self):
+        """Desired-state payload for the operator's /api/access/sync — scoped to
+        THIS single route. Each protected route is its own Cloudflare Access
+        application: domain = destinations = this route's hostname only."""
+        self.ensure_one()
+        sa = self.security_access_id
+        login_idp_types = []
+        if self.login_google:
+            login_idp_types.append('google')
+        if self.login_email_otp:
+            login_idp_types.append('onetimepin')
+        hostname = self.hostname or ''
+        protected = [hostname] if (self.is_protected and hostname) else []
+        return {
+            'enabled': bool(self.is_protected),
+            'canonical_name': sa.canonical_name,
+            # Per-route app display name: distinct per route so multiple apps
+            # under one tunnel never collide on a shared name.
+            'app_name': self.subdomain_prefix or sa.canonical_name,
+            'primary_hostname': hostname,
+            'protected_hostnames': protected,
+            'session_duration': self.session_duration or '24h',
+            'login_idp_types': login_idp_types,
+            'policies': [{
+                'name': p.name, 'decision': p.decision,
+                'rule_type': p.rule_type, 'rule_value': p.rule_value,
+                'precedence': p.sequence,
+            } for p in self.access_policy_ids.sorted(
+                key=lambda x: (x.sequence, x.id))],
+            'existing_app_id': self.access_app_id or None,
+            'existing_policy_ids': self._build_existing_policy_ids(),
+        }
+
+    def _sync_access_to_operator(self):
+        """Push THIS route's full desired Access state to the operator
+        (idempotent). Liveness gate matches the route/SA sync: only fires once
+        the SA has a live tunnel and is in ('active', 'error') — a stage-2
+        provision failure leaves the SA in 'error' with a live tunnel while the
+        subscription stays active, so an Access edit in that state must still
+        converge CF, not silently diverge it. is_protected=False sends an
+        enabled=False payload (teardown via existing_app_id), then clears the
+        stored app id; with no app id it is a harmless no-op.
+
+        The `sa_force_access_sync` context bypasses the STATE half of the gate
+        (tunnel_id is still required): provision/resume are deliberate
+        convergence points that run BEFORE the SA state is flipped back to
+        'active' (resume) or while it is being restored, so the create/write
+        liveness gate would otherwise skip the very push they exist to do —
+        e.g. converging a route disabled while suspended (its stored app_id must
+        be torn down at resume even though state is still 'suspended' here)."""
+        self.ensure_one()
+        sa = self.security_access_id
+        forced = self.env.context.get('sa_force_access_sync')
+        if not sa or not sa.tunnel_id:
+            return
+        if not forced and sa.state not in ('active', 'error'):
+            return
+        # Nothing to do for an unprotected route that was never an app.
+        if not self.is_protected and not self.access_app_id:
+            return
+        client = sa._get_operator_client()
+        result = client.sync_access_app(self._build_access_payload())
+        # Surface old reusable policies the operator could not delete after
+        # repointing the app — permanent Cloudflare orphans (cost/clutter) that
+        # no later re-sync reconciles, so make them observable in the log.
+        orphaned = result.get('orphaned_policy_ids') or []
+        if orphaned:
+            _logger.warning(
+                "Security Access route %s (%s, sa=%s): operator left %d orphan "
+                "CF Access policy(ies) after sync: %s", self.id,
+                self.subdomain_prefix, sa.id, len(orphaned),
+                ', '.join(orphaned))
+        # write back CF ids onto this route
+        self.access_app_id = result.get('app_id') or False
+        # Persist the operator's fail-open login-widening signal (requested
+        # login methods with no matching CF IdP). Surfaced via to_dict().
+        unresolved = result.get('unresolved_idp_types') or []
+        new_unresolved = ', '.join(unresolved) if unresolved else False
+        if self.access_unresolved_idp_types != new_unresolved:
+            self.access_unresolved_idp_types = new_unresolved
+        # map returned policy ids back onto policy rows in (sequence,id) order
+        returned = result.get('policy_ids') or []
+        policies = self.access_policy_ids.sorted(
+            key=lambda x: (x.sequence, x.id))
+        for pol, cf_id in zip(policies, returned):
+            if pol.cf_policy_id != cf_id:
+                pol.cf_policy_id = cf_id
+        if not result.get('app_id'):
+            # torn down → clear stale cf ids on this route's policies
+            for pol in self.access_policy_ids:
+                if pol.cf_policy_id:
+                    pol.cf_policy_id = False
 
     def to_dict(self):
         self.ensure_one()
@@ -1229,4 +1298,11 @@ class SecurityAccessRoute(models.Model):
             'http_host_header': self.http_host_header,
             'is_primary': self.is_primary,
             'is_protected': self.is_protected,
+            # P2.5 per-route Access config
+            'session_duration': self.session_duration,
+            'login_google': self.login_google,
+            'login_email_otp': self.login_email_otp,
+            # Fail-open login-widening signal from this route's last sync.
+            'access_unresolved_idp_types': self.access_unresolved_idp_types or '',
+            'access_policies': [p.to_dict() for p in self.access_policy_ids],
         }
