@@ -110,13 +110,25 @@ class SecurityAccess(models.Model):
              "timestamp), NOT a pre-computed duration. Consumers derive the "
              "uptime as now() - opened_at.",
     )
-
-    primary_hostname = fields.Char(
-        string='Primary Hostname',
-        compute='_compute_primary_hostname',
-        help='{canonical_name}.{paas_domain} — safe to compute: derives '
-             'from the stored canonical_name, not from the nickname.',
+    connector_version = fields.Char(
+        string='Connector Version',
+        help="cloudflared client version reported by the active connector "
+             "(from the operator tunnel-status connections payload).",
     )
+    edge_connection_count = fields.Integer(
+        string='Edge Connections',
+        default=0,
+        help="Number of active edge connections the connector holds "
+             "(len of the operator tunnel-status connections list).",
+    )
+
+    # NOTE: there is deliberately NO SA-level "primary_hostname" field. A
+    # Security Access IS a Cloudflare Tunnel with N application routes (all
+    # forwarded to the user's reverse proxy); Cloudflare Tunnel has no
+    # primary/default hostname concept. Where a single hostname is genuinely
+    # needed internally (tunnel provisioning, the service-wide Access app
+    # domain) it is derived on demand from the platform-default route via
+    # _platform_default_hostname(); it is never surfaced as "the hostname".
 
     # Access Control（P2；服務層共用設定）
     access_enabled = fields.Boolean(
@@ -169,14 +181,21 @@ class SecurityAccess(models.Model):
     #  Computes / helpers                                                #
     # ------------------------------------------------------------------ #
 
-    @api.depends('canonical_name')
-    def _compute_primary_hostname(self):
+    def _platform_default_hostname(self):
+        """Hostname of the platform-auto-created (is_primary) route, derived on
+        demand. Prefers the live route's computed hostname; falls back to
+        {canonical_name}.{paas_domain} when the route does not exist yet (e.g.
+        during initial provisioning). NOT an SA-level field — only the few
+        internal CF consumers (tunnel provisioning, service-wide Access app
+        domain) call this; it is never exposed to the UI/HA API as a singular
+        "hostname"."""
+        self.ensure_one()
+        primary = self.route_ids.filtered('is_primary')[:1]
+        if primary and primary.hostname:
+            return primary.hostname
         domain = self._get_paas_domain()
-        for record in self:
-            record.primary_hostname = (
-                f"{record.canonical_name}.{domain}"
-                if record.canonical_name else False
-            )
+        return (f"{self.canonical_name}.{domain}"
+                if self.canonical_name else '')
 
     @api.depends('route_ids')
     def _compute_route_count(self):
@@ -406,7 +425,7 @@ class SecurityAccess(models.Model):
         self.write({'state': 'provisioning', 'error_message': False})
 
         try:
-            hostname = self.primary_hostname
+            hostname = self._platform_default_hostname()
             default_url = self._get_default_service_url()
 
             # create_tunnel already configures ingress (single rule +
@@ -539,13 +558,20 @@ class SecurityAccess(models.Model):
             connections = result.get('connections', [])
             update_vals = {
                 'tunnel_status': 'connected' if connections else 'disconnected',
+                'edge_connection_count': len(connections),
             }
             if connections:
                 conn = connections[0]
                 update_vals['connector_id'] = conn.get('connector_id', '')
                 update_vals['connector_type'] = conn.get('type', '')
+                # cloudflared client version (key varies by operator/CF payload)
+                update_vals['connector_version'] = (
+                    conn.get('client_version')
+                    or conn.get('version') or '')
                 if conn.get('opened_at'):
                     update_vals['tunnel_uptime'] = conn['opened_at']
+            else:
+                update_vals['connector_version'] = ''
             self.write(update_vals)
         except PaaSOperatorError as e:
             self.write({
@@ -656,7 +682,9 @@ class SecurityAccess(models.Model):
             'enabled': bool(self.access_enabled),
             'canonical_name': self.canonical_name,
             'app_name': self.name or self.canonical_name,
-            'primary_hostname': self.primary_hostname,
+            # operator schema key (Access app domain) — derived from the
+            # platform-default route, not an SA-level "primary hostname" field
+            'primary_hostname': self._platform_default_hostname(),
             'protected_hostnames': protected,
             'session_duration': self.session_duration or '24h',
             'login_idp_types': login_idp_types,
@@ -925,7 +953,8 @@ class SecurityAccess(models.Model):
             'tunnel_uptime': self.tunnel_uptime or '',
             'connector_id': self.connector_id or '',
             'connector_type': self.connector_type or '',
-            'primary_hostname': self.primary_hostname or '',
+            'connector_version': self.connector_version or '',
+            'edge_connection_count': self.edge_connection_count,
             'error_message': self.error_message or '',
             'deployed_at': self.deployed_at.isoformat() if self.deployed_at else '',
             'created_at': self.create_date.isoformat() if self.create_date else '',
