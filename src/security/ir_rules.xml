@@ -181,24 +181,33 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
-        <!-- SecurityAccessAccessPolicy (P2): SAME read/write split as the
-             SecurityAccess/Route sub-models, walking the parent SA's
-             workspace.access_ids. Access policies ARE the Cloudflare Access
-             allow/deny authentication gate — a MORE sensitive resource than
-             routes — so the ir.rule layer must itself encode the owner/admin
-             role restriction, not lean solely on the BFF.
+        <!-- SecurityAccessAccessPolicy (P2 → P2.5 per-route): SAME read/write
+             split as the SecurityAccess/Route sub-models, walking the parent
+             SA's workspace.access_ids via the stored related security_access_id
+             (P2.5: the policy binds to route_id, but security_access_id is a
+             store=True related the rule domain can still traverse). Access
+             policies ARE the Cloudflare Access allow/deny authentication gate —
+             a MORE sensitive resource than routes — so the ir.rule layer must
+             itself encode the owner/admin role restriction.
 
-             Earlier design used a single member full-CRUD rule, justified by
-             "the only mutation path is the /woow BFF (Task 10), which gates
-             every write behind role=owner/admin + _check_operation_allowed".
-             But that BFF is NOT present in this slice (no access-policy
-             @route, no role guard in the policy model write()), so a single
-             full-CRUD rule let a plain role='user' workspace member directly
-             ORM-create/edit/delete access policies — e.g. add an 'allow
-             email_domain' rule to open a protected hostname, or delete a
-             'deny' rule — skipping BOTH the owner/admin role gate AND the
-             subscription _check_operation_allowed check. two-layer-acl-lockstep
-             means the rule must encode the role restriction too. Split into:
+             two-layer-acl-lockstep: this ir.rule (layer 1) and the BFF role
+             gate (layer 2) BOTH encode the owner/admin restriction; tightening
+             or loosening EITHER layer requires the matching change in the other,
+             or the two silently diverge. Layer 2 today is
+             controllers/security_access.py:
+               - api_sa_access_policies — create/update/delete role gate at :642
+                 (role not in [ROLE_OWNER, ROLE_ADMIN]) + _check_operation_allowed
+               - api_sa_route_access_config — per-route config role gate at :679
+             The BFF gate ALONE is not sufficient because the Odoo backend form
+             (and any direct ORM walk, e.g. a M2M widget) bypasses the
+             controller entirely — without this rule a plain role='user'
+             workspace member could ORM-create/edit/delete policies (add an
+             'allow email_domain' rule to open a protected hostname, or delete a
+             'deny' rule), skipping both the BFF role gate AND the subscription
+             _check_operation_allowed check. Conversely the rule alone is not
+             enough either: it grants owner/admin full CRUD, but the BFF adds the
+             _check_operation_allowed (subscription state) gate the rule can't
+             express — hence both layers, in lock-step. Split into:
                - read rule: ALL workspace members (any role) — needed so a
                  plain 'user' member can still list/get via the BFF.
                - write/create/unlink rule: owner/admin members only, via the
