@@ -37,8 +37,8 @@ def _make_targz(files, links=None, special=None):
     return buf.getvalue()
 
 
-# A compliant bundle: SKILL.md at tar root with name + description, plus the
-# default entrypoint scripts/main.py present.
+# A SKILL.md template with name + description (version also included). Callers
+# add scripts/main.py and other optional files as needed via _make_targz.
 def _compliant_skill_md(name='demo', description='A demo skill'):
     return (
         '---\n'
@@ -449,8 +449,9 @@ class TestSkillUploadWizard(TransactionCase):
         self.assertEqual(nxt['res_model'], 'woow_paas_platform.skill')
         return nxt
 
-    def test_warn_missing_entrypoint_still_creates(self):
-        # Compliant SKILL.md but no scripts/main.py present.
+    def test_skill_md_only_no_warnings(self):
+        # Claude Code 模型：skill 只要 SKILL.md（無 script）即合法，且不應有任何
+        # 警告（移除舊的「缺 entrypoint」warning A）。回傳純 act_window、非警告通知。
         raw = _make_targz({
             'SKILL.md': _compliant_skill_md(name=f'up-{self.suffix}'),
         })
@@ -458,9 +459,10 @@ class TestSkillUploadWizard(TransactionCase):
         action = wiz.action_upload()
         skill = self.Skill.search([('name', '=', f'up-{self.suffix}')], limit=1)
         self.assertEqual(len(skill), 1)
-        nxt = self._assert_warning_action(action)
-        self.assertEqual(nxt['res_id'], skill.id)
-        self.assertIn('entrypoint', action['params']['message'])
+        # 純 act_window（非 display_notification）＝ 0 警告
+        self.assertEqual(action['type'], 'ir.actions.act_window')
+        self.assertEqual(action['res_model'], 'woow_paas_platform.skill')
+        self.assertEqual(action['res_id'], skill.id)
 
     def test_warn_appledouble_still_creates(self):
         raw = _make_targz({

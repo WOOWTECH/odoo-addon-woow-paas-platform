@@ -45,8 +45,9 @@ class SkillUploadWizard(models.TransientModel):
         cryptic tool_error on the pod's first invoke. sha256 is still
         computed over the RAW bytes (pod fetch contract is byte-exact).
 
-        Validation rules mirror paas-agent-runtime ``runtime/skills/{cache,
-        loader}.py`` (the contract SSOT); see ``skill_bundle_validation``.
+        Validation rules mirror the paas-agent-runtime Claude Code skill bundle
+        contract (SKILL.md + optional files, no required entrypoint); see
+        ``skill_bundle_validation``.
         """
         self.ensure_one()
         if self.scope == 'user' and not self.project_id:

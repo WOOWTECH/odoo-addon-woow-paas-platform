@@ -4,21 +4,18 @@
         <!-- Demo/starter system skill: available to every project's pod.
              noupdate so admins may delete it; bundle bytes inlined as base64,
              sha256 must match the raw tar.gz bytes the pod fetches.
-             CONTRACT (issue #135 + #139):
-               1. the tar root MUST contain SKILL.md directly (no wrapper dir)
-                  — agent-runtime cache.py reads dest/SKILL.md after extract.
-               2. the entrypoint MUST be runnable: loader.py defaults entrypoint
-                  to scripts/main.py; subprocess_runner runs `python3 <entrypoint>`
-                  with input_args as JSON on stdin and stdout == tool_result. So
-                  the script needs a __main__ that reads json.load(sys.stdin) and
-                  writes its result to stdout — a bare `def run()` produces nothing.
+             Claude Code model: the bundle is SKILL.md-only (no executable
+             entrypoint). The SKILL.md body IS the skill's instructions, injected
+             into the agent context via load_skill; there is no scripts/main.py.
+             The tar root MUST contain SKILL.md directly (no wrapper dir) —
+             agent-runtime cache.py reads dest/SKILL.md after extract.
              See src/data/demo_skills/hello-world-0.1.0.tar.gz; if you re-pack,
              update both the base64 above and bundle_sha256 below, and bump the
              manifest + add a migration (noupdate records don't auto-update). -->
         <record id="demo_attachment_hello_world" model="ir.attachment">
             <field name="name">hello-world-0.1.0.tar.gz</field>
             <field name="mimetype">application/gzip</field>
-            <field name="datas">H4sIAAAAAAAC/+2VPW/bMBCGPfNXXNUhNhCpii3HgAEXyNaPoBk8dBRo6WwzlUiBPNk1iv73krTTpC2KokPcofcsoijy+J6Iu3f5/u3tbdbWg2ck91wXRXx6fn7mk/H4+/g4P7sqxgPIB2egdyStP3Lwf5KmqdCyxTlssWlMuje2qcUOrVNGzyHPrrJc1OgqqzqKUzdQY2vAHRxhC+6TahqgrSTYWERyfozQO7SZkD1tjZ3D3ph92jWS1sa2AjXZQ2eUpjkcw7pXrVQ66w4iqHkJb4IS+BiViBtolVatbE7HxvPkTqpGrhoEMoBe7QE6a+6xokwMmL/g4Qaeu/5n0+lv6//X8ayYFAOYcv2f7f5PFfhP+v91Mfnx/q/y2WTK/f8cJEnypPE/7bGPfToTYnmc+oxVH1wAKuO/yopgKDd+YWp7TapFcP3KN+IKnSv9lEY7mguAFJTueiql3TiQ1qodgnTwbnn3AXwwR7XScdne+0ho56Ac7K0iQh06vF9geoIVVqbFo8OQMU1p0fUNCZ+DUG1nLMG9M/ph7B1KCO9da/BShsGSyijD2w5ZWECSjCB9HV6CRgCL1FsN6yT6zyV8edwCxsJF/EMXX18kPqpaQ1kG3yxLWPhQZRkKqCyTY6iY6CKqyRoj66HXksU0R/H76dUnlYU0cRgUhk3ZBmmYxDOTy6BwNGJDYxiGYRiGYRiGYRiGYRiGYRiGYRiGYf7MN9ADk40AKAAA</field>
+            <field name="datas">H4sIAF9YJ2oC/+3SsU7DMBAG4Mx+ipMYWEiUikKlbN1AdGPobJprY2r7IttplLcnSWmF2IGB/1vuZFn3nyW/vjxvNoWrsx9Ujh6Xy7mOvtdyuXq49ufz1WJxn1GZ/YIuJh2Isn8qz3PlteOKGrZW8l6CrdWJQzTiKyqLRVGqmuMumDbNR2uq2QnFISZ2FI/GWkqNTnQIzCmOPVMXORRKd6mRUFEv0uet1Wkvwakp8YaepjTazmlqTc5447T9HD3P1CdtrH6zTEmIx40GaoO88y4VtG3YX4MuwYN0SgLpeIy0n5qvT5on31Hg2IqvqTepGS/sg2Ff2+E8wvgDeZmKSo2JZM6PuWx+G2n6K2lMnDcsVAYAAAAAAAAAAAAAAAAAAAAAAPB3PgB2xFqFACgAAA==</field>
         </record>
 
         <record id="demo_skill_hello_world" model="woow_paas_platform.skill">
@@ -28,7 +25,7 @@
             <field name="version">0.1.0</field>
             <field name="scope">system</field>
             <field name="state">published</field>
-            <field name="bundle_sha256">88fd964a8d82c8d6d9868b65868f9885091517c9c064d835f7b90cacd22ea8b3</field>
+            <field name="bundle_sha256">f682398bd86af29702d750c507c5e881befbbe878a91704a4756a14a831011a6</field>
             <field name="bundle_attachment_id" ref="demo_attachment_hello_world"/>
             <field name="skill_metadata">{"name": "hello-world", "version": "0.1.0", "description": "A demo system skill that greets the user.", "author": "woow-platform"}</field>
         </record>

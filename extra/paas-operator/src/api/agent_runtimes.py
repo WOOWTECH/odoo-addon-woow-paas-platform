@@ -187,6 +187,17 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
                 f"must be one of {sorted(_VALID_PROBE_STYLES)}"
             )
         values["probe"] = {"style": probe_style}
+    # skill bash sidecar (Drop B): set skillRunner.enabled EXPLICITLY (both true and
+    # false) so the operator env is AUTHORITATIVE over the chart default. This is the
+    # one place we deliberately DON'T use the externalEgress omit-pattern: the
+    # agent-runtime chart defaults skillRunner.enabled=true (sidecar-on once the
+    # sidecar-aware chartVersion lands), so an omit-when-disabled forward would let the
+    # chart default win → sidecar stuck ON, operator env unable to disable it (paas-cd
+    # land recon). Explicit set makes AGENT_RUNTIME_SKILL_RUNNER_ENABLED a real
+    # fleet-wide kill switch (env=false disables without a chart rollback) and removes
+    # the silent-no-op both ways. Default false → sidecar off until the coordinated
+    # Drop B land (image with bash_bridge + env flipped true), else it crashloops.
+    values["skillRunner"] = {"enabled": settings.agent_runtime_skill_runner_enabled}
     return values
 
 
