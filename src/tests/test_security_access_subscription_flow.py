@@ -823,3 +823,170 @@ class TestSecurityAccessAccessControl(TransactionCase):
             res = self.controller._delete_policy(sa, pol.id)
         self.assertTrue(res['success'], res.get('error'))
         self.assertEqual(len(self._sa_policies(sa)), 0)
+
+    # ==================== P2.5 Phase 3: per-route CRUD ====================
+
+    def _second_route(self, sa, mc, prefix='ac-second'):
+        """A non-primary protected route on the same SA, so per-route create
+        can target a route other than the primary one."""
+        with patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            return self.env[
+                'woow_paas_platform.security_access_route'].create({
+                    'security_access_id': sa.id,
+                    'subdomain_prefix': prefix, 'is_protected': True})
+
+    def test_create_policy_on_explicit_route_id(self):
+        """Phase 3: _create_policy 帶 route_id 可把 policy 綁到 SA 底下的任一
+        route（非僅 primary），並真的落在指定的那條 route 上。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        second = self._second_route(sa, mc)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._create_policy(sa, {
+                'name': 'on-second', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'second.com',
+                'route_id': second.id})
+        self.assertTrue(res['success'], res.get('error'))
+        pol = self._sa_policies(sa).filtered(lambda p: p.name == 'on-second')
+        self.assertEqual(len(pol), 1)
+        self.assertEqual(pol.route_id, second)
+        self.assertNotEqual(pol.route_id, sa.route_ids.filtered('is_primary'))
+
+    def test_create_policy_cross_sa_route_id_denied(self):
+        """Phase 3 white-list 守線：route_id 指向『另一個 SA』的 route → 必須被
+        拒（Route not found），policy 不得建到別 SA 的 route。跨 SA 注入面。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        # A second SA in the SAME workspace with its own route.
+        other_sa = self.SA.create({
+            'name': 'Other GW X', 'workspace_id': self.workspace.id})
+        other_route = self.env[
+            'woow_paas_platform.security_access_route'].create({
+                'security_access_id': other_sa.id,
+                'subdomain_prefix': 'cross-sa-route'})
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._create_policy(sa, {
+                'name': 'cross', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'cross.com',
+                'route_id': other_route.id})
+        self.assertFalse(res['success'])
+        self.assertIn('route not found', (res.get('error') or '').lower())
+        # nothing landed on the other SA's route
+        self.assertFalse(other_route.access_policy_ids)
+        # nor (under the gated sa's pin) was a policy created at all
+        self.assertFalse(self._sa_policies(sa).filtered(
+            lambda p: p.name == 'cross'))
+
+    def test_update_route_access_writes_per_route(self):
+        """Phase 3: _update_route_access 寫進指定 route 的 is_protected /
+        login / session（非 SA 層、非 primary-only）。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        second = self._second_route(sa, mc, prefix='ac-cfg-second')
+        # start it unprotected so the flip is observable
+        with patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            second.write({'is_protected': False})
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._update_route_access(sa, second.id, {
+                'is_protected': True, 'login_google': True,
+                'session_duration': '8h'})
+        self.assertTrue(res['success'], res.get('error'))
+        second.invalidate_recordset(
+            ['is_protected', 'login_google', 'session_duration'])
+        self.assertTrue(second.is_protected)
+        self.assertTrue(second.login_google)
+        self.assertEqual(second.session_duration, '8h')
+        # primary route untouched (per-route isolation)
+        primary = sa.route_ids.filtered('is_primary')
+        self.assertFalse(primary.is_protected)
+
+    def test_update_route_access_whitelist_only(self):
+        """Phase 3: _update_route_access 的 whitelist 是 server-owned per-route
+        access_app_id / access_unresolved_idp_types 的唯一防線 —— forged 鍵全
+        部被丟棄，不得寫進 route。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        route = sa.route_ids.filtered('is_primary')
+        route.access_unresolved_idp_types = 'google'
+        orig_app_id = route.access_app_id
+        orig_unresolved = route.access_unresolved_idp_types
+        mc.sync_access_app.reset_mock()
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._update_route_access(sa, route.id, {
+                'access_app_id': 'attacker-app',
+                'access_unresolved_idp_types': '',
+                'security_access_id': 999999,
+                'is_primary': False})
+        self.assertTrue(res['success'], res.get('error'))
+        route.invalidate_recordset(
+            ['access_app_id', 'access_unresolved_idp_types', 'is_primary'])
+        self.assertEqual(route.access_app_id, orig_app_id)
+        self.assertEqual(route.access_unresolved_idp_types, orig_unresolved)
+        self.assertEqual(route.access_unresolved_idp_types, 'google')
+        # is_primary is NOT in the whitelist → unchanged
+        self.assertTrue(route.is_primary)
+        # vals ended empty → no operator sync fired
+        mc.sync_access_app.assert_not_called()
+
+    def test_update_route_access_cross_sa_route_id_denied(self):
+        """Phase 3 white-list：route_id 指向另一個 SA 的 route → 拒（Route not
+        found），不得翻動別 SA route 的 access config。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        other_sa = self.SA.create({
+            'name': 'Other GW Cfg', 'workspace_id': self.workspace.id})
+        other_route = self.env[
+            'woow_paas_platform.security_access_route'].create({
+                'security_access_id': other_sa.id,
+                'subdomain_prefix': 'cross-sa-cfg', 'is_protected': False})
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            res = self.controller._update_route_access(sa, other_route.id, {
+                'is_protected': True})
+        self.assertFalse(res['success'])
+        self.assertIn('route not found', (res.get('error') or '').lower())
+        other_route.invalidate_recordset(['is_protected'])
+        self.assertFalse(other_route.is_protected)
+
+    def test_policy_list_filters_by_route_id(self):
+        """Phase 3: access-policies list 帶 route_id 只回該 route 的 policy；
+        cross-SA route_id 回空（never 另一 SA 的 rows）。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        primary = sa.route_ids.filtered('is_primary')
+        second = self._second_route(sa, mc, prefix='ac-list-second')
+        with patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            self.env[
+                'woow_paas_platform.security_access_access_policy'].create([
+                    {'route_id': primary.id, 'name': 'on-primary',
+                     'decision': 'allow', 'rule_type': 'email_domain',
+                     'rule_value': 'p.com'},
+                    {'route_id': second.id, 'name': 'on-2nd',
+                     'decision': 'allow', 'rule_type': 'email_domain',
+                     'rule_value': 's.com'}])
+        with _patch_request(self.env(user=self.env.user)), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            scoped = self.controller.api_sa_access_policies(
+                workspace_id=self.workspace.id, sa_id=sa.id,
+                action='list', route_id=second.id)
+            cross = self.controller.api_sa_access_policies(
+                workspace_id=self.workspace.id, sa_id=sa.id,
+                action='list', route_id=999999)
+        self.assertTrue(scoped['success'])
+        self.assertEqual([p['name'] for p in scoped['data']], ['on-2nd'])
+        # unknown / cross-SA route_id → empty, never the SA's other policies
+        self.assertTrue(cross['success'])
+        self.assertEqual(cross['data'], [])

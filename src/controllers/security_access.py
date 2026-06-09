@@ -621,12 +621,20 @@ class SecurityAccessController(Controller):
             # reaches here (_get_workspace_or_error gates first), and a member
             # sees only their own SA's policies via the row-level rule.
             #
-            # P2.5 bridge: policies bind to routes now. Until the Phase-3 BFF
-            # exposes per-route policy CRUD, list every policy across the SA's
-            # routes (walk via the stored related security_access_id).
+            # P2.5 per-route: policies bind to routes. List every policy across
+            # the SA's routes via the stored related security_access_id. An
+            # optional route_id filter (pinned to the gated SA) lets the
+            # per-route UI scope the list to one Application Route; an unknown /
+            # cross-SA route_id yields an empty list (never another SA's rows).
+            domain = [("security_access_id", "=", sa.id)]
+            if kwargs.get("route_id"):
+                route = self._sa_route(sa, kwargs["route_id"])
+                if not route:
+                    return {"success": True, "data": []}
+                domain = [("route_id", "=", route.id)]
             policies = request.env[
                 "woow_paas_platform.security_access_access_policy"].search(
-                    [("security_access_id", "=", sa.id)])
+                    domain)
             return {"success": True,
                     "data": [p.to_dict() for p in policies]}
 
@@ -646,20 +654,66 @@ class SecurityAccessController(Controller):
             return self._delete_policy(sa, kwargs.get("policy_id"))
         return {"success": False, "error": f"Unknown action: {action}"}
 
+    # ==================== Per-route Access config (P2.5 Phase 3) ====
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/security-accesses/<int:sa_id>/routes/<int:route_id>/access-config",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_sa_route_access_config(self, workspace_id: int, sa_id: int,
+                                   route_id: int,
+                                   **kwargs: Any) -> dict[str, Any]:
+        """Per-route Access config (P2.5 Phase 3): set THIS route's own
+        is_protected / login methods / session duration. Each protected route
+        is its own Cloudflare Access application, so the config is route-scoped.
+        route_id comes from the URL and is pinned to the gated SA (route must be
+        in sa.route_ids); a cross-SA route_id is rejected, never written."""
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return {"success": False,
+                    "error": "Workspace not found or access denied"}
+        sa = self._get_sa_or_error(sa_id, workspace)
+        if not sa:
+            return {"success": False, "error": "Security access not found"}
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Insufficient permissions"}
+        try:
+            sa._check_operation_allowed(operation='write')
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        return self._update_route_access(sa, route_id, kwargs)
+
     # ---- Access Control helpers ----
     #
-    # P2.5 bridge: Access config + policies are per-route now (each protected
-    # route is its own Cloudflare Access app). The Phase-3 BFF will expose
-    # per-route endpoints; until then these SA-level helpers operate on the
-    # SA's primary (is_primary) route so the existing UI/contract keeps working.
-    # The migration likewise re-homes legacy SA-level policies onto the primary
-    # route, so this bridge is consistent with the migrated data.
+    # P2.5: Access config + policies are per-route now (each protected route is
+    # its own Cloudflare Access app). The per-route endpoints below take a
+    # route_id pinned to the gated SA. The legacy SA-level helpers
+    # (_update_access_config / _create_policy without route_id) remain as a
+    # P2.5 bridge that acts on the SA's primary (is_primary) route so the
+    # not-yet-migrated Phase 4 frontend keeps working; the migration re-homed
+    # legacy SA-level policies onto the primary route, so the bridge is
+    # consistent with the migrated data. Remove the bridge once Phase 4 ships.
 
     def _sa_access_route(self, sa):
-        """The route these SA-level Access helpers act on (P2.5 bridge): the
-        primary route. Returns an empty recordset if the SA has no route yet
-        (pre-provision) so callers can surface a clean error."""
+        """The route the legacy SA-level Access helpers act on (P2.5 bridge):
+        the primary route. Returns an empty recordset if the SA has no route
+        yet (pre-provision) so callers can surface a clean error."""
         return sa.route_ids.filtered("is_primary")[:1]
+
+    def _sa_route(self, sa, route_id):
+        """Resolve a client-supplied route_id, PINNED to the gated SA: the
+        route must belong to this SA (route.security_access_id == sa.id, i.e.
+        route_id in sa.route_ids). A cross-SA / unknown route_id returns an
+        empty recordset so callers deny it — a client can never write a policy
+        or flip access config on another SA's route. sa.route_ids is itself
+        ir.rule-filtered (no .sudo()), so this also denies routes the caller
+        can't see."""
+        try:
+            rid = int(route_id)
+        except (TypeError, ValueError):
+            return sa.route_ids.browse()
+        return sa.route_ids.filtered(lambda r: r.id == rid)[:1]
 
     def _update_access_config(self, sa, kwargs) -> dict[str, Any]:
         # Whitelist only: never pass raw kwargs to write() — access_app_id and
@@ -686,10 +740,50 @@ class SecurityAccessController(Controller):
             _logger.exception("[SA] Failed to update access config: %s", e)
             return {"success": False, "error": str(e)}
 
+    def _update_route_access(self, sa, route_id, kwargs) -> dict[str, Any]:
+        """Per-route Access config write (P2.5 Phase 3). route_id is pinned to
+        the gated SA via _sa_route. Strict whitelist: only is_protected /
+        login_google / login_email_otp / session_duration are client-settable.
+        The server-owned per-route access_app_id / access_unresolved_idp_types
+        (set by the operator sync) are never written from kwargs — the route
+        write() immutable guard only covers subdomain_prefix, so this whitelist
+        is the sole defense for those Chars (mirrors _update_access_config)."""
+        route = self._sa_route(sa, route_id)
+        if not route:
+            return {"success": False, "error": "Route not found"}
+        vals = {}
+        # Accept both 'is_protected' (per-route native) and the legacy
+        # 'access_enabled' alias so an in-flight Phase 4 client can use either.
+        if "is_protected" in kwargs:
+            vals["is_protected"] = bool(kwargs["is_protected"])
+        elif "access_enabled" in kwargs:
+            vals["is_protected"] = bool(kwargs["access_enabled"])
+        for f in ("login_google", "login_email_otp"):
+            if f in kwargs:
+                vals[f] = bool(kwargs[f])
+        if kwargs.get("session_duration"):
+            vals["session_duration"] = kwargs["session_duration"]
+        try:
+            if vals:
+                route.write(vals)
+            return {"success": True, "data": route.to_dict()}
+        except Exception as e:
+            _logger.exception("[SA] Failed to update route access: %s", e)
+            return {"success": False, "error": str(e)}
+
     def _create_policy(self, sa, kwargs) -> dict[str, Any]:
         if not kwargs.get("name"):
             return {"success": False, "error": "name is required"}
-        route = self._sa_access_route(sa)
+        # P2.5 Phase 3: a client may target ANY of the gated SA's routes via
+        # route_id (pinned to the SA). A cross-SA / unknown route_id is rejected
+        # — never written to another SA's route. Absent route_id, fall back to
+        # the SA's primary route (P2.5 bridge for the not-yet-migrated frontend).
+        if kwargs.get("route_id"):
+            route = self._sa_route(sa, kwargs["route_id"])
+            if not route:
+                return {"success": False, "error": "Route not found"}
+        else:
+            route = self._sa_access_route(sa)
         if not route:
             return {"success": False,
                     "error": "No application route to attach a policy to yet"}
@@ -707,8 +801,11 @@ class SecurityAccessController(Controller):
                 return {"success": False,
                         "error": "Access policy quota exceeded: plan allows "
                                  "%d polic(ies)" % quota}
-        # Whitelist only: cf_policy_id / security_access_id are server-owned;
-        # route_id is pinned to the gated SA's primary route, never from kwargs.
+        # Whitelist only: cf_policy_id / security_access_id / access_app_id are
+        # server-owned and never taken from kwargs. route_id is set from the
+        # already-resolved, SA-pinned `route` recordset (NOT the raw kwargs id),
+        # so the client's value only selects a route within the gated SA and can
+        # never bind the policy to another SA's route.
         try:
             pol = Policy.create({
                 "route_id": route.id,
