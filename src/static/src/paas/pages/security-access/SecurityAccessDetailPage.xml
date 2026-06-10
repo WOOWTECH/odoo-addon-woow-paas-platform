@@ -139,7 +139,7 @@
                 <tr><th>Hostname</th><th>Service</th><th>Host header</th><th></th></tr>
               </thead>
               <tbody>
-                <t t-foreach="state.sa.routes" t-as="route" t-key="route.id">
+                <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
                   <tr>
                     <td>
                       <t t-esc="route.hostname"/>
@@ -196,7 +196,7 @@
           </WoowCard>
 
           <!-- One card per route -->
-          <t t-foreach="state.sa.routes" t-as="route" t-key="route.id">
+          <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
             <WoowCard shadow="true">
               <div class="o_woow_sa_access__route_head">
                 <div class="o_woow_sa_access__route_host">

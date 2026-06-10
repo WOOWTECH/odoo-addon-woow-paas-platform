@@ -207,7 +207,7 @@
 
   // Fail-open login-widening warning banner: shown when the operator could not
   // resolve some requested login method to a Cloudflare IdP (the restriction
-  // may have silently widened to all IdPs). Amber to match the protect_hint.
+  // may have silently widened to all IdPs). Amber to signal a soft warning.
   &__idp_warning {
     display: flex;
     align-items: flex-start;
