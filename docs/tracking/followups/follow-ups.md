@@ -1634,3 +1634,16 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
     才有 P2 Access endpoints **且**含 delete-path 修復（PR #166）；一併也帶上 P1 operator 變更（prod 落後多版）。
     走 Fleet image-only（`paas-operator/values-prod.yaml`，paas-app-bundle-cd）。bump 後可比照 stg 做
     operator 級 live 寫測閉環（含 token live 驗證）。owner=platform / prod 維運。
+
+- **F-SA-5**（**post-migration 觀測 / OPEN**，priority:low，scope=P2.5 升級後 stg operator review；2026-06-10）：
+  **P2.5 migration `18.0.1.0.37` 的 policy fan-out 可讓「多 protected route」的 SA 升級後落在 per-SA
+  policy quota 之上，擋住後續使用者新增 policy。** quota 語意在 P2.5 改了——`_check_policy_quota`
+  count 的是 `search_count([('security_access_id','=',sa.id)])`＝該 SA 跨**所有** protected route 的
+  policy 總量；但 per-SA 上限（`plan.sa_max_access_policies`）沒變。migration step 2 fan-out 把每條
+  legacy policy 複製到每條 protected route（`cr.sa_skip_policy_quota` bypass 讓 migration 本身不中斷），
+  故 N legacy policy × M protected route → 升級後 N×M 列都算進同一個未變的 cap。**結果**：該 SA 升級後
+  可能 count > quota，下一次使用者 `_create_policy`（BFF）被「quota exceeded」拒絕，直到手動刪到 cap 以下；
+  純改 name/decision/rule 不受影響（`@api.constrains` 對那些 vals 不 fire）。**stg-only**（prod migration
+  no-op、prod operator 仍 pre-P2）。已在 `post-migrate.py` docstring（step 2「POST-MIGRATION QUOTA
+  CAVEAT」）標註。**建議**：升級後請維運人員 review 多 protected route SA 的 per-SA policy 配額；或日後
+  考慮在 count 端對「同 route 內完全相同的 fanned policy」去重。owner=platform / stg 維運。

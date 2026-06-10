@@ -28,6 +28,20 @@ What this migration does, per existing Security Access DB row:
    its destinations, so each per-route app gets the same set). Zero protected
    routes → attach to the primary route as an inert (unprotected) carrier so no
    policy is silently dropped; it stays inert until that route is protected.
+
+   POST-MIGRATION QUOTA CAVEAT (multi-protected-route SAs): the P2.5 quota
+   (_check_policy_quota) counts EVERY policy across all of the SA's routes via
+   the stored related security_access_id — but the per-SA cap
+   (plan.sa_max_access_policies) is unchanged. An SA with N legacy policies × M
+   protected routes ends with N×M rows counted against the same budget, so it may
+   legitimately land ABOVE its cap. The in-migration fan-out is bypassed (see the
+   sa_skip_policy_quota note below), so the migration itself succeeds, but the
+   AFTER state can sit over-quota: the next user-driven policy CREATE is rejected
+   ('quota exceeded') until the operator deletes back under cap. Plain name /
+   decision / rule edits are unaffected (the @api.constrains does not fire for
+   those vals). This is stg-only (prod migration is a no-op). Operators should
+   review per-SA policy quotas post-migration on multi-protected-route SAs. See
+   docs/tracking/followups/follow-ups.md.
 3. Clear the orphan SA-level access_app_id column and LOG the old id, so a stg
    operator can manually tear down the single legacy CF Access app (the
    per-route re-sync rebuilds one app per protected route — see Phase 5).
