@@ -317,17 +317,6 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
-  async toggleRouteProtected(route, ev) {
-    const res = await securityAccessService.updateRoute(
-      this.props.workspaceId, this.props.saId, route.id,
-      { is_protected: ev.target.checked });
-    if (res.success) {
-      await this.loadDetail();
-    } else {
-      this.state.error = res.error;
-    }
-  }
-
   // ---- SkipTrialModal 接線（鏡像 SmartHomeDetailPage） ----
   loadSkipTrialEstimate = () => {
     return securityAccessService.getSkipTrialEstimate(

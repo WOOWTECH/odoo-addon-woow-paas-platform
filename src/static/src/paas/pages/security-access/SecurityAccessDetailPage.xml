@@ -136,7 +136,7 @@
                forwarded to the service URL with the Host header set.</p>
             <table class="o_woow_sa_detail__routes">
               <thead>
-                <tr><th>Hostname</th><th>Service</th><th>Protected</th><th>Host header</th><th></th></tr>
+                <tr><th>Hostname</th><th>Service</th><th>Host header</th><th></th></tr>
               </thead>
               <tbody>
                 <t t-foreach="state.sa.routes" t-as="route" t-key="route.id">
@@ -145,21 +145,6 @@
                       <t t-esc="route.hostname"/>
                     </td>
                     <td><t t-esc="route.service_url"/></td>
-                    <td>
-                      <input type="checkbox" class="o_woow_checkbox"
-                             t-att-checked="route.is_protected"
-                             t-att-title="state.sa.access_enabled ? '' : 'Marking a route Protected has no effect until Access is enabled in the Access tab.'"
-                             t-on-change="(ev) => this.toggleRouteProtected(route, ev)"/>
-                      <!-- P2: the toggle is always live (so routes can be
-                           pre-marked before Access is enabled), but its CF
-                           effect only kicks in once Access is on. Surface that
-                           coupling so a checked box on a disabled SA isn't
-                           mistaken for active protection. -->
-                      <span t-if="route.is_protected and !state.sa.access_enabled"
-                            class="o_woow_sa_detail__protect_hint">
-                        Enable Access to apply
-                      </span>
-                    </td>
                     <td><t t-esc="route.http_host_header ? 'Yes' : 'No'"/></td>
                     <td>
                       <WoowButton t-if="!route.is_primary" variant="'danger'"
