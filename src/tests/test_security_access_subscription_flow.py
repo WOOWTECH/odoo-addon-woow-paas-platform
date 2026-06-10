@@ -774,11 +774,17 @@ class TestSecurityAccessAccessControl(TransactionCase):
         self.assertEqual(pol.route_id, route)
 
     def test_create_policy_whitelist_only(self):
-        """P2.5: _create_policy must drop client-controlled cf_policy_id and pin
-        route_id to the gated SA's primary route — never trust the client's
-        value. Send a forged cf_policy_id + route_id pointing at ANOTHER SA's
-        route and assert the created row keeps cf_policy_id empty and is pinned
-        to sa's primary route."""
+        """P2.5 Phase 3 white-list: _create_policy never trusts the client for
+        server-owned fields. Two prongs:
+
+        (1) a cross-SA route_id (pointing at ANOTHER SA's route) is REJECTED
+            ('Route not found') — not silently re-pinned, and certainly never
+            written to the other SA's route (cross-SA injection deny). This is
+            the security-critical change vs. the P2 bridge, where route_id was
+            ignored and the policy always landed on the primary route.
+        (2) with a VALID same-SA route_id, a forged cf_policy_id is dropped
+            (server-owned: the row only gets a cf id from the operator's
+            returned policy_ids on sync)."""
         mc = self._mock()
         sa = self._active_sa(mc)
         route = sa.route_ids.filtered('is_primary')
@@ -792,18 +798,30 @@ class TestSecurityAccessAccessControl(TransactionCase):
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
-            res = self.controller._create_policy(sa, {
+            # (1) cross-SA route_id → deny, nothing created on either SA.
+            cross = self.controller._create_policy(sa, {
+                'name': 'cross', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'cross.com',
+                'cf_policy_id': 'attacker-set',
+                'route_id': other_route.id})
+            # (2) valid same-SA route_id + forged cf_policy_id → cf dropped.
+            ok = self.controller._create_policy(sa, {
                 'name': 'corp', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'acme.com',
                 'cf_policy_id': 'attacker-set',
-                'route_id': other_route.id})
-        self.assertTrue(res['success'], res.get('error'))
+                'route_id': route.id})
+        # (1) cross-SA route_id rejected; no policy on either SA.
+        self.assertFalse(cross['success'])
+        self.assertIn('route not found', (cross.get('error') or '').lower())
+        self.assertFalse(self._sa_policies(sa).filtered(
+            lambda p: p.name == 'cross'))
+        self.assertFalse(other_route.access_policy_ids)
+        # (2) created on the chosen (primary) route, cf_policy_id NOT the forged
+        # value (server-owned).
+        self.assertTrue(ok['success'], ok.get('error'))
         pol = self._sa_policies(sa).filtered(lambda p: p.name == 'corp')
         self.assertEqual(len(pol), 1)
-        # cf_policy_id is server-owned: the forged value was dropped (the row
-        # only gets a cf id from the operator's returned policy_ids on sync).
         self.assertNotEqual(pol.cf_policy_id, 'attacker-set')
-        # route_id pinned to the gated SA's primary route, NOT other_route.
         self.assertEqual(pol.route_id, route)
         self.assertEqual(pol.security_access_id.id, sa.id)
         self.assertNotIn(pol, other_route.access_policy_ids)
