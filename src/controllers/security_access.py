@@ -693,7 +693,16 @@ class SecurityAccessController(Controller):
     # P2.5 bridge that acts on the SA's primary (is_primary) route so the
     # not-yet-migrated Phase 4 frontend keeps working; the migration re-homed
     # legacy SA-level policies onto the primary route, so the bridge is
-    # consistent with the migrated data. Remove the bridge once Phase 4 ships.
+    # consistent with the migrated data.
+    #
+    # NOTE: Phase 4 has now shipped (service.js drops updateAccessConfig/
+    # updateRoute and always passes route_id), so NO in-repo client calls this
+    # SA-level bridge anymore — it is retained only for in-flight browsers
+    # carrying pre-deploy cached JS during the rollout window. Removal is tracked
+    # as F-SA-6 (docs/tracking/followups/follow-ups.md): delete this bridge (+ its
+    # ~5 security tests) once stg/prod are deployed and the in-flight window has
+    # passed. The bridge is NOT a divergent attack surface — same _get_sa_or_error
+    # cross-SA pin + same whitelist + same Policy.create as the per-route path.
 
     def _sa_access_route(self, sa):
         """The route the legacy SA-level Access helpers act on (P2.5 bridge):

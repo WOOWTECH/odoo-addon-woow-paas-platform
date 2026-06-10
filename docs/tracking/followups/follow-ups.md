@@ -1647,3 +1647,22 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   no-op、prod operator 仍 pre-P2）。已在 `post-migrate.py` docstring（step 2「POST-MIGRATION QUOTA
   CAVEAT」）標註。**建議**：升級後請維運人員 review 多 protected route SA 的 per-SA policy 配額；或日後
   考慮在 count 端對「同 route 內完全相同的 fanned policy」去重。owner=platform / stg 維運。
+
+- **F-SA-6**（**dead bridge 移除 / OPEN**，priority:low，scope=P2.5 controller cleanup；2026-06-10）：
+  **移除 P2.5 SA-level Access bridge（`/access-config` SA-level endpoint + `_create_policy` 的
+  no-route_id fallback）。** Phase 1 加這條 bridge 是讓尚未遷移的 Phase 4 前端能繼續用 SA-level 寫法
+  （`_update_access_config` 把 `access_enabled`→primary route `is_protected`；`_create_policy` 無
+  `route_id` 時 fallback 到 primary route），原 comment 寫「Remove the bridge once Phase 4 ships」。
+  **Phase 4 已在本 PR（`feat/security-access-p2-access-per-route`）shipped**：`service.js` 移除
+  `updateAccessConfig`/`updateRoute`，`createPolicy(workspaceId, saId, routeId, vals)` 一律帶
+  `route_id`，`updateRouteAccess` 打 per-route endpoint。故 SA-level `/access-config` POST 與
+  no-route_id `_create_policy` 分支**已無任何 in-repo client 觸發**。
+  **本 cycle 刻意不移除的理由**：① severity=minor ② bridge 仍有完整安全測試鎖契約（positive
+  `test_update_access_config` / `test_update_access_config_whitelist_only` /
+  `test_security_access_endpoints.py` owner 翻開 + 非 member/role-gate 負向；移除須一併刪/改 ~5 條
+  test）③ deploy 窗口內帶舊快取 JS 的 in-flight 瀏覽器仍可能打舊 endpoint，過早移除會 break ④ 此面
+  **非安全發散**——bridge 走同一組 `_get_sa_or_error` cross-SA pin + 同一 whitelist + 同一
+  `Policy.create`，只是作用在 primary route 而非 client 指名 route，跟 per-route 路徑 lock-step。
+  **動手建議**：確認 stg/prod 都已部署含本 PR 的前端、in-flight client 窗口過後，刪 `api_sa_access_config`
+  + `_update_access_config` + `_sa_access_route` + `_create_policy` 的 `else` fallback 分支，並同步刪除
+  上述 5 條 bridge-specific 測試（per-route endpoint 的對等測試已涵蓋安全契約）。owner=platform。
