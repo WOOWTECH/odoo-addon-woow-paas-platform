@@ -159,7 +159,14 @@ class TestP2_5Migration(TransactionCase):
     def test_migration_multi_protected_routes_copies_policy(self):
         """An SA with 2 protected routes → the legacy shared policy is copied to
         each (behaviour-equivalent: old single app's policy set applied to all
-        its destinations)."""
+        its destinations), AND the SA-level login/session is copied onto EVERY
+        protected route (not just the primary).
+
+        Seeds a NON-default session ('8h', model default is '24h') and a
+        non-default login flag so the login/session copy onto the non-primary
+        route r2 has discriminating coverage: a regression that copies onto only
+        the primary (or only the first protected route) leaves r2 at the '24h'
+        default and trips the r2 asserts below."""
         self._add_legacy_columns()
         self._make_route_id_nullable()
         try:
@@ -176,8 +183,12 @@ class TestP2_5Migration(TransactionCase):
                 'route_id': r1.id, 'name': 'shared', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'a.com'})
             self._null_policy_route(pol, sa)
-            self._set_legacy(sa, session_duration='24h')
+            # Non-default session ('8h' != model default '24h') + a login flag so
+            # the copy onto the NON-primary route r2 is actually discriminating.
+            self._set_legacy(sa, session_duration='8h', login_google=True,
+                             login_email_otp=False, access_enabled=True)
             self.SA.invalidate_model()
+            self.Route.invalidate_model()
             self.Policy.invalidate_model()
             self.migrate(self.env.cr, '18.0.1.0.37')
             # each protected route ends with a copy of the policy
@@ -187,6 +198,15 @@ class TestP2_5Migration(TransactionCase):
             self.assertEqual(len(r2_pols), 1)
             self.assertEqual(r1_pols.name, 'shared')
             self.assertEqual(r2_pols.name, 'shared')
+            # login/session copied onto the NON-PRIMARY protected route too
+            r2.invalidate_recordset()
+            self.assertEqual(r2.session_duration, '8h',
+                             "non-primary protected route must pick up the "
+                             "legacy SA-level session, not stay at the default")
+            self.assertTrue(r2.login_google,
+                            "non-primary protected route must pick up the "
+                            "legacy SA-level login_google")
+            self.assertFalse(r2.login_email_otp)
         finally:
             self._drop_legacy_columns()
 
