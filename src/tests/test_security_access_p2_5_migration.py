@@ -190,6 +190,81 @@ class TestP2_5Migration(TransactionCase):
         finally:
             self._drop_legacy_columns()
 
+    def test_migration_access_disabled_clears_route_protection(self):
+        """Legacy access_enabled=False is the SA-level master toggle: in P2 NO CF
+        Access app existed while it was off (payload enabled=bool(access_enabled)),
+        so an is_protected route under a disabled SA was PUBLICLY reachable. P2.5
+        makes route.is_protected the sole switch, so without reconciliation the
+        Phase-5 resync would silently gate a deliberately-public route. The
+        migration must preserve the 'public' intent: clear is_protected on every
+        route of an SA whose legacy master toggle was off."""
+        self._add_legacy_columns()
+        self._make_route_id_nullable()
+        try:
+            sa = self.SA.create({'name': 'MIG GW Disabled',
+                                 'workspace_id': self.workspace.id})
+            primary = self.Route.create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': sa.canonical_name,
+                'is_primary': True, 'is_protected': True})
+            extra = self.Route.create({
+                'security_access_id': sa.id, 'subdomain_prefix': 'mig-dis-r2',
+                'is_protected': True})
+            pol = self.Policy.create({
+                'route_id': primary.id, 'name': 'dis-pol', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+            self._null_policy_route(pol, sa)
+            # Master toggle OFF: in P2 there was NO live Access app, the routes
+            # were public despite is_protected=True.
+            self._set_legacy(sa, access_enabled=False, login_google=True,
+                             session_duration='8h')
+            self.SA.invalidate_model()
+            self.Route.invalidate_model()
+            self.Policy.invalidate_model()
+
+            self.migrate(self.env.cr, '18.0.1.0.37')
+
+            # routes preserved as PUBLIC (is_protected cleared) — no silent
+            # auth-gating of a route the operator left public.
+            primary.invalidate_recordset()
+            extra.invalidate_recordset()
+            self.assertFalse(primary.is_protected,
+                             "access_enabled=False → route must stay public")
+            self.assertFalse(extra.is_protected,
+                             "access_enabled=False → every route stays public")
+            # policy is still re-homed (not dropped) — it parks on the (now
+            # unprotected) primary as an inert carrier until re-protected.
+            pol.invalidate_recordset()
+            self.assertTrue(pol.route_id,
+                            "legacy policy must still be re-homed, not dropped")
+            self.assertEqual(pol.route_id.security_access_id, sa)
+        finally:
+            self._drop_legacy_columns()
+
+    def test_migration_access_enabled_keeps_route_protection(self):
+        """The symmetric case: access_enabled=True is the normal path — an
+        is_protected route stays protected (this is what the Phase-5 resync then
+        gates). Guards against an over-eager clear that strips protection from a
+        legitimately-enabled SA."""
+        self._add_legacy_columns()
+        self._make_route_id_nullable()
+        try:
+            sa = self.SA.create({'name': 'MIG GW Enabled',
+                                 'workspace_id': self.workspace.id})
+            primary = self.Route.create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': sa.canonical_name,
+                'is_primary': True, 'is_protected': True})
+            self._set_legacy(sa, access_enabled=True, session_duration='8h')
+            self.SA.invalidate_model()
+            self.Route.invalidate_model()
+            self.migrate(self.env.cr, '18.0.1.0.37')
+            primary.invalidate_recordset()
+            self.assertTrue(primary.is_protected,
+                            "access_enabled=True → protected route stays gated")
+        finally:
+            self._drop_legacy_columns()
+
     def test_migration_fan_out_bypasses_policy_quota(self):
         """fan-out copy() 不可撞 _check_policy_quota → 不中斷 migration。
 
@@ -231,7 +306,12 @@ class TestP2_5Migration(TransactionCase):
                 'route_id': r1.id, 'name': 'shared-q', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'a.com'})
             self._null_policy_route(pol, sa)
-            self._set_legacy(sa, session_duration='24h')
+            # access_enabled=True so the master-toggle reconciliation (step 0)
+            # keeps both routes protected — the fan-out path under test only
+            # fires when the routes STAY is_protected. (access_enabled=False
+            # would de-publicise them, collapsing targets to the primary and
+            # defeating this test's purpose.)
+            self._set_legacy(sa, session_duration='24h', access_enabled=True)
             self.SA.invalidate_model()
             self.Policy.invalidate_model()
             # 修前：fan-out 第 2 筆 copy 觸發 quota（2 > 1）→ ValidationError abort

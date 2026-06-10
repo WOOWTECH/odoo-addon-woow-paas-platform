@@ -11,6 +11,13 @@ the ``access_policy_ids`` inverse keyed on ``security_access_id``) are gone, and
 
 What this migration does, per existing Security Access DB row:
 
+0. Reconcile the dropped SA-level master toggle (access_enabled). In P2 the CF
+   Access app's enabled flag was gated SOLELY on access_enabled, so an
+   is_protected route under an access_enabled=False SA had NO live Access app and
+   was PUBLICLY reachable. P2.5 makes route.is_protected the sole switch, so a
+   straight upgrade would let the Phase-5 resync gate that deliberately-public
+   route. When the master toggle was OFF, clear is_protected on every route of
+   the SA (+ WARNING log) to preserve the public intent.
 1. Copy the old SA-level login_google / login_email_otp / session_duration onto
    EACH of that SA's is_protected routes (those routes were the destinations of
    the single SA-level Access app, so they keep the same login/session).
@@ -92,11 +99,47 @@ def migrate(cr, version):
     copied_policies = 0
     touched_routes = 0
     cleared_app_ids = 0
+    depublicised_routes = 0
+
+    have_access_enabled = 'access_enabled' in cols
 
     for sa_id, legacy in sa_legacy.items():
         routes = Route.search([('security_access_id', '=', sa_id)])
         if not routes:
             continue
+
+        # ---- 0. reconcile the dropped SA-level master toggle ----
+        # In P2 the CF Access app's enabled flag was gated SOLELY on the
+        # SA-level access_enabled master toggle (payload built
+        # 'enabled': bool(access_enabled)); a route could legitimately be
+        # is_protected=True while access_enabled=False, and in THAT state NO CF
+        # Access app existed — the route was publicly reachable. P2.5 makes
+        # route.is_protected the sole switch, so a straight upgrade would let
+        # the Phase-5 resync build a REAL, enabled Access app for that route,
+        # silently flipping a deliberately-PUBLIC route to authentication-gated
+        # (availability surprise / fail-closed). Preserve the operator's public
+        # intent: when the master toggle was OFF, clear is_protected on every
+        # route of this SA so it stays public after upgrade. (If the column is
+        # absent — partial legacy DB — we cannot tell, so we conservatively
+        # leave is_protected as-is rather than clear blindly.)
+        if have_access_enabled and not legacy.get('access_enabled'):
+            still_protected = routes.filtered('is_protected')
+            if still_protected:
+                # sa_skip_route_sync: DB-only re-home; Phase 5 does the live CF
+                # convergence (these routes will build NO app since they are now
+                # is_protected=False, matching the P2 'no app existed' state).
+                still_protected.with_context(
+                    sa_skip_route_sync=True).write({'is_protected': False})
+                depublicised_routes += len(still_protected)
+                _logger.warning(
+                    "18.0.1.0.37 P2.5 migration: SA id=%s had legacy "
+                    "access_enabled=False (master toggle OFF) but %s "
+                    "is_protected route(s) — in P2 these were PUBLICLY "
+                    "reachable (no live Access app). Cleared is_protected to "
+                    "preserve the public intent; re-enable per-route Access in "
+                    "the P2.5 UI if gating is desired.",
+                    sa_id, len(still_protected))
+
         protected = routes.filtered('is_protected')
         primary = routes.filtered('is_primary')[:1] or routes[:1]
 
@@ -184,5 +227,7 @@ def migrate(cr, version):
     _logger.info(
         "18.0.1.0.37 P2.5 migration done: re-homed %s legacy polic(ies) "
         "(+%s copied to extra protected routes), updated login/session on %s "
-        "route(s), cleared %s legacy SA access_app_id(s).",
-        moved_policies, copied_policies, touched_routes, cleared_app_ids)
+        "route(s), cleared %s legacy SA access_app_id(s), de-publicised "
+        "(cleared is_protected on) %s route(s) whose SA master toggle was off.",
+        moved_policies, copied_policies, touched_routes, cleared_app_ids,
+        depublicised_routes)
