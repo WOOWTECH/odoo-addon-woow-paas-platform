@@ -8,6 +8,7 @@ The legacy SA-level columns no longer exist in the P2.5 ORM, so the test adds
 them back as raw orphan columns (exactly what Odoo leaves in a real upgraded DB)
 before running the migration, then lets migrate() consume + clear them.
 """
+from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase
 
 
@@ -342,5 +343,21 @@ class TestP2_5Migration(TransactionCase):
             self.assertEqual(len(r2_pols), 1,
                              "fan-out must land on both routes despite quota")
             self.assertEqual(r2_pols.name, 'shared-q')
+            # The bypass flag lives on the transaction CURSOR (shared by every
+            # env in the transaction), so a leak past the one-shot move would
+            # silently disable _check_policy_quota for ALL subsequent policy
+            # creates in this transaction. Assert the `finally` cleared it: a
+            # fresh over-quota create AFTER migrate() must still trip the quota
+            # (the SA is already at count=2 > quota=1 from the fan-out).
+            self.assertFalse(
+                getattr(self.env.cr, 'sa_skip_policy_quota', False),
+                "the cursor bypass flag must be cleared after migrate() returns")
+            with self.assertRaises(ValidationError,
+                                   msg="quota must re-engage post-migrate — the "
+                                       "bypass is scoped to the one-shot move"):
+                self.Policy.create({
+                    'route_id': r1.id, 'name': 'post-mig-overquota',
+                    'decision': 'allow', 'rule_type': 'email_domain',
+                    'rule_value': 'b.com'})
         finally:
             self._drop_legacy_columns()
