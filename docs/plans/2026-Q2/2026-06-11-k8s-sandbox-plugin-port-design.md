@@ -97,7 +97,9 @@ in-repo 時 ①② 同根、③ 一定是 woow，所以一個 `PROJECT_ROOT` 剛
 |------|---------|------|--------------|
 | (b) repo 根即 addon | `${REPO_ROOT}/__manifest__.py` 存在 | `REPO_ROOT → /mnt/extra-addons/{module}` | repo 目錄名正規化 或 `.sandbox.yml` 覆寫 |
 | (a) `src/` 單一（woow 現況） | 根無 manifest 但 `${REPO_ROOT}/src/__manifest__.py` 存在 | `REPO_ROOT/src → /mnt/extra-addons/{module}`（把 src 內容曝光成一個叫 module 的合法 addon 目錄） | 同 (b)；**不可**用 `src` 當 module 名 |
-| (c) 多 addon 子目錄 | 根與 src 皆無 manifest，掃第一層找到 ≥1 個 `<child>/__manifest__.py` | 整個 repo 直掛 `/mnt/extra-addons`，Odoo 自動發現 | 各合格子目錄名即 module 名 |
+| (c) 多 addon 子目錄 | 根與 src 皆無 manifest，掃第一層找到 ≥1 個 `<child>/__manifest__.py` | **逐合格 addon** 各掛 `/mnt/extra-addons/{name}`（見下方實作修正） | 各合格子目錄名即 module 名 |
+
+> **實作修正（e2e 發現）**：(c) 原設計用 `mountWholeDir`（整個 repo 直掛 `/mnt/extra-addons`），但 Odoo `db.initialize` 會掃**所有**子目錄 —— repo 內任何 malformed `__manifest__.py`（空檔/語法錯）會 `ast.literal_eval` crash 整個 init（detect_layout 的過濾只影響 install 清單、不影響 Odoo 掃描）。改為**逐合格 addon 掛載**：`create.sh` 依 `SBX_DETECTED_MODULES` 對每個 addon 注入 `codeMount.mounts[i]={hostPath: REPO_ROOT/<name>, mountSubdir: <name>}`，Odoo 只看得到過濾後的合法 addon。docker-desktop e2e 實證：repo 含 malformed dir 仍零 crash。
 
 樣態 (c) 非 addon 子目錄過濾（AND 全通過）：① `<child>/__manifest__.py` 為檔案（主過濾器，刷掉 `docs/ scripts/ tests/ .git/`）；② 目錄名符合 `^[a-z][a-z0-9_]*$`（Odoo 技術名；連字號/大寫即使有 manifest 也 warn 跳過）；③（opt-in）`ast.literal_eval` 驗 manifest 是含 `name` 的合法 dict（**不用 `eval`**）；④ 固定忽略 `{setup, docs, .git, .github, .gitea, __pycache__, node_modules}`。印出接受/拒絕清單與拒絕原因。
 
