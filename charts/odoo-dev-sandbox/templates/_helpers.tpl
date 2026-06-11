@@ -55,7 +55,7 @@ Compute the sandbox namespace name.
 {{- if .Values.namespace.name }}
 {{- .Values.namespace.name }}
 {{- else }}
-{{- printf "dev-sandbox-%s" .Values.sandbox.branch | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-%s" (.Values.namespace.prefix | default "dev-sandbox") .Values.sandbox.branch | trunc 63 | trimSuffix "-" }}
 {{- end }}
 {{- end }}
 
@@ -66,7 +66,7 @@ Compute the database name.
 {{- if .Values.postgres.database }}
 {{- .Values.postgres.database }}
 {{- else }}
-{{- printf "woow_%s" (.Values.sandbox.branch | replace "-" "_") | trunc 63 }}
+{{- printf "%s%s" (.Values.postgres.dbPrefix | default "sandbox_") (.Values.sandbox.branch | replace "-" "_") | trunc 63 }}
 {{- end }}
 {{- end }}
 

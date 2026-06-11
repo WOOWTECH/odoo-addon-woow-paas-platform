@@ -75,7 +75,7 @@ spec:
                   echo "Checking TTL for namespace: $NAMESPACE"
 
                   EXPIRES=$(kubectl get namespace "$NAMESPACE" \
-                    -o jsonpath='{.metadata.annotations.sandbox\.woow\.tw/expires}' 2>/dev/null || echo "")
+                    -o jsonpath='{.metadata.annotations.{{ .Values.sandbox.labelPrefix | replace "." "\\." }}/expires}' 2>/dev/null || echo "")
 
                   if [ -z "$EXPIRES" ]; then
                     echo "No expires annotation found, skipping cleanup"

@@ -1,0 +1,13 @@
+# woow_paas_platform sandbox 設定（woowprd plugin /woowprd:k8s-dev-sandbox 讀取）
+#
+# 此 repo 是樣態 (a)：src/ 放單一 addon（src/__manifest__.py）。
+# 平台特化 seed 由 .sandbox/ 下兩個 opt-in hook 提供（通用 create.sh 主線零 woow 分支）：
+#   pre-install.sh   install-time —— 動態撈 agent-runtime secret + stg networkPolicy / registry
+#   post-create.sh   post-install —— operator 探索 + ir.config_parameter / ECPay / AI / journal seed
+
+layout: src
+module: woow_paas_platform
+install_modules: [base, web, woow_paas_platform]
+# 既有 DB 沿用 woow_ 前綴（與舊 create.sh / e2e-seed / seed-from-stg 一致）
+db_prefix: woow_
+post_create_hook: .sandbox/post-create.sh

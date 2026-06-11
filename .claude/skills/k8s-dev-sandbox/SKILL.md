@@ -1,6 +1,6 @@
 ---
 name: k8s-dev-sandbox
-description: K8s Dev Sandbox Manager. 管理 Kubernetes 開發沙盒環境，支援建立、銷毀、查看狀態、日誌、延長 TTL、測試及建構映像等操作。
+description: "[DEPRECATED — 改用 woowprd plugin 的 /woowprd:k8s-dev-sandbox] K8s Dev Sandbox Manager. 管理 Kubernetes 開發沙盒環境，支援建立、銷毀、查看狀態、日誌、延長 TTL、測試及建構映像等操作。本 in-repo 版保留給 deploy-stg 與未安裝 plugin 者。"
 usage: |
   Use this skill when:
   - User wants to create, destroy, or manage K8s dev sandboxes
@@ -12,6 +12,11 @@ usage: |
 ---
 
 # K8s Dev Sandbox Manager
+
+> **⚠️ DEPRECATED（2026-06）**：本工具已移植成 `woowprd` plugin 通用版，支援任意 Odoo addon repo。
+> **有 plugin 時請改用 `/woowprd:k8s-dev-sandbox <command>`**（需帶 `--repo "$(git rev-parse --show-toplevel)"`）。
+> 本 in-repo 版保留為 fallback：`deploy-stg` 仍呼叫 `scripts/create.sh`，`scripts/e2e-seed.sh` / `scripts/seed-from-stg.sh` 為 woow 專屬未進 plugin。完整移除 + deploy-stg 遷移待另一 PR。
+> 設計與實作：`docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
 
 管理 Kubernetes 開發沙盒環境的完整工具。透過子命令路由到對應的腳本。
 
