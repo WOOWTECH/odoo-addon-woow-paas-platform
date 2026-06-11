@@ -165,23 +165,29 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 # - (空)         → CI 尚未開始，繼續等待
 ```
 
-### Step 6: 部署到 Sandbox
+### Step 6: 部署到 Sandbox（委派 woowprd plugin）
 
-使用 k8s-dev-sandbox 的 create.sh 部署，傳入完整 image reference。
+deploy-stg **不再自帶 create.sh**，改委派給 woowprd plugin 的 `/woowprd:k8s-dev-sandbox`（同一套引擎，避免重複程式）。`deploy-stg.sh` 內建 resolver 自動定位 plugin 的 `create.sh`（`$WOOWPRD_PLUGIN_ROOT` → marketplace cache → plugins-local），找不到會 fail-loud。
 
 ```bash
 FULL_IMAGE="jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:${DOCKER_TAG}"
 
-bash .claude/skills/k8s-dev-sandbox/scripts/create.sh \
+# deploy-stg.sh 解析後等同：
+bash "<plugin>/skills/k8s-dev-sandbox/scripts/create.sh" \
+  --repo "$(git rev-parse --show-toplevel)" \
+  --context "${KUBE_CONTEXT}" \
   --branch "${SLUG}" \
   --image "${FULL_IMAGE}" \
   --mode stg
 ```
 
 這會：
-- 建立 namespace `dev-sandbox-${SLUG}`
+- 建立 namespace `dev-sandbox-${SLUG}`（managed-label 前綴為 plugin native 的 `dev-sandbox.io`，用 `/woowprd:k8s-dev-sandbox list/status/extend` 管理）
 - 以 STG 模式部署 Odoo（addons 路徑：`/opt/bitnami/odoo/custom-addons/`）
 - 套用 NetworkPolicy 和 ResourceQuota
+- stg 平台特化（networkPolicy / storageClass / JCR registry / agent-runtime secret 從 operator 撈）走 repo 的 `.sandbox/pre-install.sh`；operator/ECPay/AI/journal seed 走 `.sandbox/post-create.sh`
+
+> **前置**：需安裝 woowprd plugin（或設 `WOOWPRD_PLUGIN_ROOT`）。`JCR_USER`/`JCR_PASS`、`AGENT_RUNTIME_*`、`PAAS_OPERATOR_NAMESPACE` 等 env 由 deploy-stg 環境繼承，經 plugin create.sh 傳入 `.sandbox/` hook。
 
 ### Step 7: 初始化 Odoo 系統參數
 
