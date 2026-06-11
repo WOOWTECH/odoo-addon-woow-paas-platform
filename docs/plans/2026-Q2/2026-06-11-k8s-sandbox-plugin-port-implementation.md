@@ -904,6 +904,7 @@ git commit -m "refactor: 移除 in-repo k8s-dev-sandbox skill，改走 woowprd p
 - **Placeholder scan：** common.sh、common_test.sh、chart 片段、hook、`.sandbox.yml` 皆完整碼；SKILL.md 全文指向 grounding artifact（落地逐字寫入，非 placeholder）。
 - **Type consistency：** `SBX_MODULE`/`SBX_INSTALL_MODULES`/`SBX_DB_PREFIX`/`SBX_EXTRA_ADDONS`/`SBX_POST_CREATE_HOOK` 在 load_sandbox_yml 定義並於 create/test/hook 一致引用；`resolve_workload` 簽名一致；DB 名單一真相（`--set postgres.database`）消除前綴 lock-step。
 - **已知留尾（design §風險）：** 樣態 c 預設全裝、`primary_module` tie-break、相依 repo 遞迴偵測 → 仍為未決，標於設計文件 §6，不阻擋本 plan。
+- **實作修正（e2e 後）：** 樣態 (c) 從 `mountWholeDir`（整 repo 直掛）改為**逐合格 addon 掛載** `/mnt/extra-addons/{name}`（common.sh 加 `SBX_DETECTED_MODULES`、create.sh layout=multi 對它逐項注入 `codeMount.mounts[i]`）—— 避免 Odoo `db.initialize` 掃到 repo 內 malformed `__manifest__.py` 而 crash。詳見設計文件 §三樣態的「實作修正」。另 e2e 修了 addons_path 寫死未掛載 ext（odoo --dev reload crash）與 `import packaging` pip-wait（woow-specific）兩個 bug。
 
 ## Execution Handoff
 
