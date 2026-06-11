@@ -1667,3 +1667,19 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   **動手建議**：確認 stg/prod 都已部署含本 PR 的前端、in-flight client 窗口過後，刪 `api_sa_access_config`
   + `_update_access_config` + `_sa_access_route` + `_create_policy` 的 `else` fallback 分支，並同步刪除
   上述 5 條 bridge-specific 測試（per-route endpoint 的對等測試已涵蓋安全契約）。owner=platform。
+
+- **F-SA-7**（**cosmetic / OPEN**，priority:low，scope=operator reusable-policy 命名；2026-06-11，live stg E2E 實證）：
+  **per-route 模型下，reusable policy 的 CF 顯示名前綴用 SA 層 `canonical_name`，不是該 route 自己的
+  `app_name`（subdomain）→ CF dashboard 上非 primary route 的 policy 掛著 primary route 的 subdomain 前綴，
+  可讀性誤導。** `extra/paas-operator/src/services/cloudflare.py:1322` 寫死
+  `name=f"{canonical_name}: {p['name']}"`，而 app 本身的名字（同函式 line ~1332）正確用 per-route 的
+  `app_name`。Odoo `_build_access_payload`（`security_access.py:1249`）同時送 `canonical_name`（SA 層、=
+  primary/canonical route 的 subdomain）與 `app_name`（this route 的 subdomain），operator 取了前者當 policy
+  前綴。**實測（2026-06-11 live stg，test SA id=2）**：route `paas-test-sa-1` 的 policy 在 CF 顯示成
+  `paas-sa-5a105e8b-5ee42426: stg-verify-allow`（`paas-sa-5a105e8b-5ee42426` 是另一條 primary route 的
+  subdomain）。**功能完全無損**：per-route 隔離 live 驗證通過（兩條 route 各自獨立 app／session／idp／policy、
+  零交叉洩漏；operator 以 `existing_policy_ids` 按 **id** reconcile、CF reusable policy 以 id 為鍵，故同 SA 跨
+  route 的同名 policy 雖在 dashboard 顯示同名仍 by-id 安全）。**唯一影響**：CF dashboard 看不出 policy 屬於哪條
+  route。**修法**：operator line 1322 前綴改用 payload 的 `app_name`（this route 的 subdomain）取代
+  `canonical_name`。需 operator image 重建 → **建議併入下次 operator bump**（如 F-SA-4 ② 的 prod bump 一起帶）。
+  owner=platform。
