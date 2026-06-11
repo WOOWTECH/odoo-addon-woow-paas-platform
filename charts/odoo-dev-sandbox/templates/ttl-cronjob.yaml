@@ -57,7 +57,8 @@ spec:
           restartPolicy: Never
           containers:
             - name: ttl-check
-              image: bitnami/kubectl:latest
+              image: "{{ .Values.ttl.image.repository }}:{{ .Values.ttl.image.tag }}"
+              imagePullPolicy: {{ .Values.ttl.image.pullPolicy }}
               resources:
                 requests:
                   cpu: 10m
