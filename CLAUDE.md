@@ -116,35 +116,42 @@ Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正
 
 本機開發與測試的首選方式（namespace 隔離、可跑測試、產出可存取環境）。
 
-部署獨立的開發沙盒環境到 Kubernetes：
+> **已移植成 `woowprd` plugin 通用工具**（2026-06；支援任意 Odoo addon repo 三樣態：src 單一 / repo 根即 addon / 多 addon 子目錄）。
+> 有 `woowprd` plugin 時**優先用 `/woowprd:k8s-dev-sandbox <command>`**（需要被測 repo 的子命令要帶 `--repo "$(git rev-parse --show-toplevel)"`，且 `create`/`destroy` 必帶 `--context`；詳見 plugin 的 SKILL.md）。
+> 平台特化 seed 已外置成 repo 自帶 `.sandbox/{pre-install,post-create}.sh` opt-in hook。
+> 設計與實作見 `docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
+
+部署獨立的開發沙盒環境到 Kubernetes（plugin 通用版，推薦）：
 
 ```bash
-# 為當前 branch 建立沙盒 (--context required, see fix/sandbox-scripts-context-safety)
+# 建立 / 快速建立當前 branch（--context 必填）
+/woowprd:k8s-dev-sandbox create --context woow-k3s [--ttl 48h --pgadmin]
+/woowprd:k8s-dev-sandbox up --context docker-desktop
+
+# 列出 / 狀態 / 日誌 / 測試 / 延長 TTL / 銷毀 / 建構映像
+/woowprd:k8s-dev-sandbox list
+/woowprd:k8s-dev-sandbox status [<sandbox-name>]
+/woowprd:k8s-dev-sandbox logs <sandbox-name> [--service odoo|postgres|nginx] [--follow]
+/woowprd:k8s-dev-sandbox test <sandbox-name> [--module <module>]
+/woowprd:k8s-dev-sandbox extend <sandbox-name> [--ttl 336h]
+/woowprd:k8s-dev-sandbox destroy <sandbox-name> --context woow-k3s [--keep-data]
+/woowprd:k8s-dev-sandbox build [--registry <registry>] [--push]
+```
+
+<details><summary><b>Deprecated</b>：in-repo scripts（無 plugin 時的 fallback；<code>deploy-stg</code> 仍依賴 create.sh、<code>e2e-seed.sh</code>/<code>seed-from-stg.sh</code> 為 woow 專屬未進 plugin。完整移除 + deploy-stg 遷移待另一 PR）</summary>
+
+```bash
 ./.claude/skills/k8s-dev-sandbox/scripts/create.sh --context woow-k3s
-
-# 列出所有活躍的沙盒
 ./.claude/skills/k8s-dev-sandbox/scripts/list.sh
-
-# 檢查沙盒狀態
 ./.claude/skills/k8s-dev-sandbox/scripts/status.sh <sandbox-name>
-
-# 查看日誌
 ./.claude/skills/k8s-dev-sandbox/scripts/logs.sh <sandbox-name> [--service odoo|postgres|nginx] [--follow]
-
-# 在沙盒中執行測試
 ./.claude/skills/k8s-dev-sandbox/scripts/test.sh <sandbox-name> [--module <module>]
-
-# 延長沙盒 TTL
 ./.claude/skills/k8s-dev-sandbox/scripts/extend.sh <sandbox-name> [--ttl 336h]
-
-# 銷毀沙盒（--context required，同 create.sh；--keep-data 可保留資料，預設清除 issue #85）
 ./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh <sandbox-name> --context woow-k3s
-
-# 建構 CI 映像
 ./.claude/skills/k8s-dev-sandbox/scripts/build.sh [--registry <registry>] [--push]
 ```
 
-或使用 Claude Code skill：`/k8s-dev-sandbox <command>`
+</details>
 
 ### PaaS Operator Local Development
 
@@ -277,11 +284,11 @@ tea login add --name gitea --url https://git-prod.woowtech.io --token <your-toke
 # 查看 staging pod 狀態
 kubectl get pods -n dev-sandbox-stg
 
-# 查看日誌
-./.claude/skills/k8s-dev-sandbox/scripts/logs.sh stg --service odoo --follow
+# 查看日誌（plugin 通用版；無 plugin 時用 ./.claude/skills/k8s-dev-sandbox/scripts/logs.sh）
+/woowprd:k8s-dev-sandbox logs stg --service odoo --follow
 
-# 銷毀 staging
-/k8s-dev-sandbox destroy stg
+# 銷毀 staging（plugin 通用版；無 plugin 時用 ./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh）
+/woowprd:k8s-dev-sandbox destroy stg --context woow-k3s
 ```
 
 **CI 流程圖：**

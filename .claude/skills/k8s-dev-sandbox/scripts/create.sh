@@ -383,6 +383,17 @@ HELM_INSTALL_ARGS=(
     --set "sandbox.branch=$SLUG"
     --set "sandbox.ttl=$TTL"
     --set "sandbox.mode=$MODE"
+    # woow profile 釘樁：chart 預設已去品牌（dbPrefix sandbox_ / labelPrefix
+    # dev-sandbox.io），但本 in-repo 腳本（deploy-stg 仍依賴）及其姊妹腳本
+    # extend/list/status 硬編 woow 命名，故顯式把 chart 釘回 woow profile：
+    #   - postgres.database：直接鎖 create.sh 自己算的 $DB_NAME（DB 名單一來源；
+    #     比靠 dbPrefix 預設更穩，chart 預設再改名也不影響），否則 Odoo 連
+    #     sandbox_{slug}、而 install-check / seed SQL 打 woow_{slug} → 連錯 DB。
+    #   - sandbox.labelPrefix：namespace label/annotation 用 sandbox.woow.tw，
+    #     對齊 ttl-cronjob 讀取 + extend/list/status 的硬編 selector，否則 extend
+    #     patch 錯 key → cron 照原 TTL 刪 namespace（資料遺失）、list 列不出。
+    --set "postgres.database=$DB_NAME"
+    --set "sandbox.labelPrefix=sandbox.woow.tw"
 )
 
 # 套用對應模式的 values overlay
