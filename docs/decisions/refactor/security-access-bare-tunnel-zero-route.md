@@ -1,8 +1,8 @@
 # Decision: Security Access 裸 Tunnel（零 Route / 零 DNS）+ 建立即自動 Provision
 
 **Date**: 2026-06-11
-**Status**: 軸1 accepted + shipped（commit `8633026`）；軸2 **proposed**（待 D1 / D3 / D4 簽核）
-**Branch**: `fix/remove-extra-application-route`
+**Status**: 軸1 accepted + shipped（commit `8633026`，PR #179 merged）；軸2 **accepted**（D1 / D3 / D4 已於 2026-06-11 拍板，見 §Open Decisions）
+**Branch**: `fix/remove-extra-application-route`（軸1）→ `feat/sa-bare-tunnel-operator`（軸2 起）
 **Components**: `woow_paas_platform.security_access`、`woow_paas_platform.security_access_route`、`action_provision`、`extra/paas-operator`（`schemas.py` / `api/tunnels.py` / `services/cloudflare.py`）、`CreateSecurityAccessModal`、`subscription_lifecycle_cron`、`sh.subscription.plan` SA quota、`src/migrations/`
 
 > 本文件記錄一個**超出已簽核 P2.5 plan 範圍**的架構擴張的取捨與影響面。撰寫動機正是：軸2 不在任何 design doc 的授權範圍內，動工前需要把「為什麼這樣改、改了會動到什麼、剩哪些決策」攤開供團隊 review。
@@ -93,13 +93,13 @@ SA 的 create modal 內部自動串接 `create → provision`（完全比照 `Cr
 
 ---
 
-## 仍需拍板的決策（Open Decisions）
+## 決策結論（Decision Log — 已於 2026-06-11 拍板）
 
-| ID | 問題 | 選項 | 不決定的後果 |
-|----|------|------|------------|
-| **D1** | 零 route SA 的 state 語意 | (a) 維持 `active` + Application tab empty-state +「Add Route」引導；(b) 新增 distinct state；(c) `active` + banner「尚未設定路由，服務無法存取」 | 目前**無 constraint 強制 `route_count>=1`** → 零 route SA 看似 active 但對外 catch-all 404，使用者不知為何訪問不到 |
-| **D3** | quota 計費語義 + 既有訂閱溯及 | (a) migration 給既有 SA 既得權、新 SA 全計；(b) 調 plan 配額數字；(c) 不處理（潛伏） | 既有訂閱者升級後莫名少一個 route 額度，billing dispute |
-| **D4** | `is_primary` 欄位 DROP vs 留 dead-marker | (a) `.38` 只改值、`.39` 再 DROP（rollback 最低）；(b) `.38` 直接 DROP + 同 commit 改全部 lock-step 觸點 | 順序錯 → `.37` ORM `filtered('is_primary')` AttributeError 中止升級；(b) 漏改任一觸點 → registry load crash |
+| ID | 問題 | **結論** | 對實作的影響 |
+|----|------|---------|------------|
+| **D1** | 零 route SA 的 state 語意 | **(b) 新增 distinct state**（如 `active_no_route`）明確區分「已佈署但無路由」 | PR #3 擴大：SA `state` Selection 加新值；裸 tunnel provision → `active_no_route`；加第一條 route → `active`、刪到零 route → 退回 `active_no_route`；前端 badge + monitoring 健康判斷需認得新狀態 |
+| **D3** | quota 計費語義 + 既有訂閱溯及 | **(a) 既有既得權 + 新規則** | PR #4 migration 對既有 SA 把 `sa_max_routes` +1（補回被降級的 primary 名額），新建 SA 起算全 route 計入 → 既有客戶零感知、不超配 |
+| **D4** | `is_primary` 欄位 DROP vs 留 dead-marker | **(a) `.38` 只改值、`.39` 再 DROP** | `.38` 用 raw SQL 把 `is_primary` 降為 False + code 停止讀它（保留欄位宣告）；`.39+` 才 DROP 欄位 + 移除宣告 + 改 `_order`/`@api.constrains`/`to_dict`。不可逆動作與行為改動解耦 |
 
 **編號說明**：上表保留 D2 空號 —— D2 是「operator / Odoo 部署順序」，已有明確預設、不需 sign-off，故併入下方技術預設段不列入待決表（保留空號避免與先前評估的編號漂移）。
 
