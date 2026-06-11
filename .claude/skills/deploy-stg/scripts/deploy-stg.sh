@@ -256,7 +256,7 @@ if [ -n "$IMAGE_OVERRIDE" ]; then
     FULL_IMAGE="$IMAGE_OVERRIDE"
     echo -e "${BLUE}Using provided image: ${FULL_IMAGE}${NC}"
     # Jump to deploy
-    CREATE_ARGS=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
+    CREATE_ARGS=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" --db-prefix woow_ --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
     if [ "$INGRESS" = true ]; then
         CREATE_ARGS+=(--ingress)
     fi
@@ -378,7 +378,7 @@ fi
 echo ""
 echo -e "${BLUE}Deploying to sandbox...${NC}"
 
-CREATE_ARGS=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
+CREATE_ARGS=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" --db-prefix woow_ --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
 if [ "$INGRESS" = true ]; then
     CREATE_ARGS+=(--ingress)
 fi
