@@ -132,17 +132,6 @@
     &--error { color: #dc2626; }
   }
 
-  // Inline hint next to a Protected checkbox when Access is disabled: the
-  // route is marked protected but it has no Cloudflare effect until the
-  // Access master toggle is on.
-  &__protect_hint {
-    display: inline-block;
-    margin-left: 0.5rem;
-    color: #d97706;
-    font-size: 0.75rem;
-    font-style: italic;
-  }
-
   &__coming_soon {
     text-align: center;
     padding: 3rem 1rem;
@@ -150,13 +139,63 @@
   }
 }
 
-// Access tab (P2) — master toggle row + policy header
+// Access tab (P2.5 per-route) — per-route Protected Application cards
 .o_woow_sa_access {
-  &__master {
+  // Header row of a route card: hostname (+ Public hint) on the left, the
+  // Protected toggle on the right.
+  &__route_head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
+  }
+
+  &__route_host {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    word-break: break-all;
+  }
+
+  // Right-hand controls of a route card header: expand/collapse + Protected.
+  &__route_controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex: 0 0 auto;
+  }
+
+  &__expand_btn {
+    display: flex;
+    align-items: center;
+    border: none;
+    background: none;
+    color: $woow-text-secondary;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  // "Public · anyone can reach it" — shown when a route is not protected.
+  &__public_hint {
+    color: $woow-text-secondary;
+    font-size: 0.8125rem;
+  }
+
+  // Expanded settings panel of a protected route.
+  &__route_body {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid $woow-border-light;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  &__section {
+    h4 {
+      font-family: $woow-font-display;
+      margin: 0 0 0.25rem;
+    }
   }
 
   &__policy_header {
@@ -168,7 +207,7 @@
 
   // Fail-open login-widening warning banner: shown when the operator could not
   // resolve some requested login method to a Cloudflare IdP (the restriction
-  // may have silently widened to all IdPs). Amber to match the protect_hint.
+  // may have silently widened to all IdPs). Amber to signal a soft warning.
   &__idp_warning {
     display: flex;
     align-items: flex-start;

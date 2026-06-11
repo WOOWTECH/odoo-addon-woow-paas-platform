@@ -427,9 +427,16 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
                            'user_id': self.alice.id, 'role': 'owner'})
         self.sa = self.env['woow_paas_platform.security_access'].sudo().create({
             'name': 'AC EP GW', 'workspace_id': self.workspace.id})
+        # P2.5: Access config + policies are per-route. The SA-level BFF bridge
+        # operates on the primary route, so seed one (the SA has no tunnel, so
+        # no operator sync fires).
+        self.route = self.env[
+            'woow_paas_platform.security_access_route'].sudo().create({
+                'security_access_id': self.sa.id,
+                'subdomain_prefix': 'ac-ep-primary', 'is_primary': True})
         self.pol = self.env[
             'woow_paas_platform.security_access_access_policy'].sudo().create({
-                'security_access_id': self.sa.id, 'name': 'p',
+                'route_id': self.route.id, 'name': 'p',
                 'decision': 'allow', 'rule_type': 'email_domain',
                 'rule_value': 'a.com'})
 
@@ -490,7 +497,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}/access-config',
             {'access_enabled': True})
         self._assert_structured_denial(res)
-        self.assertFalse(self.sa.sudo().access_enabled)
+        self.assertFalse(self.route.sudo().is_protected)
 
     # ---- role='user' member negatives (endpoint-layer role gate) ----
     #
@@ -523,7 +530,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             {'access_enabled': True})
         self._assert_structured_denial(res)
         self.assertIn('permission', (res.get('error') or '').lower())
-        self.assertFalse(self.sa.sudo().access_enabled)
+        self.assertFalse(self.route.sudo().is_protected)
 
     def test_member_user_policy_create_denied_and_none_made(self):
         """role='user' member 不得經 BFF create allow policy（繞過 role gate
@@ -602,9 +609,10 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
     # ORM-effect verification.
 
     def test_owner_access_config_flips_enabled(self):
-        """owner 經 @route 打 access-config 翻開 access_enabled，正向通過 role
-        + _check_operation_allowed gate 並真的寫進 DB。"""
-        self.assertFalse(self.sa.sudo().access_enabled)
+        """owner 經 @route 打 access-config 翻開 protection（P2.5 bridge：寫進
+        primary route 的 is_protected / session_duration），正向通過 role +
+        _check_operation_allowed gate 並真的寫進 DB。"""
+        self.assertFalse(self.route.sudo().is_protected)
         self.authenticate(self.alice.login, self.alice.login)
         res = self._rpc(
             f'/api/workspaces/{self.workspace.id}'
@@ -614,9 +622,9 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
                          "endpoint crashed instead of returning a result: %s"
                          % self._last_body.get('error'))
         self.assertTrue(res.get('success'), res.get('error'))
-        self.sa.invalidate_recordset(['access_enabled', 'session_duration'])
-        self.assertTrue(self.sa.sudo().access_enabled)
-        self.assertEqual(self.sa.sudo().session_duration, '8h')
+        self.route.invalidate_recordset(['is_protected', 'session_duration'])
+        self.assertTrue(self.route.sudo().is_protected)
+        self.assertEqual(self.route.sudo().session_duration, '8h')
 
     def test_owner_policy_create_update_delete_through_route(self):
         """owner 經 @route 對 access-policies 做 create→update→delete 全程，
@@ -652,3 +660,148 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             {'action': 'delete', 'policy_id': new_id})
         self.assertTrue(deleted.get('success'), deleted.get('error'))
         self.assertFalse(pol.exists())
+
+    # ==================== P2.5 Phase 3: per-route endpoints =============
+    #
+    # The per-route access-config endpoint (/routes/<route_id>/access-config)
+    # and the per-route policy create (route_id in payload) are NEW attack
+    # surfaces in Phase 3. ORM-level coverage lives in
+    # test_security_access_subscription_flow.py (TestSecurityAccessAccessControl
+    # Phase-3 block), but ORM 綠 ≠ endpoint secure
+    # (orm-vs-endpoint-acl-test-coverage): a non-member / role='user' member /
+    # cross-SA route_id must each be rejected at the @route dispatch (workspace →
+    # role → _check_operation_allowed gate), so pair every Phase-3 endpoint with
+    # an HttpCase negative here. _make_second_sa_route gives an attacker a route
+    # id that exists but belongs to ANOTHER SA, to test the route_id pin.
+
+    def _make_second_sa_route(self):
+        """A second SA (same workspace) + a route on it, so a request against
+        self.sa can try to smuggle in that route's id (cross-SA pin test)."""
+        other_sa = self.env[
+            'woow_paas_platform.security_access'].sudo().create({
+                'name': 'AC EP GW2', 'workspace_id': self.workspace.id})
+        other_route = self.env[
+            'woow_paas_platform.security_access_route'].sudo().create({
+                'security_access_id': other_sa.id,
+                'subdomain_prefix': 'ac-ep-other', 'is_protected': False})
+        return other_sa, other_route
+
+    def test_non_member_route_access_config_denied(self):
+        """非 member 打 per-route access-config 須被 workspace gate 結構化拒絕，
+        且該 route 的 is_protected 不得被翻開。"""
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}'
+            f'/routes/{self.route.id}/access-config',
+            {'is_protected': True})
+        self._assert_structured_denial(res)
+        self.route.invalidate_recordset(['is_protected'])
+        self.assertFalse(self.route.sudo().is_protected)
+
+    def test_member_user_route_access_config_denied(self):
+        """role='user' member 打 per-route access-config 須被 role gate 拒，
+        is_protected 不得被翻開。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}'
+            f'/routes/{self.route.id}/access-config',
+            {'is_protected': True})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        self.route.invalidate_recordset(['is_protected'])
+        self.assertFalse(self.route.sudo().is_protected)
+
+    def test_owner_route_access_config_cross_sa_route_denied(self):
+        """owner（通過 role gate）但 route_id 屬於『另一個 SA』→ per-route
+        access-config 須拒（route not pinned to gated SA），別 SA 的 route 的
+        is_protected 不得被翻開。跨 SA route_id 注入面（白名單守線）。"""
+        _other_sa, other_route = self._make_second_sa_route()
+        self.authenticate(self.alice.login, self.alice.login)
+        # URL targets self.sa but the route belongs to other_sa → mismatch.
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}'
+            f'/routes/{other_route.id}/access-config',
+            {'is_protected': True})
+        # owner clears the role gate, so this must be a structured business
+        # rejection ("Route not found"), not a permission denial nor a crash.
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed: %s" % self._last_body.get('error'))
+        self.assertFalse(res.get('success'))
+        self.assertIn('route not found', (res.get('error') or '').lower())
+        other_route.invalidate_recordset(['is_protected'])
+        self.assertFalse(other_route.sudo().is_protected)
+
+    def test_owner_route_access_config_flips_per_route(self):
+        """正向對照：owner 經 per-route access-config 翻開 self.route 的
+        is_protected（確認 cross-SA deny 不是把整個 endpoint 鎖死的假綠）。"""
+        self.assertFalse(self.route.sudo().is_protected)
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}'
+            f'/routes/{self.route.id}/access-config',
+            {'is_protected': True, 'session_duration': '1h'})
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed: %s" % self._last_body.get('error'))
+        self.assertTrue(res.get('success'), res.get('error'))
+        self.route.invalidate_recordset(['is_protected', 'session_duration'])
+        self.assertTrue(self.route.sudo().is_protected)
+        self.assertEqual(self.route.sudo().session_duration, '1h')
+
+    def test_member_user_policy_create_with_route_id_denied(self):
+        """role='user' member 不得經 BFF create policy（即使帶合法 route_id）。
+        鎖 role gate 在 route_id 路徑同樣生效，policy 不得落地。"""
+        before = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'member-route-inject',
+             'decision': 'allow', 'rule_type': 'email_domain',
+             'rule_value': 'evil.com', 'route_id': self.route.id})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        after = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('security_access_id', '=', self.sa.id)])
+        self.assertEqual(after, before)
+
+    def test_owner_policy_create_cross_sa_route_id_denied(self):
+        """owner（通過 role gate）但 route_id 屬於另一個 SA → policy create 須拒
+        （Route not found），不得在別 SA 的 route 上建 policy。"""
+        _other_sa, other_route = self._make_second_sa_route()
+        before = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('route_id', '=', other_route.id)])
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'cross-sa-pol', 'decision': 'allow',
+             'rule_type': 'email_domain', 'rule_value': 'cross.com',
+             'route_id': other_route.id})
+        self.assertNotIn('error', self._last_body,
+                         "endpoint crashed: %s" % self._last_body.get('error'))
+        self.assertFalse(res.get('success'))
+        self.assertIn('route not found', (res.get('error') or '').lower())
+        after = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo(
+            ).search_count([('route_id', '=', other_route.id)])
+        self.assertEqual(after, before)
+
+    def test_non_member_policy_list_with_route_id_denied(self):
+        """非 member 帶 route_id 打 access-policies list 仍被 workspace gate 擋
+        （route_id filter 不得成為繞過 membership 的後門）。"""
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'list', 'route_id': self.route.id})
+        self._assert_structured_denial(res)

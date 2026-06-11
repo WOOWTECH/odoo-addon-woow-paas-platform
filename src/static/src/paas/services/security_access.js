@@ -111,20 +111,6 @@ export const securityAccessService = {
     }
   },
 
-  async updateRoute(workspaceId, saId, routeId, vals) {
-    try {
-      const result = await jsonRpc(
-        `/api/workspaces/${workspaceId}/security-accesses/${saId}/routes`,
-        { action: "update", route_id: routeId, ...vals },
-      );
-      return result.success
-        ? { success: true, data: result.data }
-        : { success: false, error: result.error };
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  },
-
   async deleteRoute(workspaceId, saId, routeId) {
     try {
       const result = await jsonRpc(
@@ -139,10 +125,20 @@ export const securityAccessService = {
     }
   },
 
-  async updateAccessConfig(workspaceId, saId, vals) {
+  // NOTE: the legacy SA-level updateAccessConfig was removed in P2.5 — Access
+  // config is per-route now (updateRouteAccess below). The SA-level bridge
+  // endpoint still exists server-side for in-flight clients but no UI calls it.
+
+  // P2.5 per-route Access config. Each protected Application Route is its own
+  // Cloudflare Access app, so config (is_protected / login methods / session
+  // duration) is route-scoped. Hits the route-pinned BFF endpoint; the backend
+  // whitelists is_protected/login_google/login_email_otp/session_duration and
+  // returns the updated route.to_dict() (server-owned access_app_id /
+  // access_unresolved_idp_types are never client-settable).
+  async updateRouteAccess(workspaceId, saId, routeId, vals) {
     try {
       const result = await jsonRpc(
-        `/api/workspaces/${workspaceId}/security-accesses/${saId}/access-config`,
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/routes/${routeId}/access-config`,
         vals,
       );
       return result.success
@@ -153,11 +149,14 @@ export const securityAccessService = {
     }
   },
 
-  async createPolicy(workspaceId, saId, vals) {
+  // P2.5: a policy binds to a route. routeId pins it to one Application Route
+  // (the backend re-validates the route belongs to the gated SA — a cross-SA
+  // route_id is rejected, never written to another SA's route).
+  async createPolicy(workspaceId, saId, routeId, vals) {
     try {
       const result = await jsonRpc(
         `/api/workspaces/${workspaceId}/security-accesses/${saId}/access-policies`,
-        { action: "create", ...vals },
+        { action: "create", route_id: routeId, ...vals },
       );
       return result.success
         ? { success: true, data: result.data }

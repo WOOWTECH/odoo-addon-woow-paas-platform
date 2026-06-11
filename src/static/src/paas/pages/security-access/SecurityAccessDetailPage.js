@@ -81,9 +81,12 @@ export class SecurityAccessDetailPage extends Component {
       prefixChecking: false,
       showSkipTrialModal: false,
       showDeleteConfirm: false,
-      // Access tab — policy modal
+      // Access tab (P2.5 per-route) — policy modal + which route it targets,
+      // and which protected route cards are expanded (keyed by route id).
       showPolicyModal: false,
       editingPolicy: null,
+      policyModalRoute: null,
+      expandedRoutes: {},
     });
     this.pollingInterval = null;
     this.prefixCheckTimer = null;
@@ -248,13 +251,17 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
-  // ---- Access tab：config + policies + route protection ----
-  // Map the persisted comma-joined CF type string to user-facing labels so the
-  // fail-open widening warning names the SAME methods the toggles do (e.g.
-  // 'onetimepin' → 'Email OTP'). Unknown types pass through verbatim rather
-  // than being dropped, so a future CF type still surfaces (just unmapped).
-  get unresolvedIdpLabels() {
-    const raw = this.state.sa && this.state.sa.access_unresolved_idp_types;
+  // ---- Access tab (P2.5)：per-route Protected Applications ----
+  // Each Application Route is its own Cloudflare Access app, so protection,
+  // login methods, session and policies are configured per route. A protected
+  // route's card expands to its own settings.
+  //
+  // Map a route's persisted comma-joined CF type string to user-facing labels
+  // so the fail-open widening warning names the SAME methods the toggles do
+  // (e.g. 'onetimepin' → 'Email OTP'). Unknown types pass through verbatim
+  // rather than being dropped, so a future CF type still surfaces (unmapped).
+  unresolvedIdpLabels(route) {
+    const raw = route && route.access_unresolved_idp_types;
     if (!raw) {
       return "";
     }
@@ -266,50 +273,12 @@ export class SecurityAccessDetailPage extends Component {
       .join(", ");
   }
 
-  async saveAccessConfig(vals) {
-    const res = await securityAccessService.updateAccessConfig(
-      this.props.workspaceId, this.props.saId, vals);
-    if (res.success) {
-      this.state.sa = res.data;
-    } else {
-      this.state.error = res.error;
-    }
-  }
-
-  onMasterToggle(ev) {
-    this.saveAccessConfig({ access_enabled: ev.target.checked });
-  }
-
-  onGoogleToggle(ev) {
-    this.saveAccessConfig({ login_google: ev.target.checked });
-  }
-
-  onEmailOtpToggle(ev) {
-    this.saveAccessConfig({ login_email_otp: ev.target.checked });
-  }
-
-  onSessionDurationChange(ev) {
-    this.saveAccessConfig({ session_duration: ev.target.value });
-  }
-
-  openAddPolicy() {
-    this.state.editingPolicy = null;
-    this.state.showPolicyModal = true;
-  }
-
-  openEditPolicy(policy) {
-    this.state.editingPolicy = policy;
-    this.state.showPolicyModal = true;
-  }
-
-  async onPolicySaved() {
-    this.state.showPolicyModal = false;
-    await this.loadDetail();
-  }
-
-  async deletePolicy(policy) {
-    const res = await securityAccessService.deletePolicy(
-      this.props.workspaceId, this.props.saId, policy.id);
+  // Per-route Access config write → route-pinned BFF endpoint. Reloads the SA
+  // so every route card reflects the new state (and the operator's server-owned
+  // signals like access_unresolved_idp_types).
+  async saveRouteAccess(route, vals) {
+    const res = await securityAccessService.updateRouteAccess(
+      this.props.workspaceId, this.props.saId, route.id, vals);
     if (res.success) {
       await this.loadDetail();
     } else {
@@ -317,10 +286,59 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
-  async toggleRouteProtected(route, ev) {
-    const res = await securityAccessService.updateRoute(
-      this.props.workspaceId, this.props.saId, route.id,
-      { is_protected: ev.target.checked });
+  // A protected route's settings panel is expanded by default; the user may
+  // collapse it. expandedRoutes[id] === false means explicitly collapsed;
+  // undefined/true → expanded (only matters when the route is protected).
+  isRouteExpanded(route) {
+    return this.state.expandedRoutes[route.id] !== false;
+  }
+
+  toggleRouteExpand(route) {
+    this.state.expandedRoutes[route.id] = !this.isRouteExpanded(route);
+  }
+
+  onRouteProtectedToggle(route, ev) {
+    // Expand the card when a route is freshly protected so its settings are
+    // immediately visible.
+    if (ev.target.checked) {
+      this.state.expandedRoutes[route.id] = true;
+    }
+    this.saveRouteAccess(route, { is_protected: ev.target.checked });
+  }
+
+  onRouteLoginToggle(route, method, ev) {
+    // method is 'login_google' | 'login_email_otp'
+    this.saveRouteAccess(route, { [method]: ev.target.checked });
+  }
+
+  onRouteSessionChange(route, ev) {
+    this.saveRouteAccess(route, { session_duration: ev.target.value });
+  }
+
+  openAddPolicy(route) {
+    this.state.policyModalRoute = route;
+    this.state.editingPolicy = null;
+    this.state.showPolicyModal = true;
+  }
+
+  openEditPolicy(route, policy) {
+    this.state.policyModalRoute = route;
+    this.state.editingPolicy = policy;
+    this.state.showPolicyModal = true;
+  }
+
+  async onPolicySaved() {
+    this.state.showPolicyModal = false;
+    this.state.policyModalRoute = null;
+    await this.loadDetail();
+  }
+
+  async deletePolicy(route, policy) {
+    // Policy delete is by policy id (route is passed only for call-site
+    // symmetry / future per-route disambiguation; the backend resolves the
+    // policy under the gated SA).
+    const res = await securityAccessService.deletePolicy(
+      this.props.workspaceId, this.props.saId, policy.id);
     if (res.success) {
       await this.loadDetail();
     } else {

@@ -2,7 +2,8 @@
 
 > 本 doc 累積跨 refactor cycle 沒處理 / 刻意延後的事項。每條附 (severity, scope origin, 動手建議, 對誰處理)。Reporter 不解決，列冊讓未來 PR / issue 持續追蹤。
 
-**State as of 2026-06-08**：
+**State as of 2026-06-10**：
+- **Security Access P2.5 Per-route Access 重構（2026-06-10，feat/security-access-p2-access-per-route，PR 待 merge → develop）**：把 P2 的 Service-wide Access（整 SA 一個 CF Access app + 一套共用 policies/login/session）重構成 **Per-route**（每條 Application Route = 一個 Access app，各自 Protected toggle + policies + login methods + session）。**起因**：使用者 review stg 發現 Application tab 的 Protected 欄不該存在（保護應在 Access tab 逐 app 設）+ Primary badge / primary_hostname 殘留。**決策**：只做 Per-route 廢 Service-wide、login/session 全下放 per-route、先做 P2.5（P3 Domains 暫緩）。**5-phase ultracode**（~30 commits）：①model（access_policy→route_id、route 加 access 三件組、廢 SA 層 7 欄位、per-route sync、migration 18.0.1.0.37）②ACL（related-store security_access_id walk 驗證 create 時序無 B1 leak + cross-user 測試）③BFF（per-route policy/config + route_id 跨 SA pin + HttpCase）④前端（移 Protected 欄、Access tab per-route Protected Applications、headed 驗證 console 0 error）⑤全量 5-lens 對抗式審查。**operator 不變**（仍 per-app，Odoo 每 protected route 各打一次 sync → 不用重建 operator image）。Odoo **0 failed of 1215**。審查跨-phase 接縫抓到 **migration 漏 reconcile SA `access_enabled` master toggle** major（P2 access_enabled=False 的 is_protected route 在 P2 是 public，per-route 升級後會被 Phase-5 resync 誤 gate → migration step 0 清 is_protected 保 public）已修。**stg 遷移注意**（見下方 P2.5 §）：既有 test SA DB 搬 per-route + **手動 teardown 舊 SA 層單一 CF app**（per-route re-sync 重建 N 個 app）；prod 無 P2 Access 資料（operator 舊）→ migration prod no-op。前端 SA-level access BFF bridge 待 merge 後移除（dead path）。
 - **Security Access P2 Access Control（Cloudflare Zero Trust）+ stg 發佈 + 真 Cloudflare 寫路徑 E2E（2026-06-08，PR #165 merged → develop）**：Access App / reusable Policy CRUD / Login Methods（Google + Email OTP）/ 逐 route is_protected / session duration。5-phase ultracode workflow（48 commits、Odoo 0 failed of 1107、operator 175）+ 5-lens loop-until-dry 對抗式審查（rounds 1-5，19 confirmed 全修）。**stg operator image-only Fleet bump**（`20260608.0307`，PR paas-app-bundle-cd#10）→ pod 起、Access endpoints live。**真 Cloudflare Access 寫路徑 E2E（operator 級，直接打 `PUT /api/access/sync`）**：CREATE app+policy+IdP 綁定 ✓ / idempotent re-sync ✓ — 但抓到 **operator delete 路徑 3 bug**（CF DELETE 回 202 被誤判失敗 + 孤兒 + in-use 刪序），**修復 PR #166 merged**（develop `38220bb`、image `20260608.0541`、Fleet bump PR paas-app-bundle-cd#11）→ **live 重驗 teardown 全綠**（CREATE/RE-SYNC/TEARDOWN 全 200、`orphaned=[]`、CF 零殘留）。知識持久化：[[operator-cf-access-delete-202-mock-contract]]（pitfall）。**token scope 前置**：stg token 加帳戶級 Access:Apps&Policies(Edit) + Access:Org/IdP(Read)（F-SA-3 RESOLVED）。**F-SA-3 / F-SA-4 新增**（見 §F-SA P2；F-SA-4=prod token 同前置，priority:high）。
 - **Security Access P1 主線 + stg 一起發佈 + 真 Cloudflare E2E（2026-06-07，PR #159 merged → develop）**：訂閱/Tunnel/多 route 宣告式同步/503 凍結/後台/前端 6-tab/HA API 平行串接。6-phase ultracode workflow（73 commits、Odoo 1055 tests 0 failed、operator unit 154 + integration 7）+ 5-lens × 4 輪 loop-until-dry 對抗式審查（52 confirmed：1 critical provision 冪等孤兒 tunnel / 15 major / 36 minor 全修）。知識持久化 5 篇（3 pattern + 2 pitfall：`[[unittest-mock-dual-namespace-patch]]` / `[[su-env-exempt-guard-false-green]]` / `[[two-stage-remote-provision-idempotency]]` / `[[seed-noupdate-sticky-template-links]]` / `[[owl-template-crash-class-syntax]]`）。**stg 發佈鏈（4-agent canvas 協作：paas-platform / paas-app-bundle-cd / woow-paas-charts / deploy-stg）**：operator image `20260606.2308`（含 #159 SA + #158 TTL stopgap，image-only Fleet bump，chart 0.1.13 不動，PR paas-app-bundle-cd#9）→ addon deploy-stg（develop `c45ffdb`）→ dev-sandbox-stg → **真 Cloudflare E2E 5/6 PASS**（provision 真 tunnel + primary route DNS `paas-sa-…woowtech.io` dig 解析 CF edge ✓ / `PUT /routes` 宣告式同步 + DNS reconcile ✓ / availability 雙層 ✓ / 刪除 unlink 連動清 CF tunnel+DNS ✓；503 凍結依交辦 SKIP），advisory 2（token DNS scope）閉環、清理乾淨。**F-SA-1 + F-SA-2 新增**（見 §F-SA；皆 stg 環境 / 平台命名慣例層，超出 SA P1 範圍，gitea #162/#163，priority:high）。
 - **F-SBX-5 已修（feat/skill-binding-ambiguity，2026-06-07，issue #156）**：skill 同名歧義 + 雙綁撞名修復，四層 lock-step —— ① `skill._compute_display_name` 後綴 version+scope（`test-echo v0.1.0 (System)`，`_rec_names_search=['name','version']`，後綴不進 wire）② `agent_template._check_no_duplicate_skill_name`（@api.constrains('skill_ids')，**不放行 superuser**，一條守全 3 寫入路徑：form 直寫/inverse/fork）③ `_build_skill_snapshot` dict-by-name dedup（user 蓋 system、與 bundle endpoint tie-break 同向、絕不 raise；`_effective_skill_ids` frozen 未動）④ 保守 migration `18.0.1.0.34`（(user,system) 配對自動刪 system rel、同 scope 同名 AMBIGUOUS 只 warning 留人工）。23 個新測試（display_name 7 / constraint 8 / dedup 5 / migration 3）+ 全套 1405 tests 0 fail 0 error（dev-sandbox 實跑，migration 另做 odoo-shell E2E 注入實證 + 冪等）。pitfall doc：[`skill-same-name-dual-bind-snapshot-collision`](../pitfalls/skill-same-name-dual-bind-snapshot-collision.md)（含存量鎖死預期行為 + 同 scope 人工清理 snippet + is_effective 雙 True 已知顯示行為）。**附帶發現（未修，tooling）**：`k8s-dev-sandbox/scripts/test.sh:110` 以 `${SLUG}-odoo-dev-sandbox` 組資源名，長 branch slug 被 helm 截斷（實際 `...-odoo-dev-sandb`）→ secret 查無 exit 2；workaround 直接 kubectl exec 正確資源名。
@@ -1634,3 +1635,35 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
     才有 P2 Access endpoints **且**含 delete-path 修復（PR #166）；一併也帶上 P1 operator 變更（prod 落後多版）。
     走 Fleet image-only（`paas-operator/values-prod.yaml`，paas-app-bundle-cd）。bump 後可比照 stg 做
     operator 級 live 寫測閉環（含 token live 驗證）。owner=platform / prod 維運。
+
+- **F-SA-5**（**post-migration 觀測 / OPEN**，priority:low，scope=P2.5 升級後 stg operator review；2026-06-10）：
+  **P2.5 migration `18.0.1.0.37` 的 policy fan-out 可讓「多 protected route」的 SA 升級後落在 per-SA
+  policy quota 之上，擋住後續使用者新增 policy。** quota 語意在 P2.5 改了——`_check_policy_quota`
+  count 的是 `search_count([('security_access_id','=',sa.id)])`＝該 SA 跨**所有** protected route 的
+  policy 總量；但 per-SA 上限（`plan.sa_max_access_policies`）沒變。migration step 2 fan-out 把每條
+  legacy policy 複製到每條 protected route（`cr.sa_skip_policy_quota` bypass 讓 migration 本身不中斷），
+  故 N legacy policy × M protected route → 升級後 N×M 列都算進同一個未變的 cap。**結果**：該 SA 升級後
+  可能 count > quota，下一次使用者 `_create_policy`（BFF）被「quota exceeded」拒絕，直到手動刪到 cap 以下；
+  純改 name/decision/rule 不受影響（`@api.constrains` 對那些 vals 不 fire）。**stg-only**（prod migration
+  no-op、prod operator 仍 pre-P2）。已在 `post-migrate.py` docstring（step 2「POST-MIGRATION QUOTA
+  CAVEAT」）標註。**建議**：升級後請維運人員 review 多 protected route SA 的 per-SA policy 配額；或日後
+  考慮在 count 端對「同 route 內完全相同的 fanned policy」去重。owner=platform / stg 維運。
+
+- **F-SA-6**（**dead bridge 移除 / OPEN**，priority:low，scope=P2.5 controller cleanup；2026-06-10）：
+  **移除 P2.5 SA-level Access bridge（`/access-config` SA-level endpoint + `_create_policy` 的
+  no-route_id fallback）。** Phase 1 加這條 bridge 是讓尚未遷移的 Phase 4 前端能繼續用 SA-level 寫法
+  （`_update_access_config` 把 `access_enabled`→primary route `is_protected`；`_create_policy` 無
+  `route_id` 時 fallback 到 primary route），原 comment 寫「Remove the bridge once Phase 4 ships」。
+  **Phase 4 已在本 PR（`feat/security-access-p2-access-per-route`）shipped**：`service.js` 移除
+  `updateAccessConfig`/`updateRoute`，`createPolicy(workspaceId, saId, routeId, vals)` 一律帶
+  `route_id`，`updateRouteAccess` 打 per-route endpoint。故 SA-level `/access-config` POST 與
+  no-route_id `_create_policy` 分支**已無任何 in-repo client 觸發**。
+  **本 cycle 刻意不移除的理由**：① severity=minor ② bridge 仍有完整安全測試鎖契約（positive
+  `test_update_access_config` / `test_update_access_config_whitelist_only` /
+  `test_security_access_endpoints.py` owner 翻開 + 非 member/role-gate 負向；移除須一併刪/改 ~5 條
+  test）③ deploy 窗口內帶舊快取 JS 的 in-flight 瀏覽器仍可能打舊 endpoint，過早移除會 break ④ 此面
+  **非安全發散**——bridge 走同一組 `_get_sa_or_error` cross-SA pin + 同一 whitelist + 同一
+  `Policy.create`，只是作用在 primary route 而非 client 指名 route，跟 per-route 路徑 lock-step。
+  **動手建議**：確認 stg/prod 都已部署含本 PR 的前端、in-flight client 窗口過後，刪 `api_sa_access_config`
+  + `_update_access_config` + `_sa_access_route` + `_create_policy` 的 `else` fallback 分支，並同步刪除
+  上述 5 條 bridge-specific 測試（per-route endpoint 的對等測試已涵蓋安全契約）。owner=platform。

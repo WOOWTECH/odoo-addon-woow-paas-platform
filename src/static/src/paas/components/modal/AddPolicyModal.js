@@ -16,6 +16,8 @@ import { securityAccessService } from "../../services/security_access";
  * Props:
  *   - workspaceId (number): Parent workspace ID
  *   - saId (number): Security Access ID
+ *   - route (Object): The Application Route this policy belongs to (P2.5
+ *       per-route: a policy binds to one route; create passes route.id)
  *   - policy (Object | null): Existing policy when editing
  *   - onClose (Function): Called when the modal is closed/cancelled
  *   - onSaved (Function): Called after a successful create/update
@@ -26,6 +28,7 @@ export class AddPolicyModal extends Component {
   static props = {
     workspaceId: { type: Number },
     saId: { type: Number },
+    route: { type: Object },
     policy: { type: [Object, { value: null }], optional: true },
     onClose: { type: Function },
     onSaved: { type: Function },
@@ -64,7 +67,7 @@ export class AddPolicyModal extends Component {
       ? await securityAccessService.updatePolicy(
           this.props.workspaceId, this.props.saId, this.props.policy.id, vals)
       : await securityAccessService.createPolicy(
-          this.props.workspaceId, this.props.saId, vals);
+          this.props.workspaceId, this.props.saId, this.props.route.id, vals);
     this.state.saving = false;
     if (res.success) {
       this.props.onSaved();
