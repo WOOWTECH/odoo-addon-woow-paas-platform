@@ -134,7 +134,16 @@
             <h3>Application Routes</h3>
             <p>Each route maps a public subdomain to your host. Traffic is
                forwarded to the service URL with the Host header set.</p>
-            <table class="o_woow_sa_detail__routes">
+            <!-- 軸2: a freshly-provisioned tunnel has zero routes (Active · No
+                 Route). Guide the user to add the first one; until then the
+                 tunnel is ready but answers 404. -->
+            <div t-if="!(state.sa.routes and state.sa.routes.length)"
+                 class="o_woow_sa_detail__hint">
+              No application routes yet. Add your first route below to expose a
+              service — until then the tunnel is ready but answers 404.
+            </div>
+            <table t-if="state.sa.routes and state.sa.routes.length"
+                   class="o_woow_sa_detail__routes">
               <thead>
                 <tr><th>Hostname</th><th>Service</th><th>Host header</th><th></th></tr>
               </thead>
@@ -147,7 +156,7 @@
                     <td><t t-esc="route.service_url"/></td>
                     <td><t t-esc="route.http_host_header ? 'Yes' : 'No'"/></td>
                     <td>
-                      <WoowButton t-if="!route.is_primary" variant="'danger'"
+                      <WoowButton variant="'danger'"
                                   size="'sm'" onClick="() => this.removeRoute(route)">
                         <WoowIcon name="'delete'" size="14"/>
                       </WoowButton>

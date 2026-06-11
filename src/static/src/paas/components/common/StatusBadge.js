@@ -84,6 +84,14 @@ export class StatusBadge extends Component {
                 colorClass: "o_woow_status_running",
                 showSpinner: false,
             },
+            // Security Access 軸2: tunnel provisioned but has zero application
+            // routes — reachable at nothing yet. Amber (pending colour) to
+            // signal "up but not serving", distinct from green Active.
+            active_no_route: {
+                label: "Active · No Route",
+                colorClass: "o_woow_status_pending",
+                showSpinner: false,
+            },
             suspended: {
                 label: "Suspended",
                 colorClass: "o_woow_status_pending",
