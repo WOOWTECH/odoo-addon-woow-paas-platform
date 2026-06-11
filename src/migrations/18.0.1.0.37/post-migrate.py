@@ -155,7 +155,12 @@ def migrate(cr, version):
                     sa_id, len(still_protected))
 
         protected = routes.filtered('is_protected')
-        primary = routes.filtered('is_primary')[:1] or routes[:1]
+        # 軸2 (.38) removed the is_primary ORM field; this older migration must
+        # not reference it (the loaded registry is the latest code). The inert
+        # carrier for legacy policies when no route is protected is just the
+        # SA's first route — the primary-vs-first distinction is immaterial here
+        # (it's only a parking spot) and the column may be gone post-.38.
+        primary = routes[:1]
 
         # ---- 1. copy SA-level login/session onto each protected route ----
         login_g = bool(legacy.get('login_google'))

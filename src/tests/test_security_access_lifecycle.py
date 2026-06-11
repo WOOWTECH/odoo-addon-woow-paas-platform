@@ -82,7 +82,6 @@ class TestSecurityAccessCron(TransactionCase):
         self.env['woow_paas_platform.security_access_route'].create({
             'security_access_id': sa.id,
             'subdomain_prefix': sa.canonical_name,
-            'is_primary': True,
         })
         sa.write({'state': 'active', 'tunnel_id': 'tun-cron'})
         sub = self._make_subscription(sub_state, **sub_kwargs)

@@ -521,11 +521,11 @@ class SecurityAccessController(Controller):
         sub = sa.sudo().subscription_id
         if sub and sub.sh_subscription_plan_id:
             quota = sub.sh_subscription_plan_id.sa_max_routes
-            count = len(sa.route_ids.filtered(lambda r: not r.is_primary))
+            count = len(sa.route_ids)
             if count >= quota:
                 return {"success": False,
                         "error": "Route quota exceeded: plan allows %d "
-                                 "custom route(s)" % quota}
+                                 "route(s)" % quota}
 
         check = self._check_route_prefix(subdomain_prefix)
         if not check["data"]["available"]:
@@ -705,10 +705,11 @@ class SecurityAccessController(Controller):
     # cross-SA pin + same whitelist + same Policy.create as the per-route path.
 
     def _sa_access_route(self, sa):
-        """The route the legacy SA-level Access helpers act on (P2.5 bridge):
-        the primary route. Returns an empty recordset if the SA has no route
-        yet (pre-provision) so callers can surface a clean error."""
-        return sa.route_ids.filtered("is_primary")[:1]
+        """The route the legacy SA-level Access helpers act on (P2.5 bridge).
+        軸2 removed the auto primary route, so this falls back to the SA's
+        first route; returns an empty recordset if the SA has no route yet so
+        callers can surface a clean error. (Full bridge removal: F-SA-6.)"""
+        return sa.route_ids[:1]
 
     def _sa_route(self, sa, route_id):
         """Resolve a client-supplied route_id, PINNED to the gated SA: the

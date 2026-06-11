@@ -48,7 +48,6 @@
                                     <field name="service_url"/>
                                     <field name="http_host_header"/>
                                     <field name="is_protected"/>
-                                    <field name="is_primary" readonly="1"/>
                                 </list>
                             </field>
                         </page>

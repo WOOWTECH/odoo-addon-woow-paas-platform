@@ -119,7 +119,7 @@ class TestRouteAccessSync(TransactionCase):
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': protected})
+                'is_protected': protected})
         return sa, route
 
     def _mock(self):
@@ -452,7 +452,7 @@ class TestRouteAccessSync(TransactionCase):
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             pol = self.Policy.create({
                 'route_id': route.id, 'name': 'pend', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'pend.com'})
@@ -494,7 +494,7 @@ class TestProvisionPushesRouteAccess(TransactionCase):
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True,
+                'is_protected': True,
                 'login_google': True})
             self.Policy.create({
                 'route_id': route.id, 'name': 'corp', 'decision': 'allow',
@@ -513,8 +513,9 @@ class TestProvisionPushesRouteAccess(TransactionCase):
             sa = self.SA.create({'name': 'PPA GW2',
                                   'workspace_id': self.workspace.id})
             sa.action_provision()
-        self.assertEqual(sa.state, 'active')
-        # 預設 primary route 由 provision 建立且 is_protected=False → 無 access sync
+        # 軸2: 裸 tunnel、零 route → active_no_route
+        self.assertEqual(sa.state, 'active_no_route')
+        # 無 route（更無 protected route）→ 不觸發任何 Access app sync
         self.assertFalse(mc.sync_access_app.called)
 
 
@@ -546,7 +547,7 @@ class TestRouteAccessCleanup(TransactionCase):
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             # route.access_app_id 已回填 app-al
             self.assertEqual(route.access_app_id, 'app-al')
             # cleanup 用 enabled=False teardown
@@ -571,7 +572,7 @@ class TestRouteAccessCleanup(TransactionCase):
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             self.assertEqual(route.access_app_id, 'app-al-err')
             mc.sync_access_app.reset_mock()
             mc.sync_access_app.side_effect = Exception("operator down")

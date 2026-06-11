@@ -433,7 +433,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
         self.route = self.env[
             'woow_paas_platform.security_access_route'].sudo().create({
                 'security_access_id': self.sa.id,
-                'subdomain_prefix': 'ac-ep-primary', 'is_primary': True})
+                'subdomain_prefix': 'ac-ep-primary'})
         self.pol = self.env[
             'woow_paas_platform.security_access_access_policy'].sudo().create({
                 'route_id': self.route.id, 'name': 'p',

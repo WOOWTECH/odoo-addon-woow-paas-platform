@@ -96,44 +96,61 @@ class TestSecurityAccess(TransactionCase):
             self.assertNotIn(k, sa_dict,
                              "SA to_dict must not expose %r (P2.5)" % k)
 
-    def test_platform_default_hostname_derived_on_demand(self):
-        """The few internal CF consumers derive a hostname from the platform
-        default (is_primary) route / canonical_name — never an SA field."""
-        self.env['ir.config_parameter'].sudo().set_param(
-            'woow_paas_platform.paas_domain', 'woowtech.io')
-        sa = self._make_sa()
-        # No route yet → falls back to {canonical_name}.{domain}
-        self.assertEqual(
-            sa._platform_default_hostname(),
-            f"{sa.canonical_name}.woowtech.io")
-
     # ---- provision ----
 
     @patch(MOCK_GET_CLIENT)
-    def test_provision_creates_tunnel_and_primary_route(self, mock_get_client):
+    def test_provision_creates_bare_tunnel_no_route(self, mock_get_client):
+        """軸2: provision builds a BARE tunnel — no hostname passed, NO
+        auto-created primary route, zero DNS. A freshly-provisioned SA with no
+        user-added routes ends in 'active_no_route' (D1 distinct state) with an
+        empty route list (canonical_name is the tunnel identity, not a route)."""
         mock_client = MagicMock()
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-sa-1',
             'tunnel_token': 'tok-secret',
             'tunnel_name': 'paas-sa-x-y',
-            'dns_record_id': 'rec-primary',
         }
         mock_client.sync_tunnel_routes.return_value = {'routes': []}
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
         sa.action_provision()
-        self.assertEqual(sa.state, 'active')
+        # zero routes -> active_no_route (D1), NOT 'active'
+        self.assertEqual(sa.state, 'active_no_route')
         self.assertEqual(sa.tunnel_id, 'tun-sa-1')
-        # tunnel name = canonical（反推性需求）
+        # tunnel name = canonical (identity); NO hostname (bare tunnel)
         create_kwargs = mock_client.create_tunnel.call_args.kwargs
         self.assertEqual(create_kwargs['name'], sa.canonical_name)
-        # primary route 自動建立、prefix = canonical、不可刪
-        primary = sa.route_ids.filtered('is_primary')
-        self.assertEqual(len(primary), 1)
-        self.assertEqual(primary.subdomain_prefix, sa.canonical_name)
-        # provision 只對 operator sync 一次（sa_skip_route_sync 略過
-        # route-create override 的多餘 sync；只留帶 http_host_header 的顯式 sync）
-        self.assertEqual(mock_client.sync_tunnel_routes.call_count, 1)
+        self.assertNotIn('hostname', create_kwargs)
+        # NO auto primary route — the screenshot's undeletable route is gone
+        self.assertEqual(len(sa.route_ids), 0)
+
+    @patch(MOCK_GET_CLIENT)
+    def test_state_machine_active_no_route_to_active_and_back(self, mock_get_client):
+        """D1 state machine: bare tunnel is 'active_no_route'; adding the first
+        application route flips it to 'active'; deleting the last route (now
+        freely deletable — no primary guard) drops it back to 'active_no_route'."""
+        mock_client = MagicMock()
+        mock_client.create_tunnel.return_value = {
+            'tunnel_id': 'tun-sm', 'tunnel_token': 't', 'tunnel_name': 'n',
+        }
+        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_get_client.return_value = mock_client
+        sa = self._make_sa()
+        sa.action_provision()
+        self.assertEqual(sa.state, 'active_no_route')
+
+        # add first route -> active
+        route = self.Route.create({
+            'security_access_id': sa.id,
+            'subdomain_prefix': 'app-one',
+            'service_url': 'http://localhost:80',
+        })
+        self.assertEqual(sa.state, 'active')
+
+        # delete the last route (no primary guard) -> back to active_no_route
+        route.unlink()
+        self.assertEqual(len(sa.route_ids), 0)
+        self.assertEqual(sa.state, 'active_no_route')
 
     @patch(MOCK_GET_CLIENT)
     def test_provision_error_sets_error_state(self, mock_get_client):
@@ -166,7 +183,7 @@ class TestSecurityAccess(TransactionCase):
         sa = self._make_sa()
         # First provision succeeds end-to-end.
         sa.action_provision()
-        self.assertEqual(sa.state, 'active')
+        self.assertEqual(sa.state, 'active_no_route')
         self.assertEqual(mock_client.create_tunnel.call_count, 1)
         original_tunnel = sa.tunnel_id
 
@@ -177,7 +194,7 @@ class TestSecurityAccess(TransactionCase):
         # No second tunnel created; tunnel_id unchanged; back to active.
         mock_client.create_tunnel.assert_not_called()
         self.assertEqual(sa.tunnel_id, original_tunnel)
-        self.assertEqual(sa.state, 'active')
+        self.assertEqual(sa.state, 'active_no_route')
 
     @patch(MOCK_GET_CLIENT)
     def test_provision_resync_failure_keeps_tunnel_for_retry(
@@ -206,80 +223,34 @@ class TestSecurityAccess(TransactionCase):
         mock_client.create_tunnel.reset_mock()
         sa.action_provision()
         mock_client.create_tunnel.assert_not_called()
-        self.assertEqual(sa.state, 'active')
+        self.assertEqual(sa.state, 'active_no_route')
 
     @patch(MOCK_GET_CLIENT)
     def test_provision_stage2_non_operator_error_fails_loud(
             self, mock_get_client):
-        """Stage-2 非 operator 例外（route create UNIQUE 撞庫）也須 fail-loud
-        到 'error'，不得留在假性 'active' 而 CF 有 live tunnel、DB 無對齊。
+        """Stage-2（route re-sync）的非 operator 例外也須 fail-loud 到 'error'，
+        不得留在假性 active 而 CF 有 live tunnel、DB 無對齊。tunnel_id 保留供
+        retry（無孤兒）。
 
-        重現：先用 sa1 佔走 canonical_name 對應的 primary prefix，再 provision
-        sa2 但讓它算出同一個 canonical_name → primary route create 撞 UNIQUE →
-        非 PaaSOperatorError 例外。修前窄 except 會放行例外、state 卡在
-        'active'；修後 broad except 寫 'error'。
+        軸2: 不再有 primary route create，所以原本的 UNIQUE-clash 觸發已不存在；
+        改以 stage-2 sync 拋一個非 PaaSOperator 例外（programming error）來驗
+        broad except 仍 fail-loud。
         """
         mock_client = MagicMock()
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-stage2',
             'tunnel_token': 'tok-secret',
             'tunnel_name': 'paas-sa-x-y',
-            'dns_record_id': 'rec-primary',
         }
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.sync_tunnel_routes.side_effect = ValueError('unexpected')
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
-        # Squat the SA's own canonical_name as a route prefix so the primary
-        # route create inside action_provision hits the UNIQUE constraint.
-        self.Route.with_context(sa_skip_route_sync=True).create({
-            'security_access_id': sa.id,
-            'subdomain_prefix': sa.canonical_name,
-            'is_primary': True,
-        })
-        # Drop the primary so the re-sync self-heal path isn't the one tested;
-        # we want the FIRST-provision branch's UNIQUE clash. Re-create a
-        # NON-primary squatter on the canonical prefix on a sibling SA.
-        sa.route_ids.with_context(sa_force_delete_primary=True).unlink()
-        sibling = self.SecurityAccess.create({
-            'name': 'Squatter', 'workspace_id': self.workspace.id,
-        })
-        self.Route.with_context(sa_skip_route_sync=True).create({
-            'security_access_id': sibling.id,
-            'subdomain_prefix': sa.canonical_name,
-            'is_primary': True,
-        })
         sa.action_provision()
-        # tunnel was created (id stored) but primary route create clashed →
-        # must NOT remain 'active'; must fail loud to 'error'.
+        # stage-2 raised a non-operator error -> must fail loud to 'error',
+        # NOT silently stay active; tunnel_id retained for a safe retry.
         self.assertEqual(sa.state, 'error')
         self.assertTrue(sa.error_message)
         self.assertEqual(sa.tunnel_id, 'tun-stage2')
-
-    @patch(MOCK_GET_CLIENT)
-    def test_provision_retry_rebuilds_missing_primary_route(
-            self, mock_get_client):
-        """active+tunnel_id 但無 primary route 的不可自癒態：retry 須補建 primary。
-
-        模擬 stage-2 失敗後落入「tunnel 已存、primary route 沒建成」的狀態，
-        再次 provision（走 re-sync 分支）必須偵測並補建 primary route，而非
-        推一份只有 catch-all 404 的 ingress。
-        """
-        mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
-        mock_get_client.return_value = mock_client
-        sa = self._make_sa()
-        # Simulate the broken state: live tunnel, no primary route.
-        sa.write({'state': 'error', 'tunnel_id': 'tun-orphan'})
-        self.assertFalse(sa.route_ids.filtered('is_primary'))
-        sa.action_provision()
-        # primary route rebuilt from canonical_name + sync pushed it.
-        primary = sa.route_ids.filtered('is_primary')
-        self.assertEqual(len(primary), 1)
-        self.assertEqual(primary.subdomain_prefix, sa.canonical_name)
-        self.assertEqual(sa.state, 'active')
-        sync_kwargs = mock_client.sync_tunnel_routes.call_args.kwargs
-        subs = [r['subdomain'] for r in sync_kwargs['routes']]
-        self.assertIn(sa.canonical_name, subs)
 
     # ---- refresh status ----
 
@@ -357,7 +328,6 @@ class TestSecurityAccess(TransactionCase):
             self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True,
             })
         return sa
 
@@ -432,12 +402,6 @@ class TestSecurityAccess(TransactionCase):
                         'security_access_id': sa2.id,
                         'subdomain_prefix': 'taken-prefix',
                     })
-
-    def test_primary_route_cannot_be_deleted(self):
-        sa = self._make_active_sa()
-        primary = sa.route_ids.filtered('is_primary')
-        with self.assertRaises(UserError):
-            primary.unlink()
 
     def test_route_prefix_immutable(self):
         sa = self._make_active_sa()
@@ -531,7 +495,6 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
             self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True,
             })
             self.Route.create({
                 'security_access_id': sa.id,
@@ -560,12 +523,13 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
         self.assertEqual(sa.state, 'suspended')
         self.assertEqual(sa.pre_suspend_state, 'active')
         kwargs = mock_client.sync_tunnel_routes.call_args.kwargs
-        # 全部 route（含 primary）都 503；service_url 原值保留在 DB
+        # 全部 route 都 503；service_url 原值保留在 DB
         self.assertTrue(all(
             r['service_url'] == 'http_status:503' for r in kwargs['routes']))
         self.assertEqual(len(kwargs['routes']), 2)
         self.assertEqual(
-            sa.route_ids.filtered(lambda r: not r.is_primary).service_url,
+            sa.route_ids.filtered(
+                lambda r: r.subdomain_prefix == 'lc-custom').service_url,
             'http://localhost:80')
 
     def test_suspend_idempotent(self):
@@ -634,7 +598,6 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
                 'app_id': 'app-dws', 'policy_ids': [], 'allowed_idps': []}
             route = self.Route.create({'security_access_id': sa.id,
                                        'subdomain_prefix': sa.canonical_name,
-                                       'is_primary': True,
                                        'is_protected': True})
             self.assertEqual(route.access_app_id, 'app-dws')
             sa._do_suspend()
@@ -771,7 +734,6 @@ class TestSecurityAccessAcl(TransactionCase):
             'woow_paas_platform.security_access_route'].create({
                 'security_access_id': self.sa.id,
                 'subdomain_prefix': self.sa.canonical_name,
-                'is_primary': True,
             })
 
     def test_member_can_read(self):
