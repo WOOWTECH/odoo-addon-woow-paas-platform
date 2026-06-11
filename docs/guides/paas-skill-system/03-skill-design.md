@@ -3,8 +3,8 @@ title: Skill 設計與發布
 category: guides
 status: active
 created: 2026-05-25
-updated: 2026-05-25
-tags: [paas, skill-system, skill-design, authoring]
+updated: 2026-06-09
+tags: [paas, skill-system, skill-design, authoring, claude-code-model]
 related:
   - README.md
   - 04-skill-bundle-jwt.md
@@ -13,36 +13,46 @@ related:
 
 # Skill 設計與發布
 
-> 如何建立、打包、發布一個 Skill，讓 agent-runtime Pod 能下載並執行。對應程式碼：`src/models/skill.py`。
+> 如何建立、打包、發布一個 Skill，讓 agent-runtime Pod 能下載並交給 agent 使用。對應程式碼：`src/models/skill.py`。
+
+> ⚠️ **執行模型更新（2026-06-09）**：Skill 執行已從「subprocess-tool（每個 skill =
+> 固定 entrypoint 的 StructuredTool）」改為 **Claude Code 模型**（SKILL.md 指令注入 +
+> `skill:load_skill` + 通用 `bash:execute`，bash 跑在異 UID 的 `bash_bridge` sidecar）。
+> **STG 已上線並驗證（agent-runtime 1.4.0）；prod 待 Fleet flip**。設計依據見
+> `docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md`，
+> sidecar 細節見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 
 ## 🎯 什麼是 Skill？
 
-Skill 是系統裡**最小的功能單位**，像一個可被 Pod 下載執行的外掛，由三部分組成：
+Skill 是系統裡**最小的能力單位**——一份**指令**（SKILL.md body）加上**選配**的 bundle 內檔案：
 
-- **metadata** — `SKILL.md` 的 frontmatter
-- **程式碼** — Python / JavaScript 等
-- **靜態資源** —（可選）
+- **metadata** — `SKILL.md` 的 frontmatter（必填 `name` / `description`）
+- **指令本體** — `SKILL.md` frontmatter 之後的 markdown（**會注入 agent context**，告訴 agent 這個 skill 怎麼用）
+- **選配檔案** — script（`scripts/...`）、靜態資源等；agent 依指令自行用 `bash:execute` 執行，**不再要求固定 entrypoint**
 
-在 Odoo 端，每一個 Skill 版本是 `woow_paas_platform.skill` 的一筆記錄；實際程式被打包成 tar.gz，存進 `ir.attachment`。
+> 🔁 **與舊模型的差異**：舊版每個 skill 是一個 `StructuredTool`，invoke = 跑固定 `scripts/main.py`，SKILL.md body 被丟棄、最小 skill 必須有可執行檔。新版（Claude Code 模型）最小 skill **只要一份 SKILL.md**；agent 讀懂指令後**自己決定**要不要、怎麼用 `bash:execute` 跑 bundle 內 script。
+
+在 Odoo 端，每一個 Skill 版本是 `woow_paas_platform.skill` 的一筆記錄；實際 bundle 被打包成 tar.gz，存進 `ir.attachment`。
 
 ## 📁 Bundle 目錄結構
 
 ```
 my-skill/
-├── SKILL.md          ← frontmatter metadata（至少要有 name、version）
-├── src/
-│   ├── __init__.py
-│   ├── main.py        ← 入口程式
-│   └── utils.py
-└── static/            ← 靜態資源（可選）
+├── SKILL.md          ← 必要；tar root 直接放，不可包 wrapper dir
+│                        frontmatter（name / description）+ 指令 body
+├── scripts/          ← 選配；agent 依 SKILL.md 指令用 bash:execute 自行執行
+│   └── do_thing.py
+└── static/           ← 選配；靜態資源
     └── assets/
 ```
+
+> 📌 **最小合法 skill = 只有一份 `SKILL.md`**（name + description）。不再要求 `scripts/main.py` 或任何可執行檔；`SKILL.md` 必須在 tar root（包 wrapper dir 會被 `BundleStructureError` 擋下，見 `src/wizard/skill_bundle_validation.py`）。
 
 ```mermaid
 graph TB
     subgraph Bundle["📦 Skill Bundle（tar.gz）"]
-        MD["SKILL.md<br/>frontmatter metadata"]
-        CODE["程式碼 .py / .js ..."]
+        MD["SKILL.md<br/>frontmatter + 指令 body"]
+        CODE["選配 script<br/>（agent 用 bash:execute 跑）"]
         ASSETS["靜態資源（可選）"]
     end
     Bundle -->|"存成 binary（base64）"| ATT["ir.attachment"]
@@ -51,19 +61,17 @@ graph TB
 
 ## 📝 SKILL.md frontmatter
 
-> ⚠️ Odoo 端**強制的契約只有 `name` 與 `version`**（對應欄位與 UNIQUE 約束）；其餘欄位會被解析後原樣存進 `skill_metadata`（JSON），由 Pod 內的 runtime 解讀。下面是**示意**格式，實際可用欄位以 runtime 解析為準。
+> ⚠️ Odoo 端**強制的契約是 `name` 與 `version`**（對應欄位與 UNIQUE 約束）；`description` 為新模型必填（roster 用）。其餘欄位會被解析後原樣存進 `skill_metadata`（JSON），由 Pod 內的 runtime 解讀。下面是**示意**格式，實際可用欄位以 runtime 解析為準。
 
 ```yaml
 ---
-name: my-skill            # 契約：唯一 slug
+name: my-skill            # 契約：唯一 slug（≤64 字、小寫字母/數字/連字號）
 version: 1.0.0            # 契約：semver
-description: 做某件事     # 以下皆 metadata（存 skill_metadata）
-author: team-xxx
-tags: [coding, review]
+description: 做某件事     # 新模型必填：會進 skill-roster 注入 agent context
 ---
 ```
 
-> 📌 Pod 端 `loader.py` 實際解析的 frontmatter 欄位（必填 `name`/`description`，選填 `entrypoint`/`runtime`/`timeout_seconds`/`max_output_kb`/`allowed_egress`）見 [agent-runtime Pod 內部](06-pod-internals.md)。
+> 📌 **新模型不再需要 `entrypoint`**（舊 subprocess-tool 模型才有，已隨 Claude Code 模型移除，見頂部橫幅）。frontmatter 之後的 markdown body 即指令本體，agent 透過 `skill:load_skill` 取回；如何執行見 [Skill 運行時生命週期](05-skill-runtime-lifecycle.md) 與 [agent-runtime Pod 內部](06-pod-internals.md)。
 
 ## 📊 Skill Model 欄位（`src/models/skill.py`）
 
@@ -115,7 +123,7 @@ graph LR
     A["本地開發<br/>my-skill/ 資料夾"] -->|"tar.gz 打包"| B["上傳到 Odoo<br/>Skill（draft）"]
     B -->|"算 sha256 + 解析 frontmatter"| C["bundle_sha256 +<br/>skill_metadata(JSON)"]
     B -->|"state=published"| D["可供 Pod 下載"]
-    D -->|"GET /skill-bundle"| E["Pod 快取並執行"]
+    D -->|"GET /skill-bundle"| E["Pod load_skill 載入指令<br/>agent 用 bash:execute 執行"]
     A2["改版 v1.1.0"] -->|"新增一筆<br/>partial unique index<br/>(user/system leg)"| B
     D -->|"舊版 state=deprecated"| F["停止供應"]
 ```
@@ -155,7 +163,7 @@ system skill 由 Odoo 自動 union 進每個 project 的 `_build_skill_snapshot`
 
 ## 🔐 bundle attachment 不是普通附件
 
-`bundle_attachment_id` 存的是可執行 payload，屬敏感資料。系統對它做了 **row-level ACL + anchor stamping** 兩層防護，避免被跨專案越權讀取。原理見 [Skill 系統安全模型](09-security-model.md)，repo 內 pattern：`docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`。
+`bundle_attachment_id` 存的是 SKILL.md 指令 + 選配 script，屬敏感資料（script 會被 agent 在異 UID sidecar 內以 `bash:execute` 執行）。系統對它做了 **row-level ACL + anchor stamping** 兩層防護，避免被跨專案越權讀取。原理見 [Skill 系統安全模型](09-security-model.md)，repo 內 pattern：`docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`。
 
 ## 📁 相關文件
 
