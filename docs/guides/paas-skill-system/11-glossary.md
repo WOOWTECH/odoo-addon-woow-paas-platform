@@ -3,7 +3,7 @@ title: PaaS Skill 術語表
 category: guides
 status: active
 created: 2026-05-25
-updated: 2026-05-25
+updated: 2026-06-09
 tags: [paas, skill-system, glossary, reference]
 related:
   - README.md
@@ -31,8 +31,8 @@ related:
 | **D-CAVEAT-1** | namespace secret **fail-closed**：未設值直接 `UserError`，不退化成弱 hash |
 | **D-CAVEAT-2** | 跨 repo 部署順序風險：F-PC-7 未先部署 → 1h 在途 token 空窗 |
 | **SC-4** | mcp / template reloader 缺 tool_set 失效 hook（改 snapshot 可能 silently 不生效） |
-| **SC-5** | langgraph stub 與 ws_server 都送 `done` → 雙 done（待修） |
-| **SC-7** | skill tool 依 `(name, version, invoker_role)` 快取做 role 隔離 |
+| **SC-5** | （已解）舊 langgraph stub 與 ws_server 都送 `done` 的雙 done；真 `stream()` 不送 done，由 ws_server 唯一合成 |
+| **SC-7** | （舊 subprocess-tool 模型）skill tool 依 `(name, version, invoker_role)` 快取做 role 隔離；新模型 skill 不再是 per-skill tool |
 
 ## A
 
@@ -44,6 +44,9 @@ related:
 
 **AGENT_RUNTIME_WEBHOOK_SECRET / _PREVIOUS**
 驗 Pod→Odoo webhook 的 HMAC 雙 secret。注意 current 版是**裸名**（無 `_CURRENT` 後綴）。
+
+**AGENT_RUNTIME_SKILL_RUNNER_ENABLED**
+agent container 的 gate env（Drop B）：`true` 才暴露 `bash:execute` 並起 `bash_bridge` sidecar。由 operator 依 `skillRunner.enabled` 顯式設定，**預設 false（fail-closed）**。見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 
 **agent-runtime**
 Pod 內負責載入、執行 Skills 與跑對話 agent loop 的 runtime 程序。程式碼在 `woow-paas-agent-runtime` repo。
@@ -62,6 +65,19 @@ paas-operator 的認證金鑰。Odoo 呼叫 operator 時透過 `X-API-Key` heade
 
 **audit_logger**
 Pod 內把稽核事件以一行 JSON 印到 **stdout**（K8s log 收集）。必填 `ts`/`level`/`event`/`project_hash`，15 種 event 凍結；對 mail body 做 **PII redaction**（`security/audit_logger.py`）。
+
+## B
+
+**bash:execute**
+Claude Code 模型的通用 shell tool（`bash:execute(cmd, timeout_seconds?)`）：full shell、可 `pip install`，cwd 預設 `/workspace`，回 `{stdout, stderr, exit_code, truncated}`。在異 UID 的 `bash_bridge` sidecar 內執行。
+
+**bash_bridge / skill-runner**
+agent pod 內的 sidecar container（agent-runtime image ≥ `1.4.0`），用異於 agent 的 UID（`runAsUser=10002`）+ PID ns 隔離跑 `bash:execute` 的指令。見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
+
+## C
+
+**Claude Code 模型**
+skill 執行模型（2026-06-09 STG 上線、prod 待 flip）：skill = SKILL.md 指令 + 選配檔案；agent 用 `skill:load_skill` 取回指令、用 `bash:execute` 自行執行，取代「每個 skill = 固定 entrypoint 的 StructuredTool」的舊 subprocess-tool 模型。
 
 ## D
 
@@ -92,7 +108,9 @@ Odoo↔Pod WebSocket 的訊息格式，含 `version` / `type` / `request_id` / `
 
 ## L
 
-**langchain / langgraph**：LLM 對話與 tool calling 框架。**legacy** 路徑跑在 Odoo（`ai_client.py`：`ChatOpenAI` + `langchain-mcp-adapters` + `langgraph`）；**agent-runtime** 路徑在 Pod（`runtime/langgraph_runtime.py`，同樣 stack，但 agent loop 目前是 Phase B stub）。見 [Agent 對話與串流](02-conversation-streaming.md) · [agent-runtime Pod 內部](06-pod-internals.md)。
+**langchain / langgraph**：LLM 對話與 tool calling 框架。**legacy** 路徑跑在 Odoo（`ai_client.py`：`ChatOpenAI` + `langchain-mcp-adapters` + `langgraph`）；**agent-runtime** 路徑在 Pod（`runtime/langgraph_runtime.py`，同樣 stack；agent loop 已上線，skill 執行為 Claude Code 模型 `load_skill` + `bash:execute`）。見 [Agent 對話與串流](02-conversation-streaming.md) · [agent-runtime Pod 內部](06-pod-internals.md)。
+
+**load_skill（skill:load_skill）**：Claude Code 模型的 tool，agent 判斷要用某 skill 時呼叫 → `ensure_skill_cached` lazy fetch+extract → 回 `{name, description, body, workdir, files[]}` 供 agent 依指令用 `bash:execute` 執行。
 
 ## M
 
@@ -122,14 +140,15 @@ Odoo↔Pod WebSocket 的訊息格式，含 `version` / `type` / `request_id` / `
 
 ## S
 
-**Skill**：最小功能單位（`SKILL.md` + 程式碼 + 資源）。
-**SKILL_BUNDLE_TOKEN**：HS256 JWT，Pod 用它向 Odoo 驗證身份並下載 bundle，效期 1h，`token_use=skill_bundle`。
-**Skill Bundle**：Skill 的封包格式（tar.gz），存於 `ir.attachment`。
-**skill_snapshot**：Odoo 傳給 Pod 的已發布 skills 清單（`name`/`version`/`sha`，`_build_skill_snapshot`）。
+**Skill**：最小能力單位——SKILL.md 指令 + 選配 bundle 檔案（Claude Code 模型；舊版才是「+ 固定 entrypoint 程式」）。
+**SKILL_BUNDLE_TOKEN**：HS256 JWT，Pod 用它向 Odoo 驗證身份並下載 bundle，預設效期 7 天（issue #155），`token_use=skill_bundle`。
+**Skill Bundle**：Skill 的封包格式（tar.gz），存於 `ir.attachment`；tar root 直接含 `SKILL.md`，不可包 wrapper dir。
+**skill-roster**：progressive disclosure 機制——啟動時把 effective skills 的 `name + description` 組成清單注入 system_context，全文等 agent 呼 `load_skill` 才載入（cap 約 50 條 / 4KB）。
+**skill_snapshot**：Odoo 傳給 Pod 的已發布 skills 清單（`name`/`version`/`sha`/`description`，`_build_skill_snapshot`）。
 **spawn_or_attach**：核心冪等入口，依 helm release 狀態分 cold start / resume / attach。
 **SSE (Server-Sent Events)**：對話串流回瀏覽器的協定，端點 `GET /api/ai/stream/{channel_id}`，`content_type=text/event-stream`。見 [Agent 對話與串流](02-conversation-streaming.md)。
-**StructuredTool**：langchain 的 tool 包裝。Pod 的 `loader.py` 把每個 skill 的 `SKILL.md` 包成 `StructuredTool` 餵給 LLM，依 `(name, version, invoker_role)` 快取（role 隔離）。
-**subprocess isolation**：Pod 執行 skill 的隔離方式（`subprocess_runner.py`）：硬 rlimit（CPU 30s / AS 512MB / NOFILE / NPROC / FSIZE）、wall timeout `min(宣告, 60s)`、**env 白名單**（只放 PATH/HOME/LANG/PROJECT_HASH，不漏任何 secret）、stdout 截斷。
+**StructuredTool**：langchain 的 tool 包裝。**舊 subprocess-tool 模型**才把每個 skill 包成 `StructuredTool`；Claude Code 模型已改用通用 `skill:load_skill` + `bash:execute`，skill 不再各自是 tool。
+**subprocess isolation**：Pod 執行 skill bash 的隔離方式（`subprocess_runner.py` 的 `_safe_env` / `_set_rlimits` / `_capped_*`）：硬 rlimit（CPU / AS / NOFILE / NPROC / FSIZE）、wall timeout、**env 白名單**（只放 PATH/HOME/LANG/PROJECT_HASH，不漏任何 secret）、stdout 截斷。Drop B 起在**異 UID（`runAsUser=10002`）的 `bash_bridge` sidecar** 內執行（PID ns 隔離，見 skill-runner）。
 **sync-workspaces**：helm upgrade 重渲染 NetworkPolicy egress，不重啟 Pod。
 
 ## T

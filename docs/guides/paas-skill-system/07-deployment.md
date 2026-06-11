@@ -3,8 +3,8 @@ title: Agent Runtime Pod 部署機制
 category: guides
 status: active
 created: 2026-05-25
-updated: 2026-06-05
-tags: [paas, skill-system, deployment, kubernetes, helm]
+updated: 2026-06-09
+tags: [paas, skill-system, deployment, kubernetes, helm, skill-runner]
 related:
   - README.md
   - 05-skill-runtime-lifecycle.md
@@ -114,6 +114,16 @@ sequenceDiagram
     Note over K8s: Pod 不重啟，只更新出口白名單
 ```
 
+## 🧩 skill-runner sidecar 開關（Drop B）
+
+operator `_build_install_values` 會把 `skillRunner.enabled` **顯式**（true/false 都設）forward 給 agent-runtime chart，由 env `AGENT_RUNTIME_SKILL_RUNNER_ENABLED` 驅動（`extra/paas-operator/src/config.py` 的 `agent_runtime_skill_runner_enabled`，**預設 false**）。同一個 chart 值同時決定：① 是否起 `bash_bridge` sidecar container；② agent container gate env → runtime 是否暴露 `bash:execute`。
+
+- **為何顯式雙向**：sidecar-aware chart 預設 `skillRunner.enabled=true`，若「關閉就省略」會讓 chart 預設值贏 → operator env 關不掉。顯式設才是真正的 kill-switch。
+- **硬約束**：flip 時 agent-runtime image 必須 `≥1.4.0`（含 `bash_bridge`）+ chart `0.4.0`，否則 crashloop。
+- **既有 pod 不會自動套用**：改 `AGENT_RUNTIME_SKILL_RUNNER_ENABLED` 走 cold-start path，既有 pod 需 respawn（同 image 升版的 reap 邏輯）才生效。
+
+完整 kill-switch 鏈、4 個跨組件 gap、異 UID 安全模型見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
+
 ## 🆔 命名規則與 hash（重要）
 
 | 資源 | 命名 |
@@ -132,4 +142,5 @@ sequenceDiagram
 - [Skill 運行時生命週期](05-skill-runtime-lifecycle.md) — Pod 內部視角
 - [Webhook 回呼與 ws_token](08-webhook-ws-token.md) — Pod 怎麼回報
 - [Skill 系統安全模型](09-security-model.md) · [PaaS Skill 術語表](11-glossary.md)
+- [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md) — `skillRunner.enabled` kill-switch 全貌
 - [agent-runtime image 升版 SOP](../deployment/agent-runtime-image-upgrade-sop.md) — operator/platform 視角升版 runbook（tag 注入鏈、DELETE reap 程序）

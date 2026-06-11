@@ -3,8 +3,8 @@ title: Skill 系統安全模型
 category: guides
 status: active
 created: 2026-05-25
-updated: 2026-05-25
-tags: [paas, skill-system, security, threat-model]
+updated: 2026-06-09
+tags: [paas, skill-system, security, threat-model, bash-sidecar]
 related:
   - README.md
   - 10-roadmap-phases.md
@@ -114,6 +114,15 @@ skill-bundle 下載端點改為 **dual-leg** domain：`state=published AND name 
 - **project-owned leg** 維持 HC-2：以 token 的 `project_id` 為權威（不信任 client 傳入值）。
 - **system leg** 刻意放寬：`scope='system'` 的 skill 可被**任一有效 skill_bundle token** 下載（平台策展、全域可取，為設計意圖）。
 - (name,version) 衝突時 **project row 遮蔽（shadow）system row**，避免 pod `_TOOL_CACHE` name clash。
+
+## 🧰 Skill 執行隔離（bash sidecar / 異 UID）— Drop B
+
+Claude Code 模型的 `bash:execute` 跑的是使用者上傳、不受信任的 bash，需要額外一層執行隔離（2026-06-09 STG 上線、prod 待 flip）。完整 kill-switch 與機制見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)；安全模型摘要：
+
+- **邊界**：沙箱 = agent pod 自身，pod : workspace = **1:1** → pod 邊界即租戶邊界，**無跨租戶外洩**。
+- **殘留風險**不是鄰居租戶，而是**租戶自己 pod 內的平台級憑證**被它自己上傳的 untrusted skill bash 撈走：`LLM_API_KEY`(env) / `SKILL_BUNDLE_TOKEN`(env) / auth 簽章檔。
+- **緩解（defense-in-depth）**：bash 跑在 **sidecar container**，k8s `runAsUser=10002` 異於 agent(`10001`) + **PID ns 隔離**（看不到 `/proc/<agent-pid>`，非只靠檔案權限）+ `_safe_env` allowlist + 祕密檔 `0400`。封住 `/proc` 旁路與 `RLIMIT_NPROC` per-UID 共用 DoS。
+- **誠實標註（本期未解，列未來硬化）**：bash 與 agent **同 network namespace** → 若 `externalEgress` 開到 LLM provider，仍可循該路徑用偷到的 key 外送（異 UID 擋不住網路向量；IMDS `169.254.169.254` 已被 NetworkPolicy except 擋）。IPC / Unix socket / `/dev/shm` 同 pod 不隔離。完整封死需 gVisor/Kata 或短命 sandbox pod（v2）。追蹤 `woow-paas/paas-agent-runtime#26`。
 
 ## 📚 本 repo 對應 pattern（`docs/decisions/patterns/`）
 
