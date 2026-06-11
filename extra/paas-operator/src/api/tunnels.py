@@ -60,44 +60,52 @@ async def create_tunnel(request: TunnelCreateRequest):
         # Step 2: Get the tunnel token
         tunnel_token = await cloudflare_service.get_tunnel_token(tunnel_id)
 
-        # Step 3: Configure ingress rules
-        await cloudflare_service.configure_tunnel(
-            tunnel_id=tunnel_id,
-            hostname=request.hostname,
-            service_url=request.service_url,
-        )
-
-        # Step 4: Create DNS record
+        # Step 3 + 4: with a hostname -> single ingress rule + DNS record.
+        # Without a hostname -> BARE tunnel: catch-all 404 only, no DNS. The
+        # subdomain-extraction below dereferences request.hostname, so it MUST
+        # stay inside the hostname branch (None.endswith would raise).
         dns_record_id = None
         dns_failed = False
-        if cloudflare_service.dns_enabled:
-            # Extract subdomain from hostname
-            domain = settings.cloudflare_domain
-            if request.hostname.endswith(f".{domain}"):
-                subdomain = request.hostname[: -(len(domain) + 1)]
-            else:
-                subdomain = request.hostname.split(".")[0]
+        if request.hostname:
+            await cloudflare_service.configure_tunnel(
+                tunnel_id=tunnel_id,
+                hostname=request.hostname,
+                service_url=request.service_url,
+            )
 
-            try:
-                dns_record_id = await cloudflare_service.create_dns_record_for_tunnel(
-                    subdomain=subdomain,
-                    tunnel_id=tunnel_id,
-                )
-            except CloudflareException as e:
-                # DNS was ENABLED but creation failed: surface dns_failed=True
-                # so the caller (Odoo) can tell this apart from dns_record_id
-                # being None because DNS is intentionally disabled. Without the
-                # flag the caller would mark the SA active with no resolvable
-                # hostname and rely entirely on a later re-sync to self-heal.
-                dns_failed = True
-                logger.warning(
-                    f"DNS record creation failed for {request.hostname}: {e.message}. "
-                    "Tunnel is created but DNS must be configured manually."
-                )
+            if cloudflare_service.dns_enabled:
+                # Extract subdomain from hostname
+                domain = settings.cloudflare_domain
+                if request.hostname.endswith(f".{domain}"):
+                    subdomain = request.hostname[: -(len(domain) + 1)]
+                else:
+                    subdomain = request.hostname.split(".")[0]
+
+                try:
+                    dns_record_id = await cloudflare_service.create_dns_record_for_tunnel(
+                        subdomain=subdomain,
+                        tunnel_id=tunnel_id,
+                    )
+                except CloudflareException as e:
+                    # DNS was ENABLED but creation failed: surface dns_failed=True
+                    # so the caller (Odoo) can tell this apart from dns_record_id
+                    # being None because DNS is intentionally disabled. Without the
+                    # flag the caller would mark the SA active with no resolvable
+                    # hostname and rely entirely on a later re-sync to self-heal.
+                    dns_failed = True
+                    logger.warning(
+                        f"DNS record creation failed for {request.hostname}: {e.message}. "
+                        "Tunnel is created but DNS must be configured manually."
+                    )
+        else:
+            # Bare tunnel: empty rule list -> configure_tunnel_ingress appends
+            # the catch-all 404 automatically. No DNS until the caller adds a
+            # route via the declarative /routes sync.
+            await cloudflare_service.configure_tunnel_ingress(tunnel_id, rules=[])
 
         logger.info(
             f"Tunnel provisioned: {tunnel_name} (ID: {tunnel_id}, "
-            f"hostname: {request.hostname})"
+            f"hostname: {request.hostname or '<bare>'})"
         )
 
         return TunnelCreateResponse(

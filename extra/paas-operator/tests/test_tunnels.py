@@ -63,6 +63,38 @@ class TestCreateTunnel:
         )
 
     @patch("src.api.tunnels.cloudflare_service")
+    def test_create_bare_tunnel_no_hostname(self, mock_cf, client):
+        """Omitting hostname creates a BARE tunnel: catch-all 404 ingress only,
+        no DNS — even when DNS is enabled. Used by Security Access (routes are
+        added on demand; zero route = zero DNS)."""
+        mock_cf.api_token = "test-token"
+        mock_cf.account_id = "test-account"
+        mock_cf.dns_enabled = True  # enabled, but must NOT create DNS without a hostname
+
+        mock_cf.create_tunnel = AsyncMock(
+            return_value={"tunnel_id": "tun-bare", "tunnel_name": "sa-bare"}
+        )
+        mock_cf.get_tunnel_token = AsyncMock(return_value="bare-token")
+        mock_cf.configure_tunnel = AsyncMock()
+        mock_cf.configure_tunnel_ingress = AsyncMock()
+        mock_cf.create_dns_record_for_tunnel = AsyncMock(return_value="should-not-be-called")
+
+        response = client.post("/api/tunnels", json={"name": "sa-bare"})
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["tunnel_id"] == "tun-bare"
+        assert data["hostname"] is None
+        assert data["dns_record_id"] is None
+        assert data["dns_failed"] is False
+
+        # Bare path: catch-all only via configure_tunnel_ingress(rules=[]),
+        # never the single-hostname configure_tunnel, never DNS creation.
+        mock_cf.configure_tunnel_ingress.assert_called_once_with("tun-bare", rules=[])
+        mock_cf.configure_tunnel.assert_not_called()
+        mock_cf.create_dns_record_for_tunnel.assert_not_called()
+
+    @patch("src.api.tunnels.cloudflare_service")
     def test_create_tunnel_default_service_url(self, mock_cf, client):
         """Test tunnel creation uses default service_url when not provided."""
         mock_cf.api_token = "test-token"

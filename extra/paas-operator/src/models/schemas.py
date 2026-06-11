@@ -108,9 +108,10 @@ class TunnelCreateRequest(BaseModel):
         ...,
         description="Tunnel name (e.g., 'smarthome-livingroom')",
     )
-    hostname: str = Field(
-        ...,
-        description="Public hostname for the tunnel (e.g., 'ha.example.com')",
+    hostname: Optional[str] = Field(
+        None,
+        description="Public hostname for the tunnel. Omit to create a bare "
+        "tunnel (catch-all 404 ingress, no DNS record).",
     )
     service_url: str = Field(
         default="http://localhost:8123",
@@ -211,7 +212,9 @@ class TunnelCreateResponse(BaseModel):
     tunnel_id: str = Field(..., description="Cloudflare Tunnel ID")
     tunnel_name: str = Field(..., description="Tunnel name")
     tunnel_token: str = Field(..., description="Tunnel token for cloudflared")
-    hostname: str = Field(..., description="Configured public hostname")
+    hostname: Optional[str] = Field(
+        None, description="Configured public hostname (None for a bare tunnel)"
+    )
     dns_record_id: Optional[str] = Field(
         None, description="DNS record ID if created"
     )
@@ -460,7 +463,7 @@ class TunnelRouteSpec(BaseModel):
 class TunnelRoutesSyncRequest(BaseModel):
     """Declarative full sync of a dedicated tunnel's routes."""
 
-    routes: List[TunnelRouteSpec] = Field(..., min_length=1)
+    routes: List[TunnelRouteSpec] = Field(..., min_length=0)
     comment: Optional[str] = Field(
         None, description="Canonical name stamped on DNS records for traceability"
     )

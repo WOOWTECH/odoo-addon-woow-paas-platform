@@ -589,14 +589,16 @@ class PaaSOperatorClient:
     def create_tunnel(
         self,
         name: str,
-        hostname: str,
+        hostname: Optional[str] = None,
         service_url: str = 'http://localhost:8123',
     ) -> Dict[str, Any]:
         """Create a dedicated Cloudflare Tunnel.
 
         Args:
             name: Tunnel name
-            hostname: Public hostname (e.g., 'sh-myworkspace.woowtech.io')
+            hostname: Public hostname (e.g., 'sh-myworkspace.woowtech.io').
+                Omit to create a BARE tunnel (catch-all 404 ingress, no DNS) —
+                used by Security Access where routes are added on demand.
             service_url: Local service URL to tunnel to (default: HA port)
 
         Returns:
@@ -605,11 +607,14 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If tunnel creation fails
         """
-        data = {
+        data: Dict[str, Any] = {
             'name': name,
-            'hostname': hostname,
             'service_url': service_url,
         }
+        # Only send hostname when provided; absence signals a bare tunnel.
+        # Smart Home always passes one, so its behaviour is unchanged.
+        if hostname:
+            data['hostname'] = hostname
         return self._request(
             'POST',
             '/api/tunnels',
