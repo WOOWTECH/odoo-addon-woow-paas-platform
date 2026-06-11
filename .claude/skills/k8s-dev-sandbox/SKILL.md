@@ -1,221 +1,62 @@
 ---
 name: k8s-dev-sandbox
-description: "[DEPRECATED — 改用 woowprd plugin 的 /woowprd:k8s-dev-sandbox] K8s Dev Sandbox Manager. 管理 Kubernetes 開發沙盒環境，支援建立、銷毀、查看狀態、日誌、延長 TTL、測試及建構映像等操作。本 in-repo 版保留給 deploy-stg 與未安裝 plugin 者。"
+description: "[大部分已移至 woowprd plugin] woow 專屬的 K8s 沙盒 e2e / 測試工具。完整沙盒生命週期（建立/銷毀/列出/狀態/日誌/建構映像）請改用 /woowprd:k8s-dev-sandbox。本 in-repo 版僅保留 test（沙盒內跑模組測試）、extend（TTL）+ 內部 e2e-seed / seed-from-stg helper。"
 usage: |
   Use this skill when:
-  - User wants to create, destroy, or manage K8s dev sandboxes
-  - User says "sandbox", "沙盒", "k8s sandbox", "dev sandbox"
-  - User wants to quickly spin up/down a sandbox for the current branch
+  - User wants to run module tests inside an existing woow sandbox (`test`)
+  - User wants to extend a sandbox TTL (`extend`)
+  - User mentions e2e skill fixtures / seed-from-stg（woow 專屬）
 
-  Invoke with: /k8s-dev-sandbox <subcommand> [args]
-  Keywords: k8s, kubernetes, sandbox, 沙盒, dev environment, 開發環境
+  建立 / 管理沙盒（create/destroy/list/status/logs/build）→ 改用 /woowprd:k8s-dev-sandbox
+  Invoke with: /k8s-dev-sandbox <test|extend> [args]
+  Keywords: k8s, kubernetes, sandbox, 沙盒, e2e, test, seed
 ---
 
-# K8s Dev Sandbox Manager
+# K8s Dev Sandbox — woow 專屬 e2e / 測試工具（縮減版）
 
-> **⚠️ DEPRECATED（2026-06）**：本工具已移植成 `woowprd` plugin 通用版，支援任意 Odoo addon repo。
-> **有 plugin 時請改用 `/woowprd:k8s-dev-sandbox <command>`**（需帶 `--repo "$(git rev-parse --show-toplevel)"`）。
-> 本 in-repo 版保留為 fallback：`deploy-stg` 仍呼叫 `scripts/create.sh`，`scripts/e2e-seed.sh` / `scripts/seed-from-stg.sh` 為 woow 專屬未進 plugin。完整移除 + deploy-stg 遷移待另一 PR。
+> **⚠️ 大部分已移至 woowprd plugin（2026-06）**：完整沙盒生命週期管理（`create` / `destroy` / `list` / `status` / `logs` / `build` / `up` / `down`）已移植成通用 **`/woowprd:k8s-dev-sandbox`**，本 in-repo 版的那些重複腳本**已移除**。
+> **建立 / 管理沙盒請用 `/woowprd:k8s-dev-sandbox <command>`**（需帶 `--repo "$(git rev-parse --show-toplevel)"` 與 `--context`）。
+> `deploy-stg` 也已改為委派 plugin `create.sh`（見 `deploy-stg` skill）。
+> **本 in-repo 版僅保留 woow 專屬、未進通用 plugin 的工具**（綁 `woow_paas_platform` model / stg 環境）：
+> - `test` — 沙盒內跑模組測試（`scripts/test.sh`）
+> - `extend` — 延長 TTL（`scripts/extend.sh`；供 `test --keep-on-fail`）
+> - 內部 helper：`scripts/e2e-seed.sh`（tests/e2e/skill 的 skill fixture seeder）、`scripts/seed-from-stg.sh`（從 stg clone DB + filestore）
 > 設計與實作：`docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
 
-管理 Kubernetes 開發沙盒環境的完整工具。透過子命令路由到對應的腳本。
+## 子命令參考（in-repo 保留部分）
 
-## 子命令參考
+| 子命令                 | 說明                 | 對應腳本            |
+| ---------------------- | -------------------- | ------------------- |
+| `test <name> [opts]`   | 在沙盒中執行模組測試 | `scripts/test.sh`   |
+| `extend <name> [opts]` | 延長沙盒 TTL         | `scripts/extend.sh` |
 
-| 子命令                 | 說明                   | 對應腳本                                |
-| ---------------------- | ---------------------- | --------------------------------------- |
-| `create`               | 建立新沙盒（互動式）   | `scripts/create.sh`                     |
-| `destroy <name>`       | 銷毀指定沙盒           | `scripts/destroy.sh`                    |
-| `list`                 | 列出所有沙盒           | `scripts/list.sh`                       |
-| `status [<name>]`      | 顯示沙盒詳細狀態       | `scripts/status.sh`                     |
-| `logs <name> [opts]`   | 查看服務日誌           | `scripts/logs.sh`                       |
-| `extend <name> [opts]` | 延長沙盒 TTL           | `scripts/extend.sh`                     |
-| `test <name> [opts]`   | 在沙盒中執行測試       | `scripts/test.sh`                       |
-| `build [opts]`         | 建構 CI 用 Docker 映像 | `scripts/build.sh`                      |
-| `up`                   | 快速建立當前分支的沙盒 | `scripts/create.sh`（使用預設值）       |
-| `down`                 | 快速銷毀當前分支的沙盒 | `scripts/destroy.sh --force`            |
-| （無子命令）           | 顯示使用說明           | 顯示下方說明                            |
+> 其餘子命令（`create` / `destroy` / `list` / `status` / `logs` / `build` / `up` / `down`）**已移除** → 請用 `/woowprd:k8s-dev-sandbox`。
 
-## 執行流程
-
-### 步驟 1：解析子命令
-
-從使用者的 `/k8s-dev-sandbox` 呼叫中擷取子命令和參數。
-
-- 子命令是第一個非選項參數（例如 `create`, `destroy`, `list` 等）
-- 其餘參數原樣傳遞給對應腳本
-
-### 步驟 2：根據子命令路由執行
-
-#### `create` - 建立新沙盒
-
-```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/create.sh <args>
-```
-
-可用選項：
-
-- `--branch <name>` - 覆蓋分支 slug（預設從 git 自動偵測）
-- `--ttl <duration>` - 覆蓋 TTL（預設 168h = 7 天）
-- `--image <tag>` - 使用自訂映像（預設 ci-local 模式，除非搭配 `--mode`）
-- `--mode <mode>` - 覆蓋 sandbox 模式：local / ci-local / stg
-- `--values <file>` - 額外的 Helm values 檔案
-- `--pgadmin` - 啟用 PgAdmin
-- `--ingress` - 啟用 Ingress（`{slug}.woowtech.io`）
-
-#### `destroy <name>` - 銷毀沙盒
-
-```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/destroy.sh <name> --context <ctx> <args>
-```
-
-可用選項：
-
-- `--context <name>` - **必填**：kubectl context（如 `woow-k3s`、`docker-desktop`），亦可用 `KUBE_CONTEXT` env。destroy 會做破壞性 cluster-scoped 操作（helm uninstall / delete namespace / delete pv），強制顯式指定以防 cross-cluster 誤刪（與 `create.sh` 一致，見 `fix/sandbox-scripts-context-safety`）。
-- `--force` - 跳過確認提示
-- `--keep-data` - 保留 postgres 資料（PVC + Retain/Released PV）。預設會清除資料，讓重新部署從乾淨狀態開始（issue #85）。
-
-#### `list` - 列出所有沙盒
-
-```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/list.sh
-```
-
-#### `status [<name>]` - 顯示沙盒狀態
-
-```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/status.sh [<name>]
-```
-
-- 若未提供名稱，自動從當前分支偵測
-
-#### `logs <name> [--service <svc>] [--follow]` - 查看日誌
-
-```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/logs.sh <name> <args>
-```
-
-可用選項：
-
-- `--service <name>` - 指定服務：odoo（預設）、postgres、nginx
-- `-f, --follow` - 即時追蹤日誌
-- `--tail <n>` - 顯示行數（預設 100）
-
-#### `extend <name> [--ttl <duration>]` - 延長 TTL
-
-```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/extend.sh <name> <args>
-```
-
-可用選項：
-
-- `--ttl <duration>` - 新的 TTL 持續時間（例如 "168h"、"24h"、"0" 表示永不過期）
-
-#### `test <name> [--module <mod>]` - 執行測試
+### `test <name> [--module <mod>] [--keep-on-fail]`
 
 ```bash
 cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/test.sh <name> <args>
 ```
 
-可用選項：
+- `--module <name>` — 要測試的模組（預設 `woow_paas_platform`）
+- `--keep-on-fail` — 測試失敗時延長沙盒 TTL 24h 以便除錯（呼叫 `extend.sh`）
 
-- `--module <name>` - 要測試的模組（預設 woow_paas_platform）
-- `--keep-on-fail` - 測試失敗時延長沙盒 TTL 24 小時以便除錯
-
-#### `build [--registry <reg>] [--push]` - 建構 Docker 映像
+### `extend <name> [--ttl <duration>]`
 
 ```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/build.sh <args>
+cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/extend.sh <name> --ttl <duration>
 ```
 
-可用選項：
+- `--ttl <duration>` — Go duration，如 `24h` / `168h` / `0`（永不過期）
 
-- `--registry <registry>` - Registry 前綴（例如 registry.example.com/）
-- `--push` - 建構後推送映像
+## 內部 helper（非直接子命令）
 
-映像 tag 格式：`{registry}woow-odoo-dev:{branch-slug}-{commit-short}`
-
-#### `up` - 快速建立
-
-快速建立當前分支的沙盒，使用所有預設值，無需互動。
-
-```bash
-# 1. 取得當前分支
-BRANCH=$(git branch --show-current)
-
-# 2. 產生 slug（將 / 和特殊字元轉為 -，並截斷長度）
-SLUG=$(echo "$BRANCH" | sed 's|[/_]|-|g' | sed 's|--*|-|g' | cut -c1-40 | sed 's|-$||')
-
-# 3. 呼叫 create 腳本
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/create.sh --branch "$SLUG"
-```
-
-#### `down` - 快速銷毀
-
-快速銷毀當前分支對應的沙盒，跳過確認提示。
-
-```bash
-# 1. 取得當前分支
-BRANCH=$(git branch --show-current)
-
-# 2. 產生 slug（與 up 相同邏輯）
-SLUG=$(echo "$BRANCH" | sed 's|[/_]|-|g' | sed 's|--*|-|g' | cut -c1-40 | sed 's|-$||')
-
-# 3. 呼叫 destroy 腳本（--force 跳過確認；--context 必填，需指定目標 cluster）
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/destroy.sh "$SLUG" --force --context <ctx>
-```
-
-#### 無子命令 - 顯示使用說明
-
-若使用者未提供子命令，顯示以下說明：
-
-```
-K8s Dev Sandbox Manager - 管理 Kubernetes 開發沙盒環境
-
-使用方式：
-  /k8s-dev-sandbox <subcommand> [args]
-
-可用子命令：
-  create              建立新沙盒（互動式）
-  destroy <name>      銷毀指定沙盒
-  list                列出所有沙盒
-  status [<name>]     顯示沙盒詳細狀態
-  logs <name> [opts]  查看服務日誌
-  extend <name>       延長沙盒 TTL
-  test <name> [opts]  在沙盒中執行測試
-  build [opts]        建構 CI 用 Docker 映像
-  up                  快速建立當前分支的沙盒（使用預設值）
-  down                快速銷毀當前分支的沙盒
-
-範例：
-  /k8s-dev-sandbox up                              # 快速啟動
-  /k8s-dev-sandbox create --ttl 48h --pgadmin      # 自訂建立
-  /k8s-dev-sandbox status                          # 查看當前分支沙盒狀態
-  /k8s-dev-sandbox logs epic-smarthome -f          # 即時追蹤日誌
-  /k8s-dev-sandbox test epic-smarthome --module sale_management
-  /k8s-dev-sandbox down                            # 快速關閉
-```
-
-### 步驟 3：執行腳本並顯示結果
-
-1. 使用 Bash 工具在專案根目錄下執行對應腳本
-2. 將腳本輸出完整呈現給使用者
-3. 若腳本執行失敗（非零退出碼），顯示錯誤訊息並建議排查方式
-
-### 步驟 4：完成通知
-
-執行完成後，使用語音通知使用者：
-
-```bash
-say -r 180 "沙盒操作完成了"
-```
+- `scripts/e2e-seed.sh <slug> [--reset|--purge]` — 把 e2e skill fixture seed 進「已存在」的沙盒（沙盒須先用 `/woowprd:k8s-dev-sandbox create` 建好）。由 `test.sh` 與 `tests/e2e/skill` 使用。
+- `scripts/seed-from-stg.sh` — 從 stg 環境 clone DB + filestore 到本地沙盒（woow-k3s 專屬）。
 
 ## 重要提醒
 
-- **專案根目錄**：所有腳本需在專案根目錄下執行
-- **kubectl 權限**：需要有效的 Kubernetes 叢集連線（`kubectl` 已設定）
-- **`--context` 必填**：`create` 與 `destroy` 為避免 cross-cluster 誤操作，須顯式指定 `--context <name>`（或 `KUBE_CONTEXT` env），未指定會直接報錯並列出可用 context。`destroy` 尤其關鍵——它含破壞性的 `delete namespace` / `delete pv`。
-- **Helm**：部分操作需要 Helm 3.13+
-- **分支偵測**：`up` / `down` 以及未提供名稱的指令會自動從 `git branch --show-current` 偵測
-- **TTL 格式**：支援 Go duration 格式，如 `24h`、`168h`、`0`（永不過期）
-- **timeout**：`create` 和 `test` 指令可能耗時較長，建議設定 timeout 為 300000ms（5 分鐘）
+- **專案根目錄**：腳本需在專案根目錄下執行。
+- **kubectl / Helm**：需有效叢集連線。
+- **沙盒須先存在**：`test` / `extend` / `e2e-seed` 都作用在「已存在」的沙盒上；建立請用 `/woowprd:k8s-dev-sandbox create --context <ctx> --repo "$(git rev-parse --show-toplevel)"`。
+- **完成通知**：`say -r 180 "沙盒操作完成了"`。

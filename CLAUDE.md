@@ -138,17 +138,18 @@ Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正
 /woowprd:k8s-dev-sandbox build [--registry <registry>] [--push]
 ```
 
-<details><summary><b>Deprecated</b>：in-repo scripts（無 plugin 時的 fallback；<code>deploy-stg</code> 仍依賴 create.sh、<code>e2e-seed.sh</code>/<code>seed-from-stg.sh</code> 為 woow 專屬未進 plugin。完整移除 + deploy-stg 遷移待另一 PR）</summary>
+<details><summary><b>in-repo 保留的 woow 專屬 e2e / 測試工具</b>（沙盒生命週期已全移至 plugin；<code>deploy-stg</code> 已改委派 plugin create.sh）</summary>
+
+完整沙盒管理（create/destroy/list/status/logs/build）已移除 → 用 `/woowprd:k8s-dev-sandbox`。in-repo 僅保留未進通用 plugin 的 woow 專屬工具：
 
 ```bash
-./.claude/skills/k8s-dev-sandbox/scripts/create.sh --context woow-k3s
-./.claude/skills/k8s-dev-sandbox/scripts/list.sh
-./.claude/skills/k8s-dev-sandbox/scripts/status.sh <sandbox-name>
-./.claude/skills/k8s-dev-sandbox/scripts/logs.sh <sandbox-name> [--service odoo|postgres|nginx] [--follow]
-./.claude/skills/k8s-dev-sandbox/scripts/test.sh <sandbox-name> [--module <module>]
+# 沙盒內跑模組測試（綁 woow_paas_platform）
+./.claude/skills/k8s-dev-sandbox/scripts/test.sh <sandbox-name> [--module <module>] [--keep-on-fail]
+# 延長 TTL（供 test --keep-on-fail）
 ./.claude/skills/k8s-dev-sandbox/scripts/extend.sh <sandbox-name> [--ttl 336h]
-./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh <sandbox-name> --context woow-k3s
-./.claude/skills/k8s-dev-sandbox/scripts/build.sh [--registry <registry>] [--push]
+# 內部 helper：e2e skill fixture seeder / 從 stg clone DB+filestore
+./.claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh <slug> [--reset|--purge]
+./.claude/skills/k8s-dev-sandbox/scripts/seed-from-stg.sh
 ```
 
 </details>
