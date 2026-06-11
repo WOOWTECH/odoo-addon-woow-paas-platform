@@ -231,6 +231,29 @@ class TestTunnelRoutesSyncEndpoint:
         assert dns_call.kwargs["comment"] == "paas-sa-x-y"
 
     @sync_patch("src.api.tunnels.cloudflare_service")
+    def test_sync_empty_routes_accepted(self, mock_cf, client):
+        """Zero-route SA pushes an empty route list (declarative full-sync).
+        min_length=0 must accept it (not 422): the tunnel keeps only the
+        catch-all 404 and reconcile prunes any stale DNS. Previously
+        min_length=1 rejected this, flipping zero-route SAs to error on every
+        cron suspend/resume."""
+        mock_cf.api_token = "t"
+        mock_cf.account_id = "a"
+        mock_cf.domain = "woowtech.io"
+        mock_cf.configure_tunnel_ingress = AsyncMock(return_value=None)
+        mock_cf.reconcile_tunnel_dns = AsyncMock(return_value={})
+
+        response = client.put(
+            "/api/tunnels/tun-1/routes",
+            json={"routes": [], "comment": "paas-sa-x-y"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["routes"] == []
+        # Empty desired -> catch-all only (empty rules) + DNS reconcile no-op.
+        mock_cf.configure_tunnel_ingress.assert_called_once()
+        assert mock_cf.configure_tunnel_ingress.call_args.kwargs["rules"] == []
+
+    @sync_patch("src.api.tunnels.cloudflare_service")
     def test_sync_routes_requires_credentials(self, mock_cf, client):
         mock_cf.api_token = None
         mock_cf.account_id = None
