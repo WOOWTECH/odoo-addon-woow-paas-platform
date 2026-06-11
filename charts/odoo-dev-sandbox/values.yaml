@@ -154,6 +154,22 @@ codeMount:
   # Absolute path on the host to extra-addons directory
   extraAddonsHostPath: ""
 
+# --- TTL Cleanup CronJob ---
+# 每小時跑一次、刪除過期 sandbox namespace 的 image。需具備：kubectl + POSIX
+# shell（/bin/sh）+ GNU `date -d`（解析 ISO 8601 的 expires annotation）。
+# 預設 pin Bitnami *legacy* archive tag：原本的 `bitnami/kubectl:latest` 在
+# 2025-08 Bitnami community image 凍結後已搬到 `bitnamilegacy/`，凍結 repo 上的
+# `:latest` 會 pull 不到 → TTL 自動清理 ImagePullBackOff 靜默失效（過期 sandbox
+# 永不刪除）。bitnamilegacy 維持 Debian-12/glibc 底層，GNU date 的到期判斷邏輯
+# 逐字不變、零風險。若要完全脫離 Bitnami，可覆寫成其它含 shell + GNU date 的
+# kubectl image（注意：rancher/kubectl 與 alpine 系用 busybox date，ISO 8601
+# 解析行為不同，切換前須先驗證 expires 判斷仍正確）。
+ttl:
+  image:
+    repository: bitnamilegacy/kubectl
+    tag: "1.33.4-debian-12-r0"
+    pullPolicy: IfNotPresent
+
 # --- Resource Quota ---
 resourceQuota:
   enabled: true
