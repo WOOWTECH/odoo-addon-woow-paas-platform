@@ -73,6 +73,10 @@ class SecurityAccess(models.Model):
             ('pending', 'Pending'),
             ('provisioning', 'Provisioning'),
             ('active', 'Active'),
+            # D1: tunnel provisioned but has zero application routes — reachable
+            # at nothing yet (catch-all 404). Distinct from 'active' so monitoring
+            # can tell a routed tunnel from an empty one.
+            ('active_no_route', 'Active (No Route)'),
             ('error', 'Error'),
             ('suspended', 'Suspended'),
             ('deleting', 'Deleting'),
@@ -122,13 +126,13 @@ class SecurityAccess(models.Model):
              "(len of the operator tunnel-status connections list).",
     )
 
-    # NOTE: there is deliberately NO SA-level "primary_hostname" field. A
-    # Security Access IS a Cloudflare Tunnel with N application routes (all
-    # forwarded to the user's reverse proxy); Cloudflare Tunnel has no
-    # primary/default hostname concept. Where a single hostname is genuinely
-    # needed internally (tunnel provisioning, the service-wide Access app
-    # domain) it is derived on demand from the platform-default route via
-    # _platform_default_hostname(); it is never surfaced as "the hostname".
+    # NOTE: there is deliberately NO SA-level "primary_hostname" field, and no
+    # auto-created primary route. A Security Access IS a bare Cloudflare Tunnel
+    # with N user-managed application routes (each forwarded to the user's
+    # reverse proxy); Cloudflare Tunnel has no primary/default hostname concept.
+    # canonical_name is only the tunnel's CF identity (its name), never surfaced
+    # as "the hostname"; a freshly-provisioned tunnel has zero routes and zero
+    # DNS until the user adds a route.
 
     # Access Control（P2.5；下放到 route 子模型 per-route）
     #
@@ -156,26 +160,22 @@ class SecurityAccess(models.Model):
     #  Computes / helpers                                                #
     # ------------------------------------------------------------------ #
 
-    def _platform_default_hostname(self):
-        """Hostname of the platform-auto-created (is_primary) route, derived on
-        demand. Prefers the live route's computed hostname; falls back to
-        {canonical_name}.{paas_domain} when the route does not exist yet (e.g.
-        during initial provisioning). NOT an SA-level field — only the few
-        internal CF consumers (tunnel provisioning, service-wide Access app
-        domain) call this; it is never exposed to the UI/HA API as a singular
-        "hostname"."""
-        self.ensure_one()
-        primary = self.route_ids.filtered('is_primary')[:1]
-        if primary and primary.hostname:
-            return primary.hostname
-        domain = self._get_paas_domain()
-        return (f"{self.canonical_name}.{domain}"
-                if self.canonical_name else '')
-
     @api.depends('route_ids')
     def _compute_route_count(self):
         for record in self:
             record.route_count = len(record.route_ids)
+
+    def _recompute_route_state(self):
+        """D1: flip a provisioned tunnel between 'active' (has ≥1 route) and
+        'active_no_route' (bare). Only touches those two states — never
+        pending/provisioning/error/suspended/deleting. Called from the route
+        sub-model's create()/unlink() so adding the first route activates the
+        SA and deleting the last one drops it back to no-route."""
+        for sa in self:
+            if sa.state in ('active', 'active_no_route'):
+                target = 'active' if sa.route_ids else 'active_no_route'
+                if sa.state != target:
+                    sa.state = target
 
     def _get_operator_client(self):
         """Get PaaS Operator client instance."""
@@ -298,23 +298,9 @@ class SecurityAccess(models.Model):
         if self.tunnel_id:
             self.write({'state': 'provisioning', 'error_message': False})
             try:
-                # Self-heal: a first provision can land state=active +
-                # tunnel_id but die before/while creating the primary route
-                # record (e.g. UNIQUE clash or a ValidationError). Without the
-                # primary row _build_route_payload would push a tunnel that
-                # serves only the catch-all 404. Rebuild it from the stored
-                # canonical_name (the immutable primary subdomain) before
-                # re-syncing so the retry path is genuinely self-curing rather
-                # than freezing an "active but no primary route" state.
-                if not self.route_ids.filtered('is_primary'):
-                    self.env[
-                        'woow_paas_platform.security_access_route'
-                    ].with_context(sa_skip_route_sync=True).create({
-                        'security_access_id': self.id,
-                        'subdomain_prefix': self.canonical_name,
-                        'service_url': self._get_default_service_url(),
-                        'is_primary': True,
-                    })
+                # 軸2: bare tunnel — no primary route to self-heal. Just re-run
+                # the declarative route sync (zero routes -> empty sync, tunnel
+                # keeps catch-all 404) + per-route Access for any user routes.
                 self._sync_routes_to_operator()
                 # P2.5: if any route was set is_protected (+ policies) on the SA
                 # while it was still pending, the route Access sync never reached
@@ -323,7 +309,9 @@ class SecurityAccess(models.Model):
                 # route marked protected stays silently inert (no CF Access app)
                 # until some route access field is re-toggled.
                 self._sync_all_routes_access()
-                self.write({'state': 'active'})
+                self.write({
+                    'state': 'active' if self.route_ids else 'active_no_route',
+                })
             except PaaSOperatorConnectionError as e:
                 self.write({
                     'state': 'error',
@@ -369,71 +357,29 @@ class SecurityAccess(models.Model):
         self.write({'state': 'provisioning', 'error_message': False})
 
         try:
-            hostname = self._platform_default_hostname()
             default_url = self._get_default_service_url()
 
-            # create_tunnel already configures ingress (single rule +
-            # catch-all) and creates the primary DNS record in one call.
+            # 軸2: build a BARE tunnel — no hostname, no auto-created primary
+            # route, no DNS. canonical_name is only the tunnel identity (its CF
+            # name); application routes (and their DNS) are added on demand by
+            # the user afterwards. create_tunnel with no hostname configures
+            # the tunnel with a catch-all 404 ingress only.
             result = client.create_tunnel(
                 name=self.canonical_name,
-                hostname=hostname,
                 service_url=default_url,
             )
 
             self.write({
-                'state': 'active',
                 'tunnel_id': result.get('tunnel_id'),
                 'tunnel_token': result.get('tunnel_token'),
                 'tunnel_name': result.get('tunnel_name'),
                 'deployed_at': fields.Datetime.now(),
             })
 
-            if result.get('dns_failed'):
-                # Operator created the tunnel but DNS record creation FAILED
-                # (distinct from DNS being disabled, where dns_failed is False
-                # and dns_record_id is None by design). The explicit re-sync
-                # below normally heals this by re-asserting the primary route's
-                # DNS, but log it so a never-converging case is observable
-                # instead of an "active" SA silently having no resolvable host.
-                _logger.warning(
-                    "[SA] operator reported DNS creation failure for sa=%s "
-                    "canonical=%s; relying on re-sync to converge",
-                    self.id, self.canonical_name,
-                )
-
-            # Primary route record mirrors the ingress rule created above.
-            # Skip the route-create override's sync (sa_skip_route_sync): it
-            # would fire a first PUT /routes that lacks http_host_header, and
-            # the explicit re-sync just below supersedes it — two operator
-            # round-trips for one declarative result. Keep only the explicit
-            # one (it carries the originRequest/http_host_header semantics).
-            #
-            # Idempotent on the primary route: a primary row keyed on
-            # canonical_name may already exist (re-provision after the
-            # tunnel_id was cleared, or a row pre-seeded out of band). Creating
-            # a second one would clash on the global UNIQUE(subdomain_prefix)
-            # and flip an otherwise-healthy provision into 'error'. Mirror the
-            # tunnel_id retry branch above: create when absent, otherwise
-            # re-stamp the fresh tunnel's dns_record_id onto the existing
-            # primary route so the re-sync below reconciles against current
-            # state instead of a stale DNS anchor.
-            primary = self.route_ids.filtered('is_primary')
-            if not primary:
-                self.env[
-                    'woow_paas_platform.security_access_route'
-                ].with_context(sa_skip_route_sync=True).create({
-                    'security_access_id': self.id,
-                    'subdomain_prefix': self.canonical_name,
-                    'service_url': default_url,
-                    'is_primary': True,
-                    'dns_record_id': result.get('dns_record_id'),
-                })
-            elif result.get('dns_record_id'):
-                primary.with_context(sa_skip_route_sync=True).write(
-                    {'dns_record_id': result.get('dns_record_id')})
-
-            # Re-sync so the primary rule carries http_host_header
-            # (create_tunnel's single-rule config doesn't set originRequest).
+            # Push whatever routes already exist — a user may have added routes
+            # on the still-pending SA via the configure-then-provision flow.
+            # Zero routes -> empty declarative sync -> tunnel keeps the
+            # catch-all 404 only (the operator accepts an empty route list).
             self._sync_routes_to_operator()
 
             # P2.5: push per-route Access too if any route was set protected
@@ -443,6 +389,13 @@ class SecurityAccess(models.Model):
             # never reached the operator (no live tunnel). Now that the tunnel
             # exists, converge each protected route's CF Access app.
             self._sync_all_routes_access()
+
+            # D1: a tunnel with zero application routes is reachable at nothing
+            # yet -> distinct 'active_no_route' state; once it has a route it is
+            # 'active'.
+            self.write({
+                'state': 'active' if self.route_ids else 'active_no_route',
+            })
 
             _logger.info(
                 "[SA] provisioned sa=%s canonical=%s tunnel=%s",
@@ -554,9 +507,9 @@ class SecurityAccess(models.Model):
                     "billed. The record was kept so the deletion can be "
                     "retried. Please try again shortly."
                 )
-        # primary route's own unlink guard would block the cascade — force it
-        # since the whole SA (and its routes) is being torn down.
-        self.route_ids.with_context(sa_force_delete_primary=True).unlink()
+        # 軸2: routes are freely deletable (no primary guard), so cascade-delete
+        # them directly as part of tearing down the whole SA.
+        self.route_ids.unlink()
         return super().unlink()
 
     # ------------------------------------------------------------------ #
@@ -690,7 +643,7 @@ class SecurityAccess(models.Model):
                 return
         self.write({
             'pre_suspend_state': (
-                self.state if self.state in ('active', 'error') else 'active'
+                self.state if self.state in ('active', 'active_no_route', 'error') else 'active'
             ),
             'state': 'suspended',
         })
@@ -1008,24 +961,26 @@ class SecurityAccessRoute(models.Model):
 
     @api.constrains('security_access_id')
     def _check_route_quota(self):
-        """Plan quota: non-primary route count <= plan.sa_max_routes.
+        """Plan quota: total route count <= plan.sa_max_routes.
+
+        軸2: every application route counts (no more free auto primary route).
+        Existing subscriptions are grandfathered in the .38 migration (sa_max_routes
+        +1) so they don't lose a slot when their old primary route is downgraded.
 
         No subscription (admin/legacy) → unrestricted, mirroring
         subscription_lifecycle_mixin._is_subscription_active. The
         controller layer re-checks (two-layer enforcement).
         """
         for route in self:
-            if route.is_primary:
-                continue
             sa = route.security_access_id
             sub = sa.sudo().subscription_id
             if not sub or not sub.sh_subscription_plan_id:
                 continue
             quota = sub.sh_subscription_plan_id.sa_max_routes
-            count = len(sa.route_ids.filtered(lambda r: not r.is_primary))
+            count = len(sa.route_ids)
             if count > quota:
                 raise ValidationError(
-                    "Route quota exceeded: plan '%s' allows %d custom "
+                    "Route quota exceeded: plan '%s' allows %d "
                     "route(s)." % (sub.sh_subscription_plan_id.name, quota)
                 )
 
@@ -1057,7 +1012,7 @@ class SecurityAccessRoute(models.Model):
             # reports success — so include 'error' here (and in write/unlink).
             if not self.env.context.get('sa_skip_route_sync'):
                 for sa in routes.mapped('security_access_id'):
-                    if sa.state in ('active', 'error') and sa.tunnel_id:
+                    if sa.state in ('active', 'active_no_route', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
             # P2.5: a newly-created is_protected route is its own Cloudflare
             # Access application — push its own Access state. The route sync
@@ -1067,6 +1022,8 @@ class SecurityAccessRoute(models.Model):
             if not self.env.context.get('sa_skip_route_sync'):
                 for route in routes:
                     route._sync_access_to_operator()
+        # D1: first route on a bare tunnel flips it active_no_route -> active.
+        routes.mapped('security_access_id')._recompute_route_state()
         return routes
 
     def write(self, vals):
@@ -1099,7 +1056,7 @@ class SecurityAccessRoute(models.Model):
             result = super().write(vals)
             if any(k in vals for k in ('service_url', 'http_host_header')):
                 for sa in self.mapped('security_access_id'):
-                    if sa.state in ('active', 'error') and sa.tunnel_id:
+                    if sa.state in ('active', 'active_no_route', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
             # P2.5: toggling is_protected, or changing this route's own login
             # methods / session duration, changes its own Cloudflare Access app
@@ -1128,12 +1085,9 @@ class SecurityAccessRoute(models.Model):
         return result
 
     def unlink(self):
-        if any(r.is_primary for r in self) and not self.env.context.get(
-                'sa_force_delete_primary'):
-            raise UserError(
-                "The primary route cannot be deleted. It is removed "
-                "together with the Security Access instance."
-            )
+        # 軸2: no primary route, so any route is deletable (incl. the last one,
+        # which drops the SA back to 'active_no_route' via _recompute_route_state
+        # below). The old is_primary delete guard is gone.
         affected = self.mapped('security_access_id')
         # P2.5: a protected route is its OWN Cloudflare Access app. Deleting the
         # route must tear that app (+ its reusable policies) down, but
@@ -1147,7 +1101,7 @@ class SecurityAccessRoute(models.Model):
             if not route.is_protected:
                 continue
             sa = route.security_access_id
-            if not (sa and sa.state in ('active', 'error') and sa.tunnel_id):
+            if not (sa and sa.state in ('active', 'active_no_route', 'error') and sa.tunnel_id):
                 continue
             pol_ids = [p.cf_policy_id for p in route.access_policy_ids
                        if p.cf_policy_id]
@@ -1173,7 +1127,7 @@ class SecurityAccessRoute(models.Model):
         with self.env.cr.savepoint():
             result = super().unlink()
             for sa in affected:
-                if (sa.exists() and sa.state in ('active', 'error')
+                if (sa.exists() and sa.state in ('active', 'active_no_route', 'error')
                         and sa.tunnel_id):
                     sa._sync_routes_to_operator()
             # P2.5: tear down each deleted protected route's own Access app
@@ -1212,6 +1166,8 @@ class SecurityAccessRoute(models.Model):
                     "app is still live in Cloudflare." % ', '.join(
                         str(f) for f in failed)
                 )
+        # D1: deleting the last route drops the SA back to 'active_no_route'.
+        affected.exists()._recompute_route_state()
         return result
 
     # ------------------------------------------------------------------ #
@@ -1269,7 +1225,7 @@ class SecurityAccessRoute(models.Model):
     def _sync_access_to_operator(self):
         """Push THIS route's full desired Access state to the operator
         (idempotent). Liveness gate matches the route/SA sync: only fires once
-        the SA has a live tunnel and is in ('active', 'error') — a stage-2
+        the SA has a live tunnel and is in ('active', 'active_no_route', 'error') — a stage-2
         provision failure leaves the SA in 'error' with a live tunnel while the
         subscription stays active, so an Access edit in that state must still
         converge CF, not silently diverge it. is_protected=False sends an
@@ -1288,7 +1244,7 @@ class SecurityAccessRoute(models.Model):
         forced = self.env.context.get('sa_force_access_sync')
         if not sa or not sa.tunnel_id:
             return
-        if not forced and sa.state not in ('active', 'error'):
+        if not forced and sa.state not in ('active', 'active_no_route', 'error'):
             return
         # Nothing to do for an unprotected route that was never an app.
         if not self.is_protected and not self.access_app_id:
@@ -1334,7 +1290,6 @@ class SecurityAccessRoute(models.Model):
             'hostname': self.hostname or '',
             'service_url': self.service_url,
             'http_host_header': self.http_host_header,
-            'is_primary': self.is_primary,
             'is_protected': self.is_protected,
             # P2.5 per-route Access config
             'session_duration': self.session_duration,

@@ -513,8 +513,9 @@ class TestProvisionPushesRouteAccess(TransactionCase):
             sa = self.SA.create({'name': 'PPA GW2',
                                   'workspace_id': self.workspace.id})
             sa.action_provision()
-        self.assertEqual(sa.state, 'active')
-        # 預設 primary route 由 provision 建立且 is_protected=False → 無 access sync
+        # 軸2: 裸 tunnel、零 route → active_no_route
+        self.assertEqual(sa.state, 'active_no_route')
+        # 無 route（更無 protected route）→ 不觸發任何 Access app sync
         self.assertFalse(mc.sync_access_app.called)
 
 
