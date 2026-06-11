@@ -3,7 +3,7 @@ title: PaaS Skill 系統總覽
 category: guides
 status: active
 created: 2026-05-25
-updated: 2026-05-25
+updated: 2026-06-09
 tags: [paas, skill-system, overview, architecture]
 related:
   - ../../plans/2026-Q2/agent-runtime-pod-plan.md
@@ -12,7 +12,7 @@ related:
 
 # PaaS Skill 系統總覽
 
-> 入口文件。一頁讀懂「PaaS Skill 系統」(內部代號 agent-runtime-pod) 怎麼運作、由哪些角色組成、該往哪篇深讀。本指南是新人 onboarding 用的知識庫（共 12 篇），閱讀順序見下方「文件地圖」。
+> 入口文件。一頁讀懂「PaaS Skill 系統」(內部代號 agent-runtime-pod) 怎麼運作、由哪些角色組成、該往哪篇深讀。本指南是新人 onboarding 用的知識庫（共 13 篇），閱讀順序見下方「文件地圖」。
 
 > 🧭 **給新人**：不用先懂 K8s / JWT 細節也能讀。建議路線——
 > - **快速抓全貌**：本頁 → [Skill 端到端調用流程](01-end-to-end-flow.md) → [Agent 對話與串流](02-conversation-streaming.md)，三篇就夠。
@@ -29,7 +29,7 @@ related:
 |---|---|
 | 點餐的客人 | 🟢 **Odoo**（存 Skill、決定要跑什麼） |
 | 外送平台（調度） | 🔵 **paas-operator**（簽憑證、跑 Helm） |
-| 廚房 | 🟠 **agent-runtime Pod**（真正執行 Skill） |
+| 廚房 | 🟠 **agent-runtime Pod**（agent 讀 SKILL.md 指令、用 bash 執行） |
 | 食譜包 | 📦 **Skill Bundle**（tar.gz） |
 | 一次性取餐憑證 | 🔑 **SKILL_BUNDLE_TOKEN**（1 小時效期的 JWT） |
 
@@ -40,7 +40,7 @@ related:
 | 🟢 **Odoo** | 存 Skill、發 bundle、收 Pod 回報、橋接對話 | 本 repo `src/` |
 | 🔵 **paas-operator** | Odoo↔K8s 中介，簽 token、跑 Helm | 本 repo `extra/paas-operator/` |
 | 🟣 **Kubernetes** | 跑 Pod 的基礎設施 | 叢集 |
-| 🟠 **agent-runtime Pod** | 載入並執行 Skill、跑 agent loop | **另一 repo** `woow-paas-agent-runtime`（本 repo 只有 contract） |
+| 🟠 **agent-runtime Pod** | 載入 SKILL.md 指令、agent 用 `bash:execute` 執行、跑 agent loop | **另一 repo** `woow-paas-agent-runtime`（本 repo 只有 contract） |
 
 ## 📐 系統架構
 
@@ -68,7 +68,7 @@ graph TB
     end
 
     subgraph Pod["🟠 agent-runtime Pod（另一 repo）"]
-        RT["runtime<br/>SkillsLoader + agent loop"]
+        RT["runtime<br/>load_skill + bash:execute（sidecar）+ agent loop"]
     end
 
     AR -->|"helm install/upgrade"| DEP
@@ -94,7 +94,7 @@ graph TB
 
 ## 🔑 核心概念
 
-1. **Skill** — 最小功能單位，一個可執行的外掛（metadata + 程式碼 + 資源）。見 [Skill 設計與發布](03-skill-design.md)
+1. **Skill** — 最小能力單位：SKILL.md 指令 + 選配檔案（最小只要 SKILL.md）。見 [Skill 設計與發布](03-skill-design.md)
 2. **Skill Bundle** — Skill 的封包格式（tar.gz），存在 `ir.attachment`。見 [Skill Bundle 與 JWT 認證](04-skill-bundle-jwt.md)
 3. **SKILL_BUNDLE_TOKEN** — operator 簽的 JWT（HS256，1h），Pod 用它向 Odoo 驗證身份並下載 bundle
 4. **agent-runtime** — Pod 內負責載入、執行 Skill 與跑對話 agent loop 的 runtime 程序
@@ -110,15 +110,14 @@ graph TB
 | 4 | [Skill 設計與發布](03-skill-design.md) | Skill 是什麼、怎麼包、怎麼發 | 工程參考 |
 | 5 | [Skill Bundle 與 JWT 認證](04-skill-bundle-jwt.md) | 封包格式與下載端點的認證 | 工程參考 |
 | 6 | [Skill 運行時生命週期](05-skill-runtime-lifecycle.md) | Pod 內如何載入與執行（概念層） | 工程參考 |
-| 7 | [agent-runtime Pod 內部](06-pod-internals.md) | Pod 內部實作（WS/auth/skill/langgraph stub） | 工程參考 |
+| 7 | [agent-runtime Pod 內部](06-pod-internals.md) | Pod 內部實作（WS/auth/skill/bash sidecar/agent loop） | 工程參考 |
 | 8 | [Agent Runtime Pod 部署機制](07-deployment.md) | operator/K8s 如何調度 Pod | 工程參考 |
 | 9 | [Webhook 回呼與 ws_token](08-webhook-ws-token.md) | Pod→Odoo 反向通道 + WebSocket 認證 | 工程參考 |
 | 10 | [Skill 系統安全模型](09-security-model.md) | 雙 secret / token_use / replay / NetworkPolicy 整合 | 工程參考 |
 | 11 | [Agent Runtime 演進史 (Phase A~G)](10-roadmap-phases.md) | 從哪來、現在在哪、往哪去 | 深入淺出 |
 | 12 | [PaaS Skill 術語表](11-glossary.md) | 名詞速查 | 參考 |
+| 13 | [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md) | Drop B：`bash:execute` 的異 UID sidecar + kill-switch | 工程參考 |
 
 ## 📍 目前進度
 
-Phase D 已完成（branch `feature/agent-pod-phase-d`），系統仍以 **enable-gate 關閉**，尚未對使用者開啟；下一步 Phase E 進 pilot 的 dual-write 觀察期。完整時間軸見 [Agent Runtime 演進史 (Phase A~G)](10-roadmap-phases.md)。
-
-> 🚧 Pod 端的 agent loop（`langgraph_runtime`）目前還是 **Phase B stub**，真正的 langgraph 調用待後續 phase——細節見 [agent-runtime Pod 內部](06-pod-internals.md)。
+agent-runtime 已上 stg pilot（真 LLM agent loop 上線）。**Skill 執行已於 2026-06-09 改為 Claude Code 模型 + bash sidecar（STG 已上線並驗證；prod 待 Fleet flip）**——見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。完整時間軸見 [Agent Runtime 演進史 (Phase A~G)](10-roadmap-phases.md)。

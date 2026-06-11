@@ -3,8 +3,8 @@ title: agent-runtime Pod 內部
 category: guides
 status: active
 created: 2026-05-25
-updated: 2026-05-25
-tags: [paas, skill-system, runtime-internals, langgraph, pod]
+updated: 2026-06-09
+tags: [paas, skill-system, runtime-internals, langgraph, pod, claude-code-model]
 related:
   - 02-conversation-streaming.md
   - 05-skill-runtime-lifecycle.md
@@ -15,7 +15,7 @@ related:
 
 > contract 的 Pod 那一端。程式碼在 `woow-paas-agent-runtime` repo（`runtime/`）。這篇補齊 [Agent 對話與串流](02-conversation-streaming.md) 裡「Pod 內怎麼跑」的細節。
 
-> ✅ **狀態（2026-05 更新）**：transport（WS / 認證 / envelope）、skill 載入與執行、熱重載、安全機制、**以及真正的 agent loop `runtime/langgraph_runtime.py` 都已實作並上線**（F-PILOT-10，image ≥ `v1.1.0`）。`stream()` 會 `_resolve_tool_set`（skill lazy tools + MCP tools）→ `ChatOpenAI.bind_tools` → `astream` → 逐 delta yield `text_chunk`，遇 `tool_calls` 則執行並串 §4b tool frame，直到無 tool_call（`MAX_TOOL_ROUNDS` 上限）。`initialize()` 仍是 no-op（LLM client 於 `stream()` 內按 env 即時建）；無 `LLM_API_KEY` → echo fallback。`use_agent_runtime=True` 接上後 agent 會用真 LLM 回話（stg F-PILOT-10 cluster e2e 已驗）。
+> ✅ **狀態（2026-06-09 更新，Drop B）**：transport（WS / 認證 / envelope）、skill 載入與執行、熱重載、安全機制、真正的 agent loop `runtime/langgraph_runtime.py` 都已實作並上線。**skill 執行已改為 Claude Code 模型**（image `1.4.0`，含 `bash_bridge` sidecar）：`stream()` 會 `_resolve_tool_set` 組出 `[skill:load_skill, bash:execute, *mcp_tools]`（skill **不再各自是 StructuredTool**）→ `ChatOpenAI.bind_tools` → `astream` → 逐 delta yield `text_chunk`，遇 `tool_calls` 則執行並串 §4b tool frame，直到無 tool_call（`MAX_TOOL_ROUNDS` 上限）。`initialize()` 仍是 no-op（LLM client 於 `stream()` 內按 env 即時建）；無 `LLM_API_KEY` → echo fallback。**STG 已上線並驗證；prod 待 Fleet flip**；設計依據見 `docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md`，sidecar kill-switch 見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 >
 > ⚠️ 注意：snapshot 真正送達 pod 是 **PR #104（skill）/ #106（mcp）** 才補上的 operator 端 missed-forward（cold-start `configMap.{skills,mcp}Snapshot` forward + attach refresh）；在那之前 pod 的 `skills.json` / `mcp.json` ConfigMap 一直是 chart 預設 `"{}"`，agent 雖會回話卻綁不到任何 skill/MCP tool。
 
@@ -32,9 +32,10 @@ graph TB
         LG["langgraph_runtime.py<br/>agent loop（真 LLM，F-PILOT-10）"]
     end
     subgraph SK["skills/"]
-        LO["loader.py<br/>SKILL.md→StructuredTool"]
+        LO["loader.py<br/>SKILL.md→body+roster"]
         CA["cache.py<br/>下載+sha256+解壓"]
-        SR["subprocess_runner.py<br/>隔離執行"]
+        SR["subprocess_runner.py<br/>_safe_env/_set_rlimits（被 spawn_bash 複用）"]
+        BB["bash_bridge（sidecar container）<br/>異 UID 10002 跑 bash:execute"]
     end
     subgraph ST["state/（熱重載）"]
         BR["base_reloader.py"]
@@ -50,7 +51,8 @@ graph TB
     WS --> LG
     LG --> LO
     LO --> CA
-    LO --> SR
+    LG --> BB
+    BB --> SR
     WS --> RLS
     AU --> JT
     LG -.建 MCP client 前驗.-> UV
@@ -72,6 +74,7 @@ graph TB
 | `SKILL_BUNDLE_TOKEN` | 選 | 下載 bundle 的 Bearer（fallback `SHARED_SECRET`） |
 | `WORKSPACE_ROOT` | 選（預設 `/workspace`） | PVC 快取掛載點 |
 | `AUTH_SECRET_DIR` | 選（預設 `/run/secrets/...`） | JWT secret 檔案掛載目錄 |
+| `AGENT_RUNTIME_SKILL_RUNNER_ENABLED` | 選（預設 `false`） | gate：`true` 才暴露 `bash:execute` + 起 `bash_bridge` sidecar（Drop B；operator 顯式設定，fail-closed） |
 
 ## 🔌 WS 伺服器（`/v1/chat`）
 
@@ -136,23 +139,23 @@ sequenceDiagram
     participant LO as loader
     participant CA as cache（PVC）
     participant Odoo
-    participant SP as subprocess
-    LG->>LO: 首次 invoke 某 skill（當作 tool）
-    LO->>CA: ensure_skill(name, version)
+    participant BB as bash_bridge（sidecar，異 UID）
+    LG->>LO: skill:load_skill(name)（agent 判斷要用時才呼叫）
+    LO->>CA: ensure_skill_cached(name, version)
     alt cache miss
         CA->>Odoo: GET /api/agent-runtimes/skill-bundle（Bearer SKILL_BUNDLE_TOKEN）
         Odoo-->>CA: tar.gz
         CA->>CA: sha256 校驗（早於解壓）→ atomic extract<br/>到 /workspace/project-{PROJECT_ID}/skills/cache/{name}/{version}/
     end
-    LO->>LO: 解析 SKILL.md frontmatter → StructuredTool（依 (name,version,role) 快取）
-    LG->>SP: 呼叫 tool → spawn_skill_subprocess
-    SP->>SP: rlimit + env 白名單 + 輸出截斷
-    SP-->>LG: {exit_code, stdout, stderr, timeout, truncated_stdout}
+    LO-->>LG: {name, description, body, workdir, files[]}
+    LG->>BB: bash:execute(cmd)（agent 先 cd 進 workdir）
+    BB->>BB: rlimit + env 白名單 + 輸出截斷（異 UID 10002）
+    BB-->>LG: {stdout, stderr, exit_code, truncated}
 ```
 
-- **loader**：SKILL.md frontmatter 必填 `name`/`description`，選 `entrypoint`(預設 `scripts/main.py`)/`runtime`/`timeout_seconds`(30)/`max_output_kb`(64)/`allowed_egress`；包成 `StructuredTool` 給 LLM（`loader.py:33-90`）。tool 依 `(name, version, invoker_role)` 快取（role 隔離，SC-7）
-- **cache**：lazy fetch，sha256 **早於**解壓，`tarfile filter="data"` 擋 path traversal，atomic extract（`cache.py:47-107`）
-- **subprocess_runner**：硬 rlimit（CPU 30s / AS 512MB / NOFILE 64 / NPROC 16 / FSIZE 100MB）、wall timeout `min(宣告, 60s)`、**env 白名單**（只放 PATH/HOME/LANG/PROJECT_HASH，**絕不**漏 OPENAI_API_KEY / MCP key / SHARED_SECRET）、stdout 截斷（`subprocess_runner.py:25-110`）
+- **loader**：SKILL.md frontmatter 必填 `name`/`description`；**保留 body** 供 `skill:load_skill` 回傳（不再丟棄、不再包 `StructuredTool`、不再要 `entrypoint`）。
+- **cache**：lazy fetch（agent 呼 `load_skill` 時才 fetch），sha256 **早於**解壓，`tarfile filter="data"` 擋 path traversal，atomic extract（`cache.py`）。
+- **bash 執行**：`bash:execute` 的 runner 複用 `subprocess_runner` 的 `_safe_env`（只放 PATH/HOME/LANG/PROJECT_HASH，**絕不**漏 `LLM_API_KEY` / MCP key / `SKILL_BUNDLE_TOKEN`）/ `_set_rlimits`（CPU / AS / NOFILE / NPROC / FSIZE）/ `_capped_*` 截斷，**並在異 UID（`runAsUser=10002`）的 `bash_bridge` sidecar 內執行**（PID ns 隔離）。隔離細節見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 
 ## ♻️ 熱重載（ConfigMap）
 
