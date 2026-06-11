@@ -22,7 +22,7 @@ spec:
     spec:
       {{- if eq .Values.sandbox.mode "stg" }}
       imagePullSecrets:
-        - name: jfrog-registry
+        - name: {{ .Values.registry.secretName | default "image-registry-creds" }}
       {{- end }}
       containers:
         - name: odoo
@@ -134,9 +134,21 @@ spec:
               {{- end }}
             {{- end }}
             {{- if eq .Values.sandbox.mode "local" }}
+            {{- if .Values.codeMount.mounts }}
+            {{- range $i, $m := .Values.codeMount.mounts }}
+            - name: code-mount-{{ $i }}
+              mountPath: {{ if $.Values.codeMount.mountWholeDir }}/mnt/extra-addons{{ else }}/mnt/extra-addons/{{ $m.mountSubdir }}{{ end }}
+            {{- end }}
+            {{- else }}
             - name: extra-addons
               mountPath: /mnt/extra-addons/{{ .Values.codeMount.moduleName }}
-            {{- if .Values.codeMount.extraAddonsHostPath }}
+            {{- end }}
+            {{- if .Values.codeMount.extraMounts }}
+            {{- range $i, $e := .Values.codeMount.extraMounts }}
+            - name: extra-mount-{{ $i }}
+              mountPath: {{ $e.containerPath }}
+            {{- end }}
+            {{- else if .Values.codeMount.extraAddonsHostPath }}
             - name: extra-addons-ext
               mountPath: /mnt/extra-addons-ext
             {{- end }}
@@ -163,11 +175,27 @@ spec:
             claimName: {{ include "odoo-dev-sandbox.fullname" . }}-odoo-filestore
         {{- end }}
         {{- if eq .Values.sandbox.mode "local" }}
+        {{- if .Values.codeMount.mounts }}
+        {{- range $i, $m := .Values.codeMount.mounts }}
+        - name: code-mount-{{ $i }}
+          hostPath:
+            path: {{ $m.hostPath }}
+            type: Directory
+        {{- end }}
+        {{- else }}
         - name: extra-addons
           hostPath:
             path: {{ .Values.codeMount.hostPath }}
             type: Directory
-        {{- if .Values.codeMount.extraAddonsHostPath }}
+        {{- end }}
+        {{- if .Values.codeMount.extraMounts }}
+        {{- range $i, $e := .Values.codeMount.extraMounts }}
+        - name: extra-mount-{{ $i }}
+          hostPath:
+            path: {{ $e.hostPath }}
+            type: Directory
+        {{- end }}
+        {{- else if .Values.codeMount.extraAddonsHostPath }}
         - name: extra-addons-ext
           hostPath:
             path: {{ .Values.codeMount.extraAddonsHostPath }}

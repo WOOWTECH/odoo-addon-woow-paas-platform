@@ -8,14 +8,19 @@ sandbox:
   ttl: "168h"
   # Git branch slug (used for namespace naming)
   branch: ""
-  # Labels applied to the sandbox namespace
-  labels:
-    sandbox.woow.tw/managed: "true"
+  # 去品牌 label/annotation 前綴；woow profile 覆寫為 sandbox.woow.tw。
+  # namespace.yaml 用它組 managed label + branch/ttl/mode/created/expires annotation；
+  # ttl-cronjob.yaml 用它讀 expires —— lock-step，改值整鏈一起改否則 TTL 清理失效。
+  labelPrefix: dev-sandbox.io
+  # 額外自訂 namespace labels（自由擴充；managed label 由 labelPrefix 自動渲染）
+  labels: {}
 
 # --- Namespace ---
 namespace:
-  # If empty, computed as "dev-sandbox-{branch}"
+  # If empty, computed as "{prefix}-{branch}"
   name: ""
+  # namespace 前綴（_helpers.tpl 用）；namespace.name 顯式覆寫優先
+  prefix: dev-sandbox
 
 # --- Odoo ---
 odoo:
@@ -28,16 +33,22 @@ odoo:
   # Admin master password
   adminPassword: admin
   # Install Python packages from requirements.txt at container startup (single source of truth)
-  # Path inside the container to a pip requirements file
-  extraPipRequirementsFile: /mnt/extra-addons/woow_paas_platform/requirements.txt
+  # Path inside the container to a pip requirements file. Default empty: the generic
+  # chart must not assume a module ships requirements.txt (a non-existent path makes
+  # Odoo startup pip fail). create.sh injects /mnt/extra-addons/{primary_module}/requirements.txt
+  # only when that file actually exists; otherwise falls back to extraPipPackages.
+  extraPipRequirementsFile: ""
   # Fallback: list individual packages (used only when extraPipRequirementsFile is empty)
   extraPipPackages: []
   # Modules to update on startup (comma-separated, e.g. "web,woow_paas_platform")
   # Uses -u (update) which is idempotent and safe for restarts.
   # Empty string means no explicit module update (Odoo starts normally).
   updateModules: ""
-  # Addons path inside container
+  # Addons path inside container (non-stg). extraMounts containerPaths are appended.
   addonsPath: /mnt/extra-addons,/mnt/extra-addons-ext
+  # stg mode addons_path (Bitnami base image internal paths). woow/stg profile;
+  # override if a non-Bitnami stg base image is used.
+  stgAddonsPath: /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/addons,/opt/bitnami/odoo/custom-addons
   # Filestore persistence (recommended for stg mode)
   filestore:
     persistence:
@@ -89,8 +100,12 @@ postgres:
     repository: pgvector/pgvector
     tag: "pg15"
     pullPolicy: IfNotPresent
-  # Database name (auto-generated from branch if empty)
+  # Database name (auto-generated from {dbPrefix}{branch} if empty)
   database: ""
+  # DB name prefix (used by _helpers.tpl dbName when database empty). Neutral
+  # default; woow profile / .sandbox.yml sets "woow_". create.sh passes the full
+  # name via --set postgres.database so this is mostly a fallback.
+  dbPrefix: sandbox_
   user: odoo
   password: odoo
   storage:
@@ -126,7 +141,7 @@ pgadmin:
     repository: dpage/pgadmin4
     tag: latest
     pullPolicy: IfNotPresent
-  defaultEmail: admin@woow.com
+  defaultEmail: admin@example.com
   defaultPassword: admin
   resources:
     requests:
@@ -140,13 +155,23 @@ pgadmin:
 ingress:
   enabled: false
   className: traefik
-  # Domain pattern: {sandbox-name}.woowtech.io
-  domain: woowtech.io
+  # Domain pattern: {sandbox-name}.{domain}. 去品牌：default 空，啟用 ingress 時須設；
+  # woow profile 覆寫為 woowtech.io。
+  domain: ""
   annotations: {}
   tls: []
 
 # --- Code mount (local mode) ---
 codeMount:
+  # --- 新（plugin 通用）：多掛載，支援三樣態（mounts 非空時取代下方 legacy 單掛載）---
+  # 每項 { hostPath, mountSubdir }。由 create.sh 依 detect_layout 注入。
+  mounts: []
+  # true=整個來源目錄直掛 /mnt/extra-addons（樣態 c 多 addon，Odoo 自動發現）；
+  # false=逐子目錄掛 /mnt/extra-addons/{mountSubdir}（樣態 a/b 單 addon）
+  mountWholeDir: false
+  # 多相依來源：每項 { hostPath, containerPath }（非空時取代 legacy extraAddonsHostPath）
+  extraMounts: []
+  # --- legacy（向後相容；mounts/extraMounts 空時 fallback）---
   # Absolute path on the host to the worktree src/ directory
   hostPath: ""
   # Odoo module name (used as subdirectory under /mnt/extra-addons/)
@@ -222,6 +247,9 @@ aiRuntime:
 
 # --- Registry credentials (stg mode) ---
 registry:
+  # imagePullSecret 物件名（去品牌；woow profile 覆寫為 jfrog-registry）。
+  # registry-secret.yaml 與 odoo-deployment.yaml imagePullSecrets lock-step 引用。
+  secretName: image-registry-creds
   # Docker registry server
   server: ""
   # Username for docker login

@@ -22,9 +22,9 @@ data:
 
     ; Addons path
     {{- if eq .Values.sandbox.mode "stg" }}
-    addons_path = /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/addons,/opt/bitnami/odoo/custom-addons
+    addons_path = {{ .Values.odoo.stgAddonsPath }}
     {{- else }}
-    addons_path = {{ .Values.odoo.addonsPath }}
+    addons_path = {{ .Values.odoo.addonsPath }}{{- range .Values.codeMount.extraMounts }},{{ .containerPath }}{{- end }}
     {{- end }}
 
     ; Server settings

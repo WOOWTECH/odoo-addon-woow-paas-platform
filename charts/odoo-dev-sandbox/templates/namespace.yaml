@@ -1,3 +1,4 @@
+{{- $p := .Values.sandbox.labelPrefix | default "dev-sandbox.io" }}
 {{- $existingNs := (lookup "v1" "Namespace" "" (include "odoo-dev-sandbox.namespace" .)) }}
 apiVersion: v1
 kind: Namespace
@@ -5,20 +6,22 @@ metadata:
   name: {{ include "odoo-dev-sandbox.namespace" . }}
   labels:
     {{- include "odoo-dev-sandbox.labels" . | nindent 4 }}
+    {{ $p }}/managed: "true"
     {{- range $key, $value := .Values.sandbox.labels }}
     {{ $key }}: {{ $value | quote }}
     {{- end }}
   annotations:
-    sandbox.woow.tw/branch: {{ .Values.sandbox.branch | quote }}
-    sandbox.woow.tw/ttl: {{ .Values.sandbox.ttl | quote }}
-    sandbox.woow.tw/mode: {{ .Values.sandbox.mode | quote }}
-    {{- if and $existingNs $existingNs.metadata.annotations (index $existingNs.metadata.annotations "sandbox.woow.tw/created") }}
-    sandbox.woow.tw/created: {{ index $existingNs.metadata.annotations "sandbox.woow.tw/created" | quote }}
+    {{ $p }}/branch: {{ .Values.sandbox.branch | quote }}
+    {{ $p }}/ttl: {{ .Values.sandbox.ttl | quote }}
+    {{ $p }}/mode: {{ .Values.sandbox.mode | quote }}
+    {{- $createdKey := printf "%s/created" $p }}
+    {{- if and $existingNs $existingNs.metadata.annotations (index $existingNs.metadata.annotations $createdKey) }}
+    {{ $p }}/created: {{ index $existingNs.metadata.annotations $createdKey | quote }}
     {{- else }}
-    sandbox.woow.tw/created: {{ now | date "2006-01-02T15:04:05Z" | quote }}
+    {{ $p }}/created: {{ now | date "2006-01-02T15:04:05Z" | quote }}
     {{- end }}
     {{- if ne (.Values.sandbox.ttl | toString) "0" }}
-    sandbox.woow.tw/expires: {{ now | dateModify .Values.sandbox.ttl | date "2006-01-02T15:04:05Z" | quote }}
+    {{ $p }}/expires: {{ now | dateModify .Values.sandbox.ttl | date "2006-01-02T15:04:05Z" | quote }}
     {{- else }}
-    sandbox.woow.tw/expires: "never"
+    {{ $p }}/expires: "never"
     {{- end }}
