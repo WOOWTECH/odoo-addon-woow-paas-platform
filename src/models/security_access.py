@@ -525,8 +525,7 @@ class SecurityAccess(models.Model):
         """
         self.ensure_one()
         payload = []
-        for route in self.route_ids.sorted(
-                key=lambda r: (not r.is_primary, r.id)):
+        for route in self.route_ids.sorted(key=lambda r: r.id):
             payload.append({
                 'subdomain': route.subdomain_prefix,
                 'service_url': override_service_url or route.service_url,
@@ -832,7 +831,7 @@ class SecurityAccess(models.Model):
 class SecurityAccessRoute(models.Model):
     _name = 'woow_paas_platform.security_access_route'
     _description = 'Security Access Application Route'
-    _order = 'is_primary desc, id'
+    _order = 'id'
 
     _sql_constraints = [
         (
@@ -873,12 +872,6 @@ class SecurityAccessRoute(models.Model):
         default=True,
         help='Send the public hostname as the HTTP Host header to the '
              'origin so the user-side reverse proxy can route by Host.',
-    )
-    is_primary = fields.Boolean(
-        string='Primary Route',
-        default=False,
-        help='Auto-created at provision (prefix = canonical name). '
-             'Cannot be deleted.',
     )
     is_protected = fields.Boolean(
         string='Protected',
@@ -952,7 +945,7 @@ class SecurityAccessRoute(models.Model):
             )
         return None
 
-    @api.constrains('subdomain_prefix', 'is_primary')
+    @api.constrains('subdomain_prefix')
     def _check_prefix_format(self):
         for route in self:
             err = self._subdomain_prefix_error(route.subdomain_prefix)

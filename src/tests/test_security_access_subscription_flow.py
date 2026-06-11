@@ -608,7 +608,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
             sa.write({'state': 'active', 'tunnel_id': 'tun-ac'})
             self.env['woow_paas_platform.security_access_route'].create({
                 'security_access_id': sa.id,
-                'subdomain_prefix': sa.canonical_name, 'is_primary': True})
+                'subdomain_prefix': sa.canonical_name})
         return sa
 
     def _mock(self):
@@ -631,7 +631,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 'access_enabled': True, 'login_google': True,
                 'login_email_otp': True, 'session_duration': '8h'})
         self.assertTrue(res['success'], res.get('error'))
-        route = sa.route_ids.filtered('is_primary')
+        route = sa.route_ids[:1]
         self.assertTrue(route.is_protected)
         self.assertEqual(route.session_duration, '8h')
 
@@ -646,7 +646,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         and assert none reached the route write()."""
         mc = self._mock()
         sa = self._active_sa(mc)
-        route = sa.route_ids.filtered('is_primary')
+        route = sa.route_ids[:1]
         # Seed the per-route fail-open warning so a forged blank can't clear it.
         route.access_unresolved_idp_types = 'google'
         orig_app_id = route.access_app_id
@@ -688,7 +688,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         route (route_id), surfaced via the stored related security_access_id."""
         mc = self._mock()
         sa = self._active_sa(mc)
-        route = sa.route_ids.filtered('is_primary')
+        route = sa.route_ids[:1]
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
@@ -755,7 +755,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         applies. route_id is server-owned now (pins the CF Access app)."""
         mc = self._mock()
         sa = self._active_sa(mc)
-        route = sa.route_ids.filtered('is_primary')
+        route = sa.route_ids[:1]
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
@@ -787,7 +787,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
             returned policy_ids on sync)."""
         mc = self._mock()
         sa = self._active_sa(mc)
-        route = sa.route_ids.filtered('is_primary')
+        route = sa.route_ids[:1]
         # A second SA + route whose id the attacker tries to smuggle in.
         other_sa = self.SA.create({
             'name': 'Other GW', 'workspace_id': self.workspace.id})
@@ -829,7 +829,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
     def test_delete_policy(self):
         mc = self._mock()
         sa = self._active_sa(mc)
-        route = sa.route_ids.filtered('is_primary')
+        route = sa.route_ids[:1]
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
@@ -871,7 +871,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         pol = self._sa_policies(sa).filtered(lambda p: p.name == 'on-second')
         self.assertEqual(len(pol), 1)
         self.assertEqual(pol.route_id, second)
-        self.assertNotEqual(pol.route_id, sa.route_ids.filtered('is_primary'))
+        self.assertNotEqual(pol.route_id, sa.route_ids[:1])
 
     def test_create_policy_cross_sa_route_id_denied(self):
         """Phase 3 white-list 守線：route_id 指向『另一個 SA』的 route → 必須被
@@ -923,7 +923,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         self.assertTrue(second.login_google)
         self.assertEqual(second.session_duration, '8h')
         # primary route untouched (per-route isolation)
-        primary = sa.route_ids.filtered('is_primary')
+        primary = sa.route_ids[:1]
         self.assertFalse(primary.is_protected)
 
     def test_update_route_access_whitelist_only(self):
@@ -932,7 +932,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         部被丟棄，不得寫進 route。"""
         mc = self._mock()
         sa = self._active_sa(mc)
-        route = sa.route_ids.filtered('is_primary')
+        route = sa.route_ids[:1]
         route.access_unresolved_idp_types = 'google'
         orig_app_id = route.access_app_id
         orig_unresolved = route.access_unresolved_idp_types
@@ -943,16 +943,14 @@ class TestSecurityAccessAccessControl(TransactionCase):
             res = self.controller._update_route_access(sa, route.id, {
                 'access_app_id': 'attacker-app',
                 'access_unresolved_idp_types': '',
-                'security_access_id': 999999,
-                'is_primary': False})
+                'security_access_id': 999999})
         self.assertTrue(res['success'], res.get('error'))
         route.invalidate_recordset(
-            ['access_app_id', 'access_unresolved_idp_types', 'is_primary'])
+            ['access_app_id', 'access_unresolved_idp_types'])
         self.assertEqual(route.access_app_id, orig_app_id)
         self.assertEqual(route.access_unresolved_idp_types, orig_unresolved)
         self.assertEqual(route.access_unresolved_idp_types, 'google')
-        # is_primary is NOT in the whitelist → unchanged
-        self.assertTrue(route.is_primary)
+        # non-whitelisted fields (access_app_id / security_access_id) ignored
         # vals ended empty → no operator sync fired
         mc.sync_access_app.assert_not_called()
 
@@ -982,7 +980,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         cross-SA route_id 回空（never 另一 SA 的 rows）。"""
         mc = self._mock()
         sa = self._active_sa(mc)
-        primary = sa.route_ids.filtered('is_primary')
+        primary = sa.route_ids[:1]
         second = self._second_route(sa, mc, prefix='ac-list-second')
         with patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):

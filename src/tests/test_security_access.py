@@ -328,7 +328,6 @@ class TestSecurityAccess(TransactionCase):
             self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True,
             })
         return sa
 
@@ -496,7 +495,6 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
             self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True,
             })
             self.Route.create({
                 'security_access_id': sa.id,
@@ -525,12 +523,13 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
         self.assertEqual(sa.state, 'suspended')
         self.assertEqual(sa.pre_suspend_state, 'active')
         kwargs = mock_client.sync_tunnel_routes.call_args.kwargs
-        # 全部 route（含 primary）都 503；service_url 原值保留在 DB
+        # 全部 route 都 503；service_url 原值保留在 DB
         self.assertTrue(all(
             r['service_url'] == 'http_status:503' for r in kwargs['routes']))
         self.assertEqual(len(kwargs['routes']), 2)
         self.assertEqual(
-            sa.route_ids.filtered(lambda r: not r.is_primary).service_url,
+            sa.route_ids.filtered(
+                lambda r: r.subdomain_prefix == 'lc-custom').service_url,
             'http://localhost:80')
 
     def test_suspend_idempotent(self):
@@ -599,7 +598,6 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
                 'app_id': 'app-dws', 'policy_ids': [], 'allowed_idps': []}
             route = self.Route.create({'security_access_id': sa.id,
                                        'subdomain_prefix': sa.canonical_name,
-                                       'is_primary': True,
                                        'is_protected': True})
             self.assertEqual(route.access_app_id, 'app-dws')
             sa._do_suspend()
@@ -736,7 +734,6 @@ class TestSecurityAccessAcl(TransactionCase):
             'woow_paas_platform.security_access_route'].create({
                 'security_access_id': self.sa.id,
                 'subdomain_prefix': self.sa.canonical_name,
-                'is_primary': True,
             })
 
     def test_member_can_read(self):

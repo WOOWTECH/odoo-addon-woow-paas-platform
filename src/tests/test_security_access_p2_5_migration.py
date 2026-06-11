@@ -89,7 +89,7 @@ class TestP2_5Migration(TransactionCase):
             primary = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             # A policy created on the route, then forced to look legacy
             # (route_id NULL) via raw SQL — the real upgraded shape.
             pol = self.Policy.create({
@@ -136,7 +136,7 @@ class TestP2_5Migration(TransactionCase):
             primary = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             pol = self.Policy.create({
                 'route_id': primary.id, 'name': 'p', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'a.com'})
@@ -176,7 +176,7 @@ class TestP2_5Migration(TransactionCase):
             r1 = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             r2 = self.Route.create({
                 'security_access_id': sa.id, 'subdomain_prefix': 'mig-r2',
                 'is_protected': True})
@@ -227,7 +227,7 @@ class TestP2_5Migration(TransactionCase):
             primary = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             extra = self.Route.create({
                 'security_access_id': sa.id, 'subdomain_prefix': 'mig-dis-r2',
                 'is_protected': True})
@@ -275,7 +275,7 @@ class TestP2_5Migration(TransactionCase):
             primary = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             self._set_legacy(sa, access_enabled=True, session_duration='8h')
             self.SA.invalidate_model()
             self.Route.invalidate_model()
@@ -319,7 +319,7 @@ class TestP2_5Migration(TransactionCase):
             r1 = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
-                'is_primary': True, 'is_protected': True})
+                'is_protected': True})
             r2 = self.Route.create({
                 'security_access_id': sa.id, 'subdomain_prefix': 'mig-q-r2',
                 'is_protected': True})
