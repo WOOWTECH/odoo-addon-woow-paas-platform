@@ -287,8 +287,8 @@ kubectl get pods -n dev-sandbox-stg
 # 查看日誌（plugin 通用版；無 plugin 時用 ./.claude/skills/k8s-dev-sandbox/scripts/logs.sh）
 /woowprd:k8s-dev-sandbox logs stg --service odoo --follow
 
-# 銷毀 staging
-/k8s-dev-sandbox destroy stg
+# 銷毀 staging（plugin 通用版；無 plugin 時用 ./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh）
+/woowprd:k8s-dev-sandbox destroy stg --context woow-k3s
 ```
 
 **CI 流程圖：**

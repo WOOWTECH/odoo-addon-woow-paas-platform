@@ -66,13 +66,20 @@ if [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
     AGENT_RUNTIME_WEBHOOK_SECRET="$(kubectl get secret -n "$_ar_op_ns" "$_ar_op_secret" -o jsonpath='{.data.webhook-current}' 2>/dev/null | base64 -d 2>/dev/null || true)"
   fi
   if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; then
-    echo "WARN pre-install: 無法解析 agent-runtime auth/webhook secret（operator secret ${_ar_op_ns}/${_ar_op_secret} 缺，或 context 不對）。agent-runtime 可能 401。" >&2
+    # fail-closed：auth 或 webhook 任一解析不到，就整段不寫（含 namespaceSecret）。
+    # 半開（只寫 namespaceSecret 啟用 agent-runtime、卻缺 auth/webhook）會讓
+    # skill-bundle / state-update webhook 401 → agent_session.state 卡 'absent'。
+    # 寧可 agent-runtime 整個關閉（legacy AI chat 不受影響），不要半開漂移。
+    # 比照舊 in-repo create.sh stg 段的 fail-fast 語義（不留半套設定）。
+    echo "WARN pre-install: 無法解析 agent-runtime auth/webhook secret（operator secret ${_ar_op_ns}/${_ar_op_secret} 缺，或 kubectl context 不對）。" >&2
+    echo "WARN pre-install: agent-runtime 維持關閉（fail-closed），不寫任何 agentRuntime values。" >&2
+  else
+    {
+      echo "agentRuntime:"
+      echo "  authSecretCurrent: $(yaml_sq "$AGENT_RUNTIME_AUTH_SECRET_CURRENT")"
+      echo "  namespaceSecret: $(yaml_sq "$AGENT_RUNTIME_NAMESPACE_SECRET")"
+      echo "  webhookSecret: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET")"
+      [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ] && echo "  webhookSecretPrevious: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS")"
+    } >> "$EXTRA_VALUES_FILE"
   fi
-  {
-    echo "agentRuntime:"
-    [ -n "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] && echo "  authSecretCurrent: $(yaml_sq "$AGENT_RUNTIME_AUTH_SECRET_CURRENT")"
-    echo "  namespaceSecret: $(yaml_sq "$AGENT_RUNTIME_NAMESPACE_SECRET")"
-    [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ] && echo "  webhookSecret: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET")"
-    [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ] && echo "  webhookSecretPrevious: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS")"
-  } >> "$EXTRA_VALUES_FILE"
 fi
