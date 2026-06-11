@@ -170,9 +170,15 @@ post_create_hook: .sandbox/post-create.sh   # 平台 seed 外置入口（存在�
 
 ### 平台 seed 剝離設計（關鍵）
 
+> **實作修正（plan-gap）**：原設計只規劃 post-create 單一 hook，但實作發現 `create.sh:230-326`
+> 的 agent-runtime secret 是 **install-time**（要在 `helm install` 當下從 operator k8s secret 動態撈
+> 寫進 chart Secret），無法塞進 install 之後的 post-create hook。故最終採 **雙 hook**：
+> `.sandbox/pre-install.sh`（install 前、輸出額外 helm values）+ `.sandbox/post-create.sh`（install 後、seed SQL）。
+> 細節見 implementation 檔 Phase 4。
+
 那一大段 stg-only woow 平台 seed（`create.sh:230-326` stg profile、`:588-719` operator 探索 + `ir_config_parameter`/ECPay/WoowBot AI/journal SQL；整支 `e2e-seed.sh` / `seed-from-stg.sh`）對通用 addon 無意義且會失敗，**不可留在通用主線**：
 
-1. **通用 skill 預設不跑任何平台 seed。** 把這段抽成 **opt-in 的 repo-specific post-create hook**：通用 `create.sh` 在 helm install + module install 完成後，偵測 `${REPO_ROOT}/.sandbox/post-create.sh`（或 `.sandbox/seed.sql`），**存在才執行**——平台邏輯外置回 `woow_paas_platform` repo 自己。
+1. **通用 skill 預設不跑任何平台 seed。** 把這段抽成 **opt-in 的 repo-specific hook**：通用 `create.sh` 在 helm install 前偵測 `${REPO_ROOT}/.sandbox/pre-install.sh`（install-time values）、在 module install 完成後偵測 `${REPO_ROOT}/.sandbox/post-create.sh`（post-install seed），**存在才執行**——平台邏輯外置回 `woow_paas_platform` repo 自己。
 2. `e2e-seed.sh` / `seed-from-stg.sh` **整支不進通用 plugin**，留在 `woow_paas_platform` repo 的 in-repo 擴充（或重寫成 thin runner：通用骨架由 plugin 提供、seed 內容由 repo 提供）。
 3. stg 模式（`create.sh:230-326`）整體視為「environment profile」：registry server / egress·ingress namespace / storageClass 從 values/profile 讀，不硬編 `woowtech.io` / `paas-stg-*` 字面值。
 4. install gate 與 `ir_config_parameter` 注入 gate-on `primary_module == woow_paas_platform`：非 woow addon 一律 skip。

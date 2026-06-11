@@ -783,53 +783,49 @@ git commit -m "feat: 泛化 7 支 sandbox script（雙根/module 偵測/db 前�
 
 ---
 
-## Phase 4：剝離 woow 平台 seed 成 opt-in hook
+## Phase 4：剝離 woow 平台 seed 成 opt-in **雙 hook**（已實作）
 
-### Task 4.1：create.sh 加 hook 偵測（通用主線零 woow 分支）
+> **Plan-gap 修正（實作時發現）**：原設計只規劃單一 post-create hook，但 woow stg 的
+> agent-runtime 共享 secret 是 **install-time** 的（要在 `helm install` 當下從 operator 的
+> k8s secret 動態撈、寫進 chart Secret 成 pod env），無法搬到 install 之後才跑的 post-create
+> hook。因此通用 create.sh 提供 **兩個** opt-in hook：
+>
+> | hook | 時機 | 用途（woow） |
+> |------|------|------|
+> | `${REPO_ROOT}/.sandbox/pre-install.sh` | `helm install` **之前** | 寫額外 helm values 到 `$EXTRA_VALUES_FILE`（create.sh `-f` 它）—— agent-runtime secret 動態撈 + stg networkPolicy/storageClass/JCR registry |
+> | `${REPO_ROOT}/.sandbox/post-create.sh` | module install 完成、**最終 restart 之前** | operator 探索 + `ir.config_parameter` / ECPay / WoowBot AI / journal seed SQL |
+>
+> post-create 在最終 restart **之前**跑（seed 走 psql、odoo 因 `--stop-after-init` 停著也行；
+> restart 在 seed 後做讓 `ir.config_parameter` in-process 快取重載、seed 生效）。
 
-**Files:** Modify `…/scripts/create.sh`
+### Task 4.1：create.sh 雙 hook 偵測（通用主線零 woow 分支）✅
 
-- [ ] **Step 1：在 module install + rollout restart 完成後加**
+**Files:** Modify `…/scripts/create.sh`（plugin `7a32bee`）
+
+- [x] **pre-install hook**（build helm args 後、`helm install` 前）：
 
 ```bash
-# --- opt-in post-create hook（平台特化 seed 外置；通用主線不跑任何 woow seed）---
-HOOK="${REPO_ROOT}/${SBX_POST_CREATE_HOOK:-.sandbox/post-create.sh}"
-if [ -f "$HOOK" ]; then
-    echo -e "${BLUE}Running post-create hook: ${HOOK}${NC}"
-    export REPO_ROOT PLUGIN_SKILL_ROOT NAMESPACE SLUG DB_NAME DB_PREFIX MODE KUBE_CONTEXT
-    export PRIMARY_MODULE="$SBX_MODULE" INSTALL_MODULES="$SBX_INSTALL_MODULES"
-    export ODOO_DEPLOY PG_STATEFULSET NGINX_SVC
-    export OPERATOR_NS="${PAAS_OPERATOR_NAMESPACE:-$([ "$MODE" = "stg" ] && echo paas-stg-system || echo paas-system)}"
-    if ! bash "$HOOK"; then
-        echo -e "${YELLOW}post-create hook 失敗（sandbox 仍可用，繼續）${NC}" >&2
-    fi
+_PREINSTALL_VALUES=""
+PRE_HOOK="${REPO_ROOT}/.sandbox/pre-install.sh"
+if [ -f "$PRE_HOOK" ]; then
+    _PREINSTALL_VALUES="$(mktemp)"; trap 'rm -f "${_PREINSTALL_VALUES:-}"' EXIT
+    EXTRA_VALUES_FILE="$_PREINSTALL_VALUES" REPO_ROOT="$REPO_ROOT" NAMESPACE="$NAMESPACE" \
+        SLUG="$SLUG" MODE="$MODE" DB_NAME="$DB_NAME" KUBE_CONTEXT="$KUBE_CONTEXT" \
+        PRIMARY_MODULE="$PRIMARY_MODULE" bash "$PRE_HOOK" || echo "pre-install hook 失敗（繼續）" >&2
+    [ -s "$_PREINSTALL_VALUES" ] && EXTRA_ARGS="$EXTRA_ARGS -f $_PREINSTALL_VALUES"
 fi
 ```
 
-（契約：存在才跑、`bash` 子行程隔離、失敗不中止；export 14 變數見設計文件 §post-create hook 契約。）
+- [x] **post-create hook**（module install + seed 後、最終 restart 前）：存在才跑、`bash` 子行程隔離、失敗不中止；export 14 變數（`REPO_ROOT`/`PLUGIN_SKILL_ROOT`/`NAMESPACE`/`SLUG`/`DB_NAME`/`DB_PREFIX`/`MODE`/`KUBE_CONTEXT`/`PRIMARY_MODULE`/`INSTALL_MODULES`/`ODOO_DEPLOY`/`PG_STATEFULSET`/`NGINX_SVC`/`OPERATOR_NS`）。
 
-### Task 4.2：在 woow repo 建外置 seed
+### Task 4.2：在 woow repo 建外置 seed ✅
 
-**Files:** Create `woow_paas_platform/.sandbox.yml`、`woow_paas_platform/.sandbox/post-create.sh`
+**Files:** Create `.sandbox.yml`、`.sandbox/pre-install.sh`、`.sandbox/post-create.sh`（woow `693ef62`）
 
-- [ ] **Step 1：`.sandbox.yml`**
-
-```yaml
-layout: src
-module: woow_paas_platform
-install_modules: [base, web, woow_paas_platform]
-db_prefix: woow_
-post_create_hook: .sandbox/post-create.sh
-```
-
-- [ ] **Step 2：`.sandbox/post-create.sh`** ＝ 舊 `create.sh:588-719` 的平台 seed（operator 探索 / `ir_config_parameter` / ECPay / WoowBot AI / subscription journal）整段搬入，讀 `NAMESPACE`/`PG_STATEFULSET`/`DB_NAME`/`MODE`/`OPERATOR_NS` env（不再自己推導）。`chmod +x`。
-
-- [ ] **Step 3：Commit（in-repo）**
-
-```bash
-git add .sandbox.yml .sandbox/post-create.sh
-git commit -m "feat: 外置 woow 平台 sandbox seed 成 .sandbox/post-create.sh hook"
-```
+- [x] **`.sandbox.yml`**：`layout: src` / `module: woow_paas_platform` / `db_prefix: woow_` / `post_create_hook: .sandbox/post-create.sh`。
+- [x] **`.sandbox/pre-install.sh`**（install-time）＝ 舊 `create.sh:230-326`（stg agent-runtime secret 從 operator k8s secret 動態撈 + networkPolicy/storageClass/JCR registry），只 stg 生效，寫 YAML 到 `$EXTRA_VALUES_FILE`。
+- [x] **`.sandbox/post-create.sh`**（post-install）＝ 舊 `create.sh:588-719`（operator 探索 + `ir_config_parameter` / ECPay / WoowBot AI / subscription journal SQL），讀 `NAMESPACE`/`PG_STATEFULSET`/`DB_NAME`/`MODE`/`OPERATOR_NS` env。
+- [x] 驗證：`bash -n` 全綠；pre-install 產出 YAML 經 `helm template -f` 消費驗證。
 
 ---
 
