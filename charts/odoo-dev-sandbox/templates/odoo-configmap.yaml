@@ -24,7 +24,7 @@ data:
     {{- if eq .Values.sandbox.mode "stg" }}
     addons_path = {{ .Values.odoo.stgAddonsPath }}
     {{- else }}
-    addons_path = {{ .Values.odoo.addonsPath }}{{- range .Values.codeMount.extraMounts }},{{ .containerPath }}{{- end }}
+    addons_path = {{ .Values.odoo.addonsPath }}{{- if .Values.codeMount.extraAddonsHostPath }},/mnt/extra-addons-ext{{- end }}{{- range .Values.codeMount.extraMounts }},{{ .containerPath }}{{- end }}
     {{- end }}
 
     ; Server settings

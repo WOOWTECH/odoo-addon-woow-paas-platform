@@ -44,8 +44,11 @@ odoo:
   # Uses -u (update) which is idempotent and safe for restarts.
   # Empty string means no explicit module update (Odoo starts normally).
   updateModules: ""
-  # Addons path inside container (non-stg). extraMounts containerPaths are appended.
-  addonsPath: /mnt/extra-addons,/mnt/extra-addons-ext
+  # Addons path inside container (non-stg). BASE ONLY — legacy extraAddonsHostPath
+  # (/mnt/extra-addons-ext) 與 extraMounts 的 containerPath 由 configmap 在「實際有掛載」
+  # 時才 append。不可把未掛載的 /mnt/extra-addons-ext 寫死進來：odoo --dev reload 的
+  # inotify watcher 對不存在的 addons_path 目錄會 FileNotFoundError 而 crash（乾淨 addon 無相依時）。
+  addonsPath: /mnt/extra-addons
   # stg mode addons_path (Bitnami base image internal paths). woow/stg profile;
   # override if a non-Bitnami stg base image is used.
   stgAddonsPath: /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/addons,/opt/bitnami/odoo/custom-addons
