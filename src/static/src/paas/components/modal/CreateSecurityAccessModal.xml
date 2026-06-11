@@ -4,41 +4,81 @@
     <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
       <div class="o_woow_modal" t-on-click.stop="">
         <div class="o_woow_modal_header">
-          <h2>Create Security Access</h2>
+          <h2>
+            <t t-if="state.step === 'form'">Create Security Access</t>
+            <t t-elif="state.step === 'provisioning'">Provisioning...</t>
+            <t t-else="">Setup Complete</t>
+          </h2>
           <button
             class="o_woow_modal_close"
             t-on-click="props.onClose"
-            t-att-disabled="state.loading">
+            t-att-disabled="state.loading or state.provisioning">
             <WoowIcon name="'close'" size="20"/>
           </button>
         </div>
         <div class="o_woow_modal_body">
-          <div t-if="state.error" class="o_woow_error_message">
-            <WoowIcon name="'error'" size="16"/>
-            <span t-esc="state.error"/>
-          </div>
-          <div class="o_woow_form_group">
-            <label for="security_access_name">Name</label>
-            <input
-              type="text"
-              id="security_access_name"
-              class="o_woow_input"
-              placeholder="e.g., secure-gateway"
-              t-att-value="state.name"
-              t-on-input="onNameInput"
-              t-att-disabled="state.loading"
-            />
-          </div>
-          <div class="o_woow_form_group">
-            <label>Plan</label>
-            <PlanSelector
-              plans="state.plans"
-              selectedPlanId="state.selectedPlanId"
-              onSelect.bind="onSelectPlan"
-            />
-          </div>
+          <!-- Form Step -->
+          <t t-if="state.step === 'form'">
+            <div t-if="state.error" class="o_woow_error_message">
+              <WoowIcon name="'error'" size="16"/>
+              <span t-esc="state.error"/>
+            </div>
+            <div class="o_woow_form_group">
+              <label for="security_access_name">Name</label>
+              <input
+                type="text"
+                id="security_access_name"
+                class="o_woow_input"
+                placeholder="e.g., secure-gateway"
+                t-att-value="state.name"
+                t-on-input="onNameInput"
+                t-att-disabled="state.loading"
+              />
+            </div>
+            <div class="o_woow_form_group">
+              <label>Plan</label>
+              <PlanSelector
+                plans="state.plans"
+                selectedPlanId="state.selectedPlanId"
+                onSelect.bind="onSelectPlan"
+              />
+            </div>
+          </t>
+
+          <!-- Provisioning / Done Step -->
+          <t t-elif="state.step === 'provisioning' or state.step === 'done'">
+            <div class="o_woow_provision_progress">
+              <div class="o_woow_provision_icon">
+                <t t-if="state.step === 'done'">
+                  <WoowIcon name="'check_circle'" size="48"/>
+                </t>
+                <t t-else="">
+                  <WoowIcon name="'sync'" size="48" class="'o_woow_spin'"/>
+                </t>
+              </div>
+              <h3 t-if="state.step === 'done'">Security Access Ready</h3>
+              <h3 t-else="">Setting up your Security Access...</h3>
+              <p t-if="state.step === 'done'">
+                Your Cloudflare Tunnel has been created. Add application routes to expose your services.
+              </p>
+              <p t-else="">
+                Creating the Cloudflare Tunnel. This may take a moment.
+              </p>
+              <div class="o_woow_progress_bar">
+                <div
+                  class="o_woow_progress_fill"
+                  t-attf-style="width: {{ state.provisionProgress }}%"/>
+              </div>
+            </div>
+
+            <div t-if="state.error" class="o_woow_error_message">
+              <WoowIcon name="'error'" size="16"/>
+              <span t-esc="state.error"/>
+            </div>
+          </t>
         </div>
-        <div class="o_woow_modal_footer">
+
+        <div class="o_woow_modal_footer" t-if="state.step === 'form'">
           <WoowButton
             variant="'ghost'"
             size="'md'"
@@ -59,6 +99,15 @@
               <WoowIcon name="'verified_user'" size="18"/>
               Create
             </t>
+          </WoowButton>
+        </div>
+
+        <div class="o_woow_modal_footer" t-if="state.step === 'done'">
+          <WoowButton
+            variant="'primary'"
+            size="'md'"
+            onClick="props.onClose">
+            Done
           </WoowButton>
         </div>
       </div>

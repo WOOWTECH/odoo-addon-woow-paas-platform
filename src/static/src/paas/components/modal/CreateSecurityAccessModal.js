@@ -10,9 +10,10 @@ import { securityAccessService } from "../../services/security_access";
  *
  * A modal dialog for creating a new Security Access (Zero Trust Tunnel)
  * instance. Mirrors CreateSmartHomeModal: loads platform-level templates
- * and plans, lets the user pick a plan, then creates the record. The
- * parent navigates to the detail page (where provisioning progress polls)
- * after creation.
+ * and plans, lets the user pick a plan, creates the record, then
+ * automatically chains provisioning (Cloudflare Tunnel creation) in-modal
+ * with a progress step. On success/failure the parent is notified and
+ * navigates to the detail page (active, or error with a retry button).
  *
  * Props:
  *   - workspaceId (number): Parent workspace ID
@@ -37,6 +38,11 @@ export class CreateSecurityAccessModal extends Component {
       selectedPlanId: null,
       loading: false,
       error: null,
+      // provision 串接 step machine（鏡像 CreateSmartHomeModal）：
+      // loading 管 create 階段的按鈕 spinner，provisioning 管 provision 階段。
+      provisioning: false,
+      step: "form", // "form" | "provisioning" | "done"
+      provisionProgress: 0,
     });
     onWillStart(async () => {
       const res = await securityAccessService.fetchTemplates();
@@ -71,7 +77,11 @@ export class CreateSecurityAccessModal extends Component {
   }
 
   onBackdropClick(ev) {
-    if (ev.target === ev.currentTarget && !this.state.loading) {
+    if (
+      ev.target === ev.currentTarget &&
+      !this.state.loading &&
+      !this.state.provisioning
+    ) {
       this.props.onClose();
     }
   }
@@ -87,18 +97,49 @@ export class CreateSecurityAccessModal extends Component {
     }
     this.state.loading = true;
     this.state.error = null;
-    const res = await securityAccessService.create(
+
+    // Step 1: 建立 SA 記錄
+    const createResult = await securityAccessService.create(
       this.props.workspaceId,
       this.state.name.trim(),
       this.state.selectedPlanId,
       this.state.templateId,
     );
+
+    if (!createResult.success) {
+      this.state.error =
+        createResult.error || "Failed to create security access";
+      this.state.loading = false;
+      return;
+    }
+
+    // Step 2: 自動 provision（建 Cloudflare tunnel），進度顯示在 modal 內
+    this.state.step = "provisioning";
     this.state.loading = false;
-    if (res.success) {
-      this.props.onCreated(res.data);
-      this.props.onClose();
+    this.state.provisioning = true;
+    this.state.provisionProgress = 30;
+
+    const saId = createResult.data.id;
+    const provisionResult = await securityAccessService.provision(
+      this.props.workspaceId,
+      saId,
+    );
+
+    this.state.provisionProgress = 100;
+
+    if (provisionResult.success) {
+      this.state.step = "done";
+      this.state.provisioning = false;
+      // 短暫顯示完成畫面後通知父層（父層關閉 modal 並導去 detail page）
+      setTimeout(() => {
+        this.props.onCreated(provisionResult.data || createResult.data);
+      }, 800);
     } else {
-      this.state.error = res.error;
+      // provision 失敗：仍通知父層導去 detail page，SA 處於 error state，
+      // detail page 有 Provision 重試鈕接住。
+      this.state.error = provisionResult.error || "Provisioning failed";
+      this.state.provisioning = false;
+      this.props.onCreated(createResult.data);
     }
   }
 }
