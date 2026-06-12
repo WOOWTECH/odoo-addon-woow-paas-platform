@@ -25,13 +25,19 @@ yaml_sq() { local v="${1:-}"; v="${v//\'/\'\'}"; printf "'%s'" "$v"; }
 
 # kubectl 沿用 create.sh 已切換的 context（require_kube_context 做過 use-context）。
 
-# --- stg networkPolicy / storageClass（cloudflare tunnel ingress + operator egress + agent-runtime pods）---
+# --- stg networkPolicy / storageClass / devMode（cloudflare tunnel ingress + operator egress + agent-runtime pods）---
 {
   echo "networkPolicy:"
   echo "  allowIngressFromNamespaces: [paas-stg-cloudflare-system, paas-stg-system]"
   echo "  allowEgressToNamespaces: [paas-stg-system]"
   echo "  allowAgentRuntimePods: true"
   echo "odoo:"
+  # stg 是類正式驗證環境：釘 devMode=false。plugin chart 的 default devMode=true 只對本機
+  # local sandbox（hostPath 掛 code、改檔即時生效）合理；stg 是打包 image、code 不變，開
+  # devMode 只剩副作用且與 prod（devMode off）行為偏離：--dev xml 會從 XML 檔讀 view 而非
+  # DB（遮蔽升級後的真實 view 狀態，正是 stg 要驗的東西）、qweb 不快取每次重讀 template、
+  # reload 起多餘 file watcher。對齊舊 in-repo values-ci.yaml 原本的 devMode: false。
+  echo "  devMode: false"
   echo "  filestore:"
   echo "    persistence:"
   echo "      storageClass: longhorn-delete"
