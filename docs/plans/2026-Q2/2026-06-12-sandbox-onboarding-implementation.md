@@ -1178,8 +1178,14 @@ git commit -m "docs: SKILL.md 補 onboard 子命令與三層設定模型"
 
 - [ ] **Step 1：建 fixture（root layout、合法技術名目錄）**
 
+> **執行修訂（e2e 實撞）**：fixture **不可放 `/tmp`** —— local 模式 hostPath 由 Docker
+> Desktop VM 的 kubelet 解析，macOS `/tmp` 不在 VM 檔案共享範圍 → pod 卡
+> `FailedMount: hostPath type check failed`、Odoo 600s 不 ready。fixture 一律放
+> `$HOME` 下（如 `$HOME/.sandbox-e2e/fixture_addon`）。這也順帶實證了 create.sh 的
+> fail-loud 鏈：module install 失敗 → config_params 讀取失敗計數 → 結尾紅字 exit 1。
+
 ```bash
-FIX=/tmp/fixture_addon && rm -rf "$FIX" && mkdir -p "$FIX"
+FIX="$HOME/.sandbox-e2e/fixture_addon" && rm -rf "$FIX" && mkdir -p "$FIX"
 cat > "$FIX/__manifest__.py" <<'PY'
 {'name': 'Fixture Addon', 'version': '1.0', 'depends': ['base'], 'installable': True}
 PY
@@ -1274,3 +1280,20 @@ Expected: `web.base.url=https://stg.woowtech.io` + `freeze=True`（來源改為�
 ## Execution Handoff
 
 Plan 存於 `docs/plans/2026-Q2/2026-06-12-sandbox-onboarding-implementation.md`。執行採 Inline（同 session、interlocked bash 檔不適合平行 subagent），每 Phase 末驗證 + commit。
+
+## 執行結果（2026-06-12，全 Phase 完成）
+
+| Phase | 結果 | Commit |
+|-------|------|--------|
+| 1 common.sh | ✅ 單測雙 bash（/bin/bash 3.2 + Homebrew 5.3）ALL PASS，含既有 yaml_sq 3.2 紅轉綠 | plugin `8b2d215` |
+| 2 create.sh | ✅ `bash -n` 雙版本過 | plugin `72624c0` |
+| 3 onboard.sh | ✅ 煙霧六情境全過（check1=1 / onboard=0 / check2=0 / chmod 600 / verbatim-kept / ambient-ctx-refused / denylist=1） | plugin `6f6494b` |
+| 4 woow repo | ✅ parser 實解 woow 宣告（OPT 三筆、merged stg 兩行、render=`https://stg.woowtech.io`、merged local 空） | woow `827c6ea`、`1e0bacc` |
+| 5 SKILL.md | ✅ | plugin `1506920` |
+| 6 e2e（docker-desktop） | ✅ 全鏈：fail-fast（不碰 cluster、onboard 指引）→ onboard → create 零 `--context`（profile 補）→ module installed → config_params 落 DB（含「收斂漂移值」訊息：Odoo init 自寫的 `http://localhost:8069` 被收斂）→ 無變更重跑「不變」不 restart（rev 持平）→ 改值重跑 `↻ ...:9090` + restart 恰一次（rev+1）→ destroy 零殘留 | — |
+
+e2e 額外實證：
+- **fixture 不可放 `/tmp`**（Docker Desktop VM hostPath 看不到 → FailedMount → Odoo 600s 不 ready）；第一輪失敗同時實證了 **fail-loud 鏈**：install 失敗 → config_params 讀取失敗計數 → create 結尾紅字 exit 1（正是 design 要的不可靜默降級）。
+- woow floor project-key = `woow_paas_platform-a1ebac6d`（remote URL 推導；所有 Floor / worktree / clone 收斂同 key）。
+
+**Deferred（不阻擋）**：deploy-stg 真 stg 回歸（下次 `/woow:deploy-stg` 時驗 `web.base.url=https://stg.woowtech.io`）；雙 worktree 並行 up e2e；follow-up 清單見 Self-Review。
