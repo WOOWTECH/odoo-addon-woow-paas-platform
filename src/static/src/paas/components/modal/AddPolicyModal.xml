@@ -2,9 +2,9 @@
 <templates xml:space="preserve">
   <t t-name="woow_paas_platform.AddPolicyModal">
     <div class="o_woow_modal_backdrop" t-on-click="props.onClose">
-      <div class="o_woow_modal" t-on-click.stop="">
+      <div class="o_woow_modal o_woow_sa_policy_modal" t-on-click.stop="">
         <div class="o_woow_modal_header">
-          <h2><t t-esc="isEdit ? 'Edit Access Policy' : 'Add Access Policy'"/></h2>
+          <h2><t t-esc="isEdit ? 'Edit Policy' : 'Add Policy'"/></h2>
           <button class="o_woow_modal_close" t-on-click="props.onClose">
             <WoowIcon name="'close'" size="20"/>
           </button>
@@ -14,33 +14,51 @@
             <WoowIcon name="'error'" size="16"/><span t-esc="state.error"/>
           </div>
           <div class="o_woow_form_group">
-            <label>Name</label>
+            <label>Policy name</label>
             <input type="text" class="o_woow_input" t-att-value="state.name"
                    t-on-input="(ev) => state.name = ev.target.value"
                    placeholder="e.g. Internal staff"/>
           </div>
           <div class="o_woow_form_group">
-            <label>Decision</label>
-            <select class="o_woow_input"
-                    t-on-change="(ev) => state.decision = ev.target.value">
-              <option value="allow" t-att-selected="state.decision === 'allow'">Allow</option>
-              <option value="deny" t-att-selected="state.decision === 'deny'">Block</option>
-            </select>
+            <label>Action</label>
+            <div class="o_woow_sa_action_seg">
+              <button t-att-class="'o_woow_sa_action_card' + (state.decision === 'allow' ? ' o_woow_sa_action_card--allow' : '')"
+                      t-on-click="() => state.decision = 'allow'">
+                <div class="o_woow_sa_action_card__title">
+                  <WoowIcon name="'check'" size="18"/>
+                  <strong>Allow</strong>
+                </div>
+                <span class="o_woow_sa_action_card__sub">Grant access to matches</span>
+              </button>
+              <button t-att-class="'o_woow_sa_action_card' + (state.decision === 'deny' ? ' o_woow_sa_action_card--deny' : '')"
+                      t-on-click="() => state.decision = 'deny'">
+                <div class="o_woow_sa_action_card__title">
+                  <WoowIcon name="'block'" size="18"/>
+                  <strong>Block</strong>
+                </div>
+                <span class="o_woow_sa_action_card__sub">Deny access to matches</span>
+              </button>
+            </div>
           </div>
           <div class="o_woow_form_group">
             <label>Rule type</label>
             <select class="o_woow_input"
                     t-on-change="(ev) => state.rule_type = ev.target.value">
-              <option value="email_domain" t-att-selected="state.rule_type === 'email_domain'">Email domain</option>
-              <option value="email_list" t-att-selected="state.rule_type === 'email_list'">Email list</option>
+              <option value="email_domain" t-att-selected="state.rule_type === 'email_domain'">Emails ending in a domain</option>
+              <option value="email_list" t-att-selected="state.rule_type === 'email_list'">List of emails</option>
               <option value="ip_range" t-att-selected="state.rule_type === 'ip_range'">IP range (CIDR)</option>
             </select>
           </div>
           <div class="o_woow_form_group">
-            <label>Rule value</label>
-            <input type="text" class="o_woow_input" t-att-value="state.rule_value"
-                   t-on-input="(ev) => state.rule_value = ev.target.value"
-                   placeholder="acme.com / a@x.com,b@x.com / 203.0.113.0/24"/>
+            <label t-esc="ruleValueConfig.label"/>
+            <div class="o_woow_sa_prefix_input">
+              <span t-if="ruleValueConfig.prefix"
+                    class="o_woow_sa_prefix_input__prefix" t-esc="ruleValueConfig.prefix"/>
+              <input type="text" class="o_woow_input" t-att-value="state.rule_value"
+                     t-on-input="(ev) => state.rule_value = ev.target.value"
+                     t-att-placeholder="ruleValueConfig.placeholder"/>
+            </div>
+            <p class="o_woow_sa_field_hint" t-esc="ruleValueConfig.hint"/>
           </div>
         </div>
         <div class="o_woow_modal_footer">
@@ -48,7 +66,10 @@
           <WoowButton variant="'primary'" onClick.bind="confirm"
                       disabled="state.saving">
             <t t-if="state.saving">Saving...</t>
-            <t t-else=""><t t-esc="isEdit ? 'Save' : 'Add Policy'"/></t>
+            <t t-else="">
+              <WoowIcon name="'check'" size="16"/>
+              <span t-esc="isEdit ? 'Save Policy' : 'Add Policy'"/>
+            </t>
           </WoowButton>
         </div>
       </div>

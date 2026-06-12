@@ -185,9 +185,8 @@ export class SecurityAccessDetailPage extends Component {
   }
 
   // ---- Application tab：routes ----
-  // 平台 domain 後綴（add-route 表單顯示 {prefix}.{domain}）。後端 to_dict 不
-  // 暴露 domain，故從既有任一 route 的 hostname 推回；尚無 route 時 fallback 平台
-  // 預設值（與後端 _get_paas_domain 預設一致），確保新增第一條 route 時仍顯示後綴。
+  // 平台 domain 後綴；後端 to_dict 不暴露 domain，從既有 route hostname 推回，
+  // 無 route 時 fallback 平台預設（與後端 _get_paas_domain 一致）。
   get paasDomainSuffix() {
     const routes = this.state.sa && this.state.sa.routes;
     if (routes && routes.length && routes[0].hostname) {
@@ -326,8 +325,7 @@ export class SecurityAccessDetailPage extends Component {
     this.saveRouteAccess(route, { is_protected: ev.target.checked });
   }
 
-  // Login methods 以 toggle pill 呈現（對齊素材）。pill 點擊沒有 checkbox 事件
-  // 可讀，故讀目前 route[method] 取反。method 為 'login_google' | 'login_email_otp'。
+  // Login methods 以 toggle pill 呈現；pill 點擊讀目前 route[method] 取反。
   toggleRouteLogin(route, method) {
     this.saveRouteAccess(route, { [method]: !route[method] });
   }
