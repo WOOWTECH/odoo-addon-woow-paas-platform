@@ -124,7 +124,11 @@ Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正
 部署獨立的開發沙盒環境到 Kubernetes（plugin 通用版，推薦）：
 
 ```bash
-# 建立 / 快速建立當前 branch（--context 必填）
+# 一次性 onboarding（記錄執行期 env 到 ~/.sandbox/{project-key}/，worktree 共用；
+# 之後 create/up 可不帶 --context、由 profile 補；destroy 仍須顯式 --context）
+/woowprd:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" [--context <ctx>] [--set KEY=VALUE]
+
+# 建立 / 快速建立當前 branch（--context 必填，或由 onboard profile 提供）
 /woowprd:k8s-dev-sandbox create --context woow-k3s [--ttl 48h --pgadmin]
 /woowprd:k8s-dev-sandbox up --context docker-desktop
 
