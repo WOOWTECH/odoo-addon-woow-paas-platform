@@ -102,23 +102,8 @@
           </WoowCard>
         </div>
 
-        <!-- Configuration（record 自身設定 + 接入教學） -->
+        <!-- Configuration（record 自身設定） -->
         <div t-if="state.activeTab === 'configuration'" class="o_woow_sa_detail__body">
-          <WoowCard shadow="true">
-            <h3>Connector Setup</h3>
-            <p>Run the Cloudflare Tunnel connector on your host, then point
-               your reverse proxy (e.g. Nginx Proxy Manager) at port 80.
-               All application routes forward to it with the Host header
-               preserved.</p>
-            <div class="o_woow_sa_detail__code">
-              <code>docker run cloudflare/cloudflared:latest tunnel run --token &lt;TOKEN&gt;</code>
-            </div>
-            <p class="o_woow_sa_detail__hint">
-              Get the tunnel token from your Home Assistant integration or
-              ask your workspace owner. See the NPM setup guide for the
-              reverse-proxy walkthrough.
-            </p>
-          </WoowCard>
           <WoowCard shadow="true">
             <h3>Identity</h3>
             <div class="o_woow_sa_detail__grid">

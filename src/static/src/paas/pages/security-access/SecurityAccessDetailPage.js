@@ -185,6 +185,20 @@ export class SecurityAccessDetailPage extends Component {
   }
 
   // ---- Application tab：routes ----
+  // 平台 domain 後綴（add-route 表單顯示 {prefix}.{domain}）。後端 to_dict 不
+  // 暴露 domain，故從既有任一 route 的 hostname 推回；尚無 route 時 fallback 平台
+  // 預設值（與後端 _get_paas_domain 預設一致），確保新增第一條 route 時仍顯示後綴。
+  get paasDomainSuffix() {
+    const routes = this.state.sa && this.state.sa.routes;
+    if (routes && routes.length && routes[0].hostname) {
+      const dot = routes[0].hostname.indexOf(".");
+      if (dot > -1) {
+        return routes[0].hostname.slice(dot + 1);
+      }
+    }
+    return "woowtech.io";
+  }
+
   onPrefixInput(ev) {
     this.state.newRoutePrefix = ev.target.value.trim().toLowerCase();
     this.state.prefixCheck = null;
@@ -260,6 +274,12 @@ export class SecurityAccessDetailPage extends Component {
   // so the fail-open widening warning names the SAME methods the toggles do
   // (e.g. 'onetimepin' → 'Email OTP'). Unknown types pass through verbatim
   // rather than being dropped, so a future CF type still surfaces (unmapped).
+  // 卡頭副標 "N of M routes protected" 的 N。
+  get protectedRouteCount() {
+    const routes = (this.state.sa && this.state.sa.routes) || [];
+    return routes.filter((r) => r.is_protected).length;
+  }
+
   unresolvedIdpLabels(route) {
     const raw = route && route.access_unresolved_idp_types;
     if (!raw) {
@@ -306,9 +326,10 @@ export class SecurityAccessDetailPage extends Component {
     this.saveRouteAccess(route, { is_protected: ev.target.checked });
   }
 
-  onRouteLoginToggle(route, method, ev) {
-    // method is 'login_google' | 'login_email_otp'
-    this.saveRouteAccess(route, { [method]: ev.target.checked });
+  // Login methods 以 toggle pill 呈現（對齊素材）。pill 點擊沒有 checkbox 事件
+  // 可讀，故讀目前 route[method] 取反。method 為 'login_google' | 'login_email_otp'。
+  toggleRouteLogin(route, method) {
+    this.saveRouteAccess(route, { [method]: !route[method] });
   }
 
   onRouteSessionChange(route, ev) {
