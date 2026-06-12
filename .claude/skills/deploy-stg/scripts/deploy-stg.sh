@@ -142,6 +142,36 @@ echo -e "${BLUE}Using kubectl context:${NC} ${GREEN}${KUBE_CONTEXT}${NC}"
 kubectl config use-context "$KUBE_CONTEXT" >/dev/null
 export KUBE_CONTEXT
 
+# --- Resolve woowprd plugin's k8s-dev-sandbox create.sh ---
+#
+# deploy-stg 把「建沙盒」委派給 woowprd plugin 的 create.sh（即
+# /woowprd:k8s-dev-sandbox 的引擎），不再自帶一份重複的 create.sh。
+# CLAUDE_PLUGIN_ROOT 在純 bash 不可用，故依序解析 plugin 安裝路徑：
+#   1) WOOWPRD_PLUGIN_ROOT env 覆寫（最高優先）
+#   2) 本機 dev copy（plugins-local，開發中的活版本）
+#   3) marketplace cache（含版本目錄 glob：cache/<market>/woowprd/<ver>/...，
+#      給只裝 marketplace 的使用者；bash nullglob off 時不匹配會留 literal → -f 失敗跳過）
+resolve_plugin_create_sh() {
+    local rel="skills/k8s-dev-sandbox/scripts/create.sh"
+    local c
+    for c in \
+        ${WOOWPRD_PLUGIN_ROOT:+"${WOOWPRD_PLUGIN_ROOT}/${rel}"} \
+        "$HOME/.claude/plugins-local/woowprd/${rel}" \
+        "$HOME/.claude/plugins/cache/"*"/woowprd/"*"/${rel}"; do
+        [ -f "$c" ] && { printf '%s\n' "$c"; return 0; }
+    done
+    return 1
+}
+
+if ! PLUGIN_CREATE_SH="$(resolve_plugin_create_sh)"; then
+    echo -e "${RED}ERROR: 找不到 woowprd plugin 的 k8s-dev-sandbox create.sh。${NC}" >&2
+    echo -e "${YELLOW}deploy-stg 已改為委派給 woowprd plugin 建沙盒（不再自帶 create.sh）。${NC}" >&2
+    echo -e "${YELLOW}請安裝 woowprd plugin，或設 WOOWPRD_PLUGIN_ROOT 指向其根目錄。${NC}" >&2
+    echo -e "${YELLOW}  已找：\$WOOWPRD_PLUGIN_ROOT / ~/.claude/plugins-local/woowprd / ~/.claude/plugins/cache/*/woowprd/*${NC}" >&2
+    exit 1
+fi
+echo -e "${BLUE}Delegating sandbox creation to woowprd plugin:${NC} ${PLUGIN_CREATE_SH}"
+
 # --- Helper: seed web.base.url + freeze for HTTPS ECPay callbacks ---
 #
 # A fresh sandbox DB has no web.base.url, so Odoo defaults to the request
@@ -160,7 +190,8 @@ init_odoo_system_params() {
     local namespace="dev-sandbox-${slug}"
     local pg_pod="${slug}-odoo-dev-sandbox-postgres-0"
     local odoo_deploy="${slug}-odoo-dev-sandbox-odoo"
-    local db_name="woow_${slug}"
+    # DB 名與 plugin compute_db_name 對齊（dash→_），帶 dash 的自訂 --slug 才不會對不上
+    local db_name="woow_$(echo "$slug" | sed 's/-/_/g')"
     local hostname="${slug}.woowtech.io"
 
     echo ""
@@ -225,11 +256,11 @@ if [ -n "$IMAGE_OVERRIDE" ]; then
     FULL_IMAGE="$IMAGE_OVERRIDE"
     echo -e "${BLUE}Using provided image: ${FULL_IMAGE}${NC}"
     # Jump to deploy
-    CREATE_ARGS=(--branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
+    CREATE_ARGS=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" --db-prefix woow_ --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
     if [ "$INGRESS" = true ]; then
         CREATE_ARGS+=(--ingress)
     fi
-    bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" "${CREATE_ARGS[@]}"
+    bash "$PLUGIN_CREATE_SH" "${CREATE_ARGS[@]}"
     init_odoo_system_params "$SLUG"
     exit 0
 fi
@@ -347,11 +378,11 @@ fi
 echo ""
 echo -e "${BLUE}Deploying to sandbox...${NC}"
 
-CREATE_ARGS=(--branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
+CREATE_ARGS=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" --db-prefix woow_ --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
 if [ "$INGRESS" = true ]; then
     CREATE_ARGS+=(--ingress)
 fi
-bash "${PROJECT_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/create.sh" "${CREATE_ARGS[@]}"
+bash "$PLUGIN_CREATE_SH" "${CREATE_ARGS[@]}"
 
 # --- Initialize Odoo system parameters (web.base.url + freeze) ---
 init_odoo_system_params "$SLUG"
