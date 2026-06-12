@@ -86,7 +86,12 @@ if [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
       echo "  authSecretCurrent: $(yaml_sq "$AGENT_RUNTIME_AUTH_SECRET_CURRENT")"
       echo "  namespaceSecret: $(yaml_sq "$AGENT_RUNTIME_NAMESPACE_SECRET")"
       echo "  webhookSecret: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET")"
-      [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ] && echo "  webhookSecretPrevious: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS")"
+      # 注意：不可寫成 `[ -n ... ] && echo`——PREVIOUS 未設（常態）時該行短路回 1，
+      # 作為 group 最後一行會讓整個 script 以非零退出 → create.sh 誤報 hook 失敗
+      # （values 其實已寫完；2026-06-12 stg 部署實證的假性失敗）。
+      if [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ]; then
+        echo "  webhookSecretPrevious: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS")"
+      fi
     } >> "$EXTRA_VALUES_FILE"
   fi
 fi
