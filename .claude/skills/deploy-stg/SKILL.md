@@ -42,13 +42,22 @@ tea login add --name gitea --url https://git-prod.woowtech.io --token <your-toke
 
 **Agent-runtime（test-echo skill / agent pod）所需 env（選用，但要用就必帶）：**
 
-若 stg 需要在任務 chat 內 spawn agent-runtime pod（執行 skill）並讓 `agent_session.state` 正確同步，**只需 export 一個 env**：`AGENT_RUNTIME_NAMESPACE_SECRET`。它是 Odoo 端專屬、無法從 operator 取，因此同時當作「啟用 agent-runtime」的開關。
+若 stg 需要在任務 chat 內 spawn agent-runtime pod（執行 skill）並讓 `agent_session.state` 正確同步，**只需供值一個 env**：`AGENT_RUNTIME_NAMESPACE_SECRET`。它是 Odoo 端專屬、無法從 operator 取，因此同時當作「啟用 agent-runtime」的開關。
+
+供值兩種方式（擇一）：
 
 ```bash
-# Odoo 端算 per-project namespace hash 用，也是 agent-runtime 的啟用開關
-# （未設 → 整個 agent-runtime 區塊跳過，legacy AI chat 不受影響）
+# 方式 1（推薦，一次性）：onboard 進 user-scope profile —— 之後任何 checkout / worktree
+# 跑 deploy-stg 都自動帶值（create.sh 載入 ~/.sandbox/{project-key}/config.env）
+/woowprd:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" \
+  --set AGENT_RUNTIME_NAMESPACE_SECRET=<odoo 端固定值>
+
+# 方式 2（每次）：export 後再跑 deploy-stg
+# （未供值 → 整個 agent-runtime 區塊跳過，legacy AI chat 不受影響）
 export AGENT_RUNTIME_NAMESPACE_SECRET=<odoo 端固定值>
 ```
+
+`JCR_USER` / `JCR_PASS`（registry pull 憑證）同理可 onboard 進 profile。
 
 AUTH 與 WEBHOOK 兩把 secret **必須與 operator byte-match**，因此 `create.sh` stg mode 會在部署前**自動從 operator 的 canonical secret**（`paas-stg-system/paas-operator-stg-agent-runtime-auth`，keys `current` / `webhook-current`）讀取注入 —— 部署者不用記、也不會與 operator 漂移（漂移 = skill-bundle / state-update webhook 401 → `agent_session.state` 卡 `absent`）。需覆寫時才 export：
 
@@ -187,27 +196,27 @@ bash "<plugin>/skills/k8s-dev-sandbox/scripts/create.sh" \
 - 套用 NetworkPolicy 和 ResourceQuota
 - stg 平台特化（networkPolicy / storageClass / JCR registry / agent-runtime secret 從 operator 撈）走 repo 的 `.sandbox/pre-install.sh`；operator/ECPay/AI/journal seed 走 `.sandbox/post-create.sh`
 
-> **前置**：需安裝 woowprd plugin（或設 `WOOWPRD_PLUGIN_ROOT`）。`JCR_USER`/`JCR_PASS`、`AGENT_RUNTIME_*`、`PAAS_OPERATOR_NAMESPACE` 等 env 由 deploy-stg 環境繼承，經 plugin create.sh 傳入 `.sandbox/` hook。
+> **前置**：需安裝 woowprd plugin（或設 `WOOWPRD_PLUGIN_ROOT`）。`JCR_USER`/`JCR_PASS`、`AGENT_RUNTIME_*`、`PAAS_OPERATOR_NAMESPACE` 等 env 由 deploy-stg 環境繼承（或由 onboard profile 經 create.sh 載入），經 plugin create.sh 傳入 `.sandbox/` hook。
 
-### Step 7: 初始化 Odoo 系統參數
+### Step 7: Odoo 系統參數（已宣告式化，自動）
 
-新建的 sandbox DB 沒有 `web.base.url`，Odoo 會用 request host 但不帶 scheme，導致丟給 ECPay 的 OrderResultURL 變成 `http://...`。3DS 完成後 ECPay 從 HTTPS 頁面 POST 回我們的 HTTP endpoint，Chrome 會擋 Mixed Content（顯示「你要提交的資訊未受到保護」），使用者就無法完成綁卡或加值。
+`web.base.url` + `web.base.url.freeze` 的 seed 已從 deploy-stg 移出，宣告在本 repo
+`.sandbox.yml` 的 `config_params_stg`：
 
-`init_odoo_system_params` 自動跑：
-
-```bash
-# Upsert: 即使 SQL 改了 ir_config_parameter，Odoo 仍會 in-process cache 舊值
-INSERT INTO ir_config_parameter (key, value, ...)
-VALUES
-  ('web.base.url', 'https://${SLUG}.woowtech.io', ...),
-  ('web.base.url.freeze', 'True', ...)
-ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, ...;
-
-# Restart Odoo 讓 cache 失效
-kubectl rollout restart deployment -n "${NAMESPACE}" "${SLUG}-odoo-dev-sandbox-odoo"
+```yaml
+config_params_stg:
+  web.base.url: "https://{{slug}}.woowtech.io"
+  web.base.url.freeze: "True"
 ```
 
-`web.base.url.freeze=True` 防止 Odoo 在第一次 authenticated request 時把這個值改回去（Odoo 預設行為是 freeze=False 時會自動更新）。
+由 plugin `create.sh` 在 Step 6 部署時自動 **diff-aware** 套用：值沒變不動（零多餘
+restart）、值變了 upsert + rollout restart（解 `ir.config_parameter` in-process cache）、
+套用失敗 create **非零退出**（fail-loud，deploy-stg `set -e` 接力傳播）。
+
+> 為什麼需要這組參數：fresh DB 沒有 `web.base.url` 時，Odoo 用 request host 但不帶
+> scheme → 丟給 ECPay 的 OrderResultURL 變 `http://...` → 3DS 完成後 HTTPS→HTTP 的
+> POST 被 Chrome 擋 Mixed Content，使用者無法完成綁卡/加值。`freeze=True` 防止 Odoo
+> 在第一次 authenticated request 時改回去。
 
 ### Step 8: 驗證部署
 
