@@ -172,45 +172,8 @@ if ! PLUGIN_CREATE_SH="$(resolve_plugin_create_sh)"; then
 fi
 echo -e "${BLUE}Delegating sandbox creation to woowprd plugin:${NC} ${PLUGIN_CREATE_SH}"
 
-# --- Helper: seed web.base.url + freeze for HTTPS ECPay callbacks ---
-#
-# A fresh sandbox DB has no web.base.url, so Odoo defaults to the request
-# host without a scheme — leaking out as `http://stg.woowtech.io/...` in
-# any URL we hand to ECPay (notably the bind/topup OrderResultURL). When
-# ECPay's HTTPS 3DS page POSTs back, Chrome blocks the cross-scheme form
-# as Mixed Content and the user sees "your data isn't protected" before
-# they can return. Setting `web.base.url.freeze=True` also stops Odoo
-# from rewriting the value on the first authenticated request.
-#
-# This is idempotent (ON CONFLICT DO UPDATE) and safe to run every deploy.
-# We rollout-restart Odoo afterwards because `ir.config_parameter` is
-# cached in-process; SQL upserts don't invalidate it.
-init_odoo_system_params() {
-    local slug="$1"
-    local namespace="dev-sandbox-${slug}"
-    local pg_pod="${slug}-odoo-dev-sandbox-postgres-0"
-    local odoo_deploy="${slug}-odoo-dev-sandbox-odoo"
-    # DB 名與 plugin compute_db_name 對齊（dash→_），帶 dash 的自訂 --slug 才不會對不上
-    local db_name="woow_$(echo "$slug" | sed 's/-/_/g')"
-    local hostname="${slug}.woowtech.io"
-
-    echo ""
-    echo -e "${BLUE}Initializing Odoo system parameters (web.base.url=https://${hostname})...${NC}"
-
-    kubectl wait --for=condition=ready "pod/${pg_pod}" -n "$namespace" --timeout=120s
-
-    kubectl exec -i -n "$namespace" "$pg_pod" -- psql -U odoo -d "$db_name" -v ON_ERROR_STOP=1 <<SQL
-INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
-VALUES
-  ('web.base.url', 'https://${hostname}', 1, NOW(), 1, NOW()),
-  ('web.base.url.freeze', 'True', 1, NOW(), 1, NOW())
-ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
-SQL
-
-    echo -e "${BLUE}Restarting Odoo to invalidate ir.config_parameter cache...${NC}"
-    kubectl rollout restart deployment -n "$namespace" "$odoo_deploy"
-    kubectl rollout status deployment -n "$namespace" "$odoo_deploy" --timeout=180s
-}
+# web.base.url + freeze 的 seed 已宣告式化：.sandbox.yml 的 config_params_stg，
+# 由 plugin create.sh 在部署時 diff-aware 套用（值變才 restart、失敗則 create 非零退出）。
 
 # Check tea login (not needed for --image override)
 if [ -z "$IMAGE_OVERRIDE" ]; then
@@ -228,8 +191,9 @@ fi
 # they are NOT re-warned here. Without the namespace secret the in-task pod path
 # / state-sync simply stays disabled; legacy AI chat deploys fine either way.
 if [ -z "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
-    echo -e "${YELLOW}Note: AGENT_RUNTIME_NAMESPACE_SECRET not set — agent-runtime pod path / state-sync stays disabled (legacy AI chat unaffected).${NC}" >&2
-    echo -e "${YELLOW}  To enable: export AGENT_RUNTIME_NAMESPACE_SECRET=<odoo-side namespace-hash secret>${NC}" >&2
+    echo -e "${YELLOW}Note: AGENT_RUNTIME_NAMESPACE_SECRET 未在當下 env 偵測到。${NC}" >&2
+    echo -e "${YELLOW}  若 onboard profile 已記錄，create.sh 載入後仍會啟用 agent-runtime；兩處都沒有則保持停用（legacy AI chat 不受影響）。${NC}" >&2
+    echo -e "${YELLOW}  持久供值：/woowprd:k8s-dev-sandbox onboard --repo \"\$(git rev-parse --show-toplevel)\" --set AGENT_RUNTIME_NAMESPACE_SECRET=<value>${NC}" >&2
     echo -e "${YELLOW}  (AUTH + WEBHOOK auto-source from the operator secret; export AGENT_RUNTIME_AUTH_SECRET_CURRENT / AGENT_RUNTIME_WEBHOOK_SECRET to override.)${NC}" >&2
 fi
 
@@ -261,7 +225,6 @@ if [ -n "$IMAGE_OVERRIDE" ]; then
         CREATE_ARGS+=(--ingress)
     fi
     bash "$PLUGIN_CREATE_SH" "${CREATE_ARGS[@]}"
-    init_odoo_system_params "$SLUG"
     exit 0
 fi
 
@@ -383,9 +346,6 @@ if [ "$INGRESS" = true ]; then
     CREATE_ARGS+=(--ingress)
 fi
 bash "$PLUGIN_CREATE_SH" "${CREATE_ARGS[@]}"
-
-# --- Initialize Odoo system parameters (web.base.url + freeze) ---
-init_odoo_system_params "$SLUG"
 
 # --- Verify ---
 NAMESPACE="dev-sandbox-${SLUG}"

@@ -11,3 +11,16 @@ install_modules: [base, web, woow_paas_platform]
 # 既有 DB 沿用 woow_ 前綴（與舊 create.sh / e2e-seed / seed-from-stg 一致）
 db_prefix: woow_
 post_create_hook: .sandbox/post-create.sh
+
+# 執行期 env 宣告（onboard 收集 / create warn 用；值放 ~/.sandbox/{project-key}/config.env）
+env_optional:
+  - "AGENT_RUNTIME_NAMESPACE_SECRET: agent-runtime 啟用開關＋Odoo 端 namespace hash（僅 stg 模式生效；未設→agent-runtime 整段關閉，legacy AI chat 不受影響）"
+  - "JCR_USER: JCR registry pull 帳號（僅 stg 模式生效；cluster 已有 jfrog-registry secret 時可不設）"
+  - "JCR_PASS: JCR registry pull 密碼（僅 stg 模式生效；同上）"
+
+# 宣告式 ir.config_parameter seed（stg only：ECPay 3DS 回呼需 https base url，
+# 否則 Chrome Mixed Content 擋綁卡/加值；取代 deploy-stg.sh 舊 init_odoo_system_params。
+# local 不設 —— 與既有行為對齊，local 沙盒從未 seed 過 base url）
+config_params_stg:
+  web.base.url: "https://{{slug}}.woowtech.io"
+  web.base.url.freeze: "True"

@@ -21,7 +21,8 @@ MODE="${MODE:-local}"
 [ "$MODE" = "stg" ] || exit 0
 
 # single-quoted YAML scalar emitter（robust to " \ $ backtick；只有 ' 需 double）
-yaml_sq() { local v="${1:-}"; v="${v//\'/\'\'}"; printf "'%s'" "$v"; }
+# 3.2 注意：${v//\'/\'\'} 在 bash<4.3 會把反斜線留進輸出 —— 用變數形式跨版本一致。
+yaml_sq() { local v="${1:-}" q="'"; v="${v//$q/$q$q}"; printf "'%s'" "$v"; }
 
 # kubectl 沿用 create.sh 已切換的 context（require_kube_context 做過 use-context）。
 
