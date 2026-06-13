@@ -565,3 +565,29 @@ class TestKubernetesService:
         """Test delete service with invalid namespace."""
         with pytest.raises(ValueError):
             k8s_service.delete_service("invalid", "test-mcp")
+
+    @patch("subprocess.run")
+    def test_delete_namespace(self, mock_run, k8s_service):
+        """Test delete a namespace (two-step teardown §8.4.1 step 2).
+
+        Fire-and-return (--wait=false, brainstorm decision #4): K8s marks the
+        namespace Terminating and reaps contained objects (PVC / Secret /
+        NetworkPolicy / LLM Secret `{release}-llm`) in the background.
+        Idempotent via --ignore-not-found.
+        """
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        result = k8s_service.delete_namespace("paas-ws-test")
+
+        assert result is True
+        cmd_args = mock_run.call_args[0][0]
+        assert "delete" in cmd_args
+        assert "namespace" in cmd_args
+        assert "paas-ws-test" in cmd_args
+        assert "--ignore-not-found" in cmd_args
+        assert "--wait=false" in cmd_args
+
+    def test_delete_namespace_invalid_namespace(self, k8s_service):
+        """Test delete namespace with invalid name raises before any kubectl."""
+        with pytest.raises(ValueError):
+            k8s_service.delete_namespace("invalid")

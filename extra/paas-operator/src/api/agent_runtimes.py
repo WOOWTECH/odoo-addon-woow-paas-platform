@@ -16,7 +16,7 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 
 from src.config import settings
 from src.models.schemas import (
@@ -32,7 +32,12 @@ from src.services import (
     skill_invalidator,
     webhook_dispatcher,
 )
-from src.services.helm import HelmException, HelmService, KubernetesService
+from src.services.helm import (
+    HelmException,
+    HelmService,
+    KubectlException,
+    KubernetesService,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agent-runtimes", tags=["agent-runtimes"])
@@ -544,11 +549,40 @@ def sync_workspaces(project_hash: str, request: SyncWorkspacesRequest):
     return {"action": "synced", "workspace_ids": request.project_workspace_ids}
 
 
-@router.delete("/{project_hash}", summary="Uninstall a project pod (long-TTL GC)")
+@router.delete("/{project_hash}", summary="Tear down a project pod (uninstall + delete ns)")
 def delete_runtime(project_hash: str):
-    """Helm uninstall the project's agent-runtime release."""
+    """Two-step teardown (§8.4.1): helm uninstall the release FIRST, then delete
+    the namespace to reclaim residual objects (PVC / NetworkPolicy / the
+    plaintext LLM Secret ``{release}-llm`` per §8.4.2).
+
+    Order matters — deleting the namespace first would strand the helm
+    release-state Secret in a Terminating namespace. Idempotent: a missing
+    release / namespace is treated as success. Any other failure → 502 so the
+    Odoo unlink hook blocks the project deletion rather than leaving an orphan.
+    """
     namespace, release = _names(project_hash)
-    return helm_service.uninstall(namespace, release)
+
+    # ① helm uninstall — chart-managed resources. Missing release = already
+    #    gone; fall through to namespace deletion. Any other failure → 502.
+    try:
+        helm_service.uninstall(namespace, release)
+    except HelmException as exc:
+        if "not found" not in (exc.stderr or "").lower():
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"helm uninstall failed: {exc}",
+            )
+
+    # ② delete namespace — residual PVC / Secret / NetworkPolicy. Failure → 502.
+    try:
+        k8s_service.delete_namespace(namespace)
+    except KubectlException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"delete namespace failed: {exc}",
+        )
+
+    return {"status": "deleted", "project_hash": project_hash, "namespace": namespace}
 
 
 @router.get("/{project_hash}/status", summary="Get a project pod's lifecycle state")
