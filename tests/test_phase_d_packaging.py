@@ -12,11 +12,11 @@ Fix direction: pin an upper bound ``websockets>=12.0,<14`` (and, optionally,
 pick the kwarg by version at the connect site — that compat shim is verified
 on a live pod at the pilot gate, NOT unit-testable here).
 
-WHY this is a HOST-side test (not the in-container Odoo suite): the docker
-dev/test setup mounts only ``./src`` at ``/mnt/extra-addons/woow_paas_platform``
-(see docker-compose.yml). The websockets pin lives in the FLOOR-root
-``requirements.txt``, which is NOT inside that mount, so an in-container Odoo
-test cannot read it. Run on the host:
+WHY this is a HOST-side test (not the in-container Odoo suite): the dev/test
+sandbox mounts only ``./src`` at ``/mnt/extra-addons/woow_paas_platform``
+(k8s-dev-sandbox local mode, layout=src). The websockets pin lives in the
+FLOOR-root ``requirements.txt``, which is NOT inside that mount, so an
+in-container Odoo test cannot read it. Run on the host:
 
     python3 -m unittest tests.test_phase_d_packaging -v
     # or:  python3 tests/test_phase_d_packaging.py

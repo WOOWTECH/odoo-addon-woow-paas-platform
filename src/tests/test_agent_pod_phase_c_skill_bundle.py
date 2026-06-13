@@ -60,7 +60,7 @@ Fixture / env assumptions:
   with a previous-secret fallback per §6.6 dual-secret rotation window. The
   env var NAMES are impl-defined; the placeholders below re-align if impl
   picks different names (route contract + token-authoritative behaviour are
-  unaffected). In dev/docker-compose the helm chart injects these env vars
+  unaffected). In the dev sandbox / stg the helm chart injects these env vars
   from the K8s Secret; here the test sets os.environ for the in-process
   controller and restores it via addCleanup.
 * Tokens are HS256-signed with pure stdlib here (hmac+base64) so the test

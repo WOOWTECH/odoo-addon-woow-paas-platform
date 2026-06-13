@@ -20,11 +20,11 @@ Before you begin, ensure you have the following installed:
 
 ### Required
 - **Python 3.10+** - For PaaS Operator development
-- **Docker & Docker Compose** - For running Odoo
+- **kubectl** 1.28+ + 一個 cluster context（本機 `docker-desktop` k8s，或 VPN 後的 `woow-k3s`） - 跑 Odoo dev sandbox
+- **Helm 3.13+** - dev sandbox 用 Helm 部署
 - **Node.js 18+** - For frontend development (OWL components)
 - **Git** - Version control
-- **kubectl** - Kubernetes CLI (for testing K8s integration)
-- **Helm 3.13+** - For testing Helm operations
+- **`woowprd` plugin** - 提供 `/woowprd:k8s-dev-sandbox`（本機開發沙盒）
 
 ### Optional (for full stack development)
 - **K3s/K3d** - Local Kubernetes cluster
@@ -101,40 +101,41 @@ Access:
 - API Documentation: http://localhost:8000/docs
 - Health Check: http://localhost:8000/health
 
-### 3. Set Up Odoo
+### 3. Set Up Odoo（K8s Dev Sandbox）
+
+本機開發走 `woowprd` plugin 的 K8s Dev Sandbox（取代舊 docker-compose 流程；詳見 [CLAUDE.md](../../CLAUDE.md) §K8s Dev Sandbox）。
 
 ```bash
 # Return to project root
 cd ../..
 
-# 使用 Worktree Development 腳本啟動開發環境（推薦）
-./scripts/start-dev.sh
+# 一次性 onboarding（記錄執行期 env；之後 create/up 可不帶 --context）
+/woowprd:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" --context docker-desktop
 
-# 或查看日誌
-docker compose logs -f web
+# 建立 / 啟動當前 branch 的沙盒
+/woowprd:k8s-dev-sandbox up --context docker-desktop
+
+# 查看日誌
+/woowprd:k8s-dev-sandbox logs <sandbox-name> --service odoo --follow
 ```
 
-Access Odoo:
-- URL: http://localhost (NOT :8069, to enable websocket)
+Access Odoo（`<slug>` 見 `up` / `list` 輸出，woow repo 為 `woow_<branch>` DB）:
+```bash
+kubectl port-forward -n dev-sandbox-<slug> svc/<slug>-odoo-dev-sandbox-nginx 8080:80
+```
+- URL: http://localhost:8080
 - Email: admin
 - Password: admin
-- Database: odoo
 
-### 4. Configure PaaS Integration (if running PaaS Operator)
+### 4. PaaS Operator Integration
 
-1. Login to Odoo: http://localhost
-2. Go to **Settings → General Settings**
-3. Scroll to **Woow PaaS** section
-4. Configure:
-   - PaaS Operator URL: `http://host.docker.internal:8000` (Docker Desktop) or `http://172.17.0.1:8000` (Linux)
-   - API Key: (the key from .env file)
-5. Click **Save**
+K8s Dev Sandbox 的 `post-create.sh` hook 會**自動探索 in-cluster 的 PaaS Operator**（`paas-operator.paas-system.svc.cluster.local`）並寫進 Odoo 設定，通常不需手動配置。
 
-> **Note**: Docker Desktop users should use `host.docker.internal`, Linux users should use the Docker bridge IP (`172.17.0.1`)
+若要改接本機自跑的 Operator（`uvicorn ... --port 8000`），在 **Settings → Woow PaaS** 手動覆寫 URL / API Key（從 pod 連回宿主機的細節見 [CLAUDE.md](../../CLAUDE.md) §PaaS Operator Local Development）。
 
 ### 5. Verify Setup
 
-1. Navigate to: http://localhost/woow
+1. Navigate to: http://localhost:8080/woow（先 port-forward）
 2. You should see the PaaS dashboard
 3. Create a test workspace
 4. If PaaS Operator is running, test the Marketplace feature
@@ -177,20 +178,21 @@ Access Odoo:
 ### Odoo Tests
 
 ```bash
-# 使用 Worktree Development 腳本執行測試（推薦）
-./scripts/test-addon.sh
+# 在沙盒內跑模組測試（推薦）
+/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
 
-# 或手動執行（需先啟動開發環境）
-docker compose exec web \
-  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform --stop-after-init
+# 或手動在 Odoo pod 內執行（NS=dev-sandbox-<slug>、DB=woow_<branch>）
+NS=dev-sandbox-<slug>; ODOO=$(kubectl get deploy -n $NS -o name | grep odoo | head -1)
+kubectl exec -n $NS $ODOO -- \
+  odoo -d woow_<branch> --test-enable --test-tags woow_paas_platform --stop-after-init
 
-# Run specific test file（測試檔清單見 src/tests/；把 <test_file> 換成實際檔名，勿在此硬列）
-docker compose exec web \
-  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform.<test_file> --stop-after-init
+# 指定測試檔（清單見 src/tests/，<test_file> 換實際檔名）
+kubectl exec -n $NS $ODOO -- \
+  odoo -d woow_<branch> --test-enable --test-tags woow_paas_platform.<test_file> --stop-after-init
 
-# Run with verbose output
-docker compose exec web \
-  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform --log-level=test --stop-after-init
+# verbose
+kubectl exec -n $NS $ODOO -- \
+  odoo -d woow_<branch> --test-enable --test-tags woow_paas_platform --log-level=test --stop-after-init
 ```
 
 ### PaaS Operator Tests
@@ -232,20 +234,22 @@ npm test
 
 ### Making Changes to Odoo Module
 
+local 模式以 hostPath 即時掛載 `src/`，故檔案編輯立即反映在 pod 內。
+（`NS=dev-sandbox-<slug>; ODOO=$(kubectl get deploy -n $NS -o name | grep odoo | head -1)`）
+
 1. **Edit Python/JavaScript/SCSS files**
-2. **Restart Odoo** (picks up Python changes):
+2. **Restart Odoo**（Python 變更需重啟 pod）：
    ```bash
-   docker compose restart web
+   kubectl rollout restart -n $NS $ODOO
    ```
-3. **Update module** (picks up XML/data changes):
+3. **Update module**（XML/data 變更）：
    ```bash
-   docker compose exec web \
-     odoo -d ${POSTGRES_DB:-odoo} -u woow_paas_platform --stop-after-init
+   kubectl exec -n $NS $ODOO -- odoo -d woow_<branch> -u woow_paas_platform --stop-after-init
    ```
-4. **Test changes**: http://localhost/woow
+4. **Test changes**: http://localhost:8080/woow（先 port-forward）
 5. **Run tests**:
    ```bash
-   ./scripts/test-addon.sh
+   /woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
    ```
 
 ### Making Changes to PaaS Operator
@@ -307,7 +311,8 @@ npm test
 
 6. **Update module**:
    ```bash
-   docker compose exec web odoo -d odoo -u woow_paas_platform --stop-after-init
+   kubectl exec -n dev-sandbox-<slug> deploy/<slug>-odoo-dev-sandbox-odoo -- \
+     odoo -d woow_<branch> -u woow_paas_platform --stop-after-init
    ```
 
 ### Adding a New OWL Component
