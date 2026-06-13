@@ -17,6 +17,7 @@ from . import smart_home_template
 from . import security_access_template
 from . import security_access
 from . import security_access_access_policy
+from . import security_access_access_policy_rule
 from . import cloud_service
 from . import cloud_odoo_addon
 from . import ai_config

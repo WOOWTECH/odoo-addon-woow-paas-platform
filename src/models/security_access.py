@@ -1207,8 +1207,10 @@ class SecurityAccessRoute(models.Model):
             'login_idp_types': login_idp_types,
             'policies': [{
                 'name': p.name, 'decision': p.decision,
-                'rule_type': p.rule_type, 'rule_value': p.rule_value,
                 'precedence': p.sequence,
+                'include': p._rules_by_group('include'),
+                'require': p._rules_by_group('require'),
+                'exclude': p._rules_by_group('exclude'),
             } for p in self.access_policy_ids.sorted(
                 key=lambda x: (x.sequence, x.id))],
             'existing_app_id': self.access_app_id or None,

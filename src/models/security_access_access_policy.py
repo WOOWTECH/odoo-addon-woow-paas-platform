@@ -1,10 +1,5 @@
-import ipaddress
-import re
-
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
-
-_DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$', re.IGNORECASE)
 
 
 class SecurityAccessAccessPolicy(models.Model):
@@ -20,6 +15,13 @@ class SecurityAccessAccessPolicy(models.Model):
     existing ir.rule walk and the SA-level policy quota keep working
     (the related store materialises a real column the ir.rule domain / quota
     count can traverse), but it is no longer the field a caller binds.
+
+    P-rule (2026-06): a policy is now a CONTAINER of selector rules
+    (``rule_ids``) split into include (OR) / require (AND) / exclude (NOT)
+    groups, mirroring Cloudflare's native policy shape. The policy itself
+    carries the decision (allow / deny / bypass) and the evaluation order
+    (``sequence`` → CF precedence); the flat ``rule_type`` / ``rule_value``
+    fields moved to the ``security_access_access_policy_rule`` sub-model.
     """
 
     _name = 'woow_paas_platform.security_access_access_policy'
@@ -43,46 +45,85 @@ class SecurityAccessAccessPolicy(models.Model):
     )
     name = fields.Char(string='Name', required=True)
     decision = fields.Selection(
-        selection=[('allow', 'Allow'), ('deny', 'Block')],
-        string='Decision', default='allow', required=True,
-        help='Allow grants access; Block denies. Block rules win over allow.',
-    )
-    rule_type = fields.Selection(
         selection=[
-            ('email_domain', 'Email domain'),
-            ('email_list', 'Email list'),
-            ('ip_range', 'IP range (CIDR)'),
+            ('allow', 'Allow'),
+            ('deny', 'Block'),
+            ('bypass', 'Bypass'),
         ],
-        string='Rule Type', default='email_domain', required=True,
+        string='Decision', default='allow', required=True,
+        help='Allow grants access; Block denies; Bypass skips authentication '
+             '(no identity selectors allowed). Evaluated by precedence top to '
+             'bottom, first match wins; Cloudflare evaluates Bypass / Service '
+             'Auth policies first.',
     )
-    rule_value = fields.Char(
-        string='Rule Value', required=True,
-        help='Email domain (no @) / comma-separated emails / CIDR, per type.',
+    rule_ids = fields.One2many(
+        comodel_name='woow_paas_platform.security_access_access_policy_rule',
+        inverse_name='policy_id', string='Rules', copy=True,
+        help='Selector rules grouped into include (OR) / require (AND) / '
+             'exclude (NOT). At least one Include rule is required. '
+             'copy=True so the P2.5 migration fan-out (policy.copy onto each '
+             'protected route) carries the rules — a copied policy with no '
+             'rules would trip the at-least-one-include constraint.',
     )
     sequence = fields.Integer(string='Evaluation Order', default=10)
     cf_policy_id = fields.Char(string='CF Policy ID', copy=False)
 
-    @api.constrains('rule_type', 'rule_value')
-    def _check_rule_value(self):
+    @api.constrains('rule_ids')
+    def _check_at_least_one_include(self):
+        # Cloudflare hard rule: every policy must contain at least one Include
+        # rule (a policy with only require/exclude matches no one). Triggered on
+        # policy create/write touching rule_ids; rule create/write/unlink call
+        # this explicitly for standalone rule edits (a direct rule.unlink does
+        # not write policy.rule_ids, so the constraint would not fire on its
+        # own).
         for pol in self:
-            val = (pol.rule_value or '').strip()
-            if pol.rule_type == 'email_domain':
-                if val.startswith('@') or not _DOMAIN_RE.match(val):
+            if not pol.rule_ids.filtered(lambda r: r.group == 'include'):
+                raise ValidationError(
+                    "Access policy %r must contain at least one Include rule."
+                    % (pol.name or pol.id))
+
+    @api.constrains('decision', 'rule_ids')
+    def _check_decision_selector_compat(self):
+        # Bypass policies skip identity verification, so Cloudflare rejects
+        # identity-based selectors (email / email domain) on them. Fail fast in
+        # Odoo rather than letting the operator push an invalid policy to CF
+        # (defense in depth: the operator validates this too).
+        for pol in self:
+            if pol.decision == 'bypass':
+                if pol.rule_ids.filtered(
+                        lambda r: r.rule_type in ('email_domain', 'email_list')):
                     raise ValidationError(
-                        "Email domain must be a bare domain (no @), e.g. "
-                        "acme.com — got %r" % pol.rule_value)
-            elif pol.rule_type == 'email_list':
-                emails = [e.strip() for e in val.split(',') if e.strip()]
-                if not emails or any('@' not in e for e in emails):
-                    raise ValidationError(
-                        "Email list must be comma-separated email addresses.")
-            elif pol.rule_type == 'ip_range':
-                try:
-                    ipaddress.ip_network(val, strict=False)
-                except ValueError:
-                    raise ValidationError(
-                        "IP range must be a valid CIDR, e.g. 203.0.113.0/24 — "
-                        "got %r" % pol.rule_value)
+                        "Bypass policies cannot use identity-based selectors "
+                        "(email domain / email list). Use IP range, country, "
+                        "or everyone instead.")
+
+    @api.constrains('rule_ids')
+    def _check_emails_per_policy(self):
+        # Per-policy email cap (plan.sa_max_emails_per_policy, seeded 20). Counts
+        # every address across the policy's email_list rules. 0 = unlimited; no
+        # subscription / no plan = grandfathered (unlimited), matching
+        # _check_policy_quota. Honours the cursor-level sa_skip_policy_quota flag
+        # so the migration fan-out (and the stored-related recompute that fires
+        # this constraint in a context-stripped env) can bypass it.
+        if getattr(self.env.cr, 'sa_skip_policy_quota', False):
+            return
+        for pol in self:
+            sa = pol.security_access_id
+            sub = sa.sudo().subscription_id if sa else False
+            if not sub or not sub.sh_subscription_plan_id:
+                continue
+            quota = sub.sh_subscription_plan_id.sa_max_emails_per_policy
+            if not quota:  # 0 = unlimited
+                continue
+            count = 0
+            for rule in pol.rule_ids.filtered(
+                    lambda r: r.rule_type == 'email_list'):
+                count += len([e for e in (rule.rule_value or '').split(',')
+                              if e.strip()])
+            if count > quota:
+                raise ValidationError(
+                    "Email quota exceeded: plan '%s' allows %d email(s) per "
+                    "policy." % (sub.sh_subscription_plan_id.name, quota))
 
     @api.constrains('security_access_id', 'route_id')
     def _check_policy_quota(self):
@@ -143,8 +184,35 @@ class SecurityAccessAccessPolicy(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        for vals in vals_list:
+            # TRANSITIONAL back-compat shim (P-rule rollout): accept the legacy
+            # flat rule_type/rule_value and expand them into a single include
+            # rule. Keeps the in-flight controller + existing fixtures working
+            # across the Phase 1→3 transition without a 30-site churn. New
+            # callers pass rule_ids (include/require/exclude) directly. REMOVE
+            # once the controller (Phase 3) and tests use rule_ids natively —
+            # tracked in docs/tracking/followups/follow-ups.md.
+            rt = vals.pop('rule_type', None)
+            rv = vals.pop('rule_value', None)
+            if rt is not None and not vals.get('rule_ids'):
+                vals['rule_ids'] = [(0, 0, {
+                    'group': 'include', 'rule_type': rt,
+                    'rule_value': rv or False})]
+            # Sparse precedence: a new policy lands at max(sequence)+10 within
+            # its route (not the flat default 10), so policies never all collide
+            # on one precedence — the reorder UI then renumbers in 10s. An
+            # explicit sequence in vals is respected.
+            if not vals.get('sequence') and vals.get('route_id'):
+                last = self.search(
+                    [('route_id', '=', vals['route_id'])],
+                    order='sequence desc, id desc', limit=1)
+                vals['sequence'] = (last.sequence + 10) if last else 10
         with self.env.cr.savepoint():
             policies = super().create(vals_list)
+            # Guarantee the ≥1-include invariant even when rule_ids was absent
+            # from vals (an empty policy is invalid). Fires after the nested
+            # rule_ids creates so the final state is what is validated.
+            policies._check_at_least_one_include()
             # sa_skip_route_sync: migration / provision-time bulk row moves set
             # this so the row re-home does NOT call the operator (CF converges
             # via the explicit re-sync those flows issue, not per-row here).
@@ -158,8 +226,8 @@ class SecurityAccessAccessPolicy(models.Model):
             result = super().write(vals)
             if (not self.env.context.get('sa_skip_route_sync')
                     and any(k in vals for k in (
-                        'name', 'decision', 'rule_type', 'rule_value',
-                        'sequence', 'route_id'))):
+                        'name', 'decision', 'sequence', 'route_id',
+                        'rule_ids'))):
                 for route in self.mapped('route_id'):
                     route._sync_access_to_operator()
         return result
@@ -188,10 +256,25 @@ class SecurityAccessAccessPolicy(models.Model):
                     )._sync_access_to_operator()
         return result
 
+    def _rules_by_group(self, group):
+        self.ensure_one()
+        # Normalize the value: Odoo reads an UNSET Char (e.g. a valueless
+        # 'everyone' selector) back as Python False, which serialises to JSON
+        # `false` and is rejected by the operator's Optional[str] rule_value
+        # (a non-string) → the whole Access sync 422s. Coerce falsy → None so a
+        # valueless selector travels as JSON null the operator accepts.
+        return [
+            {'rule_type': r.rule_type, 'rule_value': r.rule_value or None}
+            for r in self.rule_ids.sorted(key=lambda x: (x.sequence, x.id))
+            if r.group == group
+        ]
+
     def to_dict(self):
         self.ensure_one()
         return {
             'id': self.id, 'name': self.name, 'decision': self.decision,
-            'rule_type': self.rule_type, 'rule_value': self.rule_value,
             'sequence': self.sequence, 'route_id': self.route_id.id,
+            'include': self._rules_by_group('include'),
+            'require': self._rules_by_group('require'),
+            'exclude': self._rules_by_group('exclude'),
         }
