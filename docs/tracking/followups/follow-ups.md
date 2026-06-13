@@ -1683,3 +1683,21 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   route。**修法**：operator line 1322 前綴改用 payload 的 `app_name`（this route 的 subdomain）取代
   `canonical_name`。需 operator image 重建 → **建議併入下次 operator bump**（如 F-SA-4 ② 的 prod bump 一起帶）。
   owner=platform。
+
+## 2026-06-13 — SA Policy rule 子模型過渡 compat shim 待移除
+
+**(severity: low, scope: SA policy P-rule Phase 1, 動手建議: Phase 3/4 收尾後移除, 對誰: platform)**
+
+P-rule Phase 1（rule 子模型 + AND/OR/NOT + Bypass + selector everyone/country + precedence sparse）在
+`src/models/security_access_access_policy.py` 的 `create()` 加了一個 **transitional 過渡相容層**：傳入扁平
+`rule_type`/`rule_value`（且未給 `rule_ids`）時自動展開成單條 `group='include'` rule。目的是讓 in-flight
+controller（`_create_policy` 仍送扁平欄位）與既有 ~30 處測試 fixture 在 Phase 1→3 過渡期零 churn 保持運作。
+
+**待辦**：Phase 3（controller 改送 include/require/exclude 三組）+ Phase 4（前端 builder）落地後，移除該 shim，
+並把仍用扁平 kwargs 的測試 fixture 改走 `rule_ids`。移除後扁平 `rule_type`/`rule_value` 不再是合法 create 輸入。
+設計依據見 `docs/plans/2026-Q2/2026-06-13-sa-policy-rule-submodel-{design,implementation}.md`（design D6）。
+
+附帶 infra note：本 repo `.sandbox.yml` **未宣告 `extra_addons`**，docker-desktop local sandbox 跑 create 會因
+addons_path 缺第三方相依（ai_base_gt 等在 `paas-odoo-ci/addons`）而模組裝不起來；暫以 `create --values`
+覆寫 `codeMount.extraAddonsHostPath` 繞過。建議把 `extra_addons: ["${PAAS_CI_ADDONS_PATH}"]` 補進
+`.sandbox.yml`（對齊 floor-env-relative-path-empty-ext-addons pitfall 精神）。owner=platform。
