@@ -238,6 +238,25 @@ class AgentSession(models.Model):
                 vals['pod_ws_url'] = status['pod_ws_url'] or False
             session.write(vals)
 
+    _ACTIVITY_THROTTLE_SECONDS = 60
+
+    @api.model
+    def _record_activity(self, project):
+        """Heartbeat：以 project 找其 session，stamp last_active（節流）。
+
+        在 SSE 串流開始（spawn_or_attach 成功後、進 generator 前）呼叫。只在
+        last_active 為空或舊於節流秒數才寫，避免寫入放大。session 不存在 → no-op。
+        """
+        session = self.sudo().search(
+            [('project_id', '=', project.id)], limit=1)
+        if not session:
+            return
+        now = fields.Datetime.now()
+        if session.last_active and session.last_active > now - timedelta(
+                seconds=self._ACTIVITY_THROTTLE_SECONDS):
+            return
+        session.write({'last_active': now})
+
     def _teardown_runtime(self):
         """Tear down this session's runtime via operator DELETE (helm uninstall
         + delete namespace). Single responsibility: call + raise on failure;

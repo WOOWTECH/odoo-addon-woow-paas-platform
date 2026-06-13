@@ -138,3 +138,5 @@ from . import test_agent_context_endpoint
 from . import test_security_access_access_policy
 # feat: security access P2.5 — per-route access (Service-wide → per-route migration)
 from . import test_security_access_p2_5_migration
+# feat: agent idle reaper (D4) — heartbeat helper + idle reaper cron (TDD)
+from . import test_agent_idle_reaper
