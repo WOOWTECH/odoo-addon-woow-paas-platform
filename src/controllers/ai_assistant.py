@@ -776,6 +776,9 @@ class AiAssistantController(Controller):
                 f'Pod spawn failed: {exc}', 'spawn_failed',
             )
 
+        # heartbeat：cursor 此處仍有效（generator 內無效，故在此 stamp）
+        request.env['woow_paas_platform.agent_session']._record_activity(project)
+
         pod_ws_url = runtime_info.get('pod_ws_url')
         auth_token = runtime_info.get('auth_token') or runtime_info.get('ws_token')
         db_name = request.env.cr.dbname
