@@ -68,7 +68,7 @@ async def sync_access(request: AccessSyncRequest):
             protected_hostnames=request.protected_hostnames,
             session_duration=request.session_duration,
             login_idp_types=request.login_idp_types,
-            policies=[p.model_dump() for p in request.policies],
+            policies=[p.model_dump(mode="json") for p in request.policies],
             enabled=request.enabled,
             existing_app_id=getattr(request, "existing_app_id", None),
             existing_policy_ids=getattr(request, "existing_policy_ids", None),

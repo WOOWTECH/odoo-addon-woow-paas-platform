@@ -1316,12 +1316,15 @@ class CloudflareService:
         # failure before re-raising, so a partial failure leaves no orphans.
         try:
             for idx, p in enumerate(policies):
-                include = self._build_access_rule(
-                    p["rule_type"], p["rule_value"])
+                include = self._build_rule_group(p.get("include", []))
+                require = self._build_rule_group(p.get("require", []))
+                exclude = self._build_rule_group(p.get("exclude", []))
                 pid = await self.create_reusable_policy(
                     name=f"{canonical_name}: {p['name']}",
                     decision=p["decision"],
                     include=include,
+                    require=require,
+                    exclude=exclude,
                 )
                 new_policy_ids.append((pid, p.get("precedence", idx + 1)))
 
@@ -1338,8 +1341,12 @@ class CloudflareService:
                 "allowed_idps": allowed_idps,
                 "auto_redirect_to_identity": False,
                 "app_launcher_visible": False,
+                # Sort by precedence (lower first) so the declared evaluation
+                # order reaches CF deterministically. CF itself still tiers
+                # Bypass/Service-Auth ahead of Allow/Block — we do not re-tier.
                 "policies": [{"id": pid, "precedence": prec}
-                             for pid, prec in new_policy_ids],
+                             for pid, prec in sorted(
+                                 new_policy_ids, key=lambda t: t[1])],
             }
 
             async with httpx.AsyncClient() as client:
@@ -1417,12 +1424,33 @@ class CloudflareService:
 
     @staticmethod
     def _build_access_rule(rule_type: str, rule_value: str) -> List[dict]:
-        """Map (rule_type, rule_value) to a Cloudflare Access include rule list."""
+        """Map (rule_type, rule_value) to a list of Cloudflare Access rule dicts.
+
+        A single selector may expand to multiple rules (email_list → one per
+        email, country → one per code). The same dict shape is valid in any of a
+        policy's include / require / exclude groups.
+        """
+        value = rule_value or ""
+        if rule_type == "everyone":
+            return [{"everyone": {}}]
         if rule_type == "email_domain":
-            return [{"email_domain": {"domain": rule_value.lstrip("@").strip()}}]
+            return [{"email_domain": {"domain": value.lstrip("@").strip()}}]
         if rule_type == "email_list":
-            emails = [e.strip() for e in rule_value.split(",") if e.strip()]
+            emails = [e.strip() for e in value.split(",") if e.strip()]
             return [{"email": {"email": e}} for e in emails]
         if rule_type == "ip_range":
-            return [{"ip": {"ip": rule_value.strip()}}]
+            return [{"ip": {"ip": value.strip()}}]
+        if rule_type == "country":
+            codes = [c.strip().upper() for c in value.split(",") if c.strip()]
+            return [{"geo": {"country_code": c}} for c in codes]
         raise CloudflareException(f"Unknown access rule_type: {rule_type}")
+
+    @staticmethod
+    def _build_rule_group(rules: List[dict]) -> List[dict]:
+        """Flatten a group's selector specs ({rule_type, rule_value}) into the
+        list of Cloudflare rule dicts for that include/require/exclude group."""
+        out: List[dict] = []
+        for r in rules or []:
+            out.extend(CloudflareService._build_access_rule(
+                r["rule_type"], r.get("rule_value") or ""))
+        return out
