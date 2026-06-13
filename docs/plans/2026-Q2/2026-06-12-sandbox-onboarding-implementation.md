@@ -1297,3 +1297,22 @@ e2e 額外實證：
 - woow floor project-key = `woow_paas_platform-a1ebac6d`（remote URL 推導；所有 Floor / worktree / clone 收斂同 key）。
 
 **Deferred（不阻擋）**：deploy-stg 真 stg 回歸（下次 `/woow:deploy-stg` 時驗 `web.base.url=https://stg.woowtech.io`）；雙 worktree 並行 up e2e；follow-up 清單見 Self-Review。
+
+## 後續補完（2026-06-13，feat/sandbox-onboarding）
+
+**Self-Review §已知留尾的「extra_addons 的 `${VAR}` 展開（design 風險 #7 / F5 敘事缺口）」已實作收口。** 起因：`woow_paas_platform` 的 6 個第三方 depends（`ai_base_gt` / `odoo_ai_assistant_chatgpt_connector` / `sh_subscription*` / `payment_ecpay_ecpg` / `ecpay_invoice_tw`，不在本 repo 也非 Odoo 核心）在 plugin local 沙盒從未被掛載 → `odoo -i` 依賴解析靜默失敗、被 `create.sh:510-516` 管線吞成 warning → 壞 sandbox（[[floor-env-relative-path-empty-ext-addons]] 同源）。
+
+兩處 lock-step：
+
+- **plugin（`woowprd-local`）**：
+  - `create.sh`：MODE 判定上移到 `load_sandbox_yml` 前（讓解析器知 mode）。
+  - `common.sh` `load_sandbox_yml`：extra_addons 解析改 **mode-aware** —— 僅 `MODE=local` 解析；新增 **`${NAME}` 大括號展開**（先抽 `${NAME}` 引用逐一確認已在環境以非空字面值提供，缺值即 fail-loud `return 1`；展開用參數間接、非 `eval`，無命令注入），展開後沿用既有絕對化 + `__manifest__.py` 驗證；`MODE!=local`（ci-local/stg/onboard/test 不設 MODE）直接略過——相依隨 image bake。
+  - `create.sh`：**install-state 硬化** —— `odoo -i` 後查 `ir_module_module.state='installed'`，非 installed 紅字 `exit 1`（不在壞 DB 上跑 seed；補住 `odoo -i ... | grep` 管線吞 exit code 的洞）。
+  - `common_test.sh`：補 3 案（local `${VAR}` 展開成功 / local 缺值 fail-loud / 非 local 略過）；既有 empty-dir 案補 `MODE=local`。
+- **repo**：`.sandbox.yml` 宣告 `extra_addons: ["${PAAS_CI_ADDONS_PATH}"]` + `env_optional` 加 `PAAS_CI_ADDONS_PATH`（值由 onboard 寫進 profile config.env，每台機器路徑不同、不進 git）。
+
+**驗證（全綠）**：plugin 52 單測（含新 3 案）+ 對真實 FLOOR/profile 整合 4 案 + helm-template dry-run 證 `addons_path` append `/mnt/extra-addons-ext-0` 與 extraMount hostPath + **docker-desktop live build 黃金驗證**（`ai_base_gt` 載入、`Verified: woow_paas_platform installed`、DB 直查 7 模組全 `installed`、`Sandbox created`）。
+
+**模式可用性結論**：local（修前 ❌ 靜默壞 → 修後 ✅）、ci-local（✅ 靠 image bake）、stg（✅ 靠 image bake，create.sh 略過 extra_addons、不受影響）。
+
+**仍 Deferred**：`env_optional_{mode}`（per-mode env 宣告）；extra_addons 值含空白路徑（pre-existing 限制）。
