@@ -238,6 +238,31 @@ class AgentSession(models.Model):
                 vals['pod_ws_url'] = status['pod_ws_url'] or False
             session.write(vals)
 
+    def _teardown_runtime(self):
+        """Tear down this session's runtime via operator DELETE (helm uninstall
+        + delete namespace). Single responsibility: call + raise on failure;
+        does NOT set state or unlink (shared by the unlink hook & future GC).
+
+        - No namespace hash (never spawned) → no-op.
+        - Operator not configured but a hash exists → raise (cannot confirm the
+          teardown; the caller blocks the delete rather than risk an orphan).
+        - operator-side not-found is idempotent (200) → no raise.
+        """
+        self.ensure_one()
+        if not self.project_namespace_hash:
+            return
+        from ..services.agent_runtime_client import (
+            AgentRuntimeOperatorError,
+            get_agent_runtime_client,
+        )
+        client = get_agent_runtime_client(self.env)
+        if not client:
+            raise AgentRuntimeOperatorError(
+                "agent runtime operator is not configured; cannot tear down "
+                "namespace hash %s" % self.project_namespace_hash
+            )
+        client.delete(self.project_namespace_hash)
+
     # ----------------------------------------------------------------- #
     # Snapshot / resolve — single source shared by chat (controller) and #
     # on-publish push (#111). Down-sunk from ai_assistant.py (spec ①).   #

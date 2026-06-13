@@ -120,6 +120,7 @@ from . import test_agent_runtime_coldstart_retry
 from . import test_agent_runtime_onpublish_push
 # feat: platform Agent runtime status endpoint (Projects-overview Agent card, gitea #126)
 from . import test_agent_status_endpoint
+from . import test_agent_teardown_unlink           # D2 teardown 孤兒防護（§2.6）
 # feat: portal task agent chat — model-layer portal access predicates (two-layer-acl-lockstep Layer 2)
 from . import test_portal_agent_access
 # feat: portal task agent chat — endpoint-level portal access (HttpCase, ORM-vs-endpoint)
