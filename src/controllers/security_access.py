@@ -652,6 +652,8 @@ class SecurityAccessController(Controller):
             return self._update_policy(sa, kwargs.get("policy_id"), kwargs)
         elif action == "delete":
             return self._delete_policy(sa, kwargs.get("policy_id"))
+        elif action == "reorder":
+            return self._reorder_policies(sa, kwargs)
         return {"success": False, "error": f"Unknown action: {action}"}
 
     # ==================== Per-route Access config (P2.5 Phase 3) ====
@@ -816,18 +818,86 @@ class SecurityAccessController(Controller):
         # already-resolved, SA-pinned `route` recordset (NOT the raw kwargs id),
         # so the client's value only selects a route within the gated SA and can
         # never bind the policy to another SA's route.
+        create_vals = {
+            "route_id": route.id,
+            "name": kwargs["name"],
+            "decision": kwargs.get("decision", "allow"),
+        }
+        # Sparse precedence: omit sequence unless the client sets it so the model
+        # assigns max+10 within the route (no all-collide-on-10). The reorder
+        # endpoint rewrites sequences explicitly.
+        if "sequence" in kwargs:
+            create_vals["sequence"] = kwargs["sequence"]
+        rule_commands = self._build_rule_commands(kwargs)
+        if rule_commands is not None:
+            create_vals["rule_ids"] = rule_commands
+        else:
+            # Legacy flat (transitional): the Policy.create compat shim expands
+            # rule_type/rule_value into one include rule. Removed with the shim
+            # once the frontend (Phase 4) sends include/require/exclude.
+            create_vals["rule_type"] = kwargs.get("rule_type", "email_domain")
+            create_vals["rule_value"] = kwargs.get("rule_value", "")
         try:
-            pol = Policy.create({
-                "route_id": route.id,
-                "name": kwargs["name"],
-                "decision": kwargs.get("decision", "allow"),
-                "rule_type": kwargs.get("rule_type", "email_domain"),
-                "rule_value": kwargs.get("rule_value", ""),
-                "sequence": kwargs.get("sequence", 10),
-            })
+            pol = Policy.create(create_vals)
             return {"success": True, "data": pol.to_dict()}
         except Exception as e:
             _logger.exception("[SA] Failed to create access policy: %s", e)
+            return {"success": False, "error": str(e)}
+
+    # Rule groups accepted on the policy create/update payload (P-rule three
+    # groups). Each rule line is whitelisted to group/rule_type/rule_value — a
+    # client can never smuggle cf_policy_id / policy_id / arbitrary fields onto a
+    # sub-rule (mass-assignment guard, same discipline as the policy whitelist).
+    _RULE_GROUPS = ("include", "require", "exclude")
+
+    def _build_rule_commands(self, kwargs):
+        """Translate an include/require/exclude payload into One2many create
+        commands ((0, 0, vals)). Returns None when no group key is present so
+        the caller can fall back to the legacy flat rule_type/rule_value path."""
+        if not any(g in kwargs for g in self._RULE_GROUPS):
+            return None
+        commands = []
+        for grp in self._RULE_GROUPS:
+            for r in kwargs.get(grp) or []:
+                if not isinstance(r, dict):
+                    continue
+                commands.append((0, 0, {
+                    "group": grp,
+                    "rule_type": r.get("rule_type"),
+                    "rule_value": r.get("rule_value"),
+                }))
+        return commands
+
+    def _reorder_policies(self, sa, kwargs) -> dict[str, Any]:
+        """Rewrite policy precedence (sequence) to the given order. Each id is
+        pinned to the gated SA via _sa_policy — a cross-SA / unknown policy_id is
+        silently skipped, never written, so a caller cannot tamper with another
+        tenant's evaluation order. owner/admin role + _check_operation_allowed are
+        already enforced by the dispatcher. Per-write operator sync is suppressed
+        and a single re-sync issued at the end so CF sees the final order once."""
+        policy_ids = kwargs.get("policy_ids") or []
+        if not isinstance(policy_ids, list):
+            return {"success": False, "error": "policy_ids must be a list"}
+        reordered = []
+        routes = request.env["woow_paas_platform.security_access_route"]
+        try:
+            seq = 0
+            for pid in policy_ids:
+                pol = self._sa_policy(sa, pid)
+                if not pol:
+                    continue  # cross-SA / unknown → skip (never write foreign)
+                # Counter over the PINNED policies (not raw index) so a skipped
+                # foreign id leaves no gap; sparse 10s keep room to insert.
+                seq += 10
+                pol.with_context(sa_skip_route_sync=True).write(
+                    {"sequence": seq})
+                reordered.append(pol.id)
+                routes |= pol.route_id
+            for route in routes:
+                route._sync_access_to_operator()
+            return {"success": True, "data": {"reordered": reordered}}
+        except Exception as e:
+            _logger.exception("[SA] Failed to reorder policies: %s", e)
             return {"success": False, "error": str(e)}
 
     def _sa_policy(self, sa, policy_id):
@@ -845,12 +915,31 @@ class SecurityAccessController(Controller):
         # Whitelist only: drop cf_policy_id / security_access_id / route_id and
         # any other key the client tries to smuggle through.
         vals = {}
-        for f in ("name", "decision", "rule_type", "rule_value", "sequence"):
+        for f in ("name", "decision", "sequence"):
             if f in kwargs:
                 vals[f] = kwargs[f]
+        write_pol = pol
+        rule_commands = self._build_rule_commands(kwargs)
+        if rule_commands is not None:
+            # Replace the whole rule set. delete-before-create ((5,0,0) + creates)
+            # so the per-policy email-quota count sees only the NEW rules; the
+            # transient empty state would trip the rule-level "≥1 include" check,
+            # so sa_rule_replace suppresses it — the policy-level @api.constrains
+            # validates the final state (include present, email cap).
+            vals["rule_ids"] = [(5, 0, 0)] + rule_commands
+            write_pol = pol.with_context(sa_rule_replace=True)
+        elif "rule_type" in kwargs or "rule_value" in kwargs:
+            # Legacy flat single-rule update (transitional): the policy no longer
+            # has flat rule fields, so replace its rules with one include rule.
+            vals["rule_ids"] = [(5, 0, 0), (0, 0, {
+                "group": "include",
+                "rule_type": kwargs.get("rule_type", "email_domain"),
+                "rule_value": kwargs.get("rule_value", ""),
+            })]
+            write_pol = pol.with_context(sa_rule_replace=True)
         try:
             if vals:
-                pol.write(vals)
+                write_pol.write(vals)
             return {"success": True, "data": pol.to_dict()}
         except Exception as e:
             _logger.exception("[SA] Failed to update access policy: %s", e)

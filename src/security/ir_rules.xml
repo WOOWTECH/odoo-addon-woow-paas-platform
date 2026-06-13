@@ -252,6 +252,50 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
+        <!-- SecurityAccessAccessPolicyRule (P-rule 2026-06): the selector rules
+             inside an Access policy. Each rule carries an include/require/exclude
+             selector (email / ip / country / everyone) — part of the SAME
+             Cloudflare allow/deny/bypass gate as the parent policy, so it is at
+             least as sensitive and MUST mirror the policy's read/write split.
+             Without it a plain role='user' workspace member could ORM-create a
+             new include rule (open a protected hostname) or unlink an exclude
+             rule, bypassing both the BFF role gate and the policy-level rule.
+             Walks the parent SA's workspace.access_ids via the stored related
+             security_access_id (= policy_id.security_access_id, two hops). Same
+             two-layer-acl-lockstep discipline as the policy rules above. -->
+        <record id="security_access_access_policy_rule_rule_workspace_member" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicyRule: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="security_access_access_policy_rule_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicyRule: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="security_access_access_policy_rule_rule_admin_full" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicyRule: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
         <!-- Task: workspace member (bound project) or project member (unbound) — full CRUD.
              Odoo's `task_visibility_rule_project_user` only applies to users with
              project.group_project_user; this rule grants the same surface to plain

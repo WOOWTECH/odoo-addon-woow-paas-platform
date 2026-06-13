@@ -310,14 +310,21 @@
                     </div>
                     <div t-if="route.access_policies.length" class="o_woow_sa_policy_list">
                       <t t-foreach="route.access_policies" t-as="pol" t-key="pol.id">
-                        <div class="o_woow_sa_policy">
-                          <div t-att-class="'o_woow_sa_policy__mark ' + (pol.decision === 'deny' ? 'o_woow_sa_policy__mark--deny' : 'o_woow_sa_policy__mark--allow')">
-                            <WoowIcon name="pol.decision === 'deny' ? 'block' : 'check'" size="16"/>
-                          </div>
-                          <span class="o_woow_sa_policy__name" t-esc="pol.name"/>
-                          <span t-att-class="'o_woow_badge ' + (pol.decision === 'deny' ? 'o_woow_badge_gray' : 'o_woow_badge_green')">
-                            <t t-esc="pol.decision === 'deny' ? 'Block' : 'Allow'"/>
+                        <div class="o_woow_sa_policy" draggable="true"
+                             t-on-dragstart="(ev) => this.onPolicyDragStart(route, pol, ev)"
+                             t-on-dragover="(ev) => this.onPolicyDragOver(ev)"
+                             t-on-drop="(ev) => this.onPolicyDrop(route, pol, ev)">
+                          <span class="o_woow_sa_policy__handle" title="Drag to reorder">
+                            <WoowIcon name="'drag_indicator'" size="16"/>
                           </span>
+                          <div t-att-class="policyMarkClass(pol)">
+                            <WoowIcon name="policyMarkIcon(pol)" size="16"/>
+                          </div>
+                          <div class="o_woow_sa_policy__main">
+                            <span class="o_woow_sa_policy__name" t-esc="pol.name"/>
+                            <span class="o_woow_sa_policy__summary" t-esc="policySummary(pol)"/>
+                          </div>
+                          <span t-att-class="policyBadgeClass(pol)" t-esc="policyBadgeLabel(pol)"/>
                           <div class="o_woow_sa_policy__actions">
                             <button class="o_woow_sa_icon_btn" title="Edit policy"
                                     t-on-click="() => this.openEditPolicy(route, pol)">

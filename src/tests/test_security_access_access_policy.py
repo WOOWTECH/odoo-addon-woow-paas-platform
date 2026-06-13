@@ -98,6 +98,174 @@ class TestAccessPolicyModel(TransactionCase):
                 'route_id': r2.id, 'name': 'p2', 'decision': 'allow',
                 'rule_type': 'email_domain', 'rule_value': 'b.com'})
 
+    # --- P-rule: include/require/exclude 三組 + bypass + email 上限 --- #
+    def test_policy_requires_at_least_one_include(self):
+        """CF 硬規則：policy 至少 1 條 include rule。全 require/exclude 應拒。"""
+        sa = self._make_sa()
+        route = self._make_route(sa)
+        with self.assertRaises(ValidationError):
+            self.Policy.create({
+                'route_id': route.id, 'name': 'no-include',
+                'decision': 'allow', 'rule_ids': [
+                    (0, 0, {'group': 'require', 'rule_type': 'ip_range',
+                            'rule_value': '10.0.0.0/8'}),
+                    (0, 0, {'group': 'exclude', 'rule_type': 'email_domain',
+                            'rule_value': 'evil.com'}),
+                ]})
+
+    def test_bypass_decision_rejects_email_selector(self):
+        """bypass policy 不可配 identity selector（email_domain/email_list）；
+        配 ip_range 合法。"""
+        sa = self._make_sa()
+        route = self._make_route(sa)
+        with self.assertRaises(ValidationError):
+            self.Policy.create({
+                'route_id': route.id, 'name': 'bypass-email',
+                'decision': 'bypass', 'rule_ids': [
+                    (0, 0, {'group': 'include', 'rule_type': 'email_domain',
+                            'rule_value': 'acme.com'})]})
+        pol = self.Policy.create({
+            'route_id': route.id, 'name': 'bypass-ip', 'decision': 'bypass',
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'ip_range',
+                                 'rule_value': '203.0.113.0/24'})]})
+        self.assertEqual(pol.decision, 'bypass')
+
+    def test_email_list_count_quota_enforced(self):
+        """sa_max_emails_per_policy：email_list email 數超過 plan 上限應拒。"""
+        sa = self._make_sa()
+        route = self._make_route(sa)
+        plan = self.env['sh.subscription.plan'].create({
+            'name': 'EQ Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_access_policies': 10, 'sa_max_emails_per_policy': 2})
+        sub = self.env['sh.subscription.subscription'].create({
+            'sh_partner_id': self.env.user.partner_id.id,
+            'state': 'in_progress'})
+        sub.sh_subscription_plan_id = plan.id
+        sa.subscription_id = sub.id
+        # 2 emails OK
+        pol = self.Policy.create({
+            'route_id': route.id, 'name': 'eq-ok', 'decision': 'allow',
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'email_list',
+                                 'rule_value': 'a@x.com, b@x.com'})]})
+        self.assertTrue(pol.exists())
+        # 3 emails 超過上限
+        with self.assertRaises(ValidationError):
+            self.Policy.create({
+                'route_id': route.id, 'name': 'eq-bad', 'decision': 'allow',
+                'rule_ids': [(0, 0, {'group': 'include',
+                                     'rule_type': 'email_list',
+                                     'rule_value': 'a@x.com, b@x.com, c@x.com'})]})
+
+    def test_to_dict_aggregates_rule_groups(self):
+        """to_dict 依 group 聚合 rule_ids 成 include/require/exclude 三陣列。"""
+        sa = self._make_sa()
+        route = self._make_route(sa)
+        pol = self.Policy.create({
+            'route_id': route.id, 'name': 'multi', 'decision': 'allow',
+            'rule_ids': [
+                (0, 0, {'group': 'include', 'rule_type': 'email_domain',
+                        'rule_value': 'acme.com', 'sequence': 1}),
+                (0, 0, {'group': 'include', 'rule_type': 'ip_range',
+                        'rule_value': '10.0.0.0/8', 'sequence': 2}),
+                (0, 0, {'group': 'require', 'rule_type': 'country',
+                        'rule_value': 'TW'}),
+                (0, 0, {'group': 'exclude', 'rule_type': 'email_domain',
+                        'rule_value': 'evil.com'}),
+            ]})
+        d = pol.to_dict()
+        self.assertEqual(d['include'], [
+            {'rule_type': 'email_domain', 'rule_value': 'acme.com'},
+            {'rule_type': 'ip_range', 'rule_value': '10.0.0.0/8'}])
+        self.assertEqual(d['require'],
+                         [{'rule_type': 'country', 'rule_value': 'TW'}])
+        self.assertEqual(d['exclude'],
+                         [{'rule_type': 'email_domain', 'rule_value': 'evil.com'}])
+
+    def test_precedence_sparse_default(self):
+        """同 route 連續新增 policy → sequence 稀疏配號（10, 20），不全撞 10。"""
+        sa = self._make_sa()
+        route = self._make_route(sa)
+        p1 = self.Policy.create({
+            'route_id': route.id, 'name': 'p1', 'decision': 'allow',
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'email_domain',
+                                 'rule_value': 'a.com'})]})
+        p2 = self.Policy.create({
+            'route_id': route.id, 'name': 'p2', 'decision': 'allow',
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'email_domain',
+                                 'rule_value': 'b.com'})]})
+        self.assertEqual(p1.sequence, 10)
+        self.assertEqual(p2.sequence, 20)
+
+    def test_everyone_rule_value_normalized_to_none(self):
+        """Odoo reads an unset Char as Python False; the desired-state payload
+        must normalize a valueless 'everyone' selector to None (not False), else
+        the operator's Optional[str] rule_value 422s the whole Access sync."""
+        sa = self._make_sa()
+        route = self._make_route(sa)
+        pol = self.Policy.create({
+            'route_id': route.id, 'name': 'all', 'decision': 'allow',
+            'rule_ids': [(0, 0, {'group': 'include',
+                                 'rule_type': 'everyone'})]})
+        groups = pol._rules_by_group('include')
+        self.assertEqual(
+            groups, [{'rule_type': 'everyone', 'rule_value': None}])
+        self.assertIsNone(groups[0]['rule_value'])
+
+
+class TestAccessPolicyRule(TransactionCase):
+    """P-rule 子模型：selector 驗證（everyone/country）+ 「至少 1 include」
+    在 rule unlink 的守線。"""
+
+    def setUp(self):
+        super().setUp()
+        self.SA = self.env['woow_paas_platform.security_access']
+        self.Route = self.env['woow_paas_platform.security_access_route']
+        self.Policy = self.env[
+            'woow_paas_platform.security_access_access_policy']
+        self.Rule = self.env[
+            'woow_paas_platform.security_access_access_policy_rule']
+        self.workspace = self.env['woow_paas_platform.workspace'].create(
+            {'name': 'AR WS'})
+        self.sa = self.SA.create(
+            {'name': 'AR GW', 'workspace_id': self.workspace.id})
+        self.route = self.Route.create({
+            'security_access_id': self.sa.id, 'subdomain_prefix': 'ar-route'})
+        self.pol = self.Policy.create({
+            'route_id': self.route.id, 'name': 'base', 'decision': 'allow',
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'ip_range',
+                                 'rule_value': '10.0.0.0/8'})]})
+
+    def test_everyone_rejects_value(self):
+        with self.assertRaises(ValidationError):
+            self.Rule.create({
+                'policy_id': self.pol.id, 'group': 'include',
+                'rule_type': 'everyone', 'rule_value': 'x'})
+
+    def test_everyone_accepts_empty(self):
+        r = self.Rule.create({
+            'policy_id': self.pol.id, 'group': 'include',
+            'rule_type': 'everyone'})
+        self.assertEqual(r.rule_type, 'everyone')
+
+    def test_country_requires_iso2(self):
+        with self.assertRaises(ValidationError):
+            self.Rule.create({
+                'policy_id': self.pol.id, 'group': 'require',
+                'rule_type': 'country', 'rule_value': 'Taiwan'})
+        r = self.Rule.create({
+            'policy_id': self.pol.id, 'group': 'require',
+            'rule_type': 'country', 'rule_value': 'TW, US'})
+        self.assertEqual(r.rule_type, 'country')
+
+    def test_unlink_last_include_rejected(self):
+        """刪掉 policy 唯一的 include rule → 違反「至少 1 include」→ rollback。"""
+        include_rule = self.pol.rule_ids.filtered(
+            lambda r: r.group == 'include')
+        with self.assertRaises(ValidationError):
+            include_rule.unlink()
+        self.assertTrue(include_rule.exists())
+
 
 class TestRouteAccessSync(TransactionCase):
     """P2.5 per-route _build_access_payload / _sync_access_to_operator."""
@@ -150,7 +318,13 @@ class TestRouteAccessSync(TransactionCase):
         self.assertEqual(sorted(payload['login_idp_types']),
                          ['google', 'onetimepin'])
         self.assertEqual(payload['session_duration'], '8h')
-        self.assertEqual(payload['policies'][0]['rule_value'], 'acme.com')
+        # P-rule: policy payload 是 include/require/exclude 三組，不再是扁平
+        # rule_type/rule_value。compat shim 把扁平建立轉成單條 include rule。
+        self.assertEqual(payload['policies'][0]['include'],
+                         [{'rule_type': 'email_domain',
+                           'rule_value': 'acme.com'}])
+        self.assertEqual(payload['policies'][0]['require'], [])
+        self.assertEqual(payload['policies'][0]['exclude'], [])
 
     def test_protected_route_syncs_app_and_writes_back(self):
         """is_protected route create → sync app → 回填 route.access_app_id +

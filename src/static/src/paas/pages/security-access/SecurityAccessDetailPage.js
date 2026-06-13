@@ -365,6 +365,84 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
+  // ---- P-rule: decision badge/mark, rule summary, drag-to-reorder ---- //
+  // Cloudflare evaluates Bypass/Service-Auth ahead of Allow/Block regardless of
+  // list position; the flat draggable list mirrors CF's own policy UI (the
+  // tiering is CF's, not re-implemented here).
+
+  policyBadgeClass(pol) {
+    if (pol.decision === "deny") return "o_woow_badge o_woow_badge_gray";
+    if (pol.decision === "bypass") return "o_woow_badge o_woow_badge_warning";
+    return "o_woow_badge o_woow_badge_green";
+  }
+
+  policyBadgeLabel(pol) {
+    if (pol.decision === "deny") return "Block";
+    if (pol.decision === "bypass") return "Bypass";
+    return "Allow";
+  }
+
+  policyMarkClass(pol) {
+    const base = "o_woow_sa_policy__mark ";
+    if (pol.decision === "deny") return base + "o_woow_sa_policy__mark--deny";
+    if (pol.decision === "bypass") return base + "o_woow_sa_policy__mark--bypass";
+    return base + "o_woow_sa_policy__mark--allow";
+  }
+
+  policyMarkIcon(pol) {
+    if (pol.decision === "deny") return "block";
+    if (pol.decision === "bypass") return "bolt";
+    return "check";
+  }
+
+  policySummary(pol) {
+    const fmt = (r) => (r.rule_type === "everyone" ? "everyone" : r.rule_value);
+    const inc = (pol.include || []).map(fmt).join(", ");
+    const extra = [];
+    if ((pol.require || []).length) extra.push(`+${pol.require.length} require`);
+    if ((pol.exclude || []).length) extra.push(`-${pol.exclude.length} exclude`);
+    return extra.length ? `${inc} · ${extra.join(" · ")}` : inc;
+  }
+
+  onPolicyDragStart(route, pol, ev) {
+    this._dragRouteId = route.id;
+    this._dragPolId = pol.id;
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = "move";
+    }
+  }
+
+  onPolicyDragOver(ev) {
+    ev.preventDefault(); // required to allow a drop
+    if (ev.dataTransfer) {
+      ev.dataTransfer.dropEffect = "move";
+    }
+  }
+
+  async onPolicyDrop(route, targetPol, ev) {
+    ev.preventDefault();
+    const dragId = this._dragPolId;
+    this._dragPolId = null;
+    // Reorder only within the same route, and never onto itself.
+    if (this._dragRouteId !== route.id || !dragId || dragId === targetPol.id) {
+      return;
+    }
+    const ids = route.access_policies.map((p) => p.id);
+    const from = ids.indexOf(dragId);
+    const to = ids.indexOf(targetPol.id);
+    if (from < 0 || to < 0) {
+      return;
+    }
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    const res = await securityAccessService.reorderPolicies(
+      this.props.workspaceId, this.props.saId, ids);
+    if (res.success) {
+      await this.loadDetail();
+    } else {
+      this.state.error = res.error;
+    }
+  }
+
   // ---- SkipTrialModal 接線（鏡像 SmartHomeDetailPage） ----
   loadSkipTrialEstimate = () => {
     return securityAccessService.getSkipTrialEstimate(

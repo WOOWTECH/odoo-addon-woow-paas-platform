@@ -23,7 +23,7 @@
             <label>Action</label>
             <div class="o_woow_sa_action_seg">
               <button t-att-class="'o_woow_sa_action_card' + (state.decision === 'allow' ? ' o_woow_sa_action_card--allow' : '')"
-                      t-on-click="() => state.decision = 'allow'">
+                      t-on-click="() => this.setDecision('allow')">
                 <div class="o_woow_sa_action_card__title">
                   <WoowIcon name="'check'" size="18"/>
                   <strong>Allow</strong>
@@ -31,35 +31,67 @@
                 <span class="o_woow_sa_action_card__sub">Grant access to matches</span>
               </button>
               <button t-att-class="'o_woow_sa_action_card' + (state.decision === 'deny' ? ' o_woow_sa_action_card--deny' : '')"
-                      t-on-click="() => state.decision = 'deny'">
+                      t-on-click="() => this.setDecision('deny')">
                 <div class="o_woow_sa_action_card__title">
                   <WoowIcon name="'block'" size="18"/>
                   <strong>Block</strong>
                 </div>
                 <span class="o_woow_sa_action_card__sub">Deny access to matches</span>
               </button>
+              <button t-att-class="'o_woow_sa_action_card' + (state.decision === 'bypass' ? ' o_woow_sa_action_card--bypass' : '')"
+                      t-on-click="() => this.setDecision('bypass')">
+                <div class="o_woow_sa_action_card__title">
+                  <WoowIcon name="'bolt'" size="18"/>
+                  <strong>Bypass</strong>
+                </div>
+                <span class="o_woow_sa_action_card__sub">Skip auth for matches</span>
+              </button>
             </div>
+            <p t-if="state.decision === 'bypass'" class="o_woow_sa_field_hint">
+              Bypass skips authentication entirely — identity selectors (email)
+              are not available; use IP range, country or everyone.
+            </p>
           </div>
-          <div class="o_woow_form_group">
-            <label>Rule type</label>
-            <select class="o_woow_input"
-                    t-on-change="(ev) => state.rule_type = ev.target.value">
-              <option value="email_domain" t-att-selected="state.rule_type === 'email_domain'">Emails ending in a domain</option>
-              <option value="email_list" t-att-selected="state.rule_type === 'email_list'">List of emails</option>
-              <option value="ip_range" t-att-selected="state.rule_type === 'ip_range'">IP range (CIDR)</option>
-            </select>
-          </div>
-          <div class="o_woow_form_group">
-            <label t-esc="ruleValueConfig.label"/>
-            <div class="o_woow_sa_prefix_input">
-              <span t-if="ruleValueConfig.prefix"
-                    class="o_woow_sa_prefix_input__prefix" t-esc="ruleValueConfig.prefix"/>
-              <input type="text" class="o_woow_input" t-att-value="state.rule_value"
-                     t-on-input="(ev) => state.rule_value = ev.target.value"
-                     t-att-placeholder="ruleValueConfig.placeholder"/>
+
+          <!-- include / require / exclude rule groups -->
+          <t t-foreach="groupDefs" t-as="group" t-key="group.key">
+            <div class="o_woow_form_group o_woow_sa_rule_group">
+              <label t-esc="group.label"/>
+              <p class="o_woow_sa_field_hint" t-esc="group.hint"/>
+              <t t-foreach="state[group.key]" t-as="rule" t-key="rule._key">
+                <t t-set="cfg" t-value="valueConfig(rule.rule_type)"/>
+                <div class="o_woow_sa_rule_row">
+                  <select class="o_woow_input o_woow_sa_rule_row__type"
+                          t-on-change="(ev) => this.setRuleType(group.key, rule_index, ev.target.value)">
+                    <t t-foreach="selectorOptions" t-as="opt" t-key="opt.value">
+                      <option t-att-value="opt.value"
+                              t-att-selected="rule.rule_type === opt.value"
+                              t-esc="opt.label"/>
+                    </t>
+                  </select>
+                  <div t-if="cfg.show" class="o_woow_sa_prefix_input o_woow_sa_rule_row__value">
+                    <span t-if="cfg.prefix"
+                          class="o_woow_sa_prefix_input__prefix" t-esc="cfg.prefix"/>
+                    <input type="text" class="o_woow_input"
+                           t-att-value="rule.rule_value"
+                           t-on-input="(ev) => this.setRuleValue(group.key, rule_index, ev.target.value)"
+                           t-att-placeholder="cfg.placeholder"/>
+                  </div>
+                  <span t-else="" class="o_woow_sa_rule_row__value o_woow_sa_field_hint"
+                        t-esc="cfg.hint"/>
+                  <button class="o_woow_sa_icon_btn" title="Remove rule"
+                          t-on-click="() => this.removeRule(group.key, rule_index)">
+                    <WoowIcon name="'close'" size="16"/>
+                  </button>
+                </div>
+              </t>
+              <button class="o_woow_sa_add_rule_btn"
+                      t-on-click="() => this.addRule(group.key)">
+                <WoowIcon name="'add'" size="14"/>
+                <span>Add <t t-esc="group.key"/> rule</span>
+              </button>
             </div>
-            <p class="o_woow_sa_field_hint" t-esc="ruleValueConfig.hint"/>
-          </div>
+          </t>
         </div>
         <div class="o_woow_modal_footer">
           <WoowButton variant="'secondary'" onClick="props.onClose">Cancel</WoowButton>

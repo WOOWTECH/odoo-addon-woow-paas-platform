@@ -35,3 +35,9 @@ class ShSubscriptionPlanSaQuota(models.Model):
         default=0,
         help='Security Access: max email routing rules (enforced in P4).',
     )
+    sa_max_emails_per_policy = fields.Integer(
+        string='SA Max Emails per Access Policy',
+        default=20,
+        help='Security Access: max email addresses across the email_list '
+             'rules of a single access policy. 0 = unlimited.',
+    )

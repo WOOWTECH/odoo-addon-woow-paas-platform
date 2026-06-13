@@ -194,6 +194,22 @@ export const securityAccessService = {
     }
   },
 
+  // P-rule: rewrite policy precedence to the given id order. The backend pins
+  // each id to the gated SA (a cross-SA id is silently skipped, never written).
+  async reorderPolicies(workspaceId, saId, policyIds) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/access-policies`,
+        { action: "reorder", policy_ids: policyIds },
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
   async checkRoutePrefix(prefix) {
     try {
       const result = await jsonRpc(

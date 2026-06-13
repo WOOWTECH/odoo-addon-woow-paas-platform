@@ -215,6 +215,7 @@
             <field name="sa_max_access_policies">3</field>
             <field name="sa_max_custom_domains">1</field>
             <field name="sa_max_email_rules">0</field>
+            <field name="sa_max_emails_per_policy">20</field>
         </record>
 
         <record id="plan_security_access_entry_yearly" model="sh.subscription.plan">
@@ -236,6 +237,7 @@
             <field name="sa_max_access_policies">3</field>
             <field name="sa_max_custom_domains">1</field>
             <field name="sa_max_email_rules">0</field>
+            <field name="sa_max_emails_per_policy">20</field>
         </record>
 
         <record id="plan_security_access_pro_monthly" model="sh.subscription.plan">
@@ -257,6 +259,7 @@
             <field name="sa_max_access_policies">10</field>
             <field name="sa_max_custom_domains">3</field>
             <field name="sa_max_email_rules">10</field>
+            <field name="sa_max_emails_per_policy">20</field>
         </record>
 
         <record id="plan_security_access_pro_yearly" model="sh.subscription.plan">
@@ -278,6 +281,7 @@
             <field name="sa_max_access_policies">10</field>
             <field name="sa_max_custom_domains">3</field>
             <field name="sa_max_email_rules">10</field>
+            <field name="sa_max_emails_per_policy">20</field>
         </record>
 
         <!-- ============================================================ -->

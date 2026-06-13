@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ReleaseStatus(str, Enum):
@@ -483,19 +483,78 @@ class TunnelRoutesSyncResponse(BaseModel):
 # Security Access — Cloudflare Access (Zero Trust) sync (security-access P2)
 
 
+class AccessDecision(str, Enum):
+    """Cloudflare Access policy decision. ``bypass`` skips authentication and
+    does not support identity-based selectors (enforced below)."""
+
+    ALLOW = "allow"
+    DENY = "deny"
+    BYPASS = "bypass"
+
+
+# Selectors whose rule_type carries no value (e.g. "everyone").
+_VALUELESS_RULE_TYPES = {"everyone"}
+# Identity-based selectors a bypass policy may not use (Cloudflare rejects them).
+_IDENTITY_RULE_TYPES = {"email_domain", "email_list"}
+
+
+class AccessRuleSpec(BaseModel):
+    """One selector rule inside a policy group (include / require / exclude).
+
+    rule_value is per-type: domain (no @) / comma-separated emails / CIDR /
+    comma-separated ISO-2 country codes; empty for ``everyone``.
+    """
+
+    rule_type: str = Field(
+        ...,
+        description="email_domain | email_list | ip_range | everyone | country",
+    )
+    rule_value: Optional[str] = Field(None, description="Selector value per type")
+
+    @field_validator("rule_value", mode="before")
+    @classmethod
+    def _normalize_empty(cls, v):
+        # Odoo reads an unset Char field back as Python ``False``; a valueless
+        # selector (e.g. everyone) therefore arrives as JSON ``false``. Coerce
+        # any falsy value (False / "" / None) to None so it is accepted instead
+        # of 422'd as a non-string — defense in depth with the Odoo-side
+        # normalization in _rules_by_group.
+        return v or None
+
+
 class AccessPolicySpec(BaseModel):
-    """One desired Access policy (reusable) on an SA's Access App."""
+    """One desired Access policy (reusable) on an SA's Access App.
+
+    Mirrors Cloudflare's native policy shape: include (OR) / require (AND) /
+    exclude (NOT) selector groups + a decision. At least one Include rule is
+    required; bypass policies may not carry identity-based selectors.
+    """
 
     name: str = Field(..., description="Policy display name")
-    decision: str = Field(..., description="allow | deny")
-    rule_type: str = Field(
-        ..., description="email_domain | email_list | ip_range"
+    decision: AccessDecision = Field(..., description="allow | deny | bypass")
+    include: List[AccessRuleSpec] = Field(
+        default_factory=list, description="OR group; at least one required"
     )
-    rule_value: str = Field(
-        ...,
-        description="domain (no @) / comma-separated emails / CIDR, per rule_type",
+    require: List[AccessRuleSpec] = Field(
+        default_factory=list, description="AND group"
+    )
+    exclude: List[AccessRuleSpec] = Field(
+        default_factory=list, description="NOT group"
     )
     precedence: int = Field(1, description="Evaluation order; lower first")
+
+    @model_validator(mode="after")
+    def _validate_groups(self) -> "AccessPolicySpec":
+        if not self.include:
+            raise ValueError(
+                "Access policy must contain at least one include rule")
+        if self.decision == AccessDecision.BYPASS:
+            for group in (self.include, self.require, self.exclude):
+                if any(r.rule_type in _IDENTITY_RULE_TYPES for r in group):
+                    raise ValueError(
+                        "Bypass policies cannot use identity-based selectors "
+                        "(email_domain / email_list)")
+        return self
 
 
 class AccessSyncRequest(BaseModel):
