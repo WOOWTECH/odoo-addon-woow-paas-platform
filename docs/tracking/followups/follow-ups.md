@@ -625,11 +625,10 @@
 
 ## F-X8 — `scripts/test-addon.sh` worktree env setup gap (tester surface)
 
+- **Status**: ✅ OBSOLETE（2026-06-13，`chore/retire-docker-compose-dev-env`）—— `scripts/test-addon.sh` 連同整條 docker-compose worktree dev 路徑已退役（k8s-dev-sandbox plugin 取代）。本 gap（PAAS_CI_ADDONS_PATH override / requirements pre-install / 共用 PG 切換）在 plugin 流程已不適用：第三方相依改由 `.sandbox.yml extra_addons ${VAR}` 解析掛載、`up`/`test` 走容器、requirements 由 chart 處理。無需再修。
 - **Severity**: low（dev env，非 production）
 - **Origin**: cycle 4 tester phase 試 run 時 surfaces；不在 plan AC 範圍
-- **狀況**：worktree 環境跑 `./scripts/test-addon.sh` 時對某些 setup case 有 gap（如 PAAS_CI_ADDONS_PATH / requirements.txt pre-install / 共用 PostgreSQL 切換 — 與 cycle 3 F24 sub-(b) 同 cluster）
-- **建議落點**：dev script PR / batch with cycle 3 F24 sub-(b)（worktree-sync skill / dev script 範疇）
-- **何時**：next dev tooling PR / 順手做
+- **狀況（歷史）**：worktree 環境跑 `./scripts/test-addon.sh` 時對某些 setup case 有 gap（如 PAAS_CI_ADDONS_PATH / requirements.txt pre-install / 共用 PostgreSQL 切換 — 與 cycle 3 F24 sub-(b) 同 cluster）
 
 ---
 

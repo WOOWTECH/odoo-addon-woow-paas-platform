@@ -335,9 +335,8 @@ woow_paas_platform/
 ├── extra/
 │   ├── paas-operator/            # FastAPI service 包 Helm CLI（含 helm chart）
 │   └── cloudflare/               # Cloudflare 整合
-├── scripts/                      # 本機輔助腳本（保留；本機環境請改用 k8s-dev-sandbox）
 ├── docs/                         # 6 類 docs（guides / reference / decisions / plans / tracking / archived + superpowers）
-└── .claude/skills/               # Project skills（ccpm、k8s-dev-sandbox、deploy-stg、deploy-local、build-operator、ecpay、playwright-cli、setup-end-to-end）
+└── .claude/skills/               # Project skills（ccpm、k8s-dev-sandbox、deploy-stg、deploy-local、build-operator、ecpay、playwright-cli）
 ```
 
 詳細結構與檔案列表已交由其他文件維護，避免雙寫漂移：

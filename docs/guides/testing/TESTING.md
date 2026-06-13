@@ -71,17 +71,18 @@ From the odoo-bin directory:
 ./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init
 ```
 
-### Run in Docker
+### Run in K8s Dev Sandbox
 
-If using Docker development environment:
+If using the K8s dev sandbox:
 
 ```bash
-# 使用 Worktree Development 腳本（推薦）
-./scripts/test-addon.sh
+# 沙盒內跑模組測試（推薦）
+/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
 
-# 或手動執行（需先啟動開發環境）
-docker compose exec web \
-  odoo -d ${POSTGRES_DB:-odoo} --test-enable --test-tags woow_paas_platform --stop-after-init
+# 或手動在 Odoo pod 內執行（NS=dev-sandbox-<slug>、DB=woow_<branch>）
+NS=dev-sandbox-<slug>; ODOO=$(kubectl get deploy -n $NS -o name | grep odoo | head -1)
+kubectl exec -n $NS $ODOO -- \
+  odoo -d woow_<branch> --test-enable --test-tags woow_paas_platform --stop-after-init
 ```
 
 ### Run Specific Test Class
@@ -181,11 +182,11 @@ OK
 3. **Import errors**: Check that `src/tests/` has `__init__.py`
 4. **Security errors**: Verify `src/security/ir.model.access.csv` is up to date
 
-### Docker Test Issues
+### Sandbox Test Issues
 
-1. **Container not running**: `./scripts/start-dev.sh`
-2. **Module not installed**: `./scripts/test-addon.sh` 會自動更新模組
-3. **Permission errors**: Check volume mounts
+1. **Pod not running**: `/woowprd:k8s-dev-sandbox up --context docker-desktop`
+2. **Module not installed**: `up` 時 create.sh 會驗 `ir_module_module.state='installed'` 並 fail-loud；若缺第三方相依，檢查 `.sandbox.yml` 的 `extra_addons`（`${PAAS_CI_ADDONS_PATH}`）
+3. **看日誌**: `/woowprd:k8s-dev-sandbox logs <sandbox-name> --service odoo`
 
 ## Continuous Integration
 

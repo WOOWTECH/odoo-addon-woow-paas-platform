@@ -17,21 +17,22 @@
 ./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init
 ```
 
-## Docker Development (Recommended)
+## K8s Dev Sandbox (Recommended)
 
-### Start dev environment
+### Onboard (one-time) + start sandbox
 ```bash
-./scripts/start-dev.sh
+/woowprd:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" --context docker-desktop
+/woowprd:k8s-dev-sandbox up --context docker-desktop
 ```
 
-### Run tests in Docker
+### Run module tests in sandbox
 ```bash
-./scripts/test-addon.sh
+/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
 ```
 
-### Clean up environment
+### Destroy sandbox
 ```bash
-./scripts/cleanup-worktree.sh
+/woowprd:k8s-dev-sandbox destroy <sandbox-name> --context docker-desktop
 ```
 
 ## PaaS Operator Development
@@ -70,4 +71,4 @@ git worktree list
 - `sed`, `awk` - text processing
 
 ## Test URL
-- http://localhost (NOT :8069, to enable websocket)
+- `kubectl port-forward -n dev-sandbox-<slug> svc/<slug>-odoo-dev-sandbox-nginx 8080:80` → http://localhost:8080

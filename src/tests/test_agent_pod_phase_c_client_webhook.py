@@ -52,7 +52,7 @@ Fixture / env assumptions:
 * Webhook HMAC secret read by the receiver from the INJECTED ENV (OQ#1
   ruling (b) — K8s Secret env injection, design §5.3 commit f5333c3). The
   env var NAME is impl-defined; the placeholder below re-aligns if impl picks
-  a different name. In dev/docker-compose the helm chart injects it from the
+  a different name. In the dev sandbox / stg the helm chart injects it from the
   K8s Secret; here the test sets os.environ for the in-process controller and
   restores it via addCleanup. (operator_url / operator_api_key for the client
   tests stay as ir.config_parameter — those are existing Odoo settings, not

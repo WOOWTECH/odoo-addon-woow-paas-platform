@@ -108,8 +108,9 @@ Groups: ['Portal']
 + ACL 行為，避免上游升級時 silent break。執行：
 
 ```bash
-./scripts/test-addon.sh
-# 或指定模組
-docker compose exec web odoo --test-enable --test-tags woow_paas_platform \
-  --stop-after-init -d $ODOO_DB_NAME
+/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
+# 或手動在 Odoo pod 內執行
+NS=dev-sandbox-<slug>; ODOO=$(kubectl get deploy -n $NS -o name | grep odoo | head -1)
+kubectl exec -n $NS $ODOO -- odoo --test-enable --test-tags woow_paas_platform \
+  --stop-after-init -d woow_<branch>
 ```
