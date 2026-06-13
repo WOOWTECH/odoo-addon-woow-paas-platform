@@ -87,6 +87,11 @@ export class SecurityAccessDetailPage extends Component {
       editingPolicy: null,
       policyModalRoute: null,
       expandedRoutes: {},
+      // P-rule drag-to-reorder UX: the policy currently being dragged (ghost
+      // style) and the route whose order is being persisted (saving spinner —
+      // the reorder API re-syncs Cloudflare so it is not instant).
+      draggingPolId: null,
+      reorderingRouteId: null,
     });
     this.pollingInterval = null;
     this.prefixCheckTimer = null;
@@ -407,39 +412,75 @@ export class SecurityAccessDetailPage extends Component {
   onPolicyDragStart(route, pol, ev) {
     this._dragRouteId = route.id;
     this._dragPolId = pol.id;
+    this._dropHandled = false;
+    // Snapshot the server order so commit can no-op when nothing actually moved.
+    this._dragOrigOrder = route.access_policies.map((p) => p.id);
+    this.state.draggingPolId = pol.id;
     if (ev.dataTransfer) {
       ev.dataTransfer.effectAllowed = "move";
+      // Firefox only starts a drag when some data is set.
+      ev.dataTransfer.setData("text/plain", String(pol.id));
     }
   }
 
-  onPolicyDragOver(ev) {
+  onPolicyDragOver(route, targetPol, ev) {
     ev.preventDefault(); // required to allow a drop
     if (ev.dataTransfer) {
       ev.dataTransfer.dropEffect = "move";
     }
+    // Live preview: reflow the list so the dragged row sits at the hovered
+    // row's slot. What the user sees during the drag IS what will be saved, so
+    // the drop feels instant — the (slow) API call only persists it afterward.
+    const dragId = this._dragPolId;
+    if (!dragId || this._dragRouteId !== route.id || dragId === targetPol.id) {
+      return;
+    }
+    const pols = route.access_policies;
+    const from = pols.findIndex((p) => p.id === dragId);
+    const to = pols.findIndex((p) => p.id === targetPol.id);
+    if (from < 0 || to < 0 || from === to) {
+      return;
+    }
+    pols.splice(to, 0, pols.splice(from, 1)[0]); // reactive → list reflows
   }
 
-  async onPolicyDrop(route, targetPol, ev) {
+  onPolicyDrop(route, ev) {
     ev.preventDefault();
-    const dragId = this._dragPolId;
+    // The dragover handler already reflowed the list into the desired order;
+    // persist whatever the user is now seeing.
+    this._commitPolicyOrder(route);
+  }
+
+  onPolicyDragEnd() {
+    this.state.draggingPolId = null;
+    // Drag released outside any row (cancelled) — discard the live preview by
+    // restoring the server order. A real drop set _dropHandled first.
+    if (!this._dropHandled) {
+      this._dragPolId = null;
+      this.loadDetail();
+    }
+  }
+
+  async _commitPolicyOrder(route) {
+    this._dropHandled = true;
     this._dragPolId = null;
-    // Reorder only within the same route, and never onto itself.
-    if (this._dragRouteId !== route.id || !dragId || dragId === targetPol.id) {
-      return;
-    }
+    this.state.draggingPolId = null;
     const ids = route.access_policies.map((p) => p.id);
-    const from = ids.indexOf(dragId);
-    const to = ids.indexOf(targetPol.id);
-    if (from < 0 || to < 0) {
+    // Dropped back where it started → nothing to persist (skip the CF re-sync).
+    if (this._dragOrigOrder && ids.join() === this._dragOrigOrder.join()) {
       return;
     }
-    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    // Saving feedback: the reorder endpoint re-syncs Cloudflare Access, so it
+    // takes a moment — keep the (already reflowed) list visible but mark it busy.
+    this.state.reorderingRouteId = route.id;
     const res = await securityAccessService.reorderPolicies(
       this.props.workspaceId, this.props.saId, ids);
+    this.state.reorderingRouteId = null;
     if (res.success) {
-      await this.loadDetail();
+      await this.loadDetail(); // confirm server order + refreshed CF ids
     } else {
       this.state.error = res.error;
+      await this.loadDetail(); // revert the optimistic order on failure
     }
   }
 

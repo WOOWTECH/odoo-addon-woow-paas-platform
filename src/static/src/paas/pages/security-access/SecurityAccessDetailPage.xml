@@ -308,12 +308,19 @@
                         <span>Add Policy</span>
                       </WoowButton>
                     </div>
-                    <div t-if="route.access_policies.length" class="o_woow_sa_policy_list">
+                    <div t-if="route.access_policies.length"
+                         t-att-class="'o_woow_sa_policy_list' + (state.reorderingRouteId === route.id ? ' o_woow_sa_policy_list--saving' : '')">
+                      <div t-if="state.reorderingRouteId === route.id" class="o_woow_sa_policy_saving">
+                        <span class="o_woow_sa_spinner o_woow_spin"/>
+                        <span>Saving order…</span>
+                      </div>
                       <t t-foreach="route.access_policies" t-as="pol" t-key="pol.id">
-                        <div class="o_woow_sa_policy" draggable="true"
+                        <div t-att-class="'o_woow_sa_policy' + (state.draggingPolId === pol.id ? ' o_woow_sa_policy--dragging' : '')"
+                             draggable="true"
                              t-on-dragstart="(ev) => this.onPolicyDragStart(route, pol, ev)"
-                             t-on-dragover="(ev) => this.onPolicyDragOver(ev)"
-                             t-on-drop="(ev) => this.onPolicyDrop(route, pol, ev)">
+                             t-on-dragover="(ev) => this.onPolicyDragOver(route, pol, ev)"
+                             t-on-drop="(ev) => this.onPolicyDrop(route, ev)"
+                             t-on-dragend="() => this.onPolicyDragEnd()">
                           <span class="o_woow_sa_policy__handle" title="Drag to reorder">
                             <WoowIcon name="'drag_indicator'" size="16"/>
                           </span>

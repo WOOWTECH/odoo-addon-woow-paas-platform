@@ -176,9 +176,22 @@
   &:hover { border-color: rgba($woow-primary, 0.4); }
   &--active { border-color: $woow-primary; color: $woow-primary; background: rgba($woow-primary, 0.06); font-weight: 600; }
 }
-.o_woow_sa_policy_list { display: flex; flex-direction: column; gap: 0.5rem; }
+.o_woow_sa_policy_list { display: flex; flex-direction: column; gap: 0.5rem;
+  // While the new order is being persisted (CF re-sync) keep it visible but
+  // block further drags and dim it so it reads as "in progress".
+  &--saving { opacity: 0.6; pointer-events: none; }
+}
+.o_woow_sa_policy_saving {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; margin-bottom: 0.25rem;
+  border: 1px solid $woow-border-light; border-radius: $woow-radius-default; background: rgba($woow-primary, 0.05);
+  font-size: 0.8125rem; color: $woow-text-secondary;
+}
+.o_woow_sa_spinner { flex: 0 0 auto; width: 14px; height: 14px; border: 2px solid rgba(0,0,0,0.12); border-top-color: $woow-primary; border-radius: 50%; }
 .o_woow_sa_policy {
   display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border: 1px solid $woow-border-light; border-radius: $woow-radius-default; background: $woow-card-light;
+  transition: opacity 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  // The row being dragged: ghost it so the live reflow of the others reads clearly.
+  &--dragging { opacity: 0.45; border-style: dashed; border-color: $woow-primary; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
   &__handle { flex: 0 0 auto; display: flex; align-items: center; color: $woow-text-secondary; cursor: grab;
     .material-symbols-outlined { color: $woow-text-secondary; } &:active { cursor: grabbing; } }
   &__mark { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 0.5rem; display: flex; align-items: center; justify-content: center;
