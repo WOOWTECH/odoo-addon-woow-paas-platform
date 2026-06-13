@@ -565,6 +565,161 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
         self.assertIn('permission', (res.get('error') or '').lower())
         self.assertEqual(self.pol.sudo().decision, 'allow')
 
+    # ---- P-rule Phase 3: reorder + three-group + bypass/email validation ---- #
+
+    def test_non_member_policy_reorder_denied(self):
+        self.authenticate(self.mallory.login, self.mallory.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'reorder', 'policy_ids': [self.pol.id]})
+        self._assert_structured_denial(res)
+
+    def test_member_user_policy_reorder_denied(self):
+        """role='user' member 不得 reorder（改 precedence 評估順序）。"""
+        user = self._add_user_member()
+        self.authenticate(user.login, user.login)
+        seq_before = self.pol.sudo().sequence
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'reorder', 'policy_ids': [self.pol.id]})
+        self._assert_structured_denial(res)
+        self.assertIn('permission', (res.get('error') or '').lower())
+        self.assertEqual(self.pol.sudo().sequence, seq_before)
+
+    def test_owner_reorder_rewrites_sequence_and_skips_cross_sa(self):
+        """owner reorder 改寫 sequence；夾帶的跨 SA policy_id 被 _sa_policy 濾掉、
+        絕不寫入別人的 SA（跨租戶 precedence 竄改防護）。"""
+        pol2 = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo().create({
+                'route_id': self.route.id, 'name': 'p2', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+        # foreign SA + policy (mallory's workspace) — alice must never touch it
+        wsB = self.env['woow_paas_platform.workspace'].sudo().create({
+            'name': 'AC WS B', 'owner_id': self.mallory.id})
+        saB = self.env['woow_paas_platform.security_access'].sudo().create({
+            'name': 'AC GW B', 'workspace_id': wsB.id})
+        routeB = self.env[
+            'woow_paas_platform.security_access_route'].sudo().create({
+                'security_access_id': saB.id, 'subdomain_prefix': 'ac-b'})
+        polB = self.env[
+            'woow_paas_platform.security_access_access_policy'].sudo().create({
+                'route_id': routeB.id, 'name': 'pB', 'decision': 'allow',
+                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+        polB_seq = polB.sequence
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'reorder',
+             'policy_ids': [polB.id, pol2.id, self.pol.id]})
+        self.assertTrue(res.get('success'), res)
+        # foreign policy untouched + not in the reordered set
+        self.assertEqual(polB.sudo().sequence, polB_seq)
+        self.assertNotIn(polB.id, res['data']['reordered'])
+        # own policies get clean 10/20 in the given order (skipped id leaves no gap)
+        self.assertEqual(pol2.sudo().sequence, 10)
+        self.assertEqual(self.pol.sudo().sequence, 20)
+
+    def test_owner_create_three_group_policy(self):
+        """owner 經 BFF 用 include/require/exclude 三組建 policy → 成功，三組正確
+        分組回傳。"""
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'three-grp', 'decision': 'allow',
+             'route_id': self.route.id,
+             'include': [{'rule_type': 'email_domain',
+                          'rule_value': 'acme.com'}],
+             'require': [{'rule_type': 'country', 'rule_value': 'TW'}],
+             'exclude': [{'rule_type': 'email_domain',
+                          'rule_value': 'evil.com'}]})
+        self.assertTrue(res.get('success'), res)
+        data = res['data']
+        self.assertEqual(
+            data['include'],
+            [{'rule_type': 'email_domain', 'rule_value': 'acme.com'}])
+        self.assertEqual(
+            data['require'], [{'rule_type': 'country', 'rule_value': 'TW'}])
+        self.assertEqual(
+            data['exclude'],
+            [{'rule_type': 'email_domain', 'rule_value': 'evil.com'}])
+
+    def test_owner_update_replaces_rule_groups(self):
+        """owner update 用三組 replace 既有 policy 的整組 rules（delete-before-
+        create + sa_rule_replace，不被『至少 1 include』過渡空狀態誤擋）。"""
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'update', 'policy_id': self.pol.id,
+             'include': [{'rule_type': 'ip_range',
+                          'rule_value': '10.0.0.0/8'}],
+             'exclude': [{'rule_type': 'email_domain',
+                          'rule_value': 'evil.com'}]})
+        self.assertTrue(res.get('success'), res)
+        data = res['data']
+        self.assertEqual(
+            data['include'],
+            [{'rule_type': 'ip_range', 'rule_value': '10.0.0.0/8'}])
+        self.assertEqual(
+            data['exclude'],
+            [{'rule_type': 'email_domain', 'rule_value': 'evil.com'}])
+
+    def test_owner_update_replace_without_include_rejected(self):
+        """replace 整組 rules 但新組無 include（只 require/exclude）→ 違反『至少
+        1 include』最終態 → 結構化錯誤。sa_rule_replace 只抑制 rule-level 過渡
+        檢查，policy-level @api.constrains 仍守最終態，不放行非法 policy。"""
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'update', 'policy_id': self.pol.id,
+             'require': [{'rule_type': 'country', 'rule_value': 'TW'}],
+             'exclude': [{'rule_type': 'email_domain',
+                          'rule_value': 'evil.com'}]})
+        self.assertFalse(res.get('success'))
+        self.assertIn('error', res)
+        # original include rule preserved (the illegal replace rolled back)
+        self.assertTrue(self.pol.sudo().rule_ids.filtered(
+            lambda r: r.group == 'include'))
+
+    def test_owner_create_bypass_with_email_rejected(self):
+        """bypass + email selector 經 BFF → 結構化錯誤（model constraint 透出）。"""
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'bp-bad', 'decision': 'bypass',
+             'route_id': self.route.id,
+             'include': [{'rule_type': 'email_domain',
+                          'rule_value': 'acme.com'}]})
+        self.assertFalse(res.get('success'))
+        self.assertIn('error', res)
+
+    def test_owner_create_email_over_cap_rejected(self):
+        """email_list 超過 plan.sa_max_emails_per_policy 經 BFF → 結構化錯誤。"""
+        plan = self.env['sh.subscription.plan'].sudo().create({
+            'name': 'EP EQ Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_access_policies': 10, 'sa_max_emails_per_policy': 2})
+        sub = self.env['sh.subscription.subscription'].sudo().create({
+            'sh_partner_id': self.alice.partner_id.id, 'state': 'in_progress'})
+        sub.sudo().sh_subscription_plan_id = plan.id
+        self.sa.sudo().subscription_id = sub.id
+        self.authenticate(self.alice.login, self.alice.login)
+        res = self._rpc(
+            f'/api/workspaces/{self.workspace.id}'
+            f'/security-accesses/{self.sa.id}/access-policies',
+            {'action': 'create', 'name': 'eq-bad', 'decision': 'allow',
+             'route_id': self.route.id,
+             'include': [{'rule_type': 'email_list',
+                          'rule_value': 'a@x.com, b@x.com, c@x.com'}]})
+        self.assertFalse(res.get('success'))
+        self.assertIn('error', res)
+
     def test_member_user_policy_delete_denied(self):
         """role='user' member 不得 delete 既有 policy（例如移除一條 deny 規則
         以放寬存取）。"""
