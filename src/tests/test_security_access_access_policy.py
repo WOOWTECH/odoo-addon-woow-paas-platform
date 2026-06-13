@@ -339,6 +339,42 @@ class TestRouteAccessSync(TransactionCase):
         self.assertEqual(route.access_app_id, 'app-1')
         self.assertEqual(pol.cf_policy_id, 'pol-1')
 
+    def test_rule_replace_never_syncs_transient_empty_include(self):
+        """編輯 policy 走 controller 整組 rule 替換（(5,0,0)+creates，帶
+        sa_rule_replace）時，rule 的 (5,0,0) unlink 不可在『舊 rule 已刪、新 rule
+        未建』的瞬時空 include 狀態觸發 operator sync——否則 operator 收到
+        include:[] 直接 422、整個編輯 abort（stg 2026-06-13 bypass policy「改不
+        了」真因）。policy.write() 會在替換完成後做最終 full-state sync，故
+        rule-level 中途 sync 須被 sa_rule_replace 抑制。"""
+        mc = self._mock()
+        sa, route = self._active_sa(mc, protected=True)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            pol = self.Policy.create({
+                'route_id': route.id, 'name': 'edit-me', 'decision': 'bypass',
+                'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'ip_range',
+                                     'rule_value': '203.0.113.0/24'})]})
+            mc.sync_access_app.reset_mock()
+            # controller _update_policy 的整組替換路徑：sa_rule_replace 且
+            # NOT sa_skip_route_sync（讓 route sync 真的會跑）。
+            pol.with_context(sa_rule_replace=True).write({
+                'name': 'edited', 'decision': 'bypass',
+                'rule_ids': [(5, 0, 0),
+                             (0, 0, {'group': 'include', 'rule_type': 'ip_range',
+                                     'rule_value': '198.51.100.0/24'})]})
+        # 替換完成後最終狀態：單條 include rule。
+        self.assertEqual(
+            pol._rules_by_group('include'),
+            [{'rule_type': 'ip_range', 'rule_value': '198.51.100.0/24'}])
+        # 每一次 operator sync 的每條 policy 都不得是空 include（含中途瞬時狀態）。
+        # 真實 operator 對空 include 直接 422，故任一次外推空 include 都是 bug。
+        self.assertTrue(mc.sync_access_app.called)
+        for call in mc.sync_access_app.call_args_list:
+            for p in call.args[0].get('policies', []):
+                self.assertTrue(
+                    p.get('include'),
+                    "operator sync 收到空 include policy %r（替換瞬時狀態被外推）"
+                    % p.get('name'))
+
     def test_toggle_protected_true_syncs(self):
         mc = self._mock()
         sa, route = self._active_sa(mc, protected=False)
