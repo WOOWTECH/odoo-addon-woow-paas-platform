@@ -106,13 +106,32 @@ class SecurityAccessAccessPolicyRule(models.Model):
                         "Country must be comma-separated ISO 3166-1 alpha-2 "
                         "codes, e.g. TW,US — got %r" % rule.rule_value)
 
+    def _suppress_route_sync(self):
+        """Whether a per-rule operator sync should be skipped for this op.
+
+        sa_skip_route_sync: migration / provision bulk row moves converge CF via
+        their own explicit re-sync, not per-row here.
+
+        sa_rule_replace: a policy-driven whole-rule-set replace (controller
+        _update_policy writes (5,0,0)+creates). Odoo runs the (5,0,0) unlink
+        FULLY — including this per-rule sync — BEFORE the (0,0,) creates, so a
+        per-rule sync in that window pushes the policy in its transient
+        empty-include state and the operator rejects "≥1 include" (422), aborting
+        the whole edit. The policy's own write() issues the final full-state sync
+        after the replace settles, so per-rule syncs here are wrong AND redundant.
+        """
+        ctx = self.env.context
+        return bool(ctx.get('sa_skip_route_sync') or ctx.get('sa_rule_replace'))
+
     # Atomicity + sync: mirror the policy sub-model. A rule create/write/unlink
     # re-syncs its policy's ROUTE (the route owns the declarative full-state
     # push to the operator). Wrapped in a savepoint so a sync raise rolls the
     # rule row back. The liveness gate lives inside route._sync_access_to_operator
     # (no-ops without a live tunnel / unprotected route), so we always call it
-    # and let the route decide. sa_skip_route_sync (context) lets migration /
-    # provision bulk moves suppress the per-row operator call.
+    # and let the route decide. _suppress_route_sync() skips the per-rule call
+    # for migration/provision bulk moves (sa_skip_route_sync) and for a
+    # policy-driven rule-set replace (sa_rule_replace), where the policy's own
+    # write() owns the final full-state sync.
     #
     # Note: creating a policy WITH rule_ids fires BOTH the nested rule sync and
     # the policy's own post-create sync; the duplicate is benign — the route
@@ -132,7 +151,7 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # already covers the final state.
             policies._check_emails_per_policy()
             policies._check_decision_selector_compat()
-            if not self.env.context.get('sa_skip_route_sync'):
+            if not self._suppress_route_sync():
                 for route in rules.mapped('policy_id.route_id'):
                     route._sync_access_to_operator()
         return rules
@@ -145,7 +164,7 @@ class SecurityAccessAccessPolicyRule(models.Model):
             policies._check_at_least_one_include()
             policies._check_emails_per_policy()
             policies._check_decision_selector_compat()
-            if (not self.env.context.get('sa_skip_route_sync')
+            if (not self._suppress_route_sync()
                     and any(k in vals for k in (
                         'group', 'rule_type', 'rule_value', 'sequence',
                         'policy_id'))):
@@ -166,7 +185,7 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # policy-level @api.constrains validates the final state.
             if not self.env.context.get('sa_rule_replace'):
                 policies.exists()._check_at_least_one_include()
-            if not self.env.context.get('sa_skip_route_sync'):
+            if not self._suppress_route_sync():
                 for route in routes.exists():
                     route._sync_access_to_operator()
         return result

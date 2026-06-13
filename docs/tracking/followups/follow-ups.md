@@ -1697,6 +1697,10 @@ controller（`_create_policy` 仍送扁平欄位）與既有 ~30 處測試 fixtu
 並把仍用扁平 kwargs 的測試 fixture 改走 `rule_ids`。移除後扁平 `rule_type`/`rule_value` 不再是合法 create 輸入。
 設計依據見 `docs/plans/2026-Q2/2026-06-13-sa-policy-rule-submodel-{design,implementation}.md`（design D6）。
 
+> **已解鎖（2026-06-13）**：PR #193 merge 進 `develop`、Phase 5 live stg E2E 全鏈打通（前端確實送三組 payload、stg 真 CF 驗綠），
+> 前置條件（前端 ship 三組）已滿足。此 shim + controller `_create_policy`/`_update_policy` 扁平 fallback **現在可獨立開 PR 退場**。
+> 退場時連同改測試 fixture 走 `rule_ids`，並驗升級路徑（`.39` 既有 DB 已遷成子模型，扁平輸入已無生產來源）。
+
 附帶 infra note：本 repo `.sandbox.yml` **未宣告 `extra_addons`**，docker-desktop local sandbox 跑 create 會因
 addons_path 缺第三方相依（ai_base_gt 等在 `paas-odoo-ci/addons`）而模組裝不起來；暫以 `create --values`
 覆寫 `codeMount.extraAddonsHostPath` 繞過。建議把 `extra_addons: ["${PAAS_CI_ADDONS_PATH}"]` 補進

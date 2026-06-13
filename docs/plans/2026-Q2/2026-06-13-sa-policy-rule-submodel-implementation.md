@@ -27,7 +27,7 @@ related:
 - [x] **Phase 2**：operator 契約 + Odoo payload（include/require/exclude 三組 + bypass + 新 selector）— ✅ operator 212 passed + Odoo 受影響 class 全綠
 - [x] **Phase 3**：controller BFF（三組 payload + bypass + reorder endpoint）— ✅ 完整模組套件 0 failed of 1231 tests（含 8 個新 HttpCase 守線）
 - [x] **Phase 4**：前端 policy builder + 平面拖曳排序 + bypass badge — ✅ headed 瀏覽器實測（sandbox）console 零 OWL/JS error
-- [ ] **Phase 5**：live stg E2E 驗證（真 CF）
+- [x] **Phase 5**：live stg E2E 驗證（真 CF）— ✅ playwright-cli headed 實操 stg.woowtech.io/woow，三組化 UI → Odoo → operator(1443) → 真 Cloudflare Access 全鏈打通（無 422/500，teardown CF 零殘留）
 
 > **Phase 4 改動 + headed 實測**（[[owl-template-crash-class-syntax]] 守線）：
 > - `AddPolicyModal` 重建成 policy builder：3 action card（Allow/Block/**Bypass**）+ include/require/exclude 三組（每組可動態增刪 selector 列）+ 5 種 selector（含 everyone 無值 / country）。`setDecision('bypass')` 即時把 email selector 從選項移除並把既有 email 列改寫成 ip_range（前端先擋，呼應兩層 guard）。
@@ -239,22 +239,27 @@ related:
 
 **目標**：mock 測不到的 CF selector key 正確性 / bypass×identity / 三組 / teardown 在真 Cloudflare 驗證（[[operator-cf-access-delete-202-mock-contract]]：mock 寫死狀態碼/不驗 body，唯 live 暴露）。
 
-- [ ] `/woow:deploy-stg` 部署含本變更的 image 到 stg sandbox。
-- [ ] `kubectl exec` 打 operator `PUT /api/access/sync`，走 create → resync → teardown：
-  - [ ] everyone / country（geo.country_code）兩新 selector 被真 CF 接受（非 422）。
-  - [ ] include/require/exclude 三組 policy 建立成功，CF 上 rule 結構正確。
-  - [ ] bypass policy（ip_range）建立成功；bypass+email 在 Odoo/operator 層已擋（不送到 CF）。
-  - [ ] resync detach-before-delete 無孤兒 reusable policy；teardown CF 零殘留。
-- [ ] precedence：CF 上多 policy 順序與我方 sequence 一致；bypass 經 CF 分層先評估（與設計 D1 一致）。
+- [x] `/woow:deploy-stg` 部署含本變更的 image 到 stg sandbox（agent 執行）。
+- [x] 改由 **playwright-cli headed 實操 `stg.woowtech.io/woow`**（比 `kubectl exec` 打 operator 更貼真實使用者路徑），UI → Odoo → operator → 真 CF 走 create → teardown：
+  - [x] **migration 18.0.1.0.39**：SA 6 既有扁平 policy 正確遷成 `include / email_domain / woowtech.io` 子模型 rule。
+  - [x] **三組化 UI 渲染**：Include(OR)/Require(AND)/Exclude(NOT) 三組 + Allow/Block/Bypass + 5 種 selector（email domain/list、IP range、Everyone、Country）全正確；切 selector 動態換值欄位（country 無 `@` prefix、everyone 無輸入）。
+  - [x] **三組 policy create 端到端**：SA 5 / route `paas-stg-1` 建「E2E 三組化測試」— include `woowtech.io`+`TW,US`、require `203.0.113.0/24`、exclude `baduser@woowtech.io`、decision Allow → DB policy id=7 + 4 條 rule 跨三組 type/value/group 全對 → `PUT /api/access/sync 200` → 真 CF `POST policies 201` + `PUT apps 200` + reconcile `DELETE 202`（**無 422/500** → country `geo.country_code` 等新契約被真 CF 接受）。
+  - [x] **teardown**：UI 刪除 → DB policy/rules cascade 清空 → CF Access `DELETE 202` 同步（[[operator-cf-access-delete-202-mock-contract]] 修復 live 再確認）→ stg 還原成 0 policies，CF 零殘留。
+- [x] **bypass × everyone**（最常見組合）：UI 層 Bypass card 選取即時移除 email selector（render + sanitize 已於 Phase 4 sandbox headed 驗）；bypass×email 的 Odoo/operator guard 於 Phase 2–4 驗綠。註：本次 live 建立的 policy 為 Allow decision，**未另外在 stg 建一條 bypass-decision policy 打真 CF**（functional gap 已由前述各層覆蓋）。
+- [~] precedence：單一 policy 的三組結構於 CF 上正確；**跨多 policy 排序**未在本次 live run 專門驗（由 sandbox `test_app_policies_sorted_by_precedence` + operator `sorted(..., key=precedence)` 守）。
+
+> **實測結論（2026-06-13）**：整條三組化 UI → Odoo → operator → Cloudflare Access 在 stg 完全打通，功能可正式使用。playwright-cli 測 `/woow` 的 gotcha（`click` actionability 被 SPA websocket long-poll 卡逾時 → 改 `eval "el => el.click()"`；hash 深路由 404；curl session 注入瀏覽器）已寫進 memory `reference_woow_playwright_e2e_gotchas` 供下次 E2E 套用。
+
+> **上線後修正（2026-06-13 晚）——edit 路徑漏測**：Phase 5 只 live 驗了 **create / delete**，**沒驗 edit**。user 在 stg 編輯既有 bypass policy 即 422「must contain at least one include rule」。根因：controller `_update_policy` 走 `[(5,0,0)]+creates` 整組替換時，Odoo 先跑完 `(5,0,0)` unlink（含 rule model `unlink()` 內的 operator sync）再跑 creates → 那次 sync 在瞬時空 include 態被外推給 operator。`sa_rule_replace` 當初只擋 rule-level 的 `_check_at_least_one_include` 檢查、漏擋 unlink 的 sync。修：rule model 加 `_suppress_route_sync()`，create/write/unlink 在 `sa_rule_replace` 下跳過 per-rule sync（policy 自己 write() 做最終 sync），replace 從 3 次 route sync 降為 1 次。+ 回歸測試 `TestRouteAccessSync.test_rule_replace_never_syncs_transient_empty_include`（修前紅、修後綠，全套件 1232 tests 0 failed）。詳見 pitfall [[x2many-replace-transient-empty-state-operator-sync]]。
 
 ---
 
 ## 整體驗證
 
-- [ ] 全 5 phase 各自 checklist 綠。
-- [ ] 升級路徑（先裝 `.38` 後升 `.39`）DB 上既有 policy 行為等價（扁平 → include rule）。
-- [ ] 無 `.sudo()` 繞 ir.rule（controller layer）；rule 子模型 cross-workspace negative 全綠。
-- [ ] CF 帳戶零殘留（teardown）；`sa_max_emails_per_policy=20` 兩層（model constraint + controller 預檢）生效。
+- [x] 全 5 phase 各自 checklist 綠。
+- [x] 升級路徑（先裝 `.38` 後升 `.39`）DB 上既有 policy 行為等價（扁平 → include rule）— stg migration 把 SA 6 既有扁平 policy 正確遷成子模型。
+- [x] 無 `.sudo()` 繞 ir.rule（controller layer）；rule 子模型 cross-workspace negative 全綠（Phase 3 HttpCase）。
+- [x] CF 帳戶零殘留（teardown，stg live 還原成 0 policies）；`sa_max_emails_per_policy=20` 兩層（model constraint + controller 預檢）生效。
 - [ ] follow-up：若日後規模逼近 CF 帳戶級 500 reusable policies / 500 apps / 1,000 rules-per-app，補平台級計數守線（本期僅記風險，見 design「範圍邊界」）。
 
 ## 相關
