@@ -30,14 +30,15 @@ design §2.3 原規劃「cluster 端」：pod 寫 `agent.woow.tw/last-active` an
 
 ### ① Heartbeat（Odoo 寫 `last_active`）
 
-在 SSE 串流處理 `api_ai_stream`：
+新 model helper `AgentSession._record_activity(project)`：以 `project_id` search 該 project 的 session，若 `last_active` 為空或舊於節流（60s）→ stamp `last_active = now()`（sudo）。
 
-- **串流開始**（spawn_or_attach 後）stamp `last_active = now()` —— 記錄「user 起了一個 turn」。同時確保 spawn/resume 路徑把 `state` 設回 `active`（防 re-reap loop 的 invariant）。
-- **串流結束**（正常收尾）再 stamp 一次 —— 讓「長 turn」結束時刷新，避免跑很久的 turn 被誤判 idle。
-- **節流**：只在 `last_active` 比 now 舊 ≥ 60s 才寫，避免寫入放大。
-- 冷啟 spawn 當下也 stamp，確保 active session 的 `last_active` 永不為空。
+呼叫點：`_stream_agent_runtime`（`ai_assistant.py:716`，agent-runtime SSE 分支）**在 `spawn_or_attach` 成功之後、進入 generator 之前**（line ~778）呼叫一次 —— 記錄「user 起了一個 turn」。
 
-**殘餘風險（已接受）**：單一 turn 連續串流 > T_idle 且中途無串流結束 → reaper 可能在串流中途 reap。對互動式 portal chat 極罕見；reap 非破壞性、resume 可復原（串流會錯、user 重送即恢復）。YAGNI：**不**在串流代理熱路徑做週期性補 stamp（若日後出現長自主任務再加）。
+**為何只在串流開始 stamp（不在結束）**：generator（`generate()`/`relay()`）執行時 **request cursor 已失效**（line 738 註解：ORM 一律在進 generator 前 pre-fetch；要在串流中/後寫需自開 `registry().cursor()` + 新 Environment，如 line 656/993）。串流開始 stamp 在 cursor 有效處，cursor-safe 且零額外 cursor 管理。idle 判定量的是「兩個 turn 起點之間的間隔」，start-only 已足夠。
+
+**為何不需在此 set `state='active'`**：reaped session 來新 turn → 串流開始 stamp `last_active=now()`；之後 webhook/drift 才把 `state` 同步回 `active`，此時 `last_active` 已是新鮮值 → reaper（掃 `state='active' AND last_active 過期`）不會誤 reap。invariant 靠**順序**成立，不需在 controller 改 state。
+
+**殘餘風險（已接受）**：單一 turn 連續串流 > T_idle → reaper 可能在串流中途 reap。對互動式 portal chat 極罕見；reap 非破壞性、resume 可復原（串流會錯、user 重送即恢復）。YAGNI：**不**在串流熱路徑做週期性補 stamp（若日後出現長自主任務再加）。
 
 ### ② Reaper cron
 
@@ -50,6 +51,7 @@ design §2.3 原規劃「cluster 端」：pod 寫 `agent.woow.tw/last-active` an
      - 失敗（`AgentRuntimeOperatorError`/網路）→ **log warning + skip，留 `active`，下輪重試**。
 - **best-effort（與 D2 的關鍵差異）**：reap 失敗不造成孤兒/計費風險（pod 續 active、下輪重試），故**不阻塞、不 raise**；一筆失敗不影響同批其他 session（cron 不可整批炸）。對比 D2 teardown 失敗會留孤兒 → 必須 fail-block。
 - **冪等 + drift 互動**：operator reap 冪等；reap 後 `state='reaped'` 與 drift cron 讀回的 operator status 一致，無衝突。
+- **防 re-reap loop**：reaped session 來新 turn → `_record_activity` 在串流開始 stamp `last_active=now()`；之後 webhook/drift 把 `state` 同步回 `active` 時 `last_active` 已新鮮 → 不被誤 reap（invariant 靠順序，見 §①）。
 
 ### ③ Config
 
@@ -67,8 +69,8 @@ design §2.3 原規劃「cluster 端」：pod 寫 `agent.woow.tw/last-active` an
 - T_idle 可由 `agent_idle_reap_seconds` 調整（設短值→立即 reap；設長值→不 reap）。
 
 **Heartbeat**：
-- helper 在 `last_active` 舊於節流（60s）時更新、近期時跳過。
-- spawn/resume 路徑把 `state` 設 `active` + stamp `last_active`（防 re-reap loop）。
+- `_record_activity`：`last_active` 為空或舊於節流（60s）時更新、近期時跳過。
+- `_record_activity` 在 reaped session 上也會 stamp `last_active`（防 re-reap loop：先於 state 同步回 active）。
 
 **回歸**：完整模組套件 0 failed。
 
