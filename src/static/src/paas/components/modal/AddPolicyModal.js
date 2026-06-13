@@ -50,6 +50,23 @@ export class AddPolicyModal extends Component {
     return !!this.props.policy;
   }
 
+  // 依 rule_type 給 rule value 的動態 label/prefix/placeholder/hint（'@' 純視覺前綴，不進 value）
+  get ruleValueConfig() {
+    switch (this.state.rule_type) {
+      case "email_domain":
+        return { label: "Emails ending in", prefix: "@", placeholder: "acme.com",
+          hint: "Anyone with an email at this domain matches." };
+      case "email_list":
+        return { label: "Emails", prefix: "", placeholder: "a@x.com, b@x.com",
+          hint: "Comma-separated email addresses match." };
+      case "ip_range":
+        return { label: "IP range (CIDR)", prefix: "", placeholder: "203.0.113.0/24",
+          hint: "Visitors from this CIDR range match." };
+      default:
+        return { label: "Rule value", prefix: "", placeholder: "", hint: "" };
+    }
+  }
+
   async confirm() {
     if (!this.state.name.trim() || !this.state.rule_value.trim()) {
       this.state.error = "Name and rule value are required";

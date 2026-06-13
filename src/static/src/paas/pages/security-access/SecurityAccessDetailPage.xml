@@ -102,23 +102,8 @@
           </WoowCard>
         </div>
 
-        <!-- Configuration（record 自身設定 + 接入教學） -->
+        <!-- Configuration（record 自身設定） -->
         <div t-if="state.activeTab === 'configuration'" class="o_woow_sa_detail__body">
-          <WoowCard shadow="true">
-            <h3>Connector Setup</h3>
-            <p>Run the Cloudflare Tunnel connector on your host, then point
-               your reverse proxy (e.g. Nginx Proxy Manager) at port 80.
-               All application routes forward to it with the Host header
-               preserved.</p>
-            <div class="o_woow_sa_detail__code">
-              <code>docker run cloudflare/cloudflared:latest tunnel run --token &lt;TOKEN&gt;</code>
-            </div>
-            <p class="o_woow_sa_detail__hint">
-              Get the tunnel token from your Home Assistant integration or
-              ask your workspace owner. See the NPM setup guide for the
-              reverse-proxy walkthrough.
-            </p>
-          </WoowCard>
           <WoowCard shadow="true">
             <h3>Identity</h3>
             <div class="o_woow_sa_detail__grid">
@@ -131,53 +116,69 @@
         <!-- Application（routes 管理） -->
         <div t-if="state.activeTab === 'application'" class="o_woow_sa_detail__body">
           <WoowCard shadow="true">
-            <h3>Application Routes</h3>
-            <p>Each route maps a public subdomain to your host. Traffic is
-               forwarded to the service URL with the Host header set.</p>
-            <!-- 軸2: a freshly-provisioned tunnel has zero routes (Active · No
-                 Route). Guide the user to add the first one; until then the
-                 tunnel is ready but answers 404. -->
+            <div class="o_woow_sa_card_head">
+              <div class="o_woow_sa_card_head__icon">
+                <WoowIcon name="'route'" size="20"/>
+              </div>
+              <div class="o_woow_sa_card_head__text">
+                <h3>Application Routes</h3>
+                <p>Each route maps a public subdomain to your host. Traffic is
+                   forwarded to the service URL with the Host header set.</p>
+              </div>
+            </div>
             <div t-if="!(state.sa.routes and state.sa.routes.length)"
                  class="o_woow_sa_detail__hint">
               No application routes yet. Add your first route below to expose a
               service — until then the tunnel is ready but answers 404.
             </div>
             <table t-if="state.sa.routes and state.sa.routes.length"
-                   class="o_woow_sa_detail__routes">
+                   class="o_woow_sa_routes_table">
               <thead>
                 <tr><th>Hostname</th><th>Service</th><th>Host header</th><th></th></tr>
               </thead>
               <tbody>
                 <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
                   <tr>
-                    <td>
-                      <t t-esc="route.hostname"/>
+                    <td class="o_woow_sa_routes_table__host">
+                      <span class="o_woow_sa_detail__mono"><t t-esc="route.hostname"/></span>
                     </td>
-                    <td><t t-esc="route.service_url"/></td>
-                    <td><t t-esc="route.http_host_header ? 'Yes' : 'No'"/></td>
                     <td>
-                      <WoowButton variant="'danger'"
-                                  size="'sm'" onClick="() => this.removeRoute(route)">
-                        <WoowIcon name="'delete'" size="14"/>
-                      </WoowButton>
+                      <span class="o_woow_sa_detail__mono"><t t-esc="route.service_url"/></span>
+                    </td>
+                    <td class="o_woow_sa_routes_table__hh">
+                      <t t-esc="route.http_host_header ? 'Yes' : 'No'"/>
+                    </td>
+                    <td class="o_woow_sa_routes_table__action">
+                      <button class="o_woow_sa_icon_btn" title="Delete route"
+                              t-on-click="() => this.removeRoute(route)">
+                        <WoowIcon name="'delete'" size="18"/>
+                      </button>
                     </td>
                   </tr>
                 </t>
               </tbody>
             </table>
-            <!-- Add route：prefix 即時 availability 反饋 -->
-            <div class="o_woow_sa_detail__add_route">
-              <input type="text" class="o_woow_input"
-                     placeholder="subdomain prefix (e.g. waltek-ha)"
-                     t-att-value="state.newRoutePrefix"
-                     t-on-input="onPrefixInput"/>
-              <input type="text" class="o_woow_input"
+            <div class="o_woow_sa_add_route">
+              <div class="o_woow_sa_add_route__prefix">
+                <input type="text" class="o_woow_input o_woow_sa_add_route__prefix_input"
+                       placeholder="subdomain prefix"
+                       t-att-value="state.newRoutePrefix"
+                       t-on-input="onPrefixInput"/>
+                <span class="o_woow_sa_add_route__suffix">.<t t-esc="paasDomainSuffix"/></span>
+              </div>
+              <input type="text" class="o_woow_input o_woow_sa_add_route__svc"
                      placeholder="service URL (default from platform)"
                      t-model="state.newRouteServiceUrl"/>
               <WoowButton variant="'primary'" onClick.bind="addRoute"
                           disabled="state.prefixCheck and !state.prefixCheck.available">
-                Add Route
+                <WoowIcon name="'add'" size="16"/>
+                <span>Add Route</span>
               </WoowButton>
+            </div>
+            <div class="o_woow_sa_add_route__rule">
+              <WoowIcon name="'info'" size="14"/>
+              <span>Subdomain may use
+                <strong>lowercase letters, numbers and hyphens</strong> only.</span>
             </div>
             <div t-if="state.prefixChecking" class="o_woow_sa_detail__hint">Checking availability...</div>
             <div t-elif="state.prefixCheck and state.prefixCheck.available"
@@ -189,153 +190,180 @@
               ✗ Not available: <t t-esc="state.prefixCheck.reason"/>
             </div>
           </WoowCard>
+          <WoowCard shadow="true">
+            <div class="o_woow_sa_info_note">
+              <div class="o_woow_sa_info_note__icon">
+                <WoowIcon name="'info'" size="18"/>
+              </div>
+              <p>Every route forwards to your own reverse proxy. Because the
+                 original <strong>Host header</strong> is preserved, your proxy
+                 reads the incoming subdomain and re-routes each request to the
+                 matching local service you have already started. Authentication
+                 is set <strong>per route</strong> in the <strong>Access</strong>
+                 tab, where each route is its own Access application with its own
+                 policies.</p>
+            </div>
+          </WoowCard>
         </div>
 
-        <!-- Access (P2.5 per-route: each Application Route is its own
-             Cloudflare Access app with its own policies / login / session) -->
+        <!-- Access (P2.5 per-route：每條 route 是自己的 Cloudflare Access app) -->
         <div t-if="state.activeTab === 'access'" class="o_woow_sa_detail__body">
-          <!-- Intro card replaces the old service-wide master toggle / mode
-               switcher. There is no per-route vs service-wide switch — the
-               model is per-route only. -->
           <WoowCard shadow="true">
-            <h3>Protected Applications</h3>
-            <p>Each Application Route is its own Access application with its own
-               policies and login methods. Turn on protection per route to
-               require visitors to authenticate before that route loads.</p>
-          </WoowCard>
-
-          <!-- One card per route -->
-          <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
-            <WoowCard shadow="true">
-              <div class="o_woow_sa_access__route_head">
-                <div class="o_woow_sa_access__route_host">
-                  <strong t-esc="route.hostname"/>
-                  <span t-if="!route.is_protected"
-                        class="o_woow_sa_access__public_hint">
-                    Public · anyone can reach it
-                  </span>
-                </div>
-                <div class="o_woow_sa_access__route_controls">
-                  <!-- Collapse/expand a protected route's settings panel. -->
-                  <button t-if="route.is_protected"
-                          class="o_woow_sa_access__expand_btn"
-                          t-on-click="() => this.toggleRouteExpand(route)">
-                    <WoowIcon name="isRouteExpanded(route) ? 'expand_less' : 'expand_more'"
-                              size="20"/>
-                  </button>
-                  <label class="o_woow_checkbox_group">
-                    <input type="checkbox" class="o_woow_checkbox"
-                           t-att-checked="route.is_protected"
-                           t-on-change="(ev) => this.onRouteProtectedToggle(route, ev)"/>
-                    <span class="o_woow_checkbox_label">Protected</span>
-                  </label>
-                </div>
+            <div class="o_woow_sa_card_head">
+              <div class="o_woow_sa_card_head__icon">
+                <WoowIcon name="'route'" size="20"/>
               </div>
-
-              <!-- Per-route settings, shown when protected (and not collapsed) -->
-              <div t-if="route.is_protected and isRouteExpanded(route)"
-                   class="o_woow_sa_access__route_body">
-                <!-- Login Methods (per route) -->
-                <div class="o_woow_sa_access__section">
-                  <h4>Login Methods</h4>
-                  <p>How visitors prove who they are (resolved against your
-                     Cloudflare account identity providers).</p>
-                  <div class="o_woow_checkbox_group">
-                    <input type="checkbox" class="o_woow_checkbox"
-                           t-att-id="'li_google_' + route.id"
-                           t-att-checked="route.login_google"
-                           t-on-change="(ev) => this.onRouteLoginToggle(route, 'login_google', ev)"/>
-                    <label t-att-for="'li_google_' + route.id"
-                           class="o_woow_checkbox_label">Google</label>
-                  </div>
-                  <div class="o_woow_checkbox_group">
-                    <input type="checkbox" class="o_woow_checkbox"
-                           t-att-id="'li_otp_' + route.id"
-                           t-att-checked="route.login_email_otp"
-                           t-on-change="(ev) => this.onRouteLoginToggle(route, 'login_email_otp', ev)"/>
-                    <label t-att-for="'li_otp_' + route.id"
-                           class="o_woow_checkbox_label">Email OTP</label>
-                  </div>
-                  <!-- Fail-open login-widening warning (per route): the operator
-                       could not match some requested login method to a Cloudflare
-                       account IdP and silently dropped it. If that emptied the
-                       resolved set, Access falls back to ALL available IdPs (the
-                       restriction widened — the opposite of intent). The backend
-                       persists this in the route's access_unresolved_idp_types. -->
-                  <div t-if="route.access_unresolved_idp_types"
-                       class="o_woow_sa_access__idp_warning" role="alert">
-                    <WoowIcon name="'warning'" size="16"/>
-                    <span>
-                      These login methods have no matching Cloudflare identity
-                      provider and were ignored:
-                      <strong t-esc="unresolvedIdpLabels(route)"/>.
-                      Access may have fallen back to allowing all available login
-                      methods. Add the matching identity provider in your
-                      Cloudflare Zero Trust account, then re-save to re-apply
-                      the restriction.
-                    </span>
-                  </div>
-                </div>
-
-                <!-- Access Policies (per route) -->
-                <div class="o_woow_sa_access__section">
-                  <div class="o_woow_sa_access__policy_header">
-                    <h4>Access Policies</h4>
-                    <WoowButton variant="'primary'" size="'sm'"
-                                onClick="() => this.openAddPolicy(route)">+ Add Policy</WoowButton>
-                  </div>
-                  <p>Rules are evaluated top to bottom. Block rules win over allow.</p>
-                  <table t-if="route.access_policies.length"
-                         class="o_woow_sa_detail__routes">
-                    <tbody>
-                      <t t-foreach="route.access_policies" t-as="pol" t-key="pol.id">
-                        <tr>
-                          <td>
-                            <t t-esc="pol.name"/>
-                            <span t-att-class="'o_woow_badge ' + (pol.decision === 'deny' ? 'o_woow_badge_gray' : 'o_woow_badge_green')">
-                              <t t-esc="pol.decision === 'deny' ? 'Block' : 'Allow'"/>
-                            </span>
-                          </td>
-                          <td><t t-esc="pol.rule_type"/>: <t t-esc="pol.rule_value"/></td>
-                          <td>
-                            <WoowButton variant="'secondary'" size="'sm'"
-                                        onClick="() => this.openEditPolicy(route, pol)">Edit</WoowButton>
-                            <WoowButton variant="'danger'" size="'sm'"
-                                        onClick="() => this.deletePolicy(route, pol)">
-                              <WoowIcon name="'delete'" size="14"/>
-                            </WoowButton>
-                          </td>
-                        </tr>
-                      </t>
-                    </tbody>
-                  </table>
-                  <p t-else="" class="o_woow_sa_detail__hint">
-                    No policies yet — without any allow rule, no visitor passes.
-                  </p>
-                </div>
-
-                <!-- Session duration (per route) -->
-                <div class="o_woow_sa_access__section">
-                  <h4>Session duration</h4>
-                  <p>How long users stay authenticated before re-login.</p>
-                  <select class="o_woow_input"
-                          t-on-change="(ev) => this.onRouteSessionChange(route, ev)">
-                    <option value="30m" t-att-selected="route.session_duration === '30m'">30 minutes</option>
-                    <option value="1h" t-att-selected="route.session_duration === '1h'">1 hour</option>
-                    <option value="8h" t-att-selected="route.session_duration === '8h'">8 hours</option>
-                    <option value="24h" t-att-selected="route.session_duration === '24h'">24 hours</option>
-                    <option value="168h" t-att-selected="route.session_duration === '168h'">7 days</option>
-                  </select>
-                </div>
+              <div class="o_woow_sa_card_head__text">
+                <h3>Protected Applications</h3>
+                <p t-if="state.sa.routes and state.sa.routes.length">
+                  <t t-esc="protectedRouteCount"/> of <t t-esc="state.sa.routes.length"/>
+                  routes protected · each route carries its own policies
+                </p>
+                <p t-else="">
+                  Each Application Route is its own Access application with its
+                  own policies and login methods.
+                </p>
               </div>
-            </WoowCard>
-          </t>
-
-          <WoowCard shadow="true" t-if="!(state.sa.routes and state.sa.routes.length)">
-            <p class="o_woow_sa_detail__hint">
+            </div>
+            <div t-if="!(state.sa.routes and state.sa.routes.length)"
+                 class="o_woow_sa_detail__hint">
               No application routes yet. Add a route in the Application tab,
               then protect it here.
-            </p>
+            </div>
+            <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
+              <div class="o_woow_sa_app">
+                <div class="o_woow_sa_app__head">
+                  <div t-att-class="'o_woow_sa_app__shield ' + (route.is_protected ? 'o_woow_sa_app__shield--on' : 'o_woow_sa_app__shield--off')">
+                    <WoowIcon name="route.is_protected ? 'verified_user' : 'gpp_bad'" size="20"/>
+                  </div>
+                  <div class="o_woow_sa_app__ident">
+                    <span class="o_woow_sa_detail__mono o_woow_sa_app__host" t-esc="route.hostname"/>
+                    <div t-if="route.is_protected"
+                         class="o_woow_sa_app__status o_woow_sa_app__status--on">
+                      <span class="o_woow_sa_app__dot"/>
+                      <span>Protected · <t t-esc="route.access_policies.length"/>
+                        <t t-esc="route.access_policies.length === 1 ? 'policy' : 'policies'"/></span>
+                    </div>
+                    <div t-else="" class="o_woow_sa_app__status o_woow_sa_app__status--off">
+                      <span class="o_woow_sa_app__dot"/>
+                      <span>Public · anyone can reach it</span>
+                    </div>
+                  </div>
+                  <div class="o_woow_sa_app__controls">
+                    <label class="o_woow_sa_switch">
+                      <input type="checkbox" t-att-checked="route.is_protected"
+                             t-on-change="(ev) => this.onRouteProtectedToggle(route, ev)"/>
+                      <span class="o_woow_sa_switch__slider"/>
+                    </label>
+                    <button t-if="route.is_protected" class="o_woow_sa_app__expand"
+                            t-on-click="() => this.toggleRouteExpand(route)">
+                      <WoowIcon name="isRouteExpanded(route) ? 'expand_less' : 'expand_more'" size="20"/>
+                    </button>
+                  </div>
+                </div>
+                <div t-if="route.is_protected and isRouteExpanded(route)"
+                     class="o_woow_sa_app__body">
+                  <div class="o_woow_sa_access__section">
+                    <div class="o_woow_sa_access__label">
+                      <WoowIcon name="'fingerprint'" size="16"/>
+                      <span>Login Methods</span>
+                    </div>
+                    <div class="o_woow_sa_login_pills">
+                      <button t-att-class="'o_woow_sa_login_pill' + (route.login_email_otp ? ' o_woow_sa_login_pill--active' : '')"
+                              t-on-click="() => this.toggleRouteLogin(route, 'login_email_otp')">
+                        <WoowIcon name="'mail'" size="16"/>
+                        <span>Email OTP</span>
+                        <WoowIcon t-if="route.login_email_otp" name="'check'" size="14"/>
+                      </button>
+                      <button t-att-class="'o_woow_sa_login_pill' + (route.login_google ? ' o_woow_sa_login_pill--active' : '')"
+                              t-on-click="() => this.toggleRouteLogin(route, 'login_google')">
+                        <WoowIcon name="'account_circle'" size="16"/>
+                        <span>Google</span>
+                        <WoowIcon t-if="route.login_google" name="'check'" size="14"/>
+                      </button>
+                    </div>
+                    <div t-if="route.access_unresolved_idp_types"
+                         class="o_woow_sa_access__idp_warning" role="alert">
+                      <WoowIcon name="'warning'" size="16"/>
+                      <span>
+                        These login methods have no matching Cloudflare identity
+                        provider and were ignored:
+                        <strong t-esc="unresolvedIdpLabels(route)"/>.
+                        Access may have fallen back to allowing all available login
+                        methods. Add the matching identity provider in your
+                        Cloudflare Zero Trust account, then re-save to re-apply
+                        the restriction.
+                      </span>
+                    </div>
+                  </div>
+                  <div class="o_woow_sa_access__section">
+                    <div class="o_woow_sa_access__policy_header">
+                      <div class="o_woow_sa_access__label">
+                        <WoowIcon name="'group'" size="16"/>
+                        <span>Access Policies</span>
+                      </div>
+                      <WoowButton variant="'secondary'" size="'sm'"
+                                  onClick="() => this.openAddPolicy(route)">
+                        <WoowIcon name="'add'" size="14"/>
+                        <span>Add Policy</span>
+                      </WoowButton>
+                    </div>
+                    <div t-if="route.access_policies.length" class="o_woow_sa_policy_list">
+                      <t t-foreach="route.access_policies" t-as="pol" t-key="pol.id">
+                        <div class="o_woow_sa_policy">
+                          <div t-att-class="'o_woow_sa_policy__mark ' + (pol.decision === 'deny' ? 'o_woow_sa_policy__mark--deny' : 'o_woow_sa_policy__mark--allow')">
+                            <WoowIcon name="pol.decision === 'deny' ? 'block' : 'check'" size="16"/>
+                          </div>
+                          <span class="o_woow_sa_policy__name" t-esc="pol.name"/>
+                          <span t-att-class="'o_woow_badge ' + (pol.decision === 'deny' ? 'o_woow_badge_gray' : 'o_woow_badge_green')">
+                            <t t-esc="pol.decision === 'deny' ? 'Block' : 'Allow'"/>
+                          </span>
+                          <div class="o_woow_sa_policy__actions">
+                            <button class="o_woow_sa_icon_btn" title="Edit policy"
+                                    t-on-click="() => this.openEditPolicy(route, pol)">
+                              <WoowIcon name="'edit'" size="16"/>
+                            </button>
+                            <button class="o_woow_sa_icon_btn" title="Delete policy"
+                                    t-on-click="() => this.deletePolicy(route, pol)">
+                              <WoowIcon name="'delete'" size="16"/>
+                            </button>
+                          </div>
+                        </div>
+                      </t>
+                    </div>
+                    <p t-else="" class="o_woow_sa_detail__hint">
+                      No policies yet — without any allow rule, no visitor passes.
+                    </p>
+                  </div>
+                  <div class="o_woow_sa_access__section o_woow_sa_access__session">
+                    <div class="o_woow_sa_access__label">
+                      <WoowIcon name="'schedule'" size="16"/>
+                      <span>Session Duration</span>
+                    </div>
+                    <select class="o_woow_input o_woow_sa_access__session_select"
+                            t-on-change="(ev) => this.onRouteSessionChange(route, ev)">
+                      <option value="30m" t-att-selected="route.session_duration === '30m'">30 minutes</option>
+                      <option value="1h" t-att-selected="route.session_duration === '1h'">1 hour</option>
+                      <option value="8h" t-att-selected="route.session_duration === '8h'">8 hours</option>
+                      <option value="24h" t-att-selected="route.session_duration === '24h'">24 hours</option>
+                      <option value="168h" t-att-selected="route.session_duration === '168h'">7 days</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </t>
+          </WoowCard>
+          <WoowCard shadow="true" t-if="state.sa.routes and state.sa.routes.length">
+            <div class="o_woow_sa_info_note">
+              <div class="o_woow_sa_info_note__icon">
+                <WoowIcon name="'info'" size="18"/>
+              </div>
+              <p>In this model, protection is scoped to a single Application
+                 Route — the same way a Cloudflare Access
+                 <strong>self-hosted application</strong> is defined by one
+                 hostname and carries its own policies. Routes you leave public
+                 are reachable by anyone.</p>
+            </div>
           </WoowCard>
         </div>
 
