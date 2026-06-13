@@ -257,6 +257,40 @@ class AgentSession(models.Model):
             return
         session.write({'last_active': now})
 
+    @api.model
+    def _cron_idle_reaper(self):
+        """掃描閒置 active session → reap（scale-to-0）。best-effort。
+
+        判定：state='active' AND (last_active or spawn_at) < now - T_idle。
+        T_idle = ir.config_parameter agent_idle_reap_seconds（預設 1800/30min）。
+        reap 失敗（operator/網路）→ log + skip，留 active 下輪重試（不阻塞、不 raise；
+        一筆失敗不影響同批其他 session）。operator reap 冪等。
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(self.env)
+        if not client:
+            return
+        seconds = int(self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.agent_idle_reap_seconds', 1800))
+        threshold = fields.Datetime.now() - timedelta(seconds=seconds)
+        for session in self.sudo().search([('state', '=', 'active')]):
+            effective = session.last_active or session.spawn_at
+            if not effective or effective >= threshold:
+                continue
+            if not session.project_namespace_hash:
+                continue
+            try:
+                client.reap(session.project_namespace_hash)
+            except Exception as exc:
+                _logger.warning(
+                    'idle reap failed for agent_session %s: %s',
+                    session.id, exc)
+                continue
+            session.write({
+                'state': 'reaped',
+                'reaped_since': fields.Datetime.now(),
+            })
+
     def _teardown_runtime(self):
         """Tear down this session's runtime via operator DELETE (helm uninstall
         + delete namespace). Single responsibility: call + raise on failure;
