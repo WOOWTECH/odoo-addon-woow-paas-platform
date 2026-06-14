@@ -140,3 +140,5 @@ from . import test_security_access_access_policy
 from . import test_security_access_p2_5_migration
 # feat: agent idle reaper (D4) — heartbeat helper + idle reaper cron (TDD)
 from . import test_agent_idle_reaper
+# feat: agent long-term GC (D3) — reaped 超 T_gc → 完整 teardown → absent (TDD)
+from . import test_agent_gc_cron

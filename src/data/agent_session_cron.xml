@@ -24,5 +24,17 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+
+        <!-- Long-term GC (design §2.5 / D3): reaped sessions whose
+             reaped-since exceeds T_gc → full teardown → absent. Daily. -->
+        <record id="ir_cron_agent_session_gc" model="ir.cron">
+            <field name="name">Agent Session: Long-term GC</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_gc_reaped()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

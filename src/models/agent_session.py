@@ -291,6 +291,35 @@ class AgentSession(models.Model):
                 'reaped_since': fields.Datetime.now(),
             })
 
+    @api.model
+    def _cron_gc_reaped(self):
+        """Long-term GC（design §2.5 / D3）：reaped 超過 T_gc → 完整 teardown
+        （helm uninstall + delete namespace，複用 _teardown_runtime）→ absent。
+
+        best-effort：teardown 失敗 → log + skip，留 reaped 隔天重試（不阻塞、不
+        raise；一筆失敗不影響同批其他）。reaped pod 已 scale-to-0，延後回收無孤兒
+        風險（與 D2 unlink 的 fail-block 不同，與 D4 reaper 一致）。
+        T_gc = ir.config_parameter agent_gc_seconds（預設 2592000/30天）。
+        reaped_since 為空 → skip（防禦）。operator 未設定 → 整批短路。
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        if not get_agent_runtime_client(self.env):
+            return
+        seconds = int(self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.agent_gc_seconds', 2592000))
+        threshold = fields.Datetime.now() - timedelta(seconds=seconds)
+        for session in self.sudo().search([('state', '=', 'reaped')]):
+            if not session.reaped_since or session.reaped_since >= threshold:
+                continue
+            try:
+                session._teardown_runtime()
+            except Exception as exc:
+                _logger.warning(
+                    'GC teardown failed for agent_session %s: %s',
+                    session.id, exc)
+                continue
+            session.write({'state': 'absent'})
+
     def _teardown_runtime(self):
         """Tear down this session's runtime via operator DELETE (helm uninstall
         + delete namespace). Single responsibility: call + raise on failure;
