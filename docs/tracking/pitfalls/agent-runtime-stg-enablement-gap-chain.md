@@ -72,3 +72,13 @@ Gap 5 一度誤導：NetworkPolicy 擋通常是 **timeout**（封包丟棄），
 | #2/#3/#5 | 未走到（被 #1 擋住）| — | — |
 
 **結論／紀律**：本機 dev sandbox 的 E2E **預期只驗到 spawn 邊界**（UI 渲染、ACL 鏈、SSE 開啟、錯誤呈現、composer 恢復）；完整 agent 串流的 E2E 正規路徑是 merge 後 deploy-stg（stg operator 由 Fleet 管理、五層已驗）。在本機追完整串流 = 重新 provision 整套 operator 環境，投資報酬極低，**果斷停在 spawn 邊界並記錄**。
+
+## Gap #1 第二實例 — 2026-06-14 agent 生命週期 D1 teardown
+
+agent 生命週期 epic 的 **D1（operator 兩步驟 teardown：`helm uninstall` → `delete_namespace`）** 在 deploy-stg e2e 驗證時，撞到 **Gap #1「operator image 過舊」一模一樣的坑**：
+
+- addon 側（D2–D6）由 deploy-stg build develop image 上 stg，全驗證正確；但 D3 GC teardown 後 **namespace `deletionTimestamp` 空、明文 LLM secret 殘留** —— teardown 只做了 helm uninstall、沒做 delete namespace。
+- 根因：stg operator image `20260613.1443`（6/13）**早於 D1 改動**（6/14 PR #195）；`delete_runtime()` 只 `helm uninstall`（單步），`helm.py` 無 `delete_namespace`。**addon 從 develop build 了，但 operator 沒有** —— deploy-stg 只 build addon image，operator 走 Fleet（同上方第 61 行紀律）。
+- 修復：照 Gap #1 既有處方 —— `operator-v20260614.0841` tag → CI build（含 D1）→ bump `paas-app-bundle-cd/paas-operator-stg/values-stg.yaml` tag → Fleet sync（PR #17）。滾動完成後（digest `3bf0be0a`）重驗：GC teardown → namespace 真 Terminating→消失、secret 回收。D1 端到端閉環。
+- **紀律強化**：任何「**addon 側改動其效果依賴 operator 端對應改動**」的 feature（D1 = addon `_teardown_runtime` 呼叫 operator DELETE，但完整回收靠 operator `delete_namespace`），deploy-stg **只**會帶上 addon 半邊；operator 半邊**必須另跑 `build-operator` + Fleet bump**，否則 addon 測試全綠、stg 上靜默半套生效。發版 / 部署 checklist 應把「這次有沒有動到 `extra/paas-operator/`？有 → 也要 build+Fleet」列為固定一問。
+- 同場另一個 e2e 才現形的缺陷（非本 gap-chain，但同 session 抓到）：drift/webhook reaped 的 session 永久免疫 GC，見 [[reaped-since-single-path-stamp-gc-immunity]]。
