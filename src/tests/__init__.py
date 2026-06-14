@@ -142,3 +142,5 @@ from . import test_security_access_p2_5_migration
 from . import test_agent_idle_reaper
 # feat: agent long-term GC (D3) — reaped 超 T_gc → 完整 teardown → absent (TDD)
 from . import test_agent_gc_cron
+# fix: agent_session reaped_since invariant — drift/webhook reaped 也補值 → GC 可回收
+from . import test_agent_reaped_since_invariant
