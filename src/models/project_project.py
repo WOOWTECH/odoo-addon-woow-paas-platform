@@ -309,6 +309,33 @@ class ProjectProject(models.Model):
                 })
         return projects
 
+    def unlink(self):
+        """刪 project 前同步拆除其 agent runtime（孤兒防護 §2.6）。
+
+        ``agent_session.project_id`` 是 ``ondelete='cascade'``（DB 層，繞過
+        ORM）：若不先拆除，刪 project 只刪掉 session row，cluster 上的 helm
+        release / namespace（含明文 LLM Secret）會變成 Odoo 再也查不到的孤兒。
+        故在此同步呼叫 operator DELETE，**失敗就阻塞刪除**（raise →
+        ``super().unlink()`` 不執行、DB 不動），寧可不刪也不留孤兒。operator
+        端對不存在的 release/namespace 冪等回成功，所以「早已沒有 pod」不會誤擋。
+
+        agent_session 無 One2many 反向欄位，以 sudo search 找出（刪 project 的
+        使用者未必對 session 有 ir.rule 可見性）。
+        """
+        from ..services.agent_runtime_client import AgentRuntimeOperatorError
+        Session = self.env['woow_paas_platform.agent_session'].sudo()
+        for project in self:
+            for session in Session.search([('project_id', '=', project.id)]):
+                try:
+                    session._teardown_runtime()
+                except AgentRuntimeOperatorError as exc:
+                    raise UserError(
+                        "無法刪除專案「%s」：其 AI agent 執行環境拆除失敗（%s）。"
+                        "為避免雲端資源變成孤兒，刪除已中止；請稍後再試或聯絡管理員。"
+                        % (project.name, exc)
+                    )
+        return super().unlink()
+
     def _portal_partner_can_access(self, partner):
         """Portal-leg project predicate (two-layer-acl-lockstep Layer 2).
 

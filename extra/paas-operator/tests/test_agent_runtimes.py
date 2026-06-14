@@ -1177,7 +1177,7 @@ class TestSyncWorkspaces:
 
 
 class TestDeleteRuntime:
-    """S.8 — helm uninstall."""
+    """S.8 — two-step teardown: helm uninstall + delete namespace (§8.4.1)."""
 
     def test_delete_uninstalls(self, client):
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
@@ -1186,6 +1186,68 @@ class TestDeleteRuntime:
             resp = client.delete(f"/api/agent-runtimes/{_HASH}")
             assert resp.status_code == 200, resp.text
             mock_helm.uninstall.assert_called_once()
+
+    def test_delete_uninstalls_then_deletes_namespace(self, client):
+        """§8.4.1 order enforced: helm uninstall FIRST, then delete namespace —
+        both on the SAME derived namespace."""
+        call_order = []
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.uninstall.side_effect = \
+                lambda *a, **k: call_order.append("uninstall")
+            mock_k8s.delete_namespace.side_effect = \
+                lambda *a, **k: call_order.append("delete_ns")
+            resp = client.delete(f"/api/agent-runtimes/{_HASH}")
+            assert resp.status_code == 200, resp.text
+            mock_helm.uninstall.assert_called_once()
+            mock_k8s.delete_namespace.assert_called_once()
+            assert call_order == ["uninstall", "delete_ns"]
+            # uninstall(namespace, release) → namespace is arg 0; same ns to both
+            ns_uninstall = mock_helm.uninstall.call_args[0][0]
+            ns_delete = mock_k8s.delete_namespace.call_args[0][0]
+            assert ns_uninstall == ns_delete == f"paas-ws-pa-{_HASH}"
+
+    def test_delete_idempotent_helm_not_found_still_deletes_ns(self, client):
+        """Missing release = already gone → still delete the namespace
+        (release/ns lifecycles are independent)."""
+        from src.services.helm import HelmException
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.uninstall.side_effect = HelmException(
+                message="not found", command="helm uninstall",
+                stderr="Error: uninstall: release: not found",
+            )
+            resp = client.delete(f"/api/agent-runtimes/{_HASH}")
+            assert resp.status_code == 200, resp.text
+            mock_k8s.delete_namespace.assert_called_once()
+
+    def test_delete_helm_real_error_returns_502_and_skips_ns(self, client):
+        """A real helm failure (not 'not found') → 502 and namespace is NOT
+        touched (order enforced: never delete ns while release-state may live)."""
+        from src.services.helm import HelmException
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.uninstall.side_effect = HelmException(
+                message="boom", command="helm uninstall",
+                stderr="Kubernetes cluster unreachable: connection refused",
+            )
+            resp = client.delete(f"/api/agent-runtimes/{_HASH}")
+            assert resp.status_code == 502, resp.text
+            mock_k8s.delete_namespace.assert_not_called()
+
+    def test_delete_namespace_error_returns_502(self, client):
+        """delete namespace failure → 502 (so Odoo blocks the project deletion
+        rather than leaving an orphan)."""
+        from src.services.helm import KubectlException
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.uninstall.return_value = {"message": "uninstalled"}
+            mock_k8s.delete_namespace.side_effect = KubectlException(
+                message="boom", command="kubectl delete namespace",
+                stderr="etcdserver: request timed out",
+            )
+            resp = client.delete(f"/api/agent-runtimes/{_HASH}")
+            assert resp.status_code == 502, resp.text
 
 
 class TestRuntimeStatus:

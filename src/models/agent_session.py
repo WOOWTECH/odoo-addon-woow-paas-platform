@@ -238,6 +238,84 @@ class AgentSession(models.Model):
                 vals['pod_ws_url'] = status['pod_ws_url'] or False
             session.write(vals)
 
+    _ACTIVITY_THROTTLE_SECONDS = 60
+
+    @api.model
+    def _record_activity(self, project):
+        """Heartbeat：以 project 找其 session，stamp last_active（節流）。
+
+        在 SSE 串流開始（spawn_or_attach 成功後、進 generator 前）呼叫。只在
+        last_active 為空或舊於節流秒數才寫，避免寫入放大。session 不存在 → no-op。
+        """
+        session = self.sudo().search(
+            [('project_id', '=', project.id)], limit=1)
+        if not session:
+            return
+        now = fields.Datetime.now()
+        if session.last_active and session.last_active > now - timedelta(
+                seconds=self._ACTIVITY_THROTTLE_SECONDS):
+            return
+        session.write({'last_active': now})
+
+    @api.model
+    def _cron_idle_reaper(self):
+        """掃描閒置 active session → reap（scale-to-0）。best-effort。
+
+        判定：state='active' AND (last_active or spawn_at) < now - T_idle。
+        T_idle = ir.config_parameter agent_idle_reap_seconds（預設 1800/30min）。
+        reap 失敗（operator/網路）→ log + skip，留 active 下輪重試（不阻塞、不 raise；
+        一筆失敗不影響同批其他 session）。operator reap 冪等。
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(self.env)
+        if not client:
+            return
+        seconds = int(self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.agent_idle_reap_seconds', 1800))
+        threshold = fields.Datetime.now() - timedelta(seconds=seconds)
+        for session in self.sudo().search([('state', '=', 'active')]):
+            effective = session.last_active or session.spawn_at
+            if not effective or effective >= threshold:
+                continue
+            if not session.project_namespace_hash:
+                continue
+            try:
+                client.reap(session.project_namespace_hash)
+            except Exception as exc:
+                _logger.warning(
+                    'idle reap failed for agent_session %s: %s',
+                    session.id, exc)
+                continue
+            session.write({
+                'state': 'reaped',
+                'reaped_since': fields.Datetime.now(),
+            })
+
+    def _teardown_runtime(self):
+        """Tear down this session's runtime via operator DELETE (helm uninstall
+        + delete namespace). Single responsibility: call + raise on failure;
+        does NOT set state or unlink (shared by the unlink hook & future GC).
+
+        - No namespace hash (never spawned) → no-op.
+        - Operator not configured but a hash exists → raise (cannot confirm the
+          teardown; the caller blocks the delete rather than risk an orphan).
+        - operator-side not-found is idempotent (200) → no raise.
+        """
+        self.ensure_one()
+        if not self.project_namespace_hash:
+            return
+        from ..services.agent_runtime_client import (
+            AgentRuntimeOperatorError,
+            get_agent_runtime_client,
+        )
+        client = get_agent_runtime_client(self.env)
+        if not client:
+            raise AgentRuntimeOperatorError(
+                "agent runtime operator is not configured; cannot tear down "
+                "namespace hash %s" % self.project_namespace_hash
+            )
+        client.delete(self.project_namespace_hash)
+
     # ----------------------------------------------------------------- #
     # Snapshot / resolve — single source shared by chat (controller) and #
     # on-publish push (#111). Down-sunk from ai_assistant.py (spec ①).   #

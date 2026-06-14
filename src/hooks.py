@@ -137,6 +137,7 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.portal_project_settings_editable',
     'woow_paas_platform.max_consecutive_payment_failures',
     'woow_paas_platform.sa_default_service_url',
+    'woow_paas_platform.agent_idle_reap_seconds',
     # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
     # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
 ]

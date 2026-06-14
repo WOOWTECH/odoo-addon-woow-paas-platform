@@ -12,5 +12,17 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+
+        <!-- Idle reaper (design §2.3 / D4): scan active sessions whose
+             last_active is older than T_idle → reap (scale-to-0). -->
+        <record id="ir_cron_agent_session_idle_reaper" model="ir.cron">
+            <field name="name">Agent Session: Idle Reaper</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_idle_reaper()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

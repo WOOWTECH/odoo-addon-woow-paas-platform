@@ -103,3 +103,37 @@ self.env['project.project']._fields.keys()
   - `docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md` §Open Q1
 - Odoo 上游：
   - `addons/project/models/project.py`（Odoo 18 `project.project` 真實欄位 inventory）
+
+---
+
+## 第二實例（2026-06-14）：agent teardown D1+D2 的 schema / 契約落差
+
+> 同一個坑的擴大版。實作 agent runtime teardown（D1+D2）時，**前序調查摘要 + 計畫**對真實 schema 與 client 契約有 **6 處假設落差**，全靠「動手前先讀真實程式碼」（reading-first）逐一抓到。教訓不只「欄位存不存在」，而是**欄位的型態 / ondelete 行為 / 關聯方向 / cascade 鏈中段 / 例外類別命名 / 檔名**都不能靠記憶。
+
+### Symptom（假設 vs 真實）
+
+| # | 假設（錯） | 真實 | 證據 |
+|---|---|---|---|
+| 1 | `project.workspace_id` 是 `ondelete='cascade'` 的 **FK** | 是 **computed stored** 欄位（`compute='_compute_workspace_id'`，源自 `cloud_service_id.workspace_id`） | `src/models/project_project.py:44-49` |
+| 2 | 刪 workspace 會 PG-cascade 刪 project（→ 需 workspace unlink hook） | `workspace→cloud_service` 雖 cascade，但 `cloud_service↔project` 是 **M2M**，**刪 workspace 不刪 project/session** → 不需 workspace hook | `project_project.py:11-17`（M2M `project_cloud_service_rel`）、`cloud_service.py:62-67` |
+| 3 | project 有 `agent_session_ids` One2many（可直接走訪） | **不存在**，須 `agent_session.search([('project_id','=',...)])` | grep 全 `src/models/` 無 `agent_session_ids` |
+| 4 | Odoo 檔是 `src/models/project.py` | 真實是 **`project_project.py`**（`project.py` 不存在） | `ls src/models/` |
+| 5 | client 例外有 `AgentRuntimeUnavailable` / `AgentRuntimeError` / `AgentRuntimeBadRequest` | 只有 **`AgentRuntimeOperatorError`**（4xx/5xx 共用一類） | `src/services/agent_runtime_client.py:75` |
+| 6 | operator `KubernetesService.delete_namespace()` 已存在 | **不存在**，須新增（仿 `delete_service`）；端點是 **同步**、例外是 `HelmException`/`KubectlException`（未處理 → 500，需顯式 raise 502） | `extra/paas-operator/src/services/helm.py`（grep 無 `delete_namespace`） |
+
+> ⚠️ 第 1、2 點直接呼應本文件 §How to avoid line 68 —— 那張範例表把 `project.workspace_id` 當「self-owned Many2one」舉例，但它**其實是 computed**；而「workspace 刪除會連帶孤兒化 agent pod」更是錯誤的 cascade 鏈推論。**同一欄位、同一份文件、第二次中招**，足見不靠記憶的紀律有多必要。
+
+### How to avoid（在第一實例 SOP 上補強）
+
+第一實例的 SOP（grep plan 觸及的欄位 → 打開 model 檔 verify 存在）仍適用，**再加三條**：
+
+1. **不只 verify「存在」，還要 verify「行為」**：`ondelete`（cascade / set null / restrict）、`compute`/`store`（是不是真 FK）、關聯方向（One2many 反向欄位是否真的定義在那個 model 上）。
+2. **跨 model cascade 鏈要逐段走完**：A→B cascade + B→C cascade **不等於** A→C cascade —— 中間只要有一段是 **M2M**（如 `cloud_service↔project`），cascade 就斷在那裡。
+3. **例外類別 / 方法 / 檔名一律重讀，不靠 grep 摘要**：跨 session 壓縮或前序 agent 的 grep 輸出可能 garbled（本次 `AgentRuntimeUnavailable` 等三個類名是憑空生成的）。在 `import`/`except`/呼叫它之前，打開該檔確認確切名稱。
+
+### Related（第二實例）
+
+- Commits：`91ee778`（D1 operator 兩步驟 teardown）、`e5d458d`（D2 Odoo 孤兒防護）
+- PR：Gitea #195 → develop
+- 設計：`docs/plans/2026-Q2/agent-runtime-pod-design.md` §2.6 / §8.4
+- 真實 schema 來源：`src/models/project_project.py`、`src/models/agent_session.py`、`src/models/workspace.py`、`src/models/cloud_service.py`、`src/services/agent_runtime_client.py`、`extra/paas-operator/src/services/helm.py`

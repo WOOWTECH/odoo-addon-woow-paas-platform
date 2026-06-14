@@ -1092,6 +1092,40 @@ class KubernetesService:
                 return False
             raise
 
+    def delete_namespace(self, namespace: str) -> bool:
+        """Delete a namespace (two-step teardown §8.4.1 step 2).
+
+        Removes the namespace AND everything left inside it that the helm
+        uninstall did not own — PVC, Secret (incl. the plaintext LLM Secret
+        ``{release}-llm`` per §8.4.2), NetworkPolicy. Always called AFTER
+        ``HelmService.uninstall`` so the helm release-state Secret is gone
+        before the namespace it lives in is removed.
+
+        Fire-and-return (``--wait=false``): K8s marks the namespace
+        ``Terminating`` and reaps contained objects in the background, so the
+        caller is not blocked on finalizers. Idempotent via
+        ``--ignore-not-found``.
+
+        Returns:
+            True if the delete was issued (or the namespace was already gone).
+
+        Raises:
+            KubectlException: deletion failed for a reason other than not-found.
+        """
+        validate_namespace(namespace)
+
+        try:
+            self._run_command([
+                "delete", "namespace", namespace,
+                "--ignore-not-found",
+                "--wait=false",
+            ])
+            return True
+        except KubectlException as e:
+            if "not found" in e.stderr.lower():
+                return True
+            raise
+
     def list_pvcs(self, namespace: str) -> List[str]:
         """List PVC names in a namespace.
 
