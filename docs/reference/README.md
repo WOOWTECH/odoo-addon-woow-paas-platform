@@ -16,7 +16,7 @@
 
 | 路徑 | 內容 |
 |------|------|
-| [`api/`](api/) | API contract：[`woowtech-paas-api-specification`](api/woowtech-paas-api-specification.md)（整站串接規格）、[`agent-runtime-ws-protocol`](api/agent-runtime-ws-protocol.md)（Agent-Runtime Pod WebSocket 協定）、[`security-access-ha-integration`](api/security-access-ha-integration.md)（Security Access HA component 串接 API） |
+| [`api/`](api/) | API contract：[`woowtech-paas-api-specification`](api/woowtech-paas-api-specification.md)（整站串接規格）、[`agent-runtime-ws-protocol`](api/agent-runtime-ws-protocol.md)（Agent-Runtime Pod WebSocket 協定）、[`ha-component-integration`](api/ha-component-integration.md)（HA component 串接總覽：概念 / OAuth / Smart Home API，SA 速覽）、[`security-access-ha-integration`](api/security-access-ha-integration.md)（Security Access HA 端點權威規格） |
 | [`features/`](features/) | 功能規格（workspace、cloud-services、subscription-integration） |
 | [`architecture/`](architecture/) | 架構生命週期圖（目前：[`n8n-cloud-service-lifecycle`](architecture/n8n-cloud-service-lifecycle.md)） |
 | [`pencil/`](pencil/) | `.pen` 設計檔（圖表） |

@@ -1,11 +1,13 @@
 ---
 title: Security Access — HA Component 串接 API
 category: reference
-status: implemented (Odoo side) / future (component side)
+status: implemented (Odoo side, stg E2E 全綠) / future (component side)
 audience: woow_paas_smart_home HomeAssistant custom component team
 source-of-truth: src/controllers/ha_api.py（HAIntegrationController 的 /api/security-access/* 路由）
 related:
+  - docs/reference/api/ha-component-integration.md（HA component 串接總覽 + 概念/OAuth + Smart Home API）
   - src/models/security_access.py（to_dict / _get_subscription_info / SecurityAccessRoute.to_dict）
+  - src/models/security_access_access_policy.py（access_policy to_dict）
   - src/models/subscription_lifecycle_mixin.py（_get_subscription_info）
   - src/data/oauth_clients.xml（public client `woow-ha-smart-home` 的 scopes）
   - src/data/oauth_scope_updates.xml（既有 DB 的 SA scope 補丁 _ensure_ha_smart_home_sa_scopes）
@@ -13,6 +15,11 @@ related:
 ---
 
 # Security Access — HA Component 串接 API
+
+> **這是 Security Access 端點的權威規格。** 概念（OAuth 2.0 / PKCE）、整體串接
+> 流程、與 Smart Home REST API 請見
+> [`ha-component-integration.md`](ha-component-integration.md)；本文件只專注 SA
+> 端點與其完整 response shape，避免兩份文件對同一塊內容漂移。
 
 對象：`woow_paas_smart_home` HomeAssistant custom component 的未來擴展
 （component 將支援從 Smart Home 或 Security Access 選擇服務來源）。
@@ -140,7 +147,6 @@ Response（`200`）：
       "name": "Front Door NVR",
       "canonical_name": "paas-sa-7f3a2b9c-c1d4e9f0",
       "state": "active",
-      "primary_hostname": "paas-sa-7f3a2b9c-c1d4e9f0.paas.example.com",
       "tunnel_status": "connected",
       "plan_name": "Security Access Pro",
       "next_payment": "2026-07-06"
@@ -149,15 +155,20 @@ Response（`200`）：
 }
 ```
 
-欄位說明：
+> **無 `primary_hostname` / FQDN**：SA 是一條 bare Cloudflare Tunnel + N 條
+> application route，沒有單一 hostname。列表只回 `canonical_name`（≠ FQDN，
+> 是內部識別碼）。要顯示對外主機名 → 走 §2.3 detail 讀 `routes[].hostname`。
 
-| 欄位               | 來源                                          | 備註                                                              |
-| ------------------ | --------------------------------------------- | ----------------------------------------------------------------- |
-| `state`            | `security_access.state`                       | `pending` / `provisioning` / `active` / `error` / `suspended` / `deleting` |
-| `primary_hostname` | `security_access.primary_hostname`（compute） | `{canonical_name}.{paas_domain}`；缺值為 `""`                     |
-| `tunnel_status`    | `security_access.tunnel_status`               | `connected` / `disconnected` / `error`；預設 `disconnected`       |
-| `plan_name`        | `_get_subscription_info()['plan_name']`       | 無訂閱時整段 `plan_name` / `next_payment` 為 `null`               |
-| `next_payment`     | `_get_subscription_info()['next_payment']`    | ISO date（`sh_date_of_next_payment`），無則 `null`                |
+欄位說明（直接取自 `sa_list_accesses` controller，是 list-tailored 子集，
+非完整 `to_dict()`）：
+
+| 欄位             | 來源                                       | 備註                                                                       |
+| ---------------- | ------------------------------------------ | -------------------------------------------------------------------------- |
+| `canonical_name` | `security_access.canonical_name`           | 內部識別碼（`paas-sa-{ws_hash}-{res_hash}`），缺值為 `""`，**不是 FQDN**    |
+| `state`          | `security_access.state`                     | `pending` / `provisioning` / `active` / `active_no_route` / `error` / `suspended` / `deleting` |
+| `tunnel_status`  | `security_access.tunnel_status`             | `connected` / `disconnected` / `error`；預設 `disconnected`                 |
+| `plan_name`      | `_get_subscription_info()['plan_name']`     | 無訂閱時整段 `plan_name` / `next_payment` 為 `null`                         |
+| `next_payment`   | `_get_subscription_info()['next_payment']`  | ISO date（`sh_date_of_next_payment`），無則 `null`                          |
 
 > 無訂閱（admin / legacy 建立）時 `_get_subscription_info()` 回 `None`，
 > controller 將 `plan_name` 與 `next_payment` 都填 `null`。
@@ -178,7 +189,7 @@ curl -H "Authorization: Bearer $TOKEN" \
   https://paas.example.com/api/security-access/accesses/5
 ```
 
-Response（`200`，`security_access.to_dict()` 完整輸出）：
+Response（`200`，`security_access.to_dict()` 完整輸出，欄位順序以實作為準）：
 
 ```json
 {
@@ -194,7 +205,8 @@ Response（`200`，`security_access.to_dict()` 完整輸出）：
     "tunnel_uptime": "2026-06-06T08:30:00Z",
     "connector_id": "c0ffee...",
     "connector_type": "cloudflared",
-    "primary_hostname": "paas-sa-7f3a2b9c-c1d4e9f0.paas.example.com",
+    "connector_version": "2026.5.0",
+    "edge_connection_count": 4,
     "error_message": "",
     "deployed_at": "2026-06-06T08:30:00",
     "created_at": "2026-06-06T08:29:41",
@@ -205,8 +217,23 @@ Response（`200`，`security_access.to_dict()` 完整輸出）：
         "hostname": "paas-sa-7f3a2b9c-c1d4e9f0.paas.example.com",
         "service_url": "http://localhost:80",
         "http_host_header": true,
-        "is_primary": true,
-        "is_protected": false
+        "is_protected": true,
+        "session_duration": "24h",
+        "login_google": true,
+        "login_email_otp": false,
+        "access_unresolved_idp_types": "",
+        "access_policies": [
+          {
+            "id": 3,
+            "name": "Allow team",
+            "decision": "allow",
+            "sequence": 10,
+            "route_id": 9,
+            "include": [{ "rule_type": "email_domain", "rule_value": "example.com" }],
+            "require": [],
+            "exclude": []
+          }
+        ]
       }
     ],
     "subscription": {
@@ -227,15 +254,28 @@ Response（`200`，`security_access.to_dict()` 完整輸出）：
 
 注意：
 
+- **detail 沒有頂層 `primary_hostname` / FQDN 欄位**。SA 是 bare tunnel +
+  N route 結構，對外主機名分散在每筆 `routes[].hostname`（compute =
+  `{subdomain_prefix}.{paas_domain}`）。`canonical_name` 是內部識別碼，不是 FQDN。
 - `tunnel_token` **不在** `to_dict()`（欄位 `groups='base.group_system'`），
   detail 端點不洩漏。要 tunnel 憑證走 §2.4。
 - `tunnel_uptime` **不是已計算好的時長字串**，而是 connector 連線「開啟時間」
   的 ISO timestamp（Cloudflare `opened_at`，如 `2026-06-06T08:30:00Z`，
   原樣存入、原樣輸出）。要顯示 uptime 時長，由 consumer 端自行
   `now() - opened_at` 計算；勿把它當成 `"3h12m"` 之類的時長直接解析。
-- `routes[]` 是每筆 `SecurityAccessRoute.to_dict()`（6 欄 + `hostname`
-  compute）。`is_primary=true` 那筆為 provision 時自動建立、不可刪，其
-  `subdomain_prefix` 等於 `canonical_name`。
+- `routes[]` 是每筆 `SecurityAccessRoute.to_dict()`（`src/models/security_access.py`
+  的 `SecurityAccessRoute.to_dict`）。欄位：`id` / `subdomain_prefix` /
+  `hostname`（compute）/ `service_url` / `http_host_header` / `is_protected` /
+  `session_duration` / `login_google` / `login_email_otp` /
+  `access_unresolved_idp_types` / `access_policies[]`。**無 `is_primary` 欄位**
+  （P2.5 之後每條 route 都是平等的 application route，Access 設定下放到 route 層）。
+- `routes[].access_policies[]` 是每筆 `security_access_access_policy.to_dict`：
+  `id` / `name` / `decision`（`allow` / `deny` / `bypass` 等）/ `sequence` /
+  `route_id` / `include[]` / `require[]` / `exclude[]`，三組各自為
+  `[{rule_type, rule_value}]`（valueless selector 的 `rule_value` 為 `null`）。
+- `access_unresolved_idp_types` 非空 = 該 route 上次同步時，要求的登入方式
+  （如 google）在 Cloudflare 帳戶找不到對應 IdP，fail-open 靜默放寬，已被
+  surface 出來讓 consumer 看得見。
 - `subscription` 為 `_get_subscription_info()`；**無訂閱時整個 `subscription`
   為 `null`**（非 `{}`）。
 
@@ -260,12 +300,27 @@ Response（`200`）：
 ```json
 {
   "tunnel_token": "eyJ...",
-  "tunnel_id": "f3a1...",
-  "primary_hostname": "paas-sa-7f3a2b9c-c1d4e9f0.paas.example.com"
+  "tunnel_id": "f3a1..."
 }
 ```
 
-三欄缺值皆回 `""`。對照 SH 版回的是 `subdomain`（FQDN），SA 版回 `primary_hostname`。
+兩欄缺值皆回 `""`。
+
+> **與 SH 的關鍵差異**：SH 版 tunnel-token 回 `{tunnel_token, tunnel_id, subdomain}`
+> （`subdomain` 是單一 FQDN）；SA 版**只回 `tunnel_token` + `tunnel_id`，沒有
+> hostname/FQDN**。SA 是一條 bare Cloudflare Tunnel + N 條 application route，
+> 沒有單一 hostname 可回。要顯示對外主機名，請改從 §2.3 detail 的
+> `routes[].hostname` 取。這是刻意的非對稱設計（見 `sa_get_tunnel_token` 內註解）。
+
+啟動 tunnel 的方式與 SH 完全相同：
+
+```bash
+cloudflared tunnel run --token <tunnel_token>
+```
+
+SA 是 **remotely-managed tunnel**：ingress（N 條 route）由 paas-operator 在
+server-side 宣告式管理、從 Cloudflare edge 下發；connector 端只需 token，**不需
+本機 config 檔**。
 
 ---
 
@@ -337,13 +392,15 @@ Response：同 §2.3（完整 `to_dict()`，差別是 `tunnel_status` / `tunnel_
 
 ## 5. 與 Smart Home 的差異速查
 
-| 面向                   | Smart Home                       | Security Access                              |
-| ---------------------- | -------------------------------- | -------------------------------------------- |
-| 資源 model             | `smart_home`                     | `security_access`                            |
-| 列表端點 path 尾段     | `/homes`                         | `/accesses`                                  |
-| 單筆 path 尾段         | `/homes/{id}`                    | `/accesses/{id}`                             |
-| read scope             | `smarthome:read`                 | `security-access:read`                       |
-| tunnel scope           | `smarthome:tunnel`               | `security-access:tunnel`                     |
-| tunnel-token 回的主機名 | `subdomain`（FQDN）              | `primary_hostname`                           |
-| detail 內多出的結構    | `ha_port` / `subdomain`          | `routes[]`（多組 application route）         |
-| 列表端點 plan 欄位     | 不帶（走 detail 的 subscription） | 直接帶 `plan_name` / `next_payment`（FR-9）  |
+| 面向                    | Smart Home                        | Security Access                                          |
+| ----------------------- | --------------------------------- | ------------------------------------------------------- |
+| 資源 model              | `smart_home`                      | `security_access`                                        |
+| 列表端點 path 尾段      | `/homes`                          | `/accesses`                                              |
+| 單筆 path 尾段          | `/homes/{id}`                     | `/accesses/{id}`                                         |
+| read scope              | `smarthome:read`                  | `security-access:read`                                   |
+| tunnel scope            | `smarthome:tunnel`                | `security-access:tunnel`                                 |
+| tunnel-token 回傳       | `{tunnel_token, tunnel_id, subdomain}`（含 FQDN） | `{tunnel_token, tunnel_id}`（**無 hostname**）  |
+| 對外主機名來源          | tunnel-token 的 `subdomain` 或 detail `subdomain` | detail `routes[].hostname`（無單一 FQDN）       |
+| detail 內結構           | `ha_port` / `subdomain`           | `routes[]`（N 條 application route + 各自 Access 設定）  |
+| state enum 多出值       | —                                 | `active_no_route`（tunnel 已 provision 但 0 route）      |
+| 列表端點 plan 欄位      | 不帶（走 detail 的 subscription） | 直接帶 `plan_name` / `next_payment`（FR-9）             |

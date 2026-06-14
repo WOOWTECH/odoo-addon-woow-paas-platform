@@ -197,6 +197,12 @@ stateDiagram-v2
 | `smarthome:read` | 讀取 Smart Home 和 Workspace 資料 |
 | `smarthome:tunnel` | 存取裝置的 tunnel 連線 |
 | `workspace:read` | 讀取 Workspace 資訊 |
+| `security-access:read` | 讀取 Security Access 清單 / detail / 狀態 / 方案資訊 |
+| `security-access:tunnel` | 取得 Security Access 的 tunnel token（高權限） |
+
+> 本文件是 OAuth provider 的**內部實作架構**（model 關聯、生命週期）。HA
+> component 開發者面向的 authorize / token / PKCE 流程、scope 用途與 REST API，
+> 請見 [`docs/reference/api/ha-component-integration.md`](../../reference/api/ha-component-integration.md)。
 
 ## 安全機制
 
