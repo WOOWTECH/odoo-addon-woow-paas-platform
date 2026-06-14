@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.39",
+    "version": "18.0.1.0.40",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
