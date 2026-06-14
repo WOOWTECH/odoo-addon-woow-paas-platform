@@ -183,6 +183,10 @@ class AgentSession(models.Model):
                 vals['project_namespace_hash'] = _compute_project_namespace_hash(
                     vals['project_id'], secret,
                 )
+            # 鏡像 write() 的 reaped_since invariant：直接 create reaped 也補值
+            # （目前無生產 caller 這樣建，純 future-proof 對稱）
+            if vals.get('state') == 'reaped' and not vals.get('reaped_since'):
+                vals['reaped_since'] = fields.Datetime.now()
         return super().create(vals_list)
 
     def write(self, vals):

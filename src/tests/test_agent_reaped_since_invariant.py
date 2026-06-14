@@ -79,6 +79,20 @@ class TestReapedSinceInvariant(TransactionCase):
         client.delete.assert_called_once_with(self.session.project_namespace_hash)
         self.assertEqual(self.session.state, 'absent')
 
+    def test_create_with_reaped_state_stamps_reaped_since(self):
+        # 對稱性：create({'state':'reaped'}) 也鏡像 invariant（future-proof，
+        # 雖目前無生產 caller 直接 create reaped session）
+        proj2 = self.env['project.project'].sudo().create({'name': 'RS2'})
+        sess = self.Session.create({'project_id': proj2.id, 'state': 'reaped'})
+        self.assertTrue(sess.reaped_since)
+
+    def test_create_with_explicit_reaped_since_preserved(self):
+        proj3 = self.env['project.project'].sudo().create({'name': 'RS3'})
+        explicit = fields.Datetime.now() - timedelta(days=2)
+        sess = self.Session.create({
+            'project_id': proj3.id, 'state': 'reaped', 'reaped_since': explicit})
+        self.assertEqual(sess.reaped_since, explicit)
+
     def test_migration_backfills_reaped_null(self):
         # 造一筆 reaped + reaped_since=NULL（migration 18.0.1.0.40 的目標）：
         # 先 flush ORM 寫入落 DB，再用 raw SQL 清成 NULL（繞過 write override 補值），
