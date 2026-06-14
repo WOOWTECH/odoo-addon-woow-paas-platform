@@ -185,6 +185,44 @@ class AgentSession(models.Model):
                 )
         return super().create(vals_list)
 
+    def write(self, vals):
+        """Enforce invariant: reaped_since 有值 ⟺ state == 'reaped'。
+
+        reaper 在同一 vals 同時帶 state='reaped' + reaped_since（不被此處覆蓋）。
+        drift（_cron_drift_detection）與 webhook（state_update）只從 operator 同步
+        state、不帶 reaped_since → 此處補 now，否則該 session 因 GC 的
+        `if not reaped_since: continue` 永久免疫回收（namespace/PVC/明文 LLM secret
+        孤兒）。離開 reaped（resume → active / GC → absent）則清空，防舊 reaped_since
+        殘留導致重新 reap 後被立即誤 GC。
+        """
+        res = super().write(vals)
+        new_state = vals.get('state')
+        if new_state == 'reaped' and 'reaped_since' not in vals:
+            stamp = self.filtered(lambda s: not s.reaped_since)
+            if stamp:
+                stamp.write({'reaped_since': fields.Datetime.now()})
+        elif new_state and new_state != 'reaped':
+            clear = self.filtered(lambda s: s.reaped_since)
+            if clear:
+                clear.write({'reaped_since': False})
+        return res
+
+    @api.model
+    def _backfill_reaped_since_orphans(self):
+        """state='reaped' 但 reaped_since 為 NULL 的列 → 補 now（UTC，給 T_gc 寬限）。
+
+        修復 write() invariant 加入前由 drift / webhook 留下的 reaped+NULL 列：它們
+        因 GC 的 `if not reaped_since: continue` 永久免疫回收。補 now 而非推導舊時間 →
+        backfill 後 T_gc（預設 30 天）才到期，不瞬間 GC。冪等。供 migration 18.0.1.0.40。
+        """
+        self.env.cr.execute(
+            """
+            UPDATE woow_paas_platform_agent_session
+            SET reaped_since = (now() AT TIME ZONE 'UTC')
+            WHERE state = 'reaped' AND reaped_since IS NULL
+            """
+        )
+
     @api.model
     def _get_namespace_secret(self):
         """Return the namespace HMAC secret from the injected env, fail-closed.
