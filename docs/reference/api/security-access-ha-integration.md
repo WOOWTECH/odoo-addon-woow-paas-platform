@@ -12,6 +12,8 @@ related:
   - src/data/oauth_clients.xml（public client `woow-ha-smart-home` 的 scopes）
   - src/data/oauth_scope_updates.xml（既有 DB 的 SA scope 補丁 _ensure_ha_smart_home_sa_scopes）
   - docs/reference/api/woowtech-paas-api-specification.md（平台 API 總規格）
+  - docs/decisions/patterns/su-env-exempt-guard-false-green.md（route subdomain_prefix 不可變 guard 的內部視角）
+  - docs/decisions/refactor/security-access-bare-tunnel-zero-route.md（bare tunnel + N route 架構與 route 生命週期）
 ---
 
 # Security Access — HA Component 串接 API
@@ -279,6 +281,50 @@ Response（`200`，`security_access.to_dict()` 完整輸出，欄位順序以實
 - `subscription` 為 `_get_subscription_info()`；**無訂閱時整個 `subscription`
   為 `null`**（非 `{}`）。
 
+#### 2.3.1 `routes[].id` 穩定性契約（消費端可依賴）
+
+> **結論：route 的 `id` 在該 route 存活期間穩定，可安全當成 consumer 端 entity
+> 的識別 key。唯一例外 = 改 `hostname` / `subdomain_prefix`（語意上等同砍掉重建，
+> 會換新 `id`）。** 這是 PaaS 端的對外契約（已對照 codebase 驗證 @ develop /
+> `feat/ha-component-apis`），HA component 以 route `id` 綁 entity unique_id 時依賴它。
+
+**✅ in-place 編輯 = 同一筆 record、`id` 不變**：下列欄位的編輯都走「以 `id` 撈
+既有 record → `write()` → 回傳同筆」，不重建、不換 `id`：
+
+- `service_url`、`http_host_header`、`is_protected`、`session_duration`、
+  `login_google`、`login_email_otp`
+- `access_policies`（新增 / 修改 / 刪除 / 重排都不動 route `id`）
+
+controller `_update_route`（`src/controllers/security_access.py:551`）以
+`route_id` filter 既有 record 後 `route_rec.write(vals)`、回傳同筆；
+access-config / policy CRUD 同理。`action_provision` / 重新 sync 也只把
+`dns_record_id` / `access_app_id` **寫回既有 record**，不重建、不換 `id`。
+
+**⚠️ 唯一例外：改 `hostname` / `subdomain_prefix` = 砍重建 = 新 `id`**。
+`subdomain_prefix` 是**不可變 identity anchor**（hostname / DNS / ingress 全由它
+推導），model `write()` 對**所有人（含 superuser）**硬擋：
+
+```
+UserError: Subdomain prefix is immutable. Delete the route and create a new one to rename.
+```
+
+（`src/models/security_access.py:1029-1036`）。`_update_route` 根本不接受
+`subdomain_prefix` 欄位，前端也只在「新增 route」時可填 prefix、無 edit-prefix UI。
+因此「改某條 route 的 hostname」在 API 上必然呈現為**舊 route 消失 + 新 route
+出現（新 `id`）**，server 端**不提供**「new route 是 old route 的 rename」關聯訊號
+（兩 `id` 無關聯）。
+
+**消費端建議**：
+
+- entity 的 unique_id 綁 route `id`（唯一穩定 key，涵蓋上述所有「真正算編輯」場景）。
+- 改 route hostname 語意上本就是「換一個資源」，consumer 應預期該 route 對應的
+  entity 歷史 / automation 參照會被重置（舊 entity 轉 unavailable、出現新 entity），
+  並在 UI / docs 對使用者提示此行為。
+
+> 此不可變設計的內部視角與「為何 guard 不能對 superuser 豁免」的教訓見
+> [`su-env-exempt-guard-false-green.md`](../../decisions/patterns/su-env-exempt-guard-false-green.md)
+> 與 [`security-access-bare-tunnel-zero-route.md`](../../decisions/refactor/security-access-bare-tunnel-zero-route.md)。
+
 ---
 
 ### 2.4 `GET /api/security-access/accesses/{id}/tunnel-token`
@@ -389,6 +435,11 @@ Response：同 §2.3（完整 `to_dict()`，差別是 `tunnel_status` / `tunnel_
 4. **Sensor 可顯示的欄位（FR-9）**：`state`、`tunnel_status`、`plan_name`、
    `next_payment`。列表端點（§2.2）已直接帶 `plan_name` / `next_payment`，
    單筆 sensor 也可走 §2.5 status 刷新後從 `subscription` 取。
+
+5. **per-route entity 以 route `id` 為 key（§2.3.1）**：SA 一筆可含 N 條 route，
+   若每條 route 各對一個 entity（如各自的 URL sensor），unique_id 綁 route `id`
+   是對的選擇 —— 它在 route 存活期間穩定（in-place 編輯不換 `id`）。唯一例外是改
+   hostname（= 砍重建 = 新 `id`，舊 entity 應轉 unavailable）。完整契約見 §2.3.1。
 
 ## 5. 與 Smart Home 的差異速查
 
