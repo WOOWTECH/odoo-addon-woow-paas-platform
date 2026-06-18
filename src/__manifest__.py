@@ -61,6 +61,7 @@
         "views/oauth_client_views.xml",
         "data/oauth_clients.xml",
         "data/oauth_scope_updates.xml",
+        "data/oauth_redirect_mode_update.xml",
     ],
     "assets": {
         "web.assets_backend": [
