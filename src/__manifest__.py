@@ -62,6 +62,8 @@
         "data/oauth_clients.xml",
         "data/oauth_scope_updates.xml",
         "data/oauth_redirect_mode_update.xml",
+        "data/oauth_device_code_cron.xml",
+        "data/oauth_device_grant_update.xml",
     ],
     "assets": {
         "web.assets_backend": [

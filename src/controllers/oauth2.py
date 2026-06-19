@@ -11,12 +11,17 @@ from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
 from odoo import http
 from odoo.http import request, route, Controller
 
+from ..models.oauth_device_code import DEVICE_CODE_LIFETIME, MAX_VERIFICATION_ATTEMPTS
+
 _logger = logging.getLogger(__name__)
 
 # Token lifetimes
 ACCESS_TOKEN_LIFETIME = timedelta(hours=1)
 REFRESH_TOKEN_LIFETIME = timedelta(days=30)
 AUTH_CODE_LIFETIME = timedelta(minutes=10)
+
+# RFC 8628 device authorization grant
+DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 
 
 def _json_error(error: str, description: str, status: int = 400) -> http.Response:
@@ -328,6 +333,120 @@ class OAuth2Controller(Controller):
 
         return request.redirect(_build_redirect_uri(redirect_uri, params), local=False)
 
+    # ==================== Device Authorization Endpoint (RFC 8628) ====================
+
+    @route('/oauth2/device_authorization', type='http', auth='none',
+           methods=['POST'], csrf=False, save_session=False)
+    def device_authorization(self, **kwargs: Any) -> http.Response:
+        """RFC 8628 §3.1-3.2: issue a device_code + user_code for a client."""
+        client = self._authenticate_client(kwargs)
+        if not client:
+            return _json_error('invalid_client', 'Client authentication failed.', 401)
+        if not client.check_grant_type(DEVICE_GRANT):
+            return _json_error(
+                'unauthorized_client',
+                'This client is not authorized for the device_code grant type.',
+            )
+
+        scope = kwargs.get('scope', '')
+        if scope:
+            invalid = set(scope.split()) - client.get_allowed_scopes()
+            if invalid:
+                return _json_error(
+                    'invalid_scope', f'Invalid scope(s): {", ".join(sorted(invalid))}',
+                )
+        else:
+            # No scope requested: resolve to the client's full allowed set NOW
+            # and store it, so the consent page shows exactly what the token
+            # will carry (mirrors authorize_get's write-back).
+            scope = ' '.join(sorted(client.get_allowed_scopes()))
+
+        device = request.env['woow_paas_platform.oauth_device_code'].create_for_client(
+            client, scope,
+        )
+
+        # verification_uri MUST be absolute https. Use admin-controlled
+        # web.base.url ONLY — never derive a security-relevant URL from the
+        # client-controlled Host header (host-header injection -> phishing).
+        base = (request.env['ir.config_parameter'].sudo()
+                .get_param('web.base.url') or '').rstrip('/')
+        if not base:
+            return _json_error(
+                'server_error', 'Server misconfigured: web.base.url is unset.', 500,
+            )
+        verification_uri = f'{base}/device'
+
+        _logger.info(
+            'OAuth2 device authorization issued: client=%s user_code=%s',
+            client.name, device.user_code,
+        )
+        return _json_response({
+            'device_code': device.device_code,
+            'user_code': device.user_code,
+            'verification_uri': verification_uri,
+            'verification_uri_complete': f'{verification_uri}?user_code={device.user_code}',
+            'expires_in': int(DEVICE_CODE_LIFETIME.total_seconds()),
+            'interval': device.interval,
+        })
+
+    @route('/device', type='http', auth='user', methods=['GET'], website=False)
+    def device_verify_get(self, **kwargs: Any) -> Any:
+        """RFC 8628 §3.3: verification page. Optional ?user_code= pre-fill."""
+        user_code = (kwargs.get('user_code') or '').strip().upper()
+        return request.render('woow_paas_platform.device_verify', {
+            'user_code': user_code, 'error': None,
+        })
+
+    @route('/device', type='http', auth='user', methods=['POST'],
+           website=False, csrf=True)
+    def device_verify_post(self, **kwargs: Any) -> Any:
+        """Validate user_code, then show consent or process approve/deny."""
+        user_code = (kwargs.get('user_code') or '').strip().upper()
+
+        # Per-session brute-force throttle — the REAL guessing defense. A wrong
+        # guess finds no record, so any per-RECORD counter never fires; the only
+        # place to rate-limit guessing is per-actor here. (Persistent per-IP
+        # version is F-DEV-1; session-based is the MVP floor, on top of 34.6-bit
+        # entropy + 15-min lifetime + the auth='user' session requirement.)
+        fails = request.session.get('device_verify_fails', 0)
+        if fails >= MAX_VERIFICATION_ATTEMPTS:
+            return request.render('woow_paas_platform.device_verify', {
+                'user_code': '', 'error': 'Too many attempts. Please wait and try again.',
+            })
+
+        DeviceCode = request.env['woow_paas_platform.oauth_device_code'].sudo()
+        device = DeviceCode.search([
+            ('user_code', '=', user_code), ('status', '=', 'pending'),
+        ], limit=1)
+
+        # Invalid / expired user_code — generic error (no oracle on which codes
+        # exist), and count the failed guess against this session.
+        if not device or device.is_expired():
+            request.session['device_verify_fails'] = fails + 1
+            return request.render('woow_paas_platform.device_verify', {
+                'user_code': '', 'error': 'Invalid or expired code. Please try again.',
+            })
+
+        # Valid code entered — reset the session failure counter.
+        request.session['device_verify_fails'] = 0
+
+        # Stage 2: approve / deny.
+        if 'approve' in kwargs:
+            device.mark_approved(request.env.user)
+            return request.render('woow_paas_platform.device_result', {'approved': True})
+        if 'deny' in kwargs:
+            device.mark_denied()
+            return request.render('woow_paas_platform.device_result',
+                                  {'approved': False, 'message': None})
+
+        # Stage 1 (verify pressed): show consent with scopes + possession check.
+        scopes = [s for s in (device.scope or '').split() if s]
+        return request.render('woow_paas_platform.device_consent', {
+            'client_name': device.client_id.name,
+            'user_code': device.user_code,
+            'scopes': scopes or list(device.client_id.get_allowed_scopes()),
+        })
+
     # ==================== Token Endpoint ====================
 
     @route('/oauth2/token', type='http', auth='none', methods=['POST'],
@@ -348,11 +467,14 @@ class OAuth2Controller(Controller):
             return self._handle_refresh_token(kwargs)
         elif grant_type == 'client_credentials':
             return self._handle_client_credentials(kwargs)
+        elif grant_type == DEVICE_GRANT:
+            return self._handle_device_code(kwargs)
         else:
             return _json_error(
                 'unsupported_grant_type',
                 f'Grant type "{grant_type}" is not supported. '
-                'Use: authorization_code, refresh_token, or client_credentials.',
+                'Use: authorization_code, refresh_token, client_credentials, '
+                'or urn:ietf:params:oauth:grant-type:device_code.',
             )
 
     def _authenticate_client(self, kwargs: dict) -> Any | None:
@@ -613,6 +735,59 @@ class OAuth2Controller(Controller):
             user=service_user,
             scope=scope,
             include_refresh=False,
+        )
+
+    def _handle_device_code(self, kwargs: dict) -> http.Response:
+        """Handle grant_type=urn:ietf:params:oauth:grant-type:device_code.
+
+        RFC 8628 §3.4-3.5 polling state machine. No PKCE (device flow has no
+        authorize redirect channel). The user identity comes from the /device
+        approval, not from this machine-to-machine poll.
+        """
+        device_code_str = kwargs.get('device_code', '')
+
+        client = self._authenticate_client(kwargs)
+        if not client:
+            return _json_error('invalid_client', 'Client authentication failed.', 401)
+        if not client.check_grant_type(DEVICE_GRANT):
+            return _json_error(
+                'unauthorized_client',
+                'This client is not authorized for the device_code grant type.',
+            )
+        if not device_code_str:
+            return _json_error('invalid_request', 'Missing device_code parameter.')
+
+        device = request.env['woow_paas_platform.oauth_device_code'].sudo().search([
+            ('device_code', '=', device_code_str),
+            ('client_id', '=', client.id),
+        ], limit=1)
+        if not device:
+            return _json_error('invalid_grant', 'Unknown device_code.')
+
+        # RFC 8628 §3.5: terminal states (expired / denied) must beat the
+        # slow_down "pending variant" — a user who DENIED must get access_denied
+        # even if the device is polling too fast. register_poll() runs ONLY in
+        # the pending branch: never on the approved path (else the very poll
+        # that should mint the token returns slow_down and delays success one
+        # interval), and never preempting a terminal decision.
+        if device.is_expired():
+            return _json_error('expired_token', 'The device_code has expired.')
+        if device.status == 'denied':
+            return _json_error('access_denied', 'The user denied the request.')
+        if device.status == 'consumed':
+            return _json_error('invalid_grant', 'Authorization already used.')
+        if device.status == 'pending':
+            if device.register_poll():
+                return _json_error('slow_down', 'Polling too frequently.')
+            return _json_error('authorization_pending', 'Authorization pending.')
+
+        # approved -> atomically consume (compare-and-swap). Only the race
+        # winner issues tokens; concurrent polls cannot double-issue.
+        if not device.consume():
+            return _json_error('invalid_grant', 'Authorization already used.')
+        return self._issue_tokens(
+            client=client, user=device.user_id, scope=device.scope or '',
+            include_refresh=True,
         )
 
     # ==================== Introspection Endpoint ====================

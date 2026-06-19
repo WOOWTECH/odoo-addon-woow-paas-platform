@@ -194,6 +194,7 @@ def post_init_hook(env):
     _ensure_default_agent_template(env)
     _ensure_ha_client_sa_scopes(env)
     _ensure_ha_client_redirect_mode(env)
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_device_grant()
     company = env.ref('base.main_company', raise_if_not_found=False)
     if not company:
         return
