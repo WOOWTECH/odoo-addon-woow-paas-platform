@@ -39,7 +39,7 @@ metadata:
 **變體 A (over-access) 反例**：
 
 ```python
-# src/controllers/ai_assistant.py:1186-1190 (BEFORE cycle 6 TC4 follow-on)
+# src/controllers/ai_assistant.py:1501-1505 (BEFORE cycle 6 TC4 follow-on)
 def _list_projects(self, workspace, params: dict) -> dict[str, Any]:
     domain = []
     if workspace:
@@ -49,7 +49,7 @@ def _list_projects(self, workspace, params: dict) -> dict[str, Any]:
     data = [{...} for proj in projects]
     return {'success': True, 'data': data, 'count': len(data)}
 
-# src/controllers/ai_assistant.py:1313-1331 (BEFORE cycle 6 CAQA BLOCKER A1)
+# src/controllers/ai_assistant.py:1658-1680 (BEFORE cycle 6 CAQA BLOCKER A1)
 def _list_tasks(self, workspace, params: dict) -> dict[str, Any]:
     domain = []
     if workspace:
@@ -65,7 +65,7 @@ def _list_tasks(self, workspace, params: dict) -> dict[str, Any]:
 **變體 B (under-access) 反例**：
 
 ```python
-# src/controllers/ai_assistant.py:972-978 (BEFORE cycle 6 F-DP-2 fix)
+# src/controllers/ai_assistant.py:1266-1284 (BEFORE cycle 6 F-DP-2 fix)
 def api_support_stats(self, **kwargs):
     user = request.env.user
     # ❌ sudo + hand-rolled bound-only filter — 漏 unbound leg (follower / creator)
@@ -83,7 +83,7 @@ def api_support_stats(self, **kwargs):
 **變體 C (same-method 半套狀態) 反例**：
 
 ```python
-# src/controllers/ai_assistant.py:972-986 (hypothetical intermediate: F-DP-2 fix 後留 Task.sudo())
+# src/controllers/ai_assistant.py:1266-1286 (hypothetical intermediate: F-DP-2 fix 後留 Task.sudo())
 # accessible_projects drop sudo → ir.rule walk ✓ (B 變體 close)
 accessible_projects = request.env['project.project'].search([])
 task_domain = [('project_id', 'in', accessible_projects.ids)]
@@ -98,21 +98,21 @@ total = Task.search_count(task_domain)
 ### 正例（safe — cycle 6 fix shape，三條同源）
 
 ```python
-# src/controllers/ai_assistant.py:1186-1190 (AFTER cycle 6 TC4 follow-on)
+# src/controllers/ai_assistant.py:1501-1505 (AFTER cycle 6 TC4 follow-on)
 # Walk ir.rule (no sudo): project_rule_workspace_member dual-leg
 # filters bound projects by workspace membership, unbound projects by
 # their follower / creator sub-legs. The bare-URL list path (no
 # workspace_id) must NOT cross-tenant-leak.
 projects = request.env['project.project'].search(domain)
 
-# src/controllers/ai_assistant.py:1325-1329 (AFTER cycle 6 CAQA BLOCKER A1)
+# src/controllers/ai_assistant.py:1670-1674 (AFTER cycle 6 CAQA BLOCKER A1)
 # Walk ir.rule (no sudo): project_task_rule_workspace_member dual-leg
 # filters bound tasks by their project's workspace membership, unbound
 # tasks by the project_id follower / creator sub-legs. The bare-URL
 # list path (no workspace_id, no project_id) must NOT cross-tenant-leak.
 tasks = request.env['project.task'].search(domain)
 
-# src/controllers/ai_assistant.py:972-986 (AFTER cycle 6 F-DP-2 + Task.sudo unify)
+# src/controllers/ai_assistant.py:1266-1286 (AFTER cycle 6 F-DP-2 + Task.sudo unify)
 # Walk ir.rule (no sudo, empty domain): project_rule_workspace_member
 # dual-leg covers both bound (workspace member leg) and unbound
 # (follower / creator legs) projects for the caller. A hand-rolled
@@ -130,7 +130,7 @@ total = Task.search_count(task_domain)
 done = Task.search_count(task_domain + [('stage_id.name', 'in', ('Done', 'Cancelled'))])
 ```
 
-**註解設計**：`:972-977` 解釋變體 B vs A 對稱關係（under-access vs over-access）；`:980-983` 解釋變體 C 為何需要 unify（perf-safe ≠ pattern-safe）。互引設計讓未來 reader 看到「為什麼這 method 有兩段 sudo 都被拔掉」一目了然。
+**註解設計**：`:1272-1277` 解釋變體 B vs A 對稱關係（under-access vs over-access）；`:1280-1283` 解釋變體 C 為何需要 unify（perf-safe ≠ pattern-safe）。互引設計讓未來 reader 看到「為什麼這 method 有兩段 sudo 都被拔掉」一目了然。
 
 ### 對等補 endpoint test（HttpCase + cross-user `with_user`）
 
@@ -158,7 +158,7 @@ class TestEndpointListProjects(HttpCase):
 **Under-access (變體 B) test 對應 idiom**（cycle 6 T5）：
 
 ```python
-# src/tests/test_project_decouple_frontend_endpoint.py:845-1014 (T5)
+# src/tests/test_project_decouple_frontend_endpoint.py:845-1032 (T5)
 def test_t5_api_support_stats_includes_unbound_owned_projects(self):
     # Alice 建 1 unbound + 1 bound project，各 seed 1 task
     ...
@@ -184,9 +184,9 @@ Cycle 6 抽出來的 anti-pattern 不只「sudo 漏 leg = leak」一種。contro
 
 | 變體 | Symptom | 攻擊 / UX 表現 | Root cause 細節 | Instance in cycle 6 |
 |------|---------|---------------|---------------|---------------------|
-| **A: Over-access** | Cross-tenant leak | attacker 看到 victim row | `sudo()` + empty / loose domain → ir.rule 被繞，全 db row 都 match | `_list_projects:1186` (T3) / `_list_tasks:1325` (T4) |
-| **B: Under-access** | Creator 看不到自家 row | 合法 user 的 stats / list 偏低 | `sudo()` + hand-rolled **partial-leg** domain → 只 cover dual-leg 其中一條（如只 bound leg 不 unbound leg）| `api_support_stats:974-976` (T5) — sudo + `cloud_service_id.workspace_id.access_ids.user_id` bound-only filter |
-| **C: Same-method 半套狀態** | Inconsistent boundary 即使 ACL-safe | 同一 method 內 drop 一條 sudo 但留另一條（input-side ✓ output-side ✗，或反之）| 一部份信任 ir.rule、一部份不信任 — boundary 模糊，**未來 reviewer 需逐條評估每個 sudo() 合法性**，pattern 立論被同 method 內違反例稀釋 | `api_support_stats:980` (T5 fix 後 residual) — `accessible_projects` drop sudo（B closure）但 `Task.sudo()` 殘留 |
+| **A: Over-access** | Cross-tenant leak | attacker 看到 victim row | `sudo()` + empty / loose domain → ir.rule 被繞，全 db row 都 match | `_list_projects:1505` (T3) / `_list_tasks:1674` (T4) |
+| **B: Under-access** | Creator 看不到自家 row | 合法 user 的 stats / list 偏低 | `sudo()` + hand-rolled **partial-leg** domain → 只 cover dual-leg 其中一條（如只 bound leg 不 unbound leg）| `api_support_stats:1276-1278` (T5) — sudo + `cloud_service_id.workspace_id.access_ids.user_id` bound-only filter |
+| **C: Same-method 半套狀態** | Inconsistent boundary 即使 ACL-safe | 同一 method 內 drop 一條 sudo 但留另一條（input-side ✓ output-side ✗，或反之）| 一部份信任 ir.rule、一部份不信任 — boundary 模糊，**未來 reviewer 需逐條評估每個 sudo() 合法性**，pattern 立論被同 method 內違反例稀釋 | `api_support_stats:1284` (T5 fix 後 residual) — `accessible_projects` drop sudo（B closure）但 `Task.sudo()` 殘留 |
 
 ### 共同 root cause + 正解
 
@@ -209,7 +209,7 @@ Cycle 6 抽出來的 anti-pattern 不只「sudo 漏 leg = leak」一種。contro
 3. **正確的 perf justification 是 enclosing transaction context，不是 sudo()**：若真有 perf hot path，正解是 `with_context(bin_size=True)` / `prefetch_fields` / batch fetch — 不是 sudo()。Sudo() 是 security primitive，不是 perf primitive，誤用會讓 future reader 把 sudo() 當 perf cache idiom。
 4. **CAQA 對等性已驗**（mini re-verdict §2）：drop Task.sudo() 後結果集對等（project 可見 ⟹ task ir.rule pass，因 task `project_task_rule_workspace_member` 完全透過 `project_id` walk）。**Perf trade 是真實的（marginal），correctness 是 lossless 的**。
 
-**Cycle 6 拍板**：option (b) unify（implementation 落地 `:980-986` comment unify 對等註解）。
+**Cycle 6 拍板**：option (b) unify（implementation 落地 `:1280-1286` comment unify 對等註解）。
 
 ## Anti-pattern checklist（reviewer / CAQA 對 list endpoint 必對照）
 
@@ -240,7 +240,7 @@ grep -rn "request\.env\[.*\]\.sudo()\.create\|\.sudo()\.create" src/controllers/
 ```
 
 **本 repo cycle 6 baseline 結果**（CAQA round 2 + mini re-verdict 雙輪 audit 完成）：
-- `sudo().search` 第三輪掃描 34 處：32 處安全（platform-shared / channel-verified / server-authoritative）+ 1 處 pending（`_get_project_stages` line 1152 [F-DP-1] pre-existing）+ cycle 6 fix 已 close `_list_projects` / `_list_tasks` / `api_support_stats` 3 處
+- `sudo().search` 第三輪掃描 34 處：32 處安全（platform-shared / channel-verified / server-authoritative）+ 1 處 pending（`_get_project_stages` line 1465 [F-DP-1] pre-existing）+ cycle 6 fix 已 close `_list_projects` / `_list_tasks` / `api_support_stats` 3 處
 - `sudo().read()` 0 處（codebase idiom 用 `.sudo().browse() + attribute access`）
 - `sudo().browse()` 22 處：100% 配套 `_check_X_access` / server-authoritative scope（partner_id / workspace member / channel partner / project access）
 
@@ -248,11 +248,11 @@ grep -rn "request\.env\[.*\]\.sudo()\.create\|\.sudo()\.create" src/controllers/
 
 | # | 位置 | 變體 | 狀態 | Reference |
 |---|------|------|------|-----------|
-| 1 | `_list_projects` (`ai_assistant.py:1186-1190`) | A (over-access) | ✅ closed cycle 6 (TC4 follow-on) | `test_project_decouple_frontend_endpoint.py` T3 |
-| 2 | `_list_tasks` (`ai_assistant.py:1325-1329`) | A (over-access) | ✅ closed cycle 6 (CAQA BLOCKER A1) | `test_project_decouple_frontend_endpoint.py` T4 |
-| 3 | `api_support_stats` `accessible_projects` (`ai_assistant.py:972-978`) | B (under-access) | ✅ closed cycle 6 (F-DP-2) | `test_project_decouple_frontend_endpoint.py` T5 |
-| 4 | `api_support_stats` `Task.sudo()` (`ai_assistant.py:980-986`) | C (same-method 半套) | ✅ closed cycle 6 (Task.sudo unify, option b) | T5 same — caqa mini re-verdict §2 對等性驗證 |
-| 5 | `_get_project_stages` (`ai_assistant.py:1046, 1139-1177`) | A + write surface | ⏸ pending (F-DP-1) | [[follow-ups]] F-DP-1 — 需 design |
+| 1 | `_list_projects` (`ai_assistant.py:1501-1505`) | A (over-access) | ✅ closed cycle 6 (TC4 follow-on) | `test_project_decouple_frontend_endpoint.py` T3 |
+| 2 | `_list_tasks` (`ai_assistant.py:1670-1674`) | A (over-access) | ✅ closed cycle 6 (CAQA BLOCKER A1) | `test_project_decouple_frontend_endpoint.py` T4 |
+| 3 | `api_support_stats` `accessible_projects` (`ai_assistant.py:1272-1278`) | B (under-access) | ✅ closed cycle 6 (F-DP-2) | `test_project_decouple_frontend_endpoint.py` T5 |
+| 4 | `api_support_stats` `Task.sudo()` (`ai_assistant.py:1280-1286`) | C (same-method 半套) | ✅ closed cycle 6 (Task.sudo unify, option b) | T5 same — caqa mini re-verdict §2 對等性驗證 |
+| 5 | `_get_project_stages` (`ai_assistant.py:1375, 1454-1471`) | A + write surface | ⏸ pending (F-DP-1) | [[follow-ups]] F-DP-1 — 需 design |
 
 **Cycle 6 closure rate**：5 instance 4 closed（80%）+ 1 follow-up（pre-existing 雙重洞，需 design）。同 method 內 `api_support_stats` 變體 B + C 同時 close → pattern doc 立論在「同 method 一致性」維度也 airtight。
 

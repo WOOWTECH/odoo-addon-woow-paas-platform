@@ -218,15 +218,10 @@ pytest tests/<test_file>.py::<test_name> -v
 
 ### Frontend Tests (Future)
 
-Currently, the frontend doesn't have automated tests. To add them:
+Currently, the frontend doesn't have automated tests. Odoo 18 的前端測試使用內建的 **Hoot** 測試框架（`@odoo/hoot`，隨 `web` 模組提供，**非**外部 npm 套件 / jest）。要加入時：
 
-```bash
-# Install dependencies
-npm install --save-dev @odoo/owl-test-helpers jest
-
-# Run tests (once implemented)
-npm test
-```
+- 測試檔放 `static/tests/`，以 Hoot API 撰寫，並掛進 `web.assets_tests` bundle。
+- 透過 Odoo 測試基礎設施執行（瀏覽器 `/web/tests`，或 `odoo-bin --test-enable --test-tags` 跑 QUnit/Hoot suite），不需 `npm install` / `npm test`。
 
 ---
 

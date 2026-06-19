@@ -16,7 +16,7 @@ implementation_status: implemented
 2. [系統元件介紹](#2-系統元件介紹)
 3. [建立流程：完整序列圖](#3-建立流程完整序列圖)
 4. [Phase 1：前端觸發與 Odoo Controller](#4-phase-1前端觸發與-odoo-controller)
-5. [Phase 2：背景執行緒部署](#5-phase-2背景執行緒部署)
+5. [Phase 2：Cron 驅動部署](#5-phase-2cron-驅動部署)
 6. [Phase 3：Helm Release 安裝與 Cloudflare Tunnel](#6-phase-3helm-release-安裝與-cloudflare-tunnel)
 7. [Phase 4：MCP Sidecar 注入](#7-phase-4mcp-sidecar-注入)
 8. [Phase 5：n8n 初始化（Post-Deploy Init）](#8-phase-5n8n-初始化post-deploy-init)
@@ -58,7 +58,7 @@ graph TB
     end
 
     subgraph "執行層 — Kubernetes"
-        NS["Namespace<br/>paas-ws-{id}"]
+        NS["Namespace<br/>paas-ws-{ws_hash}"]
         HelmRelease["Helm Release<br/>svc-{uuid}"]
         N8nPod["n8n Pod"]
         N8nContainer["n8n Container<br/>:5678"]
@@ -157,7 +157,7 @@ sequenceDiagram
     participant FE as OWL Frontend
     participant Ctrl as PaasController
     participant DB as CloudService DB
-    participant Thread as Background Thread
+    participant Cron as ir.cron
     participant Client as PaaSOperatorClient
     participant Operator as PaaS Operator
     participant Helm as HelmService
@@ -171,24 +171,26 @@ sequenceDiagram
     Note over Ctrl: Phase 1：前端驗證與記錄建立
     Ctrl->>Ctrl: 驗證密碼規則（8字元+大小寫+數字）
     Ctrl->>Ctrl: 產生 reference_id (UUID)
-    Ctrl->>Ctrl: 產生 subdomain: paas-{ws_id}-{hash8}
+    Ctrl->>Ctrl: 產生 subdomain: paas-cs-{ws_hash}-{svc_hash}
     Ctrl->>Ctrl: 產生 helm_release_name: svc-{uuid[:8]}
     Ctrl->>Ctrl: 產生 mcp_api_key (UUID placeholder)
     Ctrl->>Ctrl: 合併 helm_default_values + user_values + API key
     Ctrl->>DB: CREATE CloudService (state=pending)
+    Ctrl->>DB: 寫入 deploy_params (expose_config + mcp_api_key)
+    Ctrl->>Cron: ir_cron_deploy_cloud_services._trigger()
     Ctrl-->>FE: 回傳 {success, data: {state: 'pending'}}
     FE-->>User: 顯示「部署中」
 
-    Note over Thread: Phase 2：背景執行緒部署
-    Ctrl->>Thread: threading.Thread(daemon=True).start()
-    Thread->>Client: create_namespace(paas-ws-{id})
+    Note over Cron: Phase 2：Cron 驅動部署
+    Cron->>Cron: _cron_process_pending_deploys() 撈一筆 pending
+    Cron->>Client: create_namespace(paas-ws-{ws_hash})
     Client->>Operator: POST /api/namespaces
     Operator->>K8s: kubectl apply namespace + ResourceQuota
     K8s-->>Operator: OK
     Operator-->>Client: OK
 
-    Note over Thread: Phase 3：Helm Install + Cloudflare
-    Thread->>Client: install_release(chart, values, expose)
+    Note over Cron: Phase 3：Helm Install + Cloudflare
+    Cron->>Client: install_release(chart, values, expose)
     Client->>Operator: POST /api/releases
     Operator->>Helm: helm install svc-{uuid} oci://...n8n
     Helm->>K8s: 建立 Deployment, Service, Secret, PVC
@@ -199,8 +201,8 @@ sequenceDiagram
     CF-->>Operator: OK
     Operator-->>Client: ReleaseInfo + RouteInfo
 
-    Note over Thread: Phase 4：MCP Sidecar 注入
-    Thread->>Client: patch_sidecar(sidecar_config)
+    Note over Cron: Phase 4：MCP Sidecar 注入
+    Cron->>Client: patch_sidecar(sidecar_config)
     Client->>Operator: POST /api/releases/{ns}/{name}/sidecar
     Operator->>K8s: kubectl patch deployment (JSON Patch)
     K8s->>K8s: 在 Pod 中加入 mcp-sidecar container
@@ -208,15 +210,15 @@ sequenceDiagram
     Operator->>CF: create_route({subdomain}-mcp, svc_url)
     CF-->>Operator: MCP endpoint URL
     Operator-->>Client: SidecarPatchResponse
-    Thread->>DB: UPDATE state='deploying', mcp_auth_token
+    Cron->>DB: UPDATE state='deploying', mcp_auth_token
 
-    Note over Ctrl: Phase 5：狀態輪詢 + n8n Init
-    FE->>Ctrl: POST /api/workspaces/{id}/services/{sid}<br/>{action: 'get'}
-    Ctrl->>Client: get_status(ns, release)
+    Note over Cron: Phase 5：狀態輪詢 + n8n Init
+    Note over Cron: _cron_check_deploying_services()<br/>每分鐘輪詢 transitional 狀態<br/>（FE get 端點亦會觸發同邏輯）
+    Cron->>Client: get_status(ns, release)
     Client->>Operator: GET /api/releases/{ns}/{name}/status
     Operator-->>Client: pods Running, release deployed
-    Ctrl->>DB: UPDATE state='initializing'
-    Ctrl->>Client: init_n8n(ns, release, email, password)
+    Cron->>DB: UPDATE state='initializing'
+    Cron->>Client: init_n8n(ns, release, email, password)
     Client->>Operator: POST /api/releases/{ns}/{name}/init/n8n
     Operator->>N8nInit: initialize()
     N8nInit->>K8s: kubectl exec (n8n container)
@@ -225,11 +227,10 @@ sequenceDiagram
     N8nInit->>K8s: rollout restart deployment
     N8nInit-->>Operator: {success, api_key}
     Operator-->>Client: N8nInitResponse
-    Ctrl->>DB: UPDATE state='running', n8n_api_key, helm_values
+    Cron->>DB: UPDATE state='running', n8n_api_key, helm_values
 
-    Note over Ctrl: Phase 6：MCP Server 自動註冊
-    Ctrl->>DB: CREATE McpServer (auto_created=True)
-    Ctrl->>DB: action_sync_tools_safe()
+    Note over Ctrl: Phase 6：MCP Server（已退場：原為自動註冊）
+    Note over Ctrl: 現行由使用者於 UI 手動建立<br/>（見 §9 banner）
 ```
 
 ---
@@ -266,7 +267,7 @@ POST /api/workspaces/{workspace_id}/services
 
 ### 4.3 Controller 處理邏輯
 
-`_create_service()` 方法（`src/controllers/paas.py:1388`）執行以下步驟：
+`_create_service()` 方法（`src/controllers/paas.py:1969`）執行以下步驟：
 
 **4.3.1 驗證**
 
@@ -276,11 +277,13 @@ POST /api/workspaces/{workspace_id}/services
 **4.3.2 身份與命名產生**
 
 ```python
-reference_id = str(uuid.uuid4())                    # 不可變唯一識別碼
-subdomain = f"paas-{workspace.id}-{md5_hash[:8]}"   # 加鹽 hash 防猜測
-helm_release_name = f"svc-{reference_id[:8]}"        # Helm release 名稱
-helm_namespace = f"paas-ws-{workspace.id}"           # K8s namespace
+reference_id = str(uuid.uuid4())                                      # 不可變唯一識別碼
+subdomain = make_service_subdomain(workspace.slug, reference_id, name) # paas-cs-{ws_hash}-{svc_hash}
+helm_release_name = f"svc-{reference_id[:8]}"                          # Helm release 名稱
+helm_namespace = make_namespace(workspace.slug, prefix=ns_prefix)     # paas-ws-{ws_hash}（slug 雜湊）
 ```
+
+> 命名工具集中在 `src/services/naming.py`：`make_namespace()`（`paas-ws-` 前綴 + workspace slug 的 md5 8 碼）、`make_service_subdomain()`（`paas-cs-{ws_hash}-{svc_hash}`，`svc_hash` 對 `reference_id + name` 加鹽雜湊）。namespace 前綴可由 `ir.config_parameter` `woow_paas_platform.namespace_prefix` 覆寫。
 
 **4.3.3 值處理與 API Key 注入**
 
@@ -309,21 +312,28 @@ helm_namespace = f"paas-ws-{workspace.id}"           # K8s namespace
 }
 ```
 
-**4.3.4 建立 DB 記錄並啟動背景執行緒**
+**4.3.4 建立 DB 記錄並觸發部署 Cron**
 
 - 建立 `CloudService` 記錄，`state='pending'`
-- 立即回傳 HTTP response 給前端（非阻塞）
-- 啟動 `daemon=True` 的背景 Thread 執行部署
+- 將部署所需參數（`expose_config`、`mcp_api_key`）序列化寫入 `deploy_params` 欄位
+- 呼叫 `ir_cron_deploy_cloud_services._trigger()` 讓 cron 立即接手部署
+- 立即回傳 HTTP response 給前端（非阻塞；實際部署在 cron 交易中進行）
 
 ---
 
-## 5. Phase 2：背景執行緒部署
+## 5. Phase 2：Cron 驅動部署
 
-`_deploy_service_background()` 方法（`src/controllers/paas.py:1520`）在獨立的資料庫 cursor 中運作，不受 HTTP request 生命週期影響。
+部署改由 Odoo `ir.cron` 驅動（早期的 `threading.Thread` 背景緒做法已移除，原因見 `src/controllers/paas.py:2145` 註解：避免 Odoo 18 `workers=0` 模式下的 ConnectionPool 鎖競爭）。流程：
+
+1. `_create_service()` 建立 `state='pending'` 記錄後，呼叫 `ir_cron_deploy_cloud_services._trigger()`。
+2. Cron `_cron_process_pending_deploys()`（`src/models/cloud_service.py:342`）每分鐘執行一次，每輪撈一筆 `pending` 服務交給 `_execute_deploy()`（`src/models/cloud_service.py:369`）；若仍有 pending 則 re-trigger 立即接續。
+3. `_execute_deploy()` 在 Odoo 自身的 cron 交易中運作，不受 HTTP request 生命週期影響。
+
+> Cron 定義於 `src/data/cloud_service_cron.xml`：`ir_cron_deploy_cloud_services`（部署 pending）與 `ir_cron_check_deploying_services`（輪詢 deploying/upgrading/initializing 狀態），兩者皆 1 分鐘間隔。
 
 ```mermaid
 flowchart TD
-    A[背景 Thread 啟動] --> B{取得 PaaS Operator Client}
+    A[Cron _execute_deploy 啟動] --> B{取得 PaaS Operator Client}
     B -->|未設定| C[state = error<br/>Error: Operator not configured]
     B -->|OK| D[建立 Namespace]
     D -->|失敗（非 409）| C
@@ -336,8 +346,10 @@ flowchart TD
     I -->|成功| K[儲存 mcp_auth_token]
     J --> H
     K --> H
-    H --> L[commit DB]
+    H --> L[寫入 release info<br/>清空 deploy_params<br/>cron 交易 commit]
 ```
+
+> `_execute_deploy()` 開頭即先 `write({'state': 'deploying'})`，Helm install 成功後寫回 `helm_revision` / `deployed_at` 並清空 `deploy_params`；後續 deploying → initializing → running 的轉換交由 `_cron_check_deploying_services` 輪詢處理（見 §8）。
 
 ### 5.1 Namespace 建立
 
@@ -346,7 +358,7 @@ flowchart TD
 ```
 POST /api/namespaces
 {
-    "name": "paas-ws-42",
+    "name": "paas-ws-9a8b7c6d",
     "cpu_limit": "24",
     "memory_limit": "24Gi",
     "storage_limit": "300Gi"
@@ -362,14 +374,14 @@ PaaS Operator 執行 `kubectl apply` 建立 Namespace + ResourceQuota。若 Name
 ```
 POST /api/releases
 {
-    "namespace": "paas-ws-42",
+    "namespace": "paas-ws-9a8b7c6d",
     "name": "svc-a1b2c3d4",
     "chart": "oci://8gears.container-registry.com/library/n8n",
     "create_namespace": true,
     "values": { ... merged helm values ... },
     "expose": {
         "enabled": true,
-        "subdomain": "paas-42-f8e3a1b2"
+        "subdomain": "paas-cs-9a8b7c6d-f8e3a1b2"
     }
 }
 ```
@@ -384,7 +396,7 @@ PaaS Operator 的 `HelmService.install()` 執行：
 
 ```bash
 helm install svc-a1b2c3d4 oci://8gears.container-registry.com/library/n8n \
-    --namespace paas-ws-42 \
+    --namespace paas-ws-9a8b7c6d \
     --create-namespace \
     --values /tmp/values-xxxxx.yaml \
     --output json
@@ -412,7 +424,7 @@ sequenceDiagram
 
     API->>API: 等待 3 秒（K8s Service 建立）
     API->>CF: create_route(subdomain, service_url)
-    CF->>DNS: 建立 CNAME record<br/>paas-42-f8e3a1b2.woowtech.io<br/>→ {tunnel_id}.cfargotunnel.com
+    CF->>DNS: 建立 CNAME record<br/>paas-cs-9a8b7c6d-f8e3a1b2.woowtech.io<br/>→ {tunnel_id}.cfargotunnel.com
     DNS-->>CF: OK
     CF->>CFAPI: GET tunnel config (現有 ingress rules)
     CFAPI-->>CF: 現有 rules
@@ -422,12 +434,12 @@ sequenceDiagram
     CF-->>API: RouteInfo
 ```
 
-**產生的 FQDN**：`https://paas-42-f8e3a1b2.woowtech.io`
+**產生的 FQDN**：`https://paas-cs-9a8b7c6d-f8e3a1b2.woowtech.io`
 
 路由邏輯：
-1. 使用者存取 `https://paas-42-f8e3a1b2.woowtech.io`
+1. 使用者存取 `https://paas-cs-9a8b7c6d-f8e3a1b2.woowtech.io`
 2. Cloudflare DNS 解析 CNAME 到 Tunnel
-3. Tunnel ingress rule 轉發到 `http://svc-a1b2c3d4-n8n.paas-ws-42.svc.cluster.local:5678`
+3. Tunnel ingress rule 轉發到 `http://svc-a1b2c3d4-n8n.paas-ws-9a8b7c6d.svc.cluster.local:5678`
 4. n8n container 回應
 
 ---
@@ -440,7 +452,7 @@ n8n Helm chart 不原生支援 sidecar container。因此系統採用「先 Helm
 
 ### 7.2 Sidecar 配置建構
 
-`_build_mcp_sidecar_config()` 方法（`src/controllers/paas.py:1202`）建構 sidecar 規格：
+`_build_mcp_sidecar_config()` 方法（`src/models/cloud_service.py:673`，已從 controller 移至 model；controller 端僅留 `src/controllers/paas.py:1883` 移轉註解）建構 sidecar 規格：
 
 ```json
 {
@@ -499,7 +511,7 @@ flowchart LR
 
 ```bash
 kubectl patch deployment svc-a1b2c3d4-n8n \
-    --namespace paas-ws-42 \
+    --namespace paas-ws-9a8b7c6d \
     --type=json \
     --patch='[{"op":"add","path":"/spec/template/spec/containers/-","value":{...}}]'
 ```
@@ -511,7 +523,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: svc-a1b2c3d4-mcp
-  namespace: paas-ws-42
+  namespace: paas-ws-9a8b7c6d
   labels:
     app.kubernetes.io/instance: svc-a1b2c3d4
     app.kubernetes.io/component: mcp-sidecar
@@ -528,10 +540,10 @@ spec:
 
 **Step 3：建立 MCP Cloudflare Route**
 
-- Subdomain: `paas-42-f8e3a1b2-mcp`
-- 產生的 FQDN: `https://paas-42-f8e3a1b2-mcp.woowtech.io`
-- 轉發到: `http://svc-a1b2c3d4-mcp.paas-ws-42.svc.cluster.local:3000`
-- MCP Endpoint: `https://paas-42-f8e3a1b2-mcp.woowtech.io/mcp`
+- Subdomain: `paas-cs-9a8b7c6d-f8e3a1b2-mcp`
+- 產生的 FQDN: `https://paas-cs-9a8b7c6d-f8e3a1b2-mcp.woowtech.io`
+- 轉發到: `http://svc-a1b2c3d4-mcp.paas-ws-9a8b7c6d.svc.cluster.local:3000`
+- MCP Endpoint: `https://paas-cs-9a8b7c6d-f8e3a1b2-mcp.woowtech.io/mcp`
 
 ### 7.4 Patch 後的 Pod 結構
 
@@ -567,13 +579,13 @@ graph LR
 
 ### 8.1 觸發時機
 
-前端定期輪詢服務狀態。當 `_update_service_status()` 偵測到：
+`ir_cron_check_deploying_services`（每分鐘）呼叫 `_cron_check_deploying_services()`（`src/models/cloud_service.py:744`），對每筆 transitional 服務跑 `_poll_and_update_status()`（`src/models/cloud_service.py:771`）。前端 get 端點的 `_update_service_status()`（`src/controllers/paas.py:2414`）走相同判定邏輯，因此不論有無前端輪詢都會推進。當偵測到：
 - Helm release status = `deployed`
 - 所有 Pod 的 `phase` = `Running` 且 `ready` = 全部就緒
 - 原始狀態 = `deploying`
 - Template 有 `post_deploy_init_type = 'n8n'`
 
-系統將 state 切換為 `initializing` 並呼叫 `_run_post_deploy_init()`。
+系統將 state 切換為 `initializing` 並呼叫 `_model_run_post_deploy_init()`（`src/models/cloud_service.py:862`，cron 路徑；request 路徑為 controller 的 `_run_post_deploy_init()`，`src/controllers/paas.py:2536`）。
 
 ### 8.2 n8n Init 完整流程
 
@@ -643,10 +655,10 @@ n8n container 內建 Node.js runtime 但沒有 `curl`。`wget` 在處理 n8n bod
 
 ### 8.4 失敗重試機制
 
-- 每次輪詢時，若 init 失敗，`init_retries` +1
+- 每次輪詢時，若 init 失敗，`init_retries` +1（見 `_record_init_failure()`，`src/models/cloud_service.py:940`）
 - 最多重試 5 次
 - 超過 5 次後 state 轉為 `error`
-- 重試邏輯由前端輪詢 `_update_service_status()` 驅動
+- 重試由 `ir_cron_check_deploying_services` 每分鐘輪詢驅動（`initializing` 仍屬 transitional 狀態，會持續被 `_cron_check_deploying_services()` 撈出重跑 init）；前端 get 端點亦會觸發同邏輯
 
 ---
 
@@ -662,7 +674,7 @@ n8n container 內建 Node.js runtime 但沒有 `curl`。`wget` 在處理 n8n bod
 
 **（已退場）** 原本服務成功轉為 `running` 狀態後，`_auto_create_mcp_server()` 方法自動建立 `McpServer` 記錄。該方法現已移除（見本節開頭 banner）。
 
-現行 `McpServer` 記錄改由使用者手動建立（controller 的 create payload，`src/controllers/paas.py:1365`、`src/controllers/paas.py:1687`）。注意 payload 已改用 `project_id`（綁定 support project），`McpServer` model 本身沒有 `cloud_service_id` 欄位——服務關聯改透過 `server.project_id.cloud_service_id` 取得：
+現行 `McpServer` 記錄改由使用者手動建立（controller 的 create payload，`src/controllers/paas.py:1397`、`src/controllers/paas.py:1725`）。注意 payload 已改用 `project_id`（綁定 support project），`McpServer` model 本身沒有 `cloud_service_id` 欄位——服務關聯改透過 `server.project_id.cloud_service_id` 取得：
 
 ```python
 McpServer.create({
@@ -677,7 +689,7 @@ McpServer.create({
 
 ### 9.2 MCP Endpoint URL 優先順序
 
-controller 端 `_compute_sidecar_url_hint()`（`src/controllers/paas.py:2657`，原名 `_build_mcp_endpoint_url`，現為 UI 預填 helper）依以下優先順序建構 URL；model context 另有 twin `cloud_service._model_build_mcp_endpoint_url()`（`src/models/cloud_service.py:965`，供 cron / 非 request caller）：
+controller 端 `_compute_sidecar_url_hint()`（`src/controllers/paas.py:2695`，原名 `_build_mcp_endpoint_url`，現為 UI 預填 helper）依以下優先順序建構 URL；model context 另有 twin `cloud_service._model_build_mcp_endpoint_url()`（`src/models/cloud_service.py:965`，供 cron / 非 request caller）：
 
 1. **K8s Internal URL**（最可靠）：`http://{release}-mcp.{namespace}.svc.cluster.local:{port}/mcp`
 2. **Subdomain URL**（需要 Cloudflare）：`https://{subdomain}.{paas_domain}/mcp`
@@ -686,7 +698,7 @@ controller 端 `_compute_sidecar_url_hint()`（`src/controllers/paas.py:2657`，
 ### 9.3 Tool 發現與 Cron 重試（已退場觸發路徑）
 
 - **（已退場）** 原本自動建立後立即嘗試 `action_sync_tools_safe()` 做 tool 發現；此自動觸發隨 §9.1 一併移除。
-- Cron job `_cron_retry_mcp_sync`（`src/models/mcp_server.py:205`，註冊於 `src/data/mcp_server_cron.xml`）仍存在，篩選 `auto_created=True` 且 `state='draft'` 的 server 定期重試 tool sync，最多重試 10 次，超過後標記為 `error`。
+- Cron job `_cron_retry_mcp_sync`（`src/models/mcp_server.py:237`，註冊於 `src/data/mcp_server_cron.xml`）仍存在，篩選 `auto_created=True` 且 `state='draft'` 的 server 定期重試 tool sync，最多重試 10 次，超過後標記為 `error`。
 - 但現行 production code 已無任何處設定 `auto_created=True`，故此 cron 已無對象、實質為 dormant legacy；手動建立的 server（`auto_created=False`）由使用者在 UI 觸發 sync，不走此 cron。
 
 ---
@@ -699,8 +711,8 @@ controller 端 `_compute_sidecar_url_hint()`（`src/controllers/paas.py:2657`，
 stateDiagram-v2
     [*] --> pending: 使用者建立
 
-    pending --> deploying: 背景 Thread<br/>Helm install 成功
-    pending --> error: Operator 未設定/<br/>Namespace 失敗
+    pending --> deploying: deploy cron<br/>_execute_deploy 開始
+    deploying --> error: Operator 未設定/<br/>Namespace 失敗
 
     deploying --> initializing: Pods Ready +<br/>需要 Post-Deploy Init
     deploying --> running: Pods Ready +<br/>不需 Init
@@ -730,7 +742,7 @@ stateDiagram-v2
 
 | 狀態 | 說明 | 持續時間 |
 |------|------|---------|
-| `pending` | DB 記錄已建，等待部署 | < 1 秒 |
+| `pending` | DB 記錄已建，等待 deploy cron 接手（建立時即 `_trigger()`，通常即時，最差等 1 分鐘整點輪詢） | < 1 秒 ~ 1 分鐘 |
 | `deploying` | Helm install 完成，等待 Pods Ready | 30-120 秒 |
 | `initializing` | n8n 特有：Owner 設定 + API Key 產生中 | 30-90 秒 |
 | `running` | 服務正常運作 | 持續 |
@@ -751,11 +763,11 @@ graph TB
     end
 
     subgraph "Cloudflare"
-        DNS1["DNS: paas-42-f8e3a1b2.woowtech.io<br/>CNAME → tunnel.cfargotunnel.com"]
-        DNS2["DNS: paas-42-f8e3a1b2-mcp.woowtech.io<br/>CNAME → tunnel.cfargotunnel.com"]
+        DNS1["DNS: paas-cs-9a8b7c6d-f8e3a1b2.woowtech.io<br/>CNAME → tunnel.cfargotunnel.com"]
+        DNS2["DNS: paas-cs-9a8b7c6d-f8e3a1b2-mcp.woowtech.io<br/>CNAME → tunnel.cfargotunnel.com"]
         Tunnel["Cloudflare Tunnel<br/>(cloudflared connector)"]
-        Rule1["Ingress Rule 1:<br/>paas-42-f8e3a1b2.woowtech.io<br/>→ http://svc-a1b2c3d4-n8n.paas-ws-42.svc:5678"]
-        Rule2["Ingress Rule 2:<br/>paas-42-f8e3a1b2-mcp.woowtech.io<br/>→ http://svc-a1b2c3d4-mcp.paas-ws-42.svc:3000"]
+        Rule1["Ingress Rule 1:<br/>paas-cs-9a8b7c6d-f8e3a1b2.woowtech.io<br/>→ http://svc-a1b2c3d4-n8n.paas-ws-9a8b7c6d.svc:5678"]
+        Rule2["Ingress Rule 2:<br/>paas-cs-9a8b7c6d-f8e3a1b2-mcp.woowtech.io<br/>→ http://svc-a1b2c3d4-mcp.paas-ws-9a8b7c6d.svc:3000"]
     end
 
     subgraph "Kubernetes Cluster"
@@ -785,19 +797,29 @@ graph TB
 
 | 用途 | FQDN 格式 | 範例 |
 |------|-----------|------|
-| n8n 主應用 | `{subdomain}.{paas_domain}` | `paas-42-f8e3a1b2.woowtech.io` |
-| MCP Sidecar | `{subdomain}-mcp.{paas_domain}` | `paas-42-f8e3a1b2-mcp.woowtech.io` |
-| MCP Endpoint | `{subdomain}-mcp.{paas_domain}/mcp` | `paas-42-f8e3a1b2-mcp.woowtech.io/mcp` |
+| n8n 主應用 | `{subdomain}.{paas_domain}` | `paas-cs-9a8b7c6d-f8e3a1b2.woowtech.io` |
+| MCP Sidecar | `{subdomain}-mcp.{paas_domain}` | `paas-cs-9a8b7c6d-f8e3a1b2-mcp.woowtech.io` |
+| MCP Endpoint | `{subdomain}-mcp.{paas_domain}/mcp` | `paas-cs-9a8b7c6d-f8e3a1b2-mcp.woowtech.io/mcp` |
 
 ### 11.3 Subdomain 產生演算法
 
+實作集中在 `src/services/naming.py:19`（`make_service_subdomain`）：
+
 ```python
-salted_input = reference_id + name          # UUID + 服務名稱
-name_hash = hashlib.md5(salted_input.encode()).hexdigest()[:8]
-subdomain = f"paas-{workspace.id}-{name_hash}"
+# src/services/naming.py
+def generate_ws_hash(slug):                 # workspace slug → 8 碼
+    return hashlib.md5(slug.encode()).hexdigest()[:8]
+
+def generate_resource_hash(reference_id, name):   # 加鹽 → 8 碼
+    return hashlib.md5((reference_id + name).encode()).hexdigest()[:8]
+
+def make_service_subdomain(slug, reference_id, name):
+    return f"paas-cs-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
 ```
 
-使用 `reference_id`（UUID）作為鹽值，確保相同服務名稱在不同場景下不會產生相同的 subdomain。
+- `ws_hash`：對 workspace **slug**（非 `workspace.id`）取 md5 前 8 碼，跨 sandbox 唯一。
+- `svc_hash`：以 `reference_id`（UUID）+ 服務名稱加鹽取 md5 前 8 碼，確保相同服務名稱在不同場景下不會產生相同的 subdomain。
+- 對應的 K8s namespace 由 `make_namespace(slug, prefix='paas-ws-')` 產生為 `paas-ws-{ws_hash}`（前綴可由 `woow_paas_platform.namespace_prefix` 覆寫）。smart home / security access 另有 `paas-sm-` / `paas-sa-` 前綴的 twin。
 
 ---
 
@@ -870,9 +892,9 @@ sequenceDiagram
     K8s-->>Helm: OK
 
     Note over Operator: 清理 Cloudflare routes
-    Operator->>CF: delete_route(paas-42-f8e3a1b2)
+    Operator->>CF: delete_route(paas-cs-9a8b7c6d-f8e3a1b2)
     CF-->>Operator: OK (n8n route 已刪除)
-    Operator->>CF: delete_route(paas-42-f8e3a1b2-mcp)
+    Operator->>CF: delete_route(paas-cs-9a8b7c6d-f8e3a1b2-mcp)
     CF-->>Operator: OK (MCP route 已刪除)
 
     Note over Operator: 清理 MCP K8s Service
@@ -900,13 +922,19 @@ sequenceDiagram
 
 | 檔案 | 說明 |
 |------|------|
-| `src/controllers/paas.py:1388` | `_create_service()` - 服務建立入口 |
-| `src/controllers/paas.py:1520` | `_deploy_service_background()` - 背景部署 |
-| `src/controllers/paas.py:1202` | `_build_mcp_sidecar_config()` - Sidecar 配置 |
-| `src/controllers/paas.py:1818` | `_update_service_status()` - 狀態輪詢 |
-| `src/controllers/paas.py:1934` | `_run_post_deploy_init()` - Post-deploy init |
-| `src/controllers/paas.py:2040` | `_auto_create_mcp_server()` - MCP Server 自動建立 |
-| `src/controllers/paas.py:2091` | `_build_mcp_endpoint_url()` - MCP URL 建構 |
+| `src/controllers/paas.py:1969` | `_create_service()` - 服務建立入口（建 pending + 觸發 deploy cron） |
+| `src/models/cloud_service.py:342` | `_cron_process_pending_deploys()` - deploy cron 入口（撈 pending） |
+| `src/models/cloud_service.py:369` | `_execute_deploy()` - 實際部署（namespace + helm install + sidecar patch） |
+| `src/models/cloud_service.py:744` | `_cron_check_deploying_services()` - 輪詢 transitional 狀態 cron 入口 |
+| `src/models/cloud_service.py:771` | `_poll_and_update_status()` - 單筆服務狀態轉換（model context） |
+| `src/models/cloud_service.py:673` | `_build_mcp_sidecar_config()` - Sidecar 配置（已從 controller 移至 model） |
+| `src/controllers/paas.py:2414` | `_update_service_status()` - 狀態輪詢（request 路徑，與 cron 同邏輯） |
+| `src/controllers/paas.py:2536` | `_run_post_deploy_init()` - Post-deploy init（request 路徑） |
+| `src/models/cloud_service.py:862` | `_model_run_post_deploy_init()` - Post-deploy init（cron 路徑） |
+| `src/controllers/paas.py:2695` | `_compute_sidecar_url_hint()` - MCP URL 建構（原 `_build_mcp_endpoint_url`，UI 預填 helper） |
+| `src/models/cloud_service.py:965` | `_model_build_mcp_endpoint_url()` - MCP URL 建構 twin（cron / 非 request caller） |
+| `src/services/naming.py:19` | `make_service_subdomain()` / `make_namespace()` - subdomain 與 namespace 命名 |
+| `src/data/cloud_service_cron.xml` | deploy / check-deploying 兩個 ir.cron 定義 |
 | `src/models/cloud_service.py` | CloudService 資料模型 |
 | `src/models/cloud_app_template.py` | CloudAppTemplate 資料模型 |
 | `src/models/mcp_server.py` | McpServer 資料模型 + tool 發現 |
