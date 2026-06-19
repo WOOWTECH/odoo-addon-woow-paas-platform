@@ -8,7 +8,7 @@
 
 **Tech Stack:** Odoo 18（Python 4-space）、ir.cron、`ir.config_parameter`、複用 `agent_session._teardown_runtime`；測試 `TransactionCase` + `unittest.mock`（本機 k8s-dev-sandbox）。
 
-**Spec:** `docs/superpowers/specs/2026-06-14-agent-gc-cron-design.md`
+**Spec:** `docs/archived/superpowers/specs/2026-06-14-agent-gc-cron-design.md`
 
 ---
 
