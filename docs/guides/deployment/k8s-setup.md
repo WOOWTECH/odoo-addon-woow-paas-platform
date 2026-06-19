@@ -66,11 +66,25 @@ The PaaS Operator is deployed using Helm chart. This automatically creates:
 
 ### 3.1 Install with Helm
 
-```bash
-cd extra/paas-operator
+> **Chart 位置已搬遷**（commit `651d9f8`）：Helm chart 已從 `extra/paas-operator/helm/` 移除，現位於 **`woow-paas-charts`** repo（`charts/paas-operator`）。
+>
+> **Prod 部署不走本機 `helm install`**：正式環境由 **`paas-app-bundle-cd`（Rancher Fleet GitOps）** 部署，唯一上線動作是改該 repo 的 pin 值並 merge `main`，Fleet 自動 `helm upgrade`。完整流程見 [`prod-release-sop.md` §5.2 paas-operator 上 prod](./prod-release-sop.md#52-paas-operator-上-prod)。
+>
+> **若本機仍要手動 `helm install`**：須先取得 chart——`clone` charts repo，或用 `helm pull` 拉取後再指向本機 chart 路徑：
+>
+> ```bash
+> # 方式 A：clone charts repo
+> git clone https://git-prod.woowtech.io/woow-paas/woow-paas-charts.git
+> CHART=./woow-paas-charts/charts/paas-operator
+>
+> # 方式 B：helm pull（需先 add Gitea Helm registry）
+> # helm pull <registry>/paas-operator --untar
+> # CHART=./paas-operator
+> ```
 
-# Install PaaS Operator using Helm
-helm install paas-operator ./helm \
+```bash
+# Install PaaS Operator using Helm（CHART 指向上面取得的本機 chart 路徑）
+helm install paas-operator "$CHART" \
   --namespace paas-system \
   --set auth.apiKey=$API_KEY
 ```
@@ -94,7 +108,7 @@ resources:
 Then install with:
 
 ```bash
-helm install paas-operator ./helm \
+helm install paas-operator "$CHART" \
   --namespace paas-system \
   -f values-override.yaml
 ```
@@ -302,19 +316,22 @@ helm install loki grafana/loki-stack -n monitoring
 
 ### Upgrading PaaS Operator
 
-```bash
-cd extra/paas-operator
+> **Prod 升級不走本機 `helm upgrade`**：chart 已搬到 **`woow-paas-charts`** repo（`charts/paas-operator`，commit `651d9f8` 從 `extra/paas-operator/helm/` 移除）。正式環境由 **`paas-app-bundle-cd`（Rancher Fleet GitOps）** 部署——升級時改該 repo 的 image tag / chart version pin 值並 merge `main`，Fleet 自動 `helm upgrade`。完整流程見 [`prod-release-sop.md` §5.2 paas-operator 上 prod](./prod-release-sop.md#52-paas-operator-上-prod)。
+>
+> **若本機仍要手動 `helm upgrade`**：須先取得 chart——`clone` charts repo 或 `helm pull`（同 §3.1），再讓下方 `CHART` 指向本機 chart 路徑。
 
-# Pull latest changes
-git pull origin main
+```bash
+# 取得 chart（同 §3.1）：
+git clone https://git-prod.woowtech.io/woow-paas/woow-paas-charts.git
+CHART=./woow-paas-charts/charts/paas-operator
 
 # Upgrade with Helm
-helm upgrade paas-operator ./helm \
+helm upgrade paas-operator "$CHART" \
   --namespace paas-system \
   --reuse-values
 
 # Or upgrade with new values
-helm upgrade paas-operator ./helm \
+helm upgrade paas-operator "$CHART" \
   --namespace paas-system \
   --set image.tag=v1.2.0
 

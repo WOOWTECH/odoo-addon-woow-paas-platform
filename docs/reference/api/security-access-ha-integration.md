@@ -44,8 +44,10 @@ Security Access 端點是 Smart Home 端點的鏡像：相同認證模型、相�
 ## 1. 認證
 
 OAuth 2.0 Bearer token。public client `woow-ha-smart-home`（PKCE-only，
-`client_type=public`，redirect_uri 為 HA 標準
-`https://my.home-assistant.io/redirect/oauth`）。所有 SA 端點
+`client_type=public`，redirect_uri 為 host-flexible 模式
+`redirect_uri_match_mode=ha_callback`：path 嚴格鎖
+`/auth/external/woow/callback`、host 不限〔本機 / Nabu Casa / 自訂網域 HA
+base〕，詳見 [`ha-component-integration.md`](ha-component-integration.md) §1.1）。所有 SA 端點
 `auth='none'`，由 `_authenticate()` → `verify_oauth_token()` 驗 Bearer +
 required scopes。
 

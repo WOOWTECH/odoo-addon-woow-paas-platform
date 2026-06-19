@@ -228,6 +228,8 @@ Example: paas-ws-123-anythingllm-01
 
 ### DNS & TLS Architecture (Cloudflare)
 
+> ⚠️ **早期設計、未在生產採用**：以下 Traefik Ingress + wildcard A record（`*.woowtech.io` → K3s Node IP）的架構是早期設計方案，**未在生產環境採用**。現行生產的 DNS/TLS 實際走 **Cloudflare Tunnel**（cloudflared + 每服務 CNAME → `{tunnel_id}.cfargotunnel.com`），不對外暴露 K3s Node IP、也不依賴 Traefik Ingress 入口。權威說明請見 [n8n-cloud-service-lifecycle.md](../architecture/n8n-cloud-service-lifecycle.md)。以下內容保留作早期設計考古。
+
 域名 `*.woowtech.io` 由 Cloudflare 管理，採用 **Cloudflare Proxy** 模式處理 TLS：
 
 ```

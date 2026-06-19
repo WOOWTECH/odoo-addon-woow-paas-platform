@@ -7,6 +7,14 @@
 
 > 本文件記錄一個**超出已簽核 P2.5 plan 範圍**的架構擴張的取捨與影響面。撰寫動機正是：軸2 不在任何 design doc 的授權範圍內，動工前需要把「為什麼這樣改、改了會動到什麼、剩哪些決策」攤開供團隊 review。
 
+> **⚠️ Decision Log（D3 / D4 + Migration 段）已與 shipped code 分歧**（軸2 後續已全數出貨；現行 manifest `18.0.1.0.40`，`is_primary` 已從 code 與 DB 完全移除）。分歧點：
+> - **D4（兩階段 DROP）**：原拍板「`.38` 只改值（raw SQL `is_primary=false`）+ 保留欄位宣告、`.39+` 再 DROP 欄位」。**現況**：`.38` migration（`src/migrations/18.0.1.0.38/post-migrate.py:46-60`）一步到位 DELETE primary route + `DROP COLUMN is_primary`，**無兩階段 deferral**；且 `.39` 是無關的 P-rule policy 遷移，不是原承諾的「`.39+` DROP 欄位」。
+> - **D3（quota grandfather）**：原拍板「`.38` 對既有 SA `sa_max_routes` +1 補回 primary 名額」。**現況**：`.38` 明文「No quota grandfather is needed」（`:21-22`）—— 既無既有 route、降級也無對象，故未實作補配。
+> - **Migration「方案 A in-place 降級」**：原採用「保留既有 primary route 的 DNS + ingress + policy」。**現況**：實際走 DELETE primary route + DROP COLUMN（近原列為「不採用」的方案 B），因 ship 時 product owner 確認**無任何租戶在用 SA**（`.38` docstring `:8-10`），方案 A 賴以成立的「既有 SA 帶已解析 DNS」前提不成立。
+>
+> 軸2 行為本體（裸 tunnel provision、`active_no_route` state、移除 `is_primary` guard）皆已落地：`src/models/security_access.py:79`（state Selection 加 `active_no_route`）、`:362-398`（bare tunnel provision）、`:1083`（is_primary guard 已移除）；`_platform_default_hostname` 亦已成 dead code 移除。
+> 以下 Decision Log / Migration 文字保留為**當時拍板的歷史紀錄**，不修改；對齊現況請以本 callout + 上述 code 行號為準。
+
 ---
 
 ## Context

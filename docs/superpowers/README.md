@@ -36,4 +36,4 @@ obra/superpowers 是 Plugin 形式安裝（`~/.claude/plugins/cache/claude-plugi
 
 ## CI 例外
 
-`docs/superpowers/` 已加入 `.docs-check.yml` 例外清單（orphan 不檢，broken link 仍檢）。
+`docs/superpowers/` 已加入 `.lychee.toml` 例外清單（broken link 與 orphan 皆不檢，本目錄在 .lychee.toml exclude_path 被整段排除）。

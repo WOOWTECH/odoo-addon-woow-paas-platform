@@ -133,7 +133,7 @@ def create_ecpay_invoice(self):
 | `ecpay_invoice_cron._issue_one` | True | 有（`with_context(woow_force_issue=True)`） | **執行** ✅ |
 | 第三方 / 人工開單（無 PaaS flag） | False | 缺 | **執行** ✅（不影響上游既有行為） |
 
-詳見 design：`docs/plans/2026-05-03-invoice-issue-fix-path-b.md` Task 2.1 / 2.2。
+詳見 design：`docs/plans/2026-Q2/2026-05-03-invoice-issue-fix-path-b.md` Task 2.1 / 2.2。
 
 > ⚠️ **Refund (out_refund) not yet covered.** Upstream's `action_post` also calls
 > `run_refund()` inline when `company.auto_invoice='automatic'`. Our override

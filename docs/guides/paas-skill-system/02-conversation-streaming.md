@@ -23,14 +23,14 @@ graph TB
     ENTRY --> CSRF["CSRF + channel 存取檢查"]
     CSRF --> GATE{"channel→task→project<br/>use_agent_runtime?"}
     GATE -->|"False（預設・legacy）"| LEGACY["LLM 跑在 Odoo<br/>AIClient（LangChain）"]
-    GATE -->|"True（pilot 開啟）"| POD["_stream_agent_runtime<br/>橋接 Pod"]
+    GATE -->|"True（auto-enable / 手動開）"| POD["_stream_agent_runtime<br/>橋接 Pod"]
     LEGACY --> SSE["text/event-stream 回瀏覽器"]
     POD --> SSE
     style GATE fill:#fff0b3,stroke:#e6a700
 ```
 
-- 前門：`GET /api/ai/stream/{channel_id}`（SSE，`type=http`，`auth=user`）— `ai_assistant.py:360`
-- gate：由 `channel → project.task → project.use_agent_runtime` 決定走哪邊，**預設 False**，Phase E 才對 pilot project 開 — `ai_assistant.py:384-396`
+- 前門：`GET /api/ai/stream/{channel_id}`（SSE，`type=http`，`auth=user`）— `ai_assistant.py:488`
+- gate：由 `channel → project.task → project.use_agent_runtime` 決定走哪邊，**預設 False**；平台條件就緒（平台 toggle ON + operator + project 有有效 agent_template）時，新 project 由 server-side auto-enable 自動翻 True、既有 project 由 migration（`18.0.1.0.30`）backfill；平台 toggle 預設 OFF 需管理員 opt-in — `ai_assistant.py:512-524`
 
 ## 🅰️ Legacy 路徑：LLM 跑在 Odoo
 
@@ -54,7 +54,7 @@ sequenceDiagram
     O-->>B: SSE data:{done:true, message_id}
 ```
 
-落點：`AIClient.from_assistant()` → `build_messages()` → generator 內 `_async_agent_stream()` 或 `chat_completion_stream()`（`ai_assistant.py:403-565`）。
+落點：`AIClient.from_assistant()` → `build_messages()` → generator 內 `_async_agent_stream()` 或 `chat_completion_stream()`（`ai_assistant.py:531-695`）。
 
 ## 🅱️ Agent-runtime 路徑：LLM 跑在 Pod，Odoo 只橋接
 
@@ -79,7 +79,7 @@ sequenceDiagram
     O-->>B: SSE data:{done:true, message_id}
 ```
 
-落點：`_stream_agent_runtime()`（`ai_assistant.py:567`）→ `spawn_or_attach()`（`agent_runtime_client.py:60`，回 `{pod_ws_url, auth_token, pod_state, spawn_age_ms}`）→ WS 橋接（`ai_assistant.py:647-743`）。WS 的 `Bearer` 用的就是這裡的 `auth_token`（即 [Webhook 回呼與 ws_token](08-webhook-ws-token.md) 講的 ws_token）。Pod 端怎麼收這條 WS、怎麼跑，見 [agent-runtime Pod 內部](06-pod-internals.md)。
+落點：`_stream_agent_runtime()`（`ai_assistant.py:716`）→ `spawn_or_attach()`（`agent_runtime_client.py:117`，回 `{pod_ws_url, auth_token, pod_state, spawn_age_ms}`）→ WS 橋接（`ai_assistant.py:801-936`）。WS 的 `Bearer` 用的就是這裡的 `auth_token`（即 [Webhook 回呼與 ws_token](08-webhook-ws-token.md) 講的 ws_token）。Pod 端怎麼收這條 WS、怎麼跑，見 [agent-runtime Pod 內部](06-pod-internals.md)。
 
 ## 📨 WS Envelope 協定（Pod ↔ Odoo）
 
@@ -98,10 +98,10 @@ sequenceDiagram
 
 | 傳給 Pod | 來源（`ai_assistant.py`） | 內容 |
 |---|---|---|
-| `agent_template` | `_resolve_agent_template`（優先 `state=published`）`:755` | 該 project 綁定的 agent 範本；無自綁時取平台預設（config_parameter `default_agent_template_id` / 內建 seed `agent_template_default`）|
-| `mcp_snapshot` | `_build_mcp_snapshot` `:778` | `{servers:{name:{url, transport}}}` |
-| `skill_snapshot` | `_build_skill_snapshot` `:785` | 範本已發布 skills 的 `name`/`version`/`sha` |
-| `invoker_role` | `_get_project_access_role`（預設 `guest`）`:770` | 觸發者在該 project 的角色 |
+| `agent_template` | `_resolve_agent_template`（優先 `state=published`）`:948` | 該 project 綁定的 agent 範本；無自綁時取平台預設（config_parameter `default_agent_template_id` / 內建 seed `agent_template_default`）|
+| `mcp_snapshot` | `_build_mcp_snapshot` `:965` | `{servers:{name:{url, transport}}}` |
+| `skill_snapshot` | `_build_skill_snapshot` `:970` | 範本已發布 skills 的 `name`/`version`/`sha` |
+| `invoker_role` | `_get_project_access_role`（預設 `guest`）`:957` | 觸發者在該 project 的角色 |
 
 > 這些快照進 Pod 的通道是 **ConfigMap mount**（`/etc/agent-runtime/*.json`）+ 熱重載，不是走 WS payload，細節見 [agent-runtime Pod 內部](06-pod-internals.md)。skill_snapshot 怎麼變成 Pod 真的下載的 bundle，見 [Skill Bundle 與 JWT 認證](04-skill-bundle-jwt.md)；skill 怎麼來，見 [Skill 設計與發布](03-skill-design.md)。
 
@@ -109,12 +109,12 @@ sequenceDiagram
 
 | 路徑 | langchain 在哪 | 技術棧 / 狀態 |
 |---|---|---|
-| **Legacy**（`use_agent_runtime=False`） | **Odoo** `src/models/ai_client.py` | `langchain-openai` 的 `ChatOpenAI`（`:88`）+ `langchain-mcp-adapters` 的 `MultiServerMCPClient`（`:271`）+ `langgraph` agent graph（`bind_tools` / `StateGraph` / `ToolNode`，`:373`）— **可運作** |
+| **Legacy**（`use_agent_runtime=False`） | **Odoo** `src/models/ai_client.py` | `langchain-openai` 的 `ChatOpenAI`（`:89`）+ `langchain-mcp-adapters` 的 `MultiServerMCPClient`（`:276`）+ `langgraph` agent graph（`bind_tools` / `StateGraph` / `ToolNode`，`:378`）— **可運作** |
 | **Agent-runtime**（`True`） | **Pod** `runtime/langgraph_runtime.py`（`woow-paas-agent-runtime`） | 同樣是 langchain/langgraph stack（已是依賴）；⚠️ **agent loop 目前是 Phase B stub**（`stream()` 只回 `done`），真正 graph 待後續 phase。詳見 [agent-runtime Pod 內部](06-pod-internals.md) |
 
 ## 🧹 連線清理（F-PC-6 / P-2）
 
-`done` / `error` 跳出 drain loop 時，relay generator 仍掛在 `async with websockets.connect()` 裡，必須 `agen.aclose()` 收掉才會觸發 WS 關閉；否則**每輪對話漏一條 pod 連線**（`ai_assistant.py:728-743`）。
+`done` / `error` 跳出 drain loop 時，relay generator 仍掛在 `async with websockets.connect()` 裡，必須 `agen.aclose()` 收掉才會觸發 WS 關閉；否則**每輪對話漏一條 pod 連線**（`ai_assistant.py:921-936`）。
 
 ## 📁 相關文件
 

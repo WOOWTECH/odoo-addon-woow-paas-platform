@@ -38,20 +38,22 @@ kubectl describe pod -n paas-system -l app.kubernetes.io/name=paas-operator
 | Cause                     | Solution                                                                        |
 | ------------------------- | ------------------------------------------------------------------------------- |
 | Missing API key in secret | Verify secret exists: `kubectl get secret paas-operator-secret -n paas-system` |
-| RBAC permissions missing  | Reinstall Helm chart: `helm upgrade paas-operator ./helm -n paas-system`         |
+| RBAC permissions missing  | 透過 Fleet 套用（見下方 Fix Example，走 `woow-paas-charts` values-prod.yaml）       |
 | Helm binary not found     | Check Dockerfile includes Helm installation                                     |
 | Python dependencies issue | Verify requirements.txt is complete, rebuild image                              |
 
 **Fix Example**:
 
-```bash
-# Regenerate API key and upgrade via Helm
-API_KEY=$(openssl rand -hex 32)
-helm upgrade paas-operator ./helm \
-  --namespace paas-system \
-  --set auth.apiKey=$API_KEY
+> **注意**：operator 的 RBAC / `auth.apiKey` 等設定變更，現已不再用本機 `helm upgrade ./helm`（chart 已移出本 repo）。改為在 `woow-paas-charts` 的 `paas-operator/values-prod.yaml` 修改，經 `paas-app-bundle-cd` bump image pin + Fleet reconcile 套用。完整步驟見 [prod-release-sop.md §5.2 paas-operator 上 prod](prod-release-sop.md#52-paas-operator-上-prod)。
 
-# Verify pod restarted with new secret
+```bash
+# 1. 產生新 API key
+API_KEY=$(openssl rand -hex 32)
+
+# 2. 把 API key 寫進 woow-paas-charts 的 paas-operator/values-prod.yaml（auth.apiKey）
+#    → 透過 paas-app-bundle-cd PR + Fleet reconcile 套用（見 prod-release-sop.md §5.2）
+
+# 3. Fleet reconcile 後，驗證 pod 已用新 secret 重啟
 kubectl get pods -n paas-system -l app.kubernetes.io/name=paas-operator
 ```
 
@@ -400,12 +402,13 @@ kubectl describe node
 
 **Solution**:
 
-```bash
-# Increase Helm timeout via Helm upgrade
-helm upgrade paas-operator ./helm \
-  --namespace paas-system \
-  --reuse-values \
-  --set env.HELM_TIMEOUT=600
+> **注意**：`HELM_TIMEOUT` 等 operator env 變更，現透過 `woow-paas-charts` 的 `paas-operator/values-prod.yaml`（`env.HELM_TIMEOUT`）修改，經 `paas-app-bundle-cd` bump image pin + Fleet reconcile 套用，不再用本機 `helm upgrade ./helm`。完整步驟見 [prod-release-sop.md §5.2 paas-operator 上 prod](prod-release-sop.md#52-paas-operator-上-prod)。
+
+```yaml
+# woow-paas-charts: paas-operator/values-prod.yaml
+env:
+  HELM_TIMEOUT: 600
+# → 透過 paas-app-bundle-cd PR + Fleet reconcile 套用（見 prod-release-sop.md §5.2）
 ```
 
 ### Issue: Helm Chart Not Found
@@ -432,11 +435,14 @@ kubectl exec -it <paas-operator-pod> -n paas-system -- \
 
 **Solution**:
 
+> **注意**：operator 的 chart repo / 啟動設定變更，現已不再用本機 `helm upgrade ./helm`（operator chart 已移出本 repo，改由 `woow-paas-charts` 維護）。修改 operator 啟動腳本（`src/main.py` 新增 `helm repo add`）後須重新 build operator image，並在 `woow-paas-charts` 的 `paas-operator/values-prod.yaml` bump image pin，經 `paas-app-bundle-cd` PR + Fleet reconcile 套用。完整步驟見 [prod-release-sop.md §5.2 paas-operator 上 prod](prod-release-sop.md#52-paas-operator-上-prod)。
+
 ```bash
-# Add missing chart repositories in operator startup script
+# 在 operator 啟動腳本補上缺少的 chart repo
 # Edit src/main.py to add repo on startup:
 # helm.run_command(["repo", "add", "bitnami", "https://charts.bitnami.com/bitnami"])
 # helm.run_command(["repo", "update"])
+# → 重新 build operator image → woow-paas-charts bump image pin → Fleet reconcile（見 prod-release-sop.md §5.2）
 ```
 
 ---

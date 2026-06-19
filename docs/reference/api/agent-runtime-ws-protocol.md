@@ -116,27 +116,27 @@ There are **two classes** of frame — the field placement differs and **matters
 
 ### 4a. Odoo-transformed frames (Odoo reads `payload.*`, re-emits a normalised SSE event)
 
-Drain loop: `ai_assistant.py:687-720`.
+Drain loop: `ai_assistant.py:860-913`.
 
 | `type` | frame the pod sends | Odoo behaviour (code) |
 |--------|--------------------|----------------------|
-| `text_chunk` | `{"type":"text_chunk","request_id":"…","payload":{"content":"<delta>"}}` | reads **`payload.content`**, accumulates into `full_response`, emits SSE `{"chunk":"<delta>","done":false}` (`:688-693`) |
-| `done` | `{"type":"done","request_id":"…","payload":{"full_response":"…"}}` (`full_response` optional) | terminal: persists the **Odoo-accumulated** text as the assistant's `mail.message` (`:701-712` → `_persist_ai_response :795-811`), emits SSE `{"chunk":"","done":true,"full_response":"<accumulated>","message_id":<int>}`. NB Odoo persists **its own** accumulated chunks, not your `payload.full_response` (that field is currently ignored for persistence). |
-| `error` | `{"type":"error","request_id":"…","payload":{"error":"<msg>","fatal":true\|false}}` | reads **`payload.error`**, emits SSE `{"error":"<msg>","done":true}` (`:713-720`); the relay only **stops the stream** when **`payload.fatal`** is truthy (`:674-676`) — a non-fatal `error` surfaces but the stream continues. |
+| `text_chunk` | `{"type":"text_chunk","request_id":"…","payload":{"content":"<delta>"}}` | reads **`payload.content`**, accumulates into `full_response`, emits SSE `{"chunk":"<delta>","done":false}` (`:866-871`) |
+| `done` | `{"type":"done","request_id":"…","payload":{"full_response":"…"}}` (`full_response` optional) | terminal: persists the **Odoo-accumulated** text as the assistant's `mail.message` (`:879-890` → `_persist_ai_response :975-1016`), emits SSE `{"chunk":"","done":true,"full_response":"<accumulated>","message_id":<int>}`. NB Odoo persists **its own** accumulated chunks, not your `payload.full_response` (that field is currently ignored for persistence). |
+| `error` | `{"type":"error","request_id":"…","payload":{"error":"<msg>","fatal":true\|false}}` | reads **`payload.error`**, emits SSE `{"error":"<msg>","done":true}` (`:891-913`); the relay only **stops the stream** when **`payload.fatal`** is truthy (`:850-852`) — a non-fatal `error` surfaces but the stream continues. |
 
 ### 4b. Passthrough frames (Odoo forwards the WHOLE frame verbatim; the **browser** reads them)
 
 Odoo forwards these unchanged with `done:false` merged in — `{**envelope, "done":false}`
-(`ai_assistant.py:694-700`). The OWL browser client then reads fields at the
+(`ai_assistant.py:872-878`). The OWL browser client then reads fields at the
 **TOP LEVEL** of the frame (`AiChat.js`), so **these fields go at the envelope top
 level (siblings of `type`/`request_id`), NOT inside `payload`** — the single most
 common mistake:
 
 | `type` | frame the pod sends | browser consumer |
 |--------|--------------------|------------------|
-| `tool_call` | `{"type":"tool_call","request_id":"…","tool":"<name>","args":{…}}` | `AiChat.js:216-231` reads `data.tool`, `data.args` |
-| `tool_result` | `{"type":"tool_result","request_id":"…","tool":"<name>","result":"<str>"}` | `AiChat.js:233-244` matches by `data.tool`, sets `data.result` |
-| `tool_error` | `{"type":"tool_error","request_id":"…","tool":"<name>","error":"<msg>"}` | `AiChat.js:246-258` matches by `data.tool`, sets `data.error` |
+| `tool_call` | `{"type":"tool_call","request_id":"…","tool":"<name>","args":{…}}` | `AiChat.js:236-250` reads `data.tool`, `data.args` |
+| `tool_result` | `{"type":"tool_result","request_id":"…","tool":"<name>","result":"<str>"}` | `AiChat.js:251-261` matches by `data.tool`, sets `data.result` |
+| `tool_error` | `{"type":"tool_error","request_id":"…","tool":"<name>","error":"<msg>"}` | `AiChat.js:262-273` matches by `data.tool`, sets `data.error` |
 | `status` / `tool_unavailable` | `{"type":"status",…}` | forwarded with `done:false`, but the browser has **no handler** → silently ignored. Safe to emit; no field contract; not rendered. |
 
 > **Why top-level for tool frames:** §4a frames are *re-emitted* by Odoo (it pulls
@@ -158,7 +158,7 @@ connected-but-silent chat.
 
 ## 5. skill-bundle fetch — Pod → Odoo (during processing)
 
-Source of truth: `src/controllers/agent_runtime_skill.py` (route `:86-90`).
+Source of truth: `src/controllers/agent_runtime_skill.py` (route `:91-95`).
 
 ```
 GET {ODOO_BASE_URL}/api/agent-runtimes/skill-bundle?project_hash={hash}&skill_name={name}&version={ver}
@@ -166,16 +166,16 @@ Authorization: Bearer <SKILL_BUNDLE_TOKEN>
 ODOO_BASE_URL = http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.local:8069
 ```
 
-- **Response = the RAW bundle bytes** (`:125-133`) — **NOT base64, NOT a JSON
+- **Response = the RAW bundle bytes** (`:135-143`) — **NOT base64, NOT a JSON
   wrapper**. `Content-Type` is the attachment mimetype (default `application/gzip`).
   The pod does `resp.read()` then `sha256`.
 - **Auth** `SKILL_BUNDLE_TOKEN` (HS256, verified against `AGENT_RUNTIME_AUTH_SECRET_CURRENT`
-  then `_PREVIOUS`, `:62-80`). The token's **`token_use` MUST be `skill_bundle`** or
-  the endpoint returns **403** (`:105-106`) — a `ws` token can't be replayed here.
-  The token's **`project_id` claim is authoritative** (`:108-111`); the query
+  then `_PREVIOUS`, `:67-85`). The token's **`token_use` MUST be `skill_bundle`** or
+  the endpoint returns **403** (`:110-111`) — a `ws` token can't be replayed here.
+  The token's **`project_id` claim is authoritative** (`:113-116`); the query
   `project_hash` is **not** trusted for project resolution (HC-2).
-- **Status codes**: missing/non-Bearer → 401 (`:93-94`); wrong `token_use` → 403
-  (`:138`); skill not found / not `published` / no attachment → 404 (`:118-123`).
+- **Status codes**: missing/non-Bearer → 401 (`:98-99`); wrong `token_use` → 403
+  (`:149`); skill not found / not `published` / no attachment → 404 (`:128-133`).
 
 ### What to fetch + how to verify — `skill_snapshot` (delivered at spawn)
 
@@ -206,7 +206,7 @@ as `skill_snapshot` (`ai_assistant.py:_build_skill_snapshot`):
 
 ### MCP servers — `mcp_snapshot` (delivered at spawn)
 
-`ai_assistant.py:778-783`:
+`ai_assistant.py:965-968`:
 
 ```json
 {"servers": {"<mcp_name>": {"url": "<url>", "transport": "<transport>"}}}
@@ -224,9 +224,9 @@ over the WS. Source chain (design §8.2):
 agent_template.model_config_id → ai.config            (agent_template.py:23-27)
         + agent_template.model_overrides (JSON merge)  (agent_template.py:28-32)
    ↓ Odoo client puts api_key + llm_model_config on the spawn request
-operator SpawnOrAttachRequest.api_key / .llm_model_config   (operator schemas.py:378-405)
+operator SpawnOrAttachRequest.api_key / .llm_model_config   (operator schemas.py:391-418)
    ↓ operator cold-start provisions a per-release Secret  agent-pa-{hash}-llm
-Secret stringData = {LLM_API_KEY, LLM_MODEL_CONFIG(json)}   (operator agent_runtimes.py:160-185)
+Secret stringData = {LLM_API_KEY, LLM_MODEL_CONFIG(json)}   (operator agent_runtimes.py:259-286)
    ↓ chart (agent-runtime ≥0.1.2) secretKeyRef, optional:true
 pod env  LLM_API_KEY  (+ LLM_MODEL_CONFIG)  →  init LangGraph ChatOpenAI
 ```
@@ -234,7 +234,7 @@ pod env  LLM_API_KEY  (+ LLM_MODEL_CONFIG)  →  init LangGraph ChatOpenAI
 ### `LLM_MODEL_CONFIG` schema (JSON string in env)
 
 Built by the Odoo client mirroring the existing `ai_client.from_assistant`
-read of `ai.config` (`src/models/ai_client.py:114-126`; `api_base_url` is this
+read of `ai.config` (`src/models/ai_client.py:115-131`; `api_base_url` is this
 repo's extension of `ai.config`, `src/models/ai_config.py:11`):
 
 ```json
@@ -255,7 +255,7 @@ repo's extension of `ai.config`, `src/models/ai_config.py:11`):
 ### Fallback-echo (拍板)
 
 If `LLM_API_KEY` is **absent**, the operator provisioned **no** LLM Secret
-(`agent_runtimes.py:170-171` — `if not request.api_key: return`). This happens
+(`agent_runtimes.py:238-239` — `if not request.api_key: return`). This happens
 when the bound `ai.config` has no `api_key`, or no template config is bound.
 **The pod MUST fall back to echo** in that case (do not crash) — `LLM_MODEL_CONFIG`
 may likewise be absent. Only initialise the real LLM when `LLM_API_KEY` is present.

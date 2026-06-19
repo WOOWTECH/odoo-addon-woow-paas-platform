@@ -34,17 +34,17 @@ reap 後已知行為，以及「為什麼必須手動」的現狀備註。
 paas-app-bundle-cd values-stg.yaml          ← 手動 bump（agentRuntime.imageTag + chartVersion）
   └─ Fleet reconcile（~30–60s lag）
        └─ paas-operator chart → operator Deployment env AGENT_RUNTIME_IMAGE_TAG
-            └─ settings.agent_runtime_image_tag        ← extra/paas-operator/src/config.py:47
+            └─ settings.agent_runtime_image_tag        ← extra/paas-operator/src/config.py:48
                  └─ cold-start helm install 注入 image.tag
-                      ← extra/paas-operator/src/api/agent_runtimes.py:122（_build_install_values）
+                      ← extra/paas-operator/src/api/agent_runtimes.py:124（_build_install_values）
 ```
 
 關鍵性質：
 
-- **注入只發生在 cold-start `helm install`**（`_build_install_values`，`agent_runtimes.py:122`）。
-  resume 路徑（`_resume_pod`，`agent_runtimes.py:302`）只重簽 SKILL_BUNDLE_TOKEN + set env +
+- **注入只發生在 cold-start `helm install`**（`_build_install_values`，`agent_runtimes.py:124`）。
+  resume 路徑（`_resume_pod`，`agent_runtimes.py:318`）只重簽 SKILL_BUNDLE_TOKEN + set env +
   scale 1，**不重 render** → 既存 release 永遠是舊 image。
-- `config.py:47` 的 default `"1.0.0"` 是 **fallback，僅在 env 缺席時生效**。正常部署 Fleet 一定
+- `config.py:48` 的 default `"1.0.0"` 是 **fallback，僅在 env 缺席時生效**。正常部署 Fleet 一定
   set `AGENT_RUNTIME_IMAGE_TAG`，看到 pod 跑 1.0.0 多半是 env 沒注入（去查 operator chart
   values→env wire 與 Fleet values），不是 fallback 該背的鍋。
 - **Fleet reconcile 有 ~30–60s lag**：merge Fleet values 後立刻查 operator deploy env 可能還是
@@ -58,12 +58,12 @@ paas-app-bundle-cd values-stg.yaml          ← 手動 bump（agentRuntime.image
 
 ## 2. 現狀備註：為什麼必須手動 reap
 
-- `spawn_or_attach`（`agent_runtimes.py:320`）的 cold-start gate **只看
-  `_release_exists()`**（`:325`），**不比 image tag**。release 存在（含 replicas=0 的 dormant
+- `spawn_or_attach`（`agent_runtimes.py:339`）的 cold-start gate **只看
+  `_release_exists()`**（`:344`），**不比 image tag**。release 存在（含 replicas=0 的 dormant
   release）→ 走 attach / resume → **還是舊 image**。
 - 所以 `kubectl scale --replicas=0` 對換 image **是白做**（下次 chat 走 resume 拉回舊 image）。
   注意 scale-to-0 對 **SKILL_BUNDLE_TOKEN 重簽是有效的**（resume 會重簽）——兩件事別混。
-- `POST /api/agent-runtimes/{hash}/reap`（`agent_runtimes.py:454`）是 **idle reap =
+- `POST /api/agent-runtimes/{hash}/reap`（`agent_runtimes.py:476`）是 **idle reap =
   scale-to-0**（保留 release / PVC），**不是**升版用的路徑。
 - **auto-roll（F-AR-1）未落地**：四半 lock-step 設計中，③ runtime graceful-drain 半已隨
   1.2.1 / chart 0.3.x 上 stg，**② operator-reconcile 半（本 repo `extra/paas-operator/`）仍待
@@ -126,8 +126,8 @@ curl -X DELETE -H "X-API-Key: $API_KEY" \
   http://localhost:8000/api/agent-runtimes/{project_hash}
 ```
 
-`DELETE /api/agent-runtimes/{hash}`（`agent_runtimes.py:530`）= **helm uninstall 整個
-release**（`:534`）——這才是升版路徑；`POST .../{hash}/reap` 只 scale-to-0，換不了 image（§2）。
+`DELETE /api/agent-runtimes/{hash}`（`agent_runtimes.py:552`）= **helm uninstall 整個
+release**（`:568`）——這才是升版路徑；`POST .../{hash}/reap` 只 scale-to-0，換不了 image（§2）。
 
 ### 3.6 等資源完全消失再觸發 cold-start
 
@@ -155,7 +155,7 @@ kubectl --context woow-k3s get pod,pvc -n paas-ws-stg-pa-{hash}
 |------|---------|------|
 | **PVC 連帶刪除** | helm 行為（chart 設計） | agent-runtime chart `templates/pvc.yaml` 無 `helm.sh/resource-policy: keep`（2026-06-05 stg reap 5/5 實證；runtime owner 確認是 chart 設計的正確行為）。PVC 只含 lazy-fetch skill cache（可重抓，重拉後首次 chat 略慢）；chat 史在 Odoo DB → 資料安全。「保 PVC」只存在於 F-AR-1 auto-roll 的 `helm upgrade` 路徑。 |
 | **空 namespace 保留** | operator 設計 | uninstall 不刪 ns（供 resume / 下次 cold-start 復用）。**兩層別混**：ns 保留 = operator 設計、PVC 消失 = helm 行為。 |
-| **DELETE 不發 state webhook → session 漂移自癒** | operator 設計 | `delete_runtime` 只 helm uninstall、不呼叫 `webhook_dispatcher` → Odoo `agent_session.state` 短暫停留在舊值（如 `active`）。自癒機制：`spawn_or_attach` **每次** attach / cold-start 都 re-notify state webhook（`agent_runtimes.py:430` 起的註解，刻意非 transition-only）+ drift cron → 下一次 chat turn 收斂。看到 stale state 不用手修。 |
+| **DELETE 不發 state webhook → session 漂移自癒** | operator 設計 | `delete_runtime` 只 helm uninstall、不呼叫 `webhook_dispatcher` → Odoo `agent_session.state` 短暫停留在舊值（如 `active`）。自癒機制：`spawn_or_attach` **每次** attach / cold-start 都 re-notify state webhook（`agent_runtimes.py:446` 起的註解，刻意非 transition-only）+ drift cron → 下一次 chat turn 收斂。看到 stale state 不用手修。 |
 | **cold-start 首次 chat 較慢** | 已知 perf 特性 | operator CPU bump 後 stg 實測 ~11s；client 端已有 spawning 進度 + retry。見 [`agent-runtime-coldstart-cpu-throttle-timeout.md`](../../tracking/pitfalls/agent-runtime-coldstart-cpu-throttle-timeout.md)。 |
 
 ## 相關
@@ -165,5 +165,5 @@ kubectl --context woow-k3s get pod,pvc -n paas-ws-stg-pa-{hash}
 - **F-AR-1 auto-roll 設計與進度**：[`docs/tracking/followups/follow-ups.md`](../../tracking/followups/follow-ups.md)
 - **chat 資料流 / secret 關係**：[`agent-runtime-chat-architecture.md`](../development/agent-runtime-chat-architecture.md)
 - **stg 啟用 gap chain**（升版撞牆時的環境前提對照）：[`agent-runtime-stg-enablement-gap-chain.md`](../../tracking/pitfalls/agent-runtime-stg-enablement-gap-chain.md)
-- **operator 程式碼**：`extra/paas-operator/src/api/agent_runtimes.py`（spawn_or_attach `:320` /
-  image 注入 `:122` / idle reap `:454` / DELETE `:530`）、`extra/paas-operator/src/config.py:47`
+- **operator 程式碼**：`extra/paas-operator/src/api/agent_runtimes.py`（spawn_or_attach `:339` /
+  image 注入 `:124` / idle reap `:476` / DELETE `:552`）、`extra/paas-operator/src/config.py:48`

@@ -108,7 +108,7 @@ HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
 | 變數                           | 為什麼                                                                                                                |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | `HELM_BINARY`                  | macOS Homebrew 把 helm 放在 `/opt/homebrew/bin/`，operator 預設找 `/usr/local/bin/helm`，沒給就 lifespan startup 失敗 |
-| `API_KEY` / `NAMESPACE_PREFIX` | 不用設，`app_client` fixture 自動 set（`""` + `"paas-ws-test-op-"`）                                                  |
+| `API_KEY` / `NAMESPACE_PREFIX` | 不用設，`app_client` fixture 自動 set（`"integration-test-key"` + `"paas-ws-test-op-"`）                                                  |
 
 Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正常 teardown 會刪；中斷或 cleanup 失敗會留下，需要時手動 `kubectl delete ns paas-ws-test-op-<x>`。詳細請見 `extra/paas-operator/tests/integration/README.md`。
 
@@ -289,10 +289,10 @@ tea login add --name gitea --url https://git-prod.woowtech.io --token <your-toke
 # 查看 staging pod 狀態
 kubectl get pods -n dev-sandbox-stg
 
-# 查看日誌（plugin 通用版；無 plugin 時用 ./.claude/skills/k8s-dev-sandbox/scripts/logs.sh）
+# 查看日誌（plugin 通用版）
 /woowprd:k8s-dev-sandbox logs stg --service odoo --follow
 
-# 銷毀 staging（plugin 通用版；無 plugin 時用 ./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh）
+# 銷毀 staging（plugin 通用版）
 /woowprd:k8s-dev-sandbox destroy stg --context woow-k3s
 ```
 
@@ -333,7 +333,7 @@ woow_paas_platform/
 │   ├── security/                 # ir.model.access.csv、ir_rules.xml
 │   └── static/src/paas/          # Standalone OWL App（layout / pages / components / services / core/router.js / styles）
 ├── extra/
-│   ├── paas-operator/            # FastAPI service 包 Helm CLI（含 helm chart）
+│   ├── paas-operator/            # FastAPI service 包 Helm CLI（helm chart 已移至 woow-paas-charts repo）
 │   └── cloudflare/               # Cloudflare 整合
 ├── docs/                         # 6 類 docs（guides / reference / decisions / plans / tracking / archived + superpowers）
 └── .claude/skills/               # Project skills（ccpm、k8s-dev-sandbox、deploy-stg、deploy-local、build-operator、ecpay、playwright-cli）
@@ -448,7 +448,7 @@ _CONFIG_PARAMETERS = [
 
 ## Known patterns
 
-改動以下 model 與 ACL 前必看 invariants 與 pattern docs，避免 B1-class data leak 重炸（完整 18 條 pattern 索引見 [`docs/decisions/patterns/README.md`](docs/decisions/patterns/README.md)）：
+改動以下 model 與 ACL 前必看 invariants 與 pattern docs，避免 B1-class data leak 重炸（完整 pattern 索引見 [`docs/decisions/patterns/README.md`](docs/decisions/patterns/README.md)）：
 
 - **CloudService / Project decoupling**：見 `docs/decisions/refactor/cloud-service-project-decouple.md`（含 7 條 Invariants）
 - **Odoo addon override std ir.rule**（任何在 `ir.model.access.csv` 給 `base.group_user` 加 project / task / Odoo std model 的 RWCU 時）：見 `docs/decisions/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
