@@ -16,7 +16,7 @@
 | 路徑 | 內容 |
 |------|------|
 | [`ccpm-v1/`](ccpm-v1/) | 舊 ccpm v1 的 project context 文件（v2 不再維護） |
-| [`plans/`](plans/) | 退役的 plan（按 `<year>/` 切分） |
+| `plans/` | 退役的 plan（按 `<year>/` 切分）（首次歸檔 plan 時建立） |
 
 ## 命名
 
@@ -31,4 +31,4 @@
 
 ## CI 例外
 
-`docs/archived/` 已加入 `.docs-check.yml` 例外清單（broken link / orphan 都不檢）。
+`docs/archived/` 已加入 `.lychee.toml` 例外清單（broken link / orphan 都不檢）。

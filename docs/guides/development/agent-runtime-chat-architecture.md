@@ -57,10 +57,10 @@ sequenceDiagram
     O-->>B: SSE data:{done:true, message_id}
 
     Note over Op,O: ── 連線 4：operator → Odoo（state-update webhook，單向，不在 chat 路徑上）──
-    Op-->>O: (設計上) POST /api/agent-runtimes/webhook/state-update（X-PaaS-Signature）
+    Op-->>O: POST /api/agent-runtimes/webhook/state-update（X-PaaS-Signature）
 ```
 
-> ⚠️ 連線 4 是**狀態同步**，不在 chat 的來回路徑上。目前**尚未接線**（見 [§5](#5-目前現況--已知缺口)），所以它沒運作不會讓 chat 壞。
+> ⚠️ 連線 4 是**狀態同步**，不在 chat 的來回路徑上。operator **已接線**（每次 spawn-or-attach + reap 經 `BackgroundTask` POST state-update webhook，見 [§5](#5-目前現況--已知缺口)），但因為它跑在 chat 來回路徑之外（response 送出後才觸發、no-op/失敗都不 raise），**斷了也不會讓 chat 壞**。
 
 ---
 
@@ -271,11 +271,11 @@ mcp_server.write(name/url/transport 變動) ┘
 
 > 本節嚴格區分「設計（本來該怎麼運作）」與「目前實際狀況」。以下皆為查證後的事實。
 
-### 5.1 缺口：operator→Odoo 的 state-update webhook **尚未接線**
+### 5.1 缺口：operator→Odoo 的 state-update webhook **程式碼已接線，剩環境 secret 待確認**
 
-- 查證：`dispatch_state_update` 在 operator **沒有任何 production caller** —— 全 repo grep 只剩「它自己的定義」+「unit test」引用它（`extra/paas-operator/src/services/webhook_dispatcher.py:26`、`tests/test_agent_runtimes.py:1011,1044`）。follow-up `N-2` 與 reviewer report 都標註它「**未接線**」。
-- 同時：`AGENT_RUNTIME_WEBHOOK_SECRET` / `_PREVIOUS` 兩端目前都**未佈署**（empty）。
-- **淨效果**：operator 從不送 state-update webhook（就算送，secret 空也會 401），所以 `agent_session.state` **永遠停在建立時的預設 `absent`**，即使 pod 其實是健康執行中的。再加上 §4.4 的 drift cron 刻意跳過 `'absent'`，這列就**永遠不會自我修復**。
+- 查證：operator 已有 **production caller** —— `notify_state_update`（內部包 `dispatch_state_update`）在**每次** spawn-or-attach 與 reap 都經 `BackgroundTask` 觸發（`extra/paas-operator/src/api/agent_runtimes.py:460-466` spawn-or-attach、`:496-501` reap，commit `a907743`）。spawn-or-attach 是**刻意每次都送**（含純 attach 穩態，非只在 cold-start/resume 轉移）——這是 self-heal 機制：Odoo `agent_session` row 在請求中才建（`state='absent'`、可能尚未 commit），加上 §4.4 drift cron 刻意跳過 `'absent'`，靠「每次 attach 都 re-notify」讓該列在下一輪 chat 收斂到 `active`（caller 註解明文標註「Do NOT optimize to transition-only」）。
+- **剩餘缺口**：只在於 `AGENT_RUNTIME_WEBHOOK_SECRET` / `_PREVIOUS` 是否已**佈署到 stg / prod 環境**。這是 runtime 佈署問題（secret 落在 operator 自己的佈署側、由 Fleet 管理，**repo 內查不到**），須到對應環境確認；secret 若未注入，`notify_state_update` 會 no-op（不送 webhook，也不 raise）。
+- **淨效果（secret 未佈署時）**：operator 不送 state-update webhook，所以 `agent_session.state` **可能停在建立時的預設 `absent`**，即使 pod 其實是健康執行中的；再加上 §4.4 的 drift cron 刻意跳過 `'absent'`，這列就**不會自我修復**。secret 一旦佈署，§4 這條 loop 即接通、self-heal 生效。
 
 ### 5.2 重要：這**不影響 chat**
 

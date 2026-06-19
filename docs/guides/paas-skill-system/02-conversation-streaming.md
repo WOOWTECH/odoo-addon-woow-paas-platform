@@ -23,14 +23,14 @@ graph TB
     ENTRY --> CSRF["CSRF + channel 存取檢查"]
     CSRF --> GATE{"channel→task→project<br/>use_agent_runtime?"}
     GATE -->|"False（預設・legacy）"| LEGACY["LLM 跑在 Odoo<br/>AIClient（LangChain）"]
-    GATE -->|"True（pilot 開啟）"| POD["_stream_agent_runtime<br/>橋接 Pod"]
+    GATE -->|"True（auto-enable / 手動開）"| POD["_stream_agent_runtime<br/>橋接 Pod"]
     LEGACY --> SSE["text/event-stream 回瀏覽器"]
     POD --> SSE
     style GATE fill:#fff0b3,stroke:#e6a700
 ```
 
 - 前門：`GET /api/ai/stream/{channel_id}`（SSE，`type=http`，`auth=user`）— `ai_assistant.py:360`
-- gate：由 `channel → project.task → project.use_agent_runtime` 決定走哪邊，**預設 False**，Phase E 才對 pilot project 開 — `ai_assistant.py:384-396`
+- gate：由 `channel → project.task → project.use_agent_runtime` 決定走哪邊，**預設 False**；平台條件就緒（平台 toggle ON + operator + project 有有效 agent_template）時，新 project 由 server-side auto-enable 自動翻 True、既有 project 由 migration（`18.0.1.0.30`）backfill；平台 toggle 預設 OFF 需管理員 opt-in — `ai_assistant.py:384-396`
 
 ## 🅰️ Legacy 路徑：LLM 跑在 Odoo
 

@@ -169,7 +169,7 @@
   - Pattern: [[odoo-addon-std-rule-symmetric-deactivation]]
   - Pitfall: [[cross-workspace-task-data-leak]]
   - Decision invariant: [[cloud-service-project-decouple]] §Invariants 4-5
-- **下一步**：把 pattern doc 引用加進 CLAUDE.md，讓未來 dev / agent 改 ACL 時自動 surface。**部分已落地**（issue #93 追蹤）：CLAUDE.md「Known patterns」段已收錄 3 條 ACL pattern 引用 + [`docs/decisions/patterns/README.md`](../../decisions/patterns/README.md)（18 條 pattern 索引）。
+- **下一步**：把 pattern doc 引用加進 CLAUDE.md，讓未來 dev / agent 改 ACL 時自動 surface。**部分已落地**（issue #93 追蹤）：CLAUDE.md「Known patterns」段已收錄 3 條 ACL pattern 引用 + [`docs/decisions/patterns/README.md`](../../decisions/patterns/README.md)（pattern 索引）。
 
 ---
 

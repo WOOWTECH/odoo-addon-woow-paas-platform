@@ -9,14 +9,13 @@
 
 ## 退出條件
 
-- epic 完成且回顧已 promote 到 `decisions/` 或 `tracking/` → 移到 `archived/plans/<year>/`
+- epic 完成且回顧已 promote 到 `decisions/` 或 `tracking/` → 移到 `archived/plans/<year>/`（首次歸檔時建立）
 - 跨年的 plan 留在原 quarter，不重歸檔
 
 ## 子目錄
 
 | 路徑 | 內容 |
 |------|------|
-| [`2026-Q1/`](2026-Q1/) | 2026 年 1-3 月計畫 |
 | [`2026-Q2/`](2026-Q2/) | 2026 年 4-6 月計畫（含 wallet-billing、subscription-integration、refactor 等） |
 | [`journal/`](journal/) | 過程側記（非完整 plan，是「邊做邊記」） |
 

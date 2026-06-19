@@ -49,7 +49,7 @@ related:
 agent container 的 gate env（Drop B）：`true` 才暴露 `bash:execute` 並起 `bash_bridge` sidecar。由 operator 依 `skillRunner.enabled` 顯式設定，**預設 false（fail-closed）**。見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 
 **agent-runtime**
-Pod 內負責載入、執行 Skills 與跑對話 agent loop 的 runtime 程序。程式碼在 `woow-paas-agent-runtime` repo。
+Pod 內負責載入、執行 Skills 與跑對話 agent loop 的 runtime 程序。程式碼在 `paas-agent-runtime` repo。
 
 **agent_template**
 每個 project 綁定的 agent 範本（`woow_paas_platform.agent_template`），含 `mcp_server_ids`、skills、`state`。對話時 `_resolve_agent_template` 優先取 `state=published` 的範本；project 無自綁時 fallback 到平台預設（Settings 的 `default_agent_template_id`；module 內建 seed `agent_template_default`，public+published+unbound）。見 [Agent 對話與串流](02-conversation-streaming.md)。
@@ -158,7 +158,7 @@ Odoo↔Pod WebSocket 的訊息格式，含 `version` / `type` / `request_id` / `
 ## U
 
 **url_validator (SSRF guard)**：Pod 建 MCP client 前再驗一次 URL（defense in depth）：拒 non-http(s)、link-local（`169.254/16`、`fe80::/10`）、雲端 IMDS、進位繞過；放行 `*.svc.cluster.local`（`security/url_validator.py`）。
-**use_agent_runtime**：`project.project` 旗標，決定對話走 **legacy**（Odoo 跑 LLM）或 **agent-runtime**（Pod 跑）。預設 `False`，Phase E 對 pilot project 開。見 [Agent 對話與串流](02-conversation-streaming.md)。
+**use_agent_runtime**：`project.project` 旗標，決定對話走 **legacy**（Odoo 跑 LLM）或 **agent-runtime**（Pod 跑）。預設 `False`；平台條件就緒（平台 toggle ON + operator url/api_key 設妥 + project 有有效 agent_template）時，新 project 由 server-side auto-enable 在 `/woow` 建立路徑自動翻 True、既有 project 由 migration（`18.0.1.0.30`）backfill；平台 toggle（`woow_paas_platform.default_enable_agent_runtime`）預設 OFF，需管理員 opt-in。見 [Agent 對話與串流](02-conversation-streaming.md)。
 
 ## V
 

@@ -93,7 +93,7 @@ related: [docs/decisions/xxx.md, .claude/epics/yyy/epic.md]
 
 - **Phase 1**（目前）：lychee broken link check，PR 觸發，失敗只 warning，**不 block merge**
 - **Phase 2**（穩定後）：升級為 block merge，加 orphan doc check
-- 例外清單：`docs/archived/`、`docs/superpowers/`、`docs/INDEX.md`
+- 例外清單：`docs/archived/`、`docs/superpowers/`
 
 ## 「無法分類」處理
 

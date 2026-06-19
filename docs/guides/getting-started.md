@@ -19,7 +19,7 @@ Welcome to the WoowTech PaaS Platform development guide! This document will help
 Before you begin, ensure you have the following installed:
 
 ### Required
-- **Python 3.10+** - For PaaS Operator development
+- **Python 3.11+** - For PaaS Operator development
 - **kubectl** 1.28+ + 一個 cluster context（本機 `docker-desktop` k8s，或 VPN 後的 `woow-k3s`） - 跑 Odoo dev sandbox
 - **Helm 3.13+** - dev sandbox 用 Helm 部署
 - **Node.js 18+** - For frontend development (OWL components)
@@ -35,7 +35,7 @@ Before you begin, ensure you have the following installed:
 
 ```bash
 # Check versions
-python --version    # Should be 3.10+
+python --version    # Should be 3.11+
 docker --version
 node --version      # Should be 18+
 kubectl version --client
