@@ -348,6 +348,25 @@ class OAuthClient(models.Model):
             })
 
     @api.model
+    def _ensure_ha_smart_home_device_grant(self) -> None:
+        """Idempotently add the RFC 8628 device_code grant to the seeded HA
+        client (hybrid: browser uses authorization_code, app uses device_code).
+        oauth_clients.xml is noupdate=1 so the seed change never reaches
+        existing DBs; this healer covers the upgrade path. Wired into
+        post_init_hook + data/oauth_device_grant_update.xml <function>."""
+        device_grant = 'urn:ietf:params:oauth:grant-type:device_code'
+        client = self.env.ref(
+            'woow_paas_platform.oauth_client_ha_smart_home',
+            raise_if_not_found=False,
+        )
+        if not client:
+            return
+        grants = [g.strip() for g in (client.grant_types or '').split(',') if g.strip()]
+        if device_grant not in grants:
+            grants.append(device_grant)
+            client.grant_types = ','.join(grants)
+
+    @api.model
     def generate_client_credentials(self) -> dict[str, str]:
         """Generate a new client_id and client_secret pair.
 

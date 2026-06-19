@@ -18,7 +18,7 @@
             <field name="require_pkce" eval="True"/>
             <field name="redirect_uri_match_mode">ha_callback</field>
             <field name="redirect_uris">/auth/external/woow/callback</field>
-            <field name="grant_types">authorization_code,refresh_token</field>
+            <field name="grant_types">authorization_code,refresh_token,urn:ietf:params:oauth:grant-type:device_code</field>
             <field name="scopes">smarthome:read smarthome:tunnel workspace:read security-access:read security-access:tunnel</field>
             <field name="is_active" eval="True"/>
         </record>
