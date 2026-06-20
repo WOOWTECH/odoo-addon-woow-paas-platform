@@ -310,6 +310,14 @@ class TestCloudService(TransactionCase):
         tunnel ingress route outlived the service as a permanent orphan (see
         pitfall ``cf-ns-orphan-no-account-gc``). Pass ``self.subdomain`` so the
         operator deletes the *actual* route.
+
+        Note (scope): this fixes the *main* route for all services. The
+        operator's mcp sidecar route stays mismatched — deploy uses
+        ``generate_subdomain+"-mcp"`` (releases.py:685), delete uses
+        ``(subdomain or generate_subdomain)+"-mcp"`` (:233) — so a service
+        WITH a sidecar leaks its mcp route. That is a pre-existing operator
+        bug (controller ``_delete_service`` already passed subdomain on
+        develop), decoupled from this fix; tracked in the operator repo.
         """
         service = self.Service.create({
             'name': 'Route Teardown Probe',

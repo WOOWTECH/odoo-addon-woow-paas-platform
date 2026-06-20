@@ -36,13 +36,15 @@ if self.tunnel_id:
 self.unlink()   # ← 無條件 unlink，連 retry 的 DB 參照都不留
 ```
 
-`delete_tunnel` 一次暫態失敗（operator 重啟 / CF 429 / 網路抖動）就只記 warning，緊接著 `self.unlink()` **無條件**刪掉 DB row → `tunnel_id` 隨之蒸發 → CF tunnel 變永久孤兒。`_do_cleanup`（`smart_home.py:348-365`）與 suspend/resume（`:278`/`:317`）路徑同樣只 `_logger.warning`、不 raise。**這不需要 destroy 繞過，正常刪除路徑就會漏。** 本次清出的 3 個 dedicated tunnel 孤兒全是 `paas-sm-*`。
+`delete_tunnel` 一次暫態失敗（operator 重啟 / CF 429 / 網路抖動）就只記 warning，緊接著 `self.unlink()` **無條件**刪掉 DB row → `tunnel_id` 隨之蒸發 → CF tunnel 變永久孤兒。**這不需要 destroy 繞過，正常刪除路徑就會漏。** 本次清出的 3 個 dedicated tunnel 孤兒全是 `paas-sm-*`。
+
+> 精確範圍（別擴大化）：SmartHome **唯一**會漏 tunnel 的是 `action_delete`（`:202` 無條件 `unlink()`）。`_do_cleanup`（`:367` 失敗後 `write({'state':'deleting'})`）、`_do_suspend`/`_do_resume`（`:296`/`:335` 失敗後 `write({'state':'error'})` + `return`）雖也只 `_logger.warning` 不 raise，但**都保留 record（不 unlink）** → `tunnel_id` 還在、**不漏 tunnel**。所以缺的是 `action_delete` 一處的 fail-loud guard，不是「所有路徑都漏」。
 
 ### 3. 沒有帳號級反向對帳器（reconciler）
 
 `cloudflare.py` 只有「給定一個已知 tunnel_id，對帳它名下的 DNS」（`reconcile_tunnel_dns`，`:439`）；**沒有** list-all-tunnels / list-all-access-apps / list-all-access-policies。所以無法做「列 CF account 上所有平台資源 vs Odoo 現存 stored-id 取差集」這種帳號級孤兒掃描。孤兒一旦失去 DB 反參照，就再也沒有任何 code path 能發現它。
 
-> 對照：PVC 至少有 grace-period 清理（`config.py` `pvc_grace_period_days`，prod 90 / dev 7）；但**孤兒 namespace 本身沒有 TTL**，且 PVC grace 也救不了「ns 被整個留下」的情況。
+> 對照：PVC 至少有 grace-period 清理（`config.py` `pvc_grace_period_days`，本 repo default=7；prod 90 來自 cross-repo Fleet override，本 repo 證不到、待證）；但**孤兒 namespace 本身沒有 TTL**，且 PVC grace 也救不了「ns 被整個留下」的情況。
 
 ### 配套的清理陷阱（盤/清孤兒時會踩）
 
@@ -50,12 +52,13 @@ self.unlink()   # ← 無條件 unlink，連 retry 的 DB 參照都不留
 - **刪一條 marketplace route 要 DNS + namespace + shared-tunnel ingress rule 三處一起清**：刪 DNS record ≠ 刪 namespace ≠ 刪 tunnel ingress rule。本次刪完 DNS + ns 後，shared tunnel 的 ingress config 仍殘留 30 條指向死 service 的 rule（ingress 無單刪 API，需 GET→filter→PUT 整份 config）。
 - **CF list API `per_page=100` 會截斷**：第一次 zone CNAME dump 漏了 15 筆 `svc-*-mcp` 孤兒（在 100 筆之外），全 zone（`per_page=500`）才現形。
 - **不能信 Odoo DB 白名單判 Access policy 孤兒**：`sync_access_app` 每次 resync 重建一組 reusable policy + 刪舊，造成 DB `cf_policy_id` 與 CF app 實際引用漂移（實測 SA6 在 CF 有 3 組 test1/2/3 policy、三方對不上）。判 policy 孤兒要用 **CF app 實際引用**（`GET /access/apps/{id}/policies`）為準，靠 CF `409 in-use` guard 兜底——本次正是它擋下 3 個被誤判為孤兒的 active policy。
+- **CloudService 的 mcp sidecar route 是 operator 既存的 create/delete 命名不對稱孤兒源**（與本 repo 的 CloudService teardown subdomain fix **解耦**，非該 fix 引入）：deploy 時 mcp route 用 `generate_subdomain(ns,release)+"-mcp"`（`extra/paas-operator/src/api/releases.py:685`），delete 時用 `(subdomain or generate_subdomain)+"-mcp"`（`:233`）。controller `_delete_service`（`src/controllers/paas.py:2332`，**develop 既存**）與對齊後的 `_do_cleanup` 都傳 `subdomain=self.subdomain`（`paas-cs-…`）→ delete 算出 `paas-cs-…-mcp` ≠ deploy 的 `svc-…-{nssuffix}-mcp` → **有開 sidecar 的 service 刪除時漏 mcp CF route**。無 sidecar 的 service（如本次 myodoo2）不受影響。快修在 operator（`:233` 改回 `generate_subdomain(ns,name)+"-mcp"`），盤 mcp 孤兒須同時涵蓋 `svc-…-mcp` 與 `paas-cs-…-mcp` 兩種命名。
 
 ## How to avoid
 
 ### 1. SmartHome 補 fail-loud guard，對齊 SecurityAccess
 
-`SmartHome.action_delete` / `_do_cleanup` 的 `delete_tunnel` 失敗時，**保留 `tunnel_id` 不要 unlink、raise（或至少不清 record）讓 cron/使用者 retry**，對齊 `SecurityAccess.unlink` 的契約（[[direct-unlink-bypass-cleanup-hook]] 的 cloud-service-unlink-override-cleanup pattern）。「遠端資源不可比 record 先消失」這條不變式應該在每個建立遠端資源的 model 上對稱成立，不能只有 SecurityAccess 有。
+`SmartHome.action_delete` 的 `delete_tunnel` 失敗時，**保留 `tunnel_id` 不要 unlink、raise（或至少不清 record）讓 cron/使用者 retry**（`_do_cleanup`/suspend/resume 失敗已是「只 write state、不 unlink」→ 不漏 tunnel；要補的是 `action_delete:202` 那一處無條件 `unlink()`），對齊 `SecurityAccess.unlink` 的契約（[[direct-unlink-bypass-cleanup-hook]] 的 cloud-service-unlink-override-cleanup pattern）。「遠端資源不可比 record 先消失」這條不變式應該在每個建立遠端資源的 model 上對稱成立，不能只有 SecurityAccess 有。
 
 ### 2. 加帳號級 Cloudflare reconciler（反向 GC）
 
