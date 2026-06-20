@@ -48,9 +48,9 @@ project.project + user-scope mcp_server
     <field name="domain_force">['&amp;',
         ('scope', '=', 'user'),
         '|',
-        ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+        ('project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),
         '&amp;',
-        ('project_id.cloud_service_id', '=', False),
+        ('project_id.cloud_service_ids', '=', False),
         ('project_id.message_partner_ids', 'in', [user.partner_id.id])
     ]</field>
 </record>

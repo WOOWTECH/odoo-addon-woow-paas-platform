@@ -13,7 +13,7 @@ related:
 
 # agent-runtime Pod 內部
 
-> contract 的 Pod 那一端。程式碼在 `woow-paas-agent-runtime` repo（`runtime/`）。這篇補齊 [Agent 對話與串流](02-conversation-streaming.md) 裡「Pod 內怎麼跑」的細節。
+> contract 的 Pod 那一端。程式碼在 `paas-agent-runtime` repo（`runtime/`）。這篇補齊 [Agent 對話與串流](02-conversation-streaming.md) 裡「Pod 內怎麼跑」的細節。
 
 > ✅ **狀態（2026-06-09 更新，Drop B）**：transport（WS / 認證 / envelope）、skill 載入與執行、熱重載、安全機制、真正的 agent loop `runtime/langgraph_runtime.py` 都已實作並上線。**skill 執行已改為 Claude Code 模型**（image `1.4.0`，含 `bash_bridge` sidecar）：`stream()` 會 `_resolve_tool_set` 組出 `[skill:load_skill, bash:execute, *mcp_tools]`（skill **不再各自是 StructuredTool**）→ `ChatOpenAI.bind_tools` → `astream` → 逐 delta yield `text_chunk`，遇 `tool_calls` 則執行並串 §4b tool frame，直到無 tool_call（`MAX_TOOL_ROUNDS` 上限）。`initialize()` 仍是 no-op（LLM client 於 `stream()` 內按 env 即時建）；無 `LLM_API_KEY` → echo fallback。**STG 已上線並驗證；prod 待 Fleet flip**；設計依據見 `docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md`，sidecar kill-switch 見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 >

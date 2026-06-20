@@ -126,6 +126,13 @@ Odoo `ir_rule.py:140-168` 對同 group 多 rule 採 **OR 語意**。`project.pro
 
 ## Invariants（後人改本區前必看）
 
+> **⚠️ 部分 invariant 已被 2026-Q2 cloud_service M:N migration 部分 superseded**（agent-runtime-pod epic Phase A，`18.0.1.0.26` migration）。Project ↔ Service 已從單一 `cloud_service_id` M2O 改為 `cloud_service_ids` M:N（rel table `project_cloud_service_rel`），單數 `cloud_service_id` 退化成 deprecated stored compute over `cloud_service_ids[:1]`（`src/models/project_project.py:11-33,123-139`），ir.rule 改走複數 `cloud_service_ids`（`src/security/ir_rules.xml:68,316,367,403`）。受影響條目：
+> - **#1**：`unique_cloud_service` SQL constraint **已被拔**（`src/migrations/18.0.1.0.26/post-migrate.py:106-124` `_step3_drop_unique_constraint`）—— 這正是 invariant 文中「要拔就走獨立 plan + schema migration」的合法兌現（M:N 即該 1:N 演進）。
+> - **#2**：`cloud_service_id` **不再是帶 `ondelete='set null'` 的實體 M2O 欄位**，改為 `compute='_compute_cloud_service_id'` + `inverse` + `store=True`；「Project 可獨立存在」現由 M:N rel table（`ON DELETE CASCADE` 只拆連結列、不連坐刪 project）保證。
+> - **#3**：實質仍成立（`workspace_id` 仍 `compute='_compute_workspace_id'` + `store=True`，depend `cloud_service_id.workspace_id`），唯其 source `cloud_service_id` 本身已是 derived compute；另新增聚合 `workspace_ids` M2M。
+>
+> 以下原 invariant 文字為歷史紀錄，**不修改**；改動相關 code 前以本 callout 對齊現況。
+
 1. **`project.project._sql_constraints['unique_cloud_service']`** 不可拔。要拔就是把 Project ↔ Service 改成 1:N，必須走獨立 plan + schema migration + 既有資料 audit。
 2. **`project.project.cloud_service_id` 必須維持 `ondelete='set null'`**。改成 cascade 或 restrict 會把刪 service 連坐刪 project，違反「Project 可獨立存在」的目標。
 3. **`project.project.workspace_id` 必須維持 `compute='_compute_workspace_id'` + `store=True` + `related-style` 對 `cloud_service_id.workspace_id`**。任何把它改成手動寫入或 unstored compute 的動作會破 AC #3 與 stg 既有資料一致性。

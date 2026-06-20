@@ -20,11 +20,14 @@
 | [`issues/`](issues/) | 生產 / 沙盒問題排查紀錄（含修復方案 Path A/B） |
 | [`pitfalls/`](pitfalls/) | 已踩過的坑（cross-workspace data leak、plan-vs-schema mismatch 等） |
 | [`followups/`](followups/) | 技術債清單（單檔 `follow-ups.md`，F# 流水號跨 refactor cycle 連續編號） |
-| [`test-reports/`](test-reports/) | Test scope report、coverage report、CAQA test report |
+| [`test-reports/`](test-reports/) | **測試覆蓋 / 結果報告**：test scope report、coverage report、TDD red 解釋、CAQA test report |
+| [`reports/`](reports/) | **交付物（deliverables）報告**：cycle / phase 收尾的 docs 清單 + commit message draft + PR description draft + leader hand-off 清單 + retro |
+
+> **根層 loose `.md` 為歷史遺留**：tracking/ 根層目前散著多個 per-epic 快照檔（`caqa-report-*`、`reviewer-report-*`、`agent-runtime-pod-phase-*` 等），都是某次 epic / phase 的 point-in-time 報告。**慣例上這類報告應歸 [`test-reports/`](test-reports/)**（測試覆蓋 / review / CAQA 結果），根層既有檔僅因早期未分目錄而遺留。**未來新增請直接放對應子目錄，不要再落根層**；本次不搬動既有檔（避免打斷 CLAUDE.md / 其他 doc 的路徑引用），日後若整批搬遷再連同引用一起更新。
 
 ## 命名
 
-- `issues/`：`<incident-slug>.md`（如 `sandbox-hostpath-rot.md`、`stg-networkpolicy.md`）
+- `issues/`：`<incident-slug>.md`（如 `sandbox-hostpath-rot.md`、`stg-sandbox-networkpolicy-cross-ns-block.md`）
 - `pitfalls/`：`<incident-slug>.md`（如 `cross-workspace-task-data-leak.md`）
 - `followups/`：固定 `follow-ups.md`，內部用 F1, F2, ... 連續編號（跨 cycle 不重置）
 - `test-reports/`：`<feature>-<aspect>-YYYY-MM-DD.md` 或 `issue-<N>-test-coverage.md`

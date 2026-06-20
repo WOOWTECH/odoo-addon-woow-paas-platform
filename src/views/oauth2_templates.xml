@@ -235,4 +235,136 @@
             </body>
         </html>
     </template>
+
+    <!-- Device Flow (RFC 8628): enter user_code -->
+    <template id="device_verify" name="Device Verification">
+        <html>
+            <head>
+                <meta charset="utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <title>Connect a Device - Woow PaaS</title>
+                <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { font-family: 'Manrope', -apple-system, sans-serif; background: #f5f7fa;
+                           display: flex; align-items: center; justify-content: center; min-height: 100vh; color: #1a1a2e; }
+                    .oauth-card { background: #fff; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+                                  padding: 40px; max-width: 440px; width: 100%; margin: 20px; }
+                    .oauth-logo { text-align: center; margin-bottom: 24px; }
+                    .oauth-logo span { font-size: 28px; font-weight: 700; color: #6366f1; }
+                    .oauth-title { font-size: 18px; font-weight: 600; text-align: center; margin-bottom: 24px; }
+                    .code-input { width: 100%; padding: 14px; font-size: 22px; text-align: center; letter-spacing: 0.2em;
+                                  text-transform: uppercase; border: 2px solid #e5e7eb; border-radius: 10px; margin-bottom: 16px;
+                                  font-family: 'Manrope', monospace; }
+                    .oauth-btn-allow { width: 100%; padding: 12px 24px; border-radius: 10px; font-size: 15px; font-weight: 600;
+                                       border: none; cursor: pointer; background: #6366f1; color: #fff; font-family: inherit; }
+                    .err { color: #dc2626; font-size: 14px; text-align: center; margin-bottom: 12px; }
+                </style>
+            </head>
+            <body>
+                <div class="oauth-card">
+                    <div class="oauth-logo"><span>Woow PaaS</span></div>
+                    <div class="oauth-title">Enter the code shown on your device</div>
+                    <t t-if="error"><div class="err"><t t-esc="error"/></div></t>
+                    <form method="POST" action="/device">
+                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token(None)"/>
+                        <input type="text" name="user_code" class="code-input" placeholder="XXXX-XXXX"
+                               t-att-value="user_code or ''" autocomplete="off" required="required"/>
+                        <button type="submit" name="verify" value="1" class="oauth-btn-allow">Continue</button>
+                    </form>
+                </div>
+            </body>
+        </html>
+    </template>
+
+    <!-- Device Flow (RFC 8628): consent (after a valid user_code) -->
+    <template id="device_consent" name="Device Consent">
+        <html>
+            <head>
+                <meta charset="utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <title>Authorize Device - Woow PaaS</title>
+                <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { font-family: 'Manrope', -apple-system, sans-serif; background: #f5f7fa;
+                           display: flex; align-items: center; justify-content: center; min-height: 100vh; color: #1a1a2e; }
+                    .oauth-card { background: #fff; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+                                  padding: 40px; max-width: 440px; width: 100%; margin: 20px; }
+                    .oauth-logo { text-align: center; margin-bottom: 24px; }
+                    .oauth-logo span { font-size: 28px; font-weight: 700; color: #6366f1; }
+                    .oauth-title { font-size: 18px; font-weight: 600; text-align: center; margin-bottom: 8px; }
+                    .oauth-client-name { color: #6366f1; font-weight: 700; }
+                    .device-code-confirm { text-align: center; font-size: 13px; color: #6b7280; margin: 16px 0 2px; }
+                    .device-code { font-size: 26px; font-weight: 700; letter-spacing: 0.15em; text-align: center; color: #1a1a2e; margin: 2px 0 8px; }
+                    .oauth-scopes { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin: 16px 0 24px; }
+                    .oauth-scope-item { padding: 6px 0; font-size: 14px; }
+                    .oauth-actions { display: flex; gap: 12px; }
+                    .oauth-btn { flex: 1; padding: 12px 24px; border-radius: 10px; font-size: 15px; font-weight: 600;
+                                 border: none; cursor: pointer; font-family: inherit; }
+                    .oauth-btn-deny { background: #f3f4f6; color: #4b5563; }
+                    .oauth-btn-allow { background: #6366f1; color: #fff; }
+                    .oauth-user-info { text-align: center; font-size: 13px; color: #9ca3af; margin-top: 16px; }
+                </style>
+            </head>
+            <body>
+                <div class="oauth-card">
+                    <div class="oauth-logo"><span>Woow PaaS</span></div>
+                    <div class="oauth-title"><span class="oauth-client-name"><t t-esc="client_name"/></span> wants to access your account</div>
+                    <!-- RFC 8628 §5.4: confirm device possession (anti-phishing) -->
+                    <div class="device-code-confirm">Confirm this code matches the one shown on your device:</div>
+                    <div class="device-code"><t t-esc="user_code"/></div>
+                    <div class="oauth-scopes">
+                        <t t-foreach="scopes" t-as="s"><div class="oauth-scope-item"><t t-esc="s"/></div></t>
+                    </div>
+                    <form method="POST" action="/device">
+                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token(None)"/>
+                        <input type="hidden" name="user_code" t-att-value="user_code"/>
+                        <div class="oauth-actions">
+                            <button type="submit" name="deny" value="1" class="oauth-btn oauth-btn-deny">Deny</button>
+                            <button type="submit" name="approve" value="1" class="oauth-btn oauth-btn-allow">Allow</button>
+                        </div>
+                    </form>
+                    <div class="oauth-user-info">Signed in as <t t-esc="request.env.user.login"/></div>
+                </div>
+            </body>
+        </html>
+    </template>
+
+    <!-- Device Flow (RFC 8628): result (approved / denied) -->
+    <template id="device_result" name="Device Result">
+        <html>
+            <head>
+                <meta charset="utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <title>Device Authorized - Woow PaaS</title>
+                <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { font-family: 'Manrope', -apple-system, sans-serif; background: #f5f7fa;
+                           display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+                    .oauth-card { background: #fff; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+                                  padding: 40px; max-width: 440px; width: 100%; margin: 20px; text-align: center; }
+                    .ic { font-size: 48px; margin-bottom: 16px; }
+                    .ttl { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+                    .ok { color: #16a34a; } .no { color: #dc2626; }
+                    .msg { font-size: 15px; color: #6b7280; }
+                </style>
+            </head>
+            <body>
+                <div class="oauth-card">
+                    <t t-if="approved">
+                        <div class="ic ok">&#10003;</div>
+                        <div class="ttl ok">Device Connected</div>
+                        <div class="msg">You can return to your device. It will finish connecting automatically.</div>
+                    </t>
+                    <t t-else="">
+                        <div class="ic no">&#10007;</div>
+                        <div class="ttl no">Request Denied</div>
+                        <div class="msg"><t t-esc="message or 'The device authorization was denied.'"/></div>
+                    </t>
+                </div>
+            </body>
+        </html>
+    </template>
 </odoo>

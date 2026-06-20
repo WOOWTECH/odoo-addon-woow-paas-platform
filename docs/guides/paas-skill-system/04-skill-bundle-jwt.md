@@ -38,7 +38,7 @@ sequenceDiagram
 
 ## 🔐 JWT 宣告（claims）
 
-operator 的 `sign_skill_bundle_token()` 簽出（`jwt_signer.py:94-119`），演算法 **HS256（純 stdlib，無 PyJWT）**，效期 **3600 秒（1h）**：
+operator 的 `sign_skill_bundle_token()` 簽出（`jwt_signer.py:94-119`），演算法 **HS256（純 stdlib，無 PyJWT）**，效期 **預設 7 天（604800 秒，issue #155）**（`config.py:88-90` default=604800）。`jwt_signer.py:111` 的 `exp_seconds=3600` 僅是未顯式帶 ttl 時的 footgun fallback；兩個 production caller（cold-start install + resume re-sign）都會顯式傳 7 天的 `skill_bundle_token_ttl_seconds`：
 
 | Claim | 值 | 用途 |
 |---|---|---|
@@ -48,7 +48,7 @@ operator 的 `sign_skill_bundle_token()` 簽出（`jwt_signer.py:94-119`），�
 | `project_id` | `int` | **權威身份**：Odoo 以此查庫，URL 參數忽略 |
 | `workspace_ids` | `list[int]` | Pod 的 NetworkPolicy egress 白名單 |
 | `project_hash` | `str` | namespace / release 命名 |
-| `iat` / `exp` | ts | 簽發 / 到期（`exp = iat + 3600`） |
+| `iat` / `exp` | ts | 簽發 / 到期（`exp = iat + 604800`，預設 7 天；3600 僅未帶 ttl 時的 fallback） |
 | `jti` | uuid hex | 唯一識別，供 **operator 端** replay 防禦 |
 
 ## ✅ 下載端點的驗證步驟

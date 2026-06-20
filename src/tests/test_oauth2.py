@@ -63,6 +63,83 @@ class TestOAuthClient(TransactionCase):
         self.assertTrue(client.check_redirect_uri('https://example.com/cb'))
         self.assertFalse(client.check_redirect_uri('https://evil.com/cb'))
 
+    def _ha_client(self):
+        """A public + PKCE client in ha_callback mode (mirrors the seeded HA client)."""
+        return self.OAuthClient.create({
+            'name': 'HA Callback Test',
+            'client_type': 'public',
+            'require_pkce': True,
+            'redirect_uri_match_mode': 'ha_callback',
+            'redirect_uris': '/auth/external/woow/callback',
+        })
+
+    def test_ha_callback_accepts_loopback_http(self):
+        c = self._ha_client()
+        self.assertTrue(c.check_redirect_uri('http://127.0.0.1:8123/auth/external/woow/callback'))
+        self.assertTrue(c.check_redirect_uri('http://localhost:8123/auth/external/woow/callback'))
+        self.assertTrue(c.check_redirect_uri('http://[::1]:8123/auth/external/woow/callback'))
+
+    def test_ha_callback_accepts_private_and_local_http(self):
+        c = self._ha_client()
+        self.assertTrue(c.check_redirect_uri('http://192.168.1.50:8123/auth/external/woow/callback'))
+        self.assertTrue(c.check_redirect_uri('http://10.0.0.5:8123/auth/external/woow/callback'))
+        self.assertTrue(c.check_redirect_uri('http://homeassistant.local:8123/auth/external/woow/callback'))
+
+    def test_ha_callback_accepts_public_https(self):
+        c = self._ha_client()
+        self.assertTrue(c.check_redirect_uri('https://abc123.ui.nabu.casa/auth/external/woow/callback'))
+        self.assertTrue(c.check_redirect_uri('https://ha.mydomain.com/auth/external/woow/callback'))
+
+    def test_ha_callback_rejects_public_http(self):
+        c = self._ha_client()
+        self.assertFalse(c.check_redirect_uri('http://ha.mydomain.com/auth/external/woow/callback'))
+        self.assertFalse(c.check_redirect_uri('http://attacker.example.com/auth/external/woow/callback'))
+
+    def test_ha_callback_rejects_wrong_path(self):
+        c = self._ha_client()
+        self.assertFalse(c.check_redirect_uri('https://ha.mydomain.com/evil'))
+        self.assertFalse(c.check_redirect_uri('https://ha.mydomain.com/auth/external/woow/callback/extra'))
+        self.assertFalse(c.check_redirect_uri('https://ha.mydomain.com/auth/external/woow/callback/../evil'))
+
+    def test_ha_callback_rejects_query_fragment_userinfo(self):
+        c = self._ha_client()
+        self.assertFalse(c.check_redirect_uri('https://ha.mydomain.com/auth/external/woow/callback?x=1'))
+        self.assertFalse(c.check_redirect_uri('https://ha.mydomain.com/auth/external/woow/callback#frag'))
+        self.assertFalse(c.check_redirect_uri('https://user:pass@ha.mydomain.com/auth/external/woow/callback'))
+
+    def test_ha_callback_rejects_bad_scheme(self):
+        c = self._ha_client()
+        self.assertFalse(c.check_redirect_uri('ftp://ha.mydomain.com/auth/external/woow/callback'))
+        self.assertFalse(c.check_redirect_uri('javascript:alert(1)//auth/external/woow/callback'))
+
+    def test_ha_callback_rejects_parser_confusion(self):
+        # urlsplit silently strips \t\r\n; fail closed on raw control chars /
+        # surrounding whitespace so the validated host cannot diverge from the
+        # stored/browser-seen literal (HIGH-1 from adversarial review).
+        c = self._ha_client()
+        self.assertFalse(c.check_redirect_uri('http://local\thost:8123/auth/external/woow/callback'))
+        self.assertFalse(c.check_redirect_uri('http://127.0.0.1\n/auth/external/woow/callback'))
+        self.assertFalse(c.check_redirect_uri(' http://127.0.0.1:8123/auth/external/woow/callback'))
+        self.assertFalse(c.check_redirect_uri('https://exa\tmple.com/auth/external/woow/callback'))
+
+    def test_ha_callback_local_host_classifier_edges(self):
+        c = self._ha_client()
+        # bare '.local' (empty label) is NOT local -> public -> http reject
+        self.assertFalse(c.check_redirect_uri('http://.local/auth/external/woow/callback'))
+        # IPv4-mapped IPv6 loopback unwraps and is allowed over http
+        self.assertTrue(c.check_redirect_uri('http://[::ffff:127.0.0.1]/auth/external/woow/callback'))
+        # uppercase host normalized; .local mDNS allowed over http
+        self.assertTrue(c.check_redirect_uri('http://HomeAssistant.LOCAL:8123/auth/external/woow/callback'))
+
+    def test_exact_mode_unaffected_by_relaxation(self):
+        c = self.OAuthClient.create({
+            'name': 'Exact Mode',
+            'redirect_uris': 'https://example.com/cb',
+        })
+        self.assertEqual(c.redirect_uri_match_mode, 'exact')
+        self.assertTrue(c.check_redirect_uri('https://example.com/cb'))
+        self.assertFalse(c.check_redirect_uri('https://anything.com/auth/external/woow/callback'))
+
     def test_default_scopes(self):
         """Test default scopes include smart home scopes."""
         client = self.OAuthClient.create({
@@ -282,6 +359,27 @@ class TestPublicClientConstraints(TransactionCase):
         with self.assertRaises(ValidationError):
             client.write({'client_secret_hash': 'pretend-hash'})
 
+    def test_ha_callback_mode_requires_pkce(self):
+        """ha_callback relaxes host; without PKCE it would be a bare open-redirect."""
+        with self.assertRaises(ValidationError):
+            self.OAuthClient.create({
+                'name': 'Bad HA Callback',
+                'client_type': 'confidential',
+                'require_pkce': False,
+                'redirect_uri_match_mode': 'ha_callback',
+                'redirect_uris': '/auth/external/woow/callback',
+            })
+
+    def test_ha_callback_mode_with_pkce_allowed(self):
+        client = self.OAuthClient.create({
+            'name': 'Good HA Callback',
+            'client_type': 'public',
+            'require_pkce': True,
+            'redirect_uri_match_mode': 'ha_callback',
+            'redirect_uris': '/auth/external/woow/callback',
+        })
+        self.assertEqual(client.redirect_uri_match_mode, 'ha_callback')
+
     def test_seeded_ha_smart_home_client(self):
         """The XML data record should be seeded on install with public+PKCE."""
         client = self.env.ref(
@@ -293,10 +391,38 @@ class TestPublicClientConstraints(TransactionCase):
         self.assertEqual(client.client_type, 'public')
         self.assertTrue(client.require_pkce)
         self.assertFalse(client.client_secret_hash)
-        self.assertIn(
-            'https://my.home-assistant.io/redirect/oauth',
-            client.redirect_uris,
-        )
+        self.assertEqual(client.redirect_uri_match_mode, 'ha_callback')
+        self.assertEqual(client.redirect_uris, '/auth/external/woow/callback')
+        # The relay value must be gone (route one 消除 my.home-assistant.io).
+        self.assertNotIn('my.home-assistant.io', client.redirect_uris or '')
+
+
+class TestHaRedirectModeHealer(TransactionCase):
+    """Healer migrates the seeded HA client to ha_callback mode on -u
+    (sticky-noupdate path: seed XML edits never reach existing DBs)."""
+
+    def setUp(self):
+        super().setUp()
+        self.OAuthClient = self.env['woow_paas_platform.oauth_client']
+        self.client = self.env.ref('woow_paas_platform.oauth_client_ha_smart_home')
+
+    def test_healer_flips_legacy_record_to_ha_callback(self):
+        # Simulate a legacy DB row still in exact mode with the old value.
+        self.client.write({
+            'redirect_uri_match_mode': 'exact',
+            'redirect_uris': 'https://my.home-assistant.io/redirect/oauth',
+        })
+        self.OAuthClient._ensure_ha_smart_home_redirect_mode()
+        self.assertEqual(self.client.redirect_uri_match_mode, 'ha_callback')
+        self.assertEqual(self.client.redirect_uris, self.OAuthClient.HA_CALLBACK_PATH)
+        # Legacy my.home-assistant.io value is gone (not superset).
+        self.assertNotIn('my.home-assistant.io', self.client.redirect_uris)
+
+    def test_healer_is_idempotent(self):
+        self.OAuthClient._ensure_ha_smart_home_redirect_mode()
+        self.OAuthClient._ensure_ha_smart_home_redirect_mode()
+        self.assertEqual(self.client.redirect_uri_match_mode, 'ha_callback')
+        self.assertEqual(self.client.redirect_uris, self.OAuthClient.HA_CALLBACK_PATH)
 
 
 class TestPkceOnlyTokenFlow(TransactionCase):

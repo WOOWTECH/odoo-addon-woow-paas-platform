@@ -60,9 +60,9 @@ mcp_tool    server_id ───►  mcp_server
     <field name="domain_force">['&amp;',
         ('scope', '=', 'user'),
         '|',
-        ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+        ('project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),
         '&amp;',
-        ('project_id.cloud_service_id', '=', False),
+        ('project_id.cloud_service_ids', '=', False),
         ('project_id.message_partner_ids', 'in', [user.partner_id.id])
     ]</field>
     <field name="groups" eval="[(4, ref('base.group_user'))]"/>
@@ -98,9 +98,9 @@ mcp_tool    server_id ───►  mcp_server
     <field name="domain_force">['&amp;',
         ('server_id.scope', '=', 'user'),
         '|',
-        ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+        ('server_id.project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),
         '&amp;',
-        ('server_id.project_id.cloud_service_id', '=', False),
+        ('server_id.project_id.cloud_service_ids', '=', False),
         ('server_id.project_id.message_partner_ids', 'in', [user.partner_id.id])
     ]</field>
     <!-- perms / groups 同 mcp_server_rule_workspace_user -->
@@ -134,7 +134,7 @@ Round 1 plan 用 single dual-leg rule：
 
 ```xml
 <record id="mcp_server_rule_workspace_member" model="ir.rule">
-    <field name="domain_force">['|', ('scope', '=', 'system'), ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+    <field name="domain_force">['|', ('scope', '=', 'system'), ('project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id)]</field>
     <field name="groups" eval="[(4, ref('base.group_user'))]"/>
     <field name="perm_read" eval="True"/>
     <field name="perm_write" eval="True"/>
@@ -228,16 +228,16 @@ domain = [('server_id.scope', '=', 'system')]
 # parent workspace chain — dual-leg as of cycle 4 (見 [[unbound-project-acl-dual-leg]])
 domain = [
     '&', ('scope', '=', 'user'),
-    '|', ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
-    '&', ('project_id.cloud_service_id', '=', False),
+    '|', ('project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),
+    '&', ('project_id.cloud_service_ids', '=', False),
          ('project_id.message_partner_ids', 'in', [user.partner_id.id]),
 ]
 
 # sub-model — dual-leg sub-model 對等 (server_id. 前綴)
 domain = [
     '&', ('server_id.scope', '=', 'user'),
-    '|', ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
-    '&', ('server_id.project_id.cloud_service_id', '=', False),
+    '|', ('server_id.project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),
+    '&', ('server_id.project_id.cloud_service_ids', '=', False),
          ('server_id.project_id.message_partner_ids', 'in', [user.partner_id.id]),
 ]
 ```

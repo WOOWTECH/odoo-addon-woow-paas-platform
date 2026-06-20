@@ -1,6 +1,6 @@
 # Design: Security Access 訂閱服務（Cloudflare Tunnel + Access Control + 自有網域 + Email Routing）
 
-> 狀態：P1 + P2(Per-route Access Control) implemented（plans: `docs/superpowers/plans/2026-06-06-security-access-p1-mainline.md` + `docs/superpowers/plans/2026-06-07-security-access-p2-access-control.md` + P2.5 per-route 重構 `docs/superpowers/plans/2026-06-09-security-access-p2.5-per-route-access.md`）；P3 Domains / P4 Email 待開。
+> 狀態：P1 + P2(Per-route Access Control) implemented（plans: `docs/superpowers/plans/2026-06-06-security-access-p1-mainline.md` + `docs/archived/superpowers/plans/2026-06-07-security-access-p2-access-control.md` + P2.5 per-route 重構 `docs/superpowers/plans/2026-06-09-security-access-p2.5-per-route-access.md`）；P3 Domains / P4 Email 待開。
 >
 > **P2.5 note**：P2 原為 Service-wide（整 SA 一個 Cloudflare Access app + 一套共用 policies/login/session）；P2.5 重構成 **Per-route**（每條 Application Route = 一個 Access app，各自 Protected toggle + policies + login methods + session）。Access 三件組從 SA 層下放到 route 子模型；Application tab 移除 Protected 欄，Access tab 改 per-route Protected Applications（無 Service-wide 切換器，廢雙模版）。operator 不變（仍 per-app，Odoo 每 protected route 各打一次 sync）。
 > 來源：`docs/meeting/docs/2026-06-06 Security Access 開發需求文件.md`（27 份會議記錄彙整）

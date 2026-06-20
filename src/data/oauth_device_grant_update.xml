@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- noupdate=0 (default): <function> re-runs every -u. oauth_clients.xml is
+         noupdate=1, so the seed grant_types change only reaches fresh installs;
+         this healer covers existing DBs (upgrade path). See pitfall
+         docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md. -->
+    <function
+        model="woow_paas_platform.oauth_client"
+        name="_ensure_ha_smart_home_device_grant"/>
+</odoo>

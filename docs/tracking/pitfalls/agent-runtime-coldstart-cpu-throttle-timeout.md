@@ -73,4 +73,4 @@ operator `resources.limits.cpu` **250m → 1000m**，改兩檔：
 - odoo-shell 刪測試 session 的 `unlink` 可能與 reap 觸發的 webhook（別的 worker 正寫同一 row）併發 → `psycopg2 SerializationFailure: could not serialize access due to concurrent update`。解：`env.cr.rollback()` 後 retry（reap/webhook 落定後即無併發），或刪前 `time.sleep` 緩衝。
 - operator `delete`（client `DELETE /{hash}`）**只 uninstall helm release、保留空 namespace**（與 reaped 同模式，供 resume）。刪掉 project 後該空 ns 變無主 orphan（inert、零負載），測試後需手動 `kubectl --context woow-k3s delete ns paas-ws-stg-pa-<hash>`（刪前確認 `get pods,deploy` 為空 + `helm list -n` 無 release）。
 
-> 記憶體索引：[[reference_agent_runtime_stg_verify]]（含 deploy-stg 啟用 recipe + 本根因/修復的精簡版）。
+> 記憶體索引：`reference_agent_runtime_stg_verify`（含 deploy-stg 啟用 recipe + 本根因/修復的精簡版）。

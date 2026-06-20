@@ -179,11 +179,22 @@ def _ensure_ha_client_sa_scopes(env):
     env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_sa_scopes()
 
 
+def _ensure_ha_client_redirect_mode(env):
+    """Migrate the HA public client to host-flexible ha_callback redirect
+    matching (fresh-install path). Upgrade path is covered by
+    data/oauth_redirect_mode_update.xml. oauth_clients.xml is noupdate=1 so the
+    seed change to redirect_uri_match_mode never reaches existing DBs; the
+    idempotent healer lives on the model. See seed-noupdate-sticky pitfall."""
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_redirect_mode()
+
+
 def post_init_hook(env):
     """Auto-point the platform default agent template, then ensure the
     subscription journal is configured on the main company."""
     _ensure_default_agent_template(env)
     _ensure_ha_client_sa_scopes(env)
+    _ensure_ha_client_redirect_mode(env)
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_device_grant()
     company = env.ref('base.main_company', raise_if_not_found=False)
     if not company:
         return

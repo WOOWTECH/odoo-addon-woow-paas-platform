@@ -22,7 +22,7 @@ related:
 > `docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md`，
 > sidecar 細節見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 
-> ℹ️ **本篇是概念層**；Pod 內部的實際模組（WS 伺服器 / auth / langgraph / skill loader / 熱重載 / 安全）逐項對程式碼的細節見 [agent-runtime Pod 內部](06-pod-internals.md)。runtime 程式碼在另一個 repo `woow-paas-agent-runtime`，本 repo（Odoo + operator）只定義 contract：下載端點、webhook、env 與 bundle 格式。
+> ℹ️ **本篇是概念層**；Pod 內部的實際模組（WS 伺服器 / auth / langgraph / skill loader / 熱重載 / 安全）逐項對程式碼的細節見 [agent-runtime Pod 內部](06-pod-internals.md)。runtime 程式碼在另一個 repo `paas-agent-runtime`，本 repo（Odoo + operator）只定義 contract：下載端點、webhook、env 與 bundle 格式。
 
 ## 🔄 Pod 啟動流程
 

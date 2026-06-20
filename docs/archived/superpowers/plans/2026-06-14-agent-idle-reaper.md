@@ -8,7 +8,7 @@
 
 **Tech Stack:** Odoo 18（Python 4-space）、ir.cron、`ir.config_parameter`、既有 `AgentRuntimeClient.reap`；測試 `TransactionCase` + `unittest.mock`（本機 k8s-dev-sandbox 跑 `odoo --test-enable`）。
 
-**Spec:** `docs/superpowers/specs/2026-06-14-agent-idle-reaper-design.md`
+**Spec:** `docs/archived/superpowers/specs/2026-06-14-agent-idle-reaper-design.md`
 
 ---
 

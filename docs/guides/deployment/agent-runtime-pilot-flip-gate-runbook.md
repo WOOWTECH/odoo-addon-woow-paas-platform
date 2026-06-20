@@ -87,7 +87,7 @@ pilot cluster 的 operator 須：(a) image 版本 ≥ 簽 `token_use`（Phase C+
 
 ## 3. ☸️ charts 部署（odoo-dev-sandbox 5 secret env）
 
-`charts/odoo-dev-sandbox`（含 #60 的 env mount）。5 個 env 由**單一 K8s Secret**（`odoo-dev-sandbox.secretName` helper 算出的名，與 postgres 共用）的 5 個 key 注入，`secretKeyRef` 全 **`optional: true`**：
+`skills/k8s-dev-sandbox/charts/`（含 #60 的 env mount）。5 個 env 由**單一 K8s Secret**（`odoo-dev-sandbox.secretName` helper 算出的名，與 postgres 共用）的 5 個 key 注入，`secretKeyRef` 全 **`optional: true`**：
 
 | 容器內 env | secret key | 同值要求 |
 |------------|------------|----------|
@@ -100,8 +100,8 @@ pilot cluster 的 operator 須：(a) image 版本 ≥ 簽 `token_use`（Phase C+
 - [ ] 建 / 更新該 K8s Secret，補上 5 個 key（auth/webhook 兩端同值；namespace 一旦設定**永不輪替** — 輪替 → 同 project 算出不同 hash → `paas-ws-pa-{hash}` 漂移 → 既有 pod 變孤兒）
 - [ ] 部署 / 升級 odoo-dev-sandbox（用含 #60 的 chart）：
   ```bash
-  ./.claude/skills/k8s-dev-sandbox/scripts/create.sh --context <ctx>    # 新建
-  # 或既有 release：helm upgrade <release> charts/odoo-dev-sandbox --kube-context <ctx> ...
+  /woowprd:k8s-dev-sandbox create --context <ctx>    # 新建
+  # 或既有 release：helm upgrade <release> skills/k8s-dev-sandbox/charts/ --kube-context <ctx> ...
   ```
 - [ ] **secret 建好後**才 restart / redeploy Odoo pod（讓進程啟動讀到 env）
 
@@ -153,7 +153,7 @@ flip 後 pilot project 第一次 chat invoke 觸發：
 - [ ] **spawn-or-attach**：operator helm install 起 per-project pod（A 嚴格 image），namespace `paas-ws-pa-{hash}`
   ```bash
   kubectl --context <ctx> get ns | grep paas-ws-pa-
-  ./.claude/skills/k8s-dev-sandbox/scripts/logs.sh <sandbox> --service odoo --follow   # 看 spawn / WS log
+  kubectl --context <ctx> logs -n paas-ws-pa-<hash> -l app=agent-runtime --follow   # 看 spawn / WS log
   ```
 - [ ] **WS relay**（F-PC-1）：chat invoke → 收 SSE chunks（與既有 ai.assistant path 行為等效）；**實機驗 websockets connect 不 `TypeError`**（版本 pin `>=12.0,<14` 對）
 - [ ] **skill bundle fetch**：pod 取 skill bundle 成功（`token_use=skill_bundle` 驗過；A 嚴格 pod 的 WS `token_use=ws` 驗過）
@@ -178,7 +178,7 @@ flip 後 pilot project 第一次 chat invoke 觸發：
 - [ ] 量測指令範例：
   ```bash
   kubectl --context <ctx> top pod -n <odoo-ns>                                                          # worker util
-  ./.claude/skills/k8s-dev-sandbox/scripts/logs.sh <sandbox> --service odoo | grep -iE "SSE-WS bridge failed|spawn"   # error / cold start 抽樣
+  /woowprd:k8s-dev-sandbox logs <sandbox> --service odoo | grep -iE "SSE-WS bridge failed|spawn"   # error / cold start 抽樣
   ```
 
 ↩️ **rollback**：SLO 持續未達 → 一鍵 flip off（Layer 1），回報暫停 advance。
@@ -190,7 +190,7 @@ flip 後 pilot project 第一次 chat invoke 觸發：
 ### Layer 1 — flip rollback（最快，pilot 出問題首選）
 
 1. admin UI `use_agent_runtime = False`（一鍵）
-2. agent pod 30min idle 自然 reap（或手動 `./.claude/skills/k8s-dev-sandbox/scripts/destroy.sh <sandbox>` / `kubectl --context <ctx> delete ns paas-ws-pa-<hash>`）
+2. agent pod 30min idle 自然 reap（或手動 `kubectl --context <ctx> delete ns paas-ws-pa-<hash>`）
 3. 既有 `ai_client.py` 同步路徑接手 → user 無感
 
 ### Layer 2 — deploy rollback（退 A 嚴格 / operator — **D-CAVEAT-2 反向序，順序不可錯**）
