@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 23 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 24 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -43,6 +43,7 @@
 | [[spawn-install-values-missed-forward]] | 有組裝點把上游資料 → 下游 helm install values / config，下游硬性 `required`：撞「缺一個 value」時通常系統性漏轉多個 → 修一個就全盤對齊 + 加 contract test |
 | [[plan-driven-date-helper]] | subscription 日期由 plan 強制覆寫（trial / non-trial path），且與第三方 onchange 有 post-confirm coupling 時 |
 | [[two-stage-remote-provision-idempotency]] | provision method 先建遠端資源（CF tunnel / 雲端 DNS / SaaS 帳號 / k8s ns）再跑後續步驟，且 UI 把 retry 掛在 `error` 上 → 第二段失敗讓遠端資源孤兒掛著、retry 重跑第一段在雲端再建一條（永久孤兒 / 計費外洩）→ 遠端建立步驟必須被 stored-id guard 包住，每條失敗路徑保留 stored id 讓 retry 安全（單段 method 的免-guard 安全是單段性換來的，加段就要買回來） |
+| [[external-resource-env-token-naming]] | 平台代為在 prod/stg **共用**的外部系統（CF account/zone、雲端 DNS、SaaS 帳號）產生資源時，命名/標籤要帶可一眼辨識 prod/stg 的 env token（共用帳號裡無此 token → 孤兒清理 / 稽核無法自證歸屬）→ 注入在「平台命名的單一根」（本 repo = Odoo `naming.py` 的 `canonical_name`，一改全覆蓋 tunnel/DNS/Access 且 create/delete 天然對稱），env 源用**顯式** config（禁從 `namespace_prefix` 隱式推 prod=空字串），只注入不參與反查的標籤欄位（name/comment/tag），靠重算 name 反推的路徑（`generate_subdomain`）須 create↔delete 雙向對稱 |
 
 ### 測試紀律（multi-phase / credential 硬化）
 
@@ -65,6 +66,7 @@
 - [cloud-service-unlink-override-cleanup](cloud-service-unlink-override-cleanup.md)
 - [constraint-input-trust-expansion](constraint-input-trust-expansion.md)
 - [credential-claim-test-fixture-coupling](credential-claim-test-fixture-coupling.md)
+- [external-resource-env-token-naming](external-resource-env-token-naming.md)
 - [invariant-recompute-on-orm-write-hook](invariant-recompute-on-orm-write-hook.md)
 - [mcp-acl-6-rule-split](mcp-acl-6-rule-split.md)
 - [odoo-addon-std-rule-symmetric-deactivation](odoo-addon-std-rule-symmetric-deactivation.md)
