@@ -44,7 +44,23 @@ self.unlink()   # ← 無條件 unlink，連 retry 的 DB 參照都不留
 
 `cloudflare.py` 只有「給定一個已知 tunnel_id，對帳它名下的 DNS」（`reconcile_tunnel_dns`，`:439`）；**沒有** list-all-tunnels / list-all-access-apps / list-all-access-policies。所以無法做「列 CF account 上所有平台資源 vs Odoo 現存 stored-id 取差集」這種帳號級孤兒掃描。孤兒一旦失去 DB 反參照，就再也沒有任何 code path 能發現它。
 
-> 對照：PVC 至少有 grace-period 清理（`config.py` `pvc_grace_period_days`，本 repo default=7；prod 90 來自 cross-repo Fleet override，本 repo 證不到、待證）；但**孤兒 namespace 本身沒有 TTL**，且 PVC grace 也救不了「ns 被整個留下」的情況。
+> 對照：PVC 名義上有 grace-period 清理（`config.py` `pvc_grace_period_days`，本 repo default=7；prod 90 來自 cross-repo Fleet override，本 repo 證不到、待證），**但實測這條 GC 從上線起就壞、一次都沒生效**（見下方 §4）。且**孤兒 namespace 本身沒有 TTL**，PVC grace 即使能動也救不了「ns 被整個留下」的情況。
+
+### 4. PVC grace-period GC 表面存在、實際從未生效（orphaned-at label 值非法）
+
+teardown 後 operator 想替殘留的 StatefulSet data PVC 貼 `paas.woowtech.io/orphaned-at` 標籤、供 pvc-cleanup cron 之後依 grace-period 回收（`extra/paas-operator/src/api/releases.py:205`），但標籤值用了**帶冒號的 RFC3339 時間戳**：
+
+```python
+now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")   # → "2026-06-20T08:03:00Z"（含冒號）
+```
+
+冒號是**非法的 k8s label value**（regex `(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?`）→ `label_pvcs`（`helm.py:1163-1171`）把 3 個標籤放**同一條** `kubectl label --overwrite` → **整條被拒（atomic，3 個全沒貼）**，錯誤被 `helm.py:1173` + `releases.py:219` 雙重吞掉、只留一行 WARNING。
+
+讀取側（pvc-cleanup cron Part 1，CD repo chart）`kubectl get pvc -A -l paas.woowtech.io/orphaned-at` **完全靠這 label 選 PVC** → 永不命中；Part 2 只清 `status.phase==Released` 的 PV，但 PVC 既沒被刪、PV 仍 `Bound` → 也救不了。**兩條路全漏。**
+
+實證（2026-06-20 myodoo2 teardown e2e）：`kubectl get pvc -A -l paas.woowtech.io/orphaned-at` = **0 筆**（配 74 天前就在跑的 cron → 此機制一次沒成功過）；teardown 即時重現上述 WARNING + 留下 `data-svc-127595e1-postgresql-0`（8Gi）Bound 孤兒。**所以本 pitfall 開頭「孤兒只剩 CF/ns」是低估——postgres-backed service（Odoo/n8n/PG…）連 data PVC + 底層 Longhorn volume（計費）都一起永久漏。** 與 [[reaped-since-single-path-stamp-gc-immunity]]、CF/ns 孤兒同「GC 機制看似有、實際對某些到達路徑免疫」家族。
+
+修法：label 值改 **epoch 秒**（colon-free、cron 可直接比較免 `date -d`），跨 **operator code（本 repo `releases.py:205`）** 與 **cronjob template（cross-repo `paas-app-bundle-cd` chart）** 兩處 lock-step；既有無標籤孤兒 PVC 需另行回填（fix 只救未來）。守線靠 **integration test**（單元 mock 測不到真 kubectl 的 label 值驗證——正是 74 天沒被發現之因）。詳見 operator issue #208（orphaned-at PVC label 值帶冒號，與 #207 同 e2e 挖出）。
 
 ### 配套的清理陷阱（盤/清孤兒時會踩）
 
@@ -73,9 +89,14 @@ operator 新增 list-all-tunnels（`GET /accounts/{aid}/cfd_tunnel`，過濾 nam
 
 清 marketplace/CloudService route = **DNS + ns + shared-tunnel ingress rule 三處一起**；ingress 用 GET→filter→PUT（先 dry-run 印 keep/remove）；CF list 一律 `per_page=500`/分頁；刪前先 GET 驗 content/name/connections，靠 CF guard（policy `409 in-use`、Access delete `202`、見 [[operator-cf-access-delete-202-mock-contract]]）兜底。
 
+### 5. 修好 PVC orphaned-at label，讓 grace-period GC 真的能動
+
+把 `releases.py:205` 的 `orphaned-at` 標籤值從帶冒號 RFC3339 改成 **epoch 秒**（合法 label value）；cronjob template（cross-repo `paas-app-bundle-cd` chart）同步改成直接吃 epoch（免 `date -d`）兩處 lock-step。補 operator **integration** test：斷言 `label_pvcs` 收到的 value 通過 k8s label-value regex + teardown 後 `get pvc -l orphaned-at` 須命中（單元 mock 測不到 → 這是 74 天沒被發現的根因）。fix 只救未來，既有無標籤孤兒 PVC 須一次性回填（反查「paas-ws-* ns 內無對應 live helm release 的 PVC」直接刪，不靠 label）。詳見 §4 與 operator issue。
+
 ## 相關
 
 - [[direct-unlink-bypass-cleanup-hook]] — Odoo 直接 unlink 繞過 cleanup hook（SecurityAccess 的 fail-loud guard pattern，SmartHome 缺的就是這個）
 - [[operator-cf-access-delete-202-mock-contract]] — CF Access delete 回 202、先脫鉤再刪 policy
 - [[reaped-since-single-path-stamp-gc-immunity]] — 同「孤兒 GC 免疫」家族：下游 gate 只在單一路徑 stamp → 其他路徑到達同狀態的 row 永久免疫回收
+- operator issue #208（orphaned-at PVC label 值帶冒號，§4）+ #207（mcp sidecar route 命名不對稱）— 同屬 operator teardown 孤兒 bug、同由 2026-06-20 myodoo2 teardown e2e 挖出
 - memory `prod-stg-cf-shared-account-zone`、`stg-cf-ns-orphan-cleanup` — 拓樸實證與本次清理判定法/成果
