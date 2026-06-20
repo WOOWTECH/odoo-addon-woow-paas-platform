@@ -1108,6 +1108,7 @@ class CloudService(models.Model):
             try:
                 client.uninstall_release(
                     self.helm_namespace, self.helm_release_name,
+                    subdomain=self.subdomain,
                 )
                 _logger.info(
                     "[CLOUD_SVC] _do_cleanup helm uninstalled service=%s",

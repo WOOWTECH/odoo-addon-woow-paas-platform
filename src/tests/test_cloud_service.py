@@ -295,8 +295,51 @@ class TestCloudService(TransactionCase):
 
         mock_client.uninstall_release.assert_called_once_with(
             'paas-ws-stg-cafef00d', 'svc-deadbeef',
+            subdomain=False,
         )
         self.assertEqual(service.state, 'deleting')
+
+    def test_do_cleanup_passes_subdomain_for_route_teardown(self):
+        """Regression: CloudService teardown left its Cloudflare route orphaned.
+
+        ``_do_cleanup`` called ``uninstall_release(namespace, release)`` WITHOUT
+        the subdomain. The operator's ``delete_release`` then fell back to
+        ``generate_subdomain()`` to *recompute* the route name, which diverges
+        from the Odoo-assigned subdomain (``paas-cs-{ws}-{res}``) → the operator
+        called ``delete_route`` on a name that never existed → the CF DNS +
+        tunnel ingress route outlived the service as a permanent orphan (see
+        pitfall ``cf-ns-orphan-no-account-gc``). Pass ``self.subdomain`` so the
+        operator deletes the *actual* route.
+
+        Note (scope): this fixes the *main* route for all services. The
+        operator's mcp sidecar route stays mismatched — deploy uses
+        ``generate_subdomain+"-mcp"`` (releases.py:685), delete uses
+        ``(subdomain or generate_subdomain)+"-mcp"`` (:233) — so a service
+        WITH a sidecar leaks its mcp route. That is a pre-existing operator
+        bug (controller ``_delete_service`` already passed subdomain on
+        develop), decoupled from this fix; tracked as issue #207.
+        """
+        service = self.Service.create({
+            'name': 'Route Teardown Probe',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_release_name': 'svc-deadbeef',
+            'helm_namespace': 'paas-ws-stg-cafef00d',
+            'subdomain': 'paas-cs-cafef00d-deadbeef',
+        })
+        mock_client = MagicMock()
+        with patch(
+            'odoo.addons.woow_paas_platform.services.paas_operator'
+            '.get_paas_operator_client',
+            return_value=mock_client,
+        ):
+            service._do_cleanup()
+
+        mock_client.uninstall_release.assert_called_once_with(
+            'paas-ws-stg-cafef00d', 'svc-deadbeef',
+            subdomain='paas-cs-cafef00d-deadbeef',
+        )
+
 
 class TestCloudServiceChangePlanTrialMode(TransactionCase):
     """Trial-state change-plan on CS (issue #34).
