@@ -159,7 +159,7 @@ class TestMcpProjectLifecycle(TransactionCase):
 
         captured = {}
 
-        def fake_uninstall_release(namespace, release_name):
+        def fake_uninstall_release(namespace, release_name, subdomain=None):
             # The MCP record must already be gone when helm uninstall runs.
             captured['user_mcp_count_at_uninstall'] = (
                 self.McpServer.sudo().with_context(active_test=False)
