@@ -317,7 +317,7 @@ class TestCloudService(TransactionCase):
         ``(subdomain or generate_subdomain)+"-mcp"`` (:233) — so a service
         WITH a sidecar leaks its mcp route. That is a pre-existing operator
         bug (controller ``_delete_service`` already passed subdomain on
-        develop), decoupled from this fix; tracked in the operator repo.
+        develop), decoupled from this fix; tracked as issue #207.
         """
         service = self.Service.create({
             'name': 'Route Teardown Probe',
