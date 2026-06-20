@@ -591,3 +591,42 @@ class TestKubernetesService:
         """Test delete namespace with invalid name raises before any kubectl."""
         with pytest.raises(ValueError):
             k8s_service.delete_namespace("invalid")
+
+    @patch("subprocess.run")
+    def test_label_pvcs_rejects_invalid_label_value(self, mock_run, k8s_service):
+        """label_pvcs must fail loud on a value kubectl would reject — not build
+        a doomed atomic `kubectl label` whose failure is swallowed as a warning.
+
+        Regression for operator #208: a ':'-bearing RFC3339 value made the whole
+        label command fail (all three labels dropped); the failure was double-
+        swallowed (helm.py per-PVC warning + releases.py outer try/except), so
+        the broken GC went unnoticed for 74 days. Validating in pure Python
+        moves detection from 'real kubectl only' to a unit-catchable boundary.
+        """
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        with pytest.raises(ValueError, match="label value"):
+            k8s_service.label_pvcs(
+                "paas-ws-test",
+                ["data-x-postgresql-0"],
+                {"paas.woowtech.io/orphaned-at": "2026-06-20T08:03:00Z"},
+            )
+        # Reject BEFORE shelling out: no doomed kubectl command is attempted.
+        mock_run.assert_not_called()
+
+    @patch("subprocess.run")
+    def test_label_pvcs_applies_valid_labels(self, mock_run, k8s_service):
+        """A valid (colon-free) label batch is applied via one kubectl call."""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        k8s_service.label_pvcs(
+            "paas-ws-test",
+            ["data-x-postgresql-0"],
+            {
+                "paas.woowtech.io/orphaned-at": "1750406580",
+                "paas.woowtech.io/release-name": "svc-deadbeef",
+                "paas.woowtech.io/grace-period-days": "7",
+            },
+        )
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "label" in cmd and "pvc" in cmd and "data-x-postgresql-0" in cmd
+        assert "paas.woowtech.io/orphaned-at=1750406580" in cmd

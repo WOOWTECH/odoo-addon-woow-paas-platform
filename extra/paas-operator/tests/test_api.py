@@ -1,6 +1,7 @@
 """Tests for API endpoints."""
 import json
-from unittest.mock import MagicMock, patch
+import re
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -172,6 +173,86 @@ class TestReleaseEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert "uninstalled" in data["message"].lower()
+
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
+    @patch("src.api.releases.helm_service")
+    def test_delete_release_orphan_pvc_label_value_is_k8s_safe(
+        self, mock_helm, mock_k8s, mock_cf, client
+    ):
+        """orphaned-at PVC label value must be a valid k8s label value.
+
+        Regression for operator #208: the teardown stamped the orphaned-at label
+        with an RFC3339 timestamp ("2026-06-20T08:03:00Z"). The ':' chars are
+        illegal in a k8s label value, so `kubectl label` was rejected atomically
+        (all three labels dropped) and the error was silently swallowed. The
+        pvc-cleanup cron's `-l paas.woowtech.io/orphaned-at` selector then never
+        matched → every postgres-backed service leaked its data PVC forever.
+        The stamped value must match the k8s label-value regex.
+        """
+        k8s_label_value = re.compile(r"^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$")
+        mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+        mock_k8s.list_pvcs.return_value = ["data-test-release-postgresql-0"]
+        mock_cf.delete_route = AsyncMock(return_value=True)
+
+        response = client.delete(
+            "/api/releases/paas-ws-test/test-release?subdomain=paas-cs-test"
+        )
+
+        assert response.status_code == 200
+        mock_k8s.label_pvcs.assert_called_once()
+        labels = mock_k8s.label_pvcs.call_args[0][2]
+        value = labels["paas.woowtech.io/orphaned-at"]
+        assert k8s_label_value.match(value) and len(value) <= 63, (
+            f"orphaned-at label value {value!r} is not a valid k8s label value "
+            f"(must match {k8s_label_value.pattern} and be <=63 chars)"
+        )
+        # Pin the production contract — epoch SECONDS — not just k8s-syntax. The
+        # k8s regex above ALSO matches the empty string, so a value-drop-to-''
+        # regression (which still passes the cron's key-existence selector but
+        # bricks the grace-period age math) would false-green on the regex alone.
+        assert value.isdigit() and 9 <= len(value) <= 11, (
+            f"orphaned-at must be epoch seconds (9-11 digits), got {value!r}"
+        )
+
+    @patch("src.api.releases.cloudflare_service.delete_route", new_callable=AsyncMock)
+    @patch("src.api.releases.k8s_service")
+    @patch("src.api.releases.helm_service")
+    def test_delete_release_mcp_route_matches_deploy_naming(
+        self, mock_helm, mock_k8s, mock_delete_route, client
+    ):
+        """MCP sidecar route delete must target the SAME subdomain deploy created.
+
+        Regression for operator #207: deploy builds the mcp route from
+        generate_subdomain(ns, name)+'-mcp' (scheme A: '{release}-{ns_suffix}-mcp')
+        while delete used the Odoo-passed subdomain+'-mcp' (scheme B:
+        'paas-cs-...-mcp'). The two schemes never match → the mcp CF route is
+        orphaned on every sidecar teardown. Delete must use generate_subdomain so
+        it matches deploy. The MAIN route legitimately keeps using the caller
+        subdomain — pin both so a future 'consistency' refactor can't re-break it.
+        """
+        from src.api.releases import cloudflare_service
+
+        mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+        mock_k8s.list_pvcs.return_value = []
+
+        ns, name, caller_subdomain = "paas-ws-test", "svc-deadbeef", "paas-cs-abc-def"
+        response = client.delete(
+            f"/api/releases/{ns}/{name}?subdomain={caller_subdomain}"
+        )
+        assert response.status_code == 200
+
+        deploy_mcp = cloudflare_service.generate_subdomain(ns, name) + "-mcp"  # scheme A
+        called = [c.args[0] for c in mock_delete_route.call_args_list]
+
+        assert deploy_mcp in called, (
+            f"mcp route delete must target deploy naming {deploy_mcp!r}, got {called!r}"
+        )
+        assert f"{caller_subdomain}-mcp" not in called, (
+            "mcp route delete must NOT use the caller subdomain scheme (orphan bug)"
+        )
+        # MAIN route still uses the caller-passed subdomain (must stay symmetric).
+        assert caller_subdomain in called
 
     @patch("src.api.releases.helm_service")
     def test_rollback_release(self, mock_helm, client):
