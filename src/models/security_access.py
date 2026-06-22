@@ -204,7 +204,13 @@ class SecurityAccess(models.Model):
         workspace = self.workspace_id
         slug = (workspace.slug if hasattr(workspace, 'slug') and workspace.slug
                 else workspace.name.lower().replace(' ', '-'))
-        return make_security_access_subdomain(slug, self.reference_id, self.name)
+        # L3: 注入 env token（prod=空 token、stg=paas-stg-sa-）。env 來源為顯式
+        # config_parameter，不從 namespace_prefix 隱式推導。token 只在 create 首算
+        # 一次寫入（見 create()），事後 immutable（write guard），故跨 prod/stg 不漂移。
+        deploy_env = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.deploy_env', 'prod')
+        return make_security_access_subdomain(
+            slug, self.reference_id, self.name, env=deploy_env)
 
     @api.model_create_multi
     def create(self, vals_list):

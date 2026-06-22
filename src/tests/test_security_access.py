@@ -62,6 +62,39 @@ class TestSecurityAccess(TransactionCase):
         self.assertNotEqual(sa.canonical_name, injected)
         self.assertTrue(sa.canonical_name.startswith('paas-sa-'))
 
+    # ---- L3: deploy_env token wiring (只 SA 注 token，DP2) ----
+
+    def test_canonical_name_uses_deploy_env_config(self):
+        """SA canonical_name 隨 deploy_env config 帶 env token（config 真接通）。
+
+        prod/未設 → paas-sa-（無 token、與舊行為一致）；stg → paas-stg-sa-。
+        驗的是 _generate_canonical_name 有讀 config 並傳給 naming helper，
+        非只測純函式（純函式由 test_naming.py 守）。
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        ICP.set_param('woow_paas_platform.deploy_env', 'prod')
+        prod_sa = self._make_sa(name='Prod GW')
+        self.assertTrue(prod_sa.canonical_name.startswith('paas-sa-'))
+        self.assertNotIn('stg', prod_sa.canonical_name)
+
+        ICP.set_param('woow_paas_platform.deploy_env', 'stg')
+        stg_sa = self._make_sa(name='Stg GW')
+        self.assertTrue(stg_sa.canonical_name.startswith('paas-stg-sa-'))
+        self.assertIn('stg', stg_sa.canonical_name)
+
+    def test_canonical_name_immutable_with_token_under_su(self):
+        """加 env token 後 immutable guard 仍對 su 生效（未引入 env.su 豁免）。
+
+        guard deny 分支必須真打到（TransactionCase 是 su env）——若為了注 token
+        把 guard 改成 not env.su 形態，這條會假綠。
+        """
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.deploy_env', 'stg')
+        sa = self._make_sa(name='Stg Immutable GW')
+        self.assertTrue(sa.canonical_name.startswith('paas-stg-sa-'))
+        with self.assertRaises(UserError):
+            sa.write({'canonical_name': 'paas-stg-sa-hijack'})
+
     def test_no_primary_hostname_field(self):
         """A Security Access is a Cloudflare Tunnel (N routes), not a single
         host — the SA-level primary_hostname field was removed. Lock that it

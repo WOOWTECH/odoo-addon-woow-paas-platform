@@ -19,6 +19,8 @@ from . import test_oauth2_device_flow
 from . import test_ha_api
 from . import test_ha_api_security_access
 from . import test_naming
+# feat: L3 deploy_env CF naming env token（config_parameter 接線 + 卸載清理）
+from . import test_deploy_env_config
 from . import test_mcp_integration
 from . import test_subscription_lifecycle
 from . import test_low_balance_notification
