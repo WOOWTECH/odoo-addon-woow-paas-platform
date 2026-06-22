@@ -37,6 +37,7 @@ from src.services.helm import (
     HelmService,
     KubectlException,
     KubernetesService,
+    build_managed_ns_labels,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def _ensure_namespace(namespace: str) -> None:
     k8s_service.apply_manifest({
         "apiVersion": "v1",
         "kind": "Namespace",
-        "metadata": {"name": namespace, "labels": {"paas-managed": "true"}},
+        "metadata": {"name": namespace, "labels": build_managed_ns_labels()},
     })
 
 

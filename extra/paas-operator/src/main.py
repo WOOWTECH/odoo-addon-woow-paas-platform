@@ -34,6 +34,14 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     logger.info("Starting PaaS Operator Service...")
     logger.info(f"Namespace prefix: {settings.namespace_prefix}")
+    # Observability for the L2 ns env-label discriminator: an unset PAAS_ENV is
+    # fail-OPEN (operator starts, tenant namespaces omit the env label) — log it so a
+    # prod/stg deploy that forgot to inject PAAS_ENV is visible here, not silently
+    # indistinguishable from a dev sandbox.
+    logger.info(
+        "Deploy env (PAAS_ENV, ns label discriminator): "
+        f"{settings.paas_env or '(unset — env label omitted)'}"
+    )
 
     # Verify Helm is available - FAIL FAST if not
     try:

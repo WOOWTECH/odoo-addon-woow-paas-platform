@@ -169,7 +169,7 @@ related:
 - **審查已抓（路徑錯）**：所有引用更正為 `extra/paas-operator/src/services/helm.py:93`（在 `services/` 子目錄），測試 import `from src.services.helm import validate_label_value`，否則 import error 整檔 collection 失敗。
 - **審查已抓（測試檔不存在）**：`test_res_config_settings.py` / `test_hooks.py` / `test_config.py` 三檔**目前不存在**，change_sites 須明列**新建**並確認 Odoo TransactionCase 基底 + test tag（否則 `--test-tags /woow_paas_platform` 收集不到 = 假綠）。
 - **審查已抓（Settings 全域單例污染）**：`config.py:107 settings = Settings()` 是 import-time 單例；新 validator 後若 CI runner 殘留非法 `PAAS_ENV`，import config 即 raise 連坐無關測試。tdd 一律 `Settings(_env_file=None)` 或 `monkeypatch.delenv`。
-- 確認 `model_config` 未設 `extra='forbid'`（`config.py:100-104` 確認預設 ignore）→ 舊 image + 新 Fleet env 向後相容安全。
+- 確認舊 image + 新 Fleet env 向後相容（**校正**：原稱「預設 `extra='ignore'`」事實錯——pydantic-settings 預設其實是 `extra='forbid'`，但 `forbid` **只約束 init / dotenv 傳入鍵、不約束任意 OS 環境變數**）→ 舊 operator image（無 `paas_env` field）遇 Fleet 注入的 `PAAS_ENV` 環境變數仍**不 crash**（OS env 的未宣告 key 被忽略）。**勿據「extra=ignore」前提**在別處用未知 key 做 `Settings(**kwargs)` / dotenv，那會被 forbid 擋。
 - L2 label key 用 `paas.woowtech.io/env`（對齊既有 `paas.woowtech.io/orphaned-at`），非裸 `env`。
 - L2 空值語義：`deploy_env` 空時**完全 omit** label（不打 `env=` 空 value），backward-compatible（本機 docker-desktop）。
 - L2 兩注入點 lock-step：`helm.py:684` create_namespace + `agent_runtimes.py:93` `_ensure_namespace`（`agent_runtimes.py:282` 是 LLM secret 非 ns，正確排除）。

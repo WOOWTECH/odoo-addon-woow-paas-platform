@@ -1,6 +1,6 @@
 """Application configuration."""
 import os
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -96,6 +96,26 @@ class Settings(BaseSettings):
     cloudflare_tunnel_id: str = ""  # Tunnel ID from Zero Trust dashboard
     cloudflare_zone_id: str = ""  # Zone ID for DNS management (found in domain overview)
     cloudflare_domain: str = ""  # Base domain (e.g., woowtech.io)
+
+    # Deploy environment (L1): prod/stg discriminator stamped onto tenant namespace
+    # labels (L2) + future account-level reconciler env filtering. Empty = unknown
+    # (operator must NOT crash on an un-set env). Injected per-environment via the
+    # operator Deployment env (cross-repo paas-app-bundle-cd Fleet CD values — NOT a
+    # chart in this repo, mirrors the SKILL_BUNDLE_TOKEN_TTL note above). Whitelist-
+    # validated fail-closed; consumers omit the label when empty (never stamp a wrong
+    # or empty env). Do NOT derive this from namespace_prefix (no implicit推導).
+    paas_env: str = Field(default="")  # env PAAS_ENV; "" | "prod" | "stg"
+
+    @field_validator("paas_env")
+    @classmethod
+    def _validate_paas_env(cls, v: str) -> str:
+        allowed = {"", "prod", "stg"}
+        if v not in allowed:
+            raise ValueError(
+                f"PAAS_ENV must be one of {sorted(allowed)} (exact, lowercase, "
+                f"no surrounding whitespace); got {v!r}"
+            )
+        return v
 
     model_config = SettingsConfigDict(
         env_file=".env",
