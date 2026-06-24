@@ -26,6 +26,8 @@ related:
 > **資料來源與時點**：本文件事實於 **2026-06-14** 經三方交叉驗證：① 各 repo agent 口述、② `kubectl --context woow-k3s` 叢集實況、③ clone `paas-app-bundle-cd` / `woow-paas-charts` 實際檔案。版本矩陣（§2）為當下快照，**會隨發版漂移，用前先用 §2 的指令重新產生**。
 >
 > **2026-06-21 更新**：operator **#207/#208**（#207 mcp route delete 對齊 `generate_subdomain`；#208 PVC `orphaned-at` label 改 epoch 秒 + `validate_label_value` fail-loud）已發佈 **stg**（chart `0.1.15` / image `20260620.1406`，digest `1b322c8a…c1fbc`，端到端驗證通過），**現為 prod 待 promote 候選**（prod 仍 `0.1.8` / `20260525.0054`，落後）。本次 refresh 同步了 §2 stg 列、§5.2.1 worked example、§9 坑 #11（無回歸超集）、§10.1 drift 狀態（live 複驗仍 `Modified`）。
+>
+> **2026-06-24 更新**：naming env-token **L1-L3**（PR #214）已上 **stg** 並 live 驗證（operator chart `0.1.16` / image `20260624.1022`、`PAAS_ENV=stg`、ns label `paas.woowtech.io/env=stg`、Odoo SA `canonical_name=paas-stg-sa-`；prod 未動仍 `0.1.8` / `20260525.0054`）。**§6 新增「兩端 env 一致」檢查（F-ENV-1b）**：promote operator/addon 到 prod 時，operator `PAAS_ENV`（Fleet `config.paasEnv`）與 Odoo `deploy_env` config_parameter **必須同為 `prod`**，否則 split-env（ns label 與 CF 命名對 env 各說各話）。§5.2.1 gate 同步加 `paasEnv: "prod"` 檢查。
 
 ---
 
@@ -257,6 +259,14 @@ grep -q 'namespacePrefix: "paas-ws-"' paas-operator/values-prod.yaml \
  && grep -q 'replicaCount: 2'         paas-operator/values-prod.yaml \
  && ! grep -q 'agentRuntime:'         paas-operator/values-prod.yaml \
  || { echo "STOP: prod 專屬欄位被污染或誤帶 agentRuntime"; exit 1; }
+# config.paasEnv（≥ chart 0.1.16）：若 prod values 已含 paasEnv，務必是 "prod"（誤帶 "stg" → prod ns 被標 env=stg）。
+# 舊 prod（< 0.1.16，無 paasEnv 鍵）此檢查略過——grep 命中 0 行即視為「尚無此鍵」，不擋。
+if grep -qE '^\s*paasEnv:' paas-operator/values-prod.yaml; then
+  grep -qE '^\s*paasEnv: *"?prod"?\s*$' paas-operator/values-prod.yaml \
+    || { echo "STOP: prod config.paasEnv 非 'prod'（split-env 風險，見 §6.4 兩端一致）"; exit 1; }
+fi
+# 🔒 兩端一致（§6.4 / F-ENV-1b）：promote operator 後另須確認 prod Odoo 的 deploy_env 也是 prod（或空）。
+# operator: kubectl --context $CTX -n paas-system exec deploy/paas-operator -- printenv PAAS_ENV  # 期望 prod
 [ -z "$(git diff --name-only -- paas-operator-stg/)" ] || { echo "STOP: 誤動了 stg 目錄"; exit 1; }
 
 # ── 4. PR → merge main → 等 Fleet reconcile → 閉環驗證 ──
@@ -307,11 +317,23 @@ prod **無自動 promote**，是手動把 stg 驗證過的值搬到 prod：
 2. 把 stg 已驗證的 **image.tag / chart version** 搬到對應 prod 檔（`paas-operator/values-prod.yaml` + `fleet.yaml`）。
 3. **保留 prod 專屬欄位、不可被 stg 值覆蓋**：
    - `namespacePrefix`：prod `paas-ws-` / stg `paas-ws-stg-`
+   - `config.paasEnv`（→ operator env `PAAS_ENV`；L2 ns env label `paas.woowtech.io/env`）：prod `prod` / stg `stg`。搬版務必確認 prod 值為 `prod`，誤帶 stg 的 `stg` → prod operator 把租戶 ns 標成 `env=stg`、誤導孤兒清理判 env。
    - `replicaCount`：prod 2
    - `pvcGracePeriodDays`：prod **90**（dev/stg 為 7）
    - prod `tunnelId` / `zoneId` / 各 prod secret
    - prod operator 啟用 agent-runtime 時的 webhook / auth secret（見 **paas-app-bundle-cd repo 的 `CLAUDE.md`「Agent-runtime 共用 secret」節**：secret `paas-operator-agent-runtime-auth`，含 current / previous / webhook-current 三 key —— **注意此 anchor 在 CD repo 而非本 repo 的 CLAUDE.md**）
-4. tea PR（zh-tw）→ merge `main` → Fleet 自動 `helm upgrade`。
+4. **🔒 兩端 env 一致檢查（F-ENV-1b，promote operator 或 addon 到 prod 必檢）**：env token 由**兩個各自獨立設定的端**決定，兩端必須**同為 `prod`**，否則 split-env：
+   - **operator 端** `PAAS_ENV`（來源 Fleet `paas-operator/values-prod.yaml` 的 `config.paasEnv`）→ 決定 ns label `paas.woowtech.io/env` 的值。
+   - **Odoo addon 端** `woow_paas_platform.deploy_env`（config_parameter）→ 決定 SecurityAccess `canonical_name`（prod=空 token `paas-sa-` / stg=`paas-stg-sa-`，連帶 CF tunnel name / DNS comment / Access policy name）。
+   - 不一致的後果：operator 把 ns 標 `env=prod`、但 Odoo 把 CF 命名算成 `paas-stg-sa-`（或反之）→ ns label 與 CF 命名對 env 各說各話、辨識性破功、孤兒清理誤判。
+   - 檢查（promote 後驗）：
+     ```bash
+     kubectl --context woow-k3s -n paas-system exec deploy/paas-operator -- printenv PAAS_ENV   # 期望：prod
+     # Odoo 端：Settings → Woow PaaS → Deploy Environment = Production（或查 ir.config_parameter
+     #   woow_paas_platform.deploy_env = prod 或空——prod 預設空 token 等同 prod，但顯式 prod 較不易誤判）
+     ```
+   - 註：prod deploy_env 顯式設 `prod`（非留空）較不易在日後誤判；stg 已由 `.sandbox.yml` `config_params_stg` 自動設（F-ENV-1）。
+5. tea PR（zh-tw）→ merge `main` → Fleet 自動 `helm upgrade`。
 
 ---
 
