@@ -1910,3 +1910,33 @@ class TestSkillBundleTokenTtl:
         with patch.dict("os.environ",
                         {"SKILL_BUNDLE_TOKEN_TTL_SECONDS": "1"}):
             assert Settings().skill_bundle_token_ttl_seconds == 1
+
+
+class TestEnsureNamespaceEnvLabel:
+    """L2: _ensure_namespace 與 create_namespace lock-step 帶 env label。
+
+    agent-runtime ns 也須帶 paas.woowtech.io/env（與 marketplace ns 同源
+    build_managed_ns_labels），否則兩注入點 divergence。
+    """
+
+    def test_ensure_namespace_stamps_env_label_lockstep(self, monkeypatch):
+        from src.api import agent_runtimes
+        monkeypatch.setattr("src.config.settings.paas_env", "stg")
+        captured = {}
+        monkeypatch.setattr(agent_runtimes.k8s_service, "apply_manifest",
+                            lambda m: captured.update(m=m))
+        agent_runtimes._ensure_namespace("paas-ws-stg-pa-abc123")
+        labels = captured["m"]["metadata"]["labels"]
+        assert labels["paas-managed"] == "true"
+        assert labels["paas.woowtech.io/env"] == "stg"
+
+    def test_ensure_namespace_omits_env_label_when_empty(self, monkeypatch):
+        from src.api import agent_runtimes
+        monkeypatch.setattr("src.config.settings.paas_env", "")
+        captured = {}
+        monkeypatch.setattr(agent_runtimes.k8s_service, "apply_manifest",
+                            lambda m: captured.update(m=m))
+        agent_runtimes._ensure_namespace("paas-ws-pa-abc123")
+        labels = captured["m"]["metadata"]["labels"]
+        assert labels["paas-managed"] == "true"
+        assert "paas.woowtech.io/env" not in labels

@@ -105,6 +105,30 @@ def validate_label_value(key: str, value: str) -> None:
         )
 
 
+def build_managed_ns_labels() -> Dict[str, str]:
+    """Labels stamped on every platform-managed tenant namespace.
+
+    Single source for both the marketplace path (create_namespace) and the
+    agent-runtime path (agent_runtimes._ensure_namespace) so the two never diverge:
+
+    - ``paas-managed=true`` — existing, name-agnostic NetworkPolicy selector.
+    - ``paas.woowtech.io/env=<env>`` — only when PAAS_ENV is set, so prod/stg
+      namespaces sharing one cluster are ``kubectl get ns -l`` selectable by env.
+      Omitted when PAAS_ENV is empty (dev / unknown stays label-free, backward
+      compatible).
+
+    The env value is validated as a legal k8s label value BEFORE it can reach a
+    manifest, surfacing an illegal value (e.g. a raw config write that bypassed the
+    Odoo Selection whitelist) at this pure-Python boundary instead of as a swallowed
+    kubectl rejection (operator #208 class).
+    """
+    labels = {"paas-managed": "true"}
+    if settings.paas_env:
+        validate_label_value("paas.woowtech.io/env", settings.paas_env)
+        labels["paas.woowtech.io/env"] = settings.paas_env
+    return labels
+
+
 class HelmException(Exception):
     """Exception raised when Helm command fails."""
 
@@ -680,9 +704,7 @@ class KubernetesService:
             "kind": "Namespace",
             "metadata": {
                 "name": name,
-                "labels": {
-                    "paas-managed": "true",
-                },
+                "labels": build_managed_ns_labels(),
             },
         }
 

@@ -630,3 +630,73 @@ class TestKubernetesService:
         cmd = mock_run.call_args[0][0]
         assert "label" in cmd and "pvc" in cmd and "data-x-postgresql-0" in cmd
         assert "paas.woowtech.io/orphaned-at=1750406580" in cmd
+
+
+class TestManagedNsLabels:
+    """L2: build_managed_ns_labels — 平台管理 namespace 的 env label（PAAS_ENV）。
+
+    單一 source（helm.build_managed_ns_labels），create_namespace 與
+    agent_runtimes._ensure_namespace 都由它取 labels → 兩注入點 lock-step。
+    """
+
+    def test_omits_env_label_when_paas_env_empty(self, monkeypatch):
+        """PAAS_ENV 空 → 只有 paas-managed（dev/unknown ns 不帶 env label）。"""
+        from src.services.helm import build_managed_ns_labels
+        monkeypatch.setattr("src.config.settings.paas_env", "")
+        assert build_managed_ns_labels() == {"paas-managed": "true"}
+
+    def test_includes_env_label_when_paas_env_set(self, monkeypatch):
+        """PAAS_ENV=stg → 加 paas.woowtech.io/env=stg（值=env，可 kubectl -l 查）。"""
+        from src.services.helm import build_managed_ns_labels
+        monkeypatch.setattr("src.config.settings.paas_env", "stg")
+        labels = build_managed_ns_labels()
+        assert labels["paas-managed"] == "true"
+        assert labels["paas.woowtech.io/env"] == "stg"
+
+    def test_validates_env_label_value_before_use(self, monkeypatch):
+        """非法值（raw set_param 繞 Settings 白名單）→ pure-Python fail loud（#208 類）。"""
+        from src.services.helm import build_managed_ns_labels
+        monkeypatch.setattr("src.config.settings.paas_env", "paas-ws-stg-")
+        with pytest.raises(ValueError):
+            build_managed_ns_labels()
+
+    @staticmethod
+    def _capture_ns_labels(monkeypatch):
+        """攔 create_namespace 真正寫進 ns manifest 的 labels（捕 dict，非 spy）。
+
+        create_namespace 內 `import yaml; yaml.safe_dump(ns_manifest, f)` —— patch
+        yaml 模組的 safe_dump 即可在不落檔下捕到 manifest。比 spy 強：能擋「呼叫了
+        build_managed_ns_labels 但丟棄回傳、改硬編 labels」的 mutation。
+        """
+        import yaml as yaml_mod
+        captured = {}
+        orig = yaml_mod.safe_dump
+
+        def cap(obj, *a, **k):
+            if isinstance(obj, dict) and obj.get("kind") == "Namespace":
+                captured["labels"] = obj["metadata"]["labels"]
+            return orig(obj, *a, **k)
+
+        monkeypatch.setattr(yaml_mod, "safe_dump", cap)
+        return captured
+
+    @patch("subprocess.run")
+    def test_create_namespace_stamps_env_label_in_manifest(self, mock_run, monkeypatch):
+        """PAAS_ENV=stg → ns manifest 真帶 {paas-managed, env=stg}（捕 manifest，擋 mutation）。"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr("src.config.settings.paas_env", "stg")
+        captured = self._capture_ns_labels(monkeypatch)
+        KubernetesService().create_namespace(
+            name="paas-ws-stg-x", cpu_limit="1", memory_limit="1Gi", storage_limit="5Gi")
+        assert captured["labels"] == {
+            "paas-managed": "true", "paas.woowtech.io/env": "stg"}
+
+    @patch("subprocess.run")
+    def test_create_namespace_omits_env_label_in_manifest_when_empty(self, mock_run, monkeypatch):
+        """PAAS_ENV 空 → ns manifest 只帶 paas-managed（不貼空 env value）。"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr("src.config.settings.paas_env", "")
+        captured = self._capture_ns_labels(monkeypatch)
+        KubernetesService().create_namespace(
+            name="paas-ws-x", cpu_limit="1", memory_limit="1Gi", storage_limit="5Gi")
+        assert captured["labels"] == {"paas-managed": "true"}

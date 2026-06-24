@@ -55,6 +55,23 @@ class TestSmartHome(TransactionCase):
         self.assertTrue(subdomain.startswith('paas-sm-'))
         self.assertGreater(len(subdomain), 10)
 
+    def test_subdomain_has_no_env_token_even_when_deploy_env_stg(self):
+        """DP2 lock：SM subdomain = 對外 URL，決策上「不注」env token。
+
+        即使 deploy_env=stg，SM `_generate_subdomain` 也不得帶 token（subdomain
+        對外、env 由 per-env paas_domain 區分；naming helper 雖支援 env，但 SM
+        呼叫端刻意不傳）。鎖住「CS/SM 不接線」的決策，防未來誤接。
+        """
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.deploy_env', 'stg')
+        home = self.SmartHome.create({
+            'name': 'Stg No Token Home',
+            'workspace_id': self.workspace.id,
+        })
+        subdomain = home._generate_subdomain()
+        self.assertTrue(subdomain.startswith('paas-sm-'))
+        self.assertNotIn('stg', subdomain)
+
     def test_to_dict(self):
         """Test serialization to dict."""
         home = self.SmartHome.create({
