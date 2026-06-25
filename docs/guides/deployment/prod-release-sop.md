@@ -419,6 +419,8 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 ## 10. Known issues / 本次稽核發現（2026-06-14）
 
 > 以下為整理 SOP 時發現、**非緊急**（prod 服務正常運行中）但建議追蹤 / 發 issue 的項目。
+>
+> **✅ 全數收斂（2026-06-25 複驗）**：本節 6 條稽核發現均已 resolved / clarified —— #18 Fleet drift（殘留 secret key 移除）、#19 cloudflare pin、paas-odoo-ci#1 prod approval gate、#20 CD README、#26 charts README、#5 認知 drift 澄清。各條 inline 標記修復出處與複驗結果。
 
 1. ~~**Fleet bundle `paas-app-bundle-paas-operator` 卡在 `Modified`**~~ **✅ 已解決（2026-06-25）**
    - 現象（歷史）：live `paas-system/paas-operator-registry` secret 有 `registry-server` / `registry-username` 兩個 key，但 Fleet desired state 缺這兩個 key → Fleet 永久報 drift（`modified:1` / `ready:0`，patch `{"data":{"registry-server":null,"registry-username":null}}`）。
@@ -429,7 +431,7 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 
 2. ~~**Cloudflare chart / image 未 pin（浮動 `latest`）**~~ **已解決（2026-06-21 複驗）**：prod + stg cloudflare chart 已 pin `0.1.2`、image 已 pin `cloudflared:2026.3.0`（commit `a76517e`，live pod 實跑 `2026.3.0`）。issue [paas-app-bundle-cd#19](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/19) 可關閉。
 
-3. **paas-odoo-ci 無 prod approval gate**：workflow 僅以 `startsWith(ref_name,'stg-')` 判環境，無環境保護 / 人工核可。誤推 `v*` tag 即進 prod build。建議加 branch protection / environment approval。追蹤 issue：[paas-odoo-ci#1](https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/1)
+3. ~~**paas-odoo-ci 無 prod approval gate**…~~ **✅ 已解決（2026-06-25 複驗）**：`paas-odoo-ci/.gitea/workflows/build-image.yml`（branch `feat/prod-build-approval-gate` + `fix/codeowners-and-self-approve-toggle` merged）已加 prod **人工核可 gate**——build job 內「Wait for prod approval」step（非 stg 路徑才跑、**位在 build/push 之前**），由 `PROD_APPROVERS` 白名單成員留言 `/approve` 才放行。`scripts/wait-for-approval.sh` 全程 fail-closed（`set -euo pipefail`、`APPROVERS` 空→exit 1、BUILD_TAG 字元集擋 issue-body 注入、condition 只用 `github.*` context 防 shell injection bypass、`ALLOW_SELF_APPROVE` 非法值 fail-safe 回嚴格）。實際配置 `PROD_APPROVERS=eugene` / `ALLOW_SELF_APPROVE=true`（單人維運自核）。追蹤 issue：[paas-odoo-ci#1](https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/1)（已關閉）
 
 4. ~~**文件 drift（小）**：`paas-app-bundle-cd/README.md` 只描述 `paas-odoo` 且寫 `values.yaml`…~~ **✅ 已解決（2026-06-25）**：paas-cd 已重寫 README（branch `docs/readme-multi-component-20` merged），涵蓋 5 component 結構表（paas-operator / paas-operator-stg / paas-odoo / cloudflare / cloudflare-stg + 各自 ns/env）、`values-<env>.yaml` 命名規則、版號 pin 規則（chart→`fleet.yaml#helm.version`、image→`values-<env>.yaml#image.tag`）、bundle 實名前綴 `paas-app-bundle`（無 `-cd`）caveat，逐項對齊實際 fleet.yaml 驗證。殘留一處 cloudflare「尚未 pin」過時註記（#19 已 merge、實際已 pin chart `0.1.2` + image `2026.3.0`）經 PR [paas-app-bundle-cd#28](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/pulls/28) 修正。追蹤 issue：[paas-app-bundle-cd#20](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/20)（已關閉）
 
