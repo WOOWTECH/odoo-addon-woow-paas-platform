@@ -1,7 +1,7 @@
 """FastAPI application entry point."""
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -164,7 +164,7 @@ async def health_check():
 
     return HealthResponse(
         status="healthy" if helm_version else "degraded",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         helm_version=helm_version,
     )
 

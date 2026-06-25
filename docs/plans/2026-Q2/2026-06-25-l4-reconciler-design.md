@@ -235,7 +235,8 @@ related:
 ## 機械守線（貫穿 5 Phase，CI fail-closed 非人工自律）
 
 - **reconcile 路徑 pre-merge grep gate**：在 `src/services/reconciler.py`、operator `src/api/reconcile.py`、cron/報表檔上掛 pre-merge test，assert 路徑內**零** `delete_*` / `uninstall` / `kubectl delete` / `unlink`。首版「零刪除」從紀律變 CI fail-closed（尤其 Phase E 動 operator helm，delete 字樣語意上更近，最易漏）。
-- **`dry_run=False` 422 endpoint test**：補 endpoint-level 測試，斷言首版傳 `dry_run=False` → 422 拒收。
+  - **TS-1 已實作 operator 端**（`extra/paas-operator/tests/test_reconcile_delete_gate.py`，2026-06-25；對抗式審查後精煉）：① 用 `tokenize` 先抹掉「註解 + 所有字串字面值」**只掃可執行 code** → reconcile.py 合法的免責 docstring / runbook 註解 / dry-run log·reason 字串 / `deleted_at` 軟刪過濾 / `orphan_candidates` 命名一律不誤判；② pattern 修 `\bdelete_` 漏 leading-underscore 私有刪除（`_delete_access_app` / `_delete_dns_record_by_id`，CF 真實刪除向量）→ 改 `(?<![A-Za-z0-9])_?delete_`；③ 擴及「無 delete 字眼但會抹除資源」的破壞向量：`update_tunnel_config`（PUT-erase ingress）/ `configure_tunnel_ingress([])` / `reconcile_tunnel_dns([])` / `scale_(deployment|statefulset)`（scale-to-zero）/ `rollback` / `subprocess`（直接 shell out）。**本質是 fail-closed tripwire 非完備證明**（只認 operator 既有破壞動詞；新動詞須同步補 pattern；偵測非虛設由 detector self-test 擔保）。權威 pattern 清單以該 test 檔為準，避免雙寫漂移。Odoo 端（`src/services/reconciler.py` + cron/報表）的對等 gate 於 TS-3 / Phase D 檔案落地時補。
+- **`dry_run=False` 422 endpoint test**：補 endpoint-level 測試，斷言首版傳 `dry_run=False` → 422 拒收。**延到 TS-2**：endpoint 與 `ReconcileResponse` schema 於 Phase A.1 才建，現無從測（強行 mock 假值違背 plan-gap-stop-and-report）。
 - **ReconcileResponse 契約 golden fixture（BUG-8 防護升級）**：把 `ReconcileResponse` / `OrphanCandidate` JSON shape 固化成 checked-in golden JSON。operator 端斷言「序列化輸出 == golden」；Odoo client 端用**同一份 golden** 反序列化、斷言每欄位正確讀取（`{id,name,kind,env_hint,reconcilable,reason}` 逐一對齊）。任一端改欄位 → golden 對不上 → 其一必紅。再加 stg smoke：client 實打 operator 一次，斷言回傳能 parse 成預期 dataclass（catch 真實 wire shape）。比「部署順序紀律」實質得多（後者只防 404，防不了 payload shape drift）。
 
 ---
