@@ -37,5 +37,6 @@ from . import agent_session
 from . import topup_plan
 from . import wallet_transaction
 from . import wallet_topup
+from . import loyalty_card
 from . import payment_transaction
 from . import payment_token
