@@ -44,6 +44,7 @@
         "views/agent_template_views.xml",
         "views/ai_assistant_views.xml",
         "views/topup_plan_views.xml",
+        "views/gift_grant_wizard_views.xml",
         "views/res_config_settings_views.xml",
         "data/subscription_lifecycle_cron.xml",
         "data/mail_templates.xml",

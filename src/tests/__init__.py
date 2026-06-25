@@ -148,3 +148,5 @@ from . import test_agent_reaped_since_invariant
 from . import test_gift_redeem
 # feat: Smart Home 半年贈點 Phase 2 — redeem-code endpoint（HttpCase）
 from . import test_redeem_code_endpoint
+# feat: Smart Home 半年贈點 Phase 3 — admin 手動發點 wizard
+from . import test_gift_grant_wizard
