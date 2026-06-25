@@ -108,6 +108,50 @@ class Workspace(models.Model):
         """Restore archived workspace"""
         self.write({'state': 'active'})
 
+    def unlink(self):
+        """Tear down external-resource (Cloudflare tunnel) children through
+        their own ORM unlink() BEFORE the DB FK cascade fires, so each child's
+        F-ENV-4 fail-loud cleanup guard actually runs.
+
+        SecurityAccess / SmartHome bind ``workspace_id`` with
+        ``ondelete='cascade'``; a DB-level cascade executes a raw SQL DELETE and
+        BYPASSES the Python ``unlink()`` override on those children (same ORM
+        behaviour the ``cloud-service-unlink-override-cleanup`` pattern works
+        around). Without this, hard-deleting a workspace would drop SA/SmartHome
+        rows that still hold a LIVE, billed Cloudflare tunnel with no DB anchor
+        left to drive a retry — a permanent orphan (pitfall:
+        cf-ns-orphan-no-account-gc, F-ENV-5).
+
+        Children are resolved by search (no explicit One2many to SA/SmartHome on
+        Workspace) and unlinked with ``sudo()`` so cleanup completes regardless
+        of the caller's row-level ACL (caller authorisation is enforced upstream
+        at the controller). A child whose tunnel cleanup fails raises UserError;
+        we deliberately let it PROPAGATE so the whole workspace deletion rolls
+        back and the child + its tunnel survive for a retry — never swallow it.
+
+        ``ondelete='cascade'`` is kept as a DB-integrity safety net for paths
+        that bypass this override entirely (raw SQL / an upstream cascade chain).
+
+        NOTE: CloudService (helm release / namespace) shares the SAME
+        cascade-bypass exposure but is deliberately NOT routed here yet. Its
+        helm uninstall lives in ``_do_cleanup()`` (NOT ``unlink()``), and that
+        helm-failure path is not yet fail-loud — so routing CloudService
+        correctly requires ALSO making ``_do_cleanup`` raise + keep the row on
+        helm failure, not merely calling ``unlink()``. (``CloudService.unlink``
+        only does sidecar-MCP row cleanup; the locked
+        ``test_delete_workspace_preserves_mcp_via_orphaned_project`` verifies
+        project/MCP row survival, NOT helm artifact cleanup, so it does not
+        block routing.) Tracked as F-ENV-5 residual — see follow-ups.
+        """
+        for workspace in self:
+            self.env['woow_paas_platform.security_access'].sudo().search(
+                [('workspace_id', '=', workspace.id)]
+            ).unlink()
+            self.env['woow_paas_platform.smart_home'].sudo().search(
+                [('workspace_id', '=', workspace.id)]
+            ).unlink()
+        return super().unlink()
+
     def check_user_access(self, user: Any = None, required_role: str | None = None) -> Union[Any, bool]:
         """
         Check if user has access to this workspace.
