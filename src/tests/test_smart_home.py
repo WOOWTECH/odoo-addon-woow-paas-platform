@@ -72,6 +72,44 @@ class TestSmartHome(TransactionCase):
         self.assertTrue(subdomain.startswith('paas-sm-'))
         self.assertNotIn('stg', subdomain)
 
+    def test_generate_tunnel_name_carries_env_token_while_subdomain_clean(self):
+        """Option C：env token 騎在『內部 tunnel 名』，對外 subdomain 維持乾淨。
+
+        SM dedicated tunnel 在共用 CF account 上需自證 env（problem-1 可辨識）；
+        但 subdomain = 對外 URL、immutable，不可變（DP2）。故 token 只注 tunnel
+        顯示名，subdomain 不動——比照 SecurityAccess（token 騎內部 canonical_name、
+        不騎 route 的對外 subdomain_prefix）。
+        """
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.deploy_env', 'stg')
+        home = self.SmartHome.create({
+            'name': 'Token Tunnel Home',
+            'workspace_id': self.workspace.id,
+        })
+        tunnel_name = home._generate_tunnel_name()
+        subdomain = home._generate_subdomain()
+        # 內部 tunnel 名帶 stg、對外 subdomain 不帶
+        self.assertIn('stg', tunnel_name)
+        self.assertNotIn('stg', subdomain)
+        self.assertTrue(tunnel_name.startswith('paas-'))
+        self.assertIn('sm-', tunnel_name)
+        # 同一資源、只差 env token：'sm-' 之後的 hash 尾段必須相同（存在性/差異性
+        # 斷言，不硬編 'paas-stg-sm-xxxx-yyyy' 完整快照，避免 phase-versioned 假紅）
+        self.assertEqual(
+            tunnel_name.split('sm-', 1)[1], subdomain.split('sm-', 1)[1])
+        # DNS/label 安全（即使帶最長環境前綴）
+        self.assertLessEqual(len(tunnel_name), 63)
+        self.assertRegex(tunnel_name, r'^[a-z0-9][a-z0-9-]*[a-z0-9]$')
+
+    def test_generate_tunnel_name_clean_when_prod_default(self):
+        """prod / 未設 deploy_env：tunnel 名 == 乾淨 subdomain（零行為變更）。"""
+        home = self.SmartHome.create({
+            'name': 'Prod Clean Home',
+            'workspace_id': self.workspace.id,
+        })
+        self.assertEqual(home._generate_tunnel_name(), home._generate_subdomain())
+        self.assertNotIn('stg', home._generate_tunnel_name())
+
     def test_to_dict(self):
         """Test serialization to dict."""
         home = self.SmartHome.create({
@@ -124,6 +162,65 @@ class TestSmartHome(TransactionCase):
         self.assertTrue(home.subdomain)
         self.assertTrue(home.tunnel_route)
         self.assertTrue(home.deployed_at)
+
+    @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
+    def test_provision_stg_passes_token_name_clean_hostname(self, mock_get_client):
+        """provision：傳給 operator 的 tunnel name 帶 stg token、hostname 乾淨；
+        且 stored subdomain / tunnel_route（對外）維持乾淨。
+
+        驗 operator 端能把『內部 tunnel 名』與『對外 hostname』分離（DNS 從
+        hostname 抽、不碰 name，tunnels.py:79-82 已證），故 Option C 純 Odoo
+        改動即可讓 stg tunnel 自證 env、對外 URL 零變更。
+        """
+        mock_client = MagicMock()
+        mock_client.create_tunnel.return_value = {
+            'tunnel_id': 'tun-stg-1',
+            'tunnel_token': 'tok',
+            'tunnel_name': 'paas-stg-sm-x-y',
+        }
+        mock_get_client.return_value = mock_client
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.deploy_env', 'stg')
+
+        home = self.SmartHome.create({
+            'name': 'Stg Provision Home',
+            'workspace_id': self.workspace.id,
+        })
+        home.action_provision()
+
+        kwargs = mock_client.create_tunnel.call_args.kwargs
+        # 內部 tunnel 名帶 token
+        self.assertIn('stg', kwargs['name'])
+        self.assertTrue(kwargs['name'].startswith('paas-'))
+        # 對外 hostname 乾淨（無 token）
+        self.assertNotIn('stg', kwargs['hostname'])
+        self.assertTrue(kwargs['hostname'].startswith('paas-sm-'))
+        # stored 對外識別維持乾淨
+        self.assertNotIn('stg', home.subdomain)
+        self.assertNotIn('stg', home.tunnel_route)
+
+    @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
+    def test_provision_prod_tunnel_name_equals_subdomain(self, mock_get_client):
+        """prod 預設（regression lock）：傳給 operator 的 name == 對外 hostname base
+        == stored subdomain（byte-identical 舊行為，token 路徑零回歸）。"""
+        mock_client = MagicMock()
+        mock_client.create_tunnel.return_value = {
+            'tunnel_id': 'tun-prod-1',
+            'tunnel_token': 'tok',
+            'tunnel_name': 'paas-sm-x-y',
+        }
+        mock_get_client.return_value = mock_client
+
+        home = self.SmartHome.create({
+            'name': 'Prod Provision Home',
+            'workspace_id': self.workspace.id,
+        })
+        home.action_provision()
+
+        kwargs = mock_client.create_tunnel.call_args.kwargs
+        self.assertEqual(kwargs['name'], home.subdomain)
+        self.assertEqual(kwargs['hostname'], f"{home.subdomain}.{home._get_paas_domain()}")
+        self.assertNotIn('stg', kwargs['name'])
 
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_provision_connection_error(self, mock_get_client):
