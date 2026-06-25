@@ -69,6 +69,45 @@
                     </div>
                 </WoowCard>
 
+                <!-- Redeem Code Card -->
+                <WoowCard shadow="true" class="'o_woow_billing_redeem_card'">
+                    <div class="o_woow_card_header">
+                        <WoowIcon name="'redeem'" size="22"/>
+                        <h3>Redeem a Code</h3>
+                    </div>
+                    <p class="o_woow_billing_redeem_hint">
+                        Have a gift card code? Redeem it to add points to your wallet balance.
+                    </p>
+                    <div t-if="state.redeemError" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.redeemError"/>
+                    </div>
+                    <div t-if="state.redeemSuccess" class="o_woow_billing_redeem_success">
+                        <WoowIcon name="'check_circle'" size="16"/>
+                        <span t-esc="state.redeemSuccess"/>
+                    </div>
+                    <div class="o_woow_billing_redeem_form">
+                        <input type="text"
+                               class="o_woow_input o_woow_billing_redeem_input"
+                               t-att-value="state.redeemCode"
+                               t-on-input="onRedeemInput"
+                               t-on-keydown="onRedeemKeydown"
+                               placeholder="Enter your gift card code"/>
+                        <WoowButton variant="'primary'" size="'md'"
+                                    onClick.bind="redeem"
+                                    disabled="state.redeeming">
+                            <t t-if="state.redeeming">
+                                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                                Redeeming...
+                            </t>
+                            <t t-else="">
+                                <WoowIcon name="'redeem'" size="18"/>
+                                Redeem
+                            </t>
+                        </WoowButton>
+                    </div>
+                </WoowCard>
+
                 <!-- Subscription &amp; Payment Card -->
                 <WoowCard shadow="true" class="'o_woow_billing_subscription_card'">
                     <div class="o_woow_billing_sub_section_header">

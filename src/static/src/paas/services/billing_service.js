@@ -483,4 +483,23 @@ export const billingService = reactive({
             return { success: false, error: String(err), code: 'sdk_error' };
         }
     },
+
+    /**
+     * Redeem a gift card code into wallet points.
+     * Backend grants points to the caller's own wallet (partner is bound
+     * server-side to request.env.user — the code param is the only input).
+     * @param {string} code - Gift card code
+     * @returns {Promise<{success: boolean, data?: {new_balance: number, points_granted: number}, error?: string, code?: string}>}
+     */
+    async redeemCode(code) {
+        try {
+            const result = await jsonRpc("/api/billing/redeem-code", { code });
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error, code: result.code };
+        } catch (err) {
+            return { success: false, error: err.message || "Redeem failed" };
+        }
+    },
 });
