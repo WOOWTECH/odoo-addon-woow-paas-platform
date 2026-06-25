@@ -14,6 +14,20 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 
 
+class GiftRedeemError(ValidationError):
+    """ValidationError 帶機器可讀 code，供 endpoint 穩定分流（免比對 i18n 訊息）。
+
+    code 是穩定 ASCII（already_used / expired / inactive / not_a_gift_card）。
+    endpoint 經 getattr(e, 'code', ...) 取用、轉成 API 回應的 error code，避免對
+    經 _() 翻譯的訊息字串做 substring 比對（在非 en 語系會失效）。
+    因 GiftRedeemError ⊂ ValidationError ⊂ UserError，既有 assertRaises 守線不變。
+    """
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
 class LoyaltyCard(models.Model):
     _inherit = 'loyalty.card'
 
@@ -68,15 +82,15 @@ class LoyaltyCard(models.Model):
             ['points', 'partner_id', 'active', 'expiration_date', 'program_id'],
         )
 
-        # --- (2) validate ---
+        # --- (2) validate（GiftRedeemError 帶 code 供 endpoint 穩定分流）---
         if self.program_id.program_type != 'gift_card':
-            raise ValidationError(_("Not a gift card."))
+            raise GiftRedeemError(_("Not a gift card."), 'not_a_gift_card')
         if self.points <= 0:
-            raise ValidationError(_("Gift card already used."))
+            raise GiftRedeemError(_("Gift card already used."), 'already_used')
         if not self.active:
-            raise ValidationError(_("Gift card is inactive."))
+            raise GiftRedeemError(_("Gift card is inactive."), 'inactive')
         if self.expiration_date and self.expiration_date < fields.Date.today():
-            raise ValidationError(_("Gift card expired."))
+            raise GiftRedeemError(_("Gift card expired."), 'expired')
 
         # --- (3) 灌點（官方 API，必 sudo + 必 invalidate wallet_balance 快取） ---
         amount = self.points

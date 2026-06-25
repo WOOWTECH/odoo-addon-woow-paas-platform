@@ -7,7 +7,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from odoo import fields
+from odoo import _, fields
+from odoo.exceptions import UserError, ValidationError
 from odoo.http import request, route, Controller
 from odoo.tools import str2bool
 
@@ -24,6 +25,13 @@ ERR_MISSING_PARAMS = 'missing_params'
 ERR_MEMBER_MISMATCH = 'member_id_mismatch'
 ERR_NOT_FOUND = 'not_found'
 ERR_NOT_OWNER = 'not_owner'
+
+# Error codes for /api/billing/redeem-code (gift card → wallet).
+# already_used / expired / inactive / not_a_gift_card 由 GiftRedeemError 從 model
+# 層帶 code 過來，endpoint 直接轉發；此處只列 endpoint 自身產生的。
+ERR_CODE_NOT_FOUND = 'code_not_found'
+ERR_CARD_LOCKED = 'locked'
+ERR_REDEEM_FAILED = 'redeem_failed'  # 防禦性 fallback（未帶 code 的 ValidationError）
 
 
 def _sanitize_phone_for_ecpay(raw):
@@ -1191,4 +1199,56 @@ class BillingController(Controller):
                 'new_balance': partner.wallet_balance,
                 'invoice_status': self._invoice_status_label(invoice),
             },
+        }
+
+    # ==================== Gift Card Redeem ====================
+
+    @route("/api/billing/redeem-code", auth="user", methods=["POST"], type="json")
+    def api_redeem_code(self, code=None, **kw):
+        """把禮品碼兌成登入者的 eWallet 點數。
+
+        安全契約（loyalty_card._redeem_to_wallet docstring）：partner 一律
+        = request.env.user.partner_id，**絕不**接受 client 指定的 partner/partner_id
+        （否則攻擊者可把碼灌進他人錢包 = mass-assign 提權）。auth="user" 保證身分；
+        簽名只收 code，**kw 吞掉並丟棄任何多餘 client 參數。
+
+        回應：
+          成功 {"success": True, "data": {"new_balance": float, "points_granted": float}}
+          失敗 {"success": False, "error": <i18n 訊息>, "code": <穩定 code>}
+        """
+        partner = request.env.user.partner_id
+        # .sudo()：portal user 對 loyalty.card 無 ORM 讀權；查的是平台發放的 gift_card 卡。
+        card = request.env['loyalty.card'].sudo()._find_redeemable(code)
+        if not card:
+            return {
+                'success': False,
+                'error': _("Gift card code not found."),
+                'code': ERR_CODE_NOT_FOUND,
+            }
+        try:
+            # _redeem_to_wallet 內含 FOR UPDATE NOWAIT + validate + add_wallet_points
+            # + 作廢卡，並已 invalidate partner.wallet_balance 快取。回傳入帳點數（float）。
+            points_granted = card._redeem_to_wallet(partner)
+        except ValidationError as e:
+            # GiftRedeemError 帶機器可讀 code（already_used / expired / inactive /
+            # not_a_gift_card），免比對 i18n 訊息；非預期 ValidationError 落 fallback。
+            return {
+                'success': False,
+                'error': str(e),
+                'code': getattr(e, 'code', ERR_REDEEM_FAILED),
+            }
+        except UserError as e:
+            # FOR UPDATE NOWAIT 鎖衝突（並發兌換）。
+            return {'success': False, 'error': str(e), 'code': ERR_CARD_LOCKED}
+
+        # wallet_balance 是 sh_subscription_wallet 的 non-stored compute；
+        # _redeem_to_wallet 已 invalidate，這裡 .sudo() 讀回新值（對齊 api_invoice_pay）。
+        new_balance = partner.sudo().wallet_balance
+        _logger.info(
+            "[REDEEM] ok partner=%s granted=%s new_balance=%s",
+            partner.id, points_granted, new_balance,
+        )
+        return {
+            'success': True,
+            'data': {'new_balance': new_balance, 'points_granted': points_granted},
         }

@@ -146,3 +146,5 @@ from . import test_agent_gc_cron
 from . import test_agent_reaped_since_invariant
 # feat: Smart Home 半年贈點 Phase 1 — gift_card → eWallet 兌換核心（TDD red）
 from . import test_gift_redeem
+# feat: Smart Home 半年贈點 Phase 2 — redeem-code endpoint（HttpCase）
+from . import test_redeem_code_endpoint
