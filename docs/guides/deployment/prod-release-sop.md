@@ -3,7 +3,7 @@ title: 發佈到 Production 的標準作業流程（SOP）
 category: guides
 status: active
 created: 2026-06-14
-updated: 2026-06-21
+updated: 2026-06-25
 tags: [paas, release, production, fleet, gitops, helm, ci-cd, sop]
 related:
   - docs/guides/deployment/agent-runtime-image-upgrade-sop.md
@@ -27,7 +27,9 @@ related:
 >
 > **2026-06-21 更新**：operator **#207/#208**（#207 mcp route delete 對齊 `generate_subdomain`；#208 PVC `orphaned-at` label 改 epoch 秒 + `validate_label_value` fail-loud）已發佈 **stg**（chart `0.1.15` / image `20260620.1406`，digest `1b322c8a…c1fbc`，端到端驗證通過），**現為 prod 待 promote 候選**（prod 仍 `0.1.8` / `20260525.0054`，落後）。本次 refresh 同步了 §2 stg 列、§5.2.1 worked example、§9 坑 #11（無回歸超集）、§10.1 drift 狀態（live 複驗仍 `Modified`）。
 >
-> **2026-06-24 更新**：naming env-token **L1-L3**（PR #214）已上 **stg** 並 live 驗證（operator chart `0.1.16` / image `20260624.1022`、`PAAS_ENV=stg`、ns label `paas.woowtech.io/env=stg`、Odoo SA `canonical_name=paas-stg-sa-`；prod 未動仍 `0.1.8` / `20260525.0054`）。**§6 新增「兩端 env 一致」檢查（F-ENV-1b）**：promote operator/addon 到 prod 時，operator `PAAS_ENV`（Fleet `config.paasEnv`）與 Odoo `deploy_env` config_parameter **必須同為 `prod`**，否則 split-env（ns label 與 CF 命名對 env 各說各話）。§5.2.1 gate 同步加 `paasEnv: "prod"` 檢查。
+> **2026-06-24 更新**：naming env-token **L1-L3**（PR #214）已上 **stg** 並 live 驗證（operator chart `0.1.16` / image `20260624.1022`、`PAAS_ENV=stg`、ns label `paas.woowtech.io/env=stg`、Odoo SA `canonical_name=paas-stg-sa-`；當時 prod 未動仍 `0.1.8` / `20260525.0054`——已於隔日 promote，見下）。**§6 新增「兩端 env 一致」檢查（F-ENV-1b）**：promote operator/addon 到 prod 時，operator `PAAS_ENV`（Fleet `config.paasEnv`）與 Odoo `deploy_env` config_parameter **必須同為 `prod`**，否則 split-env（ns label 與 CF 命名對 env 各說各話）。§5.2.1 gate 同步加 `paasEnv: "prod"` 檢查。
+>
+> **2026-06-25 更新**：① **prod operator 已 promote 到 `0.1.16` / image `20260624.1022`（digest `9b937dbb…6b16`，helm rev 42，2026-06-25 06:03 UTC，paas-cd PR #27）** —— 不只追上、且已與 stg **同版**（stg 亦 `0.1.16` / `20260624.1022`，rev 65）。§2 矩陣與 §5.2.1 worked example 的「prod 仍 0.1.8」前提已**過時**（promote 在他處完成）。② **§10.1 issue #18（Fleet `paas-operator-registry` drift）已解決**（亦即 follow-ups **F-ENV-6**）：live secret 上殘留的 `registry-server`/`registry-username` 兩個 key 經 paas-charts 複核確認**零 consumer**（chart 自 0.1.6 起就單 key 模型、server/username 一直走 plaintext deployment env），移除後 bundle 收斂 `ready:1`、GitRepo `5/5`。原 pitfall/F-ENV-6 的「split-values 非 deep-merge 吃掉 server」框架為**誤診**，已於對應 pitfall doc 更正。
 
 ---
 
@@ -84,7 +86,7 @@ related:
 
 ---
 
-## 2. 當前 prod 版本矩陣（2026-06-14 建立 · 2026-06-21 複驗）
+## 2. 當前 prod 版本矩陣（2026-06-14 建立 · 2026-06-21 · 2026-06-25 複驗）
 
 > ⚠️ 這是**快照**。發版後務必用本節最後的指令重新產生，別照抄。
 > ⚠️ prod image tag 是 **mutable date-tag**（可能被重指）→ **判版本看 digest，不看 tag**。
@@ -94,7 +96,7 @@ related:
 | Component | NS | image:tag | digest（sha256，前綴） | chart | chart 版本 | pin 位置（paas-app-bundle-cd） |
 |-----------|----|-----------|----------------------|-------|-----------|-------------------------------|
 | paas-odoo | `paas-system` | `jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo:20260426.1204` | `0c899562…ebd6` | Bitnami `odoo`（OCI） | `28.2.10` | tag→`paas-odoo/values-prod.yaml`（image 區塊）；chart→`paas-odoo/fleet.yaml` `helm.version` |
-| paas-operator | `paas-system` | `…/paas-operator:20260525.0054` | `2b49e9eb…51c5` | `paas-operator` | **`0.1.8`** | tag→`paas-operator/values-prod.yaml:8`；chart→`paas-operator/fleet.yaml` `version` |
+| paas-operator | `paas-system` | `…/paas-operator:20260624.1022` | `9b937dbb…6b16` | `paas-operator` | **`0.1.16`**（2026-06-25 promote，helm rev 42） | tag→`paas-operator/values-prod.yaml:8`；chart→`paas-operator/fleet.yaml` `version` |
 | postgresql | `paas-system` | `bitnamilegacy/postgresql:17.6.0-debian-12-r4` | `92635613…0a8d` | （subchart） | — | `paas-odoo/values-prod.yaml`（postgresql 區塊） |
 | cloudflared | `paas-cloudflare-system` | `cloudflare/cloudflared:2026.3.0` | `6b599ca3…31b0` | `cloudflare-tunnel-remote` | **`0.1.2`**（已 pin） | tag→`cloudflare/values-prod.yaml:8`；chart→`cloudflare/fleet.yaml` `version`（issue #19 已於 `a76517e` pin） |
 
@@ -102,11 +104,11 @@ related:
 
 | Component | NS | image:tag | chart 版本 |
 |-----------|----|-----------|-----------|
-| paas-operator-stg | `paas-stg-system` | `…/paas-operator:20260620.1406`（digest `1b322c8a…c1fbc`） | `0.1.15` |
+| paas-operator-stg | `paas-stg-system` | `…/paas-operator:20260624.1022`（digest `9b937dbb…6b16`） | `0.1.16`（helm rev 65） |
 | cloudflared-stg | `paas-stg-cloudflare-system` | `cloudflare/cloudflared:2026.3.0` | `0.1.2`（已 pin） |
 | odoo（stg） | — | **不在此 CD**：stg odoo 走 `dev-sandbox-stg`（見 [deploy-stg](../../../CLAUDE.md)） | — |
 
-> **觀察**：prod operator（chart `0.1.8` / image `20260525.0054`）**落後 stg**（chart `0.1.15` / image `20260620.1406`，含 **#207/#208** teardown 孤兒修復 + D1-D6 agent 生命週期）。stg 是領先邊（已帶 agent-runtime / skill sidecar / security-access / epoch PVC GC 等）。prod operator values **無 `agentRuntime` 區塊** → **agent-runtime 在 prod 尚未啟用**（見 §5.3）。promote 落後幅度大時，務必先過 §9 坑 #11 的**無回歸超集 gate**。
+> **觀察（2026-06-25）**：prod operator 已 promote 到 chart `0.1.16` / image `20260624.1022`，**與 stg 同版**（含 **#207/#208** teardown 孤兒修復 + D1-D6 agent 生命週期 + epoch PVC GC 等）。先前「prod 落後 stg」的缺口已消除。**agent-runtime 在 prod 是否啟用屬 values 層（非 image/chart）**：prod operator image+chart 已追上，但 prod 是否真的開了 `agentRuntime` 區塊需另查 prod values（見 §5.3，本次未複驗該 flag）。落後幅度大時 promote 仍須先過 §9 坑 #11 的**無回歸超集 gate**。
 
 ### 重新產生版本矩陣（一鍵）
 
@@ -207,7 +209,9 @@ E. 驗證：operator pod digest + readyReplicas=2/2          見 §7
 
 #### 5.2.1 Worked example：operator #207/#208 promote 到 prod（stg 已驗證，可機器執行）
 
-> 情境：stg 已跑 chart `0.1.15` + image `20260620.1406`（#207 mcp route 命名 + #208 PVC `orphaned-at` epoch），端到端驗證通過；要把同一組 pin 搬到 prod（prod 現為 `0.1.8` / `20260525.0054`）。下列為**可貼上執行**的片段，每步含 fail-closed 退出；實際 promote 仍須過審核（§6 + §11）。
+> ⚠️ **本例版本已成歷史（2026-06-25）**：此 promote 已完成，prod operator 現為 `0.1.16` / `20260624.1022`（見 §2）。下列 `NEW_TAG=20260620.1406` / `0.1.15` 等是**當時**的值，**保留作可機器執行的 recipe 範本**——下次 promote 時把 `NEW_TAG`/`NEW_CHART`/`NEW_DIGEST` 換成新的 stg 驗過值即可，步驟與 gate 不變。
+>
+> 情境：stg 已跑 chart `0.1.15` + image `20260620.1406`（#207 mcp route 命名 + #208 PVC `orphaned-at` epoch），端到端驗證通過；要把同一組 pin 搬到 prod（prod 當時為 `0.1.8` / `20260525.0054`）。下列為**可貼上執行**的片段，每步含 fail-closed 退出；實際 promote 仍須過審核（§6 + §11）。
 
 ```bash
 set -euo pipefail
@@ -280,9 +284,10 @@ kubectl --context $CTX -n paas-system rollout status deploy/paas-operator --time
 kubectl --context $CTX -n paas-system get pod -l app.kubernetes.io/name=paas-operator \
   -o jsonpath='{range .items[*]}{.status.containerStatuses[0].imageID}{"\n"}{end}' | grep -q "$NEW_DIGEST" \
   || { echo "FAIL: prod pod digest 未更新到 $NEW_DIGEST → 走 §8 rollback"; exit 1; }
-# bundle 若顯示 Modified：先排除既有 drift（§10.1 issue #18）再判斷新失敗——
+# bundle 應為 ready:1（§10.1 issue #18 的既有 registry-server/username drift 已於 2026-06-25 清除）——
 #   summary=$(kubectl --context $CTX -n fleet-local get bundle paas-app-bundle-paas-operator -o jsonpath='{.status.summary}')
-#   若 drift 僅 paas-operator-registry 的 registry-server/username=null → 既有非本次（pod 2/2 即放行）；其他 modified → 本次失敗 → rollback。
+#   現在任何 modified 都視為「本次造成」→ 排查/rollback。若再見 paas-operator-registry 的 registry-server/username=null
+#   復現，代表那兩個殘留 key 被重新手動 apply 回去（非 chart 產出），照 §10.1 修法再移除即可。
 
 # ── 5. #208 端到端鐵證（prod 有真租戶 → 只用隔離 fixture，絕不碰 paas-ws-<真實租戶>）──
 #   test ns 用 prod 前綴 paas-ws-208proof（非 paas-ws-stg-），裝一個含 helm.sh/resource-policy:keep standalone PVC 的真 helm release，
@@ -415,12 +420,12 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 
 > 以下為整理 SOP 時發現、**非緊急**（prod 服務正常運行中）但建議追蹤 / 發 issue 的項目。
 
-1. **Fleet bundle `paas-app-bundle-paas-operator` 卡在 `Modified`（0/1，GitRepo 整體 4/5）**
-   - 現象：live `paas-system/paas-operator-registry` secret 有 `registry-server` / `registry-username`（有人手動補回），但 Fleet desired state 缺這兩個 key → Fleet 永久報 drift（預設不自動回滾）。
-   - 當前影響：**無**（operator pods 2/2 Running；operator 自身 image pull 用的是另一個 secret `jfrog-registry`；且 prod agent-runtime 未啟用）。**2026-06-21 複驗：bundle 仍 `Modified`（`modified:1` / `ready:0`，drift = `paas-system/paas-operator-registry` 的 `registry-server` / `registry-username` 被設 `null`），operator deploy 仍 `2/2` Ready；issue #18 仍待處理。** promote operator 上 prod 後要能分辨「自己改的 reconcile」與「這條既有 drift」，別誤判。
-   - 潛在風險：GitRepo 卡 `Modified` 會遮蔽未來真實失敗；若做 drift-correction / force sync 把手動補的值蓋掉，等 prod 啟用 agent-runtime 時租戶 pod 會 ImagePullBackOff。
-   - 建議：在 paas-app-bundle-cd 補齊 operator-registry secret 的 desired 定義（或調整 chart 渲染），讓 bundle 回 ready。
-   - 追蹤 issue：[paas-app-bundle-cd#18](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/18)
+1. ~~**Fleet bundle `paas-app-bundle-paas-operator` 卡在 `Modified`**~~ **✅ 已解決（2026-06-25）**
+   - 現象（歷史）：live `paas-system/paas-operator-registry` secret 有 `registry-server` / `registry-username` 兩個 key，但 Fleet desired state 缺這兩個 key → Fleet 永久報 drift（`modified:1` / `ready:0`，patch `{"data":{"registry-server":null,"registry-username":null}}`）。
+   - **根因（經 paas-charts 複核 + live 證據更正）**：chart `secret-registry.yaml` **自 0.1.6 起就是單 key 模型**（只渲染 `registry-password`），`registry.server` / `registry.username` 一直走 **plaintext deployment env**（live `REGISTRY_SERVER=jcr-prod.woowtech.io` / `REGISTRY_USERNAME=woow-prod` 皆為 env value，非 secretKeyRef）。那兩個 secret key **從來不是這顆 chart 產生的**，是 pre-0.1.6 / chart 外（手動 `kubectl apply`，secret 上有 `last-applied-configuration` annotation）殘留，且**零 consumer**（全叢集只有 operator deploy 引用此 secret 的 `registry-password`）。
+   - **修復**：`kubectl -n paas-system patch secret paas-operator-registry --type=json -p='[{"op":"remove","path":"/data/registry-server"},{"op":"remove","path":"/data/registry-username"}]'`（移除殘留 key，收斂到 Fleet desired）→ bundle `ready:1`、GitRepo `5/5`、operator pod 0 restart、`REGISTRY_SERVER/USERNAME` plaintext env 不受影響。
+   - 教訓：判 Fleet drift 方向看 `modifiedStatus.patch`（live→desired）；`null` = desired 要刪該 key。本案 desired（chart）才是對的、live 多了殘留 key，故修法是讓 live 收斂到 desired，**非**改 CD repo。詳見 pitfall `fleet-split-registry-values-merge-drift.md`（已更正誤診）。
+   - 追蹤 issue：[paas-app-bundle-cd#18](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/18)（可關閉）
 
 2. ~~**Cloudflare chart / image 未 pin（浮動 `latest`）**~~ **已解決（2026-06-21 複驗）**：prod + stg cloudflare chart 已 pin `0.1.2`、image 已 pin `cloudflared:2026.3.0`（commit `a76517e`，live pod 實跑 `2026.3.0`）。issue [paas-app-bundle-cd#19](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/19) 可關閉。
 
