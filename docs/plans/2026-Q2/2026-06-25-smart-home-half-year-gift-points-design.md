@@ -80,7 +80,7 @@ related:
 - **兌換 = 純發點**，不順帶綁特定 SH（呼應「點數可花任何服務」已拍板）。使用者照既有流程建 Smart Home，點數自動覆蓋帳單。
 - **發點走 `partner.add_wallet_points()`**（贈點免費、不經 ECPay、不開客戶發票）。**不要**借 `wallet.topup`——那是付費路徑，會誤開一張「已付」發票。
 - **半年點數值** = 目標 SH plan 月費 × 6（或 admin 產碼時填 explicit amount，存在兌換碼上）。
-- **單次碼 idiom** 可參考 `src/models/oauth_code.py`（`code`/`is_used`/`expires_at`/`is_valid()`/`mark_used()`），但**不可照抄並行安全性**（見約束）。
+- **碼用 Odoo 原生（2026-06-25 修正，砍掉自訂 model）**：stg 查證錢包本身就是原生 ewallet program（id 2「Wallet Points」），且已有 gift_card program（id 1）+ 原生產碼精靈 `loyalty.generate.wizard`。故**產碼 100% 用原生**——在 gift_card program 下批量產 `loyalty.card`（自帶 `code`/`points`/`expiration_date`，無 state 欄位，「已用」= `points` 歸 0）；**不自建 code model**。我們只自建「`/woow` 兌換 endpoint：查 `loyalty.card` → `add_wallet_points` 灌入錢包 → 作廢卡（points→0）」+ 前端。詳見 implementation。
 
 ## 決策鎖定（Eugene，2026-06-25）
 
@@ -91,7 +91,7 @@ related:
 
 ## 約束 / 風險 / 取捨
 
-- **🔴 並行兌換必須 `SELECT FOR UPDATE` 鎖 code row**：`oauth_code` 既有單次碼 pattern **沒有 row locking**（裸 TOCTOU），照抄會讓同一碼被並行兌換兩次（兌出兩份點數）。單次性需三層：`_sql_constraints UNIQUE(code)` + `state` 機 + redeem 時 `FOR UPDATE` + `write()` guard 擋 `used→unused` 逆轉。
+- **🔴 並行兌換必須 `SELECT FOR UPDATE` 鎖 `loyalty.card` row**：兌換時讀 `points>0` 再歸 0，若不鎖 row，兩個並行請求會雙雙讀到 `points>0`、各自灌一份點數（同碼兌兩次）。單次性靠：redeem 時對該 card row `FOR UPDATE` + 原子地 `points→0`。（`oauth_code` 既有單次碼 pattern 無 row lock、是裸 TOCTOU，不可照抄其並行寫法。）
 - **跨服務外洩（已接受）**：點數是 partner 全域（`loyalty.card.points` 綁 partner 非綁訂閱），送的半年點數可被拿去付任何服務的帳單（`/api/billing/invoices/<id>/pay` 不限服務）。Eugene 已接受。若日後不可接受，eWallet 架構擋不住，需改受限用途的 gift_card。
 - **auto-topup 邊界**：有卡買家點數光時會被 auto-topup 自動續扣其卡（community 版 `_resolve_default_token` 會借該 partner 任一服務綁的最近一張卡）。已決定不改——視為「願綁卡＝願續訂」的合理行為。
 - **停服延遲 ≈ 6 天**（閾值 6 + 每日累計）。半年贈送下這段額外免費期可接受；閾值可調。
