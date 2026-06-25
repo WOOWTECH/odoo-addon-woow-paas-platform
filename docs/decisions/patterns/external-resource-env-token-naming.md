@@ -24,6 +24,7 @@
 | 外部資源 | 命名根在 | 能注入? | 機制 | 反查破壞? |
 |---|---|---|---|---|
 | CF Tunnel name(SA dedicated) | Odoo `canonical_name`(透傳至 `cloudflare.py:742`) | ✅ | naming.py 注入即生效 | 否(反查靠 tunnel_id + CNAME content) |
+| CF Tunnel name(**SM dedicated**) | Odoo `_generate_tunnel_name`(**內部名，與對外 subdomain 解耦**;`smart_home.py`) | ✅ | naming.py env token 注**內部 tunnel 名**、對外 subdomain/hostname 維持乾淨(**Option C**,2026-06-25;operator `tunnels.py` DNS 從 hostname 抽、不碰 name) | 否(teardown 走 stored tunnel_id) |
 | CF DNS comment | = canonical_name(`security_access.py:547`) | ✅ | 隨 canonical_name 帶 | 否(反查靠 CNAME content) |
 | CF Access app `name`(display name) | **主路徑 = 使用者自填 `subdomain_prefix`**,canonical_name 僅當 prefix 空時 fallback(主 sync `security_access.py:1203`、teardown `:595`) | ⚠️ **不適用(主路徑)** | 同 `subdomain_prefix`——env 靠 per-env `paas_domain`,**不主動注 token**;僅 route 未填 prefix 退回 canonical 時順帶 | 否(反查靠 existing_app_id) |
 | CF reusable policy name | operator 加工 `f'{canonical}: {name}'`(`cloudflare.py:1322`,canonical 經 `sync_access_app` 的 `canonical_name` 參數 `security_access.py:594/1200` 傳入) | ✅ | canonical 帶 env 即自動前綴(**Access 物件「穩定帶 env」的只有這個,不是 app name**) | 否(反查靠 existing_policy_ids) |

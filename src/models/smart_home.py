@@ -120,11 +120,41 @@ class SmartHome(models.Model):
             )
         return client
 
-    def _generate_subdomain(self):
-        """Generate a unique subdomain for this smart home."""
+    def _naming_slug(self):
+        """Workspace slug used as the stable hash seed for Cloudflare naming."""
         workspace = self.workspace_id
-        slug = workspace.slug if hasattr(workspace, 'slug') else workspace.name.lower().replace(' ', '-')
-        return make_smarthome_subdomain(slug, self.reference_id, self.name)
+        return workspace.slug if hasattr(workspace, 'slug') else workspace.name.lower().replace(' ', '-')
+
+    def _generate_subdomain(self):
+        """Generate the public subdomain (= user-facing hostname base).
+
+        Deliberately env-token-FREE: the subdomain is the external URL and is
+        immutable, so prod/stg are told apart by per-env ``paas_domain``, not by
+        mutating the hostname (DP2). The env token rides the internal tunnel
+        name instead — see ``_generate_tunnel_name``.
+        """
+        return make_smarthome_subdomain(self._naming_slug(), self.reference_id, self.name)
+
+    def _generate_tunnel_name(self):
+        """Generate the Cloudflare *tunnel display name*, carrying the deploy-env token.
+
+        A SmartHome owns a dedicated Cloudflare tunnel on the prod/stg-shared
+        account; with no env token in its name — and, unlike CloudService, no
+        shared-tunnel CNAME ``content`` clue — it cannot self-identify its
+        environment (the orphan-attribution gap from cf-ns-orphan-no-account-gc).
+        We stamp the env onto the *internal* tunnel name (e.g. ``paas-stg-sm-…``)
+        while the public subdomain stays clean, mirroring SecurityAccess where
+        the token rides the internal ``canonical_name`` rather than the route's
+        user-facing ``subdomain_prefix``. The operator keeps the tunnel name and
+        the DNS hostname independent (DNS is derived from the hostname, never the
+        name — see operator tunnels.py), so the user-facing URL is unchanged.
+        Teardown reads the stored ``tunnel_id``, never a recomputed name, so the
+        token is reverse-lookup-safe (external-resource-env-token-naming 守則 3/4).
+        """
+        env = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.deploy_env', 'prod')
+        return make_smarthome_subdomain(
+            self._naming_slug(), self.reference_id, self.name, env=env)
 
     def _get_paas_domain(self):
         """Get PaaS domain from system settings."""
@@ -145,9 +175,11 @@ class SmartHome(models.Model):
             domain = self._get_paas_domain()
             hostname = f"{subdomain}.{domain}"
 
-            # Create tunnel via operator
+            # Create tunnel via operator. The tunnel *name* carries the deploy-env
+            # token (internal traceability on the shared CF account); the
+            # *hostname* stays env-clean so the user-facing URL is unchanged.
             result = client.create_tunnel(
-                name=subdomain,
+                name=self._generate_tunnel_name(),
                 hostname=hostname,
                 service_url=f"http://localhost:{self.ha_port}",
             )
