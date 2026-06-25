@@ -257,7 +257,7 @@ related:
 | ID | 決策點 | 現況/傾向 |
 |----|--------|-----------|
 | **DP5** | L4 介面：cron+`/woow` UI 報表（plan 建議）vs operator endpoint + Odoo client 手動觸發 | **Phase D 拍板**；傾向 A（自動定期對帳、零自動刪、人工確認 + 單筆即時重查） |
-| **DP-PAGINATION** | CF pagination contract（`next_cursor` vs page offset） | **Phase A 前置阻塞**：寫分頁測試前先用真 CF sandbox zone 確認，不可邊猜邊測 |
+| **DP-PAGINATION** | CF pagination contract（`next_cursor` vs page offset） | **✅ RESOLVED（TS-2，2026-06-26，權威三來源：CF API docs + OpenAPI schema + cloudflare-python SDK 回傳型別互證）**：5 個 endpoint（`dns_records` / `cfd_tunnel` / `access/apps` / `access/apps/{id}/policies` / `access/policies`）**全部 `page`/`per_page` offset 分頁，無 cursor、無不分頁**，皆有 `result_info.total_count`（`cfd_tunnel` 缺 `total_pages`）。實作 `_get_paginated`：**`total_count` 主停 + 空頁 fallback + `max_pages` 防無限**（對「server 偷壓低 per_page」「缺 total_pages」皆 robust，與官方 SDK 行為一致）。per_page：`cfd_tunnel` 硬上限 1000；DNS 上限極大（用 1000）；**access 三端點硬上限 OpenAPI 未明訂 → 保守 50**（`total_count` 迴圈補齊，避免過大 per_page 首跑 400）。唯一 live-待確認：access per_page 真實上限（fail-loud、非靜默漏資料）。 |
 | **DP-MARKER** | 正向 ownership marker 載體 + backfill（DNS comment / Access tags / tunnel metadata）+ 對存量補 env token | 未設計；**是開任何 CS `reconcilable=True` 的硬前置**；Access app/dedicated tunnel 結構性無載體 |
 | **DP-DIFF** | dedicated tunnel env 判定（prod DB diff）做在 operator 端 API 還是 Odoo 端 | 未定；prod DB「可達 ≠ 對該 model 有權威」，table-not-exist/空集→skip；**只填 env_hint 不授權刪** |
 | **DP-SM-COMMENT** | 是否補 SM `create_tunnel` 傳 DNS comment（對稱 SA）讓 SM DNS 自證 env，還是以 tunnel 物件 name 為 env 判定起點 | 未定；F-ENV-7 後 SM tunnel name 已帶 token（零 operator 改動可判 env）→ **DP-SM-COMMENT 非必需**；若做則為**獨立 operator 變更**（不混 Phase C） |

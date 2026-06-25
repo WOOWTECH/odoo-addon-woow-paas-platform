@@ -1,0 +1,22 @@
+{
+  "dry_run": true,
+  "partial": false,
+  "orphan_candidates": [
+    {
+      "id": "tunnel-abc123",
+      "name": "paas-stg-sm-115223fa-5c25b8a1",
+      "kind": "tunnel",
+      "env_hint": "stg",
+      "reconcilable": false,
+      "reason": "dedicated tunnel, no owner marker — manual only"
+    },
+    {
+      "id": "dns-def456",
+      "name": "legacy.woowtech.io",
+      "kind": "dns_record",
+      "env_hint": "unknown",
+      "reconcilable": false,
+      "reason": "legacy record, no env token"
+    }
+  ]
+}

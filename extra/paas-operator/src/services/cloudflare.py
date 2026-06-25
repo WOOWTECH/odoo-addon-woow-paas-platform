@@ -396,30 +396,126 @@ class CloudflareService:
             logger.info(f"DNS record deleted: {hostname}")
             return True
 
+    async def _get_paginated(
+        self,
+        url: str,
+        params: Optional[dict] = None,
+        *,
+        per_page: int = 1000,
+        resource: str = "resource",
+        max_pages: int = 1000,
+    ) -> List[dict]:
+        """GET a Cloudflare v4 LIST endpoint across **all** pages 並回傳完整 result。
+
+        DP-PAGINATION 已用權威三來源（CF API docs / OpenAPI / cloudflare-python SDK）確認：
+        ``dns_records`` / ``cfd_tunnel`` / ``access/apps`` / ``access/apps/{id}/policies`` /
+        ``access/policies`` 全部是 **page/per_page offset 分頁**（無 cursor、無不分頁），且都有
+        ``result_info.total_count``。故：``total_count`` 主停 + 空頁 fallback（不假設 server 一定
+        回 total_count，也對「server 把 per_page 上限偷壓低」robust）+ ``max_pages`` 防病態無限迴圈。
+
+        **fail-closed**：任何一頁非 200 / ``success=False`` 一律 raise，**絕不回部分/空清單**——
+        部分清單會讓下游差集把「沒取到的資源」誤判成孤兒回收。``per_page`` 預設 1000（≤ cfd_tunnel
+        硬上限 1000；DNS/access 皆可）。
+        """
+        base_params = dict(params or {})
+        base_params["per_page"] = per_page
+        results: List[dict] = []
+        page = 1
+        async with httpx.AsyncClient() as client:
+            while True:
+                response = await client.get(
+                    url,
+                    headers=self._headers,
+                    params=dict(base_params, page=page),
+                    timeout=30.0,
+                )
+                if response.status_code != 200:
+                    raise CloudflareException(
+                        f"Failed to list {resource} (page {page}): {response.text}",
+                        status_code=response.status_code,
+                    )
+                data = response.json()
+                if not data.get("success"):
+                    raise CloudflareException(
+                        f"Cloudflare API error listing {resource}: "
+                        f"{data.get('errors', 'Unknown error')}"
+                    )
+                batch = data.get("result") or []
+                results.extend(batch)
+                if not batch:
+                    break
+                total_count = (data.get("result_info") or {}).get("total_count")
+                if total_count is not None and len(results) >= total_count:
+                    break
+                if page >= max_pages:
+                    raise CloudflareException(
+                        f"Pagination for {resource} exceeded max_pages={max_pages} "
+                        f"(collected {len(results)}); aborting fail-loud rather than "
+                        "silently truncating."
+                    )
+                page += 1
+        return results
+
     async def _list_dns_records_by_content(self, content: str) -> List[dict]:
-        """List CNAME records in the zone whose content equals ``content``.
+        """List CNAME records in the zone whose content equals ``content`` (all pages).
 
         Used to find every record pointing at a dedicated tunnel
-        ({tunnel_id}.cfargotunnel.com) for declarative reconciliation.
+        ({tunnel_id}.cfargotunnel.com) for declarative reconciliation. 走完整分頁 —
+        修 ``*-mcp 漏 15 筆`` 事故（原寫死 ``per_page=100`` 且無分頁迴圈 → 超過 100 筆同 content
+        的孤兒被當「不存在」）。
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                self._dns_records_url,
-                headers=self._headers,
-                params={"type": "CNAME", "content": content, "per_page": 100},
-                timeout=30.0,
-            )
-            if response.status_code != 200:
-                raise CloudflareException(
-                    f"Failed to list DNS records: {response.text}",
-                    status_code=response.status_code,
-                )
-            data = response.json()
-            if not data.get("success"):
-                raise CloudflareException(
-                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
-                )
-            return data.get("result", [])
+        return await self._get_paginated(
+            self._dns_records_url,
+            params={"type": "CNAME", "content": content},
+            resource="DNS records",
+        )
+
+    # ============ Account-level list-all（L4 reconciler reverse-discovery）============
+    # 帳號級反向發現能力：對 stored-id 取差集前，先撈 CF account 上的全量資源（右集）。
+    # 皆走 _get_paginated（fail-closed、分頁到底），不可回部分清單。
+    #
+    # per_page 取值（DP-PAGINATION 研究結論）：tunnel 硬上限 1000（用 1000）、DNS 上限極大
+    # （用助手預設 1000）；**access 三端點（apps / app-policies / reusable）的 per_page 硬上限
+    # 在 CF OpenAPI 未明訂**（只有 default 1000/200/100）→ 保守用 50（必落在任何合理上限內），
+    # 靠 total_count 迴圈補齊，避免「server 對過大 per_page 硬回 400」的首跑意外。多打幾頁對
+    # 低頻 dry-run 對帳無感。
+    _ACCESS_PER_PAGE = 50
+
+    async def list_all_tunnels(self) -> List[dict]:
+        """List **all** cfd_tunnel in the account（分頁到底），過濾軟刪（``deleted_at != null``）。
+
+        軟刪 tunnel 不是孤兒、不該回收。fail-closed（錯誤 raise，絕不回 []）。
+        """
+        tunnels = await self._get_paginated(
+            self._tunnels_url(), resource="tunnels", per_page=1000
+        )
+        return [t for t in tunnels if not t.get("deleted_at")]
+
+    async def list_all_access_apps(self) -> List[dict]:
+        """List **all** Access applications in the account（分頁到底）。"""
+        return await self._get_paginated(
+            f"{self._access_base}/apps", resource="access apps",
+            per_page=self._ACCESS_PER_PAGE,
+        )
+
+    async def list_policies_of_app(self, app_id: str) -> List[dict]:
+        """List policies attached to an Access app（分頁到底）。
+
+        判 Access policy 孤兒以「CF app 實際引用」為 ground truth（不信 DB 白名單，因 resync
+        重建 policy 會造成 DB↔CF 漂移）—— 即用本 method 取某 app 的真實 policy 清單。
+        """
+        return await self._get_paginated(
+            f"{self._access_base}/apps/{app_id}/policies",
+            resource=f"policies of app {app_id}",
+            per_page=self._ACCESS_PER_PAGE,
+        )
+
+    async def list_all_reusable_policies(self) -> List[dict]:
+        """List **all** account-level reusable Access policies（分頁到底）。"""
+        return await self._get_paginated(
+            f"{self._access_base}/policies", resource="reusable policies",
+            per_page=self._ACCESS_PER_PAGE,
+        )
 
     async def _delete_dns_record_by_id(self, record_id: str) -> bool:
         """Delete a DNS record by its Cloudflare record ID."""
