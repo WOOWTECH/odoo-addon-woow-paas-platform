@@ -435,7 +435,7 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 
 5. **認知 drift（已澄清，記錄供後人）**：曾有「odoo CD 完全手動、改 `resources/private/paas-odoo.md` + Rancher UI 點 upgrade」的說法 —— 經查 Fleet GitRepo / bundle / CD repo README，**odoo 確實由 Fleet GitOps 管理**（bundle `paas-app-bundle-paas-odoo`），該手動說法為**過時錯誤**。
 
-6. **charts repo README drift**：`woow-paas-charts/README.md` 宣稱 paas-operator CD「已改為 Fleet GitRepo 直接從 OCI registry 拉取」，但實際 `paas-app-bundle-cd/paas-operator/fleet.yaml` 仍用傳統 helm repo（in-cluster Gitea `…/api/packages/woow-paas/helm`，非 OCI）。可能誤導 agent 以為 operator chart 走 OCI。建議修 charts README 對齊實況。追蹤 issue：[woow-paas-charts#26](https://git-prod.woowtech.io/woow-paas/woow-paas-charts/issues/26)
+6. ~~**charts repo README drift**：`woow-paas-charts/README.md` 宣稱 paas-operator CD 走 OCI…~~ **✅ 已解決（2026-06-25 複驗）**：`woow-paas-charts/README.md`（branch `docs/readme-operator-cd-oci-drift` merged）已更正為**傳統 Gitea Helm Repo（非 OCI）**——明寫 operator CD 由 `paas-app-bundle-cd/fleet.yaml` 從 in-cluster `…/api/packages/woow-paas/helm` 拉取，並加「尚未推送 OCI artifacts、請勿用 `oci://`」caveat。複驗無殘留 drift：`publish-charts.yaml` 確實只 `POST .../helm/api/charts`（classic helm repo、零 `oci` push）、operator `Chart.yaml` version `0.1.16` 與 CD pin 一致。追蹤 issue：[woow-paas-charts#26](https://git-prod.woowtech.io/woow-paas/woow-paas-charts/issues/26)（已關閉）
 
 ---
 
