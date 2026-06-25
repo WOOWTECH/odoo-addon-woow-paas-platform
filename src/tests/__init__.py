@@ -150,3 +150,5 @@ from . import test_gift_redeem
 from . import test_redeem_code_endpoint
 # feat: Smart Home 半年贈點 Phase 3 — admin 手動發點 wizard
 from . import test_gift_grant_wizard
+# fix: sh_journal_id auto-config idempotent (install+upgrade) + invoice fallback
+from . import test_subscription_journal_config

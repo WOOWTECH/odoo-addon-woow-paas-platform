@@ -26,6 +26,7 @@
         "data/topup_plans.xml",
         "data/subscription_products.xml",
         "data/subscription_template_links.xml",
+        "data/subscription_journal_config.xml",
         "views/menu.xml",
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",

@@ -40,3 +40,4 @@ from . import wallet_topup
 from . import loyalty_card
 from . import payment_transaction
 from . import payment_token
+from . import res_company
