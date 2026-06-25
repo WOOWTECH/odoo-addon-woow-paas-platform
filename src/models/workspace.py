@@ -132,16 +132,16 @@ class Workspace(models.Model):
         ``ondelete='cascade'`` is kept as a DB-integrity safety net for paths
         that bypass this override entirely (raw SQL / an upstream cascade chain).
 
-        NOTE: CloudService (helm release / namespace) shares the SAME
-        cascade-bypass exposure but is deliberately NOT routed here yet. Its
-        helm uninstall lives in ``_do_cleanup()`` (NOT ``unlink()``), and that
-        helm-failure path is not yet fail-loud — so routing CloudService
-        correctly requires ALSO making ``_do_cleanup`` raise + keep the row on
-        helm failure, not merely calling ``unlink()``. (``CloudService.unlink``
-        only does sidecar-MCP row cleanup; the locked
-        ``test_delete_workspace_preserves_mcp_via_orphaned_project`` verifies
-        project/MCP row survival, NOT helm artifact cleanup, so it does not
-        block routing.) Tracked as F-ENV-5 residual — see follow-ups.
+        CloudService (helm release / namespace) is routed too, via
+        ``service_ids.unlink()`` → ``CloudService.unlink()``'s own helm
+        fail-loud guard (``_cleanup_helm``). A configured-operator helm
+        uninstall failure aborts the whole workspace deletion (keeps row +
+        release for retry); an already-uninstalled release (controller path)
+        or an unconfigured operator is an idempotent no-op. (The locked
+        ``test_delete_workspace_preserves_mcp_via_orphaned_project`` only
+        verifies project/MCP row survival, NOT helm cleanup, and the MCP it
+        keeps is non-sidecar so ``CloudService.unlink``'s sidecar-MCP cleanup
+        leaves it intact — routing does not regress it.)
         """
         for workspace in self:
             self.env['woow_paas_platform.security_access'].sudo().search(
@@ -150,6 +150,9 @@ class Workspace(models.Model):
             self.env['woow_paas_platform.smart_home'].sudo().search(
                 [('workspace_id', '=', workspace.id)]
             ).unlink()
+            # CloudService: route helm/ns teardown through its unlink() helm
+            # fail-loud guard (F-ENV-5). service_ids is the explicit One2many.
+            workspace.service_ids.sudo().unlink()
         return super().unlink()
 
     def check_user_access(self, user: Any = None, required_role: str | None = None) -> Union[Any, bool]:

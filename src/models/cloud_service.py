@@ -1128,6 +1128,53 @@ class CloudService(models.Model):
         # Step 3 — mark state so cron/UI know teardown is in progress.
         self.write({'state': 'deleting'})
 
+    def _cleanup_helm(self):
+        """Idempotent helm uninstall for the direct-unlink / workspace-cascade
+        path (F-ENV-5).
+
+        Returns True when the release is gone — physically uninstalled,
+        already-absent (operator 404, e.g. controller already ran its own
+        uninstall before calling unlink), or operator unconfigured (dev/test,
+        no live release to tear down). Returns False ONLY when a configured
+        operator was asked to uninstall and genuinely failed (release still
+        live). Does NOT write state — callers decide their own policy
+        (``_do_cleanup``→state='error', ``unlink``→raise). KEEPS
+        ``helm_release_name`` on failure so a retry still has the anchor
+        (analogous to SecurityAccess keeping ``tunnel_id``); clearing it would
+        make the helm release un-findable = a permanent orphan
+        (cf-ns-orphan-no-account-gc).
+        """
+        self.ensure_one()
+        if not (self.helm_release_name and self.helm_namespace):
+            return True
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorError,
+        )
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return True  # operator unconfigured — no live release to tear down
+        try:
+            client.uninstall_release(
+                self.helm_namespace, self.helm_release_name,
+                subdomain=self.subdomain,
+            )
+            return True
+        except PaaSOperatorError as e:
+            if getattr(e, 'status_code', None) == 404:
+                return True  # already gone — idempotent success
+            _logger.warning(
+                "[CLOUD_SVC] _cleanup_helm failed service=%s: %s — kept for retry",
+                self.id, e,
+            )
+            return False
+        except Exception as e:
+            _logger.warning(
+                "[CLOUD_SVC] _cleanup_helm failed service=%s: %s — kept for retry",
+                self.id, e,
+            )
+            return False
+
     def unlink(self):
         """Cleanup sidecar-backed user-scope MCP before deleting the service.
 
@@ -1151,6 +1198,23 @@ class CloudService(models.Model):
         sidecar-backed MCP rows on a project that binds both.
         """
         for service in self:
+            # F-ENV-5 helm fail-loud guard: the helm release / namespace must
+            # never outlive the record. The workspace-cascade routing path
+            # (Workspace.unlink → service_ids.unlink) relies on THIS to tear
+            # down helm, since the DB FK cascade bypasses Python unlink. The
+            # controller delete path that already uninstalled helm hits an
+            # idempotent 404 here (treated as success). On a real failure the
+            # row + release are kept and the deletion is aborted for retry.
+            if service.helm_release_name and service.helm_namespace:
+                if not service._cleanup_helm():
+                    raise UserError(
+                        "Helm uninstall failed; release '%s' is still live in "
+                        "namespace '%s' (billed compute / leaked namespace). "
+                        "The service record was kept so the deletion can be "
+                        "retried. Please try again shortly." % (
+                            service.helm_release_name, service.helm_namespace,
+                        )
+                    )
             user_mcps = service._collect_sidecar_user_mcps(
                 service._sidecar_url_prefix()
             )
