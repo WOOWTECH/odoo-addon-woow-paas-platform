@@ -108,7 +108,7 @@ related:
 | cloudflared-stg | `paas-stg-cloudflare-system` | `cloudflare/cloudflared:2026.3.0` | `0.1.2`（已 pin） |
 | odoo（stg） | — | **不在此 CD**：stg odoo 走 `dev-sandbox-stg`（見 [deploy-stg](../../../CLAUDE.md)） | — |
 
-> **觀察（2026-06-25）**：prod operator 已 promote 到 chart `0.1.16` / image `20260624.1022`，**與 stg 同版**（含 **#207/#208** teardown 孤兒修復 + D1-D6 agent 生命週期 + epoch PVC GC 等）。先前「prod 落後 stg」的缺口已消除。**agent-runtime 在 prod 是否啟用屬 values 層（非 image/chart）**：prod operator image+chart 已追上，但 prod 是否真的開了 `agentRuntime` 區塊需另查 prod values（見 §5.3，本次未複驗該 flag）。落後幅度大時 promote 仍須先過 §9 坑 #11 的**無回歸超集 gate**。
+> **觀察（2026-06-25）**：prod operator 已 promote 到 chart `0.1.16` / image `20260624.1022`，**與 stg 同版**（含 **#207/#208** teardown 孤兒修復 + D1-D6 agent 生命週期 + epoch PVC GC 等）。先前「prod 落後 stg」的缺口已消除。**agent-runtime 在 prod 是否啟用屬 values 層（非 image/chart）**：prod operator image+chart 雖已追上 0.1.16，但 **agent-runtime 在 prod 仍未啟用（2026-06-25 四向複驗確認）**——prod operator deploy **無任何 `AGENT_RUNTIME_*` env**、CD `paas-operator/values-prod.yaml` **無 `agentRuntime` 區塊**、`fleet-local`／`paas-system` 無 agent-runtime 注入 secret、cluster 內 `paas-ws-*` 租戶 ns **全為 stg（0 個 prod）**；對照 stg operator 13 個 `AGENT_RUNTIME_*` env + 完整 `agentRuntime` values + 11 個 `paas-ws-stg-*` ns。屬「stg 為先導邊、prod 尚未 rollout」的刻意狀態（見 §5.3 啟用步驟）。落後幅度大時 promote 仍須先過 §9 坑 #11 的**無回歸超集 gate**。
 
 ### 重新產生版本矩陣（一鍵）
 
