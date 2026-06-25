@@ -401,3 +401,22 @@ grep 實證計畫的 fixture-coupling 分析**正確**：
 - `test_security_access.py:111/178/211/243/876/892` 的 `'tunnel_name': 'paas-sa-x-y'` 與 operator `test_tunnel_routes_sync.py:107/111/231` 的 `comment=='paas-sa-x-y'` —— 皆 **mock 輸入 / forwarding 斷言**（非 naming 輸出），不受 token 影響。
 - `test_security_access.py:330/497/600` 的 `'subdomain_prefix': sa.canonical_name` —— subdomain_prefix 走 user 路徑；預設 prod 下 canonical 無 token，不變。
 - **結論**：預設 prod 下既有測試零變紅，blast radius 僅限新增的 stg 存在性測試。fixture-coupling lock-step 清單在「stg fixture 時」才放寬為存在性斷言、**絕不刪除繞過**。
+
+## DP2 部分推翻：SmartHome 走 Option C（2026-06-25 拍板 + 已實作驗證）
+
+**背景**：DP2（2026-06-22）把 CS+SM 綁在一起「subdomain 不注 token」。2026-06-25 重新討論時，讀實機程式碼發現這個綁定**不對稱**：
+
+- **CS** 走 **shared tunnel**，DNS record 的 `content` 指向哪條 shared tunnel（stg `55953bfa` / prod `328c3a28`）**已經能分 env**；加上 ns prefix（`paas-ws-stg-`）+ L2 ns label → CS 早就 env-可辨識，CF 名注 token **冗餘**且白改對外 URL。**CS 維持 DP2 不注。**
+- **SM** 走 **dedicated tunnel**，**無** shared-tunnel content 線索、**無** namespace（純 CF-to-home，L2 救不到）→ 在共用 CF account 上**完全無法自證 env**（正是 L4 plan「dedicated tunnel env_hint 只能標 unknown」那筆）。這是 problem-1 唯一真缺口。
+
+**Option C（外科手術，只 SM、只注內部）**：把 SM 的 env token 注在 **內部 CF tunnel 顯示名**（`_generate_tunnel_name` → `paas-stg-sm-…`），**對外 subdomain / hostname / tunnel_route 維持乾淨**（`_generate_subdomain` 不變）。**完全比照 SA**（token 騎內部 `canonical_name`、不騎 route 對外 `subdomain_prefix`）。
+
+**可行性 make-or-break（已驗）**：operator `tunnels.py:54-88` 的 `name` 只給 CF tunnel 顯示名（step 1），DNS subdomain 從 `request.hostname` 抽（`:79-82`）、**完全不碰 `name`** → tunnel 名與對外 hostname 可分離 → **純 Odoo 改動、零 operator 改動、無跨 repo lock-step、deploy-stg 可驗**。
+
+**對稱安全**：SM teardown（`_cleanup_tunnel`/`unlink`）走 stored `tunnel_id`，**不重算 tunnel 名** → 改名零反查破壞（`external-resource-env-token-naming` 守則 3/4）。
+
+**實作（commit 見 PR）**：`src/models/smart_home.py` 新增 `_naming_slug`（去重）+ `_generate_tunnel_name`（讀 `deploy_env` config）；`action_provision` 的 `create_tunnel(name=…)` 從 `subdomain` 改 `_generate_tunnel_name()`。`src/tests/test_smart_home.py` 加 4 測試（TDD red-first 驗過）：tunnel 名帶 token + subdomain 乾淨、prod 預設零變更、provision 傳 token 名乾淨 hostname、prod regression lock。**既有 DP2-lock 測試 `test_subdomain_has_no_env_token_even_when_deploy_env_stg` 續綠**（Option C 不動 subdomain）。全 suite **1326 綠**。
+
+**Caveats**：① 既有 stg SM tunnel（改前建）名維持 `paas-sm-`，新建才 `paas-stg-sm-` → stg 永久混格（pattern doc「既有不回填」caveat；舊筆交給 L4 reconciler 認雙格式）。② **live stg 驗證仍 deferred**（unit mock 證不到真 CF；plan 階段 1 驗證點要求 deploy-stg 真查 CF tunnel 名帶 token + DNS hostname 乾淨）。
+
+**更新後的 token-bearing 集合**：SA（tunnel name + DNS comment + policy name）+ **SM dedicated tunnel name**。對外 URL（SA route subdomain_prefix、CS subdomain、SM subdomain/hostname）一律不帶。
