@@ -1,0 +1,150 @@
+.o_woow_payment_methods_page {
+    padding: 1.5rem 2rem;
+    max-width: 60rem;
+    margin: 0 auto;
+
+    .o_woow_page_header {
+        margin-bottom: 1.5rem;
+
+        .o_woow_breadcrumb {
+            font-size: 0.8125rem;
+            color: $woow-text-secondary;
+            margin-bottom: 0.5rem;
+
+            a {
+                color: $woow-text-secondary;
+                text-decoration: none;
+                &:hover { color: $woow-primary; }
+            }
+            .o_woow_breadcrumb_sep {
+                margin: 0 0.5rem;
+                opacity: 0.6;
+            }
+        }
+
+        h1 {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin: 0 0 0.5rem 0;
+            color: $woow-text-primary;
+        }
+        p {
+            margin: 0;
+            color: $woow-text-secondary;
+        }
+    }
+}
+
+.o_woow_success_banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #d1fae5;
+    border: 1px solid #6ee7b7;
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
+    color: #065f46;
+
+    .o_woow_success_close {
+        margin-left: auto;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        color: inherit;
+    }
+}
+
+.o_woow_error_banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
+    color: #991b1b;
+}
+
+.o_woow_loading {
+    padding: 3rem;
+    text-align: center;
+    color: $woow-text-secondary;
+}
+
+.o_woow_payment_methods_empty {
+    .o_woow_empty_body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 3rem 1.5rem;
+        text-align: center;
+
+        h3 {
+            margin: 0;
+            color: $woow-text-primary;
+        }
+        p {
+            margin: 0 0 0.5rem 0;
+            color: $woow-text-secondary;
+        }
+    }
+}
+
+.o_woow_payment_methods_list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.o_woow_payment_method_card {
+    .o_woow_card_body {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem 1.25rem;
+    }
+    .o_woow_card_info {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex: 1;
+    }
+    .o_woow_card_meta {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+    .o_woow_card_number {
+        font-family: monospace;
+        font-size: 1rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+    }
+    .o_woow_card_details {
+        display: flex;
+        gap: 0.5rem;
+        font-size: 0.8125rem;
+        color: $woow-text-secondary;
+    }
+    .o_woow_default_badge {
+        padding: 0.125rem 0.5rem;
+        background: rgba($woow-primary, 0.1);
+        color: $woow-primary;
+        border-radius: $woow-radius-full;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+    .o_woow_card_actions {
+        display: flex;
+        gap: 0.5rem;
+    }
+}
+
+.o_woow_payment_methods_add {
+    display: flex;
+    justify-content: center;
+}

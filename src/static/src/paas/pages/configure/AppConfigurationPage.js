@@ -4,7 +4,11 @@ import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { HelmValueForm } from "../../components/config/HelmValueForm";
+import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddonSelector";
+import { PlanSelector } from "../../components/subscription/PlanSelector";
 import { cloudService } from "../../services/cloud_service";
+import { workspaceService } from "../../services/workspace_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 
 /**
@@ -13,7 +17,7 @@ import { router } from "../../core/router";
  */
 export class AppConfigurationPage extends Component {
     static template = "woow_paas_platform.AppConfigurationPage";
-    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector };
     static props = {
         workspaceId: { type: Number },
         templateId: { type: Number },
@@ -27,7 +31,12 @@ export class AppConfigurationPage extends Component {
             // Form state
             name: '',
             helmValues: {},
+            selectedAddonIds: [],
             showAdvanced: false,
+            // Subscription plan
+            plans: [],
+            selectedPlanId: null,
+            plansError: null,
             // Validation errors
             errors: {},
             // Launch state
@@ -52,8 +61,24 @@ export class AppConfigurationPage extends Component {
 
         if (result.success) {
             this.state.template = result.data;
+            this._publishBreadcrumb();
             // Initialize helm values with defaults
             this.initializeHelmValues(result.data);
+            // Load available subscription plans. fetchPlans returns
+            // ApiResponse<Array> — surface backend errors verbatim so admin
+            // misconfiguration (template missing/inactive/empty) doesn't
+            // look like a blank-list bug.
+            this.state.plansError = null;
+            const plansResult = await cloudService.fetchPlans(this.props.templateId);
+            if (plansResult.success) {
+                this.state.plans = plansResult.data;
+                if (this.state.plans.length > 0) {
+                    this.state.selectedPlanId = this.state.plans[0].id;
+                }
+            } else {
+                this.state.plans = [];
+                this.state.plansError = plansResult.error;
+            }
         } else {
             this.state.error = result.error || "Failed to load template";
         }
@@ -92,12 +117,30 @@ export class AppConfigurationPage extends Component {
         this.state.helmValues = helmValues;
     }
 
+    /**
+     * 麵包屑軌跡：Workspaces → {工作區} → App Marketplace(連回市集) → Configure {模板名}。
+     * 此頁是從市集點模板進來的設定頁，父層接回市集；工作區名取自快取，缺則退守。
+     */
+    _publishBreadcrumb() {
+        const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
+        breadcrumbService.set("configure", [
+            { label: "Workspaces", path: "workspaces" },
+            { label: ws?.name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: "App Marketplace", path: `workspace/${this.props.workspaceId}/services/marketplace` },
+            { label: `Configure ${this.state.template.name}`, path: null },
+        ]);
+    }
+
     get template() {
         return this.state.template;
     }
 
     get helmValueSpecs() {
         return this.template?.helm_value_specs || { required: [], optional: [] };
+    }
+
+    get isOdooTemplate() {
+        return this.template?.slug === 'odoo';
     }
 
     get hasOptionalSettings() {
@@ -134,6 +177,10 @@ export class AppConfigurationPage extends Component {
      * Handle service name input change
      * @param {Event} event
      */
+    onAddonSelectionChange(addonIds) {
+        this.state.selectedAddonIds = addonIds;
+    }
+
     onNameChange(event) {
         const value = event.target.value;
         this.state.name = value;
@@ -202,6 +249,11 @@ export class AppConfigurationPage extends Component {
             }
         }
 
+        // Validate plan selection
+        if (!this.state.selectedPlanId) {
+            errors.plan = 'Please select a subscription plan';
+        }
+
         this.state.errors = errors;
         return Object.keys(errors).length === 0;
     }
@@ -209,6 +261,10 @@ export class AppConfigurationPage extends Component {
     /**
      * Handle cancel button click
      */
+    onPlanSelect(planId) {
+        this.state.selectedPlanId = planId;
+    }
+
     onCancel() {
         this.router.navigate(`workspace/${this.props.workspaceId}/marketplace`);
     }
@@ -225,11 +281,16 @@ export class AppConfigurationPage extends Component {
         this.state.launchError = null;
 
         try {
-            const result = await cloudService.createService(this.props.workspaceId, {
+            const payload = {
                 template_id: this.props.templateId,
                 name: this.state.name.trim(),
                 values: this.state.helmValues,
-            });
+                plan_id: this.state.selectedPlanId,
+            };
+            if (this.isOdooTemplate && this.state.selectedAddonIds.length) {
+                payload.odoo_addon_ids = this.state.selectedAddonIds;
+            }
+            const result = await cloudService.createService(this.props.workspaceId, payload);
 
             if (result.success) {
                 // Navigate to service detail page

@@ -1,0 +1,140 @@
+// =============================================================================
+// Manage Payment Methods Modal Styles
+// =============================================================================
+
+// Section label
+.o_woow_manage_pm_section_label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: $woow-text-secondary;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+// Card row
+.o_woow_manage_pm_card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  background: $woow-background-light;
+  border-radius: $woow-radius-default;
+  margin-bottom: 0.75rem;
+}
+
+.o_woow_manage_pm_card_active {
+  border: 1px solid rgba($woow-primary, 0.2);
+  background: rgba($woow-primary, 0.04);
+}
+
+.o_woow_manage_pm_card_left {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.o_woow_manage_pm_type_badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border-radius: 4px;
+  background: #1a1f71;
+  color: #fff;
+}
+
+.o_woow_manage_pm_card_number {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: $woow-text-primary;
+}
+
+.o_woow_manage_pm_default_badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: $woow-radius-full;
+  background: rgba($woow-primary, 0.12);
+  color: $woow-primary;
+}
+
+.o_woow_manage_pm_card_actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.o_woow_manage_pm_delete_btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: $woow-radius-default;
+  color: $woow-text-secondary;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+// Empty state
+.o_woow_manage_pm_empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2rem 1rem;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+}
+
+// Add payment method button (dashed border)
+.o_woow_manage_pm_add_btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: $woow-primary;
+  background: transparent;
+  border: 2px dashed rgba($woow-primary, 0.3);
+  border-radius: $woow-radius-default;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba($woow-primary, 0.04);
+    border-color: $woow-primary;
+  }
+}
+
+// Loading state
+.o_woow_manage_pm_loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2rem 1rem;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+}

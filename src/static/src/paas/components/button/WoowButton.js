@@ -11,10 +11,10 @@ export class WoowButton extends Component {
         slots: { type: Object, optional: true },
     };
 
-    handleClick() {
+    handleClick(ev) {
         if (this.props.disabled) return;
         if (this.props.onClick) {
-            this.props.onClick();
+            this.props.onClick(ev);
         }
     }
 }

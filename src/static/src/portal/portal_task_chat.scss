@@ -1,0 +1,22 @@
+.o_woow_portal_chat {
+  &__messages {
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  &__msg {
+    &--user .o_woow_portal_chat__bubble {
+      background: var(--bs-primary-bg-subtle, #e7f1ff);
+    }
+    &--ai .o_woow_portal_chat__bubble {
+      background: var(--bs-light, #f8f9fa);
+    }
+  }
+  &__bubble {
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    overflow-wrap: anywhere;
+    pre {
+      white-space: pre-wrap;
+    }
+  }
+}

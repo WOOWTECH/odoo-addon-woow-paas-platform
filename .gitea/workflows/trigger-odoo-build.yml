@@ -1,0 +1,34 @@
+name: Trigger paas-odoo Image Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag info
+        run: |
+          TAG_REF="${GITHUB_REF#refs/tags/}"
+          IMAGE_TAG="$(date -u +'%Y%m%d.%H%M')"
+          echo "TAG_REF=${TAG_REF}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "Addon ref: ${TAG_REF}, image tag: ${IMAGE_TAG}"
+
+      - name: Trigger paas-odoo-ci build
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" -X POST \
+            "http://gitea-http.gitea.svc.cluster.local:3000/api/v1/repos/woow-paas/paas-odoo-ci/actions/workflows/build-image.yml/dispatches" \
+            -H "Authorization: token ${{ secrets.CI_GITEA_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"ref\": \"main\", \"inputs\": {\"tag\": \"${IMAGE_TAG}\", \"addon_ref\": \"${TAG_REF}\"}}")
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "✅ Triggered paas-odoo-ci build: image_tag=${IMAGE_TAG}, addon_ref=${TAG_REF}"
+          else
+            echo "❌ Failed to trigger paas-odoo-ci (HTTP ${HTTP_CODE})"
+            cat /tmp/response.txt
+            exit 1
+          fi

@@ -1,0 +1,132 @@
+// =============================================================================
+// Add Funds Modal Styles
+// =============================================================================
+
+// Amount display section
+.o_woow_addfunds_amount_section {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 1.5rem 0;
+  border-bottom: 1px solid $woow-border-light;
+  margin-bottom: 1rem;
+}
+
+.o_woow_addfunds_amount_prefix {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: $woow-text-secondary;
+}
+
+.o_woow_addfunds_amount_value {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: $woow-text-primary;
+  line-height: 1;
+}
+
+// Plan info rows
+.o_woow_addfunds_info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.o_woow_addfunds_row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.o_woow_addfunds_label {
+  font-size: 0.875rem;
+  color: $woow-text-secondary;
+}
+
+.o_woow_addfunds_value {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: $woow-text-primary;
+}
+
+.o_woow_addfunds_bonus_note {
+  font-size: 0.75rem;
+  color: #16a34a;
+  font-weight: 400;
+  margin-left: 0.25rem;
+}
+
+// Payment method section
+.o_woow_addfunds_payment_section {
+  border-top: 1px solid $woow-border-light;
+  padding-top: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.o_woow_addfunds_section_title {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: $woow-text-secondary;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.75rem;
+}
+
+.o_woow_addfunds_card_row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  background: $woow-background-light;
+  border-radius: $woow-radius-default;
+}
+
+.o_woow_addfunds_card_info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: $woow-text-primary;
+}
+
+.o_woow_addfunds_card_expiry {
+  font-size: 0.8rem;
+  color: $woow-text-secondary;
+}
+
+.o_woow_addfunds_no_card {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: $woow-radius-default;
+  color: #b45309;
+  font-size: 0.875rem;
+  margin-bottom: 0.75rem;
+}
+
+// Total
+.o_woow_addfunds_total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0;
+  border-top: 1px solid $woow-border-light;
+}
+
+.o_woow_addfunds_total_label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: $woow-text-primary;
+}
+
+.o_woow_addfunds_total_value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: $woow-text-primary;
+}

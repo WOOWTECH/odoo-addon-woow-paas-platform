@@ -12,7 +12,65 @@ from werkzeug.wrappers import Response
 
 from odoo.http import request, route, Controller
 
+from .paas import _portal_project_settings_editable
+
 _logger = logging.getLogger(__name__)
+
+
+def _platform_default_agent_template(env):
+    """Delegate to the single source on agent_session (spec Refactor①)."""
+    return env['woow_paas_platform.agent_session']._platform_default_agent_template()
+
+
+def _agent_runtime_autoenable_ready(env):
+    """True when a project created now should auto-enable use_agent_runtime.
+
+    Fail-safe gate (plan 決策 2): platform toggle ON **and** operator
+    configured (url+api_key) **and** a valid platform default template — so
+    auto-enable never lands a project in a guaranteed no_template /
+    spawn_failed state. Users never write use_agent_runtime; this is the only
+    place that flips it on the /woow create path.
+    """
+    from ..services.agent_runtime_client import get_agent_runtime_client
+    ICP = env['ir.config_parameter'].sudo()
+    toggle = (ICP.get_param(
+        'woow_paas_platform.default_enable_agent_runtime') or '').strip().lower()
+    if toggle not in ('true', '1'):
+        return False
+    if get_agent_runtime_client(env) is None:
+        return False
+    if not _platform_default_agent_template(env):
+        return False
+    return True
+
+
+def backfill_existing_projects_use_agent_runtime(env):
+    """One-time backfill for migration 18.0.1.0.30.
+
+    On a platform that already has agent runtime fully configured (operator
+    url+api_key + a valid platform default template), turn on the new-project
+    default toggle and flip every existing project's use_agent_runtime to True.
+
+    Toggle-INDEPENDENT on purpose: the toggle is brand-new (defaults off) at
+    upgrade time, so gating on it would no-op. A platform with operator + a
+    valid default template configured is already running agent runtime → it is
+    safe (and intended, plan 決策 3) to backfill. Returns the number of existing
+    projects flipped to True — 0 means there was nothing to flip: either the
+    platform is not ready (no side effect), or every existing project is already
+    enabled (toggle still gets set ON).
+    """
+    from ..services.agent_runtime_client import get_agent_runtime_client
+    if get_agent_runtime_client(env) is None:
+        return 0
+    if not _platform_default_agent_template(env):
+        return 0
+    env['ir.config_parameter'].sudo().set_param(
+        'woow_paas_platform.default_enable_agent_runtime', 'True')
+    projects = env['project.project'].sudo().search([
+        ('use_agent_runtime', '!=', True)])
+    if projects:
+        projects.write({'use_agent_runtime': True})
+    return len(projects)
 
 
 class AiAssistantController(Controller):
@@ -25,10 +83,23 @@ class AiAssistantController(Controller):
     def _check_channel_access(self, channel):
         """Verify the current user has access to the channel.
 
-        Returns True if the user's partner is a member of the channel.
+        Internal users: channel membership (unchanged).
+        Portal users (``user.share``): membership AND the task-level portal
+        predicate re-validated on EVERY request — stale channel membership
+        after un-share must not keep the door open (design spec §安全模型 7).
+        Portal users may only use task-bound channels.
         """
-        user_partner = request.env.user.partner_id
-        return user_partner in channel.channel_partner_ids
+        user = request.env.user
+        user_partner = user.partner_id
+        if user_partner not in channel.channel_partner_ids:
+            return False
+        if user.share:
+            task = request.env['project.task'].sudo().search(
+                [('channel_id', '=', channel.id)], limit=1)
+            if not task:
+                return False
+            return task._portal_partner_can_access(user_partner)
+        return True
 
     def _check_workspace_access(self, workspace):
         """Verify the current user is a member of the workspace.
@@ -41,12 +112,25 @@ class AiAssistantController(Controller):
         ]) > 0
 
     def _check_project_access(self, project):
-        """Verify the current user has access to the project via cloud service.
+        """Verify the current user has access to the project.
 
-        Returns True if the project has no cloud service (global) or the user
-        is a member of the workspace that owns the cloud service.
+        - Bound project: requires workspace membership.
+        - Unbound project (no cloud_service): requires follower membership
+          (``message_partner_ids``). This must mirror the ir.rule
+          ``mcp_server_rule_workspace_user`` leg 2 — diverging from it
+          re-opens the IDOR surface where the rule layer denies but the
+          controller layer still serves the row.
         """
-        if not project.cloud_service_id or not project.cloud_service_id.workspace_id:
+        user = request.env.user
+        if user.share:
+            # Positive-only portal leg (two-layer-acl-lockstep Layer 2).
+            # Placed FIRST so portal users can never reach the internal
+            # fail-open branches below (F4 stays internal-scoped).
+            return project.sudo()._portal_partner_can_access(user.partner_id)
+        if not project.cloud_service_id:
+            user_partner = request.env.user.partner_id
+            return user_partner in project.message_partner_ids
+        if not project.cloud_service_id.workspace_id:
             return True
         return self._check_workspace_access(project.cloud_service_id.workspace_id)
 
@@ -56,9 +140,34 @@ class AiAssistantController(Controller):
         Returns True if the task has no project/cloud_service or the user
         is a member of the associated workspace.
         """
+        if request.env.user.share:
+            return task.sudo()._portal_partner_can_access(
+                request.env.user.partner_id)
         if not task.project_id:
             return True
         return self._check_project_access(task.project_id)
+
+    def _portal_write_denied(self):
+        """Fail-closed guard for project/task CRUD write/delete/create paths.
+
+        The portal legs in ``_check_project_access`` / ``_check_task_access``
+        widen access for ``user.share`` portal users, but they were designed
+        to gate ONLY the read-only agent endpoints (chat / status). Those same
+        helpers are also the sole authorization gate for the sudo-browsed
+        write/delete/create endpoints (``_create_project``, ``_update_project``,
+        ``_delete_project``, ``_create_task``, ``_update_task``,
+        ``_delete_task``) — and because the records are sudo-browsed (or, for
+        ``_create_project``, the row does not yet exist and no workspace gate
+        runs when both workspace_id and cloud_service_id are 0) the native
+        read-only portal ir.rule never gets a second say. Read-mode share is
+        read-only by design (spec §非目標:
+        edit-mode project_sharing is a separate epic), so portal/share users
+        must be denied on every mutation path. Returns an error dict when the
+        caller must abort, else ``None``.
+        """
+        if request.env.user.share:
+            return {'success': False, 'error': 'Access denied'}
+        return None
 
     def _sse_error_response(self, error: str, error_code: str) -> Response:
         """Build a structured SSE error response (HTTP 200)."""
@@ -77,6 +186,32 @@ class AiAssistantController(Controller):
             },
             status=200,
         )
+
+    @staticmethod
+    def _agent_error_sse_data(envelope: dict) -> dict:
+        """把 agent-runtime 的 §4a error envelope 映射成瀏覽器 SSE error frame。
+
+        #129 兩層契約 lock-step：agent-runtime 在 error payload 加了 additive 欄位
+        ``code``（前端用來查 friendly 訊息）與 ``retryable``（前端用來決定是否顯示
+        「重試」），SSE gateway 必須對等轉發；否則瀏覽器只會拿到原始英文 ``error``
+        字串，且 ``llm_empty_response`` 這類可重試錯誤無法和終態失敗區分。
+
+        純函式（不碰 request / env）以利不依賴 live pod 的單元測試。缺欄位時退回與
+        ``_sse_error_response`` 一致的最小 frame，既有消費者忽略多餘欄位不受影響。
+        """
+        payload = envelope.get('payload', {}) if isinstance(envelope, dict) else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        data = {
+            'error': payload.get('error') or 'Agent runtime error',
+            'done': True,
+        }
+        code = payload.get('code')
+        if code:
+            data['error_code'] = code
+        if payload.get('retryable'):
+            data['retryable'] = True
+        return data
 
     # ==================== AI Provider / Agent API ====================
 
@@ -374,6 +509,20 @@ class AiAssistantController(Controller):
         if not self._check_channel_access(channel):
             return self._sse_error_response('Access denied', 'access_denied')
 
+        # Agent-runtime dual-mode gate (§5.6): when the channel's project opts
+        # in, route to the pod-backed runtime branch. The flag defaults False,
+        # so production chat stays on the legacy synchronous path below until
+        # Phase D enables it per pilot project.
+        runtime_task = request.env['project.task'].sudo().search([
+            ('channel_id', '=', channel_id),
+        ], limit=1)
+        runtime_project = (
+            runtime_task.project_id if runtime_task
+            else request.env['project.project']
+        )
+        if runtime_project and runtime_project.use_agent_runtime:
+            return self._stream_agent_runtime(channel, runtime_project, channel_id)
+
         # Find the assistant for this channel
         assistant = self._get_channel_assistant(channel)
         if not assistant:
@@ -406,11 +555,13 @@ class AiAssistantController(Controller):
         if assistant.context_id:
             system_prompt = assistant.context_id.context or ''
 
-        # Append cloud service context if the channel is linked to a task
-        # whose project is bound to a cloud service
-        cloud_context = self._get_cloud_service_context_for_channel(channel)
-        if cloud_context:
-            system_prompt = (system_prompt + '\n\n' + cloud_context).strip()
+        # Unified background context (project / task / cloud services) —
+        # single source with the chatter + agent-runtime paths
+        # (spec 2026-06-04-agent-context-enrichment D1).
+        context_block = request.env['woow_paas_platform.agent_session'] \
+            ._build_system_context(channel)
+        if context_block:
+            system_prompt = (system_prompt + '\n\n' + context_block).strip()
 
         history = channel._get_chat_history(limit=20)
         messages = client.build_messages(
@@ -480,7 +631,14 @@ class AiAssistantController(Controller):
                         })
                         yield f'data: {event_data}\n\n'
             except AIClientError as exc:
-                error_data = json.dumps({'error': exc.message, 'done': True})
+                _logger.exception(
+                    'AI stream failed for channel %s (assistant=%s): %s | detail=%s',
+                    channel_id, assistant.name, exc.message, exc.detail,
+                )
+                error_message = exc.message
+                if exc.detail:
+                    error_message = f'{exc.message} — {exc.detail}'
+                error_data = json.dumps({'error': error_message, 'done': True})
                 yield f'data: {error_data}\n\n'
                 return
 
@@ -536,6 +694,327 @@ class AiAssistantController(Controller):
             },
         )
 
+    @staticmethod
+    def _build_runtime_user_message_payload(channel_id, body, history,
+                                            template_id, invoker_role,
+                                            invoker_user_id, system_context):
+        """user_message envelope payload (ws-protocol §3) + additive
+        ``system_context`` (spec 2026-06-04 D5). Key omitted when falsy so
+        empty-context turns keep the exact legacy payload shape."""
+        payload = {
+            'channel_id': channel_id,
+            'body': body,
+            'history': history,
+            'template_id': template_id,
+            'invoker_role': invoker_role,
+            'invoker_user_id': invoker_user_id,
+        }
+        if system_context:
+            payload['system_context'] = system_context
+        return payload
+
+    def _stream_agent_runtime(self, channel, project, channel_id):
+        """Agent-runtime pod transport branch (§5.6, flag-gated).
+
+        Bridges the per-project pod's WS envelope stream to the browser SSE
+        stream. Reached only when ``project.use_agent_runtime`` is True; the
+        SSE entry point and frontend EventSource contract are unchanged.
+        """
+        import uuid
+
+        # ③ project_access gate (§4)
+        if not self._check_project_access(project):
+            return self._sse_error_response(
+                'Project access denied', 'project_access_denied',
+            )
+
+        # ④ resolve agent_template (per-project default)
+        template = self._resolve_agent_template(project)
+        if not template:
+            return self._sse_error_response(
+                'No agent template configured', 'no_template',
+            )
+
+        # ⑤ pre-fetch ORM data before entering the generator (cursor valid here)
+        invoker = request.env.user
+        invoker_role = self._get_project_access_role(project, invoker)
+        mcp_snapshot = self._build_mcp_snapshot(project, template)
+        skill_snapshot = self._build_skill_snapshot(project, template)
+        history = channel._get_chat_history(limit=20)
+        system_context = request.env['woow_paas_platform.agent_session'] \
+            ._build_runtime_system_context(channel, template)
+        last_message = request.env['mail.message'].sudo().search([
+            ('res_id', '=', channel_id),
+            ('model', '=', 'discuss.channel'),
+            ('message_type', '=', 'comment'),
+        ], order='id desc', limit=1)
+        user_message = last_message.body or '' if last_message else ''
+        request_id = str(uuid.uuid4())
+
+        # ⑥ spawn-or-attach the project pod
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(request.env)
+        if not client:
+            return self._sse_error_response(
+                'Agent runtime not configured', 'spawn_failed',
+            )
+        try:
+            runtime_info = client.spawn_or_attach(
+                project=project,
+                channel_id=channel_id,
+                invoker_user_id=invoker.id,
+                invoker_role=invoker_role,
+                agent_template=template,
+                mcp_snapshot=mcp_snapshot,
+                skill_snapshot=skill_snapshot,
+            )
+        except Exception as exc:
+            _logger.exception(
+                'spawn-or-attach failed for channel %s: %s', channel_id, exc,
+            )
+            return self._sse_error_response(
+                f'Pod spawn failed: {exc}', 'spawn_failed',
+            )
+
+        # heartbeat：cursor 此處仍有效（generator 內無效，故在此 stamp）
+        request.env['woow_paas_platform.agent_session']._record_activity(project)
+
+        pod_ws_url = runtime_info.get('pod_ws_url')
+        auth_token = runtime_info.get('auth_token') or runtime_info.get('ws_token')
+        db_name = request.env.cr.dbname
+        uid = request.env.uid
+        context = dict(request.env.context)
+        template_id = template.id
+
+        def generate():
+            import asyncio
+            from datetime import datetime as _dt
+            try:
+                import websockets
+            except ImportError as exc:
+                _logger.error('websockets unavailable for WS bridge: %s', exc)
+                yield 'data: ' + json.dumps({
+                    'error': 'WS client unavailable', 'done': True,
+                }) + '\n\n'
+                return
+
+            async def relay():
+                # F-ARL-1 / #123 G3: pod may not be WS-ready right after
+                # spawn-or-attach returns pod_state="spawning". Retry only the
+                # CONNECT (not send/drain) with backoff up to a deadline, so a
+                # mid-stream disconnect never re-sends user_message. Keep the
+                # __aenter__/__aexit__ pair so the F-PC-6 aclose() cleanup still
+                # closes the socket on the done/error break.
+                cm = None
+                ws = None
+                backoff = 1.0
+                start = loop.time()
+                deadline = start + 60
+                while ws is None:
+                    try:
+                        cm = websockets.connect(
+                            pod_ws_url,
+                            extra_headers={'Authorization': f'Bearer {auth_token}'},
+                            ping_interval=30,
+                            ping_timeout=60,
+                        )
+                        ws = await cm.__aenter__()
+                    except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
+                        cm = None
+                        if loop.time() >= deadline:
+                            yield {'type': 'error', 'payload': {
+                                'error': 'agent 啟動逾時，請稍後再試',
+                                'fatal': True}}
+                            return
+                        yield {'type': 'status', 'payload': {
+                            'stage': 'spawning',
+                            'elapsed_ms': int((loop.time() - start) * 1000)}}
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, 5)
+                try:
+                    await ws.send(json.dumps({
+                        'version': '1.0',
+                        'type': 'user_message',
+                        'request_id': request_id,
+                        'sequence_number': 0,
+                        'timestamp': _dt.utcnow().isoformat() + 'Z',
+                        'payload': self._build_runtime_user_message_payload(
+                            channel_id, user_message, history, template_id,
+                            invoker_role, uid, system_context),
+                    }))
+                    async for raw in ws:
+                        envelope = json.loads(raw)
+                        yield envelope
+                        if envelope.get('type') == 'done':
+                            return
+                        if envelope.get('type') == 'error' and \
+                                envelope.get('payload', {}).get('fatal'):
+                            return
+                finally:
+                    await cm.__aexit__(None, None, None)
+
+            loop = asyncio.new_event_loop()
+            try:
+                agen = relay()
+                full_response = ''
+                while True:
+                    try:
+                        envelope = loop.run_until_complete(agen.__anext__())
+                    except StopAsyncIteration:
+                        break
+                    etype = envelope.get('type')
+                    if etype == 'text_chunk':
+                        chunk = envelope.get('payload', {}).get('content', '')
+                        full_response += chunk
+                        yield 'data: ' + json.dumps({
+                            'chunk': chunk, 'done': False,
+                        }) + '\n\n'
+                    elif etype in (
+                        'tool_call', 'tool_result', 'tool_error',
+                        'tool_unavailable', 'status',
+                    ):
+                        yield 'data: ' + json.dumps({
+                            **envelope, 'done': False,
+                        }) + '\n\n'
+                    elif etype == 'done':
+                        saved_message_id = self._persist_ai_response(
+                            db_name, uid, channel_id, full_response, context,
+                        )
+                        done_payload = {
+                            'chunk': '', 'done': True,
+                            'full_response': full_response,
+                        }
+                        if saved_message_id:
+                            done_payload['message_id'] = saved_message_id
+                        yield 'data: ' + json.dumps(done_payload) + '\n\n'
+                        break
+                    elif etype == 'error':
+                        # #129：轉發 runtime 的 error_code + retryable（lock-step）。
+                        error_data = self._agent_error_sse_data(envelope)
+                        # Defense-in-depth (graceful degradation): a retryable
+                        # error (e.g. llm_empty_response when the post-tool
+                        # summary is empty) ends the turn via THIS branch, not
+                        # 'done', so the done-path persist above never runs and
+                        # any text streamed this turn vanishes on reload. Persist
+                        # it here too, but CONDITIONALLY — only a retryable error
+                        # WITH accumulated text — so a half-streamed / fatally
+                        # errored response is never stored. (full_response holds
+                        # only text_chunk content; a tool_result-only turn leaves
+                        # it empty and this no-ops — that case's durable fix is
+                        # the runtime surfacing its summary as text_chunk+done,
+                        # which this branch complements, not replaces.)
+                        if error_data.get('retryable') and full_response:
+                            saved_message_id = self._persist_ai_response(
+                                db_name, uid, channel_id, full_response, context,
+                            )
+                            if saved_message_id:
+                                error_data['message_id'] = saved_message_id
+                        yield 'data: ' + json.dumps(error_data) + '\n\n'
+                        break
+            except Exception as exc:
+                _logger.exception(
+                    'SSE-WS bridge failed for channel %s: %s', channel_id, exc,
+                )
+                yield 'data: ' + json.dumps({
+                    'error': str(exc), 'done': True,
+                }) + '\n\n'
+            finally:
+                # The done / error branches break out of the drain loop with the
+                # relay generator SUSPENDED at its yield inside
+                # ``async with websockets.connect()``; only aclose() unwinds it
+                # so the connection's __aexit__ (the WS close) runs — otherwise
+                # we leak a pod connection per chat turn (F-PC-6 / P-2). On the
+                # exception path the async-with already unwound, so aclose() is a
+                # harmless no-op. Best-effort: a pod that dropped uncleanly can
+                # raise during the WS close handshake, which must not crash the
+                # already-finished SSE stream — log and still close the loop.
+                try:
+                    loop.run_until_complete(agen.aclose())
+                except Exception as close_exc:
+                    _logger.debug('relay aclose() during cleanup: %s', close_exc)
+                finally:
+                    loop.close()
+
+        return Response(
+            generate(),
+            content_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            },
+        )
+
+    def _resolve_agent_template(self, project):
+        # Delegate via project.env (NOT request.env): existing unit tests call
+        # AiAssistantController()._build_*/_resolve_* directly with no HTTP
+        # request context, so request.env would raise "object is not bound".
+        # project.env carries the same registry/cursor; model methods sudo()
+        # internally so user context is irrelevant. (single source: spec ①)
+        return project.env['woow_paas_platform.agent_session'] \
+            ._resolve_agent_template(project)
+
+    def _get_project_access_role(self, project, user):
+        """Return the user's project_access role string (default 'guest')."""
+        access = request.env['woow_paas_platform.project_access'].sudo().search([
+            ('project_id', '=', project.id),
+            ('user_id', '=', user.id),
+        ], limit=1)
+        return access.role if access else 'guest'
+
+    def _build_mcp_snapshot(self, project, template):
+        # project.env (not request.env) — see _resolve_agent_template note.
+        return project.env['woow_paas_platform.agent_session'] \
+            ._build_mcp_snapshot(project, template)
+
+    def _build_skill_snapshot(self, project, template):
+        # project.env (not request.env) — see _resolve_agent_template note.
+        return project.env['woow_paas_platform.agent_session'] \
+            ._build_skill_snapshot(project, template)
+
+    def _persist_ai_response(self, db_name, uid, channel_id, full_response, context):
+        """Persist the assembled agent-runtime response to the channel.
+
+        Runs with SYSTEM identity (SUPERUSER_ID), NOT the streaming user's
+        uid: access was already gated at stream entry (_check_channel_access
+        incl. the portal leg), and the stored message is a system artefact
+        authored by OdooBot. A PORTAL (share) initiator's uid-bound env
+        cannot even read discuss.channel / create mail.message (ir.rule), so
+        the uid env silently dropped the reply — live stream worked, history
+        lost on reload (2026-06-05 stg e2e finding). This is NOT a
+        list-and-return sudo bypass ([[orm-vs-endpoint-acl-test-coverage]]
+        L2): nothing is read back to the caller beyond the new message id.
+        ``uid`` is kept for log attribution only.
+        """
+        if not full_response:
+            return None
+        try:
+            import odoo
+            from odoo import api as odoo_api
+            registry = odoo.registry(db_name)
+            with registry.cursor() as new_cr:
+                new_env = odoo_api.Environment(
+                    new_cr, odoo.SUPERUSER_ID, context)
+                author_id = new_env.ref('base.partner_root').id
+                new_channel = new_env['discuss.channel'].browse(channel_id)
+                msg = new_channel.with_context(
+                    mail_create_nosubscribe=True,
+                    skip_ai_reply=True,
+                ).message_post(
+                    body=full_response,
+                    message_type='comment',
+                    subtype_xmlid='mail.mt_comment',
+                    author_id=author_id,
+                )
+                return msg.id
+        except Exception as exc:
+            _logger.exception(
+                'Failed to persist agent-runtime response for channel %s '
+                '(initiator uid %s): %s',
+                channel_id, uid, exc,
+            )
+            return None
+
     def _get_channel_assistant(self, channel):
         """Find the appropriate AI assistant for a channel.
 
@@ -572,61 +1051,21 @@ class AiAssistantController(Controller):
                 _logger.warning('Invalid default_ai_assistant_id value: %r', assistant_id)
         return None
 
-    def _get_cloud_service_context_for_channel(self, channel) -> str:
-        """Build cloud service context for AI system prompt.
-
-        Looks up the task linked to this channel, then the project's
-        cloud service, and assembles relevant context.
-
-        Returns:
-            A formatted context string, or empty string if not applicable.
-        """
-        task = request.env['project.task'].sudo().search([
-            ('channel_id', '=', channel.id),
-        ], limit=1)
-        if not task or not task.project_id or not task.project_id.cloud_service_id:
-            return ''
-
-        service = task.project_id.cloud_service_id
-        template = service.template_id
-
-        parts = ['## Cloud Service Information']
-        if template:
-            parts.append(f'- Application: {template.name}')
-            if template.category:
-                parts.append(f'- Category: {template.category}')
-            if template.description:
-                parts.append(f'- Description: {template.description}')
-
-        parts.append(f'- Service Name: {service.name}')
-        parts.append(f'- Status: {service.state or "unknown"}')
-
-        if service.subdomain:
-            parts.append(f'- URL: https://{service.subdomain}')
-        if service.error_message:
-            parts.append(f'- Error: {service.error_message}')
-
-        if service.helm_values:
-            parts.append(f'- Configuration (Helm Values):\n```json\n{service.helm_values}\n```')
-
-        return '\n'.join(parts)
-
     def _get_user_mcp_tools_for_channel(self, channel):
-        """Get user-scope MCP tools from the cloud service linked to this channel.
+        """Get user-scope MCP tools from the project linked to this channel.
 
-        Follows the chain: channel → task → project → cloud_service → user_mcp_servers → tools.
+        Follows the chain: channel → task → project → mcp_server_ids → tools.
         Returns an MCP tool recordset, or empty recordset if not applicable.
         """
         McpTool = request.env['woow_paas_platform.mcp_tool'].sudo()
         task = request.env['project.task'].sudo().search([
             ('channel_id', '=', channel.id),
         ], limit=1)
-        if not task or not task.project_id or not task.project_id.cloud_service_id:
+        if not task or not task.project_id:
             return McpTool.browse()
 
-        service = task.project_id.cloud_service_id
-        servers = service.user_mcp_server_ids.filtered(
-            lambda s: s.active and s.state == 'connected'
+        servers = task.project_id.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active and s.state == 'connected'
         )
         if not servers:
             return McpTool.browse()
@@ -665,6 +1104,162 @@ class AiAssistantController(Controller):
             },
         }
 
+    # ==================== Agent Runtime Status ====================
+
+    @route('/api/ai/agent-status', auth='user', methods=['POST'], type='json')
+    def api_ai_agent_status(
+        self, project_id: int = 0, **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Report Agent runtime configuration readiness (config-only).
+
+        Two scopes, selected by ``project_id``:
+
+        * **platform** (``project_id`` omitted) — the Settings-level gate, in
+          lock-step with ``_agent_runtime_autoenable_ready``: platform toggle
+          on + tenant-neutral platform default template (+ its api_key) +
+          operator configured. The platform default is tenant-neutral by
+          invariant (unbound, no user-scope bindings), so its name / model is
+          platform-level info — safe to surface to any logged-in user.
+
+        * **project** (``project_id`` given) — whether *this project* can chat
+          with its agent right now, mirroring the gates ``_stream_agent_runtime``
+          walks before spawn: the per-project ``use_agent_runtime`` flag +
+          ``_resolve_agent_template`` (project binding → platform default
+          fallback) + that template's api_key + operator configured. ACL: the
+          caller must pass ``_check_project_access`` or the row is denied — the
+          same leg the chat stream enforces, so a per-project status query can
+          never leak another tenant's template/model (B1-class guard).
+
+        Config-only either way: no operator /health ping, no pod spawn. Live
+        pod lifecycle is a separate call (``/api/ai/agent-pod-status``).
+
+        Returns:
+            dict: ``{'success': True, 'data': {scope, ready, enabled,
+                operator_configured, template_name, model_name, reason}}``.
+                ``reason`` is '' when ready, else the first failing reason.
+        """
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        operator_configured = get_agent_runtime_client(request.env) is not None
+
+        if project_id:
+            project = request.env['project.project'].sudo().browse(int(project_id))
+            if not project.exists():
+                return {'success': False, 'error': 'Project not found'}
+            # ACL: mirror _stream_agent_runtime / ir.rule — deny before reading
+            # the resolved template, else a cross-tenant status leak reopens.
+            if not self._check_project_access(project):
+                return {'success': False, 'error': 'Access denied'}
+            enabled = bool(project.use_agent_runtime)
+            template = self._resolve_agent_template(project)
+            has_key = bool(
+                template and template.model_config_id
+                and template.model_config_id.api_key
+            )
+            ready = enabled and bool(template) and has_key and operator_configured
+            if not enabled:
+                reason = '此專案未啟用 Agent runtime'
+            elif not template:
+                reason = '無 Agent Template'
+            elif not has_key:
+                reason = 'Template 未設 API key'
+            elif not operator_configured:
+                reason = 'Operator 未設定'
+            else:
+                reason = ''
+            scope = 'project'
+        else:
+            ICP = request.env['ir.config_parameter'].sudo()
+            enabled = (ICP.get_param(
+                'woow_paas_platform.default_enable_agent_runtime') or ''
+            ).strip().lower() in ('true', '1')
+            template = _platform_default_agent_template(request.env)
+            has_key = bool(
+                template and template.model_config_id
+                and template.model_config_id.api_key
+            )
+            ready = enabled and bool(template) and has_key and operator_configured
+            if not enabled:
+                reason = 'Agent runtime 未啟用'
+            elif not template:
+                reason = '無預設 Agent Template'
+            elif not has_key:
+                reason = 'Template 未設 API key'
+            elif not operator_configured:
+                reason = 'Operator 未設定'
+            else:
+                reason = ''
+            scope = 'platform'
+
+        return {
+            'success': True,
+            'data': {
+                'scope': scope,
+                'ready': ready,
+                'enabled': enabled,
+                'operator_configured': operator_configured,
+                'template_name': template.name if template else '',
+                'model_name': (
+                    template.model_config_id.model or ''
+                ) if template and template.model_config_id else '',
+                'reason': reason,
+            },
+        }
+
+    @route('/api/ai/agent-pod-status', auth='user', methods=['POST'], type='json')
+    def api_ai_agent_pod_status(
+        self, project_id: int = 0, **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Live per-project agent pod lifecycle (stage 2 of the kanban pill).
+
+        Thin read-through to the operator ``GET /{hash}/status`` →
+        ``state ∈ {absent, active, reaped}``. Distinct from
+        ``/api/ai/agent-status`` (config-only): this reflects whether a pod is
+        actually running *right now*. Pods are spawn-on-demand, so a healthy
+        idle project reports ``reaped`` / ``absent`` — expected, not an error.
+
+        Side-effect-free: we do NOT call the client's ``_project_hash`` (which
+        would create an agent_session row); a project that never chatted has no
+        session → reported ``absent`` without touching the DB. ACL mirrors the
+        chat stream (``_check_project_access``) so pod state never leaks across
+        tenants. Operator unreachable / unconfigured degrades to ``unknown``
+        (HTTP 200) rather than surfacing a 500 to the kanban header.
+        """
+        if not project_id:
+            return {'success': False, 'error': 'project_id is required'}
+        project = request.env['project.project'].sudo().browse(int(project_id))
+        if not project.exists():
+            return {'success': False, 'error': 'Project not found'}
+        if not self._check_project_access(project):
+            return {'success': False, 'error': 'Access denied'}
+
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(request.env)
+        if not client:
+            return {'success': True, 'data': {
+                'state': 'unknown', 'reason': 'Operator 未設定',
+            }}
+
+        session = request.env['woow_paas_platform.agent_session'].sudo().search(
+            [('project_id', '=', project.id)], limit=1,
+        )
+        if not session or not session.project_namespace_hash:
+            # Never spawned — no session row. A status poll must not create one.
+            return {'success': True, 'data': {'state': 'absent'}}
+        try:
+            status = client.get_status(session.project_namespace_hash)
+        except Exception as exc:
+            _logger.warning(
+                'agent pod status failed for project %s: %s', project.id, exc,
+            )
+            return {'success': True, 'data': {'state': 'unknown'}}
+        return {
+            'success': True,
+            'data': {
+                'state': status.get('state') or 'unknown',
+                'pod_ws_url': status.get('pod_ws_url'),
+            },
+        }
+
     # ==================== Support Stats API ====================
 
     @route('/api/support/stats', auth='user', methods=['POST'], type='json')
@@ -674,13 +1269,19 @@ class AiAssistantController(Controller):
         Returns:
             dict: Task stats (total, active, completion percentage).
         """
-        # Scope stats to projects the current user has access to
-        user = request.env.user
-        accessible_projects = request.env['project.project'].sudo().search([
-            ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
-        ])
+        # Walk ir.rule (no sudo, empty domain): project_rule_workspace_member
+        # dual-leg covers both bound (workspace member leg) and unbound
+        # (follower / creator legs) projects for the caller. A hand-rolled
+        # bound-only filter (sudo + cloud_service_id.workspace_id.access_ids
+        # walk) under-counts — unbound projects miss the chain entirely
+        # (inverse symptom of T3 / T4 sudo+empty-domain over-access).
+        accessible_projects = request.env['project.project'].search([])
         task_domain = [('project_id', 'in', accessible_projects.ids)]
-        Task = request.env['project.task'].sudo()
+        # Unify with the project-side ir.rule walk above: task ir.rule
+        # (project_task_rule_workspace_member) traverses project_id and
+        # mirrors the dual-leg the projects search already passed, so no
+        # sudo is needed here either — closes the same-method anti-pattern.
+        Task = request.env['project.task']
         total = Task.search_count(task_domain)
         done = Task.search_count(task_domain + [('stage_id.name', 'in', ('Done', 'Cancelled'))])
         active = total - done
@@ -740,8 +1341,6 @@ class AiAssistantController(Controller):
         if action == 'list':
             return self._list_projects(workspace, cloud_service)
         elif action == 'create':
-            if not cloud_service and not workspace:
-                return {'success': False, 'error': 'cloud_service_id is required for create'}
             return self._create_project(kwargs, cloud_service=cloud_service, workspace=workspace)
         elif action == 'update':
             return self._update_project(kwargs)
@@ -764,6 +1363,15 @@ class AiAssistantController(Controller):
         Returns:
             dict: Response with stage list sorted by sequence.
         """
+        # Read-mode share users have no stages UI; this endpoint sudo-reads and
+        # may sudo auto-CREATE stages for any project_id with no row-level gate
+        # (full per-project access carve-out is follow-up F-DP-1). Fail closed
+        # for share users so they can neither read another tenant's stage names
+        # nor trigger the sudo auto-create side effect. Internal behaviour is
+        # unchanged.
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         stages = self._get_project_stages(project_id)
         return {
             'success': True,
@@ -890,7 +1498,11 @@ class AiAssistantController(Controller):
             domain.append(('cloud_service_id', '=', cloud_service.id))
         elif workspace:
             domain.append(('cloud_service_id.workspace_id', '=', workspace.id))
-        projects = request.env['project.project'].sudo().search(domain)
+        # Walk ir.rule (no sudo): project_rule_workspace_member dual-leg
+        # filters bound projects by workspace membership, unbound projects
+        # by creator / follower sub-legs. The bare-URL list path (no
+        # workspace_id, no cloud_service_id) must NOT cross-tenant-leak.
+        projects = request.env['project.project'].search(domain)
         data = [{
             'id': proj.id,
             'name': proj.name,
@@ -910,6 +1522,9 @@ class AiAssistantController(Controller):
 
     def _create_project(self, params: dict, cloud_service=None, workspace=None) -> dict[str, Any]:
         """Create a new project bound to a cloud service."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         name = (params.get('name') or '').strip()
         if not name:
             return {'success': False, 'error': 'Project name is required'}
@@ -930,7 +1545,21 @@ class AiAssistantController(Controller):
             if cs_id:
                 vals['cloud_service_id'] = int(cs_id)
 
+        # Server-decided auto-enable (plan 決策 1+2). use_agent_runtime is NEVER
+        # read from user params — only flipped here when the platform is ready,
+        # so there is no attacker-writable path to widen agent-runtime scope.
+        if _agent_runtime_autoenable_ready(request.env):
+            vals['use_agent_runtime'] = True
+
         project = request.env['project.project'].sudo().create(vals)
+        # D2=A: sudo().create() leaves create_uid=SUPERUSER, so the
+        # project_rule_workspace_member create_uid sub-leg never matches the
+        # caller. Subscribe the caller as a follower so the message_partner_ids
+        # sub-leg passes — required for unbound projects (no workspace member
+        # leg) and harmless for bound ones (workspace member leg still primary).
+        project.sudo().message_subscribe(
+            partner_ids=[request.env.user.partner_id.id],
+        )
         return {
             'success': True,
             'data': {
@@ -948,6 +1577,24 @@ class AiAssistantController(Controller):
 
     def _update_project(self, params: dict) -> dict[str, Any]:
         """Update an existing project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
+        # two-layer-acl-lockstep invariant #4 (spec §3/§6): portal project
+        # settings are read-only unless the platform flag is on. This is the
+        # third write endpoint and must share the same gate as
+        # paas.py:api_support_project_detail / mcp_servers — otherwise an
+        # internal owner/admin could mutate name/description here with the flag
+        # off (fail-closed default). Runs AFTER the share-write deny so a
+        # read-mode share user keeps the existing 'Access denied' semantics
+        # (test_project_update_share_denied). create/delete are intentionally
+        # not gated (not part of the "project settings page" scope; meeting
+        # left undecided). Denial wording is 'Access denied' — THIS endpoint's
+        # convention, locked by AC #42
+        # (test_mcp_acl_unbound_isolation:'endpoint denial wording must remain
+        # Access denied'); paas.py's gates use its own 'Permission denied'.
+        if not _portal_project_settings_editable(request.env):
+            return {'success': False, 'error': 'Access denied'}
         project_id = params.get('project_id')
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
@@ -985,6 +1632,9 @@ class AiAssistantController(Controller):
 
     def _delete_project(self, params: dict) -> dict[str, Any]:
         """Delete (archive) a project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         project_id = params.get('project_id')
         if not project_id:
             return {'success': False, 'error': 'project_id is required'}
@@ -1017,7 +1667,11 @@ class AiAssistantController(Controller):
             except (ValueError, TypeError):
                 return {'success': False, 'error': 'Invalid project_id'}
 
-        tasks = request.env['project.task'].sudo().search(domain)
+        # Walk ir.rule (no sudo): project_task_rule_workspace_member dual-leg
+        # filters bound tasks by their project's workspace membership, unbound
+        # tasks by the project_id follower / creator sub-legs. The bare-URL
+        # list path (no workspace_id, no project_id) must NOT cross-tenant-leak.
+        tasks = request.env['project.task'].search(domain)
         data = [self._serialize_task(task) for task in tasks]
         return {
             'success': True,
@@ -1027,6 +1681,9 @@ class AiAssistantController(Controller):
 
     def _create_task(self, workspace, params: dict) -> dict[str, Any]:
         """Create a new task in a project."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         name = (params.get('name') or '').strip()
         project_id = params.get('project_id')
 
@@ -1085,6 +1742,9 @@ class AiAssistantController(Controller):
 
     def _update_task(self, task, params: dict) -> dict[str, Any]:
         """Update an existing task."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         vals = {}
         if 'name' in params:
             name = (params['name'] or '').strip()
@@ -1112,6 +1772,9 @@ class AiAssistantController(Controller):
 
     def _delete_task(self, task) -> dict[str, Any]:
         """Delete (archive) a task."""
+        denied = self._portal_write_denied()
+        if denied:
+            return denied
         task.write({'active': False})
         return {'success': True, 'data': {'id': task.id}}
 

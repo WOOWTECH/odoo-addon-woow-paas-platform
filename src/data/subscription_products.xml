@@ -1,0 +1,431 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- ============================================================ -->
+        <!--  Reminder Templates                                          -->
+        <!-- ============================================================ -->
+
+        <record id="reminder_3days_before" model="sh.reminder.template">
+            <field name="sh_reminder">3</field>
+            <field name="sh_reminder_unit">day(s)</field>
+        </record>
+
+        <record id="reminder_1day_before" model="sh.reminder.template">
+            <field name="sh_reminder">1</field>
+            <field name="sh_reminder_unit">day(s)</field>
+        </record>
+
+        <!-- ============================================================ -->
+        <!--  Plans                                                       -->
+        <!-- ============================================================ -->
+
+        <!-- n8n Plans -->
+        <record id="plan_n8n_monthly" model="sh.subscription.plan">
+            <field name="name">n8n Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">199</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <record id="plan_n8n_yearly" model="sh.subscription.plan">
+            <field name="name">n8n Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">1990</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <!-- PostgreSQL Plans -->
+        <record id="plan_postgresql_monthly" model="sh.subscription.plan">
+            <field name="name">PostgreSQL Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">99</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <record id="plan_postgresql_yearly" model="sh.subscription.plan">
+            <field name="name">PostgreSQL Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">990</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <!-- Odoo Plans -->
+        <record id="plan_odoo_monthly" model="sh.subscription.plan">
+            <field name="name">Odoo Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">499</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <record id="plan_odoo_yearly" model="sh.subscription.plan">
+            <field name="name">Odoo Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">4990</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <!-- AnythingLLM Plans (template TBD) -->
+        <record id="plan_anythingllm_monthly" model="sh.subscription.plan">
+            <field name="name">AnythingLLM Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">299</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <record id="plan_anythingllm_yearly" model="sh.subscription.plan">
+            <field name="name">AnythingLLM Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">2990</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <!-- Smart Home Plans -->
+        <record id="plan_smarthome_monthly" model="sh.subscription.plan">
+            <field name="name">Smart Home Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">100</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <record id="plan_smarthome_yearly" model="sh.subscription.plan">
+            <field name="name">Smart Home Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">1000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <!-- Security Access Plans (pricing placeholder until Elmo's pricing lands) -->
+        <record id="plan_security_access_entry_monthly" model="sh.subscription.plan">
+            <field name="name">Security Access Entry Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">100</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="sa_max_routes">3</field>
+            <field name="sa_max_access_policies">3</field>
+            <field name="sa_max_custom_domains">1</field>
+            <field name="sa_max_email_rules">0</field>
+            <field name="sa_max_emails_per_policy">20</field>
+        </record>
+
+        <record id="plan_security_access_entry_yearly" model="sh.subscription.plan">
+            <field name="name">Security Access Entry Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">1000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="sa_max_routes">3</field>
+            <field name="sa_max_access_policies">3</field>
+            <field name="sa_max_custom_domains">1</field>
+            <field name="sa_max_email_rules">0</field>
+            <field name="sa_max_emails_per_policy">20</field>
+        </record>
+
+        <record id="plan_security_access_pro_monthly" model="sh.subscription.plan">
+            <field name="name">Security Access Pro Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">300</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="sa_max_routes">10</field>
+            <field name="sa_max_access_policies">10</field>
+            <field name="sa_max_custom_domains">3</field>
+            <field name="sa_max_email_rules">10</field>
+            <field name="sa_max_emails_per_policy">20</field>
+        </record>
+
+        <record id="plan_security_access_pro_yearly" model="sh.subscription.plan">
+            <field name="name">Security Access Pro Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">3000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="sa_max_routes">10</field>
+            <field name="sa_max_access_policies">10</field>
+            <field name="sa_max_custom_domains">3</field>
+            <field name="sa_max_email_rules">10</field>
+            <field name="sa_max_emails_per_policy">20</field>
+        </record>
+
+        <!-- ============================================================ -->
+        <!--  Products (one per plan, each links to its plan)             -->
+        <!--  sh_subscription_plan_id is on product.template              -->
+        <!-- ============================================================ -->
+
+        <record id="product_n8n_monthly" model="product.product">
+            <field name="name">n8n Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">199</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_n8n_monthly"/>
+        </record>
+
+        <record id="product_n8n_yearly" model="product.product">
+            <field name="name">n8n Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">1990</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_n8n_yearly"/>
+        </record>
+
+        <record id="product_postgresql_monthly" model="product.product">
+            <field name="name">PostgreSQL Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">99</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_postgresql_monthly"/>
+        </record>
+
+        <record id="product_postgresql_yearly" model="product.product">
+            <field name="name">PostgreSQL Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">990</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_postgresql_yearly"/>
+        </record>
+
+        <record id="product_odoo_monthly" model="product.product">
+            <field name="name">Odoo Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">499</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_odoo_monthly"/>
+        </record>
+
+        <record id="product_odoo_yearly" model="product.product">
+            <field name="name">Odoo Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">4990</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_odoo_yearly"/>
+        </record>
+
+        <record id="product_anythingllm_monthly" model="product.product">
+            <field name="name">AnythingLLM Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">299</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_anythingllm_monthly"/>
+        </record>
+
+        <record id="product_anythingllm_yearly" model="product.product">
+            <field name="name">AnythingLLM Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">2990</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_anythingllm_yearly"/>
+        </record>
+
+        <record id="product_smarthome_monthly" model="product.product">
+            <field name="name">Smart Home Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">100</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_smarthome_monthly"/>
+        </record>
+
+        <record id="product_smarthome_yearly" model="product.product">
+            <field name="name">Smart Home Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">1000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_smarthome_yearly"/>
+        </record>
+
+        <!-- Security Access Products (one per plan) -->
+        <record id="product_security_access_entry_monthly" model="product.product">
+            <field name="name">Security Access Entry Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">100</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_security_access_entry_monthly"/>
+        </record>
+        <record id="product_security_access_entry_yearly" model="product.product">
+            <field name="name">Security Access Entry Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">1000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_security_access_entry_yearly"/>
+        </record>
+        <record id="product_security_access_pro_monthly" model="product.product">
+            <field name="name">Security Access Pro Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">300</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_security_access_pro_monthly"/>
+        </record>
+        <record id="product_security_access_pro_yearly" model="product.product">
+            <field name="name">Security Access Pro Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">3000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_security_access_pro_yearly"/>
+        </record>
+
+    </data>
+</odoo>

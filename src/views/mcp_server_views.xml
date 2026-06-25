@@ -40,7 +40,7 @@
                         </group>
                         <group string="Configuration">
                             <field name="scope"/>
-                            <field name="cloud_service_id"
+                            <field name="project_id"
                                    invisible="scope != 'user'"/>
                             <field name="active"/>
                             <field name="auto_created" invisible="True"/>
@@ -106,11 +106,14 @@
         </field>
     </record>
 
-    <!-- Menu under Woow PaaS -->
+    <!-- Menu under Project > Configuration（會議決議 2026-06-03 議題 D：
+         MCP 設定 by project，移到原生 Project 模組；可見性沿用父選單的
+         project.group_project_manager gate，record-level 由 action domain
+         (scope=system) + system_readonly ir.rule + api_key field-level ACL 守線 -->
     <menuitem
         id="menu_mcp_servers"
         name="MCP Servers"
-        parent="menu_woow_paas_platform_root"
+        parent="project.menu_project_config"
         action="action_mcp_server"
-        sequence="50"/>
+        sequence="90"/>
 </odoo>

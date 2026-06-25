@@ -25,16 +25,7 @@
 
             <!-- Configuration Form -->
             <t t-elif="template">
-                <!-- Breadcrumb / Back Navigation -->
-                <div class="o_woow_breadcrumb">
-                    <button class="o_woow_back_btn" t-on-click="goBack">
-                        <WoowIcon name="'arrow_back'" size="20"/>
-                    </button>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack">Marketplace</span>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_current">Configure <t t-esc="template.name"/></span>
-                </div>
+                <!-- 麵包屑統一由全域 Header 呈現（見 AppConfigurationPage._publishBreadcrumb）-->
 
                 <!-- Header Section -->
                 <WoowCard shadow="true" class="'o_woow_configure_header'">
@@ -52,7 +43,7 @@
                                 </span>
                                 <span class="o_woow_template_price">
                                     <WoowIcon name="'payments'" size="14"/>
-                                    $<t t-esc="template.monthly_price"/>/month
+                                    Free
                                 </span>
                                 <span class="o_woow_template_resources">
                                     <WoowIcon name="'memory'" size="14"/>
@@ -95,6 +86,38 @@
                             </t>
                         </div>
 
+                    </div>
+                </WoowCard>
+
+                <!-- Subscription Plan Section -->
+                <WoowCard shadow="true" class="'o_woow_configure_section'">
+                    <div class="o_woow_section_header">
+                        <WoowIcon name="'credit_card'" size="24"/>
+                        <div>
+                            <h2>Subscription Plan</h2>
+                            <p>Choose a billing plan for this service</p>
+                        </div>
+                    </div>
+                    <div class="o_woow_section_body">
+                        <t t-if="state.plansError">
+                            <div class="o_woow_error_message">
+                                <WoowIcon name="'error'" size="16"/>
+                                <span t-esc="state.plansError"/>
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <PlanSelector
+                                plans="state.plans"
+                                selectedPlanId="state.selectedPlanId"
+                                onSelect.bind="onPlanSelect"
+                            />
+                        </t>
+                        <t t-if="state.errors.plan">
+                            <p class="o_woow_field_error">
+                                <WoowIcon name="'error'" size="14"/>
+                                <t t-esc="state.errors.plan"/>
+                            </p>
+                        </t>
                     </div>
                 </WoowCard>
 
@@ -175,6 +198,26 @@
                     </WoowCard>
                 </t>
 
+                <!-- Odoo Addon Selection (only for Odoo templates) -->
+                <t t-if="isOdooTemplate">
+                    <WoowCard shadow="true" class="'o_woow_configure_section'">
+                        <div class="o_woow_section_header">
+                            <WoowIcon name="'extension'" size="24"/>
+                            <div>
+                                <h2>Addons</h2>
+                                <p>Select Odoo addons to include in your service</p>
+                            </div>
+                        </div>
+                        <div class="o_woow_section_body">
+                            <OdooAddonSelector
+                                templateId="props.templateId"
+                                selectedIds="state.selectedAddonIds"
+                                onSelectionChange.bind="onAddonSelectionChange"
+                            />
+                        </div>
+                    </WoowCard>
+                </t>
+
                 <!-- Launch Error -->
                 <t t-if="state.launchError">
                     <div class="o_woow_error_message">
@@ -196,6 +239,7 @@
                         variant="'primary'"
                         size="'lg'"
                         onClick.bind="onLaunch"
+                        disabled="state.launching"
                     >
                         <t t-if="state.launching">
                             <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>

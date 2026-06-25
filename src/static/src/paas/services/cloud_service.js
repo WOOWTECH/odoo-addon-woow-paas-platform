@@ -73,7 +73,6 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
  * @property {string} description - Short description
  * @property {string} category - Template category
  * @property {string[]} tags - Template tags
- * @property {number} monthly_price - Monthly price in USD
  * @property {string} documentation_url - Documentation URL
  * @property {number} default_port - Default service port
  * @property {boolean} ingress_enabled - Whether ingress is enabled
@@ -115,7 +114,7 @@ export async function getConfig() {
             return _configCache;
         }
     } catch (err) {
-        console.warn("Failed to fetch config, using defaults:", err);
+        console.error("Failed to fetch config, using defaults:", err);
     }
     // Return default config
     return { domain: "woowtech.io" };
@@ -154,6 +153,125 @@ export const cloudService = reactive({
     async initConfig() {
         const config = await getConfig();
         this.domain = config.domain;
+    },
+
+    /** @type {Array} */
+    odooAddons: [],
+
+    /**
+     * Fetch available subscription plans for a template.
+     *
+     * Returns ApiResponse<Array> so callers can surface backend errors
+     * instead of silently rendering "no plans" — same rationale as the
+     * Smart Home variant in workspace_service.fetchSmartHomePlans. The
+     * backend hard-fails on missing/inactive/empty templates with a
+     * specific message; we want admins to see that message, not a blank
+     * list that looks like a bug.
+     *
+     * @param {number} templateId - Template ID
+     * @returns {Promise<ApiResponse<Array>>}
+     */
+    async fetchPlans(templateId) {
+        try {
+            const result = await jsonRpc(`/api/cloud-services/templates/${templateId}/plans`, {});
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return {
+                success: false,
+                error: result.error || "Failed to fetch plans",
+            };
+        } catch (err) {
+            return { success: false, error: err.message || "Network error" };
+        }
+    },
+
+    /**
+     * Change subscription plan for a service
+     * @param {number} serviceId - Service ID
+     * @param {number} planId - New plan ID
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async changePlan(serviceId, planId) {
+        this.operationLoading.changePlan = true;
+        try {
+            const result = await jsonRpc(`/api/cloud-services/services/${serviceId}/change-plan`, {
+                plan_id: planId,
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.changePlan = false;
+        }
+    },
+
+    /**
+     * Skip trial period and start paid billing immediately.
+     * @param {number} serviceId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async skipTrial(serviceId) {
+        this.operationLoading.skipTrial = true;
+        try {
+            const result = await jsonRpc(`/api/cloud-services/services/${serviceId}/skip-trial`, {});
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.skipTrial = false;
+        }
+    },
+
+    /**
+     * Get the upcoming-invoice breakdown for a skip-trial confirmation.
+     *
+     * Side-effect-free counterpart to `skipTrial`: returns untaxed / tax /
+     * total + wallet sufficiency so the confirm modal can render the real
+     * amount before the user commits.
+     *
+     * @param {number} serviceId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     *   data has keys: untaxed, tax_rate, tax_amount, total, currency,
+     *   wallet_balance, sufficient, shortage, billing_cycle_start,
+     *   billing_cycle_end.
+     */
+    async getSkipTrialEstimate(serviceId) {
+        try {
+            const result = await jsonRpc(
+                `/api/cloud-services/services/${serviceId}/skip-trial-estimate`,
+                {},
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    },
+
+    async fetchOdooAddons(templateId = null, category = null) {
+        this.operationLoading.fetchOdooAddons = true;
+        try {
+            const params = {};
+            if (templateId) params.template_id = templateId;
+            if (category) params.category = category;
+            const result = await jsonRpc("/api/cloud/odoo-addons", params);
+            if (result.success) {
+                this.odooAddons = result.data;
+            }
+        } catch (err) {
+            console.warn("Failed to fetch Odoo addons:", err);
+        } finally {
+            this.operationLoading.fetchOdooAddons = false;
+        }
     },
 
     /**
@@ -244,7 +362,11 @@ export const cloudService = reactive({
                 template_id: payload.template_id,
                 name: payload.name,
                 values: payload.values || {},
+                plan_id: payload.plan_id,
             };
+            if (payload.odoo_addon_ids) {
+                params.odoo_addon_ids = payload.odoo_addon_ids;
+            }
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/services`, params);
             if (result.success) {
                 this.services = [result.data, ...this.services];
@@ -316,6 +438,53 @@ export const cloudService = reactive({
             return { success: false, error: err.message };
         } finally {
             this.operationLoading.updateService = false;
+        }
+    },
+
+    /**
+     * Update Odoo addon selection for a service
+     * @param {number} workspaceId - Workspace ID
+     * @param {number} serviceId - Service ID
+     * @param {number[]} odooAddonIds - Selected addon IDs
+     * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
+     */
+    async updateServiceAddons(workspaceId, serviceId, odooAddonIds) {
+        this.operationLoading.updateServiceAddons = true;
+        try {
+            const params = {
+                action: "update",
+                odoo_addon_ids: odooAddonIds,
+            };
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}`, params);
+            if (result.success) {
+                const index = this.services.findIndex(s => s.id === serviceId);
+                if (index !== -1) {
+                    this.services[index] = { ...this.services[index], ...result.data };
+                }
+                return { success: true, data: result.data };
+            } else {
+                return { success: false, error: result.error };
+            }
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.updateServiceAddons = false;
+        }
+    },
+
+    /**
+     * Check if removed addons can be safely deselected
+     * @param {number} serviceId - Service ID
+     * @param {number[]} removedAddonIds - Addon IDs being removed
+     * @returns {Promise<{success: boolean, modules?: Object, error?: string}>}
+     */
+    async checkAddonRemoval(serviceId, removedAddonIds) {
+        try {
+            return await jsonRpc(`/api/cloud-services/services/${serviceId}/check-addon-removal`, {
+                removed_addon_ids: removedAddonIds,
+            }, 180000);
+        } catch (err) {
+            return { success: false, error: err.message };
         }
     },
 

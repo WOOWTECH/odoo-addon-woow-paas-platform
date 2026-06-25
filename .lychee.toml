@@ -1,0 +1,55 @@
+# Lychee broken-link checker configuration (Phase 1 — docs/ + CLAUDE.md)
+# https://lychee.cli.rs/configuration/
+
+# Paths to skip entirely
+exclude_path = [
+  "docs/archived",
+  "docs/superpowers",
+  "node_modules",
+  ".venv",
+  "venv",
+]
+
+# Don't follow URLs matching these patterns (regex)
+exclude = [
+  # GitHub anchors that lychee mis-handles
+  "^https://github\\.com/.+#.*",
+  # Internal hostnames (only resolvable inside K8s / VPN)
+  "^http://gitea-http\\.gitea\\.svc\\.cluster\\.local",
+  "^http://paas-operator\\.paas-system",
+  "^https://jcr-prod\\.woowtech\\.io",
+  # Localhost / loopback in dev docs
+  "^http://localhost",
+  "^http://127\\.0\\.0\\.1",
+  "^http://host\\.docker\\.internal",
+  # Example domains in template docs
+  "^https://example\\.com",
+  "^https://your\\.repo",
+]
+
+# Use the cache to avoid re-checking unchanged URLs across runs
+cache = true
+max_cache_age = "1d"
+
+# Timeouts (be generous for slow external sites)
+timeout = 20
+max_retries = 2
+retry_wait_time = 5
+
+# Accept common success codes (some sites return 403/429 for HEAD)
+accept = ["200", "204", "206", "301", "302", "307", "308", "403", "429"]
+
+# Follow redirects
+max_redirects = 5
+
+# Skip HTTPS verification only for known dev/internal hosts (none right now)
+# insecure = false
+
+# User agent (some sites block default lychee UA)
+user_agent = "lychee-link-checker (docs-ci)"
+
+# Verbose output to highlight which files have broken links
+verbose = "info"
+
+# Don't fail on warnings (Phase 1 is warning-only; CI workflow also sets continue-on-error)
+# In Phase 2, drop `continue-on-error` in the workflow to make this blocking.

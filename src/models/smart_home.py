@@ -17,6 +17,7 @@ _logger = logging.getLogger(__name__)
 
 class SmartHome(models.Model):
     _name = 'woow_paas_platform.smart_home'
+    _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
     _description = 'Smart Home Instance'
     _order = 'create_date desc'
 
@@ -57,11 +58,17 @@ class SmartHome(models.Model):
             ('provisioning', 'Provisioning'),
             ('active', 'Active'),
             ('error', 'Error'),
+            ('suspended', 'Suspended'),
             ('deleting', 'Deleting'),
         ],
         string='State',
         default='pending',
         required=True,
+    )
+
+    # Store original service_url for resume after suspend
+    original_service_url = fields.Char(
+        help='Original service URL before suspension, used for resume',
     )
     error_message = fields.Text(
         string='Error Message',
@@ -174,25 +181,63 @@ class SmartHome(models.Model):
             _logger.error("Smart Home provision error: %s", e.message)
 
     def action_delete(self):
-        """Delete the smart home and its Cloudflare Tunnel."""
-        self.ensure_one()
-        client = self._get_operator_client()
+        """Delete the smart home and its Cloudflare Tunnel.
 
+        Teardown + fail-loud orphan guard are delegated to unlink(): if the
+        tunnel cannot be deleted, the record is kept and a UserError surfaces,
+        so a billed tunnel is never left orphaned in Cloudflare with no DB row
+        to drive a retry (F-ENV-4).
+        """
+        self.ensure_one()
         if self.tunnel_id:
             self.write({'state': 'deleting'})
-            try:
-                client.delete_tunnel(self.tunnel_id)
-                _logger.info(
-                    "Smart Home '%s' tunnel deleted. Tunnel ID: %s",
-                    self.name, self.tunnel_id,
-                )
-            except PaaSOperatorError as e:
-                _logger.warning(
-                    "Failed to delete tunnel %s for Smart Home '%s': %s",
-                    self.tunnel_id, self.name, e.message,
-                )
-
         self.unlink()
+
+    def _cleanup_tunnel(self):
+        """Best-effort idempotent Cloudflare tunnel teardown.
+
+        Clears tunnel_id on success and KEEPS it on failure, so unlink() / a
+        retry can detect a still-live tunnel and avoid orphaning it (symmetric
+        with SecurityAccess._cleanup_cloudflare).
+        """
+        self.ensure_one()
+        if not self.tunnel_id:
+            return
+        try:
+            client = self._get_operator_client()
+            client.delete_tunnel(self.tunnel_id)
+            _logger.info(
+                "[SH] tunnel deleted sh=%s tunnel=%s", self.id, self.tunnel_id,
+            )
+            self.tunnel_id = False
+        except Exception as e:
+            _logger.warning(
+                "[SH] tunnel cleanup failed sh=%s: %s — kept for retry",
+                self.id, e,
+            )
+
+    def unlink(self):
+        """Direct-unlink guard: the Cloudflare tunnel must never outlive the
+        record.
+
+        Without this, a transient delete_tunnel failure would drop the DB row
+        while a billed, token-still-valid tunnel lives on in Cloudflare with no
+        DB reference left to drive a retry — a permanent orphan
+        (cf-ns-orphan-no-account-gc: SmartHome's unconditional unlink was the
+        source of 3 such orphan tunnels). Mirrors SecurityAccess.unlink: attempt
+        cleanup, then fail-loud if the tunnel is still live so both the DB row
+        and the CF tunnel survive for the user / cron to retry.
+        """
+        for record in self:
+            if record.tunnel_id:
+                record._cleanup_tunnel()
+            if record.tunnel_id:
+                raise UserError(
+                    "Cloudflare cleanup failed; the tunnel is still live and "
+                    "billed. The record was kept so the deletion can be "
+                    "retried. Please try again shortly."
+                )
+        return super().unlink()
 
     def action_refresh_status(self):
         """Refresh tunnel status from the PaaS Operator."""
@@ -250,4 +295,122 @@ class SmartHome(models.Model):
             'error_message': self.error_message or '',
             'deployed_at': self.deployed_at.isoformat() if self.deployed_at else '',
             'created_at': self.create_date.isoformat() if self.create_date else '',
+            'subscription': self._get_subscription_info(),
         }
+
+    # ------------------------------------------------------------------ #
+    #  Subscription lifecycle: suspend / resume / cleanup                #
+    # ------------------------------------------------------------------ #
+
+    def _do_suspend(self):
+        """Update tunnel ingress to return 503."""
+        self.ensure_one()
+        _logger.info(
+            "[SH] _do_suspend sh=%s name=%s state=%s sub=%s",
+            self.id, self.name, self.state,
+            self.subscription_id.id if self.subscription_id else None,
+        )
+        if self.state == 'suspended':
+            return
+
+        if self.tunnel_id:
+            try:
+                client = self._get_operator_client()
+                hostname = f"{self.subdomain}.{self._get_paas_domain()}"
+                client.configure_tunnel(
+                    self.tunnel_id,
+                    hostname=hostname,
+                    service_url="http_status:503",
+                )
+                _logger.info(
+                    "[SH] _do_suspend tunnel 503 sh=%s tunnel=%s",
+                    self.id, self.tunnel_id,
+                )
+            except Exception as e:
+                _logger.warning(
+                    "[SH] _do_suspend tunnel failed sh=%s: %s",
+                    self.id, e,
+                )
+                self.write({'state': 'error'})
+                return
+
+        self.write({
+            'original_service_url': f"http://localhost:{self.ha_port}",
+            'pre_suspend_state': self.state if self.state in ('active', 'error') else 'active',
+            'state': 'suspended',
+        })
+        _logger.info("[SH] _do_suspend done sh=%s new_state=suspended", self.id)
+
+    def _do_resume(self):
+        """Restore tunnel ingress to original service URL."""
+        self.ensure_one()
+        _logger.info(
+            "[SH] _do_resume sh=%s name=%s state=%s pre_suspend=%s",
+            self.id, self.name, self.state, self.pre_suspend_state,
+        )
+        if self.state != 'suspended':
+            return
+
+        service_url = self.original_service_url or f"http://localhost:{self.ha_port}"
+        if self.tunnel_id:
+            try:
+                client = self._get_operator_client()
+                hostname = f"{self.subdomain}.{self._get_paas_domain()}"
+                client.configure_tunnel(
+                    self.tunnel_id,
+                    hostname=hostname,
+                    service_url=service_url,
+                )
+                _logger.info(
+                    "[SH] _do_resume tunnel restored sh=%s tunnel=%s",
+                    self.id, self.tunnel_id,
+                )
+            except Exception as e:
+                _logger.warning(
+                    "[SH] _do_resume tunnel failed sh=%s: %s",
+                    self.id, e,
+                )
+                self.write({'state': 'error'})
+                return
+
+        restore_state = self.pre_suspend_state or 'active'
+        self.write({
+            'state': restore_state,
+            'pre_suspend_state': False,
+        })
+        _logger.info(
+            "[SH] _do_resume done sh=%s new_state=%s",
+            self.id, restore_state,
+        )
+
+    def _do_cleanup(self):
+        """Delete tunnel permanently (cron path).
+
+        Mirrors SecurityAccess._do_cleanup fail-loud contract: the cron calls
+        _do_cleanup (not unlink), so this path is NOT covered by the unlink
+        guard and must not silently swallow a delete_tunnel failure then write
+        'deleting' (a false success signal — the subscription is already
+        cancelled so the cron never revisits, leaving a billed orphan tunnel).
+        _cleanup_tunnel keeps tunnel_id on failure; if it is still set, land in
+        'error' so the next cron pass retries (F-ENV-4 M1).
+        """
+        self.ensure_one()
+        _logger.info(
+            "[SH] _do_cleanup sh=%s name=%s tunnel=%s",
+            self.id, self.name, self.tunnel_id,
+        )
+        self._cleanup_tunnel()
+        if self.tunnel_id:
+            self.write({
+                'state': 'error',
+                'error_message': (
+                    "Cloudflare cleanup failed; the tunnel is still live and "
+                    "billed. Will retry on the next cron pass."
+                ),
+            })
+            _logger.warning(
+                "[SH] _do_cleanup incomplete sh=%s tunnel=%s (state=error)",
+                self.id, self.tunnel_id,
+            )
+            return
+        self.write({'state': 'deleting'})

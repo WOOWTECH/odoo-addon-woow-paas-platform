@@ -1,0 +1,15 @@
+# Optional runtime dependencies for the agent-runtime pod transport (Phase C).
+#
+# These are NOT declared in __manifest__.py external_dependencies on purpose:
+# the agent-runtime WS bridge is flag-gated (project.use_agent_runtime, default
+# False) and only exercised once Phase D enables a pilot project, so the module
+# installs and runs without them. Install on hosts that activate the flag.
+#
+#   websockets — Odoo controller's outbound WS client to the pod (§5.6 bridge)
+#   PyJWT      — optional JWT helper (token verify is also done via stdlib hmac)
+#
+# websockets is pinned <14: v14 renamed the connect() kwarg extra_headers →
+# additional_headers, which the bridge at ai_assistant.py uses (F-PC-1 / A-1).
+# A bare >=12.0 would let a host install 14+ and break the bridge at runtime.
+websockets>=12.0,<14
+PyJWT>=2.8.0

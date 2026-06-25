@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.InvoiceListPage">
+        <div class="o_woow_invoice_list">
+            <!-- Page Header -->
+            <div class="o_woow_invoice_header">
+                <div class="o_woow_invoice_title_area">
+                    <div class="o_woow_invoice_breadcrumb">
+                        <a href="#/dashboard" class="o_woow_breadcrumb_link">Home</a>
+                        <WoowIcon name="'chevron_right'" size="16"/>
+                        <a href="#/billing" class="o_woow_breadcrumb_link">Billing</a>
+                        <WoowIcon name="'chevron_right'" size="16"/>
+                        <span class="o_woow_breadcrumb_current">Invoices</span>
+                    </div>
+                    <h1>Invoices &amp; Billing</h1>
+                </div>
+                <div class="o_woow_invoice_controls">
+                    <div class="o_woow_invoice_select_group">
+                        <label>Sort by</label>
+                        <select class="o_woow_select" t-on-change="onSortChange">
+                            <option value="date" selected="">Date</option>
+                            <option value="amount">Amount</option>
+                        </select>
+                    </div>
+                    <div class="o_woow_invoice_select_group">
+                        <label>Status</label>
+                        <select class="o_woow_select" t-on-change="onFilterChange">
+                            <option value="all">All</option>
+                            <option value="posted">Waiting</option>
+                            <option value="paid">Paid</option>
+                            <option value="overdue">Overdue</option>
+                            <option value="draft">Draft</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading invoices...</p>
+                </div>
+            </t>
+
+            <t t-else="">
+                <!-- Empty State -->
+                <t t-if="invoices.length === 0">
+                    <div class="o_woow_invoice_empty">
+                        <WoowIcon name="'receipt_long'" size="48"/>
+                        <p>No invoices found.</p>
+                    </div>
+                </t>
+
+                <t t-else="">
+                    <!-- Table Header (desktop) -->
+                    <div class="o_woow_invoice_table_header">
+                        <div class="o_woow_invoice_col o_woow_invoice_col_number">Invoice #</div>
+                        <div class="o_woow_invoice_col o_woow_invoice_col_date">Date</div>
+                        <div class="o_woow_invoice_col o_woow_invoice_col_due">Due Date</div>
+                        <div class="o_woow_invoice_col o_woow_invoice_col_amount">Amount</div>
+                        <div class="o_woow_invoice_col o_woow_invoice_col_status">Status</div>
+                        <div class="o_woow_invoice_col o_woow_invoice_col_action"></div>
+                    </div>
+
+                    <!-- Invoice Rows -->
+                    <t t-foreach="invoices" t-as="invoice" t-key="invoice.id">
+                        <div class="o_woow_invoice_row" t-on-click="() => this.onInvoiceClick(invoice)">
+                            <div class="o_woow_invoice_col o_woow_invoice_col_number">
+                                <span class="o_woow_invoice_col_label">Invoice #</span>
+                                <div class="o_woow_invoice_number_cell">
+                                    <WoowIcon name="'description'" size="18"/>
+                                    <span t-esc="invoice.name || invoice.number || '-'"/>
+                                </div>
+                            </div>
+                            <div class="o_woow_invoice_col o_woow_invoice_col_date">
+                                <span class="o_woow_invoice_col_label">Date</span>
+                                <span t-esc="formatDate(invoice.invoice_date)"/>
+                            </div>
+                            <div class="o_woow_invoice_col o_woow_invoice_col_due">
+                                <span class="o_woow_invoice_col_label">Due Date</span>
+                                <span t-esc="formatDate(invoice.invoice_date_due)"/>
+                            </div>
+                            <div class="o_woow_invoice_col o_woow_invoice_col_amount">
+                                <span class="o_woow_invoice_col_label">Amount</span>
+                                <span class="o_woow_invoice_amount_value">
+                                    <t t-esc="formatPoints(invoice.amount_total)"/>
+                                </span>
+                            </div>
+                            <div class="o_woow_invoice_col o_woow_invoice_col_status">
+                                <span class="o_woow_invoice_col_label">Status</span>
+                                <span t-attf-class="o_woow_invoice_badge {{ getStatusClass(invoice) }}">
+                                    <span class="o_woow_invoice_badge_dot"/>
+                                    <t t-esc="getStatusLabel(invoice)"/>
+                                </span>
+                            </div>
+                            <div class="o_woow_invoice_col o_woow_invoice_col_action">
+                                <t t-if="canPay(invoice)">
+                                    <WoowButton
+                                        variant="'primary'"
+                                        size="'sm'"
+                                        onClick="(ev) => this.showPay(ev, invoice)">
+                                        Pay Now
+                                    </WoowButton>
+                                </t>
+                            </div>
+                        </div>
+                    </t>
+
+                    <!-- Pagination -->
+                    <div class="o_woow_invoice_pagination">
+                        <span class="o_woow_invoice_pagination_info">
+                            Showing <t t-esc="showingFrom"/>-<t t-esc="showingTo"/> of <t t-esc="totalInvoices"/> invoices
+                        </span>
+                        <div class="o_woow_invoice_pagination_buttons">
+                            <button
+                                class="o_woow_page_btn"
+                                t-att-disabled="currentPage === 1"
+                                t-on-click="() => this.goToPage(currentPage - 1)">
+                                <WoowIcon name="'chevron_left'" size="18"/>
+                            </button>
+                            <t t-foreach="pageNumbers" t-as="p" t-key="p">
+                                <button
+                                    t-attf-class="o_woow_page_btn {{ p === currentPage ? 'o_woow_page_btn_active' : '' }}"
+                                    t-on-click="() => this.goToPage(p)">
+                                    <t t-esc="p"/>
+                                </button>
+                            </t>
+                            <button
+                                class="o_woow_page_btn"
+                                t-att-disabled="currentPage === totalPages"
+                                t-on-click="() => this.goToPage(currentPage + 1)">
+                                <WoowIcon name="'chevron_right'" size="18"/>
+                            </button>
+                        </div>
+                    </div>
+                </t>
+            </t>
+
+            <!-- Pay Invoice Modal -->
+            <t t-if="state.showPayModal and state.selectedInvoice">
+                <PayInvoiceModal
+                    invoice="state.selectedInvoice"
+                    onClose.bind="hidePay"
+                    onPaid.bind="onPayComplete"/>
+            </t>
+        </div>
+    </t>
+</templates>

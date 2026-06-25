@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>F-ENV-2 L4 帳號級反向 Reconciler · 會做什麼 + 誤刪風險守衛</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============ Tokens ============ */
+:root{
+  --bg:#0F172A; --surface:#1E293B; --surface-2:#243349; --surface-3:#172033;
+  --border:rgba(148,163,184,.18); --border-strong:rgba(148,163,184,.32);
+  --text:#F1F5F9; --muted:#94A3B8; --faint:#64748B;
+  --primary:#3B82F6; --primary-2:#60A5FA; --cta:#2563EB;
+  --green:#34D399; --green-bg:rgba(52,211,153,.12);
+  --red:#F87171; --red-bg:rgba(248,113,113,.12);
+  --amber:#FBBF24; --amber-bg:rgba(251,191,36,.12);
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+  --shadow:0 8px 30px rgba(0,0,0,.35); --radius:14px;
+}
+[data-theme="light"]{
+  --bg:#F8FAFC; --surface:#FFFFFF; --surface-2:#F1F5F9; --surface-3:#EEF2F7;
+  --border:#E2E8F0; --border-strong:#CBD5E1;
+  --text:#0F172A; --muted:#475569; --faint:#94A3B8;
+  --green:#059669; --green-bg:rgba(5,150,105,.10);
+  --red:#DC2626; --red-bg:rgba(220,38,38,.08);
+  --amber:#B45309; --amber-bg:rgba(180,83,9,.10);
+  --shadow:0 8px 24px rgba(15,23,42,.08);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{
+  margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+  line-height:1.65;font-size:16px;-webkit-font-smoothing:antialiased;
+  transition:background .3s ease,color .3s ease;
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+/* ============ Scroll progress ============ */
+#progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:100;
+  background:linear-gradient(90deg,var(--primary),var(--primary-2));transition:width .1s linear}
+
+/* ============ Nav ============ */
+nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);
+  background:color-mix(in srgb,var(--bg) 82%,transparent);
+  border-bottom:1px solid var(--border)}
+.nav-inner{max-width:1140px;margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:18px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-weight:700;font-size:14px;white-space:nowrap}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--primary);box-shadow:0 0 12px var(--primary)}
+.nav-links{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;flex:1}
+.nav-links::-webkit-scrollbar{display:none}
+.nav-links a{font-family:var(--mono);font-size:12.5px;color:var(--muted);text-decoration:none;
+  padding:6px 11px;border-radius:8px;white-space:nowrap;transition:color .2s,background .2s;cursor:pointer}
+.nav-links a:hover{color:var(--text);background:var(--surface)}
+.nav-links a.active{color:var(--primary-2);background:var(--surface)}
+.nav-links a.danger{color:var(--red)}
+.nav-links a.danger.active{color:var(--red);background:var(--red-bg)}
+.toggle{flex-shrink:0;display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);
+  color:var(--muted);border-radius:8px;padding:7px 10px;cursor:pointer;font-family:var(--mono);font-size:12px;transition:.2s}
+.toggle:hover{color:var(--text);border-color:var(--border-strong)}
+.toggle svg{width:15px;height:15px}
+
+/* ============ Layout ============ */
+main{max-width:1140px;margin:0 auto;padding:0 24px}
+section{padding:56px 0;border-top:1px solid var(--border)}
+section:first-of-type{border-top:none}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px}
+.sec-num{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--primary);letter-spacing:.5px}
+.sec-head h2{font-family:var(--mono);font-size:clamp(20px,3vw,27px);font-weight:700;margin:0;letter-spacing:-.5px}
+.sec-sub{color:var(--muted);font-size:15px;margin:0 0 26px;max-width:80ch}
+
+/* ============ Hero ============ */
+.hero{position:relative;max-width:1140px;margin:0 auto;padding:64px 24px 30px;overflow:hidden}
+.hero::before{content:"";position:absolute;top:-160px;right:-80px;width:520px;height:420px;z-index:-1;
+  background:radial-gradient(circle at 60% 40%,rgba(59,130,246,.22),transparent 62%);filter:blur(8px)}
+.badge{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;font-weight:600;
+  color:var(--primary-2);background:var(--surface);border:1px solid var(--border-strong);
+  padding:6px 13px;border-radius:999px;margin-bottom:20px}
+.badge .pulse{width:7px;height:7px;border-radius:50%;background:var(--amber);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.hero h1{font-family:var(--mono);font-size:clamp(26px,4.4vw,42px);line-height:1.18;margin:0 0 16px;
+  font-weight:700;letter-spacing:-1px;max-width:22ch}
+.hero h1 .accent{background:linear-gradient(120deg,var(--primary),var(--primary-2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:18px;color:var(--muted);max-width:72ch;margin:0 0 22px}
+.lead b{color:var(--text);font-weight:600}
+.meta-chips{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:6px}
+.chip{font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--surface);
+  border:1px solid var(--border);padding:6px 12px;border-radius:8px;display:inline-flex;gap:7px;align-items:center}
+.chip b{color:var(--text);font-weight:600}
+.chip a{color:var(--primary-2);text-decoration:none}
+.chip a:hover{text-decoration:underline}
+
+/* ============ KPI ============ */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:34px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;
+  position:relative;overflow:hidden;transition:border-color .2s,transform .2s}
+.kpi:hover{border-color:var(--border-strong);transform:translateY(-2px)}
+.kpi::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary)}
+.kpi .v{font-family:var(--mono);font-size:30px;font-weight:700;line-height:1.05;letter-spacing:-1px}
+.kpi .v.sm{font-size:21px}
+.kpi .v small{font-size:14px;color:var(--muted);font-weight:500}
+.kpi .l{color:var(--muted);font-size:12.5px;margin-top:9px;line-height:1.5}
+.kpi.good::after{background:var(--green)} .kpi.good .v{color:var(--green)}
+.kpi.warn::after{background:var(--amber)} .kpi.warn .v{color:var(--amber)}
+.kpi.bad::after{background:var(--red)} .kpi.bad .v{color:var(--red)}
+
+/* ============ TL;DR ============ */
+.tldr{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--primary);
+  border-radius:var(--radius);padding:22px 24px;margin-top:8px}
+.tldr p{margin:0;font-size:15.5px}
+.tldr b{color:var(--text)} .tldr code{font-family:var(--mono);font-size:.86em;background:var(--surface-3);
+  padding:2px 6px;border-radius:5px;color:var(--primary-2)}
+
+/* ============ Cards / Mermaid ============ */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow)}
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;
+  display:flex;justify-content:center;align-items:center;overflow-x:auto;min-height:80px}
+.diagram svg{max-width:100%;height:auto}
+.mermaid:not([data-processed]){visibility:hidden}
+.cap{font-family:var(--mono);font-size:12px;color:var(--faint);text-align:center;margin:10px 0 0}
+.prose{font-size:14.5px;color:var(--muted);max-width:82ch}
+.prose b{color:var(--text)} .prose code{font-family:var(--mono);font-size:.86em;background:var(--surface-3);
+  padding:2px 6px;border-radius:5px;color:var(--primary-2)}
+.prose ul{padding-left:20px;display:grid;gap:8px} .prose li{padding-left:4px}
+
+/* ============ Callouts ============ */
+.callout{border-radius:var(--radius);padding:18px 22px;margin:8px 0;border:1px solid var(--border);font-size:14.5px}
+.callout .ch{font-family:var(--mono);font-weight:700;font-size:14px;display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.callout p{margin:0 0 9px} .callout p:last-child{margin-bottom:0}
+.callout code{font-family:var(--mono);font-size:.86em;background:rgba(148,163,184,.14);padding:2px 6px;border-radius:5px}
+.callout.info{background:var(--surface);border-left:3px solid var(--primary)}
+.callout.info .ch{color:var(--primary-2)}
+.callout.danger{background:var(--red-bg);border:1px solid var(--red);border-left:4px solid var(--red)}
+.callout.danger .ch{color:var(--red)} .callout.danger code{color:var(--red)}
+.callout.warn{background:var(--amber-bg);border-left:3px solid var(--amber)}
+.callout.warn .ch{color:var(--amber)}
+.callout.law{background:var(--surface);border:1px solid var(--border-strong);border-left:4px solid var(--green)}
+.callout.law .ch{color:var(--green)}
+.callout svg{width:17px;height:17px;flex-shrink:0}
+
+/* ============ Q verdict cards ============ */
+.qgrid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.qcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;
+  border-top:3px solid var(--red);position:relative}
+.qcard h4{margin:0 0 8px;font-family:var(--mono);font-size:15px;line-height:1.4}
+.qcard .verdict{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--red);
+  background:var(--red-bg);padding:3px 10px;border-radius:6px;display:inline-block;margin-bottom:14px}
+.qcard .blk{margin-bottom:14px}
+.qcard .blk:last-child{margin-bottom:0}
+.qcard .blk .lbl{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.4px;display:block;margin-bottom:6px}
+.qcard .blk.risk .lbl{color:var(--red)}
+.qcard .blk.guard .lbl{color:var(--green)}
+.qcard .blk p{margin:0;font-size:13.5px;color:var(--muted)}
+.qcard code{font-family:var(--mono);font-size:.84em;background:var(--surface-3);padding:2px 5px;border-radius:5px;color:var(--primary-2)}
+.qcard ol{margin:0;padding-left:18px;display:grid;gap:7px;font-size:13.5px;color:var(--muted)}
+.qcard ol code{color:var(--primary-2)}
+
+/* ============ Iron laws checklist ============ */
+.laws{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:11px}
+.laws li{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--green);
+  border-radius:11px;padding:14px 18px;display:flex;gap:14px;align-items:flex-start;font-size:14px;color:var(--muted)}
+.laws li .n{font-family:var(--mono);font-weight:700;color:var(--green);background:var(--green-bg);
+  min-width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.laws li b{color:var(--text);font-family:var(--mono);font-size:13px}
+.laws li code{font-family:var(--mono);font-size:.84em;background:var(--surface-3);padding:2px 5px;border-radius:5px;color:var(--primary-2)}
+
+/* ============ Stack grid (relationship/compare) ============ */
+.stacks{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.stack-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
+.stack-card.primary{border-color:var(--primary)}
+.stack-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px}
+.stack-head h4{margin:0;font-family:var(--mono);font-size:15px}
+.pill{font-family:var(--mono);font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;white-space:nowrap}
+.pill.blue{color:var(--primary-2);background:rgba(59,130,246,.14)}
+.pill.gray{color:var(--muted);background:var(--surface-2)}
+.pill.green{color:var(--green);background:var(--green-bg)}
+.complist{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:8px}
+.complist li{display:flex;gap:10px;font-size:13px;align-items:flex-start}
+.complist .nm{font-family:var(--mono);color:var(--text);font-weight:600;min-width:120px}
+.complist .ds{color:var(--muted)}
+.complist code{font-family:var(--mono);font-size:.88em;background:var(--surface-3);padding:1px 5px;border-radius:4px;color:var(--primary-2)}
+
+/* ============ Details / Accordion ============ */
+details{background:var(--surface);border:1px solid var(--border);border-radius:11px;margin-bottom:10px;overflow:hidden;transition:border-color .2s}
+details[open]{border-color:var(--border-strong)}
+summary{cursor:pointer;padding:15px 18px;display:flex;align-items:center;gap:12px;list-style:none;font-weight:500;user-select:none}
+summary::-webkit-details-marker{display:none}
+summary:hover{background:var(--surface-2)}
+summary .chev{margin-left:auto;color:var(--faint);transition:transform .2s;flex-shrink:0}
+details[open] summary .chev{transform:rotate(90deg)}
+.det-body{padding:2px 18px 18px;color:var(--muted);font-size:14px}
+.det-body p{margin:0 0 10px} .det-body p:last-child{margin-bottom:0}
+.det-body code{font-family:var(--mono);font-size:.86em;background:var(--surface-3);padding:2px 6px;border-radius:5px;color:var(--primary-2)}
+.skey{font-family:var(--mono);font-size:12px;color:var(--primary);font-weight:600;min-width:30px;display:inline-block}
+
+/* gap cards (operator new caps / env signals) */
+.gap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+.gap-grid details{margin:0}
+.gap-grid summary{padding:14px 16px;font-family:var(--mono);font-size:13px}
+.st{font-family:var(--mono);font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:6px;flex-shrink:0}
+.st.miss{color:var(--red);background:var(--red-bg)} .st.part{color:var(--amber);background:var(--amber-bg)}
+.gap-grid .det-body{font-size:13px}
+
+/* ============ Tables ============ */
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:4px}
+.tbl th{text-align:left;font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:600;
+  padding:10px 12px;border-bottom:1px solid var(--border-strong)}
+.tbl td{padding:11px 12px;border-bottom:1px solid var(--border);color:var(--muted);vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl td b{color:var(--text)} .tbl td code{font-family:var(--mono);font-size:.86em;background:var(--surface-3);padding:2px 5px;border-radius:5px;color:var(--primary-2)}
+.conf{font-family:var(--mono);font-size:11px;font-weight:700;padding:3px 9px;border-radius:6px;white-space:nowrap}
+.conf.hi{color:var(--green);background:var(--green-bg)} .conf.mid{color:var(--amber);background:var(--amber-bg)} .conf.lo{color:var(--red);background:var(--red-bg)}
+
+/* sources */
+.srcs{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:6px}
+.srcs a{display:flex;gap:12px;align-items:center;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:13px 16px;text-decoration:none;color:var(--text);transition:.2s;font-size:13px}
+.srcs a:hover{border-color:var(--primary);transform:translateX(3px)}
+.srcs .n{font-family:var(--mono);font-size:12px;color:var(--primary);font-weight:700;flex-shrink:0}
+
+.toolbar{display:flex;gap:8px;margin-bottom:16px}
+.btn-sm{font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--surface);
+  border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;transition:.2s}
+.btn-sm:hover{color:var(--text);border-color:var(--border-strong)}
+
+footer{max-width:1140px;margin:0 auto;padding:40px 24px 60px;border-top:1px solid var(--border);
+  color:var(--faint);font-size:12.5px;font-family:var(--mono);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.totop{position:fixed;right:22px;bottom:22px;width:42px;height:42px;border-radius:50%;background:var(--primary);
+  color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;
+  pointer-events:none;transition:opacity .3s,transform .2s;box-shadow:var(--shadow);z-index:40}
+.totop.show{opacity:1;pointer-events:auto} .totop:hover{transform:translateY(-3px)}
+
+/* ============ Responsive ============ */
+@media(max-width:880px){
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .stacks,.qgrid{grid-template-columns:1fr}
+  .srcs{grid-template-columns:1fr}
+  .brand span{display:none}
+}
+@media(max-width:520px){
+  .kpis{grid-template-columns:1fr}
+  main,.hero,.nav-inner,footer{padding-left:16px;padding-right:16px}
+}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+
+<!-- ============ NAV ============ -->
+<nav>
+  <div class="nav-inner">
+    <div class="brand"><span class="dot"></span><span>F-ENV-2 / L4 reconciler</span></div>
+    <div class="nav-links" id="navlinks">
+      <a href="#summary">摘要</a>
+      <a href="#problem">問題</a>
+      <a href="#mechanism">核心機制</a>
+      <a href="#operator">operator 能力</a>
+      <a href="#env">env 分流</a>
+      <a href="#security">安全模型</a>
+      <a href="#schedule">排程/分工</a>
+      <a href="#l1l3">與 L1-L3</a>
+      <a href="#critique">10 條補強</a>
+      <a href="#overdelete" class="danger">⚠ 誤刪風險</a>
+      <a href="#open">開放點</a>
+      <a href="#sources">來源</a>
+    </div>
+    <button class="toggle" id="themeBtn" aria-label="切換明暗主題">
+      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <span id="themeTxt">Light</span>
+    </button>
+  </div>
+</nav>
+
+<!-- ============ HERO ============ -->
+<header class="hero">
+  <div class="badge"><span class="pulse"></span>tracking · status: open · 2026-06-25</div>
+  <h1>L4 帳號級<span class="accent">反向 Reconciler</span> — 會做什麼 + 誤刪守衛</h1>
+  <p class="lead">L4 是整個孤兒清理體系裡<b>唯一能「反向」發現孤兒的機制</b>。現有清理都從 Odoo DB 的 stored-id 出發；L4 反過來從 Cloudflare 帳號 / K8s cluster <b>列舉實體資源</b>，對 Odoo 已知集合<b>取差集</b>，撈出「Odoo 已不認得、但雲端還活著」的資源。但反向刪除 = 誤刪可打掛 prod，<b>naive 實作對「非-paas」與「跨-env」兩個誤刪風險都真實</b>。</p>
+  <div class="meta-chips">
+    <span class="chip">Effort <b style="color:var(--amber)">XL</b></span>
+    <span class="chip">優先度 <b>medium · 🚧 open</b></span>
+    <span class="chip">來源 <b>understand + over-deletion-risk</b></span>
+    <span class="chip">設計依據 <b>naming-env-token plan §階段 3</b></span>
+  </div>
+  <div class="kpis">
+    <div class="kpi bad"><div class="v sm">naive 皆會</div><div class="l">誤刪風險（Q1 非-paas / Q2 跨-env）→ 需正向 allowlist + env-pin fail-closed + protected denylist（見 §09）</div></div>
+    <div class="kpi warn"><div class="v">4<small> 類</small></div><div class="l">operator 待新增 list-all 能力（tunnels / access-apps / access-policies / zone-DNS）</div></div>
+    <div class="kpi"><div class="v">10<small> 條</small></div><div class="l">對抗式審查補強條目（建 L4 設計前必納）</div></div>
+    <div class="kpi"><div class="v">3<small>/3</small></div><div class="l">真實事故孤兒 tunnel 全是 dedicated 類 → 雙證 allowlist 結構性失效</div></div>
+  </div>
+</header>
+
+<main>
+<!-- ============ §00 SUMMARY ============ -->
+<section id="summary">
+  <div class="sec-head"><span class="sec-num">00</span><h2>一句話 + KPI 速覽</h2></div>
+  <p class="sec-sub">L1-L3 讓「未來」孤兒好清，L4 把「過去 / 現在」孤兒撈回來，合起來才是完整帳號級反向 GC。</p>
+  <div class="tldr">
+    <p>L4 的本質是<b>集合差集</b>：<code>孤兒候選 = (CF-side 實際存在的資源) − (Odoo-side DB 已知 stored-id 白名單)</code>。這是 record-driven 清理永遠做不到的方向 —— 但因為跑在<b>共用 CF account / zone（<code>woowtech.io</code>）</b>上，naive 的「list-all → set-diff → delete」會誤刪官網本體與 prod 資源，<b>且目前連擋它的東西都還沒寫</b>。</p>
+  </div>
+  <div class="card" style="padding:8px 8px 4px;margin-top:18px">
+    <table class="tbl">
+      <thead><tr><th>指標</th><th>值</th></tr></thead>
+      <tbody>
+        <tr><td><b>Effort</b></td><td><b style="color:var(--amber)">XL</b>（跨 operator + Odoo + K8s，每步要安全閘）</td></tr>
+        <tr><td><b>優先度</b></td><td>medium（🚧 open）</td></tr>
+        <tr><td><b>operator 待新增 list-all 能力</b></td><td><b>4 類</b>（tunnels / access-apps / access-policies / zone-DNS）</td></tr>
+        <tr><td><b>對抗式審查補強條目</b></td><td><b>10 條</b>（建 L4 設計前必納）</td></tr>
+        <tr><td><b>相依</b></td><td><b>不依賴</b> L1-L3（token 只讓判 env 更乾淨）</td></tr>
+        <tr><td><b>prod 影響</b></td><td>反向刪除高風險 → dry-run + 多重 guard</td></tr>
+        <tr><td><b>誤刪風險（Q1 非-paas / Q2 跨-env）</b></td><td><b style="color:var(--red)">naive 皆會</b> → 需正向 allowlist + env-pin fail-closed + protected denylist（見 <a href="#overdelete" style="color:var(--primary-2)">§09</a>）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ §01 PROBLEM ============ -->
+<section id="problem">
+  <div class="sec-head"><span class="sec-num">01</span><h2>解決什麼問題 — record-driven 清理的盲區</h2></div>
+  <p class="sec-sub">目前 Odoo 側<b>所有</b>外部資源清理都是 record-driven：先在 DB 找到一筆現存 record → 讀它存的 stored-id → 拿 id 叫 operator 刪對應雲端資源。</p>
+  <div class="diagram"><div class="mermaid">flowchart LR
+    DB[("Odoo DB&lt;br/&gt;stored-id 白名單")] -->|現存 record| F["遍歷現存 record&lt;br/&gt;讀 stored-id"]
+    F -->|by-id 刪除| OP["operator&lt;br/&gt;delete by-id"]
+    OP --> CF[("Cloudflare&lt;br/&gt;+ K8s ns/PVC")]
+    REC["record 先消失&lt;br/&gt;id→NULL / 整列刪"] -.->|stored-id 蒸發| GHOST["永久孤兒&lt;br/&gt;無 code path 列得出"]
+    GHOST -.->|無限累積| CF
+    classDef db fill:#172033,stroke:#60a5fa,color:#dbeafe;
+    classDef ok fill:#1e293b,stroke:#3b82f6,color:#f1f5f9;
+    classDef bad fill:#3f1d1d,stroke:#f87171,color:#fecaca;
+    class DB db; class CF db; class F,OP ok; class REC,GHOST bad;</div></div>
+  <p class="cap">▲ stored-id 只存在 Odoo DB 這一份 → record 先消失就生不出識別符 → 永久孤兒</p>
+  <div class="prose" style="margin-top:22px">
+    <p><b>落點（4 個 record-driven 清理路徑）：</b></p>
+    <ul>
+      <li><b>CloudService</b> 存 <code>helm_release_name</code>（<code>cloud_service.py:147</code>）+ <code>helm_namespace</code>（<code>:151</code>），清理 <code>_do_cleanup</code>（<code>:1069</code>）只遍歷<b>現存</b> record。</li>
+      <li><b>SecurityAccess</b> 存 <code>tunnel_id</code>（<code>security_access.py:94</code>）+ route 的 <code>dns_record_id</code> / <code>access_app_id</code> + policy 的 <code>cf_policy_id</code>，清理 <code>_cleanup_cloudflare</code>（<code>:756</code>）只遍歷 <code>route_ids.filtered('access_app_id')</code>。</li>
+      <li><b>SmartHome</b> 存 <code>tunnel_id</code>（<code>smart_home.py:79</code>），清理 <code>_do_cleanup</code>（<code>:348</code>）直接拿 <code>tunnel_id</code> 刪。</li>
+      <li><b>每日 cron</b>（<code>subscription_lifecycle_cron.py:39</code>）<code>search([('subscription_id','!=',False)])</code> 全程遍歷現存 record。</li>
+    </ul>
+  </div>
+  <div class="callout danger" style="margin-top:20px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>致命弱點 + 觸發路徑</div>
+    <p>stored-id 只存在 Odoo DB 這一份。只要 record 在雲端資源被刪前先消失（id 變 <code>NULL</code> 或整列被刪），Odoo <b>永遠生不出識別符</b> → 沒有任何 code path 列得出那些雲端資源 → operator 不知道要刪「誰」。</p>
+    <p>觸發：<code>k8s-dev-sandbox destroy</code> / stg DB 重置 / 手動 <code>kubectl delete</code>；<b>甚至正常刪除路徑</b> —— <code>SmartHome.action_delete</code>（<code>smart_home.py:183</code>）在 <code>delete_tunnel</code> 暫態失敗時只 log warning、接著<b>無條件</b> <code>unlink()</code>（<code>:202</code>），DB 列就此蒸發。對照 <code>SecurityAccess.unlink</code>（<code>:511</code>）失敗時 <code>raise UserError</code> 保留供 retry，<b>SmartHome 缺這道 fail-loud guard</b>。</p>
+    <p>結果即 <code>cf-ns-orphan-no-account-gc.md</code> 那次清掉的 <b>3 policy + 28 DNS + 3 tunnel + 30 ingress rule + 3 ns</b> —— 永久孤兒，無限累積。L4 就是要補上這個「反向發現」的洞。</p>
+  </div>
+</section>
+
+<!-- ============ §02 MECHANISM ============ -->
+<section id="mechanism">
+  <div class="sec-head"><span class="sec-num">02</span><h2>核心機制 — list-all → 取差集 → 孤兒候選</h2></div>
+  <p class="sec-sub">L4 的演算法本質是<b>集合差集</b>。CF-side 是 ground truth（雲端實際長怎樣），Odoo-side 是白名單（平台「認為」自己有什麼）。</p>
+  <div class="diagram"><div class="mermaid">flowchart LR
+    CF["CF-side 列舉&lt;br/&gt;tunnel / Access app+policy&lt;br/&gt;zone DNS / 租戶 ns+PVC&lt;br/&gt;(命名前綴家族過濾)"] --> DIFF{"取差集&lt;br/&gt;CF 有、白名單沒有"}
+    ODOO["Odoo-side 白名單&lt;br/&gt;CloudService helm_release/ns&lt;br/&gt;SA tunnel/dns/app/policy&lt;br/&gt;SmartHome tunnel_id"] --> DIFF
+    DIFF --> CAND["孤兒候選&lt;br/&gt;record-driven 做不到的方向"]
+    classDef cf fill:#172033,stroke:#60a5fa,color:#dbeafe;
+    classDef od fill:#10341f,stroke:#34d399,color:#bbf7d0;
+    classDef diff fill:#3f311a,stroke:#fbbf24,color:#fde68a;
+    classDef out fill:#1e3a5f,stroke:#60a5fa,color:#dbeafe,font-weight:bold;
+    class CF cf; class ODOO od; class DIFF diff; class CAND out;</div></div>
+  <p class="cap">▲ 孤兒候選 = (CF-side 實際存在的資源集合) − (Odoo-side DB 已知 stored-id 白名單)</p>
+  <div class="callout warn" style="margin-top:22px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>反直覺設計</div>
+    <p>判 Access policy 是否孤兒時<b>不能信 Odoo 白名單</b>，要拿 CF app 實際引用的 policy 當 ground truth —— 因為 <code>sync_access_app</code> resync 會重建 policy，造成 DB <code>cf_policy_id</code> 與 CF 實際引用漂移。</p>
+  </div>
+</section>
+
+<!-- ============ §03 OPERATOR ============ -->
+<section id="operator">
+  <div class="sec-head"><span class="sec-num">03</span><h2>需要 operator 新增哪些能力（目前全缺）</h2></div>
+  <p class="sec-sub">現行 <code>CloudflareService</code>（<code>extra/paas-operator/src/services/cloudflare.py</code>）是<b>單帳號、per-tunnel</b> 導向，只有 by-id 操作，<b>完全沒有帳號級 list-all</b>。</p>
+  <div class="stacks">
+    <div class="stack-card">
+      <div class="stack-head"><h4>已有（單一 / per-resource）</h4><span class="pill gray">by-id 導向</span></div>
+      <ul class="complist">
+        <li><span class="nm">create/delete_tunnel</span><span class="ds"><code>:742</code> / <code>:1020</code> · 單一建/刪</span></li>
+        <li><span class="nm">reconcile_tunnel_dns</span><span class="ds"><code>:439</code> · 只對單一 tunnel</span></li>
+        <li><span class="nm">_list_dns_by_content</span><span class="ds"><code>:399</code> · 只能 by-content，<code>per_page=100</code> 寫死</span></li>
+        <li><span class="nm">sync_access_app</span><span class="ds"><code>:1259</code> · per-SA reconcile，回 orphaned_policy_ids 但無帳號級審計</span></li>
+        <li><span class="nm">create/delete_policy</span><span class="ds"><code>:1150</code> / <code>:1186</code> · 單一建/刪</span></li>
+      </ul>
+    </div>
+    <div class="stack-card primary">
+      <div class="stack-head"><h4>L4 必須新增</h4><span class="pill blue">帳號級 list-all</span></div>
+      <ul class="complist">
+        <li><span class="nm">list_tunnels()</span><span class="ds">帳號內所有 tunnel</span></li>
+        <li><span class="nm">list_access_apps()</span><span class="ds">+ <code>GET /access/apps/{id}/policies</code> · app 與實際引用 policy</span></li>
+        <li><span class="nm">list_access_policies()</span><span class="ds">所有 reusable policy</span></li>
+        <li><span class="nm">zone 全量 DNS</span><span class="ds">完整分頁（cursor 迭代到底，見安全模型）</span></li>
+        <li><span class="nm">HTTP endpoint</span><span class="ds"><code>api/tunnels.py</code> / <code>api/access.py</code> / <code>api/routes.py</code> 現皆只有 per-resource</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn" style="margin-top:20px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>config 全域級風險</div>
+    <p>config 的 <code>CLOUDFLARE_ACCOUNT_ID</code> / <code>ZONE_ID</code>（<code>config.py:92-98</code>）是全域級 —— 對 list-all 方便，但<b>一個 API 呼叫就撈到並潛在誤刪 prod 全量資源</b>，風險本質高，務必配 env 分流 + dry-run。</p>
+  </div>
+</section>
+
+<!-- ============ §04 ENV ============ -->
+<section id="env">
+  <div class="sec-head"><span class="sec-num">04</span><h2>env 分流 — 共用 account 上分 prod / stg</h2></div>
+  <p class="sec-sub">prod / stg 共用同一 CF account / zone，list-all 撈回<b>混 env</b>，分錯就誤刪。三個分流訊號，缺一不可。</p>
+  <div class="gap-grid">
+    <details open><summary>(a) DNS content 指哪條 shared tunnel（主）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>stg → <code>55953bfa</code> / prod → <code>328c3a28</code>。靠 DNS 記錄 content 指向哪條 shared tunnel 分 env。</p></div></details>
+    <details><summary>(b) dual-format 前綴（兩種都認）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>舊 <code>paas-{sa,cs,sm}-{hash}</code>（無 env marker）+ 新 <code>paas-stg-{sa,cs,sm}-</code>（L1-L3 注的 token）。漏認舊格式 → 舊資源變「認不得的孤兒」。</p></div></details>
+    <details><summary>(c) dedicated tunnel 例外<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p><code>paas-sm-*</code> / <code>paas-sa-*</code> 自建專用 tunnel <b>本身無指向 shared tunnel 的 CNAME</b> → DNS content 判不了 env，<b>反而要靠對照仍存在的 prod DB 取差集</b>（共用 account 限制）。</p></div></details>
+  </div>
+  <div class="callout info" style="margin-top:18px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>L1-L3 的幫助（不溯及既往）</div>
+    <p>L1-L3 已上 stg 並驗證（prod 待 promote）。新資源自帶 env token / ns <code>PAAS_ENV</code> label → L4 對<b>新</b>資源判 env 更乾淨；但 token <b>不溯及既往</b>，存量舊孤兒沒 token，最終仍靠 DNS content + prod DB diff 兜底。</p>
+  </div>
+</section>
+
+<!-- ============ §05 SECURITY MODEL ============ -->
+<section id="security">
+  <div class="sec-head"><span class="sec-num">05</span><h2>安全模型（反向刪除 = 誤刪可打掛 prod）</h2></div>
+  <p class="sec-sub">八條安全要求。預設收合，點開看細節。第一條（dry-run 先行）已展開。</p>
+  <div class="toolbar">
+    <button class="btn-sm" data-act="open" data-scope="#security">展開全部</button>
+    <button class="btn-sm" data-act="close" data-scope="#security">收合全部</button>
+  </div>
+  <details open><summary><span class="skey">1</span>dry-run 先行<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>先產孤兒 inventory 供人 review，確認才刪。</p></div></details>
+  <details><summary><span class="skey">2</span>TOCTOU 重算<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>刪除階段必須<b>即時重新 list-all + 重算差集</b>，不可拿陳舊 dry-run 清單刪（中間新建、命名落孤兒前綴的合法資源會被誤殺）。</p></div></details>
+  <details><summary><span class="skey">3</span>不信 DB 白名單（僅限 policy 孤兒判定）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>看 CF app 實際引用（<code>GET .../policies</code>）。此漂移風險<b>一般化</b>到任何被 resync 重建過的 stored-id（<code>dns_record_id</code> / <code>access_app_id</code>）。</p></div></details>
+  <details><summary><span class="skey">4</span>刪前 GET 驗證（一般化）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>in-use <code>409</code> guard 不只 policy；DNS / tunnel / app 刪前都先 <code>GET</code> 驗 content / name / connections 再刪。</p></div></details>
+  <details><summary><span class="skey">5</span>分頁 cursor 迭代到底<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p><code>per_page=500</code> 仍在 zone &gt;500 筆時截斷，只 cursor 到底才安全（事故實證：<code>per_page=100</code> 截斷漏 15 個 <code>svc-*-mcp</code> 孤兒、誤判幻影）。</p></div></details>
+  <details><summary><span class="skey">6</span>DELETE 契約對齊真值<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>Access app/policy DELETE 真 CF 回 <code>202</code>（非 200），<code>delete_reusable_policy:1186</code> 已對齊，沿用勿退回（見 <code>operator-cf-access-delete-202-mock-contract</code>）。</p></div></details>
+  <details><summary><span class="skey">7</span>ns 無 TTL → L4 待建反向清<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p><b>PVC 一起清</b>（殘餘 Released PV + 底層 Longhorn volume 計費）。</p></div></details>
+  <details><summary><span class="skey">8</span>誤認誤刪盲區<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>前綴 filter 太寬 + 舊格式無 marker + 無 DNS content 時，舊 dedicated 資源「判不了 env → 可能誤歸 stg 而刪了 prod」的激進失敗。</p></div></details>
+</section>
+
+<!-- ============ §06 SCHEDULE ============ -->
+<section id="schedule">
+  <div class="sec-head"><span class="sec-num">06</span><h2>排程 / effort（XL）/ 與既有 cron 分工</h2></div>
+  <p class="sec-sub">跨 operator（多支 list-all + 分頁）+ Odoo（reconciler cron + 差集 + dry-run 報表）+ K8s（ns/PVC 反向清），每步要閘，且 <b>mock 全綠不夠、要 live CF E2E</b> 才驗得出孤兒辨識正確。</p>
+  <div class="diagram" style="margin-bottom:22px"><div class="mermaid">flowchart LR
+    SUB["既有 cron&lt;br/&gt;subscription_lifecycle"] -->|"Odoo → CF&lt;br/&gt;record-driven · 低頻精準"| CFA[("Cloudflare&lt;br/&gt;+ K8s")]
+    SUB -.->|"id 蒸發就瞎&lt;br/&gt;不能發現孤兒"| BLIND["孤兒盲區"]
+    CFA -->|"CF → Odoo&lt;br/&gt;resource-driven · 反向對帳 net"| L4["L4 reconciler&lt;br/&gt;(新·較低頻)"]
+    L4 -->|"差集 + env 分流&lt;br/&gt;先 dry-run · 人工確認"| FOUND["撈回孤兒&lt;br/&gt;(唯一反向機制)"]
+    classDef cron fill:#1e293b,stroke:#3b82f6,color:#f1f5f9;
+    classDef db fill:#172033,stroke:#60a5fa,color:#dbeafe;
+    classDef bad fill:#3f1d1d,stroke:#f87171,color:#fecaca;
+    classDef good fill:#10341f,stroke:#34d399,color:#bbf7d0;
+    class SUB cron; class CFA db; class BLIND bad; class L4,FOUND good;</div></div>
+  <p class="cap">▲ 兩條方向互補：subscription cron（Odoo→CF）做日常生命週期，L4（CF→Odoo）做反向對帳 net</p>
+  <div class="card" style="padding:8px 8px 4px">
+    <table class="tbl">
+      <thead><tr><th></th><th>既有 <code>subscription_lifecycle_cron</code></th><th>L4 反向 reconciler（新）</th></tr></thead>
+      <tbody>
+        <tr><td><b>方向</b></td><td><b>Odoo → CF</b>（record-driven）</td><td><b>CF → Odoo</b>（resource-driven）</td></tr>
+        <tr><td><b>入口</b></td><td><code>search(subscription_id)</code>（<code>:39</code>）</td><td>list-all CF / K8s</td></tr>
+        <tr><td><b>觸發依據</b></td><td>訂閱狀態</td><td>差集 + env 分流</td></tr>
+        <tr><td><b>發現孤兒</b></td><td><b style="color:var(--red)">不能</b>（id 蒸發就瞎）</td><td><b style="color:var(--green)">能</b>（唯一反向機制）</td></tr>
+        <tr><td><b>風險</b></td><td>低</td><td>高 → dry-run + 多重 guard</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose" style="margin-top:16px">兩者<b>不互相取代</b>：日常生命週期走 subscription cron（便宜、精準），L4 是<b>較低頻</b>的反向對帳 net（先 dry-run 出報表、人工確認再刪）。</p>
+</section>
+
+<!-- ============ §07 L1-L3 ============ -->
+<section id="l1l3">
+  <div class="sec-head"><span class="sec-num">07</span><h2>與 L1-L3 的關係</h2></div>
+  <p class="sec-sub">L1-L3 補「辨識性」（建立時注 token，未來新資源好認）；L4 補「發現既有孤兒」（反向撈存量已漏的）。獨立但互利。</p>
+  <div class="stacks">
+    <div class="stack-card">
+      <div class="stack-head"><h4>L1-L3 補「辨識性」</h4><span class="pill gray">已上 stg · prod 待 promote</span></div>
+      <ul class="complist">
+        <li><span class="nm">作用</span><span class="ds">建立時注入 env token，讓<b>未來</b>新資源好認</span></li>
+        <li><span class="nm">時間軸</span><span class="ds">讓「未來」孤兒好清</span></li>
+      </ul>
+    </div>
+    <div class="stack-card primary">
+      <div class="stack-head"><h4>L4 補「發現既有孤兒」</h4><span class="pill blue">反向 GC</span></div>
+      <ul class="complist">
+        <li><span class="nm">作用</span><span class="ds">反向撈<b>存量</b>已漏的孤兒</span></li>
+        <li><span class="nm">獨立</span><span class="ds">不依賴 L1-L3（token 不溯及既往，舊孤兒靠 DNS content + prod DB diff）</span></li>
+        <li><span class="nm">互利</span><span class="ds">L1-L3 普及後新資源自帶 marker，L4 判 env 越來越靠 token、越乾淨</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout info" style="margin-top:18px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>一句話</div>
+    <p>L1-L3 讓「未來」孤兒好清，L4 把「過去 / 現在」孤兒撈回來，合起來才是完整帳號級反向 GC。</p>
+  </div>
+</section>
+
+<!-- ============ §08 CRITIQUE 10 ============ -->
+<section id="critique">
+  <div class="sec-head"><span class="sec-num">08</span><h2>對抗式審查 10 條補強（建 L4 設計前必納）</h2></div>
+  <p class="sec-sub">來源：2026-06-25 understand workflow 的 critique lens（4-reader → synth → adversarial critique）。預設收合，點開看細節。</p>
+  <div class="toolbar">
+    <button class="btn-sm" data-act="open" data-scope="#critique">展開全部</button>
+    <button class="btn-sm" data-act="close" data-scope="#critique">收合全部</button>
+  </div>
+  <details><summary><span class="skey">1</span>「不信 DB 白名單」要收窄<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>只對 Access policy 孤兒判定成立；dedicated tunnel 的 env 分類<b>反而要靠 prod DB diff</b>。一概「不信 DB」會錯失這條判定路徑。</p></div></details>
+  <details><summary><span class="skey">2</span>刪前 GET 驗證要一般化<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>in-use（409）不只 policy；DNS / tunnel / app 刪前都 <code>GET</code> 驗 content/name/connections。</p></div></details>
+  <details><summary><span class="skey">3</span>resync 漂移風險要一般化<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>不只 <code>cf_policy_id</code>，任何 resync 重建過的 stored-id（<code>dns_record_id</code>/<code>access_app_id</code>）差集前都要防「id 已變但資源合法 → 誤判孤兒」。</p></div></details>
+  <details><summary><span class="skey">4</span>TOCTOU 重算<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>刪除階段即時重新 list-all + 重算差集，不可拿陳舊 dry-run 清單刪。</p></div></details>
+  <details><summary><span class="skey">5</span>「誤認誤刪」激進失敗盲區<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>前綴 filter 太寬 + 舊格式無 marker + 無 DNS content → 舊 dedicated 資源「判不了 env → 誤歸 stg 刪 prod」。原設計只談保守的「漏認→放過」。</p></div></details>
+  <details><summary><span class="skey">6</span>分頁須 cursor 迭代到底<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p><code>per_page=500</code> 仍在 zone &gt;500 筆時截斷；CF pagination contract（<code>next_cursor</code> vs page offset）待查證。</p></div></details>
+  <details><summary><span class="skey">7</span>mcp sidecar 雙命名孤兒<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>CloudService mcp route deploy 用 <code>svc-*-{nssuffix}-mcp</code>、delete 用 <code>paas-cs-*-mcp</code>（命名不對稱 → 有 sidecar 的 service 刪除漏 mcp route），兩種命名都有歷史孤兒 → L4 盤 mcp <b>必須同認兩種前綴</b>。</p></div></details>
+  <details><summary><span class="skey">8</span>DB↔CF 分歧殘留判定缺設計<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>best-effort cleanup 只 catch <code>CloudflareException</code> → 暫態 httpx 錯逸出 → Odoo savepoint rollback → 半完成 CF 物件殘留；L4 反向對帳遇此如何判，尚無設計。</p></div></details>
+  <details><summary><span class="skey">9</span>跨 repo lock-step 部署守線<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>動 PVC/GC 那塊，operator code 與 cross-repo <code>woow-paas-charts</code> cronjob template <b>必須 lock-step</b>（漏一邊重炸 fleet-split / 部署漂移）。</p></div></details>
+  <details><summary><span class="skey">10</span>成熟度校正（勿把「修復中/已修」當「L4 全新」）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body"><p>PVC <code>orphaned-at</code> grace-period GC 機制<b>已存在但曾壞掉</b>（label 值含冒號過不了驗證、上線 ~74 天從沒生效），已由 operator #207/#208（epoch 秒 + <code>validate_label_value</code>）修復上 stg → L4 只需在反向掃描涵蓋殘餘 PVC/PV，非全新；<b>namespace 無 TTL</b> 才是 L4 真正待建。另：L1-L3「已 ship」精確語意為「<b>已上 stg 驗證、prod 待 promote</b>」，prod 仍空 token。</p></div></details>
+</section>
+
+<!-- ============ §09 OVER-DELETION RISK (FOCAL) ============ -->
+<section id="overdelete">
+  <div class="sec-head"><span class="sec-num">09</span><h2 style="color:var(--red)">誤刪風險 + 必備守衛（Q1 非-paas / Q2 跨-env）</h2></div>
+  <p class="sec-sub">來源：2026-06-25 over-deletion-risk workflow（3-reader → synth → adversarial critique）。共用 CF account/zone（<code style="font-family:var(--mono);background:var(--surface-3);padding:2px 6px;border-radius:5px;color:var(--primary-2)">woowtech.io</code>）上跑「list-all → set-diff → delete」對兩個誤刪風險<b>都真實</b>；naive 實作會誤刪，且<b style="color:var(--red)">目前連擋它的東西都還沒寫</b> —— CF 資源無帳號級 ownership marker，只有 <code style="font-family:var(--mono);background:var(--surface-3);padding:2px 6px;border-radius:5px;color:var(--primary-2)">paas-cs-/sa-/sm-</code> 前綴（<code style="font-family:var(--mono);background:var(--surface-3);padding:2px 6px;border-radius:5px;color:var(--primary-2)">naming.py:19-31</code>），<code style="font-family:var(--mono);background:var(--surface-3);padding:2px 6px;border-radius:5px;color:var(--primary-2)">cloudflare.py</code> 也無 <code style="font-family:var(--mono);background:var(--surface-3);padding:2px 6px;border-radius:5px;color:var(--primary-2)">list_all_*</code>。</p>
+
+  <!-- Q1 / Q2 verdict cards -->
+  <div class="qgrid">
+    <div class="qcard">
+      <h4>Q1 — 會不會刪到「非 paas」的東西？</h4>
+      <span class="verdict">verdict · naive 會</span>
+      <div class="blk risk">
+        <span class="lbl">風險</span>
+        <p>zone-wide DNS list-all 會把官網 apex / MX（收信）/ 行銷子網域一起撈進來 → 它們在 Odoo DB 查無 stored-id → 全落入「孤兒」候選。純靠 <code>paas-*</code> 前綴擋不住（前綴撞名 + paas 自己 legacy 無前綴）。人工事故（2026-06-18~19）正是<b style="color:var(--text)">刻意不動官網本體 / shared tunnel 本體 / zone 本身</b> —— 這條紀律交給 naive 自動化就破。</p>
+      </div>
+      <div class="blk guard">
+        <span class="lbl">守衛</span>
+        <ol>
+          <li>① <b>正向 ownership allowlist</b>（只刪「能證明是我建的」，不是「刪不像我的」）+ 建立時蓋 ownership 證據（DNS <code>comment</code> / canonical_name）+ backfill</li>
+          <li>② <b>前綴 AND 內容雙證</b></li>
+          <li>③ <b>protected denylist</b>：apex / MX / 官網 / 行銷 / shared tunnel 本體硬編絕不可碰</li>
+          <li>④ <b>永不刪 shared tunnel 本體</b>（只清指向它的 DNS / ingress rule）</li>
+        </ol>
+      </div>
+    </div>
+    <div class="qcard">
+      <h4>Q2 — 會不會刪到「不同 PAAS_ENV」（stg 殺 prod）？</h4>
+      <span class="verdict">verdict · naive 會</span>
+      <div class="blk risk">
+        <span class="lbl">最危險情境</span>
+        <ol>
+          <li>① prod DB 不可達 → stg reconciler 靠「prod DB 查無＝孤兒」判 dedicated tunnel → <b style="color:var(--text)">fail-open → 直接刪掉 prod 的 SA / SmartHome tunnel</b></li>
+          <li>② <code>PAAS_ENV</code> 漏注入 prod operator → 自我識別不能 → 把 prod 自己的當「來路不明」刪</li>
+          <li>③ 舊格式無 token 的 prod 資源被 stg 判「不屬 stg → 孤兒」誤刪</li>
+        </ol>
+      </div>
+      <div class="blk guard">
+        <span class="lbl">守衛</span>
+        <ol>
+          <li>① reconciler 用 <code>PAAS_ENV</code> <b>pin 自己 env</b>、跨-env 一律 skip</li>
+          <li>② <b>fail-closed：env 判不出來就一律不刪、留人工</b>（直接堵掉上面三個情境）</li>
+          <li>③ prod-DB-diff 跑前先驗可達性，連不上就 skip（fail-safe 非 fail-open）</li>
+        </ol>
+        <p style="margin-top:10px"><code>PAAS_ENV</code> config 基礎已就位（<code>config.py:107</code> 白名單 fail-closed、<code>helm.py:108</code> ns label、pattern 明文禁止從 <code>namespace_prefix</code> 隱式推導），但<b style="color:var(--text)">還沒接到 CF 刪除決策上</b>。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- structural hole — DANGER callout -->
+  <div class="callout danger" style="margin-top:22px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>⚠️ 最深的結構性洞（對抗式校正抓到，必看）</div>
+    <p><b>「正向 ownership 雙證」這條最強守衛，對 dedicated tunnel（<code>paas-sm-*</code> / <code>paas-sa-*</code>）結構性失效</b> —— 它們 CNAME 指向自己的 tunnel、不是 shared tunnel，「內容指向已知 shared tunnel」<b>永遠不成立</b>；CF Access app 又<b>沒有 metadata 欄位</b>可蓋 owner tag（<code>cloudflare.py:1334-1350</code>），policy 只有 name 帶 canonical_name 前綴 → allowlist 退化成跟前綴一樣弱的訊號。而真實事故裡<b>全部 3 條孤兒 tunnel 都正是這一類</b>。</p>
+    <p>→ 推論：<b>reconciler 連它當初要解的「既有孤兒 backlog」都無法安全自動刪</b>（那些 record 已 unlink、無 stored-id、無 env marker、無 shared-tunnel 內容 → 通不過任何守衛）。它只能自動清「<b>未來新洩漏、且帶完整 marker</b>」的資源；<b>dedicated tunnel / Access app / legacy 三類永遠只能 dry-run + 人工</b>。</p>
+  </div>
+
+  <!-- guard decision flow diagram (4th mermaid) -->
+  <div class="diagram" style="margin-top:22px"><div class="mermaid">flowchart TD
+    C["候選資源&lt;br/&gt;(來自 list-all 差集)"] --> OWN{"正向 ownership?&lt;br/&gt;allowlist + 雙證&lt;br/&gt;(前綴 AND 內容)"}
+    OWN -->|證不出| MAN["人工 only&lt;br/&gt;dry-run，不自動刪"]
+    OWN -->|是·能證明是我建的| ENV{"env == 我的&lt;br/&gt;PAAS_ENV?&lt;br/&gt;(fail-closed)"}
+    ENV -->|判不出 / 跨-env / prod DB 不可達| MAN
+    ENV -->|同 env| DENY{"protected&lt;br/&gt;denylist?&lt;br/&gt;apex/MX/官網/shared"}
+    DENY -->|命中| KEEP["絕不刪&lt;br/&gt;硬編兜底"]
+    DENY -->|不在名單| DRY["dry-run + 刪前對&lt;br/&gt;CF 與 Odoo 都重查"]
+    DRY --> DEL["delete"]
+    DED["dedicated tunnel&lt;br/&gt;paas-sm-* / paas-sa-*&lt;br/&gt;Access app 無 metadata&lt;br/&gt;legacy 無 marker"] -.->|雙證結構性失效| MAN
+    classDef in fill:#1e293b,stroke:#3b82f6,color:#f1f5f9;
+    classDef q fill:#3f311a,stroke:#fbbf24,color:#fde68a;
+    classDef bad fill:#3f1d1d,stroke:#f87171,color:#fecaca;
+    classDef good fill:#10341f,stroke:#34d399,color:#bbf7d0;
+    classDef man fill:#1e3a5f,stroke:#60a5fa,color:#dbeafe,font-weight:bold;
+    class C in; class OWN,ENV,DENY q; class DED bad; class KEEP,MAN man; class DRY,DEL good;</div></div>
+  <p class="cap">▲ 守衛決策流：證不出 ownership / env 判不出 / dedicated 三類 → 全落到「人工 only」</p>
+
+  <!-- iron laws — enumerated checklist -->
+  <div class="callout law" style="margin-top:26px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>鐵律與底線</div>
+    <p style="font-weight:600;color:var(--text)">寧可漏刪（留孤兒，只是計費 / 整潔）也不可誤刪（打掛 apex/MX/官網/prod tunnel ＝ 線上事故）。</p>
+  </div>
+  <ul class="laws">
+    <li><span class="n">1</span><span><b>Allowlist not denylist</b> —— 只刪「能證明是我建的」。</span></li>
+    <li><span class="n">2</span><span><b>雙證</b> —— 前綴 AND 內容（DNS content / canonical_name comment / shared-tunnel ID）。</span></li>
+    <li><span class="n">3</span><span><b>env-pin fail-closed</b> —— reconciler pin 自己 <code>PAAS_ENV</code>，env 判不出就不刪、跨-env skip、prod DB 不可達就 skip dedicated tunnel。</span></li>
+    <li><span class="n">4</span><span><b>dry-run + 刪前對 CF 與 Odoo 都重查</b>（防 TOCTOU）、分頁 cursor 走到底（防 <code>per_page</code> 截斷而誤算孤兒）。</span></li>
+    <li><span class="n">5</span><span><b>protected 名單兜底</b> —— apex / MX / 官網 / 行銷 / shared tunnel 本體，硬編絕不可碰。</span></li>
+  </ul>
+  <div class="callout warn" style="margin-top:18px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>開自動刪除的前置條件</div>
+    <p>在「正向 ownership marker + backfill」「env-pin fail-closed」「protected denylist」三者補齊前，<b>L4 不該開自動刪除，只能 dry-run 出清單給人工確認</b>（＝ 2026-06 人工事故的做法）。</p>
+  </div>
+
+  <!-- pre-bleeding-stop note -->
+  <div class="callout danger" style="margin-top:18px">
+    <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>前置止血（獨立於 L4 · 候選 F-ENV-4）</div>
+    <p><code>smart_home.py:202</code> 的<b>無條件 unlink</b>（暫態失敗只 warning、缺 <code>SecurityAccess:497-511</code> 那種 fail-loud guard）<b>正是事故裡 3 條孤兒 tunnel 的製造源</b>。先修它（不再生產 un-reconcilable 孤兒）是 L4 的前置項，可獨立開條目（候選 <b>F-ENV-4</b>）。</p>
+  </div>
+</section>
+
+<!-- ============ §10 OPEN POINTS ============ -->
+<section id="open">
+  <div class="sec-head"><span class="sec-num">10</span><h2>仍要拍板的開放點</h2></div>
+  <p class="sec-sub">設計前必須拍板的決策點，尚無定論。</p>
+  <div class="prose">
+    <ul>
+      <li><b>mcp sidecar 雙命名孤兒</b>辨識（<code>svc-*-mcp</code> 與 <code>paas-cs-*-mcp</code> 必須同盤）。</li>
+      <li><b>DB↔CF 分歧殘留</b>（sync 半途 rollback 的 CF 物件）如何判定。</li>
+      <li><b>dedicated tunnel env 判定</b>（prod DB diff）做在 operator 端 API 還是 Odoo 端比對；且 prod DB 可達性是「可被推翻的前提」，不可 hardcode 信任。</li>
+      <li><b>Access app / dedicated tunnel 的正向 ownership marker</b> 天生稀薄（無 metadata 欄位 / CNAME 指自身）→ 這兩類能否「永久只走人工」而非自動刪除。</li>
+      <li><b>與既有 cron 的刪除 race</b>：<code>subscription_lifecycle_cron</code> 也在同一 account 用 stored-id 刪 CF → 需 serialization / lease guard 避免互踩。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ §11 SOURCES ============ -->
+<section id="sources">
+  <div class="sec-head"><span class="sec-num">11</span><h2>來源</h2></div>
+  <p class="sec-sub">本 session 兩個 workflow —— understand（6 agents、329k tokens）+ over-deletion-risk（5 agents、283k tokens、3/3 reader 直讀 code）。設計依據見 plan §階段 3；根因 pitfall <code style="font-family:var(--mono);background:var(--surface-3);padding:2px 6px;border-radius:5px;color:var(--primary-2)">cf-ns-orphan-no-account-gc.md</code>。</p>
+  <div class="card" style="padding:8px 8px 4px;margin-bottom:22px">
+    <table class="tbl">
+      <thead><tr><th>Workflow</th><th style="width:150px">規模</th><th>角色</th></tr></thead>
+      <tbody>
+        <tr><td><b>understand</b>（會做什麼 + 10 條補強）</td><td><span class="conf hi">6 agents · 329k</span></td><td>4-reader → synth → adversarial critique</td></tr>
+        <tr><td><b>over-deletion-risk</b>（§09 誤刪風險）</td><td><span class="conf mid">5 agents · 283k</span></td><td>3-reader（直讀 code）→ synth → adversarial critique</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3 style="font-family:var(--mono);font-size:15px;margin:0 0 14px;color:var(--muted)">相關文件</h3>
+  <div class="srcs">
+    <a href="../plans/2026-Q2/2026-06-21-naming-env-token-prod-stg-plan.md"><span class="n">01</span><span>naming-env-token-prod-stg-plan.md §階段 3（設計依據）</span></a>
+    <a href="pitfalls/cf-ns-orphan-no-account-gc.md"><span class="n">02</span><span>cf-ns-orphan-no-account-gc.md（根因 pitfall）</span></a>
+    <a href="followups/follow-ups.md"><span class="n">03</span><span>follow-ups.md（追蹤）</span></a>
+    <a href="pitfalls/operator-cf-access-delete-202-mock-contract.md"><span class="n">04</span><span>operator-cf-access-delete-202-mock-contract.md（DELETE 202 契約）</span></a>
+  </div>
+</section>
+</main>
+
+<footer>
+  <span>tracking · 2026-06-25 · 由 2026-06-25-fenv2-l4-reconciler-explainer.md 生成</span>
+  <span>woow_paas_platform / F-ENV-2 L4 reconciler</span>
+</footer>
+<button class="totop" id="totop" aria-label="回到頂部"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg></button>
+
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+const themeVars = (light) => light ? {
+  background:'#FFFFFF', primaryColor:'#EFF6FF', primaryTextColor:'#0F172A', primaryBorderColor:'#3B82F6',
+  lineColor:'#94A3B8', secondaryColor:'#F1F5F9', tertiaryColor:'#F8FAFC', tertiaryTextColor:'#0F172A',
+  fontFamily:'IBM Plex Sans, system-ui, sans-serif', fontSize:'13px'
+} : {
+  background:'#1E293B', primaryColor:'#243349', primaryTextColor:'#F1F5F9', primaryBorderColor:'#3B82F6',
+  lineColor:'#64748B', secondaryColor:'#1E3A5F', tertiaryColor:'#172033', tertiaryTextColor:'#F1F5F9',
+  fontFamily:'IBM Plex Sans, system-ui, sans-serif', fontSize:'13px'
+};
+
+/* 直接渲染頁面上所有 .mermaid 區塊。首次載入先保存原始語法,
+   主題切換時還原語法、清掉 data-processed,再用 mermaid.run() 以新主題色重繪。 */
+const mNodes = [...document.querySelectorAll('.mermaid')];
+mNodes.forEach(n => { n.dataset.src = n.textContent; });
+
+async function renderDiagrams(){
+  const light = document.documentElement.getAttribute('data-theme') === 'light';
+  mermaid.initialize({ startOnLoad:false, theme:'base', securityLevel:'loose',
+    flowchart:{ curve:'basis', htmlLabels:true, padding:14 }, themeVariables: themeVars(light) });
+  mNodes.forEach(n => { n.textContent = n.dataset.src; n.removeAttribute('data-processed'); });
+  try{ await mermaid.run({ nodes: mNodes }); }
+  catch(e){ console.error('mermaid render failed', e); }
+}
+renderDiagrams();
+
+/* ----- theme toggle ----- */
+const root = document.documentElement, tBtn = document.getElementById('themeBtn'),
+      tTxt = document.getElementById('themeTxt'), tIcon = document.getElementById('themeIcon');
+const moonPath = '<path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/>';
+const sunPath = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
+function applyTheme(t){
+  root.setAttribute('data-theme', t);
+  tTxt.textContent = t === 'dark' ? 'Light' : 'Dark';
+  tIcon.innerHTML = t === 'dark' ? sunPath : moonPath;
+  try{ localStorage.setItem('fenv2-theme', t); }catch(e){}
+  renderDiagrams();
+}
+try{ const saved = localStorage.getItem('fenv2-theme'); if(saved) applyTheme(saved); }catch(e){}
+tBtn.addEventListener('click', () => applyTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'));
+
+/* ----- copy buttons ----- */
+document.querySelectorAll('.copy').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const code = btn.parentElement.querySelector('code');
+    navigator.clipboard.writeText(code.innerText).then(() => {
+      btn.textContent = '已複製'; btn.classList.add('done');
+      setTimeout(() => { btn.textContent = '複製'; btn.classList.remove('done'); }, 1600);
+    });
+  });
+});
+
+/* ----- expand/collapse all ----- */
+document.querySelectorAll('[data-act]').forEach(b => {
+  b.addEventListener('click', () => {
+    const open = b.dataset.act === 'open';
+    document.querySelectorAll(b.dataset.scope + ' details').forEach(d => d.open = open);
+  });
+});
+
+/* ----- scroll progress + totop ----- */
+const prog = document.getElementById('progress'), totop = document.getElementById('totop');
+const onScroll = () => {
+  const h = document.documentElement.scrollHeight - innerHeight;
+  prog.style.width = (h > 0 ? (scrollY / h) * 100 : 0) + '%';
+  totop.classList.toggle('show', scrollY > 500);
+};
+addEventListener('scroll', onScroll, { passive:true }); onScroll();
+totop.addEventListener('click', () => scrollTo({ top:0, behavior:'smooth' }));
+
+/* ----- scroll-spy ----- */
+const links = [...document.querySelectorAll('.nav-links a')];
+const spy = new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    if(en.isIntersecting){
+      links.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + en.target.id));
+    }
+  });
+}, { rootMargin:'-45% 0px -50% 0px' });
+document.querySelectorAll('main section').forEach(s => spy.observe(s));
+</script>
+</body>
+</html>

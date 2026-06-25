@@ -1,0 +1,280 @@
+from odoo import api, fields, models
+from odoo.exceptions import ValidationError
+
+
+class SecurityAccessAccessPolicy(models.Model):
+    """One reusable Cloudflare Access policy on a ROUTE (P2.5 per-route).
+
+    Mirrors the route sub-model: rows are the desired-state, the parent route
+    pushes the full set declaratively to the operator (no per-row CF call).
+    cf_policy_id stores the Cloudflare reusable-policy id after sync.
+
+    P2.5: the real binding is ``route_id`` — each Application Route is its own
+    Cloudflare Access application with its own policies. ``security_access_id``
+    is kept as a store=True related on ``route_id.security_access_id`` so the
+    existing ir.rule walk and the SA-level policy quota keep working
+    (the related store materialises a real column the ir.rule domain / quota
+    count can traverse), but it is no longer the field a caller binds.
+
+    P-rule (2026-06): a policy is now a CONTAINER of selector rules
+    (``rule_ids``) split into include (OR) / require (AND) / exclude (NOT)
+    groups, mirroring Cloudflare's native policy shape. The policy itself
+    carries the decision (allow / deny / bypass) and the evaluation order
+    (``sequence`` → CF precedence); the flat ``rule_type`` / ``rule_value``
+    fields moved to the ``security_access_access_policy_rule`` sub-model.
+    """
+
+    _name = 'woow_paas_platform.security_access_access_policy'
+    _description = 'Security Access — Access Policy'
+    _order = 'sequence, id'
+
+    route_id = fields.Many2one(
+        comodel_name='woow_paas_platform.security_access_route',
+        string='Application Route', required=True, ondelete='cascade',
+        index=True,
+        help='The route this policy protects. Each protected route is its own '
+             'Cloudflare Access application with its own policy set.',
+    )
+    security_access_id = fields.Many2one(
+        comodel_name='woow_paas_platform.security_access',
+        string='Security Access',
+        related='route_id.security_access_id', store=True, index=True,
+        help='Derived from route_id; kept stored so the ir.rule workspace walk '
+             'and the SA-level policy quota can traverse it. The real binding '
+             'is route_id.',
+    )
+    name = fields.Char(string='Name', required=True)
+    decision = fields.Selection(
+        selection=[
+            ('allow', 'Allow'),
+            ('deny', 'Block'),
+            ('bypass', 'Bypass'),
+        ],
+        string='Decision', default='allow', required=True,
+        help='Allow grants access; Block denies; Bypass skips authentication '
+             '(no identity selectors allowed). Evaluated by precedence top to '
+             'bottom, first match wins; Cloudflare evaluates Bypass / Service '
+             'Auth policies first.',
+    )
+    rule_ids = fields.One2many(
+        comodel_name='woow_paas_platform.security_access_access_policy_rule',
+        inverse_name='policy_id', string='Rules', copy=True,
+        help='Selector rules grouped into include (OR) / require (AND) / '
+             'exclude (NOT). At least one Include rule is required. '
+             'copy=True so the P2.5 migration fan-out (policy.copy onto each '
+             'protected route) carries the rules — a copied policy with no '
+             'rules would trip the at-least-one-include constraint.',
+    )
+    sequence = fields.Integer(string='Evaluation Order', default=10)
+    cf_policy_id = fields.Char(string='CF Policy ID', copy=False)
+
+    @api.constrains('rule_ids')
+    def _check_at_least_one_include(self):
+        # Cloudflare hard rule: every policy must contain at least one Include
+        # rule (a policy with only require/exclude matches no one). Triggered on
+        # policy create/write touching rule_ids; rule create/write/unlink call
+        # this explicitly for standalone rule edits (a direct rule.unlink does
+        # not write policy.rule_ids, so the constraint would not fire on its
+        # own).
+        for pol in self:
+            if not pol.rule_ids.filtered(lambda r: r.group == 'include'):
+                raise ValidationError(
+                    "Access policy %r must contain at least one Include rule."
+                    % (pol.name or pol.id))
+
+    @api.constrains('decision', 'rule_ids')
+    def _check_decision_selector_compat(self):
+        # Bypass policies skip identity verification, so Cloudflare rejects
+        # identity-based selectors (email / email domain) on them. Fail fast in
+        # Odoo rather than letting the operator push an invalid policy to CF
+        # (defense in depth: the operator validates this too).
+        for pol in self:
+            if pol.decision == 'bypass':
+                if pol.rule_ids.filtered(
+                        lambda r: r.rule_type in ('email_domain', 'email_list')):
+                    raise ValidationError(
+                        "Bypass policies cannot use identity-based selectors "
+                        "(email domain / email list). Use IP range, country, "
+                        "or everyone instead.")
+
+    @api.constrains('rule_ids')
+    def _check_emails_per_policy(self):
+        # Per-policy email cap (plan.sa_max_emails_per_policy, seeded 20). Counts
+        # every address across the policy's email_list rules. 0 = unlimited; no
+        # subscription / no plan = grandfathered (unlimited), matching
+        # _check_policy_quota. Honours the cursor-level sa_skip_policy_quota flag
+        # so the migration fan-out (and the stored-related recompute that fires
+        # this constraint in a context-stripped env) can bypass it.
+        if getattr(self.env.cr, 'sa_skip_policy_quota', False):
+            return
+        for pol in self:
+            sa = pol.security_access_id
+            sub = sa.sudo().subscription_id if sa else False
+            if not sub or not sub.sh_subscription_plan_id:
+                continue
+            quota = sub.sh_subscription_plan_id.sa_max_emails_per_policy
+            if not quota:  # 0 = unlimited
+                continue
+            count = 0
+            for rule in pol.rule_ids.filtered(
+                    lambda r: r.rule_type == 'email_list'):
+                count += len([e for e in (rule.rule_value or '').split(',')
+                              if e.strip()])
+            if count > quota:
+                raise ValidationError(
+                    "Email quota exceeded: plan '%s' allows %d email(s) per "
+                    "policy." % (sub.sh_subscription_plan_id.name, quota))
+
+    @api.constrains('security_access_id', 'route_id')
+    def _check_policy_quota(self):
+        # P2.5: the quota is an SA-LEVEL total (plan.sa_max_access_policies is
+        # a per-SA allowance, not per-route), so count every policy across all
+        # of the SA's routes via the stored related security_access_id. Policies
+        # now bind to routes, but the budget is still pooled per Security Access.
+        #
+        # sa_skip_policy_quota: the P2.5 migration fan-out copies the OLD single
+        # shared app's legacy policy set onto EACH protected route (behaviour-
+        # equivalent re-home, not a user adding capacity). The quota was a per-SA
+        # total designed for the old single-app model where the set was counted
+        # once; fanning the same set across M routes multiplies the count under
+        # the same budget, so an SA with a real subscription near its quota would
+        # trip this constraint and abort the migration. The migration runs the
+        # re-home + fan-out under this key so the constraint is bypassed for that
+        # one-shot data move; normal user-driven create/write keep enforcing it.
+        # sa_skip_policy_quota lives on the transaction CURSOR, not the context:
+        # this constraint also fires from the deferred recompute of the stored
+        # related security_access_id at flush time, and that recompute re-browses
+        # the records in a context-STRIPPED env, so a context-only flag is
+        # silently dropped on those passes (the fan-out copy would still abort).
+        # The cursor is shared by every env in the transaction, so a flag set on
+        # it survives the recompute env reconstruction. Set + cleared by the
+        # migration around its one-shot data move.
+        if getattr(self.env.cr, 'sa_skip_policy_quota', False):
+            return
+        for pol in self:
+            sa = pol.security_access_id
+            sub = sa.sudo().subscription_id
+            if not sub or not sub.sh_subscription_plan_id:
+                continue
+            quota = sub.sh_subscription_plan_id.sa_max_access_policies
+            count = self.search_count([('security_access_id', '=', sa.id)])
+            if count > quota:
+                raise ValidationError(
+                    "Access policy quota exceeded: plan '%s' allows %d "
+                    "polic(ies)." % (sub.sh_subscription_plan_id.name, quota))
+
+    # Atomicity scope: mirror the route sub-model's savepoint so a
+    # create/write/unlink whose Access re-sync raises rolls the DB row back and
+    # re-raises, rather than leaving a committed policy row the operator never
+    # received. The guarantee is Odoo-side ONLY — sync_access_app is a
+    # declarative full-state push with no compensating action, so a
+    # mid-reconcile operator failure can still leave Cloudflare partially
+    # mutated; that residual CF↔DB divergence converges via the next idempotent
+    # full-state re-sync, not via this savepoint (same scope the route model
+    # documents). A stale policy row alone is not served publicly, so the
+    # window is benign relative to routes, but keeping the savepoint matters
+    # for parity: a BFF that catches the sync error and reports success would
+    # otherwise leave the row committed while CF was never updated.
+
+    # P2.5: a policy now belongs to ONE route, so a mutation re-syncs that
+    # route's own Access app (not the whole SA). The liveness gate lives inside
+    # route._sync_access_to_operator (it no-ops without a live tunnel / when the
+    # route is not protected), so create/write/unlink just call the route sync
+    # and let the route decide. This keeps the gate single-sourced on the route.
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in vals_list:
+            # TRANSITIONAL back-compat shim (P-rule rollout): accept the legacy
+            # flat rule_type/rule_value and expand them into a single include
+            # rule. Keeps the in-flight controller + existing fixtures working
+            # across the Phase 1→3 transition without a 30-site churn. New
+            # callers pass rule_ids (include/require/exclude) directly. REMOVE
+            # once the controller (Phase 3) and tests use rule_ids natively —
+            # tracked in docs/tracking/followups/follow-ups.md.
+            rt = vals.pop('rule_type', None)
+            rv = vals.pop('rule_value', None)
+            if rt is not None and not vals.get('rule_ids'):
+                vals['rule_ids'] = [(0, 0, {
+                    'group': 'include', 'rule_type': rt,
+                    'rule_value': rv or False})]
+            # Sparse precedence: a new policy lands at max(sequence)+10 within
+            # its route (not the flat default 10), so policies never all collide
+            # on one precedence — the reorder UI then renumbers in 10s. An
+            # explicit sequence in vals is respected.
+            if not vals.get('sequence') and vals.get('route_id'):
+                last = self.search(
+                    [('route_id', '=', vals['route_id'])],
+                    order='sequence desc, id desc', limit=1)
+                vals['sequence'] = (last.sequence + 10) if last else 10
+        with self.env.cr.savepoint():
+            policies = super().create(vals_list)
+            # Guarantee the ≥1-include invariant even when rule_ids was absent
+            # from vals (an empty policy is invalid). Fires after the nested
+            # rule_ids creates so the final state is what is validated.
+            policies._check_at_least_one_include()
+            # sa_skip_route_sync: migration / provision-time bulk row moves set
+            # this so the row re-home does NOT call the operator (CF converges
+            # via the explicit re-sync those flows issue, not per-row here).
+            if not self.env.context.get('sa_skip_route_sync'):
+                for route in policies.mapped('route_id'):
+                    route._sync_access_to_operator()
+        return policies
+
+    def write(self, vals):
+        with self.env.cr.savepoint():
+            result = super().write(vals)
+            if (not self.env.context.get('sa_skip_route_sync')
+                    and any(k in vals for k in (
+                        'name', 'decision', 'sequence', 'route_id',
+                        'rule_ids'))):
+                for route in self.mapped('route_id'):
+                    route._sync_access_to_operator()
+        return result
+
+    def unlink(self):
+        affected = self.mapped('route_id')
+        # Capture each doomed row's cf_policy_id BEFORE super().unlink() wipes
+        # it. The operator deletes reusable policies only via existing_policy_ids
+        # (delete-old-then-create), which _build_access_payload derives from the
+        # SURVIVING rows. Once the row is gone its cf id never enters that list,
+        # so the operator never deletes the policy → permanent CF orphan, one
+        # leaked per unlink. Inject the captured ids per-ROUTE on the resync so
+        # the operator reaps them.
+        doomed_by_route = {}
+        for pol in self:
+            if pol.cf_policy_id and pol.route_id:
+                doomed_by_route.setdefault(
+                    pol.route_id.id, []).append(pol.cf_policy_id)
+        with self.env.cr.savepoint():
+            result = super().unlink()
+            for route in affected:
+                if route.exists():
+                    doomed = doomed_by_route.get(route.id) or []
+                    route.with_context(
+                        sa_unlinked_cf_policy_ids=doomed
+                    )._sync_access_to_operator()
+        return result
+
+    def _rules_by_group(self, group):
+        self.ensure_one()
+        # Normalize the value: Odoo reads an UNSET Char (e.g. a valueless
+        # 'everyone' selector) back as Python False, which serialises to JSON
+        # `false` and is rejected by the operator's Optional[str] rule_value
+        # (a non-string) → the whole Access sync 422s. Coerce falsy → None so a
+        # valueless selector travels as JSON null the operator accepts.
+        return [
+            {'rule_type': r.rule_type, 'rule_value': r.rule_value or None}
+            for r in self.rule_ids.sorted(key=lambda x: (x.sequence, x.id))
+            if r.group == group
+        ]
+
+    def to_dict(self):
+        self.ensure_one()
+        return {
+            'id': self.id, 'name': self.name, 'decision': self.decision,
+            'sequence': self.sequence, 'route_id': self.route_id.id,
+            'include': self._rules_by_group('include'),
+            'require': self._rules_by_group('require'),
+            'exclude': self._rules_by_group('exclude'),
+        }

@@ -10,6 +10,7 @@ LangGraph's ``StateGraph`` with ``ToolNode``.
 import asyncio
 import json
 import logging
+import os
 from typing import Generator, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -114,7 +115,11 @@ class AIClient:
         config = assistant.sudo().config_id
         if not config:
             raise AIClientError("AI assistant has no configuration")
-        api_key = config.api_key
+        # Fall back to a deployment-injected env var (e.g. sandbox Helm secret
+        # WOOW_AI_API_KEY) when the record has no key. Soft fail: if both are
+        # empty we still raise at call time below, so non-AI deployments are
+        # unaffected (no import-time hard-fail).
+        api_key = config.api_key or os.environ.get('WOOW_AI_API_KEY', '')
         if not api_key:
             raise AIClientError("AI configuration is missing an API key")
         return cls(

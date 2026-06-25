@@ -1,0 +1,286 @@
+// =============================================================================
+// Top-up Store Page Styles
+// =============================================================================
+
+.o_woow_topup_store {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+// Page Header
+.o_woow_topup_header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    margin: 0 0 0.25rem;
+  }
+}
+
+.o_woow_topup_title_area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.o_woow_topup_breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: $woow-text-secondary;
+}
+
+// Balance Bar
+.o_woow_topup_balance_bar {
+  padding: 1rem 1.5rem !important;
+}
+
+.o_woow_topup_balance_content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.o_woow_topup_balance_info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.o_woow_topup_balance_amount {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.o_woow_topup_balance_value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: $woow-text-primary;
+  line-height: 1;
+}
+
+.o_woow_topup_balance_unit {
+  font-size: 0.875rem;
+  color: $woow-text-secondary;
+  font-weight: 500;
+}
+
+// Category Tabs
+.o_woow_topup_tabs {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.o_woow_topup_tab {
+  padding: 0.5rem 1rem;
+  border: 1px solid $woow-border-light;
+  border-radius: $woow-radius-full;
+  background: $woow-card-light;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    border-color: $woow-primary;
+    color: $woow-primary;
+  }
+
+  &.o_woow_topup_tab_active {
+    background: $woow-primary;
+    border-color: $woow-primary;
+    color: #fff;
+  }
+}
+
+// Empty State
+.o_woow_topup_empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 1rem;
+  color: $woow-text-secondary;
+
+  p {
+    margin: 0;
+    font-size: 0.875rem;
+  }
+}
+
+// Plan Cards Grid
+.o_woow_topup_grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.25rem;
+
+  @media (max-width: 1024px) {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  @media (max-width: 640px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+// Plan Card
+.o_woow_topup_plan_card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem 1rem;
+  background: $woow-card-light;
+  border: 1px solid $woow-border-light;
+  border-radius: $woow-radius-default;
+  box-shadow: $woow-shadow-card;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+
+  &:hover {
+    box-shadow: $woow-shadow-soft;
+    transform: translateY(-2px);
+  }
+}
+
+// Badge
+.o_woow_topup_plan_badge {
+  position: absolute;
+  top: -0.5rem;
+  right: -0.25rem;
+  background: $woow-primary;
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.5rem;
+  border-radius: $woow-radius-full;
+}
+
+// Icon
+.o_woow_topup_plan_icon {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba($woow-primary, 0.1);
+  color: $woow-primary;
+}
+
+// Credits
+.o_woow_topup_plan_credits {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.o_woow_topup_plan_credits_value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: $woow-text-primary;
+  line-height: 1;
+}
+
+.o_woow_topup_plan_credits_label {
+  font-size: 0.75rem;
+  color: $woow-text-secondary;
+  font-weight: 500;
+}
+
+// Bonus Tag
+.o_woow_topup_plan_bonus {
+  min-height: 1.5rem;
+}
+
+.o_woow_topup_plan_bonus_tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #16a34a;
+  background: rgba(#16a34a, 0.1);
+  padding: 0.2rem 0.5rem;
+  border-radius: $woow-radius-full;
+
+  &.o_woow_topup_plan_bonus_neutral {
+    color: $woow-text-secondary;
+    background: rgba($woow-text-secondary, 0.08);
+  }
+}
+
+// Price
+.o_woow_topup_plan_price {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: $woow-text-primary;
+}
+
+// Purchase Button
+.o_woow_topup_plan_btn {
+  width: 100%;
+}
+
+// Bottom Info Grid
+.o_woow_topup_info_grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.o_woow_topup_about_card,
+.o_woow_topup_support_card {
+  padding: 1.5rem !important;
+}
+
+.o_woow_topup_about_text {
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+// Support links
+.o_woow_topup_support_body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.o_woow_topup_support_item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: $woow-text-secondary;
+
+  a {
+    color: $woow-primary;
+    text-decoration: none;
+    font-size: 0.875rem;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}

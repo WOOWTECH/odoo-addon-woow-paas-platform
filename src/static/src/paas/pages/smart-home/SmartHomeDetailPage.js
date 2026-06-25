@@ -4,16 +4,21 @@ import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
+import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { workspaceService } from "../../services/workspace_service";
 import { getDomain } from "../../services/cloud_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
+import { formatPoints } from "../../utils/billing_helpers";
 
 /**
  * SmartHomeDetailPage Component
  *
  * Displays detailed information about a smart home instance including:
  * - Header with name and status badge
+ * - Subscription info panel (trial badge, next bill date, plan name)
  * - Tunnel info panel (Tunnel ID, Connector Type/ID, Route URL, Status, Uptime)
+ * - Skip Trial button (visible during trial)
  * - Delete button with confirmation
  * - Connection guide section
  *
@@ -23,7 +28,9 @@ import { router } from "../../core/router";
  */
 export class SmartHomeDetailPage extends Component {
     static template = "woow_paas_platform.SmartHomeDetailPage";
-    static components = { WoowCard, WoowIcon, WoowButton, StatusBadge };
+    static components = {
+        WoowCard, WoowIcon, WoowButton, StatusBadge, SkipTrialModal,
+    };
     static props = {
         workspaceId: { type: Number },
         homeId: { type: Number },
@@ -39,6 +46,7 @@ export class SmartHomeDetailPage extends Component {
             deleting: false,
             deleteError: null,
             refreshing: false,
+            showSkipTrialModal: false,
             domain: "woowtech.io",
         });
         this.router = useState(router);
@@ -65,12 +73,26 @@ export class SmartHomeDetailPage extends Component {
 
         if (result.success) {
             this.state.home = result.data;
+            this._publishBreadcrumb();
             this.startPollingIfNeeded();
         } else {
             this.state.error = result.error || "Failed to load smart home";
         }
 
         this.state.loading = false;
+    }
+
+    /**
+     * 麵包屑軌跡：Workspaces → {所屬工作區}(連回工作區) → {Smart Home 名稱}。
+     * 工作區名從 workspaceService 清單快取取得，deep-link 缺快取時退守「Workspace」。
+     */
+    _publishBreadcrumb() {
+        const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
+        breadcrumbService.set("smarthome-detail", [
+            { label: "Workspaces", path: "workspaces" },
+            { label: ws?.name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: this.state.home.name, path: null },
+        ]);
     }
 
     startPollingIfNeeded() {
@@ -181,4 +203,48 @@ export class SmartHomeDetailPage extends Component {
             this.state.deleting = false;
         }
     }
+
+    // -- Subscription / Skip Trial -------------------------------------
+
+    get subscription() {
+        return this.home?.subscription || null;
+    }
+
+    get isTrialActive() {
+        return !!(this.subscription && this.subscription.is_trial);
+    }
+
+    get formattedPlanPrice() {
+        const sub = this.subscription;
+        if (!sub) return "";
+        return formatPoints(sub.plan_price || 0);
+    }
+
+    showSkipTrial() {
+        this.state.showSkipTrialModal = true;
+    }
+
+    hideSkipTrial() {
+        this.state.showSkipTrialModal = false;
+    }
+
+    onTrialSkipped() {
+        this.hideSkipTrial();
+        this.loadSmartHome();
+    }
+
+    // Skip-trial callbacks bound to workspaceService — reuses the same
+    // SkipTrialModal as ServiceDetailPage. The modal stays service-type
+    // agnostic by accepting these as props.
+    loadSmartHomeEstimate = () => {
+        return workspaceService.getSkipTrialEstimateSmartHome(
+            this.props.workspaceId, this.props.homeId,
+        );
+    };
+
+    confirmSmartHomeSkip = () => {
+        return workspaceService.skipTrialSmartHome(
+            this.props.workspaceId, this.props.homeId,
+        );
+    };
 }

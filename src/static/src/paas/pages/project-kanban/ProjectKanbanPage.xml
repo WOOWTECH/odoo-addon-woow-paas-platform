@@ -18,6 +18,67 @@
                         <WoowIcon name="'add'" size="20"/>
                         <span>Create Task</span>
                     </button>
+                    <!-- Status pills (right of Create Task; wrap below on narrow). -->
+                    <div class="o_woow_kanban__status_pills">
+                        <!-- AI Connection (platform-level LLM connection) -->
+                        <div class="o_woow_status_pill_wrap">
+                            <button class="o_woow_status_pill" t-on-click="(ev) => this.toggleStatusPopover('connection', ev)">
+                                <span t-att-class="'o_woow_status_pill_dot ' + (isConnectionLoading ? 'is-loading' : (connection.connected ? 'is-on' : 'is-off'))"/>
+                                <WoowIcon name="'smart_toy'" size="16"/>
+                                <span class="o_woow_status_pill_label">AI</span>
+                            </button>
+                            <t t-if="state.openStatusPopover === 'connection'">
+                                <div class="o_woow_status_popover" t-on-click.stop="() => {}">
+                                    <div class="o_woow_status_popover_title">AI Connection</div>
+                                    <div class="o_woow_status_row">
+                                        <span class="o_woow_status_k">Status</span>
+                                        <span t-att-class="'o_woow_status_badge ' + (connection.connected ? 'is-on' : 'is-off')">
+                                            <t t-if="connection.connected">Connected</t><t t-else="">Not Connected</t>
+                                        </span>
+                                    </div>
+                                    <t t-if="connection.connected">
+                                        <div class="o_woow_status_row"><span class="o_woow_status_k">Provider</span><span class="o_woow_status_v" t-esc="connection.provider_name"/></div>
+                                        <div class="o_woow_status_row"><span class="o_woow_status_k">Model</span><span class="o_woow_status_v" t-esc="connection.model_name"/></div>
+                                    </t>
+                                    <t t-else="">
+                                        <p class="o_woow_status_hint">Configure an AI provider in Settings to enable conversations.</p>
+                                    </t>
+                                </div>
+                            </t>
+                        </div>
+                        <!-- Agent (this project's runtime readiness + live pod state) -->
+                        <div class="o_woow_status_pill_wrap">
+                            <button class="o_woow_status_pill" t-on-click="(ev) => this.toggleStatusPopover('agent', ev)">
+                                <span t-att-class="'o_woow_status_pill_dot ' + (isAgentLoading ? 'is-loading' : (agent.ready ? 'is-on' : 'is-off'))"/>
+                                <WoowIcon name="'memory'" size="16"/>
+                                <span class="o_woow_status_pill_label">Agent</span>
+                                <t t-if="agent.ready and agentLiveLabel">
+                                    <span t-att-class="'o_woow_status_pill_live live-' + agentPod.state" t-esc="agentLiveLabel"/>
+                                </t>
+                            </button>
+                            <t t-if="state.openStatusPopover === 'agent'">
+                                <div class="o_woow_status_popover" t-on-click.stop="() => {}">
+                                    <div class="o_woow_status_popover_title">Agent</div>
+                                    <div class="o_woow_status_row">
+                                        <span class="o_woow_status_k">Status</span>
+                                        <span t-att-class="'o_woow_status_badge ' + (agent.ready ? 'is-on' : 'is-off')">
+                                            <t t-if="agent.ready">Ready</t><t t-else="">Not Ready</t>
+                                        </span>
+                                    </div>
+                                    <t t-if="agent.ready">
+                                        <div class="o_woow_status_row"><span class="o_woow_status_k">Template</span><span class="o_woow_status_v" t-esc="agent.template_name"/></div>
+                                        <div class="o_woow_status_row"><span class="o_woow_status_k">Model</span><span class="o_woow_status_v" t-esc="agent.model_name"/></div>
+                                        <t t-if="agentLiveLabel">
+                                            <div class="o_woow_status_row"><span class="o_woow_status_k">Pod</span><span class="o_woow_status_v" t-esc="agentLiveLabel"/></div>
+                                        </t>
+                                    </t>
+                                    <t t-else="">
+                                        <p class="o_woow_status_hint"><t t-esc="agent.reason or 'Agent runtime status unavailable.'"/></p>
+                                    </t>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
                 </div>
             </div>
 

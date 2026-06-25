@@ -12,7 +12,7 @@ import { Component } from "@odoo/owl";
  *   <StatusBadge status="service.state" size="'sm'" />
  *
  * Props:
- *   - status (string): Service state - running, deploying, upgrading, pending, error, deleting
+ *   - status (string): Service state - running, deploying, upgrading, pending, error, deleting, active, suspended
  *   - size (string, optional): Badge size - 'sm', 'md' (default), 'lg'
  */
 export class StatusBadge extends Component {
@@ -73,6 +73,29 @@ export class StatusBadge extends Component {
                 label: "Provisioning",
                 colorClass: "o_woow_status_deploying",
                 showSpinner: true,
+            },
+            // Security Access / SmartHome service-body states (spec §4):
+            // a provisioned service is "active" (green) and a billing-frozen
+            // one is "suspended" (warning). Without these they fall to the
+            // yellow "pending" fallback and a normally running service looks
+            // unfinished.
+            active: {
+                label: "Active",
+                colorClass: "o_woow_status_running",
+                showSpinner: false,
+            },
+            // Security Access 軸2: tunnel provisioned but has zero application
+            // routes — reachable at nothing yet. Amber (pending colour) to
+            // signal "up but not serving", distinct from green Active.
+            active_no_route: {
+                label: "Active · No Route",
+                colorClass: "o_woow_status_pending",
+                showSpinner: false,
+            },
+            suspended: {
+                label: "Suspended",
+                colorClass: "o_woow_status_pending",
+                showSpinner: false,
             },
         };
 

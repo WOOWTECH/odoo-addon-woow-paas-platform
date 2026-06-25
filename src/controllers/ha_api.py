@@ -287,6 +287,133 @@ class HAIntegrationController(Controller):
 
         return _json_response({'home': home.to_dict()})
 
+    # ==================== Security Access (mirror of smarthome) ========
+
+    @route(
+        '/api/security-access/workspaces',
+        type='http', auth='none', methods=['GET'], csrf=False,
+    )
+    def sa_list_workspaces(self, **kwargs: Any) -> Response:
+        """Mirror of /api/smarthome/workspaces. Scope: workspace:read."""
+        result = _authenticate(required_scopes=['workspace:read'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+        workspaces = _get_user_workspaces(user)
+        return _json_response({'workspaces': [
+            {'id': ws.id, 'name': ws.name, 'slug': ws.slug or ''}
+            for ws in workspaces
+        ]})
+
+    @route(
+        '/api/security-access/workspaces/<int:workspace_id>/accesses',
+        type='http', auth='none', methods=['GET'], csrf=False,
+    )
+    def sa_list_accesses(self, workspace_id: int, **kwargs: Any) -> Response:
+        """List security accesses in a workspace.
+
+        Scope: security-access:read. Returns plan + next payment for the
+        HA sensor (FR-9). tunnel_token 絕不在列表/detail 出現 —— 只走
+        tunnel-token 專用端點（更高 scope）。
+        """
+        result = _authenticate(required_scopes=['security-access:read'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+        workspace = _check_workspace_access(user, workspace_id)
+        if not workspace:
+            return _json_error('Forbidden', 'No access to this workspace', 403)
+        records = request.env['woow_paas_platform.security_access'].sudo().search([
+            ('workspace_id', '=', workspace.id),
+        ])
+        data = []
+        for sa in records:
+            sub_info = sa._get_subscription_info()
+            data.append({
+                'id': sa.id,
+                'name': sa.name,
+                'canonical_name': sa.canonical_name or '',
+                'state': sa.state,
+                'tunnel_status': sa.tunnel_status or 'disconnected',
+                'plan_name': sub_info['plan_name'] if sub_info else None,
+                'next_payment': sub_info['next_payment'] if sub_info else None,
+            })
+        return _json_response({'accesses': data})
+
+    @route(
+        '/api/security-access/accesses/<int:sa_id>',
+        type='http', auth='none', methods=['GET'], csrf=False,
+    )
+    def sa_get_access(self, sa_id: int, **kwargs: Any) -> Response:
+        """Full detail. Scope: security-access:read."""
+        result = _authenticate(required_scopes=['security-access:read'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+        sa = self._get_sa_with_access(user, sa_id)
+        if isinstance(sa, Response):
+            return sa
+        return _json_response({'access': sa.to_dict()})
+
+    @route(
+        '/api/security-access/accesses/<int:sa_id>/tunnel-token',
+        type='http', auth='none', methods=['GET'], csrf=False,
+    )
+    def sa_get_tunnel_token(self, sa_id: int, **kwargs: Any) -> Response:
+        """Tunnel credentials. Scope: security-access:tunnel (elevated)."""
+        result = _authenticate(required_scopes=['security-access:tunnel'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+        sa = self._get_sa_with_access(user, sa_id)
+        if isinstance(sa, Response):
+            return sa
+        # Asymmetry with smart home's tunnel-token (which returns a single
+        # `subdomain` FQDN) is intentional: a Security Access is a Cloudflare
+        # Tunnel with N application routes and no single hostname, so there is
+        # no one FQDN to return here. Consumers that need route hostnames read
+        # them from the access detail (to_dict `routes`), not from this token
+        # endpoint.
+        return _json_response({
+            'tunnel_token': sa.tunnel_token or '',
+            'tunnel_id': sa.tunnel_id or '',
+        })
+
+    @route(
+        '/api/security-access/accesses/<int:sa_id>/status',
+        type='http', auth='none', methods=['GET'], csrf=False,
+    )
+    def sa_get_status(self, sa_id: int, **kwargs: Any) -> Response:
+        """Refresh + return connector status. Scope: security-access:read."""
+        result = _authenticate(required_scopes=['security-access:read'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+        sa = self._get_sa_with_access(user, sa_id)
+        if isinstance(sa, Response):
+            return sa
+        try:
+            sa.action_refresh_status()
+        except Exception:
+            _logger.exception(
+                "Failed to refresh status for Security Access id=%s", sa_id)
+        return _json_response({'access': sa.to_dict()})
+
+    def _get_sa_with_access(self, user: Any, sa_id: int) -> Any | Response:
+        """Look up a security access and verify workspace access."""
+        sa = request.env['woow_paas_platform.security_access'].sudo().browse(
+            sa_id).exists()
+        if not sa:
+            return _json_error('Not Found', 'Security access not found', 404)
+        workspace = _check_workspace_access(user, sa.workspace_id.id)
+        if not workspace:
+            return _json_error(
+                'Forbidden',
+                'No access to the workspace containing this security access',
+                403,
+            )
+        return sa
+
     # ==================== Private Helpers ====================
 
     def _get_home_with_access(

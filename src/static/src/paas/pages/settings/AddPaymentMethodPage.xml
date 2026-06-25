@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AddPaymentMethodPage">
+        <div class="o_woow_add_payment_method_page">
+            <div class="o_woow_page_header">
+                <div class="o_woow_breadcrumb">
+                    <a href="#/settings">Settings</a>
+                    <span class="o_woow_breadcrumb_sep">›</span>
+                    <a href="#/settings/payment-methods">Payment Methods</a>
+                    <span class="o_woow_breadcrumb_sep">›</span>
+                    <span>Add</span>
+                </div>
+                <h1>Add Payment Method</h1>
+                <p>Enter your card details. ECPay will place a temporary NT$5 authorization hold for verification (automatically refunded). 3D Secure verification may be required.</p>
+            </div>
+
+            <WoowCard shadow="true" class="'o_woow_add_card_container'">
+                <div class="o_woow_add_card_body">
+                    <t t-if="state.phase === 'loading'">
+                        <div class="o_woow_add_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <span>Loading payment form…</span>
+                        </div>
+                    </t>
+
+                    <t t-if="state.phase === 'error'">
+                        <div class="o_woow_add_error" role="alert">
+                            <WoowIcon name="'error'" size="24"/>
+                            <div class="o_woow_add_error_text">
+                                <strong>Failed to load payment form.</strong>
+                                <p t-esc="state.error"/>
+                            </div>
+                        </div>
+                        <WoowButton variant="'secondary'" size="'md'" onClick.bind="goBack">
+                            Back
+                        </WoowButton>
+                    </t>
+
+                    <!-- SDK renders card form here. ID is required by ECPay SDK; do not rename. -->
+                    <div id="ECPayPayment"
+                         t-att-class="state.phase === 'error' ? 'o_woow_sdk_container d-none' : 'o_woow_sdk_container'"></div>
+
+                    <t t-if="state.phase === 'ready' or state.phase === 'submitting'">
+                        <t t-if="state.error">
+                            <div class="o_woow_inline_error" role="alert">
+                                <WoowIcon name="'error'" size="16"/>
+                                <span t-esc="state.error"/>
+                            </div>
+                        </t>
+                        <div class="o_woow_add_actions">
+                            <WoowButton
+                                variant="'secondary'"
+                                size="'md'"
+                                disabled="state.phase === 'submitting'"
+                                onClick.bind="goBack">
+                                Cancel
+                            </WoowButton>
+                            <WoowButton
+                                variant="'primary'"
+                                size="'md'"
+                                disabled="state.phase === 'submitting'"
+                                onClick.bind="onConfirm">
+                                <t t-if="state.phase === 'submitting'">Verifying…</t>
+                                <t t-else="">Bind Card</t>
+                            </WoowButton>
+                        </div>
+                    </t>
+                </div>
+            </WoowCard>
+        </div>
+    </t>
+</templates>

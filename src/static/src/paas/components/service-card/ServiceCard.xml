@@ -8,6 +8,7 @@
                     <WoowIcon name="templateIcon" size="28"/>
                 </div>
                 <StatusBadge status="props.service.state" size="'sm'"/>
+                <SubscriptionBadge subscription="props.service.subscription"/>
             </div>
 
             <!-- Card Body with Name and URL -->

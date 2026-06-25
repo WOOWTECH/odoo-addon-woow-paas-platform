@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.PayInvoiceModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Pay Invoice</h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.paying">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <div class="o_woow_pay_info">
+                        <div class="o_woow_pay_row">
+                            <span class="o_woow_pay_label">Invoice</span>
+                            <span class="o_woow_pay_value" t-esc="invoiceName"/>
+                        </div>
+                        <div class="o_woow_pay_row">
+                            <span class="o_woow_pay_label">Amount</span>
+                            <span class="o_woow_pay_value o_woow_pay_amount">
+                                <t t-esc="formattedAmount"/>
+                            </span>
+                        </div>
+                        <div class="o_woow_pay_row">
+                            <span class="o_woow_pay_label">Wallet Balance</span>
+                            <span class="o_woow_pay_value">
+                                <t t-esc="formattedBalance"/>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Insufficient balance warning -->
+                    <t t-if="!hasSufficientBalance">
+                        <div class="o_woow_pay_warning">
+                            <WoowIcon name="'warning'" size="20"/>
+                            <div>
+                                <p>Insufficient balance. Please top up your credits before paying.</p>
+                                <a href="#/billing/topup" class="o_woow_pay_topup_link">
+                                    <WoowIcon name="'add'" size="16"/>
+                                    Top up credits
+                                </a>
+                            </div>
+                        </div>
+                    </t>
+
+                    <!-- Sufficient balance confirmation -->
+                    <t t-if="hasSufficientBalance">
+                        <div class="o_woow_pay_confirm_text">
+                            <WoowIcon name="'info'" size="20"/>
+                            <p>
+                                Pay <strong><t t-esc="formattedAmount"/></strong> from your wallet credits?
+                            </p>
+                        </div>
+                    </t>
+
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.paying">
+                        Cancel
+                    </WoowButton>
+                    <WoowButton
+                        variant="'primary'"
+                        size="'md'"
+                        onClick.bind="onConfirm"
+                        disabled="!hasSufficientBalance or state.paying">
+                        <t t-if="state.paying">
+                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            Processing...
+                        </t>
+                        <t t-else="">
+                            <WoowIcon name="'payment'" size="18"/>
+                            Pay Now
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

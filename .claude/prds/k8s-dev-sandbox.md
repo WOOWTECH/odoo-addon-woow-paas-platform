@@ -109,7 +109,7 @@ created: 2026-02-28T09:23:10Z
 - 命名格式：`dev-sandbox-{branch-slug}`（如 `dev-sandbox-epic-cloud-services`）
 - 自動建立 namespace 並設定 ResourceQuota
 - 自動建立 NetworkPolicy 隔離沙盒
-- 自動配置 Ingress（`{branch-slug}.dev.woow.tw`）
+- 自動配置 Ingress（`{branch-slug}.woowtech.io`）
 
 #### FR-4: 程式碼同步策略
 

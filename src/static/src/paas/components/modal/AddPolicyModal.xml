@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.AddPolicyModal">
+    <div class="o_woow_modal_backdrop" t-on-click="props.onClose">
+      <div class="o_woow_modal o_woow_sa_policy_modal" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <h2><t t-esc="isEdit ? 'Edit Policy' : 'Add Policy'"/></h2>
+          <button class="o_woow_modal_close" t-on-click="props.onClose">
+            <WoowIcon name="'close'" size="20"/>
+          </button>
+        </div>
+        <div class="o_woow_modal_body">
+          <div t-if="state.error" class="o_woow_error_message">
+            <WoowIcon name="'error'" size="16"/><span t-esc="state.error"/>
+          </div>
+          <div class="o_woow_form_group">
+            <label>Policy name</label>
+            <input type="text" class="o_woow_input" t-att-value="state.name"
+                   t-on-input="(ev) => state.name = ev.target.value"
+                   placeholder="e.g. Internal staff"/>
+          </div>
+          <div class="o_woow_form_group">
+            <label>Action</label>
+            <div class="o_woow_sa_action_seg">
+              <button t-att-class="'o_woow_sa_action_card' + (state.decision === 'allow' ? ' o_woow_sa_action_card--allow' : '')"
+                      t-on-click="() => this.setDecision('allow')">
+                <div class="o_woow_sa_action_card__title">
+                  <WoowIcon name="'check'" size="18"/>
+                  <strong>Allow</strong>
+                </div>
+                <span class="o_woow_sa_action_card__sub">Grant access to matches</span>
+              </button>
+              <button t-att-class="'o_woow_sa_action_card' + (state.decision === 'deny' ? ' o_woow_sa_action_card--deny' : '')"
+                      t-on-click="() => this.setDecision('deny')">
+                <div class="o_woow_sa_action_card__title">
+                  <WoowIcon name="'block'" size="18"/>
+                  <strong>Block</strong>
+                </div>
+                <span class="o_woow_sa_action_card__sub">Deny access to matches</span>
+              </button>
+              <button t-att-class="'o_woow_sa_action_card' + (state.decision === 'bypass' ? ' o_woow_sa_action_card--bypass' : '')"
+                      t-on-click="() => this.setDecision('bypass')">
+                <div class="o_woow_sa_action_card__title">
+                  <WoowIcon name="'bolt'" size="18"/>
+                  <strong>Bypass</strong>
+                </div>
+                <span class="o_woow_sa_action_card__sub">Skip auth for matches</span>
+              </button>
+            </div>
+            <p t-if="state.decision === 'bypass'" class="o_woow_sa_field_hint">
+              Bypass skips authentication entirely — identity selectors (email)
+              are not available; use IP range, country or everyone.
+            </p>
+          </div>
+
+          <!-- include / require / exclude rule groups -->
+          <t t-foreach="groupDefs" t-as="group" t-key="group.key">
+            <div class="o_woow_form_group o_woow_sa_rule_group">
+              <label t-esc="group.label"/>
+              <p class="o_woow_sa_field_hint" t-esc="group.hint"/>
+              <t t-foreach="state[group.key]" t-as="rule" t-key="rule._key">
+                <t t-set="cfg" t-value="valueConfig(rule.rule_type)"/>
+                <div class="o_woow_sa_rule_row">
+                  <select class="o_woow_input o_woow_sa_rule_row__type"
+                          t-on-change="(ev) => this.setRuleType(group.key, rule_index, ev.target.value)">
+                    <t t-foreach="selectorOptions" t-as="opt" t-key="opt.value">
+                      <option t-att-value="opt.value"
+                              t-att-selected="rule.rule_type === opt.value"
+                              t-esc="opt.label"/>
+                    </t>
+                  </select>
+                  <div t-if="cfg.show" class="o_woow_sa_prefix_input o_woow_sa_rule_row__value">
+                    <span t-if="cfg.prefix"
+                          class="o_woow_sa_prefix_input__prefix" t-esc="cfg.prefix"/>
+                    <input type="text" class="o_woow_input"
+                           t-att-value="rule.rule_value"
+                           t-on-input="(ev) => this.setRuleValue(group.key, rule_index, ev.target.value)"
+                           t-att-placeholder="cfg.placeholder"/>
+                  </div>
+                  <span t-else="" class="o_woow_sa_rule_row__value o_woow_sa_field_hint"
+                        t-esc="cfg.hint"/>
+                  <button class="o_woow_sa_icon_btn" title="Remove rule"
+                          t-on-click="() => this.removeRule(group.key, rule_index)">
+                    <WoowIcon name="'close'" size="16"/>
+                  </button>
+                </div>
+              </t>
+              <button class="o_woow_sa_add_rule_btn"
+                      t-on-click="() => this.addRule(group.key)">
+                <WoowIcon name="'add'" size="14"/>
+                <span>Add <t t-esc="group.key"/> rule</span>
+              </button>
+            </div>
+          </t>
+        </div>
+        <div class="o_woow_modal_footer">
+          <WoowButton variant="'secondary'" onClick="props.onClose">Cancel</WoowButton>
+          <WoowButton variant="'primary'" onClick.bind="confirm"
+                      disabled="state.saving">
+            <t t-if="state.saving">Saving...</t>
+            <t t-else="">
+              <WoowIcon name="'check'" size="16"/>
+              <span t-esc="isEdit ? 'Save Policy' : 'Add Policy'"/>
+            </t>
+          </WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

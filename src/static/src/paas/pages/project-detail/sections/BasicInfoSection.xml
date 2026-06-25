@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ProjectDetailBasicInfoSection">
+        <WoowCard class="'o_woow_project_detail__section'">
+            <div class="o_woow_project_detail__section_header">
+                <WoowIcon name="'info'" size="20"/>
+                <h3>Basic Information</h3>
+            </div>
+
+            <div t-if="state.error" class="o_woow_error_message">
+                <WoowIcon name="'error'" size="16"/>
+                <span t-esc="state.error"/>
+            </div>
+
+            <div class="o_woow_project_detail__field">
+                <label>Name</label>
+                <t t-if="state.editingName">
+                    <div class="o_woow_project_detail__inline_edit">
+                        <input type="text"
+                               class="o_woow_input"
+                               t-att-value="state.nameDraft"
+                               t-on-input="onNameInput"/>
+                        <WoowButton variant="'primary'" size="'sm'"
+                                    onClick.bind="saveName"
+                                    disabled="state.saving">
+                            Save
+                        </WoowButton>
+                        <WoowButton variant="'ghost'" size="'sm'"
+                                    onClick.bind="cancelEditName"
+                                    disabled="state.saving">
+                            Cancel
+                        </WoowButton>
+                    </div>
+                </t>
+                <t t-else="">
+                    <div class="o_woow_project_detail__value">
+                        <span t-esc="props.project.name"/>
+                        <button t-if="props.editable"
+                                class="o_woow_project_detail__edit_btn"
+                                t-on-click="startEditName">
+                            <WoowIcon name="'edit'" size="16"/>
+                        </button>
+                    </div>
+                </t>
+            </div>
+
+            <div class="o_woow_project_detail__field">
+                <label>Description</label>
+                <t t-if="state.editingDescription">
+                    <div class="o_woow_project_detail__inline_edit">
+                        <div class="o_woow_project_detail__rich_toolbar">
+                            <button type="button"
+                                    class="o_woow_project_detail__rich_btn"
+                                    title="Bold (Ctrl+B)"
+                                    t-on-mousedown="onBold">
+                                <strong>B</strong>
+                            </button>
+                            <button type="button"
+                                    class="o_woow_project_detail__rich_btn"
+                                    title="Italic (Ctrl+I)"
+                                    t-on-mousedown="onItalic">
+                                <em>I</em>
+                            </button>
+                            <button type="button"
+                                    class="o_woow_project_detail__rich_btn"
+                                    title="Bullet list"
+                                    t-on-mousedown="onBulletList">
+                                •
+                            </button>
+                        </div>
+                        <div class="o_woow_project_detail__rich_editor"
+                             t-ref="descEditor"
+                             contenteditable="true"
+                             role="textbox"
+                             aria-multiline="true"/>
+                        <div class="o_woow_project_detail__inline_edit_actions">
+                            <WoowButton variant="'primary'" size="'sm'"
+                                        onClick.bind="saveDescription"
+                                        disabled="state.saving">
+                                Save
+                            </WoowButton>
+                            <WoowButton variant="'ghost'" size="'sm'"
+                                        onClick.bind="cancelEditDescription"
+                                        disabled="state.saving">
+                                Cancel
+                            </WoowButton>
+                        </div>
+                    </div>
+                </t>
+                <t t-else="">
+                    <div class="o_woow_project_detail__value">
+                        <div t-if="props.project.description"
+                             class="o_woow_project_detail__rich_view"
+                             t-out="descriptionMarkup"/>
+                        <span t-else="" class="o_woow_project_detail__placeholder">No description</span>
+                        <button t-if="props.editable"
+                                class="o_woow_project_detail__edit_btn"
+                                t-on-click="startEditDescription">
+                            <WoowIcon name="'edit'" size="16"/>
+                        </button>
+                    </div>
+                </t>
+            </div>
+
+            <div class="o_woow_project_detail__field">
+                <label>Workspace</label>
+                <div class="o_woow_project_detail__value o_woow_project_detail__value--readonly">
+                    <span t-if="props.project.workspace_name" t-esc="props.project.workspace_name"/>
+                    <span t-else="" class="o_woow_project_detail__placeholder">Unbound (no workspace)</span>
+                </div>
+            </div>
+        </WoowCard>
+    </t>
+</templates>

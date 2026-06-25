@@ -25,16 +25,7 @@
 
             <!-- Workspace Content -->
             <t t-elif="workspace">
-                <!-- Breadcrumb / Back Navigation -->
-                <div class="o_woow_breadcrumb">
-                    <button class="o_woow_back_btn" t-on-click="goBack">
-                        <WoowIcon name="'arrow_back'" size="20"/>
-                    </button>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack">Workspaces</span>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_current" t-esc="workspace.name"/>
-                </div>
+                <!-- 麵包屑統一由全域 Header 呈現（見 WorkspaceDetailPage.loadData）-->
 
                 <!-- Header Section -->
                 <div class="o_woow_workspace_detail_header">
@@ -198,6 +189,75 @@
                     onClose.bind="closeCreateSmartHomeModal"
                     onCreated.bind="onSmartHomeCreated"/>
 
+                <!-- Security Access Section (reuses styled smart-home section classes) -->
+                <section class="o_woow_smart_homes_section">
+                    <div class="o_woow_smart_homes_section_header">
+                        <h2>Security Access</h2>
+                        <WoowButton
+                            variant="'primary'"
+                            size="'md'"
+                            onClick.bind="openCreateSecurityAccessModal">
+                            <WoowIcon name="'add'" size="18"/>
+                            Add Security Access
+                        </WoowButton>
+                    </div>
+
+                    <!-- Loading Security Accesses -->
+                    <t t-if="state.loadingSecurityAccesses and !hasSecurityAccesses">
+                        <div class="o_woow_services_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <p>Loading security accesses...</p>
+                        </div>
+                    </t>
+
+                    <!-- Empty State -->
+                    <t t-elif="!hasSecurityAccesses and !state.loadingSecurityAccesses">
+                        <div class="o_woow_smart_homes_empty">
+                            <WoowIcon name="'shield'" size="48"/>
+                            <h3>Set Up Zero Trust Access</h3>
+                            <p>Expose your services securely with a Cloudflare Tunnel — no open ports, no public IP.</p>
+                            <WoowButton
+                                variant="'primary'"
+                                size="'md'"
+                                onClick.bind="openCreateSecurityAccessModal">
+                                <WoowIcon name="'add'" size="18"/>
+                                Add Security Access
+                            </WoowButton>
+                        </div>
+                    </t>
+
+                    <!-- Security Access List -->
+                    <t t-if="hasSecurityAccesses">
+                        <div class="o_woow_smart_homes_grid">
+                            <t t-foreach="state.securityAccesses" t-as="sa" t-key="sa.id">
+                                <WoowCard shadow="true" class="'o_woow_security_access_card'">
+                                    <div class="o_woow_security_access_card_inner" t-on-click="() => this.openSecurityAccess(sa.id)">
+                                        <div class="o_woow_security_access_card_head">
+                                            <WoowIcon name="'verified_user'" size="24"/>
+                                            <span class="o_woow_security_access_card_name" t-esc="sa.name"/>
+                                        </div>
+                                        <span class="o_woow_security_access_card_host">Cloudflare Tunnel</span>
+                                        <div class="o_woow_security_access_card_meta">
+                                            <span class="o_woow_security_access_card_routes">
+                                                <WoowIcon name="'route'" size="14"/>
+                                                <t t-esc="(sa.routes or []).length"/> routes
+                                            </span>
+                                            <StatusBadge status="sa.state"/>
+                                        </div>
+                                    </div>
+                                </WoowCard>
+                            </t>
+                        </div>
+                    </t>
+                </section>
+
+                <!-- Create Security Access Modal -->
+                <CreateSecurityAccessModal
+                    t-if="state.showCreateSecurityAccessModal"
+                    workspaceId="props.workspaceId"
+                    onClose.bind="closeCreateSecurityAccessModal"
+                    onCreated.bind="onSecurityAccessCreated"/>
+
                 <!-- Get Started Section (Service Types) -->
                 <WoowCard shadow="true" class="'o_woow_get_started'">
                     <div class="o_woow_get_started_header">
@@ -218,6 +278,12 @@
                                 <p><t t-esc="service.description"/></p>
                                 <t t-if="service.action === 'smarthome'">
                                     <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateSmartHomeModal">
+                                        Get Started
+                                        <WoowIcon name="'arrow_forward'" size="16"/>
+                                    </WoowButton>
+                                </t>
+                                <t t-elif="service.action === 'security-access'">
+                                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateSecurityAccessModal">
                                         Get Started
                                         <WoowIcon name="'arrow_forward'" size="16"/>
                                     </WoowButton>

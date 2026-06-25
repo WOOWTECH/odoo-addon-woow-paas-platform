@@ -3,6 +3,7 @@ import json
 import logging
 
 from odoo import api, fields, models
+from odoo.exceptions import AccessError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -54,11 +55,12 @@ class McpServer(models.Model):
         default='system',
         required=True,
     )
-    cloud_service_id = fields.Many2one(
-        'woow_paas_platform.cloud_service',
-        string='Cloud Service',
+    project_id = fields.Many2one(
+        'project.project',
+        string='Project',
         ondelete='cascade',
-        help='Only set for user-scoped MCP servers',
+        index=True,
+        help='Only set for user-scoped MCP servers. Cascade-delete with project.',
     )
     tool_ids = fields.One2many(
         'woow_paas_platform.mcp_tool',
@@ -89,10 +91,17 @@ class McpServer(models.Model):
         readonly=True,
     )
     auto_created = fields.Boolean(
-        string='Auto Created',
+        string='Auto Created (deprecated)',
         default=False,
         readonly=True,
-        help='Automatically created by the system during cloud service deployment',
+        help='Deprecated; use sidecar_backed for new code paths.',
+    )
+    sidecar_backed = fields.Boolean(
+        string='Sidecar Backed',
+        default=False,
+        readonly=True,
+        help='MCP record was populated from a sidecar URL hint and is tied to '
+             'the backing cloud service lifecycle',
     )
     sync_retry_count = fields.Integer(
         string='Sync Retry Count',
@@ -105,6 +114,54 @@ class McpServer(models.Model):
     def _compute_tool_count(self):
         for record in self:
             record.tool_count = len(record.tool_ids)
+
+    @api.constrains('scope', 'project_id')
+    def _check_scope_project_consistency(self):
+        # D4 invariant: scope='user' iff project_id IS NOT NULL.
+        for record in self:
+            if record.scope == 'user' and not record.project_id:
+                raise ValidationError(
+                    "User-scope MCP server '%s' must be linked to a project "
+                    "(scope='user' requires project_id)." % record.name
+                )
+            if record.scope == 'system' and record.project_id:
+                raise ValidationError(
+                    "System-scope MCP server '%s' must not be linked to a "
+                    "project (scope='system' requires project_id=NULL)."
+                    % record.name
+                )
+
+    def write(self, vals):
+        # scope / project_id 對非 admin 不可變更：擋窄→寬 flip（user-scope →
+        # system-scope = 平台公開、載進每個租戶 pod → 跨租戶外洩）。ir.rule 擋不住
+        # —— Odoo 對 write rule 用 PRE-write 狀態判定（flip 前 row 仍是合法
+        # scope='user'、owner 仍是 workspace member），rule 放行，改完才變寬 scope。
+        # 鏡像 skill.py 的同款 guard（sibling model parity，issue #98 / F-SDS-1）。
+        # pattern: docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md
+        if ('scope' in vals or 'project_id' in vals) and not self.env.su \
+                and not self.env.user.has_group('base.group_system'):
+            for server in self:
+                if 'scope' in vals and vals['scope'] != server.scope:
+                    raise AccessError(
+                        "Only administrators can change an MCP server's scope."
+                    )
+                if 'project_id' in vals \
+                        and vals.get('project_id') != server.project_id.id:
+                    raise AccessError(
+                        "Only administrators can change an MCP server's project."
+                    )
+        result = super().write(vals)
+        # #111 parity: mcp snapshot 只序列化 server 的 name/url/transport
+        # (_build_mcp_snapshot)，故僅這些欄位變動才改 pod 看到的 mcp.json →
+        # 觸發 best-effort 推送。active/state/state_message/tool 變動不改 snapshot
+        # 故不推（mcp_tool 同理不觸發）。
+        _MCP_SNAPSHOT_FIELDS = {'name', 'url', 'transport'}
+        if _MCP_SNAPSHOT_FIELDS & set(vals):
+            Session = self.env['woow_paas_platform.agent_session']
+            for server in self:
+                Session._push_snapshot_to_running_pods(
+                    'mcp', server.scope, server.project_id.id or None)
+        return result
 
     def _get_mcp_client_config(self):
         """Build config dict for MultiServerMCPClient."""

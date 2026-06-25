@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ManagePaymentMethodsModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Manage Payment Methods</h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.deleting">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <!-- Loading -->
+                    <t t-if="isLoading">
+                        <div class="o_woow_manage_pm_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <span>Loading payment methods...</span>
+                        </div>
+                    </t>
+
+                    <t t-else="">
+                        <!-- Active Method (Default Card) -->
+                        <t t-if="defaultMethod">
+                            <div class="o_woow_manage_pm_section_label">Active Method</div>
+                            <div class="o_woow_manage_pm_card o_woow_manage_pm_card_active">
+                                <div class="o_woow_manage_pm_card_left">
+                                    <span class="o_woow_manage_pm_type_badge">
+                                        <t t-esc="defaultMethod.type === 'credit_card' ? 'CARD' : (defaultMethod.type || '').toUpperCase()"/>
+                                    </span>
+                                    <span class="o_woow_manage_pm_card_number">
+                                        <![CDATA[•••• ]]><t t-esc="defaultMethod.last4"/>
+                                    </span>
+                                    <span class="o_woow_manage_pm_default_badge">Default</span>
+                                </div>
+                                <div class="o_woow_manage_pm_card_actions">
+                                    <button
+                                        class="o_woow_manage_pm_delete_btn"
+                                        t-on-click="() => this.onDeleteMethod(defaultMethod.id)"
+                                        t-att-disabled="state.deleting"
+                                        title="Remove card">
+                                        <WoowIcon name="'delete'" size="18"/>
+                                    </button>
+                                </div>
+                            </div>
+                        </t>
+
+                        <!-- Other Methods -->
+                        <t t-if="otherMethods.length > 0">
+                            <div class="o_woow_manage_pm_section_label">Other Methods</div>
+                            <t t-foreach="otherMethods" t-as="method" t-key="method.id">
+                                <div class="o_woow_manage_pm_card">
+                                    <div class="o_woow_manage_pm_card_left">
+                                        <span class="o_woow_manage_pm_type_badge">
+                                            <t t-esc="method.type === 'credit_card' ? 'CARD' : (method.type || '').toUpperCase()"/>
+                                        </span>
+                                        <span class="o_woow_manage_pm_card_number">
+                                            <![CDATA[•••• ]]><t t-esc="method.last4"/>
+                                        </span>
+                                    </div>
+                                    <div class="o_woow_manage_pm_card_actions">
+                                        <button
+                                            class="o_woow_manage_pm_delete_btn"
+                                            t-on-click="() => this.onDeleteMethod(method.id)"
+                                            t-att-disabled="state.deleting"
+                                            title="Remove card">
+                                            <WoowIcon name="'delete'" size="18"/>
+                                        </button>
+                                    </div>
+                                </div>
+                            </t>
+                        </t>
+
+                        <!-- No methods message -->
+                        <t t-if="methods.length === 0">
+                            <div class="o_woow_manage_pm_empty">
+                                <WoowIcon name="'credit_card_off'" size="32"/>
+                                <span>No payment methods added yet</span>
+                            </div>
+                        </t>
+
+                        <!-- Add Payment Method Button -->
+                        <button class="o_woow_manage_pm_add_btn" t-on-click="onAddCard">
+                            <WoowIcon name="'add'" size="20"/>
+                            <span>Add Payment Method</span>
+                        </button>
+
+                        <!-- Delete Error -->
+                        <div t-if="state.deleteError" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.deleteError"/>
+                        </div>
+                    </t>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.deleting">
+                        Close
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

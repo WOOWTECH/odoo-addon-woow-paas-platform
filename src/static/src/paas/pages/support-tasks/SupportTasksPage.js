@@ -108,7 +108,7 @@ export class SupportTasksPage extends Component {
     }
 
     navigateBack() {
-        this.router.navigate("ai-assistant");
+        this.router.navigate("projects");
     }
 
     getPriorityStars(priority) {

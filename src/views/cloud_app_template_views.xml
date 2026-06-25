@@ -19,7 +19,6 @@
                             <field name="category"/>
                             <field name="description" placeholder="Short description"/>
                             <field name="tags" placeholder='["tag1", "tag2"]'/>
-                            <field name="monthly_price"/>
                             <field name="documentation_url" widget="url"/>
                         </group>
                         <group string="Service Configuration">
@@ -48,6 +47,10 @@
                             <group string="Helm Value Specs">
                                 <field name="helm_value_specs" nolabel="1"
                                        placeholder="JSON schema for configurable values"/>
+                            </group>
+                            <group string="Agent Context Keys">
+                                <field name="agent_context_keys" nolabel="1"
+                                       placeholder='["replicaCount", "image.tag"]'/>
                             </group>
                         </page>
                         <page string="Description" name="description">
@@ -91,7 +94,6 @@
                 <field name="name"/>
                 <field name="slug"/>
                 <field name="category"/>
-                <field name="monthly_price"/>
                 <field name="helm_chart_name"/>
                 <field name="helm_chart_version"/>
                 <field name="mcp_enabled"/>
@@ -118,8 +120,8 @@
     <!-- Menu under Woow PaaS -->
     <menuitem
         id="menu_cloud_app_templates"
-        name="Cloud App Templates"
-        parent="menu_woow_paas_platform_root"
+        name="Templates"
+        parent="menu_cloud"
         action="action_cloud_app_template"
-        sequence="40"/>
+        sequence="10"/>
 </odoo>

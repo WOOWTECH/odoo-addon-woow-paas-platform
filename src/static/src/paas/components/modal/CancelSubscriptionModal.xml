@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.CancelSubscriptionModal">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <h2>Cancel Subscription</h2>
+                    <button
+                        class="o_woow_modal_close"
+                        t-on-click="props.onClose"
+                        t-att-disabled="state.cancelling">
+                        <WoowIcon name="'close'" size="20"/>
+                    </button>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <!-- Warning Icon & Heading -->
+                    <div class="o_woow_cancel_sub_warning_header">
+                        <div class="o_woow_cancel_sub_warning_icon">
+                            <WoowIcon name="'warning'" size="28"/>
+                        </div>
+                        <h3>Cancel Subscription?</h3>
+                        <p class="o_woow_cancel_sub_confirm_text">
+                            Are you sure you want to cancel <strong t-esc="planName"/>?
+                        </p>
+                    </div>
+
+                    <!-- Consequence Warning -->
+                    <div class="o_woow_cancel_sub_consequence">
+                        <WoowIcon name="'info'" size="18"/>
+                        <div>
+                            <p>Cancelling your subscription will:</p>
+                            <ul>
+                                <li>Suspend all associated services after the grace period</li>
+                                <li>Stop future billing charges</li>
+                                <li>Data may be deleted after the retention period</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Reason Textarea -->
+                    <div class="o_woow_cancel_sub_reason">
+                        <label>Reason for cancellation (optional)</label>
+                        <textarea
+                            class="o_woow_cancel_sub_textarea"
+                            placeholder="Let us know why you're cancelling..."
+                            t-att-value="state.reason"
+                            t-on-input="onReasonInput"
+                            rows="3"
+                            t-att-disabled="state.cancelling"/>
+                    </div>
+
+                    <!-- Error -->
+                    <div t-if="state.error" class="o_woow_error_message">
+                        <WoowIcon name="'error'" size="16"/>
+                        <span t-esc="state.error"/>
+                    </div>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick="props.onClose"
+                        disabled="state.cancelling">
+                        Keep Subscription
+                    </WoowButton>
+                    <WoowButton
+                        variant="'danger'"
+                        size="'md'"
+                        onClick.bind="onConfirm"
+                        disabled="state.cancelling">
+                        <t t-if="state.cancelling">
+                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                            Cancelling...
+                        </t>
+                        <t t-else="">
+                            Confirm Cancellation
+                        </t>
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

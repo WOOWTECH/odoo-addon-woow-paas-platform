@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ProjectDetailPage">
+        <div class="o_woow_project_detail">
+            <t t-if="state.loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading project...</p>
+                </div>
+            </t>
+
+            <t t-elif="state.error">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'error'" size="48"/>
+                    <h2>Unable to load project</h2>
+                    <p t-esc="state.error"/>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Projects
+                    </WoowButton>
+                </div>
+            </t>
+
+            <t t-elif="state.project">
+                <!-- 麵包屑統一由全域 Header 呈現（見 ProjectDetailPage._publishBreadcrumb）-->
+
+                <div class="o_woow_project_detail__header">
+                    <div class="o_woow_project_detail__title">
+                        <WoowIcon name="'folder'" size="28"/>
+                        <h1 t-esc="state.project.name"/>
+                    </div>
+                    <div class="o_woow_project_detail__header_actions">
+                        <WoowButton variant="'secondary'" size="'md'" onClick.bind="viewTasks">
+                            <WoowIcon name="'view_kanban'" size="18"/>
+                            View Tasks
+                        </WoowButton>
+                    </div>
+                </div>
+
+                <div class="o_woow_project_detail__sections">
+                    <BasicInfoSection
+                        project="state.project"
+                        editable="!!state.project.portal_editable"
+                        onUpdated="(updated) => this.onProjectUpdated(updated)"/>
+
+                    <!-- 會議 2026-06-03 議題 H：flag off（預設）時 binding 與
+                         MCP section 整個不渲染；flag on 完整恢復（spec §3）。 -->
+                    <t t-if="state.project.portal_editable">
+                        <CloudServiceBindingSection
+                            project="state.project"
+                            onUpdated="(updated) => this.onProjectUpdated(updated)"/>
+
+                        <McpServersSection
+                            project="state.project"
+                            onListChanged="(mcps) => this.onMcpListChanged(mcps)"/>
+                    </t>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

@@ -7,6 +7,7 @@ from ..services.naming import (
     make_namespace,
     make_service_subdomain,
     make_smarthome_subdomain,
+    make_security_access_subdomain,
 )
 
 
@@ -101,3 +102,136 @@ class TestNaming(unittest.TestCase):
         self.assertTrue(svc.startswith('paas-cs-'))
         self.assertTrue(sm.startswith('paas-sm-'))
         self.assertNotEqual(svc, sm)
+
+
+class TestSecurityAccessNaming(unittest.TestCase):
+    """make_security_access_subdomain: paas-sa-{ws_hash}-{res_hash}."""
+
+    def test_sa_subdomain_format(self):
+        """Test SA subdomain follows paas-sa-{ws_hash}-{res_hash} format."""
+        result = make_security_access_subdomain('my-ws', 'ref-123', 'My SA')
+        self.assertEqual(
+            result,
+            f"paas-sa-{generate_ws_hash('my-ws')}-{generate_resource_hash('ref-123', 'My SA')}",
+        )
+        self.assertTrue(result.startswith('paas-sa-'))
+        # prefix + 8 hex + hyphen + 8 hex
+        self.assertEqual(len(result), len('paas-sa-') + 8 + 1 + 8)
+
+    def test_sa_subdomain_deterministic(self):
+        """Test that same inputs always produce the same subdomain."""
+        a = make_security_access_subdomain('ws', 'r1', 'n1')
+        b = make_security_access_subdomain('ws', 'r1', 'n1')
+        self.assertEqual(a, b)
+
+    def test_sa_prefix_distinct_from_sm_cs(self):
+        """Test SA prefix differs from smarthome and cloud service (namespace isolation)."""
+        sa = make_security_access_subdomain('ws', 'r', 'n')
+        sm = make_smarthome_subdomain('ws', 'r', 'n')
+        cs = make_service_subdomain('ws', 'r', 'n')
+        # Same hash, different prefix -> three resource types stay isolated.
+        self.assertNotEqual(sa, sm)
+        self.assertNotEqual(sa, cs)
+
+    def test_sa_subdomain_k8s_valid(self):
+        """Test SA subdomain meets K8s/DNS naming constraints."""
+        sd = make_security_access_subdomain('ws-slug', 'ref-id', 'sa-name')
+        self.assertLessEqual(len(sd), 63)
+        self.assertEqual(sd, sd.lower())
+        import re
+        self.assertTrue(re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', sd))
+
+
+class TestNamingEnvToken(unittest.TestCase):
+    """L3: env token 注入 make_*_subdomain。
+
+    決策 DP1：格式 ``paas-{env}-{type}-``（stg=paas-stg-sa-、prod=paas-sa- 空 token）。
+    決策 DP2：CS/SM 是否在 model 呼叫端傳 env 由控制器決定；naming helper 一律支援
+    env 參數。prod/空 token 必須與舊行為 byte-identical（既有硬編斷言不假紅）。
+    斷言用存在性/差異性，不硬編完整快照（phase-versioned-test-assertion）。
+    """
+
+    def test_sa_subdomain_prod_equals_no_env(self):
+        """env='prod' 與不傳 env byte-identical（prod 維持現狀、零漂移）。"""
+        no_env = make_security_access_subdomain('my-ws', 'ref-123', 'My SA')
+        prod = make_security_access_subdomain('my-ws', 'ref-123', 'My SA', env='prod')
+        self.assertEqual(prod, no_env)
+        self.assertTrue(prod.startswith('paas-sa-'))
+        self.assertNotIn('stg', prod)
+
+    def test_sa_subdomain_default_has_no_env_token(self):
+        """預設（不傳 env）不含環境 token。"""
+        r = make_security_access_subdomain('my-ws', 'ref-123', 'My SA')
+        self.assertTrue(r.startswith('paas-sa-'))
+        self.assertNotIn('stg', r)
+
+    def test_sa_subdomain_stg_carries_env_token(self):
+        """env='stg' 帶 token、仍 paas- 起頭、與 prod 版相異（存在性+差異性）。
+
+        placement（env 在 type 前）由 test_env_token_format_is_paas_env_type 專守，
+        此處只守「有 token 且與 prod 不同」，避免兩條鎖同一 intent。
+        """
+        prod = make_security_access_subdomain('my-ws', 'ref-123', 'My SA', env='prod')
+        stg = make_security_access_subdomain('my-ws', 'ref-123', 'My SA', env='stg')
+        self.assertIn('stg', stg)
+        self.assertTrue(stg.startswith('paas-'))
+        self.assertNotEqual(stg, prod)
+
+    def test_env_token_format_is_paas_env_type(self):
+        """鎖 DP1 決策：env token 排在 type 之前（相對位置語意，不耦合確切分隔符）。
+
+        用 index 比較而非硬編 'paas-stg-sa-'：未來若合法改分隔符仍守住「env 在
+        type 前」的 intent，不會因快照漂移誤紅（phase-versioned-test-assertion）。
+        """
+        stg = make_security_access_subdomain('my-ws', 'ref-123', 'My SA', env='stg')
+        self.assertTrue(stg.startswith('paas-'))
+        self.assertLess(stg.index('stg-'), stg.index('sa-'))
+
+    def test_env_token_non_whitelist_value_stays_dns_safe(self):
+        """非白名單值（raw set_param 繞過 Selection）也須 slugify 成 DNS-safe。
+
+        deploy_env 是 Selection 白名單，但 set_param 可寫任意值；naming helper 絕
+        不能產出非法 DNS/k8s label（含空白 / 底線 / 非 ASCII / 尾 dash），否則
+        tunnel name / DNS comment 在 CF 端炸。
+        """
+        import re
+        for bad in ('My Env_2!', 'staging zone', 'prod_v2', 'XX__yy', '!!!'):
+            r = make_security_access_subdomain('ws', 'ref', 'name', env=bad)
+            self.assertEqual(r, r.lower(), bad)
+            self.assertLessEqual(len(r), 63, bad)
+            self.assertRegex(r, r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', bad)
+
+    def test_cs_subdomain_stg_carries_env_token(self):
+        """make_service_subdomain 支援 env 且 stg 帶 token。"""
+        cs = make_service_subdomain('my-ws', 'ref-123', 'my-svc', env='stg')
+        self.assertIn('stg', cs)
+        self.assertTrue(cs.startswith('paas-stg-cs-'))
+
+    def test_sm_subdomain_stg_carries_env_token(self):
+        """make_smarthome_subdomain 支援 env 且 stg 帶 token。"""
+        sm = make_smarthome_subdomain('my-ws', 'ref-456', 'my-home', env='stg')
+        self.assertIn('stg', sm)
+        self.assertTrue(sm.startswith('paas-stg-sm-'))
+
+    def test_env_token_dns_safe_all_makers_all_envs(self):
+        """所有 maker × {空,prod,stg} 皆 DNS/k8s-safe（lower、<=63、regex）。"""
+        import re
+        makers = (
+            make_service_subdomain,
+            make_smarthome_subdomain,
+            make_security_access_subdomain,
+        )
+        for env in ('', 'prod', 'stg'):
+            for maker in makers:
+                r = maker('a-fairly-long-workspace-slug', 'reference-id-long', 'resource', env=env)
+                self.assertEqual(r, r.lower(), (maker.__name__, env))
+                self.assertLessEqual(len(r), 63, (maker.__name__, env))
+                self.assertRegex(r, r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+
+    def test_env_token_normalised_case_and_whitespace(self):
+        """admin 誤填 'STG' / ' stg ' 須正規化，不產非法 name。"""
+        canonical = make_security_access_subdomain('ws', 'ref', 'name', env='stg')
+        self.assertEqual(
+            make_security_access_subdomain('ws', 'ref', 'name', env='STG'), canonical)
+        self.assertEqual(
+            make_security_access_subdomain('ws', 'ref', 'name', env=' stg '), canonical)

@@ -2,15 +2,15 @@
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.SupportProjectsPage">
         <div class="o_woow_sp">
+            <!-- Overview: stats + AI connection -->
+            <ProjectsOverview/>
+
             <!-- Page Header -->
             <div class="o_woow_sp_header">
                 <div class="o_woow_sp_header_left">
-                    <button class="o_woow_sp_back_btn" t-on-click="navigateBack">
-                        <WoowIcon name="'arrow_back'" size="20"/>
-                    </button>
                     <div class="o_woow_sp_header_text">
-                        <h1>Support Projects</h1>
-                        <p>Browse and manage support projects across your workspaces.</p>
+                        <h1>Projects</h1>
+                        <p>Browse and manage projects across your workspaces.</p>
                     </div>
                 </div>
                 <div class="o_woow_sp_header_right">
@@ -95,6 +95,11 @@
                                     <span t-att-class="'o_woow_sp_badge ' + getStatusBadgeClass(project)">
                                         <t t-esc="getStatusLabel(project)"/>
                                     </span>
+                                    <button class="o_woow_sp_settings_btn"
+                                            title="Project settings"
+                                            t-on-click="getSettingsHandler(project.id)">
+                                        <WoowIcon name="'settings'" size="16"/>
+                                    </button>
                                 </div>
 
                                 <!-- Description -->
@@ -120,15 +125,18 @@
                                     </div>
                                 </div>
 
-                                <!-- Cloud Service -->
+                                <!-- Cloud Service / Workspace / Unbound badge -->
                                 <div t-if="project.cloud_service_name" class="o_woow_sp_card_workspace">
                                     <WoowIcon name="'cloud'" size="14"/>
                                     <span t-esc="project.cloud_service_name"/>
                                 </div>
-                                <!-- Workspace -->
                                 <div t-elif="project.workspace_name" class="o_woow_sp_card_workspace">
                                     <WoowIcon name="'folder'" size="14"/>
                                     <span t-esc="project.workspace_name"/>
+                                </div>
+                                <div t-else="" class="o_woow_sp_card_workspace o_woow_sp_card_unbound">
+                                    <WoowIcon name="'cloud_off'" size="14"/>
+                                    <span>Unbound</span>
                                 </div>
 
                                 <!-- Team Avatars -->

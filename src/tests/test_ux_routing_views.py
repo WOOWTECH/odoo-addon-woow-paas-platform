@@ -1,0 +1,205 @@
+"""TDD red phase tests — UX / routing / view contracts (AC #20-25).
+
+Plan: docs/refactor/plan-cloud-service-project-decouple.md (D4=C, D5=A)
+
+These tests assert *file-level* contracts on the static assets and views
+that the OWL frontend ships.  Full E2E coverage (playwright-cli) is
+recommended in the plan's "E2E / UI tests" section but is *out of scope*
+for the red phase — running a headed browser per test would dwarf the
+rest of the suite.  Asset-content assertions give a deterministic red
+signal that implementation must produce specific identifiers, while
+preserving fast pytest runs.  E2E may be layered on top later.
+"""
+from pathlib import Path
+
+from odoo.modules import get_module_path
+from odoo.tests.common import TransactionCase
+
+
+class _AssetReader:
+    """Read static assets from the addon path."""
+
+    @classmethod
+    def module_path(cls) -> Path:
+        return Path(get_module_path('woow_paas_platform'))
+
+    @classmethod
+    def read(cls, *rel_parts: str) -> str:
+        p = cls.module_path().joinpath(*rel_parts)
+        return p.read_text(encoding='utf-8') if p.exists() else ''
+
+    @classmethod
+    def exists(cls, *rel_parts: str) -> bool:
+        return cls.module_path().joinpath(*rel_parts).is_file()
+
+
+class TestRouterAlias(TransactionCase):
+    """AC #20 — both /woow#/ai-assistant and /woow#/projects route to Projects."""
+
+    def test_ac20_router_declares_projects_path(self):
+        """AC #20: router.js must register a ``projects`` route.
+
+        Current router only has ``ai-assistant`` family; ``projects`` is
+        missing — implementation must add it as an alias that lands on
+        the same Projects list page.
+        """
+        router_src = _AssetReader.read('static/src/paas/core/router.js')
+        self.assertTrue(router_src, "router.js not found")
+        # Need either a "projects" path or routeName for alias
+        self.assertRegex(
+            router_src,
+            r"""path\s*:\s*['"]projects['"]""",
+            "AC #20: router.js must declare a `projects` path "
+            "(alias for `ai-assistant`)",
+        )
+
+    def test_ac20_router_keeps_ai_assistant_for_bookmarks(self):
+        """AC #20 (updated for commit 1d90953): the *bare* ``/woow#/ai-assistant``
+        route was intentionally removed — it now resolves to the not-found page.
+        The ``ai-assistant/*`` sub-paths (projects/tasks/chat) stay registered so
+        existing deep bookmarks keep resolving to the merged Projects pages.
+
+        We assert the sub-paths survive (that is the live bookmark-compat
+        contract); a hard assertion on the obsolete bare route would re-break on
+        the legitimate 1d90953 evolution (phase-versioned-test-assertion family,
+        F-ARC-1 / gitea #131).
+        """
+        router_src = _AssetReader.read('static/src/paas/core/router.js')
+        self.assertTrue(router_src, "router.js not found")
+        for subpath in ('ai-assistant/projects', 'ai-assistant/tasks',
+                        'ai-assistant/chat'):
+            self.assertRegex(
+                router_src,
+                rf"""path\s*:\s*['"]{subpath}""",
+                f"AC #20: `{subpath}` sub-path must stay registered so "
+                "existing bookmarks keep resolving (bare `ai-assistant` was "
+                "intentionally removed in 1d90953)",
+            )
+
+
+class TestSidebarEntry(TransactionCase):
+    """AC #21 — sidebar entry shows ``Projects`` label."""
+
+    def test_ac21_sidebar_navitem_renamed_to_projects(self):
+        """AC #21: sidebar registers a ``Projects`` nav item.
+
+        Decision Open Q4 = keep the English literal "Projects".
+        """
+        sidebar_src = _AssetReader.read(
+            'static/src/paas/layout/sidebar/Sidebar.js',
+        )
+        self.assertTrue(sidebar_src, "Sidebar.js not found")
+        # We look for a nav item named "Projects" (the literal label)
+        self.assertRegex(
+            sidebar_src,
+            r"""name\s*:\s*['"]Projects['"]""",
+            "AC #21: Sidebar.js must declare a nav item with "
+            "name 'Projects' (Open Q4: keep English literal)",
+        )
+
+
+class TestCreateProjectModal(TransactionCase):
+    """AC #22, #23 — modal allows unbound, drops the `has_project` filter."""
+
+    def test_ac22_modal_offers_no_service_option(self):
+        """AC #22: modal exposes a "No service" first option.
+
+        The implementation may surface this via the OWL template (xml)
+        or via a JS-side default; we accept either.  Heuristic: the
+        literal "No service" (or zh-tw equivalent) must appear in one
+        of the modal asset files.
+        """
+        js = _AssetReader.read(
+            'static/src/paas/components/modal/CreateProjectModal.js',
+        )
+        xml = _AssetReader.read(
+            'static/src/paas/components/modal/CreateProjectModal.xml',
+        )
+        combined = (js + '\n' + xml).lower()
+        self.assertTrue(
+            'no service' in combined or 'unbound' in combined,
+            "AC #22: CreateProjectModal must expose a 'No service' / "
+            "'Unbound' first-class option for unbound project creation",
+        )
+
+    def test_ac23_modal_removes_has_project_filter(self):
+        """AC #23: the JS filter ``!svc.has_project`` must be gone.
+
+        Currently CreateProjectModal.js lines 71-72 hide services with
+        existing projects; the unique constraint server-side is the
+        proper enforcement, so the front-end filter must be removed.
+        """
+        js = _AssetReader.read(
+            'static/src/paas/components/modal/CreateProjectModal.js',
+        )
+        self.assertTrue(js, "CreateProjectModal.js not found")
+        # Reject the negation-style filter that hides services
+        self.assertNotRegex(
+            js,
+            r"!\s*svc\.has_project\b|has_project\s*===?\s*false",
+            "AC #23: `has_project` client-side filter must be removed "
+            "(server-side unique constraint is the source of truth)",
+        )
+
+    def test_ac23_modal_no_longer_requires_service_selection(self):
+        """AC #23 (paired): submit no longer fails on empty service.
+
+        Current code at onSubmit raises "Please select a cloud service"
+        when cloudServiceId is empty — that gate must go away with D5=A.
+        """
+        js = _AssetReader.read(
+            'static/src/paas/components/modal/CreateProjectModal.js',
+        )
+        self.assertNotIn(
+            'Please select a cloud service', js,
+            "AC #23: 'Please select a cloud service' gate must be "
+            "removed (service is optional after D5=A)",
+        )
+
+
+class TestProjectsListBadge(TransactionCase):
+    """AC #24 — Projects list page exposes bound/unbound badge."""
+
+    def test_ac24_projects_page_shows_binding_state(self):
+        """AC #24: Projects list renders a Bound/Unbound badge column.
+
+        Heuristic: a literal "Unbound" / "unbound" must appear in either
+        the page's JS or XML so the badge has visible text for the user.
+        """
+        js = _AssetReader.read(
+            'static/src/paas/pages/support-projects/SupportProjectsPage.js',
+        )
+        xml = _AssetReader.read(
+            'static/src/paas/pages/support-projects/SupportProjectsPage.xml',
+        )
+        combined = (js + '\n' + xml).lower()
+        self.assertIn(
+            'unbound', combined,
+            "AC #24: SupportProjectsPage must render 'Unbound' badge "
+            "text so users distinguish bound from unbound projects",
+        )
+
+
+class TestTaskFormLinkedServicesPanel(TransactionCase):
+    """AC #25 — Task form chatter area exposes Linked Services panel."""
+
+    def test_ac25_task_form_xml_declares_extras_panel(self):
+        """AC #25: project_task_views.xml renders ``extra_cloud_service_ids``.
+
+        Implementation chooses the exact widget; the contract is that
+        the field is bound somewhere in the form so users can add /
+        remove extras.  We also assert ``primary_cloud_service_id`` is
+        rendered (read-only chip).
+        """
+        view_xml = _AssetReader.read('views/project_task_views.xml')
+        self.assertTrue(view_xml, "project_task_views.xml not found")
+        self.assertIn(
+            'extra_cloud_service_ids', view_xml,
+            "AC #25: task form must surface extra_cloud_service_ids "
+            "(Linked Services panel)",
+        )
+        self.assertIn(
+            'primary_cloud_service_id', view_xml,
+            "AC #25: task form must surface primary_cloud_service_id "
+            "(readonly chip in Linked Services panel)",
+        )

@@ -1,10 +1,13 @@
 /** @odoo-module **/
-import { Component, useState, onMounted } from "@odoo/owl";
+import { Component, useState, onMounted, useExternalListener } from "@odoo/owl";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { CreateTaskModal } from "../../components/modal/CreateTaskModal";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
+import { aiService } from "../../services/ai_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { formatDate } from "../../services/utils";
+import { podStateLabel } from "../../services/agent_pod_state";
 
 export class ProjectKanbanPage extends Component {
     static template = "woow_paas_platform.ProjectKanbanPage";
@@ -16,14 +19,86 @@ export class ProjectKanbanPage extends Component {
     setup() {
         this.router = router;
         this.supportService = useState(supportService);
+        this.aiService = useState(aiService);
         this.state = useState({
             showCreateModal: false,
             defaultStageId: null,
+            // Status pills (header, right of Create Task)
+            connectionLoading: true,
+            agentLoading: true,
+            agentPodLoading: true,
+            openStatusPopover: null, // 'connection' | 'agent' | null
+        });
+
+        // Close any open status popover on an outside click. Pill / popover
+        // clicks stopPropagation, so only true outside clicks reach this.
+        useExternalListener(window, "click", () => {
+            this.state.openStatusPopover = null;
         });
 
         onMounted(async () => {
             await this._loadData();
+            // Status pills load independently of the kanban board so a slow
+            // operator never blocks the board render.
+            this._loadStatuses();
         });
+    }
+
+    async _loadStatuses() {
+        // Stage 1 — config readiness (fast DB/config reads; gates the pills).
+        this.state.connectionLoading = true;
+        this.state.agentLoading = true;
+        await Promise.all([
+            this.aiService.fetchConnectionStatus(),
+            this.aiService.fetchAgentStatus(this.props.projectId),
+        ]);
+        this.state.connectionLoading = false;
+        this.state.agentLoading = false;
+        // Stage 2 — live pod lifecycle (augments the Agent pill; non-blocking).
+        this.state.agentPodLoading = true;
+        await this.aiService.fetchAgentPodStatus(this.props.projectId);
+        this.state.agentPodLoading = false;
+    }
+
+    toggleStatusPopover(which, ev) {
+        if (ev) {
+            ev.stopPropagation();
+        }
+        this.state.openStatusPopover =
+            this.state.openStatusPopover === which ? null : which;
+    }
+
+    get connection() {
+        return this.aiService.connectionStatus || {
+            connected: false, provider_name: "", model_name: "",
+        };
+    }
+
+    get agent() {
+        return this.aiService.agentStatus || {
+            ready: false, enabled: false, operator_configured: false,
+            template_name: "", model_name: "", reason: "",
+        };
+    }
+
+    get agentPod() {
+        return this.aiService.agentPodStatus || { state: "" };
+    }
+
+    get isConnectionLoading() {
+        return this.state.connectionLoading;
+    }
+
+    get isAgentLoading() {
+        return this.state.agentLoading;
+    }
+
+    /** Short zh-tw label for the live pod state — only shown once the Agent is
+     *  config-ready. Empty fallback for unknown states (XML guards display with
+     *  ``t-if``). Label字面與 portal 共用 services/agent_pod_state.js，避免漂移
+     *  （舊版手寫 map 缺 spawning/unknown，已由共用模組補齊）。 */
+    get agentLiveLabel() {
+        return podStateLabel(this.agentPod.state, "");
     }
 
     openCreateModal(stageId = null) {
@@ -46,6 +121,11 @@ export class ProjectKanbanPage extends Component {
         await Promise.all([
             supportService.fetchProjectStages(this.props.projectId),
             supportService.fetchAllTasks({ project_id: this.props.projectId }),
+        ]);
+        // 麵包屑軌跡：Projects → {專案名}（看板是專案的主工作視圖，末段即專案本身）
+        breadcrumbService.set("ai-project-kanban", [
+            { label: "Projects", path: "projects" },
+            { label: this.projectName, path: null },
         ]);
     }
 
@@ -136,7 +216,9 @@ export class ProjectKanbanPage extends Component {
     }
 
     navigateBack() {
-        this.router.navigate("ai-assistant/projects");
+        // 統一回 canonical 的 Projects 列表入口（#/projects），與卡片進入點一致，
+        // 不再導去舊的 ai-assistant/projects URL。
+        this.router.navigate("projects");
     }
 
     // ==================== Drag and Drop ====================
