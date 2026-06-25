@@ -2,6 +2,7 @@
 import { Component, useState } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
+import { PlanSelector } from "../subscription/PlanSelector";
 import { workspaceService } from "../../services/workspace_service";
 
 /**
@@ -17,7 +18,7 @@ import { workspaceService } from "../../services/workspace_service";
  */
 export class CreateSmartHomeModal extends Component {
     static template = "woow_paas_platform.CreateSmartHomeModal";
-    static components = { WoowButton, WoowIcon };
+    static components = { WoowButton, WoowIcon, PlanSelector };
     static props = {
         workspaceId: { type: Number },
         onClose: { type: Function },
@@ -28,12 +29,73 @@ export class CreateSmartHomeModal extends Component {
         this.state = useState({
             name: "",
             haPort: "8123",
+            templates: [],
+            selectedTemplateId: null,
+            plans: [],
+            selectedPlanId: null,
             loading: false,
+            loadingTemplates: true,
+            loadingPlans: false,
             provisioning: false,
             error: null,
+            // Surface backend fetch failures so admins see the actual
+            // error (e.g. "Template has no subscription plans configured")
+            // instead of a misleading "No plans available" empty state.
+            templatesError: null,
+            plansError: null,
             step: "form", // "form" | "provisioning" | "done"
             provisionProgress: 0,
         });
+
+        this.loadTemplates();
+    }
+
+    async loadTemplates() {
+        this.state.loadingTemplates = true;
+        this.state.templatesError = null;
+        const result = await workspaceService.fetchSmartHomeTemplates();
+        this.state.loadingTemplates = false;
+        if (!result.success) {
+            this.state.templatesError = result.error;
+            this.state.templates = [];
+            return;
+        }
+        this.state.templates = result.data;
+        if (this.state.templates.length > 0) {
+            // Auto-select the first template; users can switch via the
+            // dropdown when more than one is active.
+            await this.onTemplateSelect(this.state.templates[0].id);
+        }
+    }
+
+    async onTemplateSelect(templateId) {
+        this.state.selectedTemplateId = templateId;
+        this.state.selectedPlanId = null;
+        this.state.plans = [];
+        this.state.error = null;
+        this.state.plansError = null;
+        this.state.loadingPlans = true;
+        const result = await workspaceService.fetchSmartHomePlans(templateId);
+        this.state.loadingPlans = false;
+        if (!result.success) {
+            this.state.plansError = result.error;
+            return;
+        }
+        this.state.plans = result.data;
+        if (this.state.plans.length > 0) {
+            this.state.selectedPlanId = this.state.plans[0].id;
+        }
+    }
+
+    onTemplateChange(ev) {
+        const id = parseInt(ev.target.value, 10);
+        if (!isNaN(id)) {
+            this.onTemplateSelect(id);
+        }
+    }
+
+    onPlanSelect(planId) {
+        this.state.selectedPlanId = planId;
     }
 
     onNameInput(ev) {
@@ -65,6 +127,16 @@ export class CreateSmartHomeModal extends Component {
             return;
         }
 
+        if (!this.state.selectedTemplateId) {
+            this.state.error = "Please select a Smart Home template";
+            return;
+        }
+
+        if (!this.state.selectedPlanId) {
+            this.state.error = "Please select a subscription plan";
+            return;
+        }
+
         this.state.loading = true;
         this.state.error = null;
 
@@ -72,6 +144,8 @@ export class CreateSmartHomeModal extends Component {
         const createResult = await workspaceService.createSmartHome(this.props.workspaceId, {
             name,
             ha_port: port,
+            plan_id: this.state.selectedPlanId,
+            template_id: this.state.selectedTemplateId,
         });
 
         if (!createResult.success) {

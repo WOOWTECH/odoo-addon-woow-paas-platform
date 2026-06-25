@@ -25,16 +25,7 @@
 
             <!-- Team Content -->
             <t t-elif="workspace">
-                <!-- Breadcrumb / Back Navigation -->
-                <div class="o_woow_breadcrumb">
-                    <button class="o_woow_back_btn" t-on-click="goBack">
-                        <WoowIcon name="'arrow_back'" size="20"/>
-                    </button>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack" t-esc="workspace.name"/>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_current">Team</span>
-                </div>
+                <!-- 麵包屑統一由全域 Header 呈現（見 WorkspaceTeamPage.loadData）-->
 
                 <!-- Header Section -->
                 <div class="o_woow_workspace_header">

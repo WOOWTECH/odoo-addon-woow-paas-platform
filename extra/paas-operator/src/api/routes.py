@@ -67,6 +67,51 @@ async def list_routes():
         )
 
 
+# NOTE: declared before any path-param route (e.g. DELETE /{subdomain}) so
+# FastAPI does not match "availability" as a {subdomain} value.
+@router.get(
+    "/availability",
+    summary="Check whether a subdomain is free in the platform zone",
+)
+async def check_route_availability(subdomain: str):
+    """Check Cloudflare-side DNS for an existing record on this subdomain.
+
+    Second layer of the two-layer availability check (first layer is the
+    Odoo DB UNIQUE constraint) — catches drift and records created outside
+    the platform (e.g. infra tunnels, manual records).
+    """
+    if not cloudflare_service.api_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cloudflare API token is required",
+        )
+    hostname = f"{subdomain}.{cloudflare_service.domain}"
+    # raise_on_error=True so a CF API error (401/403/429/5xx) is NOT silently
+    # reported as "available" (fail-open). On error we surface an explicit
+    # unknown state with the reason; the Odoo side keeps the DB UNIQUE
+    # constraint + CF-side create failure as the authoritative guards.
+    try:
+        existing = await cloudflare_service.get_dns_record(
+            hostname, raise_on_error=True
+        )
+    except CloudflareException as e:
+        logger.error(f"Availability check could not determine status: {e.message}")
+        return {
+            "subdomain": subdomain,
+            "hostname": hostname,
+            "available": None,
+            "status": "unknown",
+            "reason": "Cloudflare availability check failed; "
+                      "could not confirm the subdomain is free.",
+        }
+    return {
+        "subdomain": subdomain,
+        "hostname": hostname,
+        "available": existing is None,
+        "status": "free" if existing is None else "taken",
+    }
+
+
 @router.post(
     "",
     response_model=RouteResponse,

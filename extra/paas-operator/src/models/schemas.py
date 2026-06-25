@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ReleaseStatus(str, Enum):
@@ -108,9 +108,10 @@ class TunnelCreateRequest(BaseModel):
         ...,
         description="Tunnel name (e.g., 'smarthome-livingroom')",
     )
-    hostname: str = Field(
-        ...,
-        description="Public hostname for the tunnel (e.g., 'ha.example.com')",
+    hostname: Optional[str] = Field(
+        None,
+        description="Public hostname for the tunnel. Omit to create a bare "
+        "tunnel (catch-all 404 ingress, no DNS record).",
     )
     service_url: str = Field(
         default="http://localhost:8123",
@@ -211,9 +212,21 @@ class TunnelCreateResponse(BaseModel):
     tunnel_id: str = Field(..., description="Cloudflare Tunnel ID")
     tunnel_name: str = Field(..., description="Tunnel name")
     tunnel_token: str = Field(..., description="Tunnel token for cloudflared")
-    hostname: str = Field(..., description="Configured public hostname")
+    hostname: Optional[str] = Field(
+        None, description="Configured public hostname (None for a bare tunnel)"
+    )
     dns_record_id: Optional[str] = Field(
         None, description="DNS record ID if created"
+    )
+    dns_failed: bool = Field(
+        False,
+        description=(
+            "True when DNS was enabled but the record creation failed, so "
+            "dns_record_id is None for an error reason (vs None because DNS "
+            "is intentionally disabled). Lets the caller distinguish the two "
+            "and alert/re-sync rather than silently treating the tunnel as "
+            "fully reachable."
+        ),
     )
 
 
@@ -329,8 +342,275 @@ class N8nInitResponse(BaseModel):
     error: Optional[str] = None
 
 
+class OdooInitResponse(BaseModel):
+    """Response from Odoo module list initialization."""
+
+    success: bool
+    modules_added: int = Field(default=0, description="Number of new modules discovered")
+    modules_updated: int = Field(default=0, description="Number of existing modules updated")
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+# --- Odoo Module Management ---
+
+
+class OdooModuleStatesRequest(BaseModel):
+    """Request to query Odoo module installation states."""
+
+    module_names: List[str] = Field(..., description="List of module technical names to check")
+
+
+class OdooModuleStateInfo(BaseModel):
+    """Installation state and reverse dependencies for a single module."""
+
+    state: str = Field(..., description="Module state: installed, uninstalled, uninstallable, etc.")
+    dependents: List[str] = Field(default_factory=list, description="Installed modules that depend on this one")
+
+
+class OdooModuleStatesResponse(BaseModel):
+    """Response with module states."""
+
+    success: bool
+    modules: Dict[str, OdooModuleStateInfo] = Field(default_factory=dict)
+    error: Optional[str] = None
+
+
+
+
 class ErrorResponse(BaseModel):
     """Error response."""
 
     detail: str
     error_type: Optional[str] = None
+
+
+# Agent Runtime (per-project pod) — design §2.11
+
+
+class SpawnOrAttachRequest(BaseModel):
+    """Request to spawn / attach / resume a project's agent-runtime pod."""
+
+    project_hash: str = Field(..., description="K8s namespace hash (per-project)")
+    project_id: int = Field(..., description="Authoritative project id (token claim)")
+    channel_id: int = Field(..., description="Invoking discuss.channel id")
+    invoker_user_id: int = Field(..., description="Invoking res.users id")
+    invoker_role: str = Field(..., description="Invoker project_access role")
+    project_workspace_ids: List[int] = Field(
+        default_factory=list,
+        description="Workspace ids the pod's NetworkPolicy egress may reach",
+    )
+    agent_template_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    mcp_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    skill_snapshot: List[Dict[str, Any]] = Field(default_factory=list)
+    # F-PILOT-8 — per-tenant LLM credential (design §8.2). The operator never
+    # queries the Odoo DB, so the tenant's ai.config api_key (+ optional model
+    # config) rides the spawn request and the operator provisions it as a
+    # per-release Secret. NB the model-config field is `llm_model_config`, NOT
+    # `model_config` — the latter is a pydantic-reserved BaseModel attribute.
+    api_key: Optional[str] = Field(
+        default=None,
+        description="Per-tenant LLM api_key, provisioned as a per-release Secret",
+    )
+    llm_model_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional LLM model config (model / temperature / ...)",
+    )
+
+
+class ResumeRequest(BaseModel):
+    """Optional body for the standalone resume endpoint (re-sign token)."""
+
+    project_id: Optional[int] = None
+    project_workspace_ids: List[int] = Field(default_factory=list)
+
+
+class InvalidateMcpRequest(BaseModel):
+    """Request to invalidate a pod's mcp.json ConfigMap snapshot."""
+
+    mcp_snapshot: Dict[str, Any] = Field(default_factory=dict)
+
+
+class InvalidateSkillsRequest(BaseModel):
+    """Request to invalidate a pod's skills.json ConfigMap snapshot.
+
+    Symmetric with :class:`InvalidateMcpRequest`; the snapshot is the
+    list[{name, version, sha256, description}] the Odoo controller builds.
+    """
+
+    skill_snapshot: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class SyncWorkspacesRequest(BaseModel):
+    """Request to re-render a pod's NetworkPolicy egress allowlist."""
+
+    project_workspace_ids: List[int] = Field(default_factory=list)
+
+
+# Security Access — multi-route dedicated tunnel sync (security-access P1)
+
+
+class TunnelRouteSpec(BaseModel):
+    """One desired ingress route on a dedicated tunnel."""
+
+    subdomain: str = Field(..., description="Subdomain under the platform zone")
+    service_url: str = Field(..., description="Backend service URL or http_status:NNN")
+    http_host_header: bool = Field(
+        True, description="Send the public hostname as HTTP Host header to origin"
+    )
+
+
+class TunnelRoutesSyncRequest(BaseModel):
+    """Declarative full sync of a dedicated tunnel's routes."""
+
+    routes: List[TunnelRouteSpec] = Field(..., min_length=0)
+    comment: Optional[str] = Field(
+        None, description="Canonical name stamped on DNS records for traceability"
+    )
+
+
+class TunnelRouteSyncResult(BaseModel):
+    subdomain: str
+    hostname: str
+    dns_record_id: Optional[str] = None
+
+
+class TunnelRoutesSyncResponse(BaseModel):
+    tunnel_id: str
+    routes: List[TunnelRouteSyncResult]
+
+
+# Security Access — Cloudflare Access (Zero Trust) sync (security-access P2)
+
+
+class AccessDecision(str, Enum):
+    """Cloudflare Access policy decision. ``bypass`` skips authentication and
+    does not support identity-based selectors (enforced below)."""
+
+    ALLOW = "allow"
+    DENY = "deny"
+    BYPASS = "bypass"
+
+
+# Selectors whose rule_type carries no value (e.g. "everyone").
+_VALUELESS_RULE_TYPES = {"everyone"}
+# Identity-based selectors a bypass policy may not use (Cloudflare rejects them).
+_IDENTITY_RULE_TYPES = {"email_domain", "email_list"}
+
+
+class AccessRuleSpec(BaseModel):
+    """One selector rule inside a policy group (include / require / exclude).
+
+    rule_value is per-type: domain (no @) / comma-separated emails / CIDR /
+    comma-separated ISO-2 country codes; empty for ``everyone``.
+    """
+
+    rule_type: str = Field(
+        ...,
+        description="email_domain | email_list | ip_range | everyone | country",
+    )
+    rule_value: Optional[str] = Field(None, description="Selector value per type")
+
+    @field_validator("rule_value", mode="before")
+    @classmethod
+    def _normalize_empty(cls, v):
+        # Odoo reads an unset Char field back as Python ``False``; a valueless
+        # selector (e.g. everyone) therefore arrives as JSON ``false``. Coerce
+        # any falsy value (False / "" / None) to None so it is accepted instead
+        # of 422'd as a non-string — defense in depth with the Odoo-side
+        # normalization in _rules_by_group.
+        return v or None
+
+
+class AccessPolicySpec(BaseModel):
+    """One desired Access policy (reusable) on an SA's Access App.
+
+    Mirrors Cloudflare's native policy shape: include (OR) / require (AND) /
+    exclude (NOT) selector groups + a decision. At least one Include rule is
+    required; bypass policies may not carry identity-based selectors.
+    """
+
+    name: str = Field(..., description="Policy display name")
+    decision: AccessDecision = Field(..., description="allow | deny | bypass")
+    include: List[AccessRuleSpec] = Field(
+        default_factory=list, description="OR group; at least one required"
+    )
+    require: List[AccessRuleSpec] = Field(
+        default_factory=list, description="AND group"
+    )
+    exclude: List[AccessRuleSpec] = Field(
+        default_factory=list, description="NOT group"
+    )
+    precedence: int = Field(1, description="Evaluation order; lower first")
+
+    @model_validator(mode="after")
+    def _validate_groups(self) -> "AccessPolicySpec":
+        if not self.include:
+            raise ValueError(
+                "Access policy must contain at least one include rule")
+        if self.decision == AccessDecision.BYPASS:
+            for group in (self.include, self.require, self.exclude):
+                if any(r.rule_type in _IDENTITY_RULE_TYPES for r in group):
+                    raise ValueError(
+                        "Bypass policies cannot use identity-based selectors "
+                        "(email_domain / email_list)")
+        return self
+
+
+class AccessSyncRequest(BaseModel):
+    """Declarative full-state sync of one SA's Cloudflare Access config.
+
+    enabled=False → operator tears down the app + its reusable policies.
+    """
+
+    enabled: bool = Field(..., description="Master Access protection toggle")
+    canonical_name: str = Field(
+        ..., description="SA canonical name; stamped on app/policy names"
+    )
+    app_name: str = Field(..., description="Access Application display name")
+    primary_hostname: str = Field(
+        ..., description="App primary domain (SA primary hostname)"
+    )
+    protected_hostnames: List[str] = Field(
+        default_factory=list,
+        description="Hostnames to protect (app destinations); subset of routes",
+    )
+    session_duration: str = Field(
+        "24h", description='Go duration string, e.g. "8h" / "24h"'
+    )
+    login_idp_types: List[str] = Field(
+        default_factory=list,
+        description='IdP types to allow, e.g. ["google", "onetimepin"]; '
+                    "empty = all available",
+    )
+    policies: List[AccessPolicySpec] = Field(default_factory=list)
+    existing_app_id: Optional[str] = Field(None)
+    existing_policy_ids: Optional[List[str]] = Field(None)
+
+
+class AccessSyncResponse(BaseModel):
+    app_id: Optional[str] = Field(None, description="CF Access App id (None if disabled/torn down)")
+    policy_ids: List[str] = Field(default_factory=list)
+    allowed_idps: List[str] = Field(
+        default_factory=list, description="Resolved IdP ids set on the app"
+    )
+    unresolved_idp_types: List[str] = Field(
+        default_factory=list,
+        description="Requested login methods with no matching account IdP "
+                    "(silently dropped → login restriction widened to all IdPs)",
+    )
+    orphaned_policy_ids: List[str] = Field(
+        default_factory=list,
+        description="Old reusable policies that could not be deleted after the "
+                    "app was repointed — permanent CF orphans to log/alert on",
+    )
+
+
+class IdentityProviderInfo(BaseModel):
+    id: str
+    name: str
+    type: str
+
+
+class IdentityProvidersResponse(BaseModel):
+    identity_providers: List[IdentityProviderInfo]

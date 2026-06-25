@@ -5,6 +5,7 @@ import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { InviteMemberModal } from "../../components/modal/InviteMemberModal";
 import { workspaceService } from "../../services/workspace_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { MANAGEMENT_ROLES, getRoleBadgeClass, formatDate, getInitials } from "../../services/utils";
 
@@ -42,6 +43,12 @@ export class WorkspaceTeamPage extends Component {
 
         if (workspaceResult.success) {
             this.state.workspace = workspaceResult.data;
+            // 麵包屑軌跡：Workspaces → {工作區名}(連回工作區) → Team
+            breadcrumbService.set("workspace-team", [
+                { label: "Workspaces", path: "workspaces" },
+                { label: this.state.workspace.name, path: `workspace/${this.props.workspaceId}` },
+                { label: "Team", path: null },
+            ]);
         } else {
             this.state.error = workspaceResult.error;
         }

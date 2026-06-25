@@ -2,9 +2,10 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config import settings
 from src.models.schemas import (
@@ -90,7 +91,7 @@ async def create_release(request: ReleaseCreateRequest):
     response_model=ReleaseInfo,
     summary="Get release information",
 )
-async def get_release(namespace: str, name: str):
+def get_release(namespace: str, name: str):
     """Get detailed information about a Helm release.
 
     Args:
@@ -130,7 +131,7 @@ async def get_release(namespace: str, name: str):
     response_model=ReleaseInfo,
     summary="Upgrade a Helm release",
 )
-async def upgrade_release(
+def upgrade_release(
     namespace: str,
     name: str,
     request: ReleaseUpgradeRequest,
@@ -174,6 +175,23 @@ async def upgrade_release(
         )
 
 
+def build_orphan_pvc_labels(release_name: str, grace_period_days: int) -> Dict[str, str]:
+    """Build the orphaned-PVC labels stamped at teardown for the pvc-cleanup cron.
+
+    orphaned-at is epoch SECONDS (colon-free): an RFC3339 timestamp contains ':',
+    an illegal k8s label value, which made `kubectl label` reject the whole batch
+    atomically so the cron's `-l orphaned-at` selector never matched and data PVCs
+    leaked forever (operator #208). Single source of truth so the integration
+    test exercises the exact value production the teardown path uses.
+    """
+    now_epoch = str(int(datetime.now(timezone.utc).timestamp()))
+    return {
+        "paas.woowtech.io/orphaned-at": now_epoch,
+        "paas.woowtech.io/release-name": release_name,
+        "paas.woowtech.io/grace-period-days": str(grace_period_days),
+    }
+
+
 @router.delete(
     "/{namespace}/{name}",
     response_model=Dict[str, str],
@@ -197,6 +215,21 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
         result = helm_service.uninstall(namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
 
+        # Label orphaned PVCs for deferred cleanup
+        try:
+            remaining_pvcs = k8s_service.list_pvcs(namespace)
+            if remaining_pvcs:
+                labels = build_orphan_pvc_labels(
+                    name, settings.pvc_grace_period_days
+                )
+                k8s_service.label_pvcs(namespace, remaining_pvcs, labels)
+                logger.info(
+                    f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace}: "
+                    f"{remaining_pvcs}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to label orphaned PVCs in {namespace}: {e}")
+
         # Delete Cloudflare Tunnel route if exists
         try:
             # Use provided subdomain or fall back to auto-generated
@@ -209,7 +242,13 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
 
         # Delete MCP sidecar Cloudflare route and K8s Service if they exist
         try:
-            mcp_subdomain = (subdomain or cloudflare_service.generate_subdomain(namespace, name)) + "-mcp"
+            # Deploy ALWAYS builds the mcp route from generate_subdomain (see
+            # _create_sidecar_service_and_route), ignoring the caller subdomain.
+            # Delete must use the same source or it targets a different hostname
+            # than was created → orphaned mcp CF route (operator #207). The main
+            # route above legitimately honours the caller subdomain; the mcp leg
+            # must NOT, to stay symmetric with deploy.
+            mcp_subdomain = cloudflare_service.generate_subdomain(namespace, name) + "-mcp"
             await cloudflare_service.delete_route(mcp_subdomain)
             logger.info(f"Deleted MCP sidecar Cloudflare route for {mcp_subdomain}")
         except CloudflareException as e:
@@ -248,7 +287,7 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
     response_model=Dict[str, str],
     summary="Rollback a Helm release",
 )
-async def rollback_release(
+def rollback_release(
     namespace: str,
     name: str,
     request: ReleaseRollbackRequest,
@@ -289,7 +328,7 @@ async def rollback_release(
     response_model=ReleaseRevisionsResponse,
     summary="Get release revision history",
 )
-async def get_release_revisions(namespace: str, name: str):
+def get_release_revisions(namespace: str, name: str):
     """Get the revision history of a Helm release.
 
     Args:
@@ -324,7 +363,7 @@ async def get_release_revisions(namespace: str, name: str):
     response_model=ReleaseStatusResponse,
     summary="Get release and pod status",
 )
-async def get_release_status(namespace: str, name: str):
+def get_release_status(namespace: str, name: str):
     """Get detailed status including pod information.
 
     Args:
@@ -369,6 +408,80 @@ async def get_release_status(namespace: str, name: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get release status. Check operator logs for details.",
+        )
+
+
+@router.post(
+    "/{namespace}/{name}/scale",
+    response_model=Dict[str, str],
+    summary="Scale a release's deployments",
+)
+def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge=0, le=10)):
+    """Scale all workloads (Deployments + StatefulSets) in a Helm release.
+
+    Used for subscription suspend (replicas=0) and resume (replicas=1).
+    Bitnami charts deploy their primary workload as a StatefulSet so we
+    cover both kinds; releases that have neither are a 404.
+
+    Args:
+        namespace: Release namespace
+        name: Release name
+        replicas: Target replica count (0 to suspend, 1+ to resume)
+
+    Returns:
+        Confirmation message with scaled workload counts.
+
+    Raises:
+        HTTPException: If scaling fails
+    """
+    selector = f"app.kubernetes.io/instance={name}"
+    try:
+        deployments = k8s_service.get_deployments(
+            namespace=namespace,
+            label_selector=selector,
+        )
+        statefulsets = k8s_service.get_statefulsets(
+            namespace=namespace,
+            label_selector=selector,
+        )
+
+        if not deployments and not statefulsets:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No deployments or statefulsets found for release {name} in namespace {namespace}",
+            )
+
+        scaled_deps = []
+        for dep in deployments:
+            dep_name = dep["name"]
+            k8s_service.scale_deployment(namespace, dep_name, replicas)
+            scaled_deps.append(dep_name)
+            logger.info(f"Scaled deployment {dep_name} in {namespace} to {replicas} replicas")
+
+        scaled_sts = []
+        for sts in statefulsets:
+            sts_name = sts["name"]
+            k8s_service.scale_statefulset(namespace, sts_name, replicas)
+            scaled_sts.append(sts_name)
+            logger.info(f"Scaled statefulset {sts_name} in {namespace} to {replicas} replicas")
+
+        total = len(scaled_deps) + len(scaled_sts)
+        return {
+            "message": f"Scaled {total} workload(s) to {replicas} replicas",
+            "deployments": ", ".join(scaled_deps),
+            "statefulsets": ", ".join(scaled_sts),
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except KubectlException as e:
+        logger.error(f"kubectl scale failed: {e.message}\nStderr: {e.stderr}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to scale workload. Check operator logs for details.",
         )
 
 

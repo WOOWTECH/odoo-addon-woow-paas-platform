@@ -6,6 +6,8 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { CategoryFilter } from "../../components/marketplace/CategoryFilter";
 import { AppCard } from "../../components/marketplace/AppCard";
 import { cloudService } from "../../services/cloud_service";
+import { workspaceService } from "../../services/workspace_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 
 /**
@@ -35,7 +37,23 @@ export class AppMarketplacePage extends Component {
 
         onMounted(() => {
             this.loadTemplates();
+            this._publishBreadcrumb();
         });
+    }
+
+    /**
+     * 麵包屑軌跡：Workspaces → {所屬工作區}(連回工作區) → App Marketplace。
+     * Marketplace 頁本身只抓模板、不載入工作區，工作區名從 workspaceService
+     * 的清單快取取得（經工作區頁進來時通常已有）；deep-link 缺快取時退守
+     * 泛用標籤「Workspace」，連結仍正確指向該工作區。
+     */
+    _publishBreadcrumb() {
+        const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
+        breadcrumbService.set("marketplace", [
+            { label: "Workspaces", path: "workspaces" },
+            { label: ws?.name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: "App Marketplace", path: null },
+        ]);
     }
 
     /**

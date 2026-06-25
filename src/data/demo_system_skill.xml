@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Demo/starter system skill: available to every project's pod.
+             noupdate so admins may delete it; bundle bytes inlined as base64,
+             sha256 must match the raw tar.gz bytes the pod fetches.
+             Claude Code model: the bundle is SKILL.md-only (no executable
+             entrypoint). The SKILL.md body IS the skill's instructions, injected
+             into the agent context via load_skill; there is no scripts/main.py.
+             The tar root MUST contain SKILL.md directly (no wrapper dir) —
+             agent-runtime cache.py reads dest/SKILL.md after extract.
+             See src/data/demo_skills/hello-world-0.1.0.tar.gz; if you re-pack,
+             update both the base64 above and bundle_sha256 below, and bump the
+             manifest + add a migration (noupdate records don't auto-update). -->
+        <record id="demo_attachment_hello_world" model="ir.attachment">
+            <field name="name">hello-world-0.1.0.tar.gz</field>
+            <field name="mimetype">application/gzip</field>
+            <field name="datas">H4sIAF9YJ2oC/+3SsU7DMBAG4Mx+ipMYWEiUikKlbN1AdGPobJprY2r7IttplLcnSWmF2IGB/1vuZFn3nyW/vjxvNoWrsx9Ujh6Xy7mOvtdyuXq49ufz1WJxn1GZ/YIuJh2Isn8qz3PlteOKGrZW8l6CrdWJQzTiKyqLRVGqmuMumDbNR2uq2QnFISZ2FI/GWkqNTnQIzCmOPVMXORRKd6mRUFEv0uet1Wkvwakp8YaepjTazmlqTc5447T9HD3P1CdtrH6zTEmIx40GaoO88y4VtG3YX4MuwYN0SgLpeIy0n5qvT5on31Hg2IqvqTepGS/sg2Ff2+E8wvgDeZmKSo2JZM6PuWx+G2n6K2lMnDcsVAYAAAAAAAAAAAAAAAAAAAAAAPB3PgB2xFqFACgAAA==</field>
+        </record>
+
+        <record id="demo_skill_hello_world" model="woow_paas_platform.skill">
+            <field name="name">hello-world</field>
+            <field name="title">Hello World</field>
+            <field name="description">A demo system skill that greets the user.</field>
+            <field name="version">0.1.0</field>
+            <field name="scope">system</field>
+            <field name="state">published</field>
+            <field name="bundle_sha256">f682398bd86af29702d750c507c5e881befbbe878a91704a4756a14a831011a6</field>
+            <field name="bundle_attachment_id" ref="demo_attachment_hello_world"/>
+            <field name="skill_metadata">{"name": "hello-world", "version": "0.1.0", "description": "A demo system skill that greets the user.", "author": "woow-platform"}</field>
+        </record>
+    </data>
+</odoo>

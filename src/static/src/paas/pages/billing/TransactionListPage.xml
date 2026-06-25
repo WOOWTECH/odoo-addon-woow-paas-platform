@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.TransactionListPage">
+        <div class="o_woow_transaction_list">
+            <!-- Page Header -->
+            <div class="o_woow_transaction_header">
+                <div class="o_woow_transaction_title_area">
+                    <div class="o_woow_transaction_breadcrumb">
+                        <a href="#/dashboard" class="o_woow_breadcrumb_link">Home</a>
+                        <WoowIcon name="'chevron_right'" size="16"/>
+                        <a href="#/billing" class="o_woow_breadcrumb_link">Billing</a>
+                        <WoowIcon name="'chevron_right'" size="16"/>
+                        <span class="o_woow_breadcrumb_current">Transactions</span>
+                    </div>
+                    <h1>Transaction History</h1>
+                    <p class="o_woow_transaction_subtitle">View all credit point transactions for your account.</p>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading transactions...</p>
+                </div>
+            </t>
+
+            <t t-else="">
+                <!-- Empty State -->
+                <t t-if="transactions.length === 0">
+                    <div class="o_woow_transaction_empty">
+                        <WoowIcon name="'receipt_long'" size="48"/>
+                        <p>No transactions found.</p>
+                    </div>
+                </t>
+
+                <t t-else="">
+                    <!-- Transaction Rows -->
+                    <div class="o_woow_transaction_rows">
+                        <t t-foreach="transactions" t-as="txn" t-key="txn.id">
+                            <div class="o_woow_transaction_row">
+                                <!-- Left: Icon -->
+                                <div t-attf-class="o_woow_txn_icon_circle {{ getTxnColorClass(txn) }}">
+                                    <WoowIcon name="getTxnIcon(txn)" size="20"/>
+                                </div>
+
+                                <!-- Middle: Description + Date -->
+                                <div class="o_woow_txn_details">
+                                    <span class="o_woow_txn_description" t-esc="formatDescription(txn)"/>
+                                    <span class="o_woow_txn_date" t-esc="formatDate(txn.date)"/>
+                                </div>
+
+                                <!-- Right: Amount + Balance After -->
+                                <div class="o_woow_txn_amounts">
+                                    <span t-attf-class="o_woow_txn_amount {{ getAmountClass(txn) }}"
+                                          t-esc="formatAmount(txn)"/>
+                                    <t t-if="txn.balance_after != null">
+                                        <span class="o_woow_txn_balance_after">
+                                            Balance: <t t-esc="formatBalance(txn)"/>
+                                        </span>
+                                    </t>
+                                </div>
+                            </div>
+                        </t>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="o_woow_transaction_pagination">
+                        <span class="o_woow_transaction_pagination_info">
+                            Showing <t t-esc="showingFrom"/>-<t t-esc="showingTo"/> of <t t-esc="totalTransactions"/> transactions
+                        </span>
+                        <div class="o_woow_transaction_pagination_buttons">
+                            <button
+                                class="o_woow_page_btn"
+                                t-att-disabled="currentPage === 1"
+                                t-on-click="() => this.goToPage(currentPage - 1)">
+                                <WoowIcon name="'chevron_left'" size="18"/>
+                            </button>
+                            <t t-foreach="pageNumbers" t-as="p" t-key="p">
+                                <button
+                                    t-attf-class="o_woow_page_btn {{ p === currentPage ? 'o_woow_page_btn_active' : '' }}"
+                                    t-on-click="() => this.goToPage(p)">
+                                    <t t-esc="p"/>
+                                </button>
+                            </t>
+                            <button
+                                class="o_woow_page_btn"
+                                t-att-disabled="currentPage === totalPages"
+                                t-on-click="() => this.goToPage(currentPage + 1)">
+                                <WoowIcon name="'chevron_right'" size="18"/>
+                            </button>
+                        </div>
+                    </div>
+                </t>
+            </t>
+        </div>
+    </t>
+</templates>

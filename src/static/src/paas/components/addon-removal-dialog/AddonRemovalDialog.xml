@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.AddonRemovalDialog">
+        <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+            <div class="o_woow_modal o_woow_addon_removal_dialog" t-on-click.stop="">
+                <div class="o_woow_modal_header">
+                    <WoowIcon name="'block'" size="24"/>
+                    <h3>Cannot Remove Addon</h3>
+                </div>
+
+                <div class="o_woow_modal_body">
+                    <p class="o_woow_dialog_desc">
+                        The following addon(s) are currently active (installed) in your Odoo instance and must be deactivated before removal:
+                    </p>
+                    <div class="o_woow_installed_list">
+                        <t t-foreach="installedModules" t-as="mod" t-key="mod.name">
+                            <div class="o_woow_installed_item">
+                                <WoowIcon name="'extension'" size="18"/>
+                                <span t-esc="mod.name"/>
+                                <t t-if="mod.dependents and mod.dependents.length > 0">
+                                    <span class="o_woow_dep_names">
+                                        (required by: <t t-esc="mod.dependents.join(', ')"/>)
+                                    </span>
+                                </t>
+                            </div>
+                        </t>
+                    </div>
+                    <p class="o_woow_dialog_hint">
+                        Please go to Odoo Apps and deactivate (uninstall) these modules first, then come back to remove them.
+                    </p>
+                </div>
+
+                <div class="o_woow_modal_footer">
+                    <WoowButton
+                        t-if="props.odooAppsUrl"
+                        variant="'primary'"
+                        size="'md'"
+                        onClick.bind="openOdooApps">
+                        <WoowIcon name="'open_in_new'" size="18"/>
+                        Open Odoo Apps
+                    </WoowButton>
+                    <WoowButton variant="'secondary'" size="'md'" onClick="props.onClose">
+                        OK
+                    </WoowButton>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

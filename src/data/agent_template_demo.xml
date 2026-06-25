@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Phase D WS3 / SEED.1: a draft, inert demo agent_template, seeded by the
+         module but NOT bound to any real project. Code-prep placeholder for the
+         admin enablement surface.
+         - state='draft' (the workflow "unpublished" state) — must stay draft.
+         - is_public=True is set DELIBERATELY: _check_visibility_consistency
+           rejects an unbound template only when is_public=False AND non-draft, so
+           a public draft is constraint-clean. (is_public here is the consistency
+           gate, NOT a publish/visibility claim — the template is unreachable
+           anyway: bound to no project, the resolver's ('project_ids','in',pid)
+           never matches it.)
+         - xmlid is a frozen contract: woow_paas_platform.agent_template_demo. -->
+    <data noupdate="1">
+        <record id="agent_template_demo" model="woow_paas_platform.agent_template">
+            <field name="name">Demo Agent Template</field>
+            <field name="title">Demo Agent</field>
+            <field name="description">Draft demo template for the Phase D agent-runtime enablement surface. Not bound to any project.</field>
+            <field name="is_public" eval="True"/>
+            <field name="state">draft</field>
+        </record>
+    </data>
+</odoo>

@@ -1,61 +1,133 @@
 /** @odoo-module **/
-import { Component } from "@odoo/owl";
+import { Component, onMounted, useState } from "@odoo/owl";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
-import { WoowButton } from "../../components/button/WoowButton";
+import { dashboardService } from "../../services/dashboard_service";
+import { profileService } from "../../services/profile_service";
+import { formatPoints, formatDate, formatDateTimeShort } from "../../utils/billing_helpers";
 
 export class DashboardPage extends Component {
     static template = "woow_paas_platform.DashboardPage";
-    static components = { WoowCard, WoowIcon, WoowButton };
+    static components = { WoowCard, WoowIcon };
 
-    stats = [
-        {
-            label: "Members Overview",
-            subtitle: "Team Management",
+    setup() {
+        this.dashboardService = useState(dashboardService);
+        this.profileService = useState(profileService);
+        onMounted(() => {
+            // Profile fetch is shared with the Header; dashboardService loads
+            // the rest of the page in one round-trip.
+            profileService.fetch();
+            dashboardService.fetchSummary();
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Welcome heading
+    // ------------------------------------------------------------------
+
+    get welcomeName() {
+        const name = this.profileService.partner?.name?.trim();
+        return name || "there";
+    }
+
+    // ------------------------------------------------------------------
+    // State convenience getters
+    // ------------------------------------------------------------------
+
+    get loading() {
+        return this.dashboardService.loading && !this.dashboardService.data;
+    }
+
+    get error() {
+        return this.dashboardService.error;
+    }
+
+    get data() {
+        return this.dashboardService.data;
+    }
+
+    // ------------------------------------------------------------------
+    // Stat-card content
+    // ------------------------------------------------------------------
+
+    get membersCard() {
+        const m = this.data?.members || { total: 0, active: 0, pending: 0 };
+        return {
+            label: "Members",
+            subtitle: "Workspace access",
             icon: "group",
             color: "blue",
             items: [
-                { label: "Total Members", value: "12" },
-                { label: "Active Users", value: "8" },
-                { label: "Pending Invites", value: "4" },
-            ]
-        },
-        {
-            label: "Billing Overview",
-            subtitle: "Current Cycle",
+                { label: "Total", value: m.total },
+                { label: "Active", value: m.active, highlight: true },
+            ],
+        };
+    }
+
+    get billingCard() {
+        const b = this.data?.billing || {};
+        return {
+            label: "Billing",
+            subtitle: "Credits & next bill",
             icon: "account_balance_wallet",
             color: "green",
             items: [
-                { label: "Month Usage", value: "$245.00" },
-                { label: "Credits Left", value: "$1,255.00" },
-                { label: "Next Bill", value: "Nov 1st", highlight: true },
-            ]
-        },
-        {
-            label: "Workspace Overview",
-            subtitle: "Pro Plan Limits",
-            icon: "deployed_code",
+                { label: "Credits Left", value: formatPoints(b.credits_left), highlight: true },
+                { label: "Cycle Usage", value: formatPoints(b.current_cycle_usage) },
+                {
+                    label: "Next Bill",
+                    value: b.next_bill_date
+                        ? `${formatDate(b.next_bill_date)} · ${formatPoints(b.next_bill_estimate)}`
+                        : "—",
+                },
+            ],
+        };
+    }
+
+    get workspacesCard() {
+        const w = this.data?.workspaces || { total: 0, services: { running: 0, total: 0 } };
+        return {
+            label: "Workspaces",
+            subtitle: "Active spaces & services",
+            icon: "dashboard",
             color: "purple",
             items: [
-                { label: "Cloud Services", value: "5", max: "10" },
-                { label: "Secure Tunnels", value: "3", max: "5" },
-                { label: "Workspaces", value: "2", max: "3" },
-            ]
-        },
-    ];
+                { label: "Total", value: w.total, highlight: true },
+                {
+                    label: "Services",
+                    value: `${w.services.running} running / ${w.services.total} total`,
+                },
+            ],
+        };
+    }
 
-    activities = [
-        { time: "10:48 AM", user: "Admin", action: "deployed", target: "Odoo Cloud" },
-        { time: "10:41 AM", user: "Admin", action: "deployed", target: "Odoo Cloud" },
-        { time: "10:27 AM", user: "Admin", action: "deployed", target: "Home Assistant" },
-        { time: "10:21 AM", user: "Admin", action: "deployed", target: "Odoo Cloud" },
-        { time: "10:01 AM", user: "Admin", action: "deployed", target: "Odoo Cloud" },
-    ];
+    /** Three stat cards rendered together in the grid. */
+    get statCards() {
+        if (!this.data) return [];
+        return [this.membersCard, this.billingCard, this.workspacesCard];
+    }
 
-    quickAccess = [
-        { name: "Odoo Cloud", icon: "cloud_circle", color: "purple", action: "Deploy" },
-        { name: "Local Home Assistant", icon: "home_iot_device", color: "blue", tag: "Local", action: "Connect" },
-        { name: "n8n Cloud", icon: "webhook", color: "orange", action: "Deploy" },
-        { name: "Custom Local Server", icon: "dns", color: "slate", tag: "On-Prem", action: "Setup Tunnel" },
-    ];
+    // ------------------------------------------------------------------
+    // Recent activity helpers
+    // ------------------------------------------------------------------
+
+    get activities() {
+        return this.data?.recent_activity || [];
+    }
+
+    /** Render `Mitchell Admin` → `MA` for the avatar circle. */
+    initialsFor(actor) {
+        if (!actor) return "?";
+        return actor
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(0, 2)
+            .map(p => p[0].toUpperCase())
+            .join("");
+    }
+
+    formatActivityTime(ts) {
+        return formatDateTimeShort(ts);
+    }
 }

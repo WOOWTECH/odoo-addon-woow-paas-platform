@@ -37,6 +37,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 SLUG=""
 MODULE="woow_paas_platform"
 KEEP_ON_FAIL=false
+E2E_SEED=false
 
 # --- 解析參數 ---
 while [[ $# -gt 0 ]]; do
@@ -47,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --keep-on-fail)
             KEEP_ON_FAIL=true
+            shift
+            ;;
+        --e2e-seed)
+            E2E_SEED=true
             shift
             ;;
         -h|--help)
@@ -60,6 +65,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --module <name>     Module to test (default: woow_paas_platform)"
             echo "  --keep-on-fail      If tests fail, extend sandbox TTL by 24h for debugging"
+            echo "  --e2e-seed          After tests pass, seed the e2e fixture (project + draft skill)"
             echo "  -h, --help          Show usage"
             echo ""
             echo "Examples:"
@@ -112,7 +118,7 @@ fi
 # --- 檢查 namespace 是否存在 ---
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo -e "${RED}Namespace '$NAMESPACE' does not exist. Is the sandbox running?${NC}" >&2
-    echo -e "${YELLOW}Create one with: "${SCRIPT_DIR}/create.sh"${NC}" >&2
+    echo -e "${YELLOW}Create one with: /woowprd:k8s-dev-sandbox create --context <ctx>${NC}" >&2
     exit 2
 fi
 
@@ -154,13 +160,27 @@ echo ""
 echo -e "${BLUE}Running tests for module: ${MODULE} in sandbox: ${NAMESPACE}${NC}"
 echo ""
 
-# Disable errexit so we can capture the exit code from kubectl exec
+# `/$MODULE` (slash-prefixed) selects the module's tests. A bare `$MODULE` is
+# parsed by Odoo as a *tag name* — no test carries that tag, so it matches 0
+# tests (silent false green). See docs/tracking/pitfalls/sandbox-module-test-false-green.md.
+# Disable errexit so we can capture the exit code from kubectl exec (tee keeps
+# the live log; PIPESTATUS[0] is kubectl's real exit code, not tee's).
+TEST_LOG="$(mktemp)"
 set +e
 kubectl exec -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" -- \
-    odoo --test-enable --test-tags "$MODULE" --stop-after-init \
-    --log-level=test -d "$DB_NAME" -c /etc/odoo/odoo.conf
-TEST_EXIT_CODE=$?
+    odoo -u "$MODULE" --test-enable --test-tags "/$MODULE" --stop-after-init \
+    --http-port=18069 --gevent-port=18072 --log-level=test \
+    -d "$DB_NAME" -c /etc/odoo/odoo.conf 2>&1 | tee "$TEST_LOG"
+TEST_EXIT_CODE=${PIPESTATUS[0]}
 set -e
+
+# False-green guard: exit 0 with 0 collected tests (uninstalled module → `-u`
+# is a no-op, or a non-matching tag) must NOT be reported as passing.
+if grep -qE "of 0 tests when loading database" "$TEST_LOG"; then
+    echo -e "${RED}❌ 0 tests ran — module likely not installed (install with -i first) or tag mismatch. Treating as failure.${NC}"
+    TEST_EXIT_CODE=1
+fi
+rm -f "$TEST_LOG"
 
 echo ""
 
@@ -175,6 +195,15 @@ if [ $TEST_EXIT_CODE -eq 0 ]; then
     echo -e "${BLUE}Restarting Odoo...${NC}"
     kubectl rollout restart -n "$NAMESPACE" "deploy/${FULLNAME}-odoo"
     kubectl rollout status -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" --timeout=120s 2>/dev/null || true
+
+    # Seed the e2e fixture last — after the rollout above the pod is serving again
+    # (module tests ran with --stop-after-init). --reset because the e2e run advances
+    # the fixture to archived, so each run needs a clean draft starting point.
+    if [ "$E2E_SEED" = true ]; then
+        echo ""
+        echo -e "${BLUE}Seeding e2e fixture...${NC}"
+        "${SCRIPT_DIR}/e2e-seed.sh" "$SLUG" --reset
+    fi
 
     exit 0
 else

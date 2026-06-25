@@ -2,6 +2,8 @@
 __pycache__/
 .idea
 .playwright-mcp
+.playwright-cli/
+.claude/skills/ecpay/
 odoo_env
 xdg-utils-1.1.3.tar.gz
 xdg-utils-1.1.3
@@ -13,12 +15,16 @@ resource/stitch_*
 .env
 .env.local
 .env.*.local
+.DS_Store
 
 # Generated config (from template)
 config/odoo/odoo.conf
 
 # Docker override
 docker-compose.override.yml
+
+# Third-party addons (mount from paas-odoo-ci repo via PAAS_CI_ADDONS_PATH)
+extra/extra-addons/
 
 # Python virtual environment
 .venv/
@@ -28,6 +34,9 @@ venv/
 .vscode/*.log
 .idea/
 
+# SuperClaude_Framework auto-generated namespace (/sc:workflow, /sc:research)
+claudedocs/
+
 # helm values (exclude real, keep examples)
 *values.yaml
 *values.yml
@@ -36,3 +45,7 @@ venv/
 # Allow chart default values (no secrets, only defaults)
 !charts/*/values.yaml
 !charts/*/values-*.yaml
+.maestri
+
+# Local symlink to meeting notes (absolute path, machine-specific — never commit)
+docs/meeting

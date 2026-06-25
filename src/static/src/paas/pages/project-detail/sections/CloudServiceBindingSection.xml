@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ProjectDetailCloudServiceBindingSection">
+        <WoowCard class="'o_woow_project_detail__section'">
+            <div class="o_woow_project_detail__section_header">
+                <WoowIcon name="'cloud'" size="20"/>
+                <h3>Cloud Service Binding</h3>
+            </div>
+
+            <div t-if="state.error" class="o_woow_error_message">
+                <WoowIcon name="'error'" size="16"/>
+                <span t-esc="state.error"/>
+            </div>
+
+            <div t-if="state.toast" class="o_woow_project_detail__toast">
+                <WoowIcon name="'warning'" size="16"/>
+                <span t-esc="state.toast"/>
+                <button class="o_woow_project_detail__toast_close" t-on-click="dismissToast">
+                    <WoowIcon name="'close'" size="14"/>
+                </button>
+            </div>
+
+            <div class="o_woow_project_detail__field">
+                <label>Current Binding</label>
+                <div class="o_woow_project_detail__binding_current">
+                    <t t-if="isBound">
+                        <WoowIcon name="'cloud'" size="16"/>
+                        <span t-esc="currentServiceName"/>
+                    </t>
+                    <t t-else="">
+                        <WoowIcon name="'cloud_off'" size="16"/>
+                        <span>Unbound</span>
+                    </t>
+                </div>
+            </div>
+
+            <div class="o_woow_project_detail__field">
+                <label>Change Binding</label>
+                <select class="o_woow_input"
+                        t-on-change="onSelectionChange"
+                        t-att-disabled="state.saving or state.loadingServices">
+                    <option value=""
+                            t-att-selected="!isBound">Unbound</option>
+                    <t t-foreach="state.availableServices" t-as="svc" t-key="svc.id">
+                        <option t-att-value="svc.id"
+                                t-att-selected="svc.id === currentServiceId"
+                                t-esc="svc.name"/>
+                    </t>
+                </select>
+            </div>
+
+            <!-- D7 Confirm modal -->
+            <div t-if="state.showConfirmModal"
+                 class="o_woow_modal_backdrop"
+                 t-on-click="cancelChange">
+                <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+                    <div class="o_woow_modal_header">
+                        <h2>Confirm Cloud Service Change</h2>
+                        <button class="o_woow_modal_close" t-on-click="cancelChange"
+                                t-att-disabled="state.saving">
+                            <WoowIcon name="'close'" size="20"/>
+                        </button>
+                    </div>
+                    <div class="o_woow_modal_body">
+                        <p t-esc="state.confirmMessage"/>
+                    </div>
+                    <div class="o_woow_modal_footer">
+                        <WoowButton variant="'secondary'" size="'md'"
+                                    onClick.bind="cancelChange"
+                                    disabled="state.saving">
+                            Cancel
+                        </WoowButton>
+                        <WoowButton variant="'primary'" size="'md'"
+                                    onClick.bind="confirmChange"
+                                    disabled="state.saving">
+                            <t t-if="state.saving">Saving...</t>
+                            <t t-else="">Confirm</t>
+                        </WoowButton>
+                    </div>
+                </div>
+            </div>
+        </WoowCard>
+    </t>
+</templates>

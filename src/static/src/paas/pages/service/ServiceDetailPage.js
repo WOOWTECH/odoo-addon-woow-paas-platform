@@ -6,13 +6,16 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { OverviewTab } from "./tabs/OverviewTab";
 import { ConfigurationTab } from "./tabs/ConfigurationTab";
+import { AddonsTab } from "./tabs/AddonsTab";
 import { McpServersTab } from "./tabs/McpServersTab";
 import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
+import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
+import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 
 /**
@@ -39,9 +42,11 @@ export class ServiceDetailPage extends Component {
         StatusBadge,
         OverviewTab,
         ConfigurationTab,
+        AddonsTab,
         McpServersTab,
         DeleteServiceModal,
         RollbackModal,
+        SkipTrialModal,
         EditDomainModal,
         CreateProjectModal,
     };
@@ -59,6 +64,7 @@ export class ServiceDetailPage extends Component {
             currentTab: this.props.initialTab || "overview",
             showDeleteModal: false,
             showRollbackModal: false,
+            showSkipTrialModal: false,
             showDomainModal: false,
             showCreateProjectModal: false,
             supportProject: null,
@@ -88,12 +94,29 @@ export class ServiceDetailPage extends Component {
 
         if (result.success) {
             this.state.service = result.data;
+            this._publishBreadcrumb();
             this.startPollingIfNeeded();
         } else {
             this.state.error = result.error || "Failed to load service";
         }
 
         this.state.loading = false;
+    }
+
+    /**
+     * 麵包屑軌跡：Workspaces → {所屬工作區}(連回該工作區) → {服務名}。
+     * 中間段連回服務真正所屬的工作區（服務的唯一入口來源），修正舊版父層
+     * 標籤寫死「Services」、卻導去工作區詳情、文字與落點對不上的問題。
+     * 服務序列化未必帶 workspace 名稱，缺時退守泛用標籤「Workspace」。
+     */
+    _publishBreadcrumb() {
+        const service = this.state.service;
+        if (!service) return;
+        breadcrumbService.set("service-detail", [
+            { label: "Workspaces", path: "workspaces" },
+            { label: service.workspace_name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: service.name, path: null },
+        ]);
     }
 
     startPollingIfNeeded() {
@@ -134,6 +157,10 @@ export class ServiceDetailPage extends Component {
         // Disable actions when service is in transitional state
         const disabledStates = ["deploying", "initializing", "upgrading", "deleting", "pending"];
         return this.service && !disabledStates.includes(this.service.state);
+    }
+
+    get isOdooService() {
+        return this.service?.template?.slug === 'odoo';
     }
 
     // Support Project
@@ -217,6 +244,31 @@ export class ServiceDetailPage extends Component {
         this.hideRollback();
         this.loadService();
     }
+
+    // Skip Trial Modal
+    showSkipTrial() {
+        this.state.showSkipTrialModal = true;
+    }
+
+    hideSkipTrial() {
+        this.state.showSkipTrialModal = false;
+    }
+
+    onTrialSkipped() {
+        this.hideSkipTrial();
+        this.loadService();
+    }
+
+    // Skip-trial callbacks bound to cloudService — passed to SkipTrialModal
+    // so the same modal works for cloud services and smart homes (and any
+    // future service type) without modal-side branching.
+    loadCloudServiceEstimate = () => {
+        return cloudService.getSkipTrialEstimate(this.props.serviceId);
+    };
+
+    confirmCloudServiceSkip = () => {
+        return cloudService.skipTrial(this.props.serviceId);
+    };
 
     // Domain Modal
     showDomainModal() {

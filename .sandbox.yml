@@ -1,0 +1,42 @@
+# woow_paas_platform sandbox 設定（woowprd plugin /woowprd:k8s-dev-sandbox 讀取）
+#
+# 此 repo 是樣態 (a)：src/ 放單一 addon（src/__manifest__.py）。
+# 平台特化 seed 由 .sandbox/ 下兩個 opt-in hook 提供（通用 create.sh 主線零 woow 分支）：
+#   pre-install.sh   install-time —— 動態撈 agent-runtime secret + stg networkPolicy / registry
+#   post-create.sh   post-install —— operator 探索 + ir.config_parameter / ECPay / AI / journal seed
+
+layout: src
+module: woow_paas_platform
+install_modules: [base, web, woow_paas_platform]
+# 既有 DB 沿用 woow_ 前綴（與舊 create.sh / e2e-seed / seed-from-stg 一致）
+db_prefix: woow_
+post_create_hook: .sandbox/post-create.sh
+
+# local 模式第三方相依 addon 來源：__manifest__.py depends 含 6 個非核心 addon
+# （ai_base_gt / odoo_ai_assistant_chatgpt_connector / sh_subscription* /
+#   payment_ecpay_ecpg / ecpay_invoice_tw），不在本 repo 內。值由 ${VAR} 從 onboarding
+# profile 的 PAAS_CI_ADDONS_PATH 展開（每台機器路徑不同，故不硬編進 git）。
+# 僅 local 模式生效 —— ci-local / stg 的相依隨 image bake，create.sh 會略過本機解析；
+# 指向整個 paas-odoo-ci/addons 目錄即可，Odoo 自會在其中找到各 addon。
+extra_addons:
+  - "${PAAS_CI_ADDONS_PATH}"
+
+# 執行期 env 宣告（onboard 收集 / create warn 用；值放 ~/.sandbox/{project-key}/config.env）
+env_optional:
+  - "PAAS_CI_ADDONS_PATH: [local 模式] 第三方相依 addons 目錄絕對路徑（含 ai_base_gt 等，非本 repo）。通常是 <你的 woow checkout>/woow-paas-repo/paas-odoo-ci/addons；onboard 可自動探索。stg / ci-local 不需要（相依隨 image bake）"
+  - "AGENT_RUNTIME_NAMESPACE_SECRET: agent-runtime 啟用開關＋Odoo 端 namespace hash（僅 stg 模式生效；未設→agent-runtime 整段關閉，legacy AI chat 不受影響）"
+  - "JCR_USER: JCR registry pull 帳號（僅 stg 模式生效；cluster 已有 jfrog-registry secret 時可不設）"
+  - "JCR_PASS: JCR registry pull 密碼（僅 stg 模式生效；同上）"
+
+# 宣告式 ir.config_parameter seed（stg only）：
+# - web.base.url / freeze：ECPay 3DS 回呼需 https base url，否則 Chrome Mixed Content
+#   擋綁卡/加值；取代 deploy-stg.sh 舊 init_odoo_system_params。
+# - woow_paas_platform.deploy_env=stg（F-ENV-1）：L3 CF 命名 env token —— 讓 stg 新建
+#   SecurityAccess 的 canonical_name 帶 paas-stg-sa-（tunnel name / DNS comment / policy
+#   name 隨之分辨 prod/stg）。stg only，local/ci-local 不設（它們非 stg、應維持空 token
+#   的 paas-sa-）；operator 端對應走 PAAS_ENV（Fleet 注入），這裡是 Odoo addon 端。
+# local 不設任何項 —— 與既有行為對齊，local 沙盒從未 seed 過這些 param。
+config_params_stg:
+  web.base.url: "https://{{slug}}.woowtech.io"
+  web.base.url.freeze: "True"
+  woow_paas_platform.deploy_env: "stg"

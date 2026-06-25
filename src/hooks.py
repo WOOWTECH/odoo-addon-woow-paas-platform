@@ -9,6 +9,7 @@ _IMPORT_NAME_OVERRIDES = {
     'pillow': 'PIL',
     'scikit-learn': 'sklearn',
     'python-dateutil': 'dateutil',
+    'pycryptodomex': 'Cryptodome',
 }
 
 
@@ -117,3 +118,103 @@ def pre_init_hook(env):
     before module installation.
     """
     _check_python_dependencies()
+
+
+_CONFIG_PARAMETERS = [
+    'woow_paas_platform.operator_url',
+    'woow_paas_platform.operator_api_key',
+    'woow_paas_platform.paas_domain',
+    'woow_paas_platform.default_ai_config_id',
+    'woow_paas_platform.default_ai_assistant_id',
+    'woow_paas_platform.default_agent_template_id',
+    'woow_paas_platform.default_enable_agent_runtime',
+    'woow_paas_platform.namespace_prefix',
+    'woow_paas_platform.deploy_env',
+    'woow_paas_platform.grace_period_days',
+    'woow_paas_platform.cleanup_after_months',
+    'woow_paas_platform.storage_class_name',
+    'woow_paas_platform.registry_secret_name',
+    'woow_paas_platform.topup_payment_enabled',
+    'woow_paas_platform.portal_project_settings_editable',
+    'woow_paas_platform.max_consecutive_payment_failures',
+    'woow_paas_platform.sa_default_service_url',
+    'woow_paas_platform.agent_idle_reap_seconds',
+    'woow_paas_platform.agent_gc_seconds',
+    # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
+    # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
+]
+
+
+def _ensure_default_agent_template(env):
+    """Point the platform-default agent template at the seeded system template
+    on first install, WITHOUT clobbering an admin's existing choice.
+
+    Idempotent: only sets the config_parameter when it is currently empty, so
+    re-running -u (post_init fires on every update) never overrides a value the
+    admin picked in Settings. The seeded template is tenant-neutral (public,
+    published, unbound, no user-scope skills/mcp) so broadcasting it as the
+    cluster-wide default is safe.
+    """
+    ICP = env['ir.config_parameter'].sudo()
+    key = 'woow_paas_platform.default_agent_template_id'
+    if ICP.get_param(key):
+        return  # admin already chose (or a prior install set it) — don't clobber
+    template = env.ref(
+        'woow_paas_platform.agent_template_default', raise_if_not_found=False,
+    )
+    if template:
+        ICP.set_param(key, str(template.id))
+        _logger.info(
+            "Auto-pointed platform default agent template -> %s (id=%s)",
+            template.name, template.id,
+        )
+
+
+def _ensure_ha_client_sa_scopes(env):
+    """Grant the HA public client the Security Access scopes (fresh-install
+    path). oauth_clients.xml is noupdate=1 so the seed XML scope change does
+    not reach existing databases; the idempotent merge lives on the
+    oauth_client model and is also wired into data/oauth_scope_updates.xml so
+    the upgrade (-u) path is covered too (G-H3: missing client scopes break
+    HA token refresh)."""
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_sa_scopes()
+
+
+def _ensure_ha_client_redirect_mode(env):
+    """Migrate the HA public client to host-flexible ha_callback redirect
+    matching (fresh-install path). Upgrade path is covered by
+    data/oauth_redirect_mode_update.xml. oauth_clients.xml is noupdate=1 so the
+    seed change to redirect_uri_match_mode never reaches existing DBs; the
+    idempotent healer lives on the model. See seed-noupdate-sticky pitfall."""
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_redirect_mode()
+
+
+def post_init_hook(env):
+    """Auto-point the platform default agent template, then ensure the
+    subscription journal is configured on the main company."""
+    _ensure_default_agent_template(env)
+    _ensure_ha_client_sa_scopes(env)
+    _ensure_ha_client_redirect_mode(env)
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_device_grant()
+    company = env.ref('base.main_company', raise_if_not_found=False)
+    if not company:
+        return
+    if company.sh_journal_id:
+        _logger.info("Subscription journal already configured: %s", company.sh_journal_id.name)
+        return
+    sale_journal = env['account.journal'].search([
+        ('company_id', '=', company.id),
+        ('type', '=', 'sale'),
+    ], limit=1)
+    if sale_journal:
+        company.sh_journal_id = sale_journal
+        _logger.info("Auto-configured subscription journal: %s (id=%s)", sale_journal.name, sale_journal.id)
+    else:
+        _logger.warning("No sales journal found for company %s — subscription invoices will fail", company.name)
+
+
+def uninstall_hook(env):
+    """Remove ir.config_parameter records created by this module."""
+    env['ir.config_parameter'].search([
+        ('key', 'in', _CONFIG_PARAMETERS),
+    ]).unlink()

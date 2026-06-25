@@ -1,4 +1,5 @@
-from odoo import fields, models
+from odoo import api, fields, models
+from odoo.exceptions import ValidationError
 
 
 class CloudAppTemplate(models.Model):
@@ -46,10 +47,24 @@ class CloudAppTemplate(models.Model):
         string='Tags',
         help='JSON array of tags (e.g., ["postgresql", "database", "sql"])',
     )
-    monthly_price = fields.Float(
-        string='Monthly Price',
-        help='Base monthly price in USD',
+    agent_context_keys = fields.Text(
+        string='Agent Context Keys',
+        help='JSON list of helm_values key paths (dot notation) that are '
+             'safe to expose to the project AI agent, e.g. '
+             '["replicaCount", "image.tag"]. Empty = expose no '
+             'configuration (fail-closed). Extracted values still pass '
+             'the secret sanitizer as a second layer.',
     )
+    # Subscription plans available for this template
+    subscription_plan_ids = fields.Many2many(
+        'sh.subscription.plan',
+        'woow_template_plan_rel',
+        'template_id',
+        'plan_id',
+        string='Subscription Plans',
+        help='Available subscription plans for this template',
+    )
+
     documentation_url = fields.Char(
         string='Documentation URL',
         help='Link to official documentation',
@@ -153,6 +168,7 @@ class CloudAppTemplate(models.Model):
         selection=[
             ('none', 'None'),
             ('n8n', 'n8n (Owner Setup + API Key)'),
+            ('odoo', 'Odoo (Update Module List)'),
         ],
         string='Post-Deploy Init Type',
         default='none',
@@ -170,3 +186,44 @@ class CloudAppTemplate(models.Model):
         default=True,
         help='Whether this template is available for deployment',
     )
+
+    @api.constrains('subscription_plan_ids')
+    def _check_no_cross_service_type_plans(self):
+        """Symmetrical to smart_home_template — a plan belongs to one service type only.
+
+        Triggered when an admin edits a CloudAppTemplate; rejects the change if
+        any of the chosen plans is already attached to a SmartHomeTemplate or a
+        SecurityAccessTemplate. Without this check, the other-side constrains
+        alone wouldn't catch edits made on the CS side.
+
+        Three-way symmetric check with smart_home_template and
+        security_access_template; all fire on write so the conflict is
+        caught regardless of which side is edited last.
+        """
+        if not self:
+            return
+        for record in self:
+            if not record.subscription_plan_ids:
+                continue
+            for other_model, label in [
+                ('woow_paas_platform.smart_home_template', 'Smart Home Template'),
+                ('woow_paas_platform.security_access_template',
+                 'Security Access Template'),
+            ]:
+                conflicts = self.env[other_model].search([
+                    ('subscription_plan_ids', 'in',
+                     record.subscription_plan_ids.ids),
+                ])
+                if conflicts:
+                    shared = (record.subscription_plan_ids
+                              & conflicts.subscription_plan_ids)
+                    raise ValidationError(
+                        "Plan(s) %s are already linked to %s(s) %s. "
+                        "A subscription plan must belong to a single service "
+                        "type — its product determines the invoice line text."
+                        % (
+                            ', '.join(shared.mapped('name')),
+                            label,
+                            ', '.join(conflicts.mapped('name')),
+                        )
+                    )

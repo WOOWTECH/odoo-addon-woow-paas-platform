@@ -1,0 +1,67 @@
+// =============================================================================
+// Topup Success Modal Styles
+// =============================================================================
+
+.o_woow_topup_success_body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.75rem;
+  padding: 2rem 1.5rem !important;
+}
+
+.o_woow_topup_success_icon {
+  color: $woow-primary;
+  margin-bottom: 0.25rem;
+}
+
+.o_woow_topup_success_title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: $woow-text-primary;
+  margin: 0;
+}
+
+.o_woow_topup_success_message {
+  font-size: 0.875rem;
+  color: $woow-text-secondary;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 340px;
+}
+
+.o_woow_topup_success_bonus {
+  font-size: 0.875rem;
+  color: #16a34a;
+  margin: 0;
+}
+
+.o_woow_topup_success_balance {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+  padding: 1rem 1.5rem;
+  background: $woow-background-light;
+  border-radius: $woow-radius-default;
+}
+
+.o_woow_topup_success_balance_label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: $woow-text-secondary;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.o_woow_topup_success_balance_value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: $woow-text-primary;
+}
+
+.o_woow_topup_success_footer {
+  justify-content: center;
+}

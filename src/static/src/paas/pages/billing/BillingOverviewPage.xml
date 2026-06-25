@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.BillingOverviewPage">
+        <div class="o_woow_billing_overview">
+            <!-- Page Header -->
+            <div class="o_woow_billing_header">
+                <div class="o_woow_billing_title">
+                    <h1>Account Overview</h1>
+                    <p>Manage your subscription, credits, and payment details.</p>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <t t-if="loading">
+                <div class="o_woow_loading">
+                    <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+                    <p>Loading billing information...</p>
+                </div>
+            </t>
+
+            <t t-else="">
+                <!-- Low-balance Renewal Banner -->
+                <t t-if="hasLowBalanceWarning">
+                    <WoowCard shadow="true" class="'o_woow_billing_low_balance_banner'">
+                        <div class="o_woow_low_balance_content" role="alert">
+                            <WoowIcon name="'warning'" size="28"/>
+                            <div class="o_woow_low_balance_text">
+                                <h3>Wallet balance is too low for upcoming renewal</h3>
+                                <p>
+                                    You need at least
+                                    <strong><t t-esc="formatPoints(lowBalanceShortfall)"/></strong>
+                                    more to cover subscriptions renewing in the next 3 days.
+                                    Top up now to avoid service interruption.
+                                </p>
+                            </div>
+                            <WoowButton
+                                variant="'primary'"
+                                size="'md'"
+                                onClick="() => this.goToTopup()">
+                                Top up now
+                            </WoowButton>
+                        </div>
+                    </WoowCard>
+                </t>
+
+                <!-- Credit Balance Card -->
+                <WoowCard shadow="true" class="'o_woow_billing_credit_card'">
+                    <div class="o_woow_billing_credit_content">
+                        <div class="o_woow_billing_credit_info">
+                            <div class="o_woow_billing_credit_label">
+                                <WoowIcon name="'account_balance_wallet'" size="24"/>
+                                <span>Credit Balance</span>
+                            </div>
+                            <div class="o_woow_billing_credit_amount">
+                                <span class="o_woow_billing_balance" t-esc="formattedBalance"/>
+                            </div>
+                            <p class="o_woow_billing_rate">Conversion Rate: 1 Point = NT$ 1</p>
+                            <a class="o_woow_billing_view_history_link" t-on-click.prevent="showCreditHistory">
+                                <WoowIcon name="'history'" size="14"/>
+                                View History
+                            </a>
+                        </div>
+                        <div class="o_woow_billing_credit_action">
+                            <WoowButton variant="'primary'" size="'md'" onClick.bind="goToTopup">
+                                <WoowIcon name="'add'" size="18"/>
+                                Top-up
+                            </WoowButton>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Subscription &amp; Payment Card -->
+                <WoowCard shadow="true" class="'o_woow_billing_subscription_card'">
+                    <div class="o_woow_billing_sub_section_header">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'credit_card'" size="22"/>
+                            <h3>Subscription &amp; Payment</h3>
+                        </div>
+                        <div class="o_woow_billing_sub_header_actions">
+                            <WoowButton
+                                variant="'link'"
+                                size="'sm'"
+                                onClick.bind="openManagePaymentMethods">
+                                Manage
+                            </WoowButton>
+                            <a href="#/billing/subscriptions" class="o_woow_billing_view_all_link">
+                                View All
+                                <WoowIcon name="'arrow_forward'" size="16"/>
+                            </a>
+                        </div>
+                    </div>
+
+                    <t t-if="subscriptionsLoading">
+                        <div class="o_woow_billing_recent_invoices_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <span>Loading subscriptions...</span>
+                        </div>
+                    </t>
+
+                    <t t-elif="!hasSubscriptions">
+                        <div class="o_woow_billing_subscription_body">
+                            <p class="o_woow_billing_placeholder">No active subscriptions.</p>
+                            <p class="o_woow_billing_hint">
+                                Visit the marketplace to deploy services and start a subscription.
+                            </p>
+                        </div>
+                    </t>
+
+                    <t t-else="">
+                        <div class="o_woow_billing_sub_list">
+                            <t t-foreach="activeSubscriptions" t-as="sub" t-key="sub.id">
+                                <div class="o_woow_billing_sub_row"
+                                     t-on-click="() => this.goToSubscriptions()">
+                                    <div class="o_woow_billing_sub_info">
+                                        <div class="o_woow_billing_sub_name">
+                                            <WoowIcon name="'diamond'" size="18"/>
+                                            <div class="o_woow_billing_sub_name_text">
+                                                <span class="o_woow_billing_sub_id" t-esc="sub.name"/>
+                                                <span class="o_woow_billing_sub_plan" t-esc="sub.plan_name"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="o_woow_billing_sub_right">
+                                        <span t-attf-class="o_woow_sub_badge {{ getSubStateClass(sub) }}">
+                                            <span class="o_woow_sub_badge_dot"/>
+                                            <t t-esc="getSubStateLabel(sub)"/>
+                                        </span>
+                                        <span class="o_woow_billing_sub_payment" t-esc="getPaymentMethodLabel()"/>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+                </WoowCard>
+
+                <!-- Recent Invoices Section -->
+                <WoowCard shadow="true" class="'o_woow_billing_recent_invoices_card'">
+                    <div class="o_woow_billing_recent_invoices_header">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'receipt_long'" size="22"/>
+                            <h3>Recent Invoices</h3>
+                        </div>
+                        <a href="#/billing/invoices" class="o_woow_billing_view_all_link">
+                            View All
+                            <WoowIcon name="'arrow_forward'" size="16"/>
+                        </a>
+                    </div>
+
+                    <t t-if="invoicesLoading">
+                        <div class="o_woow_billing_recent_invoices_loading">
+                            <WoowIcon name="'sync'" size="24" class="'o_woow_spin'"/>
+                            <span>Loading invoices...</span>
+                        </div>
+                    </t>
+
+                    <t t-elif="recentInvoices.length === 0">
+                        <div class="o_woow_billing_recent_invoices_empty">
+                            <p>No invoices yet.</p>
+                        </div>
+                    </t>
+
+                    <t t-else="">
+                        <div class="o_woow_billing_recent_invoices_list">
+                            <t t-foreach="recentInvoices" t-as="invoice" t-key="invoice.id">
+                                <div class="o_woow_billing_recent_invoice_row"
+                                     t-on-click="() => this.goToInvoiceDetail(invoice.id)">
+                                    <div class="o_woow_billing_recent_invoice_info">
+                                        <div class="o_woow_billing_recent_invoice_name">
+                                            <WoowIcon name="'description'" size="18"/>
+                                            <span t-esc="invoice.name || invoice.number || '-'"/>
+                                        </div>
+                                        <span class="o_woow_billing_recent_invoice_date"
+                                              t-esc="formatDate(invoice.invoice_date)"/>
+                                    </div>
+                                    <div class="o_woow_billing_recent_invoice_right">
+                                        <span class="o_woow_billing_recent_invoice_amount">
+                                            <t t-esc="formatPoints(invoice.amount_total)"/>
+                                        </span>
+                                        <span t-attf-class="o_woow_invoice_badge {{ getStatusClass(invoice) }}">
+                                            <span class="o_woow_invoice_badge_dot"/>
+                                            <t t-esc="getStatusLabel(invoice)"/>
+                                        </span>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+                    </t>
+                </WoowCard>
+
+                <!-- Bottom 2-column Grid -->
+                <div class="o_woow_billing_summary_grid">
+                    <!-- About WoowTech Card -->
+                    <WoowCard shadow="true" class="'o_woow_billing_about_card'">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'groups'" size="22"/>
+                            <h3>About WoowTech</h3>
+                        </div>
+                        <p class="o_woow_billing_about_text">
+                            WoowTech provides cloud infrastructure and smart home integration
+                            solutions. We help businesses and individuals deploy, manage, and
+                            scale their digital services with ease.
+                        </p>
+                    </WoowCard>
+
+                    <!-- Stay Connected / Billing Support Card -->
+                    <WoowCard shadow="true" class="'o_woow_billing_support_card'">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'contact_support'" size="22"/>
+                            <h3>Billing Support</h3>
+                        </div>
+                        <div class="o_woow_billing_support_body">
+                            <div class="o_woow_billing_support_item">
+                                <WoowIcon name="'mail'" size="18"/>
+                                <a href="mailto:support@woowtech.io">support@woowtech.io</a>
+                            </div>
+                            <div class="o_woow_billing_support_item">
+                                <WoowIcon name="'phone'" size="18"/>
+                                <a href="tel:+886227001234">+886-2-2700-1234</a>
+                            </div>
+                        </div>
+                    </WoowCard>
+                </div>
+            </t>
+
+            <!-- Credit History Modal -->
+            <t t-if="state.showCreditHistoryModal">
+                <CreditHistoryModal onClose.bind="hideCreditHistory"/>
+            </t>
+
+            <!-- Manage Payment Methods Modal -->
+            <t t-if="state.showManagePaymentMethods">
+                <ManagePaymentMethodsModal
+                    onClose.bind="closeManagePaymentMethods"
+                    onUpdated.bind="onPaymentMethodsUpdated"/>
+            </t>
+        </div>
+    </t>
+</templates>

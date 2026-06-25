@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- noupdate=0: each module update resets templates to the canonical default
+         set defined here. Plan-link bindings live in subscription_template_links.xml. -->
+    <data noupdate="0">
+
+        <!-- Home Assistant -->
+        <record id="smart_home_home_assistant" model="woow_paas_platform.smart_home_template">
+            <field name="name">Home Assistant</field>
+            <field name="slug">home-assistant</field>
+            <field name="description">Connect Home Assistant via a secure managed tunnel</field>
+            <field name="full_description">Securely access your Home Assistant device from anywhere via a managed Cloudflare tunnel. No port forwarding, no DDNS, no SSL certificate management required.</field>
+            <field name="is_active" eval="True"/>
+        </record>
+
+    </data>
+</odoo>

@@ -111,14 +111,27 @@ class CloudflareService:
 
     # ==================== DNS Record Management ====================
 
-    async def get_dns_record(self, hostname: str) -> Optional[dict]:
+    async def get_dns_record(
+        self, hostname: str, raise_on_error: bool = False
+    ) -> Optional[dict]:
         """Get a DNS record by hostname.
 
         Args:
             hostname: Full hostname (e.g., 'myapp.domain.com')
+            raise_on_error: when True, a non-200 Cloudflare response (401/403/
+                429/5xx) raises CloudflareException instead of collapsing to
+                None. Callers that interpret None as "no record exists" (e.g.
+                the availability check) MUST set this — otherwise an API error
+                is silently reported as "subdomain free" (fail-open). Internal
+                create/delete callers keep the legacy None behaviour.
 
         Returns:
-            DNS record dict if found, None otherwise
+            DNS record dict if found, None if confirmed absent (or, when
+            raise_on_error is False, on API error).
+
+        Raises:
+            CloudflareException: only when raise_on_error and the API returns
+                a non-200 / unsuccessful response.
         """
         if not self.dns_enabled:
             return None
@@ -134,10 +147,23 @@ class CloudflareService:
             if response.status_code != 200:
                 logger.error(f"Failed to get DNS record: {response.status_code}")
                 logger.debug(f"Response details: {response.text}")
+                if raise_on_error:
+                    raise CloudflareException(
+                        f"Cloudflare DNS lookup failed for {hostname}: "
+                        f"{response.text}",
+                        status_code=response.status_code,
+                    )
                 return None
 
             data = response.json()
-            if data.get("success") and data.get("result"):
+            if not data.get("success"):
+                if raise_on_error:
+                    raise CloudflareException(
+                        f"Cloudflare API error looking up {hostname}: "
+                        f"{data.get('errors', 'Unknown error')}"
+                    )
+                return None
+            if data.get("result"):
                 return data["result"][0] if data["result"] else None
 
             return None
@@ -202,13 +228,15 @@ class CloudflareService:
             return True
 
     async def create_dns_record_for_tunnel(
-        self, subdomain: str, tunnel_id: str
+        self, subdomain: str, tunnel_id: str, comment: Optional[str] = None
     ) -> Optional[str]:
         """Create a CNAME DNS record pointing to a specific tunnel.
 
         Args:
             subdomain: Subdomain to create (e.g., 'myapp' for myapp.domain.com)
             tunnel_id: The tunnel ID to point the CNAME at.
+            comment: Optional canonical name stamped on the DNS record for
+                traceability (e.g., 'paas-sa-{workspace}-{name}').
 
         Returns:
             DNS record ID if created, None if DNS is disabled.
@@ -230,7 +258,20 @@ class CloudflareService:
         if existing:
             logger.info(f"DNS record for {hostname} already exists")
             if existing.get("content") != cname_target:
-                await self._update_dns_record(existing["id"], hostname)
+                # The record points at a DIFFERENT tunnel; repoint it at THIS
+                # tunnel's target. Must pass cname_target explicitly — letting
+                # _update_dns_record fall back to the shared default target
+                # would "fix" the record into pointing at the shared tunnel
+                # instead of this per-tunnel one, producing a routing black
+                # hole that no error surfaces (the record_id is still returned
+                # and stored as if correct).
+                logger.info(
+                    f"Repointing DNS record {hostname} from "
+                    f"{existing.get('content')} -> {cname_target}"
+                )
+                await self._update_dns_record(
+                    existing["id"], hostname, content=cname_target
+                )
             return existing["id"]
 
         logger.info(f"Creating DNS record: {hostname} -> {cname_target}")
@@ -242,6 +283,8 @@ class CloudflareService:
             "ttl": 1,
             "proxied": True,
         }
+        if comment:
+            payload["comment"] = comment
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -269,22 +312,31 @@ class CloudflareService:
             logger.info(f"DNS record created: {hostname} (ID: {record_id})")
             return record_id
 
-    async def _update_dns_record(self, record_id: str, hostname: str) -> bool:
+    async def _update_dns_record(
+        self, record_id: str, hostname: str, content: Optional[str] = None
+    ) -> bool:
         """Update an existing DNS record.
 
         Args:
             record_id: DNS record ID
             hostname: Full hostname
+            content: CNAME target to point at. Defaults to the shared tunnel
+                target (``_tunnel_cname_target``) for the legacy single-tunnel
+                callers (``create_dns_record``). Per-tunnel callers
+                (``create_dns_record_for_tunnel``) MUST pass the dedicated
+                tunnel's target so a repoint lands on the correct tunnel rather
+                than silently on the shared one.
 
         Returns:
             True if update was successful
         """
-        logger.info(f"Updating DNS record: {hostname} -> {self._tunnel_cname_target}")
+        target = content or self._tunnel_cname_target
+        logger.info(f"Updating DNS record: {hostname} -> {target}")
 
         payload = {
             "type": "CNAME",
             "name": hostname,
-            "content": self._tunnel_cname_target,
+            "content": target,
             "ttl": 1,
             "proxied": True,
         }
@@ -343,6 +395,96 @@ class CloudflareService:
 
             logger.info(f"DNS record deleted: {hostname}")
             return True
+
+    async def _list_dns_records_by_content(self, content: str) -> List[dict]:
+        """List CNAME records in the zone whose content equals ``content``.
+
+        Used to find every record pointing at a dedicated tunnel
+        ({tunnel_id}.cfargotunnel.com) for declarative reconciliation.
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                self._dns_records_url,
+                headers=self._headers,
+                params={"type": "CNAME", "content": content, "per_page": 100},
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to list DNS records: {response.text}",
+                    status_code=response.status_code,
+                )
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+            return data.get("result", [])
+
+    async def _delete_dns_record_by_id(self, record_id: str) -> bool:
+        """Delete a DNS record by its Cloudflare record ID."""
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{self._dns_records_url}/{record_id}",
+                headers=self._headers,
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to delete DNS record {record_id}: {response.text}",
+                    status_code=response.status_code,
+                )
+            return True
+
+    async def reconcile_tunnel_dns(
+        self,
+        tunnel_id: str,
+        subdomains: List[str],
+        comment: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        """Make the zone's DNS records for a dedicated tunnel match ``subdomains``.
+
+        Declarative: creates missing CNAMEs, keeps matching ones, deletes
+        records that point at this tunnel but are no longer desired.
+        Idempotent — safe to call repeatedly (suspend/resume don't change
+        hostnames, so reconcile is a no-op there).
+
+        Returns:
+            Mapping of subdomain -> DNS record ID.
+        """
+        if not self.dns_enabled:
+            logger.info("DNS management disabled, skipping reconcile")
+            return {s: None for s in subdomains}
+
+        cname_target = self._tunnel_cname_target_for(tunnel_id)
+        existing = await self._list_dns_records_by_content(cname_target)
+        existing_by_sub = {}
+        for rec in existing:
+            # rec["name"] is the FQDN; strip the zone domain suffix
+            name = rec.get("name", "")
+            if name.endswith(f".{self.domain}"):
+                existing_by_sub[name[: -(len(self.domain) + 1)]] = rec
+
+        desired = set(subdomains)
+        result: Dict[str, Optional[str]] = {}
+
+        for sub in subdomains:
+            if sub in existing_by_sub:
+                result[sub] = existing_by_sub[sub]["id"]
+            else:
+                result[sub] = await self.create_dns_record_for_tunnel(
+                    subdomain=sub, tunnel_id=tunnel_id, comment=comment,
+                )
+
+        for sub, rec in existing_by_sub.items():
+            if sub not in desired:
+                logger.info(
+                    f"Reconcile: deleting stale DNS record {rec['name']} "
+                    f"(tunnel {tunnel_id})"
+                )
+                await self._delete_dns_record_by_id(rec["id"])
+
+        return result
 
     # ==================== Tunnel Configuration ====================
 
@@ -751,6 +893,64 @@ class CloudflareService:
 
             logger.info(f"Tunnel {tunnel_id} configured successfully")
 
+    async def configure_tunnel_ingress(
+        self, tunnel_id: str, rules: List[dict]
+    ) -> None:
+        """Replace a dedicated tunnel's full ingress rule list.
+
+        Multi-route counterpart of ``configure_tunnel`` (which only expresses
+        a single hostname). Each rule dict: {hostname, service,
+        http_host_header}. A catch-all 404 rule is appended automatically.
+
+        Args:
+            tunnel_id: The tunnel ID.
+            rules: Desired ingress rules, order preserved.
+
+        Raises:
+            CloudflareException: If configuration update fails.
+        """
+        url = f"{self._tunnels_url(tunnel_id)}/configurations"
+
+        ingress_rules = []
+        for rule in rules:
+            entry = {"hostname": rule["hostname"], "service": rule["service"]}
+            if rule.get("http_host_header"):
+                entry["originRequest"] = {"httpHostHeader": rule["hostname"]}
+            ingress_rules.append(entry)
+        ingress_rules.append({"service": "http_status:404"})
+
+        payload = {"config": {"ingress": ingress_rules}}
+
+        logger.info(
+            f"Configuring tunnel {tunnel_id} ingress with {len(rules)} route(s)"
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                url,
+                headers=self._headers,
+                json=payload,
+                timeout=30.0,
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Failed to configure tunnel ingress: "
+                    f"{response.status_code} - {response.text}"
+                )
+                raise CloudflareException(
+                    f"Failed to configure tunnel ingress: {response.text}",
+                    status_code=response.status_code,
+                )
+
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown error')}"
+                )
+
+            logger.info(f"Tunnel {tunnel_id} ingress configured successfully")
+
     async def get_tunnel_status(self, tunnel_id: str) -> Dict[str, Any]:
         """Get the status and connection info for a Cloudflare Tunnel.
 
@@ -915,3 +1115,342 @@ class CloudflareService:
                         f"Failed to delete DNS record {record_name}: "
                         f"{delete_response.status_code}"
                     )
+
+    # ==================== Cloudflare Access (Zero Trust) ====================
+
+    @property
+    def _access_base(self) -> str:
+        return f"{self.BASE_URL}/accounts/{self.account_id}/access"
+
+    async def list_identity_providers(self) -> List[dict]:
+        """List the account's Access identity providers.
+
+        Returns list of {id, name, type}. Needs token scope
+        'Access: Organizations, Identity Providers and Groups (Read)' —
+        a 403 here means that scope is missing.
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self._access_base}/identity_providers",
+                headers=self._headers,
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise CloudflareException(
+                    f"Failed to list identity providers: {response.text}",
+                    status_code=response.status_code,
+                )
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown')}"
+                )
+            return data.get("result", [])
+
+    async def create_reusable_policy(
+        self,
+        name: str,
+        decision: str,
+        include: List[dict],
+        exclude: Optional[List[dict]] = None,
+        require: Optional[List[dict]] = None,
+    ) -> str:
+        """Create a reusable Access policy; return its id."""
+        payload = {
+            "name": name,
+            "decision": decision,
+            "include": include,
+            "exclude": exclude or [],
+            "require": require or [],
+            "reusable": True,
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self._access_base}/policies",
+                headers=self._headers,
+                json=payload,
+                timeout=30.0,
+            )
+            if response.status_code not in (200, 201):
+                raise CloudflareException(
+                    f"Failed to create access policy: {response.text}",
+                    status_code=response.status_code,
+                )
+            data = response.json()
+            if not data.get("success"):
+                raise CloudflareException(
+                    f"Cloudflare API error: {data.get('errors', 'Unknown')}"
+                )
+            return data["result"]["id"]
+
+    async def delete_reusable_policy(self, policy_id: str) -> bool:
+        """Delete a reusable Access policy by id.
+
+        Cloudflare's DELETE on Access policies/apps replies **202 Accepted**
+        (body ``{"success": true, "result": {"id": ...}}``), not 200 — and 404
+        when already gone. Treat all three as success; anything else is a real
+        failure. (Mocked tests returned 200, masking this until a live CF call.)
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{self._access_base}/policies/{policy_id}",
+                headers=self._headers,
+                timeout=30.0,
+            )
+            if response.status_code not in (200, 202, 404):
+                raise CloudflareException(
+                    f"Failed to delete access policy {policy_id}: {response.text}",
+                    status_code=response.status_code,
+                )
+            return True
+
+    async def _resolve_idp_ids(
+        self, idp_types: List[str]
+    ) -> tuple[List[str], List[str]]:
+        """Map IdP type strings (google/onetimepin) to account IdP ids.
+
+        Empty input → empty list (= app shows all available IdPs). A requested
+        type with no matching IdP on the account is skipped (logged) — but it
+        is also collected and returned so the caller can surface the silent
+        downgrade. Returns ``(resolved_ids, unresolved_types)``.
+
+        Security note: a requested-but-missing type that is silently dropped to
+        ``[]`` flips the app to "all available IdPs" (login restriction widened,
+        opposite of intent). Reporting ``unresolved_types`` lets Odoo/the BFF
+        warn the user instead of letting the widening go unnoticed.
+        """
+        if not idp_types:
+            return [], []
+        idps = await self.list_identity_providers()
+        by_type = {}
+        for idp in idps:
+            by_type.setdefault(idp.get("type"), idp.get("id"))
+        resolved = []
+        unresolved = []
+        for t in idp_types:
+            idp_id = by_type.get(t)
+            if idp_id:
+                resolved.append(idp_id)
+            else:
+                unresolved.append(t)
+                logger.warning(
+                    "Access: login method '%s' has no IdP on the account; "
+                    "skipping (configure it in Zero Trust → Settings → "
+                    "Authentication).", t,
+                )
+        return resolved, unresolved
+
+    async def _delete_access_app(self, app_id: str) -> None:
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{self._access_base}/apps/{app_id}",
+                headers=self._headers, timeout=30.0,
+            )
+            # CF replies 202 Accepted on a successful Access-app delete (not
+            # 200); 404 = already gone. Anything else is a real failure. Reading
+            # 202 as failure made teardown raise *after* CF actually deleted the
+            # app, aborting the subsequent policy cleanup → orphan policies.
+            if response.status_code not in (200, 202, 404):
+                raise CloudflareException(
+                    f"Failed to delete access app {app_id}: {response.text}",
+                    status_code=response.status_code,
+                )
+
+    async def sync_access_app(
+        self,
+        canonical_name: str,
+        app_name: str,
+        primary_hostname: str,
+        protected_hostnames: List[str],
+        session_duration: str,
+        login_idp_types: List[str],
+        policies: List[dict],
+        enabled: bool = True,
+        existing_app_id: Optional[str] = None,
+        existing_policy_ids: Optional[List[str]] = None,
+    ) -> dict:
+        """Declaratively reconcile one SA's Cloudflare Access config.
+
+        Strategy (simple + idempotent): always delete the SA's previous
+        reusable policies (existing_policy_ids) then recreate from the desired
+        list; create-or-update the single per-SA Access App referencing them.
+        enabled=False → tear down app + policies, return empty.
+
+        Returns {app_id, policy_ids, allowed_idps, unresolved_idp_types}.
+        """
+        existing_policy_ids = existing_policy_ids or []
+
+        # Teardown path: disabled or no protected hostnames → remove everything.
+        if not enabled or not protected_hostnames:
+            if existing_app_id:
+                await self._delete_access_app(existing_app_id)
+            orphaned = []
+            for pid in existing_policy_ids:
+                # Best-effort: a leftover policy must not fail teardown. Catch
+                # broadly — a transient httpx transport error is not a
+                # CloudflareException; collect failures so the caller can observe
+                # the orphan (the SA clears its ids on teardown regardless).
+                try:
+                    await self.delete_reusable_policy(pid)
+                except Exception as e:
+                    orphaned.append(pid)
+                    logger.warning("Access teardown: policy %s delete failed "
+                                   "(left as orphan): %s", pid, e)
+            return {"app_id": None, "policy_ids": [], "allowed_idps": [],
+                    "unresolved_idp_types": [], "orphaned_policy_ids": orphaned}
+
+        # Resync strategy (detach-before-delete): create the NEW reusable
+        # policies, point the app at them (which detaches the OLD ones), and
+        # only THEN delete the old policies (deferred to after a successful app
+        # update, below). Deleting old policies first — while the app still
+        # references them — makes Cloudflare reject the delete as "in use",
+        # silently orphaning them.
+        new_policy_ids = []
+        # Compensating-cleanup scope: this is a two-stage remote provision
+        # (create N reusable policies, then PUT/POST the app referencing them).
+        # If the app update fails, the policies just created are NOT returned to
+        # the caller (the function raises), so Odoo's savepoint rolls back the
+        # DB row and the next idempotent re-sync only knows the OLD cf_policy_ids
+        # — these would be permanent Cloudflare orphans, never reconciled. Wrap
+        # the whole create+update window and best-effort delete this batch on
+        # failure before re-raising, so a partial failure leaves no orphans.
+        try:
+            for idx, p in enumerate(policies):
+                include = self._build_rule_group(p.get("include", []))
+                require = self._build_rule_group(p.get("require", []))
+                exclude = self._build_rule_group(p.get("exclude", []))
+                pid = await self.create_reusable_policy(
+                    name=f"{canonical_name}: {p['name']}",
+                    decision=p["decision"],
+                    include=include,
+                    require=require,
+                    exclude=exclude,
+                )
+                new_policy_ids.append((pid, p.get("precedence", idx + 1)))
+
+            allowed_idps, unresolved_idps = await self._resolve_idp_ids(
+                login_idp_types)
+
+            app_payload = {
+                "name": app_name,
+                "type": "self_hosted",
+                "domain": primary_hostname,
+                "destinations": [{"type": "public", "uri": h}
+                                 for h in protected_hostnames],
+                "session_duration": session_duration,
+                "allowed_idps": allowed_idps,
+                "auto_redirect_to_identity": False,
+                "app_launcher_visible": False,
+                # Sort by precedence (lower first) so the declared evaluation
+                # order reaches CF deterministically. CF itself still tiers
+                # Bypass/Service-Auth ahead of Allow/Block — we do not re-tier.
+                "policies": [{"id": pid, "precedence": prec}
+                             for pid, prec in sorted(
+                                 new_policy_ids, key=lambda t: t[1])],
+            }
+
+            async with httpx.AsyncClient() as client:
+                if existing_app_id:
+                    response = await client.put(
+                        f"{self._access_base}/apps/{existing_app_id}",
+                        headers=self._headers, json=app_payload, timeout=30.0,
+                    )
+                else:
+                    response = await client.post(
+                        f"{self._access_base}/apps",
+                        headers=self._headers, json=app_payload, timeout=30.0,
+                    )
+                if response.status_code not in (200, 201):
+                    raise CloudflareException(
+                        f"Failed to sync access app: {response.text}",
+                        status_code=response.status_code,
+                    )
+                data = response.json()
+                if not data.get("success"):
+                    raise CloudflareException(
+                        f"Cloudflare API error: {data.get('errors', 'Unknown')}"
+                    )
+                app_id = data["result"]["id"]
+        except Exception:
+            # App update failed after policies were created → reclaim them so
+            # they don't linger as Cloudflare orphans (the caller's DB rollback
+            # would otherwise lose all reference to this batch).
+            for pid, _ in new_policy_ids:
+                # Best-effort reclaim: one delete error must not abort cleanup of
+                # the rest. Catch broadly (transient httpx errors are not
+                # CloudflareException); the original failure is re-raised below.
+                try:
+                    await self.delete_reusable_policy(pid)
+                except Exception as ce:
+                    logger.warning(
+                        "Access rollback: orphan policy %s delete failed: %s",
+                        pid, ce)
+            raise
+
+        # App now references only the new policies → the OLD ones are detached
+        # and safe to delete. Best-effort: a leftover policy is undesirable but
+        # must NOT fail an otherwise-successful sync — the app PUT already
+        # committed CF's desired state, and raising here would roll back the
+        # caller's DB write-back into CF↔DB divergence. Catch broadly (a
+        # transient httpx transport error is not a CloudflareException) and
+        # collect failures so the caller can observe the orphan (mirrors the
+        # unresolved_idp_types signal channel). Skip ids we just created
+        # (defensive; create always returns fresh ids).
+        new_ids = {pid for pid, _ in new_policy_ids}
+        orphaned = []
+        for pid in existing_policy_ids:
+            if pid in new_ids:
+                continue
+            try:
+                await self.delete_reusable_policy(pid)
+            except Exception as e:
+                orphaned.append(pid)
+                logger.warning("Access resync: old policy %s delete failed "
+                               "(left as orphan): %s", pid, e)
+
+        return {
+            "app_id": app_id,
+            "policy_ids": [pid for pid, _ in new_policy_ids],
+            "allowed_idps": allowed_idps,
+            # Requested login methods with no matching account IdP. Non-empty
+            # here means the resolved set was narrowed (or, if it became empty,
+            # the app silently fell back to "all available IdPs") — the caller
+            # must surface this so the login-restriction widening is visible.
+            "unresolved_idp_types": unresolved_idps,
+            # Old reusable policies that could not be deleted after the app was
+            # repointed — permanent CF orphans the caller should log/alert on.
+            "orphaned_policy_ids": orphaned,
+        }
+
+    @staticmethod
+    def _build_access_rule(rule_type: str, rule_value: str) -> List[dict]:
+        """Map (rule_type, rule_value) to a list of Cloudflare Access rule dicts.
+
+        A single selector may expand to multiple rules (email_list → one per
+        email, country → one per code). The same dict shape is valid in any of a
+        policy's include / require / exclude groups.
+        """
+        value = rule_value or ""
+        if rule_type == "everyone":
+            return [{"everyone": {}}]
+        if rule_type == "email_domain":
+            return [{"email_domain": {"domain": value.lstrip("@").strip()}}]
+        if rule_type == "email_list":
+            emails = [e.strip() for e in value.split(",") if e.strip()]
+            return [{"email": {"email": e}} for e in emails]
+        if rule_type == "ip_range":
+            return [{"ip": {"ip": value.strip()}}]
+        if rule_type == "country":
+            codes = [c.strip().upper() for c in value.split(",") if c.strip()]
+            return [{"geo": {"country_code": c}} for c in codes]
+        raise CloudflareException(f"Unknown access rule_type: {rule_type}")
+
+    @staticmethod
+    def _build_rule_group(rules: List[dict]) -> List[dict]:
+        """Flatten a group's selector specs ({rule_type, rule_value}) into the
+        list of Cloudflare rule dicts for that include/require/exclude group."""
+        out: List[dict] = []
+        for r in rules or []:
+            out.extend(CloudflareService._build_access_rule(
+                r["rule_type"], r.get("rule_value") or ""))
+        return out

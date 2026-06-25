@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.OdooAddonSelector">
+        <div class="o_woow_addon_selector">
+            <div class="o_woow_addon_selector__header">
+                <h4>Odoo Addons</h4>
+                <span class="o_woow_addon_selector__count" t-if="!state.loading">
+                    <t t-esc="(props.selectedIds || []).length"/> selected
+                </span>
+            </div>
+
+            <div class="o_woow_addon_selector__filters" t-if="!state.loading">
+                <input type="text"
+                    class="o_woow_addon_selector__search"
+                    placeholder="Search addons..."
+                    t-on-input="onSearchInput"
+                    t-att-value="state.search"/>
+                <select class="o_woow_addon_selector__category" t-on-change="onCategoryChange">
+                    <option value="">All categories</option>
+                    <t t-foreach="categories" t-as="cat" t-key="cat">
+                        <option t-att-value="cat" t-esc="cat"/>
+                    </t>
+                </select>
+            </div>
+
+            <div class="o_woow_addon_selector__loading" t-if="state.loading">
+                Loading addons...
+            </div>
+
+            <div class="o_woow_addon_selector__list" t-else="">
+                <div t-if="addons.length === 0" class="o_woow_addon_selector__empty">
+                    No addons found
+                </div>
+                <t t-foreach="addons" t-as="addon" t-key="addon.id">
+                    <div class="o_woow_addon_selector__item"
+                        t-att-class="{'o_woow_addon_selector__item--selected': isSelected(addon.id)}"
+                        t-on-click="() => this.toggleAddon(addon.id)">
+                        <div class="o_woow_addon_selector__checkbox">
+                            <input type="checkbox"
+                                t-att-checked="isSelected(addon.id)"
+                                t-att-disabled="isRequiredByOthers(addon.id)"
+                                t-att-title="getRequiredByTooltip(addon.id)"
+                                t-on-click.stop="() => this.toggleAddon(addon.id)"/>
+                        </div>
+                        <div class="o_woow_addon_selector__info">
+                            <div class="o_woow_addon_selector__name">
+                                <span class="material-symbols-outlined o_woow_addon_selector__icon"
+                                    t-if="addon.icon" t-esc="addon.icon"/>
+                                <strong t-esc="addon.name"/>
+                                <span class="o_woow_addon_selector__badge"
+                                    t-if="addon.source_type === 'built_in'">built-in</span>
+                                <span class="o_woow_addon_selector__badge o_woow_addon_selector__badge--dep"
+                                    t-if="isDependency(addon.id) and !selectedSet.has(addon.id)">dependency</span>
+                            </div>
+                            <div class="o_woow_addon_selector__desc"
+                                t-if="addon.description" t-esc="addon.description"/>
+                            <div class="o_woow_addon_selector__meta">
+                                <span class="o_woow_addon_selector__tech" t-esc="addon.technical_name"/>
+                                <span class="o_woow_addon_selector__cat" t-esc="addon.category"/>
+                            </div>
+                        </div>
+                    </div>
+                </t>
+            </div>
+        </div>
+    </t>
+</templates>

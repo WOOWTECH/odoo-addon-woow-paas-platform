@@ -10,14 +10,26 @@ import { WorkspaceTeamPage } from "./pages/workspace/WorkspaceTeamPage";
 import { AppMarketplacePage } from "./pages/marketplace/AppMarketplacePage";
 import { AppConfigurationPage } from "./pages/configure/AppConfigurationPage";
 import { ServiceDetailPage } from "./pages/service/ServiceDetailPage";
-import { AiAssistantPage } from "./pages/ai-assistant/AiAssistantPage";
 import { SupportProjectsPage } from "./pages/support-projects/SupportProjectsPage";
 import { SupportTasksPage } from "./pages/support-tasks/SupportTasksPage";
 import { TaskDetailPage } from "./pages/task-detail/TaskDetailPage";
 import { AiChatPage } from "./pages/ai-chat/AiChatPage";
 import { ProjectKanbanPage } from "./pages/project-kanban/ProjectKanbanPage";
+import { ProjectDetailPage } from "./pages/project-detail/ProjectDetailPage";
 import { SmartHomeDetailPage } from "./pages/smart-home/SmartHomeDetailPage";
+import { SecurityAccessDetailPage } from "./pages/security-access/SecurityAccessDetailPage";
+import { BillingOverviewPage } from "./pages/billing/BillingOverviewPage";
+import { InvoiceListPage } from "./pages/billing/InvoiceListPage";
+import { InvoiceDetailPage } from "./pages/billing/InvoiceDetailPage";
+import { TopupStorePage } from "./pages/billing/TopupStorePage";
+import { SubscriptionListPage } from "./pages/billing/SubscriptionListPage";
+import { TransactionListPage } from "./pages/billing/TransactionListPage";
+import { SettingsPage } from "./pages/settings/SettingsPage";
+import { ProfilePage } from "./pages/settings/ProfilePage";
+import { PaymentMethodsListPage } from "./pages/settings/PaymentMethodsListPage";
+import { AddPaymentMethodPage } from "./pages/settings/AddPaymentMethodPage";
 import { EmptyState } from "./pages/empty/EmptyState";
+import { NotFoundPage } from "./pages/not-found/NotFoundPage";
 
 export class Root extends Component {
     static template = "woow_paas_platform.Root";
@@ -30,14 +42,26 @@ export class Root extends Component {
         AppMarketplacePage,
         AppConfigurationPage,
         ServiceDetailPage,
-        AiAssistantPage,
         SupportProjectsPage,
         SupportTasksPage,
         TaskDetailPage,
         AiChatPage,
         ProjectKanbanPage,
+        ProjectDetailPage,
         SmartHomeDetailPage,
+        SecurityAccessDetailPage,
+        BillingOverviewPage,
+        InvoiceListPage,
+        InvoiceDetailPage,
+        TopupStorePage,
+        SubscriptionListPage,
+        TransactionListPage,
+        SettingsPage,
+        ProfilePage,
+        PaymentMethodsListPage,
+        AddPaymentMethodPage,
         EmptyState,
+        NotFoundPage,
     };
     static props = {};
 
@@ -80,5 +104,17 @@ export class Root extends Component {
 
     get homeId() {
         return this.router.params.homeId ? parseInt(this.router.params.homeId, 10) : null;
+    }
+
+    get securityAccessId() {
+        return this.router.params.saId ? parseInt(this.router.params.saId, 10) : null;
+    }
+
+    get securityAccessTab() {
+        return this.router.params.tab || 'overview';
+    }
+
+    get invoiceId() {
+        return parseInt(this.router.params?.id) || 0;
     }
 }

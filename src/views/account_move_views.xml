@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_account_move_form_woow_ecpay" model="ir.ui.view">
+        <field name="name">account.move.form.woow.ecpay</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="ecpay_invoice_tw.ecpay_invoice_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//button[@name='create_ecpay_invoice']" position="after">
+                <button name="action_woow_retry_ecpay_invoice" type="object"
+                        class="oe_stat_button oe_highlight"
+                        icon="fa-refresh" string="重試開立 ECPay 發票"
+                        groups="account.group_account_manager"
+                        invisible="woow_invoice_issue_state not in ('failed', 'error')"/>
+            </xpath>
+            <xpath expr="//page[@id='uniform_invoice']/group" position="inside">
+                <group string="PaaS 開立追蹤">
+                    <field name="woow_invoice_issue_state" readonly="1"/>
+                    <field name="woow_invoice_retry_count" readonly="1"/>
+                    <field name="woow_invoice_last_error" readonly="1"
+                           invisible="not woow_invoice_last_error"/>
+                    <field name="woow_invoice_next_retry_at" readonly="1"
+                           invisible="woow_invoice_issue_state != 'failed'"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>

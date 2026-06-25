@@ -63,11 +63,7 @@ export class AppCard extends Component {
      * @returns {string}
      */
     get formattedPrice() {
-        const price = this.props.template.monthly_price;
-        if (price === 0) {
-            return "Free";
-        }
-        return `$${price.toFixed(2)}/mo`;
+        return "Free";
     }
 
     /**

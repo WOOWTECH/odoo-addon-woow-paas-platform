@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ProjectsOverview">
+        <div class="o_woow_sp_overview">
+            <!-- Stats Overview Cards -->
+            <div class="o_woow_ai_stats_grid">
+                <!-- Total Tasks -->
+                <WoowCard shadow="true" class="'o_woow_ai_stat_card'">
+                    <div class="o_woow_ai_stat_content">
+                        <div class="o_woow_ai_stat_icon o_woow_ai_stat_icon_blue">
+                            <WoowIcon name="'task_alt'" size="24"/>
+                        </div>
+                        <div class="o_woow_ai_stat_info">
+                            <span class="o_woow_ai_stat_label">Total Tasks</span>
+                            <t t-if="isStatsLoading">
+                                <span class="o_woow_ai_stat_value o_woow_ai_stat_loading">--</span>
+                            </t>
+                            <t t-else="">
+                                <span class="o_woow_ai_stat_value"><t t-esc="stats.total"/></span>
+                            </t>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Active Tasks -->
+                <WoowCard shadow="true" class="'o_woow_ai_stat_card'">
+                    <div class="o_woow_ai_stat_content">
+                        <div class="o_woow_ai_stat_icon o_woow_ai_stat_icon_green">
+                            <WoowIcon name="'pending_actions'" size="24"/>
+                        </div>
+                        <div class="o_woow_ai_stat_info">
+                            <span class="o_woow_ai_stat_label">Active</span>
+                            <t t-if="isStatsLoading">
+                                <span class="o_woow_ai_stat_value o_woow_ai_stat_loading">--</span>
+                            </t>
+                            <t t-else="">
+                                <span class="o_woow_ai_stat_value"><t t-esc="stats.active"/></span>
+                            </t>
+                        </div>
+                    </div>
+                </WoowCard>
+
+                <!-- Completion Rate -->
+                <WoowCard shadow="true" class="'o_woow_ai_stat_card'">
+                    <div class="o_woow_ai_stat_content">
+                        <div class="o_woow_ai_stat_icon o_woow_ai_stat_icon_purple">
+                            <WoowIcon name="'donut_large'" size="24"/>
+                        </div>
+                        <div class="o_woow_ai_stat_info">
+                            <span class="o_woow_ai_stat_label">Completion</span>
+                            <t t-if="isStatsLoading">
+                                <span class="o_woow_ai_stat_value o_woow_ai_stat_loading">--</span>
+                            </t>
+                            <t t-else="">
+                                <span class="o_woow_ai_stat_value"><t t-esc="stats.completion"/>%</span>
+                            </t>
+                        </div>
+                    </div>
+                </WoowCard>
+            </div>
+        </div>
+    </t>
+</templates>

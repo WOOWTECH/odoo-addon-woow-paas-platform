@@ -86,6 +86,7 @@ class PaaSOperatorClient:
         method: str,
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> Dict[str, Any]:
         """Make an HTTP request to the PaaS Operator API.
@@ -94,6 +95,7 @@ class PaaSOperatorClient:
             method: HTTP method (GET, POST, PATCH, DELETE)
             endpoint: API endpoint (e.g., '/api/releases')
             data: Request body data (for POST, PATCH)
+            params: URL query string parameters
             timeout: Request timeout in seconds
 
         Returns:
@@ -112,6 +114,7 @@ class PaaSOperatorClient:
                 method=method,
                 url=url,
                 json=data if data else None,
+                params=params if params else None,
                 timeout=timeout,
             )
 
@@ -370,6 +373,36 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def scale_release(
+        self,
+        release_name: str,
+        namespace: str,
+        replicas: int = 0,
+    ) -> Dict[str, str]:
+        """Scale a Helm release's deployments.
+
+        Used for subscription suspend (replicas=0) and resume (replicas=1).
+
+        Args:
+            release_name: Release name
+            namespace: Release namespace
+            replicas: Target replica count
+
+        Returns:
+            Scale confirmation
+
+        Raises:
+            PaaSOperatorError: If scaling fails
+        """
+        # Operator reads `replicas` as a Query parameter, not request body.
+        # Send via URL query string to match the server-side contract.
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/scale',
+            params={'replicas': replicas},
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def rollback_release(
         self,
         namespace: str,
@@ -481,6 +514,57 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def init_odoo(
+        self,
+        namespace: str,
+        release_name: str,
+    ) -> Dict[str, Any]:
+        """Initialize Odoo module list after deployment.
+
+        Triggers module list update so newly deployed addons are discoverable
+        in the Odoo Apps interface without manual intervention.
+
+        Args:
+            namespace: K8s namespace
+            release_name: Helm release name
+
+        Returns:
+            Dict with success, modules_added, modules_updated
+
+        Raises:
+            PaaSOperatorError: If initialization fails
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/init/odoo',
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def get_odoo_module_states(
+        self,
+        namespace: str,
+        release_name: str,
+        module_names: list[str],
+    ) -> Dict[str, Any]:
+        """Query Odoo module installation states.
+
+        Args:
+            namespace: K8s namespace
+            release_name: Helm release name
+            module_names: Module technical names to query
+
+        Returns:
+            Dict with 'success' and 'modules' mapping name -> {state, dependents}
+        """
+        return self._request(
+            'POST',
+            f'/api/odoo/{namespace}/{release_name}/module-states',
+            data={'module_names': module_names},
+            timeout=150,
+        )
+
+
+
     def get_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
         """Get detailed status of a release including pod information.
 
@@ -505,14 +589,16 @@ class PaaSOperatorClient:
     def create_tunnel(
         self,
         name: str,
-        hostname: str,
+        hostname: Optional[str] = None,
         service_url: str = 'http://localhost:8123',
     ) -> Dict[str, Any]:
         """Create a dedicated Cloudflare Tunnel.
 
         Args:
             name: Tunnel name
-            hostname: Public hostname (e.g., 'sh-myworkspace.woowtech.io')
+            hostname: Public hostname (e.g., 'sh-myworkspace.woowtech.io').
+                Omit to create a BARE tunnel (catch-all 404 ingress, no DNS) —
+                used by Security Access where routes are added on demand.
             service_url: Local service URL to tunnel to (default: HA port)
 
         Returns:
@@ -521,11 +607,14 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If tunnel creation fails
         """
-        data = {
+        data: Dict[str, Any] = {
             'name': name,
-            'hostname': hostname,
             'service_url': service_url,
         }
+        # Only send hostname when provided; absence signals a bare tunnel.
+        # Smart Home always passes one, so its behaviour is unchanged.
+        if hostname:
+            data['hostname'] = hostname
         return self._request(
             'POST',
             '/api/tunnels',
@@ -577,6 +666,125 @@ class PaaSOperatorClient:
             'DELETE',
             f'/api/tunnels/{tunnel_id}',
             timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def configure_tunnel(
+        self,
+        tunnel_id: str,
+        hostname: str,
+        service_url: str,
+    ) -> Dict[str, Any]:
+        """Update a tunnel's ingress configuration.
+
+        Used for subscription suspend (service_url="http_status:503")
+        and resume (service_url="http://localhost:PORT").
+
+        Args:
+            tunnel_id: Cloudflare Tunnel ID
+            hostname: Public hostname (e.g., ha-xxx.woowtech.io)
+            service_url: Target service URL or http_status:503
+
+        Returns:
+            Configuration confirmation
+
+        Raises:
+            PaaSOperatorError: If configuration fails
+        """
+        data = {
+            'hostname': hostname,
+            'service_url': service_url,
+        }
+        return self._request(
+            'PUT',
+            f'/api/tunnels/{tunnel_id}/config',
+            data=data,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def sync_tunnel_routes(
+        self,
+        tunnel_id: str,
+        routes: List[Dict[str, Any]],
+        comment: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Declaratively sync a dedicated tunnel's full route list.
+
+        Replaces the tunnel ingress (plus catch-all 404) and reconciles DNS
+        records. Idempotent — Security Access uses this for route CRUD,
+        suspend (service_url='http_status:503') and resume.
+
+        Args:
+            tunnel_id: Cloudflare Tunnel ID
+            routes: list of dicts {subdomain, service_url, http_host_header}
+            comment: canonical name stamped on DNS records (traceability)
+
+        Returns:
+            Dict with tunnel_id and routes (each with dns_record_id)
+
+        Raises:
+            PaaSOperatorError: If the route sync fails
+        """
+        data: Dict[str, Any] = {'routes': routes}
+        if comment:
+            data['comment'] = comment
+        return self._request(
+            'PUT',
+            f'/api/tunnels/{tunnel_id}/routes',
+            data=data,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def sync_access_app(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Declaratively sync one SA's Cloudflare Access config.
+
+        payload keys: enabled, canonical_name, app_name, primary_hostname,
+        protected_hostnames, session_duration, login_idp_types, policies,
+        existing_app_id, existing_policy_ids. Returns {app_id, policy_ids,
+        allowed_idps, unresolved_idp_types}. unresolved_idp_types lists
+        requested login methods with no matching CF account IdP — a fail-open
+        login-widening signal the caller persists (SA.access_unresolved_idp_types).
+        Idempotent.
+        """
+        return self._request(
+            'PUT', '/api/access/sync', data=payload,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def list_identity_providers(self) -> Dict[str, Any]:
+        """List account Access IdPs ({identity_providers: [{id,name,type}]})."""
+        return self._request('GET', '/api/access/identity-providers')
+
+    def check_route_availability(self, subdomain: str) -> Dict[str, Any]:
+        """Check Cloudflare-side whether a subdomain is free in the zone.
+
+        Args:
+            subdomain: subdomain prefix (without domain)
+
+        Returns:
+            Dict with:
+              - ``subdomain``: the queried prefix
+              - ``hostname``: the full FQDN that was checked
+              - ``status``: one of ``free`` / ``taken`` / ``unknown``.
+                ``unknown`` means the Cloudflare API errored (401/403/429/5xx)
+                and availability could NOT be determined — it is NOT "free".
+              - ``available``: ``bool | None``. ``True``/``False`` for
+                ``free``/``taken``; ``None`` when ``status == 'unknown'``
+                (the operator deliberately does NOT fail open).
+              - ``reason``: present only on ``unknown``, a human message.
+
+            Callers MUST branch on ``status`` and treat ``unknown`` /
+            ``available is None`` as fail-closed (see
+            controllers/security_access.py:_check_route_prefix). Do not treat
+            ``available`` as a plain bool.
+
+        Raises:
+            PaaSOperatorError: If the request itself fails (transport / non-2xx
+                outside the operator's handled ``unknown`` path).
+        """
+        return self._request(
+            'GET',
+            '/api/routes/availability',
+            params={'subdomain': subdomain},
         )
 
 

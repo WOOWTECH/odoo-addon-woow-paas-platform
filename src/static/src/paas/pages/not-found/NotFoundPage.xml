@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.NotFoundPage">
+        <div class="o_woow_not_found">
+            <div class="o_woow_not_found_content">
+                <div class="o_woow_not_found_icon">
+                    <WoowIcon name="'error'" size="64"/>
+                </div>
+                <h1>404</h1>
+                <h2>Page Not Found</h2>
+                <p>
+                    The page you're looking for doesn't exist or has been moved.
+                    Check the URL, or head back to the dashboard.
+                </p>
+                <WoowButton variant="'primary'" onClick.bind="goHome">
+                    <WoowIcon name="'home'" size="16"/>
+                    Back to Dashboard
+                </WoowButton>
+            </div>
+        </div>
+    </t>
+</templates>

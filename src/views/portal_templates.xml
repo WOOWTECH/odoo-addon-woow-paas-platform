@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- Task detail：status 卡片（原生空欄）+ chat 區塊（chatter 之前） -->
+  <template id="portal_my_task_paas_agent"
+            inherit_id="project.portal_my_task"
+            name="Portal Task: PaaS Agent">
+    <xpath expr="//div[@name='portal_my_task_second_column']" position="inside">
+      <t t-if="paas_agent_enabled and paas_project_id">
+        <owl-component name="woow_paas_platform.PortalAgentStatus"
+                       t-attf-props='{"projectId": #{paas_project_id}}'/>
+      </t>
+    </xpath>
+    <xpath expr="//div[@id='task_chat']" position="before">
+      <div id="paas_task_chat" class="mt-4" t-if="paas_agent_enabled">
+        <h5 class="mb-2">AI 助理對話</h5>
+        <t t-if="paas_channel_id">
+          <owl-component name="woow_paas_platform.PortalTaskChat"
+                         t-attf-props='{"channelId": #{paas_channel_id}, "projectId": #{paas_project_id}}'/>
+        </t>
+        <div t-else="" class="alert alert-info mb-0">
+          請先登入以使用 AI 對話。
+        </div>
+      </div>
+    </xpath>
+  </template>
+
+  <!-- Project detail：status 卡片（searchbar 之前） -->
+  <template id="portal_my_project_paas_agent"
+            inherit_id="project.portal_my_project"
+            name="Portal Project: PaaS Agent">
+    <xpath expr="//t[@t-call='portal.portal_searchbar']" position="before">
+      <t t-if="paas_agent_enabled and paas_project_id">
+        <owl-component name="woow_paas_platform.PortalAgentStatus"
+                       t-attf-props='{"projectId": #{paas_project_id}}'/>
+      </t>
+    </xpath>
+  </template>
+
+</odoo>

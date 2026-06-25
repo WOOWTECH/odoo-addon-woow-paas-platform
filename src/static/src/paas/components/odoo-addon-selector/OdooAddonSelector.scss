@@ -1,0 +1,138 @@
+.o_woow_addon_selector {
+  &__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+
+    h4 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+  }
+
+  &__count {
+    font-size: 13px;
+    color: var(--woow-text-muted, #888);
+  }
+
+  &__filters {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  &__search {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid var(--woow-border, #ddd);
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+
+    &:focus {
+      border-color: var(--woow-primary, #7c3aed);
+    }
+  }
+
+  &__category {
+    padding: 6px 10px;
+    border: 1px solid var(--woow-border, #ddd);
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  &__item {
+    display: flex;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--woow-border, #ddd);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+
+    &:hover {
+      background: var(--woow-bg-hover, #f8f8f8);
+    }
+
+    &--selected {
+      border-color: var(--woow-primary, #7c3aed);
+      background: var(--woow-primary-bg, #f5f0ff);
+    }
+  }
+
+  &__checkbox {
+    display: flex;
+    align-items: flex-start;
+    padding-top: 2px;
+
+    input {
+      cursor: pointer;
+      accent-color: var(--woow-primary, #7c3aed);
+    }
+  }
+
+  &__info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+  }
+
+  &__icon {
+    font-size: 18px;
+    color: var(--woow-text-muted, #888);
+  }
+
+  &__badge {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--woow-bg-muted, #eee);
+    color: var(--woow-text-muted, #888);
+
+    &--dep {
+      background: #fff3cd;
+      color: #856404;
+    }
+  }
+
+  &__desc {
+    font-size: 12px;
+    color: var(--woow-text-muted, #888);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__meta {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--woow-text-muted, #aaa);
+  }
+
+  &__loading, &__empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--woow-text-muted, #888);
+    font-size: 13px;
+  }
+}

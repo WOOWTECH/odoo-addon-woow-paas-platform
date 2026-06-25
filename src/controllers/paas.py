@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import threading
@@ -7,7 +8,10 @@ import traceback
 import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
+from odoo import fields
+from odoo.exceptions import ValidationError
 from odoo.http import request, route, Controller
 
 from ..models.workspace_access import (
@@ -21,6 +25,60 @@ from ..services.paas_operator import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+# Cloud metadata endpoints must never be reachable from a user-provided
+# MCP URL. cluster.local resolves into pod-network IPs and must stay
+# allowed (sidecar-backed URL form).
+_SSRF_BLOCKED_IPV4 = frozenset({
+    '169.254.169.254',  # AWS / GCP / Azure IMDSv1
+})
+_SSRF_BLOCKED_IPV6 = frozenset({
+    'fd00:ec2::254',  # AWS IMDSv2 IPv6
+})
+_SSRF_ALLOWED_SCHEMES = frozenset({'http', 'https'})
+
+
+PORTAL_SETTINGS_FLAG = 'woow_paas_platform.portal_project_settings_editable'
+
+
+def _portal_project_settings_editable(env) -> bool:
+    """Feature flag（2026-06-03 議題 H）：portal project settings 預設唯讀。
+    Param 缺值 = off（fail-closed）。ai_assistant.py import 共用 —
+    two-layer-acl-lockstep：三支寫入 endpoint 必須同一開關。"""
+    return (env['ir.config_parameter'].sudo().get_param(
+        PORTAL_SETTINGS_FLAG) or '').strip().lower() in ('true', '1')
+
+
+def _validate_mcp_url(url: str) -> str | None:
+    """Minimal SSRF guard: reject non-http(s) schemes + cloud metadata IPs."""
+    if not url:
+        return 'URL is required'
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return f'URL host not allowed: {url}'
+    scheme = (parsed.scheme or '').lower()
+    if scheme not in _SSRF_ALLOWED_SCHEMES:
+        return (
+            f'URL scheme not allowed: {parsed.scheme!r} '
+            '(only http/https accepted)'
+        )
+    host = (parsed.hostname or '').strip()
+    if not host:
+        return f'URL host not allowed: {url}'
+    if host in _SSRF_BLOCKED_IPV4:
+        return f'URL host not allowed: {host}'
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.is_link_local:
+            return f'URL host not allowed: [{host}]'
+        if str(ip).lower() in _SSRF_BLOCKED_IPV6:
+            return f'URL host not allowed: [{host}]'
+    return None
 
 
 class PaasController(Controller):
@@ -762,7 +820,6 @@ class PaasController(Controller):
             'description': template.description or '',
             'category': template.category,
             'tags': json.loads(template.tags) if template.tags else [],
-            'monthly_price': template.monthly_price,
             'documentation_url': template.documentation_url or '',
             'default_port': template.default_port,
             'ingress_enabled': template.ingress_enabled,
@@ -778,10 +835,237 @@ class PaasController(Controller):
             data['full_description'] = template.full_description or ''
         return data
 
+    # ==================== Odoo Addons API ====================
+
+    @route("/api/cloud/odoo-addons/sync", auth="user", methods=["POST"], type="json")
+    def api_odoo_addons_sync(self, **kw: Any) -> dict[str, Any]:
+        """Sync addon records from catalog.json (admin only)."""
+        if not request.env.user.has_group('base.group_system'):
+            return {'success': False, 'error': 'Admin access required'}
+        result = request.env['woow_paas_platform.cloud_odoo_addon'].sync_from_catalog()
+        return {'success': True, 'data': result}
+
+    @route("/api/cloud/odoo-addons", auth="user", methods=["POST"], type="json")
+    def api_odoo_addons(self, template_id: int | None = None, category: str | None = None, **kw: Any) -> dict[str, Any]:
+        """List available Odoo addons, optionally filtered by template or category."""
+        CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+
+        domain = [('active', '=', True)]
+        if template_id:
+            # Show addons linked to this template OR addons with no template restriction
+            domain = [
+                ('active', '=', True),
+                '|',
+                ('template_ids', 'in', [template_id]),
+                ('template_ids', '=', False),
+            ]
+        if category:
+            domain.append(('category', '=', category))
+
+        addons = CloudOdooAddon.search(domain)
+        data = []
+        for addon in addons:
+            data.append({
+                'id': addon.id,
+                'name': addon.name,
+                'technical_name': addon.technical_name,
+                'description': addon.description or '',
+                'category': addon.category or 'other',
+                'icon': addon.icon or '',
+                'source_type': addon.source_type,
+                'is_default': addon.is_default,
+                'depends_on': [
+                    {'id': d.id, 'technical_name': d.technical_name}
+                    for d in addon.depends_on
+                ],
+            })
+
+        return {'success': True, 'data': data, 'count': len(data)}
+
     # ==================== Cloud Services API ====================
 
+    @route("/api/cloud-services/templates/<int:template_id>/plans", auth="user", methods=["POST"], type="json")
+    def api_template_plans(self, template_id: int, **kw: Any) -> dict[str, Any]:
+        """Get available subscription plans for a template."""
+        CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
+        template = CloudAppTemplate.browse(template_id)
+        if not template.exists() or not template.is_active:
+            return {'success': False, 'error': 'Template not found'}
+
+        plans = []
+        for plan in template.sudo().subscription_plan_ids:
+            plans.append({
+                'id': plan.id,
+                'name': plan.name,
+                'price': plan.sh_plan_price,
+                'duration': plan.sh_duration,
+                'unit': plan.sh_unit,
+                'has_trial': plan.sh_trial,
+                'trial_duration': plan.sh_trial_duration if plan.sh_trial else 0,
+                'trial_unit': plan.sh_trial_unit if plan.sh_trial else None,
+            })
+
+        return {'success': True, 'data': plans}
+
+    @route("/api/cloud-services/services/<int:service_id>/change-plan", auth="user", methods=["POST"], type="json")
+    def api_service_change_plan(self, service_id: int, plan_id: int | None = None, **kw: Any) -> dict[str, Any]:
+        """Change subscription plan for a cloud service."""
+        if not plan_id:
+            return {'success': False, 'error': 'plan_id is required'}
+
+        CloudService = request.env['woow_paas_platform.cloud_service']
+        service = CloudService.browse(service_id)
+        if not service.exists():
+            return {'success': False, 'error': 'Service not found'}
+
+        workspace = service.workspace_id
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {'success': False, 'error': 'Admin access required'}
+
+        Plan = request.env['sh.subscription.plan'].sudo()
+        plan = Plan.browse(plan_id)
+        if not plan.exists():
+            return {'success': False, 'error': 'Plan not found'}
+        # Plan must belong to THIS service's template — symmetric with the
+        # create path's gate (api_deploy_service: `plan not in
+        # template.subscription_plan_ids`). The role check above only gates who
+        # may change the plan, not whether the plan belongs here; without this
+        # an owner could switch to another template's (or an orphan) plan,
+        # producing a subscription/invoice line inconsistent with the service's
+        # template. Lock-step with the SA-side change-plan guard.
+        svc_template = service.template_id.sudo()
+        if svc_template.subscription_plan_ids and plan not in svc_template.subscription_plan_ids:
+            return {'success': False,
+                    'error': 'Plan not available for this template'}
+
+        old_sub = service.sudo().subscription_id
+        _logger.info(
+            "[CLOUD_SVC] change_plan request service=%s new_plan=%s old_sub=%s",
+            service_id, plan_id, old_sub.id if old_sub else None,
+        )
+        if not old_sub or old_sub.state != 'in_progress':
+            return {'success': False, 'error': 'No active subscription'}
+
+        # During trial, sh_end_date is legitimately NULL (billing period
+        # hasn't started yet). Strict date completeness is only meaningful
+        # for active subs — see the SH-side counterpart in smart_home.py
+        # for the full rationale. `_compute_unused_refund` is already
+        # trial-aware (returns 0), so the rest of the flow is safe.
+        if not old_sub.sh_trial:
+            if not old_sub.sh_end_date or not old_sub.sh_start_date:
+                return {'success': False, 'error': 'Subscription dates are incomplete'}
+
+        # Refund: defer to the model method instead of recomputing the
+        # proration inline. The previous inline form
+        #   refund = price * remaining_days / total_days
+        # would have crashed on trial subs (sh_end_date is None) once the
+        # date guard above was relaxed; the model method is the SH side's
+        # canonical calculator and is already covered by
+        # test_change_plan_refund.py for the trial / partial / end-of-cycle
+        # cases. SH at smart_home.py:167 already routes through it; this
+        # change brings CS to parity.
+        refund = old_sub._compute_unused_refund()
+
+        partner = old_sub.sh_partner_id
+        _logger.info(
+            "[CLOUD_SVC] change_plan refund calc service=%s start=%s end=%s price=%s refund=%s partner=%s",
+            service_id, old_sub.sh_start_date, old_sub.sh_end_date,
+            old_sub.sh_plan_price, refund, partner.id,
+        )
+
+        # Refund unused points
+        if refund > 0:
+            partner.sudo().add_wallet_points(
+                amount=refund,
+                description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
+            )
+            partner.invalidate_recordset(['wallet_balance'])
+            _logger.info(
+                "[CLOUD_SVC] change_plan refund credited service=%s partner=%s amount=%s",
+                service_id, partner.id, refund,
+            )
+
+        # Close old subscription
+        old_sub.sudo().write({
+            'state': 'close',
+            'sh_reason': 'Plan changed to: %s' % plan.name,
+        })
+
+        # Create new subscription
+        service._create_and_confirm_subscription(partner, plan)
+        _logger.info(
+            "[CLOUD_SVC] change_plan done service=%s old_sub=%s new_sub=%s",
+            service_id, old_sub.id,
+            service.subscription_id.id if service.subscription_id else None,
+        )
+
+        return {
+            'success': True,
+            'data': {
+                'refund_amount': refund,
+                'new_plan': plan.name,
+                'subscription': service._get_subscription_info(),
+            },
+        }
+
+    @route("/api/cloud-services/services/<int:service_id>/skip-trial-estimate", auth="user", methods=["POST"], type="json")
+    def api_service_skip_trial_estimate(self, service_id: int, **kw: Any) -> dict[str, Any]:
+        """Return the upcoming-invoice breakdown for skip-trial confirmation.
+
+        Side-effect-free: computes untaxed / tax / total + wallet sufficiency
+        without mutating the subscription. Used by the confirm modal so the
+        displayed total matches what `api_service_skip_trial` will charge.
+        """
+        CloudService = request.env['woow_paas_platform.cloud_service']
+        service = CloudService.browse(service_id)
+        if not service.exists():
+            return {'success': False, 'error': 'Service not found'}
+
+        workspace = service.workspace_id
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {'success': False, 'error': 'Admin access required'}
+
+        try:
+            estimate = service._skip_trial_estimate()
+        except Exception as e:
+            _logger.error(
+                "Error estimating skip-trial for service %s: %s", service_id, e,
+            )
+            return {'success': False, 'error': str(e)}
+
+        return {'success': True, 'data': estimate}
+
+    @route("/api/cloud-services/services/<int:service_id>/skip-trial", auth="user", methods=["POST"], type="json")
+    def api_service_skip_trial(self, service_id: int, **kw: Any) -> dict[str, Any]:
+        """Skip trial period and start paid billing immediately."""
+        CloudService = request.env['woow_paas_platform.cloud_service']
+        service = CloudService.browse(service_id)
+        if not service.exists():
+            return {'success': False, 'error': 'Service not found'}
+
+        workspace = service.workspace_id
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {'success': False, 'error': 'Admin access required'}
+
+        try:
+            invoice_info = service._skip_trial()
+        except Exception as e:
+            _logger.error("Error skipping trial for service %s: %s", service_id, e)
+            return {'success': False, 'error': str(e)}
+
+        return {
+            'success': True,
+            'data': {
+                'invoice': invoice_info,
+                'subscription': service._get_subscription_info(),
+            },
+        }
+
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
-    def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, **kw: Any) -> dict[str, Any]:
+    def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
         """
         Handle cloud service operations for a workspace.
 
@@ -816,12 +1100,13 @@ class PaasController(Controller):
             # Only admin/owner can create services
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._create_service(workspace, template_id, name, values)
+            plan_id = kw.get('plan_id')
+            return self._create_service(workspace, template_id, name, values, odoo_addon_ids, plan_id=plan_id)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
-    def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, **kw: Any) -> dict[str, Any]:
+    def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
         """
         Handle operations on a specific cloud service.
 
@@ -860,10 +1145,18 @@ class PaasController(Controller):
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
-            return self._update_service(service, values, version)
+            try:
+                service._check_operation_allowed(operation='write')
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
+            return self._update_service(service, values, version, odoo_addon_ids)
         elif action == 'delete':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
+            try:
+                service._check_operation_allowed(operation='write')
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
             return self._delete_service(service)
         else:
             return {'success': False, 'error': f'Unknown action: {action}'}
@@ -947,6 +1240,66 @@ class PaasController(Controller):
 
         return self._get_service_revisions(service)
 
+    # ==================== Addon Module Operations ====================
+
+    @route(
+        '/api/cloud-services/services/<int:service_id>/check-addon-removal',
+        type='json', auth='user', methods=['POST'],
+    )
+    def api_check_addon_removal(self, service_id):
+        """Check if removed addons can be safely deselected."""
+        params = request.get_json_data()
+        removed_addon_ids = params.get('removed_addon_ids', [])
+
+        if not removed_addon_ids:
+            return {'success': True, 'modules': {}}
+
+        service = request.env['woow_paas_platform.cloud_service'].browse(service_id)
+        if not service.exists():
+            return {'success': False, 'error': 'Service not found'}
+
+        workspace = service.workspace_id
+        access = workspace.check_user_access(request.env.user)
+        if not access:
+            return {'success': False, 'error': 'Access denied'}
+
+        if service.state != 'running':
+            return {'success': False, 'error': f'Service must be running to check module states (current: {service.state})'}
+
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return {'success': False, 'error': 'PaaS Operator not configured'}
+
+        CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+        addons = CloudOdooAddon.browse(removed_addon_ids).exists()
+        if not addons:
+            return {'success': True, 'modules': {}}
+
+        tech_names = [a.technical_name for a in addons]
+        name_to_id = {a.technical_name: a.id for a in addons}
+
+        try:
+            result = client.get_odoo_module_states(
+                namespace=service.helm_namespace,
+                release_name=service.helm_release_name,
+                module_names=tech_names,
+            )
+        except Exception as e:
+            return {'success': False, 'error': f'Failed to query module states: {e}'}
+
+        if not result.get('success'):
+            return {'success': False, 'error': result.get('error', 'Unknown error')}
+
+        modules = {}
+        for name, info in result.get('modules', {}).items():
+            modules[name] = {
+                'addon_id': name_to_id.get(name),
+                'state': info.get('state', 'unknown'),
+                'dependents': info.get('dependents', []),
+            }
+
+        return {'success': True, 'modules': modules}
+
     # ==================== MCP Server API (per-service) ====================
 
     @route(
@@ -979,7 +1332,17 @@ class PaasController(Controller):
 
         if action == 'list':
             return self._list_mcp_servers(service)
-        elif action == 'create':
+
+        # Legacy service-centric write endpoint must honour the same portal
+        # settings flag as the project-centric route (two-layer-acl-lockstep:
+        # 三支寫入 endpoint 必須同一開關). Without this gate, flag-off lets a
+        # workspace owner/admin RPC past read-only via the legacy route.
+        write_actions = ('create', 'update', 'delete', 'sync', 'test')
+        if action in write_actions:
+            if not _portal_project_settings_editable(request.env):
+                return {'success': False, 'error': 'Permission denied'}
+
+        if action == 'create':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': 'Permission denied'}
             return self._create_mcp_server(service, kw)
@@ -1001,7 +1364,14 @@ class PaasController(Controller):
             return {'success': False, 'error': f'Unknown action: {action}'}
 
     def _list_mcp_servers(self, service) -> dict[str, Any]:
-        servers = service.sudo().user_mcp_server_ids.filtered(lambda s: s.active)
+        # User-scope MCP now hangs off project, not service (D6 keeps the
+        # frontend tab on the service page; query walks service.project_ids).
+        project = service.sudo().project_ids[:1]
+        if not project:
+            return {'success': True, 'data': []}
+        servers = project.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active
+        )
         return {
             'success': True,
             'data': [self._format_mcp_server(s) for s in servers],
@@ -1012,6 +1382,16 @@ class PaasController(Controller):
         url = params.get('url', '').strip()
         if not name or not url:
             return {'success': False, 'error': 'Name and URL are required'}
+        url_error = _validate_mcp_url(url)
+        if url_error:
+            return {'success': False, 'error': url_error}
+
+        project = service.sudo().project_ids[:1]
+        if not project:
+            return {
+                'success': False,
+                'error': 'No support project bound to this service.',
+            }
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.create({
@@ -1022,7 +1402,7 @@ class PaasController(Controller):
             'headers_json': params.get('headers_json', ''),
             'description': params.get('description', ''),
             'scope': 'user',
-            'cloud_service_id': service.id,
+            'project_id': project.id,
         })
         return {'success': True, 'data': self._format_mcp_server(server)}
 
@@ -1033,8 +1413,13 @@ class PaasController(Controller):
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
-        if not server.exists() or server.cloud_service_id.id != service.id:
+        if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
+
+        if 'url' in params:
+            url_error = _validate_mcp_url((params.get('url') or '').strip())
+            if url_error:
+                return {'success': False, 'error': url_error}
 
         vals = {}
         for field in ('name', 'url', 'transport', 'api_key', 'headers_json', 'description'):
@@ -1051,7 +1436,7 @@ class PaasController(Controller):
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
-        if not server.exists() or server.cloud_service_id.id != service.id:
+        if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
         server.unlink()
@@ -1064,7 +1449,7 @@ class PaasController(Controller):
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
-        if not server.exists() or server.cloud_service_id.id != service.id:
+        if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
         try:
@@ -1082,7 +1467,7 @@ class PaasController(Controller):
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
-        if not server.exists() or server.cloud_service_id.id != service.id:
+        if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
         try:
@@ -1118,6 +1503,303 @@ class PaasController(Controller):
             'tool_count': server.tool_count,
             'tools': tools,
             'last_sync': server.last_sync.isoformat() if server.last_sync else None,
+            'sidecar_backed': bool(server.sidecar_backed),
+        }
+
+    # ==================== Project-centric Support API (D4 / OR-6) ====================
+
+    _PROJECT_NOT_FOUND_ERROR = 'Project not found or access denied'
+
+    class _SyntheticAccess:
+        """Stand-in access record for unbound projects.
+
+        Issued only after the unbound carve-out in
+        ``_resolve_project_access`` has already verified that the current
+        user is a project follower — the role is granted to a
+        scope-resolved user, not to anyone authenticated. Mirrors the
+        follower carve-out in ``ai_assistant.py:_check_project_access``;
+        both layers must stay in lock-step, otherwise the rule layer
+        denies but the controller layer still serves the row.
+        """
+        def __init__(self, role):
+            self.role = role
+
+    def _resolve_project_access(self, project_id: int):
+        """Resolve a project + workspace access record for the current user.
+
+        Returns ``(project, access)`` when the user can reach the project,
+        or ``(None, None)`` for every deny path — the unified ``Project
+        not found or access denied`` error keeps id enumeration closed.
+
+        Unbound projects (no cloud_service / workspace) require the
+        current user to be in ``project.message_partner_ids`` (follower
+        carve-out, in lock-step with ``ai_assistant.py``).
+        """
+        Project = request.env['project.project'].sudo()
+        project = Project.browse(project_id)
+        if not project.exists():
+            return None, None
+        workspace = project.cloud_service_id.workspace_id
+        if not workspace:
+            user_partner = request.env.user.partner_id
+            if user_partner in project.message_partner_ids:
+                return project, self._SyntheticAccess(role=ROLE_OWNER)
+            return None, None
+        access = workspace.check_user_access(request.env.user)
+        if not access:
+            return None, None
+        return project, access
+
+    @route(
+        "/api/support-projects/<int:project_id>",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_support_project_detail(
+        self,
+        project_id: int,
+        action: str = 'get',
+        **kw: Any,
+    ) -> dict[str, Any]:
+        """Project detail operations (get / update).
+
+        URL is hyphenated (``/api/support-projects/...``) to avoid the
+        ``/api/support/projects/<wid>`` slash pattern in ``ai_assistant.py``
+        which scopes to a workspace, not a project — see Plan D4 / OR-6.
+        """
+        project, access = self._resolve_project_access(project_id)
+        if not project or not access:
+            return {'success': False, 'error': self._PROJECT_NOT_FOUND_ERROR}
+
+        if action == 'get':
+            return {'success': True, 'data': self._format_project_detail(project)}
+        if action == 'update':
+            if not _portal_project_settings_editable(request.env):
+                return {'success': False, 'error': 'Permission denied'}
+            if access.role not in (ROLE_OWNER, ROLE_ADMIN):
+                return {'success': False, 'error': 'Permission denied'}
+            return self._update_support_project(project, kw)
+        return {'success': False, 'error': f'Unknown action: {action}'}
+
+    def _format_project_detail(self, project) -> dict[str, Any]:
+        servers = project.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active
+        )
+        service = project.cloud_service_id
+        return {
+            'id': project.id,
+            'name': project.name,
+            'description': project.description or '',
+            'cloud_service_id': service.id if service else False,
+            'cloud_service_name': service.name if service else '',
+            'cloud_service_mcp_enabled': bool(
+                service and service.template_id.mcp_enabled
+            ),
+            'workspace_id': project.workspace_id.id if project.workspace_id else False,
+            'workspace_name': project.workspace_id.name if project.workspace_id else '',
+            'mcp_server_ids': [self._format_mcp_server(s) for s in servers],
+            'portal_editable': _portal_project_settings_editable(request.env),
+            'task_count': project.task_count,
+            'open_task_count': project.open_task_count,
+            'created_date': project.create_date.isoformat() if project.create_date else None,
+        }
+
+    def _update_support_project(self, project, params: dict) -> dict[str, Any]:
+        vals: dict[str, Any] = {}
+        if 'name' in params:
+            name = (params.get('name') or '').strip()
+            if not name:
+                return {'success': False, 'error': 'Name cannot be empty'}
+            vals['name'] = name
+        if 'description' in params:
+            vals['description'] = params.get('description') or ''
+
+        if 'cloud_service_id' in params:
+            target_raw = params.get('cloud_service_id')
+            if target_raw:
+                CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
+                target = CloudService.browse(int(target_raw))
+                if not target.exists():
+                    return {'success': False, 'error': 'Cloud Service not found'}
+                current_ws = project.workspace_id
+                if not current_ws or target.workspace_id.id != current_ws.id:
+                    return {
+                        'success': False,
+                        'error': 'Cloud Service must belong to the same workspace.',
+                    }
+                vals['cloud_service_id'] = target.id
+            else:
+                vals['cloud_service_id'] = False
+
+        if not vals:
+            return {'success': True, 'data': self._format_project_detail(project)}
+
+        try:
+            project.sudo().write(vals)
+        except ValidationError as e:
+            return {'success': False, 'error': str(e)}
+        return {'success': True, 'data': self._format_project_detail(project)}
+
+    @route(
+        "/api/support-projects/<int:project_id>/mcp-servers",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_support_project_mcp_servers(
+        self,
+        project_id: int,
+        action: str = 'list',
+        **kw: Any,
+    ) -> dict[str, Any]:
+        """Project-centric MCP CRUD (Plan D4 / AC #4-7)."""
+        project, access = self._resolve_project_access(project_id)
+        if not project or not access:
+            return {'success': False, 'error': self._PROJECT_NOT_FOUND_ERROR}
+
+        if action == 'list':
+            return self._list_project_mcp_servers(project)
+
+        # sidecar-hint is read-only but mirrors create's owner/admin gate
+        # (it is the prefill backing for the Add Sidecar MCP shortcut).
+        write_actions = (
+            'create', 'update', 'delete', 'sync', 'test', 'sidecar-hint',
+        )
+        if action in write_actions:
+            if not _portal_project_settings_editable(request.env):
+                return {'success': False, 'error': 'Permission denied'}
+            if access.role not in (ROLE_OWNER, ROLE_ADMIN):
+                return {'success': False, 'error': 'Permission denied'}
+
+        if action == 'sidecar-hint':
+            return self._compute_project_sidecar_hint(project)
+        if action == 'create':
+            return self._create_project_mcp_server(project, kw)
+        if action == 'update':
+            return self._update_project_mcp_server(project, kw)
+        if action == 'delete':
+            return self._delete_project_mcp_server(project, kw)
+        if action == 'sync':
+            return self._sync_project_mcp_server(project, kw)
+        if action == 'test':
+            return self._test_project_mcp_server(project, kw)
+        return {'success': False, 'error': f'Unknown action: {action}'}
+
+    def _compute_project_sidecar_hint(self, project) -> dict[str, Any]:
+        """Return prefill payload for the Add Sidecar MCP UI shortcut, or
+        an error when the project has no mcp-enabled backing service."""
+        service = project.cloud_service_id
+        if not service or not service.template_id.mcp_enabled:
+            return {
+                'success': False,
+                'error': 'No sidecar available for this project',
+            }
+        template = service.template_id
+        return {
+            'success': True,
+            'data': {
+                'url': self._compute_sidecar_url_hint(service),
+                'transport': template.mcp_transport or 'streamable_http',
+                'api_key': service.mcp_auth_token or '',
+                'suggested_name': f'{service.name} MCP',
+            },
+        }
+
+    def _list_project_mcp_servers(self, project) -> dict[str, Any]:
+        servers = project.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active
+        )
+        return {
+            'success': True,
+            'data': [self._format_mcp_server(s) for s in servers],
+        }
+
+    def _create_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        name = (params.get('name') or '').strip()
+        url = (params.get('url') or '').strip()
+        if not name or not url:
+            return {'success': False, 'error': 'Name and URL are required'}
+        url_error = _validate_mcp_url(url)
+        if url_error:
+            return {'success': False, 'error': url_error}
+
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        try:
+            server = McpServer.create({
+                'name': name,
+                'url': url,
+                'transport': params.get('transport', 'sse'),
+                'api_key': params.get('api_key', ''),
+                'headers_json': params.get('headers_json', ''),
+                'description': params.get('description', ''),
+                'scope': 'user',
+                'project_id': project.id,
+                # Payload-driven; endpoint deliberately does not enforce
+                # URL ↔ flag consistency — frontend owns the mental model.
+                'sidecar_backed': bool(params.get('sidecar_backed', False)),
+            })
+        except ValidationError as e:
+            return {'success': False, 'error': str(e)}
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _resolve_project_mcp(self, project, params: dict):
+        server_id = params.get('server_id')
+        if not server_id:
+            return None, {'success': False, 'error': 'server_id is required'}
+        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        server = McpServer.browse(int(server_id))
+        if not server.exists() or server.project_id.id != project.id:
+            return None, {'success': False, 'error': 'MCP Server not found'}
+        return server, None
+
+    def _update_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        server, error = self._resolve_project_mcp(project, params)
+        if error:
+            return error
+        if 'url' in params:
+            url_error = _validate_mcp_url((params.get('url') or '').strip())
+            if url_error:
+                return {'success': False, 'error': url_error}
+        vals: dict[str, Any] = {}
+        for field_name in ('name', 'url', 'transport', 'api_key', 'headers_json', 'description'):
+            if field_name in params:
+                vals[field_name] = params[field_name]
+        if vals:
+            try:
+                server.write(vals)
+            except ValidationError as e:
+                return {'success': False, 'error': str(e)}
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _delete_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        server, error = self._resolve_project_mcp(project, params)
+        if error:
+            return error
+        server.unlink()
+        return {'success': True}
+
+    def _sync_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        server, error = self._resolve_project_mcp(project, params)
+        if error:
+            return error
+        try:
+            server.action_sync_tools()
+        except Exception as e:
+            _logger.warning('MCP sync failed for server %s: %s', server.name, e)
+            return {'success': False, 'error': f'Sync failed: {e}'}
+        return {'success': True, 'data': self._format_mcp_server(server)}
+
+    def _test_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+        server, error = self._resolve_project_mcp(project, params)
+        if error:
+            return error
+        try:
+            server.action_test_connection()
+        except Exception as e:
+            return {'success': False, 'error': f'Connection test failed: {e}'}
+        return {
+            'success': True,
+            'data': {
+                'state': server.state,
+                'state_message': server.state_message or '',
+            },
         }
 
     # ==================== Cloud Service Helpers ====================
@@ -1198,107 +1880,7 @@ class PaasController(Controller):
 
         return _mask_secrets(values)
 
-    def _build_mcp_sidecar_config(
-        self,
-        template: Any,
-        auth_token: str,
-        api_key: str | None = None,
-        helm_release_name: str | None = None,
-    ) -> dict[str, Any]:
-        """Build MCP sidecar container config for PaaS Operator patch endpoint.
-
-        Constructs the sidecar container spec from the template's MCP fields,
-        merging any custom environment variables from `template.mcp_sidecar_env`
-        with the required environment variables.
-
-        When helm_release_name is provided and the template has mcp_api_key_helm_path,
-        the API key env var uses valueFrom.secretKeyRef so the sidecar reads the key
-        from the K8s Secret. This ensures pod restarts always pick up the latest key.
-
-        Args:
-            template: CloudAppTemplate record with MCP fields
-            auth_token: Generated AUTH_TOKEN for sidecar authentication
-            api_key: Optional API key for the main application (e.g., N8N_API_KEY).
-                     Used as plain value fallback when helm_release_name is not provided.
-            helm_release_name: Helm release name, used to derive K8s Secret name
-                              for secretKeyRef-based env vars.
-
-        Returns:
-            Dict matching the SidecarPatchRequest schema expected by PaaS Operator
-        """
-        sidecar_port = template.mcp_sidecar_port or 3000
-
-        # Required env vars for the MCP sidecar
-        env_vars = [
-            {'name': 'MCP_MODE', 'value': 'http'},
-            {'name': 'AUTH_TOKEN', 'value': auth_token},
-            {'name': 'N8N_API_URL', 'value': f'http://localhost:{template.default_port}'},
-            {'name': 'PORT', 'value': str(sidecar_port)},
-            # Raise the default rate limit (20 req/15min) which is too low
-            # for LangGraph agents that issue many tool calls per conversation.
-            {'name': 'AUTH_RATE_LIMIT_MAX', 'value': '500'},
-            {'name': 'AUTH_RATE_LIMIT_WINDOW', 'value': '900000'},
-        ]
-
-        # Inject API key for the main application via secretKeyRef (preferred)
-        # or plain value (fallback). secretKeyRef ensures the sidecar always
-        # picks up the latest key from the K8s Secret after pod restarts.
-        if template.mcp_api_key_helm_path:
-            env_name = template.mcp_api_key_helm_path.rsplit('.', 1)[-1]
-            if helm_release_name:
-                # Derive K8s Secret name from Helm release + chart convention
-                # n8n chart creates: {release}-n8n-app-secret
-                secret_name = f'{helm_release_name}-n8n-app-secret'
-                env_vars.append({
-                    'name': env_name,
-                    'valueFrom': {
-                        'secretKeyRef': {
-                            'name': secret_name,
-                            'key': env_name,
-                        }
-                    }
-                })
-            elif api_key:
-                # Fallback: plain value (used when helm_release_name unknown)
-                env_vars.append({'name': env_name, 'value': api_key})
-
-        # Merge custom env vars from template (if any)
-        if template.mcp_sidecar_env:
-            try:
-                custom_env = json.loads(template.mcp_sidecar_env)
-                # custom_env is a dict like {"KEY": "VALUE"}
-                # Required keys that should not be overridden
-                reserved_keys = {'MCP_MODE', 'AUTH_TOKEN', 'PORT', 'N8N_API_URL'}
-                if template.mcp_api_key_helm_path:
-                    reserved_keys.add(template.mcp_api_key_helm_path.rsplit('.', 1)[-1])
-                for key, value in custom_env.items():
-                    if key not in reserved_keys:
-                        env_vars.append({'name': key, 'value': str(value)})
-            except (json.JSONDecodeError, TypeError):
-                _logger.warning("Invalid MCP sidecar env JSON in template %s", template.name)
-
-        container_spec = {
-            'name': 'mcp-sidecar',
-            'image': template.mcp_sidecar_image,
-            'ports': [{'containerPort': sidecar_port}],
-            'env': env_vars,
-            'resources': {
-                'requests': {'memory': '128Mi', 'cpu': '100m'},
-                'limits': {'memory': '256Mi', 'cpu': '200m'},
-            },
-            'livenessProbe': {
-                'httpGet': {'path': '/health', 'port': sidecar_port},
-                'initialDelaySeconds': 15,
-                'periodSeconds': 30,
-            },
-            'readinessProbe': {
-                'httpGet': {'path': '/health', 'port': sidecar_port},
-                'initialDelaySeconds': 10,
-                'periodSeconds': 10,
-            },
-        }
-
-        return {'container': container_spec}
+    # _build_mcp_sidecar_config moved to CloudService model
 
     def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> tuple[dict[str, Any], list[str]]:
         """
@@ -1384,12 +1966,14 @@ class PaasController(Controller):
             'count': len(data),
         }
 
-    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None) -> dict[str, Any]:
+    def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
         if not template_id:
             return {'success': False, 'error': 'Template ID is required'}
         if not name:
             return {'success': False, 'error': 'Service name is required'}
+        if not plan_id:
+            return {'success': False, 'error': 'Subscription plan is required'}
 
         name = name.strip()
         if not name:
@@ -1402,13 +1986,25 @@ class PaasController(Controller):
         if not template.exists() or not template.is_active:
             return {'success': False, 'error': 'Template not found'}
 
+        # Validate subscription plan
+        Plan = request.env['sh.subscription.plan'].sudo()
+        plan = Plan.browse(plan_id)
+        if not plan.exists():
+            return {'success': False, 'error': 'Subscription plan not found'}
+        # Verify plan belongs to this template
+        if template.sudo().subscription_plan_ids and plan not in template.sudo().subscription_plan_ids:
+            return {'success': False, 'error': 'Plan not available for this template'}
+
         # Always generate reference_id server-side (never accept from frontend)
         reference_id = str(uuid.uuid4())
         # Generate hash-based names for cross-sandbox uniqueness
         from ..services.naming import make_namespace, make_service_subdomain
+        ns_prefix = request.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.namespace_prefix', 'paas-ws-'
+        )
         subdomain = make_service_subdomain(workspace.slug, reference_id, name)
         helm_release_name = f"svc-{reference_id[:8]}"
-        helm_namespace = make_namespace(workspace.slug)
+        helm_namespace = make_namespace(workspace.slug, prefix=ns_prefix)
 
         # Filter user values to only allowed keys, then merge with defaults
         # Note: silently filter on create (frontend may send defaults alongside user values)
@@ -1436,8 +2032,20 @@ class PaasController(Controller):
             if not any(c.isdigit() for c in pwd):
                 return {'success': False, 'error': 'Password must contain at least one number'}
 
+        # Validate Odoo administrator password
+        if template.slug == 'odoo':
+            pwd = helm_only_values.get('odooPassword', '')
+            if not pwd or len(pwd) < 8:
+                return {'success': False, 'error': 'Administrator password must be at least 8 characters'}
+
         nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
+        _logger.info(
+            "Merged helm values keys for service '%s' (template: %s): %s",
+            name,
+            template.name,
+            sorted(merged_values.keys()),
+        )
 
         # Generate per-service API key for MCP sidecar ↔ main container communication
         mcp_api_key = None
@@ -1450,7 +2058,7 @@ class PaasController(Controller):
             merged_values = self._deep_merge(merged_values, api_key_nested)
 
         try:
-            # Create service record in pending state
+            # Create service record in pending state (cron picks up 'pending')
             service_vals = {
                 'workspace_id': workspace.id,
                 'template_id': template.id,
@@ -1473,7 +2081,32 @@ class PaasController(Controller):
             if init_params.get('owner_password'):
                 service_vals['n8n_owner_password'] = init_params['owner_password']
 
+            # Resolve Odoo addon selection (with dependency expansion)
+            resolved_addon_ids = []
+            if odoo_addon_ids and template.slug == 'odoo':
+                CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+                selected = CloudOdooAddon.browse(odoo_addon_ids).filtered('active')
+                # Expand dependencies recursively
+                all_addons = selected
+                queue = list(selected)
+                while queue:
+                    addon = queue.pop(0)
+                    for dep in addon.depends_on:
+                        if dep not in all_addons:
+                            all_addons |= dep
+                            queue.append(dep)
+                resolved_addon_ids = all_addons.ids
+                service_vals['odoo_addon_ids'] = [(6, 0, resolved_addon_ids)]
+
             service = CloudService.create(service_vals)
+
+            # Create subscription for this service
+            partner = workspace.owner_id.partner_id
+            _logger.info(
+                "[CLOUD_SVC] deploy_service created service=%s workspace=%s template=%s partner=%s plan=%s",
+                service.id, workspace.id, template.id, partner.id, plan.id,
+            )
+            service._create_and_confirm_subscription(partner, plan)
 
             # Build expose configuration before spawning background thread
             expose_config = None
@@ -1483,168 +2116,35 @@ class PaasController(Controller):
                     'subdomain': subdomain,
                 }
 
-            # Return immediately with pending state; deploy in background
-            service_data = self._format_service(service)
+            # Store deploy params and trigger cron for background deployment
+            deploy_params = {}
+            if expose_config:
+                deploy_params['expose_config'] = expose_config
+            if mcp_api_key:
+                deploy_params['mcp_api_key'] = mcp_api_key
+            if deploy_params:
+                service.write({'deploy_params': json.dumps(deploy_params)})
 
-            deploy_args = {
-                'db_name': request.env.cr.dbname,
-                'uid': request.env.uid,
-                'service_id': service.id,
-                'workspace_id': workspace.id,
-                'helm_namespace': helm_namespace,
-                'helm_release_name': helm_release_name,
-                'template_id': template.id,
-                'merged_values': merged_values,
-                'expose_config': expose_config,
-                'mcp_api_key': mcp_api_key,
-            }
-            thread = threading.Thread(
-                target=self._deploy_service_background,
-                args=(deploy_args,),
-                daemon=True,
+            # Trigger the deploy cron to pick up this service ASAP
+            cron = request.env.ref(
+                'woow_paas_platform.ir_cron_deploy_cloud_services',
+                raise_if_not_found=False,
             )
-            thread.start()
+            if cron:
+                cron._trigger()
 
             return {
                 'success': True,
-                'data': service_data,
+                'data': self._format_service(service),
             }
 
         except Exception as e:
             _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while creating the service.'}
 
-    def _deploy_service_background(self, args: dict) -> None:
-        """Background thread: namespace creation + helm install + sidecar patch.
-
-        Runs outside the HTTP request lifecycle with its own DB cursor.
-        """
-        import odoo
-
-        _logger.info("Background deploy thread started for service %s", args.get('service_id'))
-
-        db_name = args['db_name']
-        registry = odoo.registry(db_name)
-        cr = registry.cursor()
-        try:
-            env = odoo.api.Environment(cr, args['uid'], {})
-            CloudService = env['woow_paas_platform.cloud_service']
-            service = CloudService.browse(args['service_id'])
-            if not service.exists():
-                return
-
-            template = env['woow_paas_platform.cloud_app_template'].browse(args['template_id'])
-            client = get_paas_operator_client(env)
-            if not client:
-                service.write({
-                    'state': 'error',
-                    'error_message': 'PaaS Operator not configured. Contact administrator.',
-                })
-                cr.commit()
-                return
-
-            helm_namespace = args['helm_namespace']
-            helm_release_name = args['helm_release_name']
-            merged_values = args['merged_values']
-            expose_config = args['expose_config']
-            mcp_api_key = args['mcp_api_key']
-
-            try:
-                # Create namespace if needed
-                all_services = CloudService.search([
-                    ('workspace_id', '=', args['workspace_id']),
-                    ('state', '!=', 'deleting'),
-                ])
-                total_vcpu = sum(s.allocated_vcpu for s in all_services)
-                total_ram = sum(s.allocated_ram_gb for s in all_services)
-                total_storage = sum(s.allocated_storage_gb for s in all_services)
-                try:
-                    client.create_namespace(
-                        namespace=helm_namespace,
-                        cpu_limit=str(max(total_vcpu * 3, 8)),
-                        memory_limit=f"{max(int(total_ram * 3), 8)}Gi",
-                        storage_limit=f"{max(total_storage * 3, 100)}Gi",
-                    )
-                except PaaSOperatorError as e:
-                    if e.status_code != 409:
-                        _logger.error("Namespace creation failed: %s", str(e))
-                        service.write({
-                            'state': 'error',
-                            'error_message': f'Failed to create namespace: {e.detail or e.message}',
-                        })
-                        cr.commit()
-                        return
-
-                # Install Helm release
-                _logger.info(
-                    "Template %s (id=%d): ingress_enabled=%s, expose_config=%s",
-                    template.name, template.id, template.ingress_enabled, expose_config,
-                )
-                release_info = client.install_release(
-                    namespace=helm_namespace,
-                    release_name=helm_release_name,
-                    chart=template.helm_chart_name,
-                    repo_url=template.helm_repo_url,
-                    version=template.helm_chart_version,
-                    values=merged_values,
-                    create_namespace=True,
-                    expose=expose_config,
-                )
-
-                # After Helm install, patch sidecar if MCP enabled
-                if template.mcp_enabled and template.mcp_sidecar_image:
-                    mcp_auth_token = str(uuid.uuid4())
-                    sidecar_config = self._build_mcp_sidecar_config(
-                        template, mcp_auth_token, mcp_api_key,
-                        helm_release_name=helm_release_name,
-                    )
-                    try:
-                        client.patch_sidecar(
-                            namespace=helm_namespace,
-                            release_name=helm_release_name,
-                            sidecar_config=sidecar_config,
-                        )
-                        service.write({'mcp_auth_token': mcp_auth_token})
-                        _logger.info(
-                            "MCP sidecar patched for service %s (release=%s)",
-                            service.name, helm_release_name,
-                        )
-                    except PaaSOperatorError as e:
-                        _logger.warning("Failed to patch MCP sidecar: %s", e)
-
-                # Update service state
-                service.write({
-                    'state': 'deploying',
-                    'helm_revision': release_info.get('revision', 1),
-                    'deployed_at': datetime.now(),
-                })
-                cr.commit()
-
-            except PaaSOperatorConnectionError as e:
-                _logger.error("Operator connection error: %s", str(e))
-                cr.rollback()
-                service.write({
-                    'state': 'error',
-                    'error_message': 'Unable to connect to deployment service. Please try again later.',
-                })
-                cr.commit()
-
-            except PaaSOperatorError as e:
-                _logger.error("Operator error during deployment: %s", str(e))
-                cr.rollback()
-                service.write({
-                    'state': 'error',
-                    'error_message': f'Deployment failed: {e.detail or e.message}',
-                })
-                cr.commit()
-
-        except Exception as e:
-            _logger.exception(
-                "Background deploy error for service %s: %s",
-                args.get('service_id'), e,
-            )
-        finally:
-            cr.close()
+    # _deploy_service_background removed — deployment is now handled by
+    # ir.cron (CloudService._cron_process_pending_deploys) to avoid
+    # ConnectionPool lock contention in Odoo 18 workers=0 mode.
 
     def _get_service(self, service: Any) -> dict[str, Any]:
         """Get service details, updating status from operator if needed."""
@@ -1657,7 +2157,7 @@ class PaasController(Controller):
             'data': self._format_service(service, include_details=True),
         }
 
-    def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None) -> dict[str, Any]:
+    def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
         """Update/upgrade a service."""
         if service.state in ['pending', 'deleting', 'error']:
             return {'success': False, 'error': f'Cannot update service in {service.state} state'}
@@ -1667,6 +2167,56 @@ class PaasController(Controller):
             return {'success': False, 'error': 'PaaS Operator not configured'}
 
         try:
+            # Update Odoo addon selection if provided
+            addon_changed = False
+            if odoo_addon_ids is not None and service.template_id.slug == 'odoo':
+                old_addon_ids = set(service.odoo_addon_ids.ids)
+                CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+                selected = CloudOdooAddon.browse(odoo_addon_ids).filtered('active')
+                # Expand dependencies
+                all_addons = selected
+                queue = list(selected)
+                while queue:
+                    addon = queue.pop(0)
+                    for dep in addon.depends_on:
+                        if dep not in all_addons:
+                            all_addons |= dep
+                            queue.append(dep)
+                service.write({'odoo_addon_ids': [(6, 0, all_addons.ids)]})
+                addon_changed = set(all_addons.ids) != old_addon_ids
+
+                # Server-side validation: block removal of installed modules
+                removed_ids = old_addon_ids - set(all_addons.ids)
+                if removed_ids and service.state == 'running':
+                    removed_addons = CloudOdooAddon.browse(list(removed_ids)).exists()
+                    if removed_addons:
+                        tech_names = [a.technical_name for a in removed_addons]
+                        try:
+                            check_result = client.get_odoo_module_states(
+                                namespace=service.helm_namespace,
+                                release_name=service.helm_release_name,
+                                module_names=tech_names,
+                            )
+                            if check_result.get('success'):
+                                safe_states = {'uninstalled', 'uninstallable', 'not_found'}
+                                for name, info in check_result.get('modules', {}).items():
+                                    if info.get('state') not in safe_states:
+                                        # Rollback the addon write
+                                        service.write({'odoo_addon_ids': [(6, 0, list(old_addon_ids))]})
+                                        return {
+                                            'success': False,
+                                            'error': f"Cannot remove '{name}': module is {info.get('state')} in Odoo. "
+                                                     f"Please deactivate it in Odoo first.",
+                                        }
+                        except Exception as e:
+                            # Fail-closed: rollback and reject
+                            service.write({'odoo_addon_ids': [(6, 0, list(old_addon_ids))]})
+                            _logger.warning("Failed to verify module states for addon removal: %s", e)
+                            return {
+                                'success': False,
+                                'error': 'Cannot verify module states. Please try again later.',
+                            }
+
             # Filter user values to only allowed keys, reject unauthorized
             existing_values = json.loads(service.helm_values) if service.helm_values else {}
             filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
@@ -1675,35 +2225,84 @@ class PaasController(Controller):
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)
 
-            # Upgrade release
-            release_info = client.upgrade_release(
+            # Rebuild or remove addon initContainer helm values when addon selection changed
+            if addon_changed:
+                if service.odoo_addon_ids:
+                    image_vals = merged_values.get('image', {})
+                    registry = image_vals.get('registry', '')
+                    repo = image_vals.get('repository', '')
+                    tag = image_vals.get('tag', 'latest')
+                    image_ref = f"{registry}/{repo}:{tag}" if registry else f"{repo}:{tag}"
+                    addon_values = service._build_odoo_addon_helm_values(image_ref)
+                    merged_values = self._deep_merge(merged_values, addon_values)
+                else:
+                    # All addons deselected — remove addon-specific helm values
+                    service._remove_addon_helm_values(merged_values)
+
+            # Transition to upgrading BEFORE calling operator so the
+            # frontend gets an immediate response with state='upgrading'.
+            service.write({
+                'state': 'upgrading',
+                'helm_values': json.dumps(merged_values),
+                'helm_chart_version': version or service.helm_chart_version,
+                'last_upgraded_at': datetime.now(),
+                'error_message': False,
+                'addon_update_pending': addon_changed,
+            })
+            response_data = self._format_service(service)
+
+            # Capture values for the background thread (no ORM access).
+            db_name = request.env.cr.dbname
+            service_id = service.id
+            upgrade_kwargs = dict(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
                 chart=service.template_id.helm_chart_name,
                 values=merged_values,
                 version=version,
             )
+            operator_url = client.base_url
+            operator_api_key = client._session.headers.get('X-API-Key', '')
 
-            service.write({
-                'state': 'upgrading',
-                'helm_values': json.dumps(merged_values),
-                'helm_revision': release_info.get('revision', service.helm_revision + 1),
-                'helm_chart_version': version or service.helm_chart_version,
-                'last_upgraded_at': datetime.now(),
-                'error_message': False,
-            })
+            def _bg_upgrade():
+                """Run helm upgrade in a background thread with its own cursor."""
+                import odoo
+                from ..services.paas_operator import PaaSOperatorClient
+                bg_client = PaaSOperatorClient(operator_url, operator_api_key)
+                try:
+                    release_info = bg_client.upgrade_release(**upgrade_kwargs)
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        svc = env['woow_paas_platform.cloud_service'].browse(service_id)
+                        if svc.exists() and svc.state == 'upgrading':
+                            svc.write({
+                                'helm_revision': release_info.get('revision', svc.helm_revision + 1),
+                            })
+                except Exception as exc:
+                    _logger.error("Background upgrade failed for service %s: %s", service_id, exc)
+                    try:
+                        with odoo.registry(db_name).cursor() as cr:
+                            env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                            svc = env['woow_paas_platform.cloud_service'].browse(service_id)
+                            if svc.exists() and svc.state == 'upgrading':
+                                detail = getattr(exc, 'detail', None) or str(exc)
+                                svc.write({
+                                    'state': 'error',
+                                    'error_message': f'Upgrade failed: {detail}',
+                                })
+                    except Exception:
+                        _logger.exception("Failed to write error state for service %s", service_id)
+
+            thread = threading.Thread(target=_bg_upgrade, daemon=True)
+            thread.start()
 
             return {
                 'success': True,
-                'data': self._format_service(service),
+                'data': response_data,
             }
 
         except PaaSOperatorConnectionError:
             return {'success': False, 'error': 'Unable to connect to deployment service'}
-
-        except PaaSOperatorError as e:
-            _logger.error("Operator error during upgrade: %s", str(e))
-            return {'success': False, 'error': f'Upgrade failed: {e.detail or e.message}'}
 
     def _delete_service(self, service: Any) -> dict[str, Any]:
         """Delete/uninstall a service."""
@@ -1857,12 +2456,17 @@ class PaasController(Controller):
 
             # Determine new state based on release status and pod status
             if release_status == 'deployed':
-                # Check if all pods are ready
+                # Filter to Running-phase pods only — after helm upgrade,
+                # old pods may be Terminating (phase=Succeeded/Failed) and
+                # would cause the readiness check to fail permanently.
+                active_pods = [
+                    p for p in pods if p.get('phase') == 'Running'
+                ]
                 all_ready = all(
-                    pod.get('phase') == 'Running' and '/' in pod.get('ready', '0/0')
+                    '/' in pod.get('ready', '0/0')
                     and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
-                    for pod in pods
-                ) if pods else True
+                    for pod in active_pods
+                ) if active_pods else (not pods)
 
                 if all_ready:
                     template = service.template_id
@@ -1884,23 +2488,24 @@ class PaasController(Controller):
                         # Already initializing, retry if needed
                         self._run_post_deploy_init(service)
 
+                    elif needs_init and original_state == 'upgrading' and service.addon_update_pending:
+                        # Addon selection changed during upgrade → need module list refresh
+                        service.write({
+                            'state': 'initializing',
+                            'helm_revision': helm_revision,
+                            'error_message': False,
+                            'init_retries': 0,
+                            'init_error': False,
+                        })
+                        self._run_post_deploy_init(service)
+
                     else:
-                        # No init needed or already done → running
+                        # No init needed or already done → running.
                         service.write({
                             'state': 'running',
                             'helm_revision': helm_revision,
                             'error_message': False,
                         })
-
-                        # Auto-create MCP Server when transitioning to running
-                        if original_state != 'running':
-                            try:
-                                self._auto_create_mcp_server(service)
-                            except Exception as e:
-                                _logger.warning(
-                                    "Auto-create MCP server failed for service %s: %s",
-                                    service.name, e,
-                                )
                 # else: still deploying/waiting for pods
 
             elif release_status == 'failed':
@@ -1992,13 +2597,6 @@ class PaasController(Controller):
                         "n8n init succeeded for service %s, API key and helm_values updated",
                         service.name,
                     )
-                    try:
-                        self._auto_create_mcp_server(service)
-                    except Exception as e:
-                        _logger.warning(
-                            "Auto-create MCP server failed for service %s: %s",
-                            service.name, e,
-                        )
                 else:
                     retries = (service.init_retries or 0) + 1
                     error_msg = result.get('error', 'Unknown error')
@@ -2034,67 +2632,75 @@ class PaasController(Controller):
                     retries, service.name, e,
                 )
 
-    def _auto_create_mcp_server(self, service: Any) -> None:
-        """Auto-create MCP Server record for a cloud service with MCP enabled.
+        elif template.post_deploy_init_type == 'odoo':
+            client = get_paas_operator_client(request.env)
+            if not client:
+                _logger.warning("PaaS Operator not configured, cannot initialize Odoo module list")
+                return
 
-        Called when a service transitions to 'running' state. Creates a
-        user-scope MCP Server record linked to the cloud service and
-        triggers tool discovery.
+            try:
+                result = client.init_odoo(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                )
 
-        Idempotent: skips creation if an auto-created record already exists.
+                if result.get('success'):
+                    service.write({
+                        'state': 'running',
+                        'init_retries': 0,
+                        'init_error': False,
+                        'addon_update_pending': False,
+                    })
+                    _logger.info(
+                        "Odoo init succeeded for service %s: added=%d, updated=%d",
+                        service.name,
+                        result.get('modules_added', 0),
+                        result.get('modules_updated', 0),
+                    )
+                else:
+                    retries = (service.init_retries or 0) + 1
+                    error_msg = result.get('error', 'Unknown error')
+                    vals = {
+                        'init_retries': retries,
+                        'init_error': error_msg,
+                    }
+                    if retries >= 5:
+                        vals.update({
+                            'state': 'error',
+                            'error_message': f'Odoo initialization failed after {retries} retries: {error_msg}',
+                        })
+                    service.write(vals)
+                    _logger.warning(
+                        "Odoo init attempt %d failed for service %s: %s",
+                        retries, service.name, error_msg,
+                    )
+
+            except Exception as e:
+                retries = (service.init_retries or 0) + 1
+                vals = {
+                    'init_retries': retries,
+                    'init_error': str(e),
+                }
+                if retries >= 5:
+                    vals.update({
+                        'state': 'error',
+                        'error_message': f'Odoo initialization failed: {str(e)}',
+                    })
+                service.write(vals)
+                _logger.warning(
+                    "Odoo init exception (attempt %d) for service %s: %s",
+                    retries, service.name, e,
+                )
+
+    def _compute_sidecar_url_hint(self, service: Any) -> str:
+        """Compute the MCP endpoint URL for a service's sidecar.
+
+        Prefers the cluster-internal K8s service address (most reliable —
+        Cloudflare routes the main app port only, not the sidecar). Falls
+        back to subdomain, then to a localhost placeholder the user must
+        edit.
         """
         template = service.template_id
-        if not template.mcp_enabled or not template.mcp_sidecar_image:
-            return
-
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
-
-        # Check if already exists (avoid duplicates on re-deploy/upgrade)
-        existing = McpServer.search([
-            ('cloud_service_id', '=', service.id),
-            ('auto_created', '=', True),
-        ], limit=1)
-        if existing:
-            _logger.debug(
-                "MCP Server already exists for service %s (id=%s), skipping auto-create",
-                service.name, existing.id,
-            )
-            return
-
-        # Build MCP endpoint URL
-        mcp_url = self._build_mcp_endpoint_url(service, template)
-
-        # Create MCP Server record
-        server = McpServer.create({
-            'name': f"{service.name} MCP",
-            'url': mcp_url,
-            'transport': template.mcp_transport or 'streamable_http',
-            'scope': 'user',
-            'cloud_service_id': service.id,
-            'auto_created': True,
-            'api_key': service.mcp_auth_token,
-            'description': f"Auto-created MCP server for {service.name}",
-        })
-
-        _logger.info(
-            "Auto-created MCP Server '%s' (id=%s) for cloud service '%s'",
-            server.name, server.id, service.name,
-        )
-
-        # Try to sync tools using safe method (keeps state as 'draft' on
-        # failure so the cron retry mechanism can pick it up later).
-        server.action_sync_tools_safe()
-
-    def _build_mcp_endpoint_url(self, service: Any, template: Any) -> str:
-        """Build the MCP endpoint URL for a cloud service sidecar.
-
-        Constructs the URL using the service's subdomain and the PaaS
-        domain from system configuration. Falls back to a Kubernetes
-        internal service URL when no subdomain is available.
-
-        Returns:
-            str: The full MCP endpoint URL.
-        """
         endpoint_path = template.mcp_endpoint_path or '/mcp'
         sidecar_port = template.mcp_sidecar_port or 3001
 
@@ -2123,10 +2729,14 @@ class PaasController(Controller):
 
     def _format_service(self, service: Any, include_details: bool = False) -> dict[str, Any]:
         """Format a service record for API response."""
+        # Map 'pending' to 'deploying' for UI — pending is an internal
+        # state used by the cron as a pick-up lock; users should see 'deploying'.
+        ui_state = 'deploying' if service.state == 'pending' else service.state
+
         data = {
             'id': service.id,
             'name': service.name,
-            'state': service.state,
+            'state': ui_state,
             'subdomain': service.subdomain or '',
             'custom_domain': service.custom_domain or '',
             'error_message': service.error_message or '',
@@ -2134,12 +2744,18 @@ class PaasController(Controller):
             'template': {
                 'id': service.template_id.id,
                 'name': service.template_id.name,
+                'slug': service.template_id.slug or '',
                 'category': service.template_id.category,
                 'helm_value_specs': self._parse_helm_value_specs(service.template_id),
             },
             'helm_revision': service.helm_revision,
             'created_date': service.create_date.isoformat() if service.create_date else None,
             'deployed_at': service.deployed_at.isoformat() if service.deployed_at else None,
+            'odoo_addons': [
+                {'id': a.id, 'name': a.name, 'technical_name': a.technical_name}
+                for a in service.odoo_addon_ids
+            ] if service.odoo_addon_ids else [],
+            'subscription': service._get_subscription_info(),
         }
 
         if include_details:

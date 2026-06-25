@@ -214,56 +214,31 @@ class DiscussChannel(models.Model):
         )
 
     def _get_cloud_service_context(self) -> str:
-        """Build cloud service context for AI system prompt.
+        """Unified background context (project / task / cloud services).
 
-        Looks up the task linked to this channel, then the project's
-        cloud service, and assembles relevant context.
+        Delegates to agent_session._build_system_context — the single
+        source for all three chat paths (spec
+        2026-06-04-agent-context-enrichment D1). Method name kept as the
+        chatter-path hook consumed by _post_ai_reply and locked by
+        test_chatter_service_injection.py.
         """
-        task = self.env['project.task'].sudo().search([
-            ('channel_id', '=', self.id),
-        ], limit=1)
-        if not task or not task.project_id or not task.project_id.cloud_service_id:
-            return ''
-
-        service = task.project_id.cloud_service_id
-        template = service.template_id
-
-        parts = ['## Cloud Service Information']
-        if template:
-            parts.append(f'- Application: {template.name}')
-            if template.category:
-                parts.append(f'- Category: {template.category}')
-            if template.description:
-                parts.append(f'- Description: {template.description}')
-
-        parts.append(f'- Service Name: {service.name}')
-        parts.append(f'- Status: {service.state or "unknown"}')
-
-        if service.subdomain:
-            parts.append(f'- URL: https://{service.subdomain}')
-        if service.error_message:
-            parts.append(f'- Error: {service.error_message}')
-
-        if service.helm_values:
-            parts.append(f'- Configuration (Helm Values):\n```json\n{service.helm_values}\n```')
-
-        return '\n'.join(parts)
+        return self.env['woow_paas_platform.agent_session'] \
+            ._build_system_context(self)
 
     def _get_user_mcp_tools(self):
-        """Get user-scope MCP tools from the cloud service linked to this channel.
+        """Get user-scope MCP tools from the project linked to this channel.
 
-        Follows: channel → task → project → cloud_service → user_mcp_servers → tools.
+        Follows: channel → task → project → mcp_server_ids → tools.
         """
         McpTool = self.env['woow_paas_platform.mcp_tool'].sudo()
         task = self.env['project.task'].sudo().search([
             ('channel_id', '=', self.id),
         ], limit=1)
-        if not task or not task.project_id or not task.project_id.cloud_service_id:
+        if not task or not task.project_id:
             return McpTool.browse()
 
-        service = task.project_id.cloud_service_id
-        servers = service.user_mcp_server_ids.filtered(
-            lambda s: s.active and s.state == 'connected'
+        servers = task.project_id.mcp_server_ids.filtered(
+            lambda s: s.scope == 'user' and s.active and s.state == 'connected'
         )
         if not servers:
             return McpTool.browse()

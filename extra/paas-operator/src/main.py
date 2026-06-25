@@ -7,7 +7,16 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api import init, namespaces, releases, routes, tunnels
+from src.api import (
+    access,
+    agent_runtimes,
+    init,
+    namespaces,
+    odoo_modules,
+    releases,
+    routes,
+    tunnels,
+)
 from src.config import settings
 from src.models.schemas import ErrorResponse, HealthResponse
 from src.services.helm import HelmService
@@ -25,6 +34,14 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     logger.info("Starting PaaS Operator Service...")
     logger.info(f"Namespace prefix: {settings.namespace_prefix}")
+    # Observability for the L2 ns env-label discriminator: an unset PAAS_ENV is
+    # fail-OPEN (operator starts, tenant namespaces omit the env label) — log it so a
+    # prod/stg deploy that forgot to inject PAAS_ENV is visible here, not silently
+    # indistinguishable from a dev sandbox.
+    logger.info(
+        "Deploy env (PAAS_ENV, ns label discriminator): "
+        f"{settings.paas_env or '(unset — env label omitted)'}"
+    )
 
     # Verify Helm is available - FAIL FAST if not
     try:
@@ -78,9 +95,16 @@ async def verify_api_key(request: Request, call_next):
     # Check API key header
     api_key = request.headers.get("X-API-Key")
 
+    # An UNSET key is a misconfiguration, not a "disable auth" switch: fail
+    # CLOSED (503) for every protected route rather than serving spawn / reap /
+    # delete / scale to anyone (F-PC-4 / C-2 / D-1). Health & docs stay exempt
+    # (checked above) so the k8s liveness probe is unaffected.
     if not settings.api_key:
-        logger.warning("API key not configured - authentication disabled")
-        return await call_next(request)
+        logger.error("API key not configured - failing closed (503)")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "Operator API key not configured"},
+        )
 
     if api_key != settings.api_key:
         logger.warning(f"Invalid API key attempt from {request.client.host}")
@@ -151,6 +175,9 @@ app.include_router(namespaces.router)
 app.include_router(routes.router)
 app.include_router(tunnels.router)
 app.include_router(init.router)
+app.include_router(odoo_modules.router)
+app.include_router(agent_runtimes.router)
+app.include_router(access.router)
 
 
 # Root endpoint

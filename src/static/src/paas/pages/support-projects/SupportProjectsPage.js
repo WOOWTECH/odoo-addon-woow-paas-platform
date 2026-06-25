@@ -4,13 +4,14 @@ import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
+import { ProjectsOverview } from "./ProjectsOverview";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
 import { formatDate, getInitials } from "../../services/utils";
 
 export class SupportProjectsPage extends Component {
     static template = "woow_paas_platform.SupportProjectsPage";
-    static components = { WoowCard, WoowIcon, WoowButton, CreateProjectModal };
+    static components = { WoowCard, WoowIcon, WoowButton, CreateProjectModal, ProjectsOverview };
     static props = {};
 
     setup() {
@@ -151,7 +152,14 @@ export class SupportProjectsPage extends Component {
         this.router.navigate("ai-assistant/projects/" + projectId);
     }
 
-    navigateBack() {
-        this.router.navigate("ai-assistant");
+    navigateToProjectSettings(projectId, ev) {
+        if (ev) {
+            ev.stopPropagation();
+        }
+        this.router.navigate("projects/" + projectId);
+    }
+
+    getSettingsHandler(projectId) {
+        return (ev) => this.navigateToProjectSettings(projectId, ev);
     }
 }

@@ -48,16 +48,686 @@
             <field name="perm_create" eval="True"/>
             <field name="perm_unlink" eval="False"/>
         </record>
-        <!-- Project: Users can access projects bound to cloud services in their workspaces -->
+    </data>
+
+    <!-- Refactor-managed rules (noupdate=0): module owns the definitive domain,
+         so module updates re-apply edits. Admin tweaks here will be reverted on
+         `-u` — that is the intended behaviour for the three security-critical
+         rules introduced by the CloudService ↔ Project decouple refactor
+         (project_rule_workspace_member, cloud_service_rule_workspace_member,
+         project_task_rule_workspace_member). -->
+    <data noupdate="0">
+        <!-- Project visibility (decoupled CloudService ↔ Project):
+             - bound project → visible to workspace members (via cloud_service.workspace)
+             - unbound project → visible to project members (user_ids / follower partner / creator)
+             Replaces the legacy ('|', ('cloud_service_id', '=', False), ...) short-circuit
+             that leaked every unbound project to all base.group_user accounts. -->
         <record id="project_rule_workspace_member" model="ir.rule">
-            <field name="name">Project: workspace member access via cloud service</field>
+            <field name="name">Project: workspace member (bound) or project member (unbound)</field>
             <field name="model_id" ref="project.model_project_project"/>
-            <field name="domain_force">['|', ('cloud_service_id', '=', False), ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
-            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="domain_force">['|', ('cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id), '&amp;', ('cloud_service_ids', '=', False), '|', ('message_partner_ids', 'in', [user.partner_id.id]), ('create_uid', '=', user.id)]</field>
+            <!-- Apply to both base.group_user and project.group_project_user: Odoo
+                 evaluates per-group rules with OR semantics, so a user that has
+                 group_project_user (e.g. project admins) would otherwise bypass the
+                 workspace filter via that group's unrestricted ruleset. -->
+            <field name="groups" eval="[(4, ref('base.group_user')), (4, ref('project.group_project_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
             <field name="perm_create" eval="True"/>
             <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- CloudService: only workspace members may see / mutate services in that ws.
+             Plugs the pre-existing ACL gap surfaced by D2=A — Task form's M2M widget
+             walks ORM directly, so a controller-only filter is insufficient. -->
+        <record id="cloud_service_rule_workspace_member" model="ir.rule">
+            <field name="name">CloudService: workspace member access only</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="domain_force">[('workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- SecurityAccess: read/write split so the ir.rule layer is in
+             lock-step with the BFF (controllers/security_access.py), which
+             gates every mutation behind role owner/admin + the subscription
+             _check_operation_allowed guard. The earlier single any-member
+             full-CRUD rule (mirroring cloud_service) left the Odoo backend
+             form (editable route list + Provision button) as an un-gated
+             ORM-walking bypass: a role='user' member could provision tunnels
+             / edit routes straight from the backend, skipping both the role
+             gate AND the subscription check. Split into:
+               - read rule: ALL workspace members (any role) — needed so a
+                 plain 'user' member can still list/get via the BFF.
+               - write/create/unlink rule: owner/admin members only, via the
+                 'any' operator binding user_id+role to the SAME access row
+                 (cross-tuple satisfaction otherwise lets a 'user' pass by
+                 matching role on the owner's row).
+               - admin bypass: group_system full CRUD (backend ops).
+             See docs/decisions/patterns/two-layer-acl-lockstep.md +
+             paas-workspace-member-acl-tightening.md. The backend menu/action
+             is additionally restricted to base.group_system (see
+             security_access_views.xml) — the /woow frontend is the tenant
+             entry point, not the Odoo backend. -->
+        <record id="security_access_rule_workspace_member" model="ir.rule">
+            <field name="name">SecurityAccess: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access"/>
+            <field name="domain_force">[('workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="security_access_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SecurityAccess: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access"/>
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="security_access_rule_admin_full" model="ir.rule">
+            <field name="name">SecurityAccess: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- SecurityAccessRoute: same read/write split, walking the parent
+             SA's workspace.access_ids. The route list on the backend SA form
+             is the concrete bypass surface this closes for non-owner/admin. -->
+        <record id="security_access_route_rule_workspace_member" model="ir.rule">
+            <field name="name">SecurityAccessRoute: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_route"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="security_access_route_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SecurityAccessRoute: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_route"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="security_access_route_rule_admin_full" model="ir.rule">
+            <field name="name">SecurityAccessRoute: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_route"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- SecurityAccessAccessPolicy (P2 → P2.5 per-route): SAME read/write
+             split as the SecurityAccess/Route sub-models, walking the parent
+             SA's workspace.access_ids via the stored related security_access_id
+             (P2.5: the policy binds to route_id, but security_access_id is a
+             store=True related the rule domain can still traverse). Access
+             policies ARE the Cloudflare Access allow/deny authentication gate —
+             a MORE sensitive resource than routes — so the ir.rule layer must
+             itself encode the owner/admin role restriction.
+
+             two-layer-acl-lockstep: this ir.rule (layer 1) and the BFF role
+             gate (layer 2) BOTH encode the owner/admin restriction; tightening
+             or loosening EITHER layer requires the matching change in the other,
+             or the two silently diverge. Layer 2 today is
+             controllers/security_access.py:
+               - api_sa_access_policies — create/update/delete role gate at :642
+                 (role not in [ROLE_OWNER, ROLE_ADMIN]) + _check_operation_allowed
+               - api_sa_route_access_config — per-route config role gate at :679
+             The BFF gate ALONE is not sufficient because the Odoo backend form
+             (and any direct ORM walk, e.g. a M2M widget) bypasses the
+             controller entirely — without this rule a plain role='user'
+             workspace member could ORM-create/edit/delete policies (add an
+             'allow email_domain' rule to open a protected hostname, or delete a
+             'deny' rule), skipping both the BFF role gate AND the subscription
+             _check_operation_allowed check. Conversely the rule alone is not
+             enough either: it grants owner/admin full CRUD, but the BFF adds the
+             _check_operation_allowed (subscription state) gate the rule can't
+             express — hence both layers, in lock-step. Split into:
+               - read rule: ALL workspace members (any role) — needed so a
+                 plain 'user' member can still list/get via the BFF.
+               - write/create/unlink rule: owner/admin members only, via the
+                 'any' operator binding user_id+role to the SAME access row
+                 (cross-tuple satisfaction otherwise lets a 'user' pass by
+                 matching role on the owner's row).
+               - admin bypass: group_system full CRUD (backend ops) so a
+                 group_system admin outside the workspace is not locked out by
+                 the member-scoped domain.
+             See docs/decisions/patterns/two-layer-acl-lockstep.md +
+             paas-workspace-member-acl-tightening.md. -->
+        <record id="security_access_access_policy_rule_workspace_member" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicy: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="security_access_access_policy_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicy: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="security_access_access_policy_rule_admin_full" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicy: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- SecurityAccessAccessPolicyRule (P-rule 2026-06): the selector rules
+             inside an Access policy. Each rule carries an include/require/exclude
+             selector (email / ip / country / everyone) — part of the SAME
+             Cloudflare allow/deny/bypass gate as the parent policy, so it is at
+             least as sensitive and MUST mirror the policy's read/write split.
+             Without it a plain role='user' workspace member could ORM-create a
+             new include rule (open a protected hostname) or unlink an exclude
+             rule, bypassing both the BFF role gate and the policy-level rule.
+             Walks the parent SA's workspace.access_ids via the stored related
+             security_access_id (= policy_id.security_access_id, two hops). Same
+             two-layer-acl-lockstep discipline as the policy rules above. -->
+        <record id="security_access_access_policy_rule_rule_workspace_member" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicyRule: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="security_access_access_policy_rule_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicyRule: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
+            <field name="domain_force">[('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="security_access_access_policy_rule_rule_admin_full" model="ir.rule">
+            <field name="name">SecurityAccessAccessPolicyRule: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- Task: workspace member (bound project) or project member (unbound) — full CRUD.
+             Odoo's `task_visibility_rule_project_user` only applies to users with
+             project.group_project_user; this rule grants the same surface to plain
+             base.group_user accounts when they belong to the task's project workspace
+             (bound) or are project followers/creator (unbound). Required for D3=A
+             so workspace members can manage tasks on their own projects.
+
+             Partners with the symmetric deactivation in migrations/18.0.1.0.23/
+             post-migrate.py, which turns off Odoo's `task_visibility_rule` and
+             `task_visibility_rule_project_user`. If a future maintainer re-enables
+             either std rule, the OR-combined per-group ruleset will reopen the
+             cross-workspace task leak that CAQA B1 caught. Keep the three-way
+             deactivation (project_public_members_rule + the two task rules) and
+             this scoped task rule in lockstep. -->
+        <record id="project_task_rule_workspace_member" model="ir.rule">
+            <field name="name">Task: workspace member (bound) or project member (unbound)</field>
+            <field name="model_id" ref="project.model_project_task"/>
+            <field name="domain_force">['|', ('project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id), '&amp;', ('project_id.cloud_service_ids', '=', False), '|', ('project_id.message_partner_ids', 'in', [user.partner_id.id]), ('project_id.create_uid', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- MAJOR 1 fix (rule split): the original dual-leg single-rule design
+             (mcp_server_rule_workspace_member + mcp_tool_rule_workspace_member)
+             let base.group_user ORM-create scope='system' MCP rows because the
+             ('scope', '=', 'system') leg is True for newly-built rows. Split
+             into two rules per model so read direction stays universally true
+             for system-scope (Invariant #6) while create/write/unlink are
+             scoped to user-scope rows in the caller's own workspace. Pattern
+             mirrors workspace_rule_member_access + workspace_rule_create
+             above. Migration 18.0.1.0.24 step 5 retires the old two xmlids
+             to prevent OR-combine with these new rules on `-u`. -->
+
+        <!-- McpServer: system-scope is universally READABLE only (Invariant #6).
+             perm_create/write/unlink False here blocks ORM create({'scope':
+             'system', ...}) attacks — only sudo, group_system, and demo data
+             XML may seed system MCP. -->
+        <record id="mcp_server_rule_system_readonly" model="ir.rule">
+            <field name="name">McpServer: system-scope read-only (all internal users)</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
+            <field name="domain_force">[('scope', '=', 'system')]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- McpServer: workspace members get full CRUD on user-scope MCP.
+             Dual-leg domain:
+               - leg 1 (bound project):     workspace.access_ids walk —
+                                            sidecar-backed flow.
+               - leg 2 (unbound project):   project follower walk via
+                                            message_partner_ids — external
+                                            URL flow.
+             scope='user' is the OUTERMOST AND so the create direction
+             cannot be abused to land scope='system' rows. Both legs walk
+             follower / workspace membership, so cross-workspace users
+             still cannot read either flavour. -->
+        <record id="mcp_server_rule_workspace_user" model="ir.rule">
+            <field name="name">McpServer: workspace member CRUD on user-scope</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
+            <field name="domain_force">['&amp;',
+                ('scope', '=', 'user'),
+                '|',
+                    ('project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),
+                    '&amp;',
+                        ('project_id.cloud_service_ids', '=', False),
+                        ('project_id.message_partner_ids', 'in', [user.partner_id.id])
+            ]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- McpTool: B1 sub-model parity — system-scope tools read-only via
+             server_id walk. perm_create=False blocks tool definition forgery
+             on existing system MCPs. -->
+        <record id="mcp_tool_rule_system_readonly" model="ir.rule">
+            <field name="name">McpTool: system-scope read-only (all internal users)</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_tool"/>
+            <field name="domain_force">[('server_id.scope', '=', 'system')]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- McpTool: sub-model parity — workspace member full CRUD on
+             tools whose server is in their workspace. Dual-leg domain
+             mirrors mcp_server_rule_workspace_user through the
+             ``server_id`` walk. -->
+        <record id="mcp_tool_rule_workspace_user" model="ir.rule">
+            <field name="name">McpTool: workspace member CRUD on user-scope</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_tool"/>
+            <field name="domain_force">['&amp;',
+                ('server_id.scope', '=', 'user'),
+                '|',
+                    ('server_id.project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),
+                    '&amp;',
+                        ('server_id.project_id.cloud_service_ids', '=', False),
+                        ('server_id.project_id.message_partner_ids', 'in', [user.partner_id.id])
+            ]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- Admin (group_system) backend bypass. Required because
+             group_system inherits group_user via implied_ids — without an
+             explicit group_system rule, the system_readonly perm_create=False
+             blocks admin from seeding scope='system' MCP through the backend
+             UI. Odoo resolves rules per-group with OR semantics, so this
+             rule short-circuits the deny for admins. Same bypass for
+             mcp_tool below (B1 sub-model parity). -->
+        <record id="mcp_server_rule_admin_full" model="ir.rule">
+            <field name="name">McpServer: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_server"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="mcp_tool_rule_admin_full" model="ir.rule">
+            <field name="name">McpTool: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_mcp_tool"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- CAQA B1 fresh-install fix (D9 / AC #29): deactivate the three Odoo
+             std project/task rules whose always-true `privacy_visibility !=
+             'followers'` legs would OR-bypass our workspace-scoped rules
+             (project_rule_workspace_member + project_task_rule_workspace_member).
+
+             3-way symmetric deactivation matches migrations/18.0.1.0.23/post-migrate.py:
+               - project.project_public_members_rule  → project.project leak
+               - project.task_visibility_rule         → project.task leak (base.group_user)
+               - project.task_visibility_rule_project_user → project.task leak (project_user)
+
+             Migration only runs on upgrade (`if not version: return` early-out at
+             post-migrate.py:35), so fresh-install path needs this XML declaration
+             to land all three at install time too. CAQA B-1 (re-loop 2026-05-20)
+             caught the missing project_public_members_rule entry — keep the
+             ref list in 1:1 sync with the migration's UPDATE ... WHERE name IN (...).
+
+             We can't use `<record id="project.task_visibility_rule">` because the
+             std rules were loaded by project module under `<data noupdate="1">`
+             (project/security/project_security.xml:48), so their ir_model_data
+             rows carry noupdate=true and Odoo's XML loader skips updates from
+             other modules. The `<function>` call bypasses this — it goes
+             straight through ORM write. Re-enabling any of the three std rules
+             re-opens the original B1 leak surfaced in CAQA. -->
+        <function model="ir.rule" name="write" eval="[
+            [ref('project.project_public_members_rule'),
+             ref('project.task_visibility_rule'),
+             ref('project.task_visibility_rule_project_user')],
+            {'active': False}
+        ]"/>
+
+        <!-- ============================================================== -->
+        <!-- Phase A B-1 (CAQA 2026-05-22) — 4 model × 4 rule = 16 rules     -->
+        <!--                                                                 -->
+        <!-- 4 new self-owned models (agent_template, agent_session, skill,  -->
+        <!-- project_access) shipped with CSV ``1,1,1,1`` for base.group_user-->
+        <!-- but had no ir.rule — every authenticated user defaulted to admin-->
+        <!-- on these records. Add scoped rules per design §3.2 / §4.1 /     -->
+        <!-- §4.3 + [[two-layer-acl-lockstep]] (CSV ↔ rule paired commit).   -->
+        <!--                                                                 -->
+        <!-- Domain idiom: ``project_(id|ids).project_access_ids`` walked    -->
+        <!-- with the 'any' operator so user_id + role match on the SAME     -->
+        <!-- access row (Odoo M2M/O2M cross-tuple semantics otherwise let    -->
+        <!-- attacker satisfy each leg via a different row — e.g. seeing     -->
+        <!-- owner role via the project's owner row while being themselves   -->
+        <!-- just a user). ``'any'`` translates to a SQL EXISTS subquery     -->
+        <!-- that locks user_id+role to the SAME row.                        -->
+        <!-- ============================================================== -->
+
+        <!-- agent_template (design §4.1 — 4 rules) -->
+
+        <record id="agent_template_rule_public_readonly" model="ir.rule">
+            <field name="name">AgentTemplate: public template read-only (all internal users)</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_template"/>
+            <field name="domain_force">[('is_public', '=', True)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="agent_template_rule_project_admin" model="ir.rule">
+            <field name="name">AgentTemplate: project admin/owner full CRUD</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_template"/>
+            <field name="domain_force">[('project_ids.project_access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="agent_template_rule_project_user" model="ir.rule">
+            <field name="name">AgentTemplate: project user read-only</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_template"/>
+            <field name="domain_force">[('project_ids.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'user')])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="agent_template_rule_admin_full" model="ir.rule">
+            <field name="name">AgentTemplate: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_template"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- agent_session (design §2.12 — derived from project_access; 4 rules) -->
+
+        <record id="agent_session_rule_owner_admin" model="ir.rule">
+            <field name="name">AgentSession: project owner/admin full CRUD</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_session"/>
+            <field name="domain_force">[('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="agent_session_rule_user" model="ir.rule">
+            <field name="name">AgentSession: project user read-only</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_session"/>
+            <field name="domain_force">[('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'user')])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="agent_session_rule_guest" model="ir.rule">
+            <field name="name">AgentSession: project guest read-only</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_session"/>
+            <field name="domain_force">[('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'guest')])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="agent_session_rule_admin_full" model="ir.rule">
+            <field name="name">AgentSession: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_agent_session"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- skill (dual-scope — design 2026-05-30) -->
+        <!-- 3 user-scope rules (project_access walk AND scope='user') +     -->
+        <!-- 1 system_readonly (all internal users read system skills) +      -->
+        <!-- admin_full (unchanged below). Old skill_rule_project_* xmlids are -->
+        <!-- retired in migration 18.0.1.0.29 (two-DELETE) to avoid OR-combine.-->
+
+        <record id="skill_rule_user_admin" model="ir.rule">
+            <field name="name">Skill: user-scope project admin/owner full CRUD</field>
+            <field name="model_id" ref="model_woow_paas_platform_skill"/>
+            <field name="domain_force">['&amp;', ('scope', '=', 'user'), ('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="skill_rule_user_member" model="ir.rule">
+            <field name="name">Skill: user-scope project user read-only</field>
+            <field name="model_id" ref="model_woow_paas_platform_skill"/>
+            <field name="domain_force">['&amp;', ('scope', '=', 'user'), ('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'user')])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="skill_rule_user_guest" model="ir.rule">
+            <field name="name">Skill: user-scope project guest read-only</field>
+            <field name="model_id" ref="model_woow_paas_platform_skill"/>
+            <field name="domain_force">['&amp;', ('scope', '=', 'user'), ('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'guest')])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="skill_rule_system_readonly" model="ir.rule">
+            <field name="name">Skill: system-scope read-only for all internal users</field>
+            <field name="model_id" ref="model_woow_paas_platform_skill"/>
+            <field name="domain_force">[('scope', '=', 'system')]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="skill_rule_admin_full" model="ir.rule">
+            <field name="name">Skill: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_skill"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- project_access (design §4.3 — 4 rules) -->
+
+        <record id="project_access_rule_member_read" model="ir.rule">
+            <field name="name">ProjectAccess: project member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_project_access"/>
+            <field name="domain_force">[('project_id.project_access_ids', 'any', [('user_id', '=', user.id)])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="project_access_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">ProjectAccess: project owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_project_access"/>
+            <field name="domain_force">[('project_id.project_access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="project_access_rule_self" model="ir.rule">
+            <field name="name">ProjectAccess: self introspection</field>
+            <field name="model_id" ref="model_woow_paas_platform_project_access"/>
+            <field name="domain_force">[('partner_id', '=', user.partner_id.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="project_access_rule_admin_full" model="ir.rule">
+            <field name="name">ProjectAccess: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_project_access"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- ============================================================== -->
+        <!-- HC-4 (reviewer 2026-05-22) — ir.attachment side-channel deny    -->
+        <!--                                                                 -->
+        <!-- Attack: ``skill.bundle_attachment_id`` is field-level masked    -->
+        <!-- (B1.SK-6), but a non-admin who knows the attachment id can hit  -->
+        <!-- ``/web/content/<id>?download=1`` to stream the bytes —          -->
+        <!-- delegation through ``ir.attachment._check()`` falls back to the -->
+        <!-- skill model's permissive R rule for project members. We gate    -->
+        <!-- the attachment row directly here.                               -->
+        <!--                                                                 -->
+        <!-- Odoo 18 ships NO default ir.rule on ir.attachment for           -->
+        <!-- base.group_user (verified via DB query at impl time) — meaning  -->
+        <!-- there is no std rule to deactivate; adding a group_user rule    -->
+        <!-- introduces row-level filtering for the first time, narrowing   -->
+        <!-- base.group_user from "all attachments" to "all non-skill        -->
+        <!-- attachments". The second rule re-grants group_system            -->
+        <!-- unrestricted access (mirrors the admin_full pattern used by the -->
+        <!-- B-1 ACL fix).                                                   -->
+        <!-- ============================================================== -->
+
+        <record id="ir_attachment_rule_skill_bundle_user_scope" model="ir.rule">
+            <field name="name">ir.attachment: internal user CRUD except skill bundles</field>
+            <field name="model_id" ref="base.model_ir_attachment"/>
+            <field name="domain_force">[('res_model', '!=', 'woow_paas_platform.skill')]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <record id="ir_attachment_rule_skill_bundle_admin_full" model="ir.rule">
+            <field name="name">ir.attachment: admin full CRUD (group_system bypass for skill bundles)</field>
+            <field name="model_id" ref="base.model_ir_attachment"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
         </record>
     </data>
 </odoo>

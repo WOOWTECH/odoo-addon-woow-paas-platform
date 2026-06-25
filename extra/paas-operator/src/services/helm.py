@@ -1,6 +1,8 @@
 """Helm CLI wrapper service."""
+import base64
 import json
 import logging
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -17,6 +19,62 @@ from src.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# issue #29: the private Helm repo token is passed via ``--password`` on the helm
+# argv. Redact credential values BEFORE they reach the "Executing:" log line and
+# HelmException.command, so the token never persists in operator stdout / log
+# aggregation / SIEM. (The argv is still briefly visible via /proc/<pid>/cmdline
+# during the subprocess lifetime — a narrower, transient exposure tracked as a
+# follow-up; this change kills the persistent, broadly-readable log leak.)
+_SECRET_VALUE_FLAGS = frozenset({"--password", "--username"})
+_SECRET_SET_KEY_HINTS = ("password", "token", "secret", "key", "credential")
+
+
+def _redact_cmd(cmd: List[str]) -> List[str]:
+    """Return a copy of a CLI argv with credential values masked for logging.
+
+    Handles ``--password value`` / ``--password=value`` (and ``--username``),
+    plus ``--set key=value`` / ``--set-string`` where the key hints at a secret
+    (future-proofing — the operator currently passes secrets via ``--values``
+    file, whose path is non-sensitive, not via ``--set``).
+    """
+    redacted: List[str] = []
+    mask_next = False  # next token is a bare credential value
+    set_next = False   # next token is a `--set key=value` pair
+    for tok in cmd:
+        if mask_next:
+            redacted.append("<redacted>")
+            mask_next = False
+            continue
+        if set_next:
+            set_next = False
+            key = tok.split("=", 1)[0]
+            if "=" in tok and any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
+                redacted.append(f"{key}=<redacted>")
+            else:
+                redacted.append(tok)
+            continue
+        if tok in _SECRET_VALUE_FLAGS:
+            redacted.append(tok)
+            mask_next = True
+            continue
+        if tok in ("--set", "--set-string"):
+            redacted.append(tok)
+            set_next = True
+            continue
+        if "=" in tok and tok.split("=", 1)[0] in _SECRET_VALUE_FLAGS:
+            redacted.append(f"{tok.split('=', 1)[0]}=<redacted>")
+            continue
+        # Bare `KEY=value` positional (e.g. `kubectl set env … SKILL_BUNDLE_TOKEN=<tok>`)
+        # whose key hints at a secret — issue #29 audit found resume injects the
+        # signed SKILL_BUNDLE_TOKEN via kubectl set env, also logged via _run_command.
+        if "=" in tok and not tok.startswith("-"):
+            key = tok.split("=", 1)[0]
+            if any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
+                redacted.append(f"{key}=<redacted>")
+                continue
+        redacted.append(tok)
+    return redacted
+
 
 def validate_namespace(namespace: str) -> None:
     """Validate that namespace starts with allowed prefix."""
@@ -24,6 +82,51 @@ def validate_namespace(namespace: str) -> None:
         raise ValueError(
             f"Namespace must start with '{settings.namespace_prefix}'"
         )
+
+
+# k8s label VALUE syntax: empty, or <=63 chars of alnum / '-' / '_' / '.' that
+# begin and end with an alphanumeric. A ':' (e.g. from an RFC3339 timestamp) is
+# illegal and makes `kubectl label` reject the WHOLE command atomically.
+_K8S_LABEL_VALUE_RE = re.compile(r"^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$")
+
+
+def validate_label_value(key: str, value: str) -> None:
+    """Fail loud on a label value kubectl would reject.
+
+    Operator #208: an illegal value was handed straight to `kubectl label`, where
+    the atomic rejection was swallowed as a warning and the broken PVC GC went
+    unnoticed for 74 days. Validate in pure Python so the failure surfaces at a
+    unit-catchable boundary instead of only against real kubectl.
+    """
+    if len(value) > 63 or not _K8S_LABEL_VALUE_RE.match(value):
+        raise ValueError(
+            f"Invalid k8s label value for {key!r}: {value!r} — must be <=63 "
+            f"chars matching {_K8S_LABEL_VALUE_RE.pattern} (e.g. ':' is illegal)"
+        )
+
+
+def build_managed_ns_labels() -> Dict[str, str]:
+    """Labels stamped on every platform-managed tenant namespace.
+
+    Single source for both the marketplace path (create_namespace) and the
+    agent-runtime path (agent_runtimes._ensure_namespace) so the two never diverge:
+
+    - ``paas-managed=true`` — existing, name-agnostic NetworkPolicy selector.
+    - ``paas.woowtech.io/env=<env>`` — only when PAAS_ENV is set, so prod/stg
+      namespaces sharing one cluster are ``kubectl get ns -l`` selectable by env.
+      Omitted when PAAS_ENV is empty (dev / unknown stays label-free, backward
+      compatible).
+
+    The env value is validated as a legal k8s label value BEFORE it can reach a
+    manifest, surfacing an illegal value (e.g. a raw config write that bypassed the
+    Odoo Selection whitelist) at this pure-Python boundary instead of as a swallowed
+    kubectl rejection (operator #208 class).
+    """
+    labels = {"paas-managed": "true"}
+    if settings.paas_env:
+        validate_label_value("paas.woowtech.io/env", settings.paas_env)
+        labels["paas.woowtech.io/env"] = settings.paas_env
+    return labels
 
 
 class HelmException(Exception):
@@ -73,7 +176,10 @@ class HelmService:
             HelmException: If command fails
         """
         cmd = [self.helm_bin] + args
-        logger.info(f"Executing: {' '.join(cmd)}")
+        # issue #29: redact the repo token (--password) before logging / before it
+        # lands in HelmException.command. NEVER log/raise the raw cmd.
+        safe_cmd = " ".join(_redact_cmd(cmd))
+        logger.info(f"Executing: {safe_cmd}")
 
         try:
             result = subprocess.run(
@@ -88,7 +194,7 @@ class HelmService:
             if result.returncode != 0:
                 raise HelmException(
                     message=f"Helm command failed with code {result.returncode}",
-                    command=" ".join(cmd),
+                    command=safe_cmd,
                     stderr=result.stderr,
                 )
 
@@ -97,13 +203,13 @@ class HelmService:
         except subprocess.TimeoutExpired as e:
             raise HelmException(
                 message=f"Helm command timed out after {self.timeout}s",
-                command=" ".join(cmd),
+                command=safe_cmd,
                 stderr=str(e),
             )
         except FileNotFoundError:
             raise HelmException(
                 message=f"Helm binary not found: {self.helm_bin}",
-                command=" ".join(cmd),
+                command=safe_cmd,
                 stderr="",
             )
 
@@ -115,6 +221,9 @@ class HelmService:
         values: Optional[Dict[str, Any]] = None,
         version: Optional[str] = None,
         create_namespace: bool = False,
+        repo: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> ReleaseInfo:
         """Install a Helm chart.
 
@@ -125,6 +234,10 @@ class HelmService:
             values: Values override
             version: Chart version
             create_namespace: Create namespace if not exists
+            repo: Optional classic Helm repo URL for stateless fetch (--repo).
+                Leave None for direct/OCI chart refs (marketplace default).
+            username: Optional repo username for a private Helm repo (--username).
+            password: Optional repo password/token for a private repo (--password).
 
         Returns:
             Release information
@@ -150,6 +263,17 @@ class HelmService:
 
         if version:
             args.extend(["--version", version])
+
+        # Classic Helm repo (stateless): resolve the chart directly from a repo
+        # URL without a persistent `helm repo add` — used by the agent-runtime
+        # path (private Gitea classic Helm repo over in-cluster HTTP). Unset for
+        # the existing marketplace OCI refs, so their behaviour is unchanged.
+        if repo:
+            args.extend(["--repo", repo])
+        if username:
+            args.extend(["--username", username])
+        if password:
+            args.extend(["--password", password])
 
         # Write values to temp file if provided
         if values:
@@ -214,6 +338,9 @@ class HelmService:
         version: Optional[str] = None,
         reset_values: bool = False,
         reuse_values: bool = True,
+        repo: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
 
@@ -225,6 +352,9 @@ class HelmService:
             version: Chart version
             reset_values: Reset to chart default values
             reuse_values: Reuse last release values
+            repo: Optional classic Helm repo URL for stateless fetch (--repo).
+            username: Optional repo username for a private Helm repo (--username).
+            password: Optional repo password/token for a private repo (--password).
 
         Returns:
             Updated release information
@@ -259,6 +389,14 @@ class HelmService:
             args.append("--reset-values")
         elif reuse_values:
             args.append("--reuse-values")
+
+        # Classic Helm repo (stateless) — mirrors install(); see its note.
+        if repo:
+            args.extend(["--repo", repo])
+        if username:
+            args.extend(["--username", username])
+        if password:
+            args.extend(["--password", password])
 
         if values:
             with tempfile.NamedTemporaryFile(
@@ -445,7 +583,10 @@ class KubernetesService:
             KubectlException: If command fails or times out
         """
         cmd = [self.kubectl_bin] + args
-        logger.info(f"Executing: {' '.join(cmd)}")
+        # issue #29 audit: `kubectl set env … SKILL_BUNDLE_TOKEN=<tok>` (resume)
+        # passes a secret on argv; redact before logging / raising.
+        safe_cmd = " ".join(_redact_cmd(cmd))
+        logger.info(f"Executing: {safe_cmd}")
 
         try:
             result = subprocess.run(
@@ -459,7 +600,7 @@ class KubernetesService:
             if result.returncode != 0:
                 raise KubectlException(
                     message=f"kubectl command failed with code {result.returncode}",
-                    command=" ".join(cmd),
+                    command=safe_cmd,
                     stderr=result.stderr,
                 )
 
@@ -468,13 +609,13 @@ class KubernetesService:
         except subprocess.TimeoutExpired as e:
             raise KubectlException(
                 message="kubectl command timed out after 30s",
-                command=" ".join(cmd),
+                command=safe_cmd,
                 stderr=str(e),
             )
         except FileNotFoundError:
             raise KubectlException(
                 message=f"kubectl binary not found: {self.kubectl_bin}",
-                command=" ".join(cmd),
+                command=safe_cmd,
                 stderr="",
             )
 
@@ -563,9 +704,7 @@ class KubernetesService:
             "kind": "Namespace",
             "metadata": {
                 "name": name,
-                "labels": {
-                    "paas-managed": "true",
-                },
+                "labels": build_managed_ns_labels(),
             },
         }
 
@@ -609,7 +748,70 @@ class KubernetesService:
         finally:
             Path(quota_file).unlink(missing_ok=True)
 
+        self.ensure_registry_secret(name)
+
         return {"message": f"Namespace {name} created with quota"}
+
+    def ensure_registry_secret(self, namespace: str) -> Optional[str]:
+        """Create/update a dockerconfigjson secret for private registry access.
+
+        Reads registry credentials from settings. If not configured, skips.
+        Uses kubectl apply so it's idempotent.
+
+        Args:
+            namespace: Target namespace
+
+        Returns:
+            Secret name if created, None if registry not configured
+        """
+        if not settings.registry_server or not settings.registry_username:
+            return None
+
+        import yaml
+
+        auth_raw = f"{settings.registry_username}:{settings.registry_password}"
+        auth_b64 = base64.b64encode(auth_raw.encode()).decode()
+        docker_config = json.dumps({
+            "auths": {
+                settings.registry_server: {
+                    "username": settings.registry_username,
+                    "password": settings.registry_password,
+                    "auth": auth_b64,
+                }
+            }
+        })
+        docker_config_b64 = base64.b64encode(docker_config.encode()).decode()
+
+        secret_manifest = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": settings.registry_secret_name,
+                "namespace": namespace,
+            },
+            "type": "kubernetes.io/dockerconfigjson",
+            "data": {
+                ".dockerconfigjson": docker_config_b64,
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            yaml.safe_dump(secret_manifest, f)
+            secret_file = f.name
+
+        try:
+            self._run_command(["apply", "-f", secret_file])
+            logger.info(
+                "Registry secret '%s' ensured in namespace '%s'",
+                settings.registry_secret_name,
+                namespace,
+            )
+        finally:
+            Path(secret_file).unlink(missing_ok=True)
+
+        return settings.registry_secret_name
 
     def get_services(
         self, namespace: str, label_selector: Optional[str] = None
@@ -741,6 +943,148 @@ class KubernetesService:
         result = self._run_command(args)
         return json.loads(result.stdout)
 
+    def scale_deployment(
+        self,
+        namespace: str,
+        deployment_name: str,
+        replicas: int,
+    ) -> None:
+        """Scale a Kubernetes deployment to the given replica count.
+
+        Args:
+            namespace: Namespace name
+            deployment_name: Name of the deployment to scale
+            replicas: Target replica count
+
+        Raises:
+            KubectlException: If scaling fails
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "scale",
+            "deployment",
+            deployment_name,
+            "--namespace",
+            namespace,
+            f"--replicas={replicas}",
+        ]
+
+        self._run_command(args)
+
+    def get_deployment_replicas(
+        self, namespace: str, deployment_name: str
+    ) -> int:
+        """Return the desired replica count of a deployment (0 if reaped).
+
+        Used by the agent-runtime lifecycle to distinguish attach (replicas>=1)
+        from resume (replicas==0).
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "deployment", deployment_name,
+            "--namespace", namespace,
+            "--output", "jsonpath={.spec.replicas}",
+        ]
+        result = self._run_command(args)
+        output = result.stdout.strip()
+        return int(output) if output else 0
+
+    def get_deployment_annotation(
+        self, namespace: str, deployment_name: str, annotation_key: str
+    ) -> Optional[str]:
+        """Return a metadata annotation value on a deployment (None if absent).
+
+        Used by the agent-runtime lifecycle to detect whether the LLM credential
+        changed since the pod was spawned: the checksum is stamped as a
+        *metadata* annotation (which, unlike a pod-template annotation, does not
+        trigger a rollout), and attach/resume compares against it.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "deployment", deployment_name,
+            "--namespace", namespace,
+            "--output", "json",
+        ]
+        result = self._run_command(args)
+        data = json.loads(result.stdout)
+        return (
+            data.get("metadata", {}).get("annotations", {}).get(annotation_key)
+        )
+
+    def set_deployment_env(
+        self, namespace: str, deployment_name: str, env: Dict[str, str]
+    ) -> None:
+        """Set/replace environment variables on a deployment via ``kubectl set env``.
+
+        Triggers a rollout; used on resume to inject a freshly-signed
+        SKILL_BUNDLE_TOKEN BEFORE scaling back to 1 (design §2.11.1 — avoids
+        the pod coming up with a stale token).
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "set", "env",
+            f"deployment/{deployment_name}",
+            "--namespace", namespace,
+        ] + [f"{key}={value}" for key, value in env.items()]
+        self._run_command(args)
+
+    def get_statefulsets(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get statefulsets in a namespace.
+
+        Bitnami charts (Redis, PostgreSQL, Odoo, ...) deploy their primary
+        workload as a StatefulSet, so subscription suspend/resume must
+        cover this kind too.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get",
+            "statefulsets",
+            "--namespace",
+            namespace,
+            "--output",
+            "json",
+        ]
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
+        sts_data = json.loads(result.stdout)
+        statefulsets = []
+        for sts in sts_data.get("items", []):
+            metadata = sts.get("metadata", {})
+            statefulsets.append({
+                "name": metadata.get("name", ""),
+                "namespace": namespace,
+            })
+        return statefulsets
+
+    def scale_statefulset(
+        self,
+        namespace: str,
+        statefulset_name: str,
+        replicas: int,
+    ) -> None:
+        """Scale a Kubernetes statefulset to the given replica count."""
+        validate_namespace(namespace)
+
+        args = [
+            "scale",
+            "statefulset",
+            statefulset_name,
+            "--namespace",
+            namespace,
+            f"--replicas={replicas}",
+        ]
+
+        self._run_command(args)
+
     def apply_manifest(self, manifest: dict) -> Dict[str, Any]:
         """Apply a Kubernetes manifest via kubectl apply.
 
@@ -791,6 +1135,92 @@ class KubernetesService:
             if "not found" in e.stderr.lower():
                 return False
             raise
+
+    def delete_namespace(self, namespace: str) -> bool:
+        """Delete a namespace (two-step teardown §8.4.1 step 2).
+
+        Removes the namespace AND everything left inside it that the helm
+        uninstall did not own — PVC, Secret (incl. the plaintext LLM Secret
+        ``{release}-llm`` per §8.4.2), NetworkPolicy. Always called AFTER
+        ``HelmService.uninstall`` so the helm release-state Secret is gone
+        before the namespace it lives in is removed.
+
+        Fire-and-return (``--wait=false``): K8s marks the namespace
+        ``Terminating`` and reaps contained objects in the background, so the
+        caller is not blocked on finalizers. Idempotent via
+        ``--ignore-not-found``.
+
+        Returns:
+            True if the delete was issued (or the namespace was already gone).
+
+        Raises:
+            KubectlException: deletion failed for a reason other than not-found.
+        """
+        validate_namespace(namespace)
+
+        try:
+            self._run_command([
+                "delete", "namespace", namespace,
+                "--ignore-not-found",
+                "--wait=false",
+            ])
+            return True
+        except KubectlException as e:
+            if "not found" in e.stderr.lower():
+                return True
+            raise
+
+    def list_pvcs(self, namespace: str) -> List[str]:
+        """List PVC names in a namespace.
+
+        Args:
+            namespace: Namespace name
+
+        Returns:
+            List of PVC names
+        """
+        validate_namespace(namespace)
+
+        result = self._run_command([
+            "get", "pvc",
+            "--namespace", namespace,
+            "-o", "jsonpath={.items[*].metadata.name}",
+        ])
+
+        output = result.stdout.strip()
+        if not output:
+            return []
+        return output.split()
+
+    def label_pvcs(
+        self, namespace: str, pvc_names: List[str], labels: Dict[str, str]
+    ) -> None:
+        """Add labels to PVCs.
+
+        Args:
+            namespace: Namespace name
+            pvc_names: List of PVC names to label
+            labels: Dict of label key-value pairs
+        """
+        validate_namespace(namespace)
+
+        # Reject illegal values up front — all labels go in ONE atomic kubectl
+        # command, so a single bad value (e.g. a ':'-bearing timestamp) would
+        # silently drop the entire batch (operator #208).
+        for k, v in labels.items():
+            validate_label_value(k, v)
+
+        label_args = [f"{k}={v}" for k, v in labels.items()]
+
+        for pvc_name in pvc_names:
+            try:
+                self._run_command([
+                    "label", "pvc", pvc_name,
+                    "--namespace", namespace,
+                    "--overwrite",
+                ] + label_args)
+            except KubectlException as e:
+                logger.warning(f"Failed to label PVC {pvc_name}: {e.stderr}")
 
     def get_pod_name(self, namespace: str, label_selector: str) -> str:
         """Get the first pod name matching a label selector.
@@ -920,6 +1350,34 @@ class KubernetesService:
 
         result = self._run_command(args)
         return {"message": f"Secret {secret_name} patched"}
+
+    def patch_configmap(
+        self,
+        namespace: str,
+        configmap_name: str,
+        data: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """Merge-patch a ConfigMap's ``data`` field.
+
+        Touches ONLY ``data`` (strategic merge), so existing labels / annotations
+        — including the Helm ownership metadata (``app.kubernetes.io/managed-by:
+        Helm`` + ``meta.helm.sh/release-*``) that the chart-created ConfigMap
+        carries — are preserved. A full ``kubectl apply`` would replace the object
+        and strip that metadata, breaking the next ``helm upgrade`` with an
+        ownership conflict.
+        """
+        validate_namespace(namespace)
+
+        patch_data = {"data": data}
+        args = [
+            "patch", "configmap", configmap_name,
+            "--namespace", namespace,
+            "--type=merge",
+            f"--patch={json.dumps(patch_data)}",
+        ]
+
+        self._run_command(args)
+        return {"message": f"ConfigMap {configmap_name} patched"}
 
     @staticmethod
     def _is_base64(s: str) -> bool:

@@ -1,0 +1,102 @@
+// =============================================================================
+// Cancel Subscription Modal Styles
+// =============================================================================
+
+.o_woow_cancel_sub_warning_header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    margin: 0;
+  }
+}
+
+.o_woow_cancel_sub_warning_icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+
+.o_woow_cancel_sub_confirm_text {
+  font-size: 0.875rem;
+  color: $woow-text-secondary;
+  margin: 0;
+
+  strong {
+    color: $woow-text-primary;
+  }
+}
+
+.o_woow_cancel_sub_consequence {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.15);
+  border-radius: $woow-radius-default;
+  margin-bottom: 1.25rem;
+  color: #92400e;
+
+  p {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 1.25rem;
+    font-size: 0.8rem;
+    line-height: 1.6;
+  }
+}
+
+.o_woow_cancel_sub_reason {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $woow-text-secondary;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+}
+
+.o_woow_cancel_sub_textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid $woow-border-light;
+  border-radius: $woow-radius-default;
+  background: $woow-card-light;
+  color: $woow-text-primary;
+  font-size: 0.875rem;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+
+  &:focus {
+    border-color: $woow-primary;
+    box-shadow: 0 0 0 2px rgba($woow-primary, 0.15);
+  }
+
+  &::placeholder {
+    color: $woow-text-secondary;
+    opacity: 0.6;
+  }
+}

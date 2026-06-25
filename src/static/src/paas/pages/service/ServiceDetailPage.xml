@@ -25,16 +25,7 @@
 
             <!-- Service Content -->
             <t t-elif="service">
-                <!-- Breadcrumb / Back Navigation -->
-                <div class="o_woow_breadcrumb">
-                    <button class="o_woow_back_btn" t-on-click="goBack">
-                        <WoowIcon name="'arrow_back'" size="20"/>
-                    </button>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_parent o_woow_breadcrumb_link" t-on-click="goBack">Services</span>
-                    <span class="o_woow_breadcrumb_sep">/</span>
-                    <span class="o_woow_breadcrumb_current" t-esc="service.name"/>
-                </div>
+                <!-- 麵包屑統一由全域 Header 呈現（見 ServiceDetailPage._publishBreadcrumb）-->
 
                 <!-- Service Header -->
                 <div class="o_woow_service_header">
@@ -86,6 +77,15 @@
                             Open Web UI
                         </WoowButton>
                         <WoowButton
+                            t-if="service.subscription and service.subscription.is_trial"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showSkipTrial"
+                            disabled="!canPerformActions">
+                            <WoowIcon name="'skip_next'" size="18"/>
+                            Skip Trial
+                        </WoowButton>
+                        <WoowButton
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="showDomainModal"
@@ -132,6 +132,13 @@
                         Configuration
                     </button>
                     <button
+                        t-if="isOdooService"
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'addons'}"
+                        t-on-click="() => this.setTab('addons')">
+                        <WoowIcon name="'inventory_2'" size="18"/>
+                        Addons
+                    </button>
+                    <button
                         t-att-class="{'o_woow_tab': true, 'active': currentTab === 'mcp-servers'}"
                         t-on-click="() => this.setTab('mcp-servers')">
                         <WoowIcon name="'extension'" size="18"/>
@@ -146,6 +153,11 @@
                         service="service"/>
                     <ConfigurationTab
                         t-if="currentTab === 'configuration'"
+                        service="service"
+                        workspaceId="props.workspaceId"
+                        onSave.bind="handleConfigSave"/>
+                    <AddonsTab
+                        t-if="currentTab === 'addons'"
                         service="service"
                         workspaceId="props.workspaceId"
                         onSave.bind="handleConfigSave"/>
@@ -169,6 +181,15 @@
                 service="serviceForModal"
                 onClose.bind="hideRollback"
                 onRollback.bind="onRollbackComplete"/>
+
+            <!-- Skip Trial Modal -->
+            <SkipTrialModal
+                t-if="state.showSkipTrialModal and serviceForModal"
+                service="serviceForModal"
+                loadEstimate="loadCloudServiceEstimate"
+                confirmSkip="confirmCloudServiceSkip"
+                onClose.bind="hideSkipTrial"
+                onSkipped.bind="onTrialSkipped"/>
 
             <!-- Edit Domain Modal -->
             <EditDomainModal
