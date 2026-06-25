@@ -7,6 +7,7 @@ from . import test_cloud_service
 from . import test_cloud_api
 from . import test_paas_operator
 from . import test_smart_home
+from . import test_workspace_cascade_cleanup
 from . import test_smart_home_template
 from . import test_security_access_template
 from . import test_security_access
