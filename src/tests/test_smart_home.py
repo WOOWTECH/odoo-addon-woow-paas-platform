@@ -198,6 +198,115 @@ class TestSmartHome(TransactionCase):
         self.assertFalse(self.SmartHome.browse(home_id).exists())
 
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
+    def test_action_delete_keeps_record_and_raises_when_tunnel_delete_fails(self, mock_get_client):
+        """刪 tunnel 暫態失敗 → 不得無條件 unlink 製造孤兒（F-ENV-4 止血）。
+
+        鏡像 SecurityAccess.unlink 的 fail-loud 契約：delete_tunnel 失敗時
+        保留 DB row + tunnel_id 供 retry、並 raise UserError —— 而非靜默
+        unlink、留下計費中且無 DB 參照可再發現的孤兒 tunnel（cf-ns-orphan
+        事故 3 條孤兒 tunnel 的製造源）。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
+        mock_client = MagicMock()
+        mock_client.delete_tunnel.side_effect = PaaSOperatorError(message='upstream 503')
+        mock_get_client.return_value = mock_client
+
+        home = self.SmartHome.create({
+            'name': 'Orphan Risk Home',
+            'workspace_id': self.workspace.id,
+            'tunnel_id': 'tun-still-live',
+            'state': 'active',
+        })
+        home_id = home.id
+
+        with self.assertRaises(UserError):
+            home.action_delete()
+
+        kept = self.SmartHome.browse(home_id)
+        self.assertTrue(kept.exists(), '刪 tunnel 失敗時 record 必須保留供 retry')
+        self.assertEqual(kept.tunnel_id, 'tun-still-live', 'tunnel_id 必須保留供 retry')
+        mock_client.delete_tunnel.assert_called_once_with('tun-still-live')
+
+    @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
+    def test_unlink_keeps_record_and_raises_when_tunnel_still_live(self, mock_get_client):
+        """直接 unlink 也要 fail-loud：tunnel 還活著就不可刪 DB row（F-ENV-4）。
+
+        與 SecurityAccess.unlink 對稱 —— 任何 unlink 路徑（含 cron、直接刪）
+        都受同一道 guard 保護，tunnel 未成功 teardown 即 raise、保留供 retry。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
+        mock_client = MagicMock()
+        mock_client.delete_tunnel.side_effect = PaaSOperatorError(message='upstream 503')
+        mock_get_client.return_value = mock_client
+
+        home = self.SmartHome.create({
+            'name': 'Direct Unlink Home',
+            'workspace_id': self.workspace.id,
+            'tunnel_id': 'tun-still-live-2',
+            'state': 'active',
+        })
+        home_id = home.id
+
+        with self.assertRaises(UserError):
+            home.unlink()
+
+        kept = self.SmartHome.browse(home_id)
+        self.assertTrue(kept.exists(), 'tunnel 還活著時 record 必須保留供 retry')
+        self.assertEqual(kept.tunnel_id, 'tun-still-live-2', 'tunnel_id 必須保留供 retry')
+        mock_client.delete_tunnel.assert_called_once_with('tun-still-live-2')
+
+    @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
+    def test_unlink_success_clears_tunnel_and_removes_record(self, mock_get_client):
+        """正向控制：tunnel 刪成功時 unlink 正常清空 tunnel_id 並刪 record（F-ENV-4）。
+
+        擋「_cleanup_tunnel 成功路徑被改壞」的回歸（純負向測試不足）。
+        """
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        home = self.SmartHome.create({
+            'name': 'Clean Unlink Home',
+            'workspace_id': self.workspace.id,
+            'tunnel_id': 'tun-clean',
+            'state': 'active',
+        })
+        home_id = home.id
+
+        home.unlink()
+
+        mock_client.delete_tunnel.assert_called_once_with('tun-clean')
+        self.assertFalse(
+            self.SmartHome.browse(home_id).exists(),
+            'tunnel 清乾淨後 record 應正常刪除',
+        )
+
+    @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
+    def test_do_cleanup_keeps_tunnel_and_lands_error_on_failure(self, mock_get_client):
+        """cron 路徑（_do_cleanup）刪 tunnel 失敗也要 fail-loud（F-ENV-4 M1）。
+
+        cron（subscription_lifecycle_cron）走 _do_cleanup() 非 unlink()，unlink
+        guard 不覆蓋此路徑。_do_cleanup 須鏡像 SecurityAccess._do_cleanup：刪失敗
+        則保留 tunnel_id + 落 state='error'（非 'deleting' 假成功訊號），讓下一次
+        cron retry，避免訂閱過期後孤兒從 cron 路徑永久外洩。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
+        mock_client = MagicMock()
+        mock_client.delete_tunnel.side_effect = PaaSOperatorError(message='upstream 503')
+        mock_get_client.return_value = mock_client
+
+        home = self.SmartHome.create({
+            'name': 'Cron Cleanup Home',
+            'workspace_id': self.workspace.id,
+            'tunnel_id': 'tun-cron-live',
+            'state': 'active',
+        })
+
+        home._do_cleanup()
+
+        self.assertEqual(home.state, 'error', '刪 tunnel 失敗 → state 應落 error 非 deleting')
+        self.assertEqual(home.tunnel_id, 'tun-cron-live', 'tunnel_id 必須保留供 cron retry')
+
+    @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_refresh_status_connected(self, mock_get_client):
         """Test refreshing status with connected tunnel."""
         mock_client = MagicMock()
