@@ -154,3 +154,131 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         self.assertFalse(self.SmartHome.browse(sh2_id).exists())
         self.assertFalse(self.Workspace.browse(ws1.id).exists())
         self.assertFalse(self.Workspace.browse(ws2.id).exists())
+
+    # ----------------------------------------------------------------- #
+    #  CloudService (helm/ns) — F-ENV-5 residual fix                      #
+    # ----------------------------------------------------------------- #
+
+    def _make_cloud_service_with_helm(self, ws):
+        template = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'CS Tpl', 'slug': f'cs-tpl-{ws.id}',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'app', 'helm_chart_version': '1.0.0',
+        })
+        return self.env['woow_paas_platform.cloud_service'].create({
+            'name': 'CS Svc', 'workspace_id': ws.id,
+            'template_id': template.id,
+            'helm_release_name': 'rel-cs', 'helm_namespace': 'ns-cs',
+        })
+
+    def test_workspace_unlink_tears_down_cloud_service_helm(self):
+        """workspace.unlink 必須走 CloudService.unlink → helm uninstall_release 被
+        呼叫（F-ENV-5 CloudService residual）。
+
+        修前：cascade 繞過 Python unlink → uninstall_release 從未呼叫 → helm
+        release + namespace 孤兒（RED）。
+        """
+        ws = self.Workspace.create({'name': 'WS CS Helm'})
+        with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
+                   'get_paas_operator_client') as mock_get:
+            mock_client = MagicMock()
+            mock_get.return_value = mock_client
+            svc = self._make_cloud_service_with_helm(ws)
+            svc_id = svc.id
+            subdomain = svc.subdomain
+            ws.unlink()
+            mock_client.uninstall_release.assert_called_once_with(
+                'ns-cs', 'rel-cs', subdomain=subdomain)
+        self.assertFalse(
+            self.env['woow_paas_platform.cloud_service'].browse(svc_id).exists())
+
+    def test_workspace_unlink_fail_loud_keeps_cloud_service_on_helm_failure(self):
+        """helm uninstall 失敗（非 404）→ CloudService.unlink raise UserError →
+        穿透 workspace.unlink → rollback：workspace + service 保留供 retry（F-ENV-5）。
+
+        修前：cascade 直刪、無 helm guard → 不 raise、helm 孤兒（RED）。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
+        ws = self.Workspace.create({'name': 'WS CS FailLoud'})
+        with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
+                   'get_paas_operator_client') as mock_get:
+            mock_client = MagicMock()
+            mock_client.uninstall_release.side_effect = PaaSOperatorError(
+                message='helm boom', status_code=500)
+            mock_get.return_value = mock_client
+            svc = self._make_cloud_service_with_helm(ws)
+            svc_id = svc.id
+            with self.assertRaises(UserError):
+                ws.unlink()
+        self.assertTrue(self.Workspace.browse(ws.id).exists(),
+                        'helm 失敗 → workspace 刪除應 rollback、保留')
+        kept = self.env['woow_paas_platform.cloud_service'].browse(svc_id)
+        self.assertTrue(kept.exists(), 'service 必須保留供 retry')
+        self.assertEqual(kept.helm_release_name, 'rel-cs',
+                         'helm_release_name 必須保留供 retry')
+
+    def test_workspace_unlink_cloud_service_404_is_idempotent_success(self):
+        """helm uninstall 回 404（release 已不存在）→ 視為冪等成功、不 fail-loud →
+        workspace + service 正常刪除（F-ENV-5；對齊 controller double-helm 安全）。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
+        ws = self.Workspace.create({'name': 'WS CS 404'})
+        with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
+                   'get_paas_operator_client') as mock_get:
+            mock_client = MagicMock()
+            mock_client.uninstall_release.side_effect = PaaSOperatorError(
+                message='not found', status_code=404)
+            mock_get.return_value = mock_client
+            svc = self._make_cloud_service_with_helm(ws)
+            svc_id = svc.id
+            ws.unlink()
+        self.assertFalse(
+            self.env['woow_paas_platform.cloud_service'].browse(svc_id).exists(),
+            '404（已不存在）視為成功 → service 應正常刪除')
+        self.assertFalse(self.Workspace.browse(ws.id).exists())
+
+    def test_workspace_unlink_cloud_service_no_operator_configured(self):
+        """operator 未設定（get_paas_operator_client → None）→ _cleanup_helm 跳過
+        helm、workspace + service 正常刪除（dev/test 無 live release，對齊
+        _do_cleanup 的 if-client 分支）。"""
+        ws = self.Workspace.create({'name': 'WS CS NoOp'})
+        with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
+                   'get_paas_operator_client') as mock_get:
+            mock_get.return_value = None
+            svc = self._make_cloud_service_with_helm(ws)
+            svc_id = svc.id
+            ws.unlink()
+        self.assertFalse(
+            self.env['woow_paas_platform.cloud_service'].browse(svc_id).exists(),
+            'operator 未設定 → 跳過 helm、service 正常刪除')
+        self.assertFalse(self.Workspace.browse(ws.id).exists())
+
+    def test_workspace_unlink_mixed_cloud_service_sa_smarthome(self):
+        """一個 workspace 同時帶 CS(helm) + SA(tunnel) + SmartHome(tunnel) → 三者
+        teardown 都被呼叫、三筆都刪（helm guard 與 tunnel guard 互不干擾）。"""
+        ws = self.Workspace.create({'name': 'WS Mixed'})
+        with _mock_sh() as msh, _mock_sa() as msa, \
+                patch('odoo.addons.woow_paas_platform.services.paas_operator.'
+                      'get_paas_operator_client') as mcs:
+            sh_client = MagicMock()
+            sa_client = MagicMock()
+            cs_client = MagicMock()
+            msh.return_value = sh_client
+            msa.return_value = sa_client
+            mcs.return_value = cs_client
+            cs = self._make_cloud_service_with_helm(ws)
+            sh = self.SmartHome.create({
+                'name': 'sh', 'workspace_id': ws.id,
+                'tunnel_id': 'tun-mix-sh', 'state': 'active'})
+            sa = self.SA.create({
+                'name': 'sa', 'workspace_id': ws.id, 'tunnel_id': 'tun-mix-sa'})
+            cs_id, sh_id, sa_id = cs.id, sh.id, sa.id
+            subdomain = cs.subdomain
+            ws.unlink()
+            cs_client.uninstall_release.assert_called_once_with(
+                'ns-cs', 'rel-cs', subdomain=subdomain)
+            sh_client.delete_tunnel.assert_called_once_with('tun-mix-sh')
+            sa_client.delete_tunnel.assert_called_once_with('tun-mix-sa')
+        self.assertFalse(
+            self.env['woow_paas_platform.cloud_service'].browse(cs_id).exists())
+        self.assertFalse(self.SmartHome.browse(sh_id).exists())
+        self.assertFalse(self.SA.browse(sa_id).exists())
