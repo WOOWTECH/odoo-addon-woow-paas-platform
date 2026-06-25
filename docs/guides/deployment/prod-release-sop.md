@@ -431,7 +431,7 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 
 3. **paas-odoo-ci 無 prod approval gate**：workflow 僅以 `startsWith(ref_name,'stg-')` 判環境，無環境保護 / 人工核可。誤推 `v*` tag 即進 prod build。建議加 branch protection / environment approval。追蹤 issue：[paas-odoo-ci#1](https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/1)
 
-4. **文件 drift（小）**：`paas-app-bundle-cd/README.md` 只描述 `paas-odoo` 且寫 `values.yaml`，實際檔名為 `values-prod.yaml`、且已有 operator/cloudflare 等多 component。建議更新 README。追蹤 issue：[paas-app-bundle-cd#20](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/20)
+4. ~~**文件 drift（小）**：`paas-app-bundle-cd/README.md` 只描述 `paas-odoo` 且寫 `values.yaml`…~~ **✅ 已解決（2026-06-25）**：paas-cd 已重寫 README（branch `docs/readme-multi-component-20` merged），涵蓋 5 component 結構表（paas-operator / paas-operator-stg / paas-odoo / cloudflare / cloudflare-stg + 各自 ns/env）、`values-<env>.yaml` 命名規則、版號 pin 規則（chart→`fleet.yaml#helm.version`、image→`values-<env>.yaml#image.tag`）、bundle 實名前綴 `paas-app-bundle`（無 `-cd`）caveat，逐項對齊實際 fleet.yaml 驗證。殘留一處 cloudflare「尚未 pin」過時註記（#19 已 merge、實際已 pin chart `0.1.2` + image `2026.3.0`）經 PR [paas-app-bundle-cd#28](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/pulls/28) 修正。追蹤 issue：[paas-app-bundle-cd#20](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/20)（已關閉）
 
 5. **認知 drift（已澄清，記錄供後人）**：曾有「odoo CD 完全手動、改 `resources/private/paas-odoo.md` + Rancher UI 點 upgrade」的說法 —— 經查 Fleet GitRepo / bundle / CD repo README，**odoo 確實由 Fleet GitOps 管理**（bundle `paas-app-bundle-paas-odoo`），該手動說法為**過時錯誤**。
 
