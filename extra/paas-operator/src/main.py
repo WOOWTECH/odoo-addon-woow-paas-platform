@@ -13,6 +13,7 @@ from src.api import (
     init,
     namespaces,
     odoo_modules,
+    reconcile,
     releases,
     routes,
     tunnels,
@@ -178,6 +179,7 @@ app.include_router(init.router)
 app.include_router(odoo_modules.router)
 app.include_router(agent_runtimes.router)
 app.include_router(access.router)
+app.include_router(reconcile.router)
 
 
 # Root endpoint

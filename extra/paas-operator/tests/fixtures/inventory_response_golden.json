@@ -1,0 +1,22 @@
+{
+  "paas_env": "stg",
+  "partial": false,
+  "failed_kinds": [],
+  "resources": [
+    {
+      "id": "tun-abc123",
+      "name": "paas-stg-sm-115223fa",
+      "kind": "tunnel"
+    },
+    {
+      "id": "app-def456",
+      "name": "paas-stg-sa-5c25b8a1",
+      "kind": "access_app"
+    },
+    {
+      "id": "pol-ghi789",
+      "name": "paas-stg-sa-5c25b8a1-allow",
+      "kind": "access_policy"
+    }
+  ]
+}
