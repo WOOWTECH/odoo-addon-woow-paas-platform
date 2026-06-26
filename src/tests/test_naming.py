@@ -8,6 +8,7 @@ from ..services.naming import (
     make_service_subdomain,
     make_smarthome_subdomain,
     make_security_access_subdomain,
+    reconstruct_mcp_subdomain,
 )
 
 
@@ -235,3 +236,42 @@ class TestNamingEnvToken(unittest.TestCase):
             make_security_access_subdomain('ws', 'ref', 'name', env='STG'), canonical)
         self.assertEqual(
             make_security_access_subdomain('ws', 'ref', 'name', env=' stg '), canonical)
+
+
+class TestReconstructMcpSubdomain(unittest.TestCase):
+    """L4 reconciler：reconstruct_mcp_subdomain 必須與 operator deploy/teardown
+    的 MCP subdomain byte-identical（漂移 → 活躍 MCP route 被誤判成孤兒）。
+
+    operator 端公式（cross-repo，無共用 import，靠 golden cases 鎖）：
+      cloudflare.py generate_subdomain(ns, release) = f"{release}-{ns.replace('paas-ws-','')}"
+      releases.py 對 MCP route 再接 "-mcp"
+    → 完整 MCP subdomain = f"{release}-{ns_suffix}-mcp"。
+    """
+
+    def test_matches_operator_generate_subdomain_plus_mcp(self):
+        """golden：複刻 operator generate_subdomain + '-mcp'（鎖確切字面，防跨 repo 漂移）。"""
+        self.assertEqual(
+            reconstruct_mcp_subdomain('paas-ws-115223fa', 'myapp'),
+            'myapp-115223fa-mcp',
+        )
+        self.assertEqual(
+            reconstruct_mcp_subdomain('paas-ws-abc12345', 'n8n-xyz'),
+            'n8n-xyz-abc12345-mcp',
+        )
+
+    def test_namespace_without_paas_ws_prefix_is_no_op_like_operator(self):
+        """operator 用 str.replace（前綴不在則 no-op）→ reconstruct 須一致（不額外剝）。"""
+        self.assertEqual(
+            reconstruct_mcp_subdomain('custom-ns', 'app'),
+            'app-custom-ns-mcp',
+        )
+
+    def test_ns_suffix_is_namespace_minus_paas_ws(self):
+        """鎖 intent：ns_suffix = namespace 去掉 'paas-ws-' 前綴（與 operator 同源）。"""
+        result = reconstruct_mcp_subdomain('paas-ws-deadbeef', 'rel')
+        self.assertEqual(result, 'rel-deadbeef-mcp')
+        self.assertNotIn('paas-ws-', result)
+
+    def test_none_namespace_defensive(self):
+        """None namespace 不炸（collector 只對有值的 CS 呼叫，但函式自身防呆）。"""
+        self.assertEqual(reconstruct_mcp_subdomain(None, 'app'), 'app--mcp')
