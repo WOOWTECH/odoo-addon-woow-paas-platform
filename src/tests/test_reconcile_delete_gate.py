@@ -44,8 +44,11 @@ FORBIDDEN_PATTERNS = [
 ]
 
 # Odoo reconcile **專屬**路徑檔（未建者 gate 對其 vacuous；一落地即自動納管）。
+# controller 純讀（list / reverify）、無自家 row unlink → 走全量 pattern（連 unlink 都禁，
+# 未來若加「刪除此孤兒」endpoint 會被 gate 擋下，逼維持發現↔刪除分離）。
 RECONCILE_PATH_FILES = [
     ADDON_SRC / "services" / "reconciler.py",
+    ADDON_SRC / "controllers" / "reconcile_report.py",
 ]
 
 # report 路徑（``models/reconcile_report.py``：model + cron + snapshot 持久化）：snapshot-replace
