@@ -614,3 +614,65 @@ class IdentityProviderInfo(BaseModel):
 
 class IdentityProvidersResponse(BaseModel):
     identity_providers: List[IdentityProviderInfo]
+
+
+# ==================== L4 reconciler（帳號級反向孤兒對帳）====================
+# 設計 doc: docs/plans/2026-Q2/2026-06-25-l4-reconciler-design.md
+# 首版「零自動刪除」：reconcilable / dry_run 的預設都偏向安全（不可回收 / dry-run）。
+
+
+class OrphanKind(str, Enum):
+    """L4 reconciler 反向發現的孤兒資源類別。enum 值是 operator↔Odoo wire 契約的一部分。"""
+
+    TUNNEL = "tunnel"                  # cfd_tunnel（dedicated，CNAME 指自身）
+    DNS_RECORD = "dns_record"          # zone DNS（指 shared / dedicated tunnel）
+    ACCESS_APP = "access_app"          # Zero Trust Access application
+    ACCESS_POLICY = "access_policy"    # reusable Access policy
+    NAMESPACE = "namespace"            # k8s 租戶 namespace（Phase E）
+
+
+class OrphanCandidate(BaseModel):
+    """單筆疑似孤兒（dry-run inventory 的一列）。"""
+
+    id: str = Field(..., description="CF / k8s 資源 id")
+    name: str = Field(default="", description="顯示名（tunnel name / hostname / app name ...）")
+    kind: OrphanKind = Field(..., description="資源類別")
+    env_hint: str = Field(
+        default="unknown", description="判讀的環境歸屬：prod / stg / unknown"
+    )
+    reconcilable: bool = Field(
+        default=False,
+        description="是否『結構上可被自動回收』。首版恆 False（dry-run-only、刪除權留人手）；"
+                    "唯帶 owner marker 的資源未來可能升 True（仍受 DP-MARKER 等 gate）。",
+    )
+    reason: str = Field(
+        default="", description="判定理由 / 人工審用說明（如 'no env token, manual only'）"
+    )
+
+
+class ReconcileRequest(BaseModel):
+    """Odoo → operator：帶各類 stored-id 左集（白名單），請 operator 對 CF/k8s 右集取差集。"""
+
+    stored_ids: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Odoo 持有的 stored-id 左集，依 kind 分組"
+                    "（如 {'tunnel': [...], 'dns_record': [...], 'access_app': [...]}）",
+    )
+    dry_run: bool = Field(
+        default=True,
+        description="首版恆 True；傳 False 由 endpoint 422 拒收（發現與刪除刻意分離）。",
+    )
+
+
+class ReconcileResponse(BaseModel):
+    """operator → Odoo：dry-run 孤兒 inventory。"""
+
+    dry_run: bool = Field(default=True, description="本次是否 dry-run（首版恆 True）")
+    partial: bool = Field(
+        default=False,
+        description="completeness gate：任一類右集撈取失敗 → True，"
+                    "且此時不得有任何 reconcilable=True 的候選。",
+    )
+    orphan_candidates: List[OrphanCandidate] = Field(
+        default_factory=list, description="疑似孤兒清單（dry-run，供人工審）"
+    )

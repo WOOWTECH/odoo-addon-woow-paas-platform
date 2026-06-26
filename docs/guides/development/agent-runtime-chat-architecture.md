@@ -57,10 +57,10 @@ sequenceDiagram
     O-->>B: SSE data:{done:true, message_id}
 
     Note over Op,O: ── 連線 4：operator → Odoo（state-update webhook，單向，不在 chat 路徑上）──
-    Op-->>O: (設計上) POST /api/agent-runtimes/webhook/state-update（X-PaaS-Signature）
+    Op-->>O: POST /api/agent-runtimes/webhook/state-update（X-PaaS-Signature）
 ```
 
-> ⚠️ 連線 4 是**狀態同步**，不在 chat 的來回路徑上。目前**尚未接線**（見 [§5](#5-目前現況--已知缺口)），所以它沒運作不會讓 chat 壞。
+> ⚠️ 連線 4 是**狀態同步**，不在 chat 的來回路徑上。operator **已接線**（每次 spawn-or-attach + reap 經 `BackgroundTask` POST state-update webhook，見 [§5](#5-目前現況--已知缺口)），但因為它跑在 chat 來回路徑之外（response 送出後才觸發、no-op/失敗都不 raise），**斷了也不會讓 chat 壞**。
 
 ---
 
@@ -70,14 +70,14 @@ sequenceDiagram
 
 ### 1.1 送訊息（上行）— 一條獨立的 POST
 
-- `POST /api/ai/chat/post`（`type='json'`、`auth='user'`）— `src/controllers/ai_assistant.py:291`
+- `POST /api/ai/chat/post`（`type='json'`、`auth='user'`）— `src/controllers/ai_assistant.py:343`
 - 它只做一件事：把使用者訊息 `message_post` 進 `discuss.channel`（觸發 mail.message 落地），**不負責產生回覆**。回覆走另一條 SSE。
 
 ### 1.2 收回覆（下行）— SSE 串流
 
-- `GET /api/ai/stream/<int:channel_id>`（`type='http'`、`auth='user'`）— `src/controllers/ai_assistant.py:436`
-- 因為是 GET，Odoo 不自動驗 CSRF，所以這裡**手動驗 `csrf_token`**（`ai_assistant.py:450-452`）。
-- 回傳 `Response(generate(), content_type='text/event-stream')`，並帶三個關鍵 header（`ai_assistant.py:821-829`）：
+- `GET /api/ai/stream/<int:channel_id>`（`type='http'`、`auth='user'`）— `src/controllers/ai_assistant.py:488`
+- 因為是 GET，Odoo 不自動驗 CSRF，所以這裡**手動驗 `csrf_token`**（`ai_assistant.py:502-504`）。
+- 回傳 `Response(generate(), content_type='text/event-stream')`，並帶三個關鍵 header（`ai_assistant.py:938-946`）：
 
   | Header | 作用 |
   |---|---|
@@ -87,16 +87,16 @@ sequenceDiagram
 
 ### 1.3 dual-mode gate：legacy vs agent-runtime
 
-進到 `api_ai_stream` 後，用 `channel → project.task → project.use_agent_runtime` 判斷走哪條路（`ai_assistant.py:464-472`）：
+進到 `api_ai_stream` 後，用 `channel → project.task → project.use_agent_runtime` 判斷走哪條路（`ai_assistant.py:516-524`）：
 
 - `use_agent_runtime == False`（**預設**）→ legacy：LLM 跑在 Odoo 內（`AIClient` / LangChain），不在本篇範圍。
-- `use_agent_runtime == True`（pilot 開啟）→ `self._stream_agent_runtime(...)`（`ai_assistant.py:643`），即本篇主角。
+- `use_agent_runtime == True`（pilot 開啟）→ `self._stream_agent_runtime(...)`（`ai_assistant.py:716`），即本篇主角。
 
-### 1.4 `_stream_agent_runtime`：橋接 pod 的那段（`ai_assistant.py:643`）
+### 1.4 `_stream_agent_runtime`：橋接 pod 的那段（`ai_assistant.py:716`）
 
 進入串流前（cursor 還有效時）先備齊 ORM 資料，再進 `generate()` generator：
 
-1. `_check_project_access` project 存取檢查（`ai_assistant.py:653`）。
+1. `_check_project_access` project 存取檢查（`ai_assistant.py:726`）。
 2. `_resolve_agent_template(project)` 解析要用哪個 agent 範本（順序：project 綁定的 published → project 綁定的任意 → `project.agent_template_id` → 平台預設）。
 3. `_build_mcp_snapshot` / `_build_skill_snapshot` 組 MCP 與 skill 快照。
 
@@ -109,16 +109,16 @@ sequenceDiagram
      單一字串，放進 `user_message.payload.system_context`（additive；空值省略
      key）。pod 端原樣 `SystemMessage(content=...)`，不驗內容、零 truncation —
      長度由 Odoo 端 `CTX_TOTAL_CAP=8000` 把關。
-5. `client.spawn_or_attach(...)` 呼叫 operator 把 pod 起來 / 接上（`ai_assistant.py:687`）。
-6. **從回應物件**讀 pod 位址：`pod_ws_url = runtime_info.get('pod_ws_url')`（`ai_assistant.py:704`）。
+5. `client.spawn_or_attach(...)` 呼叫 operator 把 pod 起來 / 接上（`ai_assistant.py:762`）。
+6. **從回應物件**讀 pod 位址：`pod_ws_url = runtime_info.get('pod_ws_url')`（`ai_assistant.py:782`）。
 
    > 🔑 **關鍵**：pod 的 WS 位址來自**這次 spawn 的即時回應**，**不是**讀任何 DB 欄位（不是 `agent_session.pod_ws_url`）。這正是為什麼 [§5](#5-目前現況--已知缺口) 的 `agent_session.state` 卡死也不影響 chat。
-7. `auth_token = runtime_info.get('auth_token') or runtime_info.get('ws_token')`（`ai_assistant.py:705`）— 對 operator 回的兩個等值欄位都相容。
+7. `auth_token = runtime_info.get('auth_token') or runtime_info.get('ws_token')`（`ai_assistant.py:783`）— 對 operator 回的兩個等值欄位都相容。
 8. 連上 pod（`websockets.connect(pod_ws_url, extra_headers={'Authorization': f'Bearer {auth_token}'})`），先送一筆 `user_message` envelope（payload 含 `system_context`），再 `async for` 把 pod 回來的 envelope 逐筆轉成 SSE。
 
    > 🔁 **cold-start WS connect bounded retry（#123 / F-ARL-1 / pitfall G3，2026-06-02）**：cold-start 時 `spawn_or_attach` 可能回 `pod_state="spawning"`，pod 還沒 WS-ready，第一次 connect 會 `ConnectionRefusedError`。`relay()` 現在把 **connect** 包進退避重試迴圈（backoff `1→2→…→5s`，deadline **60s**）：connect 失敗就推一筆 `status:spawning` 進度 event（前端轉黃色「AI 啟動中…」非紅錯誤）後重試；逾 deadline 才送 fatal `error`。**retry 只包 connect**（連上後的 `send(user_message)` + drain loop 不在 retry 範圍）→ mid-stream 斷線**絕不重送 `user_message`**。connect 成功後仍走 `try/finally` 的 `cm.__aexit__(...)`，保留 §1.5 的 F-PC-6 aclose 清理語意。配套 client 側（`agent_runtime_client.py`）：`spawn_or_attach` 對 idempotent spawn 做 bounded retry（transient timeout/connection 重試、4xx 不 retry）+ per-call timeout 分級（spawn 90s / invalidate 10s / 其餘 default 30s）。
 
-### 1.5 envelope → SSE 對照（`ai_assistant.py:763-796`）
+### 1.5 envelope → SSE 對照（`ai_assistant.py:865-913`）
 
 | pod envelope `type` | Odoo 動作 | 吐給瀏覽器的 SSE |
 |---|---|---|
@@ -127,7 +127,7 @@ sequenceDiagram
 | `done` | `_persist_ai_response()` 把完整回覆存回 channel | `data:{chunk:'', done:true, full_response, message_id?}` |
 | `error` | 結束串流 | `data:{error, done:true}` |
 
-> 收尾陷阱：`done` / `error` 跳出 drain loop 時，relay generator 還掛在 `async with websockets.connect()` 裡，必須 `agen.aclose()` 才會觸發 WS 關閉，否則**每輪對話漏一條 pod 連線**（`ai_assistant.py:804-819`，F-PC-6 / P-2）。
+> 收尾陷阱：`done` / `error` 跳出 drain loop 時，relay generator 還掛在 `async with websockets.connect()` 裡，必須 `agen.aclose()` 才會觸發 WS 關閉，否則**每輪對話漏一條 pod 連線**（`ai_assistant.py:921-936`，F-PC-6 / P-2）。
 
 ### 1.6 pod 端（不在本 repo）
 
@@ -139,25 +139,25 @@ pod 是一支 FastAPI WebSocket endpoint `/v1/chat`，程式碼在獨立的 `paa
 
 ### 2.1 Odoo 這側：`agent_runtime_client.py`
 
-- `AgentRuntimeClient.spawn_or_attach(...)`（`src/services/agent_runtime_client.py:110`）→ `POST /api/agent-runtimes/spawn-or-attach`，用 **operator API key** 認證（header `X-API-Key`，`agent_runtime_client.py:84-90`）。
-- client 由 `get_agent_runtime_client(env)` 建立（`agent_runtime_client.py:168`），它從 `ir.config_parameter` 讀 `woow_paas_platform.operator_url` + `woow_paas_platform.operator_api_key`；任一沒設就回 `None`（fail-closed）。
-- `_project_hash(project)`（`agent_runtime_client.py:158`）：解析（或建立）該 project 的 `agent_session` row，回傳 `project_namespace_hash`，當作 request body 的 `project_hash`。
+- `AgentRuntimeClient.spawn_or_attach(...)`（`src/services/agent_runtime_client.py:117`）→ `POST /api/agent-runtimes/spawn-or-attach`，用 **operator API key** 認證（header `X-API-Key`，`agent_runtime_client.py:93-98`）。
+- client 由 `get_agent_runtime_client(env)` 建立（`agent_runtime_client.py:202`），它從 `ir.config_parameter` 讀 `woow_paas_platform.operator_url` + `woow_paas_platform.operator_api_key`；任一沒設就回 `None`（fail-closed）。
+- `_project_hash(project)`（`agent_runtime_client.py:193`）：解析（或建立）該 project 的 `agent_session` row，回傳 `project_namespace_hash`，當作 request body 的 `project_hash`。
 
 ### 2.2 operator 這側：`extra/paas-operator/src/api/agent_runtimes.py`
 
-handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:224`）：
+handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:339`）：
 
-- **cold start**（release 不存在）：建好帶 `paas-managed=true` label 的 namespace → 確保 registry pull secret → provision per-tenant LLM secret → `jwt_signer.sign_skill_bundle_token(...)` → `helm_service.install(... chart=agent-runtime, **_chart_source_kwargs())`（`agent_runtimes.py:235-250`），`pod_state = "spawning"`。
-- **attach / resume**（release 已存在）：重用既有 pod；replicas==0 時 resume（重簽 token + scale 1），否則 attach（不重裝），`pod_state = "active"`（`agent_runtimes.py:252-261`）。
-- 最後 `jwt_signer.sign_ws_token(...)` 簽 WS token 並回傳（`agent_runtimes.py:296-308`）：
+- **cold start**（release 不存在）：建好帶 `paas-managed=true` label 的 namespace → 確保 registry pull secret → provision per-tenant LLM secret → `jwt_signer.sign_skill_bundle_token(...)` → `helm_service.install(... chart=agent-runtime, **_chart_source_kwargs())`（`agent_runtimes.py:349-367`），`pod_state = "spawning"`。
+- **attach / resume**（release 已存在）：重用既有 pod；replicas==0 時 resume（重簽 token + scale 1），否則 attach（不重裝），`pod_state = "active"`（`agent_runtimes.py:387-405`）。
+- 最後 `jwt_signer.sign_ws_token(...)` 簽 WS token 並回傳（`agent_runtimes.py:440-473`）：
 
   ```text
   {pod_ws_url, ws_token, auth_token, pod_state, spawn_age_ms}
   ```
 
-  注意：`ws_token` 與 `auth_token` **是同一個值**（`agent_runtimes.py:304-305`，`auth_token` 是相容別名）。`pod_state` 只會是 `"spawning"`（cold）或 `"active"`（attach/resume）。
+  注意：`ws_token` 與 `auth_token` **是同一個值**（`agent_runtimes.py:469-470`，`auth_token` 是相容別名）。`pod_state` 只會是 `"spawning"`（cold）或 `"active"`（attach/resume）。
 
-> 與 [`paas-skill-system/02-conversation-streaming.md`](../paas-skill-system/02-conversation-streaming.md) 的小差異：那篇把回應寫成 `{pod_ws_url, auth_token, pod_state, spawn_age_ms}`（省略 `ws_token`），實際 operator 兩個都回；Odoo 端 `ai_assistant.py:705` 也兩個都吃，行為一致。
+> 與 [`paas-skill-system/02-conversation-streaming.md`](../paas-skill-system/02-conversation-streaming.md) 的小差異：那篇把回應寫成 `{pod_ws_url, auth_token, pod_state, spawn_age_ms}`（省略 `ws_token`），實際 operator 兩個都回；Odoo 端 `ai_assistant.py:783` 也兩個都吃，行為一致。
 
 ---
 
@@ -165,13 +165,13 @@ handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:224`�
 
 這是理解「單一共用 secret 怎麼做到 per-project 隔離」的核心。
 
-- 推導函式 `_compute_project_namespace_hash(project_id, secret)`（`src/models/agent_session.py:22`）：
+- 推導函式 `_compute_project_namespace_hash(project_id, secret)`（`src/models/agent_session.py:25`）：
 
   ```text
   hash = base32( HMAC_SHA256(project_id, NAMESPACE_SECRET)[:10] )  → 16 個小寫字元
   ```
 
-- operator 用這個 hash 拼出 K8s 名稱（`extra/paas-operator/src/api/agent_runtimes.py:40-55`）：
+- operator 用這個 hash 拼出 K8s 名稱（`extra/paas-operator/src/api/agent_runtimes.py:51-66`）：
 
   | 名稱 | 樣板 | 預設 prefix（`paas-ws-`） | stg（`paas-ws-stg-`） |
   |---|---|---|---|
@@ -179,7 +179,7 @@ handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:224`�
   | helm release | `agent-pa-{hash}`（與 prefix 無關） | `agent-pa-<hash>` | `agent-pa-<hash>` |
   | pod WS URL | `ws://{release}-svc.{namespace}.svc.cluster.local:8000/v1/chat` | — | — |
 
-  `namespace_prefix` 來自 operator 設定 `settings.namespace_prefix`（預設 `"paas-ws-"`，`extra/paas-operator/src/config.py:18`；stg 環境 env-scoped 成 `paas-ws-stg-`）。
+  `namespace_prefix` 來自 operator 設定 `settings.namespace_prefix`（預設 `"paas-ws-"`，`extra/paas-operator/src/config.py:19`；stg 環境 env-scoped 成 `paas-ws-stg-`）。
 
 > 🔑 **為什麼一把共用 key 能讓每個 project 有獨立 pod**：key 相同，但 `project_id` 這個輸入不同 → HMAC 出不同 hash → 不同 namespace / release / pod。**隔離來自「輸入不同」，不是「key 不同」。**
 
@@ -210,19 +210,19 @@ handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:224`�
 
 ### 4.1 Model：`woow_paas_platform.agent_session`（`src/models/agent_session.py`）
 
-- 一個 project 一列（`UNIQUE(project_id)`，`agent_session.py:106-117`）。
+- 一個 project 一列（`UNIQUE(project_id)`，`agent_session.py:165-176`）。
 - 關鍵欄位：
 
   | 欄位 | 說明 |
   |---|---|
-  | `state` | selection：`absent` / `spawning` / `active` / `reaped` / `degraded` / `spawn_failed`，**預設 `absent`**（`agent_session.py:54-65`） |
-  | `project_namespace_hash` | §3 推導出的 hash（`agent_session.py:45`） |
+  | `state` | selection：`absent` / `spawning` / `active` / `reaped` / `degraded` / `spawn_failed`，**預設 `absent`**（`agent_session.py:113-124`） |
+  | `project_namespace_hash` | §3 推導出的 hash（`agent_session.py:104`） |
   | `pod_ws_url` | pod WS 位址（觀測用；**chat 不讀它**，見 §1.4） |
-  | `last_synced_at` | 最後一次被 webhook / drift cron 同步的時間（`agent_session.py:97`） |
-  | `last_state_event_ts` | operator 最後一次 state event 的時戳（`agent_session.py:101`） |
-  | `spawn_at` / `last_active` / `reaped_since` | 生命週期時間點（`agent_session.py:88-90`） |
+  | `last_synced_at` | 最後一次被 webhook / drift cron 同步的時間（`agent_session.py:156`） |
+  | `last_state_event_ts` | operator 最後一次 state event 的時戳（`agent_session.py:160`） |
+  | `spawn_at` / `last_active` / `reaped_since` | 生命週期時間點（`agent_session.py:147-149`） |
 
-- `NAMESPACE_SECRET` 採 **fail-closed**：`_get_namespace_secret()` 讀不到 env 就 raise（`agent_session.py:130-145`），不退回任何「原始碼可推得」的預設值（否則任何看到原始碼的人都能算出 namespace hash）。
+- `NAMESPACE_SECRET` 採 **fail-closed**：`_get_namespace_secret()` 讀不到 env 就 raise（`agent_session.py:230-246`），不退回任何「原始碼可推得」的預設值（否則任何看到原始碼的人都能算出 namespace hash）。
 
 ### 4.2 入站 webhook（主要管道）：`agent_runtime_webhook.py`
 
@@ -235,13 +235,13 @@ handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:224`�
 
 ### 4.3 出站 dispatcher（operator 這側）：`webhook_dispatcher.py`
 
-- `dispatch_state_update(odoo_base_url, payload, secret)`（`extra/paas-operator/src/services/webhook_dispatcher.py:26`）：HMAC 簽 body（header `X-PaaS-Signature: sha256=<hex>`）→ POST 到 Odoo receiver，5xx 重試 3 次 exponential backoff。
+- `dispatch_state_update(odoo_base_url, payload, secret)`（`extra/paas-operator/src/services/webhook_dispatcher.py:29`）：HMAC 簽 body（header `X-PaaS-Signature: sha256=<hex>`）→ POST 到 Odoo receiver，5xx 重試 3 次 exponential backoff。
 
 ### 4.4 後備拉取（fallback pull）：drift cron
 
-- `_cron_drift_detection`（`src/models/agent_session.py:148`），cron 定義在 `src/data/agent_session_cron.xml`（每 5 分鐘）。
-- 它重新同步「state ∈ `['spawning','active','reaped','degraded']` 且 `last_synced_at` 過舊（> 10 分鐘）」的 session，做法是反向呼叫 operator 的 `get_status`（`agent_session.py:159-180`）。
-- ⚠️ **它刻意排除 `'absent'`**（`agent_session.py:160`）。這點與 §5 的現況缺口直接相關。
+- `_cron_drift_detection`（`src/models/agent_session.py:249`），cron 定義在 `src/data/agent_session_cron.xml`（每 5 分鐘）。
+- 它重新同步「state ∈ `['spawning','active','reaped','degraded']` 且 `last_synced_at` 過舊（> 10 分鐘）」的 session，做法是反向呼叫 operator 的 `get_status`（`agent_session.py:259-281`）。
+- ⚠️ **它刻意排除 `'absent'`**（`agent_session.py:261`）。這點與 §5 的現況缺口直接相關。
 
 ### 4.5 skill / mcp on-publish 即時推送（#111）
 
@@ -271,11 +271,11 @@ mcp_server.write(name/url/transport 變動) ┘
 
 > 本節嚴格區分「設計（本來該怎麼運作）」與「目前實際狀況」。以下皆為查證後的事實。
 
-### 5.1 缺口：operator→Odoo 的 state-update webhook **尚未接線**
+### 5.1 缺口：operator→Odoo 的 state-update webhook **程式碼已接線，剩環境 secret 待確認**
 
-- 查證：`dispatch_state_update` 在 operator **沒有任何 production caller** —— 全 repo grep 只剩「它自己的定義」+「unit test」引用它（`extra/paas-operator/src/services/webhook_dispatcher.py:26`、`tests/test_agent_runtimes.py:1011,1044`）。follow-up `N-2` 與 reviewer report 都標註它「**未接線**」。
-- 同時：`AGENT_RUNTIME_WEBHOOK_SECRET` / `_PREVIOUS` 兩端目前都**未佈署**（empty）。
-- **淨效果**：operator 從不送 state-update webhook（就算送，secret 空也會 401），所以 `agent_session.state` **永遠停在建立時的預設 `absent`**，即使 pod 其實是健康執行中的。再加上 §4.4 的 drift cron 刻意跳過 `'absent'`，這列就**永遠不會自我修復**。
+- 查證：operator 已有 **production caller** —— `notify_state_update`（內部包 `dispatch_state_update`）在**每次** spawn-or-attach 與 reap 都經 `BackgroundTask` 觸發（`extra/paas-operator/src/api/agent_runtimes.py:460-466` spawn-or-attach、`:496-501` reap，commit `a907743`）。spawn-or-attach 是**刻意每次都送**（含純 attach 穩態，非只在 cold-start/resume 轉移）——這是 self-heal 機制：Odoo `agent_session` row 在請求中才建（`state='absent'`、可能尚未 commit），加上 §4.4 drift cron 刻意跳過 `'absent'`，靠「每次 attach 都 re-notify」讓該列在下一輪 chat 收斂到 `active`（caller 註解明文標註「Do NOT optimize to transition-only」）。
+- **剩餘缺口**：只在於 `AGENT_RUNTIME_WEBHOOK_SECRET` / `_PREVIOUS` 是否已**佈署到 stg / prod 環境**。這是 runtime 佈署問題（secret 落在 operator 自己的佈署側、由 Fleet 管理，**repo 內查不到**），須到對應環境確認；secret 若未注入，`notify_state_update` 會 no-op（不送 webhook，也不 raise）。
+- **淨效果（secret 未佈署時）**：operator 不送 state-update webhook，所以 `agent_session.state` **可能停在建立時的預設 `absent`**，即使 pod 其實是健康執行中的；再加上 §4.4 的 drift cron 刻意跳過 `'absent'`，這列就**不會自我修復**。secret 一旦佈署，§4 這條 loop 即接通、self-heal 生效。
 
 ### 5.2 重要：這**不影響 chat**
 
@@ -302,14 +302,14 @@ mcp_server.write(name/url/transport 變動) ┘
 | `AGENT_RUNTIME_WEBHOOK_SECRET`（+ `_PREVIOUS`） | 共用 HMAC key，只在 **operator ↔ Odoo** 之間（**不給 pod**） | operator 簽 state-update webhook；Odoo 驗章 | 只把守 §4 的 state-update webhook | 只有狀態同步（連線 4）壞，**chat 不受影響** |
 | operator API key（`ir.config_parameter` `woow_paas_platform.operator_api_key`） | Odoo→operator 的呼叫端認證 | Odoo 用 | 對 operator 的 `spawn_or_attach` / 控制呼叫 | Odoo 無法跟 operator 講話 |
 
-> 📌 對應的 k8s Secret / env 注入：`AGENT_RUNTIME_AUTH_SECRET_*` 對應 K8s Secret `agent-runtime-auth-secret`（`extra/paas-operator/src/services/jwt_signer.py:1-5`），`AGENT_RUNTIME_NAMESPACE_SECRET` 由 K8s Secret env 注入 Odoo（`src/models/agent_session.py:13-19`）。chart repo 拉取 token 的 K8s Secret 落在 **operator 自己的佈署側（Fleet 管理，不在本 repo 的 chart）**，本 repo 只看得到 operator config 欄位名與 helm `--username/--password` 接線（`extra/paas-operator/src/api/agent_runtimes.py:164-176`、`extra/paas-operator/src/config.py:43-46`）。
+> 📌 對應的 k8s Secret / env 注入：`AGENT_RUNTIME_AUTH_SECRET_*` 對應 K8s Secret `agent-runtime-auth-secret`（`extra/paas-operator/src/services/jwt_signer.py:1-5`），`AGENT_RUNTIME_NAMESPACE_SECRET` 由 K8s Secret env 注入 Odoo（`src/models/agent_session.py:16-22`）。chart repo 拉取 token 的 K8s Secret 落在 **operator 自己的佈署側（Fleet 管理，不在本 repo 的 chart）**，本 repo 只看得到 operator config 欄位名與 helm `--username/--password` 接線（`extra/paas-operator/src/api/agent_runtimes.py:209-221`、`extra/paas-operator/src/config.py:44-47`）。
 
 ### 6.1 架構重點：隔離不來自「per-project key」
 
 per-project 的隔離**不是**靠每個 project 一把 key（auth key 是**共用**的）。隔離來自三件事疊加：
 
 1. 推導出的 per-project **namespace**（靠 `NAMESPACE_SECRET`，§3）；
-2. token 內帶的 **JWT claims**（`project_hash` / `project_id` / `workspace_ids`，見 `jwt_signer.sign_ws_token` / `sign_skill_bundle_token`，`extra/paas-operator/src/services/jwt_signer.py:68-119`）；
+2. token 內帶的 **JWT claims**（`project_hash` / `project_id` / `workspace_ids`，見 `jwt_signer.sign_ws_token` / `sign_skill_bundle_token`，`extra/paas-operator/src/services/jwt_signer.py:74-131`）；
 3. **NetworkPolicy**（pod ↔ Odoo 以 `paas-managed=true` label 授權）。
 
 這是一個有紀錄的取捨（設計文件 D-CAVEAT-1）；本篇不展開「per-project key 替代方案」。

@@ -98,7 +98,9 @@ promote 後在原檔頂端加 `> Promoted to: docs/<path>` 註記，**不刪原�
 
 ## CI 例外
 
-`docs/superpowers/` 已加入 `.docs-check.yml` 的 orphan check 例外（探索檔可以是 orphan、不算問題）。lychee broken link check 仍會掃 `docs/superpowers/` 內檔的 link。
+CI 設定分兩檔：lychee 設定 `.lychee.toml` + workflow `.gitea/workflows/docs-link-check.yml`。`docs/superpowers/` 已列入 `.lychee.toml` 的 `exclude_path`，**整個目錄被排除、連內部 link 都不掃**（探索檔的 link 失效不算問題）。
+
+orphan check 屬 Phase 2，**目前尚未啟用**（Phase 1 只跑 lychee broken link check 且 warning-only）。
 
 ## 為什麼把產出位置設在 `docs/` 而不是 `.claude/`
 

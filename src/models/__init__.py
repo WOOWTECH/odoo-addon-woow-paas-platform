@@ -27,6 +27,7 @@ from . import discuss_channel
 from . import oauth_client
 from . import oauth_token
 from . import oauth_code
+from . import oauth_device_code
 from . import smart_home
 from . import ai_assistant
 from . import mcp_server

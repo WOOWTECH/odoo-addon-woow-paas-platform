@@ -40,7 +40,7 @@ related:
 | 🟢 **Odoo** | 存 Skill、發 bundle、收 Pod 回報、橋接對話 | 本 repo `src/` |
 | 🔵 **paas-operator** | Odoo↔K8s 中介，簽 token、跑 Helm | 本 repo `extra/paas-operator/` |
 | 🟣 **Kubernetes** | 跑 Pod 的基礎設施 | 叢集 |
-| 🟠 **agent-runtime Pod** | 載入 SKILL.md 指令、agent 用 `bash:execute` 執行、跑 agent loop | **另一 repo** `woow-paas-agent-runtime`（本 repo 只有 contract） |
+| 🟠 **agent-runtime Pod** | 載入 SKILL.md 指令、agent 用 `bash:execute` 執行、跑 agent loop | **另一 repo** `paas-agent-runtime`（本 repo 只有 contract） |
 
 ## 📐 系統架構
 

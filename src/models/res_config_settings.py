@@ -32,6 +32,18 @@ class ResConfigSettings(models.TransientModel):
         help='Prefix for Kubernetes namespaces created by PaaS (e.g., paas-ws- or paas-ws-stg-)',
     )
 
+    # Deploy Environment (L3: Cloudflare 命名 env token)
+    woow_deploy_env = fields.Selection(
+        selection=[('prod', 'Production'), ('stg', 'Staging')],
+        string='Deploy Environment',
+        config_parameter='woow_paas_platform.deploy_env',
+        default='prod',
+        help='部署環境 (prod / stg)。stg 時 SA canonical_name → paas-stg-sa- '
+             '(tunnel name / DNS comment / policy name 隨之帶 env token)；prod '
+             '維持 paas-sa- (空 token)。用 Selection 限白名單，避免誤填非法 DNS '
+             'name；獨立於 namespace_prefix（禁隱式推導）。',
+    )
+
     # Security Access
     woow_sa_default_service_url = fields.Char(
         string='SA Default Service URL',

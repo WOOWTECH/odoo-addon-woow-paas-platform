@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- noupdate="0" (default): the <function> re-executes on every -u,
+         independent of the noupdate flag on the seed record it touches.
+         oauth_clients.xml is noupdate="1", so editing the seed's
+         redirect_uri_match_mode / redirect_uris only reaches *fresh* installs;
+         existing DBs (sandbox/stg/prod run -u) never see it from XML. The
+         idempotent merge lives on the model and is also called from
+         post_init_hook for the fresh-install path. See pitfall
+         docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md. -->
+    <function
+        model="woow_paas_platform.oauth_client"
+        name="_ensure_ha_smart_home_redirect_mode"/>
+</odoo>

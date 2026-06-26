@@ -129,6 +129,7 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.default_agent_template_id',
     'woow_paas_platform.default_enable_agent_runtime',
     'woow_paas_platform.namespace_prefix',
+    'woow_paas_platform.deploy_env',
     'woow_paas_platform.grace_period_days',
     'woow_paas_platform.cleanup_after_months',
     'woow_paas_platform.storage_class_name',
@@ -179,9 +180,19 @@ def _ensure_ha_client_sa_scopes(env):
     env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_sa_scopes()
 
 
+def _ensure_ha_client_redirect_mode(env):
+    """Migrate the HA public client to host-flexible ha_callback redirect
+    matching (fresh-install path). Upgrade path is covered by
+    data/oauth_redirect_mode_update.xml. oauth_clients.xml is noupdate=1 so the
+    seed change to redirect_uri_match_mode never reaches existing DBs; the
+    idempotent healer lives on the model. See seed-noupdate-sticky pitfall."""
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_redirect_mode()
+
+
 def post_init_hook(env):
-    """Auto-point the platform default agent template, then ensure the
-    subscription journal is configured on every company.
+    """Auto-point the platform default agent template, ensure HA SA-client
+    scopes / redirect mode / device grant, then ensure the subscription
+    journal is configured on every company.
 
     The subscription-journal auto-config lives on
     ``res.company._ensure_subscription_journal`` (idempotent) and is wired into
@@ -192,6 +203,8 @@ def post_init_hook(env):
     failure)."""
     _ensure_default_agent_template(env)
     _ensure_ha_client_sa_scopes(env)
+    _ensure_ha_client_redirect_mode(env)
+    env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_device_grant()
     env['res.company']._ensure_subscription_journal()
 
 

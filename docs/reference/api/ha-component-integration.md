@@ -47,7 +47,8 @@ HA component 以 OAuth 2.0 Authorization Code + PKCE 取得 access token，再�
 | Client type       | **public**（`client_type=public`）—— **無 `client_secret`**              |
 | PKCE              | **S256 強制**（public client 拒 `plain`、拒缺 `code_challenge`）          |
 | Grant types       | `authorization_code`、`refresh_token`                                     |
-| `redirect_uri`    | `https://my.home-assistant.io/redirect/oauth`（HA 標準 callback，精確比對）|
+| `redirect_uri`    | host-flexible：`{本機 / Nabu Casa / 自訂網域 HA base}/auth/external/woow/callback`（path 固定、host 不限；`redirect_uri_match_mode=ha_callback`，由 component 自家 view 渲染方向 A 品牌頁）|
+| 比對規則          | scheme∈{http,https}、path 嚴格 `= /auth/external/woow/callback`、拒 query/fragment/userinfo；http 僅限 loopback/私有/`.local`，公網強制 https（RFC 8252）；open-redirect 殘餘面由 PKCE + 一次性 code 兜底 |
 | Scopes（seed）    | 見 §1.2                                                                   |
 
 > public client **不得**在 `/oauth2/token` 帶 `client_secret`：帶了會被
@@ -55,7 +56,11 @@ HA component 以 OAuth 2.0 Authorization Code + PKCE 取得 access token，再�
 > `code_verifier` 取代 secret 作為持有證明。
 
 Seed 記錄見 `src/data/oauth_clients.xml`（`noupdate="1"`，僅 fresh install
-落地；既有 DB 的 scope 補丁見 §1.2 註記）。
+落地）。`redirect_uri_match_mode` / `redirect_uris` 的既有 DB 升級由
+`data/oauth_redirect_mode_update.xml` 的 `<function>` healer
+（`oauth_client._ensure_ha_smart_home_redirect_mode`）覆蓋；既有 DB 的 scope
+補丁見 §1.2 註記。`redirect_uri` 比對放寬僅限本 client（`woow-ha-smart-home`
+→ `ha_callback` 模式），其餘 client 維持 `exact` 精確比對。
 
 ### 1.2 Scopes
 

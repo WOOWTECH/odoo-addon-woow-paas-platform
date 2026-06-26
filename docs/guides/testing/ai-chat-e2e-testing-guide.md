@@ -40,7 +40,7 @@ Branch: alpha/ai-assistant
 - **Location**: `src/static/src/paas/services/ai_service.js`
 - **功能**: 封裝所有 AI 相關的 API 呼叫
 - **Key Methods**:
-  - `fetchAgents()` - 獲取可用的 AI agents
+  - `fetchAssistants()` - 獲取可用的 AI assistants
   - `fetchChatHistory(channelId, limit, beforeId)` - 載入聊天歷史
   - `postMessage(channelId, body, agentId)` - 發送訊息
   - `getStreamUrl(channelId)` - 取得 SSE 串流 URL
@@ -355,7 +355,7 @@ console.log('Connection status:', status);
 
 ### 前端服務測試 ✅
 
-- [ ] `aiService.fetchAgents()` 正確載入 agents
+- [ ] `aiService.fetchAssistants()` 正確載入 assistants
 - [ ] `aiService.fetchChatHistory()` 正確載入歷史
 - [ ] `aiService.postMessage()` 成功發送訊息
 - [ ] `aiService.getStreamUrl()` 返回正確的 URL
@@ -445,9 +445,9 @@ describe('AI Chat E2E Tests', () => {
 
 - **Controller**: `src/controllers/ai_assistant.py`
 - **Models**:
-  - `src/models/ai_agent.py`
-  - `src/models/ai_provider.py`
+  - `src/models/ai_assistant.py`
+  - `src/models/ai_config.py`
   - `src/models/ai_client.py`
 - **Frontend Service**: `src/static/src/paas/services/ai_service.js`
 - **Views**: `src/views/project_task_views.xml`
-- **Data**: `src/data/ai_agents.xml`
+- **Data**: `src/data/ai_assistant_data.xml`

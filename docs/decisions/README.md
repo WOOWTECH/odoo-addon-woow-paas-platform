@@ -19,7 +19,7 @@
 |------|------|
 | [`philosophy/`](philosophy/) | 跨多個 feature 的基礎設計原則（billing-philosophy 等） |
 | [`refactor/`](refactor/) | 大規模重構決策（含 invariants） |
-| [`patterns/`](patterns/) | 可複用的 pattern（odoo addon override、ACL 收緊、date helper）——完整 18 條索引見 [`patterns/README.md`](patterns/README.md) |
+| [`patterns/`](patterns/) | 可複用的 pattern（odoo addon override、ACL 收緊、date helper）——完整索引見 [`patterns/README.md`](patterns/README.md) |
 | [`reviews/`](reviews/) | PR review verdict、CAQA report、PR description draft |
 
 ## 命名

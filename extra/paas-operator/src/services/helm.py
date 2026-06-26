@@ -2,6 +2,7 @@
 import base64
 import json
 import logging
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -81,6 +82,51 @@ def validate_namespace(namespace: str) -> None:
         raise ValueError(
             f"Namespace must start with '{settings.namespace_prefix}'"
         )
+
+
+# k8s label VALUE syntax: empty, or <=63 chars of alnum / '-' / '_' / '.' that
+# begin and end with an alphanumeric. A ':' (e.g. from an RFC3339 timestamp) is
+# illegal and makes `kubectl label` reject the WHOLE command atomically.
+_K8S_LABEL_VALUE_RE = re.compile(r"^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$")
+
+
+def validate_label_value(key: str, value: str) -> None:
+    """Fail loud on a label value kubectl would reject.
+
+    Operator #208: an illegal value was handed straight to `kubectl label`, where
+    the atomic rejection was swallowed as a warning and the broken PVC GC went
+    unnoticed for 74 days. Validate in pure Python so the failure surfaces at a
+    unit-catchable boundary instead of only against real kubectl.
+    """
+    if len(value) > 63 or not _K8S_LABEL_VALUE_RE.match(value):
+        raise ValueError(
+            f"Invalid k8s label value for {key!r}: {value!r} — must be <=63 "
+            f"chars matching {_K8S_LABEL_VALUE_RE.pattern} (e.g. ':' is illegal)"
+        )
+
+
+def build_managed_ns_labels() -> Dict[str, str]:
+    """Labels stamped on every platform-managed tenant namespace.
+
+    Single source for both the marketplace path (create_namespace) and the
+    agent-runtime path (agent_runtimes._ensure_namespace) so the two never diverge:
+
+    - ``paas-managed=true`` — existing, name-agnostic NetworkPolicy selector.
+    - ``paas.woowtech.io/env=<env>`` — only when PAAS_ENV is set, so prod/stg
+      namespaces sharing one cluster are ``kubectl get ns -l`` selectable by env.
+      Omitted when PAAS_ENV is empty (dev / unknown stays label-free, backward
+      compatible).
+
+    The env value is validated as a legal k8s label value BEFORE it can reach a
+    manifest, surfacing an illegal value (e.g. a raw config write that bypassed the
+    Odoo Selection whitelist) at this pure-Python boundary instead of as a swallowed
+    kubectl rejection (operator #208 class).
+    """
+    labels = {"paas-managed": "true"}
+    if settings.paas_env:
+        validate_label_value("paas.woowtech.io/env", settings.paas_env)
+        labels["paas.woowtech.io/env"] = settings.paas_env
+    return labels
 
 
 class HelmException(Exception):
@@ -658,9 +704,7 @@ class KubernetesService:
             "kind": "Namespace",
             "metadata": {
                 "name": name,
-                "labels": {
-                    "paas-managed": "true",
-                },
+                "labels": build_managed_ns_labels(),
             },
         }
 
@@ -1159,6 +1203,12 @@ class KubernetesService:
             labels: Dict of label key-value pairs
         """
         validate_namespace(namespace)
+
+        # Reject illegal values up front — all labels go in ONE atomic kubectl
+        # command, so a single bad value (e.g. a ':'-bearing timestamp) would
+        # silently drop the entire batch (operator #208).
+        for k, v in labels.items():
+            validate_label_value(k, v)
 
         label_args = [f"{k}={v}" for k, v in labels.items()]
 

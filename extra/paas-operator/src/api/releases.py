@@ -175,6 +175,23 @@ def upgrade_release(
         )
 
 
+def build_orphan_pvc_labels(release_name: str, grace_period_days: int) -> Dict[str, str]:
+    """Build the orphaned-PVC labels stamped at teardown for the pvc-cleanup cron.
+
+    orphaned-at is epoch SECONDS (colon-free): an RFC3339 timestamp contains ':',
+    an illegal k8s label value, which made `kubectl label` reject the whole batch
+    atomically so the cron's `-l orphaned-at` selector never matched and data PVCs
+    leaked forever (operator #208). Single source of truth so the integration
+    test exercises the exact value production the teardown path uses.
+    """
+    now_epoch = str(int(datetime.now(timezone.utc).timestamp()))
+    return {
+        "paas.woowtech.io/orphaned-at": now_epoch,
+        "paas.woowtech.io/release-name": release_name,
+        "paas.woowtech.io/grace-period-days": str(grace_period_days),
+    }
+
+
 @router.delete(
     "/{namespace}/{name}",
     response_model=Dict[str, str],
@@ -202,14 +219,9 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
         try:
             remaining_pvcs = k8s_service.list_pvcs(namespace)
             if remaining_pvcs:
-                now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                labels = {
-                    "paas.woowtech.io/orphaned-at": now_iso,
-                    "paas.woowtech.io/release-name": name,
-                    "paas.woowtech.io/grace-period-days": str(
-                        settings.pvc_grace_period_days
-                    ),
-                }
+                labels = build_orphan_pvc_labels(
+                    name, settings.pvc_grace_period_days
+                )
                 k8s_service.label_pvcs(namespace, remaining_pvcs, labels)
                 logger.info(
                     f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace}: "
@@ -230,7 +242,13 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
 
         # Delete MCP sidecar Cloudflare route and K8s Service if they exist
         try:
-            mcp_subdomain = (subdomain or cloudflare_service.generate_subdomain(namespace, name)) + "-mcp"
+            # Deploy ALWAYS builds the mcp route from generate_subdomain (see
+            # _create_sidecar_service_and_route), ignoring the caller subdomain.
+            # Delete must use the same source or it targets a different hostname
+            # than was created → orphaned mcp CF route (operator #207). The main
+            # route above legitimately honours the caller subdomain; the mcp leg
+            # must NOT, to stay symmetric with deploy.
+            mcp_subdomain = cloudflare_service.generate_subdomain(namespace, name) + "-mcp"
             await cloudflare_service.delete_route(mcp_subdomain)
             logger.info(f"Deleted MCP sidecar Cloudflare route for {mcp_subdomain}")
         except CloudflareException as e:

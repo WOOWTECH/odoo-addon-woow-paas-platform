@@ -62,4 +62,4 @@ helm uninstall agent-pa-{hash} -n paas-ws-stg-pa-{hash} --kube-context woow-k3s
 
 > 仍未改：`_build_llm_credential` 無 `default_ai_config_id`/env fallback，故 key **必須**在 resolved template 綁的 ai.config 上（不是只在 woow Settings 的其他 AI 欄位）。這是另一條設計取捨，本次未動。
 >
-> 記憶體索引：[[reference_agent_runtime_llm_key_after_coldstart]]。
+> 記憶體索引：`reference_agent_runtime_llm_key_after_coldstart`。

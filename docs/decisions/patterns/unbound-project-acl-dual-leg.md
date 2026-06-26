@@ -7,7 +7,7 @@
 當下列條件同時成立：
 
 1. **Model 有 nullable M2O 到 workspace-bearing model**（如 `mcp_server.project_id → project.project`，而 `project.cloud_service_id → cloud_service → workspace` 是 nullable chain；或 `project.cloud_service_id` 自身 nullable）
-2. **bound rows 透過 chain walk 做 workspace 隔離**（如 `project_id.cloud_service_id.workspace_id.access_ids.user_id = user.id`）
+2. **bound rows 透過 chain walk 做 workspace 隔離**（如 `project_id.cloud_service_ids.workspace_id.access_ids.user_id = user.id`）
 3. **unbound rows 不可一刀切 deny**（business 需求允許某些 user 看到 — creator / follower / workspace member 等）
 4. **跨 workspace 仍須 deny**（unbound 不等於 public visible — 必須限縮給 specific user set）
 
@@ -31,9 +31,9 @@
 <field name="domain_force">['&amp;',
     ('scope', '=', 'user'),                          ◄── 外層 AND，鎖 scope direction
     '|',                                              ◄── 內層 OR，bound/unbound 兩腿
-    ('project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),  ◄── leg 1: bound walk
+    ('project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),  ◄── leg 1: bound walk
     '&amp;',                                          ◄── leg 2 內部 AND
-    ('project_id.cloud_service_id', '=', False),     ◄── leg 2 unbound condition
+    ('project_id.cloud_service_ids', '=', False),    ◄── leg 2 unbound condition
     ('project_id.message_partner_ids', 'in', [user.partner_id.id])  ◄── leg 2 follower carve-out
 ]</field>
 ```
@@ -59,9 +59,9 @@ def _check_project_access(self, project):
     <field name="domain_force">['&amp;',
         ('server_id.scope', '=', 'user'),
         '|',
-        ('server_id.project_id.cloud_service_id.workspace_id.access_ids.user_id', '=', user.id),
+        ('server_id.project_id.cloud_service_ids.workspace_id.access_ids.user_id', '=', user.id),
         '&amp;',
-        ('server_id.project_id.cloud_service_id', '=', False),
+        ('server_id.project_id.cloud_service_ids', '=', False),
         ('server_id.project_id.message_partner_ids', 'in', [user.partner_id.id])
     ]</field>
 </record>
@@ -151,7 +151,7 @@ Odoo 兩條 same-group rule 用 OR 合併 → 邏輯等價。**選 A 的理由**
 
 跨 workspace user 評估 dual-leg：
 
-- leg 1 false：`cloud_service_id.workspace_id.access_ids.user_id = user.id` — user 不在 victim workspace access_ids 內 → False
+- leg 1 false：`cloud_service_ids.workspace_id.access_ids.user_id = user.id` — user 不在 victim workspace access_ids 內 → False
 - leg 2 false：`project_id.message_partner_ids` 內 → user.partner_id 不在 → False
 - OR 兩腿都 False → 整 domain False → deny
 

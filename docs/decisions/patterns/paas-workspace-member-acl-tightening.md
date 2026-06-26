@@ -82,7 +82,7 @@ access_project_task_internal,project.task internal user,project.model_project_ta
 過去的 PaaS workspace member 判斷有 3 個 candidate：
 - `workspace.owner_id`（單一 owner，不夠用）
 - `workspace.message_partner_ids`（Odoo `mail.thread` 的 follower）
-- **`workspace.access_ids` →`woow_paas_platform.workspace.access` model**
+- **`workspace.access_ids` →`woow_paas_platform.workspace_access` model**
 
 只有第三個是 PaaS 業務語意上的「workspace 成員 + 角色」（owner / admin / member 等）。前兩個是 Odoo 通用機制，用了會在 invite / kick / role-change 場景下與業務邏輯打架。
 
