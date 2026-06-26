@@ -1,7 +1,7 @@
 ---
 title: Prod Agent-Runtime 啟用 Implementation Plan
 category: plans
-status: draft
+status: completed
 created: 2026-06-26
 related:
   - docs/tracking/pitfalls/agent-runtime-stg-enablement-gap-chain.md
@@ -9,6 +9,9 @@ related:
 ---
 
 # Prod Agent-Runtime 啟用 Implementation Plan
+
+> ✅ **已執行完成並端到端驗證（2026-06-26）。** Task1 operator wiring（`paas-app-bundle-cd#33`）+ Task2 odoo 5 env（`#34`）+ Task3 NP（**prod Bitnami chart NP 預設已通、無需改**）+ Task4 E2E（spawn cold-start 8.5s→agent pod 2/2 Running→state-sync webhook 雙向 200 `spawning→active`→cleanup）。`default_enable_agent_runtime=True`（新 project 自動開）。
+> **執行偏差（草稿→實況，未來複用注意）**：operator values 欄位是 `repoAuth`（非 `repoSecret`）+ `enabled: true` gate + `odooBaseUrl` 就在 agentRuntime 區塊內（= webhook 目標，省掉原 Task 3 的 ODOO_BASE_URL）；prod odoo svc port **80**（非 8069）；G5 直接複用 stg `paas-operator-stg-agent-runtime-repo`（同 git-prod woow-paas helm package）；auth/webhook 從 operator secret 複製 base64 → byte-match。**剩 LLM key 待 admin 後台設**（pod 在那前走 echo fallback）。下方為原始 plan（保留供未來複用與審計）。
 
 > **For agentic workers:** 這是 prod 基礎設施變更 plan。每個 Task 結束都有獨立可驗證的 deliverable + rollback。**勿跳過前置 Gate**——其中 G1/G3/G5 需人類提供 secret 值或決策，缺了會 fail-closed。
 
