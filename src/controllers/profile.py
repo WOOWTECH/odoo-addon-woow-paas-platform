@@ -47,6 +47,9 @@ class ProfileController(Controller):
             'email': partner.email or '',
             'phone': partner.phone or '',
             'avatar_url': f'/web/image/res.partner/{partner.id}/image_128',
+            # 前端 nav 條件渲染用（admin 才顯示 L4 反向孤兒報表入口）。真把關在
+            # reconcile_report controller 的 has_group（前端隱藏只是 cosmetic）。
+            'is_admin': request.env.user.has_group('base.group_system'),
         }
 
     def _serialize_invoice(self, partner):

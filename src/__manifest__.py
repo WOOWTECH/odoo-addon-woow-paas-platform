@@ -53,6 +53,7 @@
         "data/cron_topup.xml",
         "data/ecpay_invoice_cron.xml",
         "data/agent_session_cron.xml",
+        "data/reconcile_report_cron.xml",
         "data/agent_template_demo.xml",
         "data/agent_template_default.xml",
         "data/demo_system_skill.xml",
