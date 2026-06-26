@@ -32,6 +32,7 @@ const routes = [
     { path: "billing/subscriptions", name: "Subscriptions", routeName: "billing-subscriptions" },
     { path: "billing/transactions", name: "Transactions", routeName: "billing-transactions" },
     { path: "settings", name: "Settings", routeName: "settings" },
+    { path: "settings/reconcile-report", name: "孤兒對帳報表", routeName: "reconcile-report" },
     { path: "settings/profile", name: "Profile", routeName: "settings-profile" },
     { path: "settings/payment-methods", name: "Payment Methods", routeName: "settings-payment-methods" },
     { path: "settings/payment-methods/add", name: "Add Payment Method", routeName: "settings-payment-methods-add" },

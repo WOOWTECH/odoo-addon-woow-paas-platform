@@ -28,6 +28,7 @@ import { SettingsPage } from "./pages/settings/SettingsPage";
 import { ProfilePage } from "./pages/settings/ProfilePage";
 import { PaymentMethodsListPage } from "./pages/settings/PaymentMethodsListPage";
 import { AddPaymentMethodPage } from "./pages/settings/AddPaymentMethodPage";
+import { ReconcileReportPage } from "./pages/reconcile-report/ReconcileReportPage";
 import { EmptyState } from "./pages/empty/EmptyState";
 import { NotFoundPage } from "./pages/not-found/NotFoundPage";
 
@@ -60,6 +61,7 @@ export class Root extends Component {
         ProfilePage,
         PaymentMethodsListPage,
         AddPaymentMethodPage,
+        ReconcileReportPage,
         EmptyState,
         NotFoundPage,
     };
