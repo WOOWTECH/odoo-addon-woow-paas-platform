@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="woow_paas_platform.ReconcileReportPage">
+        <div class="o_woow_recon">
+            <!-- Header -->
+            <div class="o_woow_recon_header">
+                <div class="o_woow_recon_header_text">
+                    <a class="o_woow_recon_back" t-on-click="() => this.goBack()">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        <span>Settings</span>
+                    </a>
+                    <h1 class="o_woow_recon_title">L4 反向孤兒對帳報表</h1>
+                    <p class="o_woow_recon_subtitle">
+                        dry-run 唯讀清單 · 刪除權留人手
+                        <t t-if="scannedAt"> · 掃描時間 <t t-esc="formatDateTime(scannedAt)"/></t>
+                    </p>
+                </div>
+                <WoowButton variant="'secondary'" size="'md'"
+                            onClick="() => this.refresh()" disabled="service.loading">
+                    <WoowIcon name="'sync'" size="18" class="service.loading ? 'o_woow_spin' : ''"/>
+                    重新整理
+                </WoowButton>
+            </div>
+
+            <!-- Partial-scan warning -->
+            <t t-if="isPartial">
+                <div class="o_woow_recon_warning">
+                    <WoowIcon name="'warning'" size="18"/>
+                    <span>本次掃描不完整（某類右集 list-all 失敗）→ 孤兒可能少報，請勿據此清單刪除。</span>
+                </div>
+            </t>
+
+            <!-- Loading -->
+            <WoowCard t-if="loading" shadow="true">
+                <div class="o_woow_recon_placeholder">
+                    <WoowIcon name="'hourglass_top'" size="32"/>
+                    <p>載入中…</p>
+                </div>
+            </WoowCard>
+
+            <!-- Error -->
+            <WoowCard t-elif="error" shadow="true">
+                <div class="o_woow_recon_placeholder">
+                    <WoowIcon name="'error_outline'" size="32"/>
+                    <h3>無法載入報表</h3>
+                    <p><t t-esc="error"/></p>
+                </div>
+            </WoowCard>
+
+            <!-- Empty -->
+            <WoowCard t-elif="isEmpty" shadow="true">
+                <div class="o_woow_recon_empty">
+                    <WoowIcon name="'task_alt'" size="48"/>
+                    <p>目前無孤兒候選（或 cron 尚未跑過第一次對帳）。</p>
+                </div>
+            </WoowCard>
+
+            <!-- Candidate list（含 reconcilable=false，no-silent-drop §C.4#7）-->
+            <t t-else="">
+                <t t-foreach="candidates" t-as="candidate" t-key="candidate.id">
+                    <WoowCard shadow="true" class="'o_woow_recon_card'">
+                        <div class="o_woow_recon_card_top">
+                            <span class="o_woow_recon_kind"><t t-esc="candidate.kind"/></span>
+                            <span class="o_woow_recon_name">
+                                <t t-esc="candidate.name || '(無名稱)'"/>
+                            </span>
+                            <span t-attf-class="o_woow_recon_env {{ envBadgeClass(candidate.env_hint) }}">
+                                <t t-esc="candidate.env_hint"/>
+                            </span>
+                            <span t-attf-class="o_woow_recon_badge {{ reconcilableClass(candidate) }}">
+                                <span class="o_woow_recon_badge_dot"/>
+                                <t t-esc="reconcilableLabel(candidate)"/>
+                            </span>
+                        </div>
+                        <div class="o_woow_recon_uid"><t t-esc="candidate.resource_uid"/></div>
+                        <div class="o_woow_recon_reason"><t t-esc="candidate.reason"/></div>
+                        <div class="o_woow_recon_card_footer">
+                            <WoowButton variant="'ghost'" size="'sm'"
+                                        onClick="() => this.reverify(candidate)"
+                                        disabled="isReverifying(candidate)">
+                                <t t-if="isReverifying(candidate)">
+                                    <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                                    重查中…
+                                </t>
+                                <t t-else="">
+                                    <WoowIcon name="'fact_check'" size="16"/>
+                                    重新驗證是否仍為孤兒
+                                </t>
+                            </WoowButton>
+                            <t t-if="reverifyVerdict(candidate)">
+                                <span t-attf-class="o_woow_recon_verdict {{ reverifyVerdict(candidate).error ? 'o_woow_recon_verdict_err' : (reverifyVerdict(candidate).still_orphan ? 'o_woow_recon_verdict_orphan' : 'o_woow_recon_verdict_gone') }}">
+                                    <t t-if="reverifyVerdict(candidate).error">
+                                        <t t-esc="reverifyVerdict(candidate).error"/>
+                                    </t>
+                                    <t t-elif="reverifyVerdict(candidate).still_orphan">
+                                        仍為孤兒（刪除前請再確認）
+                                    </t>
+                                    <t t-else="">
+                                        已不在孤兒清單（可能已被新 provision 重用，請勿刪）
+                                    </t>
+                                </span>
+                            </t>
+                        </div>
+                    </WoowCard>
+                </t>
+            </t>
+        </div>
+    </t>
+</templates>

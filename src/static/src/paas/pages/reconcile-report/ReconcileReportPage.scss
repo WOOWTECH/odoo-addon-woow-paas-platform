@@ -1,0 +1,171 @@
+// L4 反向孤兒對帳報表頁（admin-only）。沿用 .o_woow_ 前綴與 00_variables 變數。
+
+.o_woow_recon {
+  padding: 1.5rem;
+  max-width: 960px;
+  margin: 0 auto;
+
+  &_header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  &_back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: $woow-text-secondary;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    margin-bottom: 0.5rem;
+
+    &:hover { color: $woow-primary; }
+  }
+
+  &_title {
+    font-size: 1.375rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    margin: 0;
+  }
+
+  &_subtitle {
+    font-size: 0.8125rem;
+    color: $woow-text-secondary;
+    margin: 0.25rem 0 0;
+  }
+
+  &_warning {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    border-radius: $woow-radius-default;
+    background: rgba(245, 158, 11, 0.1);
+    color: #b45309;
+    font-size: 0.8125rem;
+  }
+
+  &_placeholder,
+  &_empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 3rem 1rem;
+    color: $woow-text-secondary;
+    text-align: center;
+  }
+
+  // ── 候選卡 ──────────────────────────────────────────────
+  &_card {
+    margin-bottom: 0.75rem;
+  }
+
+  &_card_top {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  &_kind {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: $woow-text-secondary;
+    background: $woow-border-light;
+    padding: 0.125rem 0.5rem;
+    border-radius: $woow-radius-full;
+  }
+
+  &_name {
+    font-weight: 600;
+    color: $woow-text-primary;
+    word-break: break-all;
+  }
+
+  &_uid {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    word-break: break-all;
+    margin-top: 0.375rem;
+  }
+
+  &_reason {
+    font-size: 0.8125rem;
+    color: $woow-text-primary;
+    margin-top: 0.5rem;
+    line-height: 1.5;
+  }
+
+  // ── env 歸屬 badge ─────────────────────────────────────
+  &_env {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    padding: 0.125rem 0.5rem;
+    border-radius: $woow-radius-full;
+  }
+  &_env_known {
+    background: rgba(95, 129, 252, 0.1);
+    color: $woow-primary;
+  }
+  &_env_unknown {
+    background: rgba(107, 114, 128, 0.12);
+    color: #6b7280;
+  }
+
+  // ── reconcilable badge（首版恆「人工審」）────────────────
+  &_badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin-left: auto;
+    padding: 0.25rem 0.625rem;
+    border-radius: $woow-radius-full;
+    font-size: 0.75rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  &_badge_dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+  &_badge_manual {
+    background: rgba(107, 114, 128, 0.12);
+    color: #6b7280;
+    .o_woow_recon_badge_dot { background: #6b7280; }
+  }
+  &_badge_actionable {
+    background: rgba(16, 185, 129, 0.1);
+    color: #10b981;
+    .o_woow_recon_badge_dot { background: #10b981; }
+  }
+
+  // ── 卡底：reverify 按鈕 + 結論 ─────────────────────────
+  &_card_footer {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid $woow-border-light;
+  }
+
+  &_verdict {
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+  &_verdict_orphan { color: #b45309; }
+  &_verdict_gone { color: #10b981; }
+  &_verdict_err { color: #ef4444; }
+}
