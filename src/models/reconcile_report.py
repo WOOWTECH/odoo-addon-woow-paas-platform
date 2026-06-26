@@ -15,6 +15,8 @@ import logging
 
 from odoo import api, fields, models
 
+from ..services.reconciler import reconcile_orphans
+
 _logger = logging.getLogger(__name__)
 
 
@@ -88,3 +90,24 @@ class ReconcileReport(models.Model):
             len(vals), result.partial, scanned_at,
         )
         return scanned_at
+
+    @api.model
+    def _cron_reconcile_report(self):
+        """低頻反向對帳 cron：跑 ``reconcile_orphans`` → 落 snapshot。**只報告、零刪除**。
+
+        **fail-closed**：``reconcile_orphans`` 任一 abort（R3 env-pin 未鎖 prod|stg /
+        operator 未設 / body malformed / 両端 env 不一致 / shared_tunnel_id 缺）→ **保留前次
+        snapshot 不洗空**。理由：config 壞掉若洗成空清單，會偽裝成「掃完、無孤兒」——比保留
+        （帶舊 scanned_at、人工看得出已 stale）的舊資料更危險。先 ``reconcile_orphans``（可能
+        raise）成功後才 ``_record_snapshot``，故 replace 對 abort 原子（不會清了又寫不出）。
+        """
+        try:
+            result = reconcile_orphans(self.env)
+        except Exception as exc:
+            # dry-run 對帳「本輪沒掃成」是運維狀態非 crash：warning 不洗空、不拋（保留前次
+            # snapshot；scanned_at 不前進本身即 stale 訊號）。RuntimeError 訊息已具描述性。
+            _logger.warning(
+                "[RECON_CRON] L4 反向對帳本輪 abort，保留前次 snapshot（fail-closed）：%s", exc)
+            return False
+        self._record_snapshot(result)
+        return True

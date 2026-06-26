@@ -48,6 +48,15 @@ RECONCILE_PATH_FILES = [
     ADDON_SRC / "services" / "reconciler.py",
 ]
 
+# report 路徑（``models/reconcile_report.py``：model + cron + snapshot 持久化）：snapshot-replace
+# 需 ``unlink`` **自家報表列**（Odoo bookkeeping，非 CF/k8s 資源刪除）→ 僅豁免 ``\bunlink\b`` 一條，
+# 其餘 operator client 資源破壞向量仍全禁。豁免精確鎖死（見 ``TestReconcileReportPathDeleteGate``）。
+_UNLINK_PATTERN = r"\bunlink\b"
+REPORT_FORBIDDEN_PATTERNS = [p for p in FORBIDDEN_PATTERNS if p != _UNLINK_PATTERN]
+REPORT_PATH_FILES = [
+    ADDON_SRC / "models" / "reconcile_report.py",
+]
+
 
 def _strip_comments_and_strings(source):
     """用 tokenize 把「註解 + 所有字串字面值」抹成等長空白，只留可執行 code（同 operator 端）。"""
@@ -72,10 +81,10 @@ def _strip_comments_and_strings(source):
     return ["".join(row) for row in rows]
 
 
-def _scan_forbidden(source):
+def _scan_forbidden(source, patterns=FORBIDDEN_PATTERNS):
     hits = []
     for lineno, code in enumerate(_strip_comments_and_strings(source), start=1):
-        for pattern in FORBIDDEN_PATTERNS:
+        for pattern in patterns:
             if re.search(pattern, code):
                 hits.append((lineno, pattern, code.strip()))
     return hits
@@ -133,3 +142,59 @@ class TestReconcileDeleteGate(unittest.TestCase):
             if hits:
                 offenders[path.name] = hits
         self.assertFalse(offenders, f"reconcile 路徑出現刪除/破壞 token：{offenders}")
+
+
+class TestReconcileReportPathDeleteGate(unittest.TestCase):
+    """report 路徑（``models/reconcile_report.py``：model + cron + snapshot 持久化）的 delete-gate。
+
+    與 reconciler.py（純讀、連自家 unlink 都禁）不同：報表 model 做 snapshot-replace 需 ``unlink``
+    **自家報表列**（Odoo bookkeeping，非 CF/k8s 資源）。故 report-path **僅豁免 ``\\bunlink\\b``
+    一條**，所有經 operator client 真去刪/改遠端資源的破壞向量（``delete_*`` / ``uninstall_release``
+    / ``scale_release`` / ``rollback_release`` / ``configure_tunnel`` / ``subprocess`` / ``.delete(``）
+    **仍全禁**。豁免精確鎖死，不得靜默放寬其他破壞 pattern（否則報表路徑變後門）。
+    """
+
+    def test_report_path_is_armed(self):
+        """report 路徑清單非空（否則 gate vacuous）。"""
+        self.assertTrue(REPORT_PATH_FILES, "report 路徑清單為空 → gate 沒在守任何東西")
+
+    def test_report_exemption_is_exactly_unlink(self):
+        """豁免鎖死：report-path 相對全量 pattern **只**少 ``\\bunlink\\b`` 一條，不多不少。"""
+        self.assertEqual(
+            set(FORBIDDEN_PATTERNS) - set(REPORT_FORBIDDEN_PATTERNS),
+            {r"\bunlink\b"},
+            "report-path 只應豁免 unlink；其餘破壞 pattern 必須全保留（豁免變寬 = 後門）",
+        )
+
+    def test_report_gate_still_catches_resource_destruction(self):
+        """detector 自證非虛設：豁免 unlink 後，report-path 仍抓所有 operator client 資源破壞向量。"""
+        code = "\n".join([
+            "client.delete_tunnel(tid)",                  # 1
+            "client._delete_dns_record(rid)",             # 2
+            "client.uninstall_release(ns, rel)",          # 3
+            "client.scale_release(ns, rel, 0)",           # 4
+            "client.rollback_release(ns, rel, rev)",      # 5
+            "client.configure_tunnel(tid, h, s)",         # 6
+            "subprocess.run(['kubectl', 'delete'])",      # 7
+            "await client.delete(url)",                   # 8
+        ])
+        matched = {ln for ln, _, _ in _scan_forbidden(code, REPORT_FORBIDDEN_PATTERNS)}
+        self.assertEqual(matched, set(range(1, 9)),
+                         f"report-path 漏抓資源破壞向量：{sorted(set(range(1, 9)) - matched)}")
+
+    def test_report_gate_allows_own_row_unlink(self):
+        """自家報表列 unlink（snapshot-replace bookkeeping）放行——這正是豁免的目的。"""
+        code = "Report.search([]).unlink()"
+        self.assertEqual(_scan_forbidden(code, REPORT_FORBIDDEN_PATTERNS), [],
+                         "自家 row unlink 不該被 report-path gate 擋")
+
+    def test_report_path_files_have_no_resource_destruction(self):
+        """report 路徑檔（存在者）零 **資源破壞** token（自家 row unlink 例外）。"""
+        offenders = {}
+        for path in REPORT_PATH_FILES:
+            if not path.exists():
+                continue
+            hits = _scan_forbidden(path.read_text(encoding="utf-8"), REPORT_FORBIDDEN_PATTERNS)
+            if hits:
+                offenders[path.name] = hits
+        self.assertFalse(offenders, f"report 路徑出現資源破壞 token：{offenders}")

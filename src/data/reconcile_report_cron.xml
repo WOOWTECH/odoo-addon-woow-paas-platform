@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- L4 反向孤兒 dry-run 對帳（Phase D / DP5 選項 A）：低頻唯讀掃描 CF 帳號級
+             inventory（operator GET /api/reconcile/inventory）對 Odoo stored-id 左集取差集，
+             落分類後 snapshot 供 /woow admin 後台報表頁人工審。**只報告、零自動刪除**。
+             較 subscription_lifecycle_cron（每日）低頻：每 7 天一次（反向 net 不需高頻）。 -->
+        <record id="ir_cron_reconcile_report" model="ir.cron">
+            <field name="name">PaaS: L4 反向孤兒 dry-run 對帳報表</field>
+            <field name="model_id" ref="model_woow_paas_platform_reconcile_report"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_reconcile_report()</field>
+            <field name="interval_number">7</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

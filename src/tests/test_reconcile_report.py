@@ -17,10 +17,14 @@ cron（Slice B）跑 ``reconcile_orphans`` 後，把 ``ReconcileResult.orphan_ca
 
 設計 doc Phase D（§185-207）、§C.4 #7（報表層不得以 reconcilable 過濾，須全列呈現）。
 """
+from unittest.mock import patch
+
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, tagged
 
 from ..services.reconciler import OrphanCandidate, ReconcileResult
+
+_RECON_ORPHANS = 'odoo.addons.woow_paas_platform.models.reconcile_report.reconcile_orphans'
 
 
 @tagged('post_install', '-at_install')
@@ -118,3 +122,44 @@ class TestReconcileReportModel(TransactionCase):
         self.Report._record_snapshot(self._result([self._candidate()]))
         with self.assertRaises(AccessError):
             self.Report.with_user(non_admin).search([])
+
+
+@tagged('post_install', '-at_install')
+class TestReconcileReportCron(TransactionCase):
+    """Slice B：低頻反向對帳 cron。``reconcile_orphans`` 成功 → 落 snapshot；任一 abort
+    （env-pin / operator 未設 / body malformed / 両端不一致）→ **保留前次 snapshot 不洗空**
+    （fail-closed：config 壞掉不該偽裝成『掃完、無孤兒』）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Report = cls.env['woow_paas_platform.reconcile_report']
+
+    def _result(self, candidates, partial=False):
+        return ReconcileResult(dry_run=True, partial=partial, orphan_candidates=candidates)
+
+    def _cand(self, uid):
+        return OrphanCandidate(id=uid, name='paas-stg-sm-%s' % uid, kind='tunnel',
+                               env_hint='stg', reconcilable=False, reason='r')
+
+    def test_cron_record_exists_and_points_to_method(self):
+        """cron XML 記錄存在且 code 真接 ``_cron_reconcile_report``（拆接線 → 紅）。"""
+        cron = self.env.ref('woow_paas_platform.ir_cron_reconcile_report',
+                            raise_if_not_found=False)
+        self.assertTrue(cron, "reconcile report cron 記錄應存在")
+        self.assertIn('_cron_reconcile_report', cron.code or '')
+
+    def test_cron_persists_snapshot_from_reconcile(self):
+        """cron 把 ``reconcile_orphans`` 產出落成 snapshot（接線正確）。"""
+        with patch(_RECON_ORPHANS, return_value=self._result([self._cand('cron-x')])) as m:
+            self.Report._cron_reconcile_report()
+        m.assert_called_once()
+        self.assertEqual(self.Report.search([]).mapped('resource_uid'), ['cron-x'])
+
+    def test_cron_abort_keeps_prior_snapshot(self):
+        """reconcile_orphans abort → cron 保留前次 snapshot、不洗空（fail-closed）。"""
+        self.Report._record_snapshot(self._result([self._cand('prev')]))
+        with patch(_RECON_ORPHANS, side_effect=RuntimeError('env-pin abort')):
+            self.Report._cron_reconcile_report()
+        self.assertEqual(self.Report.search([]).mapped('resource_uid'), ['prev'],
+                         "abort 時須保留前次 snapshot（不洗空 → 避免 config 壞掉偽裝成『無孤兒』）")
