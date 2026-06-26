@@ -34,6 +34,10 @@ export class BillingOverviewPage extends Component {
     this.state = useState({
       showCreditHistoryModal: false,
       showManagePaymentMethods: false,
+      redeemCode: "",
+      redeeming: false,
+      redeemError: null,
+      redeemSuccess: null,
     });
 
     onMounted(() => {
@@ -156,6 +160,43 @@ export class BillingOverviewPage extends Component {
 
   onPaymentMethodsUpdated() {
     billingService.fetchWallet();
+  }
+
+  onRedeemInput(ev) {
+    this.state.redeemCode = ev.target.value;
+    // Clear stale feedback as soon as the user edits the code again.
+    this.state.redeemError = null;
+    this.state.redeemSuccess = null;
+  }
+
+  onRedeemKeydown(ev) {
+    if (ev.key === "Enter") {
+      this.redeem();
+    }
+  }
+
+  async redeem() {
+    const code = (this.state.redeemCode || "").trim();
+    if (this.state.redeeming || !code) {
+      return;
+    }
+    this.state.redeeming = true;
+    this.state.redeemError = null;
+    this.state.redeemSuccess = null;
+
+    const result = await billingService.redeemCode(code);
+    if (!result.success) {
+      this.state.redeemError = result.error || "Redeem failed. Please try again.";
+      this.state.redeeming = false;
+      return;
+    }
+
+    // Refresh the wallet balance so the Credit Balance card reflects the grant.
+    await this.loadWallet();
+    const granted = result.data ? result.data.points_granted : 0;
+    this.state.redeemSuccess = `Successfully redeemed ${this.formatPoints(granted)} to your wallet.`;
+    this.state.redeemCode = "";
+    this.state.redeeming = false;
   }
 
   goToTopup() {

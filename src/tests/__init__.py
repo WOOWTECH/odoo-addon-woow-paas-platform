@@ -148,3 +148,11 @@ from . import test_agent_idle_reaper
 from . import test_agent_gc_cron
 # fix: agent_session reaped_since invariant — drift/webhook reaped 也補值 → GC 可回收
 from . import test_agent_reaped_since_invariant
+# feat: Smart Home 半年贈點 Phase 1 — gift_card → eWallet 兌換核心（TDD red）
+from . import test_gift_redeem
+# feat: Smart Home 半年贈點 Phase 2 — redeem-code endpoint（HttpCase）
+from . import test_redeem_code_endpoint
+# feat: Smart Home 半年贈點 Phase 3 — admin 手動發點 wizard
+from . import test_gift_grant_wizard
+# fix: sh_journal_id auto-config idempotent (install+upgrade) + invoice fallback
+from . import test_subscription_journal_config

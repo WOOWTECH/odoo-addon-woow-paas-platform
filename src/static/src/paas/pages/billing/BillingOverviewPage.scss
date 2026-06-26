@@ -106,6 +106,45 @@
   flex-shrink: 0;
 }
 
+// Redeem Code Card
+.o_woow_billing_redeem_card {
+  padding: 1.5rem !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.o_woow_billing_redeem_hint {
+  font-size: 0.875rem;
+  color: $woow-text-secondary;
+  margin: 0;
+}
+
+.o_woow_billing_redeem_form {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+
+  @media (max-width: 640px) {
+    flex-direction: column;
+  }
+}
+
+.o_woow_billing_redeem_input {
+  flex: 1;
+}
+
+.o_woow_billing_redeem_success {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(34, 197, 94, 0.1);
+  border-radius: $woow-radius-default;
+  color: #16a34a;
+  font-size: 0.875rem;
+}
+
 // Subscription & Payment Card
 .o_woow_billing_subscription_card {
   padding: 1.5rem !important;

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- noupdate="0" (default): re-executes the ensure on every module upgrade
+         (-u), covering the path post_init_hook (install-only) misses. A
+         brand-new environment whose sale journal is created *after* this
+         module installs would otherwise leave company.sh_journal_id NULL,
+         making _sh_create_auto_invoice fail silently (account.move.create hits
+         the journal_id NOT NULL constraint, which _process_subscription_billing
+         swallows in its outer except). Mirrors data/oauth_scope_updates.xml.
+         The method is idempotent — it never overwrites a configured journal. -->
+    <function
+        model="res.company"
+        name="_ensure_subscription_journal"/>
+</odoo>

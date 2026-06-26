@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Smart Home 半年贈點 Phase 3：admin 手動贈送錢包點數 wizard -->
+    <record id="view_gift_grant_wizard_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.gift_grant_wizard.form</field>
+        <field name="model">woow_paas_platform.gift_grant_wizard</field>
+        <field name="arch" type="xml">
+            <form string="贈送錢包點數">
+                <group>
+                    <field name="partner_id"/>
+                    <field name="points"/>
+                    <field name="reason"/>
+                </group>
+                <footer>
+                    <button name="action_grant" string="贈送" type="object" class="btn-primary"/>
+                    <button string="取消" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- 綁在 res.partner 的「動作」選單（僅 admin 可見）。 -->
+    <record id="action_gift_grant_wizard" model="ir.actions.act_window">
+        <field name="name">贈送錢包點數</field>
+        <field name="res_model">woow_paas_platform.gift_grant_wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="binding_model_id" ref="base.model_res_partner"/>
+        <field name="binding_view_types">form,list</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+    </record>
+</odoo>

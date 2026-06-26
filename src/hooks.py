@@ -190,27 +190,22 @@ def _ensure_ha_client_redirect_mode(env):
 
 
 def post_init_hook(env):
-    """Auto-point the platform default agent template, then ensure the
-    subscription journal is configured on the main company."""
+    """Auto-point the platform default agent template, ensure HA SA-client
+    scopes / redirect mode / device grant, then ensure the subscription
+    journal is configured on every company.
+
+    The subscription-journal auto-config lives on
+    ``res.company._ensure_subscription_journal`` (idempotent) and is wired into
+    both this install path AND every ``-u`` via
+    ``data/subscription_journal_config.xml`` — post_init alone is install-only,
+    which would leave ``sh_journal_id`` permanently NULL on an environment
+    whose sale journal lands after this module installs (silent auto-invoice
+    failure)."""
     _ensure_default_agent_template(env)
     _ensure_ha_client_sa_scopes(env)
     _ensure_ha_client_redirect_mode(env)
     env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_device_grant()
-    company = env.ref('base.main_company', raise_if_not_found=False)
-    if not company:
-        return
-    if company.sh_journal_id:
-        _logger.info("Subscription journal already configured: %s", company.sh_journal_id.name)
-        return
-    sale_journal = env['account.journal'].search([
-        ('company_id', '=', company.id),
-        ('type', '=', 'sale'),
-    ], limit=1)
-    if sale_journal:
-        company.sh_journal_id = sale_journal
-        _logger.info("Auto-configured subscription journal: %s (id=%s)", sale_journal.name, sale_journal.id)
-    else:
-        _logger.warning("No sales journal found for company %s — subscription invoices will fail", company.name)
+    env['res.company']._ensure_subscription_journal()
 
 
 def uninstall_hook(env):

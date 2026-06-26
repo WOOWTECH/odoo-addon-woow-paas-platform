@@ -121,6 +121,26 @@ class ShSubscriptionFix(models.Model):
             return existing, False
 
         invoice_vals = subscription._generate_invoice_vals()
+        # Defense in depth: upstream stamps journal_id from
+        # company.sh_journal_id, which can be unset on a freshly-onboarded
+        # environment (see res.company._ensure_subscription_journal). A False
+        # journal_id would hit the NOT NULL constraint and be swallowed by our
+        # outer except — a silent billing outage. Fall back to the company sale
+        # journal and warn loudly instead of failing invisibly.
+        if not invoice_vals.get('journal_id'):
+            fallback_journal = self.env['account.journal'].sudo().search([
+                ('company_id', '=', subscription.sh_company_id.id),
+                ('type', '=', 'sale'),
+            ], limit=1)
+            if fallback_journal:
+                _logger.warning(
+                    "[SUB_FIX] company %s has no sh_journal_id; using fallback "
+                    "sale journal %s for invoice on sub=%s — configure "
+                    "sh_journal_id to silence this.",
+                    subscription.sh_company_id.id, fallback_journal.name,
+                    subscription.id,
+                )
+                invoice_vals['journal_id'] = fallback_journal.id
         # Carry the partner's invoice carrier preference into the move so the
         # ECPay issuing cron has everything it needs at post time.
         invoice_vals.update(
