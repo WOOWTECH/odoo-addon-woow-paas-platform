@@ -787,6 +787,21 @@ class PaaSOperatorClient:
             params={'subdomain': subdomain},
         )
 
+    def get_reconcile_inventory(self) -> Dict[str, Any]:
+        """GET /api/reconcile/inventory — operator 唯讀 CF 帳號級右集 inventory（L4，方向 A）。
+
+        Returns:
+            Dict：``{paas_env, partial, failed_kinds:[str], resources:[{id,name,kind}]}``。
+            operator 對 CF 帳號級資源只做唯讀發現；差集 / 分類 / 刪除全在 Odoo。
+
+        Raises:
+            PaaSOperatorError（及子類）：404（operator 太舊、無此端點）/ 503（env-pin 未鎖
+            為 prod|stg）/ 連線失敗 / timeout → ``_request`` fail-loud raise。**絕不**降級回空
+            inventory —— 空 inventory 會被下游差集當『無孤兒』，與『沒掃到 / 沒權限』無法區分
+            （B.0 / §機械守線）。
+        """
+        return self._request('GET', '/api/reconcile/inventory')
+
 
 def get_paas_operator_client(env) -> Optional[PaaSOperatorClient]:
     """Get a configured PaaS Operator client from Odoo settings.
