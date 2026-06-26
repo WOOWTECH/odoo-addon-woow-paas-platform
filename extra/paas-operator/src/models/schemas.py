@@ -676,3 +676,42 @@ class ReconcileResponse(BaseModel):
     orphan_candidates: List[OrphanCandidate] = Field(
         default_factory=list, description="疑似孤兒清單（dry-run，供人工審）"
     )
+
+
+# ── 方向 A：operator 唯讀 inventory wire（operator→Odoo 右集 ground truth）──────
+# operator 對 CF 帳號級資源只做唯讀發現、回 raw 事實；差集 / 分類（env_hint /
+# reconcilable / reason）/ 刪除全在 Odoo `src/services/reconciler.py`。故 operator 端
+# wire 是未分類的 `InventoryResponse`，不是 `ReconcileResponse`（後者是 Odoo 端產出）。
+
+
+class CfResource(BaseModel):
+    """帳號級反向 inventory 的單筆 CF 資源（raw、未分類）。
+
+    operator 只回『事實』（id / name / kind），**不**含 env_hint / reconcilable /
+    reason — 那些是 Odoo reconciler.py 依 stored-id 左集 + 守衛規則算出的分類結果。
+    """
+
+    id: str = Field(..., description="CF 資源 id")
+    name: str = Field(default="", description="顯示名（tunnel name / app name / policy name）")
+    kind: OrphanKind = Field(..., description="資源類別")
+
+
+class InventoryResponse(BaseModel):
+    """operator → Odoo：帳號級 CF 資源 inventory（右集 ground truth，未分類、唯讀）。"""
+
+    paas_env: str = Field(
+        ...,
+        description="operator 鎖定的環境（R3 env-pin 回拋，恆為 prod|stg；未鎖定時端點 503 不回此物件）",
+    )
+    partial: bool = Field(
+        default=False,
+        description="completeness gate：任一類 list-all 失敗 → True，該類資源缺漏。"
+                    "下游差集**不得**把缺漏類當『無孤兒』，且 partial 時不得授權任何 reconcilable=True。",
+    )
+    failed_kinds: List[str] = Field(
+        default_factory=list,
+        description="撈取失敗的資源類別（partial 細節，供人工審看是哪一類沒撈到）",
+    )
+    resources: List[CfResource] = Field(
+        default_factory=list, description="撈到的 CF 資源（未分類，右集 ground truth）"
+    )
