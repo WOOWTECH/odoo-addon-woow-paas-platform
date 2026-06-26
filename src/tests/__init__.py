@@ -30,6 +30,8 @@ from . import test_reconciler_diff
 from . import test_reconciler_env_pin
 # feat: L4 reconciler 分類層 — env attribution + 結構 allowlist + protected + tripwire（TS-4 S3+S4）
 from . import test_reconciler_classify
+# feat: L4 reconciler Phase D 報表 model — snapshot 持久化 + admin-only ACL（TS-5 Slice A）
+from . import test_reconcile_report
 # feat: L3 deploy_env CF naming env token（config_parameter 接線 + 卸載清理）
 from . import test_deploy_env_config
 from . import test_mcp_integration
