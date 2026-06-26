@@ -9,6 +9,8 @@ from ..services.naming import (
     make_smarthome_subdomain,
     make_security_access_subdomain,
     reconstruct_mcp_subdomain,
+    parse_paas_name,
+    classify_env_hint,
 )
 
 
@@ -275,3 +277,51 @@ class TestReconstructMcpSubdomain(unittest.TestCase):
     def test_none_namespace_defensive(self):
         """None namespace 不炸（collector 只對有值的 CS 呼叫，但函式自身防呆）。"""
         self.assertEqual(reconstruct_mcp_subdomain(None, 'app'), 'app--mcp')
+
+
+class TestParsePaasName(unittest.TestCase):
+    """L4 reconciler S3：parse_paas_name 解析 (env_token, kind)，literal (stg) 白名單。
+
+    鏡像 _env_token 對 {prod,stg} 白名單輸出：prod/legacy 無 token byte-identical → (None,kind)；
+    stg → ('stg',kind)；非白名單 token（foo）/ 非 paas 名 → (None,None)（不 over-accept、不靜默漏）。
+    """
+
+    def test_prod_legacy_no_token_returns_none_kind(self):
+        self.assertEqual(parse_paas_name('paas-sa-5c25b8a1'), (None, 'sa'))
+        self.assertEqual(parse_paas_name('paas-sm-115223fa'), (None, 'sm'))
+        self.assertEqual(parse_paas_name('paas-cs-aabbccdd-11223344'), (None, 'cs'))
+
+    def test_stg_token_parsed(self):
+        self.assertEqual(parse_paas_name('paas-stg-sa-5c25b8a1'), ('stg', 'sa'))
+        self.assertEqual(parse_paas_name('paas-stg-sm-115223fa'), ('stg', 'sm'))
+
+    def test_non_whitelist_token_not_over_accepted(self):
+        """非白名單 token 'foo' 不可被當 explicit env（回 (None,None) 而非 ('foo','sa')）。"""
+        self.assertEqual(parse_paas_name('paas-foo-sa-xxx'), (None, None))
+
+    def test_multi_label_token_not_matched(self):
+        """_env_token 對多 label（'foo bar'→paas-foo-bar-sa-）→ 不 match → unknown（不靜默誤判）。"""
+        self.assertEqual(parse_paas_name('paas-foo-bar-sa-xxx'), (None, None))
+
+    def test_non_paas_names_return_none_none(self):
+        for name in ('woowtech.io', 'promo2026', 'paas-stg-xx-yy', ''):
+            self.assertEqual(parse_paas_name(name), (None, None), name)
+
+
+class TestClassifyEnvHint(unittest.TestCase):
+    """L4 reconciler S3：classify_env_hint(name, pinned_env) -> (env_hint, is_cross_env)。"""
+
+    def test_same_env_not_cross(self):
+        self.assertEqual(classify_env_hint('paas-stg-sm-1', 'stg'), ('stg', False))
+
+    def test_explicit_token_other_env_is_cross(self):
+        """prod-pinned 看到 stg 資源 → cross-env（單向：只抓得到 stg 被 prod 看到）。"""
+        self.assertEqual(classify_env_hint('paas-stg-sm-1', 'prod'), ('stg', True))
+
+    def test_no_token_is_unknown_not_cross(self):
+        """prod 空 token 與 legacy 不可分 → unknown、非 cross（不瞎猜，prod 確認靠 DP-DIFF）。"""
+        self.assertEqual(classify_env_hint('paas-sm-1', 'stg'), ('unknown', False))
+        self.assertEqual(classify_env_hint('paas-sm-1', 'prod'), ('unknown', False))
+
+    def test_non_paas_name_is_unknown(self):
+        self.assertEqual(classify_env_hint('woowtech.io', 'stg'), ('unknown', False))

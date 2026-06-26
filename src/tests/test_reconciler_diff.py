@@ -121,14 +121,23 @@ class TestComputeOrphans(TransactionCase):
         )
 
 
+# operator inventory 必填的 shared tunnel id（TS-4 S2 後 _parse_inventory 要求；非空即可，
+# 本檔測差集/兩端一致，shared tunnel protected 行為在 test_reconciler_classify 另測）。
+_SHARED_TUN = 'shared-tun-uuid-0000'
+
+
 @tagged('post_install', '-at_install')
 class TestReconcileOrphansEndToEnd(TransactionCase):
-    """reconcile_orphans(env, client)：蒐左集 + 取右集（client）+ 差集。"""
+    """reconcile_orphans(env, client)：env-pin self-check + 蒐左集 + 取右集（client）+ 差集。"""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.ws = cls.env['woow_paas_platform.workspace'].create({'name': 'L4 diff WS'})
+        # TS-4 S2：reconcile_orphans 入口 env-pin self-check 要求 deploy_env ∈ {prod,stg}；
+        # 鎖 stg 讓本檔（差集行為）能跑過 self-check（env-pin 的 abort 負向測試在
+        # test_reconciler_env_pin.py）。inventory.paas_env 須與此一致（両端一致 check）。
+        cls.env['ir.config_parameter'].sudo().set_param('woow_paas_platform.deploy_env', 'stg')
 
     def test_active_resource_not_orphan_ghost_is(self):
         """SA 持有 tun-keep → inventory 含 tun-keep（活躍）+ tun-ghost（孤兒）→ 只回 ghost。"""
@@ -136,7 +145,8 @@ class TestReconcileOrphansEndToEnd(TransactionCase):
             'name': 'SAk', 'workspace_id': self.ws.id})
         sa.write({'tunnel_id': 'tun-keep'})
         client = _FakeClient({
-            'paas_env': 'stg', 'partial': False, 'failed_kinds': [],
+            'paas_env': 'stg', 'shared_tunnel_id': _SHARED_TUN,
+            'partial': False, 'failed_kinds': [],
             'resources': [
                 {'id': 'tun-keep', 'name': 'paas-stg-sa-keep', 'kind': 'tunnel'},
                 {'id': 'tun-ghost', 'name': 'paas-stg-sm-ghost', 'kind': 'tunnel'},
@@ -148,26 +158,48 @@ class TestReconcileOrphansEndToEnd(TransactionCase):
         self.assertNotIn('tun-keep', ids, "活躍 tunnel（Odoo 持有）不該被判孤兒")
 
     def test_propagates_partial_from_inventory(self):
-        client = _FakeClient({'partial': True, 'failed_kinds': ['tunnel'], 'resources': []})
+        client = _FakeClient({
+            'paas_env': 'stg', 'shared_tunnel_id': _SHARED_TUN,
+            'partial': True, 'failed_kinds': ['tunnel'], 'resources': [],
+        })
         res = reconcile_orphans(self.env, client=client)
         self.assertTrue(res.partial)
 
     def test_malformed_inventory_missing_resources_fails_loud(self):
         """200 但 body 缺 resources 鍵（gateway envelope / 欄位改名）→ raise，
-        **不**靜默變成空候選 + partial=False（假性『掃完無孤兒』，silent-failure HIGH-1）。"""
-        client = _FakeClient({'partial': False})  # 缺 resources
+        **不**靜默變成空候選 + partial=False（假性『掃完無孤兒』，silent-failure HIGH-1）。
+        （只缺 resources，其餘必填鍵齊 → 隔離測『缺 resources』）。"""
+        client = _FakeClient({
+            'partial': False, 'paas_env': 'stg', 'shared_tunnel_id': _SHARED_TUN,
+        })  # 缺 resources
         with self.assertRaises(Exception):
             reconcile_orphans(self.env, client=client)
 
     def test_malformed_inventory_missing_partial_fails_loud(self):
         """body 缺 partial 鍵 → raise（缺鍵與『完整掃描』無法區分，不 default 成完整，HIGH-2）。"""
-        client = _FakeClient({'resources': []})  # 缺 partial
+        client = _FakeClient({
+            'resources': [], 'paas_env': 'stg', 'shared_tunnel_id': _SHARED_TUN,
+        })  # 缺 partial
         with self.assertRaises(Exception):
             reconcile_orphans(self.env, client=client)
 
     def test_resources_wrong_type_fails_loud(self):
         """resources 非 list（型別不符）→ raise，不嘗試對非清單取差集。"""
-        client = _FakeClient({'partial': False, 'resources': 'oops'})
+        client = _FakeClient({
+            'partial': False, 'resources': 'oops',
+            'paas_env': 'stg', 'shared_tunnel_id': _SHARED_TUN,
+        })
+        with self.assertRaises(Exception):
+            reconcile_orphans(self.env, client=client)
+
+    def test_resources_non_dict_element_fails_loud(self):
+        """resources 是 list 但含非 dict 元素（半序列化 / envelope 污染，如 ['foo']）→ clean
+        fail-loud RuntimeError，不放任 compute_orphans 的 r.get(...) 對 str 觸發未受控 AttributeError
+        （code review silent-failure LOW）。"""
+        client = _FakeClient({
+            'partial': False, 'resources': ['not-a-dict'],
+            'paas_env': 'stg', 'shared_tunnel_id': _SHARED_TUN,
+        })
         with self.assertRaises(Exception):
             reconcile_orphans(self.env, client=client)
 
@@ -175,6 +207,7 @@ class TestReconcileOrphansEndToEnd(TransactionCase):
         """operator 防禦性不一致：partial=False 但 failed_kinds 非空 → 結果仍 partial=True
         （不假設 operator 內部一致，MEDIUM-3）。"""
         client = _FakeClient({
+            'paas_env': 'stg', 'shared_tunnel_id': _SHARED_TUN,
             'partial': False, 'failed_kinds': ['access_policy'], 'resources': [],
         })
         res = reconcile_orphans(self.env, client=client)
