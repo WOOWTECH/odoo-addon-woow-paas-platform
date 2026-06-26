@@ -86,7 +86,7 @@ related:
 
 ---
 
-## 2. 當前 prod 版本矩陣（2026-06-14 建立 · 2026-06-21 · 2026-06-25 複驗）
+## 2. 當前 prod 版本矩陣（2026-06-14 建立 · 2026-06-21 · 2026-06-25 · 2026-06-26 複驗）
 
 > ⚠️ 這是**快照**。發版後務必用本節最後的指令重新產生，別照抄。
 > ⚠️ prod image tag 是 **mutable date-tag**（可能被重指）→ **判版本看 digest，不看 tag**。
@@ -95,7 +95,7 @@ related:
 
 | Component | NS | image:tag | digest（sha256，前綴） | chart | chart 版本 | pin 位置（paas-app-bundle-cd） |
 |-----------|----|-----------|----------------------|-------|-----------|-------------------------------|
-| paas-odoo | `paas-system` | `jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo:20260426.1204` | `0c899562…ebd6` | Bitnami `odoo`（OCI） | `28.2.10` | tag→`paas-odoo/values-prod.yaml`（image 區塊）；chart→`paas-odoo/fleet.yaml` `helm.version` |
+| paas-odoo | `paas-system` | `…/paas-odoo:20260625.1514`（addon `18.0.1.0.40`；**2026-06-26 已裝 `woow_paas_platform`**，見下觀察） | `4a687584…4e66`（manifest；pod imageID 因 prod+stg 共 cluster containerd dedup 報 stg repo 別名，內容同此 tag） | Bitnami `odoo`（OCI） | `28.2.10` | tag→`paas-odoo/values-prod.yaml`（image 區塊）；chart→`paas-odoo/fleet.yaml` `helm.version` |
 | paas-operator | `paas-system` | `…/paas-operator:20260624.1022` | `9b937dbb…6b16` | `paas-operator` | **`0.1.16`**（2026-06-25 promote，helm rev 42） | tag→`paas-operator/values-prod.yaml:8`；chart→`paas-operator/fleet.yaml` `version` |
 | postgresql | `paas-system` | `bitnamilegacy/postgresql:17.6.0-debian-12-r4` | `92635613…0a8d` | （subchart） | — | `paas-odoo/values-prod.yaml`（postgresql 區塊） |
 | cloudflared | `paas-cloudflare-system` | `cloudflare/cloudflared:2026.3.0` | `6b599ca3…31b0` | `cloudflare-tunnel-remote` | **`0.1.2`**（已 pin） | tag→`cloudflare/values-prod.yaml:8`；chart→`cloudflare/fleet.yaml` `version`（issue #19 已於 `a76517e` pin） |
@@ -109,6 +109,8 @@ related:
 | odoo（stg） | — | **不在此 CD**：stg odoo 走 `dev-sandbox-stg`（見 [deploy-stg](../../../CLAUDE.md)） | — |
 
 > **觀察（2026-06-25）**：prod operator 已 promote 到 chart `0.1.16` / image `20260624.1022`，**與 stg 同版**（含 **#207/#208** teardown 孤兒修復 + D1-D6 agent 生命週期 + epoch PVC GC 等）。先前「prod 落後 stg」的缺口已消除。**agent-runtime 在 prod 是否啟用屬 values 層（非 image/chart）**：prod operator image+chart 雖已追上 0.1.16，但 **agent-runtime 在 prod 仍未啟用（2026-06-25 四向複驗確認）**——prod operator deploy **無任何 `AGENT_RUNTIME_*` env**、CD `paas-operator/values-prod.yaml` **無 `agentRuntime` 區塊**、`fleet-local`／`paas-system` 無 agent-runtime 注入 secret、cluster 內 `paas-ws-*` 租戶 ns **全為 stg（0 個 prod）**；對照 stg operator 13 個 `AGENT_RUNTIME_*` env + 完整 `agentRuntime` values + 11 個 `paas-ws-stg-*` ns。屬「stg 為先導邊、prod 尚未 rollout」的刻意狀態（見 §5.3 啟用步驟）。落後幅度大時 promote 仍須先過 §9 坑 #11 的**無回歸超集 gate**。
+
+> **觀察（2026-06-26）：prod PaaS addon 首次安裝上線。** 此前 prod `paas-system/paas-odoo` 的 `bitnami_odoo` DB **從未裝過 `woow_paas_platform`**（只有 37 Odoo core module、`/woow` 一直 404，非回歸；本 §2 與 §1.2「paas-odoo 提供 /woow」的假設此前其實**不成立**——prod 只跑 Odoo core/官網）。2026-06-26 經 **one-off install Job** 首裝成功：因 Bitnami chart 的 `ODOO_SKIP_MODULES_UPDATE=yes`、且 `--update=all` **不裝 uninstalled**、`--init=all` 只在 fresh DB 跑，既存 DB 安裝特定 addon 必須 `odoo -c /bitnami/odoo/conf/odoo.conf -d bitnami_odoo -i woow_paas_platform --stop-after-init`（scale 主 deploy 0 釋放 RWO PVC → Job → scale 1）。結果：module **37→81**、`woow_paas_platform`+6 depends 全 `installed`、`/woow` 上線（**303**）、core 無損、post_init 設 `default_agent_template_id`。執行 runbook：[`docs/plans/2026-Q2/2026-06-26-prod-paas-first-install-plan.md`](../../plans/2026-Q2/2026-06-26-prod-paas-first-install-plan.md)。pre-install snapshot `paas-odoo-pg-preinstall-20260626-0830` 保留。**注意**：① 換 image tag 與「addon 已 install」是兩件事——換 image 只換檔案、`-i` 才建 schema；② 判 prod odoo 版本看 deploy `.spec...image` + manifest digest（pod imageID 會報 stg 別名）；③ 10 個 ecpay/訂閱金流 cron 已 active，**ecpay 待後台設測試模式**。詳見 memory `prod-odoo-paas-not-installed` / `prod-odoo-bitnami-module-mgmt`。
 
 ### 重新產生版本矩陣（一鍵）
 
