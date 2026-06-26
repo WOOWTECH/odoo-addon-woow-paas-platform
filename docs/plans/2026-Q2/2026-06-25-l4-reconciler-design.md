@@ -274,14 +274,14 @@ related:
 
 ## effort 估計與建議切分
 
-**可先做的 thin slice（高價值、低風險、不開刪除）**：
+**進度（2026-06-26）**：✅ **TS-1 + TS-2 + TS-3 已完成並合併 develop** = 「dry-run 反向發現 MVP」齊備（可 `kubectl exec` 打 `GET /api/reconcile/inventory` + Odoo `reconcile_orphans(env)` 看孤兒清單）。⬜ TS-4（誤刪守衛標記層）待開。PR：TS-1 #234、TS-2 #235、TS-3a #236（operator inventory endpoint）、TS-3b #238（Odoo 左集 + MCP 重建 + Odoo delete-gate）、TS-3c/d #239（差集引擎 + inventory client + fail-loud 硬化）。
 
 | 切片 | 內容 | effort | 為何先做 |
 |------|------|--------|---------|
-| **TS-1：async 結構修 + 機械 grep gate**（Phase A.0 +「機械守線」節） | `pytest.ini` `asyncio_mode=auto` + 移 `--disable-warnings` + `filterwarnings=error` + collection meta-test + reconcile 路徑 grep gate + `dry_run=False` 422 test | **S（半天）** | 純測試基建，無功能風險，立刻關掉 #208 假綠溫床，且是後續所有 async test 的地基 |
-| **TS-2：list-all + 分頁修 + golden 契約**（Phase A.1/A.2 +「機械守線」節 golden） | `list_all_tunnels/access_apps/policies` + `_list_dns_records_by_content` cursor 分頁 + ReconcileResponse golden fixture | **M（2-3 天，含 DP-PAGINATION live 確認）** | list-all 是 0→1 的反向發現地基；分頁修直接消 `*-mcp` 漏 15 筆同型 bug；唯讀無刪除 |
-| **TS-3：左集 + 差集 + completeness gate（dry-run only）**（Phase B） | SA 2 層 walk + CS MCP hostname 重建 + 三表左集 + 差集 + 右集 completeness gate | **M-L（3-5 天）** | 純 Odoo，產 dry-run inventory 即有運維價值（人工照單清，比 2026-06 純人工強）；MCP/SA walk 是最高衝擊正確性點 |
-| **TS-4：env-pin self-check + 結構防線 + denylist tripwire**（Phase C 核心，**不含 DP-MARKER / DP-SM-COMMENT**） | self-check abort + `reconcilable` 預設 False + env 分流 + denylist tripwire + ingress 精確比對 | **L（5-7 天）** | Q1/Q2 防線，但**仍 dry-run only**（無 owner marker 前 CS 不可自動刪）；先把守衛 code 就位，inventory 標記更精準 |
+| ✅ **TS-1：async 結構修 + 機械 grep gate**（Phase A.0 +「機械守線」節） | `pytest.ini` `asyncio_mode=auto` + 移 `--disable-warnings` + `filterwarnings=error` + collection meta-test + reconcile 路徑 grep gate | **S（半天）** | 純測試基建，無功能風險，立刻關掉 #208 假綠溫床，且是後續所有 async test 的地基 |
+| ✅ **TS-2：list-all + 分頁修 + golden 契約**（Phase A.1/A.2 +「機械守線」節 golden） | `list_all_tunnels/access_apps/policies` + `_list_dns_records_by_content` 分頁 + golden fixture | **M** | list-all 是 0→1 的反向發現地基；分頁修直接消 `*-mcp` 漏 15 筆同型 bug；唯讀無刪除 |
+| ✅ **TS-3：operator inventory 端點 + Odoo 左集 + 差集（dry-run only）**（方向 A：operator 唯讀回 inventory、Odoo 做差集）| **TS-3a** operator `GET /api/reconcile/inventory`（env-pin fail-closed + completeness gate）；**TS-3b** `collect_left_set`（SA 2 層 walk + CS MCP 重建 + SM）+ `reconstruct_mcp_subdomain` + Odoo delete-gate；**TS-3c/d** `compute_orphans`（右−左差集）+ client `get_reconcile_inventory` + `_parse_inventory` body fail-loud | **M-L** | 純運維價值（人工照單清，比 2026-06 純人工強）；MCP/SA walk 是最高衝擊正確性點。對抗式審查抓到並修：operator completeness gate 漏 timeout、delete-gate 盲抄 operator 漏 `uninstall_release`、diff body-shape silent-failure |
+| ⬜ **TS-4：env-pin self-check + 結構防線 + denylist tripwire**（Phase C 核心，**不含 DP-MARKER / DP-SM-COMMENT**） | self-check abort + `reconcilable` 預設 False + env 分流 + denylist tripwire + ingress 精確比對 | **L（5-7 天）** | Q1/Q2 防線，但**仍 dry-run only**（無 owner marker 前 CS 不可自動刪）；先把守衛 code 就位，inventory 標記更精準 |
 
 **建議延後 / 需 DP 拍板才動**：
 - **DP-MARKER backfill** — 開任何 CS 自動刪的硬前置，未設計前不碰自動刪。
