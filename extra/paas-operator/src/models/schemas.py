@@ -703,6 +703,13 @@ class InventoryResponse(BaseModel):
         ...,
         description="operator 鎖定的環境（R3 env-pin 回拋，恆為 prod|stg；未鎖定時端點 503 不回此物件）",
     )
+    shared_tunnel_id: str = Field(
+        ...,
+        description="operator 配置的 shared tunnel id（CLOUDFLARE_TUNNEL_ID，與 CloudflareService "
+                    "同源）。Odoo reconciler 用它把 shared tunnel 本體標 protected（必出現在 "
+                    "list_all_tunnels 右集、不在 SM/SA 左集 → 否則被誤判孤兒）。**取代**對完整 "
+                    "32-char UUID 永不命中的 8-char 硬編 denylist。空值時 Odoo 端 fail-loud abort。",
+    )
     partial: bool = Field(
         default=False,
         description="completeness gate：任一類 list-all 失敗 → True，該類資源缺漏。"

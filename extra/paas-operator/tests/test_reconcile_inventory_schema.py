@@ -30,6 +30,7 @@ def test_cf_resource_fields_read_back_from_golden():
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     resp = InventoryResponse(**golden)
     assert resp.paas_env == "stg"
+    assert resp.shared_tunnel_id == "55953bfa-1111-2222-3333-444455556666"
     assert resp.partial is False
     assert resp.failed_kinds == []
     assert len(resp.resources) == 3
@@ -44,11 +45,27 @@ def test_cf_resource_fields_read_back_from_golden():
 
 
 def test_inventory_defaults_safe():
-    """空 inventory：partial 預設 False、resources/failed_kinds 空（最小合法 payload）。"""
-    resp = InventoryResponse(paas_env="prod")
+    """空 inventory：partial 預設 False、resources/failed_kinds 空（最小合法 payload）。
+    paas_env + shared_tunnel_id 為必填（無預設）。"""
+    resp = InventoryResponse(paas_env="prod", shared_tunnel_id="328c3a28-aaaa-bbbb-cccc-ddddeeeeffff")
     assert resp.partial is False
     assert resp.failed_kinds == []
     assert resp.resources == []
+    assert resp.shared_tunnel_id == "328c3a28-aaaa-bbbb-cccc-ddddeeeeffff"
+
+
+def test_shared_tunnel_id_is_required():
+    """shared_tunnel_id 必填（無預設）：缺漏 → ValidationError。
+
+    它是 Odoo reconciler 標 shared tunnel 本體 protected 的權威來源；operator 若連自己掛在
+    哪條 shared tunnel 都報不出來，下游就無法保證不誤判刪它 → 寧可 schema 層就 fail，
+    不給 default 假裝有值（與 Odoo 端『缺 shared_tunnel_id → abort』fail-closed 對稱）。
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        InventoryResponse(paas_env="prod")  # 缺 shared_tunnel_id
 
 
 def test_cf_resource_carries_no_classification_fields():

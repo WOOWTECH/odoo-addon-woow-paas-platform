@@ -97,6 +97,10 @@ async def get_inventory(env: str = Depends(require_pinned_env)) -> InventoryResp
 
     return InventoryResponse(
         paas_env=env,
+        # shared tunnel id 的權威來源：CloudflareService.__init__（cloudflare.py:40）也讀同一個
+        # settings.cloudflare_tunnel_id。回拋它讓 Odoo reconciler 把 shared tunnel 本體標 protected
+        # ——operator 才知道自己掛在哪條 shared tunnel，比 Odoo 端硬編完整 UUID 可靠（隨環境/輪替對齊）。
+        shared_tunnel_id=settings.cloudflare_tunnel_id,
         partial=bool(failed_kinds),
         failed_kinds=failed_kinds,
         resources=resources,
