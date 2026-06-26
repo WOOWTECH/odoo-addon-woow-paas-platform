@@ -24,6 +24,8 @@ from . import test_naming
 from . import test_reconciler_left_set
 # feat: L4 reconciler Odoo 端 delete-gate（reconcile 路徑零刪除機械守線）
 from . import test_reconcile_delete_gate
+# feat: L4 reconciler 差集引擎（右集 − 左集）+ inventory client + 端到端
+from . import test_reconciler_diff
 # feat: L3 deploy_env CF naming env token（config_parameter 接線 + 卸載清理）
 from . import test_deploy_env_config
 from . import test_mcp_integration
