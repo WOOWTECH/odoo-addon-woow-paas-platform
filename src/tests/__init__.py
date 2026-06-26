@@ -20,6 +20,10 @@ from . import test_oauth2_device_flow
 from . import test_ha_api
 from . import test_ha_api_security_access
 from . import test_naming
+# feat: L4 reconciler 左集蒐集（SA 2 層 walk + CS MCP 重建 + SM）
+from . import test_reconciler_left_set
+# feat: L4 reconciler Odoo 端 delete-gate（reconcile 路徑零刪除機械守線）
+from . import test_reconcile_delete_gate
 # feat: L3 deploy_env CF naming env token（config_parameter 接線 + 卸載清理）
 from . import test_deploy_env_config
 from . import test_mcp_integration

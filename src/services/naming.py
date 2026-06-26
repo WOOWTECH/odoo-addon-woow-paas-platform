@@ -56,3 +56,25 @@ def make_smarthome_subdomain(slug: str, reference_id: str, name: str, env: str =
 def make_security_access_subdomain(slug: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate security access subdomain: paas-{env}-sa-{ws_hash}-{sa_hash}."""
     return f"paas-{_env_token(env)}sa-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
+
+
+def reconstruct_mcp_subdomain(namespace: str, release_name: str) -> str:
+    """Reconstruct a CloudService MCP sidecar route's Cloudflare subdomain.
+
+    Used by the L4 reverse-orphan reconciler to recognise a live MCP DNS /
+    ingress rule as NOT-an-orphan. It reconstructs the subdomain from the
+    **stored** ``helm_release_name`` + ``helm_namespace`` (not re-derived from
+    slug), so it matches whatever was actually deployed.
+
+    MUST stay byte-identical to the operator's deploy/teardown transform:
+
+    - operator ``cloudflare.py:generate_subdomain(namespace, release_name)`` =
+      ``f"{release_name}-{namespace.replace('paas-ws-', '')}"``;
+    - operator ``releases.py`` then appends ``"-mcp"`` for the MCP route.
+
+    So full MCP subdomain = ``f"{release_name}-{ns_suffix}-mcp"``. Any drift from
+    the operator formula would falsely flag a live MCP route as orphan — guarded
+    by golden cases in ``test_naming.py`` (cross-repo replica, no shared import).
+    """
+    ns_suffix = (namespace or '').replace('paas-ws-', '')
+    return f"{release_name}-{ns_suffix}-mcp"
