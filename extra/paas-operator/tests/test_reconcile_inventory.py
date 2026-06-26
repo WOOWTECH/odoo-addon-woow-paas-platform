@@ -30,6 +30,9 @@ def client_env_stg():
         main_settings.api_key = "test-api-key"
         main_settings.namespace_prefix = "paas-ws-"
         rec_settings.paas_env = "stg"
+        # operator 配置的 shared tunnel id（CLOUDFLARE_TUNNEL_ID）。inventory 回拋它當
+        # Odoo reconciler 標 shared tunnel 本體 protected 的權威來源。
+        rec_settings.cloudflare_tunnel_id = "55953bfa-1111-2222-3333-444455556666"
         yield TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
@@ -219,6 +222,47 @@ class TestCompletenessGate:
         assert data["partial"] is True
         assert data["resources"] == []
         assert set(data["failed_kinds"]) == {"tunnel", "access_app", "access_policy"}
+
+
+class TestInventoryReportsSharedTunnelId:
+    """TS-4 S1：inventory 回 operator 配置的 shared tunnel id（權威來源）。
+
+    Odoo reconciler 用它把 shared tunnel 本體（必出現在 list_all_tunnels 右集、不在
+    SM/SA 左集）標 protected。**取代**對完整 32-char UUID 永不命中的 8-char 硬編 denylist
+    （否則 shared tunnel 落回泛用『結構孤兒候選』→ 人照報表刪 = cf-ns-orphan 事故重演）。
+    """
+
+    @patch("src.api.reconcile.cloudflare_service")
+    def test_inventory_includes_operator_shared_tunnel_id(self, mock_cf, client_env_stg):
+        """正常路徑：回 settings.cloudflare_tunnel_id（與 CloudflareService 同源）。"""
+        mock_cf.list_all_tunnels = AsyncMock(return_value=[])
+        mock_cf.list_all_access_apps = AsyncMock(return_value=[])
+        mock_cf.list_all_reusable_policies = AsyncMock(return_value=[])
+
+        resp = client_env_stg.get("/api/reconcile/inventory")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("shared_tunnel_id") == "55953bfa-1111-2222-3333-444455556666", (
+            "inventory 必須回 operator 配置的 shared tunnel id（完整 UUID），"
+            "供 Odoo reconciler 標 shared tunnel 本體 protected"
+        )
+
+    @patch("src.api.reconcile.cloudflare_service")
+    def test_shared_tunnel_id_reflects_config_not_hardcoded(self, mock_cf):
+        """非 vacuity：換一個 tunnel id 配置 → 回值跟著變（證明讀 config 非寫死）。"""
+        mock_cf.list_all_tunnels = AsyncMock(return_value=[])
+        mock_cf.list_all_access_apps = AsyncMock(return_value=[])
+        mock_cf.list_all_reusable_policies = AsyncMock(return_value=[])
+        with patch("src.main.settings") as main_settings, \
+             patch("src.api.reconcile.settings") as rec_settings:
+            main_settings.api_key = "test-api-key"
+            rec_settings.paas_env = "prod"
+            rec_settings.cloudflare_tunnel_id = "328c3a28-9999-8888-7777-666655554444"
+            client = TestClient(app, headers={"X-API-Key": "test-api-key"})
+            resp = client.get("/api/reconcile/inventory")
+        assert resp.status_code == 200
+        assert resp.json()["shared_tunnel_id"] == "328c3a28-9999-8888-7777-666655554444"
 
 
 class TestReadOnlyContract:

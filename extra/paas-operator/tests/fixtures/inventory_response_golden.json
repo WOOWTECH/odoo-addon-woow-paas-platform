@@ -1,5 +1,6 @@
 {
   "paas_env": "stg",
+  "shared_tunnel_id": "55953bfa-1111-2222-3333-444455556666",
   "partial": false,
   "failed_kinds": [],
   "resources": [
