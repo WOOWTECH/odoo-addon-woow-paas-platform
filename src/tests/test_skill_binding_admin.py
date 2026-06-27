@@ -484,6 +484,20 @@ class TestTemplateNoDuplicateSkillName(TransactionCase):
         cls.other_skill = _mk_skill(
             cls.env, name='other-skill', version='1.0.0', scope='user',
             project_id=cls.project.id, state='published')
+        # F-LLM-3: published+bound templates need a usable LLM credential or the
+        # echo guard (_check_published_bound_has_llm_credential) fires before the
+        # duplicate-skill guard this class targets. Two paths create such a
+        # template here:
+        #   * the 'DUP Source' fixture (test_fork_propagates_*) → give it a keyed
+        #     ai.config below;
+        #   * action_create_dedicated_agent_template (test_project_inverse_*) →
+        #     forks the platform default, whose ai_config_woowbot ships keyless,
+        #     so stamp a test key on it (matches prod where the admin sets it).
+        cls.llm_config = cls.env['ai.config'].sudo().create({
+            'name': 'DUP LLM Config', 'type': 'chatgpt',
+            'api_key': 'sk-test-dup-llm', 'model': 'gpt-4o-mini'})
+        cls.env.ref('woow_paas_platform.ai_config_woowbot').sudo().api_key = \
+            'sk-test-dup-default'
 
     def test_template_form_direct_dual_bind_rejected(self):
         with self.assertRaises(ValidationError):
@@ -528,6 +542,7 @@ class TestTemplateNoDuplicateSkillName(TransactionCase):
             'project_ids': [(6, 0, [self.project.id, other_project.id])],
             'state': 'published',
             'is_public': True,
+            'model_config_id': self.llm_config.id,  # F-LLM-3 echo guard
         })
         _inject_dual_bind(self.env, source, self.sys_skill, self.usr_skill)
         # Point the project at the tainted shared source so the fork action
