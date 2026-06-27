@@ -67,6 +67,13 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
         # project_ids — we are setting up state, not testing the bind ACL).
         self.AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
         self.ICP = self.env['ir.config_parameter'].sudo()
+        # F-LLM-3: published+bound templates need a usable LLM credential. These
+        # resolution tests don't care about LLM wiring, so attach a keyed config
+        # to the bound fixtures (d2/d4/d6) to satisfy the echo guard.
+        self._config = self.env['ai.config'].sudo().create({
+            'name': 'Resolve Test Config', 'type': 'chatgpt',
+            'api_key': 'sk-test-resolve', 'model': 'gpt-4o-mini',
+        })
 
     def _resolve(self, project):
         """Call _resolve_agent_template with request.env bound to test env."""
@@ -99,6 +106,7 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
     def test_d2_project_binding_wins_over_default(self):
         own = self.AgentTemplate.create({
             'name': 'Own Template', 'is_public': True, 'state': 'published',
+            'model_config_id': self._config.id,
         })
         default = self.AgentTemplate.create({
             'name': 'Default Woow Template',
@@ -130,6 +138,7 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
         tmpl = self.AgentTemplate.create({
             'name': 'Private Default', 'is_public': False, 'state': 'published',
             'project_ids': [(4, other_project.id)],
+            'model_config_id': self._config.id,
         })
         self._set_default(tmpl.id)
         project = self._make_project('Consumer Project')
@@ -170,6 +179,7 @@ class TestDefaultAgentTemplateResolution(TransactionCase):
             'name': 'Tenant-Bound Public Template',
             'is_public': True, 'state': 'published',
             'project_ids': [(4, bound_project.id)],
+            'model_config_id': self._config.id,
         })
         self._set_default(tmpl.id)
         consumer = self._make_project('Consumer Project')

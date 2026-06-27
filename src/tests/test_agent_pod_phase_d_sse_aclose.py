@@ -140,12 +140,17 @@ class TestPhaseDSseBridgeAclose(HttpCase):
         # unbound project → _check_project_access needs admin as follower.
         self.project.message_subscribe(partner_ids=[self.admin.partner_id.id])
         self.project.write({'use_agent_runtime': True})
-        # a resolvable agent_template bound to the project.
+        # a resolvable agent_template bound to the project (F-LLM-3: published+
+        # bound needs a usable LLM credential).
+        _cfg = self.env['ai.config'].sudo().create({
+            'name': f'aclose-cfg-{self.suffix}', 'type': 'chatgpt',
+            'api_key': 'sk-test-aclose', 'model': 'gpt-4o-mini'})
         self.template = self.env['woow_paas_platform.agent_template'].sudo().create({
             'name': f'tmpl-{self.suffix}',
             'is_public': True,
             'state': 'published',
             'project_ids': [(6, 0, [self.project.id])],
+            'model_config_id': _cfg.id,
         })
         self.channel = self.env['discuss.channel'].sudo().create({
             'name': f'aclose-ch-{self.suffix}',

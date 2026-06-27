@@ -160,11 +160,16 @@ class TestSkillIsEffective(TransactionCase):
                                 project_id=cls.project.id, state='published')
         cls.sys_pub = _mk_skill(cls.env, name='fe-sys', state='published')
         cls.sys_draft = _mk_skill(cls.env, name='fe-sys-draft')
+        # F-LLM-3: published+bound template needs a usable LLM credential.
+        cls._config = cls.env['ai.config'].sudo().create({
+            'name': 'FE Cfg', 'type': 'chatgpt', 'api_key': 'sk-test-fe',
+            'model': 'gpt-4o-mini'})
         cls.env['woow_paas_platform.agent_template'].sudo().create({
             'name': 'FE Tpl',
             'project_ids': [(6, 0, [cls.project.id])],
             'skill_ids': [(6, 0, [cls.bound.id])],
             'state': 'published',
+            'model_config_id': cls._config.id,
         })
 
     def test_is_effective_matrix(self):
@@ -238,6 +243,10 @@ class TestDedicatedTemplateFork(TransactionCase):
         cls.other_skill = _mk_skill(
             cls.env, name='fk-other', scope='user',
             project_id=cls.other.id, state='published')
+        # F-LLM-3: published+bound template needs a usable LLM credential.
+        cls._config = cls.env['ai.config'].sudo().create({
+            'name': 'FK Cfg', 'type': 'chatgpt', 'api_key': 'sk-test-fk',
+            'model': 'gpt-4o-mini'})
         # 共用 template：綁兩個 project、綁 system + other 的 user skill
         cls.shared = cls.env['woow_paas_platform.agent_template'].sudo() \
             .create({
@@ -245,6 +254,7 @@ class TestDedicatedTemplateFork(TransactionCase):
                 'project_ids': [(6, 0, [cls.proj.id, cls.other.id])],
                 'skill_ids': [(6, 0, [cls.sys_skill.id, cls.other_skill.id])],
                 'state': 'published',
+                'model_config_id': cls._config.id,
             })
 
     def test_binding_status_shared_then_dedicated(self):
@@ -331,10 +341,15 @@ class TestTemplateBindingPush(TransactionCase):
         super().setUpClass()
         cls.proj = cls.env['project.project'].sudo().create({'name': 'TP'})
         cls.skill = _mk_skill(cls.env, name='tp-sys', state='published')
+        # F-LLM-3: published+bound template needs a usable LLM credential.
+        cls._config = cls.env['ai.config'].sudo().create({
+            'name': 'TP Cfg', 'type': 'chatgpt', 'api_key': 'sk-test-tp',
+            'model': 'gpt-4o-mini'})
         cls.tpl = cls.env['woow_paas_platform.agent_template'].sudo().create({
             'name': 'TP Tpl',
             'project_ids': [(6, 0, [cls.proj.id])],
             'state': 'published',
+            'model_config_id': cls._config.id,
         })
 
     def test_skill_binding_change_pushes(self):
@@ -596,11 +611,16 @@ class TestSnapshotDedup(TransactionCase):
             state='published')
         # Legacy template with the same-name dual-bind injected past the
         # constraint (simulates pre-#156 stock data).
+        # F-LLM-3: published+bound template needs a usable LLM credential.
+        cls._config = cls.env['ai.config'].sudo().create({
+            'name': 'DEDUP Cfg', 'type': 'chatgpt', 'api_key': 'sk-test-dedup',
+            'model': 'gpt-4o-mini'})
         cls.template = cls.env['woow_paas_platform.agent_template'].sudo() \
             .create({
                 'name': 'DEDUP Tpl',
                 'project_ids': [(6, 0, [cls.project.id])],
                 'state': 'published',
+                'model_config_id': cls._config.id,
             })
         _inject_dual_bind(cls.env, cls.template, cls.sys_skill, cls.usr_skill)
 

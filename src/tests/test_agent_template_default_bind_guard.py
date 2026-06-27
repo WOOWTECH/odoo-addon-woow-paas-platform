@@ -38,6 +38,14 @@ class TestDefaultAgentTemplateBindGuard(TransactionCase):
         # platform-default guard (which intentionally does NOT bypass superuser).
         self.AgentTemplate = self.env['woow_paas_platform.agent_template'].sudo()
         self.ICP = self.env['ir.config_parameter'].sudo()
+        # F-LLM-3: published+bound templates now require a usable LLM credential.
+        # Attach a keyed config so this guard passes and only the platform-default
+        # guard under test here can fire (else G-1's message assert would catch
+        # the wrong ValidationError).
+        self._config = self.env['ai.config'].sudo().create({
+            'name': 'Bind Guard Config', 'type': 'chatgpt',
+            'api_key': 'sk-test-bind-guard', 'model': 'gpt-4o-mini',
+        })
 
     def _make_project(self, name='Bind Guard Project'):
         return self.env['project.project'].sudo().create({'name': name})
@@ -45,6 +53,7 @@ class TestDefaultAgentTemplateBindGuard(TransactionCase):
     def _make_template(self, name):
         return self.AgentTemplate.create({
             'name': name, 'is_public': True, 'state': 'published',
+            'model_config_id': self._config.id,
         })
 
     def test_g1_bind_project_to_platform_default_is_refused(self):
