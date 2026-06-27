@@ -163,6 +163,53 @@ class AgentTemplate(models.Model):
                     % (tmpl.name or tmpl.id)
                 )
 
+    @api.constrains('project_ids', 'state', 'model_config_id')
+    def _check_published_bound_has_llm_credential(self):
+        """F-LLM-3 — a published, project-bound template must carry a usable
+        LLM credential, else the agent pod silently falls back to echo.
+
+        ``_resolve_agent_template`` (agent_session.py) resolves a project-bound
+        published template ahead of the platform default (leg 2). If that
+        template has no ``model_config_id``, or its ``ai.config`` carries no
+        ``api_key``, ``agent_runtime_client._build_llm_credential`` returns
+        ``(None, None)`` → the operator provisions no LLM Secret → the pod
+        echoes the user's message instead of answering. Because the binding
+        *shadows* the (valid, tenant-neutral) platform default, the regression
+        is invisible: spawn succeeds, state-sync works, only the answer is
+        wrong. Failing loud at bind/publish time surfaces the echo trap before
+        it reaches a tenant.
+
+        Companion to ``_check_not_platform_default_when_bound``: that guard
+        stops binding the *default itself*; this one stops binding *any other*
+        keyless template that would shadow it (the gap that guard leaves open).
+
+        Scope: only ``state == 'published'`` + bound templates. Draft /
+        deprecated work-in-progress and unbound system templates (incl. the
+        seeded tenant-neutral default, which is unbound) are intentionally
+        exempt — publishing-while-bound is the "this template is ready to serve
+        a tenant" signal, so that is where "must be able to answer" is enforced.
+
+        Not bypassed for superuser/admin: the echo trap is identical regardless
+        of who binds, and an exemption would let the very test fixtures that
+        exercise this path bind keyless templates and silently regress the
+        guard (credential-claim-test-fixture-coupling anti-pattern). ``api_key``
+        is read via sudo because it is a ``base.group_system`` field — that is a
+        restricted-field READ inside the check, NOT an exemption of the check.
+        """
+        for tmpl in self:
+            if tmpl.state != 'published' or not tmpl.project_ids:
+                continue
+            config = tmpl.model_config_id
+            if not config or not config.sudo().api_key:
+                raise ValidationError(_(
+                    "Agent template '%s' is published and bound to a project "
+                    "but has no usable LLM credential: set 'LLM Provider "
+                    "Config' to an ai.config that carries an API key. Without "
+                    "one the agent pod silently falls back to echo (returns the "
+                    "user's own message) instead of answering, shadowing the "
+                    "platform default for every bound project."
+                ) % (tmpl.name or tmpl.id))
+
     @api.constrains('mcp_server_ids', 'project_ids')
     def _check_mcp_subset(self):
         """Bound MCP servers must be a subset of (project user-scope ∪

@@ -175,9 +175,13 @@ class TestWsConnectRetry(HttpCase):
         self.project = Project.create({'name': f'wsr-{s}'})
         self.project.message_subscribe(partner_ids=[self.admin.partner_id.id])
         self.project.write({'use_agent_runtime': True})
+        _cfg = self.env['ai.config'].sudo().create({
+            'name': f'wsr-cfg-{s}', 'type': 'chatgpt',
+            'api_key': 'sk-test-wsr', 'model': 'gpt-4o-mini'})
         self.env['woow_paas_platform.agent_template'].sudo().create({
             'name': f'tmpl-{s}', 'is_public': True, 'state': 'published',
-            'project_ids': [(6, 0, [self.project.id])]})
+            'project_ids': [(6, 0, [self.project.id])],
+            'model_config_id': _cfg.id})  # F-LLM-3: published+bound needs LLM cred
         self.channel = self.env['discuss.channel'].sudo().create({
             'name': f'wsr-ch-{s}', 'channel_type': 'channel',
             'channel_partner_ids': [(4, self.admin.partner_id.id)]})

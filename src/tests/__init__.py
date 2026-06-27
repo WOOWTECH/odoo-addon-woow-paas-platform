@@ -130,6 +130,8 @@ from . import test_default_agent_template
 from . import test_auto_enable_agent_runtime
 # fix: platform-default agent template must stay project-unbound (write-time guard)
 from . import test_agent_template_default_bind_guard
+# feat: F-LLM-3 published+bound template must carry a usable LLM credential (echo guard)
+from . import test_agent_template_llm_credential_guard
 # refactor: snapshot/resolve 下沉到 agent_session model (#123/#111 共用 refactor)
 from . import test_agent_runtime_snapshot_refactor
 # feat: #123 cold-start retry — client timeout 分級 + spawn retry + WS connect retry

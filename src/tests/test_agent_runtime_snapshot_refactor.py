@@ -12,9 +12,15 @@ class TestSnapshotRefactor(TransactionCase):
         self.Session = self.env['woow_paas_platform.agent_session'].sudo()
         self.project = self.env['project.project'].sudo().create(
             {'name': f'snap-{uuid.uuid4().hex[:6]}'})
+        # F-LLM-3: published+bound templates need a usable LLM credential;
+        # default every fixture template to a keyed config (harmless on unbound).
+        self._config = self.env['ai.config'].sudo().create({
+            'name': f'snap-cfg-{uuid.uuid4().hex[:4]}', 'type': 'chatgpt',
+            'api_key': 'sk-test-snap', 'model': 'gpt-4o-mini'})
 
     def _make_template(self, **kw):
-        vals = {'name': f'tmpl-{uuid.uuid4().hex[:6]}'}
+        vals = {'name': f'tmpl-{uuid.uuid4().hex[:6]}',
+                'model_config_id': self._config.id}
         vals.update(kw)
         return self.env['woow_paas_platform.agent_template'].sudo().create(vals)
 

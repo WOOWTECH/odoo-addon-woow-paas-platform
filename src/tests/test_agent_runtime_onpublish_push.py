@@ -57,11 +57,15 @@ class TestPushCoordination(TransactionCase):
         # _resolve_agent_template 第一個 search 就命中。否則測試隱式依賴 seed
         # 的 agent_template_default + post_init_hook 設 default_agent_template_id，
         # seed 缺失/未發布/綁 project 時 push 不觸發 → 假紅（且原因誤導）。
+        config = self.env['ai.config'].sudo().create({
+            'name': f'ps-cfg-{uuid.uuid4().hex[:4]}', 'type': 'chatgpt',
+            'api_key': 'sk-test-ps', 'model': 'gpt-4o-mini'})
         self.env['woow_paas_platform.agent_template'].sudo().create({
             'name': f'tmpl-{uuid.uuid4().hex[:6]}',
             'is_public': True,
             'state': 'published',
             'project_ids': [(6, 0, [project.id])],
+            'model_config_id': config.id,  # F-LLM-3: published+bound needs LLM cred
         })
         session = self.Session.create({'project_id': project.id})
         session.write({'state': 'active'})
