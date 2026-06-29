@@ -217,3 +217,31 @@ config.json 同時是「Secret seed 的目標」又是「admin GUI 的 runtime �
   `helm_default_values` 已用 `envPrefix` ✓；Task 7 複製務必沿用 camelCase。
 - **MCP endpoint 精確路徑**：woow-mcp-server launcher 實作後確認為 `/private_{token}/sse`
   （+ `/messages/?session_id=...`），內部 FastMCP SSE 綁 `127.0.0.1:8000`。對外仍 :8080、不變。
+
+### O-1 回報結果 + existingSecret 機制（階段 2，2026-06-30）
+
+**O-1（woow-mcp-server 回報）：**
+- image pull 對外前綴：`jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin`
+  （CI push 走叢集內網 artifactory 繞 CF 上限，pull 用對外前綴；與既有 manifest 一致）。
+- **image tag 待 PR #5 merge 進 main + CI 綠後，取該 commit sha pin**——pilot 階段先用 `latest`。
+- :8080 **有 HTTP health**：`GET /healthz → 200 {"status":"ok"}`（`app.py:81-83`、AuthMiddleware 免 JWT、
+  CI smoke 證實）→ chart probe 用 **httpGet /healthz**（非 TCP）。
+- config.json 逐欄 schema + 敏感切分：woow-mcp-server 直接同步 paas-charts（填 chart fail-fast + 文件）。
+
+**existingSecret 機制（paas-charts chart values）：**
+- chart 採 `existingSecret`：**operator 為每個實例建 K8s Secret（key=`config.secret.json`，含敏感 config
+  fragment）**，chart 引用此 Secret 名 → 敏感值**不落 helm values 明文**。
+- `config.sensitive` 走 existingSecret（勿放 `helm_default_values`）、`config.nonSensitive` 進 values。
+- chart initContainer 缺此 key 時印 WARNING（pre-O-1 不 fail-fast；O-1 釘死必填欄位後改 fail-fast）。
+- ⚠️ 安全提醒：seed 後敏感值以明文存於 PVC `config.json`（GUI-owned 設計必然）→ longhorn 卷/備份
+  需納入加密考量（GA 前 follow-up）。
+
+**pilot 範圍裁定：**
+- **pilot 端到端用 chart 預設 config 跑通**（hermes 啟動 + GUI + MCP + PVC + R1 回收）。
+- **existingSecret 完整注入（operator 建 per-instance Secret）列 GA 前 follow-up**（不阻塞 pilot
+  smoke；見 task #6）——這是 spec 原 paas-platform plan 未涵蓋的部署鏈新工作（operator 需 create-secret 能力）。
+
+**pilot 端到端依賴鏈：**
+paas-charts 接力（probe→httpGet、bump 版本、回報 OCI 座標）→ platform I-1 pin（OCI 座標 + image latest）
+→ k8s-dev-sandbox 端到端驗證（含 R1 PVC 回收實證）→ 三 PR 對抗式審查 → 授權 merge → CI build image
+→ re-pin image tag sha（GA 精確化）。
