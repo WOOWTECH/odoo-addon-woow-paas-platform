@@ -209,3 +209,11 @@ config.json 同時是「Secret seed 的目標」又是「admin GUI 的 runtime �
   直接用、不依賴 manifest（manifest 若保留請同步 8080）。R2 因此從「blocker」降為「dev 一致性」。
 - **note 連接限制**：maestri note 只連建立者終端，repo agent 讀不到共享 note；對齊改用
   「回覆 prompt 直接附 spec 絕對路徑 + 貼契約答案」。
+- **values key 命名（paas-charts 階段 1 審查抓到，Task 7 守線）**：chart 的 **helm values key
+  用 camelCase**（`envPrefix`、`image.repository`、`service.port`…）；**config.json 內部 key
+  用 snake_case**（`env_prefix`）。`helm_default_values` JSON 必須用 `envPrefix`（**非**
+  `env_prefix`），否則 helm 忽略未知 key 退回預設——pilot hermes 因預設 `HERMES_` 僥倖正確，
+  複製 odoo/n8n（`envPrefix` 空字串）會靜默配錯。平台 `cloud_app_mcp_hermes` 的
+  `helm_default_values` 已用 `envPrefix` ✓；Task 7 複製務必沿用 camelCase。
+- **MCP endpoint 精確路徑**：woow-mcp-server launcher 實作後確認為 `/private_{token}/sse`
+  （+ `/messages/?session_id=...`），內部 FastMCP SSE 綁 `127.0.0.1:8000`。對外仍 :8080、不變。
