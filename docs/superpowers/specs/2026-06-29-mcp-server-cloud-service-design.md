@@ -168,3 +168,44 @@ transport path、`env_prefix`）。
   進 admin GUI 自取；後續可自動化）。
 - **O-6**（woow-mcp-server）：n8n `--transport http` 真實端點路徑（/mcp vs /sse），複製
   n8n 階段實測。
+
+## 契約補遺（階段 1 三方對齊，2026-06-29）
+
+兩個 repo agent 開 worktree（charts=`feat+mcp-server-chart`、mcp-server=`paas-cloud-service-hermes-pilot`）後，獨立指出一個 spec 未釘死的 design gap 並提出缺口清單。以下為拍板結果：
+
+### config.json 生命週期：**GUI-owned / seed-if-absent**（拍板）
+
+config.json 同時是「Secret seed 的目標」又是「admin GUI 的 runtime 可寫狀態庫」
+（GUI 會改 connection、輪替 token、開關工具）。決策：
+
+- initContainer **只在 `/data/config.json` 不存在時** seed 初始值（admin_password 等 bootstrap）。
+- 之後 GUI 的 runtime 變更持久化於 PVC，pod 重啟保留（與 PVC 持久化目的一致）。
+- initContainer 邏輯 = **seed-once / 補缺，非全量覆寫**。
+- 代價：Secret 輪替不自動生效（pilot 接受；後續可加 reconcile）。
+- 採 woow-mcp-server 的 Option A：**Dockerfile / 啟動腳本不改**，由 chart 的
+  Secret + ConfigMap（含 `env_prefix="HERMES_"` 這個 config key）+ initContainer 組出 config.json。
+
+### 缺口拍板（回覆兩 agent 放行用）
+
+| # | 缺口 | 拍板 |
+|---|------|------|
+| 1 | OCI registry | 議定 `oci://jcr-prod.woowtech.io/woow-paas-charts/mcp-server`；paas-charts 用真實 publish registry 確認/修正並回報（I-1 pin） |
+| 2 | config schema + 敏感切分 | woow-mcp-server **O-1** 回報（hermes config.json 完整 schema + 逐欄敏感/非敏感）；chart 先把 Secret/ConfigMap/initContainer 機制做好、schema 標 TODO |
+| 3 | config.json 生命週期 | GUI-owned / seed-if-absent（見上） |
+| 4 | NetworkPolicy | 仿 agent-runtime；pilot allow-list：ingress 允許 tunnel/ingress-controller ns → :8080；egress 允許 DNS + 對外（hermes 連使用者後端/外部 API），pilot 從寬 |
+| 5 | 部署形態 / ns | per-instance、operator 託管、`paas-ws-*` ns（= D6）；PVC 落 paas-ws-* + operator teardown 貼 orphaned-at 回收（R1） |
+| 6 | 對外性 | **ClusterIP-only，chart 不建 K8s Ingress**；對外由 platform subdomain + Cloudflare tunnel 處理（沿用現有 cloud service） |
+| 7 | health probe | woow-mcp-server O-1 確認 :8080 有無 HTTP health endpoint；無則 pilot 用 TCP probe，有則 httpGet |
+| 8 | image 座標 | woow-mcp-server O-1（hermes-mcp-admin registry 前綴 + tag 來源 from `ci.yml`） |
+| 9 | values 切 app 形式 | 單一 values + `app:` 選擇器（pilot `app: hermes`）；差異過大授權 paas-charts 改 per-app values / subchart（= D5） |
+
+### 其他
+
+- **hermes SSE launcher**（woow-mcp-server Blocker 2）：授權 woow-mcp-server 以其 SSE 方案
+  （內部 `/sse`+`/messages/`、bind `127.0.0.1:8000`）實作 hermes launcher，**維持對外契約**
+  （:8080、GUI 在 `/`、MCP client 在 `/private_{token}/`）。
+- **manifest 去留**：chart 是正式部署來源（platform 用 chart 部署）；三份
+  `apps/<app>/k8s-deploy.yaml` 降為 woow-mcp-server 的 **dev 參考**，port 8080 契約已定、chart
+  直接用、不依賴 manifest（manifest 若保留請同步 8080）。R2 因此從「blocker」降為「dev 一致性」。
+- **note 連接限制**：maestri note 只連建立者終端，repo agent 讀不到共享 note；對齊改用
+  「回覆 prompt 直接附 spec 絕對路徑 + 貼契約答案」。
