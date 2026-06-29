@@ -284,6 +284,41 @@
             <field name="sa_max_emails_per_policy">20</field>
         </record>
 
+        <!-- MCP Server: Hermes Plans (odoo-level pricing) -->
+        <record id="plan_mcp_hermes_monthly" model="sh.subscription.plan">
+            <field name="name">Hermes MCP Server Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">499</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
+        <record id="plan_mcp_hermes_yearly" model="sh.subscription.plan">
+            <field name="name">Hermes MCP Server Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">4990</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+        </record>
+
         <!-- ============================================================ -->
         <!--  Products (one per plan, each links to its plan)             -->
         <!--  sh_subscription_plan_id is on product.template              -->
@@ -425,6 +460,27 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_pro_yearly"/>
+        </record>
+
+        <!-- MCP Server: Hermes Products (one per plan) -->
+        <record id="product_mcp_hermes_monthly" model="product.product">
+            <field name="name">Hermes MCP Server Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">499</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_mcp_hermes_monthly"/>
+        </record>
+
+        <record id="product_mcp_hermes_yearly" model="product.product">
+            <field name="name">Hermes MCP Server Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">4990</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_mcp_hermes_yearly"/>
         </record>
 
     </data>

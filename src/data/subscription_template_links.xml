@@ -20,6 +20,11 @@
                    eval="[(6, 0, [ref('plan_odoo_monthly'), ref('plan_odoo_yearly')])]"/>
         </record>
 
+        <record id="cloud_app_mcp_hermes" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_mcp_hermes_monthly'), ref('plan_mcp_hermes_yearly')])]"/>
+        </record>
+
         <!-- AnythingLLM template does not exist yet; plans will be linked when created -->
 
         <!-- Link smart_home_template to its subscription plans -->

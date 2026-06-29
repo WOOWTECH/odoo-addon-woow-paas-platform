@@ -197,5 +197,41 @@
 
             <field name="is_active" eval="True" />
         </record>
+
+        <!-- MCP Server: Hermes (pilot) — MCP capability built into the body, NOT a sidecar -->
+        <record id="cloud_app_mcp_hermes" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Hermes MCP Server</field>
+            <field name="slug">mcp-hermes</field>
+            <field name="description">Hermes MCP server with admin GUI</field>
+            <field name="full_description">Hermes MCP server — a managed Model Context
+                Protocol server with an admin GUI and an MCP client endpoint, persisting
+                its configuration on a dedicated volume.</field>
+            <field name="category">mcp</field>
+            <field name="tags">["mcp", "hermes", "mcp-server", "ai"]</field>
+
+            <!-- Helm Configuration (OCI; chart from woow-paas-charts).
+                 helm_chart_version / image tag are negotiated defaults pinned at
+                 integration I-1 (see design spec 契約補遺). -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-charts/mcp-server</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "latest"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <!-- Service Configuration -->
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True" />
+
+            <!-- Resource Requirements -->
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">5</field>
+
+            <!-- MCP capability is built into the service body; NO sidecar -->
+            <field name="mcp_enabled" eval="False" />
+            <field name="post_deploy_init_type">none</field>
+
+            <field name="is_active" eval="True" />
+        </record>
     </data>
 </odoo>

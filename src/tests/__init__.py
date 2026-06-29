@@ -172,3 +172,5 @@ from . import test_redeem_code_endpoint
 from . import test_gift_grant_wizard
 # fix: sh_journal_id auto-config idempotent (install+upgrade) + invoice fallback
 from . import test_subscription_journal_config
+# feat: MCP server cloud service type — hermes pilot seed (template/plan/link)
+from . import test_mcp_server_template_seed
