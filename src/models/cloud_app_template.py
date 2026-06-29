@@ -39,6 +39,7 @@ class CloudAppTemplate(models.Model):
             ('devops', 'DevOps'),
             ('web', 'Web'),
             ('container', 'Container'),
+            ('mcp', 'MCP Server'),
         ],
         string='Category',
         help='Application category for filtering',
