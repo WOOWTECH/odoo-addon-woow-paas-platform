@@ -637,6 +637,18 @@ class CloudService(models.Model):
                 ('master', 'persistence', 'storageClass'),
                 ('replica', 'persistence', 'storageClass'),
             ],
+            # MCP server cloud services (hermes/odoo/n8n) — single mcp-server
+            # chart, persistence.storageClass. Explicit entries (default already
+            # falls back here) to document intent and guard against default drift.
+            'mcp-hermes': [
+                ('persistence', 'storageClass'),
+            ],
+            'mcp-odoo': [
+                ('persistence', 'storageClass'),
+            ],
+            'mcp-n8n': [
+                ('persistence', 'storageClass'),
+            ],
         }
 
         paths = path_map.get(template_slug, [('persistence', 'storageClass')])
