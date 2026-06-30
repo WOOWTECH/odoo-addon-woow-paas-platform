@@ -295,3 +295,27 @@ operator 三修復（OCI login + input encode + imagePullSecrets）依序 build 
 **OCI repo follow-up 更新（gap 1 連帶）：** gap 1 修法用 `helm registry login` 證實 B 解（chart 推 image repo `woow-paas-docker-local`）可行——operator 用 `settings.registry_*`（同 jcr-prod 憑證）拉 chart 成功。GA 遷 A（專用 `woow-paas-charts-local`）時 operator helm 認證不變（同 jcr-prod registry），只改座標。
 
 **誤報（無需 action）**：`updateStrategy`（platform helm_default_values 有但 chart 硬編 Recreate，fail-safe）、`ENV_PREFIX`（chart 注入但 env_prefix 走 config.json，dead 但無害）。
+
+## 階段 4：odoo/n8n 複製接續指引（下次 session 起點；hermes pilot 已完成）
+
+**啟動方式**：新 session 一句話喚起——「繼續 MCP server cloud service：複製 odoo/n8n service type（Task 7）。先讀 `docs/superpowers/specs/2026-06-29-mcp-server-cloud-service-design.md` 階段 3-4 恢復 context。」開場跑 `maestri list` 確認連到 woow-mcp-server + paas-charts；各 repo agent 動工前先開/確認 worktree。
+
+**hermes pilot 已落地（複製直接參照，基礎設施不需重做）：**
+- 三 repo merge：platform develop（至 #260）/ woow-mcp-server main（#5）/ paas-charts main（#31/#32）
+- **operator 20260630.1123**：私有 image 部署鏈三修復已打通（OCI login + input encode + imagePullSecrets）→ **odoo/n8n 複製不需再改 operator**
+- chart `mcp-server` 0.1.2 已通用（values 切 app）+ OCI published `oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server`
+- 層 1-3 全驗證（層 3 stg 端到端 + R1）
+
+**複製前必補（先做，否則複製會把 bug 帶進 3 app）：**
+1. ⚠️ **proxy Origin**（woow-mcp-server `mcp-admin-core/proxy.py`）：Host 修了但 Origin 沒——FastMCP DNS-rebinding 同時驗 Origin，瀏覽器型 MCP client 會 403。**共用 proxy、shared 3 apps**。修：`origin` 加 skip set（或改寫 `127.0.0.1:{port}`）+ 鏡像 Host 的 Origin 回歸測試 + contract doc 註明。詳見階段 3 follow-up。
+2. **O-6 n8n transport 實測**：n8n MCP 子行程是 `/mcp`（streamable-http）還是 `/sse`？實測決定 chart/proxy 路由。
+
+**複製步驟（odoo / n8n 各走一次層 1-3，照 hermes pattern）：**
+- platform：`cloud_app_templates.xml` 加 `cloud_app_mcp_odoo` / `cloud_app_mcp_n8n` seed（category=mcp、helm_chart_name 同 OCI 座標、image 釘 git-sha、helm_chart_version 0.1.2、`_inject_storage_class` mcp-odoo/mcp-n8n path_map 已在）+ 訂閱方案 + link + tests（仿 `test_mcp_server_template_seed.py`）
+- 各 app helm_default_values 差異（woow-mcp-server 已給；O-6 待確認 n8n）：
+  - **odoo**：image repo `odoo-mcp-admin`、`app: odoo`、port=8000、transport `/sse`、env_prefix `""`（envPrefix camelCase 也空）
+  - **n8n**：image repo `n8n-mcp-admin`、`app: n8n`、port=3000、transport `/mcp`（待 O-6 實測確認）、env_prefix `""`
+  - 注意：**這是 mcp-server-as-a-service（獨立 admin GUI + MCP endpoint），不是既有 n8n cloud service 的 n8n-mcp sidecar**（兩者並存、勿混）
+- 層 1-3 同 hermes：platform unit test → 層 2 chart e2e（local image）→ 層 3 deploy-stg 端到端（operator 部署鏈已打通，預期順無新 gap）
+
+**已知 GA 硬化（非複製阻塞，GA 前處理，詳見階段 3）：** CONFIG_PATH dead key（chart）/ runAsNonRoot + image sha pin / networkPolicy egress·ingress 收斂 / R1 over-label 改 per-release PVC selector / existingSecret（task #6 operator 建 per-instance Secret）/ OCI repo B→A 遷專用 `woow-paas-charts-local`。
