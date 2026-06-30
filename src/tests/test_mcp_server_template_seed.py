@@ -210,9 +210,9 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
 class TestMcpN8nTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     """mcp-n8n template: tenant-neutral, sidecar-free, odoo-level pricing.
 
-    Seeded INACTIVE pending the A2 launcher rebuild (GAP-N1) + AUTH_TOKEN
-    wiring (GAP-N2); the plan/product/link/contract are in place so the only
-    remaining step is flipping is_active + re-pinning the image git-sha.
+    Active (launcher sha 2ef1dc16 + chart 0.1.4, whose secret.yaml
+    self-generates the mandatory n8n AUTH_TOKEN — no operator per-instance
+    Secret needed); validated layer-3 on stg. EXPECT_ACTIVE defaults to True.
     """
 
     SLUG = 'mcp-n8n'
@@ -223,17 +223,3 @@ class TestMcpN8nTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     IMAGE_REPO_SUFFIX = 'n8n-mcp-admin'
     APP = 'n8n'
     EXPECT_MCP_COMMAND = 'n8n-mcp-http'
-    EXPECT_ACTIVE = False
-
-    def test_n8n_gated_inactive_until_launcher(self):
-        """n8n must stay inactive (hidden + non-deployable, see
-        controllers/paas.py is_active gate) until the launcher image lands,
-        so the marketplace never offers a service whose container cannot
-        start. This guard fails loudly if someone flips is_active before the
-        image tag is re-pinned away from the placeholder git-sha."""
-        tmpl = self.env.ref(self.TMPL)
-        self.assertFalse(
-            tmpl.is_active,
-            "mcp-n8n must remain inactive until the A2 launcher image is "
-            "built and the placeholder tag is re-pinned (GAP-N1/N2).",
-        )
