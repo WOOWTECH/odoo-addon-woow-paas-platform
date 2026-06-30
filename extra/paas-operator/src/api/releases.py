@@ -49,11 +49,22 @@ async def create_release(request: ReleaseCreateRequest):
         HTTPException: If installation fails
     """
     try:
+        # Private-image charts (e.g. mcp-server pulling hermes-mcp-admin from
+        # jcr-prod) need imagePullSecrets so the kubelet can authenticate; the
+        # secret is provisioned into the ns by ensure_registry_secret. Mirrors
+        # agent_runtimes.py (F-PILOT-4) — the cloud-service install path was the
+        # missing half (same gap family as orm-vs-endpoint "half-applied" fixes).
+        # setdefault lets a template's helm_default_values override; public-image
+        # charts (bitnami n8n/odoo) ignore an unused top-level imagePullSecrets.
+        values = dict(request.values or {})
+        values.setdefault(
+            "imagePullSecrets", [{"name": settings.registry_secret_name}]
+        )
         release = helm_service.install(
             namespace=request.namespace,
             name=request.name,
             chart=request.chart,
-            values=request.values,
+            values=values,
             version=request.version,
             create_namespace=request.create_namespace,
         )

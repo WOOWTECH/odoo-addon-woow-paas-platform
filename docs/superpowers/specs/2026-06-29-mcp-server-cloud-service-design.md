@@ -270,12 +270,28 @@ paas-charts 接力（probe→httpGet、bump 版本、回報 OCI 座標）→ pla
 - **R1 PVC 孤兒回收**：chart 姿態正確（orphaned-at 由 operator teardown 貼標、chart 不擁有）；operator `releases.py` delete_release 已 chart-agnostic 對 ns 內 PVC 貼標 + pvc-cleanup-cronjob 消費 → 待層 3 deploy-stg 部署→teardown 實證 PVC 被回收。
 - **existingSecret 完整注入**（task #6）：operator 建 per-instance Secret；文件警示（jwtSecret+existingSecret 同設靜默丟棄、config.sensitive 未走 existingSecret）已存在於 NOTES.txt/values 註解。
 
-**⚠️ 層 3 實測發現的 GA blocker（2026-06-30 deploy-stg e2e）：operator helm 無 OCI registry 認證拉私有 chart**
+**層 3 deploy-stg e2e 完整結果（2026-06-30，step 1-4 全綠；逐一暴露+修 4 個 stg-only gap + R1 驗證成功）**
+
+四個 gap 層 2 docker-desktop 全抓不到（無 ResourceQuota / 用 public chart / local image pullPolicy=Never / 不透過 operator）——這正是 pilot 走 stg 真實環境 e2e 的核心價值。**gap 1：operator helm 無 OCI registry 認證拉私有 chart**
 
 層 3 step 1-2 全綠：deploy-stg 建 stg-* tag → CI clone **develop**（build-image.yml 對 stg-* tag 預設 develop）→ paas-odoo-stg:20260630.0915 → helm upgrade dev-sandbox-stg（DB 保留、mcp seed reload）→ `/woow` marketplace **顯示 Hermes MCP Server 卡片 + MCP Server category tab（active filter）+ hub icon + plans 499/4990 + configure 頁 Launch**，OWL render 零 console error（只 favicon 404）。**step 3（operator 部署 mcp-hermes 實例）失敗**：operator `helm install oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server --version 0.1.1` 回 `401 Unauthorized（failed to fetch anonymous token，scope=repository:woow-paas-docker-local/mcp-server:pull）`。
 
 根因：**helm OCI chart pull 認證（`helm registry login`）≠ pod imagePullSecret（kubelet）**——operator 為 pod 注入 imagePullSecret（paas-registry）拉 image，但 operator 自己的 helm CLI 無 OCI registry 認證（確認 operator pod `~/.config/helm/registry/config.json` 不存在），對私有 repo anonymous pull → 401。這是 **mcp-server（首個私有 OCI chart cloud service）暴露的 operator gap**——既有 cloud service 用 bitnami public chart（registry-1.docker.io）不需認證，整合審查未抓到（層 2 是 paas-charts 直接 helm install、不透過 operator）。**[[two-layer-acl-lockstep]] 類盲區的部署版：B 解「chart 推 image repo 重用認證」的假設因此不成立——image pull 與 helm pull 是兩套認證。**
 
-修法（GA blocker）：operator 在 helm install OCI chart 前 `helm registry login jcr-prod.woowtech.io`（用 registry 憑證，operator 已有 `paas-operator-stg-registry` Opaque secret 可能含憑證）——operator code/deployment 變更（cross-repo，operator 走 build-operator + Fleet CD）；次選 ops 設該 chart anonymous read（降安全、影響整個 image repo，不建議）。失敗部署留下空 ns `paas-ws-stg-ad023482` + Odoo service record（error 狀態、idempotent 可 retry）。
+修法（已修）：operator `_ensure_oci_login`——helm install/upgrade OCI chart 前 `helm registry login`（重用 tenant imagePullSecret 同憑證 `settings.registry_*`，`--password-stdin`；stg `REGISTRY_SERVER=jcr-prod.woowtech.io` 與 chart host 一致）。commit 315fa3a、test_helm.py +2。
+
+**gap 2：operator `_run_command` input encode dormant bug。** retry 時暴露——`_run_command` 對 input_data 做 `.encode()` → bytes，但 `subprocess.run(text=True)` 預期 str（自己 encode），對 bytes 再 encode → AttributeError。既有 caller 都 `input_data=None` 沒觸發；`_ensure_oci_login --password-stdin` 是**首個傳 input_data 的 caller**。mock `subprocess.run` 抓不到（不真 encode）— mock-vs-真實。修：移除 `.encode()`（commit 517773e）。
+
+**gap 3：chart seed-config initContainer 缺 resources。** stg `paas-ws-stg-*` ns 有 operator ResourceQuota（要求所有 container 含 initContainer 設 limits/requests），seed-config 缺 → pod `FailedCreate`。修：paas-charts chart **0.1.2**（seed-config + main 都有 resources，可配置 `seedResources`）。
+
+**gap 4：operator releases.py 漏注入 imagePullSecrets。** pod 拉私有 hermes-mcp-admin image → `Init:ImagePullBackOff 401`。operator `ensure_registry_secret` 建了 `paas-registry` dockerconfigjson secret，但 `releases.py`（cloud service install）漏注入 imagePullSecrets——`agent_runtimes.py`（F-PILOT-4）有、releases 漏（**同 family 半套**，呼應 [[orm-vs-endpoint-acl-test-coverage]]）。既有 n8n/odoo 用 bitnami public image 沒踩到。修：`releases.py` install `setdefault("imagePullSecrets", [{"name": registry_secret_name}])`（commit a0e7c25）；paas-charts 確認 chart 消費 top-level `.Values.imagePullSecrets`（key+型別對上）。
+
+operator 三修復（OCI login + input encode + imagePullSecrets）依序 build operator-v20260630.1016/1057/1123、Fleet deploy `paas-app-bundle-cd` paas-operator-stg；chart 0.1.2 publish（platform helm_chart_version + DB re-pin）。
+
+**層 3 完整成功（step 1-4 全綠）：** step 1 deploy-stg build develop → dev-sandbox-stg（mcp seed reload）；step 2 marketplace 顯示 Hermes 卡片 + MCP Server tab + hub icon + plans + configure，**OWL render 零 console error**；step 3 operator 端到端——pod 1/1 Running + service Running + **CF tunnel public URL `https://paas-cs-*.woowtech.io/healthz` → 200 `{"status":"ok"}` + GUI / → 200**；step 4 R1——delete service → operator teardown 對 ns 殘留 PVC 貼 `paas.woowtech.io/orphaned-at` + `grace-period-days=7` → pvc-cleanup cronjob 7 天回收。
+
+**R1 over-label 觀察（follow-up）：** operator teardown 是 chart-agnostic 對 ns **所有殘留** PVC 貼 orphaned-at（reaped-since 機制：`releases.py` delete_release → `label_pvcs(ns, remaining)`）。pilot 多次 retry 累積多 service 同 ns `ad023482`（reference_id 對應同 workspace test2）→ teardown 一個連帶把其他**活著** service 的 PVC 也貼 orphaned-at（grace 7 天後 cronjob 會誤刪）。正常 per-service 獨立 ns 不會 over-label；但若 reference_id 真允許多 service 同 ns，operator teardown 應改 per-release PVC selector 貼標（非 ns-wide）以免誤刪。
+
+**OCI repo follow-up 更新（gap 1 連帶）：** gap 1 修法用 `helm registry login` 證實 B 解（chart 推 image repo `woow-paas-docker-local`）可行——operator 用 `settings.registry_*`（同 jcr-prod 憑證）拉 chart 成功。GA 遷 A（專用 `woow-paas-charts-local`）時 operator helm 認證不變（同 jcr-prod registry），只改座標。
 
 **誤報（無需 action）**：`updateStrategy`（platform helm_default_values 有但 chart 硬編 Recreate，fail-safe）、`ENV_PREFIX`（chart 注入但 env_prefix 走 config.json，dead 但無害）。

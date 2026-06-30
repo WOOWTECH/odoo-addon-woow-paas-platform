@@ -184,7 +184,11 @@ class HelmService:
         try:
             result = subprocess.run(
                 cmd,
-                input=input_data.encode() if input_data else None,
+                # text=True → subprocess expects a *str* and encodes it itself;
+                # do NOT pre-encode (a bytes input would hit `bytes.encode` in
+                # subprocess._save_input). Dormant until the first input_data
+                # caller (_ensure_oci_login's `helm registry login --password-stdin`).
+                input=input_data if input_data else None,
                 capture_output=capture_output,
                 text=True,
                 timeout=self.timeout,

@@ -223,6 +223,11 @@ class TestHelmService:
         assert "jcr-prod.woowtech.io" in first_cmd
         assert "--password-stdin" in first_cmd  # password via stdin, never argv
         assert "jcr-token" not in first_cmd     # password NOT in argv
+        # Password passed as a *str* via stdin (input kwarg), NOT pre-encoded:
+        # text=True makes subprocess encode it; a pre-encoded bytes input would
+        # crash in subprocess._save_input (bytes.encode). Regression guard.
+        assert mock_run.call_args_list[0].kwargs.get("input") == "jcr-token"
+        assert not isinstance(mock_run.call_args_list[0].kwargs.get("input"), bytes)
         # Last call: the actual install
         install_cmd = mock_run.call_args_list[-1][0][0]
         assert "install" in install_cmd
