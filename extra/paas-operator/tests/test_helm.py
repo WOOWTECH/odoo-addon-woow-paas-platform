@@ -184,6 +184,82 @@ class TestHelmService:
         assert cmd[cmd.index("--username") + 1] == "ci-bot"
         assert cmd[cmd.index("--password") + 1] == "gitea-token"
 
+    @patch("src.services.helm.settings")
+    @patch("subprocess.run")
+    def test_install_private_oci_chart_logs_in_to_registry_first(self, mock_run, mock_settings):
+        """Private OCI chart install() must `helm registry login` before pull.
+
+        GA blocker (stg layer-3 e2e 2026-06-30): operator helm pulled
+        oci://jcr-prod.../mcp-server anonymously -> 401. OCI auth (registry
+        login) != classic-repo --username/--password (ignored for oci:// refs).
+        Reuses the tenant-imagePullSecret creds (settings.registry_*).
+        """
+        mock_settings.helm_binary = "/usr/local/bin/helm"
+        mock_settings.helm_timeout = 300
+        mock_settings.namespace_prefix = "paas-ws-"
+        mock_settings.registry_username = "ci-bot"
+        mock_settings.registry_password = "jcr-token"
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "svc-x", "namespace": "paas-ws-test",
+                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "chart": {"metadata": {"name": "mcp-server", "appVersion": "9d10944"}},
+            }),
+            stderr="",
+        )
+
+        svc = HelmService()
+        svc.install(
+            namespace="paas-ws-test",
+            name="svc-x",
+            chart="oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server",
+            version="0.1.1",
+        )
+
+        # First subprocess call: `helm registry login <host>` (before install)
+        first_cmd = mock_run.call_args_list[0][0][0]
+        assert "registry" in first_cmd and "login" in first_cmd
+        assert "jcr-prod.woowtech.io" in first_cmd
+        assert "--password-stdin" in first_cmd  # password via stdin, never argv
+        assert "jcr-token" not in first_cmd     # password NOT in argv
+        # Last call: the actual install
+        install_cmd = mock_run.call_args_list[-1][0][0]
+        assert "install" in install_cmd
+        assert "oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server" in install_cmd
+
+    @patch("src.services.helm.settings")
+    @patch("subprocess.run")
+    def test_install_public_oci_chart_skips_registry_login(self, mock_run, mock_settings):
+        """Public OCI chart (no registry creds) skips login — bitnami unchanged."""
+        mock_settings.helm_binary = "/usr/local/bin/helm"
+        mock_settings.helm_timeout = 300
+        mock_settings.namespace_prefix = "paas-ws-"
+        mock_settings.registry_username = ""
+        mock_settings.registry_password = ""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "pg", "namespace": "paas-ws-test",
+                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "chart": {"metadata": {"name": "postgresql", "appVersion": "16"}},
+            }),
+            stderr="",
+        )
+
+        svc = HelmService()
+        svc.install(
+            namespace="paas-ws-test",
+            name="pg",
+            chart="oci://registry-1.docker.io/bitnamicharts/postgresql",
+            version="16.0.0",
+        )
+
+        # No registry login call — only the install
+        for call in mock_run.call_args_list:
+            cmd = call[0][0]
+            assert not ("registry" in cmd and "login" in cmd)
+
     @patch("subprocess.run")
     def test_install_without_repo_is_backward_compatible(self, mock_run, helm_service):
         """install() without repo/credentials must NOT emit --repo/--username/--password.

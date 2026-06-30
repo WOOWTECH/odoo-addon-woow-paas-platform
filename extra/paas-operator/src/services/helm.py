@@ -213,6 +213,39 @@ class HelmService:
                 stderr="",
             )
 
+    def _ensure_oci_login(self, chart: str) -> None:
+        """Authenticate to a private OCI registry before pulling an ``oci://`` chart.
+
+        GA blocker found in stg layer-3 e2e (2026-06-30): the operator's helm
+        pulled ``oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server``
+        anonymously → ``401 Unauthorized``. OCI auth lives in helm's *registry
+        config* (``helm registry login``); it is **not** the classic-repo
+        ``--username/--password`` install flag — those are silently ignored for
+        ``oci://`` refs. We reuse the same registry credentials the operator
+        already uses for the tenant imagePullSecret (``settings.registry_*``).
+
+        No-op when the chart is not an ``oci://`` ref, or when no registry
+        credentials are configured (public OCI charts like bitnami stay
+        anonymous — existing behaviour unchanged). Password is passed via
+        ``--password-stdin`` so it never lands in argv / logs.
+        """
+        if not chart.startswith("oci://"):
+            return
+        if not (settings.registry_username and settings.registry_password):
+            return
+        host = chart[len("oci://"):].split("/", 1)[0]
+        self._run_command(
+            [
+                "registry",
+                "login",
+                host,
+                "--username",
+                settings.registry_username,
+                "--password-stdin",
+            ],
+            input_data=settings.registry_password,
+        )
+
     def install(
         self,
         namespace: str,
@@ -247,6 +280,11 @@ class HelmService:
             HelmException: If installation fails
         """
         validate_namespace(namespace)
+
+        # Private OCI charts need `helm registry login` before pull (GA blocker
+        # fix): OCI auth != classic-repo --username/--password. No-op for
+        # non-OCI refs or public OCI (no creds).
+        self._ensure_oci_login(chart)
 
         args = [
             "install",
@@ -371,6 +409,10 @@ class HelmService:
                 "Helm does not store the original chart URL. "
                 "Please provide the full chart reference (e.g., oci://registry-1.docker.io/bitnamicharts/postgresql)"
             )
+
+        # Private OCI charts need `helm registry login` before pull (GA blocker
+        # fix) — symmetric with install(), covers retry/upgrade paths.
+        self._ensure_oci_login(chart)
 
         args = [
             "upgrade",
