@@ -270,4 +270,12 @@ paas-charts 接力（probe→httpGet、bump 版本、回報 OCI 座標）→ pla
 - **R1 PVC 孤兒回收**：chart 姿態正確（orphaned-at 由 operator teardown 貼標、chart 不擁有）；operator `releases.py` delete_release 已 chart-agnostic 對 ns 內 PVC 貼標 + pvc-cleanup-cronjob 消費 → 待層 3 deploy-stg 部署→teardown 實證 PVC 被回收。
 - **existingSecret 完整注入**（task #6）：operator 建 per-instance Secret；文件警示（jwtSecret+existingSecret 同設靜默丟棄、config.sensitive 未走 existingSecret）已存在於 NOTES.txt/values 註解。
 
+**⚠️ 層 3 實測發現的 GA blocker（2026-06-30 deploy-stg e2e）：operator helm 無 OCI registry 認證拉私有 chart**
+
+層 3 step 1-2 全綠：deploy-stg 建 stg-* tag → CI clone **develop**（build-image.yml 對 stg-* tag 預設 develop）→ paas-odoo-stg:20260630.0915 → helm upgrade dev-sandbox-stg（DB 保留、mcp seed reload）→ `/woow` marketplace **顯示 Hermes MCP Server 卡片 + MCP Server category tab（active filter）+ hub icon + plans 499/4990 + configure 頁 Launch**，OWL render 零 console error（只 favicon 404）。**step 3（operator 部署 mcp-hermes 實例）失敗**：operator `helm install oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server --version 0.1.1` 回 `401 Unauthorized（failed to fetch anonymous token，scope=repository:woow-paas-docker-local/mcp-server:pull）`。
+
+根因：**helm OCI chart pull 認證（`helm registry login`）≠ pod imagePullSecret（kubelet）**——operator 為 pod 注入 imagePullSecret（paas-registry）拉 image，但 operator 自己的 helm CLI 無 OCI registry 認證（確認 operator pod `~/.config/helm/registry/config.json` 不存在），對私有 repo anonymous pull → 401。這是 **mcp-server（首個私有 OCI chart cloud service）暴露的 operator gap**——既有 cloud service 用 bitnami public chart（registry-1.docker.io）不需認證，整合審查未抓到（層 2 是 paas-charts 直接 helm install、不透過 operator）。**[[two-layer-acl-lockstep]] 類盲區的部署版：B 解「chart 推 image repo 重用認證」的假設因此不成立——image pull 與 helm pull 是兩套認證。**
+
+修法（GA blocker）：operator 在 helm install OCI chart 前 `helm registry login jcr-prod.woowtech.io`（用 registry 憑證，operator 已有 `paas-operator-stg-registry` Opaque secret 可能含憑證）——operator code/deployment 變更（cross-repo，operator 走 build-operator + Fleet CD）；次選 ops 設該 chart anonymous read（降安全、影響整個 image repo，不建議）。失敗部署留下空 ns `paas-ws-stg-ad023482` + Odoo service record（error 狀態、idempotent 可 retry）。
+
 **誤報（無需 action）**：`updateStrategy`（platform helm_default_values 有但 chart 硬編 Recreate，fail-safe）、`ENV_PREFIX`（chart 注入但 env_prefix 走 config.json，dead 但無害）。
