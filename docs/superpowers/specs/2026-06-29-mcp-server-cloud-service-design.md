@@ -306,9 +306,9 @@ operator 三修復（OCI login + input encode + imagePullSecrets）依序 build 
 - chart `mcp-server` 0.1.2 已通用（values 切 app）+ OCI published `oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server`
 - 層 1-3 全驗證（層 3 stg 端到端 + R1）
 
-**複製前必補（先做，否則複製會把 bug 帶進 3 app）：**
-1. ⚠️ **proxy Origin**（woow-mcp-server `mcp-admin-core/proxy.py`）：Host 修了但 Origin 沒——FastMCP DNS-rebinding 同時驗 Origin，瀏覽器型 MCP client 會 403。**共用 proxy、shared 3 apps**。修：`origin` 加 skip set（或改寫 `127.0.0.1:{port}`）+ 鏡像 Host 的 Origin 回歸測試 + contract doc 註明。詳見階段 3 follow-up。
-2. **O-6 n8n transport 實測**：n8n MCP 子行程是 `/mcp`（streamable-http）還是 `/sse`？實測決定 chart/proxy 路由。
+**複製前必補（階段 4 執行時逐一查核，結論如下）：**
+1. ✅ **proxy Origin —— 評估反轉，已修，無需新 PR**。階段 3/4 記「Host 修了但 Origin 沒」的判定**過時**：woow-mcp-server 任務1 調查 + maestro 在 woow-mcp-server repo 磁碟上獨立驗證確認——commit `4be649c`（「proxy drop 外部 Origin 修正」）是 image tag `9d109442` 的**祖先**，`packages/mcp-admin-core/mcp_admin_core/proxy.py:65` 的 `skip = {"host", "origin", ...}` 確含 `origin`，且 56-63 行契約註解齊全（「MCP endpoint 不得透傳外部 Origin」）。⇒ Origin 修正早在 PR #5（9d109442）就隨 Host 修正一起 merge；odoo/n8n pin 9d109442 自動繼承，**複製不會帶入 Origin bug**。
+2. ✅ **O-6 n8n transport = `/mcp`**（streamable-http；woow-mcp-server 裝 n8n-mcp 2.61.0 實測解決 README `/sse:3000` vs spec `/mcp` 衝突）。**校正**（paas-charts）：chart path-agnostic，transport 結果**不影響 platform `helm_default_values` 或 chart**，只影響 woow-mcp-server proxy 行為。實測另暴露 **n8n 兩個衍生 gap**（見下「n8n GAP-N1/N2」），故 n8n 複製比 odoo 多兩步。
 
 **複製步驟（odoo / n8n 各走一次層 1-3，照 hermes pattern）：**
 - platform：`cloud_app_templates.xml` 加 `cloud_app_mcp_odoo` / `cloud_app_mcp_n8n` seed（category=mcp、helm_chart_name 同 OCI 座標、image 釘 git-sha、helm_chart_version 0.1.2、`_inject_storage_class` mcp-odoo/mcp-n8n path_map 已在）+ 訂閱方案 + link + tests（仿 `test_mcp_server_template_seed.py`）
@@ -319,3 +319,55 @@ operator 三修復（OCI login + input encode + imagePullSecrets）依序 build 
 - 層 1-3 同 hermes：platform unit test → 層 2 chart e2e（local image）→ 層 3 deploy-stg 端到端（operator 部署鏈已打通，預期順無新 gap）
 
 **已知 GA 硬化（非複製阻塞，GA 前處理，詳見階段 3）：** CONFIG_PATH dead key（chart）/ runAsNonRoot + image sha pin / networkPolicy egress·ingress 收斂 / R1 over-label 改 per-release PVC selector / existingSecret（task #6 operator 建 per-instance Secret）/ OCI repo B→A 遷專用 `woow-paas-charts-local`。
+
+### 階段 4 執行進度（複製進行中，2026-06-30）
+
+**paas-charts 回報（已定案）：** 階段 4 chart 端**零工作量**——`mcp-server` 0.1.2 已是三 app 通用模板，座標不變（`oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server:0.1.2` @ `sha256:f0a95a41…`）。**spec 校正**：chart 為 **path-agnostic**（單 port、不改寫 path），故 O-6（n8n `/mcp` vs `/sse`）的結果**只影響 woow-mcp-server proxy 行為 + 可能一個 config.json passthrough 鍵，不影響 platform `helm_default_values` 或 chart 結構/版本**——L311「實測決定 chart/proxy 路由」中「chart」部分作廢，只剩 proxy。paas-charts 另提醒：odoo/n8n image 需內含 `python3`（chart seed-config initContainer 跑 `python3 /seed/base/seed-config.py`，預設 `seedImage`=app image；缺則 init fail，可改 `config.seedImage` 不需改 chart）→ 待 woow-mcp-server 確認。
+
+**platform 端契約定案（odoo/n8n `helm_default_values`）：** `app`=`odoo`/`n8n`、`image.repository`=`…/odoo-mcp-admin`·`…/n8n-mcp-admin`、`envPrefix`=`""`（**camelCase**，沿用階段1守線）、`service.port`=`8080`（對外統一，內部 port 由 image proxy 處理、不進 values）、`helm_chart_version`=`0.1.2`。image `tag` 待 woow-mcp-server 回報 git-sha（否則 `latest` 待 merge re-pin，比照 hermes）。
+
+**platform 已完成：** `subscription_products.xml`（`plan_mcp_{odoo,n8n}_{monthly,yearly}` 499/4990 + 對應 product）、`subscription_template_links.xml`（`cloud_app_mcp_{odoo,n8n}` ↔ plan link）、`test_mcp_server_template_seed.py`（`_McpServerSeedAssertions` mixin + odoo/n8n 子類；含 **envPrefix camelCase 守線** + **plan 不跨 template 誤綁 guard** + cross-service-type 不共享）。`cloud_app_templates.xml` 兩筆 template seed 待 image tag 落地後寫入。
+
+**woow-mcp-server 回報結論：** 任務1 Origin 評估反轉（見上「複製前必補 #1」）/ 任務2 O-6 n8n=`/mcp` + odoo=`/sse:8000` / 任務3 odoo helm_default_values 確認（envPrefix `""`、service.port 8080、內部 port 由 image proxy 經 config.json seed 傳）/ 任務4 image tag——odoo/n8n 皆 merged 進 main、CI run 717 同 git-sha `9d109442`（registry `jcr-prod.woowtech.io/woow-paas-docker-local/`、digest odoo `sha256:551dc3d3…`、n8n `sha256:8892ada0…`）。
+
+**odoo 已落地（platform）：** `cloud_app_mcp_odoo`（`is_active=True`、pin `odoo-mcp-admin:9d109442`、envPrefix `""`、chart 0.1.2）+ plan/product/link + 測試。待層 2/3 e2e（沿用 hermes 鏈，operator 已打通）。
+
+**n8n GAP-N1/N2（O-6 實測衍生，woow-mcp-server 依紀律停下回報、maestro 拍板）：**
+- **GAP-N1（啟動命令）**：n8n-mcp 2.61.0 改了啟動命令。**決策 A=A2 launcher**（採 woow-mcp-server 建議）——apps/n8n 新增 `n8n-mcp-http` launcher console script（內部 `MCP_MODE=http` + exec `http-server.js` + 讀 `--port`），比照 hermes pattern，避免 A1 的 node-global 絕對路徑脆弱（「巧合對齊」雷家族）。代價：n8n 需新 image build → **新 git-sha**（odoo 不受影響）。
+- **GAP-N2（double-auth）**：n8n 除 per-instance path token 外另需 bearer `AUTH_TOKEN`，同值 seed 進 `config.json` `mcp_server.env.AUTH_TOKEN` + `proxy.bearer_token` 兩處。**決策 B**=沿用 hermes pilot existingSecret 分階段：pilot 用 chart-default/init 生成 token（租戶隔離靠 path token 撐）+ paas-charts 在 n8n values/secret schema 加這兩欄；GA 改 operator per-instance Secret（併入 task #6）。對 platform `helm_default_values` 無影響（sensitive、不落明文）。
+
+**n8n 現況（platform）：** `cloud_app_mcp_n8n` 已 seed 但 **`is_active=False` gated**（`controllers/paas.py:766/806/892/1986` is_active gate → marketplace 隱藏、不可配置/部署），image tag `9d109442` 為**佔位**。待 ① woow-mcp-server A2 launcher 新 sha ② paas-charts n8n AUTH_TOKEN 兩欄 → re-pin tag + flip `is_active=True` + 層 2/3 e2e。**未驗證前不 flip、不部署**（test `test_n8n_gated_inactive_until_launcher` 守線）。
+
+**對抗式審查（platform seed，15-agent workflow）：NO_BLOCKER。** 10 findings → 4 confirmed（0 blocker / 0 major），全為 test 覆蓋強化（seed 資料值經 verify 確認皆正確）：① camelCase 守線只驗 key 存在、漏驗 `envPrefix == ''` 值 + `app` 選擇器值（複製最可能誤貼 hermes 的 `HERMES_`/`app:hermes` → 假綠）→ 已補 `assertEqual(envPrefix, '')` + `APP` 屬性 + `assertEqual(app)`；② 兩條負向守線只查 monthly、漏 yearly 誤綁 → 已改 loop monthly+yearly；③ plan/product 在 `noupdate="1"`（沿用既有慣例、非 bug）→ follow-up：日後改 MCP 定價需對既有 DB 另寫 migration。4 修正已 apply + py_compile 過。
+
+**paas-charts GAP-N2 解法（chart 0.1.3，已 published）：** 單一 `config.authToken` value → `secret.yaml` mergeOverwrite 同值扇出 `mcp_server.env.AUTH_TOKEN` + `proxy.bearer_token`，**Secret-only（不進 ConfigMap）**，空值對 hermes/odoo no-op（render 不變，已驗）。座標 `oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server:0.1.3` digest `sha256:fa7e61c8b27e5031dff81febe475a5b18dcd6f69dc68f1891fbe9e052cbee628`。fleet 全上 0.1.3 安全（GA）。
+
+**🔑 n8n AUTH_TOKEN 值來源（woow-mcp-server 確認 n8n-mcp http 強制非空 + from Secret）分層：**
+| 層 | 來源 | 機制 |
+|---|---|---|
+| 層2（驗機制） | `--set config.authToken=<test>` | chart 管理 Secret + 扇出 |
+| 層3 / marketplace | **operator per-instance Secret（task #6，對 n8n 升格硬需求）** | existingSecret |
+
+⇒ **n8n 比 odoo 顯著更 blocked**：token 不能落 git 明文、chart 不自動生成（怕 upgrade 漂移）→ 層3/真實部署「必須」operator 建 per-instance Secret。
+⚠️ **operator task #6 關鍵陷阱（paas-charts 釘）**：`existingSecret` 一旦設定，chart `secret.yaml` **整段 skip**、`config.authToken` 扇出**不發生** → operator 的 per-instance Secret 內 `config.secret.json` 必須**自己**同時帶 `mcp_server.env.AUTH_TOKEN` + `proxy.bearer_token`（同值）+ 其餘 n8n 敏感欄。扇出便利只在 chart 管理 Secret 路徑、existingSecret 不繼承。chart 端 existingSecret 機制已就緒，task #6 是純 operator 側組 Secret 內容。
+- fail-fast（避免空 token silent auth 失敗 → pod 卡 Init）：擬放 platform n8n `helm_default_values`（避免改 chart 同版號內容漂移），確切 values 片段待 n8n re-pin 時向 paas-charts 取。
+
+**進行中（背景）：** woow-mcp-server A2 launcher PR（branch `feat-n8n-mcp-http-launcher`，console script + 單元測試已綠，e2e probe 中→新 n8n image sha）/ paas-charts odoo 層 2 chart e2e（odoo-mcp-admin:9d109442，docker-desktop）。
+
+**接下來：** ① odoo 層 2 結果 → 層 3 deploy-stg（odoo 無 AUTH_TOKEN 問題、比照 hermes，operator 鏈已通）② n8n launcher 新 sha → re-pin tag + helm_chart_version 0.1.3 + flip is_active + fail-fast values ③ n8n 層 2（paas-charts --set authToken）④ n8n 層 3 待 operator task #6（per-instance Secret，含上述陷阱）。odoo 與 n8n 可分別交付（n8n is_active=False gated 不卡 odoo 上 develop）。
+
+### 階段 4 config 收斂（odoo/n8n config.nonSensitive 補完，2026-07-01）
+
+**關鍵發現（odoo 層2 investigation，mock-vs-real 守線抓到）：** chart 預設 config 是 **hermes-shaped**（`config.nonSensitive.mcp_server.command="hermes-mcp-server"`，maestro 已在 chart `values.yaml` 磁碟驗證）。odoo/n8n 的 helm_default_values **必須覆寫 `config.nonSensitive.mcp_server`**，否則 chart 用 hermes command seed → 子行程起錯/不起 → **MCP endpoint silent 502（GUI/healthz 仍正常，假象）**。hermes 之所以免填，正因 chart 預設就是它。woow-mcp-server 把 odoo/n8n 實測 config 寫進 `/private/tmp/claude-501/mcp-config-blocks.json`（main commit `2ef1dc16`）。
+
+**GAP-O1（odoo，實測修正）：** odoo `architecture.md` 寫的 `command="odoo-mcp-server", --transport sse` 是 **stale/錯**——`mcp_server_odoo` 0.1.3 是 **stdio-only**（無 console script、不解析 transport flag）。正確啟法：`python -m mcp_admin_core.mcp_sse_wrapper mcp_server_odoo.server:server --port 8000`（core wrapper 把 stdio 包成 SSE，已在三 app image）。woow-mcp-server 實測：SSE handshake 200 + MCP initialize + list_tools(7 tools)。odoo 子行程啟動**不需** sensitive；`mcp_auth_token`（sensitive，同 hermes）須非空才能連 endpoint、`admin_password` 沿用 chart 預設。已填進 odoo helm_default_values。
+
+**n8n re-pin 完成：** image `n8n-mcp-admin:2ef1dc160f06…`（digest `sha256:c7a2a09f…`，CI run 741，含 launcher）+ `config.nonSensitive.mcp_server`（command `n8n-mcp-http` / port 3000 / transport `/mcp` StreamableHTTP，`/sse`+`/messages` 已 404）+ `helm_chart_version` 0.1.3。`is_active` **維持 False**（不照 woow-mcp-server「flip」建議）——因 n8n-mcp http 強制非空 `AUTH_TOKEN`（sensitive、不能落 git helm values），層3 operator 部署必須 task #12 per-instance Secret 供值，否則 active n8n 部署即 401。flip 條件：n8n 層2 驗 double-auth + operator task #12 就緒。
+
+**⚠️ chart deep-merge 契約（woow-mcp-server `_meta.chart_merge_requirement`，paas-charts 驗證中）：** chart 須 **DEEP-merge** `config.nonSensitive`+`config.sensitive`——n8n 的 `mcp_server.env.AUTH_TOKEN`（sensitive）與 `mcp_server.command/args/port`（nonSensitive）須合成**同一** `mcp_server` 物件；shallow merge 會掉欄位 → 子行程起不來。已請 paas-charts 用 helm template render 驗（render 層、避開 amd64/arm64 arch 問題），shallow 則修 0.1.4。
+
+**測試強化（GAP-O1/N1 守線）：** `test_template_overrides_chart_default_mcp_command` 斷言各 app 的 `config.nonSensitive.mcp_server.command` == 預期值且 != `hermes-mcp-server`（堵「複製貼 hermes command」靜默 502 footgun）。`EXPECT_MCP_COMMAND` odoo=`python`/n8n=`n8n-mcp-http`。
+
+**XML pitfall（已避）：** helm_default_values 旁的 XML 註解內**不可含 `--`**（雙連字號，XML 規範保留給 `<!-- -->`）——`--transport`/`--set` 寫進註解會讓模組載入失敗；well-formed 檢查擋下，已改寫。
+
+**platform seed 現況：** odoo 完整可交付（active、full config、審查 NO_BLOCKER、測試強化）；n8n 完整但 is_active=False gated（full config、真 launcher sha、待 operator task #12 + 層2）。兩者皆未 commit（working tree）。odoo 下一步：commit + PR + merge develop + deploy-stg 層3。
