@@ -216,7 +216,7 @@
                  GA 遷專用 woow-paas-charts-local，見 spec 階段3 follow-up）. -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_chart_version">0.1.2</field>
             <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "9d109442f7bedcbc3b84f46bb55ea6d207295f12"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
