@@ -88,6 +88,38 @@ class TestReleaseEndpoints:
         assert data["status"] == "deployed"
 
     @patch("src.api.releases.helm_service")
+    def test_create_release_injects_image_pull_secret(self, mock_helm, client):
+        """releases install must inject imagePullSecrets so the kubelet can pull
+        private images. layer-3 gap: the cloud-service install path missed this
+        while agent_runtimes.py had it (F-PILOT-4) — mcp-server's private
+        hermes-mcp-admin → pod Init:ImagePullBackOff 401 without it. chart
+        consumes top-level .Values.imagePullSecrets (confirmed)."""
+        mock_helm.install.return_value = ReleaseInfo(
+            name="mcp-x",
+            namespace="paas-ws-test",
+            revision=1,
+            status=ReleaseStatus.DEPLOYED,
+            chart="mcp-server",
+            app_version="1.0.0",
+            updated="2024-01-01T00:00:00Z",
+        )
+
+        client.post(
+            "/api/releases",
+            json={
+                "namespace": "paas-ws-test",
+                "name": "mcp-x",
+                "chart": "oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server",
+                "values": {},
+            },
+        )
+
+        # operator injected imagePullSecrets (default paas-registry) into the
+        # helm install values; chart renders it to pod spec.imagePullSecrets.
+        injected = mock_helm.install.call_args.kwargs["values"]
+        assert injected.get("imagePullSecrets") == [{"name": "paas-registry"}]
+
+    @patch("src.api.releases.helm_service")
     def test_create_release_invalid_namespace(self, mock_helm, client):
         """Test create release with invalid namespace."""
         mock_helm.install.side_effect = ValueError("Invalid namespace")
