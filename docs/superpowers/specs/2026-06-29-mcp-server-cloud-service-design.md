@@ -264,6 +264,7 @@ paas-charts 接力（probe→httpGet、bump 版本、回報 OCI 座標）→ pla
 - **runAsNonRoot / readOnlyRootFilesystem**：hermes image（python:3.12-slim 無 USER）跑 root；待 **O-1 釘 image sha** 後開啟（補償控制已備：drop ALL caps + allowPrivilegeEscalation=false + seccomp RuntimeDefault + automountToken=false）。屬硬性 GA gate，不可變永久 TODO。
 - **image latest→git-sha**：pilot `latest`+IfNotPresent；GA 釘 sha（per-tenant 單 pod，pilot 風險低）。
 - **networkPolicy egress/ingress 收斂**：spec 缺口4 已簽核 pilot 從寬（egress `- {}` 全開、ingressNamespaces 空→任何來源可達 :8080）；GA 收斂（egress `0.0.0.0/0 except 叢集 CIDR + block 169.254.169.254`；ingressNamespaces 設真實 tunnel/ingress ns）。agent-runtime §6.3 已有模板。
+- **OCI chart repo 衛生（B→A 遷移）**：階段3 OCI publish 時 jcr-prod 無 `woow-paas-charts` 專用 chart repo（ops 未建/建錯型別；實際只有 image 型 repo）。pilot 採 **B 解**——chart 推進現有 image repo `woow-paas-docker-local`（最終座標 `oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server:0.1.1`，chart digest sha256:561d0420…，appVersion=image git-sha 9d109442）。隱藏優點：operator 重用 image repo 既有 OCI 認證、無須新增 chart repo 認證（降低層 3 operator 拉 chart 認證風險）。代價：chart/image 混同一 repo 衛生較差。**GA 遷 A**：請 ops 建專用 `woow-paas-charts-local`（rclass=LOCAL、packageType=Docker/OCI），遷移時同步對齊三處座標（platform `helm_chart_name` / paas-charts README + CI `OCI_CHART_REPO`）。
 
 **operator / 層 3 實證**：
 - **R1 PVC 孤兒回收**：chart 姿態正確（orphaned-at 由 operator teardown 貼標、chart 不擁有）；operator `releases.py` delete_release 已 chart-agnostic 對 ns 內 PVC 貼標 + pvc-cleanup-cronjob 消費 → 待層 3 deploy-stg 部署→teardown 實證 PVC 被回收。
