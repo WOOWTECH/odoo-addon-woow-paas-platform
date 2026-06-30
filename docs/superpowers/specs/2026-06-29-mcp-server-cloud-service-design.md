@@ -371,3 +371,19 @@ operator 三修復（OCI login + input encode + imagePullSecrets）依序 build 
 **XML pitfall（已避）：** helm_default_values 旁的 XML 註解內**不可含 `--`**（雙連字號，XML 規範保留給 `<!-- -->`）——`--transport`/`--set` 寫進註解會讓模組載入失敗；well-formed 檢查擋下，已改寫。
 
 **platform seed 現況：** odoo 完整可交付（active、full config、審查 NO_BLOCKER、測試強化）；n8n 完整但 is_active=False gated（full config、真 launcher sha、待 operator task #12 + 層2）。兩者皆未 commit（working tree）。odoo 下一步：commit + PR + merge develop + deploy-stg 層3。
+
+### 階段 4 odoo 層3 e2e 成功 + n8n AUTH_TOKEN 簡化（2026-07-01）
+
+**odoo 已交付（commit → PR #262 → merged develop 093eb7b → deploy-stg → 實例 e2e 全綠）：**
+- deploy-stg：develop image（含 seed）→ dev-sandbox-stg helm upgrade（DB 保留、seed reload）。stg DB 確認 cloud_app_mcp_odoo active / cloud_app_mcp_n8n inactive / chart 版本正確。
+- odoo MCP 實例 e2e（odoo shell 經平台 create flow 部署 svc-48158fb9 → operator → chart 0.1.2 + 我的 config）：pod 1/1 Running、**config.json seed `mcp_sse_wrapper`（GAP-O1 修正在真實 pod 確認）**、子行程綁 127.0.0.1:8000、healthz/GUI 200、**CF tunnel `paas-cs-86f34bd4-1bdf30a2.woowtech.io/healthz → 200` + GUI 200**。
+- 安全清理：helm uninstall（直接、不經 operator）+ 清 record release/ns 後 unlink → **未 over-label 同 ns 的 hermes 實例**。
+- **R1 over-label 活證據**：test-mcp workspace 的 2 個 MCP service（我的 odoo + `eugene-hermes-mcp`）共用 ns `paas-ws-stg-86f34bd4` → 正是 spec R1 follow-up「多 service 同 ns、operator teardown chart-agnostic label_pvcs 會誤傷」的真實情境。R1 機制本身由 hermes 層3 已證；此處不重測（會 over-label hermes），改用直接 helm uninstall 安全清理。
+
+**🔑 n8n AUTH_TOKEN 重大簡化（sub-agent 架構審查裁決）：原 task #12（operator per-instance AUTH_TOKEN Secret）= 過度工程，取消。**
+- AUTH_TOKEN **關不掉**（n8n-mcp HTTP 模式空值 `exit(1)`、無 disable flag；唯一避開是 stdio transport，與 proxy 模型不相容）。
+- 但對**外部攻擊面近乎冗餘**：n8n-mcp 綁 loopback（launcher `HOST=127.0.0.1` override + per-pod netns + NetworkPolicy 三層），外部必經 proxy 的 path token（per-instance、租戶隔離的真正來源）；AUTH_TOKEN 只在 proxy→127.0.0.1 內部那跳由 proxy 注入、對外不可見、不參與租戶區分。
+- **per-instance pod + loopback 下，固定/chart 生成值與 per-instance 值安全等價**（壓力測試：RCE 進 A pod 讀到 AUTH_TOKEN，打 B 租戶仍被 cross-pod loopback 不可達 + path token 雙擋）。
+- **n8n 上線新路徑（取代 task #12，task #14）**：paas-charts 在 chart `secret.yaml` 給 `config.authToken` 加 `randAlphaNum 48` default（理想配 `lookup` 跨 upgrade 持久化）→ chart 自生成非空 AUTH_TOKEN、無 git 明文、無 operator 工作。內部 token 漂移功能無害（client 不用、secret.yaml 原子扇出 `mcp_server.env.AUTH_TOKEN` + `proxy.bearer_token`）。或 b2：operator install 一次性 `--set config.authToken=$(openssl rand)`。
+- ⇒ **n8n 改為比照 odoo 直接交付**：task #14 chart 自生成 → flip `is_active=True` → 層2/3 e2e。不再卡 operator per-instance Secret。
+- 誠實標註：sub-agent 未檢視本機 n8n-mcp 2.61.0 編譯碼（用上游 main + woow-mcp-server 2.61.0 實測 no-auth 401 佐證）；`randAlphaNum`+`lookup` 跨 upgrade 持久化是 paas-charts 端一行小改需落實驗證。
