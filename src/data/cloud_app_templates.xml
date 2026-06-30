@@ -285,19 +285,19 @@
         </record>
 
         <!-- MCP Server: n8n — MCP built into the body, NOT the existing n8n-mcp sidecar.
-             ⚠️ SEEDED INACTIVE (is_active=False). The launcher (GAP-N1) HAS landed:
-             image is pinned to the real launcher sha 2ef1dc16 (n8n-mcp-http) and the
-             config/contract are complete. n8n stays inactive because it CANNOT be
-             deployed via the operator yet: n8n-mcp http mode MANDATES a non-empty
-             AUTH_TOKEN (GAP-N2, double-auth), which is sensitive and therefore cannot
-             live in these (git-committed) helm values. For a real operator deploy the
-             token must come from an operator-built per-instance Secret (task #12);
-             until that exists, an active n8n would deploy a service whose MCP subprocess
-             401s. Flip is_active to True only after: (1) n8n layer-2 e2e validates the
-             real double-auth fan-out (paas-charts sets authToken via values), and (2) operator
-             task #12 supplies the per-instance AUTH_TOKEN Secret. While inactive, n8n is
-             hidden from the marketplace and cannot be configured/deployed
-             (controllers/paas.py is_active gate). Internal transport=/mcp (O-6 實測). -->
+             ACTIVE. image = launcher sha 2ef1dc16 (n8n-mcp-http), chart 0.1.4.
+             n8n-mcp http mode MANDATES a non-empty AUTH_TOKEN (GAP-N2, double-auth) —
+             satisfied WITHOUT an operator per-instance Secret: chart 0.1.4's secret.yaml
+             self-generates config.authToken (randAlphaNum 48, app=n8n only) and
+             deep-merges the SAME value into both mcp_server.env.AUTH_TOKEN and
+             proxy.bearer_token (Secret-only, never in these git values). Tenant isolation
+             comes from the per-instance proxy path token, NOT AUTH_TOKEN, so a
+             chart-generated value is security-equivalent to per-instance (per-instance
+             pod + loopback bind; sub-agent architecture review 2026-07-01) — the original
+             operator per-instance Secret (task #12) was over-engineering and was dropped.
+             Validated layer-3 on stg: operator -> chart 0.1.4 -> pod Running, subprocess
+             (n8n-mcp-http) bound 127.0.0.1:3000, AUTH_TOKEN fan-out both places equal
+             (len 48), healthz/GUI + CF tunnel 200. Internal transport=/mcp (O-6 實測). -->
         <record id="cloud_app_mcp_n8n" model="woow_paas_platform.cloud_app_template">
             <field name="name">n8n MCP Server</field>
             <field name="slug">mcp-n8n</field>
@@ -308,20 +308,20 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "n8n", "mcp-server", "ai"]</field>
 
-            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.3, values 切 app).
-                 0.1.3 adds the config.authToken Secret-only fan-out n8n needs (GAP-N2).
-                 envPrefix MUST be camelCase + empty string for n8n (design 階段1 守線).
-                 image tag = real launcher sha 2ef1dc16 (PR #6, CI run 741) containing the
-                 n8n-mcp-http launcher (GAP-N1). config.nonSensitive.mcp_server overrides
-                 the chart's hermes default (transport=/mcp StreamableHTTP, internal port
-                 3000). The sensitive AUTH_TOKEN is NOT here: it is mandatory for n8n-mcp
-                 http mode and seeded via Secret into mcp_server.env.AUTH_TOKEN +
-                 proxy.bearer_token (pilot=chart-default, GA=operator per-instance Secret,
-                 task #12). chart must DEEP-merge nonSensitive+sensitive into one
-                 mcp_server object (woow-mcp-server _meta.chart_merge_requirement). -->
+            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.4, values 切 app).
+                 0.1.4 self-generates config.authToken (randAlphaNum, app=n8n only) so n8n
+                 needs no externally-supplied token (replaces the dropped operator
+                 per-instance Secret). envPrefix MUST be camelCase + empty string for n8n
+                 (design 階段1 守線). image tag = real launcher sha 2ef1dc16 (PR #6, CI run
+                 741) containing the n8n-mcp-http launcher (GAP-N1). config.nonSensitive.
+                 mcp_server overrides the chart's hermes default (transport=/mcp
+                 StreamableHTTP, internal port 3000). The sensitive AUTH_TOKEN is NOT here:
+                 mandatory for n8n-mcp http mode, the chart self-generates it and
+                 deep-merges the same value into mcp_server.env.AUTH_TOKEN +
+                 proxy.bearer_token (Secret-only). -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.3</field>
+            <field name="helm_chart_version">0.1.4</field>
             <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "2ef1dc160f06ff0e10fd41a9916d50521fd6a2d3"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
@@ -338,9 +338,7 @@
             <field name="mcp_enabled" eval="False" />
             <field name="post_deploy_init_type">none</field>
 
-            <!-- Inactive until the A2 launcher image lands (GAP-N1); flip to True
-                 together with the re-pinned git-sha. -->
-            <field name="is_active" eval="False" />
+            <field name="is_active" eval="True" />
         </record>
     </data>
 </odoo>
