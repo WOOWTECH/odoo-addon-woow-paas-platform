@@ -387,3 +387,13 @@ operator 三修復（OCI login + input encode + imagePullSecrets）依序 build 
 - **n8n 上線新路徑（取代 task #12，task #14）**：paas-charts 在 chart `secret.yaml` 給 `config.authToken` 加 `randAlphaNum 48` default（理想配 `lookup` 跨 upgrade 持久化）→ chart 自生成非空 AUTH_TOKEN、無 git 明文、無 operator 工作。內部 token 漂移功能無害（client 不用、secret.yaml 原子扇出 `mcp_server.env.AUTH_TOKEN` + `proxy.bearer_token`）。或 b2：operator install 一次性 `--set config.authToken=$(openssl rand)`。
 - ⇒ **n8n 改為比照 odoo 直接交付**：task #14 chart 自生成 → flip `is_active=True` → 層2/3 e2e。不再卡 operator per-instance Secret。
 - 誠實標註：sub-agent 未檢視本機 n8n-mcp 2.61.0 編譯碼（用上游 main + woow-mcp-server 2.61.0 實測 no-auth 401 佐證）；`randAlphaNum`+`lookup` 跨 upgrade 持久化是 paas-charts 端一行小改需落實驗證。
+
+### 階段 4 完成：n8n 也 ship（2026-07-01）
+
+**chart 0.1.4 published**（paas-charts；`config.authToken` 自生成 randAlphaNum 48、app=n8n only、deep-merge 兩處同值、跨 upgrade 雙保證 lookup+seed-if-absent、hermes/odoo no-op render byte-identical、回歸 6/6、digest `sha256:21fb5db2…`）。
+
+**platform PR #263 merged develop**（`f43843a`）：`cloud_app_mcp_n8n` `is_active=True` + `helm_chart_version` 0.1.4；測試移除 inactive gate、EXPECT_ACTIVE 預設 True。`cloud_app_templates.xml` 為 `noupdate="0"` → flip 在升級路徑正確套用（無 sticky 隱患）。
+
+**n8n 層3 stg e2e 全綠**（operator 部署實例 svc-e2743ac9）：先撞 `_execute_deploy:87` 用 `template.helm_chart_version`（非 service 層）→ 須 bump template 到 0.1.4 才生效（0.1.3 authToken 空→子行程 exit(1)，e2e 抓到）；修正後重部署 chart 0.1.4：pod 1/1 Running、`config.json` command=`n8n-mcp-http`、**`mcp_server.env.AUTH_TOKEN` == `proxy.bearer_token`（len 48、非空）**（chart 自生成 + deep-merge 真實驗證）、子行程綁 127.0.0.1:3000、healthz/GUI + CF tunnel `paas-cs-*.woowtech.io` 200。安全清理（直接 helm uninstall、不經 operator）無 over-label 同 ns 的 hermes 鄰居。stg DB 三 mcp template 全 active。
+
+**最終交付：odoo + n8n 兩個 MCP server cloud service type 皆 ship（develop + stg 層3 e2e 驗證），operator per-instance Secret 工作取消（chart 自生成取代）。** 殘留非阻塞 follow-up：R1 over-label（operator teardown 對多-service-同-ns 應改 per-release PVC selector）；GA 硬化清單見階段3。
