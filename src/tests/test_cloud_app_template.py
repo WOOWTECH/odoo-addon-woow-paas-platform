@@ -87,7 +87,7 @@ class TestCloudAppTemplate(TransactionCase):
         """Test that all category options are valid."""
         valid_categories = [
             'ai_llm', 'automation', 'database',
-            'analytics', 'devops', 'web', 'container'
+            'analytics', 'devops', 'web', 'container', 'mcp'
         ]
 
         for category in valid_categories:

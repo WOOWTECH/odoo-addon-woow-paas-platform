@@ -534,3 +534,18 @@ class TestCloudServiceChangePlanTrialMode(TransactionCase):
         # Half of 300 (15 / 30 days remaining) = 150.0
         self.assertEqual(res["data"]["refund_amount"], 150.0)
 
+
+class TestInjectStorageClass(TransactionCase):
+    """_inject_storage_class must map mcp-* slugs to persistence.storageClass."""
+
+    def test_inject_storage_class_mcp_hermes(self):
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_storage_class({}, 'mcp-hermes', 'longhorn-delete')
+        self.assertEqual(out['persistence']['storageClass'], 'longhorn-delete')
+
+    def test_inject_storage_class_mcp_odoo_and_n8n(self):
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        for slug in ('mcp-odoo', 'mcp-n8n'):
+            out = CloudService._inject_storage_class({}, slug, 'sc-x')
+            self.assertEqual(out['persistence']['storageClass'], 'sc-x')
+

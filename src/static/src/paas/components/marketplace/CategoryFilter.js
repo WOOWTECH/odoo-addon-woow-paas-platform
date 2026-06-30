@@ -24,6 +24,7 @@ export class CategoryFilter extends Component {
         { key: "devops", label: "DevOps" },
         { key: "web", label: "Web" },
         { key: "container", label: "Container" },
+        { key: "mcp", label: "MCP Server" },
     ];
 
     /**

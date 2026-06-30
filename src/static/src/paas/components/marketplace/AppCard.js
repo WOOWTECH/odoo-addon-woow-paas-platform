@@ -26,6 +26,7 @@ export class AppCard extends Component {
         devops: "terminal",
         web: "language",
         container: "inventory_2",
+        mcp: "hub",
     };
 
     /**
@@ -40,6 +41,7 @@ export class AppCard extends Component {
         devops: "gray",
         web: "emerald",
         container: "indigo",
+        mcp: "teal",
     };
 
     /**
