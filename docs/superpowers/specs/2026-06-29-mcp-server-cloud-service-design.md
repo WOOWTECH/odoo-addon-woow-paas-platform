@@ -245,3 +245,28 @@ config.json 同時是「Secret seed 的目標」又是「admin GUI 的 runtime �
 paas-charts 接力（probe→httpGet、bump 版本、回報 OCI 座標）→ platform I-1 pin（OCI 座標 + image latest）
 → k8s-dev-sandbox 端到端驗證（含 R1 PVC 回收實證）→ 三 PR 對抗式審查 → 授權 merge → CI build image
 → re-pin image tag sha（GA 精確化）。
+
+## 整合審查結論 + follow-up（階段 3，2026-06-30）
+
+**層 2 chart e2e = 5/5 全綠**（merge 前實際部署證據，docker-desktop k8s）：pod Running（initContainer seed→main）/ `/healthz` 200 / GUI `/` 200 / **MCP `/private_<token>/sse` → 200 + `text/event-stream` + `event: endpoint`（真實 SSE handshake）、錯 token→403** / delete pod→Recreate 後 config.json 持久（seed-if-absent 不覆寫 GUI 編輯）。
+
+**proxy Host-header bug（pilot 過程發現並修復）**：`proxy.py` 轉發裸 `localhost` 撞 FastMCP(mcp 1.28.1) DNS-rebinding 保護回 421 → 改送 `127.0.0.1:{mcp_port}`（PR #5 + 回歸測試 `test_proxy_forwards_loopback_host_with_port`）。經三層驗證：協定層直測（裸 localhost→421、127.0.0.1:8000→200）→ through-proxy e2e → chart 部署鏈路真實 SSE handshake。共用 proxy、一次修三 app。
+
+**對抗式整合審查裁決：NO_BLOCKER**（14 agents 跨 3 維度 review + 對抗式 verify；11 findings：0 blocker / 9 deferred / 2 誤報）。三 PR（platform commits / woow-mcp-server #5 / paas-charts #31）可 merge。
+
+**Follow-up（deferred，按時機）：**
+
+⚠️ **複製 odoo/n8n 前必補**：
+- **proxy Origin 半修**（`mcp-admin-core/proxy.py:57`）——Host 修了但 FastMCP `TransportSecurityMiddleware` 同時驗 **Origin**（loopback auto-enable `allowed_origins=["http://127.0.0.1:*",...]`）；proxy 未處理 Origin → 瀏覽器型 MCP client（送 `Origin: https://...`）會被子行程 403。pilot e2e 過是因非瀏覽器 SSE client（httpx/eventsource）不送 Origin。**shared across 3 apps**，複製前不補會帶入三者。修法：`origin` 加入 proxy skip set（或改寫 `http://127.0.0.1:{mcp_port}`）+ 鏡像 Host 回歸測試補 Origin 案例 + contract doc 註明 MCP endpoint 不得透傳外部 Origin。
+
+**GA 硬化**：
+- **CONFIG_PATH dead key**（chart `deployment.yaml:106`）——chart 注入 `CONFIG_PATH` 但 image 讀 `MCP_ADMIN_CONFIG`（dead/no-op）；pilot 靠 mountPath 預設 `/data` 與 image 三處硬編 `/data` 巧合對齊。改 `persistence.mountPath` 會 config 持久化靜默失效。修法：rename `CONFIG_PATH`→`MCP_ADMIN_CONFIG` + initContainer/seed mountPath 一致化，或刪 dead key + values 註明 config 路徑固定 `/data`（image 硬契約）。
+- **runAsNonRoot / readOnlyRootFilesystem**：hermes image（python:3.12-slim 無 USER）跑 root；待 **O-1 釘 image sha** 後開啟（補償控制已備：drop ALL caps + allowPrivilegeEscalation=false + seccomp RuntimeDefault + automountToken=false）。屬硬性 GA gate，不可變永久 TODO。
+- **image latest→git-sha**：pilot `latest`+IfNotPresent；GA 釘 sha（per-tenant 單 pod，pilot 風險低）。
+- **networkPolicy egress/ingress 收斂**：spec 缺口4 已簽核 pilot 從寬（egress `- {}` 全開、ingressNamespaces 空→任何來源可達 :8080）；GA 收斂（egress `0.0.0.0/0 except 叢集 CIDR + block 169.254.169.254`；ingressNamespaces 設真實 tunnel/ingress ns）。agent-runtime §6.3 已有模板。
+
+**operator / 層 3 實證**：
+- **R1 PVC 孤兒回收**：chart 姿態正確（orphaned-at 由 operator teardown 貼標、chart 不擁有）；operator `releases.py` delete_release 已 chart-agnostic 對 ns 內 PVC 貼標 + pvc-cleanup-cronjob 消費 → 待層 3 deploy-stg 部署→teardown 實證 PVC 被回收。
+- **existingSecret 完整注入**（task #6）：operator 建 per-instance Secret；文件警示（jwtSecret+existingSecret 同設靜默丟棄、config.sensitive 未走 existingSecret）已存在於 NOTES.txt/values 註解。
+
+**誤報（無需 action）**：`updateStrategy`（platform helm_default_values 有但 chart 硬編 Recreate，fail-safe）、`ENV_PREFIX`（chart 注入但 env_prefix 走 config.json，dead 但無害）。
