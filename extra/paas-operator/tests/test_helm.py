@@ -199,6 +199,7 @@ class TestHelmService:
         mock_settings.namespace_prefix = "paas-ws-"
         mock_settings.registry_username = "ci-bot"
         mock_settings.registry_password = "jcr-token"
+        mock_settings.registry_server = "jcr-prod.woowtech.io"
         mock_run.return_value = Mock(
             returncode=0,
             stdout=json.dumps({
@@ -264,6 +265,56 @@ class TestHelmService:
         for call in mock_run.call_args_list:
             cmd = call[0][0]
             assert not ("registry" in cmd and "login" in cmd)
+
+    @patch("src.services.helm.settings")
+    @patch("subprocess.run")
+    def test_install_third_party_oci_chart_skips_registry_login(self, mock_run, mock_settings):
+        """Third-party public OCI chart must stay anonymous even when the operator
+        HAS its own registry creds configured.
+
+        Regression (stg live e2e 2026-07-01): _ensure_oci_login logged into ANY
+        oci:// host with the JCR creds (settings.registry_*) whenever creds were
+        present, missing a host==registry_server guard. For a third-party public
+        chart (oci://8gears.container-registry.com/library/n8n — pullable
+        anonymously) that meant `helm registry login 8gears... --username woow-prod`
+        with the wrong creds, which then made the subsequent pull fail
+        `401 unauthorized`. The n8n full-app service could never deploy. Only the
+        operator's OWN registry (registry_server) should get a login.
+        """
+        mock_settings.helm_binary = "/usr/local/bin/helm"
+        mock_settings.helm_timeout = 300
+        mock_settings.namespace_prefix = "paas-ws-"
+        mock_settings.registry_username = "woow-prod"
+        mock_settings.registry_password = "jcr-token"
+        mock_settings.registry_server = "jcr-prod.woowtech.io"
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "svc-n8n", "namespace": "paas-ws-test",
+                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "chart": {"metadata": {"name": "n8n", "appVersion": "1.0"}},
+            }),
+            stderr="",
+        )
+
+        svc = HelmService()
+        svc.install(
+            namespace="paas-ws-test",
+            name="svc-n8n",
+            chart="oci://8gears.container-registry.com/library/n8n",
+            version="2.0.1",
+        )
+
+        # No `helm registry login` for a host that isn't the operator's own registry.
+        for call in mock_run.call_args_list:
+            cmd = call[0][0]
+            assert not ("registry" in cmd and "login" in cmd), (
+                "must not log into a third-party OCI registry with JCR creds"
+            )
+        # The install itself must still run (anonymous pull).
+        install_cmd = mock_run.call_args_list[-1][0][0]
+        assert "install" in install_cmd
+        assert "oci://8gears.container-registry.com/library/n8n" in install_cmd
 
     @patch("subprocess.run")
     def test_install_without_repo_is_backward_compatible(self, mock_run, helm_service):

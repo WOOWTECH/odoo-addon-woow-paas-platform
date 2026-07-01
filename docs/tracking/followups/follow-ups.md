@@ -372,6 +372,25 @@
 - **建議落點**：`_sanitize_helm_values` 依 template specs 的 `type=='password'` dot-path 遮罩（涵蓋 top-level 與 nested）+ ConfigurationTab password 欄位改「空白起始、僅變更才送」語意；與 F2（同名異實重命名 / 抽 utils）、F12（AI prompt path 漏 sanitize）合併處理最徹底。
 - **何時**：next cloud-service 安全相關 PR
 
+## F-N8N-2 — operator `_ensure_oci_login` 缺 `host == registry_server` 守衛（程式已修，stg/prod 部署待發版）
+
+- **Severity**: high（擋住整個 n8n 完整應用 cloud service 部署；#265 解鎖建立後才首次暴露）
+- **Origin**: stg live 建立 E2E CONFIRMED（2026-07-01）—— #265 修好「建立」後，實際建 n8n service 進 deploying → helm install 失敗 `state=error`
+- **Location**: `extra/paas-operator/src/services/helm.py` `_ensure_oci_login`
+- **問題**：n8n 完整應用 chart 在第三方**公開** registry `oci://8gears.container-registry.com/library/n8n`。`_ensure_oci_login` 只要 `settings.registry_*` 有值就對**任何** `oci://` host 做 `helm registry login <host> --username <JCR user>`，**沒檢查 host 是否等於自家 `registry_server`**。→ 拿 JCR 憑證（`woow-prod`）去登入 8gears → 後續 chart pull 反被判 `401 unauthorized`。實測：operator pod 內**匿名** `helm pull oci://8gears.../n8n` 成功（n8n:2.0.1）→ 證明 chart 公開、純粹是用錯憑證登入害的。是 2026-06-30「JCR mcp-server OCI 401」GA blocker 修正（helm.py 引入 `_ensure_oci_login`）**過度延伸**造成的回歸：修好自家私有 registry，卻打壞第三方公開 chart。
+- **修法（本次已施作）**：`_ensure_oci_login` 加 `if host != settings.registry_server: return` —— 只登入自家 registry，第三方一律匿名。TDD 補 `test_install_third_party_oci_chart_skips_registry_login` + 既有 private test 補 `registry_server`；operator 單元 289 passed。
+- **剩餘**：operator 發版（`operator-v*` tag → CI build）+ Fleet CD（`paas-app-bundle-cd/paas-operator-stg/values-stg.yaml` bump `image.tag`）上 stg，再重建 n8n service 驗 helm install 成功、pod ready；prod 同步。與 [[reference_agent_runtime_respawn_mechanism]] 同發版鏈。
+- **何時**：本 PR 後接 operator 發版
+
+## F-N8N-3 — cloud service delete 未連帶取消 trial subscription
+
+- **Severity**: low
+- **Origin**: stg live 建立 E2E 附帶發現（2026-07-01）
+- **Location**: `src/controllers/paas.py` `_delete_service`（→ cloud_service unlink / lifecycle）
+- **問題**：透過 `POST /api/workspaces/<id>/services/<sid>` `action=delete` 刪除 service 後，對應的 `sh.subscription.subscription`（本次 SUB-00023，trial `in_progress`）**仍留 `in_progress`**，未被取消/關閉 → 孤兒訂閱。E2E 中已手動 `write({'state':'close'})` 收尾。曝險：試用期建了又刪的 service 會留下 active trial sub（帳務面殘留，非資安）。
+- **建議落點**：`_delete_service` / cloud_service unlink hook 內對關聯 subscription 走正規取消流程（非直接改 state）；與 CloudService/訂閱整合的 lifecycle 一併檢視是否有對稱 cancel。
+- **何時**：next cloud-service 訂閱相關 PR
+
 ## F13 — B1 task ACL deactivation 對齊 `18.0.1.0.23` pattern（next refactor cycle `18.0.1.0.25`）
 
 - **Severity**: medium
