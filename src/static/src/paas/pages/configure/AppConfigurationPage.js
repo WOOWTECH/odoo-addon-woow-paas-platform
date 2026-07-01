@@ -148,6 +148,17 @@ export class AppConfigurationPage extends Component {
     }
 
     /**
+     * Whether to render the Application Settings section. True when the template has
+     * ANY spec (required or optional) — gating on required-only would hide the whole
+     * section (and its advanced toggle) for an optional-only template, making its
+     * fields unreachable.
+     */
+    get hasApplicationSettings() {
+        const specs = this.helmValueSpecs;
+        return (specs.required || []).length + (specs.optional || []).length > 0;
+    }
+
+    /**
      * Get category icon name
      * @returns {string}
      */

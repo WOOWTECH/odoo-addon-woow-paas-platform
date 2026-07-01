@@ -4,6 +4,7 @@ __pycache__/
 .playwright-mcp
 .playwright-cli/
 .claude/skills/ecpay/
+.claude/scheduled_tasks.lock
 odoo_env
 xdg-utils-1.1.3.tar.gz
 xdg-utils-1.1.3

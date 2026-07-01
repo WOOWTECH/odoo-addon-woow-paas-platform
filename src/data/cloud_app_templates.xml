@@ -22,9 +22,10 @@
             <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"},
                 "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits":
                 {"cpu": "2000m", "memory": "2Gi"}}}}</field>
-            <field name="helm_value_specs">{"required": [{"key": "auth.username", "label": "Database
-                Username", "type": "text", "default": "woow"}, {"key": "auth.database", "label":
-                "Database Name", "type": "text", "default": "woowdb"}], "optional": []}</field>
+            <field name="helm_value_specs">{"required": [
+                {"key": "auth.username", "label": "Database Username", "type": "text", "default": "woow"},
+                {"key": "auth.database", "label": "Database Name", "type": "text", "default": "woowdb"}
+                ], "optional": []}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5432</field>
@@ -62,17 +63,23 @@
                 "1000m", "memory": "1Gi"}},
                 "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"}},
                 "updateStrategy": {"type": "Recreate"}}</field>
-            <field name="helm_value_specs">{"required": [{"key": "_init.owner_email", "label": "n8n
-                Admin Email", "type": "text", "placeholder": "you@example.com", "description": "n8n
-                管理員登入 Email"}, {"key": "_init.owner_password", "label": "n8n Admin Password",
-                "type": "password", "description": "至少 8 字元，需含大小寫字母與數字"}], "optional": [{"key":
-                "config.database.type", "label": "Database Type", "type": "select", "default":
-                "sqlite", "options": ["sqlite", "postgres"]}, {"key":
-                "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select", "default":
-                "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai",
-                "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London",
-                "UTC"]}, {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type":
-                "select", "default": "info", "options": ["info", "warn", "error", "debug"]}]}</field>
+            <!-- IMPORTANT: 換行只能落在 JSON token 之間，不可切斷字串值。字串值內夾字面換行
+                 會讓 _parse_helm_value_specs 的 json.loads(strict) 拋錯 → 回 {} → 前端
+                 Application Settings 區塊靜默消失（見 fix/n8n-creation-issue）。 -->
+            <field name="helm_value_specs">{"required": [
+                {"key": "_init.owner_email", "label": "n8n Admin Email", "type": "text",
+                "placeholder": "you@example.com", "description": "n8n 管理員登入 Email"},
+                {"key": "_init.owner_password", "label": "n8n Admin Password", "type": "password",
+                "description": "至少 8 字元，需含大小寫字母與數字"}
+                ], "optional": [
+                {"key": "config.database.type", "label": "Database Type", "type": "select",
+                "default": "sqlite", "options": ["sqlite", "postgres"]},
+                {"key": "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select",
+                "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai",
+                "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]},
+                {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select",
+                "default": "info", "options": ["info", "warn", "error", "debug"]}
+                ]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">5678</field>
@@ -340,5 +347,14 @@
 
             <field name="is_active" eval="True" />
         </record>
+
+        <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
+             carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
+             helm_value_specs above is silently skipped on -u. <function> runs on every
+             -u regardless of noupdate; it clears the flag and repairs any dirty specs
+             in place so the DB converges to the fixed seed. See fix/n8n-creation-issue
+             and docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md. -->
+        <function model="woow_paas_platform.cloud_app_template"
+                  name="_heal_sticky_helm_value_specs"/>
     </data>
 </odoo>

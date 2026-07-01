@@ -88,7 +88,7 @@
                             <span>Modify configuration values below. Changes will trigger a service upgrade.</span>
                         </div>
                         <HelmValueForm
-                            specs="helmValueSpecs"
+                            specs="configurableSpecs"
                             values="state.editedValues"
                             onUpdate.bind="onHelmValueUpdate"
                             showAdvanced="state.showAdvanced"

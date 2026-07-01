@@ -45,12 +45,28 @@ export class ConfigurationTab extends Component {
         return this.props.service.template?.helm_value_specs || { required: [], optional: [] };
     }
 
+    /**
+     * Specs that are actually reconfigurable. `_init.*` specs are one-time
+     * provisioning params applied at creation (stored on the service record, never
+     * in helm_values), so they must not be rendered nor validated here — otherwise
+     * the owner is forced to re-type the admin password on every reconfigure and the
+     * value gets written into helm_values in plaintext on save.
+     */
+    get configurableSpecs() {
+        const notInit = (s) => !String(s.key || "").startsWith("_init.");
+        const base = this.helmValueSpecs;
+        return {
+            required: (base.required || []).filter(notInit),
+            optional: (base.optional || []).filter(notInit),
+        };
+    }
+
     get allSpecs() {
-        return [...(this.helmValueSpecs.required || []), ...(this.helmValueSpecs.optional || [])];
+        return [...this.configurableSpecs.required, ...this.configurableSpecs.optional];
     }
 
     get hasOptionalSettings() {
-        return (this.helmValueSpecs.optional || []).length > 0;
+        return this.configurableSpecs.optional.length > 0;
     }
 
     get canEdit() {
@@ -121,7 +137,7 @@ export class ConfigurationTab extends Component {
 
     validateForm() {
         const errors = {};
-        for (const spec of (this.helmValueSpecs.required || [])) {
+        for (const spec of this.configurableSpecs.required) {
             const value = this.state.editedValues[spec.key];
             if (value === undefined || value === null || value === "") {
                 errors[spec.key] = `${spec.label || spec.key} is required`;

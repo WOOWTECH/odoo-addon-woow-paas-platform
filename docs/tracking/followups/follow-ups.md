@@ -362,6 +362,16 @@
   - 路徑 2：若評估 AI chat 已上 stg / 即將 prod，獨立 hotfix PR 立刻修（機械式 1-line fix：`service.helm_values` → `_sanitize_helm_values(service.helm_values)` 並 import）
 - **何時**：next AI chat 相關 PR 一併處理
 
+## F-N8N-1 — `_sanitize_helm_values` 不遮 top-level password 型 helm value（pre-existing，與 F2/F12 同家族）
+
+- **Severity**: medium
+- **Origin**: `fix/n8n-creation-issue` 第二輪對抗式審查 CONFIRMED（2026-07-01）
+- **Location**: `src/controllers/paas.py` `_sanitize_helm_values`（僅在 `key == 'secret' and isinstance(val, dict)` 時遮罩）
+- **問題**：odoo 模板的 `odooPassword`、`smtpPassword`（top-level、`type=password` 的 helm value spec，**非** `_init.*`）在 `_create_service` 以明文存進 `service.helm_values`，並經 `_format_service(include_details=True)` → `_sanitize_helm_values` 原文回傳（top-level string 走 `else` 分支不遮）→ service-detail API 洩漏明文憑證。曝險限於已能讀該 service 的 workspace owner / members。
+- **為何沒在 `fix/n8n-creation-issue` 一併修**：pre-existing（非本次引入）；本次 F2 已用「reconfigure 剝除 `_init.*`」徹底處理 n8n owner 憑證（永不落 helm_values）。odooPassword 需**遮罩**（它是合法 helm value、必須持久化給 odoo chart），而「只在 read 端遮罩」會**回歸 odoo reconfigure**（ConfigurationTab 會把遮罩後的 `***` 預填並於存檔覆寫真密碼）→ 正解需前後端協調（password 欄位 reconfigure 時不預填、僅使用者實際輸入才送出），屬獨立 feature-level 變更。
+- **建議落點**：`_sanitize_helm_values` 依 template specs 的 `type=='password'` dot-path 遮罩（涵蓋 top-level 與 nested）+ ConfigurationTab password 欄位改「空白起始、僅變更才送」語意；與 F2（同名異實重命名 / 抽 utils）、F12（AI prompt path 漏 sanitize）合併處理最徹底。
+- **何時**：next cloud-service 安全相關 PR
+
 ## F13 — B1 task ACL deactivation 對齊 `18.0.1.0.23` pattern（next refactor cycle `18.0.1.0.25`）
 
 - **Severity**: medium

@@ -155,7 +155,7 @@
                 </WoowCard>
 
                 <!-- Helm Values Section -->
-                <t t-if="helmValueSpecs.required and helmValueSpecs.required.length > 0">
+                <t t-if="hasApplicationSettings">
                     <WoowCard shadow="true" class="'o_woow_configure_section'">
                         <div class="o_woow_section_header">
                             <WoowIcon name="'tune'" size="24"/>
