@@ -228,16 +228,28 @@ class HelmService:
         ``oci://`` refs. We reuse the same registry credentials the operator
         already uses for the tenant imagePullSecret (``settings.registry_*``).
 
-        No-op when the chart is not an ``oci://`` ref, or when no registry
-        credentials are configured (public OCI charts like bitnami stay
-        anonymous — existing behaviour unchanged). Password is passed via
-        ``--password-stdin`` so it never lands in argv / logs.
+        No-op when the chart is not an ``oci://`` ref, when no registry
+        credentials are configured, or when the chart lives on a host that is
+        NOT the operator's own registry (public OCI charts like bitnami — and
+        third-party ones like ``oci://8gears.container-registry.com/library/n8n``
+        — stay anonymous). Password is passed via ``--password-stdin`` so it
+        never lands in argv / logs.
+
+        The ``host == settings.registry_server`` guard is load-bearing: the JCR
+        creds only authenticate against JCR. Logging into a *third-party* public
+        registry with them (stg live e2e 2026-07-01) makes the otherwise-anonymous
+        pull fail ``401 unauthorized``, so the n8n full-app service could never
+        deploy. Only authenticate to our own registry; everyone else stays
+        anonymous.
         """
         if not chart.startswith("oci://"):
             return
         if not (settings.registry_username and settings.registry_password):
             return
         host = chart[len("oci://"):].split("/", 1)[0]
+        # Only log into the operator's OWN registry — never a third-party host.
+        if host != settings.registry_server:
+            return
         self._run_command(
             [
                 "registry",
