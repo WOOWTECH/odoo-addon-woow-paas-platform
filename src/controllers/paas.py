@@ -819,7 +819,7 @@ class PaasController(Controller):
             'slug': template.slug or '',
             'description': template.description or '',
             'category': template.category,
-            'tags': json.loads(template.tags) if template.tags else [],
+            'tags': self._safe_json_load(template.tags, [], 'tags', template.name),
             'documentation_url': template.documentation_url or '',
             'default_port': template.default_port,
             'ingress_enabled': template.ingress_enabled,
@@ -830,7 +830,8 @@ class PaasController(Controller):
         if include_values:
             data['helm_chart_name'] = template.helm_chart_name
             data['helm_chart_version'] = template.helm_chart_version
-            data['helm_default_values'] = json.loads(template.helm_default_values) if template.helm_default_values else {}
+            data['helm_default_values'] = self._safe_json_load(
+                template.helm_default_values, {}, 'helm_default_values', template.name)
             data['helm_value_specs'] = self._parse_helm_value_specs(template)
             data['full_description'] = template.full_description or ''
         return data
@@ -1836,6 +1837,28 @@ class PaasController(Controller):
                 result[key] = value
         return result
 
+    @staticmethod
+    def _safe_json_load(raw: Any, default: Any, field_label: str, ctx: str = '') -> Any:
+        """Parse a JSON-in-Text field, returning ``default`` instead of raising.
+
+        Seed/admin-editable JSON fields (tags, helm_default_values) live in XML and
+        are prone to the same line-wrap-inside-a-string defect that broke
+        helm_value_specs. These are consumed on hot read paths (marketplace listing,
+        template detail) with NO surrounding try/except, so one malformed row would
+        500 the whole endpoint for every user. Degrade to ``default`` + a loud log on
+        the display paths; deploy paths (which feed Helm) should fail loud instead.
+        """
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            _logger.error(
+                "Invalid JSON in %s%s; falling back to default",
+                field_label, f' ({ctx})' if ctx else '',
+            )
+            return default
+
     def _parse_helm_value_specs(self, template: Any) -> dict[str, list]:
         """Parse helm_value_specs JSON from a template record.
 
@@ -1850,8 +1873,25 @@ class PaasController(Controller):
         try:
             return json.loads(template.helm_value_specs)
         except (json.JSONDecodeError, TypeError):
-            _logger.warning("Invalid helm_value_specs for template %s", template.name)
-            return {}
+            # Defense-in-depth: a stray literal newline inside a JSON string value
+            # (e.g. a seed XML that wrapped a long label/description across lines)
+            # makes strict json.loads raise. Silently returning {} here would nuke the
+            # ENTIRE Application Settings section — including required fields the user
+            # must fill — so the service can never launch. Degrade to a tolerant parse
+            # (strict=False allows control chars) so the section still renders, and log
+            # loudly so the malformed seed data gets noticed and cleaned.
+            try:
+                specs = json.loads(template.helm_value_specs, strict=False)
+                _logger.error(
+                    "helm_value_specs for template %s contains control characters "
+                    "inside string values; parsed with strict=False as a fallback. "
+                    "Fix the seed data so JSON strings are not split across lines.",
+                    template.name,
+                )
+                return specs
+            except (json.JSONDecodeError, TypeError):
+                _logger.error("Invalid helm_value_specs for template %s", template.name)
+                return {}
 
     @staticmethod
     def _sanitize_helm_values(values: dict, template: Any) -> dict:
@@ -2008,7 +2048,13 @@ class PaasController(Controller):
 
         # Filter user values to only allowed keys, then merge with defaults
         # Note: silently filter on create (frontend may send defaults alongside user values)
-        default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
+        # helm_default_values feeds Helm directly, so fail loud on malformed JSON here
+        # (unlike the display paths which degrade) rather than deploy a broken service.
+        try:
+            default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
+        except (json.JSONDecodeError, TypeError):
+            _logger.error("Invalid helm_default_values for template %s; blocking create", template.name)
+            return {'success': False, 'error': 'Template misconfigured (invalid default values). Please contact support.'}
         filtered_user_values, _rejected = self._filter_allowed_helm_values(values, template)
 
         # Extract _init.* keys (not Helm values, used for post-deploy init)
@@ -2222,6 +2268,12 @@ class PaasController(Controller):
             filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
             if rejected_keys:
                 return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
+            # _init.* are one-time provisioning params consumed at creation (stored on
+            # the service record, e.g. n8n_owner_password). They are NOT Helm values and
+            # must never be merged into helm_values on reconfigure — doing so would
+            # persist the admin password in plaintext and echo it back unmasked via the
+            # service-detail API (_sanitize_helm_values only masks 'secret' dicts).
+            filtered_user_values = {k: v for k, v in filtered_user_values.items() if not k.startswith('_init.')}
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)
 

@@ -462,6 +462,146 @@ class TestCloudServiceController(TransactionCase):
         self.assertEqual(service.helm_revision, 3)
 
 
+class TestSeedTemplateHelmValueSpecs(TransactionCase):
+    """Regression: seeded CloudAppTemplate JSON fields must be strict-valid JSON so
+    the frontend 'Application Settings' section renders and template fetch never 500s.
+
+    Root cause (fix/n8n-creation-issue): the n8n seed wrapped a long label /
+    description across XML lines, embedding a literal newline INSIDE a JSON string
+    value. Strict ``json.loads`` rejects control characters in strings, so
+    ``_parse_helm_value_specs`` swallowed the error and returned ``{}`` -> the entire
+    Application Settings card (including the required Admin Password field) disappeared
+    -> the backend still enforced ``post_deploy_init_type == 'n8n'`` password rules ->
+    every launch failed with 'Password must be at least 8 characters' for a field the
+    user could not even see. Net effect: n8n could never be created.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.Template = self.env['woow_paas_platform.cloud_app_template']
+
+    def test_all_seeded_json_fields_are_strict_valid(self):
+        """Every seeded template's JSON-in-XML fields must parse under strict JSON (no
+        literal newlines split across XML lines inside strings). Covers every field
+        that is consumed by an unguarded / display json.loads on a hot endpoint path:
+        helm_value_specs, helm_default_values AND tags (tags 500s the whole marketplace
+        listing if malformed, paas.py:822)."""
+        templates = self.Template.search([])
+        # Guard against a vacuous pass if seed loading ever regresses.
+        self.assertTrue(templates, "no cloud_app_template seeds loaded — test would pass vacuously")
+        broken = []
+        for tmpl in templates:
+            for field_name in ('helm_value_specs', 'helm_default_values', 'tags'):
+                raw = tmpl[field_name]
+                if not raw:
+                    continue
+                try:
+                    json.loads(raw)  # strict=True: rejects control chars in strings
+                except (json.JSONDecodeError, TypeError):
+                    broken.append('%s.%s' % (tmpl.slug or tmpl.name, field_name))
+        self.assertEqual(
+            broken, [],
+            "Seeded template JSON must be strict-valid (a wrapped long string value "
+            "embeds a newline and breaks json.loads). Broken: %s" % broken,
+        )
+
+    def test_n8n_seed_exposes_admin_credential_fields(self):
+        """The active n8n template must surface the _init.owner_* required fields
+        through the exact code path the configure page consumes."""
+        from ..controllers.paas import PaasController
+        controller = PaasController()
+        n8n = self.env.ref('woow_paas_platform.cloud_app_n8n')
+
+        specs = controller._parse_helm_value_specs(n8n)
+        required_keys = {f['key'] for f in specs.get('required', [])}
+        self.assertIn('_init.owner_email', required_keys)
+        self.assertIn('_init.owner_password', required_keys)
+
+        # Endpoint-level guard: the payload the frontend actually receives must carry a
+        # non-empty required list, otherwise the Application Settings card is hidden.
+        formatted = controller._format_template(n8n, include_values=True)
+        self.assertTrue(
+            formatted['helm_value_specs'].get('required'),
+            "n8n template must expose required helm_value_specs to the configure page",
+        )
+
+        # Coupling guard: the frontend required password field only makes sense while
+        # the backend still enforces the n8n init password. If post_deploy_init_type
+        # drifts away from 'n8n' the required field would have no consumer (or vice
+        # versa the backend would validate a field the UI never renders — the original
+        # bug's shape). Keep the two ends coupled.
+        self.assertEqual(n8n.post_deploy_init_type, 'n8n')
+
+    def test_parse_tolerates_embedded_newline_fallback(self):
+        """Defense-in-depth: a stray newline inside a string value must degrade to a
+        tolerant parse (strict=False) and still surface the required keys, never {}."""
+        from ..controllers.paas import PaasController
+        controller = PaasController()
+        tmpl = self.Template.create({
+            'name': 'Newline Specs',
+            'slug': 'newline-specs',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'x',
+            'helm_chart_version': '1.0.0',
+            # Literal newline embedded INSIDE the label string value.
+            'helm_value_specs': '{"required": [{"key": "k", "label": "Broken\nLabel"}], "optional": []}',
+        })
+        specs = controller._parse_helm_value_specs(tmpl)
+        self.assertEqual(
+            [f['key'] for f in specs.get('required', [])], ['k'],
+            "parser must recover required keys from control-char JSON, not return {}",
+        )
+
+    def test_heal_sticky_helm_value_specs_cleans_dirty_row(self):
+        """The upgrade healer must rewrite a control-char-dirty helm_value_specs into
+        clean strict JSON in place (so DBs where the sticky noupdate flag skipped the
+        seed correction converge to the fixed data and stop logging fallback errors)."""
+        tmpl = self.Template.create({
+            'name': 'Dirty Specs',
+            'slug': 'dirty-specs',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'x',
+            'helm_chart_version': '1.0.0',
+            # Embedded newline + indent inside the label string value (the seed bug shape).
+            'helm_value_specs': '{"required": [{"key": "k", "label": "n8n\n                Admin Email"}], "optional": []}',
+        })
+        # Precondition: strict parse fails on the dirty row.
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(tmpl.helm_value_specs)
+
+        self.Template._heal_sticky_helm_value_specs()
+
+        # Now strict-valid and the label whitespace collapsed to a single space.
+        healed = json.loads(tmpl.helm_value_specs)  # must not raise
+        self.assertEqual(healed['required'][0]['label'], 'n8n Admin Email')
+        self.assertNotIn('\n', tmpl.helm_value_specs)
+
+    def test_heal_clears_sticky_noupdate_flag(self):
+        """The healer's other half: it must flip a sticky ir.model.data.noupdate=True
+        on a seeded cloud_app_template xmlid to False, so a DB installed under the
+        historical noupdate=1 block stops silently skipping seed corrections on -u."""
+        tmpl = self.Template.create({
+            'name': 'Sticky Template',
+            'slug': 'sticky-template',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'x',
+            'helm_chart_version': '1.0.0',
+        })
+        imd = self.env['ir.model.data'].create({
+            'module': 'woow_paas_platform',
+            'name': 'sticky_test_cloud_app_template',
+            'model': 'woow_paas_platform.cloud_app_template',
+            'res_id': tmpl.id,
+            'noupdate': True,
+        })
+        self.assertTrue(imd.noupdate)
+
+        self.Template._heal_sticky_helm_value_specs()
+
+        imd.invalidate_recordset()
+        self.assertFalse(imd.noupdate, "healer must clear the sticky noupdate flag")
+
+
 class TestWorkspaceAPI(TransactionCase):
     """Test cases for workspace API operations."""
 

@@ -228,3 +228,59 @@ class CloudAppTemplate(models.Model):
                             ', '.join(conflicts.mapped('name')),
                         )
                     )
+
+    @api.model
+    def _heal_sticky_helm_value_specs(self):
+        """Upgrade healer for the fix/n8n-creation-issue seed correction.
+
+        DBs first installed under the historical ``<data noupdate="1">`` block carry a
+        sticky ``ir.model.data.noupdate=True`` on the cloud_app_* seeds, so the corrected
+        ``helm_value_specs`` (clean single-line JSON) is silently skipped on ``-u``.
+        Runtime still works because ``PaasController._parse_helm_value_specs`` falls back
+        to ``strict=False``, but the DB row stays dirty and logs an ERROR on every
+        template fetch.
+
+        This ``<function>`` runs on every ``-u`` regardless of noupdate. It (1) clears
+        the sticky flag on the seeded template xmlids so future seed edits apply, and
+        (2) rewrites any helm_value_specs that fails strict JSON (control chars wrapped
+        inside string values) into clean strict JSON with whitespace collapsed, so the
+        stored data converges to the fixed seed. Idempotent.
+
+        See docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md.
+        """
+        import json
+        import re
+
+        def _clean(node):
+            if isinstance(node, str):
+                return re.sub(r'\s+', ' ', node).strip()
+            if isinstance(node, list):
+                return [_clean(x) for x in node]
+            if isinstance(node, dict):
+                return {k: _clean(v) for k, v in node.items()}
+            return node
+
+        # (1) Clear sticky noupdate on this module's cloud_app_template seeds.
+        stuck = self.env['ir.model.data'].sudo().search([
+            ('module', '=', 'woow_paas_platform'),
+            ('model', '=', 'woow_paas_platform.cloud_app_template'),
+            ('noupdate', '=', True),
+        ])
+        if stuck:
+            stuck.write({'noupdate': False})
+
+        # (2) Repair any dirty helm_value_specs in place.
+        for template in self.search([]):
+            raw = template.helm_value_specs
+            if not raw:
+                continue
+            try:
+                json.loads(raw)  # already strict-valid → leave untouched
+                continue
+            except (json.JSONDecodeError, TypeError):
+                pass
+            try:
+                parsed = json.loads(raw, strict=False)
+            except (json.JSONDecodeError, TypeError):
+                continue  # malformed beyond control-char wrapping; leave for a human
+            template.helm_value_specs = json.dumps(_clean(parsed), ensure_ascii=False)
