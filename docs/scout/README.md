@@ -1,0 +1,15 @@
+# scout/ — 決策前偵察
+
+放**還沒成案**的探索產出：架構調整的衝擊分析、decision matrix、可行性調查。這裡的文件回答「如果我們做 X，會發生什麼？」——而不是「我們決定做 X，因為…」（那是 `decisions/`）也不是「我們要做 X，步驟如下」（那是 `plans/`）。
+
+## 規則
+
+- **檔名**：`YYYY-MM-DD-<slug>.md`（偵察有時效性，日期前綴必帶）
+- **frontmatter**：`category: scout`、`status: draft | superseded`
+- **生命週期**：拍板後 promote——成案 → `plans/<quarter>/` 雙檔；定案（含「決定不做」）→ `decisions/`；過時未拍板 → 標 `superseded` 或移 `archived/`。scout 不是文件的長期歸宿。
+
+## 現有偵察
+
+| 文件 | 主題 | 狀態 |
+|---|---|---|
+| [2026-07-02-ns-per-workspace-decision-matrix.md](2026-07-02-ns-per-workspace-decision-matrix.md) | 「每 workspace 一個 k8s namespace」架構調整衝擊分析 | draft |

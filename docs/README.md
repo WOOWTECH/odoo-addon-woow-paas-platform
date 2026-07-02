@@ -13,9 +13,10 @@
 | [`tracking/`](tracking/README.md) | **問題與追蹤** — issue / pitfall / follow-up | sandbox 故障、incident timeline、技術債清單、test report |
 | [`archived/`](archived/README.md) | **歷史檔案** — 不再使用但保留考古 | ccpm-v1 context、退役 plan |
 
-加上一個工具自管理區（不算主題類）：
+加上兩個不算主題類的輔助區：
 
 - [`superpowers/`](superpowers/README.md) — obra/superpowers plugin 自動寫入的 specs / plans，promote 後落到主結構
+- [`scout/`](scout/README.md) — **決策前偵察** — 還沒成案的衝擊分析 / decision matrix / 可行性調查；拍板後 promote 到 `plans/`（成案）或 `decisions/`（定案），不留長期文件
 
 ## 何時用哪類？
 
