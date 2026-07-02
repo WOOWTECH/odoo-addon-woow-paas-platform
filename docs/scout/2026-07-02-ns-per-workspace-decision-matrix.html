@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>「一個 workspace 一個 namespace」偵察與 decision matrix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============ Tokens ============ */
+:root{
+  --bg:#0F172A; --surface:#1E293B; --surface-2:#243349; --surface-3:#172033;
+  --border:rgba(148,163,184,.18); --border-strong:rgba(148,163,184,.32);
+  --text:#F1F5F9; --muted:#94A3B8; --faint:#64748B;
+  --primary:#3B82F6; --primary-2:#60A5FA; --cta:#2563EB;
+  --green:#34D399; --green-bg:rgba(52,211,153,.12);
+  --red:#F87171; --red-bg:rgba(248,113,113,.12);
+  --amber:#FBBF24; --amber-bg:rgba(251,191,36,.12);
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+  --shadow:0 8px 30px rgba(0,0,0,.35); --radius:14px;
+}
+[data-theme="light"]{
+  --bg:#F8FAFC; --surface:#FFFFFF; --surface-2:#F1F5F9; --surface-3:#EEF2F7;
+  --border:#E2E8F0; --border-strong:#CBD5E1;
+  --text:#0F172A; --muted:#475569; --faint:#94A3B8;
+  --green:#059669; --green-bg:rgba(5,150,105,.10);
+  --red:#DC2626; --red-bg:rgba(220,38,38,.08);
+  --amber:#B45309; --amber-bg:rgba(180,83,9,.10);
+  --shadow:0 8px 24px rgba(15,23,42,.08);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{
+  margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+  line-height:1.65;font-size:16px;-webkit-font-smoothing:antialiased;
+  transition:background .3s ease,color .3s ease;
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+/* ============ Scroll progress ============ */
+#progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:100;
+  background:linear-gradient(90deg,var(--primary),var(--primary-2));transition:width .1s linear}
+
+/* ============ Nav ============ */
+nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);
+  background:color-mix(in srgb,var(--bg) 82%,transparent);
+  border-bottom:1px solid var(--border)}
+.nav-inner{max-width:1140px;margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:18px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-weight:700;font-size:14px;white-space:nowrap}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--primary);box-shadow:0 0 12px var(--primary)}
+.nav-links{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;flex:1}
+.nav-links::-webkit-scrollbar{display:none}
+.nav-links a{font-family:var(--mono);font-size:12.5px;color:var(--muted);text-decoration:none;
+  padding:6px 11px;border-radius:8px;white-space:nowrap;transition:color .2s,background .2s;cursor:pointer}
+.nav-links a:hover{color:var(--text);background:var(--surface)}
+.nav-links a.active{color:var(--primary-2);background:var(--surface)}
+.toggle{flex-shrink:0;display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);
+  color:var(--muted);border-radius:8px;padding:7px 10px;cursor:pointer;font-family:var(--mono);font-size:12px;transition:.2s}
+.toggle:hover{color:var(--text);border-color:var(--border-strong)}
+.toggle svg{width:15px;height:15px}
+
+/* ============ Layout ============ */
+main{max-width:1140px;margin:0 auto;padding:0 24px}
+section{padding:56px 0;border-top:1px solid var(--border)}
+section:first-of-type{border-top:none}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px}
+.sec-num{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--primary);letter-spacing:.5px}
+.sec-head h2{font-family:var(--mono);font-size:clamp(20px,3vw,27px);font-weight:700;margin:0;letter-spacing:-.5px}
+.sec-sub{color:var(--muted);font-size:15px;margin:0 0 26px;max-width:75ch}
+
+/* ============ Hero ============ */
+.hero{position:relative;max-width:1140px;margin:0 auto;padding:64px 24px 30px;overflow:hidden}
+.hero::before{content:"";position:absolute;top:-160px;right:-80px;width:520px;height:420px;z-index:-1;
+  background:radial-gradient(circle at 60% 40%,rgba(59,130,246,.22),transparent 62%);filter:blur(8px)}
+.badge{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;font-weight:600;
+  color:var(--primary-2);background:var(--surface);border:1px solid var(--border-strong);
+  padding:6px 13px;border-radius:999px;margin-bottom:20px}
+.badge .pulse{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.hero h1{font-family:var(--mono);font-size:clamp(26px,4.4vw,42px);line-height:1.18;margin:0 0 16px;
+  font-weight:700;letter-spacing:-1px;max-width:18ch}
+.hero h1 .accent{background:linear-gradient(120deg,var(--primary),var(--primary-2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:18px;color:var(--muted);max-width:68ch;margin:0 0 22px}
+.lead b{color:var(--text);font-weight:600}
+.meta-chips{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:6px}
+.chip{font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--surface);
+  border:1px solid var(--border);padding:6px 12px;border-radius:8px;display:inline-flex;gap:7px;align-items:center}
+.chip b{color:var(--text);font-weight:600}
+.chip a{color:var(--primary-2);text-decoration:none}
+.chip a:hover{text-decoration:underline}
+
+/* ============ KPI ============ */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:34px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;
+  position:relative;overflow:hidden;transition:border-color .2s,transform .2s}
+.kpi:hover{border-color:var(--border-strong);transform:translateY(-2px)}
+.kpi::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary)}
+.kpi .v{font-family:var(--mono);font-size:30px;font-weight:700;line-height:1;letter-spacing:-1px}
+.kpi .v small{font-size:15px;color:var(--muted);font-weight:500}
+.kpi .l{color:var(--muted);font-size:13px;margin-top:8px}
+.kpi.good::after{background:var(--green)} .kpi.good .v{color:var(--green)}
+.kpi.warn::after{background:var(--amber)} .kpi.warn .v{color:var(--amber)}
+
+/* ============ TL;DR ============ */
+.tldr{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--primary);
+  border-radius:var(--radius);padding:22px 24px;margin-top:8px}
+.tldr ol{margin:0;padding-left:20px;display:grid;gap:11px}
+.tldr li{padding-left:6px}
+.tldr li::marker{font-family:var(--mono);color:var(--primary);font-weight:600}
+.tldr b{color:var(--text)} .tldr code{font-family:var(--mono);font-size:.86em;background:var(--surface-3);
+  padding:2px 6px;border-radius:5px;color:var(--primary-2)}
+
+/* ============ Cards / Mermaid ============ */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow)}
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;
+  display:flex;justify-content:center;align-items:center;overflow-x:auto;min-height:80px}
+.diagram svg{max-width:100%;height:auto}
+.mermaid:not([data-processed]){visibility:hidden}
+.cap{font-family:var(--mono);font-size:12px;color:var(--faint);text-align:center;margin:10px 0 0}
+
+/* ============ Routes ============ */
+.routes{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.route{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;
+  position:relative;transition:transform .2s,border-color .2s}
+.route:hover{transform:translateY(-3px)}
+.route.pick{border-color:var(--green);box-shadow:0 0 0 1px var(--green) inset,var(--shadow)}
+.route .tag{font-family:var(--mono);font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;margin-bottom:10px}
+.route.bad .tag{color:var(--red)} .route.warn .tag{color:var(--amber)} .route.pick .tag{color:var(--green)}
+.route h4{margin:0 0 6px;font-size:16px;font-family:var(--mono)}
+.route .src{font-family:var(--mono);font-size:11.5px;color:var(--faint);word-break:break-all;margin-bottom:12px}
+.route p{margin:0;font-size:13.5px;color:var(--muted)}
+.route .lic{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
+
+/* ============ Stack grid ============ */
+.stacks{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.stack-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
+.stack-card.primary{border-color:var(--primary)}
+.stack-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.stack-head h4{margin:0;font-family:var(--mono);font-size:16px}
+.pill{font-family:var(--mono);font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px}
+.pill.blue{color:var(--primary-2);background:rgba(59,130,246,.14)}
+.pill.gray{color:var(--muted);background:var(--surface-2)}
+.pill.red{color:var(--red);background:var(--red-bg)}
+.pill.green{color:var(--green);background:var(--green-bg)}
+.complist{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:8px}
+.complist li{display:flex;gap:10px;font-size:13px;align-items:flex-start}
+.complist .nm{font-family:var(--mono);color:var(--text);font-weight:600;min-width:96px}
+.complist .ds{color:var(--muted)}
+.envline{margin-top:14px;font-size:12.5px;color:var(--muted);font-family:var(--mono)}
+.envline code{color:var(--primary-2)}
+
+/* ============ Details / Accordion ============ */
+details{background:var(--surface);border:1px solid var(--border);border-radius:11px;margin-bottom:10px;overflow:hidden;transition:border-color .2s}
+details[open]{border-color:var(--border-strong)}
+summary{cursor:pointer;padding:15px 18px;display:flex;align-items:center;gap:12px;list-style:none;font-weight:500;user-select:none}
+summary::-webkit-details-marker{display:none}
+summary:hover{background:var(--surface-2)}
+summary .chev{margin-left:auto;color:var(--faint);transition:transform .2s;flex-shrink:0}
+details[open] summary .chev{transform:rotate(90deg)}
+.det-body{padding:2px 18px 18px;color:var(--muted);font-size:14px}
+.det-body p{margin:0 0 10px} .det-body p:last-child{margin-bottom:0}
+.skey{font-family:var(--mono);font-size:12px;color:var(--primary);font-weight:600;min-width:34px;display:inline-block}
+
+/* gap cards */
+.gap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+.gap-grid details{margin:0}
+.gap-grid summary{padding:14px 16px;font-family:var(--mono);font-size:13.5px}
+.st{font-family:var(--mono);font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:6px;flex-shrink:0}
+.st.miss{color:var(--red);background:var(--red-bg)} .st.part{color:var(--amber);background:var(--amber-bg)}
+.gap-grid .det-body{font-size:13px}
+.row-now,.row-fix{display:flex;gap:8px;padding:5px 0}
+.row-now .k,.row-fix .k{font-weight:700;min-width:54px;font-family:var(--mono);font-size:11px;padding-top:1px}
+.row-now .k{color:var(--red)} .row-fix .k{color:var(--green)}
+
+/* pitfalls */
+.pit summary{font-size:14px}
+.pit .st{background:var(--amber-bg);color:var(--amber)}
+.two-col{display:grid;grid-template-columns:1.4fr 1fr;gap:24px;align-items:start}
+.reject{list-style:none;padding:0;margin:0;display:grid;gap:12px}
+.reject li{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:14px 16px;font-size:13.5px}
+.reject b{font-family:var(--mono);font-size:13px;color:var(--red);display:block;margin-bottom:5px}
+.reject span{color:var(--muted)}
+
+/* ============ Code ============ */
+.codewrap{position:relative;margin:6px 0 0}
+pre{background:var(--surface-3);border:1px solid var(--border);border-radius:11px;padding:16px 18px;overflow-x:auto;margin:0}
+code{font-family:var(--mono);font-size:13px;line-height:1.7}
+pre code{color:#cbd5e1}
+[data-theme="light"] pre code{color:#334155}
+.tok-c{color:var(--faint)} .tok-k{color:var(--primary-2)} .tok-s{color:var(--green)}
+.copy{position:absolute;top:9px;right:9px;background:var(--surface);border:1px solid var(--border);
+  color:var(--muted);border-radius:7px;padding:5px 10px;font-family:var(--mono);font-size:11px;cursor:pointer;transition:.2s;z-index:2}
+.copy:hover{color:var(--text);border-color:var(--primary)}
+.copy.done{color:var(--green);border-color:var(--green)}
+.tree{font-family:var(--mono);font-size:13px;line-height:1.85;color:var(--muted);white-space:pre;margin:0}
+.tree .d{color:var(--primary-2);font-weight:600} .tree .f{color:var(--text)} .tree .x{color:var(--faint)}
+
+/* ============ Tables ============ */
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:4px}
+.tbl th{text-align:left;font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:600;
+  padding:10px 12px;border-bottom:1px solid var(--border-strong)}
+.tbl td{padding:11px 12px;border-bottom:1px solid var(--border);color:var(--muted);vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl td b{color:var(--text)}
+.conf{font-family:var(--mono);font-size:11px;font-weight:700;padding:3px 9px;border-radius:6px;white-space:nowrap}
+.conf.hi{color:var(--green);background:var(--green-bg)} .conf.mid{color:var(--amber);background:var(--amber-bg)}
+
+/* sources */
+.srcs{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:6px}
+.srcs a{display:flex;gap:12px;align-items:center;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:13px 16px;text-decoration:none;color:var(--text);transition:.2s;font-size:13.5px}
+.srcs a:hover{border-color:var(--primary);transform:translateX(3px)}
+.srcs .n{font-family:var(--mono);font-size:12px;color:var(--primary);font-weight:700;flex-shrink:0}
+.srcs .u{color:var(--faint);font-family:var(--mono);font-size:11px;margin-left:auto;flex-shrink:0}
+
+.toolbar{display:flex;gap:8px;margin-bottom:16px}
+.btn-sm{font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--surface);
+  border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;transition:.2s}
+.btn-sm:hover{color:var(--text);border-color:var(--border-strong)}
+
+footer{max-width:1140px;margin:0 auto;padding:40px 24px 60px;border-top:1px solid var(--border);
+  color:var(--faint);font-size:12.5px;font-family:var(--mono);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.totop{position:fixed;right:22px;bottom:22px;width:42px;height:42px;border-radius:50%;background:var(--primary);
+  color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;
+  pointer-events:none;transition:opacity .3s,transform .2s;box-shadow:var(--shadow);z-index:40}
+.totop.show{opacity:1;pointer-events:auto} .totop:hover{transform:translateY(-3px)}
+
+/* ============ Responsive ============ */
+@media(max-width:880px){
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .routes,.stacks{grid-template-columns:1fr}
+  .two-col{grid-template-columns:1fr}
+  .srcs{grid-template-columns:1fr}
+  .brand span{display:none}
+}
+@media(max-width:520px){
+  .kpis{grid-template-columns:1fr}
+  main,.hero,.nav-inner,footer{padding-left:16px;padding-right:16px}
+}
+</style>
+<style>
+/* ============ Additions (matrix / facts / correction) ============ */
+.mtable-wrap{overflow-x:auto;border-radius:var(--radius)}
+.tbl.matrix{min-width:720px}
+.tbl.matrix td.num{font-family:var(--mono);color:var(--faint);text-align:center}
+.tbl.matrix th.c,.tbl.matrix td.c{text-align:center}
+.score{font-family:var(--mono);font-weight:700;font-size:14px;padding:3px 9px;border-radius:6px;display:inline-block;min-width:26px;text-align:center}
+.score.s-hi{color:var(--green);background:var(--green-bg)}
+.score.s-mid{color:var(--amber);background:var(--amber-bg)}
+.score.s-lo{color:var(--red);background:var(--red-bg)}
+.delta{font-family:var(--mono);font-weight:700;font-size:14px}
+.delta.up{color:var(--green)} .delta.down{color:var(--red)} .delta.eq{color:var(--faint)}
+.tbl.matrix tfoot td{background:var(--surface-2);font-weight:700;color:var(--text);border-top:2px solid var(--border-strong)}
+.tbl.matrix tfoot .score{font-size:16px}
+.reason{font-size:12.6px;line-height:1.55;color:var(--muted)}
+.reason b{color:var(--text)} .reason code{font-family:var(--mono);font-size:.9em;background:var(--surface-3);padding:1px 5px;border-radius:4px;color:var(--primary-2)}
+.note-box{background:var(--surface-3);border:1px solid var(--border);border-left:3px solid var(--amber);border-radius:11px;padding:14px 18px;margin-bottom:18px;font-size:13.5px;color:var(--muted)}
+.note-box b{color:var(--text)}
+.factlist{list-style:none;margin:0;padding:0;display:grid;gap:11px}
+.factlist li{display:flex;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:13px 16px;font-size:13.5px;color:var(--muted);align-items:flex-start}
+.factlist .fn{font-family:var(--mono);color:var(--primary);font-weight:700;flex-shrink:0}
+.factlist b{color:var(--text)}
+.factlist code,.prose code,.det-body code,.complist code,.tbl code{font-family:var(--mono);font-size:.9em;background:var(--surface-3);padding:1px 5px;border-radius:4px;color:var(--primary-2)}
+.strike{text-decoration:line-through;color:var(--faint)}
+.prose{color:var(--muted);font-size:14px;line-height:1.7}
+.prose b{color:var(--text)}
+.prose h4{font-family:var(--mono);font-size:14px;color:var(--text);margin:16px 0 6px}
+/* §2.2 印象 vs 實作 correction */
+.correct-wrap{border:1px solid var(--border-strong);border-radius:var(--radius);padding:20px;background:var(--surface);box-shadow:var(--shadow)}
+.correct-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.correct-head h3{margin:0;font-family:var(--mono);font-size:16px;line-height:1.5}
+.imp-card.bad{border-color:rgba(248,113,113,.5)}
+.imp-card.good{border-color:rgba(52,211,153,.5)}
+.legend-strip{display:flex;gap:14px;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px;color:var(--muted);margin:0 0 14px}
+.legend-strip span b{font-weight:700}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+
+<!-- ============ NAV ============ -->
+<nav>
+  <div class="nav-inner">
+    <div class="brand"><span class="dot"></span><span>scout / ns-per-workspace</span></div>
+    <div class="nav-links" id="navlinks">
+      <a href="#summary">摘要</a>
+      <a href="#terms">定義</a>
+      <a href="#status">現狀</a>
+      <a href="#impact">衝擊</a>
+      <a href="#matrix">打分</a>
+      <a href="#refutation">翻盤</a>
+      <a href="#blockers">Blocker</a>
+      <a href="#roadmap">路線</a>
+      <a href="#extras">補充</a>
+      <a href="#open">待驗</a>
+      <a href="#sources">來源</a>
+    </div>
+    <button class="toggle" id="themeBtn" aria-label="切換明暗主題">
+      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <span id="themeTxt">Light</span>
+    </button>
+  </div>
+</nav>
+
+<!-- ============ HERO ============ -->
+<header class="hero">
+  <div class="badge"><span class="pulse"></span>偵察（scout）· 非決策 · 尚未拍板</div>
+  <h1>「一個 workspace 一個 <span class="accent">namespace</span>」架構調整 — 偵察與 decision matrix</h1>
+  <p class="lead">核心發現：marketplace 的 cloud services <b>「已經」per-workspace 共用 ns</b>（程式碼＋git 歷史＋live 三重驗證）；「每服務一顆 ns」的印象來自 agent runtime 與 prod 手動存量。13 維 matrix <b>現狀 40 vs 提案 40 打平</b>——提案贏結構性維度、現狀贏風險維度，<b>決策取決於配套是否入 scope、而非粒度本身</b>。</p>
+  <div class="meta-chips">
+    <span class="chip">日期 <b>2026-07-02</b></span>
+    <span class="chip">類別 <b>scout</b></span>
+    <span class="chip">會議 <b>2026-07-01 議題 5（pending）</b></span>
+    <span class="chip">Scope <b>marketplace 路徑</b></span>
+    <span class="chip">結論 <b style="color:var(--amber)">40:40 打平 · 取決於配套</b></span>
+  </div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">40<small> vs 40</small></div><div class="l">13 維 matrix 總分打平——提案贏結構、現狀贏風險</div></div>
+    <div class="kpi good"><div class="v">5<small> release 3 type</small></div><div class="l">live 一顆 ns 同住 odoo+n8n+3 mcp——CS 已是提案形態（零工程）</div></div>
+    <div class="kpi warn"><div class="v">4<small> 個</small></div><div class="l">硬 blocker，全集中在 agent runtime（唯一要搬的）</div></div>
+    <div class="kpi warn"><div class="v">14<small> 顆</small></div><div class="l">prod 全裸 ns（上線前資安 gap，不應跟著 pending）</div></div>
+  </div>
+</header>
+
+<main>
+<!-- ============ §00 SUMMARY ============ -->
+<section id="summary">
+  <div class="sec-head"><span class="sec-num">00</span><h2>核心結論 TL;DR</h2></div>
+  <p class="sec-sub">兩個核心發現＋matrix 打平敘事＋不應跟著 pending 的 P0。完整推理見下方各章節。</p>
+  <div class="tldr">
+    <ol>
+      <li><b>提案</b>（Elmo，2026-07-01 會議議題 5）：一個 PaaS workspace（裡面可放 cloud service / Security Access / Smart Home）<b>只用一顆 k8s namespace</b>，該 workspace 的每個 cloud service type 都灌進這顆 ns；跨 workspace 的 ns 之間網路隔離、同 ns 內自然互通。</li>
+      <li><b>核心發現 ①——marketplace 的 cloud services 其實「已經」這樣做了</b>：部署程式碼從第一版起就是 per-workspace 共用 ns（先是 <code>paas-ws-{workspace.id}</code>，2026-03-01 起改 <code>paas-ws-{md5(slug)[:8]}</code>，<b>粒度從未變過</b>）；live stg 上一顆 <code>paas-ws-stg-86f34bd4</code> 就同時住著 <b>odoo + n8n + 3 個 mcp-server（5 個 release、3 種 type）</b>。</li>
+      <li>「每個 service 自己一顆 ns」的印象來自另外兩個地方：<b>agent runtime</b>（per-project 獨立 ns）與 <b>prod 手動搬遷存量</b>（<code>woowtech-odoo</code>、<code>woowtech-n8n</code> 每服務一顆，共約 29 顆、不在 operator 管轄內）——<b>會議是在「per-service」的前提下討論這個提案的，該前提對 marketplace 路徑不成立</b>（§2）。</li>
+      <li><b>核心發現 ②——提案的真正工程 scope 比想像小、也跟想像不同</b>：marketplace cloud services <b>零工程</b>（已是提案形態）；<b>agent runtime 是唯一要搬的</b>（per-project <code>paas-ws-pa-{hash}</code> → 併入 workspace ns），全部改動與 4 個硬 blocker（§6）都集中在這；SA / SM <b>完全沒有 k8s 資源</b>（純 Cloudflare tunnel、connector 在使用者硬體/家中），零影響；prod 手動存量正解是<b>收編進 marketplace</b>（收編當下自然落入 workspace ns），不是在手動軌道內另做一次 ns 合併。</li>
+      <li>「跨 workspace 網路隔離」<b>現狀並不存在單一保證</b>（隔離三態混雜，§2.3-1）——這是提案的前提配套，也是兩案共同欠的地基。</li>
+      <li>13 維 decision matrix：<b>現狀 40 vs 提案 40，總分打平</b>——但分數結構不對稱：提案贏在結構性維度（quota 可控、計費歸屬、擴增性、互通性），現狀贏在風險維度（blast radius、名稱衝突、K8s API 層安全、遷移成本）。<b>打平意味著決策取決於配套是否入 scope、而非粒度本身</b>；會議「pending、不擋 7 月底上線」的決議與本分析一致（Project 先隱藏 → agent per-project ns 成長凍結）。</li>
+      <li>但 <b>§7 第 0 段的 6 項 P0 與粒度無關、不應跟著 pending</b>——其中「租戶隔離補鋪」與「PVC 誤標」屬上線前資安/資料安全 gap。</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============ §01 TERMS ============ -->
+<section id="terms">
+  <div class="sec-head"><span class="sec-num">01</span><h2>名詞與提案定義</h2></div>
+  <p class="sec-sub"><b style="color:var(--text)">workspace</b>＝PaaS 的租戶容器——一個 workspace 裡可以放多個 cloud service（odoo / n8n / mcp-server…各種 type）、Security Access、Smart Home，並可掛 project（agent runtime 的宿主）。</p>
+  <div class="stacks">
+    <div class="stack-card">
+      <div class="stack-head"><h4>方案一（現狀）</h4><span class="pill gray">混合粒度</span></div>
+      <ul class="complist">
+        <li><span class="nm">Cloud Svc</span><span class="ds">marketplace cloud services 共用 per-workspace ns</span></li>
+        <li><span class="nm">Agent</span><span class="ds">每個 project 一顆獨立 ns</span></li>
+        <li><span class="nm">SA / SM</span><span class="ds">無 k8s 資源</span></li>
+        <li><span class="nm">另有</span><span class="ds">prod 手動搬遷存量（per-service ns，§2.1）</span></li>
+      </ul>
+    </div>
+    <div class="stack-card primary">
+      <div class="stack-head"><h4>方案二（提案）</h4><span class="pill blue">每 ws 恰好一顆 ns</span></div>
+      <ul class="complist">
+        <li><span class="nm">落點</span><span class="ds">該 workspace 所有工作負載（所有 cloud service type + 所有 project 的 agent runtime pod）同 ns</span></li>
+        <li><span class="nm">網路</span><span class="ds">跨 workspace deny、同 ns 內互通</span></li>
+        <li><span class="nm">評分前提</span><span class="ds"><b>「跨 workspace deny」的 NetworkPolicy 配套隨提案一起落地</b>（查核確認此前提若抽掉，方案二網路安全分數不成立）</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="prose card" style="margin-top:18px">
+    <p style="margin:0"><b>會議語境</b>：Elmo 提案的資安自我說服理由是「同一個 workspace 代表使用者已知這幾個服務在同一區網 / 同一企業」；Eugene 的顧慮是會影響命名方式、效益不一定夠大、「拆開較安全」。會議決議 <b style="color:var(--amber)">pending、優先度低、不擋 7 月底上線</b>（待辦 #12）。本文即該評估的執行結果。</p>
+  </div>
+</section>
+
+<!-- ============ §02 STATUS ============ -->
+<section id="status">
+  <div class="sec-head"><span class="sec-num">02</span><h2>現狀：四種 ns 粒度並存</h2></div>
+  <p class="sec-sub">2026-07-02 程式碼＋git 歷史＋live 三重驗證。四種粒度同時存在；「每服務一顆」只對其中兩種成立。</p>
+  <div class="diagram"><div class="mermaid">flowchart TD
+    P["現狀 ns 粒度（四種並存）"]
+    P --> G1["marketplace cloud services&lt;br/&gt;per-workspace 共用&lt;br/&gt;paas-ws-{md5(slug)[:8]}"]
+    P --> G2["agent runtime&lt;br/&gt;per-project 一 ns 一 pod&lt;br/&gt;paas-ws-pa-{HMAC16}"]
+    P --> G3["prod 手動搬遷存量&lt;br/&gt;per-service {客戶}-{服務}&lt;br/&gt;約 29 顆 · operator 守衛之外"]
+    P --> G4["Security Access / Smart Home&lt;br/&gt;無 k8s ns · dedicated CF tunnel"]
+    G1 -. live .-> L1["stg 一顆 ns 5 release 3 type&lt;br/&gt;prod 零 paas-ws-* CS ns"]
+    G2 -. live .-> L2["stg 11 顆 paas-ws-stg-pa-*"]
+    classDef good fill:#10341f,stroke:#34d399,color:#bbf7d0;
+    classDef warn fill:#3f311a,stroke:#fbbf24,color:#fde68a;
+    classDef bad fill:#3f1d1d,stroke:#f87171,color:#fecaca;
+    classDef hi fill:#1e3a5f,stroke:#60a5fa,color:#dbeafe;
+    class P hi; class G1 good; class G2 warn; class G3 bad; class G4 good; class L1 hi; class L2 hi;</div></div>
+  <p class="cap">▲ §2.1 粒度盤點：綠＝已是提案形態/不受影響、黃＝唯一要搬、紅＝守衛之外的存量</p>
+
+  <h3 style="font-family:var(--mono);font-size:15px;margin:26px 0 10px;color:var(--muted)">2.1 粒度盤點（含證據）</h3>
+  <div class="card" style="padding:8px 8px 4px">
+  <table class="tbl">
+    <thead><tr><th style="width:22%">工作負載</th><th style="width:24%">現狀 ns 粒度</th><th>證據</th></tr></thead>
+    <tbody>
+      <tr><td><b>marketplace cloud services</b>（所有 type：odoo / n8n / mcp-server…）</td><td><b style="color:var(--green)">per-workspace 共用</b> <code>paas-ws-{md5(slug)[:8]}</code></td><td>程式碼唯一產生點 <code>src/controllers/paas.py:2047</code>（輸入只有 <code>workspace.slug</code>）；git 歷史 <code>31835ff</code>（2026-03-01）之前為 <code>paas-ws-{workspace.id}</code>，<b>粒度自始未變</b>；live：<code>helm list -n paas-ws-stg-86f34bd4</code> = <code>svc-06b55af1</code>(odoo-28.2.10) + <code>svc-5b78f97b</code>(n8n-2.0.1) + 3× mcp-server，5 release 同住一顆 ns。目前<b>只在 stg 活躍（prod 零 <code>paas-ws-*</code> CS ns）</b></td></tr>
+      <tr><td><b>agent runtime</b></td><td><b style="color:var(--amber)">per-project</b> <code>paas-ws-pa-{HMAC16}</code>，一 project 一 ns 一 pod</td><td><code>extra/paas-operator/src/api/agent_runtimes.py:52-61</code>；live stg 11 顆 <code>paas-ws-stg-pa-*</code></td></tr>
+      <tr><td><b>prod 手動搬遷存量</b>（未走 marketplace）</td><td><b style="color:var(--red)">per-service</b> <code>{客戶}-{服務}</code>，同客戶多服務＝多顆 ns</td><td>live：<code>woowtech-odoo</code>+<code>woowtech-n8n</code>、<code>torchmedia</code>+<code>torchmedia-hermes</code>、5 顆 <code>{user}-hermes</code>…約 29 顆；kubectl/helm 直管、無統一 tenant label、<b>在 operator 的 <code>paas-ws-</code> prefix 守衛之外</b></td></tr>
+      <tr><td><b>Security Access / Smart Home</b></td><td><b>無 k8s ns</b>（每 instance 一條 dedicated CF tunnel；connector 跑在租戶自有硬體 / 使用者家中，流量不進 cluster）</td><td><code>security_access.py</code> / <code>smart_home.py</code> 全檔零 k8s 呼叫；operator tunnels/access API 零 kubernetes 引用</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 style="font-family:var(--mono);font-size:15px;margin:26px 0 10px;color:var(--muted)">2.2 「每服務自己一顆 ns」印象 vs 實作 — 本次分析的關鍵校正</h3>
+  <div class="correct-wrap">
+    <div class="correct-head">
+      <h3>會議前提對 prod 手動存量與 agent runtime 成立，<span style="color:var(--red)">對 marketplace 路徑不成立</span></h3>
+    </div>
+    <div class="stacks">
+      <div class="stack-card imp-card bad">
+        <div class="stack-head"><h4>印象（會議前提）</h4><span class="pill red">✕ 對 marketplace 不成立</span></div>
+        <p class="prose" style="margin:0 0 10px">「目前每個 cloud service type 有自己的 ns」——印象來源可考：</p>
+        <ul class="complist">
+          <li><span class="nm">來源 1</span><span class="ds">prod 上看得到的所有客戶服務（手動搬遷那批）確實每服務一顆 ns</span></li>
+          <li><span class="nm">來源 2</span><span class="ds">agent runtime 確實 per-project 一顆 ns</span></li>
+          <li><span class="nm">來源 3</span><span class="ds">會議中「service build 時是不同 namespace」的語境是 Hermes MCP（cloud service，會落 <code>paas-ws-*</code>）↔ Hermes Agent 本體（在 <code>eugenechen-hermes</code>，手動軌道）——那兩個確實不同 ns，但推廣到「CS type 之間互相不同 ns」就與程式碼不符</span></li>
+        </ul>
+      </div>
+      <div class="stack-card imp-card good">
+        <div class="stack-head"><h4>實作（三重驗證）</h4><span class="pill green">✓ 自始 per-workspace 共用</span></div>
+        <ul class="complist">
+          <li><span class="nm">程式碼</span><span class="ds">唯一產生點 <code>src/controllers/paas.py:2047</code>，輸入只有 <code>workspace.slug</code></span></li>
+          <li><span class="nm">git 歷史</span><span class="ds"><code>31835ff</code>（2026-03-01「refactor: use naming module」）：ns 由 <code>paas-ws-{workspace.id}</code> 改 <code>paas-ws-{md5(slug)[:8]}</code>，<b>粒度自始 per-workspace</b></span></li>
+          <li><span class="nm">live</span><span class="ds"><code>helm list -n paas-ws-stg-86f34bd4</code>＝odoo + n8n + 3 mcp-server，<b>5 release 3 type 同一顆 ns</b>（決定性證據）</span></li>
+        </ul>
+      </div>
+    </div>
+    <div class="note-box" style="margin:16px 0 0;border-left-color:var(--primary)"><b>含義</b>：提案對 marketplace CS 是<b>「確認並守住現狀」，不是新工程</b>；決策重心因此移到 agent runtime 併入與否（§4–§6）、以及 prod 存量的收編路徑（§7）。</div>
+  </div>
+
+  <h3 style="font-family:var(--mono);font-size:15px;margin:26px 0 10px;color:var(--muted)">2.3 兩個顛覆直覺的現狀事實</h3>
+  <details open>
+    <summary><span class="skey">2.3-1</span>租戶網路隔離現狀是「三態混雜」，平台層保證缺席（CS 側）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary>
+    <div class="det-body">
+      <p>operator <code>create_namespace</code> 只建 ns + ResourceQuota + registry secret（<code>extra/paas-operator/src/services/helm.py:737-811</code>），全 repo 無任何對 CS 租戶 ns 下 NetworkPolicy 的程式。Live 驗證三態：</p>
+      <p>① marketplace CS ns 內存在 <b>chart 自帶</b> per-release NP，但語意等效放行（<code>svc-*-odoo</code> 的 ingress rule 只限 port、不限來源＝任何 ns 都能打 8069；egress allow-all）→ 跨租戶隔離實質缺席；② agent ns 有 per-instance 雙向 default-deny NP（chart 實檔驗證，§5-2），但 <b>11 顆中只有 6 顆有</b>（較舊 5 顆零 NP，chart 版本 drift）；③ prod 手動存量有 15 顆 ns 鋪了 <code>default-deny-external</code>（allow same-ns ingress / deny 跨 ns，約 2026-06-25 統一鋪設），<b style="color:var(--red)">14 顆全裸</b>（全部 5 顆 hermes 系、<code>bnidistrict/changching/linyanshan/lisachuzhu/lyucijyun-odoo</code>、<code>woowtech-n8n</code>、<code>hermes</code>、<code>hermes-mcp-admin</code>、<code>woowhademo</code>）。</p>
+      <p><b style="color:var(--text)">「跨 workspace deny」沒有單一保證來源、覆蓋有洞，是兩案共同欠的地基，與 ns 粒度無關。</b></p>
+    </div>
+  </details>
+  <details>
+    <summary><span class="skey">2.3-2</span>agent→租戶服務互通現狀是 dead path<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary>
+    <div class="det-body">
+      <p>NP 設計走 <code>namespaceSelector matchLabels woow.tw/workspace-id</code>（design.md:3486-3497），但 CS ns 從未被貼該 label（<code>build_managed_ns_labels</code> 只有 <code>paas-managed=true</code> + env，<code>helm.py:108-129</code>），且 <code>sync-workspaces</code> 端點在生產碼無 caller → project 改綁 cloud service 後 egress allowlist 不同步。<b>修法（貼 label + 接線）與粒度正交。</b></p>
+    </div>
+  </details>
+
+  <details style="margin-top:6px">
+    <summary><span class="skey">2.4</span>其他關鍵事實（6 條）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary>
+    <div class="det-body">
+      <ul class="factlist" style="margin-top:4px">
+        <li><span class="fn">01</span><span><code>delete_namespace</code> 全 codebase 唯一生產 caller = agent teardown（<code>agent_runtimes.py:577-586</code>）；operator 連可刪 CS ns 的 API 端點都不存在（<code>namespaces.py</code> 僅 POST create）→ CS 孤兒 ns + quota + registry secret 永存、無 TTL。</span></li>
+        <li><span class="fn">02</span><span>Quota：CS ns 有（<code>max(3×sum(allocated), 8CPU/8Gi/100Gi)</code>、<code>persistentvolumeclaims=10</code> 硬編碼、每次 deploy 重算但刪 service 不縮，<code>cloud_service.py:438-447</code> + <code>helm.py:770-787</code>）；agent ns <b>完全無 quota</b>（<code>_ensure_namespace</code> 只 apply label，<code>agent_runtimes.py:81-95</code>）；全 repo 無 LimitRange。<b>Live 佐證</b>：<code>paas-ws-stg-86f34bd4</code> PVC 已用 6/10（5 個 release）——PVC 上限分食是現在進行式；<code>paas-ws-stg-ad023482</code> 用量全零但殘留 12CPU quota ＝「服務刪光後 ns + quota 永存」的實例。</span></li>
+        <li><span class="fn">03</span><span>project↔workspace 是 <b>M:N</b>（<code>project.workspace_ids</code> 是從 <code>cloud_service_ids</code> 算出的 computed M2M，<code>project_project.py:36-49</code>），且 unbound project 合法（decouple invariant D1）→「per-workspace ns」對跨 ws / unbound project 沒有唯一落點，是提案的 design gap。</span></li>
+        <li><span class="fn">04</span><span>ns 上無任何 workspace/owner label；<code>ws_hash</code> = md5 單向、agent hash = HMAC 刻意反枚舉。但 agent ns 的 workspace ids 其實已持久化在 k8s 端（helm release-state Secret，<code>helm get values</code> 可還原）。</span></li>
+        <li><span class="fn">05</span><span>Odoo 端 <code>ir.config_parameter namespace_prefix</code> 與 operator env <code>NAMESPACE_PREFIX</code> 是<b>兩個獨立配置源、無共同來源</b>——改 ns 模型時的 drift 風險點（live 證實 stg 兩端已同步為 <code>paas-ws-stg-</code>）。</span></li>
+        <li><span class="fn">06</span><span>Cloudflare 命名與 ns 的耦合只有一處：CS 的 MCP subdomain 公式吃 ns 名（<code>generate_subdomain</code> = <code>{release}-{ns 去 paas-ws-}</code>，<code>cloudflare.py:804-816</code>；Odoo 端 <code>reconstruct_mcp_subdomain</code> 跨 repo byte-identical，<code>src/services/naming.py:61-80</code>）——<b>維持 <code>paas-ws-{md5(slug)[:8]}</code> scheme 不動就沒有命名連鎖</b>。docs 內既有「統一命名」分析（naming-env-token plan、L4 reconciler）全部是 prod/stg env-token 軸，per-workspace ns 粒度是新題。</span></li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<!-- ============ §03 IMPACT ============ -->
+<section id="impact">
+  <div class="sec-head"><span class="sec-num">03</span><h2>各子系統衝擊</h2></div>
+  <p class="sec-sub">若把 agent runtime 併入 workspace ns：改動 100% 集中在 agent runtime，其餘子系統零或幾乎零。</p>
+  <div class="card" style="padding:8px 8px 4px">
+  <table class="tbl">
+    <thead><tr><th style="width:18%">子系統</th><th>提案衝擊</th></tr></thead>
+    <tbody>
+      <tr><td><b>Cloud Service</b></td><td><b style="color:var(--green)">零工程</b>（已是提案形態）。被動衝擊：quota 被 agent 分食、PVC 誤標面擴大、可能被 agent teardown 整鍋端（§6）</td></tr>
+      <tr><td><b>Agent Runtime</b></td><td><b style="color:var(--amber)">全部改動集中在這</b>：3 處 ns 推導 lock-step（<code>agent_runtimes.py:61</code>、<code>mcp_invalidator.py:18-22</code>、<code>skill_invalidator.py:22-26</code>）、API contract（reap/resume/status/invalidate/delete 全以 project_hash 單鍵導 ns）、cross-repo chart、DB migration（stored <code>helm_namespace</code>/<code>pod_ws_url</code> 全 stale）、teardown 重寫</td></tr>
+      <tr><td><b>Security Access</b></td><td>幾乎零。唯一守線：<code>canonical_name</code> 刻意不從 <code>namespace_prefix</code> 推導（<code>security_access.py:207-213</code>，identity-anchor 設計保證），ns 改制不得反向引入耦合</td></tr>
+      <tr><td><b>Smart Home</b></td><td>零。守線：「刪 ns ≠ teardown 租戶」——CF 資源不在 ns 裡，必須仍走 Odoo unlink guard（否則重演 cf-ns-orphan pitfall）</td></tr>
+      <tr><td><b>Cloudflare 整合</b></td><td>agent runtime 零 CF 資源 → 併入本身零影響。風險僅在「順手改 ns 命名 scheme」→ MCP subdomain 跨 repo 契約連鎖（§2.4 末條）。<b>別動 <code>paas-ws-{md5(slug)[:8]}</code> 就安全</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============ §04 MATRIX ============ -->
+<section id="matrix">
+  <div class="sec-head"><span class="sec-num">04</span><h2>Decision Matrix（13 維）</h2></div>
+  <p class="sec-sub">1–5 分，5 最好；查核校正後。Scope＝marketplace 路徑（方案一/二定義見 §1）。<b style="color:var(--green)">▲</b>＝提案較優、<b style="color:var(--red)">▼</b>＝現狀較優、<span style="color:var(--faint)">＝</span>同分。</p>
+  <div class="note-box">prod 手動存量不進 matrix：它的「合併」正解是收編進 marketplace（§7），屆時自動落入方案二形態。</div>
+  <div class="legend-strip">
+    <span><b class="delta up">▲</b> 提案較優 × 6</span>
+    <span><b class="delta down">▼</b> 現狀較優 × 4</span>
+    <span><b class="delta eq">＝</b> 同分 × 3</span>
+    <span style="margin-left:auto">總分 <b style="color:var(--text)">40 : 40 打平</b></span>
+  </div>
+  <div class="mtable-wrap card" style="padding:8px 8px 4px">
+  <table class="tbl matrix">
+    <thead><tr>
+      <th class="c" style="width:36px">#</th><th style="width:15%">維度</th>
+      <th class="c" style="width:56px">現狀</th><th class="c" style="width:56px">提案</th><th class="c" style="width:44px">Δ</th>
+      <th>關鍵理由</th>
+    </tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td><b>租戶網路安全性</b></td><td class="c"><span class="score s-lo">2</span></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="delta up">▲</span></td><td class="reason">現狀隔離三態混雜、平台層保證缺席（§2.3-1）；提案配套建 deny 後升級，但同 ns 把 agent 與 CS 攻擊面合併，抵銷部分紅利。<b>若只併 ns 不建 NP → 1 分</b></td></tr>
+      <tr><td class="num">2</td><td><b>同 ws 服務互通性</b></td><td class="c"><span class="score s-lo">2</span></td><td class="c"><span class="score s-hi">4</span></td><td class="c"><span class="delta up">▲</span></td><td class="reason">現狀 agent→CS MCP egress 是 dead path＋綁定變更不同步（§2.3-2）；提案同 ns 用 podSelector 較簡單。但 agent egress default-deny 同 ns 也照擋——「同 ns 自然互通」對 agent <b>不成立</b>（§5-3），兩案都要動 NP。CS↔CS 互通已是現狀（同 ns 無有效阻擋）</td></tr>
+      <tr><td class="num">3</td><td><b>維護性（刪、改）</b></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="delta eq">＝</span></td><td class="reason">現狀兩套模型雙寫、3 處 ns 推導副本、CS ns 永不刪；提案單一模型但失去「刪 ns 一鍋端」兜底。per-release GC 骨架已存在（CS <code>delete_release</code>），agent 真正缺的只是 <code>{release}-llm</code> Secret 刪除（§5-4）</td></tr>
+      <tr><td class="num">4</td><td><b>名稱/資源衝突</b></td><td class="c"><span class="score s-hi">4</span></td><td class="c"><span class="score s-lo">2</span></td><td class="c"><span class="delta down">▼</span></td><td class="reason"><b>硬 blocker</b>：agent chart auth Secret 固定名 per-ns → 同 ns 第二個 project 的 agent <code>helm install</code> 直接撞 Helm ownership 失敗（fail-loud、裝不起來，§5-5）。PVC orphan 標記全 ns 一鍋端誤標面也擴大（現狀已是 bug）</td></tr>
+      <tr><td class="num">5</td><td><b>Blast radius / 故障隔離</b></td><td class="c"><span class="score s-hi">4</span></td><td class="c"><span class="score s-lo">2</span></td><td class="c"><span class="delta down">▼</span></td><td class="reason"><code>delete_runtime</code> 第二步刪整顆 ns（<code>agent_runtimes.py:577-586</code>）——漏改就是「刪一個 project = 清掉整個租戶」的保證事故；workspace ns 變單一故障域。另注意：per-project 物理隔離是 agent-runtime design 的 sign-off 條款，推翻需正式 decision doc</td></tr>
+      <tr><td class="num">6</td><td><b>擴增性（規模維運）</b></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="score s-hi">4</span></td><td class="c"><span class="delta up">▲</span></td><td class="reason">現狀 ns 數 = O(ws) + O(近 30 天活躍 project)（reap 只 scale-to-0、GC 滯留 30 天）、兩套生命週期 runbook 雙寫；提案單一模型收斂</td></tr>
+      <tr><td class="num">7</td><td><b>K8s 平台限制</b></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="score s-hi">4</span></td><td class="c"><span class="delta up">▲</span></td><td class="reason">兩案都遠未觸頂（prod woow-k3s = 4-node HA embedded etcd）；提案 ns 更少、per-ns 固定物件（registry secret 等 ~3 件/ns）不重複。<code>--history-max</code> 未設是共同待修</td></tr>
+      <tr><td class="num">8</td><td><b>硬體資源限制可控</b></td><td class="c"><span class="score s-lo">2</span></td><td class="c"><span class="score s-hi">4</span></td><td class="c"><span class="delta up">▲</span></td><td class="reason"><b>現狀 agent ns 完全無 ResourceQuota = 每個 project 一個無上限逃逸口</b>；提案天然納入 workspace quota（quota 本來就按 workspace 總和訂）。但公式須納入 agent、補 LimitRange、spawn 加 quota 預檢，否則 quota 滿時 helm install 成功但 pod FailedCreate 靜默（撞 coldstart pitfall 觀測盲區）</td></tr>
+      <tr><td class="num">9</td><td><b>外部資源可溯源</b></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="delta eq">＝</span></td><td class="reason">CF 命名/溯源與 ns 粒度<b>正交</b>：SA 全鏈 stamp <code>canonical_name</code>、CS/SM DNS 無 comment、CS 呼叫未傳 env token、L4 reconciler 只看 CF name 不看 ns——兩案同分。提案不修任何既有溯源缺口</td></tr>
+      <tr><td class="num">10</td><td><b>Odoo 消失時孤兒辨識</b></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="score s-mid">3</span></td><td class="c"><span class="delta eq">＝</span></td><td class="reason">agent ns 的 workspace ids 可由 helm release-state Secret 還原（§5-6），現狀差距被原分析高估；提案的 release 級殘留混在活 ns 裡反而更難認。實質改善要靠補 workspace-id label，兩案皆然</td></tr>
+      <tr><td class="num">11</td><td><b>遷移成本/相容性</b></td><td class="c"><span class="score s-hi">5</span></td><td class="c"><span class="score s-lo">2</span></td><td class="c"><span class="delta down">▼</span></td><td class="reason">現狀零成本；提案是雙 repo + chart + DB migration + API contract 全鏈改動（好消息：100% 集中在 agent runtime）。可行路徑：new-only cutover（§7 第 2 段）</td></tr>
+      <tr><td class="num">12</td><td><b>計費/成本歸屬</b></td><td class="c"><span class="score s-lo">2</span></td><td class="c"><span class="score s-hi">4</span></td><td class="c"><span class="delta up">▲</span></td><td class="reason">repo 零 metering（純 plan 預購制）；未來若做 per-ns 成本歸屬，「一 ns = 一租戶」天然對齊。M:N project 的成本分攤是 gap</td></tr>
+      <tr><td class="num">13</td><td><b>K8s API 層安全邊界（Secret/SA/PSA）*</b></td><td class="c"><span class="score s-hi">4</span></td><td class="c"><span class="score s-lo">2</span></td><td class="c"><span class="delta down">▼</span></td><td class="reason">明文 LLM Secret（<code>{release}-llm</code>）、n8n secret、helm release-state Secret（含完整 values）全是 ns-scoped——同 ns 後任一 workload 的 SA 若可讀 Secret 即一鍋端；PSA 的 ns 級差異化（agent 鎖 restricted vs 第三方 chart 需 baseline）喪失，未來上 PSA 的成本從貼 label 升級為 admission controller</td></tr>
+    </tbody>
+    <tfoot>
+      <tr><td class="num"></td><td><b>總分</b></td><td class="c"><span class="score">40</span></td><td class="c"><span class="score">40</span></td><td class="c"><span class="delta eq">＝</span></td><td class="reason">打平——提案贏結構性維度、現狀贏風險維度；決策取決於配套是否入 scope、而非粒度本身</td></tr>
+    </tfoot>
+  </table>
+  </div>
+  <p class="cap" style="text-align:left;margin-top:12px">* 第 13 項為補完性評審新增，原 6 個分析員未評。</p>
+
+  <div class="diagram" style="margin-top:24px"><div class="mermaid">flowchart TD
+    M["13 維 matrix&lt;br/&gt;現狀 40 vs 提案 40 打平"] --> S{"分數結構不對稱"}
+    S --> W1["提案贏：結構性維度&lt;br/&gt;quota 可控 · 計費歸屬&lt;br/&gt;擴增性 · 互通性"]
+    S --> W2["現狀贏：風險維度&lt;br/&gt;blast radius · 名稱衝突&lt;br/&gt;K8s API 層安全 · 遷移成本"]
+    W1 --> D["決策取決於配套是否入 scope&lt;br/&gt;而非粒度本身"]
+    W2 --> D
+    D --> P["會議決議 pending、不擋 7 月底上線&lt;br/&gt;與本分析一致"]
+    D --> Z["做完第 0 段&lt;br/&gt;現狀分數約升至 45"]
+    Z --> E["再評第 1、2 段是否仍值得"]
+    classDef hi fill:#1e3a5f,stroke:#60a5fa,color:#dbeafe;
+    classDef warn fill:#3f311a,stroke:#fbbf24,color:#fde68a;
+    classDef good fill:#10341f,stroke:#34d399,color:#bbf7d0;
+    classDef bad fill:#3f1d1d,stroke:#f87171,color:#fecaca;
+    class M hi; class S warn; class W1 good; class W2 bad; class D warn; class P warn; class Z good; class E hi;</div></div>
+  <p class="cap">▲ 打平的敘事：提案贏結構、現狀贏風險，決策移到配套與時機</p>
+</section>
+
+<!-- ============ §05 REFUTATION ============ -->
+<section id="refutation">
+  <div class="sec-head"><span class="sec-num">05</span><h2>反證查核的翻盤點</h2></div>
+  <p class="sec-sub">原始打分有 5 處立論被自家查核推翻，本文分數已回填。記錄於此供日後重評時對照。</p>
+  <div class="toolbar">
+    <button class="btn-sm" data-act="open" data-scope="#refutation">展開全部</button>
+    <button class="btn-sm" data-act="close" data-scope="#refutation">收合全部</button>
+  </div>
+  <details open><summary><span class="st part">翻盤 1</span>「agent ns 無 quota → 提案容量失控」方向搞反<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">無 quota 是<b style="color:var(--text)">現狀</b>的缺口；提案反而讓 agent 落入 marketplace 既有 per-tenant quota 之下。</div></details>
+  <details><summary><span class="st part">翻盤 2</span>「NP union 提權」不成立<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">design.md:3471-3473 的 name-only podSelector 是過時 skeleton；chart 實檔（<code>woow-paas-charts/charts/agent-runtime</code> 0.4.3，自首 commit 起）的 NP podSelector = <code>app.kubernetes.io/name</code> + <code>app.kubernetes.io/instance: {release}</code>，per-instance。同 ns 多 agent 不會互相 union egress。</div></details>
+  <details><summary><span class="st part">翻盤 3</span>「同 ns 自然互通」對 agent 不成立<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">agent chart 是 Ingress+Egress 雙向 default-deny 且無 same-ns allow——合併 ns 後 agent egress 仍只有 TCP 3000/3001（且仍要 ns 貼 workspace-id label 才 match）。連帶「prompt-injection 下 agent 直連租戶 DB」的風險敘事也被推翻（除非 NP 改開）。</div></details>
+  <details><summary><span class="st part">翻盤 4</span>「per-release GC 從零重寫」不成立<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">CS <code>delete_release</code> 已是共用 ns 內的 per-release GC 骨架（helm uninstall + PVC orphan label）；agent 缺的只是 <code>{release}-llm</code> Secret 刪除（operator KubectlService 現無 delete secret 方法）。</div></details>
+  <details><summary><span class="st part">翻盤 5</span>auth Secret 撞名後果修正<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">不是「靜默互踩輪替 key → 間歇 401」，而是固定名撞 Helm ownership → <b style="color:var(--text)">同 ns 第二個 agent release install 直接失敗</b>。對提案是更硬、但 fail-loud 的 blocker。</div></details>
+  <details><summary><span class="st part">翻盤 6</span>「agent ns→workspace 對映僅存 Odoo DB」不成立<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">workspace ids 持久化在該 ns 的 helm release-state Secret（<code>helm get values</code> 可還原），Odoo 消失後仍可反查（只是可發現性差）。</div></details>
+  <details><summary><span class="st">誤判排除</span>C-scale 把「方案一/方案二」指涉讀反<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">另有一條 C-scale 查核把現狀讀成提案，該 refuted 屬誤判，已在校準時排除。</div></details>
+</section>
+
+<!-- ============ §06 BLOCKERS ============ -->
+<section id="blockers">
+  <div class="sec-head"><span class="sec-num">06</span><h2>提案的硬 blockers（缺一不可）</h2></div>
+  <p class="sec-sub">動工前必須解的 4 項，全集中在 agent runtime。點卡片展開細節。</p>
+  <div class="gap-grid">
+    <details open><summary>1 · agent chart auth Secret 改 release-scoped 命名<span class="st miss">硬 blocker</span></summary><div class="det-body"><p>cross-repo <code>woow-paas-charts</code>——否則同 workspace 第二個 project 的 agent 裝不起來（撞 Helm ownership，§5-5）。</p></div></details>
+    <details><summary>2 · <code>delete_runtime</code> 改 per-release teardown<span class="st miss">硬 blocker</span></summary><div class="det-body"><p>複用 CS <code>delete_release</code> 骨架 + 補 <code>{release}-llm</code> Secret 刪除；<code>delete_namespace</code> 從 agent DELETE 路徑移除，workspace teardown 做成獨立顯式端點（dry-run 列將刪資源 + 確認 token），過渡期給 <code>delete_namespace</code> 加「只准刪 <code>pa-</code> 前綴」型別 guard。</p></div></details>
+    <details><summary>3 · quota 模型統一<span class="st miss">硬 blocker</span></summary><div class="det-body"><p>公式改 <code>3×sum(CS allocated) + sum(agent 配額)</code>（可啟用 dormant 的 <code>agent_session.quota_override_*</code>）、<code>persistentvolumeclaims=10</code> 參數化、補 LimitRange（否則未宣告 resources 的容器被 admission 拒建）、spawn 路徑加 quota 預檢與明確錯誤回報。</p></div></details>
+    <details><summary>4 · M:N / unbound project 的 pod 落點拍板<span class="st miss">硬 blocker</span></summary><div class="det-body"><p>plan-gap-stop-and-report 紀律：<code>primary_workspace_id</code> 升格為建立時 snapshot、不隨綁定漂移的 stored 欄位；或禁跨 ws 綁定；unbound project 明訂 fallback（保留 per-project ns？禁用 agent？）。</p></div></details>
+  </div>
+</section>
+
+<!-- ============ §07 ROADMAP ============ -->
+<section id="roadmap">
+  <div class="sec-head"><span class="sec-num">07</span><h2>建議路線（三段式）</h2></div>
+  <p class="sec-sub">第 0 段與粒度解耦、上線前該修；第 1、2 段維持 pending，等 Project 解除隱藏或 prod 存量收編排程時再啟動。</p>
+  <div class="diagram"><div class="mermaid">flowchart LR
+    S0["第 0 段&lt;br/&gt;與粒度解耦的 P0&lt;br/&gt;（上線前收尾）"] --> S1["第 1 段&lt;br/&gt;合併前置&lt;br/&gt;§6 四個 blocker"]
+    S1 --> S2["第 2 段&lt;br/&gt;合併本體&lt;br/&gt;agent runtime 併入 workspace ns"]
+    S0 -. 現狀分數升至 ~45 .-> N["再評第 1、2 段是否值得"]
+    S1 -. pending .-> W["等 Project 解除隱藏&lt;br/&gt;或 prod 存量收編排程"]
+    classDef good fill:#10341f,stroke:#34d399,color:#bbf7d0;
+    classDef warn fill:#3f311a,stroke:#fbbf24,color:#fde68a;
+    classDef hi fill:#1e3a5f,stroke:#60a5fa,color:#dbeafe;
+    class S0 good; class S1 warn; class S2 warn; class N hi; class W warn;</div></div>
+  <p class="cap">▲ 三段式：第 0 段先行（資安地基）、第 1/2 段隨會議決議維持 pending</p>
+
+  <details open style="margin-top:20px"><summary><span class="skey">第 0 段</span>與粒度解耦、現狀就該修的 P0（不應跟著 pending）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary>
+    <div class="det-body">
+      <p>會議把整個 ns 議題 pending 掉了；本段各項<b style="color:var(--text)">不應跟著 pending</b>——它們與粒度無關，其中隔離補鋪與 PVC 誤標屬上線前資安/資料安全 gap。</p>
+      <ul class="factlist" style="margin-top:4px">
+        <li><span class="fn">A</span><span><b style="color:var(--red)">補齊租戶隔離的未覆蓋名單（上線前資安 gap）</b>：prod 手動存量的 14 顆全裸 ns（全部 hermes 系、5 顆 odoo、n8n 等，§2.3-1）比照既鋪的 15 顆補 <code>default-deny-external</code>；marketplace 側在 <code>paas-ws-*</code> ns 落地 <b>default-deny + allow-same-ns + 顯式開洞</b>（cloudflared ingress / operator / Odoo↔agent / DNS），並釐清 agent ns 6/11 有 NP 的 chart 版本 drift（舊 spawn 補渲染或 respawn）。開洞前先以 live cluster 釘死 cloudflared shared-tunnel pod 所在 ns。</span></li>
+        <li><span class="fn">B</span><span>CS ns 補 <code>woow.tw/workspace-id</code> label（單一來源 <code>build_managed_ns_labels</code> 擴充；值用 raw workspace id，chart values 註解同步修正）——一次修好 MCP dead path、人工反查、NP selector 三件事。prod 手動存量順手補統一 tenant label（收編 marketplace 前的最低治理）。</span></li>
+        <li><span class="fn">C</span><span><code>list_pvcs</code> orphan 標記加 <code>app.kubernetes.io/instance={release}</code> selector——<b>資料刪除級 bug，今天同 workspace 多 service 就會誤標</b>（<code>releases.py:229-242</code> + <code>helm.py:1231-1251</code>）；並開 <code>woow-paas-charts</code> 驗證 pvc-cleanup cron 現行版是否檢查 Bound。</span></li>
+        <li><span class="fn">D</span><span><code>workspace.slug</code> write guard（identity-anchor，比照 SA <code>canonical_name</code> 的 su-env-exempt-guard pattern）——ns=md5(slug) 但 slug 現可任意改。</span></li>
+        <li><span class="fn">E</span><span><code>sync-workspaces</code> 接線（project 綁定變更 hook 或 drift cron）。</span></li>
+        <li><span class="fn">F</span><span>operator helm install/upgrade 加 <code>--history-max</code>（建議 3–5）。</span></li>
+      </ul>
+    </div>
+  </details>
+  <details><summary><span class="skey">第 1 段</span>合併前置（§6 四個 blocker）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary>
+    <div class="det-body"><p>解決 §6 的 4 個硬 blocker：auth Secret release-scoped 命名、<code>delete_runtime</code> per-release teardown、quota 模型統一、M:N / unbound project 落點拍板。</p></div>
+  </details>
+  <details><summary><span class="skey">第 2 段</span>合併本體（把 agent runtime 併入 workspace ns）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary>
+    <div class="det-body">
+      <p><b style="color:var(--text)">new-only cutover</b>：新 spawn 一律落 workspace ns；既有 <code>pa-</code> ns 靠 idle reaper（5 分鐘 cron）+ 30 天 GC 自然 drain，不做 live 搬遷（helm 不支援 release 跨 ns 搬移；接受 <code>/workspace</code> PVC 狀態丟失）。</p>
+      <p>ns 命名<b>維持 <code>paas-ws-{md5(slug)[:8]}</code> 不動</b>（避免 MCP subdomain / L4 parse 的跨 repo 契約連鎖）。</p>
+      <p>配一次性存量清點腳本（列 cluster 全部 <code>paas-ws-pa-*</code> 對 <code>agent_session</code> stored hash 取差集），遷移期孤兒不留長尾；rollout design 先寫：Odoo/operator/chart 三方 lock-step 順序、雙 config 來源（<code>ir.config_parameter</code> vs operator env）合流、回滾語意。</p>
+    </div>
+  </details>
+  <details><summary><span class="skey">提示</span>決策提示 &amp; prod 手動存量的路線<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary>
+    <div class="det-body">
+      <p><b>決策提示</b>：做完第 0 段後現狀分數約升至 <b style="color:var(--green)">45</b>（互通性、網路安全、溯源缺口都被修掉），屆時再評第 1、2 段是否仍值得——提案剩下的獨有紅利 = 單一生命週期模型 + quota 統一 + offboarding 可稽核刪除；獨有代價 = blast radius 集中 + Secret 同鍋 + 遷移工程。<b>時程上與會議決議對齊</b>：第 0 段建議併入 7 月底上線前收尾（資安地基）；第 1、2 段維持 pending，等 Project 解除隱藏（agent ns 開始成長）或 prod 存量收編 marketplace 排程時再啟動。</p>
+      <p style="margin-bottom:0"><b>prod 手動存量的路線</b>（不在 matrix scope，但屬同一決策脈絡）：存量手動服務的終局是 marketplace 化（會議議題 3 的 MCP monorepo 已在走）；收編當下自然落入 per-workspace ns，等於提案在存量側的實現路徑。<b>不建議在手動軌道內另做一次 ns 合併</b>（成本花在即將淘汰的軌道）。收編前最低治理：統一 tenant label + 補齊 default-deny-external。</p>
+    </div>
+  </details>
+</section>
+
+<!-- ============ §08 EXTRAS ============ -->
+<section id="extras">
+  <div class="sec-head"><span class="sec-num">08</span><h2>補充維度（原 rubric 沒想到的）</h2></div>
+  <p class="sec-sub">補完性評審找出的 5 個維度；其中 K8s API 層安全邊界已入 matrix #13。</p>
+  <ul class="factlist">
+    <li><span class="fn" style="color:var(--green)">↑提案</span><span><b>租戶 offboarding / 可稽核徹底刪除</b>：現狀 CS ns 永不刪；提案讓「刪 workspace = 級聯 unlink + 刪整顆 ns」成為單一可稽核語意（GDPR-style 刪除證明的低成本布局），前提是 SM/SA 的 CF 資源仍走 Odoo unlink guard。</span></li>
+    <li><span class="fn" style="color:var(--red)">↑現狀</span><span><b>K8s API 層安全邊界</b>（已入 matrix #13）。</span></li>
+    <li><span class="fn">配套</span><span><b>Rollout/回滾時序</b>（提案必要配套，見 §7 第 2 段）。</span></li>
+    <li><span class="fn">兩案</span><span><b><code>workspace.slug</code> 不可變性</b>（前置 blocker，兩案都該修）。</span></li>
+    <li><span class="fn" style="color:var(--green)">↑提案</span><span><b>Observability / on-call 租戶歸因</b>（小幅傾向提案，效益等 label 補齊才兌現）。</span></li>
+  </ul>
+</section>
+
+<!-- ============ §09 OPEN ============ -->
+<section id="open">
+  <div class="sec-head"><span class="sec-num">09</span><h2>Open questions</h2></div>
+  <p class="sec-sub">2026-07-02 live 驗證關閉了 4 項（含本次校正核心）；仍有 5 項待驗。</p>
+  <div class="card" style="margin-bottom:18px">
+    <h4 style="font-family:var(--mono);font-size:13px;color:var(--green);margin:0 0 10px">✓ 已由 live 驗證關閉</h4>
+    <ul class="factlist">
+      <li><span class="fn">✓</span><span><span class="strike">cluster 層是否另掛 default-deny NP</span> → 無 cluster 級；隔離三態混雜（§2.3-1），matrix #1 現狀 2 分維持。</span></li>
+      <li><span class="fn">✓</span><span><span class="strike">stg 的 <code>namespace_prefix</code> 兩端是否同步</span> → live ns <code>paas-ws-stg-*</code> 證實同步為 <code>paas-ws-stg-</code>。</span></li>
+      <li><span class="fn">✓</span><span><span class="strike">prod 是否已裝 CloudService model</span> → prod 零 <code>paas-ws-*</code> CS ns，marketplace 只在 stg 活躍；prod 客戶服務全在手動存量。</span></li>
+      <li><span class="fn">✓</span><span><span class="strike">marketplace CS 是否真的共用 ns</span> → <b style="color:var(--green)">已驗（本次校正核心）</b>：程式碼唯一產生點 + git 歷史自始 per-workspace + live 一顆 ns 5 release 3 type。</span></li>
+    </ul>
+  </div>
+  <details open><summary><span class="st part">待驗</span>會議 6c「內網 Pod CIDR bypass」的技術前提<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">CF Access 的 IP bypass 看的是 CF 端看到的 connecting client IP——K3s 內 pod 打對外 hostname 通常經 cluster NAT 出口，CF 看到的是<b style="color:var(--text)">出口公網 IP 而非 Pod IP</b>。若如此，bypass 白名單該預填的是 cluster 出口 IP（同為定值），Pod CIDR（RFC1918）可能永遠 match 不到。Access Control 實作前需以真流量驗證 <code>cf-connecting-ip</code>。</div></details>
+  <details><summary><span class="st part">待驗</span>agent <code>pa-</code> ns 的 NP 覆蓋 drift<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">11 顆中僅 6 顆（較新）有 NP、5 顆（29-31d 前 spawn）零 NP——確認是 chart 版本演進所致後，決定舊 release 補渲染還是等 GC 自然淘汰。另 agent ns 缺 <code>paas.woowtech.io/env</code> label（CS ns 有）——兩條 ns 建立路徑的 label drift 實例。</div></details>
+  <details><summary><span class="st part">待驗</span>pvc-cleanup cron（cross-repo）刪除前是否檢查 PVC Bound<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">決定 <code>list_pvcs</code> 誤標 bug 的實際爆炸半徑。</div></details>
+  <details><summary><span class="st part">待驗</span>operator ClusterRole 實際 manifest（cross-repo）<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">README 宣稱「RBAC 層也 enforce prefix」，但 K8s RBAC <code>resourceNames</code> 不支援 prefix wildcard，存疑。</div></details>
+  <details><summary><span class="st part">待驗</span>prod 手動存量收編 marketplace 的排程與存量遷移設計<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></summary><div class="det-body">DB/filestore 搬遷、subdomain 沿用——屬另一個 scout/plan 的題目。</div></details>
+</section>
+
+<!-- ============ §10 SOURCES ============ -->
+<section id="sources">
+  <div class="sec-head"><span class="sec-num">10</span><h2>驗證記錄與來源</h2></div>
+  <p class="sec-sub">分析產物、live / git 驗證與會議來源；以及相關 plan / pitfall / decision 文件。</p>
+  <div class="prose card" style="margin-bottom:24px">
+    <p><b>原始事實調查</b>（7 份 × file:line 證據）、13 維度打分原文、39 條查核 verdict 與補完性評審輸出留存於分析 session 的 scratchpad（<code>facts.json</code> / <code>impacts.json</code> / <code>verdicts.json</code> / <code>critic.json</code>）；本文為查核校正後的彙整版。</p>
+    <p><b>Live 驗證</b>（2026-07-02，<code>kubectl --context woow-k3s</code> / <code>helm</code> 唯讀）：<code>get ns --show-labels</code>（粒度盤點、label drift）、<code>helm list -n paas-ws-stg-86f34bd4</code>（5 release 3 type 同 ns 的決定性證據）、<code>get netpol -A</code> + 逐條 <code>-o yaml</code>（隔離三態：<code>default-deny-external</code> 語意 vs odoo chart NP 等效放行）、<code>get resourcequota -A</code>（PVC 6/10、殘留 quota 實例）、租戶 ns 與 NP 覆蓋名單取差集。</p>
+    <p><b>Git 歷史驗證</b>：<code>31835ff</code>（2026-03-01「refactor: use naming module」）——ns 由 <code>paas-ws-{workspace.id}</code> 改 <code>paas-ws-{md5(slug)[:8]}</code>，粒度自始 per-workspace。</p>
+    <p style="margin-bottom:0"><b>會議來源</b>：2026-07-01「上線前功能聚焦」議題 4（Hermes 連線）、5（Namespace 合併，pending）、6c（IP Bypass / 內網 Pod CIDR）、8（Project 隱藏）。會議記錄存於 repo 外 <code>footage/meeting/</code>。</p>
+  </div>
+  <h3 style="font-family:var(--mono);font-size:15px;margin:0 0 14px;color:var(--muted)">相關文件（frontmatter related）</h3>
+  <div class="srcs">
+    <a href="../plans/2026-Q2/2026-06-21-naming-env-token-prod-stg-plan.md"><span class="n">01</span><span>naming-env-token prod/stg plan</span><span class="u">plans</span></a>
+    <a href="../plans/2026-Q2/2026-06-25-l4-reconciler-design.md"><span class="n">02</span><span>L4 reconciler design</span><span class="u">plans</span></a>
+    <a href="../plans/2026-Q2/agent-runtime-pod-design.md"><span class="n">03</span><span>agent-runtime-pod design</span><span class="u">plans</span></a>
+    <a href="../tracking/pitfalls/cf-ns-orphan-no-account-gc.md"><span class="n">04</span><span>cf-ns-orphan-no-account-gc pitfall</span><span class="u">pitfall</span></a>
+    <a href="../tracking/pitfalls/reaped-since-single-path-stamp-gc-immunity.md"><span class="n">05</span><span>reaped-since single-path GC immunity</span><span class="u">pitfall</span></a>
+    <a href="../decisions/refactor/cloud-service-project-decouple.md"><span class="n">06</span><span>cloud-service / project decouple</span><span class="u">decision</span></a>
+  </div>
+</section>
+</main>
+
+<footer>
+  <span>偵察（scout）文件 · 2026-07-02 · 由 2026-07-02-ns-per-workspace-decision-matrix.md 生成</span>
+  <span>docs/scout · scope＝marketplace 路徑</span>
+</footer>
+<button class="totop" id="totop" aria-label="回到頂部"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg></button>
+
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+const themeVars = (light) => light ? {
+  background:'#FFFFFF', primaryColor:'#EFF6FF', primaryTextColor:'#0F172A', primaryBorderColor:'#3B82F6',
+  lineColor:'#94A3B8', secondaryColor:'#F1F5F9', tertiaryColor:'#F8FAFC', tertiaryTextColor:'#0F172A',
+  fontFamily:'IBM Plex Sans, system-ui, sans-serif', fontSize:'13px'
+} : {
+  background:'#1E293B', primaryColor:'#243349', primaryTextColor:'#F1F5F9', primaryBorderColor:'#3B82F6',
+  lineColor:'#64748B', secondaryColor:'#1E3A5F', tertiaryColor:'#172033', tertiaryTextColor:'#F1F5F9',
+  fontFamily:'IBM Plex Sans, system-ui, sans-serif', fontSize:'13px'
+};
+
+/* 直接渲染頁面上所有 .mermaid 區塊。首次載入先保存原始語法,
+   主題切換時還原語法、清掉 data-processed,再用 mermaid.run() 以新主題色重繪。 */
+const mNodes = [...document.querySelectorAll('.mermaid')];
+mNodes.forEach(n => { n.dataset.src = n.textContent; });
+
+async function renderDiagrams(){
+  const light = document.documentElement.getAttribute('data-theme') === 'light';
+  mermaid.initialize({ startOnLoad:false, theme:'base', securityLevel:'loose',
+    flowchart:{ curve:'basis', htmlLabels:true, padding:14 }, themeVariables: themeVars(light) });
+  mNodes.forEach(n => { n.textContent = n.dataset.src; n.removeAttribute('data-processed'); });
+  try{ await mermaid.run({ nodes: mNodes }); }
+  catch(e){ console.error('mermaid render failed', e); }
+}
+renderDiagrams();
+
+/* ----- theme toggle ----- */
+const root = document.documentElement, tBtn = document.getElementById('themeBtn'),
+      tTxt = document.getElementById('themeTxt'), tIcon = document.getElementById('themeIcon');
+const moonPath = '<path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/>';
+const sunPath = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
+function applyTheme(t){
+  root.setAttribute('data-theme', t);
+  tTxt.textContent = t === 'dark' ? 'Light' : 'Dark';
+  tIcon.innerHTML = t === 'dark' ? sunPath : moonPath;
+  try{ localStorage.setItem('cond-theme', t); }catch(e){}
+  renderDiagrams();
+}
+try{ const saved = localStorage.getItem('cond-theme'); if(saved) applyTheme(saved); }catch(e){}
+tBtn.addEventListener('click', () => applyTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'));
+
+/* ----- copy buttons ----- */
+document.querySelectorAll('.copy').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const code = btn.parentElement.querySelector('code');
+    navigator.clipboard.writeText(code.innerText).then(() => {
+      btn.textContent = '已複製'; btn.classList.add('done');
+      setTimeout(() => { btn.textContent = '複製'; btn.classList.remove('done'); }, 1600);
+    });
+  });
+});
+
+/* ----- expand/collapse all ----- */
+document.querySelectorAll('[data-act]').forEach(b => {
+  b.addEventListener('click', () => {
+    const open = b.dataset.act === 'open';
+    document.querySelectorAll(b.dataset.scope + ' details').forEach(d => d.open = open);
+  });
+});
+
+/* ----- scroll progress + totop ----- */
+const prog = document.getElementById('progress'), totop = document.getElementById('totop');
+const onScroll = () => {
+  const h = document.documentElement.scrollHeight - innerHeight;
+  prog.style.width = (h > 0 ? (scrollY / h) * 100 : 0) + '%';
+  totop.classList.toggle('show', scrollY > 500);
+};
+addEventListener('scroll', onScroll, { passive:true }); onScroll();
+totop.addEventListener('click', () => scrollTo({ top:0, behavior:'smooth' }));
+
+/* ----- scroll-spy ----- */
+const links = [...document.querySelectorAll('.nav-links a')];
+const spy = new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    if(en.isIntersecting){
+      links.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + en.target.id));
+    }
+  });
+}, { rootMargin:'-45% 0px -50% 0px' });
+document.querySelectorAll('main section').forEach(s => spy.observe(s));
+</script>
+</body>
+</html>
