@@ -155,20 +155,23 @@ related:
 | CS ns 補 `woow.tw/workspace-id` label（+ `sync-workspaces` 接線）→ 修 MCP egress 靜默 dead path | §7 第 0 段 + §2.3-2 | **[#279](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/279)** |
 | `namespace_prefix` 雙配置源 | §2.4 | **→ 評估 skip**（刻意安全邊界；F-ENV-8，fold 進 prod-release SOP §6.4） |
 | CF MCP subdomain 跨 repo byte-identical 耦合 ns 名 | §2.4 / §3.1 | **→ 評估 skip**（invariant，dry-run consumer 無自動刪；F-NAME-1，fold 進 F-ENV-2 graduation） |
-| 租戶隔離補鋪 / `list_pvcs` orphan selector / `workspace.slug` write guard / `--history-max` | §7 第 0 段 | **待開**（未獨立開 issue） |
+| 補齊租戶網路隔離未覆蓋名單（marketplace 無 default-deny NP + prod 14 顆全裸 ns） | §7 第 0 段 | **[#280](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/280)** |
+| `list_pvcs` orphan 標記缺 release selector（同 workspace 多 service 誤刪資料 PVC） | §7 第 0 段 | **[#281](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/281)** |
+| `workspace.slug` write guard（identity-anchor 不可變，hardening/latent） | §7 第 0 段 | **[#282](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/282)** |
+| operator helm install/upgrade 加 `--history-max` | §7 第 0 段 | **→ 評估 skip**（Helm 3 預設 =10 非無限、respawn 經 uninstall 清空；F-HELM-1） |
 
-> 追蹤細節：skip 兩則見 `docs/tracking/followups/follow-ups.md`（F-ENV-8 / F-NAME-1）；三張 issue 見上表連結。
+> 追蹤細節：skip 三則見 `docs/tracking/followups/follow-ups.md`（F-ENV-8 / F-NAME-1 / F-HELM-1）；六張 issue（#277–#282）見上表連結。
 
 ### 第 0 段 — 與粒度解耦、現狀就該修的 P0
 
 > 會議把整個 ns 議題 pending 掉了；本段各項**不應跟著 pending**——它們與粒度無關，其中隔離補鋪與 PVC 誤標屬上線前資安/資料安全 gap。
 
-- **[待開]** **補齊租戶隔離的未覆蓋名單**（上線前資安 gap）：prod 手動存量的 14 顆全裸 ns（全部 hermes 系、5 顆 odoo、n8n 等，§2.3-1）比照既鋪的 15 顆補 `default-deny-external`；marketplace 側在 `paas-ws-*` ns 落地 **default-deny + allow-same-ns + 顯式開洞**（cloudflared ingress / operator / Odoo↔agent / DNS），並釐清 agent ns 6/11 有 NP 的 chart 版本 drift（舊 spawn 補渲染或 respawn）。開洞前先以 live cluster 釘死 cloudflared shared-tunnel pod 所在 ns。
+- **[→ #280]** **補齊租戶隔離的未覆蓋名單**（上線前資安 gap）：prod 手動存量的 14 顆全裸 ns（全部 hermes 系、5 顆 odoo、n8n 等，§2.3-1）比照既鋪的 15 顆補 `default-deny-external`；marketplace 側在 `paas-ws-*` ns 落地 **default-deny + allow-same-ns + 顯式開洞**（cloudflared ingress / operator / Odoo↔agent / DNS），並釐清 agent ns 6/11 有 NP 的 chart 版本 drift（舊 spawn 補渲染或 respawn）。開洞前先以 live cluster 釘死 cloudflared shared-tunnel pod 所在 ns。
 - **[→ #279]** CS ns 補 `woow.tw/workspace-id` label（單一來源 `build_managed_ns_labels` 擴充；值用 raw workspace id，chart values 註解同步修正）——一次修好 MCP dead path、人工反查、NP selector 三件事。prod 手動存量順手補統一 tenant label（收編 marketplace 前的最低治理）。
-- **[待開]** `list_pvcs` orphan 標記加 `app.kubernetes.io/instance={release}` selector——**資料刪除級 bug，今天同 workspace 多 service 就會誤標**（`releases.py:229-242` + `helm.py:1231-1251`）；並開 `woow-paas-charts` 驗證 pvc-cleanup cron 現行版是否檢查 Bound。
-- **[待開]** `workspace.slug` write guard（identity-anchor，比照 SA `canonical_name` 的 [su-env-exempt-guard pattern](../decisions/patterns/su-env-exempt-guard-false-green.md)）——ns=md5(slug) 但 slug 現可任意改。
+- **[→ #281]** `list_pvcs` orphan 標記加 `app.kubernetes.io/instance={release}` selector——**資料刪除級 bug，今天同 workspace 多 service 就會誤標**（`releases.py:229-242` + `helm.py:1231-1251`）；並開 `woow-paas-charts` 驗證 pvc-cleanup cron 現行版是否檢查 Bound。（查證確認：cron 到期即 delete、不查 Bound；修法有 STS volumeClaimTemplate PVC 未必帶 helm instance label 的隱坑，見 issue）
+- **[→ #282]** `workspace.slug` write guard（identity-anchor，比照 SA `canonical_name` 的 [su-env-exempt-guard pattern](../decisions/patterns/su-env-exempt-guard-false-green.md)）——ns=md5(slug) 但 slug 現可任意改。（查證校正：既有 CS 免疫〔teardown 用 stored `helm_namespace` 非重算〕、今天無租戶可達寫入路徑 → 降級為 low-severity hardening，開放自訂 slug 前補齊；total rubric 16）
 - **[→ #279]** `sync-workspaces` 接線（project 綁定變更 hook 或 drift cron）。
-- **[待開]** operator helm install/upgrade 加 `--history-max`（建議 3–5）。
+- **[→ 評估 skip]** operator helm install/upgrade 加 `--history-max`（建議 3–5）。**查證後撤案**：claim 核心「在租戶 ns 無限累積」不成立——Helm 3 預設 `--history-max=10`（無限需顯式設 0），缺 flag ＝ 走預設 10 非無限；且 agent respawn 經 uninstall 清空 release-state、不累積。殘留上限有界（每 release ≤~10 筆小 Secret）。is_real=no，記為 F-HELM-1（follow-ups）。
 - **[→ #278]（2026-07-02 新增）** agent `pa-` ns 補 per-project ResourceQuota（啟用 dormant 的 `agent_session.quota_override_*` 三欄位或給平台預設值，掛進 `_ensure_namespace` 路徑）——matrix #8 的「無上限逃逸口」在「不併入」的裁定下，必須在 per-project 模型內解，不能再指望合併後吃 workspace quota。**查證補充**：agent chart 全容器已宣告 limits（main + skill-runner sidecar），加 quota 不會因缺 limits 被 admission 拒；但 quota 值須 > 單 pod 需求（sidecar 啟用時已達 2CPU/2Gi），否則 capacity reject。
 
 ### 第 1 段 —（已否決，保留清單）合併前置（§6 四個 blocker）
