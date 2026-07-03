@@ -12,7 +12,7 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 - **Namespace Management**: Create namespaces with resource quotas
 - **Pod Monitoring**: Real-time pod status and health checks
 - **Cloudflare Integration**: Automatic DNS record and Tunnel route management for public service access
-- **Security**: API key authentication and namespace prefix enforcement
+- **Security**: API key authentication and application-layer namespace prefix validation (see [Namespace Enforcement](#namespace-enforcement) — the prefix boundary is enforced in the app layer, _not_ by RBAC)
 - **High Performance**: Async-first FastAPI with connection pooling
 - **Production-Ready**: Health checks, structured logging, and error handling
 
@@ -244,7 +244,9 @@ Environment variables:
 
 ### Namespace Enforcement
 
-All operations are restricted to namespaces starting with `paas-ws-` prefix. This is enforced at both the application and RBAC levels.
+All operations are restricted to namespaces starting with the `paas-ws-` prefix. **This prefix boundary is enforced at the application layer only** — `validate_namespace()` in [`src/services/helm.py:79-84`](src/services/helm.py) rejects any namespace that does not start with `settings.namespace_prefix` (`paas-ws-`) before a Helm/kubectl call is issued, and it is invoked at the entry of every mutating `HelmService` / `KubernetesService` method (the single choke-point through which all shell-outs pass).
+
+> **⚠️ RBAC does _not_ enforce the prefix.** The operator's `ClusterRole` (`paas-operator`, and the `paas-operator-stg` variant) grants verbs on resource *types* (`namespaces`, `pods`, `secrets`, `persistentvolumeclaims`, `deployments`, `statefulsets`, `ingresses`, `networkpolicies`, `resourcequotas`, `roles`/`rolebindings`, …) with **no `resourceNames` restriction**, bound cluster-wide via a `ClusterRoleBinding`. At the RBAC layer the ServiceAccount is therefore authorized across **all** namespaces, not just `paas-ws-*`. Kubernetes RBAC structurally *cannot* express a `paas-ws-*` prefix boundary: `resourceNames` matches exact object **names** (a different axis from namespace), supports no wildcard/prefix, and is ignored for `list`/`watch`/`create`; namespace scoping is only achievable via a namespaced `Role` bound per-namespace — impractical here because the operator must **create** namespaces on demand with dynamic `paas-ws-{hash}` names that cannot be pre-enumerated. Treat this `ClusterRole` as **operational authorization** (which verbs on which resource *types*), **not** a tenant-isolation boundary. Rationale, ground-truth manifest, and the defense-in-depth decision (admission-layer webhook as a post-launch hardening candidate) are recorded in [`docs/decisions/namespace-prefix-enforcement-app-layer-not-rbac.md`](../../docs/decisions/namespace-prefix-enforcement-app-layer-not-rbac.md).
 
 ### API Key Authentication
 
@@ -257,13 +259,18 @@ curl -H "X-API-Key: your-secret-key" \
 
 ### RBAC Permissions
 
-The service uses a dedicated ServiceAccount with ClusterRole permissions limited to:
+The service uses a dedicated ServiceAccount (`paas-system/paas-operator`) bound cluster-wide via `ClusterRoleBinding` to the `paas-operator` `ClusterRole`. The role grants full RWCU verbs on the following resource **types** (with **no `resourceNames` restriction** — i.e. cluster-wide across every namespace; see the ⚠️ note under [Namespace Enforcement](#namespace-enforcement)):
 
-- Namespace management
-- Core resources (Pods, Services, ConfigMaps, Secrets, PVCs)
-- Apps resources (Deployments, StatefulSets)
-- Networking (Ingresses)
-- Resource quotas
+- `namespaces`
+- Core resources: `pods` (+ `pods/log`, `pods/exec`), `services`, `serviceaccounts`, `configmaps`, `secrets`, `persistentvolumeclaims`, `events`
+- Apps: `deployments`, `statefulsets`, `replicasets`, `daemonsets` (+ `*/scale`)
+- Networking: `ingresses`, `networkpolicies`
+- `resourcequotas`, `poddisruptionbudgets`, `horizontalpodautoscalers`, `leases`
+- `jobs`, `cronjobs`
+- Cluster-scoped: `persistentvolumes` (get/list/patch/delete), `storageclasses` (get/list)
+- RBAC: `roles`, `rolebindings` (RWCU — needed for per-tenant Role provisioning)
+
+> The `ClusterRole` is defined and published from the cross-repo **`woow-paas-charts`** `paas-operator` chart and applied via Fleet (`paas-app-bundle-cd`); it is _not_ managed from this repo. Edit it there, not with a local `helm upgrade`.
 
 ### YAML Injection Prevention
 
