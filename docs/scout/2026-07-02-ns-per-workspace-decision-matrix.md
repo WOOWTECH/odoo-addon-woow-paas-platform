@@ -205,13 +205,13 @@ related:
 - ~~marketplace CS 是否真的共用 ns~~ → **已驗**（本次校正核心）：程式碼唯一產生點 + git 歷史自始 per-workspace + live 一顆 ns 5 release 3 type。
 - ~~agent runtime 是否應併入 workspace ns~~ → **已裁定：否**（2026-07-02，架構層）：project⊥workspace 解耦（M:N + unbound 合法）→ workspace ns 無唯一落點，per-project ns 是解耦的體現；matrix 打平＋4 硬 blocker 為工程面佐證。
 
-仍開放：
+仍開放（2026-07-02 已對 issue #277–#282 做覆蓋比對；各項歸屬如下標記）：
 
-- **會議 6c「內網 Pod CIDR bypass」的技術前提待驗**：CF Access 的 IP bypass 看的是 CF 端看到的 connecting client IP——K3s 內 pod 打對外 hostname 通常經 cluster NAT 出口，CF 看到的是**出口公網 IP 而非 Pod IP**。若如此，bypass 白名單該預填的是 cluster 出口 IP（同為定值），Pod CIDR（RFC1918）可能永遠 match 不到。Access Control 實作前需以真流量驗證 `cf-connecting-ip`。
-- agent `pa-` ns 的 NP 覆蓋 drift：11 顆中僅 6 顆（較新）有 NP、5 顆（29-31d 前 spawn）零 NP——確認是 chart 版本演進所致後，決定舊 release 補渲染還是等 GC 自然淘汰。另 agent ns 缺 `paas.woowtech.io/env` label（CS ns 有）——兩條 ns 建立路徑的 label drift 實例。
-- pvc-cleanup cron（cross-repo）現行版刪除前是否檢查 PVC Bound？決定 `list_pvcs` 誤標 bug 的實際爆炸半徑。
-- operator ClusterRole 實際 manifest（cross-repo）：README 宣稱「RBAC 層也 enforce prefix」，但 K8s RBAC `resourceNames` 不支援 prefix wildcard，存疑。
-- prod 手動存量收編 marketplace 的排程與存量遷移設計（DB/filestore 搬遷、subdomain 沿用）——屬另一個 scout/plan 的題目。
+- **[→ #283]** **會議 6c「內網 Pod CIDR bypass」的技術前提待驗**：CF Access 的 IP bypass 看的是 CF 端看到的 connecting client IP——K3s 內 pod 打對外 hostname 通常經 cluster NAT 出口，CF 看到的是**出口公網 IP 而非 Pod IP**。若如此，bypass 白名單該預填的是 cluster 出口 IP（同為定值），Pod CIDR（RFC1918）可能永遠 match 不到。Access Control 實作前需以真流量驗證 `cf-connecting-ip`。（屬 Security Access L7 edge 認證層，與 #280 的 K8s NetworkPolicy 不同機制 → 另開 verification issue #283）
+- **[→ #280]** agent `pa-` ns 的 NP 覆蓋 drift：11 顆中僅 6 顆（較新）有 NP、5 顆（29-31d 前 spawn）零 NP——確認是 chart 版本演進所致後，決定舊 release 補渲染還是等 GC 自然淘汰。另 agent ns 缺 `paas.woowtech.io/env` label（CS ns 有）——兩條 ns 建立路徑的 label drift 實例。（NP drift 本在 #280 action#3；env-label facet 2026-07-02 一併補進 #280）
+- **[→ #281]** pvc-cleanup cron（cross-repo）現行版刪除前是否檢查 PVC Bound？決定 `list_pvcs` 誤標 bug 的實際爆炸半徑。（已於 #281 triage 回答：**不查 Bound**、grace 到期即 delete；#281 action item 已含補 Bound guard）
+- **[→ #284]** operator ClusterRole 實際 manifest（cross-repo）：README 宣稱「RBAC 層也 enforce prefix」，但 K8s RBAC `resourceNames` 不支援 prefix wildcard，存疑。（F-ENV-8 只論 app-level `validate_namespace`、未查 ClusterRole manifest 本身 → 另開 verification issue #284）
+- **[open-question]** prod 手動存量收編 marketplace 的排程與存量遷移設計（DB/filestore 搬遷、subdomain 沿用）——屬另一個 scout/plan 的題目（刻意 defer，不進本批 issue；待另開專題 plan）。
 
 ## 附錄：分析產物與驗證記錄
 
