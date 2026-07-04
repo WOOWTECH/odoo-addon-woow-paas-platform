@@ -223,6 +223,19 @@ class PaaSOperatorClient:
             data['workspace_id'] = workspace_id
         return self._request('POST', '/api/namespaces', data=data)
 
+    def backfill_baseline_netpol(
+        self, namespace: str, workspace_id: int
+    ) -> Dict[str, Any]:
+        """#279 P5 backfill: apply the baseline NetworkPolicy bundle + re-stamp
+        managed labels (paas-managed + env + workspace-id) on a PRE-EXISTING
+        CloudService namespace created before O4/O1. Idempotent. (Agent-ns env
+        re-stamp is hash-based on AgentRuntimeClient.restamp_labels — the operator
+        derives the env-specific ns there.)"""
+        return self._request(
+            'POST', f'/api/namespaces/{namespace}/baseline-netpol',
+            data={'workspace_id': workspace_id},
+        )
+
     # ==================== Helm Release Operations ====================
 
     def install_release(

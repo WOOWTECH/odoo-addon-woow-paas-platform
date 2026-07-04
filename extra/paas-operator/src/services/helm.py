@@ -1519,6 +1519,34 @@ class KubernetesService:
 
         return {"added": sorted(to_add), "removed": to_remove}
 
+    def stamp_managed_ns_labels(
+        self,
+        namespace: str,
+        workspace_id: Optional[int] = None,
+        reach_workspace_ids: Optional[List[int]] = None,
+    ) -> Dict[str, str]:
+        """Re-stamp a managed namespace's #279 labels (``paas-managed`` + env +
+        ``workspace-id`` and/or ``reach-ws-*``) via ``kubectl label --overwrite`` —
+        the P5 BACKFILL path for namespaces created before O1/F6 that lack the env /
+        workspace-id labels the NetworkPolicy selectors now depend on (a legacy CS ns
+        without ``workspace-id``/env fails leg-1 egress's namespaceSelector; a legacy
+        agent ns without env fails NP4's env predicate → fail-closed reach loss once
+        #280 removes the chart from-less).
+
+        Unlike ``reconcile_ns_reach_labels`` (which also DELETES stale reach-ws keys),
+        this only ADDS/overwrites the managed set — a backfill must never drop a reach
+        label the bind-path / cron legitimately put there. Idempotent.
+
+        Returns the label set applied (for observability / tests).
+        """
+        validate_namespace(namespace)
+        labels = build_managed_ns_labels(
+            workspace_id=workspace_id, reach_workspace_ids=reach_workspace_ids
+        )
+        label_args = [f"{k}={v}" for k, v in labels.items()]
+        self._run_command(["label", "ns", namespace, "--overwrite"] + label_args)
+        return labels
+
     def get_pod_name(self, namespace: str, label_selector: str) -> str:
         """Get the first pod name matching a label selector.
 

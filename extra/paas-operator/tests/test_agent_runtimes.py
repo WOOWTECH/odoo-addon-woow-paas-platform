@@ -1308,6 +1308,25 @@ class TestSyncWorkspacesDualLeg:
             assert resp.status_code == 200, resp.text
 
 
+class TestRestampLabels:
+    """#279 P5 — agent-ns managed-label re-stamp (hash-derived ns, add-only)."""
+
+    def test_restamp_derives_ns_and_stamps(self, client):
+        with patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_k8s.stamp_managed_ns_labels.return_value = {
+                "paas-managed": "true", "paas.woowtech.io/env": "stg",
+                "woow.tw/reach-ws-3": "true"}
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/restamp-labels",
+                json={"reach_workspace_ids": [3]},
+            )
+            assert resp.status_code == 200, resp.text
+            call = mock_k8s.stamp_managed_ns_labels.call_args
+            assert call.args[0].endswith(f"pa-{_HASH}")   # env-specific ns derived
+            assert call.kwargs.get("reach_workspace_ids") == [3]
+            assert call.kwargs.get("workspace_id") is None
+
+
 class TestDeleteRuntime:
     """S.8 — two-step teardown: helm uninstall + delete namespace (§8.4.1)."""
 

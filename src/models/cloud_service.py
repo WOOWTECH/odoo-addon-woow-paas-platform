@@ -1218,6 +1218,74 @@ class CloudService(models.Model):
                 project._reconcile_agent_runtime_reach(old.get(project.id, set()))
         return res
 
+    @api.model
+    def _backfill_reach_isolation_p5(self):
+        """#279 P5 one-time backfill (invoked from migration 18.0.1.0.42).
+
+        (a) CloudService namespaces — apply the O4 baseline NP bundle + re-stamp
+            workspace-id/env labels (leg-1 egress selector + baseline NP4 key on them)
+            on every CS namespace created before O4/O1.
+        (b) Agent-runtime namespaces — re-stamp the env label (+ reach-ws) so a legacy
+            agent ns matches NP4's env predicate once #280 removes the chart from-less
+            (else the running agent silently loses reach to its bound CS).
+
+        Idempotent, re-runnable, per-ns logged, best-effort (one failure never aborts
+        the sweep — a re-run + the enforcing cron converge the rest). MUST run before
+        #280. Returns a per-leg ok/fail tally.
+        """
+        from ..services.paas_operator import get_paas_operator_client
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        ns_client = get_paas_operator_client(self.env)
+        agent_client = get_agent_runtime_client(self.env)
+
+        cs_done = cs_fail = ar_done = ar_fail = 0
+
+        # (a) CloudService namespaces — addressed by their stored helm_namespace.
+        if ns_client:
+            services = self.sudo().search([
+                ('helm_namespace', '!=', False),
+                ('workspace_id', '!=', False),
+            ])
+            for svc in services:
+                try:
+                    ns_client.backfill_baseline_netpol(
+                        svc.helm_namespace, svc.workspace_id.id)
+                    cs_done += 1
+                except Exception as exc:
+                    cs_fail += 1
+                    _logger.warning(
+                        "P5 backfill: CS ns %s failed: %s", svc.helm_namespace, exc)
+        else:
+            _logger.warning("P5 backfill: PaaS operator unconfigured — CS leg skipped")
+
+        # (b) Agent-runtime namespaces — addressed by hash (operator derives the ns).
+        if agent_client:
+            Session = self.env['woow_paas_platform.agent_session'].sudo()
+            sessions = Session.search([
+                ('project_namespace_hash', '!=', False),
+                ('project_id.use_agent_runtime', '=', True),
+            ])
+            for session in sessions:
+                try:
+                    agent_client.restamp_labels(
+                        session.project_namespace_hash,
+                        reach_workspace_ids=session.project_id.workspace_ids.ids)
+                    ar_done += 1
+                except Exception as exc:
+                    ar_fail += 1
+                    _logger.warning(
+                        "P5 backfill: agent ns (hash %s) failed: %s",
+                        session.project_namespace_hash, exc)
+        else:
+            _logger.warning(
+                "P5 backfill: agent-runtime operator unconfigured — agent leg skipped")
+
+        _logger.info(
+            "P5 backfill done: CS %s ok / %s fail; agent %s ok / %s fail",
+            cs_done, cs_fail, ar_done, ar_fail)
+        return {"cs_done": cs_done, "cs_fail": cs_fail,
+                "ar_done": ar_done, "ar_fail": ar_fail}
+
     def unlink(self):
         """Cleanup sidecar-backed user-scope MCP before deleting the service.
 

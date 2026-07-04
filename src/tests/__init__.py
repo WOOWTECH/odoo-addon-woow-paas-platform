@@ -175,3 +175,5 @@ from . import test_gift_grant_wizard
 from . import test_subscription_journal_config
 # feat: MCP server cloud service type — hermes pilot seed (template/plan/link)
 from . import test_mcp_server_template_seed
+# feat: #279 P5 tenant-isolation backfill（baseline NP + agent-ns env re-stamp）
+from . import test_p5_backfill

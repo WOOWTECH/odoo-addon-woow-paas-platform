@@ -213,6 +213,17 @@ class AgentRuntimeClient:
                 raise
         raise last_exc  # unreachable, defensive
 
+    def restamp_labels(self, project_hash, reach_workspace_ids=None, workspace_id=None):
+        """#279 P5 backfill: add-only re-stamp of the project's AGENT-ns managed
+        labels (paas-managed + env + reach-ws). The operator derives the env-specific
+        namespace from the hash (Odoo stores only the hash). Idempotent — chiefly adds
+        the env label a legacy agent ns lacks so it matches NP4's env predicate."""
+        return self._request(
+            'POST', f'/{project_hash}/restamp-labels',
+            {'reach_workspace_ids': list(reach_workspace_ids or []),
+             'workspace_id': workspace_id},
+        )
+
     def delete(self, project_hash):
         return self._request('DELETE', f'/{project_hash}')
 
