@@ -914,3 +914,82 @@ class TestTenantIsolationLabels:
             "paas.woowtech.io/env": "stg",
             "woow.tw/workspace-id": "7",
         }
+
+
+class TestReconcileNsReachLabels:
+    """O3: reconcile_ns_reach_labels — 顯式增刪 agent ns 的 reach-ws label 到 desired
+    集合。apply_manifest 只 merge（能長不能刪），unbind 撤銷靠這條顯式刪 key（#279 F1）。
+    只 diff reach-ws-*，不碰 paas-managed / env / workspace-id。add+刪同一原子 kubectl。
+    """
+
+    @staticmethod
+    def _svc_with_current(monkeypatch, current_labels):
+        """KubernetesService，其 get_namespace_labels 回固定 current、_run_command 攔 args。"""
+        svc = KubernetesService()
+        monkeypatch.setattr(svc, "get_namespace_labels", lambda ns: dict(current_labels))
+        calls = []
+        monkeypatch.setattr(
+            svc, "_run_command",
+            lambda args: calls.append(args) or Mock(returncode=0, stdout="", stderr=""))
+        return svc, calls
+
+    def test_adds_missing_reach_ws_key(self, monkeypatch):
+        svc, calls = self._svc_with_current(
+            monkeypatch, {"paas-managed": "true", "woow.tw/reach-ws-3": "true"})
+        res = svc.reconcile_ns_reach_labels("paas-ws-x", [3, 5])
+        assert res["added"] == ["woow.tw/reach-ws-5"]
+        assert res["removed"] == []
+        assert "woow.tw/reach-ws-5=true" in calls[0]
+
+    def test_removes_stale_reach_ws_key_explicitly(self, monkeypatch):
+        svc, calls = self._svc_with_current(
+            monkeypatch, {"woow.tw/reach-ws-3": "true", "woow.tw/reach-ws-5": "true"})
+        res = svc.reconcile_ns_reach_labels("paas-ws-x", [3])
+        assert res["removed"] == ["woow.tw/reach-ws-5"]
+        assert res["added"] == []
+        # trailing '-' = kubectl delete-label syntax (顯式刪，非只 merge)
+        assert "woow.tw/reach-ws-5-" in calls[0]
+
+    def test_noop_when_already_reconciled(self, monkeypatch):
+        svc, calls = self._svc_with_current(
+            monkeypatch, {"paas-managed": "true", "woow.tw/reach-ws-3": "true"})
+        res = svc.reconcile_ns_reach_labels("paas-ws-x", [3])
+        assert res == {"added": [], "removed": []}
+        assert calls == []  # idempotent → 不發任何 kubectl label
+
+    def test_empty_desired_removes_all_reach_ws(self, monkeypatch):
+        """空綁定 = deny-all：desired [] → 刪掉所有 reach-ws（opt-in 收斂）。"""
+        svc, calls = self._svc_with_current(monkeypatch, {
+            "paas-managed": "true",
+            "woow.tw/reach-ws-3": "true", "woow.tw/reach-ws-5": "true"})
+        res = svc.reconcile_ns_reach_labels("paas-ws-x", [])
+        assert res["removed"] == ["woow.tw/reach-ws-3", "woow.tw/reach-ws-5"]
+        assert "woow.tw/reach-ws-3-" in calls[0]
+        assert "woow.tw/reach-ws-5-" in calls[0]
+
+    def test_never_touches_non_reach_labels(self, monkeypatch):
+        """reach 集已對 → 無命令；paas-managed / env / workspace-id 一律不進 diff。"""
+        svc, calls = self._svc_with_current(monkeypatch, {
+            "paas-managed": "true", "paas.woowtech.io/env": "stg",
+            "woow.tw/workspace-id": "9", "woow.tw/reach-ws-3": "true"})
+        svc.reconcile_ns_reach_labels("paas-ws-x", [3])
+        assert calls == []
+
+    def test_add_and_remove_in_single_atomic_command(self, monkeypatch):
+        svc, calls = self._svc_with_current(monkeypatch, {"woow.tw/reach-ws-3": "true"})
+        svc.reconcile_ns_reach_labels("paas-ws-x", [5])
+        assert len(calls) == 1  # 一條原子 kubectl label 同時 add+刪
+        assert "woow.tw/reach-ws-5=true" in calls[0]
+        assert "woow.tw/reach-ws-3-" in calls[0]
+
+    @patch("subprocess.run")
+    def test_get_namespace_labels_parses_json(self, mock_run):
+        mock_run.return_value = Mock(returncode=0, stderr="", stdout=json.dumps(
+            {"metadata": {"labels": {"paas-managed": "true", "woow.tw/reach-ws-3": "true"}}}))
+        labels = KubernetesService().get_namespace_labels("paas-ws-x")
+        assert labels == {"paas-managed": "true", "woow.tw/reach-ws-3": "true"}
+
+    @patch("subprocess.run")
+    def test_get_namespace_labels_empty_when_none(self, mock_run):
+        mock_run.return_value = Mock(returncode=0, stderr="", stdout=json.dumps({"metadata": {}}))
+        assert KubernetesService().get_namespace_labels("paas-ws-x") == {}
