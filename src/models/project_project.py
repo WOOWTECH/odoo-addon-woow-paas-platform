@@ -1,5 +1,17 @@
+import logging
+
 from odoo import SUPERUSER_ID, api, fields, models
 from odoo.exceptions import AccessError, UserError
+
+_logger = logging.getLogger(__name__)
+
+# #279 tenant-isolation reach sync — states in which an agent ns exists and still
+# carries reach-ws-* labels, so a bind/unbind must re-render them. Excludes 'absent'
+# (no ns yet → cold start provisions both legs) and 'spawn_failed' (no live ns).
+_REACH_STATES = ('spawning', 'active', 'degraded', 'reaped')
+# Advisory-lock classifier ('REAC' as int4) serializing a project's bind-path reach
+# reconcile against the enforcing cron (§3.4/§3.5.1 TOCTOU over-delete window).
+_REACH_LOCK_NS = 0x52454143
 
 
 class ProjectProject(models.Model):
@@ -335,6 +347,138 @@ class ProjectProject(models.Model):
                         % (project.name, exc)
                     )
         return super().unlink()
+
+    # ------------------------------------------------------------------ #
+    # #279 tenant-isolation — push reachable-workspace set to agent pod   #
+    # ------------------------------------------------------------------ #
+    def _reconcile_agent_runtime_reach(self, old_ws_ids):
+        """After a binding mutation, push this project's reachable-workspace set to
+        its agent pod: leg-1 (pod egress allowlist) + leg-2 (agent-ns reach labels),
+        via the operator ``/sync-workspaces`` contract.
+
+        ``old_ws_ids`` = the workspace-id set BEFORE the mutation. A GRANT (a newly
+        reachable workspace) is fail-loud — a raise rolls the caller's txn back so the
+        DB binding never commits without the cluster reach landing (client retry in
+        agent_runtime_client covers a lost-response-after-success). A REVOKE-only
+        change is best-effort: the DB commits and the enforcing cron (§3.5.1) is the
+        authoritative converger; with leg-1-first the revoke is effective the instant
+        egress re-renders even if leg-2 lags.
+        """
+        self.ensure_one()
+        if not self.use_agent_runtime:
+            return
+        new_ws_ids = set(self.workspace_ids.ids)
+        old = set(old_ws_ids or ())
+        added, removed = new_ws_ids - old, old - new_ws_ids
+        if not added and not removed:
+            return
+        Session = self.env['woow_paas_platform.agent_session'].sudo()
+        session = Session.search([
+            ('project_id', '=', self.id),
+            ('state', 'in', _REACH_STATES),
+            ('project_namespace_hash', '!=', False),
+        ], limit=1)
+        if not session:
+            return  # no live/recent ns → cold start provisions both legs atomically
+        from ..services.agent_runtime_client import get_agent_runtime_client
+        client = get_agent_runtime_client(self.env)
+        if not client:
+            return
+        # Serialize this project's bind against the enforcing cron to close the TOCTOU
+        # over-delete window (the cron reads desired, then reconciles LIVE labels — a
+        # grant committing mid-cadence must not be clobbered). Txn-level lock
+        # auto-releases on commit/rollback; per-project → contention only on
+        # same-project concurrent bind+cron (rare).
+        self.env.cr.execute(
+            "SELECT pg_advisory_xact_lock(%s, %s)", (_REACH_LOCK_NS, self.id))
+        try:
+            client.sync_workspaces(
+                session.project_namespace_hash, self.workspace_ids.ids,
+                require_release=bool(added),
+            )
+        except Exception as exc:
+            if added:
+                raise  # GRANT: fail-loud → roll back the binding
+            _logger.warning(
+                "reach revoke best-effort failed, project %s: %s", self.id, exc)
+
+    def write(self, vals):
+        """Reconcile agent-pod reach after a cloud_service binding change (#279
+        Path A). ``workspace_ids`` is a stored compute over
+        ``cloud_service_ids.workspace_id``, so binding/unbinding a service here
+        shifts the reachable set and must re-render both isolation legs. Captured
+        per-project BEFORE ``super().write`` so the delta reflects this write only.
+        """
+        tracked = 'cloud_service_ids' in vals
+        old = {p.id: set(p.workspace_ids.ids) for p in self} if tracked else {}
+        res = super().write(vals)
+        if tracked:
+            for project in self:
+                project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+        return res
+
+    @api.model
+    def _cron_reconcile_reach(self):
+        """#279 O6 — authoritative periodic reconciler for agent-pod reach.
+
+        Ground truth = Odoo. For every agent-runtime project with a reach-bearing
+        session, push its CURRENT reachable-workspace set to the operator (idempotent
+        add-missing + delete-stale), converging any drift a best-effort revoke or a
+        lost sync left behind. This is the correctness FLOOR for the write-path's
+        best-effort revokes — so it ENFORCES by default (§3.5.1); dry-run is only an
+        explicit ops opt-out (`woow_paas_platform.reach_reconciler_enforce=False`)
+        for a single soak cadence and MUST be flipped on before #280.
+
+        Per-project isolation (one transient error can't abort the cadence);
+        `require_release=False` (a reconcile must not fail-loud on a reaped pod); and
+        a per-project advisory lock + fresh re-read of `workspace_ids` immediately
+        before each sync, committed per project so the lock releases promptly — this
+        closes the TOCTOU window where the cron would clobber a grant that committed
+        between its snapshot and the operator's live-label read (§3.5.1 [F cron #1]).
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        enforce = ICP.get_param(
+            'woow_paas_platform.reach_reconciler_enforce', 'True'
+        ).strip().lower() not in ('false', '0', 'no', 'off', '')
+        client = None
+        if enforce:
+            from ..services.agent_runtime_client import get_agent_runtime_client
+            client = get_agent_runtime_client(self.env)
+            if not client:
+                _logger.warning(
+                    "reach reconciler: operator unconfigured — skipping cadence")
+                return False
+        Session = self.env['woow_paas_platform.agent_session'].sudo()
+        sessions = Session.search([
+            ('state', 'in', _REACH_STATES),
+            ('project_namespace_hash', '!=', False),
+            ('project_id.use_agent_runtime', '=', True),
+        ])
+        # Snapshot the work-list as plain tuples so the per-project commits below can't
+        # leave us iterating a stale recordset.
+        work = [(s.project_namespace_hash, s.project_id.id) for s in sessions]
+        Project = self.env['project.project'].sudo()
+        for project_hash, project_id in work:
+            try:
+                self.env.cr.execute(
+                    "SELECT pg_advisory_xact_lock(%s, %s)",
+                    (_REACH_LOCK_NS, project_id))
+                project = Project.browse(project_id)
+                project.invalidate_recordset(['workspace_ids'])   # fresh re-read
+                desired = project.workspace_ids.ids
+                if enforce:
+                    client.sync_workspaces(
+                        project_hash, desired, require_release=False)
+                else:
+                    _logger.info(
+                        "reach reconciler DRY-RUN: project %s → %s",
+                        project_id, desired)
+                self.env.cr.commit()          # release the per-project advisory lock
+            except Exception:
+                self.env.cr.rollback()        # isolate — also releases the lock
+                _logger.exception(
+                    "reach reconciler: project %s failed", project_id)
+        return True
 
     def _portal_partner_can_access(self, partner):
         """Portal-leg project predicate (two-layer-acl-lockstep Layer 2).
