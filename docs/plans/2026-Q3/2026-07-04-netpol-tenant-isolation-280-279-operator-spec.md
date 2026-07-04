@@ -101,10 +101,11 @@ spec:
 
 ## 7. Open design questions（誠實標出，需 docs-leader / 平台決策，勿讓 impl 硬猜）
 
-- **Q1（leg-2 reconciliation，最關鍵）**：mcp-server `ingressNamespaces` 要填**該 workspace 全部 agent ns 名**，但 agent ns 是 **per-project、lazy 建立**（首次 spawn 才建）→ CS deploy 當下 agent ns 可能還不存在，且之後會增減。**選項**：
-  - (A) **每次 agent ns 建立/刪除時，reconcile 同 workspace 全部 CS 的 mcp-server ingressNamespaces**（operator/平台需一個 workspace→CS 列表的反查 + patch values 重裝/patch NP）。複雜、有時序缺口。
-  - (B) **改用 workspace-id label 對稱化**：mcp-server chart 加 `ingressWorkspaceIds`（鏡像 agent-runtime，charts agent 評估為低成本），CS ns 與 **agent ns 都 stamp `woow.tw/workspace-id`** → mcp-server ingress 直接 `namespaceSelector{woow.tw/workspace-id}` → **免枚舉、免 reconcile**。**推薦 (B)**，需重啟 charts agent 那個「現在不做」的小 PR + O3 確保 agent ns 也 stamp workspace-id label。
-- **Q2（agent ns 自身 workspace-id 來源）**：`_build_install_values` 有 `project_workspace_ids`（agent 可 egress 到的 workspace 集合，schemas.py:399），但 agent ns **自己 label 該用哪個 workspace-id**？一個 project 屬單一 workspace，但 `project_workspace_ids` 是**可達集合**、未必等於自身。→ 需平台端明確傳 agent 自身 project 的 workspace_id（新欄位 or 複用）。**未定，需平台決策。**
+- **Q1（leg-2 機制 + 跨 workspace 語意，最關鍵）**：mcp-server 該放行哪些 agent？自然身分是 **project↔CS 綁定**（`project.cloud_service_ids`），非「agent 的 workspace」。且 data model（`project_project.py:141-149`）顯示 **project↔workspace 從 CS 綁定推導、技術上多值**：`project.workspace_ids = cloud_service_ids.mapped('workspace_id')`（= leg-1 `egressWorkspaceIds` 來源、可跨 workspace）；`workspace_id` primary = 第一個綁定 CS（id ASC）的 workspace、arbitrary。**無 constraint 強制「一 project 的 CS 同 workspace」**（multi-bind 明確支援）。CS 側則單值（`cloud_service.workspace_id`，cloud_service.py:62）。選項：
+  - **(A) ns-name 枚舉**：CS mcp-server `ingressNamespaces` 列出綁定 project 的 agent ns 名。**invariant-independent、永遠正確**，但綁定變動要 reconcile（agent ns lazy 建、且綁定增減）。
+  - **(B) 單一 workspace-id label 對稱**：mcp-server 加 `ingressWorkspaceIds`（charts 評估低成本）、CS ns 與 agent ns 各 stamp 自身 `woow.tw/workspace-id`、吃 label → **免枚舉**。**但只在「project 綁的 CS 全同 workspace」才成立**——agent ns 單一 label 表達不了跨 workspace（multi-bind 會 silently 漏放行 non-primary workspace 的合法 agent）。現實多半成立（project 通常單租戶），但**無 enforced invariant 兜底**。
+  - **建議（平台 tenancy 決策，我不擅自定）**：要嘛 **(i) 加 `@api.constrains` 強制 project 綁的 CS 單 workspace**（則 (B) clean、且合多租戶直覺，charts `ingressWorkspaceIds` 小 PR 成為正解）；要嘛 **(ii) 走 (A) ns-name**（invariant-independent，接受 reconcile 成本）。**先決這個再定 leg-2。**
+- **Q2（agent ns 自身 workspace-id 來源）→ 有欄位但 lossy、與 Q1 綁定**：`project.workspace_id`（單數 primary，`project_project.py:146`）= 第一個綁定 CS 的 workspace、**arbitrary**；完整身分是 `project.workspace_ids`（多值）。若 Q1 走 (B-i)（強制單 workspace）→ primary == 唯一 workspace、label 用它即正確；若不強制 → 單一 label lossy → 應走 Q1-(A) ns-name（agent ns 免自身 workspace label）。**Q2 不獨立、隨 Q1 決。**
 - **Q3（baseline 對既有 stg ns 的回填）**：現存 stg 租戶 ns 無 baseline → 要不要一次性 backfill（對現存 ns apply baseline NP + 補 workspace-id label）？backfill 若漏 must-allow 會打斷現有服務 → 須先 §6 驗過再 backfill。
 
 ## 8. Rollout 順序（lock-step）
