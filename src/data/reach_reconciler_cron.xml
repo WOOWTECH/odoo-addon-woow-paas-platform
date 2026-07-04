@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- #279 O6 — authoritative periodic reach reconciler. Ground truth =
+             Odoo: push each agent-runtime project's current reachable-workspace
+             set to the operator (idempotent add-missing + delete-stale), the
+             correctness FLOOR for the write-path's best-effort revokes. ENFORCES
+             by default; dry-run only via ir.config_parameter
+             woow_paas_platform.reach_reconciler_enforce=False for a soak. -->
+        <record id="ir_cron_reach_reconciler" model="ir.cron">
+            <field name="name">Agent Runtime: Reach Reconciler</field>
+            <field name="model_id" ref="project.model_project_project"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_reconcile_reach()</field>
+            <field name="interval_number">15</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

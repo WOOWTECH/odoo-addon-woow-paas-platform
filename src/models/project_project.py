@@ -417,6 +417,69 @@ class ProjectProject(models.Model):
                 project._reconcile_agent_runtime_reach(old.get(project.id, set()))
         return res
 
+    @api.model
+    def _cron_reconcile_reach(self):
+        """#279 O6 — authoritative periodic reconciler for agent-pod reach.
+
+        Ground truth = Odoo. For every agent-runtime project with a reach-bearing
+        session, push its CURRENT reachable-workspace set to the operator (idempotent
+        add-missing + delete-stale), converging any drift a best-effort revoke or a
+        lost sync left behind. This is the correctness FLOOR for the write-path's
+        best-effort revokes — so it ENFORCES by default (§3.5.1); dry-run is only an
+        explicit ops opt-out (`woow_paas_platform.reach_reconciler_enforce=False`)
+        for a single soak cadence and MUST be flipped on before #280.
+
+        Per-project isolation (one transient error can't abort the cadence);
+        `require_release=False` (a reconcile must not fail-loud on a reaped pod); and
+        a per-project advisory lock + fresh re-read of `workspace_ids` immediately
+        before each sync, committed per project so the lock releases promptly — this
+        closes the TOCTOU window where the cron would clobber a grant that committed
+        between its snapshot and the operator's live-label read (§3.5.1 [F cron #1]).
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        enforce = ICP.get_param(
+            'woow_paas_platform.reach_reconciler_enforce', 'True'
+        ).strip().lower() not in ('false', '0', 'no', 'off', '')
+        client = None
+        if enforce:
+            from ..services.agent_runtime_client import get_agent_runtime_client
+            client = get_agent_runtime_client(self.env)
+            if not client:
+                _logger.warning(
+                    "reach reconciler: operator unconfigured — skipping cadence")
+                return False
+        Session = self.env['woow_paas_platform.agent_session'].sudo()
+        sessions = Session.search([
+            ('state', 'in', _REACH_STATES),
+            ('project_namespace_hash', '!=', False),
+            ('project_id.use_agent_runtime', '=', True),
+        ])
+        # Snapshot the work-list as plain tuples so the per-project commits below can't
+        # leave us iterating a stale recordset.
+        work = [(s.project_namespace_hash, s.project_id.id) for s in sessions]
+        Project = self.env['project.project'].sudo()
+        for project_hash, project_id in work:
+            try:
+                self.env.cr.execute(
+                    "SELECT pg_advisory_xact_lock(%s, %s)",
+                    (_REACH_LOCK_NS, project_id))
+                project = Project.browse(project_id)
+                project.invalidate_recordset(['workspace_ids'])   # fresh re-read
+                desired = project.workspace_ids.ids
+                if enforce:
+                    client.sync_workspaces(
+                        project_hash, desired, require_release=False)
+                else:
+                    _logger.info(
+                        "reach reconciler DRY-RUN: project %s → %s",
+                        project_id, desired)
+                self.env.cr.commit()          # release the per-project advisory lock
+            except Exception:
+                self.env.cr.rollback()        # isolate — also releases the lock
+                _logger.exception(
+                    "reach reconciler: project %s failed", project_id)
+        return True
+
     def _portal_partner_can_access(self, partner):
         """Portal-leg project predicate (two-layer-acl-lockstep Layer 2).
 

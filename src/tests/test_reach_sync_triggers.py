@@ -137,3 +137,47 @@ class TestReachSyncTriggers(TransactionCase):
         })
         with self.assertRaises(UserError):
             live.workspace_id = self.ws_b.id
+
+    # --- O6 enforcing reconciler cron ------------------------------------- #
+
+    def _hash_synced(self, client):
+        return [c for c in client.sync_workspaces.call_args_list
+                if c.args and c.args[0] == self.hash]
+
+    def test_cron_enforce_pushes_desired(self):
+        """Enforcing (default) → push this project's current reachable set,
+        require_release=False (a reconcile must not fail-loud on a reaped pod)."""
+        self.project.cloud_service_ids = [(4, self.svc_a.id)]
+        client = MagicMock()
+        with patch(_CLIENT_PATH, return_value=client):
+            self.env['project.project'].sudo()._cron_reconcile_reach()
+        calls = self._hash_synced(client)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sorted(calls[0].args[1]), [self.ws_a.id])
+        self.assertIs(calls[0].kwargs.get('require_release'), False)
+
+    def test_cron_dry_run_makes_no_operator_call(self):
+        self.project.cloud_service_ids = [(4, self.svc_a.id)]
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.reach_reconciler_enforce', 'False')
+        client = MagicMock()
+        with patch(_CLIENT_PATH, return_value=client):
+            self.env['project.project'].sudo()._cron_reconcile_reach()
+        client.sync_workspaces.assert_not_called()
+
+    def test_cron_skips_non_reach_state(self):
+        """A session outside _REACH_STATES (absent) is not reconciled."""
+        self.project.cloud_service_ids = [(4, self.svc_a.id)]
+        self.session.state = 'absent'
+        client = MagicMock()
+        with patch(_CLIENT_PATH, return_value=client):
+            self.env['project.project'].sudo()._cron_reconcile_reach()
+        self.assertEqual(self._hash_synced(client), [])
+
+    def test_cron_skips_non_agent_project(self):
+        self.project.cloud_service_ids = [(4, self.svc_a.id)]
+        self.project.use_agent_runtime = False
+        client = MagicMock()
+        with patch(_CLIENT_PATH, return_value=client):
+            self.env['project.project'].sudo()._cron_reconcile_reach()
+        self.assertEqual(self._hash_synced(client), [])
