@@ -64,7 +64,8 @@ spec:
   policyTypes: [Ingress]
   ingress: [{from: [{podSelector: {}}]}]   # 同 ns 全放行（established 生效、cross-ns 仍 deny）
 ---
-# 3) 公開入口：cloudflared → app（來源 ns 由 §6 實測確認）
+# 3) 公開入口：shared tunnel → app（per-tenant cloudflared sidecar 走 rule#2 same-ns；此條僅為
+#    用 shared 環境 tunnel 的 CS。stg=paas-stg-cloudflare-system / prod=paas-cloudflare-system，§6 實測確認）
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: paas-baseline-allow-ingress-gateway, namespace: <ns>}
@@ -72,7 +73,7 @@ spec:
   podSelector: {}
   policyTypes: [Ingress]
   ingress:
-  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: <cloudflared-ns>}}}]
+  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: paas-stg-cloudflare-system}}}]
 ```
 
 > **設計選擇**：baseline 只做 **Ingress**（不做 ns 全域 egress default-deny）——egress SSRF 收斂交給 **per-chart** egress 規則（agent-runtime / CS 各自 chart 的 egress + ipBlock except），避免一刀切 egress 打斷 DNS/LLM/外部 API。若要 ns 全域 egress default-deny，須額外把 DNS→kube-system:53 + 各 app 的外呼 except 全列進 baseline（§6 未涵蓋、暫不做）。
@@ -91,13 +92,16 @@ spec:
 
 > 方法：`kubectl run probe --image=curlimages/curl --command -- sleep 3600` → `wait Ready` → `sleep 45`（跨空窗）→ `kubectl exec probe -- curl ...`。**禁用「起 pod 即 curl」臨時 pod**（假訊號）。
 
-| 路徑 | 為何必驗 | 驗法 | 狀態 |
-| --- | --- | --- | --- |
-| kubelet probe（node→pod）| ingress default-deny 若擋 kubelet health probe → pod 永遠 NotReady | 建帶 readinessProbe 的 pod + baseline default-deny，看 Ready | ⬜ 待 stg 實測 |
-| cloudflared → app | 公開入口，擋掉 = 服務對外 502 | 確認 cloudflared 實際來源 ns 名，established probe 從該 ns → app | ⬜ 待確認 cloudflared ns |
-| same-ns app↔pg / app↔mcp | chart NP 已放行，但需確認 baseline 疊加不破 | established exec app→pg:5432 / app→mcp:8080 | ⬜ 待 stg 實測 |
-| DNS → kube-system:53 | 只有做 ns egress default-deny 才需（本 spec §4 不做 egress baseline）→ **N/A** | — | ➖ N/A（不做 egress baseline）|
-| Odoo ↔ agent WS:8000 | agent-runtime chart 自管（`odooNamespace`），非 baseline 範圍 | 既有 F-PILOT-5 已處理 | ➖ chart 自管 |
+**✅ stg 實測結果**（2026-07-04，established-pod 方法，test ns `mustallow` 套 baseline default-deny + same-ns allow）：
+
+| 路徑 | 結果 |
+| --- | --- |
+| **kubelet probe（node→pod）** | ✅ app 帶 readinessProbe 在 default-deny 下 **Ready=True** → kube-router 對 node/LOCAL 來源放行、**default-deny 不擋 kubelet probe、無需 carve-out**（最 critical，過了）|
+| **same-ns app↔pg / app↔mcp** | ✅ established `sns→pg=200`、`sns→mcp=200`（baseline + same-ns allow 疊加放行）|
+| **cross-ns negative** | ✅ 無關 ns established probe→app = **blocked（000）** → baseline 確實擋跨租戶 |
+| **cloudflared → app** | ⚠️ 部分解：cloudflared **多為 per-tenant 同 ns sidecar**（如 `bnidistrict-cloudflared` 在 `bnidistrict-odoo` ns）→ **rule#2 same-ns 已覆蓋**；**shared 環境 tunnel ns = `paas-stg-cloudflare-system`**（prod `paas-cloudflare-system`）→ rule#3 目標。**須逐 CS 確認用 per-tenant sidecar 還是 shared tunnel** |
+| DNS → kube-system:53 | ➖ N/A（本 spec 不做 egress baseline）|
+| Odoo ↔ agent WS:8000 | ➖ chart 自管（F-PILOT-5 `odooNamespace`）|
 
 ## 7. Open design questions（誠實標出，需 docs-leader / 平台決策，勿讓 impl 硬猜）
 
