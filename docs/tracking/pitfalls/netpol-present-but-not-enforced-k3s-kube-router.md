@@ -163,8 +163,30 @@ src ns 套 `{ podSelector:{}, policyTypes:[Egress] }`（無 allow），target �
 - **agent→CS-MCP 授權 NP 確認為 dead-path**：`agent-runtime/templates/network-policy.yaml` 的 `-allow` policy 把 `egressWorkspaceIds` render 成 **`egress` + `namespaceSelector{ woow.tw/workspace-id: <id> }`**（label key 預設 `woow.tw/workspace-id`，`values.yaml:318`）。在 kube-router **雙重死**：egress-type（不 enforce）＋ namespaceSelector（不生效）。該 policy 其餘規則（ingress ← Odoo ns、egress → kube-dns / Odoo ns）全 namespaceSelector → 全 no-op；只有 `-default-deny` 的 **ingress 側**生效。**=> agent→CS-MCP 授權在 woow-k3s 幾乎確定從沒生效過**，現況能通純因 mcp-server from-less 全開遮蔽（一旦 #280 收緊 CS ingress，agent→CS 立刻全斷 → 印證 #279 必與 #280 lock-step）。
 - **mcp-server from-less :8080 是 chart pilot 預設**（`values.yaml:136 ingressNamespaces: []` → `from:` 省略 → all-open），非 operator 漏帶；template 註解明寫「empty (pilot default) → allow from ANY source… TODO tighten post-pilot」。
 - **⚠️ chart 現有參數無法在此叢集收緊 mcp-server ingress**：設 `ingressNamespaces` 會 render 成 **namespaceSelector** `from`（不生效）→ 疊上 `-default-deny`（`ingress:[]`）反而讓 :8080 **完全不可達**（打斷 tunnel），而非選擇性放行。chart ingress **不支援 ipBlock** → 要限來源必須**新增 ipBlock 參數**（例 `ingressCIDRs`）。
-- **odoo:8069 / postgresql:5432 的 all-open NP 不在 woow-paas-charts**：走上游 **Bitnami** chart（`oci://…/bitnamicharts/odoo` + `postgresql` subchart，見 `src/data/cloud_app_templates.xml`）；那兩條 port-only 無 from 的 NP 是 Bitnami 自帶或 operator 注入，需另查 Bitnami values / operator NP 注入邏輯（#280 已註）。
+- **odoo:8069 / postgresql:5432 的 all-open NP = 上游 Bitnami chart 自帶**（`networkPolicy.enabled:true` 預設 render，**非 operator 注入**；odoo 28.2.10 + postgresql subchart，見 `src/data/cloud_app_templates.xml`。cluster 上 `kubectl get netpol -o yaml` 看 `managed-by: Helm` annotation 佐證）。all-open 來源 = **`allowExternal:true`（預設）** → `from:` 省略 → port-only 全開。**收緊陷阱**：`allowExternal:false` 改走 **podSelector**（app 需帶 `<pg-fullname>-client:"true"` label）→ kube-router podSelector no-op → **8069/5432 對誰都不可達、會斷 odoo↔自己的 postgres**（Bitnami odoo→pg 授權就靠此 podSelector）。唯一可行 = **`allowExternal:false` + `extraIngress` ipBlock**（Bitnami values 逃生口注入 /32、免改 chart；來源 /32 須 operator-reconciled，同 mcp-server TOCTOU）。〔woow-paas-charts recon (a) 查證 + (c) `helm template` render proof 佐證〕
 - **controller 路線的 chart 影響**：續用 kube-router → mcp-server 需新增 ipBlock 來源參數、agent 隔離只能靠 CS 側 ingress ipBlock /32；換 Calico/Cilium → 兩 chart 現有 namespaceSelector 設計「開始生效」，但前提 operator 要在 CS ns stamp `woow.tw/workspace-id` label（#279 的 label gap，operator `build_managed_ns_labels` 要補）。
+
+### 實測驗證：mixed `podSelector`(no-op) + `ipBlock`(enforce) 同一 NP → #280 remediation 形狀成立
+
+Bitnami `allowExternal:false + extraIngress ipBlock`（以及 mcp-server 未來的 ipBlock 參數）都會 render 成「同一 NP 內 rule1=podSelector（kube-router 忽略）+ rule2=ipBlock」。leader 實機驗證此形狀（target ns nginx，src pod /32 放進 ipBlock）：
+
+```yaml
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [ { podSelector: { matchLabels: { nonexistent-client: "true" } } } ]  # rule1: Bitnami 原生形狀，kube-router no-op
+    ports: [ { protocol: TCP, port: 80 } ]
+  - from: [ { ipBlock: { cidr: <src-pod-ip>/32 } } ]                            # rule2: extraIngress，kube-router enforce
+    ports: [ { protocol: TCP, port: 80 } ]
+```
+
+```
+src（在 ipBlock 內）      → HTTP:200 curl-exit:0   (ipBlock rule 生效放行)
+other ns（不在 ipBlock）  → HTTP:000 curl-exit:7   (BLOCKED)
+```
+
+**證明**：coexisting 的 no-op podSelector 規則**不干擾** ipBlock 規則；ipBlock 選擇性放行、其餘 deny → `allowExternal:false + extraIngress ipBlock` 在 kube-router 上**可行**，是 odoo / postgres / mcp-server 三者在此叢集唯一的收緊路徑（皆須 operator-reconciled /32）。
 
 ### must-allow（部署 ingress default-deny 前必驗，漏了壞租戶；全部 re-allow 只能用 ipBlock）
 
