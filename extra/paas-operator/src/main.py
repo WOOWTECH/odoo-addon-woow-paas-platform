@@ -18,7 +18,7 @@ from src.api import (
     routes,
     tunnels,
 )
-from src.config import settings
+from src.config import assert_env_guard, settings
 from src.models.schemas import ErrorResponse, HealthResponse
 from src.services.helm import HelmService
 
@@ -35,13 +35,17 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     logger.info("Starting PaaS Operator Service...")
     logger.info(f"Namespace prefix: {settings.namespace_prefix}")
-    # Observability for the L2 ns env-label discriminator: an unset PAAS_ENV is
-    # fail-OPEN (operator starts, tenant namespaces omit the env label) — log it so a
-    # prod/stg deploy that forgot to inject PAAS_ENV is visible here, not silently
-    # indistinguishable from a dev sandbox.
+    # F6 (#279): FAIL FAST on a PAAS_ENV misconfig that would stamp cross-env-colliding
+    # tenant-isolation labels on the shared prod/stg cluster. Reverses the earlier
+    # fail-OPEN "just log an unset env" stance — an env-less or env/prefix-swapped label
+    # is a cross-env tenant leak once O4 makes the label load-bearing.
+    assert_env_guard(
+        settings.paas_env, settings.namespace_prefix, settings.allow_unset_paas_env
+    )
     logger.info(
-        "Deploy env (PAAS_ENV, ns label discriminator): "
-        f"{settings.paas_env or '(unset — env label omitted)'}"
+        "F6 env guard OK — PAAS_ENV=%s, namespace_prefix=%s",
+        settings.paas_env or "(unset, dev opt-out)",
+        settings.namespace_prefix,
     )
 
     # Verify Helm is available - FAIL FAST if not
