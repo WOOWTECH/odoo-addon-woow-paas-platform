@@ -853,12 +853,15 @@ class TestTenantIsolationLabels:
         assert isinstance(labels[WORKSPACE_ID_LABEL], str)
 
     def test_reach_ws_labels_one_per_workspace(self, monkeypatch):
-        """Model B：reach_workspace_ids=[3,5] → 兩把 reach-ws label（跨 workspace 可達集合）。"""
-        from src.services.helm import build_managed_ns_labels
+        """Model B：reach_workspace_ids=[3,5] → 兩把 reach-ws label（跨 workspace 可達集合）。
+        value 用共用常數 REACH_WS_LABEL_VALUE（O4 leg-2 selector 必引用同一個，避免
+        "true" vs "1" silent deny-all）。"""
+        from src.services.helm import build_managed_ns_labels, REACH_WS_LABEL_VALUE
         monkeypatch.setattr("src.config.settings.paas_env", "")
         labels = build_managed_ns_labels(reach_workspace_ids=[3, 5])
-        assert labels["woow.tw/reach-ws-3"] == "true"
-        assert labels["woow.tw/reach-ws-5"] == "true"
+        assert labels["woow.tw/reach-ws-3"] == REACH_WS_LABEL_VALUE
+        assert labels["woow.tw/reach-ws-5"] == REACH_WS_LABEL_VALUE
+        assert REACH_WS_LABEL_VALUE == "true"
 
     def test_isolation_labels_coexist_with_env(self, monkeypatch):
         """F6：#279 label 與 env label 一定共存（selector 靠 env 分 prod/stg，缺 env 即跨環境洩漏）。"""

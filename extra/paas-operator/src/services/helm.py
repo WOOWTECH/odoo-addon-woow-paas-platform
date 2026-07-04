@@ -149,6 +149,11 @@ def validate_label_key(key: str) -> None:
 # prod CloudService of the same numeric id (F6 cross-env leak).
 WORKSPACE_ID_LABEL = "woow.tw/workspace-id"
 REACH_WS_LABEL_PREFIX = "woow.tw/reach-ws-"
+# The reach-ws label VALUE is a shared constant too: O1 stamps it here and O4's leg-2
+# baseline NP ``namespaceSelector.matchLabels`` must match the SAME value — "true" vs
+# "1" silently matches nothing (deny-all), the hardest kind of gap to spot. Lock it so
+# the stamp side and the selector side reference one source (same rationale as the keys).
+REACH_WS_LABEL_VALUE = "true"
 
 
 def reach_ws_label_key(workspace_id: int) -> str:
@@ -198,7 +203,7 @@ def build_managed_ns_labels(
         validate_label_value(WORKSPACE_ID_LABEL, value)
         labels[WORKSPACE_ID_LABEL] = value
     for wid in reach_workspace_ids or ():
-        labels[reach_ws_label_key(wid)] = "true"
+        labels[reach_ws_label_key(wid)] = REACH_WS_LABEL_VALUE
     return labels
 
 
