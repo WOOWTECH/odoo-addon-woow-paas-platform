@@ -29,12 +29,11 @@
 
 加 model-level **`@api.constrains('cloud_service_ids')`**（defense-in-depth，authority check）：
 
-- **Model A（硬 workspace 邊界，配合 #280/#279 Q1 決策 + stg 零使用）**：強制一 project 綁的所有 CS **同一 workspace**（`len(workspace_ids) <= 1`）+ 驗寫入者為該 workspace 成員。→ 同時讓 #279 leg-2 走乾淨的單一 workspace-id label 對稱（(B'')）。
-- **Model B（允許跨 workspace）**：至少驗每個綁定 CS 的 workspace 都有寫入者為成員（authority check），不強制同一 workspace。
+**✅ Eugene 拍板 Model B（允許跨 workspace 綁定，保留產品功能）**（2026-07-04）→ constraint **只做 authority check、不加 same-workspace 限制**：綁的**每個** CS 的 workspace 都必須有寫入者為成員（`workspace_access` 查核）。跨 workspace 綁定合法，前提是寫入者是**每個**目標 workspace 的成員。**不可**用 `len(workspace_ids) <= 1`（會砍「support project 同時達多 workspace CS」產品功能）。
 
-與 #280/#279 的 A/B tenancy 決策綁定（Eugene 待拍板）。**建議 A**（stg 零使用、零回歸、隔離最強、leg-2 最簡）。
+> 早期曾因 stg 零使用傾向 Model A（same-workspace constraint），Eugene 2026-07-04 否決：support project 須能同時達多 workspace 的 CS。故 leg-2 走 per-reachable-workspace label `woow.tw/reach-ws-<W>`（見 #279 spec §7）。
 
 ## 驗證/測試要求
 
 - backend `TestCase` + `with_user()`：非成員 user 綁跨 workspace CS → `ValidationError`（不可只測 controller，須測 model constraint 本身，避免 [[orm-vs-endpoint-acl-test-coverage]] 假綠）。
-- 若走 Model A：既有 multi-bind 同 workspace 仍通、跨 workspace fail-loud。
+- Model B：寫入者為成員的跨 workspace 綁定**放行**；綁到寫入者**非成員** workspace 的 CS → `ValidationError` fail-loud。
