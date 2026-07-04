@@ -177,11 +177,41 @@ class AgentRuntimeClient:
             timeout=_INVALIDATE_TIMEOUT,
         )
 
-    def sync_workspaces(self, project_hash, workspace_ids):
-        return self._request(
-            'POST', f'/{project_hash}/sync-workspaces',
-            {'project_workspace_ids': list(workspace_ids)},
-        )
+    def sync_workspaces(self, project_hash, workspace_ids, require_release=False):
+        """Re-render a project's #279 isolation legs (leg-1 egress + leg-2 reach).
+
+        ``require_release=True`` (GRANT) → the operator 409s when the pod release is
+        gone, surfacing a non-functional grant so the caller rolls back; ``False``
+        (REVOKE) → a gone pod is a no-op success.
+
+        It is idempotent (the operator reconciles to the desired set) and runs a helm
+        upgrade on a possibly CPU-throttled operator, so — exactly like
+        ``spawn_or_attach`` (#123/F-ARL-1) — retry transient Timeout/ConnectionError
+        with the 90s headroom. A 4xx/5xx (``AgentRuntimeOperatorError``) is NEVER
+        retried: a lost response after a *landed* grant must not roll the binding back
+        (§3.3 grant-txn) — the retry re-confirms already-applied state → 200 → commit.
+        """
+        body = {
+            'project_workspace_ids': list(workspace_ids),
+            'require_release': require_release,
+        }
+        last_exc = None
+        for attempt in range(_SPAWN_MAX_RETRIES + 1):
+            try:
+                return self._request(
+                    'POST', f'/{project_hash}/sync-workspaces',
+                    body, timeout=_SPAWN_TIMEOUT,
+                )
+            except (_req_exc.Timeout, _req_exc.ConnectionError) as exc:
+                last_exc = exc
+                if attempt < _SPAWN_MAX_RETRIES:
+                    _logger.warning(
+                        'sync-workspaces transient error (attempt %s/%s): %s',
+                        attempt + 1, _SPAWN_MAX_RETRIES + 1, exc)
+                    time.sleep(_SPAWN_RETRY_BACKOFF)
+                    continue
+                raise
+        raise last_exc  # unreachable, defensive
 
     def delete(self, project_hash):
         return self._request('DELETE', f'/{project_hash}')

@@ -1188,6 +1188,36 @@ class CloudService(models.Model):
             )
             return False
 
+    def write(self, vals):
+        """#279 Path B: a CloudService's ``workspace_id`` / ``project_ids`` binding
+        change shifts which workspaces its bound projects can reach, so re-render the
+        agent isolation legs. project.write (Path A) covers ``cloud_service_ids``
+        changes made from the project side; this covers changes made from the service
+        side, which fire no project hook even though ``project.workspace_ids``
+        recomputes.
+        """
+        # [F: revoke-txn low] A deployed CS's namespace identity (paas-ws-{hash}) is
+        # fixed at create; retargeting workspace_id would leave the pod in the OLD ns
+        # while agent egress is re-pointed at the new workspace → silent reach break to
+        # the still-bound CS. Reject reassignment on a live-namespace service.
+        if 'workspace_id' in vals:
+            for cs in self:
+                if (cs.helm_namespace and cs.workspace_id.id
+                        and vals['workspace_id'] != cs.workspace_id.id):
+                    raise UserError(
+                        "不可變更已部署 CloudService 的 workspace（命名空間身分固定）。"
+                    )
+        tracked = 'workspace_id' in vals or 'project_ids' in vals
+        projects = self.mapped('project_ids') if tracked else self.browse()
+        old = {p.id: set(p.workspace_ids.ids) for p in projects}
+        res = super().write(vals)
+        if tracked:
+            # Union of projects bound before AND after (a project_ids write can add or
+            # drop bindings); each reconciles against its own pre-write reach set.
+            for project in (projects | self.mapped('project_ids')):
+                project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+        return res
+
     def unlink(self):
         """Cleanup sidecar-backed user-scope MCP before deleting the service.
 
@@ -1209,7 +1239,14 @@ class CloudService(models.Model):
         M:N (Phase A): each cloud_service narrows by its own URL prefix so
         tearing down service A does not collateral-unlink service B's
         sidecar-backed MCP rows on a project that binds both.
+
+        #279 Path B (revoke): capture bound projects BEFORE delete; once the record
+        (and its M:N rows) are gone their ``workspace_ids`` recompute — dropping
+        workspaces only reachable via this service — so each is reconciled as a pure
+        revoke (best-effort; the enforcing cron is authoritative).
         """
+        affected = self.mapped('project_ids')
+        old = {p.id: set(p.workspace_ids.ids) for p in affected}
         for service in self:
             # F-ENV-5 helm fail-loud guard: the helm release / namespace must
             # never outlive the record. The workspace-cascade routing path
@@ -1237,7 +1274,10 @@ class CloudService(models.Model):
                     "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
                     "for service id=%s", len(user_mcps), service.id,
                 )
-        return super().unlink()
+        res = super().unlink()
+        for project in affected.exists():
+            project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+        return res
 
     def _collect_sidecar_user_mcps(self, url_prefix):
         """Return sidecar-backed user-scope MCP rows attached via M:N
