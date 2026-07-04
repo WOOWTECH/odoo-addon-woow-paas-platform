@@ -1,6 +1,6 @@
 # Finding: project↔CloudService 綁定授權只在 controller 層 gated、model 層無守（defense-in-depth 缺口）
 
-> 來源：#280/#279 租戶網路隔離 spec 過程，docs-leader 附帶請查「`cloud_service_ids` 寫入是否 ACL-gated 到成員 workspace」（2026-07-04）。**非即刻可利用洞**（主路徑已 gated），但屬 `constraint-input-trust-expansion` / `two-layer-acl-lockstep` family 的 defense-in-depth 缺口，值得 follow-up。
+> 來源：#280/#279 租戶網路隔離 spec 過程，docs-leader 附帶請查「`cloud_service_ids` 寫入是否 ACL-gated 到成員 workspace」（2026-07-04）。**非即刻可利用洞**（主路徑已 gated），但屬 `constraint-input-trust-expansion` / `two-layer-acl-lockstep` family 的 defense-in-depth 缺口，值得 follow-up。**追蹤 issue：[#289](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/289)。**
 >
 > Pattern：[`constraint-input-trust-expansion`](../../decisions/patterns/constraint-input-trust-expansion.md)、[`two-layer-acl-lockstep`](../../decisions/patterns/two-layer-acl-lockstep.md)、[`orm-vs-endpoint-acl-test-coverage`](../../decisions/patterns/orm-vs-endpoint-acl-test-coverage.md)
 
