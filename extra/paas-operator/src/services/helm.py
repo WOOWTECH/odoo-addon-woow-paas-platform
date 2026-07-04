@@ -207,6 +207,33 @@ def build_managed_ns_labels(
     return labels
 
 
+def _env_match_labels() -> Dict[str, str]:
+    """#279 NP-selector env qualifier — byte-identical to the env label that
+    build_managed_ns_labels() stamps. Empty when PAAS_ENV is unset (single-env dev, no
+    collision); on the shared prod/stg cluster it AND-composes into every #279 selector
+    so a per-Odoo-DB workspace id can't match across environments (F6 cross-env leak).
+    """
+    return {"paas.woowtech.io/env": settings.paas_env} if settings.paas_env else {}
+
+
+def _cloudflared_namespace() -> str:
+    """The dedicated namespace hosting THIS env's Cloudflare Tunnel connector, whose
+    ingress the CS-ns baseline NP allows so the user-facing CF web path survives the
+    ns-wide default-deny. Explicit CLOUDFLARED_NAMESPACE wins; otherwise the grounded
+    per-env default (woow-k3s: prod=``paas-cloudflare-system``,
+    stg=``paas-stg-cloudflare-system``; each is a dedicated, hostNetwork=False ns, so a
+    bare namespaceSelector on it is safe and env-safe by construction). Empty on
+    dev/unknown => no cloudflared allow is rendered (no connector exists there).
+    """
+    if settings.cloudflared_namespace:
+        return settings.cloudflared_namespace
+    if settings.paas_env == "stg":
+        return "paas-stg-cloudflare-system"
+    if settings.paas_env == "prod":
+        return "paas-cloudflare-system"
+    return ""
+
+
 class HelmException(Exception):
     """Exception raised when Helm command fails."""
 
@@ -890,7 +917,86 @@ class KubernetesService:
 
         self.ensure_registry_secret(name)
 
+        # #279 O4: apply the leg-2 tenant-isolation baseline NetworkPolicy bundle.
+        if workspace_id is not None:
+            self._apply_baseline_netpol(name, workspace_id)
+        else:
+            # A tenant CloudService ns should always carry a workspace_id; None here is
+            # either a genuine non-tenant/dev ns (fine) or a provisioning bug — the
+            # operator can't tell them apart, so it warns + skips rather than silently
+            # leaving a no-isolation ns OR breaking a legit dev caller. The tenant-side
+            # fail-loud guarantee (a CloudService MUST have a workspace) belongs in the
+            # Odoo caller (cloud_service.py deploy path), where the context is known.
+            logger.warning(
+                "create_namespace(%s): no workspace_id — skipping #279 baseline "
+                "NetworkPolicy (no leg-2 isolation applied to this namespace).", name
+            )
+
         return {"message": f"Namespace {name} created with quota"}
+
+    def _apply_baseline_netpol(self, namespace: str, workspace_id: int) -> None:
+        """#279 O4 leg-2: apply the CloudService-namespace baseline NetworkPolicy bundle
+        so tenant isolation holds once #280 removes the chart's from-less allows.
+
+        Additive, ingress-only NPs, all ``podSelector: {}`` (every pod in the ns —
+        including the n8n app pod that hosts the mcp SIDECAR, which carries no chart NP
+        of its own, so an ns-wide rule is the only mechanism that covers both the
+        sidecar and standalone mcp-server shapes):
+
+          1. ``default-deny-ingress`` — isolate every pod.
+          2. ``allow-same-ns`` — a workspace ns is shared by its CloudServices; intra-ns
+             reach is within-tenant, not a cross-tenant boundary.
+          3. ``allow-cloudflared`` — ingress from THIS env's dedicated CF Tunnel
+             connector ns, so the user-facing web path survives the default-deny.
+             Env-safe by construction (the connector ns name is env-specific); skipped
+             when no connector ns is configured/derivable (dev/local).
+          4. ``allow-mcp-reach`` (the leg-2 crux) — from any agent ns stamped BOTH this
+             workspace's ``reach-ws`` key AND the matching env label. No port filter:
+             the n8n sidecar (:3000) and standalone mcp-server (:8080) diverge, and
+             within-workspace-ns reach is within-tenant.
+
+        egress is intentionally NOT restricted here — leg-1 (agent-runtime chart) owns
+        agent egress. Idempotent via ``kubectl apply``.
+        """
+        validate_namespace(namespace)
+
+        def _np(name: str, ingress: Optional[list]) -> dict:
+            spec = {"podSelector": {}, "policyTypes": ["Ingress"]}
+            if ingress is not None:
+                spec["ingress"] = ingress
+            return {
+                "apiVersion": "networking.k8s.io/v1",
+                "kind": "NetworkPolicy",
+                "metadata": {
+                    "name": name,
+                    "namespace": namespace,
+                    "labels": {"paas-managed": "true"},
+                },
+                "spec": spec,
+            }
+
+        env_ml = _env_match_labels()
+        manifests = [
+            _np("paas-baseline-default-deny-ingress", None),
+            _np("paas-baseline-allow-same-ns", [{"from": [{"podSelector": {}}]}]),
+        ]
+        cf_ns = _cloudflared_namespace()
+        if cf_ns:
+            manifests.append(_np(
+                "paas-baseline-allow-cloudflared",
+                [{"from": [{"namespaceSelector": {
+                    "matchLabels": {"kubernetes.io/metadata.name": cf_ns},
+                }}]}],
+            ))
+        manifests.append(_np(
+            "paas-baseline-allow-mcp-reach",
+            [{"from": [{"namespaceSelector": {"matchLabels": {
+                reach_ws_label_key(workspace_id): REACH_WS_LABEL_VALUE,
+                **env_ml,
+            }}}]}],
+        ))
+        for manifest in manifests:
+            self.apply_manifest(manifest)
 
     def ensure_registry_secret(self, namespace: str) -> Optional[str]:
         """Create/update a dockerconfigjson secret for private registry access.

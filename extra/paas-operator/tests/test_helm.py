@@ -903,7 +903,9 @@ class TestTenantIsolationLabels:
     @patch("subprocess.run")
     def test_create_namespace_stamps_workspace_id_in_manifest(self, mock_run, monkeypatch):
         """CS ns：create_namespace(workspace_id=7) → manifest 真帶 workspace-id=7 + env（捕 manifest 擋 mutation）。"""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        # stdout="{}"：workspace_id 使 create_namespace 續呼 #279 O4 baseline NP（apply_manifest
+        # 會 json.loads(stdout)），需合法 JSON；ns-label 捕捉只認 kind==Namespace、不受 NP 影響。
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
         monkeypatch.setattr("src.config.settings.paas_env", "stg")
         captured = TestManagedNsLabels._capture_ns_labels(monkeypatch)
         KubernetesService().create_namespace(

@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     cloudflare_tunnel_id: str = ""  # Tunnel ID from Zero Trust dashboard
     cloudflare_zone_id: str = ""  # Zone ID for DNS management (found in domain overview)
     cloudflare_domain: str = ""  # Base domain (e.g., woowtech.io)
+    # #279 O4 leg-2 baseline NP: the dedicated namespace hosting THIS env's Cloudflare
+    # Tunnel connector pod. Grounded on woow-k3s: prod=`paas-cloudflare-system`,
+    # stg=`paas-stg-cloudflare-system` (hostNetwork=False, dedicated → a namespaceSelector
+    # on it is safe + env-safe by construction). The CS-ns baseline NP allows ingress
+    # from this ns so the user-facing CF web path survives the ns-wide default-deny.
+    # Empty => derive from PAAS_ENV (see helm._cloudflared_namespace); a genuine dev/local
+    # run with no CF connector renders no such allow.
+    cloudflared_namespace: str = ""  # env CLOUDFLARED_NAMESPACE
 
     # Deploy environment (L1): prod/stg discriminator stamped onto tenant namespace
     # labels (L2, #279) + future account-level reconciler env filtering. Injected
