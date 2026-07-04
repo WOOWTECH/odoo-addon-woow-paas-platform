@@ -444,6 +444,7 @@ class CloudService(models.Model):
                     cpu_limit=str(max(total_vcpu * 3, 8)),
                     memory_limit=f"{max(int(total_ram * 3), 8)}Gi",
                     storage_limit=f"{max(total_storage * 3, 100)}Gi",
+                    workspace_id=self.workspace_id.id or None,
                 )
             except PaaSOperatorError as e:
                 if e.status_code != 409:

@@ -39,6 +39,7 @@ async def create_namespace(request: NamespaceCreateRequest):
             cpu_limit=request.cpu_limit,
             memory_limit=request.memory_limit,
             storage_limit=request.storage_limit,
+            workspace_id=request.workspace_id,
         )
         logger.info(f"Created namespace {request.name} with quota")
         return result

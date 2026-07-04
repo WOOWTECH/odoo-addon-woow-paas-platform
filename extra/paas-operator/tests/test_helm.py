@@ -832,3 +832,85 @@ class TestManagedNsLabels:
         KubernetesService().create_namespace(
             name="paas-ws-x", cpu_limit="1", memory_limit="1Gi", storage_limit="5Gi")
         assert captured["labels"] == {"paas-managed": "true"}
+
+
+class TestTenantIsolationLabels:
+    """L2: #279 租戶隔離 label — build_managed_ns_labels 的 workspace-id / reach-ws。
+
+    CS ns 帶 woow.tw/workspace-id=<W>（leg-1 egress + leg-2 baseline 都比對）；agent
+    ns 帶多把 woow.tw/reach-ws-<W>=true（Model B 可同時可達多 workspace）。二者必與
+    env label 共存（F6：workspace int id per-DB 非叢集唯一、prod/stg 同叢集，selector
+    靠 env 分環境，否則 stg agent 達 prod CS）。value 全 str()（F9：egressWorkspaceIds
+    是 List[int]，label value 必須字串）。
+    """
+
+    def test_workspace_id_label_is_str_cast(self, monkeypatch):
+        """workspace_id=5 (int) → woow.tw/workspace-id 值為字串 "5"（非 int，F9）。"""
+        from src.services.helm import build_managed_ns_labels, WORKSPACE_ID_LABEL
+        monkeypatch.setattr("src.config.settings.paas_env", "")
+        labels = build_managed_ns_labels(workspace_id=5)
+        assert labels[WORKSPACE_ID_LABEL] == "5"
+        assert isinstance(labels[WORKSPACE_ID_LABEL], str)
+
+    def test_reach_ws_labels_one_per_workspace(self, monkeypatch):
+        """Model B：reach_workspace_ids=[3,5] → 兩把 reach-ws label（跨 workspace 可達集合）。
+        value 用共用常數 REACH_WS_LABEL_VALUE（O4 leg-2 selector 必引用同一個，避免
+        "true" vs "1" silent deny-all）。"""
+        from src.services.helm import build_managed_ns_labels, REACH_WS_LABEL_VALUE
+        monkeypatch.setattr("src.config.settings.paas_env", "")
+        labels = build_managed_ns_labels(reach_workspace_ids=[3, 5])
+        assert labels["woow.tw/reach-ws-3"] == REACH_WS_LABEL_VALUE
+        assert labels["woow.tw/reach-ws-5"] == REACH_WS_LABEL_VALUE
+        assert REACH_WS_LABEL_VALUE == "true"
+
+    def test_isolation_labels_coexist_with_env(self, monkeypatch):
+        """F6：#279 label 與 env label 一定共存（selector 靠 env 分 prod/stg，缺 env 即跨環境洩漏）。"""
+        from src.services.helm import build_managed_ns_labels
+        monkeypatch.setattr("src.config.settings.paas_env", "stg")
+        labels = build_managed_ns_labels(workspace_id=5, reach_workspace_ids=[5])
+        assert labels["paas.woowtech.io/env"] == "stg"
+        assert labels["woow.tw/workspace-id"] == "5"
+        assert labels["woow.tw/reach-ws-5"] == "true"
+
+    def test_no_isolation_labels_when_params_omitted(self, monkeypatch):
+        """向後相容：不傳 #279 參數 → 行為與舊版一致（只有 paas-managed）。"""
+        from src.services.helm import build_managed_ns_labels
+        monkeypatch.setattr("src.config.settings.paas_env", "")
+        assert build_managed_ns_labels() == {"paas-managed": "true"}
+
+    def test_reach_ws_label_key_format(self):
+        """單一真源：reach_ws_label_key(42) == 'woow.tw/reach-ws-42'（跨 repo byte-exact 契約）。"""
+        from src.services.helm import reach_ws_label_key, REACH_WS_LABEL_PREFIX
+        assert reach_ws_label_key(42) == f"{REACH_WS_LABEL_PREFIX}42"
+        assert reach_ws_label_key(42) == "woow.tw/reach-ws-42"
+
+    def test_validate_label_key_accepts_isolation_keys(self):
+        """好 key 過關（woow.tw/workspace-id、reach-ws-5）。"""
+        from src.services.helm import validate_label_key
+        validate_label_key("woow.tw/workspace-id")
+        validate_label_key("woow.tw/reach-ws-5")
+
+    def test_validate_label_key_rejects_bad_key(self):
+        """F4：非法 key pure-Python fail loud（#208 類），避免 selector 靜默 match nothing = deny-all。"""
+        from src.services.helm import validate_label_key
+        with pytest.raises(ValueError):
+            validate_label_key("woow.tw/reach ws 5")   # 空白非法
+        with pytest.raises(ValueError):
+            validate_label_key("woow.tw/" + "x" * 64)  # name >63
+        with pytest.raises(ValueError):
+            validate_label_key("woow.tw/-bad")         # name 不得 '-' 起頭
+
+    @patch("subprocess.run")
+    def test_create_namespace_stamps_workspace_id_in_manifest(self, mock_run, monkeypatch):
+        """CS ns：create_namespace(workspace_id=7) → manifest 真帶 workspace-id=7 + env（捕 manifest 擋 mutation）。"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr("src.config.settings.paas_env", "stg")
+        captured = TestManagedNsLabels._capture_ns_labels(monkeypatch)
+        KubernetesService().create_namespace(
+            name="paas-ws-stg-x", cpu_limit="1", memory_limit="1Gi",
+            storage_limit="5Gi", workspace_id=7)
+        assert captured["labels"] == {
+            "paas-managed": "true",
+            "paas.woowtech.io/env": "stg",
+            "woow.tw/workspace-id": "7",
+        }

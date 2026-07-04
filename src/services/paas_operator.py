@@ -194,6 +194,7 @@ class PaaSOperatorClient:
         cpu_limit: str = '2',
         memory_limit: str = '4Gi',
         storage_limit: str = '20Gi',
+        workspace_id: Optional[int] = None,
     ) -> Dict[str, str]:
         """Create a Kubernetes namespace with resource quota.
 
@@ -202,6 +203,9 @@ class PaaSOperatorClient:
             cpu_limit: CPU limit (e.g., '2' or '2000m')
             memory_limit: Memory limit (e.g., '4Gi')
             storage_limit: Storage limit (e.g., '20Gi')
+            workspace_id: Owning CloudService's Odoo workspace id; the operator
+                stamps it as the woow.tw/workspace-id NetworkPolicy label (#279).
+                Omitted from the payload when None (backward compatible).
 
         Returns:
             Confirmation message
@@ -215,6 +219,8 @@ class PaaSOperatorClient:
             'memory_limit': memory_limit,
             'storage_limit': storage_limit,
         }
+        if workspace_id is not None:
+            data['workspace_id'] = workspace_id
         return self._request('POST', '/api/namespaces', data=data)
 
     # ==================== Helm Release Operations ====================
