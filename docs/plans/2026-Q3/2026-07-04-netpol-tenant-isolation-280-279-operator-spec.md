@@ -154,4 +154,29 @@ spec:
 
 **★ 對自身 workflow 的 F5 修正（對抗自驗）**：skeptic 稱「fresh agent egress 空窗 fail-CLOSED → 兩腿不同時 fail-open → 無洩漏」。但 **np-window.sh 實測 egress-deny fresh pod 是 fail-OPEN**（t=0-1s code=200、t=2s 才擋）→ fresh agent egress 空窗**是 fail-open**。故存在**窄跨租戶洩漏 race**：attacker agent FRESH（egress fail-open）+ victim CS FRESH（ingress fail-open）~1s 重疊時，未授權 agent 可達 victim CS。實務可利用性低（需兩 pod 同時 fresh + 命中 CS IP + 猜中重啟時機），但**非「無洩漏」**。窗口為 kube-router 固有、無法消除；此 race **強化** leg-1 load-bearing（leg-1 egress 是唯一擋 established 未授權 agent 的腿）。
 
-**落地順序（lock-step）**：F3 chart 勘查 → F4 key 真源 → O1/O2/O3（stamp+selector+patch）→ O4/O5/O6（reconcile 觸發+撤銷，關 F1 洩漏）。**O6 leg-2 撤銷與 O4 leg-1 收斂必須同步 land**，否則補了 egress、ingress 仍靠陳舊 reach-ws label 放行。
+**落地順序（lock-step）**：見 §11.2（雙 pass 收斂版）。
+
+### 11.1 雙 pass 收斂 + docs-leader workflow 新增 findings（2026-07-04）
+
+leader（implementation-grounded）+ docs-leader（3 設計 + 9 skeptic）雙 pass **在 F1 收斂**（各自獨立抓到 unbind reconcile gap）。docs-leader 多抓 4 項 + F1 兩個精度，全部併入：
+
+**F1 精度（unbind reconcile）**：
+- (a) **`kubectl apply` 只 merge label、不刪 key** → 光 re-apply `_ensure_namespace` 不夠；unbind 收斂**必須顯式移除** `reach-ws-<W>` key（`kubectl label ns <ns> woow.tw/reach-ws-<W>-` 或整份 replace），否則永久 stale grant（比 F1 更毒）。
+- (b) reconcile trigger **不能只掛 `project.cloud_service_ids` write**——CS-side 變動（`cloud_service.unlink` / workspace_id 改）是最自然的撤銷路徑、不 fire project hook → **O5 主 anchor 錨在 CloudService 生命週期**（反查 project_ids）。
+
+**🔴 F6 NEW CRITICAL — cross-environment 洩漏（must-fix 最高優先）**：label value = 原始 Odoo workspace int id、**per-DB 非全叢集唯一**；woow-k3s **prod+stg 同一物理叢集**（helm.py:115-116，env label 正為此加）→ prod ws#3 與 stg ws#3 都 `workspace-id=3` → stg agent `egressWorkspaceIds=[3]` match prod CS ns、leg-2 `reach-ws-3` 也對上 → **stg agent 可達 prod CS**。#280 default-deny 落地後 selector 會**允許**此路 = 真跨環境租戶洩漏。**修**：leg-1 + leg-2 的 namespaceSelector matchLabels **都加 `paas.woowtech.io/env: <env>`**（CS/agent ns 已由 `build_managed_ns_labels` 帶此 label，helm.py:108）。
+
+**🟠 F7 NEW — leg-2 改由 operator baseline 渲染（非 chart）**：旗艦 n8n 的 MCP 是 `patch_sidecar` 注入 n8n deployment（cloud_service.py:442-488）、CS ns **零 chart NP** → leg-2 若只靠 mcp-server chart selector **會漏 sidecar-MCP**。**修**：leg-2 reach-ws ingress allow 由 **operator baseline（O4 `_apply_baseline_netpol`）渲染** → 一機制同蓋 standalone mcp-server + sidecar-MCP、**消掉 leg-2 跨 repo chart 依賴**（leg-1 egress 仍需 chart）。**改寫 §3 O2 分工**：O2 不再是 chart selector，而是 operator baseline 的一條 ingress-allow（含 env-qualifier + MCP 埠）；charts 端 `ingressWorkspaceIds` 增強**不再需要**（docs-leader 知會 charts）。
+
+**🟠 F8 NEW — 既有 CS ns workspace-id label backfill**：`woow.tw/workspace-id` 全 source 不存在（僅 paas-managed+env）→ 除 O1 往後 stamp，**既有 CS ns 需一次性 backfill**（否則 leg-1 對存量 CS 永遠 deny-all）。呼應 §7 Q3、擴到 workspace-id label。
+
+**🟡 F9 minor**：(a) `egressWorkspaceIds` 是 `List[int]` → label value 須 `str()` + `validate_label_value`（int→string 鑄型否則 render 壞）。(b) **workspace-granular reach（知會 Eugene）**：CS ns per-workspace 共用 → 綁 W 內一個 CS = 網路可達 W 內**全部** mcp（比 per-CS 粗）；多半可接受（workspace=租戶邊界）但網路層粒度 ≠ 邏輯綁定粒度。
+
+### 11.2 修正後落地順序（雙 pass 收斂版）
+
+1. CS-ns `workspace-id` label **backfill**（F8）+ F3 chart NP template 勘查（實際比對哪個 key）
+2. **env-qualified** label schema（F6，leg-1+leg-2 selector 都加 env）+ F4 key 真源（operator 算完整 key 明文傳、含 str 鑄型）
+3. **O1**（CS ns stamp workspace-id+env；agent ns stamp reach-ws-<W>+env；含 backfill、str）/ **O3**（ns-label patch 原語，支援**顯式刪 key**）
+4. **leg-2 走 operator baseline O4**（F7，reach-ws+env ingress allow，蓋 sidecar）
+5. **O4/O5/O6 reconcile**（關 F1）：撤銷須**顯式刪 label**（F1a）+ 主 anchor 錨 **CloudService 生命週期**（F1b/O5）
+6. **leg-1 收斂 + leg-2 撤銷同批 land**（lock-step）
