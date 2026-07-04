@@ -22,6 +22,8 @@
 
 **結論**：kube-router 沒壞；標準 NetworkPolicy 語意成立。唯一 caveat = **新建 pod 的編程啟動空窗**。
 
+> **啟動空窗實測**（單次、idle 叢集、同一 fresh pod 每秒探測 → temporal 翻轉）：**ingress-allow ≈ 1s**（fresh src IP 進 peer-ipset：`t=0 擋 → t=1s 通`）、**egress-deny ≈ 2s**（fresh src 裝上 per-pod FW chain：`t=0~1s 可出 → t=2s 起擋`）。皆**個位數秒**、非 30s 級。含意：新 pod 短暫（a）連 same-workspace 服務可能被擋 ~1s（client retry 即解）、（b）egress 不受限 ~2s（**窄 SSRF 窗口**）。註：單次量測、隨節點負載/pod 數可能浮動，取數量級即可。
+
 叢集：K3s `v1.34.5+k3s1`、4 節點 Ubuntu 24.04、flannel + **K3s 內建 kube-router-based netpol 控制器**（無 Calico/Cilium/Canal、無 Kyverno/Gatekeeper/PSA-restricted）。pod CIDR `10.42.0.0/16`、service CIDR `10.43.0.0/16`、node 私網 `192.168.10.0/24`。
 
 ---

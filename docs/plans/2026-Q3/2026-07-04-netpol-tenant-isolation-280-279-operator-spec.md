@@ -77,7 +77,7 @@ spec:
 
 > **設計選擇**：baseline 只做 **Ingress**（不做 ns 全域 egress default-deny）——egress SSRF 收斂交給 **per-chart** egress 規則（agent-runtime / CS 各自 chart 的 egress + ipBlock except），避免一刀切 egress 打斷 DNS/LLM/外部 API。若要 ns 全域 egress default-deny，須額外把 DNS→kube-system:53 + 各 app 的外呼 except 全列進 baseline（§6 未涵蓋、暫不做）。
 >
-> **啟動空窗**：baseline 對**新建** app pod 有數秒空窗（其 ingress 未編程前短暫全通/全擋，視 kube-router 對該 pod 的編程順序）。屬 hardening note，非 blocker；關鍵隔離別假設「pod 剛啟動就已 fail-closed」。
+> **啟動空窗（實測 ≈ 個位數秒）**：baseline 對**新建** app pod 有短暫空窗——實測 ingress-allow ≈ 1s、egress-deny ≈ 2s（PR #288「啟動空窗實測」）。屬 hardening note，非 blocker；關鍵隔離別假設「pod 剛啟動就已 fail-closed」。must-allow 驗證的 `sleep 45` 是相對此窗口的保守裕度。
 
 ## 5. 平台端改動（Odoo `src/`，本 repo）
 
