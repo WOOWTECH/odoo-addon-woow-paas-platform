@@ -102,6 +102,22 @@ curl http://svc-02c671c7-mcp-server.paas-ws-stg-86f34bd4.svc.cluster.local:8080/
 
 ---
 
+## agent→CS-MCP 是「雙腿單路徑」——兩腿都放行才通（#279 + #280 lock-step）
+
+agent→CS-MCP 是單一路徑、兩端各自 default-deny，**兩腿都放行才通**（與 woow-paas-charts 2026-07-04 對齊）：
+
+| 腿 | 方向 | chart 機制 | 需要什麼 |
+| --- | --- | --- | --- |
+| 腿1 = agent egress | agent pod → CS ns | agent-runtime `egressWorkspaceIds` → `egress namespaceSelector{woow.tw/workspace-id:<id>}` | (a) operator 送**非空** `egressWorkspaceIds` **且**(b) **CS ns 帶 `woow.tw/workspace-id:<id>` label**（#279 缺的）|
+| 腿2 = CS ingress | agent ns → mcp-server pod | mcp-server `ingressNamespaces` → `ingress namespaceSelector{kubernetes.io/metadata.name:<agent-ns>}` | operator 把**agent ns 名**填進 mcp-server values（#280 收緊那步）|
+
+**兩腿 selector key 不對稱**：腿1 用 workspace-id **label**（語意、一 label 對應 workspace 內多 ns）、腿2 用 ns **name**（具體 agent ns 名）→ operator 需**枚舉 + reconcile** 該 workspace 的 agent ns 名填進 mcp-server ingressNamespaces。
+
+**推論（與 corrected model 一致）**：
+- agent→CS 現「network-dead」的真因是**腿1 未 wire**（`egressWorkspaceIds` 空、或/且 CS ns 缺 label → egress namespaceSelector match 0 ns），**不是 selector 壞**。exact 現況（空 egressWorkspaceIds vs 缺 label）需 operator 端查證，但 wiring 腿1 一律要**兩者都到位**。
+- **#280 關 mcp-server from-less（腿2 收緊）不會弄斷 agent→CS**——它本就因腿1 未 wire 而不通。
+- **#279（wire 腿1）+ #280（wire 腿2 到 agent ns）必須一起做**，才把這條路**安全**接通（單做 #279 會讓腿2 維持 from-less 全開）。呼應 `two-layer-acl-lockstep`。
+
 ## must-allow（部署 ingress default-deny 前必驗；用 established pod 測，別用臨時 pod）
 
 - kubelet health/readiness probe（node 私網 `192.168.10.0/24` → pod；node forensics 見 `--src-type LOCAL -j ACCEPT` 已放行本機來源，須實測確認）。
