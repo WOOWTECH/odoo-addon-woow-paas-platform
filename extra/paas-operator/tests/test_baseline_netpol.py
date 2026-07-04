@@ -176,3 +176,38 @@ def test_create_namespace_skips_baseline_when_no_workspace_id(mock_run, mock_set
     k.ensure_registry_secret = MagicMock()
     k.create_namespace("paas-ws-dev", cpu_limit="1", memory_limit="1Gi", storage_limit="1Gi")
     k._apply_baseline_netpol.assert_not_called()
+
+
+# --- P5 backfill: stamp_managed_ns_labels ------------------------------------
+
+
+@patch("src.services.helm.settings")
+def test_stamp_managed_ns_labels_cs_ns(mock_settings):
+    """CS-ns backfill：kubectl label --overwrite 帶 build_managed_ns_labels 全集。"""
+    mock_settings.paas_env = "stg"
+    mock_settings.namespace_prefix = "paas-ws-"
+    k = KubernetesService()
+    k._run_command = MagicMock()
+    labels = k.stamp_managed_ns_labels("paas-ws-stg-x", workspace_id=7)
+    assert labels["woow.tw/workspace-id"] == "7"
+    assert labels["paas.woowtech.io/env"] == "stg"
+    assert labels["paas-managed"] == "true"
+    cmd = k._run_command.call_args.args[0]
+    assert cmd[:4] == ["label", "ns", "paas-ws-stg-x", "--overwrite"]
+    assert "woow.tw/workspace-id=7" in cmd
+    assert "paas.woowtech.io/env=stg" in cmd
+
+
+@patch("src.services.helm.settings")
+def test_stamp_managed_ns_labels_agent_ns_add_only(mock_settings):
+    """agent-ns backfill：加 env + reach-ws，全為 k=v（add-only，無 'key-' delete）。"""
+    mock_settings.paas_env = "stg"
+    mock_settings.namespace_prefix = "paas-ws-"
+    k = KubernetesService()
+    k._run_command = MagicMock()
+    k.stamp_managed_ns_labels("paas-ws-pa-abc", reach_workspace_ids=[3, 5])
+    cmd = k._run_command.call_args.args[0]
+    assert "woow.tw/reach-ws-3=true" in cmd
+    assert "woow.tw/reach-ws-5=true" in cmd
+    assert "paas.woowtech.io/env=stg" in cmd
+    assert all("=" in a for a in cmd[4:])   # 全 add-only、無 delete syntax

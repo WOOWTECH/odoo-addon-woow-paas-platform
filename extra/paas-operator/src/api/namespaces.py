@@ -1,10 +1,13 @@
 """API endpoints for namespace management."""
 import logging
-from typing import Dict
+from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, status
 
-from src.models.schemas import NamespaceCreateRequest
+from src.models.schemas import (
+    BaselineNetpolBackfillRequest,
+    NamespaceCreateRequest,
+)
 from src.services.helm import KubernetesService
 
 logger = logging.getLogger(__name__)
@@ -54,4 +57,33 @@ async def create_namespace(request: NamespaceCreateRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create namespace: {str(e)}",
+        )
+
+
+@router.post(
+    "/{name}/baseline-netpol",
+    response_model=Dict[str, Any],
+    summary="#279 P5 backfill — apply baseline NP bundle + re-stamp managed labels",
+)
+async def backfill_baseline_netpol(name: str, request: BaselineNetpolBackfillRequest):
+    """Idempotent backfill for a PRE-EXISTING CloudService namespace: apply the O4
+    baseline NetworkPolicy bundle and re-stamp its managed labels (paas-managed + env
+    + workspace-id) so leg-1 egress's namespaceSelector and the baseline NPs work on
+    namespaces created before O4/O1. Safe to re-run."""
+    try:
+        k8s_service._apply_baseline_netpol(name, request.workspace_id)
+        labels = k8s_service.stamp_managed_ns_labels(
+            name, workspace_id=request.workspace_id
+        )
+        logger.info("P5 baseline-netpol backfilled on %s (ws=%s)",
+                    name, request.workspace_id)
+        return {"action": "baseline-netpol-applied", "namespace": name,
+                "labels": labels}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error("P5 baseline-netpol backfill failed on %s: %s", name, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"baseline-netpol backfill failed: {str(e)}",
         )

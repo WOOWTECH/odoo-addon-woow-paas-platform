@@ -106,6 +106,26 @@ class NamespaceCreateRequest(BaseModel):
     )
 
 
+class BaselineNetpolBackfillRequest(BaseModel):
+    """#279 P5 backfill: re-apply the baseline NP bundle + re-stamp managed labels on
+    a PRE-EXISTING CloudService namespace created before O4/O1."""
+
+    workspace_id: int = Field(
+        ..., description="Odoo workspace id of the owning CloudService (required — the "
+        "baseline NP4 + leg-1 egress selectors key on woow.tw/workspace-id)",
+    )
+
+
+class RestampLabelsRequest(BaseModel):
+    """#279 P5 backfill: re-stamp managed labels (paas-managed + env + optional
+    workspace-id / reach-ws-*) on a pre-existing namespace — add-only (never deletes a
+    reach label). Chiefly adds the env label a legacy agent ns lacks so it matches
+    NP4's env predicate once #280 removes the chart from-less."""
+
+    workspace_id: Optional[int] = Field(default=None)
+    reach_workspace_ids: List[int] = Field(default_factory=list)
+
+
 class TunnelCreateRequest(BaseModel):
     """Request to create a new dedicated Cloudflare Tunnel."""
 

@@ -22,6 +22,7 @@ from src.config import settings
 from src.models.schemas import (
     InvalidateMcpRequest,
     InvalidateSkillsRequest,
+    RestampLabelsRequest,
     ResumeRequest,
     SpawnOrAttachRequest,
     SyncWorkspacesRequest,
@@ -603,6 +604,22 @@ def sync_workspaces(project_hash: str, request: SyncWorkspacesRequest):
     if errors:
         raise HTTPException(status_code=500, detail=f"partial sync failed: {errors}")
     return {"action": "synced", "workspace_ids": request.project_workspace_ids}
+
+
+@router.post("/{project_hash}/restamp-labels", summary="#279 P5 — re-stamp agent-ns managed labels")
+def restamp_labels(project_hash: str, request: RestampLabelsRequest):
+    """#279 P5 backfill: add-only re-stamp of a project's AGENT namespace managed
+    labels (paas-managed + env + reach-ws-*). The namespace is derived from the hash
+    (env-specific prefix) so Odoo — which stores only the hash — need not know the
+    operator's env prefix. Chiefly adds the env label a legacy agent ns lacks so it
+    matches NP4's env predicate once #280 removes the chart from-less. Idempotent."""
+    namespace, _release = _names(project_hash)
+    labels = k8s_service.stamp_managed_ns_labels(
+        namespace,
+        workspace_id=request.workspace_id,
+        reach_workspace_ids=request.reach_workspace_ids,
+    )
+    return {"action": "labels-restamped", "namespace": namespace, "labels": labels}
 
 
 @router.delete("/{project_hash}", summary="Tear down a project pod (uninstall + delete ns)")
