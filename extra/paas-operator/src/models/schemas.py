@@ -447,9 +447,18 @@ class InvalidateSkillsRequest(BaseModel):
 
 
 class SyncWorkspacesRequest(BaseModel):
-    """Request to re-render a pod's NetworkPolicy egress allowlist."""
+    """Request to re-render a project's tenant-isolation legs (#279 O5).
+
+    leg-1 = pod NetworkPolicy egress allowlist (helm upgrade);
+    leg-2 = agent-ns ``reach-ws-*`` labels (O3 reconcile primitive).
+    """
 
     project_workspace_ids: List[int] = Field(default_factory=list)
+    # GRANT path sets True: if the pod's helm release is gone, leg-1 egress can't be
+    # applied, so the operator MUST fail-loud (409) instead of returning 200 after only
+    # leg-2 — otherwise the caller commits a non-functional grant + an orphan reach
+    # label. REVOKE leaves it False (a revoke against a gone pod is a no-op success).
+    require_release: bool = Field(default=False)
 
 
 # Security Access — multi-route dedicated tunnel sync (security-access P1)

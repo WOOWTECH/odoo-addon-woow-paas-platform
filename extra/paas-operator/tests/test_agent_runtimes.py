@@ -1208,6 +1208,106 @@ class TestSyncWorkspaces:
             assert kwargs.get("password") == "gitea-token"
 
 
+class TestSyncWorkspacesDualLeg:
+    """#279 O5 — /sync-workspaces re-renders BOTH legs; leg-1 (egress) FIRST."""
+
+    def test_runs_both_legs_leg1_first(self, client):
+        """leg-1 egress upgrade AND leg-2 reach reconcile, in that order."""
+        order = []
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_helm.upgrade.side_effect = lambda *a, **k: order.append("leg1")
+            mock_k8s.reconcile_ns_reach_labels.side_effect = \
+                lambda *a, **k: order.append("leg2")
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3, 5]},
+            )
+            assert resp.status_code == 200, resp.text
+            assert order == ["leg1", "leg2"]
+            assert mock_k8s.reconcile_ns_reach_labels.call_args.args[1] == [3, 5]
+
+    def test_grant_release_absent_409_and_no_leg2(self, client):
+        """GRANT while pod gone → 409 fail-loud, NO leg-2 (no orphan reach label)."""
+        from src.services.helm import HelmException
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3, 5], "require_release": True},
+            )
+            assert resp.status_code == 409, resp.text
+            mock_helm.upgrade.assert_not_called()
+            mock_k8s.reconcile_ns_reach_labels.assert_not_called()
+
+    def test_revoke_release_absent_ok_still_reconciles(self, client):
+        """REVOKE (require_release False) while pod gone → skip leg-1, run leg-2, 200."""
+        from src.services.helm import HelmException
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3]},
+            )
+            assert resp.status_code == 200, resp.text
+            mock_helm.upgrade.assert_not_called()
+            mock_k8s.reconcile_ns_reach_labels.assert_called_once()
+
+    def test_leg1_failure_still_runs_leg2_and_500(self, client):
+        """leg-1 upgrade error must NOT skip leg-2; aggregates into a 500."""
+        from src.services.helm import HelmException
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_helm.upgrade.side_effect = HelmException(
+                message="boom", command="helm upgrade", stderr="upgrade failed",
+            )
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3]},
+            )
+            assert resp.status_code == 500, resp.text
+            assert "egress" in resp.text
+            mock_k8s.reconcile_ns_reach_labels.assert_called_once()
+
+    def test_leg2_kubectl_error_500(self, client):
+        from src.services.helm import KubectlException
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.reconcile_ns_reach_labels.side_effect = KubectlException(
+                "label failed", command="kubectl label", stderr="server error",
+            )
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3]},
+            )
+            assert resp.status_code == 500, resp.text
+            assert "reach" in resp.text
+
+    def test_leg2_not_found_is_ignored(self, client):
+        """A missing agent ns on leg-2 (pod fully torn down) is benign → 200."""
+        from src.services.helm import KubectlException
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.reconcile_ns_reach_labels.side_effect = KubectlException(
+                "nope", command="kubectl label", stderr='namespaces "x" not found',
+            )
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3]},
+            )
+            assert resp.status_code == 200, resp.text
+
+
 class TestDeleteRuntime:
     """S.8 — two-step teardown: helm uninstall + delete namespace (§8.4.1)."""
 

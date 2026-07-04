@@ -546,20 +546,62 @@ def invalidate_skills(project_hash: str, request: InvalidateSkillsRequest):
     )
 
 
-@router.post("/{project_hash}/sync-workspaces", summary="Re-render egress allowlist")
+@router.post("/{project_hash}/sync-workspaces", summary="Re-render egress + reach labels")
 def sync_workspaces(project_hash: str, request: SyncWorkspacesRequest):
-    """Helm upgrade re-renders the pod's NetworkPolicy egress allowlist."""
+    """Re-render BOTH #279 tenant-isolation legs for a project's agent pod.
+
+    leg-1 = pod NetworkPolicy egress allowlist (helm upgrade); leg-2 = agent-ns
+    ``reach-ws-*`` labels (O3 reconcile primitive). **leg-1 runs FIRST** because for a
+    REVOKE it is the gating leg — the instant egress drops, reach is revoked regardless
+    of whether leg-2 lags. Each leg is independent (own try/except); one leg's failure
+    never silently skips the other, and any failure aggregates into a 500 so the caller
+    doesn't commit against a half-applied sync.
+    """
     namespace, release = _names(project_hash)
-    helm_service.upgrade(
-        namespace=namespace,
-        name=release,
-        chart=settings.agent_runtime_chart,
-        values={
-            "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
-        },
-        reuse_values=True,
-        **_chart_source_kwargs(),
-    )
+    errors = []
+
+    # leg-1 FIRST (gating leg): re-render pod egress allowlist. `_release_exists`
+    # re-raises a non-"not found" HelmException → 500 (caller retries), which is
+    # correct: an indeterminate release state must not be treated as success.
+    release_live = _release_exists(namespace, release)
+    if not release_live and request.require_release:
+        # GRANT while the pod is gone: leg-1 can't apply, so returning 200 after only
+        # leg-2 would commit a healthy-looking but non-functional grant + an orphan
+        # reach label. Fail loud BEFORE leg-2 — caller rolls back; cold start then
+        # reprovisions both legs atomically.
+        raise HTTPException(
+            status_code=409, detail="cannot provision reach: pod not running"
+        )
+    if release_live:
+        try:
+            helm_service.upgrade(
+                namespace=namespace,
+                name=release,
+                chart=settings.agent_runtime_chart,
+                values={
+                    "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
+                },
+                reuse_values=True,
+                **_chart_source_kwargs(),
+            )
+        except HelmException as exc:
+            errors.append("egress")
+            logger.error("sync_workspaces leg-1 egress failed (%s): %s", namespace, exc)
+
+    # leg-2: reconcile agent-ns reach labels to EXACTLY desired (add + delete-stale).
+    # Release-independent — runs even if the pod is gone so an unbind's stale reach
+    # label can't linger. A missing ns is benign (pod fully torn down → nothing to revoke).
+    try:
+        k8s_service.reconcile_ns_reach_labels(namespace, request.project_workspace_ids)
+    except KubectlException as exc:
+        # The "not found" signal is in stderr, not the message (str(exc)==message);
+        # mirror _release_exists's stderr check.
+        if "not found" not in (exc.stderr or "").lower():
+            errors.append("reach")
+            logger.error("sync_workspaces leg-2 reach failed (%s): %s", namespace, exc)
+
+    if errors:
+        raise HTTPException(status_code=500, detail=f"partial sync failed: {errors}")
     return {"action": "synced", "workspace_ids": request.project_workspace_ids}
 
 
