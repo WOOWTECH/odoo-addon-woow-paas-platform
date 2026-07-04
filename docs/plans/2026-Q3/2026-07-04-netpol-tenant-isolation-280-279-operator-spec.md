@@ -139,3 +139,19 @@ spec:
 - 不做 ns 全域 egress default-deny（egress 收斂留 per-chart）。
 - 不動 CNI、不 ipBlock 全包。
 - 殘留 bypass（hostNetwork / NodePort / RWX PV / default SA token / 啟動空窗）非本 spec，歸 #284 admission/PSA 線。
+
+## 11. 實作對抗驗證 findings（implementation-grounded workflow，2026-07-04）
+
+獨立 implementation-grounded 對抗 workflow（5 skeptic 讀真實 operator/平台 code 攻破 (B')），與 docs-leader design-level workflow 互補。**結論：(B') 靜態雙腿設計健全，但動態 reconcile 面整條缺失 → 非 implementation-ready，需前置 spec-delta。**
+
+| # | severity | 發現 | spec-delta |
+| --- | --- | --- | --- |
+| **F1** | 🔴 **BLOCKER** | 綁定變動後**零 reconcile**：`sync_workspaces`(agent_runtime_client.py:180) **零 production caller**（已 grep 驗）、`project`/`cloud_service` 無 `write()` override、attach/resume/reap 皆不重算 NP → unbind 後 agent egress 凍在舊快照、**整個 release 生命週期可達已解綁 workspace 的 CS MCP**。對照 `_push_snapshot_to_running_pods`(agent_session.py:530) 有 skill/mcp hot-push 卻無 workspace 對應 push = 漏建鐵證。 | **O4** `project.write()` hook 活化死碼 `sync_workspaces`（同交易、fail-loud、冪等）；**O5** `cloud_service._do_cleanup`/`unlink` 對 running pod 同步 sync；**O6** sync endpoint 擴成同時撤 leg-2 reach-ws label |
+| **F2** | 🟠 | leg-2（reach-ws ingress）**整條未實作**，agent ns label cold-start-only、**無 post-spawn ns-label patch 原語** → 比 leg-1 更 stale | **O1** stamp label；**O2**(charts) selector；**O3** ns-label patch 路徑 |
+| **F3** | 🟠 **GATING** | CS ns **現無 workspace-id label** → 若 chart leg-1 egress 依賴該 label，leg-1 現在就 deny-all | 落 O1 前**先勘查 woow-paas-charts NP template 實際比對哪個 label key**（byte-identical 前提）|
+| **F4** | 🟠 | 跨 repo label-key 無單一真源 + 無 `validate_label_key`（只造斷路非洩漏；W 恆正整數 fail-closed）| operator 算好完整 key 明文傳 chart + cross-repo 契約測試 + 補 `validate_label_key` |
+| **F5** | 🟡 **已修正** | fresh-pod 窗（見下方自我修正）| leg-1 不可省寫進 `two-layer-acl-lockstep`；data-plane MCP retry ≥3s |
+
+**★ 對自身 workflow 的 F5 修正（對抗自驗）**：skeptic 稱「fresh agent egress 空窗 fail-CLOSED → 兩腿不同時 fail-open → 無洩漏」。但 **np-window.sh 實測 egress-deny fresh pod 是 fail-OPEN**（t=0-1s code=200、t=2s 才擋）→ fresh agent egress 空窗**是 fail-open**。故存在**窄跨租戶洩漏 race**：attacker agent FRESH（egress fail-open）+ victim CS FRESH（ingress fail-open）~1s 重疊時，未授權 agent 可達 victim CS。實務可利用性低（需兩 pod 同時 fresh + 命中 CS IP + 猜中重啟時機），但**非「無洩漏」**。窗口為 kube-router 固有、無法消除；此 race **強化** leg-1 load-bearing（leg-1 egress 是唯一擋 established 未授權 agent 的腿）。
+
+**落地順序（lock-step）**：F3 chart 勘查 → F4 key 真源 → O1/O2/O3（stamp+selector+patch）→ O4/O5/O6（reconcile 觸發+撤銷，關 F1 洩漏）。**O6 leg-2 撤銷與 O4 leg-1 收斂必須同步 land**，否則補了 egress、ingress 仍靠陳舊 reach-ws label 放行。
