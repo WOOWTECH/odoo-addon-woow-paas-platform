@@ -166,6 +166,8 @@ leader（implementation-grounded）+ docs-leader（3 設計 + 9 skeptic）雙 pa
 
 **🔴 F6 NEW CRITICAL — cross-environment 洩漏（must-fix 最高優先）**：label value = 原始 Odoo workspace int id、**per-DB 非全叢集唯一**；woow-k3s **prod+stg 同一物理叢集**（helm.py:115-116，env label 正為此加）→ prod ws#3 與 stg ws#3 都 `workspace-id=3` → stg agent `egressWorkspaceIds=[3]` match prod CS ns、leg-2 `reach-ws-3` 也對上 → **stg agent 可達 prod CS**。#280 default-deny 落地後 selector 會**允許**此路 = 真跨環境租戶洩漏。**修**：leg-1 + leg-2 的 namespaceSelector matchLabels **都加 `paas.woowtech.io/env: <env>`**（CS/agent ns 已由 `build_managed_ns_labels` 帶此 label，helm.py:108）。
 
+> **F6 enforcement（O4 前置，#290 review note 2）**：#279 label 無條件 stamp、env 只在 `settings.paas_env` 非空時加 → 共用 prod/stg 叢集若 `PAAS_ENV` 漏設，#279 label 變 env-unqualified = **config-level fail-open**（F6 跨環境洩漏重開）。O1（#290）label inert 不擋；**O4 讓 label load-bearing 前**必補：operator lifespan startup 加「非 dev 必設 `PAAS_ENV`」assert（或 stamp #279 label 但 env 空時 loud-warn）。
+
 **🟠 F7 NEW — leg-2 改由 operator baseline 渲染（非 chart）**：旗艦 n8n 的 MCP 是 `patch_sidecar` 注入 n8n deployment（cloud_service.py:442-488）、CS ns **零 chart NP** → leg-2 若只靠 mcp-server chart selector **會漏 sidecar-MCP**。**修**：leg-2 reach-ws ingress allow 由 **operator baseline（O4 `_apply_baseline_netpol`）渲染** → 一機制同蓋 standalone mcp-server + sidecar-MCP、**消掉 leg-2 跨 repo chart 依賴**（leg-1 egress 仍需 chart）。**改寫 §3 O2 分工**：O2 不再是 chart selector，而是 operator baseline 的一條 ingress-allow（含 env-qualifier + MCP 埠）；charts 端 `ingressWorkspaceIds` 增強**不再需要**（docs-leader 知會 charts）。
 
 **🟠 F8 NEW — 既有 CS ns workspace-id label backfill**：`woow.tw/workspace-id` 全 source 不存在（僅 paas-managed+env）→ 除 O1 往後 stamp，**既有 CS ns 需一次性 backfill**（否則 leg-1 對存量 CS 永遠 deny-all）。呼應 §7 Q3、擴到 workspace-id label。
