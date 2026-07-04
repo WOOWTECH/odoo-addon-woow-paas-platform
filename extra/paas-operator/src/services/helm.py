@@ -1362,6 +1362,57 @@ class KubernetesService:
             except KubectlException as e:
                 logger.warning(f"Failed to label PVC {pvc_name}: {e.stderr}")
 
+    def get_namespace_labels(self, namespace: str) -> Dict[str, str]:
+        """Return the namespace's current labels ({} if it carries none)."""
+        validate_namespace(namespace)
+        result = self._run_command(["get", "ns", namespace, "-o", "json"])
+        data = json.loads(result.stdout or "{}")
+        return data.get("metadata", {}).get("labels", {}) or {}
+
+    def reconcile_ns_reach_labels(
+        self, namespace: str, desired_workspace_ids: List[int]
+    ) -> Dict[str, List[str]]:
+        """Reconcile an agent-runtime ns's ``woow.tw/reach-ws-<W>`` labels to EXACTLY
+        the desired reachable-workspace set — adding missing keys and EXPLICITLY
+        REMOVING stale ones (#279 leg-2 reconcile primitive, O3).
+
+        ``_ensure_namespace``/``apply_manifest`` (cold-start stamping) only MERGES
+        labels, so it can grow the reach set but never shrink it. Unbinding a
+        CloudService therefore needs this explicit-delete path (``kubectl label ns
+        <ns> <key>-``) — without it a revoked workspace stays reachable for the pod's
+        whole lifetime (F1). Add + delete go in ONE atomic ``kubectl label`` command
+        so a partial apply can't leave the ns half-reconciled. Idempotent: an already
+        reconciled ns issues no command.
+
+        NOTE: only ``reach-ws-*`` keys are diffed — ``paas-managed`` / env /
+        ``workspace-id`` are never touched.
+
+        Returns ``{"added": [keys], "removed": [keys]}`` for observability / tests.
+        """
+        validate_namespace(namespace)
+
+        desired = {
+            reach_ws_label_key(w): REACH_WS_LABEL_VALUE for w in desired_workspace_ids
+        }
+        current_reach = {
+            k: v
+            for k, v in self.get_namespace_labels(namespace).items()
+            if k.startswith(REACH_WS_LABEL_PREFIX)
+        }
+
+        to_add = {k: v for k, v in desired.items() if current_reach.get(k) != v}
+        to_remove = sorted(k for k in current_reach if k not in desired)
+
+        if not to_add and not to_remove:
+            return {"added": [], "removed": []}
+
+        # trailing '-' on a key is kubectl's delete-label syntax; --overwrite lets an
+        # add correct a drifted value. One atomic command for the whole diff.
+        label_args = [f"{k}={v}" for k, v in to_add.items()] + [f"{k}-" for k in to_remove]
+        self._run_command(["label", "ns", namespace, "--overwrite"] + label_args)
+
+        return {"added": sorted(to_add), "removed": to_remove}
+
     def get_pod_name(self, namespace: str, label_selector: str) -> str:
         """Get the first pod name matching a label selector.
 
