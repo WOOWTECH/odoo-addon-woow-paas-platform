@@ -114,7 +114,7 @@ agent→CS-MCP 是單一路徑、兩端各自 default-deny，**兩腿都放行�
 **兩腿 selector key 不對稱**：腿1 用 workspace-id **label**（語意、一 label 對應 workspace 內多 ns）、腿2 用 ns **name**（具體 agent ns 名）→ operator 需**枚舉 + reconcile** 該 workspace 的 agent ns 名填進 mcp-server ingressNamespaces。
 
 **推論（與 corrected model 一致）**：
-- agent→CS 現「network-dead」的真因是**腿1 未 wire**（`egressWorkspaceIds` 空、或/且 CS ns 缺 label → egress namespaceSelector match 0 ns），**不是 selector 壞**。exact 現況（空 egressWorkspaceIds vs 缺 label）需 operator 端查證，但 wiring 腿1 一律要**兩者都到位**。
+- agent→CS 現「network-dead」的真因是**腿1 未 wire**，**不是 selector 壞**。charts 已在 template 層坐實：agent-runtime `network-policy.yaml` 那條 egress-to-CS 規則整段包在 `{{- if .Values.networkPolicy.egressWorkspaceIds }}` 內 → **空 list = 整段規則不 render**（不是 render 了但 match 0 ns）。先前 blast-radius 觀察到「live agent NP 完全無指向 CS ns 的 egress 規則」正是此表徵（`egressWorkspaceIds` 當時為空）。wiring 腿1 仍須 **(a) operator 送非空 `egressWorkspaceIds` + (b) CS ns 帶 label** 兩者都到位。
 - **#280 關 mcp-server from-less（腿2 收緊）不會弄斷 agent→CS**——它本就因腿1 未 wire 而不通。
 - **#279（wire 腿1）+ #280（wire 腿2 到 agent ns）必須一起做**，才把這條路**安全**接通（單做 #279 會讓腿2 維持 from-less 全開）。呼應 `two-layer-acl-lockstep`。
 
