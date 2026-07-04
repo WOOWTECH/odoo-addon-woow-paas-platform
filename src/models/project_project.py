@@ -430,11 +430,14 @@ class ProjectProject(models.Model):
         for a single soak cadence and MUST be flipped on before #280.
 
         Per-project isolation (one transient error can't abort the cadence);
-        `require_release=False` (a reconcile must not fail-loud on a reaped pod); and
-        a per-project advisory lock + fresh re-read of `workspace_ids` immediately
-        before each sync, committed per project so the lock releases promptly — this
-        closes the TOCTOU window where the cron would clobber a grant that committed
-        between its snapshot and the operator's live-label read (§3.5.1 [F cron #1]).
+        `require_release=False` (a reconcile must not fail-loud on a reaped pod); and a
+        per-project SESSION-level advisory lock (acquired + released per project via
+        pg_advisory_unlock) + a fresh re-read of `workspace_ids` immediately before
+        each sync — this closes the TOCTOU window where the cron would clobber a grant
+        that committed between its snapshot and the operator's live-label read (§3.5.1
+        [F cron #1]). A session lock (not xact) is used because the cron does no DB
+        writes — nothing to commit to drop an xact lock, and committing mid-cron is
+        forbidden inside a test cursor.
         """
         ICP = self.env['ir.config_parameter'].sudo()
         enforce = ICP.get_param(
@@ -454,15 +457,17 @@ class ProjectProject(models.Model):
             ('project_namespace_hash', '!=', False),
             ('project_id.use_agent_runtime', '=', True),
         ])
-        # Snapshot the work-list as plain tuples so the per-project commits below can't
-        # leave us iterating a stale recordset.
         work = [(s.project_namespace_hash, s.project_id.id) for s in sessions]
         Project = self.env['project.project'].sudo()
         for project_hash, project_id in work:
+            # SESSION-level advisory lock: acquired + released per project via explicit
+            # unlock (finally), so it releases promptly WITHOUT a commit. The cron does
+            # no DB writes, so there is nothing to commit to drop an xact lock — and
+            # committing mid-cron is forbidden inside a test cursor. Same lock space as
+            # the bind path's pg_advisory_xact_lock, so the two still serialize.
+            self.env.cr.execute(
+                "SELECT pg_advisory_lock(%s, %s)", (_REACH_LOCK_NS, project_id))
             try:
-                self.env.cr.execute(
-                    "SELECT pg_advisory_xact_lock(%s, %s)",
-                    (_REACH_LOCK_NS, project_id))
                 project = Project.browse(project_id)
                 project.invalidate_recordset(['workspace_ids'])   # fresh re-read
                 desired = project.workspace_ids.ids
@@ -473,11 +478,12 @@ class ProjectProject(models.Model):
                     _logger.info(
                         "reach reconciler DRY-RUN: project %s → %s",
                         project_id, desired)
-                self.env.cr.commit()          # release the per-project advisory lock
             except Exception:
-                self.env.cr.rollback()        # isolate — also releases the lock
                 _logger.exception(
                     "reach reconciler: project %s failed", project_id)
+            finally:
+                self.env.cr.execute(
+                    "SELECT pg_advisory_unlock(%s, %s)", (_REACH_LOCK_NS, project_id))
         return True
 
     def _portal_partner_can_access(self, partner):
