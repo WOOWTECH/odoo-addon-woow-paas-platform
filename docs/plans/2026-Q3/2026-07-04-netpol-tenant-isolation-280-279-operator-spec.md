@@ -112,6 +112,12 @@ spec:
 - **Q2（agent ns 自身 workspace-id 來源）→ 有欄位但 lossy、與 Q1 綁定**：`project.workspace_id`（單數 primary，`project_project.py:146`）= 第一個綁定 CS 的 workspace、**arbitrary**；完整身分是 `project.workspace_ids`（多值）。若 Q1 走 (B-i)（強制單 workspace）→ primary == 唯一 workspace、label 用它即正確；若不強制 → 單一 label lossy → 應走 Q1-(A) ns-name（agent ns 免自身 workspace label）。**Q2 不獨立、隨 Q1 決。**
 - **Q3（baseline 對既有 stg ns 的回填）**：現存 stg 租戶 ns 無 baseline → 要不要一次性 backfill（對現存 ns apply baseline NP + 補 workspace-id label）？backfill 若漏 must-allow 會打斷現有服務 → 須先 §6 驗過再 backfill。
 
+> **stg 實測定調（2026-07-04，leader `multi_ws=0/12` + docs-leader 雙查收斂）**：stg 12 個 agent project **全部 `cloud_service_ids=[]`/`workspace_ids=[]`、0 跨-workspace**（5 CS 有 ws 但 0 綁 project）→ 跨-ws 綁定**零使用** → **Q1 傾向 Model A（硬邊界 + `@api.constrains` 單 workspace）零回歸**（docs-leader 推薦、待 Eugene 拍板）。**Q2 隨之**：Model A 下 agent ns label = 該唯一 workspace、乾淨。
+>
+> **binding = agent→CS reachability 的 opt-in 前置**（重要含意）：0 綁定 = 所有 agent 的 `egressWorkspaceIds` 空 = leg-1 CS-egress 規則不 render（= 現況「agent→CS 授權幾乎沒生效」真根因＝0 綁定、**非控制器**）。收斂後 agent 要達某 CS **必須先綁 CS 到 project**。確認：
+> - **(a) binding flow 存在**：`/api/support/cloud-services/<id>/project`（auth=user，`_check_workspace_access` gated）建 project 時綁 CS。**但 `_update_project` 只改 name/desc、無 rebind UX** → 既有 project 要新增 CS reachability 目前**無使用者路徑**（#280 rollout UX 待補）。
+> - **(b) base egress 收斂後仍開（已確認 operator values 獨立）**：`_build_install_values`（agent_runtimes.py:143/160/178）分送 `egressWorkspaceIds`/`odooNamespace`/`externalEgress.enabled` **三獨立 key** → 空 `egressWorkspaceIds` **只**移除 CS-workspace egress，DNS（chart 預設）/Odoo WS/外部 LLM **不受影響**、agent 不全斷。（chart 端請 charts 複核 DNS/external 規則確非 gated 於 egressWorkspaceIds。）
+
 ## 8. Rollout 順序（lock-step）
 
 1. **§6 must-allow 在 stg established-pod 實測全綠**（硬 gate）。
