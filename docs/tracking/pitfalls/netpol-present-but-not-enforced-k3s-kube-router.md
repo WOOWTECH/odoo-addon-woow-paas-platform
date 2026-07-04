@@ -4,6 +4,8 @@
 >
 > **核心教訓**：任何假設 K8s NetworkPolicy 標準語意的人在此叢集都會被咬爆。實測此叢集**只有 ingress `default-deny` 與 ingress `ipBlock` allow 生效**；ingress 的 `namespaceSelector` / `podSelector` allow **完全不生效**（9 分鐘 steady-state 排除 reconciliation lag、連 same-ns podSelector 都不放行）、**egress NetworkPolicy 完全不 enforce**（egress default-deny 過 2.5 分鐘仍全通）。連帶暴露 **LIVE 跨租戶網路洞**（已從無關 ns curl 租戶服務 → HTTP 200）。
 >
+> **範圍（Eugene 2026-07-04 拍板，先讀）**：跨租戶洞目前**只在 stg**（dev-sandbox / test 租戶）；**prod 尚空、未建任何租戶服務 → 非 prod 活躍暴露事件**。故 #280 是**上線前 W1 強化**（仍必做：外科移除 stg from-less ingress + operator baseline ingress default-deny），按 W1 節奏、非緊急 incident。
+>
 > **信度分層（誠實標註）**：symptom（能力矩陣 + 跨租戶洞）＝leader 親手實測、**高信度**；root-cause（kube-router 細部 bug）＝已排除「#1513 規則消失」類、機制部分刻畫（mark-based + ipset 有在用），**precise defect 待 upstream triage**，別在查實前就下「降版 / 換 CNI」結論。
 >
 > Cross-link：**#280**（cross-tenant default-deny，P0）、**#279**（agent→CS-MCP 授權 NP dead-path）、**#284**（operator RBAC 不 enforce ns prefix，F-ENV-8）。
@@ -45,7 +47,7 @@ kubectl --context woow-k3s -n paas-ws-stg-86f34bd4 get netpol -o yaml
 
 K8s NetworkPolicy 多 policy 為 **allow 聯集**：一條 from-less allow 覆蓋掉同 pod 的 default-deny，等於對「所有來源」開放。此外**主 app（n8n）pod 完全沒有任何 NP** + 該 ns **無 namespace 級 default-deny** → in-cluster 全埠全開。
 
-**衝擊**：任一租戶 workload（或取得任一租戶 pod code-exec 者，如 n8n Code 節點）可跨 ns 觸及每個其他租戶的 **MCP:8080 / Odoo web:8069 / PostgreSQL:5432**。FQDN 由 Odoo 端 `src/models/cloud_service.py:984-989` 生成、外露即可枚舉，不外露也能掃 `10.42.0.0/16`。**這是 #280 要關的核心。**
+**衝擊**：任一租戶 workload（或取得任一租戶 pod code-exec 者，如 n8n Code 節點）可跨 ns 觸及每個其他租戶的 **MCP:8080 / Odoo web:8069 / PostgreSQL:5432**。FQDN 由 Odoo 端 `src/models/cloud_service.py:984-989` 生成、外露即可枚舉，不外露也能掃 `10.42.0.0/16`。**這是 #280 要關的核心**（範圍：目前 **stg**；prod 尚空、屬上線前強化非活躍事件，見上方範圍註記；本節指令實測於 stg `paas-ws-stg-*` ns）。
 
 **雙向暴露**：ingress 如上；egress 因 NP 不 enforce（見下），任一租戶 pod 亦可無限制 egress 到內網（他租戶 pod IP、k8s API `10.43.0.1`、kubelet `192.168.10.x:10250`、metadata `169.254.169.254`）——且 **egress 這側現在無法用 NetworkPolicy 關**。
 
