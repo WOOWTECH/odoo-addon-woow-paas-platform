@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 import time
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 
@@ -78,7 +78,9 @@ def _release_exists(namespace: str, release: str) -> bool:
         raise
 
 
-def _ensure_namespace(namespace: str) -> None:
+def _ensure_namespace(
+    namespace: str, reach_workspace_ids: Optional[List[int]] = None
+) -> None:
     """Create/patch the project namespace carrying the ``paas-managed=true``
     label (idempotent apply).
 
@@ -87,11 +89,22 @@ def _ensure_namespace(namespace: str) -> None:
     BARE (unlabelled) namespace — so the operator applies the labelled namespace
     itself and installs into it (create_namespace=False). Without the label,
     pod<->Odoo traffic is silently NetworkPolicy-dropped.
+
+    ``reach_workspace_ids`` (= the project's reachable workspaces) stamps one
+    ``woow.tw/reach-ws-<W>`` label per id so the leg-2 baseline ingress on each
+    CloudService ns can select this agent ns by its own workspace key (#279).
+
+    NOTE: ``apply_manifest`` MERGES labels — it never removes a key. Revoking reach
+    (unbind) therefore needs an explicit label-delete path (O3/O6), not a re-apply
+    with a shorter set here.
     """
     k8s_service.apply_manifest({
         "apiVersion": "v1",
         "kind": "Namespace",
-        "metadata": {"name": namespace, "labels": build_managed_ns_labels()},
+        "metadata": {
+            "name": namespace,
+            "labels": build_managed_ns_labels(reach_workspace_ids=reach_workspace_ids),
+        },
     })
 
 
@@ -347,7 +360,7 @@ def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundT
         # the private-registry pull secret (F-PILOT-4, symmetric with the
         # marketplace create_namespace_with_quota path) + provision the per-tenant
         # LLM credential Secret (F-PILOT-8) BEFORE install, then sign + install.
-        _ensure_namespace(namespace)
+        _ensure_namespace(namespace, reach_workspace_ids=request.project_workspace_ids)
         k8s_service.ensure_registry_secret(namespace)
         _provision_llm_secret(namespace, release, request)
         skill_bundle_token = jwt_signer.sign_skill_bundle_token(

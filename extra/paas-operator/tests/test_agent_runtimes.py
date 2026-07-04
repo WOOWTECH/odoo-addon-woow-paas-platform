@@ -471,6 +471,38 @@ class TestSpawnOrAttach:
             # helm must NOT also race to create the (already labelled) namespace
             assert mock_helm.install.call_args.kwargs.get("create_namespace") is False
 
+    def test_spawn_cold_start_stamps_reach_ws_labels_for_leg2(self, client):
+        """#279 leg-2: cold start stamps one ``woow.tw/reach-ws-<W>=true`` per reachable
+        workspace (= project_workspace_ids) on the agent ns, so each CloudService ns's
+        leg-2 baseline ingress can select this agent ns by its own workspace key.
+        Model B: project_workspace_ids=[3,5] → BOTH reach-ws labels (cross-workspace).
+        """
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_helm.install.return_value = MagicMock()
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt"
+            mock_signer.sign_skill_bundle_token.return_value = "skill.jwt"
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            ns_manifests = [
+                c.args[0] for c in mock_k8s.apply_manifest.call_args_list
+                if c.args and isinstance(c.args[0], dict)
+                and c.args[0].get("kind") == "Namespace"
+            ]
+            assert ns_manifests, "cold start must pre-create the agent-runtime Namespace"
+            labels = ns_manifests[0].get("metadata", {}).get("labels", {})
+            # _SPAWN_BODY project_workspace_ids == [3, 5]
+            assert labels.get("woow.tw/reach-ws-3") == "true"
+            assert labels.get("woow.tw/reach-ws-5") == "true"
+
     def test_spawn_or_attach_refreshes_skills_configmap_on_attach(self, client):
         """Layer 3 (running-pod half): on ATTACH (release exists, replicas>0) the
         operator does NO install, so the cold-start skills.json render goes stale

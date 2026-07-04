@@ -105,7 +105,63 @@ def validate_label_value(key: str, value: str) -> None:
         )
 
 
-def build_managed_ns_labels() -> Dict[str, str]:
+# k8s label KEY syntax: an optional DNS-subdomain prefix (<=253 chars) + '/', then a
+# required name segment (<=63 chars of alnum / '-' / '_' / '.' that begins and ends
+# with an alphanumeric). Symmetric to _K8S_LABEL_VALUE_RE.
+_K8S_LABEL_NAME_RE = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
+_K8S_LABEL_PREFIX_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
+
+
+def validate_label_key(key: str) -> None:
+    """Fail loud on a label key kubectl would reject.
+
+    Symmetric to :func:`validate_label_value`. The #279 tenant-isolation keys
+    (``woow.tw/workspace-id``, ``woow.tw/reach-ws-<W>``) are derived from a fixed
+    prefix + an int, so a bad key means a code/config typo — and a NetworkPolicy
+    ``namespaceSelector`` that references a key nothing carries matches nothing
+    (silent deny-all), the same quiet break kubectl's atomic rejection let slip for
+    74 days (operator #208). Surface it at this pure-Python boundary.
+    """
+    prefix, sep, name = key.rpartition("/")
+    if sep and (len(prefix) > 253 or not _K8S_LABEL_PREFIX_RE.match(prefix)):
+        raise ValueError(
+            f"Invalid k8s label key prefix {prefix!r} in {key!r} — must be a "
+            f"<=253 char lowercase DNS subdomain"
+        )
+    if not name or len(name) > 63 or not _K8S_LABEL_NAME_RE.match(name):
+        raise ValueError(
+            f"Invalid k8s label key {key!r}: name segment {name!r} must be 1–63 "
+            f"chars matching {_K8S_LABEL_NAME_RE.pattern}"
+        )
+
+
+# #279 tenant-isolation label keys — the operator is the SINGLE SOURCE OF TRUTH for
+# these keys, which are also matched by NetworkPolicy selectors:
+#   - WORKSPACE_ID_LABEL: stamped on a CloudService ns; matched by the agent-runtime
+#     chart's leg-1 egress selector (woow-paas-charts) AND by the operator's own
+#     leg-2 baseline ingress. The chart selector MUST use this exact key byte-for-byte
+#     or it silently matches nothing (F3/F4).
+#   - REACH_WS_LABEL_PREFIX + <workspace id>: stamped on an agent-runtime ns, one per
+#     reachable workspace; matched only by the operator's leg-2 baseline NP (this repo).
+# The workspace int id is per-Odoo-DB (NOT cluster-unique) and prod/stg share one
+# cluster, so every selector that matches these keys MUST also match the env label
+# (build_managed_ns_labels stamps paas.woowtech.io/env) — else a stg agent reaches a
+# prod CloudService of the same numeric id (F6 cross-env leak).
+WORKSPACE_ID_LABEL = "woow.tw/workspace-id"
+REACH_WS_LABEL_PREFIX = "woow.tw/reach-ws-"
+
+
+def reach_ws_label_key(workspace_id: int) -> str:
+    """``woow.tw/reach-ws-<W>`` for one reachable workspace, validated fail-loud."""
+    key = f"{REACH_WS_LABEL_PREFIX}{int(workspace_id)}"
+    validate_label_key(key)
+    return key
+
+
+def build_managed_ns_labels(
+    workspace_id: Optional[int] = None,
+    reach_workspace_ids: Optional[List[int]] = None,
+) -> Dict[str, str]:
     """Labels stamped on every platform-managed tenant namespace.
 
     Single source for both the marketplace path (create_namespace) and the
@@ -117,15 +173,32 @@ def build_managed_ns_labels() -> Dict[str, str]:
       Omitted when PAAS_ENV is empty (dev / unknown stays label-free, backward
       compatible).
 
-    The env value is validated as a legal k8s label value BEFORE it can reach a
-    manifest, surfacing an illegal value (e.g. a raw config write that bypassed the
-    Odoo Selection whitelist) at this pure-Python boundary instead of as a swallowed
-    kubectl rejection (operator #208 class).
+    #279 tenant-isolation labels (opt-in via the two params; both env-qualified by
+    the paas.woowtech.io/env label above so a per-DB workspace id can't match across
+    the shared prod/stg cluster):
+
+    - ``woow.tw/workspace-id=<W>`` — pass ``workspace_id`` for a CloudService ns (a
+      CloudService belongs to exactly one workspace). The chart's leg-1 egress
+      selector matches it; the value is ``str()``-cast because egressWorkspaceIds is
+      a list of ints.
+    - ``woow.tw/reach-ws-<W>=true`` (one per id) — pass ``reach_workspace_ids`` for an
+      agent-runtime ns (= the project's reachable workspaces). The leg-2 baseline
+      ingress on each CloudService ns matches the agent ns by its own workspace key.
+
+    Every env/#279 value is validated as a legal k8s label value (and #279 keys as a
+    legal key) BEFORE it can reach a manifest, surfacing an illegal value at this
+    pure-Python boundary instead of as a swallowed kubectl rejection (operator #208).
     """
     labels = {"paas-managed": "true"}
     if settings.paas_env:
         validate_label_value("paas.woowtech.io/env", settings.paas_env)
         labels["paas.woowtech.io/env"] = settings.paas_env
+    if workspace_id is not None:
+        value = str(int(workspace_id))
+        validate_label_value(WORKSPACE_ID_LABEL, value)
+        labels[WORKSPACE_ID_LABEL] = value
+    for wid in reach_workspace_ids or ():
+        labels[reach_ws_label_key(wid)] = "true"
     return labels
 
 
@@ -740,6 +813,7 @@ class KubernetesService:
         cpu_limit: str,
         memory_limit: str,
         storage_limit: str,
+        workspace_id: Optional[int] = None,
     ) -> Dict[str, str]:
         """Create namespace with resource quota.
 
@@ -748,6 +822,9 @@ class KubernetesService:
             cpu_limit: CPU limit
             memory_limit: Memory limit
             storage_limit: Storage limit
+            workspace_id: Owning CloudService's Odoo workspace id; stamped as the
+                ``woow.tw/workspace-id`` NetworkPolicy label (#279 tenant isolation).
+                None (default) keeps the ns label-free for that key (backward compat).
 
         Returns:
             Creation result
@@ -762,7 +839,7 @@ class KubernetesService:
             "kind": "Namespace",
             "metadata": {
                 "name": name,
-                "labels": build_managed_ns_labels(),
+                "labels": build_managed_ns_labels(workspace_id=workspace_id),
             },
         }
 

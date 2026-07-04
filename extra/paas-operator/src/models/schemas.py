@@ -99,6 +99,11 @@ class NamespaceCreateRequest(BaseModel):
     cpu_limit: str = Field(default="2", description="CPU limit (e.g., '2' or '2000m')")
     memory_limit: str = Field(default="4Gi", description="Memory limit")
     storage_limit: str = Field(default="20Gi", description="Storage limit")
+    workspace_id: Optional[int] = Field(
+        default=None,
+        description="Odoo workspace id of the owning CloudService; stamped as the "
+        "woow.tw/workspace-id NetworkPolicy label (#279 leg-1/leg-2 tenant isolation)",
+    )
 
 
 class TunnelCreateRequest(BaseModel):
