@@ -573,21 +573,38 @@ def sync_workspaces(project_hash: str, request: SyncWorkspacesRequest):
         raise HTTPException(
             status_code=409, detail="cannot provision reach: pod not running"
         )
+    # Skip leg-1 on a reaped (scale-0) release during a RECONCILE (require_release=False):
+    # a scaled-to-0 pod has no egress to apply, and forcing `helm upgrade --version
+    # <current>` on a release still on an older chart fails spuriously — the O6
+    # reconcile-cron noise on stale reaped releases. leg-2 (reach labels → CS-side ingress)
+    # is the actual enforcement and runs regardless; spawn-or-attach re-applies egress on
+    # resume. A GRANT (require_release=True) keeps the original always-attempt behavior so
+    # its fail-loud contract is unchanged.
     if release_live:
-        try:
-            helm_service.upgrade(
-                namespace=namespace,
-                name=release,
-                chart=settings.agent_runtime_chart,
-                values={
-                    "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
-                },
-                reuse_values=True,
-                **_chart_source_kwargs(),
+        reaped = (
+            not request.require_release
+            and not k8s_service.get_deployment_replicas(namespace, release)
+        )
+        if reaped:
+            logger.info(
+                "sync_workspaces leg-1 skipped (%s): reaped pod, egress re-applied on resume",
+                namespace,
             )
-        except HelmException as exc:
-            errors.append("egress")
-            logger.error("sync_workspaces leg-1 egress failed (%s): %s", namespace, exc)
+        else:
+            try:
+                helm_service.upgrade(
+                    namespace=namespace,
+                    name=release,
+                    chart=settings.agent_runtime_chart,
+                    values={
+                        "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
+                    },
+                    reuse_values=True,
+                    **_chart_source_kwargs(),
+                )
+            except HelmException as exc:
+                errors.append("egress")
+                logger.error("sync_workspaces leg-1 egress failed (%s): %s", namespace, exc)
 
     # leg-2: reconcile agent-ns reach labels to EXACTLY desired (add + delete-stale).
     # Release-independent — runs even if the pod is gone so an unbind's stale reach
