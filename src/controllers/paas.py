@@ -2747,19 +2747,25 @@ class PaasController(Controller):
     def _compute_sidecar_url_hint(self, service: Any) -> str:
         """Compute the MCP endpoint URL for a service's sidecar.
 
-        Prefers the cluster-internal K8s service address (most reliable —
-        Cloudflare routes the main app port only, not the sidecar). Falls
-        back to subdomain, then to a localhost placeholder the user must
-        edit.
+        Prefers the cluster-internal K8s service address: it stays in-cluster,
+        never traverses the CF edge, and so cannot hit CF Access (#271). Falls
+        back to subdomain, then to a localhost placeholder the user must edit.
+
+        NOTE (W0 #283, 2026-07-05): the operator DOES publish a public
+        ``{subdomain}-mcp`` CF route for the sidecar (see #301) — the earlier
+        "CF only routes the main app port, not the sidecar" rationale was wrong.
+        That public route is dead weight (the agent data-plane uses this
+        in-cluster hint); prefer in-cluster so the agent path never regresses.
         """
         template = service.template_id
         endpoint_path = template.mcp_endpoint_path or '/mcp'
         sidecar_port = template.mcp_sidecar_port or 3001
 
-        # Prefer Kubernetes internal service URL (most reliable).
-        # The Cloudflare tunnel only routes to the main application port,
-        # not the sidecar port, so external URL via subdomain won't work
-        # for the MCP sidecar without additional Ingress configuration.
+        # Prefer the Kubernetes internal service URL: in-cluster, off the CF
+        # edge, so it never hits CF Access (#271) and carries no public attack
+        # surface. (W0 #283, 2026-07-05: the operator DOES build a public
+        # {subdomain}-mcp CF route — see #301 — so this is NOT "the sidecar
+        # port isn't routed"; it's "in-cluster is the correct path".)
         # Pattern: http://{release}-mcp.{namespace}.svc.cluster.local:{port}{path}
         if service.helm_release_name and service.helm_namespace:
             return (

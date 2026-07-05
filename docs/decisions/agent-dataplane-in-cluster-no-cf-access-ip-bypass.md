@@ -58,7 +58,17 @@ pod curl 2 個 stg `is_protected` route（`paas-stg-1` / `paas-stg-test1.woowtec
 | Odoo → agent pod（chat WS） | operator 回傳的 `pod_ws_url`（internal svc） | `src/controllers/ai_assistant.py:782-820` |
 | agent pod → Odoo（skill/webhook） | operator env `ODOO_BASE_URL` = internal svc | stg 已驗證 |
 
-**關鍵洞察**：CS 的 MCP sidecar 埠**根本不被 CF tunnel 路由**（tunnel 只路由主應用埠）→ 公開 hostname 對 MCP 本就不通 → 叢集內互通只能、也本來就走 in-cluster DNS。**CF Access 對 agent 資料面不介入。**
+**關鍵洞察（2026-07-05 W0 覆核校正）**：agent↔CS MCP 互通走 in-cluster DNS（`cloud_service.py:985-990`：有 helm release/ns 一律回 `svc.cluster.local`），**不經 CF edge**，故 CF Access 對 agent 資料面不介入——這才是 route (a) 成立的實質依據。⚠️ 但原始論據「MCP sidecar 埠**根本不被** CF tunnel 路由」**經活叢集實測證明為錯**（見下方校正段）：operator 在 CF-enabled 時**確實會**替 sidecar 建 `{subdomain}-mcp` 公開 route 且已 live。route (a) 靠的是 **agent 端不使用該公開 URL**（Odoo 丟棄 operator 回的 `mcp_endpoint_url`、預填走 in-cluster），不是「架構上不可能經 CF」。
+
+## ⚠️ 校正（2026-07-05 W0 覆核活叢集複驗，issue #301）
+
+原 doc「CS 的 MCP sidecar 埠不被 CF tunnel 路由 / 公開 hostname 對 MCP 本就不通」的論據，經活叢集實測**推翻**：
+
+- operator `_create_sidecar_service_and_route`（`extra/paas-operator/src/api/releases.py:594-600,719`）在 CF-enabled 時**無條件**替 MCP sidecar 建 `{subdomain}-mcp.{cloudflare_domain}` 公開 route；stg 實測 `curl https://svc-…-mcp.woowtech.io/` → `HTTP/2 200`（origin 直達，非 302 到 Access）。
+- 該公開 route **未被 CF Access 納管**（operator 建 route 不掛 Access policy；SecurityAccess `is_protected` 對它零認知）、**NP 亦刻意放行** cloudflared→sidecar（#280 baseline `allow-cloudflared` 無 port filter）→ 實際保護**只剩 sidecar 自身強制 bearer token**（`/mcp` 無 token→401；但 `/` `/health` 裸露 `n8n-mcp` 版本指紋）。
+- 此公開 route 對功能為**死重**（agent 走 in-cluster、Odoo 丟棄該 URL）。
+
+**本 doc 結論不變**（agent 資料面全 in-cluster、#271 走 route (a)、不開 IP bypass）——agent 用 in-cluster DNS、不依賴這條公開 route。但**不要再用「sidecar 埠不被 tunnel 路由 / 公開 hostname 本就不通」當論據**（`src/controllers/paas.py:2747-2762` 同源錯誤註解已一併校正）。該死重公開 route 的移除追蹤見 **#301**。
 
 ## #271 vs #279：兩層症狀，勿混判
 

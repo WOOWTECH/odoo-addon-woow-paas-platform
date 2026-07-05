@@ -106,6 +106,15 @@ def test_env_guard_dev_prefix_with_env_set_ok():
     assert_env_guard("prod", "paas-ws-dev-foo-", allow_unset=False)  # 不得 raise
 
 
+def test_env_guard_empty_prefix_raises():
+    """空 NAMESPACE_PREFIX 使 validate_namespace 的 startswith('') 恆真（隔離失效）。
+    guard 必須開機即 abort，不論 PAAS_ENV / allow_unset（#284 W0 覆核揪出）。"""
+    with pytest.raises(RuntimeError, match="NAMESPACE_PREFIX"):
+        assert_env_guard("prod", "", allow_unset=False)
+    with pytest.raises(RuntimeError, match="NAMESPACE_PREFIX"):
+        assert_env_guard("", "", allow_unset=True)
+
+
 def test_allow_unset_paas_env_field_default_false(monkeypatch):
     """allow_unset_paas_env 預設 False（正式部署不得預設繞過 guard）。"""
     monkeypatch.delenv("ALLOW_UNSET_PAAS_ENV", raising=False)

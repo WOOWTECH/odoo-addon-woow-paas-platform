@@ -78,9 +78,18 @@ def _redact_cmd(cmd: List[str]) -> List[str]:
 
 def validate_namespace(namespace: str) -> None:
     """Validate that namespace starts with allowed prefix."""
-    if not namespace.startswith(settings.namespace_prefix):
+    prefix = settings.namespace_prefix
+    if not prefix:
+        # #284 W0-hardening: an empty prefix makes startswith('') always true,
+        # silently disabling the single app-layer tenant boundary (RBAC does not
+        # enforce the prefix). Fail closed rather than accept every namespace.
         raise ValueError(
-            f"Namespace must start with '{settings.namespace_prefix}'"
+            "namespace_prefix is empty — tenant isolation would be disabled "
+            "(startswith('') matches every namespace). Refusing."
+        )
+    if not namespace.startswith(prefix):
+        raise ValueError(
+            f"Namespace must start with '{prefix}'"
         )
 
 
@@ -1010,6 +1019,11 @@ class KubernetesService:
         Returns:
             Secret name if created, None if registry not configured
         """
+        # #284 W0-hardening: this mutate method (kubectl apply of a dockerconfigjson
+        # Secret) previously relied on caller discipline for the namespace. Validate
+        # it at the entry point so a future caller can't apply into an out-of-prefix
+        # ns (RBAC does not enforce the prefix — this app layer is the only boundary).
+        validate_namespace(namespace)
         if not settings.registry_server or not settings.registry_username:
             return None
 
@@ -1344,6 +1358,18 @@ class KubernetesService:
             KubectlException: If apply fails
         """
         import yaml
+
+        # #284 W0-hardening: apply_manifest is a mutate choke-point but the namespace
+        # lives inside the manifest, so it was NOT covered by the entry-point
+        # validate_namespace that guards the sibling shell-out methods. Validate it
+        # here too — a Namespace-kind manifest carries the ns in metadata.name; every
+        # other (namespaced) resource in metadata.namespace. (RBAC does not enforce
+        # the prefix, so this single app layer is the only tenant boundary.)
+        meta = manifest.get("metadata") or {}
+        if manifest.get("kind") == "Namespace":
+            validate_namespace(meta.get("name") or "")
+        elif meta.get("namespace"):
+            validate_namespace(meta["namespace"])
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.safe_dump(manifest, f)

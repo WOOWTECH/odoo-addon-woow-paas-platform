@@ -190,7 +190,16 @@ def assert_env_guard(paas_env: str, namespace_prefix: str, allow_unset: bool) ->
     - CORRECTNESS: a set PAAS_ENV that contradicts the prefix's independent env hint
       (e.g. PAAS_ENV=prod on a ``paas-ws-stg-`` deploy, or PAAS_ENV=stg on the bare
       prod prefix) is an env/prefix swap → abort.
+    - PREFIX PRESENCE: an empty NAMESPACE_PREFIX makes ``validate_namespace``'s
+      ``startswith('')`` always true, disabling the single app-layer tenant boundary
+      (RBAC does not enforce the prefix). Abort boot regardless of PAAS_ENV/opt-out.
     """
+    if not namespace_prefix:
+        raise RuntimeError(
+            "NAMESPACE_PREFIX is empty — validate_namespace would accept every "
+            "namespace (startswith('') is always true), disabling the single "
+            "app-layer tenant boundary. Refusing to start."
+        )
     if not paas_env:
         if not allow_unset:
             raise RuntimeError(

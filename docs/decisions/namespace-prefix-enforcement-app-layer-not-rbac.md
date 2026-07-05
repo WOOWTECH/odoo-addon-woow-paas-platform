@@ -75,7 +75,7 @@ $ for cr in paas-operator paas-operator-stg; do
 
 ## 現況：app 層單守的實際強度
 
-- **choke-point 設計（正面）**：`validate_namespace(namespace)` 在 `HelmService` / `KubernetesService` 每個會 shell-out（helm / kubectl）的 method **入口**呼叫，共 ~28 個 call site（`helm.py` 全數）。API router（`releases.py` / `agent_runtimes.py` / `init.py` / …）都委派這些 service method → 前綴檢查集中在單一 service 層，不是散落在各 endpoint。
+- **choke-point 設計（正面，2026-07-05 W0 覆核校正）**：`validate_namespace(namespace)` 集中在單一 service 層（`helm.py`，實測 **32** 個 call site，非原記 ~28），API router（`releases.py` / `agent_runtimes.py` / `init.py` / …）都委派這些 service method → 前綴檢查不散落各 endpoint。⚠️ 但「**每個**會 shell-out 的 method 入口都呼叫」原敘述**不精確**：W0 覆核完整 audit 發現 `apply_manifest`（ns 埋在 manifest dict）與 `ensure_registry_secret` 兩個 mutate 入口**原未自守**、`n8n_init._find_secret` 以 raw `_run_command` 繞過 choke-point，當時安全靠 call-site 順序/衍生名而非結構強制。**已於本批 TDD 補齊**（見下方「已修」）。
 - **derived-name 路徑（safe-by-construction，但依賴 call-site 紀律）**：agent-runtime 的 `_ensure_namespace` 走 `k8s_service.apply_manifest({...Namespace...})`，namespace 名由 `_names()` 從 `settings.namespace_prefix` **衍生**（`paas-ws-pa-{hash}`），故結構上保證落在前綴內、非 attacker-supplied。安全成立**靠的是每個 call site 都正確衍生名字**，而非一道無條件的結構性強制。
 - **單層的風險面**：因 ClusterRole 是 cluster-wide，一旦（a）出現任何繞過 `validate_namespace` 的 mutation 路徑、（b）operator API key 外洩、或（c）injection/SSRF 類 bug 讓 attacker 控到 namespace 參數，**blast radius = 整個 cluster**（含 `kube-system`、他租戶 ns），沒有第二道 backstop。這正是「單層 app guard」與「app guard + admission 縱深」的差別所在。
 
@@ -100,7 +100,7 @@ $ for cr in paas-operator paas-operator-stg; do
 2. admission 層是**跨 repo chart 變更 + engine 依賴 + 系統 ns allowlist 驗證**，非零成本，不宜作上線硬阻擋項；
 3. 已有**兩條旁路補償控制**降低單層風險：#280（W1 network-layer cross-tenant **default-deny NetworkPolicy**，網路層阻斷跨租戶橫向流量）+ operator API key 認證（`X-API-Key`，非公開端點）。
 
-**上線前的低成本硬前置（建議納入本 gate 收尾，非 admission 才有）**：對 operator 全部 mutation 路徑做一次 `validate_namespace` 覆蓋 audit（grep 級、已在本 gate 初步完成：`helm.py` 全 shell-out method 皆在入口呼叫；agent-runtime `_ensure_namespace` 走 derived-name），確保單層無破口——因為單層一旦有洞就無 backstop。
+**上線前的低成本硬前置（✅ 已完成，2026-07-05 W0 覆核 TDD）**：對 operator 全部 mutation 路徑做一次 `validate_namespace` 覆蓋 audit——**完整** audit（非初步）發現三處單層破口並補齊（RED→GREEN，operator unit suite 357 綠零回歸）：① `apply_manifest` 入口按 manifest kind 取 `metadata.namespace`／Namespace-kind 取 `metadata.name` 並 `validate_namespace`；② `ensure_registry_secret` 入口補 `validate_namespace`；③ `validate_namespace` 對空 `namespace_prefix`（`startswith('')` 恆真）fail-closed + `config.assert_env_guard` 開機對空 prefix abort。買回「每個 mutate 入口結構性自守」而非依賴 call-site 紀律——因為單層一旦有洞就無 backstop。
 
 **上線後：F-ENV-8 追蹤 admission 層強化**。若後續實測（recruit `woow-paas-charts` 後）發現 policy 成本確實低（叢集已有 Kyverno、chart 掛載點清楚），可提前落地：它把「隔離正確性」從**依賴每個 call-site 正確衍生/檢查名字**升級為**結構性、對整個 SA 無條件強制**，是 cluster-wide ClusterRole 之下最直接的第二道邊界。
 

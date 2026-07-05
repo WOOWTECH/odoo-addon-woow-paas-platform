@@ -30,6 +30,14 @@ class TestHelmService:
         with pytest.raises(ValueError, match="must start with"):
             validate_namespace("test")
 
+    def test_validate_namespace_rejects_empty_prefix(self, monkeypatch):
+        """空 namespace_prefix 使 startswith('') 恆真 → 隔離靜默失效（唯一 app-layer
+        邊界被移除）。validate_namespace 必須 fail-closed，而非放行任何 ns（#284 W0
+        覆核揪出的 config 脆弱性）。"""
+        monkeypatch.setattr("src.config.settings.namespace_prefix", "")
+        with pytest.raises(ValueError, match="empty"):
+            validate_namespace("paas-ws-anything")
+
     @patch("subprocess.run")
     def test_run_command_success(self, mock_run, helm_service):
         """Test successful command execution."""
@@ -655,6 +663,58 @@ class TestKubernetesService:
         cmd_args = mock_run.call_args[0][0]
         assert "apply" in cmd_args
         assert "-f" in cmd_args
+
+    @patch("subprocess.run")
+    def test_apply_manifest_rejects_invalid_namespace(self, mock_run, k8s_service):
+        """#284 W0-hardening: apply_manifest 是 mutate choke-point，但入口原本不驗
+        namespace（RBAC 不 enforce prefix → 無 backstop）。namespaced 資源的
+        metadata.namespace 出前綴外 → 在任何 kubectl apply 前拒絕。"""
+        manifest = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "x", "namespace": "kube-system"},
+        }
+        with pytest.raises(ValueError, match="must start with"):
+            k8s_service.apply_manifest(manifest)
+        mock_run.assert_not_called()
+
+    @patch("subprocess.run")
+    def test_apply_manifest_rejects_invalid_namespace_kind_name(self, mock_run, k8s_service):
+        """Namespace-kind manifest 的 ns 在 metadata.name（無 metadata.namespace）——
+        apply_manifest 必須同樣驗證該 name（_ensure_namespace 走此路徑）。"""
+        manifest = {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {"name": "kube-system"},
+        }
+        with pytest.raises(ValueError, match="must start with"):
+            k8s_service.apply_manifest(manifest)
+        mock_run.assert_not_called()
+
+    @patch("subprocess.run")
+    def test_apply_manifest_allows_valid_namespace_kind(self, mock_run, k8s_service):
+        """合法 paas-ws-* Namespace manifest（_ensure_namespace 冷啟 stamp 路徑）不被
+        新 guard 破壞。"""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({"kind": "Namespace", "metadata": {"name": "paas-ws-pa-abc"}}),
+            stderr="",
+        )
+        result = k8s_service.apply_manifest({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {"name": "paas-ws-pa-abc", "labels": {"paas-managed": "true"}},
+        })
+        assert result["metadata"]["name"] == "paas-ws-pa-abc"
+        mock_run.assert_called_once()
+
+    @patch("subprocess.run")
+    def test_ensure_registry_secret_rejects_invalid_namespace(self, mock_run, k8s_service):
+        """ensure_registry_secret 會 kubectl apply 一個 Secret，但入口原本不驗 ns
+        （靠 caller 紀律）。出前綴外的 ns 必須在入口拒絕，即使 registry 未設定。"""
+        with pytest.raises(ValueError, match="must start with"):
+            k8s_service.ensure_registry_secret("kube-system")
+        mock_run.assert_not_called()
 
     @patch("subprocess.run")
     def test_patch_configmap_merge_patches_data_only(self, mock_run, k8s_service):

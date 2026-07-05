@@ -853,6 +853,16 @@ def get_mcp_endpoint_url(
 ) -> Optional[str]:
     """Construct the MCP endpoint URL for a cloud service's sidecar.
 
+    .. warning::
+       **DEAD CODE / DO NOT WIRE（W0 #283 覆核，2026-07-05）.** 此 helper 目前
+       **無 production caller**，且優先序把公開 CF URL 排第 1/2、in-cluster 墊底。
+       agent 資料面本就走 in-cluster DNS（見 decision doc
+       ``agent-dataplane-in-cluster-no-cf-access-ip-bypass``），operator 回的公開
+       ``mcp_endpoint_url`` 是死重（見 #301：該公開 ``{subdomain}-mcp`` route 未被
+       CF Access 納管、唯靠 sidecar bearer token）。若日後真要接線取 MCP URL，
+       **一律走 in-cluster 優先**，勿讓 agent 資料面 regress 成經公開 CF hostname
+       撞 CF Access（#271）。
+
     Priority order:
     1. Use mcp_endpoint_url from sidecar patch response (operator-provided, includes Cloudflare route)
     2. Build from subdomain + PaaS domain setting (Cloudflare convention: {subdomain}-mcp.{domain})
