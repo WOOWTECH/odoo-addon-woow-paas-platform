@@ -261,12 +261,13 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
 
         # Delete MCP sidecar Cloudflare route and K8s Service if they exist
         try:
-            # Deploy ALWAYS builds the mcp route from generate_subdomain (see
-            # _create_sidecar_service_and_route), ignoring the caller subdomain.
-            # Delete must use the same source or it targets a different hostname
-            # than was created → orphaned mcp CF route (operator #207). The main
-            # route above legitimately honours the caller subdomain; the mcp leg
-            # must NOT, to stay symmetric with deploy.
+            # #301: deploy no longer builds a public mcp CF route (see
+            # _create_sidecar_service). This delete leg is KEPT to converge any
+            # residual {subdomain}-mcp route left by historical deploys (pre-#301);
+            # it must use generate_subdomain (the same source those deploys used),
+            # not the caller subdomain, or it targets a different hostname and
+            # orphans the route (operator #207). delete_route is idempotent, so it
+            # is a harmless no-op once no such route remains.
             mcp_subdomain = cloudflare_service.generate_subdomain(namespace, name) + "-mcp"
             await cloudflare_service.delete_route(mcp_subdomain)
             logger.info(f"Deleted MCP sidecar Cloudflare route for {mcp_subdomain}")
@@ -594,7 +595,7 @@ async def patch_sidecar(
         sidecar_port = _get_sidecar_port(request)
         if sidecar_port:
             mcp_service_name, mcp_internal_url, mcp_endpoint_url = (
-                await _create_sidecar_service_and_route(
+                await _create_sidecar_service(
                     namespace=namespace,
                     release_name=name,
                     sidecar_port=sidecar_port,
@@ -645,16 +646,24 @@ def _get_sidecar_port(request: SidecarPatchRequest) -> Optional[int]:
     return None
 
 
-async def _create_sidecar_service_and_route(
+async def _create_sidecar_service(
     namespace: str,
     release_name: str,
     sidecar_port: int,
 ) -> tuple:
-    """Create a K8s ClusterIP Service and Cloudflare route for the MCP sidecar.
+    """Create the in-cluster ClusterIP Service for the MCP sidecar.
 
-    This function:
-    1. Creates a ClusterIP K8s Service named {release_name}-mcp targeting the sidecar port
-    2. Creates a Cloudflare Tunnel route for external access
+    Creates a ClusterIP K8s Service named ``{release_name}-mcp`` targeting the
+    sidecar port, so the agent data-plane reaches the MCP sidecar via in-cluster
+    DNS (``{release}-mcp.{ns}.svc.cluster.local``).
+
+    #301: this deliberately does NOT create a public Cloudflare ``{subdomain}-mcp``
+    route for the sidecar. That route was dead weight (Odoo drops the public URL,
+    the agent data-plane uses in-cluster DNS) and an unprotected public attack
+    surface (no CF Access; the #280 baseline NP allows cloudflared→sidecar; only
+    the sidecar's bearer token guards it). The release-teardown path still deletes
+    any residual ``{subdomain}-mcp`` route so pre-existing orphans converge. See
+    decision doc ``agent-dataplane-in-cluster-no-cf-access-ip-bypass``.
 
     Service creation failure does NOT propagate - the sidecar patch is already done.
 
@@ -664,14 +673,14 @@ async def _create_sidecar_service_and_route(
         sidecar_port: Port the sidecar listens on
 
     Returns:
-        Tuple of (mcp_service_name, mcp_internal_url, mcp_endpoint_url)
-        Any value may be None if the corresponding operation failed.
+        Tuple of (mcp_service_name, mcp_internal_url, mcp_endpoint_url). By design
+        (#301) mcp_endpoint_url is always None; mcp_internal_url is None if Service
+        creation failed.
     """
     mcp_service_name = f"{release_name}-mcp"
     mcp_internal_url = None
-    mcp_endpoint_url = None
 
-    # Step 1: Create ClusterIP Service for the sidecar
+    # Create the in-cluster ClusterIP Service for the sidecar
     service_manifest = {
         "apiVersion": "v1",
         "kind": "Service",
@@ -715,41 +724,10 @@ async def _create_sidecar_service_and_route(
         )
         return mcp_service_name, None, None
 
-    # Step 2: Create Cloudflare route for external access
-    if cloudflare_service.enabled:
-        try:
-            # Generate subdomain: {original-subdomain}-mcp
-            base_subdomain = cloudflare_service.generate_subdomain(namespace, release_name)
-            mcp_subdomain = f"{base_subdomain}-mcp"
-
-            service_url = cloudflare_service.generate_service_url(
-                namespace=namespace,
-                service_name=mcp_service_name,
-                port=sidecar_port,
-            )
-
-            await cloudflare_service.create_route(
-                subdomain=mcp_subdomain,
-                service_url=service_url,
-            )
-
-            mcp_hostname = f"{mcp_subdomain}.{settings.cloudflare_domain}"
-            mcp_endpoint_url = f"https://{mcp_hostname}/mcp"
-            logger.info(
-                f"Created Cloudflare route for MCP sidecar: {mcp_hostname} -> {service_url}"
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to create Cloudflare route for MCP sidecar: {e}. "
-                "MCP sidecar is only reachable via internal K8s URL or port-forward."
-            )
-    else:
-        logger.info(
-            "Cloudflare disabled. MCP sidecar reachable via internal URL or port-forward: "
-            f"kubectl port-forward -n {namespace} svc/{mcp_service_name} {sidecar_port}:{sidecar_port}"
-        )
-
-    return mcp_service_name, mcp_internal_url, mcp_endpoint_url
+    # #301: no public Cloudflare route for the sidecar (see docstring). The MCP
+    # sidecar is reachable only in-cluster (agent data-plane) or via port-forward:
+    #   kubectl port-forward -n {ns} svc/{release}-mcp {port}:{port}
+    return mcp_service_name, mcp_internal_url, None
 
 
 # Helper functions for Cloudflare integration
