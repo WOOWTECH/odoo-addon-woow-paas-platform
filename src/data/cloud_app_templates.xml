@@ -223,7 +223,7 @@
                  GA 遷專用 woow-paas-charts-local，見 spec 階段3 follow-up）. -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_chart_version">0.1.5</field>
             <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "9d109442f7bedcbc3b84f46bb55ea6d207295f12"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
@@ -259,7 +259,7 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "odoo", "mcp-server", "ai"]</field>
 
-            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.2, values 切 app).
+            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.5, values 切 app).
                  envPrefix MUST be camelCase + empty string for odoo (design 階段1 守線).
                  config.nonSensitive.mcp_server OVERRIDES the chart's hermes-shaped
                  default config (chart default command='hermes-mcp-server'); without it
@@ -271,7 +271,7 @@
                  subprocess needs NO sensitive config to start. -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_chart_version">0.1.5</field>
             <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "9d109442f7bedcbc3b84f46bb55ea6d207295f12"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
@@ -315,7 +315,7 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "n8n", "mcp-server", "ai"]</field>
 
-            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.4, values 切 app).
+            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.5, values 切 app).
                  0.1.4 self-generates config.authToken (randAlphaNum, app=n8n only) so n8n
                  needs no externally-supplied token (replaces the dropped operator
                  per-instance Secret). envPrefix MUST be camelCase + empty string for n8n
@@ -328,7 +328,7 @@
                  proxy.bearer_token (Secret-only). -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.4</field>
+            <field name="helm_chart_version">0.1.5</field>
             <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "2ef1dc160f06ff0e10fd41a9916d50521fd6a2d3"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
