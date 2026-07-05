@@ -763,6 +763,32 @@ class TestKubernetesService:
         assert "label" in cmd and "pvc" in cmd and "data-x-postgresql-0" in cmd
         assert "paas.woowtech.io/orphaned-at=1750406580" in cmd
 
+    @patch("subprocess.run")
+    def test_list_pvcs_applies_label_selector(self, mock_run, k8s_service):
+        """#281: list_pvcs must support a label_selector so teardown can scope
+        orphan-labeling to its OWN release (app.kubernetes.io/instance={name}).
+
+        A per-workspace ns is shared by multiple services; without a selector the
+        teardown labeled EVERY PVC in the ns — including other live services' data
+        PVCs — for cron deletion (data-loss level, #281).
+        """
+        mock_run.return_value = Mock(
+            returncode=0, stdout="svc-a-mcp-server-data", stderr="")
+        k8s_service.list_pvcs(
+            "paas-ws-test", label_selector="app.kubernetes.io/instance=svc-a")
+        cmd = mock_run.call_args[0][0]
+        assert "--selector" in cmd, f"list_pvcs must pass --selector, got {cmd!r}"
+        assert "app.kubernetes.io/instance=svc-a" in cmd
+
+    @patch("subprocess.run")
+    def test_list_pvcs_no_selector_lists_all(self, mock_run, k8s_service):
+        """Back-compat: no selector → no --selector flag (lists the whole ns)."""
+        mock_run.return_value = Mock(returncode=0, stdout="a b", stderr="")
+        result = k8s_service.list_pvcs("paas-ws-test")
+        cmd = mock_run.call_args[0][0]
+        assert "--selector" not in cmd
+        assert result == ["a", "b"]
+
 
 class TestManagedNsLabels:
     """L2: build_managed_ns_labels — 平台管理 namespace 的 env label（PAAS_ENV）。

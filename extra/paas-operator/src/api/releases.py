@@ -226,9 +226,17 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
         result = helm_service.uninstall(namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
 
-        # Label orphaned PVCs for deferred cleanup
+        # Label orphaned PVCs for deferred cleanup — scoped to THIS release's own
+        # PVCs (#281). A per-workspace ns is shared by multiple services; an
+        # unscoped list would stamp orphaned-at on other live services' data PVCs
+        # → the pvc-cleanup cron then deletes them (data-loss). helm stamps
+        # app.kubernetes.io/instance={release} on templated resources, and the
+        # Bitnami StatefulSet volumeClaimTemplate data PVCs carry it too (verified
+        # live on stg: data-svc-…-postgresql-0 has instance=svc-…).
         try:
-            remaining_pvcs = k8s_service.list_pvcs(namespace)
+            remaining_pvcs = k8s_service.list_pvcs(
+                namespace, label_selector=f"app.kubernetes.io/instance={name}"
+            )
             if remaining_pvcs:
                 labels = build_orphan_pvc_labels(
                     name, settings.pvc_grace_period_days

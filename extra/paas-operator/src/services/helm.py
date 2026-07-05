@@ -1416,22 +1416,33 @@ class KubernetesService:
                 return True
             raise
 
-    def list_pvcs(self, namespace: str) -> List[str]:
-        """List PVC names in a namespace.
+    def list_pvcs(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[str]:
+        """List PVC names in a namespace, optionally scoped by a label selector.
 
         Args:
             namespace: Namespace name
+            label_selector: Optional label selector. Teardown passes
+                ``app.kubernetes.io/instance={release}`` so orphan-labeling only
+                touches the deleted release's OWN PVCs — a per-workspace ns is
+                shared by multiple services, and an unscoped list would sweep
+                other live services' data PVCs into the cron's delete set (#281).
 
         Returns:
             List of PVC names
         """
         validate_namespace(namespace)
 
-        result = self._run_command([
+        args = [
             "get", "pvc",
             "--namespace", namespace,
             "-o", "jsonpath={.items[*].metadata.name}",
-        ])
+        ]
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
 
         output = result.stdout.strip()
         if not output:

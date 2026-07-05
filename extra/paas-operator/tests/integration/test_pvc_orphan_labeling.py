@@ -83,6 +83,55 @@ def test_orphan_label_is_selectable_by_cleanup_cron(test_namespace):
     assert grace == "7"
 
 
+def test_orphan_labeling_scoped_to_own_release_spares_siblings(test_namespace):
+    """#281 (data-loss): two services share a per-workspace ns. Tearing down one
+    must NOT mark the OTHER's data PVC orphaned.
+
+    Applies PVC-A (instance=svc-a) + PVC-B (instance=svc-b), then runs the SCOPED
+    ``list_pvcs(instance=svc-a)`` → label path exactly as ``delete_release`` does,
+    and asserts PVC-B carries NO orphaned-at label. This is the assertion a mock
+    structurally cannot make: it exercises real kubectl ``--selector`` filtering,
+    the exact boundary the unit suite can't reach (cf. the #208 mock blind spot).
+    """
+    pvc_a = "svc-a-mcp-server-data"
+    pvc_b = "data-svc-b-postgresql-0"
+    _apply_pvc(test_namespace, pvc_a)
+    _apply_pvc(test_namespace, pvc_b)
+    # Stamp the helm release label the operator scopes teardown on.
+    for pvc, inst in [(pvc_a, "svc-a"), (pvc_b, "svc-b")]:
+        subprocess.run(
+            ["kubectl", "label", "pvc", pvc, "-n", test_namespace,
+             f"app.kubernetes.io/instance={inst}"],
+            check=True, capture_output=True,
+        )
+
+    # Exercise the teardown path for svc-a ONLY (scoped exactly as delete_release).
+    k8s = KubernetesService()
+    scoped = k8s.list_pvcs(
+        test_namespace, label_selector="app.kubernetes.io/instance=svc-a")
+    assert scoped == [pvc_a], f"scoped list must return only svc-a's PVC, got {scoped!r}"
+    k8s.label_pvcs(test_namespace, scoped, build_orphan_pvc_labels("svc-a", 7))
+
+    # The sibling service's PVC must NOT be marked orphaned.
+    b_orphaned = subprocess.check_output(
+        ["kubectl", "get", "pvc", pvc_b, "-n", test_namespace,
+         "-o", r"jsonpath={.metadata.labels.paas\.woowtech\.io/orphaned-at}"],
+    ).decode()
+    assert b_orphaned == "", (
+        f"sibling PVC {pvc_b!r} must NOT be labeled orphaned-at when svc-a is torn "
+        f"down — that is the #281 data-loss path; got orphaned-at={b_orphaned!r}"
+    )
+    # And the deleted release's OWN PVC MUST still be marked (no reverse-leak).
+    a_orphaned = subprocess.check_output(
+        ["kubectl", "get", "pvc", pvc_a, "-n", test_namespace,
+         "-o", r"jsonpath={.metadata.labels.paas\.woowtech\.io/orphaned-at}"],
+    ).decode()
+    assert a_orphaned.isdigit(), (
+        f"the deleted release's own PVC {pvc_a!r} must still be labeled orphaned-at "
+        f"(scoping must not over-narrow to nothing), got {a_orphaned!r}"
+    )
+
+
 def test_real_kubectl_rejects_colon_label_value(test_namespace):
     """Pin the root cause AND prove the validator's regex matches real kubectl.
 

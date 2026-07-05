@@ -247,6 +247,40 @@ class TestReleaseEndpoints:
             f"orphaned-at must be epoch seconds (9-11 digits), got {value!r}"
         )
 
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
+    @patch("src.api.releases.helm_service")
+    def test_delete_release_scopes_orphan_labeling_to_own_release(
+        self, mock_helm, mock_k8s, mock_cf, client
+    ):
+        """#281 (data-loss): a per-workspace ns is SHARED by multiple services.
+
+        delete_release must scope its orphan-PVC labeling to ITS OWN release via
+        the app.kubernetes.io/instance selector — otherwise it lists (and stamps
+        orphaned-at on) every PVC in the ns, marking OTHER live services' Bound
+        data PVCs for the pvc-cleanup cron to delete. Verified live on stg: a
+        svc-02c671c7 delete had mislabeled svc-06b55af1-odoo/-postgresql + svc-
+        5b78f97b-n8n. Pin that list_pvcs is scoped, not ns-wide.
+        """
+        mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+        mock_k8s.list_pvcs.return_value = ["svc-deadbeef-mcp-server-data"]
+        mock_cf.delete_route = AsyncMock(return_value=True)
+
+        response = client.delete(
+            "/api/releases/paas-ws-test/svc-deadbeef?subdomain=paas-cs-test"
+        )
+        assert response.status_code == 200
+
+        mock_k8s.list_pvcs.assert_called_once()
+        call = mock_k8s.list_pvcs.call_args
+        selector = call.kwargs.get("label_selector")
+        if selector is None and len(call.args) > 1:
+            selector = call.args[1]
+        assert selector == "app.kubernetes.io/instance=svc-deadbeef", (
+            "list_pvcs must be scoped to the deleted release's own PVCs via the "
+            f"instance selector (data-loss #281), got {selector!r}"
+        )
+
     @patch("src.api.releases.cloudflare_service.delete_route", new_callable=AsyncMock)
     @patch("src.api.releases.k8s_service")
     @patch("src.api.releases.helm_service")
