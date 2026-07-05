@@ -1260,6 +1260,50 @@ class TestSyncWorkspacesDualLeg:
             mock_helm.upgrade.assert_not_called()
             mock_k8s.reconcile_ns_reach_labels.assert_called_once()
 
+    def test_reconcile_reaped_pod_skips_leg1(self, client):
+        """Reconcile (require_release False) on a reaped (scale-0) release → skip leg-1
+        egress: no running pod → nothing to apply, and forcing a chart-version upgrade on
+        a still-old-chart release fails spuriously (the O6 cron noise). leg-2 still runs."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.return_value = MagicMock(status="deployed")  # release exists
+            mock_k8s.get_deployment_replicas.return_value = 0          # reaped (scale-0)
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3, 5]},
+            )
+            assert resp.status_code == 200, resp.text
+            mock_helm.upgrade.assert_not_called()
+            mock_k8s.reconcile_ns_reach_labels.assert_called_once()
+
+    def test_reconcile_live_pod_runs_leg1(self, client):
+        """Reconcile on a LIVE (replicas>0) release → leg-1 egress still runs."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.get_deployment_replicas.return_value = 1          # live
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3, 5]},
+            )
+            assert resp.status_code == 200, resp.text
+            mock_helm.upgrade.assert_called_once()
+
+    def test_grant_reaped_pod_still_attempts_leg1(self, client):
+        """A GRANT (require_release True) keeps the original always-attempt contract even
+        on a reaped release — the reaped-skip is scoped to reconcile (require_release
+        False) only, so GRANT's fail-loud/apply behavior is unchanged."""
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.get_deployment_replicas.return_value = 0          # reaped
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3, 5], "require_release": True},
+            )
+            assert resp.status_code == 200, resp.text
+            mock_helm.upgrade.assert_called_once()
+
     def test_leg1_failure_still_runs_leg2_and_500(self, client):
         """leg-1 upgrade error must NOT skip leg-2; aggregates into a 500."""
         from src.services.helm import HelmException
