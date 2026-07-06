@@ -57,6 +57,31 @@ truth，兩個消費端都最終讀它逐字連線。「內網走哪條路」＝
 3. **非缺口：** 無活路徑走公開（活路徑都 in-cluster）；route (a) 本就不需 seed
    bypass/ip_range policy（grep-0 成立）。指向公開的程式純屬 dead code。
 
+## 2.5 不誤傷驗證（Workflow 對抗式查證，2026-07-06）
+
+使用者提出關鍵疑慮：MCP server 要能連自己的服務（n8n / odoo hermes）或外部、且自訂 access
+control，這條 invariant 會不會誤傷？以 8-agent Workflow（4 finder 審計 + 綜合判定 + 3 skeptic
+對抗）查證，**3 個 skeptic 從不同角度找「會誤傷的反例」全部 `REFUTED=false`**——「不誤傷」
+的結論站得住。四種合法需求全部落在 `sidecar_backed=False` 或合法 in-cluster：
+
+| 使用者需求 | UI 入口 | sidecar_backed | invariant | 依據 |
+| --- | --- | --- | --- | --- |
+| 連外部 server（自架 n8n 等） | Add External | False | 不觸發 | `McpServersSection.js:96-102` |
+| 連自己 in-paas CS（in-cluster） | Add Sidecar（已部署） | True + cluster.local | 通過 | `paas.py:2770-2775` |
+| 連自己 in-paas CS 走公開 + access control | Add External + 另開 SA route | False | 不觸發 | CF Access 掛 `SecurityAccessRoute.is_protected`、與 mcp_server **無 FK** |
+| 獨立 MCP cloud service（mcp-hermes/odoo/n8n） | Add External | False | 不觸發 | 這批模板 `mcp_enabled=False`、無 sidecar 捷徑（`cloud_app_templates.xml:240/288/345`） |
+
+**兩個獨立、正交的層（不衝突）**：CF Access Control 掛在 `SecurityAccessRoute`（per-route
+`is_protected`）、MCP 自帶 bearer token（`mcp_server.api_key` / sidecar `AUTH_TOKEN`）——兩者
+與 `sidecar_backed` 無 FK、正交，invariant 不介入。「要不要給對外 MCP 設 access control」由
+使用者自主決定，不受影響。invariant 唯一擋掉的是「宣稱綁 sidecar 生命週期（`sidecar_backed=True`）、
+url 卻指向公開 hostname」——那對 in-cluster 的 agent 沒有合法用途（撞 CF 登入頁 + teardown
+前綴漏收孤兒），正是要防的 footgun。
+
+**⚠️ 但 Workflow 揪出一個平台自家 UI flow 會被誤擋（非使用者需求、仍須修）**：`mcp_enabled` 但
+**尚未部署**的服務點「Add Sidecar MCP」時，平台自己的 sidecar-hint 會 fallback 回公開 url 並標
+`sidecar_backed=True` → 被 invariant 擋死。修法見 §4 ⑥。
+
 ## 3. Invariant
 
 ```
@@ -107,7 +132,9 @@ gated 改（放行 admin 是對的），本條值對誰都不可為公開（任�
 `_validate_sidecar_mcp_url`）：`sidecar_backed` 為真時，url 非 in-cluster 即回 UI 友善
 錯誤字串。四個寫入端點（`paas.py:1386 / 1421 / 1720 / 1758`）依各自 vals 的
 `sidecar_backed` 旗標傳入。SSRF 黑名單與 `cluster.local` 允許註解（`paas.py:30-32`）
-維持不動——與本守衛方向一致。
+維持不動——與本守衛方向一致。同步**撤除** `paas.py:1735-1737` 那句「deliberately does not
+enforce URL↔flag consistency — frontend owns the mental model」註解（行為已反轉：現在明確要
+enforce）。
 
 ### ③ Teardown 對稱性
 
@@ -117,12 +144,14 @@ teardown 邏輯**，僅加測試守住對稱性。
 
 ### ④ Migration healer（既有壞列，決策：unset）
 
-①的 constrains 上線後，既有「`sidecar_backed=True` + 公開 url」壞列的任何後續 write 會
-炸。以防禦性 migration 先收斂：掃出壞列 → **`sidecar_backed = False`**（承認它實際是外部
-MCP、脫離 CS 生命週期，保留使用者設定與 `tool_ids` 不刪資料）＋ log warn。正常情況
-（prefill 給 in-cluster）應為 0 列，healer 有則修、無則 no-op——同 memory
-`seed-noupdate` / `reaped-since` backfill 手法。migration 版號沿 `src/migrations/`
-既有序列遞增。
+①的 constrains 上線後，既有「`sidecar_backed=True` + 公開 url」壞列的任何後續 write（連改
+無關欄位）都會炸 `ValidationError`。**加 constraint 前必先掃 + 修正既有列**。Workflow 查證指出
+壞列來源不只理論值——migration `18.0.1.0.25/post-migrate.py:62` 曾把 legacy `auto_created=True`
+backfill 成 `sidecar_backed=True`（其中可能夾帶公開 url），加上情境 E/F 已能產生的資料。故
+healer 是**實質必要**（非純防禦）：掃 `sidecar_backed=True AND url NOT LIKE '%.svc.cluster.local%'`
+→ **`sidecar_backed = False`**（承認它實際是外部 MCP、脫離 CS 生命週期，保留使用者設定與
+`tool_ids` 不刪資料）＋ log warn。有則修、無則 no-op——同 memory `seed-noupdate` /
+`reaped-since` backfill 手法。與 constraint 放**同一版** migration（`src/migrations/` 既有序列遞增）。
 
 ### ⑤ Dead code 清理（決策：納入一併刪）
 
@@ -133,6 +162,31 @@ MCP、脫離 CS 生命週期，保留使用者設定與 `tool_ids` 不刪資料�
 
 刪除前再次 grep 確認 0 caller（防查證漂移）。
 
+### ⑥ 收斂 sidecar-hint 的 public fallback（Workflow 新發現，必修）
+
+**問題（情境 E）**：`_compute_sidecar_url_hint`（`paas.py:2747-2786`）在服務**尚未部署**（缺
+`helm_release_name`/`helm_namespace`）時，fallback 回 `https://{subdomain}.{paas_domain}` 公開 url
+（`:2777-2783`）。而前端 `canAddSidecarMcp`（`McpServersSection.js:44-48`）只看
+`cloud_service_mcp_enabled`、**不看部署狀態**，`showAddSidecarForm` 又無條件 `isSidecarFlow=true`。
+於是「mcp_enabled 但未部署」的服務點 Add Sidecar → 平台**自己**產出 `sidecar_backed=True + public url`
+→ 被新 invariant 擋死。這不是使用者亂填，是平台預設 UI flow 的產物。
+
+**修法（二選一，優先前者）**：
+- `canAddSidecarMcp`（`McpServersSection.js:44-48`）加**部署狀態判斷**——服務未部署時不顯示
+  Add Sidecar 按鈕；或
+- 拿掉 `_compute_sidecar_url_hint` 的 public https subdomain fallback，未部署直接回 localhost 佔位。
+
+收斂後 sidecar flow **永遠只產 in-cluster**，invariant 與平台 prefill 不再衝突。
+
+**localhost 佔位注記**：`_compute_sidecar_url_hint` 最後手段 `http://localhost:{port}`（`:2786`）
+也非 `.svc.cluster.local`。採上述收斂後，未部署根本不開 Add Sidecar，localhost 佔位不再與
+`sidecar_backed=True` 同現，invariant 可安全只認 `.svc.cluster.local`（與 teardown 前綴
+`_sidecar_url_prefix` 同錨）。
+
+**（可選 UX 補強）**：前端 edit-flow 時 `isSidecarFlow` 從 url re-derive，避免「想連公開卻按了
+Add Sidecar」的使用者撞 dead-end `ValidationError`（skeptic 發現的 UX pull：Add Sidecar 是 primary
+按鈕又 prefill token，會把想連公開的使用者拉過來）。
+
 ## 5. Residual risk（誠實揭露）
 
 Model constrains 只驗「是 in-cluster」，無法驗「是**本** CS 的 sidecar」——mcp_server 僅
@@ -140,6 +194,9 @@ Model constrains 只驗「是 in-cluster」，無法驗「是**本** CS 的 side
 **別的** CS 的 in-cluster sidecar（`other-release-mcp.other-ns.svc.cluster.local`），
 constrains 放行、但 teardown 完整前綴比對不命中 → 該列變 teardown 孤兒。但這已**非公開
 曝險**（仍在叢集內、受 NP 管），嚴重度遠低於原缺口，列為 residual 不在本次處理。
+
+（另注：Workflow 揪出的「未部署 public fallback」情境 E **不是** residual、屬必修，已在 §4 ⑥
+處理。）
 
 ## 6. 測試計畫（TDD，RED→GREEN）
 
@@ -155,6 +212,11 @@ Odoo model / controller 測試（`tests/`）：
 4. **regress 案例**：既有 in-cluster sidecar 列，`_update` 改 url → 公開 → 擋。
 5. **teardown 對稱**：sidecar-backed 列（保證 in-cluster）CS teardown 正確收、無孤兒。
 6. **migration healer**：預置壞列 → 跑 healer → `sidecar_backed` 翻 False、資料保留。
+7. **情境 E 回歸**：未部署服務（無 helm metadata）不產出 sidecar flow / Add Sidecar 不可用
+   （守 §4 ⑥ 收斂）。
+8. **更新既有 orthogonality 測試**：`test_mcp_sidecar_hint_endpoint.py`（Workflow 指出約 `:480-535`）
+   曾簽署「url↔flag 正交、不強制一致」的決策；#271 反轉它，須同步更新這些既有斷言（forward-coupling，
+   勿留假綠繞過新 gate——參 memory `credential-claim-test-fixture-coupling` / `phase-versioned-test-assertion`）。
 
 ## 7. 非目標（YAGNI）
 
