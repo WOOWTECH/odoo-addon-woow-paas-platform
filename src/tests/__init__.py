@@ -181,3 +181,4 @@ from . import test_p5_backfill
 from . import test_mcp_sidecar_url_invariant
 from . import test_mcp_sidecar_url_invariant_endpoint
 from . import test_mcp_sidecar_url_invariant_migration
+from . import test_project_detail_deployed_flag

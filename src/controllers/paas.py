@@ -1614,6 +1614,14 @@ class PaasController(Controller):
             'cloud_service_mcp_enabled': bool(
                 service and service.template_id.mcp_enabled
             ),
+            # #271: sidecar flow only valid once the service has an in-cluster
+            # identity (helm release + namespace). Frontend gates the
+            # 'Add Sidecar MCP' button on this so an undeployed service can't
+            # prefill a public sidecar URL that violates the in-cluster
+            # invariant (same gate as the two sidecar URL builders).
+            'cloud_service_deployed': bool(
+                service and service.helm_release_name and service.helm_namespace
+            ),
             'workspace_id': project.workspace_id.id if project.workspace_id else False,
             'workspace_name': project.workspace_id.name if project.workspace_id else '',
             'mcp_server_ids': [self._format_mcp_server(s) for s in servers],
