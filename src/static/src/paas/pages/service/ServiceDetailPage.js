@@ -17,6 +17,7 @@ import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
+import { showProjects } from "../../core/platform_config";
 
 /**
  * ServiceDetailPage Component
@@ -176,6 +177,10 @@ export class ServiceDetailPage extends Component {
         } finally {
             this.state.supportProjectLoading = false;
         }
+    }
+
+    get projectsVisible() {
+        return showProjects();  // #275：flag OFF 時隱藏 project 交叉入口
     }
 
     openSupportProject() {

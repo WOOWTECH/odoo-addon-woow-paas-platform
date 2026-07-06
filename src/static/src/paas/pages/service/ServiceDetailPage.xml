@@ -51,23 +51,26 @@
                         </div>
                     </div>
                     <div class="o_woow_service_header_actions">
-                        <!-- Support Project Button -->
-                        <WoowButton
-                            t-if="state.supportProject"
-                            variant="'secondary'"
-                            size="'md'"
-                            onClick.bind="openSupportProject">
-                            <WoowIcon name="'support_agent'" size="18"/>
-                            Support Project
-                        </WoowButton>
-                        <WoowButton
-                            t-elif="!state.supportProjectLoading"
-                            variant="'secondary'"
-                            size="'md'"
-                            onClick.bind="showCreateProject">
-                            <WoowIcon name="'add_circle'" size="18"/>
-                            Create Support Project
-                        </WoowButton>
+                        <!-- Support Project 按鈕組 — #275：flag OFF 整組隱藏
+                             （避免 dead-end 回 dashboard + prod 建出隱藏 project） -->
+                        <t t-if="projectsVisible">
+                            <WoowButton
+                                t-if="state.supportProject"
+                                variant="'secondary'"
+                                size="'md'"
+                                onClick.bind="openSupportProject">
+                                <WoowIcon name="'support_agent'" size="18"/>
+                                Support Project
+                            </WoowButton>
+                            <WoowButton
+                                t-elif="!state.supportProjectLoading"
+                                variant="'secondary'"
+                                size="'md'"
+                                onClick.bind="showCreateProject">
+                                <WoowIcon name="'add_circle'" size="18"/>
+                                Create Support Project
+                            </WoowButton>
+                        </t>
                         <WoowButton
                             t-if="service.state === 'running'"
                             variant="'primary'"
