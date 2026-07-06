@@ -116,6 +116,10 @@
                                  help="Allow /woow portal owners/admins to edit project settings (name/description/binding/MCP). OFF = read-only portal (meeting 2026-06-03 topic H).">
                             <field name="woow_portal_project_settings_editable"/>
                         </setting>
+                        <setting string="Show Projects (/woow)"
+                                 help="Show the Projects / AI-assistant nav + routes in /woow. OFF = hidden (cosmetic per-env gate, #275). Not a security boundary.">
+                            <field name="woow_show_projects"/>
+                        </setting>
                     </block>
                     <block title="AI Assistant Configuration" name="ai_assistant">
                         <setting string="AI Configuration"

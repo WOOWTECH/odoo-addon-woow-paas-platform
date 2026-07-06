@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
+import { showProjects } from "../../core/platform_config";
 
 export class BottomNav extends Component {
     static template = "woow_paas_platform.BottomNav";
@@ -8,10 +9,14 @@ export class BottomNav extends Component {
     navItems = [
         { path: "dashboard", name: "Dashboard", icon: "dashboard" },
         { path: "workspaces", name: "Workspaces", icon: "workspaces" },
-        { path: "projects", name: "Projects", icon: "folder" },
+        { path: "projects", name: "Projects", icon: "folder", requiresProjects: true },
         { path: "billing", name: "Billing", icon: "payments" },
         { path: "settings", name: "Settings", icon: "settings" },
     ];
+
+    showItem(item) {
+        return !item.requiresProjects || showProjects();
+    }
 
     isActive(item) {
         const current = this.props.router.current;

@@ -120,6 +120,16 @@ class ResConfigSettings(models.TransientModel):
              'from the backend (2026-06-03 meeting, topic H).',
     )
 
+    # Portal (/woow) Project visibility（#275 cosmetic gate，非安全邊界）
+    woow_show_projects = fields.Boolean(
+        string='Show Projects in /woow',
+        config_parameter='woow_paas_platform.show_projects',
+        help='When ON, /woow shows the Projects / AI-assistant (projects, '
+             'tasks, chat) nav + routes. Default OFF: Projects are hidden '
+             '(cosmetic feature gate, same build per-env parameter). NOT a '
+             'security boundary — see _show_projects in controllers/paas.py.',
+    )
+
     # Subscription Lifecycle Settings
     woow_subscription_grace_days = fields.Integer(
         string='Subscription Grace Period (Days)',

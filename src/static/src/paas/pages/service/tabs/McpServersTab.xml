@@ -15,11 +15,14 @@
                             (project is the single source of truth — MCP is bound
                             to projects, not cloud services).
                         </p>
-                        <WoowButton variant="'primary'" size="'md'"
-                                    onClick.bind="goToProjectSettings">
-                            <WoowIcon name="'arrow_forward'" size="18"/>
-                            Go to Project Settings
-                        </WoowButton>
+                        <!-- #275：flag OFF 隱藏（MCP-via-project 入口一併不可達，intended） -->
+                        <t t-if="projectsVisible">
+                            <WoowButton variant="'primary'" size="'md'"
+                                        onClick.bind="goToProjectSettings">
+                                <WoowIcon name="'arrow_forward'" size="18"/>
+                                Go to Project Settings
+                            </WoowButton>
+                        </t>
                     </t>
                     <t t-else="">
                         <h3>No Project Bound to This Service</h3>

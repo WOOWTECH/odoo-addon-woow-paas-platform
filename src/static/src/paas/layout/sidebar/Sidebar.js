@@ -1,6 +1,7 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
 import { profileService } from "../../services/profile_service";
+import { showProjects } from "../../core/platform_config";
 
 export class Sidebar extends Component {
     static template = "woow_paas_platform.Sidebar";
@@ -18,7 +19,7 @@ export class Sidebar extends Component {
     navItems = [
         { path: "dashboard", name: "Dashboard", icon: "dashboard" },
         { path: "workspaces", name: "Workspaces", icon: "workspaces" },
-        { path: "projects", name: "Projects", icon: "folder" },
+        { path: "projects", name: "Projects", icon: "folder", requiresProjects: true },
         { section: "Finance" },
         { path: "billing", name: "Billing", icon: "payments" },
         { path: "billing/invoices", name: "Invoices", icon: "receipt_long" },
@@ -34,7 +35,8 @@ export class Sidebar extends Component {
 
     /** adminOnly 項僅 admin 可見；非 adminOnly 一律顯示（用 JS helper 避模板運算子歧義）。 */
     showItem(item) {
-        return !item.adminOnly || this.isAdmin;
+        return (!item.adminOnly || this.isAdmin)
+            && (!item.requiresProjects || showProjects());
     }
 
     /**

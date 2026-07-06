@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { showProjects } from "./platform_config";
 
 /** @type {Array<{path: string, name: string, routeName?: string, pattern?: RegExp}>} */
 const routes = [
@@ -37,6 +38,13 @@ const routes = [
     { path: "settings/payment-methods", name: "Payment Methods", routeName: "settings-payment-methods" },
     { path: "settings/payment-methods/add", name: "Add Payment Method", routeName: "settings-payment-methods-add" },
 ];
+
+// #275：flag OFF 時這些 routeName 一律 redirect 到 dashboard（cosmetic gate）。
+// `projects` 與 `ai-assistant/projects` 共用 `ai-projects` routeName（見 routes 註解）。
+const PROJECT_ROUTE_NAMES = new Set([
+    "ai-projects", "project-detail", "ai-project-kanban",
+    "ai-tasks", "ai-task-detail", "ai-chat",
+]);
 
 export const router = reactive({
     current: "dashboard",
@@ -104,6 +112,7 @@ export const router = reactive({
                     } else if (route.routeName === 'ai-project-kanban') {
                         this.params.id = match[1];
                     }
+                    this._applyProjectGate();
                     return;
                 }
             }
@@ -113,6 +122,20 @@ export const router = reactive({
         // on the NotFoundPage rather than silently rendering the dashboard.
         const route = routes.find(r => r.path === path);
         this.current = route ? route.routeName : "not-found";
+        this._applyProjectGate();
+    },
+
+    _applyProjectGate() {
+        // #275：flag OFF 時把 project 路由收斂到 dashboard。同步 gate → 直接
+        // hash 載入 /woow#/projects 也不會閃現 project 頁。改 hash 只是同步 URL；
+        // this.current 已即時設為 dashboard，hashchange 再跑一次為冪等。
+        if (!showProjects() && PROJECT_ROUTE_NAMES.has(this.current)) {
+            this.current = "dashboard";
+            this.params = {};
+            if (window.location.hash !== "#/dashboard") {
+                window.location.hash = "#/dashboard";
+            }
+        }
     },
 
     getRouteFromHash() {

@@ -5,6 +5,7 @@ import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { supportService } from "../../../services/support_service";
 import { router } from "../../../core/router";
+import { showProjects } from "../../../core/platform_config";
 
 /**
  * D2 (Plan 2026-05-19): the legacy service-centric MCP tab is now a redirect
@@ -35,6 +36,10 @@ export class McpServersTab extends Component {
             this.state.boundProjectId = result.data.id;
         }
         this.state.loading = false;
+    }
+
+    get projectsVisible() {
+        return showProjects();  // #275
     }
 
     goToProjectSettings() {

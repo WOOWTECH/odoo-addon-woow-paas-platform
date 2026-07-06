@@ -136,6 +136,7 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.registry_secret_name',
     'woow_paas_platform.topup_payment_enabled',
     'woow_paas_platform.portal_project_settings_editable',
+    'woow_paas_platform.show_projects',
     'woow_paas_platform.max_consecutive_payment_failures',
     'woow_paas_platform.sa_default_service_url',
     'woow_paas_platform.agent_idle_reap_seconds',
