@@ -168,6 +168,42 @@ class McpServer(models.Model):
                     % (record.name, record.url or '')
                 )
 
+    @api.model
+    def _heal_sidecar_backed_non_cluster_url(self):
+        """#271 healer: unset sidecar_backed on rows whose url is NOT
+        in-cluster (public regress / legacy 18.0.1.0.25 auto_created backfill
+        that carried a public url). They are really external MCPs — detach
+        from the CS lifecycle, keep url + tool_ids. Idempotent.
+
+        Uses the SAME _is_in_cluster_url() as the constraint (single judgment
+        source — memory two-layer-acl-lockstep). A raw-SQL host-only LIKE would
+        miss 'https://x.svc.cluster.local' (host matches but scheme != http),
+        which the constraint still rejects → a row the healer skips but every
+        later write explodes on. Row-by-row filtered() keeps healer and
+        constraint in lock-step. mcp_server is a small per-tenant table so the
+        ORM scan cost is negligible.
+        """
+        bad = self.sudo().search([('sidecar_backed', '=', True)]).filtered(
+            lambda s: not self._is_in_cluster_url(s.url or '')
+        )
+        if bad:
+            # Writing sidecar_backed=False does NOT trip the constraint
+            # (_check_sidecar_url_in_cluster skips rows where sidecar_backed is
+            # falsy); it also pushes no mcp snapshot (sidecar_backed is not in
+            # _MCP_SNAPSHOT_FIELDS). readonly=True blocks only the form view,
+            # not ORM write.
+            bad.write({'sidecar_backed': False})
+            # Flush the ORM write to the DB now. In a real migration Odoo
+            # commits the cursor after the script (which flushes), but callers
+            # that read the same cursor via raw SQL before that commit would
+            # otherwise see the stale pre-write value sitting in env.towrite.
+            self.env.flush_all()
+            _logger.warning(
+                "#271 healer: unset sidecar_backed on %s mcp_server row(s) "
+                "whose url is not in-cluster (now treated as external MCP).",
+                len(bad),
+            )
+
     def write(self, vals):
         # scope / project_id 對非 admin 不可變更：擋窄→寬 flip（user-scope →
         # system-scope = 平台公開、載進每個租戶 pod → 跨租戶外洩）。ir.rule 擋不住

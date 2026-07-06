@@ -180,3 +180,4 @@ from . import test_p5_backfill
 # feat: #271 internal MCP bypass guard — sidecar_backed url in-cluster invariant
 from . import test_mcp_sidecar_url_invariant
 from . import test_mcp_sidecar_url_invariant_endpoint
+from . import test_mcp_sidecar_url_invariant_migration
