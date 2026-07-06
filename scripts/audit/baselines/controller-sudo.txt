@@ -1,0 +1,16 @@
+# controller .sudo( 呼叫點數量上限（repo-lint.py --update-baseline 產生）
+# 調升前必讀 docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md
+0	src/controllers/__init__.py
+1	src/controllers/agent_runtime_skill.py
+1	src/controllers/agent_runtime_webhook.py
+42	src/controllers/ai_assistant.py
+29	src/controllers/billing.py
+7	src/controllers/dashboard.py
+6	src/controllers/ha_api.py
+15	src/controllers/oauth2.py
+26	src/controllers/paas.py
+3	src/controllers/portal.py
+1	src/controllers/profile.py
+0	src/controllers/reconcile_report.py
+15	src/controllers/security_access.py
+11	src/controllers/smart_home.py
