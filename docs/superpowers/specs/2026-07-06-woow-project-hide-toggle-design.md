@@ -166,7 +166,11 @@ showItem(item) {
 - ❌ 後端 endpoint 守衛（cosmetic 決策 D2）。
 - ❌ 不 revert CS↔Project 解耦（`cloud_service.py` `project_ids` 維持 M2M；見 related doc）。
 - ❌ Header 麵包屑不動（route 被 gate 後那段 project 麵包屑 code dead-but-harmless）。
-- ⚠️ issue #4 optional（Dashboard project 入口）：grep 未見 Dashboard 有 project 卡/入口 → 預設 no-op；實作時再確認一次（避免「卡片點了 redirect」的怪迴圈）。
+- ⚠️ **Project 交叉入口（cosmetic 一併收口）**：Dashboard 確認無 project 入口（grep）。但 service 路由（不在 PROJECT_ROUTE_NAMES、flag OFF 時仍可達）下有兩個 project 交叉入口，**須一併以 `showProjects()` gate**——否則 router gate 只擋得住導航、擋不掉「建資料」與「按鈕可見」：
+  - `ServiceDetailPage`（`ServiceDetailPage.xml:55-70`）「Support Project」/「Create Support Project」按鈕。**關鍵**：「Create Support Project」在 flag OFF 的 prod 仍能建出隱藏 project 資料 → 超出 cosmetic、違背「Project 不上線」；「Support Project」點了 dead-end 回 dashboard。
+  - `McpServersTab`（`McpServersTab.xml:18-22`）「Go to Project Settings」按鈕（→ `projects/{id}` 被 gate 打回 dashboard）。
+  - 實作見 plan Task 7（gate 這些交叉入口的按鈕；仍屬 cosmetic 前端，後端 create endpoint 不動——只是 flag OFF 時無 UI 路徑觸發）。
+- ℹ️ **連鎖效應（intended）**：Projects 隱藏後，MCP-via-project 管理入口（`McpServersTab` 的「Go to Project Settings」）一併不可達——因 MCP 綁 project 為單一真實來源。此為刻意；與 #271 `portal_project_settings_editable` 各自正交，勿混判。
 
 ## 8. 檔案異動總覽
 
