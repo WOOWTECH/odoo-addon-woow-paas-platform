@@ -444,6 +444,47 @@ class TestSidecarEndpoints:
 
     @patch("src.api.releases.cloudflare_service")
     @patch("src.api.releases.k8s_service")
+    def test_patch_sidecar_does_not_create_public_cloudflare_route(self, mock_k8s, mock_cf, client):
+        """#301: even when Cloudflare is ENABLED, the sidecar patch must NOT create a
+        public {subdomain}-mcp CF route. That route was dead weight (Odoo drops the
+        public URL, agent data-plane uses in-cluster DNS) and an unprotected public
+        attack surface (no CF Access, NP allows cloudflared→sidecar, only a bearer
+        token). The in-cluster ClusterIP Service is still created."""
+        mock_k8s.get_deployments.return_value = [
+            {"name": "n8n-deploy", "namespace": "paas-ws-test"}
+        ]
+        mock_k8s.patch_deployment.return_value = {}
+        mock_k8s.apply_manifest.return_value = {}
+        mock_cf.enabled = True
+        mock_cf.create_route = AsyncMock()
+        mock_cf.generate_subdomain = MagicMock(return_value="svc-abc-paas-ws-test")
+        mock_cf.generate_service_url = MagicMock(return_value="http://x:3000")
+
+        response = client.post(
+            "/api/releases/paas-ws-test/test-n8n/sidecar",
+            json={
+                "container": {
+                    "name": "n8n-mcp",
+                    "image": "ghcr.io/czlonkowski/n8n-mcp:latest",
+                    "ports": [{"containerPort": 3000, "protocol": "TCP"}],
+                }
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        # In-cluster Service still created (agent data-plane path)
+        assert data["mcp_service_name"] == "test-n8n-mcp"
+        assert data["mcp_internal_url"] == (
+            "http://test-n8n-mcp.paas-ws-test.svc.cluster.local:3000"
+        )
+        mock_k8s.apply_manifest.assert_called_once()
+        # But NO public CF route, even with Cloudflare enabled
+        mock_cf.create_route.assert_not_called()
+        assert data["mcp_endpoint_url"] is None
+
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
     def test_patch_sidecar_no_ports(self, mock_k8s, mock_cf, client):
         """Test sidecar patch without ports skips service creation."""
         mock_k8s.get_deployments.return_value = [
