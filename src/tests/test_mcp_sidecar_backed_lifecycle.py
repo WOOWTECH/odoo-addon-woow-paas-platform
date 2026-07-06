@@ -272,3 +272,37 @@ class TestSidecarBackedLifecycleFilter(TransactionCase):
             "s.sidecar_backed` — pair with _do_cleanup (AC #21) so "
             "external user-managed MCP rows survive both cleanup paths.",
         )
+
+    # ------------------------------------------------------------------ #
+    # #271 teardown symmetry: in-cluster invariant ⟹ prefix match finds  #
+    # every sidecar_backed row (no orphan)                               #
+    # ------------------------------------------------------------------ #
+    def test_sidecar_prefix_match_collects_in_cluster_row(self):
+        """#271 teardown symmetry: the in-cluster invariant guarantees a
+        sidecar_backed=True row's URL starts with the service's
+        _sidecar_url_prefix(), so _collect_sidecar_user_mcps() finds it via
+        prefix match (no orphan). External (sidecar_backed=False) rows are
+        NOT collected. Guards §3 of the design (teardown is a natural
+        consequence of the invariant).
+        """
+        service, project, sidecar_mcp, external_mcp = (
+            self._seed_service_with_dual_user_mcps(
+                name_prefix='PrefixMatch', release_name='prefix-match-svc',
+            )
+        )
+        prefix = service._sidecar_url_prefix()
+        self.assertIsNotNone(
+            prefix,
+            "deployed service (helm metadata set) must expose a non-None "
+            "sidecar URL prefix",
+        )
+        collected = service._collect_sidecar_user_mcps(prefix)
+        self.assertIn(
+            sidecar_mcp, collected,
+            "#271: sidecar_backed in-cluster row must be collected by the "
+            "prefix filter (invariant guarantees url startswith prefix).",
+        )
+        self.assertNotIn(
+            external_mcp, collected,
+            "external (sidecar_backed=False) row must NOT be collected.",
+        )

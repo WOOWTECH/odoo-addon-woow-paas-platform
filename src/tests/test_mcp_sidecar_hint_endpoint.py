@@ -477,17 +477,16 @@ class TestSidecarHintEndpoint(HttpCase):
             "the single source of truth).",
         )
 
-    def test_create_endpoint_does_not_enforce_url_consistency_backed_true_external(self):
-        """AC #28: endpoint does NOT enforce
-        ``sidecar_backed=True ⇔ url is cluster.local``.
+    def test_create_endpoint_enforces_sidecar_url_in_cluster_backed_true_external(self):
+        """#271 (reverses AC #28): endpoint now ENFORCES
+        ``sidecar_backed=True ⟹ url is in-cluster``.
 
-        Per plan §AC #28: 「Endpoint **不** enforce 一致性 ... frontend
-        負責 mental model 一致」. This test exercises the deliberately
-        loose combination ``sidecar_backed=True + URL points at external
-        host``; create must still succeed.
-
-        **Red today**：same as the True-flag test — payload key is
-        currently ignored.
+        Pre-#271 this combination (sidecar_backed=True + external URL) was
+        deliberately allowed ("frontend owns the mental model"). #271 reverses
+        that: a sidecar-backed row pointing at a public hostname makes the
+        in-cluster agent data-plane hit the CF Access login page and makes
+        teardown's URL-prefix filter miss the row (orphan). Create must now be
+        rejected — controller friendly error + model @api.constrains.
         """
         self.authenticate('shp_alice', 'shp_alice')
         result = self._post(
@@ -500,20 +499,24 @@ class TestSidecarHintEndpoint(HttpCase):
                 'sidecar_backed': True,
             },
         )
-        self.assertTrue(
+        self.assertFalse(
             result.get('success'),
-            "AC #28: sidecar_backed=True + external URL must NOT be "
-            "rejected by the endpoint. Frontend owns the mental model. "
+            "#271: sidecar_backed=True + external URL must be REJECTED. "
+            f"Got: {result!r}.",
+        )
+        self.assertIn(
+            'cluster.local', (result.get('error') or '').lower(),
+            "#271: rejection error must explain the in-cluster requirement. "
             f"Got: {result!r}.",
         )
 
-    def test_create_endpoint_does_not_enforce_url_consistency_backed_false_cluster_local(self):
-        """AC #28: reverse direction —
-        ``sidecar_backed=False`` + URL is cluster.local must also succeed.
-
-        Some users may copy an existing sidecar URL into the External
-        form by hand; endpoint must accept it without forcing the flag
-        to True. Tests `(sidecar_backed, url-shape)` pair is orthogonal.
+    def test_create_endpoint_allows_backed_false_cluster_local(self):
+        """#271: the invariant is one-directional
+        (``sidecar_backed=True ⟹ in-cluster``). The reverse is NOT enforced:
+        ``sidecar_backed=False`` + a cluster.local URL must still succeed
+        (a user may hand-copy an existing sidecar URL into the External form;
+        we don't auto-upgrade the flag or reject the URL). Orthogonality is
+        preserved on the False side only.
         """
         self.authenticate('shp_alice', 'shp_alice')
         result = self._post(
