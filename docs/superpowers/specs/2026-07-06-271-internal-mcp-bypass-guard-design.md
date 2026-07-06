@@ -148,7 +148,9 @@ teardown 邏輯**，僅加測試守住對稱性。
 無關欄位）都會炸 `ValidationError`。**加 constraint 前必先掃 + 修正既有列**。Workflow 查證指出
 壞列來源不只理論值——migration `18.0.1.0.25/post-migrate.py:62` 曾把 legacy `auto_created=True`
 backfill 成 `sidecar_backed=True`（其中可能夾帶公開 url），加上情境 E/F 已能產生的資料。故
-healer 是**實質必要**（非純防禦）：掃 `sidecar_backed=True AND url NOT LIKE '%.svc.cluster.local%'`
+healer 是**實質必要**（非純防禦）：以 row-by-row `filtered(_is_in_cluster_url)`（**與 constraint
+同一份判定**，避 healer↔constraint 漂移——raw-SQL host-only LIKE 會漏 `https://x.svc.cluster.local`
+這種 scheme≠http 的列）掃出 `sidecar_backed=True` 且 url 非 in-cluster 的列
 → **`sidecar_backed = False`**（承認它實際是外部 MCP、脫離 CS 生命週期，保留使用者設定與
 `tool_ids` 不刪資料）＋ log warn。有則修、無則 no-op——同 memory `seed-noupdate` /
 `reaped-since` backfill 手法。與 constraint 放**同一版** migration（`src/migrations/` 既有序列遞增）。
