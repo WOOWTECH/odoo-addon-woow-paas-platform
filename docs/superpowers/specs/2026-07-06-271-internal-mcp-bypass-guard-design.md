@@ -171,12 +171,14 @@ healer 是**實質必要**（非純防禦）：掃 `sidecar_backed=True AND url 
 於是「mcp_enabled 但未部署」的服務點 Add Sidecar → 平台**自己**產出 `sidecar_backed=True + public url`
 → 被新 invariant 擋死。這不是使用者亂填，是平台預設 UI flow 的產物。
 
-**修法（二選一，優先前者）**：
-- `canAddSidecarMcp`（`McpServersSection.js:44-48`）加**部署狀態判斷**——服務未部署時不顯示
-  Add Sidecar 按鈕；或
-- 拿掉 `_compute_sidecar_url_hint` 的 public https subdomain fallback，未部署直接回 localhost 佔位。
-
-收斂後 sidecar flow **永遠只產 in-cluster**，invariant 與平台 prefill 不再衝突。
+**修法（決策：前端 gating）**：`canAddSidecarMcp`（`McpServersSection.js:44-48`）加**部署狀態
+判斷**——服務未部署（無 `helm_release_name`/`helm_namespace`）時不顯示 Add Sidecar 按鈕。現況
+`canAddSidecarMcp` 只看 `cloud_service_mcp_enabled`，須由後端補一個部署狀態 flag（如
+`cloud_service_deployed`＝`bool(helm_release_name and helm_namespace)`）暴露給前端 project-detail
+payload。收斂後 sidecar flow **永遠只在已部署服務上開啟 → hint 永遠回 in-cluster**
+（`paas.py:2770-2775` 的 in-cluster 分支），invariant 與平台 prefill 不再衝突。**不採**「拿掉
+public fallback」方案（保留 `_compute_sidecar_url_hint` 對其他 caller 的既有行為，只在 UI 入口
+gate；hint 的 public fallback 分支在無 UI 觸發後成為 unreachable-by-flow，但保留不動以縮小 blast radius）。
 
 **localhost 佔位注記**：`_compute_sidecar_url_hint` 最後手段 `http://localhost:{port}`（`:2786`）
 也非 `.svc.cluster.local`。採上述收斂後，未部署根本不開 Add Sidecar，localhost 佔位不再與
