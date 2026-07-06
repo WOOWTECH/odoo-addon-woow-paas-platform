@@ -121,7 +121,11 @@ class PaasController(Controller):
             Response: Rendered QWeb template 'woow_paas_platform.paas_app'
                       with session_info context for frontend initialization.
         """
-        session_info = request.env['ir.http'].session_info()
+        # shallow copy：不 mutate 全域 ir.http.session_info()，只在 /woow 這頁附掛。
+        # #275 cosmetic gate — 每次 render 即時讀一次 config_parameter（無快取，
+        # 單次頁面載入成本可忽略）；router + nav 同步共用此注入值。
+        session_info = dict(request.env['ir.http'].session_info())
+        session_info['woow_show_projects'] = _show_projects(request.env)
         return request.render(
             'woow_paas_platform.paas_app',
             {'session_info': session_info}

@@ -34,3 +34,37 @@ class TestShowProjectsFlag(TransactionCase):
             with self.subTest(raw=raw):
                 self._set(raw)
                 self.assertTrue(_show_projects(self.env))
+
+
+import json  # noqa: E402  (module 頂端已 import TransactionCase；此為新增依賴)
+from odoo.tests.common import HttpCase, tagged  # noqa: E402
+
+
+@tagged('post_install', '-at_install')
+class TestWoowSessionInfoShowProjects(HttpCase):
+    """/woow 把 woow_show_projects 注入 session_info（值隨 flag）。
+    用 substring 斷言（json.dumps 產 `"woow_show_projects": true/false`），
+    避免解析整包 session_info JSON 的脆弱正則。"""
+
+    def setUp(self):
+        super().setUp()
+        self.user = self.env['res.users'].sudo().create({
+            'name': 'sp_user', 'login': 'sp_user', 'password': 'sp_user',
+            'email': 'sp_user@test.example',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+
+    def _woow_html(self):
+        res = self.url_open('/woow', timeout=30)
+        self.assertEqual(res.status_code, 200, res.text[:200])
+        return res.text
+
+    def test_flag_on_injects_true(self):
+        self.env['ir.config_parameter'].sudo().set_param(SHOW_PROJECTS_FLAG, 'True')
+        self.authenticate('sp_user', 'sp_user')
+        self.assertIn('"woow_show_projects": true', self._woow_html())
+
+    def test_flag_off_injects_false(self):
+        self.env['ir.config_parameter'].sudo().set_param(SHOW_PROJECTS_FLAG, 'False')
+        self.authenticate('sp_user', 'sp_user')
+        self.assertIn('"woow_show_projects": false', self._woow_html())
