@@ -182,3 +182,5 @@ from . import test_mcp_sidecar_url_invariant
 from . import test_mcp_sidecar_url_invariant_endpoint
 from . import test_mcp_sidecar_url_invariant_migration
 from . import test_project_detail_deployed_flag
+# feat: #275 /woow Project 隱藏開關 — fail-closed flag + session_info 注入 + 卸載清理 lockstep
+from . import test_show_projects_flag

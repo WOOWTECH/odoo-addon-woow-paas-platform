@@ -50,6 +50,18 @@ def _portal_project_settings_editable(env) -> bool:
         PORTAL_SETTINGS_FLAG) or '').strip().lower() in ('true', '1')
 
 
+SHOW_PROJECTS_FLAG = 'woow_paas_platform.show_projects'
+
+
+def _show_projects(env) -> bool:
+    """Cosmetic feature gate（#275）：/woow Projects/AI-assistant 可見性。
+    缺值 = off（fail-closed）。**非安全邊界** — 只驅動前端 nav + router
+    redirect；後端 project/task/chat API 不受此開關影響（對照
+    _portal_project_settings_editable 才是 ACL 寫入守衛）。"""
+    return (env['ir.config_parameter'].sudo().get_param(
+        SHOW_PROJECTS_FLAG) or '').strip().lower() in ('true', '1')
+
+
 def _validate_mcp_url(url: str, sidecar_backed: bool = False) -> str | None:
     """Minimal SSRF guard: reject non-http(s) schemes + cloud metadata IPs.
 
