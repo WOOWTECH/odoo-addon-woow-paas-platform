@@ -94,14 +94,15 @@ return request.render('woow_paas_platform.paas_app', {'session_info': session_in
 ### 4.2 前端（單一 sync source，三 consumer 共用）
 
 **B1. reader** — `src/static/src/paas/core/platform_config.js`（新檔）
-直讀 global，與既有 `ai_service.js:149` / `AiChat.js:573`（bare `odoo.*`）慣例一致，**不 import `@web/session`**（`assets_paas` 以 `web.assets_backend` 為基、不保證 `@web/session` ESM 在 app bundle 內）：
+讀 `@web/session` 的 `session` 物件（bootstrap 注入 `session_info` 後由 session service 存於此）。**⚠️ 勿改讀 bare global `odoo.__session_info__`**：headed E2E 實測，Odoo session service 於 boot 時消費 `odoo.__session_info__` 並 **`delete`** 之（防洩漏），故 runtime（nav/router render 時）bare global 永遠 undefined → Projects 連 flag ON 也永遠隱藏。`@web/session` 確在 `assets_paas` bundle 內（實測 `moduleCount 1310` 含 `@web/session`），且 `session.woow_show_projects` 帶正確值：
 
 ```javascript
 /** @odoo-module **/
+import { session } from "@web/session";
 /** #275 cosmetic feature gate — 同步讀 bootstrap（paas_app 注入 session_info）。
  *  router 與 nav 共用此單一 sync source，避免 async /api/me 的 redirect race。 */
 export function showProjects() {
-    return odoo?.__session_info__?.woow_show_projects === true;   // fail-closed: 缺值 → false
+    return session.woow_show_projects === true;   // fail-closed: 缺值 → false
 }
 ```
 
@@ -189,6 +190,6 @@ showItem(item) {
 
 多 agent 對抗審查（maestri `plan-reviewer`）逐點結論：五點全數同意、無阻擋核心（「方向 solid，可進入實作」）。實質改進與確認：
 
-- **★ reader 機制改進**：原設計用 `@web/session`，改為直讀 `odoo?.__session_info__`（`assets_paas` 以 `web.assets_backend` 為基不保證 ESM module 在 bundle；`ai_service.js:149` / `AiChat.js:573` 既有 bare `odoo.*` 先例 — 已自驗屬實）。
+- **★ reader 機制（已被 E2E 校正回 `@web/session`）**：plan-reviewer 曾建議由 `@web/session` 改為直讀 bare `odoo.__session_info__`（理由：不保證 ESM 在 bundle）。**headed E2E 實測推翻此改動**——Odoo session service 於 boot 讀取後即 `delete odoo.__session_info__`，runtime 永遠讀不到；且 `@web/session` 其實在 bundle 內。故最終回到 `import { session } from "@web/session"`（見 §4.2 B1）。教訓：前端 reader 的 runtime 可讀性只有 headed render 測得出（XML/Py 綠 ≠ render 對）。
 - **單一 sync source 確認**：router + Sidebar + BottomNav 皆讀 `showProjects()`，不接 `profileService`（避免 async race 閃現）。
 - **邊界註記**（§3）、**router 單一 tail gate + 共用 routeName 註解**（§4.2 B2）、**perf 無快取 comment**（§4.1 A4）、**deep-link bookmark 測試**（§5 case 5）、**BottomNav.xml `t-if` 易漏點**（§4.2 B4）皆納入。
