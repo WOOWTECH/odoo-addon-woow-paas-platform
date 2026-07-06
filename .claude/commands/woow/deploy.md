@@ -6,6 +6,12 @@ allowed-tools: Bash, Read, Grep
 
 This command reads the version from `src/__manifest__.py`, creates a git tag, and pushes it to trigger the paas-odoo image build pipeline.
 
+## 前置條件（一次性設定）
+
+`woow_paas_platform` repo 的 Gitea Settings → Actions → Secrets 需設定 `CI_GITEA_TOKEN`，該 token 的擁有者須同時具備 `odoo-addons` 和 `woow-paas` org 的 Write 權限（scope: `repository: Read and Write`）——cross-repo dispatch 需要。CI 觸發失敗時先檢查這裡。
+
+> **Note**: Git tag 直接使用 `__manifest__.py` 的完整版號加 `v` 前綴，不做拆解。paas-odoo image tag 使用時間戳（`YYYYMMDD.HHmm`），因為它是多個 addon 的組合打包，不應綁定單一 addon 的版本。
+
 ## Steps
 
 ### 1. Extract Version
