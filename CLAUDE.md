@@ -114,49 +114,9 @@ Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正
 
 ### K8s Dev Sandbox (Recommended)
 
-本機開發與測試的首選方式（namespace 隔離、可跑測試、產出可存取環境）。
+本機開發與測試首選（namespace 隔離、TTL 自動清理、可跑測試）。**已移植成 `woowprd` plugin 通用工具，優先用 `/woowprd:k8s-dev-sandbox <command>`**（onboard / create / up / list / status / logs / test / extend / destroy / build；被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`，`create`/`destroy` 必帶 `--context`）。架構、三種模式（local hostPath / ci-local / stg 的 addons 路徑差異）、平台 seed 的 `.sandbox/{pre-install,post-create}.sh` opt-in hook 詳見 plugin 的 SKILL.md；移植設計見 `docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
 
-> **已移植成 `woowprd` plugin 通用工具**（2026-06；支援任意 Odoo addon repo 三樣態：src 單一 / repo 根即 addon / 多 addon 子目錄）。
-> 有 `woowprd` plugin 時**優先用 `/woowprd:k8s-dev-sandbox <command>`**（需要被測 repo 的子命令要帶 `--repo "$(git rev-parse --show-toplevel)"`，且 `create`/`destroy` 必帶 `--context`；詳見 plugin 的 SKILL.md）。
-> 平台特化 seed 已外置成 repo 自帶 `.sandbox/{pre-install,post-create}.sh` opt-in hook。
-> 設計與實作見 `docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
-
-部署獨立的開發沙盒環境到 Kubernetes（plugin 通用版，推薦）：
-
-```bash
-# 一次性 onboarding（記錄執行期 env 到 ~/.sandbox/{project-key}/，worktree 共用；
-# 之後 create/up 可不帶 --context、由 profile 補；destroy 仍須顯式 --context）
-/woowprd:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" [--context <ctx>] [--set KEY=VALUE]
-
-# 建立 / 快速建立當前 branch（--context 必填，或由 onboard profile 提供）
-/woowprd:k8s-dev-sandbox create --context woow-k3s [--ttl 48h --pgadmin]
-/woowprd:k8s-dev-sandbox up --context docker-desktop
-
-# 列出 / 狀態 / 日誌 / 測試 / 延長 TTL / 銷毀 / 建構映像
-/woowprd:k8s-dev-sandbox list
-/woowprd:k8s-dev-sandbox status [<sandbox-name>]
-/woowprd:k8s-dev-sandbox logs <sandbox-name> [--service odoo|postgres|nginx] [--follow]
-/woowprd:k8s-dev-sandbox test <sandbox-name> [--module <module>]
-/woowprd:k8s-dev-sandbox extend <sandbox-name> [--ttl 336h]
-/woowprd:k8s-dev-sandbox destroy <sandbox-name> --context woow-k3s [--keep-data]
-/woowprd:k8s-dev-sandbox build [--registry <registry>] [--push]
-```
-
-<details><summary><b>in-repo 保留的 woow 專屬 e2e / 測試工具</b>（沙盒生命週期已全移至 plugin；<code>deploy-stg</code> 已改委派 plugin create.sh）</summary>
-
-完整沙盒管理（create/destroy/list/status/logs/build）已移除 → 用 `/woowprd:k8s-dev-sandbox`。in-repo 僅保留未進通用 plugin 的 woow 專屬工具：
-
-```bash
-# 沙盒內跑模組測試（綁 woow_paas_platform）
-./.claude/skills/k8s-dev-sandbox/scripts/test.sh <sandbox-name> [--module <module>] [--keep-on-fail]
-# 延長 TTL（供 test --keep-on-fail）
-./.claude/skills/k8s-dev-sandbox/scripts/extend.sh <sandbox-name> [--ttl 336h]
-# 內部 helper：e2e skill fixture seeder / 從 stg clone DB+filestore
-./.claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh <slug> [--reset|--purge]
-./.claude/skills/k8s-dev-sandbox/scripts/seed-from-stg.sh
-```
-
-</details>
+in-repo `.claude/skills/k8s-dev-sandbox/` 僅剩未進通用 plugin 的 woow 專屬工具：`test.sh`（沙盒內跑模組測試，`--keep-on-fail`）、`extend.sh`（TTL）、`e2e-seed.sh` / `seed-from-stg.sh`（e2e fixture / stg clone helper）。
 
 ### PaaS Operator Local Development
 
@@ -202,121 +162,11 @@ docker exec -it <odoo-container> curl http://host.docker.internal:8000/health
 
 ### Release & Build paas-odoo Image
 
-發版時會自動觸發 `paas-odoo-ci` repo 打包含有最新 addon 的 Odoo Docker image。
-
-**Cross-repo CI 流程：**
-
-```
-woow_paas_platform (push v* tag)
-  → .gitea/workflows/trigger-odoo-build.yml
-    → Gitea API dispatch
-      → paas-odoo-ci/.gitea/workflows/build-image.yml
-        → clone addon at tag → build & push paas-odoo image
-```
-
-**發版步驟：**
-
-使用 Claude Code 可直接執行 `/woow:deploy`，會自動讀取版號、檢查 tag、確認後打 tag 並 push。
-
-手動發版：
-
-```bash
-# 1. 更新版本號 src/__manifest__.py 中的 version
-#    格式: {odoo_version}.{major}.{minor}.{patch}
-
-# 2. Commit & push
-git add src/__manifest__.py
-git commit -m "release: 18.0.1.0.24"
-git push
-
-# 3. 打 tag 並 push（自動觸發 paas-odoo-ci build）
-git tag v18.0.1.0.24
-git push origin v18.0.1.0.24
-```
-
-**Tag 命名規則：**
-
-| 項目                              | 格式                                     | 範例            |
-| --------------------------------- | ---------------------------------------- | --------------- |
-| Addon version (`__manifest__.py`) | `{odoo_version}.{major}.{minor}.{patch}` | `18.0.1.0.24`   |
-| Git tag (woow_paas_platform)      | `v{完整 version}`                        | `v18.0.1.0.24`  |
-| paas-odoo image tag               | `YYYYMMDD.HHmm`（自動產生）              | `20260328.1430` |
-
-> **Note**: Git tag 直接使用 `__manifest__.py` 的完整版號加 `v` 前綴，不做拆解。paas-odoo image tag 使用時間戳，因為它是多個 addon 的組合打包，不應綁定單一 addon 的版本。
-
-**前置條件：**
-
-`woow_paas_platform` repo 的 Gitea Settings → Actions → Secrets 需設定 `CI_GITEA_TOKEN`，該 token 的擁有者須同時具備 `odoo-addons` 和 `woow-paas` org 的 Write 權限（scope: `repository: Read and Write`）。
+發版用 `/woow:deploy`：讀 `src/__manifest__.py` 版號 → pre-flight → 打 `v{version}` tag → push 觸發 cross-repo CI（`trigger-odoo-build.yml` → `paas-odoo-ci` build & push image，image tag 為時間戳、不綁單一 addon 版本）。tag 規則、pre-flight 檢查與前置條件（`CI_GITEA_TOKEN` 雙 org Write）見 [`.claude/commands/woow/deploy.md`](.claude/commands/woow/deploy.md)。
 
 ### Deploy Staging (deploy-stg)
 
-部署 staging 環境到 K8s dev sandbox。完整流程為：`tea` CLI 建立 tag 觸發 CI → 輪詢 CI 狀態等待完成 → 呼叫 `create.sh` 部署 sandbox。
-
-**前置條件：**
-
-```bash
-# 設定 tea login（需有 repo + write:packages scope）
-# Token 產生方式：Gitea UI → Settings → Applications → Generate New Token
-tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>
-```
-
-**使用方式：**
-
-```bash
-# 方法 1：使用 Claude Code skill（推薦）
-/woow:deploy-stg                         # 使用最新 git tag 部署
-/woow:deploy-stg v18.0.1.0.24             # 指定 addon ref
-/woow:deploy-stg --slug stg-test         # 自訂 sandbox 名稱（namespace: dev-sandbox-stg-test）
-
-# 方法 2：直接執行腳本
-./.claude/skills/deploy-stg/scripts/deploy-stg.sh
-./.claude/skills/deploy-stg/scripts/deploy-stg.sh v18.0.1.0.24 --slug stg
-```
-
-**跳過 CI 建置（用已存在的 image）：**
-
-```bash
-# 直接指定完整 image（docker tag 格式，不含 stg- 前綴）
-/woow:deploy-stg --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:20260329.1500
-
-# 跳過建立 tag，僅輪詢已存在 git tag 的 CI 狀態 + 部署
-./.claude/skills/deploy-stg/scripts/deploy-stg.sh --skip-build --tag stg-20260329.1500
-```
-
-**驗證與管理：**
-
-```bash
-# 查看 staging pod 狀態
-kubectl get pods -n dev-sandbox-stg
-
-# 查看日誌（plugin 通用版）
-/woowprd:k8s-dev-sandbox logs stg --service odoo --follow
-
-# 銷毀 staging（plugin 通用版）
-/woowprd:k8s-dev-sandbox destroy stg --context woow-k3s
-```
-
-**CI 流程圖：**
-
-```
-deploy-stg.sh
-  → Gitea API: GET .../branches/main → commit SHA
-  → Gitea API: POST .../tags → create stg-* git tag
-    → paas-odoo-ci: build-image.yml (triggered by stg-* tag)
-      → push jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:{docker_tag}
-  → Gitea API: GET .../actions/tasks → poll CI status (30s interval, 15min timeout)
-  → create.sh --branch stg --image {full_image}
-    → helm install → dev-sandbox-stg namespace
-```
-
-**Image 命名規則：**
-
-| 項目               | 格式                                   | 範例                |
-| ------------------ | -------------------------------------- | ------------------- |
-| STG image repo     | `woow-paas-docker-local/paas-odoo-stg` | -                   |
-| Git tag（觸發 CI） | `stg-YYYYMMDD.HHMM`                    | `stg-20260329.1500` |
-| Docker image tag   | `YYYYMMDD.HHMM`（CI strip `stg-`）     | `20260329.1500`     |
-| Sandbox namespace  | `dev-sandbox-{slug}`                   | `dev-sandbox-stg`   |
+部署 staging 到 K8s dev sandbox：`/woow:deploy-stg [ref] [--slug x] [--image ...]`（tea 建 `stg-*` tag 觸發 CI → 輪詢完成 → 委派 plugin create.sh 部署到 `dev-sandbox-{slug}`）。前置：`tea login add --name gitea --url https://git-prod.woowtech.io --token <token>`（repo + write:packages scope）。完整流程、skip-build 用法、image 命名規則見 [`.claude/skills/deploy-stg/SKILL.md`](.claude/skills/deploy-stg/SKILL.md)；日誌 / 銷毀走 `/woowprd:k8s-dev-sandbox logs|destroy`。
 
 ## Architecture
 
@@ -373,42 +223,6 @@ The module provides an independent frontend application:
 | `agent_runtime_webhook.py` | agent-runtime 狀態回呼（`/api/agent-runtimes/webhook/state-update`）                    |
 
 完整端點與 OWL hash-based 路由詳見 `docs/reference/api/`，或直接 grep `@route` 與 `src/static/src/paas/core/router.js`。
-
-### K8s Dev Sandbox
-
-透過 Helm 部署獨立的 Odoo 開發環境到 Kubernetes。
-
-**Architecture**:
-
-```
-┌─────────────────────────────┐
-│   K8s Namespace              │
-│   (dev-sandbox-{branch})     │
-│                              │
-│  ┌──────┐  ┌──────┐        │
-│  │ Odoo │  │  PG  │        │
-│  │ :8069│  │ :5432│        │
-│  └──┬───┘  └──────┘        │
-│     │                       │
-│  ┌──┴───┐  ┌──────┐        │
-│  │Nginx │  │PgAdmin│(opt)  │
-│  │ :80  │  │ :5050 │       │
-│  └──────┘  └───────┘       │
-└─────────────────────────────┘
-```
-
-**兩種模式**：
-
-- **Local 模式**：使用 hostPath mount 實現即時程式碼編輯
-- **CI-Local 模式**：程式碼打包進 CI image，addons 路徑同 local（`/mnt/extra-addons/`）
-- **STG 模式**：程式碼打包進 Bitnami image，addons 路徑為 `/opt/bitnami/odoo/custom-addons/`
-
-**主要功能**：
-
-- 每個 branch 獨立的 namespace 隔離
-- TTL 自動清理（預設 7 天）
-- ResourceQuota 與 NetworkPolicy 限制
-- 自動化模組安裝
 
 ### Odoo Module Patterns
 
