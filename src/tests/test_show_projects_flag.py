@@ -68,3 +68,15 @@ class TestWoowSessionInfoShowProjects(HttpCase):
         self.env['ir.config_parameter'].sudo().set_param(SHOW_PROJECTS_FLAG, 'False')
         self.authenticate('sp_user', 'sp_user')
         self.assertIn('"woow_show_projects": false', self._woow_html())
+
+
+from odoo.addons.woow_paas_platform import hooks  # noqa: E402
+
+
+class TestShowProjectsConfigLockstep(TransactionCase):
+    """卸載清理 lockstep：show_projects 須在 hooks._CONFIG_PARAMETERS
+    （CLAUDE.md 硬性要求；比照 test_deploy_env_config）。"""
+
+    def test_show_projects_in_config_parameters_cleanup_list(self):
+        self.assertIn(
+            'woow_paas_platform.show_projects', hooks._CONFIG_PARAMETERS)
