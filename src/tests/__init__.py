@@ -177,3 +177,5 @@ from . import test_subscription_journal_config
 from . import test_mcp_server_template_seed
 # feat: #279 P5 tenant-isolation backfill（baseline NP + agent-ns env re-stamp）
 from . import test_p5_backfill
+# feat: #271 internal MCP bypass guard — sidecar_backed url in-cluster invariant
+from . import test_mcp_sidecar_url_invariant

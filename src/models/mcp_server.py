@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from urllib.parse import urlparse
 
 from odoo import api, fields, models
 from odoo.exceptions import AccessError, ValidationError
@@ -129,6 +130,42 @@ class McpServer(models.Model):
                     "System-scope MCP server '%s' must not be linked to a "
                     "project (scope='system' requires project_id=NULL)."
                     % record.name
+                )
+
+    @classmethod
+    def _is_in_cluster_url(cls, url):
+        """#271: True iff *url* is an in-cluster sidecar DNS endpoint —
+        http scheme + hostname ending in '.svc.cluster.local'.
+
+        Single source of truth shared by the model @api.constrains below and
+        the controller-layer friendly-error check
+        (paas.py:_validate_mcp_url), so the two layers never drift
+        (two-layer-acl-lockstep).
+        """
+        try:
+            parsed = urlparse(url or '')
+            host = (parsed.hostname or '').strip().lower()
+        except ValueError:
+            return False
+        return parsed.scheme == 'http' and host.endswith('.svc.cluster.local')
+
+    @api.constrains('sidecar_backed', 'url')
+    def _check_sidecar_url_in_cluster(self):
+        # #271 invariant: sidecar_backed=True ⟹ url must be in-cluster DNS
+        # (http + '.svc.cluster.local'). A public hostname on a sidecar-backed
+        # row makes the in-cluster agent data-plane hit the CF Access login
+        # page, and makes teardown's URL-prefix filter miss the row (orphan).
+        # Hard invariant — NO su/group bypass (mirrors
+        # _check_scope_project_consistency; su-env-exempt-guard-false-green).
+        for record in self:
+            if not record.sidecar_backed:
+                continue
+            if not self._is_in_cluster_url(record.url):
+                raise ValidationError(
+                    "Sidecar-backed MCP server '%s' must use an in-cluster "
+                    "URL (http scheme + hostname ending in "
+                    "'.svc.cluster.local'); got: %s"
+                    % (record.name, record.url or '')
                 )
 
     def write(self, vals):
