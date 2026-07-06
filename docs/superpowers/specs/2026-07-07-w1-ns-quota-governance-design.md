@@ -24,7 +24,7 @@ W1（資料/資安止血 P0）最後兩項，同組 NS/Quota 治理（scout `doc
 - `helm.py:1411 delete_namespace(namespace)`：**存在**，但唯一生產 caller = agent teardown（`agent_runtimes.py`）。
 - `namespaces.py`：只有 POST create（:25）+ POST backfill_baseline_netpol（:68）。**無 DELETE 端點**。
 - `agent_runtimes.py:82 _ensure_namespace`：只 `apply_manifest` 貼 label。**無 quota、無 LimitRange**。
-- reconcile 範式已有：`helm.py:1515 reconcile_ns_reach_labels`（#279）、`cloudflare.py:535 reconcile_tunnel_dns`（L4，dry-run `reconcilable` 恆 False）。
+- reconcile 範式已有：`helm.py:1515 reconcile_ns_reach_labels`（#279，主動 label reconcile）、`cloudflare.py:535 reconcile_tunnel_dns`（**主動** create/update/delete DNS，**非** dry-run）；真正的 **dry-run「零自動刪」框架**在 operator `schemas.py:655+`（inventory，`reconcilable`/`dry_run` 首版恆 False/True）+ Odoo `src/services/reconciler.py`/`reconcile_report.py`（#277 延伸落點）。
 - CS quota 值算於 Odoo `cloud_service.py`（sum of allocated），deploy 路徑重算+apply（冪等只增），**刪除路徑不碰**（drift 根因）。
 
 ## 設計
@@ -33,15 +33,32 @@ W1（資料/資安止血 P0）最後兩項，同組 NS/Quota 治理（scout `doc
 
 **問題**：deploy `kubectl apply` 冪等只往上棘輪；所有刪除路徑（`cloud_service.py` `_do_cleanup`/`_cleanup_helm`/`unlink`、`paas.py` `_delete_service`、`subscription_lifecycle_cron.py`）不重算 → per-workspace 共用 ns 的 quota 被 sum 撐大後永不縮。
 
-**修法**：抽出「以現存非-deleting service 加總算 quota」的權威函式，**刪除路徑也呼叫**（重算 → 經 operator 覆寫該 ns 的 ResourceQuota）。operator 側加輕量 `PATCH/PUT /api/namespaces/{ns}/quota`（或複用冪等 apply-quota），避免刪 service 要跑整個 create_namespace（含 NP）。權威覆寫語意：quota = f(現存 service)，非 delta。
+**修法**：抽出權威函式 `_compute_ns_quota(workspace)` = `max(3×Σ allocated(現存 service), floor 8/8/100)`，**刪除路徑也呼叫並覆寫** ns 的 ResourceQuota（非 delta、非 apply 冪等只增）。
+
+**⚠️ timing（reviewer Major-1）**：重算的加總必須反映「刪除**之後**」的存活集，否則被刪 service 仍在 sum 內 → 覆寫成錯值。兩條刪除語意各別處理：
+- `unlink`（ORM 硬刪）：重算/覆寫**排在 `super().unlink()` 之後**（record 已離場），或以 `services - self` 顯式排除本批。
+- soft cleanup（`_do_cleanup`/`_cleanup_helm`/`_delete_service`/cron）：service 仍在但狀態轉 terminating → 加總 domain 明確 `state not in ('deleting','terminated')`，不靠隱含。
+
+**operator 端點（reviewer Major-2）**：新增 `PUT /api/namespaces/{ns}/quota`，body = `{cpu_limit, memory_limit, storage_limit}`（與 `create_namespace` 同三值，Odoo 端算好傳入——沿用現行「值 Odoo 算、operator apply」分工，operator **不**自 cluster 重推），語意 = **整組 hard overwrite**（`kubectl apply` 該 ResourceQuota，覆蓋全部 hard 鍵含 pvc=10），不動 ns / NP / secret。避免刪 service 要跑整個 `create_namespace`。
 
 ### #278 A2 — CS ns LimitRange（兜底）
 
-`create_namespace` 在 quota 之後 apply 一個 LimitRange（`{ns}-limits`，type: Container，default/defaultRequest = 平台預設如 cpu 500m/mem 512Mi）。讓缺 limits 宣告的第三方 chart 吃安全預設而非被 ns quota 的 `limits.cpu/memory` hard 宣告 admission 拒建。
+`create_namespace` 在 quota 之後 apply 一個 LimitRange（`{ns}-limits`，type: Container，default/defaultRequest = 平台預設如 cpu 500m/mem 512Mi）。
+
+**這是 correctness requirement，非 best-practice**：ns ResourceQuota 一旦 hard 宣告了 `limits.cpu`/`limits.memory`（現行 `create_namespace` 就有），k8s admission **強制該 ns 內每個 container（含 init/sidecar）都必須宣告 limits**，否則直接拒建。現在 CS 能跑純屬現役 chart 剛好都帶 limits（無安全網）——任何缺 limits 的第三方 chart / Bitnami preset 改動會**靜默 deploy 失敗且訊息隱晦**。LimitRange 的 `default` 補上缺漏的 limits，讓容器吃安全預設而非被拒。
 
 ### #278 B1 — agent ns per-project ResourceQuota
 
-`_ensure_namespace` 在貼 label 後 apply ResourceQuota（`{ns}-quota`）。值 = 平台預設 **3CPU/3Gi**（> 單 pod sidecar 啟用時的 2CPU/2Gi，留 headroom；agent 一 project 一 pod，非 sum）+ pvc 上限（如 3）+ requests.storage。可被 dormant `agent_session.quota_override_*` 覆寫（若日後啟用）。⚠️ 值必須 > 單 pod 需求否則同 ns 容不下（capacity reject）。
+`_ensure_namespace` 在貼 label 後 apply ResourceQuota（`{ns}-quota`）。值 = 新增的明確常數（避免實作自行編數）：
+
+```python
+AGENT_QUOTA_CPU = "3"       # > 單 pod sidecar 啟用 2CPU，留 headroom
+AGENT_QUOTA_MEMORY = "3Gi"  # > 單 pod 2Gi
+AGENT_QUOTA_PVC = "3"
+AGENT_QUOTA_STORAGE = "10Gi"
+```
+
+requests/limits.cpu·memory 皆用上面（agent 一 project 一 pod、非 sum）。可被 dormant `agent_session.quota_override_*` 覆寫（若日後啟用）。⚠️ 值必須 > 單 pod 需求否則同 ns 容不下（capacity reject）。
 
 ### #278 B2 — agent ns LimitRange
 
@@ -49,9 +66,14 @@ W1（資料/資安止血 P0）最後兩項，同組 NS/Quota 治理（scout `doc
 
 ### #277 — 孤兒 ns：owner/TTL label + dry-run reconciler
 
-1. **stamp label**（`create_namespace` + `_ensure_namespace` 經 `build_managed_ns_labels`）：加 `woow.tw/owner`（workspace/account 識別）+ `woow.tw/created-at`（或 TTL annotation）。純 additive、不影響現有 NP label 選擇。
-2. **dry-run reconciler**：帳號級對帳——list 所有 `paas-ws-*` ns（cluster）對 Odoo stored `helm_namespace` 取差集 → 「Odoo 已無 record 但 cluster 仍有 ns」納入孤兒盤點。**只報告、不自動刪**（比照 L4 `reconcile_tunnel_dns` dry-run）。落點：Odoo 端 cron 呼叫 operator 列 ns（或 operator 端點吃 Odoo live-ns 集）——取 L4 reconciler 同構落點。
-3. **一次性清存量**：手動清既有零負載空 ns（`paas-ws-stg-ad023482`）——非 code，運維動作。
+1. **stamp label**（`create_namespace` + `_ensure_namespace`）：加 `woow.tw/owner`（workspace/account 識別）+ `woow.tw/created-at`（RFC3339）。純 additive、不影響現有 NP label 選擇。**實作註記（reviewer Rec-2）**：`build_managed_ns_labels(workspace_id, reach_workspace_ids)` 現簽章要**新增 `owner`/`created_at` 參數**（或另拆 builder）——此 refactor 要刻意、兩 caller lock-step。
+
+2. **延伸既有 L4 dry-run reconciler 框架**（reviewer Major-3 校正——**原引 `reconcile_tunnel_dns` 是錯的**：那支 `cloudflare.py:535` 其實主動 create/update/**delete** DNS，非 dry-run）。真正的 dry-run 框架已存在，#277 是**把 k8s ns 加進它的 fact 集**（scout：L4 現只盤 CF、不含 ns）：
+   - operator 端 `schemas.py:655+` 的「首版零自動刪除」dry-run inventory（`reconcilable` 恆 False、`dry_run` 恆 True）——operator 只回**事實**（list `paas-ws-*` ns 的 name/labels），不做差集、不做 reconcilable 判定。
+   - Odoo 端 `src/services/reconciler.py` + `src/models/reconcile_report.py` 做差集/classify/delete-gate（既有 test：`test_reconciler_diff`/`test_reconcile_delete_gate`/`test_reconcile_report_endpoint`）。#277 在此加一類 fact：**k8s ns**。
+   - **孤兒定義**（reviewer Major-4，操作性明確）：cluster 上帶 `paas-managed=true` label 的 `paas-ws-*` ns，且**無**對應的 Odoo `cloud.service.helm_namespace` live record → 列為疑似孤兒。**dry-run 保證非破壞**（`reconcilable=False`、`dry_run=True`，只入報表供人工審）→ 誤判成本 = 一列多餘報表，非誤刪。auto-delete graduate 留 follow-up（F-ENV-2）。
+
+3. **一次性清存量**：手動清既有孤兒空 ns（`paas-ws-stg-ad023482`）。「孤兒空」判準 = 無 live workload（`kubectl get all` 空）**且**無 Odoo helm_namespace record——非 code、運維動作，且是上條 dry-run 報表的第一批人工處置對象。
 
 ## 測試策略
 
@@ -71,3 +93,5 @@ W1（資料/資安止血 P0）最後兩項，同組 NS/Quota 治理（scout `doc
 - 訂閱規格單一來源 quota（#273/#274，W3）。
 - #277 reconciler graduate 成 auto-delete（F-ENV-2 graduation，另開）。
 - eager workspace teardown 端點（本輪不建）。
+
+<!-- peer-reviewed: 2026-07-06T22:59:33Z rounds=2 verdict=approved by=miniclaude -->
