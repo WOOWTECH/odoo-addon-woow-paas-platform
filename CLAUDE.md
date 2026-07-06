@@ -448,23 +448,17 @@ _CONFIG_PARAMETERS = [
 
 ## Known patterns
 
-改動以下 model 與 ACL 前必看 invariants 與 pattern docs，避免 B1-class data leak 重炸（完整 pattern 索引見 [`docs/decisions/patterns/README.md`](docs/decisions/patterns/README.md)）：
+改 model / ACL / lifecycle / seed / OWL template 前的守線知識採兩層供給，不雙寫在本檔：
 
-- **CloudService / Project decoupling**：見 `docs/decisions/refactor/cloud-service-project-decouple.md`（含 7 條 Invariants）
-- **Odoo addon override std ir.rule**（任何在 `ir.model.access.csv` 給 `base.group_user` 加 project / task / Odoo std model 的 RWCU 時）：見 `docs/decisions/patterns/odoo-addon-std-rule-symmetric-deactivation.md`
-- **PaaS workspace member ACL 收緊**：見 `docs/decisions/patterns/paas-workspace-member-acl-tightening.md`
-- **Odoo addon 不 override std field 型態**（任何想動 Odoo std model 欄位型態 / shape 的 PR）：見 `docs/decisions/patterns/odoo-std-field-no-override.md`
-- **m2m write constraint grantor authority check**（model 上有 attacker-writable Many2many + ir.rule / `@api.constrains` 用該 m2m 做 subset / authority 推導時）：見 `docs/decisions/patterns/constraint-input-trust-expansion.md`
-- **Bundle attachment defense in depth**（自家 model 透過 `ir.attachment` 存敏感 / RCE-class binary payload 時）：見 `docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`（anchor stamping + ir.attachment ir.rule 兩層）
-- **ORM-level test 綠 ≠ endpoint-level secure**（任何改 controller endpoint 的 list / get / stats / aggregation 路徑 + ir.rule-protected model 時；新增 / 改動 ir.rule 收緊某 model 可見性時；寫 backend `TestCase` + `with_user()` 守 ir.rule 的 PR）：見 `docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md`（controller layer 不可 `.sudo()` 繞 ir.rule；對等補 HttpCase cross-user negative；含 34 處 `sudo().*` audit grep checklist + 5 instance critical mass + **anti-pattern 三變體 family**：A = over-access leak / B = under-access own-data invisibility / C = same-method 半套 sudo（同 method input drop sudo 但 output 留 sudo，pattern lint future-proof 失效）+ perf justification 章節（sudo() 是 security primitive 不是 perf primitive）)
-- **兩層 ACL lock-step**（同一 model 被 ir.rule + controller carve-out，或多個 endpoint 各自 access resolver 守時；任一層改 domain / 收緊，另一層必須同步，否則 silent divergence 比未修更糟）：見 `docs/decisions/patterns/two-layer-acl-lockstep.md`
-- **Unbound（可選綁定）model 的 dual-leg ir.rule**（model 有 nullable M2O 到 workspace-bearing model、unbound row 仍須對部分 user〔creator / follower〕可見時；leg 1 bound walk + leg 2 unbound carve-out，跨 workspace 仍 deny）：見 `docs/decisions/patterns/unbound-project-acl-dual-leg.md`
-- **Mixed-scope model 的 6-rule split**（同 model 混 platform public-read + workspace-scoped 兩種 scope、且需在 `base.group_user` 開 CRUD 時；按 perm direction 拆 3 條 + sub-model 鏡像，single dual-leg 不夠〔create direction 有提權面〕）：見 `docs/decisions/patterns/mcp-acl-6-rule-split.md`
-- **Scope / tenancy flip 必靠 write() guard（非 ir.rule）**（model 有 scope（system/user）/ project_id / public 等決定可見範圍的欄位、且對 `base.group_user` 可寫時；要擋「窄 scope→寬 scope flip」提權 / 跨租戶外洩，ir.rule 對 **pre-write** 狀態判定擋不住，必須在 model `write()` 攔 vals + 放行 sudo/admin；與 6-rule split 互補：split 守 create+可見性、guard 守 flip）：見 `docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md`
-- **Identity / 不可變 invariant guard 別用 env.su / group 豁免**（守不可變 identity anchor〔`subdomain_prefix` / `canonical_name` / `reference_id`，hostname / DNS / tunnel / FQDN 從它推導、無合法事後改值路徑〕的 model `create()` / `write()` guard 時）：**不可**寫 `not env.su` / `not has_group()` 豁免——`TransactionCase` 是 su env，deny 分支跑不到 → **假綠** + 任何 `sudo()` 路徑靜默繞過；改 context-key escape hatch（如 `sa_internal_identity_write`）無條件擋所有人，且 create（pop 注入）＋ write（擋改值）雙向對稱覆蓋。與 scope-flip 分野：那條值可 gated 改（`env.su`+admin 放行對的），本條值不可變（任何 su 豁免都是洞）。見 `docs/decisions/patterns/su-env-exempt-guard-false-green.md`
-- **多段式 remote-resource provision 必須冪等**（provision method 先建遠端資源〔CF tunnel / 雲端 DNS / SaaS 帳號 / k8s ns〕再跑後續步驟、且 UI 把 retry 掛在 `error` 上時）：第二段失敗讓遠端資源孤兒掛著、retry 重跑第一段在雲端再建一條 = 永久孤兒 / 計費外洩；遠端建立步驟必須被 **stored-id guard** 包住（method 開頭判 remote id 已存在 → 只重跑後續不重建），每條失敗路徑保留 stored id 讓 retry 安全，`AccessError` 安全訊號 propagate 不降級。單段 method 的免-guard 安全是單段性換來的，加段就要買回來。見 `docs/decisions/patterns/two-stage-remote-provision-idempotency.md`
-- **Phase leader brief 是 pointer，不是 source-of-truth**（適用 maestri 多 phase agent pod 工作流；非 paas-platform 直接相關，是 agent hand-off 通用紀律）：見 `docs/decisions/patterns/phase-leader-brief-as-pointer-not-source.md`（agent 接 brief 撞到與 plan signed-off / decision doc invariant / schema 實際 shape 不符 → trust source + 回報 leader 校正 brief，不照 brief 字面開工；與 [[plan-gap-stop-and-report]] 區分：那條 agent 執行中主動發現 gap、本條接任務時被動 detect brief drift）
-- **Seeded 平台預設 agent_template 的 tenant-neutral invariant**（動 `src/data/agent_template_default.xml`、新增任何 seeded platform-default template、或改 `src/hooks.py:_ensure_default_agent_template` 時必看）：`agent_template_default`（`is_public=True` + `state='published'` + 不綁 project / 不綁任何 user-scope skill·mcp_server）是平台 cluster-wide fallback；`post_init_hook` 開機時把 `ir.config_parameter['woow_paas_platform.default_agent_template_id']` **未設才指、不覆寫 admin 已選**。它經 `_resolve_agent_template` 的 `.sudo()` 廣播給**所有沒有自己 template 的 project、跨所有 tenant**，故**任何 seeded default 必須維持 tenant-neutral**（unbound + 無 user-scope 綁定），否則把某租戶綁定外洩給全體。與 `agent_template_demo`（`state='draft'`、inert、註解明文 must-stay-draft、stg 上被手動 publish+綁 project）**分工不同、勿互相 repurpose**。設計依據見 `docs/superpowers/specs/2026-06-01-seed-agent-template-design.md`
+1. **pattern-guard hook（機器強制）**：編輯守護路徑時 hook 自動列出必讀 docs，讀完重試即放行；對照表 `.claude/hooks/pattern-guard-map.json`（新增守線在此 append）。
+2. **完整索引（人工查閱）**：[`docs/decisions/patterns/README.md`](docs/decisions/patterns/README.md)「何時必看」表。
+
+唯二留本檔的高頻 invariant：
+
+- **CloudService / Project decoupling**：7 條 Invariants 見 `docs/decisions/refactor/cloud-service-project-decouple.md`。
+- **Seeded `agent_template_default` 必須 tenant-neutral**（unbound + 無 user-scope 綁定；經 sudo 廣播為全租戶 fallback）。綁定當下有 code guard fail-loud（`src/models/agent_template.py:125`）；設計依據 `docs/superpowers/specs/2026-06-01-seed-agent-template-design.md`；與 `agent_template_demo`（draft、可綁 project 測試）分工勿互換。
+
+可機械判定的守線改進 `scripts/audit/repo-lint.py`（gate 比散文強）。
 
 Pitfall 持久化紀錄（debug 撞牆時對照）：
 

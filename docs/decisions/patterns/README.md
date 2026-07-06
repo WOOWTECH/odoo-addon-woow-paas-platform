@@ -2,12 +2,12 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段只收錄其中高頻 ACL / data-leak 守線子集；**本表為完整 24 條**。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 24 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
 1. **同步登錄本索引**：新增 `patterns/<slug>.md` 時，務必在本檔「何時必看（按主題分組）」對應主題表補一行（pattern slug + 何時觸發 / 必看），並在「完整檔案清單」加一筆連結；同時更新頂部「完整 N 條」計數。
-2. **評估是否屬 ACL / 資料隔離 class**：若該 pattern 屬 ACL / 資料隔離（B1-class data leak）守線——例如改 `ir.rule`、`ir.model.access.csv`、controller access carve-out、跨 workspace 可見性——則**額外**把它補進 `CLAUDE.md`「Known patterns（改以下 model 與 ACL 前必看）」清單。lifecycle / cleanup / 測試紀律 / hand-off class 的 pattern **只留本索引**，不進 CLAUDE.md ACL 清單（該清單刻意 scope 在 ACL / data-isolation 守線子集）。
+2. **評估是否綁特定路徑**：若該 pattern 有明確的觸發檔案路徑（如 `src/security/`、`src/controllers/`、特定 model 檔）——則**額外**在 `.claude/hooks/pattern-guard-map.json` 對應 class 的 `docs` append 一行（`路徑 — 一句何時必看`），或新增 class；hook 會在編輯該路徑時自動餵給模型。純判斷類（無路徑可綁）的 pattern **只留本索引**。**勿再把守線散文寫回 CLAUDE.md**（該段已指針化，雙寫必漂移）。
 
 ## 何時必看（按主題分組）
 
