@@ -4,6 +4,28 @@ import json
 from odoo.tests.common import TransactionCase
 
 
+def _assert_storage_resources_aligned(tc, tmpl):
+    """#268 lockstep guard: the seeded helm_default_values must equal the
+    advertised marketplace spec, so the PVC size and container limits the
+    tenant actually gets match what the marketplace card promised.
+
+    Historic drift (#268): persistence.size was 2Gi while min_storage_gb
+    advertised 5, and the container memory limit fell back to the chart
+    default 512Mi while min_ram_gb advertised 1.0. Assumes whole-Gi specs
+    (all mcp-* templates are 5G storage / 1G RAM / 1 vCPU)."""
+    values = json.loads(tmpl.helm_default_values)
+    tc.assertEqual(
+        values['persistence']['size'], '%dGi' % int(tmpl.min_storage_gb),
+        'persistence.size must match advertised min_storage_gb')
+    limits = values['resources']['limits']
+    tc.assertEqual(
+        limits['memory'], '%dGi' % int(tmpl.min_ram_gb),
+        'resources.limits.memory must match advertised min_ram_gb')
+    tc.assertEqual(
+        limits['cpu'], str(int(tmpl.min_vcpu)),
+        'resources.limits.cpu must match advertised min_vcpu')
+
+
 class TestMcpServerTemplateSeed(TransactionCase):
     """The mcp-hermes template must be seeded tenant-neutral and sidecar-free."""
 
@@ -30,6 +52,11 @@ class TestMcpServerTemplateSeed(TransactionCase):
         tmpl = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
         self.assertIn('mcp-server', tmpl.helm_chart_name)
         self.assertTrue(tmpl.helm_chart_name.startswith('oci://'))
+
+    def test_hermes_storage_and_resources_match_advertised_spec(self):
+        """#268: PVC size + container limits must equal the advertised spec."""
+        tmpl = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
+        _assert_storage_resources_aligned(self, tmpl)
 
     def test_hermes_plans_seeded_at_odoo_pricing(self):
         monthly = self.env.ref('woow_paas_platform.plan_mcp_hermes_monthly')
@@ -142,6 +169,12 @@ class _McpServerSeedAssertions:
         command = values['config']['nonSensitive']['mcp_server']['command']
         self.assertEqual(command, self.EXPECT_MCP_COMMAND)
         self.assertNotEqual(command, 'hermes-mcp-server')
+
+    def test_template_storage_and_resources_match_advertised_spec(self):
+        """#268: PVC size + container limits must equal the advertised spec
+        (min_storage_gb / min_ram_gb / min_vcpu) — guards the 2Gi-vs-5G and
+        512Mi-vs-1G drift this issue fixed."""
+        _assert_storage_resources_aligned(self, self.env.ref(self.TMPL))
 
     def test_plans_seeded_at_odoo_pricing(self):
         monthly = self.env.ref(self.PLAN_M)
