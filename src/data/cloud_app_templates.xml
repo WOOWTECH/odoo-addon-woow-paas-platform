@@ -224,7 +224,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "a16825913ff3e87b829213efb7a9f5a08a18b123@sha256:ee6b296ebd7b2e9e7b72aa442e5119bec6aecd5e6bad6d2dc1d8221024eaa6e6"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "ed098b6070cde0c74ed0bccb47a33d6fdf40d9c6@sha256:0f1a34cd33864529c56c5aefdd0e47de6751787069bf85fde1ece01b1ae18d95"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -272,7 +272,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "05ffbe7fa5954cb37d4181069f3a76d97c3864b9@sha256:8d6d4d87085e0b9ad362ca4cc55cf3915a34224e2b15e816b85a0123080afa43"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "a447a8006b3695448713f1ea2f97eab1f3c560f9@sha256:b9d646744802709edde114e37138e66f5229caec11e808e15355466be4b74829"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -329,7 +329,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "05ffbe7fa5954cb37d4181069f3a76d97c3864b9@sha256:c85a4234eec1a280dced549291121f33ae2147ff8960a0751ed05d9dd32a3218"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "ed098b6070cde0c74ed0bccb47a33d6fdf40d9c6@sha256:618ac675b85501f5e204b51286284d4b52d487de1b6593d6dcc1e6db8525dcc7"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
