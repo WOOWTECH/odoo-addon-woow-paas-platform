@@ -224,7 +224,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "9d109442f7bedcbc3b84f46bb55ea6d207295f12"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "a16825913ff3e87b829213efb7a9f5a08a18b123@sha256:ee6b296ebd7b2e9e7b72aa442e5119bec6aecd5e6bad6d2dc1d8221024eaa6e6"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -272,7 +272,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "9d109442f7bedcbc3b84f46bb55ea6d207295f12"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "05ffbe7fa5954cb37d4181069f3a76d97c3864b9@sha256:8d6d4d87085e0b9ad362ca4cc55cf3915a34224e2b15e816b85a0123080afa43"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -329,7 +329,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "2ef1dc160f06ff0e10fd41a9916d50521fd6a2d3"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "05ffbe7fa5954cb37d4181069f3a76d97c3864b9@sha256:c85a4234eec1a280dced549291121f33ae2147ff8960a0751ed05d9dd32a3218"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "2Gi"}, "updateStrategy": {"type": "Recreate"}, "config": {"nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
