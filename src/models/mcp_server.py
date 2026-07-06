@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from urllib.parse import urlparse
 
 from odoo import api, fields, models
 from odoo.exceptions import AccessError, ValidationError
@@ -130,6 +131,78 @@ class McpServer(models.Model):
                     "project (scope='system' requires project_id=NULL)."
                     % record.name
                 )
+
+    @classmethod
+    def _is_in_cluster_url(cls, url):
+        """#271: True iff *url* is an in-cluster sidecar DNS endpoint —
+        http scheme + hostname ending in '.svc.cluster.local'.
+
+        Single source of truth shared by the model @api.constrains below and
+        the controller-layer friendly-error check
+        (paas.py:_validate_mcp_url), so the two layers never drift
+        (two-layer-acl-lockstep).
+        """
+        try:
+            parsed = urlparse(url or '')
+            host = (parsed.hostname or '').strip().lower()
+        except ValueError:
+            return False
+        return parsed.scheme == 'http' and host.endswith('.svc.cluster.local')
+
+    @api.constrains('sidecar_backed', 'url')
+    def _check_sidecar_url_in_cluster(self):
+        # #271 invariant: sidecar_backed=True ⟹ url must be in-cluster DNS
+        # (http + '.svc.cluster.local'). A public hostname on a sidecar-backed
+        # row makes the in-cluster agent data-plane hit the CF Access login
+        # page, and makes teardown's URL-prefix filter miss the row (orphan).
+        # Hard invariant — NO su/group bypass (mirrors
+        # _check_scope_project_consistency; su-env-exempt-guard-false-green).
+        for record in self:
+            if not record.sidecar_backed:
+                continue
+            if not self._is_in_cluster_url(record.url):
+                raise ValidationError(
+                    "Sidecar-backed MCP server '%s' must use an in-cluster "
+                    "URL (http scheme + hostname ending in "
+                    "'.svc.cluster.local'); got: %s"
+                    % (record.name, record.url or '')
+                )
+
+    @api.model
+    def _heal_sidecar_backed_non_cluster_url(self):
+        """#271 healer: unset sidecar_backed on rows whose url is NOT
+        in-cluster (public regress / legacy 18.0.1.0.25 auto_created backfill
+        that carried a public url). They are really external MCPs — detach
+        from the CS lifecycle, keep url + tool_ids. Idempotent.
+
+        Uses the SAME _is_in_cluster_url() as the constraint (single judgment
+        source — memory two-layer-acl-lockstep). A raw-SQL host-only LIKE would
+        miss 'https://x.svc.cluster.local' (host matches but scheme != http),
+        which the constraint still rejects → a row the healer skips but every
+        later write explodes on. Row-by-row filtered() keeps healer and
+        constraint in lock-step. mcp_server is a small per-tenant table so the
+        ORM scan cost is negligible.
+        """
+        bad = self.sudo().search([('sidecar_backed', '=', True)]).filtered(
+            lambda s: not self._is_in_cluster_url(s.url or '')
+        )
+        if bad:
+            # Writing sidecar_backed=False does NOT trip the constraint
+            # (_check_sidecar_url_in_cluster skips rows where sidecar_backed is
+            # falsy); it also pushes no mcp snapshot (sidecar_backed is not in
+            # _MCP_SNAPSHOT_FIELDS). readonly=True blocks only the form view,
+            # not ORM write.
+            bad.write({'sidecar_backed': False})
+            # Flush the ORM write to the DB now. In a real migration Odoo
+            # commits the cursor after the script (which flushes), but callers
+            # that read the same cursor via raw SQL before that commit would
+            # otherwise see the stale pre-write value sitting in env.towrite.
+            self.env.flush_all()
+            _logger.warning(
+                "#271 healer: unset sidecar_backed on %s mcp_server row(s) "
+                "whose url is not in-cluster (now treated as external MCP).",
+                len(bad),
+            )
 
     def write(self, vals):
         # scope / project_id 對非 admin 不可變更：擋窄→寬 flip（user-scope →

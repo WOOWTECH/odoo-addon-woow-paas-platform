@@ -50,8 +50,14 @@ def _portal_project_settings_editable(env) -> bool:
         PORTAL_SETTINGS_FLAG) or '').strip().lower() in ('true', '1')
 
 
-def _validate_mcp_url(url: str) -> str | None:
-    """Minimal SSRF guard: reject non-http(s) schemes + cloud metadata IPs."""
+def _validate_mcp_url(url: str, sidecar_backed: bool = False) -> str | None:
+    """Minimal SSRF guard: reject non-http(s) schemes + cloud metadata IPs.
+
+    #271: when *sidecar_backed* is True, additionally require an in-cluster
+    sidecar DNS URL (http + '.svc.cluster.local'); a public hostname on a
+    sidecar-backed row makes the in-cluster agent data-plane hit the CF
+    Access login page and makes teardown's URL-prefix filter miss the row.
+    """
     if not url:
         return 'URL is required'
     try:
@@ -78,6 +84,15 @@ def _validate_mcp_url(url: str) -> str | None:
             return f'URL host not allowed: [{host}]'
         if str(ip).lower() in _SSRF_BLOCKED_IPV6:
             return f'URL host not allowed: [{host}]'
+    if sidecar_backed and not request.env[
+        'woow_paas_platform.mcp_server'
+    ]._is_in_cluster_url(url):
+        return (
+            'Sidecar-backed MCP URL must be in-cluster (http scheme + '
+            'hostname ending in .svc.cluster.local, e.g. '
+            'http://<release>-mcp.<namespace>.svc.cluster.local:3001/mcp); '
+            f'got: {url}'
+        )
     return None
 
 
@@ -1383,7 +1398,8 @@ class PaasController(Controller):
         url = params.get('url', '').strip()
         if not name or not url:
             return {'success': False, 'error': 'Name and URL are required'}
-        url_error = _validate_mcp_url(url)
+        # legacy create never stores sidecar_backed → validate as external.
+        url_error = _validate_mcp_url(url, sidecar_backed=False)
         if url_error:
             return {'success': False, 'error': url_error}
 
@@ -1418,7 +1434,10 @@ class PaasController(Controller):
             return {'success': False, 'error': 'MCP Server not found'}
 
         if 'url' in params:
-            url_error = _validate_mcp_url((params.get('url') or '').strip())
+            url_error = _validate_mcp_url(
+                (params.get('url') or '').strip(),
+                sidecar_backed=server.sidecar_backed,
+            )
             if url_error:
                 return {'success': False, 'error': url_error}
 
@@ -1595,6 +1614,14 @@ class PaasController(Controller):
             'cloud_service_mcp_enabled': bool(
                 service and service.template_id.mcp_enabled
             ),
+            # #271: sidecar flow only valid once the service has an in-cluster
+            # identity (helm release + namespace). Frontend gates the
+            # 'Add Sidecar MCP' button on this so an undeployed service can't
+            # prefill a public sidecar URL that violates the in-cluster
+            # invariant (same gate as the two sidecar URL builders).
+            'cloud_service_deployed': bool(
+                service and service.helm_release_name and service.helm_namespace
+            ),
             'workspace_id': project.workspace_id.id if project.workspace_id else False,
             'workspace_name': project.workspace_id.name if project.workspace_id else '',
             'mcp_server_ids': [self._format_mcp_server(s) for s in servers],
@@ -1717,7 +1744,9 @@ class PaasController(Controller):
         url = (params.get('url') or '').strip()
         if not name or not url:
             return {'success': False, 'error': 'Name and URL are required'}
-        url_error = _validate_mcp_url(url)
+        url_error = _validate_mcp_url(
+            url, sidecar_backed=bool(params.get('sidecar_backed', False)),
+        )
         if url_error:
             return {'success': False, 'error': url_error}
 
@@ -1732,8 +1761,9 @@ class PaasController(Controller):
                 'description': params.get('description', ''),
                 'scope': 'user',
                 'project_id': project.id,
-                # Payload-driven; endpoint deliberately does not enforce
-                # URL ↔ flag consistency — frontend owns the mental model.
+                # #271: URL↔flag consistency IS now enforced — see
+                # _validate_mcp_url(sidecar_backed=...) above + the model
+                # @api.constrains _check_sidecar_url_in_cluster.
                 'sidecar_backed': bool(params.get('sidecar_backed', False)),
             })
         except ValidationError as e:
@@ -1755,7 +1785,10 @@ class PaasController(Controller):
         if error:
             return error
         if 'url' in params:
-            url_error = _validate_mcp_url((params.get('url') or '').strip())
+            url_error = _validate_mcp_url(
+                (params.get('url') or '').strip(),
+                sidecar_backed=server.sidecar_backed,
+            )
             if url_error:
                 return {'success': False, 'error': url_error}
         vals: dict[str, Any] = {}

@@ -969,36 +969,6 @@ class CloudService(models.Model):
         )
 
     # ------------------------------------------------------------------ #
-    #  MCP sidecar URL helper (model-context twin of                     #
-    #  PaasController._compute_sidecar_url_hint — kept for the           #
-    #  cron / non-request callers; see docs/decisions for the duplication #
-    #  follow-up)                                                        #
-    # ------------------------------------------------------------------ #
-
-    def _model_build_mcp_endpoint_url(self):
-        """Build MCP endpoint URL (model context, no request needed)."""
-        self.ensure_one()
-        template = self.template_id
-        endpoint_path = template.mcp_endpoint_path or '/mcp'
-        sidecar_port = template.mcp_sidecar_port or 3001
-
-        if self.helm_release_name and self.helm_namespace:
-            return (
-                f"http://{self.helm_release_name}-mcp"
-                f".{self.helm_namespace}.svc.cluster.local"
-                f":{sidecar_port}{endpoint_path}"
-            )
-
-        if self.subdomain:
-            IrConfigParameter = self.env['ir.config_parameter'].sudo()
-            paas_domain = IrConfigParameter.get_param(
-                'woow_paas_platform.paas_domain', 'woowtech.io',
-            )
-            return f"https://{self.subdomain}.{paas_domain}{endpoint_path}"
-
-        return f"http://localhost:{sidecar_port}{endpoint_path}"
-
-    # ------------------------------------------------------------------ #
     #  Subscription lifecycle: suspend / resume / cleanup                #
     # ------------------------------------------------------------------ #
 

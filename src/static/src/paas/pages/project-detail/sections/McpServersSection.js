@@ -43,8 +43,15 @@ export class McpServersSection extends Component {
 
     get canAddSidecarMcp() {
         // Button only visible when the backing service exposes a sidecar
-        // template; endpoint still re-validates ACL on click.
-        return !!this.props.project.cloud_service_mcp_enabled;
+        // template AND is actually deployed (has an in-cluster identity).
+        // #271: an mcp_enabled-but-undeployed service would prefill a public
+        // sidecar-hint URL + sidecar_backed=True → rejected by the new
+        // in-cluster invariant. Gate on deployment so the sidecar flow is
+        // always in-cluster. Endpoint still re-validates ACL on click.
+        return (
+            !!this.props.project.cloud_service_mcp_enabled &&
+            !!this.props.project.cloud_service_deployed
+        );
     }
 
     _emptyForm() {
