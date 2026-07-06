@@ -134,3 +134,7 @@ collected 142 items
   - GitHub Actions：JS action（`runs.using: node20`）在 job container 內執行時需 container 內有 node — 官方 [container-based jobs 文件](https://docs.github.com/en/actions/using-jobs/running-jobs-in-a-container) 明示 node 需求
   - Gitea Actions：syntax 相容 GitHub Actions，同樣行為
   - exit code 127 = "command not found"（這裡是 `node`）
+
+## 補記（2026-07-06 自 CLAUDE.md 索引化搬運）
+
+適用範圍：**cross-repo CI infra learning**（agent-runtime-pod epic Phase B，`paas-agent-runtime` repo Gitea Actions）——任何用 `container: <lang-image>` 跑 GitHub/Gitea Actions workflow 的 repo 都適用；**本 repo 的 Odoo CI 不受影響**（未用 container image 模式）。

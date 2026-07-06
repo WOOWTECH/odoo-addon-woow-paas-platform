@@ -1,0 +1,10 @@
+name: repo-lint
+on:
+  pull_request:
+    paths: ["src/**"]
+jobs:
+  repo-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/audit/repo-lint.py --all

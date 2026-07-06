@@ -1,0 +1,78 @@
+{
+  "_readme": "pattern-guard.py 的守護路徑對照表。pattern 是對 repo 相對路徑的 regex（re.search）；同一檔案可命中多個 class（docs 取聯集、marker 各自記）。新增守線時：加一個 class 或在既有 class 的 docs append 一行即可，不用改 pattern-guard.py。",
+  "classes": [
+    {
+      "class": "acl-security",
+      "pattern": "^src/security/(ir\\.model\\.access\\.csv|ir_rules\\.xml)$",
+      "why": "ACL / ir.rule 守線（B1-class cross-tenant data leak 重災區）",
+      "docs": [
+        "docs/decisions/patterns/README.md — 完整 pattern 索引，先在「何時必看」表定位適用條目",
+        "docs/decisions/patterns/odoo-addon-std-rule-symmetric-deactivation.md — 給 base.group_user 開 std model RWCU 時必須對稱停用 std ir.rule",
+        "docs/decisions/patterns/two-layer-acl-lockstep.md — ir.rule 與 controller carve-out 任一層改動，另一層必須同步",
+        "docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md — 窄→寬 scope flip 要 write() guard，ir.rule 擋不住",
+        "docs/decisions/patterns/mcp-acl-6-rule-split.md — 混 platform public-read + workspace-scoped 的 model 要 6-rule split",
+        "docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md — ORM test 綠 ≠ endpoint secure，須補 HttpCase cross-user negative"
+      ]
+    },
+    {
+      "class": "controller-endpoint",
+      "pattern": "^src/controllers/.*\\.py$",
+      "why": "controller layer 不可 .sudo() 繞 ir.rule；新增 sudo() 會被 repo-lint 白名單 gate 攔",
+      "docs": [
+        "docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md — sudo() 是 security primitive 不是 perf primitive；anti-pattern 三變體 A/B/C",
+        "docs/decisions/patterns/two-layer-acl-lockstep.md — 多 endpoint 各自 access resolver 時任一收緊須同步",
+        "docs/tracking/pitfalls/two-layer-acl-asymmetric-deny.md — 兩層 deny 不對稱的實際翻車案例",
+        "docs/tracking/pitfalls/orm-test-green-endpoint-leak-blindness.md — backend ORM test 全綠遮蔽 controller sudo bypass 的 incident 敘事"
+      ]
+    },
+    {
+      "class": "model-write-guard",
+      "pattern": "^src/models/(agent_session|agent_template|security_access|smart_home|cloud_service|mcp_server)[a-z_]*\\.py$",
+      "why": "這些 model 有 write()/create() invariant guard（identity anchor / scope flip / state stamp），改壞會假綠或孤兒資源",
+      "docs": [
+        "docs/decisions/patterns/su-env-exempt-guard-false-green.md — invariant guard 不可用 env.su / has_group 豁免（TransactionCase 是 su env → 假綠）",
+        "docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md — scope/tenancy flip 必靠 write() guard",
+        "docs/decisions/patterns/invariant-recompute-on-orm-write-hook.md — cross-record invariant 收斂要放 create()/write() hook 兜底",
+        "docs/tracking/pitfalls/reaped-since-single-path-stamp-gc-immunity.md — 狀態轉移 invariant 集中一處強制、不逐路徑 stamp",
+        "docs/decisions/patterns/two-stage-remote-provision-idempotency.md — 多段式 remote provision 必須 stored-id guard 冪等"
+      ]
+    },
+    {
+      "class": "seed-data",
+      "pattern": "^src/data/.*\\.xml$",
+      "why": "seed record 的 noupdate 是 sticky 的（寫進 ir.model.data），fresh install 綠 ≠ 升級路徑綠",
+      "docs": [
+        "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md — noupdate=1 sticky → 其他 data 檔對同 record 的更新被靜默 skip",
+        "docs/decisions/patterns/invariant-recompute-on-orm-write-hook.md — data XML 是 ORM 寫入的第二入口，會 drift cross-record invariant"
+      ]
+    },
+    {
+      "class": "seed-default-template",
+      "pattern": "^(src/data/agent_template_default\\.xml|src/hooks\\.py)$",
+      "why": "agent_template_default 是跨租戶 cluster-wide fallback，必須維持 tenant-neutral（unbound + 無 user-scope 綁定）",
+      "docs": [
+        "docs/superpowers/specs/2026-06-01-seed-agent-template-design.md — seeded default 的設計依據與 invariant",
+        "docs/tracking/pitfalls/default-agent-template-project-bind-silent-autoenable.md — default 被綁 project → auto-enable 靜默全失效；demo 與 default 分工勿互換",
+        "CLAUDE.md「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條 — post_init 未設才指、不覆寫 admin 已選"
+      ]
+    },
+    {
+      "class": "owl-template",
+      "pattern": "^src/static/src/.*\\.xml$",
+      "why": "OWL template 語法錯誤會過 XML parse + 全部 Python test，runtime 直接全站白屏；唯一攔截網是 headed 實走 + repo-lint 靜態檢查",
+      "docs": [
+        "docs/tracking/pitfalls/owl-template-crash-class-syntax.md — component 上不可 t-att-（prop 直接吃 expression）；無 .enter/.esc modifier，按鍵判斷在 handler 內讀 ev.key"
+      ]
+    },
+    {
+      "class": "paas-operator",
+      "pattern": "^extra/paas-operator/",
+      "why": "operator 包外部 API：mock 狀態碼要對齊真實回值；無 CI runner，merge 前必須本地跑 integration tests",
+      "docs": [
+        "docs/tracking/pitfalls/operator-cf-access-delete-202-mock-contract.md — CF Access DELETE 回 202；mock 寫死 200 → live 才爆",
+        "docs/decisions/patterns/two-stage-remote-provision-idempotency.md — 先建遠端資源再跑後續的 method 必須 stored-id guard",
+        "extra/paas-operator/tests/integration/README.md — 本地 integration tests 跑法（HELM_BINARY=$(which helm) pytest -m integration）"
+      ]
+    }
+  ]
+}

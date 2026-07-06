@@ -1,0 +1,21 @@
+# 允許 noupdate="1" 的 data 檔（repo-lint.py --update-baseline 產生）
+# 新增前必讀 docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md
+1	src/data/agent_session_cron.xml
+1	src/data/agent_template_default.xml
+1	src/data/agent_template_demo.xml
+1	src/data/ai_assistant_data.xml
+1	src/data/cloud_app_templates.xml
+1	src/data/cloud_service_cron.xml
+1	src/data/cron_topup.xml
+1	src/data/demo_system_skill.xml
+1	src/data/ecpay_invoice_cron.xml
+1	src/data/low_balance_warning_cron.xml
+1	src/data/mail_templates.xml
+1	src/data/mcp_server_cron.xml
+1	src/data/oauth_clients.xml
+1	src/data/oauth_device_code_cron.xml
+1	src/data/reach_reconciler_cron.xml
+1	src/data/reconcile_report_cron.xml
+1	src/data/subscription_lifecycle_cron.xml
+1	src/data/subscription_products.xml
+1	src/data/topup_plans.xml

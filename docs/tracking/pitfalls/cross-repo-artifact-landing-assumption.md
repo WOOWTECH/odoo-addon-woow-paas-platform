@@ -40,3 +40,7 @@ planner 寫 plan 時對「哪個 chart 在哪個 repo」是按假設寫的；pla
 - 同 family（plan 假設 vs 實況，勘查/實作時才現形）：
   - [[plan-vs-odoo-schema-mismatch]] —— plan 引用不存在的 schema 欄位；本 pitfall 是 plan 假設錯 artifact 的 repo 落點。兩者都根於「plan 抽象層未核對實體事實」。
 - 部署 invariant 連動：本 epic charts secretKeyRef 用 `optional:true` → partial 部署不在 deploy 時炸（見 [[follow-ups]] §Phase D enablement gate D-CAVEAT-1）。
+
+## 補記（2026-07-06 自 CLAUDE.md 索引化搬運）
+
+後續演變：本案落點 `charts/odoo-dev-sandbox` 於 2026-06 已隨 **woowprd plugin** 移出（in-repo 副本移除）；現在動 dev-sandbox chart 一律改 plugin 的 `skills/k8s-dev-sandbox/charts/`。epic Phase E-G 續動 charts/CD 跨 repo 時本 pitfall 仍適用——按「修改誰的 deployment」定位 chart，非按 feature 名。

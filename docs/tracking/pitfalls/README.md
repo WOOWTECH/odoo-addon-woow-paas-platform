@@ -1,0 +1,45 @@
+# pitfalls/ — 踩坑索引（debug 撞牆時對照）
+
+> 每條 pitfall 一檔完整敘事（症狀 → 根因 → 修法 → 守線）。本表是唯一索引：**一行症狀 + 機械化狀態**。debug 撞牆時先掃症狀欄找同 class；已機械化者撞到 gate / guard 時訊息內附 doc 指針，不需預先記憶。
+
+## 維護慣例（新增 pitfall doc 時）
+
+1. **同步登錄本表一行**（字母序插入），格式：`slug 連結 | 一行症狀 | 機械化狀態`。CLAUDE.md 只留指向本表的一行入口，**勿把 pitfall 段落寫回 CLAUDE.md**（雙寫必漂移）。
+2. **評估機械化**（`/retro` skill 的分流，按強度優先）：可 grep/parse 判定 → `scripts/audit/repo-lint.py` 加 check；綁特定路徑 → `.claude/hooks/pattern-guard-map.json` append；皆不可 → 狀態欄留 `—`。
+3. 教訓已被 code guard / gate 取代時，更新狀態欄並讓 doc 記錄 guard 位置（file:line）。
+
+## 索引（31 條）
+
+| pitfall | 一行症狀 | 機械化狀態 |
+| --- | --- | --- |
+| [agent-runtime-coldstart-cpu-throttle-timeout](agent-runtime-coldstart-cpu-throttle-timeout.md) | cold-start spawn ~36s 撞 client timeout，根因 operator CPU limit 250m throttle（非同步等 pod-ready） | — |
+| [agent-runtime-fpilot10-cluster-e2e-gap-chain](agent-runtime-fpilot10-cluster-e2e-gap-chain.md) | F-PILOT-10 真 LLM cluster e2e 的 8-gap chain（mock/caqa/reviewer 全看不到，唯 cluster + 完整 UI round-trip 暴露） | — |
+| [agent-runtime-llm-key-after-coldstart-stuck-echo](agent-runtime-llm-key-after-coldstart-stuck-echo.md) | LLM key 在 pod cold-start 之後才設 → 永久 echo（provisioning 只在 cold-start；唯一解 teardown 重 cold-start） | — |
+| [agent-runtime-pilot-e2e-gap-chain](agent-runtime-pilot-e2e-gap-chain.md) | agent-runtime pilot e2e 的 9-gap chain（flip 實跑才一關關現形） | — |
+| [agent-runtime-stg-enablement-gap-chain](agent-runtime-stg-enablement-gap-chain.md) | stg 啟用的 5 層 fail-closed gap chain；單層修復不可觀測，須逐層驗到端到端；K3s NP 回 RST 非 timeout | — |
+| [agent-runtime-webhook-statesync-deploy-hazards](agent-runtime-webhook-statesync-deploy-hazards.md) | webhook state-sync 在 stg 接通的 3 個部署層陷阱（含一次 namespace 資料全失） | — |
+| [cf-ns-orphan-no-account-gc](cf-ns-orphan-no-account-gc.md) | CF/ns 孤兒無帳號級反向 GC；繞過 Odoo unlink 的刪除 → stored id 蒸發成永久孤兒；SmartHome 連 fail-loud guard 都沒有 | — |
+| [ci-workflow-container-missing-node](ci-workflow-container-missing-node.md) | CI `container: <lang-image>` 缺 node → checkout exit 127 → pytest 從沒跑到（false green）；本 repo Odoo CI 不受影響 | — |
+| [cross-repo-artifact-landing-assumption](cross-repo-artifact-landing-assumption.md) | plan 假設部署 artifact 落 cross-repo X 實際落本 repo Y → impl 前按「修改誰的 deployment」勘查實體落點 | — |
+| [cross-workspace-task-data-leak](cross-workspace-task-data-leak.md) | CAQA B1 incident：跨 workspace task 資料外洩 | — |
+| [cs-binding-authority-controller-only-no-model-guard](cs-binding-authority-controller-only-no-model-guard.md) | project↔CloudService 綁定授權只在 controller 層 gated、model 層無守（defense-in-depth 缺口） | — |
+| [decouple-project-frontend-worktree-dev-pitfalls](decouple-project-frontend-worktree-dev-pitfalls.md) | decouple-project frontend cycle 的 3 條 worktree 開發環境陷阱 | — |
+| [default-agent-template-project-bind-silent-autoenable](default-agent-template-project-bind-silent-autoenable.md) | 平台預設 agent_template 被綁 project → auto-enable 靜默全失效（該綁的是 demo 不是 default） | code guard（`src/models/agent_template.py:125`）+ pattern-guard |
+| [direct-unlink-bypass-cleanup-hook](direct-unlink-bypass-cleanup-hook.md) | direct `.unlink()` 繞 lifecycle cleanup → child wrapper zombie | — |
+| [fleet-split-registry-values-merge-drift](fleet-split-registry-values-merge-drift.md) | Fleet secret drift 勿急套 split-merge 框架——本案真因是 chart 外殘留 key（✅ 2026-06-25 已解決＋根因更正） | — |
+| [floor-env-relative-path-empty-ext-addons](floor-env-relative-path-empty-ext-addons.md) | Floor `.env` 相對路徑恰好掛到存在但空的目錄騙過 create.sh → module 靜默裝不起來；Floor 一律絕對路徑 | — |
+| [httpcase-orm-flush-ordering-raw-sql](httpcase-orm-flush-ordering-raw-sql.md) | HttpCase 內 raw SQL 造的 drift sample 被 ORM buffered write flush 覆蓋 | — |
+| [legacy-endpoint-scope-blindness](legacy-endpoint-scope-blindness.md) | plan AC 只 cover 新 endpoint，legacy 同源 code path 漏裝同層 security helper | — |
+| [netpol-enforced-except-fresh-pod-startup-window-k3s-kube-router](netpol-enforced-except-fresh-pod-startup-window-k3s-kube-router.md) | NP 對新建 pod 有啟動編程空窗 → 用臨時 pod 測 NP 會系統性誤判「控制器全毀」 | — |
+| [operator-cf-access-delete-202-mock-contract](operator-cf-access-delete-202-mock-contract.md) | operator 包 CF Access 的 DELETE 白名單寫死 200，真 CF 回 202 → teardown 中斷孤兒 policy；mock 狀態碼要對齊真實 API | pattern-guard（paas-operator class） |
+| [orm-test-green-endpoint-leak-blindness](orm-test-green-endpoint-leak-blindness.md) | backend ORM test 全綠遮蔽 controller layer sudo bypass；ORM 綠 ≠ endpoint secure | repo-lint gate（controller-sudo）+ pattern-guard |
+| [owl-template-crash-class-syntax](owl-template-crash-class-syntax.md) | OWL template 語法錯誤（component `t-att-`、`.enter` modifier）過三層測試、runtime 全站白屏 | repo-lint gate（owl-template） |
+| [plan-vs-odoo-schema-mismatch](plan-vs-odoo-schema-mismatch.md) | plan 引用不存在的 Odoo 欄位——impl 前對 schema | — |
+| [reaped-since-single-path-stamp-gc-immunity](reaped-since-single-path-stamp-gc-immunity.md) | 下游 gate 欄位只在單一路徑 stamp → 他路徑到達 gating state 者永久免疫 GC | code guard（`src/models/agent_session.py:186-207`） |
+| [sandbox-module-test-false-green](sandbox-module-test-false-green.md) | K8s dev sandbox `test.sh` 0 tests 也報「✅ All tests passed」（false green） | — |
+| [seed-noupdate-sticky-template-links](seed-noupdate-sticky-template-links.md) | seed `noupdate="1"` 寫進 ir.model.data 變 sticky → 其他 data 檔對同 record 的 `-u` 更新被靜默 skip；fresh install 綠 ≠ 升級路徑綠 | repo-lint gate（data-noupdate）+ pattern-guard |
+| [skill-same-name-dual-bind-snapshot-collision](skill-same-name-dual-bind-snapshot-collision.md) | skill 同名雙綁 → snapshot 撞名 + 下拉無法區分同名 system/user skill | — |
+| [system-mcp-create-acl-bypass](system-mcp-create-acl-bypass.md) | dual-leg rule + `perm_create=True` → 經 always-true leg 提權 | pattern-guard（acl-security class） |
+| [tag-scoped-test-misses-full-u-failures](tag-scoped-test-misses-full-u-failures.md) | `--test-tags` scope-limited 驗綠 → cross-module stale schema reference 漏抓 | — |
+| [two-layer-acl-asymmetric-deny](two-layer-acl-asymmetric-deny.md) | 兩層 ACL 收緊一層 silent 漏另一層——partial fix 比沒 fix 更糟 | pattern-guard（controller-endpoint class） |
+| [x2many-replace-transient-empty-state-operator-sync](x2many-replace-transient-empty-state-operator-sync.md) | x2many `(5,0,0)+creates` 整組替換的瞬時空狀態觸發 child-model eager 外部 sync → operator 收到不合法中途態 422 | — |
