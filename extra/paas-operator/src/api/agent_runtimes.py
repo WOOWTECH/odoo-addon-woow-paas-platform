@@ -49,6 +49,14 @@ k8s_service = KubernetesService()
 
 _POD_WS_PORT = 8000  # pod FastAPI WS (uvicorn) port — design §B / image runtime/transport/ws_server
 
+# #278 B1：agent per-project ns quota（值 > 單 pod sidecar 2CPU/2Gi 留 headroom；
+# agent 一 project 一 pod、非 sum）。attach 不重跑 _ensure_namespace → 改值不自動
+# re-apply 既有 ns，需 teardown 重冷啟（與 label MERGE-only 同「冷啟才收斂」限制）。
+AGENT_QUOTA_CPU = "3"
+AGENT_QUOTA_MEMORY = "3Gi"
+AGENT_QUOTA_PVC = "3"
+AGENT_QUOTA_STORAGE = "10Gi"
+
 
 def _names(project_hash: str):
     """Return (namespace, release) for a project hash.
@@ -106,6 +114,29 @@ def _ensure_namespace(
             "name": namespace,
             "labels": build_managed_ns_labels(reach_workspace_ids=reach_workspace_ids),
         },
+    })
+    # #278 B1：agent per-project ns ResourceQuota（堵零-quota cluster DoS 逃逸口）
+    k8s_service.apply_manifest({
+        "apiVersion": "v1",
+        "kind": "ResourceQuota",
+        "metadata": {"name": f"{namespace}-quota", "namespace": namespace,
+                     "labels": {"paas-managed": "true"}},
+        "spec": {"hard": {
+            "requests.cpu": AGENT_QUOTA_CPU, "requests.memory": AGENT_QUOTA_MEMORY,
+            "limits.cpu": AGENT_QUOTA_CPU, "limits.memory": AGENT_QUOTA_MEMORY,
+            "persistentvolumeclaims": AGENT_QUOTA_PVC,
+            "requests.storage": AGENT_QUOTA_STORAGE,
+        }},
+    })
+    # #278 B2（必要配套）：quota 逼出 limits → LimitRange 補未宣告 limits 的容器
+    k8s_service.apply_manifest({
+        "apiVersion": "v1",
+        "kind": "LimitRange",
+        "metadata": {"name": f"{namespace}-limits", "namespace": namespace,
+                     "labels": {"paas-managed": "true"}},
+        "spec": {"limits": [{"type": "Container",
+                             "default": {"cpu": "500m", "memory": "512Mi"},
+                             "defaultRequest": {"cpu": "500m", "memory": "512Mi"}}]},
     })
 
 

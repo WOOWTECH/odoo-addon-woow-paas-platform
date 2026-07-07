@@ -503,6 +503,22 @@ class TestSpawnOrAttach:
             assert labels.get("woow.tw/reach-ws-3") == "true"
             assert labels.get("woow.tw/reach-ws-5") == "true"
 
+    @patch("src.api.agent_runtimes.k8s_service")
+    def test_ensure_namespace_applies_quota_and_limitrange(self, mock_k8s):
+        """#278 B1+B2：_ensure_namespace 貼 Namespace 後，依序 apply ns 級
+        ResourceQuota（堵零-quota 逃逸口）與 LimitRange（quota hard-limits 兜底）。"""
+        from src.api.agent_runtimes import _ensure_namespace
+        _ensure_namespace("paas-ws-pa-abc123")
+        kinds = [c.args[0]["kind"] for c in mock_k8s.apply_manifest.call_args_list]
+        assert kinds == ["Namespace", "ResourceQuota", "LimitRange"]
+        quota = mock_k8s.apply_manifest.call_args_list[1].args[0]
+        assert quota["metadata"]["name"] == "paas-ws-pa-abc123-quota"
+        assert quota["spec"]["hard"]["limits.cpu"] == "3"
+        assert quota["spec"]["hard"]["limits.memory"] == "3Gi"
+        lr = mock_k8s.apply_manifest.call_args_list[2].args[0]
+        assert lr["kind"] == "LimitRange"
+        assert lr["spec"]["limits"][0]["default"] == {"cpu": "500m", "memory": "512Mi"}
+
     def test_spawn_or_attach_refreshes_skills_configmap_on_attach(self, client):
         """Layer 3 (running-pod half): on ATTACH (release exists, replicas>0) the
         operator does NO install, so the cold-start skills.json render goes stale
@@ -2117,21 +2133,25 @@ class TestEnsureNamespaceEnvLabel:
     def test_ensure_namespace_stamps_env_label_lockstep(self, monkeypatch):
         from src.api import agent_runtimes
         monkeypatch.setattr("src.config.settings.paas_env", "stg")
-        captured = {}
+        applied = []
         monkeypatch.setattr(agent_runtimes.k8s_service, "apply_manifest",
-                            lambda m: captured.update(m=m))
+                            lambda m: applied.append(m))
         agent_runtimes._ensure_namespace("paas-ws-stg-pa-abc123")
-        labels = captured["m"]["metadata"]["labels"]
+        # #278 B1+B2 起 _ensure_namespace 會 apply 多個 manifest（ns/quota/limitrange），
+        # env label 落在 Namespace 上——挑出它驗證。
+        ns = next(m for m in applied if m["kind"] == "Namespace")
+        labels = ns["metadata"]["labels"]
         assert labels["paas-managed"] == "true"
         assert labels["paas.woowtech.io/env"] == "stg"
 
     def test_ensure_namespace_omits_env_label_when_empty(self, monkeypatch):
         from src.api import agent_runtimes
         monkeypatch.setattr("src.config.settings.paas_env", "")
-        captured = {}
+        applied = []
         monkeypatch.setattr(agent_runtimes.k8s_service, "apply_manifest",
-                            lambda m: captured.update(m=m))
+                            lambda m: applied.append(m))
         agent_runtimes._ensure_namespace("paas-ws-pa-abc123")
-        labels = captured["m"]["metadata"]["labels"]
+        ns = next(m for m in applied if m["kind"] == "Namespace")
+        labels = ns["metadata"]["labels"]
         assert labels["paas-managed"] == "true"
         assert "paas.woowtech.io/env" not in labels
