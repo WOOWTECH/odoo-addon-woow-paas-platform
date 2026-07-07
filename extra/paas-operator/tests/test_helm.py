@@ -650,6 +650,21 @@ class TestKubernetesService:
         # 建 ns 那次 build_managed_ns_labels 帶 owner="7"
         assert any(c.kwargs.get("owner") == "7" for c in mock_labels.call_args_list)
 
+    @patch("subprocess.run")
+    def test_list_managed_namespaces_parses_names(self, mock_run, k8s_service):
+        """#277：list_managed_namespaces 唯讀解析帶 paas-managed=true 的 ns 名。"""
+        mock_run.return_value = Mock(returncode=0, stderr="", stdout=json.dumps({
+            "items": [
+                {"metadata": {"name": "paas-ws-abc", "labels": {"paas-managed": "true"}}},
+                {"metadata": {"name": "paas-ws-pa-def", "labels": {"paas-managed": "true"}}},
+            ]
+        }))
+        names = k8s_service.list_managed_namespaces()
+        assert set(names) == {"paas-ws-abc", "paas-ws-pa-def"}
+        # 走 label selector 圈定右集邊界（反向發現全部、無單一輸入 ns 可驗）。
+        argv = mock_run.call_args_list[0].args[0]
+        assert "-l" in argv and "paas-managed=true" in argv
+
     def test_build_limitrange_manifest_shape(self, k8s_service):
         """#278 A2：CS ns LimitRange manifest 形狀正確。"""
         m = k8s_service._build_limitrange_manifest("paas-ws-test-abc")

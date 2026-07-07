@@ -1536,6 +1536,22 @@ class KubernetesService:
             return []
         return output.split()
 
+    def list_managed_namespaces(self) -> List[str]:
+        """#277 唯讀反向發現：列所有帶 paas-managed=true 的 ns 名。
+
+        不呼 validate_namespace（反向發現全部、無單一輸入 ns 可驗），邊界靠 label
+        selector 圈定。純唯讀 get，供 reconcile inventory 當右集 ground truth。
+        """
+        result = self._run_command([
+            "get", "ns", "-l", "paas-managed=true", "-o", "json",
+        ])
+        data = json.loads(result.stdout or "{}")
+        return [
+            item["metadata"]["name"]
+            for item in data.get("items", [])
+            if item.get("metadata", {}).get("name")
+        ]
+
     def label_pvcs(
         self, namespace: str, pvc_names: List[str], labels: Dict[str, str]
     ) -> None:
