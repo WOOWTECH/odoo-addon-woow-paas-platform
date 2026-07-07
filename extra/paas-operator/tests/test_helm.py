@@ -616,8 +616,8 @@ class TestKubernetesService:
         )
 
         assert "created" in result["message"]
-        # Should be called twice (namespace + quota)
-        assert mock_run.call_count == 2
+        # #278 A2：現在做三次 apply（namespace + quota + limitrange）
+        assert mock_run.call_count == 3
 
     def test_create_namespace_invalid_prefix(self, k8s_service):
         """Test create namespace with invalid prefix."""
@@ -628,6 +628,26 @@ class TestKubernetesService:
                 memory_limit="4Gi",
                 storage_limit="20Gi",
             )
+
+    def test_build_limitrange_manifest_shape(self, k8s_service):
+        """#278 A2：CS ns LimitRange manifest 形狀正確。"""
+        m = k8s_service._build_limitrange_manifest("paas-ws-test-abc")
+        assert m["kind"] == "LimitRange"
+        assert m["metadata"]["name"] == "paas-ws-test-abc-limits"
+        assert m["metadata"]["namespace"] == "paas-ws-test-abc"
+        entry = m["spec"]["limits"][0]
+        assert entry["type"] == "Container"
+        assert entry["default"] == {"cpu": "500m", "memory": "512Mi"}
+        assert entry["defaultRequest"] == {"cpu": "500m", "memory": "512Mi"}
+
+    @patch("subprocess.run")
+    def test_create_namespace_applies_limitrange(self, mock_run, k8s_service):
+        """#278 A2：create_namespace 現在做 ns + quota + limitrange 三次 apply。"""
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
+        k8s_service.create_namespace("paas-ws-test-abc", "8", "8Gi", "100Gi")
+        applied = [c.args[0] for c in mock_run.call_args_list]  # 每個 = 完整 kubectl argv
+        apply_calls = [a for a in applied if "apply" in a and "-f" in a]
+        assert len(apply_calls) >= 3
 
     @patch("subprocess.run")
     def test_apply_manifest(self, mock_run, k8s_service):

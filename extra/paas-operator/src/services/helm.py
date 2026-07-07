@@ -924,6 +924,16 @@ class KubernetesService:
         finally:
             Path(quota_file).unlink(missing_ok=True)
 
+        # #278 A2: CS ns LimitRange（quota 之後、registry secret 之前）
+        limits_manifest = self._build_limitrange_manifest(name)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(limits_manifest, f)
+            limits_file = f.name
+        try:
+            self._run_command(["apply", "-f", limits_file])
+        finally:
+            Path(limits_file).unlink(missing_ok=True)
+
         self.ensure_registry_secret(name)
 
         # #279 O4: apply the leg-2 tenant-isolation baseline NetworkPolicy bundle.
@@ -942,6 +952,20 @@ class KubernetesService:
             )
 
         return {"message": f"Namespace {name} created with quota"}
+
+    def _build_limitrange_manifest(self, name: str) -> dict:
+        """CS ns LimitRange（#278 A2）：ns quota hard-宣告 limits.cpu/memory 後，
+        admission 拒收未設 limits 的容器；default 補上安全預設讓其可建。"""
+        return {
+            "apiVersion": "v1",
+            "kind": "LimitRange",
+            "metadata": {"name": f"{name}-limits", "namespace": name},
+            "spec": {"limits": [{
+                "type": "Container",
+                "default": {"cpu": "500m", "memory": "512Mi"},
+                "defaultRequest": {"cpu": "500m", "memory": "512Mi"},
+            }]},
+        }
 
     def _apply_baseline_netpol(self, namespace: str, workspace_id: int) -> None:
         """#279 O4 leg-2: apply the CloudService-namespace baseline NetworkPolicy bundle
