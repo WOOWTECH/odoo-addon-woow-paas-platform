@@ -28,7 +28,6 @@ export class CreateSmartHomeModal extends Component {
     setup() {
         this.state = useState({
             name: "",
-            haPort: "8123",
             templates: [],
             selectedTemplateId: null,
             plans: [],
@@ -103,11 +102,6 @@ export class CreateSmartHomeModal extends Component {
         this.state.error = null;
     }
 
-    onPortInput(ev) {
-        this.state.haPort = ev.target.value;
-        this.state.error = null;
-    }
-
     onBackdropClick(ev) {
         if (ev.target === ev.currentTarget && !this.state.loading && !this.state.provisioning) {
             this.props.onClose();
@@ -118,12 +112,6 @@ export class CreateSmartHomeModal extends Component {
         const name = this.state.name.trim();
         if (!name) {
             this.state.error = "Smart home name is required";
-            return;
-        }
-
-        const port = parseInt(this.state.haPort, 10);
-        if (isNaN(port) || port < 1 || port > 65535) {
-            this.state.error = "Please enter a valid port number (1-65535)";
             return;
         }
 
@@ -141,9 +129,9 @@ export class CreateSmartHomeModal extends Component {
         this.state.error = null;
 
         // Step 1: Create smart home
+        // ha_port 不由前端傳入：後端 model default=8123（issue #269，port 壓死）
         const createResult = await workspaceService.createSmartHome(this.props.workspaceId, {
             name,
-            ha_port: port,
             plan_id: this.state.selectedPlanId,
             template_id: this.state.selectedTemplateId,
         });

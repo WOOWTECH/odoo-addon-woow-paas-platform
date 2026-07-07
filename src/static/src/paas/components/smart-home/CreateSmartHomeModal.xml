@@ -33,24 +33,6 @@
                             />
                         </div>
 
-                        <div class="o_woow_form_group">
-                            <label for="smarthome_port">HA Port</label>
-                            <input
-                                type="number"
-                                id="smarthome_port"
-                                class="o_woow_input"
-                                placeholder="8123"
-                                t-att-value="state.haPort"
-                                t-on-input="onPortInput"
-                                t-att-disabled="state.loading"
-                                min="1"
-                                max="65535"
-                            />
-                            <small class="o_woow_form_hint">
-                                Default Home Assistant port is 8123
-                            </small>
-                        </div>
-
                         <!-- Template selector: shown only when more than one
                              active template exists. With a single template
                              the dropdown would just be visual noise — the
