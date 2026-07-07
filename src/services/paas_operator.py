@@ -223,6 +223,35 @@ class PaaSOperatorClient:
             data['workspace_id'] = workspace_id
         return self._request('POST', '/api/namespaces', data=data)
 
+    def update_namespace_quota(
+        self,
+        namespace: str,
+        cpu_limit: str,
+        memory_limit: str,
+        storage_limit: str,
+    ) -> Dict[str, Any]:
+        """#278 A1：PUT 整組 ns quota（值 = 存活 service 集重算）。
+
+        Args:
+            namespace: 目標命名空間（須以 'paas-ws-' 開頭）
+            cpu_limit: requests.cpu / limits.cpu（字串 quantity，如 '30'）
+            memory_limit: requests.memory / limits.memory（如 '30Gi'）
+            storage_limit: requests.storage（如 '150Gi'）
+
+        Returns:
+            確認訊息
+        """
+        return self._request(
+            'PUT',
+            f'/api/namespaces/{namespace}/quota',
+            data={
+                'cpu_limit': cpu_limit,
+                'memory_limit': memory_limit,
+                'storage_limit': storage_limit,
+            },
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def backfill_baseline_netpol(
         self, namespace: str, workspace_id: int
     ) -> Dict[str, Any]:

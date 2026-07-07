@@ -340,6 +340,52 @@ class TestCloudService(TransactionCase):
             subdomain='paas-cs-cafef00d-deadbeef',
         )
 
+    def test_delete_recomputes_quota_over_survivors(self):
+        """#278 A1：刪除 CS 後以『存活集』重算並 PUT ns quota。
+
+        同 workspace / 同 namespace 兩個 service（各 vcpu=10, ram=10,
+        storage=50）。刪掉 serviceA 後，存活集只剩 serviceB → quota 應以
+        serviceB 單獨重算：
+          cpu = str(max(10*3, 8))       = "30"
+          mem = f"{max(int(10*3), 8)}Gi" = "30Gi"
+          storage = f"{max(50*3, 100)}Gi" = "150Gi"
+        若誤把已刪的 A 也算進去會得到 "60"/"60Gi"/"300Gi"，
+        assert_called_once_with 會抓到。
+        """
+        self.serviceA = self.Service.create({
+            'name': 'Survivor Probe A',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_release_name': 'svc-aaaa',
+            'helm_namespace': 'paas-ws-survivor',
+            'allocated_vcpu': 10,
+            'allocated_ram_gb': 10.0,
+            'allocated_storage_gb': 50,
+        })
+        self.serviceB = self.Service.create({
+            'name': 'Survivor Probe B',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_release_name': 'svc-bbbb',
+            'helm_namespace': 'paas-ws-survivor',
+            'allocated_vcpu': 10,
+            'allocated_ram_gb': 10.0,
+            'allocated_storage_gb': 50,
+        })
+        with patch(
+            'odoo.addons.woow_paas_platform.services.paas_operator'
+            '.get_paas_operator_client',
+            return_value=MagicMock(),
+        ) as gm:
+            client = gm.return_value
+            client.uninstall_release.return_value = True
+            ns = self.serviceA.helm_namespace  # unlink 後就取不到，先捕獲
+            self.serviceA.unlink()
+            # 存活集只剩 serviceB → survivor-only 重算
+            client.update_namespace_quota.assert_called_once_with(
+                ns, "30", "30Gi", "150Gi",
+            )
+
 
 class TestCloudServiceChangePlanTrialMode(TransactionCase):
     """Trial-state change-plan on CS (issue #34).

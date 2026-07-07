@@ -431,19 +431,15 @@ class CloudService(models.Model):
 
         try:
             # Create namespace (409 = already exists, OK)
-            all_services = self.search([
-                ('workspace_id', '=', self.workspace_id.id),
-                ('state', '!=', 'deleting'),
-            ])
-            total_vcpu = sum(s.allocated_vcpu for s in all_services)
-            total_ram = sum(s.allocated_ram_gb for s in all_services)
-            total_storage = sum(s.allocated_storage_gb for s in all_services)
+            cpu_limit, memory_limit, storage_limit = self._compute_ns_quota(
+                self.workspace_id,
+            )
             try:
                 client.create_namespace(
                     namespace=helm_namespace,
-                    cpu_limit=str(max(total_vcpu * 3, 8)),
-                    memory_limit=f"{max(int(total_ram * 3), 8)}Gi",
-                    storage_limit=f"{max(total_storage * 3, 100)}Gi",
+                    cpu_limit=cpu_limit,
+                    memory_limit=memory_limit,
+                    storage_limit=storage_limit,
                     workspace_id=self.workspace_id.id or None,
                 )
             except PaaSOperatorError as e:
@@ -1049,6 +1045,45 @@ class CloudService(models.Model):
             self.id, restore_state,
         )
 
+    def _compute_ns_quota(self, workspace):
+        """#278 A1 權威值：以 workspace 內『非 deleting』存活 service 加總算 quota。
+
+        domain 已排除 state='deleting' → 呼叫時機在 state 翻 deleting /
+        super().unlink() 之後即天然反映刪除後存活集。回傳字串 quantity
+        （與 operator NamespaceQuotaUpdateRequest 及既有 create_namespace 一致）。
+        floor 為 8 vCPU / 8Gi / 100Gi（workspace 清空後 survivor 為空亦不 skip）。
+        """
+        Svc = self.env['woow_paas_platform.cloud_service'].sudo()
+        live = Svc.search([
+            ('workspace_id', '=', workspace.id),
+            ('state', '!=', 'deleting'),
+        ])
+        vcpu = sum(live.mapped('allocated_vcpu'))
+        ram = sum(live.mapped('allocated_ram_gb'))
+        storage = sum(live.mapped('allocated_storage_gb'))
+        return (
+            str(max(vcpu * 3, 8)),
+            f"{max(int(ram * 3), 8)}Gi",
+            f"{max(storage * 3, 100)}Gi",
+        )
+
+    def _push_ns_quota(self, workspace, helm_namespace):
+        """best-effort：重算並 PUT ns quota；operator 未設定 / 失敗只 log，
+        絕不 abort 刪除。"""
+        if not helm_namespace:
+            return
+        from ..services.paas_operator import get_paas_operator_client
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return
+        cpu, mem, storage = self._compute_ns_quota(workspace)
+        try:
+            client.update_namespace_quota(helm_namespace, cpu, mem, storage)
+        except Exception as e:
+            _logger.warning(
+                "quota recompute PUT failed for %s: %s", helm_namespace, e,
+            )
+
     def _do_cleanup(self):
         """Helm uninstall — permanently remove the service.
 
@@ -1110,6 +1145,10 @@ class CloudService(models.Model):
 
         # Step 3 — mark state so cron/UI know teardown is in progress.
         self.write({'state': 'deleting'})
+
+        # Step 4 — #278 A1：本 record 已 state=deleting、被 domain 排除，
+        # 以存活集重算 ns quota 並權威覆寫（best-effort，不影響刪除）。
+        self._push_ns_quota(self.workspace_id, self.helm_namespace)
 
     def _cleanup_helm(self):
         """Idempotent helm uninstall for the direct-unlink / workspace-cascade
@@ -1285,6 +1324,12 @@ class CloudService(models.Model):
         """
         affected = self.mapped('project_ids')
         old = {p.id: set(p.workspace_ids.ids) for p in affected}
+        # #278 A1：pre-delete 捕獲 (workspace, ns)，super().unlink() 後這些
+        # record 離場、workspace_ids 重算，即以存活集重算 ns quota。
+        quota_targets = [
+            (s.workspace_id, s.helm_namespace)
+            for s in self if s.helm_namespace
+        ]
         for service in self:
             # F-ENV-5 helm fail-loud guard: the helm release / namespace must
             # never outlive the record. The workspace-cascade routing path
@@ -1313,6 +1358,8 @@ class CloudService(models.Model):
                     "for service id=%s", len(user_mcps), service.id,
                 )
         res = super().unlink()
+        for workspace, helm_namespace in quota_targets:
+            self._push_ns_quota(workspace, helm_namespace)
         for project in affected.exists():
             project._reconcile_agent_runtime_reach(old.get(project.id, set()))
         return res
