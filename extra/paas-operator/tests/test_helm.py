@@ -5,7 +5,13 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.services.helm import HelmException, HelmService, KubernetesService, validate_namespace
+from src.services.helm import (
+    HelmException,
+    HelmService,
+    KubernetesService,
+    build_managed_ns_labels,
+    validate_namespace,
+)
 
 
 class TestHelmService:
@@ -629,6 +635,21 @@ class TestKubernetesService:
                 storage_limit="20Gi",
             )
 
+    def test_build_managed_ns_labels_stamps_owner(self):
+        """#277：build_managed_ns_labels 帶 owner 參數時 stamp woow.tw/owner。"""
+        from src.services.helm import build_managed_ns_labels, OWNER_LABEL
+        labels = build_managed_ns_labels(workspace_id=7, owner="7")
+        assert labels[OWNER_LABEL] == "7"
+
+    @patch("src.services.helm.build_managed_ns_labels", wraps=build_managed_ns_labels)
+    @patch("subprocess.run")
+    def test_create_namespace_passes_owner(self, mock_run, mock_labels, k8s_service):
+        """#277：create_namespace 建 ns 時把 workspace_id 當 owner 傳入。"""
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
+        k8s_service.create_namespace("paas-ws-abc", "8", "8Gi", "100Gi", workspace_id=7)
+        # 建 ns 那次 build_managed_ns_labels 帶 owner="7"
+        assert any(c.kwargs.get("owner") == "7" for c in mock_labels.call_args_list)
+
     def test_build_limitrange_manifest_shape(self, k8s_service):
         """#278 A2：CS ns LimitRange manifest 形狀正確。"""
         m = k8s_service._build_limitrange_manifest("paas-ws-test-abc")
@@ -1034,6 +1055,7 @@ class TestTenantIsolationLabels:
             "paas-managed": "true",
             "paas.woowtech.io/env": "stg",
             "woow.tw/workspace-id": "7",
+            "woow.tw/owner": "7",  # #277：CS ns owner＝workspace_id
         }
 
 

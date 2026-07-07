@@ -163,6 +163,7 @@ REACH_WS_LABEL_PREFIX = "woow.tw/reach-ws-"
 # "1" silently matches nothing (deny-all), the hardest kind of gap to spot. Lock it so
 # the stamp side and the selector side reference one source (same rationale as the keys).
 REACH_WS_LABEL_VALUE = "true"
+OWNER_LABEL = "woow.tw/owner"  # #277：孤兒 ns 失去 Odoo record 後唯一的擁有者線索
 
 
 def reach_ws_label_key(workspace_id: int) -> str:
@@ -175,6 +176,7 @@ def reach_ws_label_key(workspace_id: int) -> str:
 def build_managed_ns_labels(
     workspace_id: Optional[int] = None,
     reach_workspace_ids: Optional[List[int]] = None,
+    owner: Optional[str] = None,
 ) -> Dict[str, str]:
     """Labels stamped on every platform-managed tenant namespace.
 
@@ -213,6 +215,10 @@ def build_managed_ns_labels(
         labels[WORKSPACE_ID_LABEL] = value
     for wid in reach_workspace_ids or ():
         labels[reach_ws_label_key(wid)] = REACH_WS_LABEL_VALUE
+    if owner is not None:
+        # owner 須為合法 label value（int-as-str 或 slug，無冒號）
+        validate_label_value(OWNER_LABEL, owner)
+        labels[OWNER_LABEL] = owner
     return labels
 
 
@@ -880,7 +886,10 @@ class KubernetesService:
             "kind": "Namespace",
             "metadata": {
                 "name": name,
-                "labels": build_managed_ns_labels(workspace_id=workspace_id),
+                "labels": build_managed_ns_labels(
+                    workspace_id=workspace_id,
+                    owner=str(workspace_id) if workspace_id is not None else None,
+                ),
             },
         }
 
