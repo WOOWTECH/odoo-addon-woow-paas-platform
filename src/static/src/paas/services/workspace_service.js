@@ -492,16 +492,15 @@ export const workspaceService = reactive({
      * @param {number} data.template_id - Smart Home template ID (required)
      * @param {number} data.plan_id - Subscription plan ID (required, must
      *   belong to the chosen template)
-     * @param {number} [data.ha_port=8123] - Home Assistant port
      * @returns {Promise<ApiResponse<Object>>}
      */
     async createSmartHome(workspaceId, data) {
         this.operationLoading.createSmartHome = true;
         try {
+            // ha_port 不帶：後端 model default=8123（issue #269，port 壓死不可編輯）
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes`, {
                 action: "create",
                 name: data.name,
-                ha_port: data.ha_port || 8123,
                 plan_id: data.plan_id,
                 template_id: data.template_id,
             });
