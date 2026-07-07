@@ -40,6 +40,7 @@ class LeftSet:
     access_policy_ids: set = field(default_factory=set)
     dns_record_ids: set = field(default_factory=set)
     subdomains: set = field(default_factory=set)
+    namespace_names: set = field(default_factory=set)  # #277：CS ∪ agent 的 live ns 名（差集鍵=ns 名本身）
 
 
 _EMPTY = (False, None, "")
@@ -87,6 +88,18 @@ def collect_left_set(env) -> LeftSet:
     ls.tunnel_ids |= _clean(sm.mapped('tunnel_id'))
     ls.subdomains |= _clean(sm.mapped('subdomain'))
 
+    # ── ns（#277）：cluster paas-ws-* 的 live 白名單 = CS 共用 ns ∪ agent per-project ns ──
+    # 漏 agent ns 會把所有活躍 agent ns 誤判孤兒（災難）；CS state='deleting' 排除（過渡態，
+    # 即將消失，否則誤判即將刪除的 ns 為活躍）；helm_namespace 非唯一（多 CS 共用）→ 入 set 去重。
+    cs_ns = env['woow_paas_platform.cloud_service'].sudo().search(
+        [('helm_namespace', '!=', False), ('state', '!=', 'deleting')]
+    )
+    ls.namespace_names |= _clean(cs_ns.mapped('helm_namespace'))
+    ag_ns = env['woow_paas_platform.agent_session'].sudo().search(
+        [('helm_namespace', '!=', False)]
+    )
+    ls.namespace_names |= _clean(ag_ns.mapped('helm_namespace'))
+
     return ls
 
 
@@ -123,6 +136,7 @@ _KIND_TO_LEFTSET_ATTR = {
     'tunnel': 'tunnel_ids',
     'access_app': 'access_app_ids',
     'access_policy': 'access_policy_ids',
+    'namespace': 'namespace_names',   # #277：差集鍵=ns 名本身（缺此對映則 compute_orphans skip+partial 靜默失效）
     # 'dns_record': 'dns_record_ids',  # 待 operator inventory 補 DNS 後啟用
 }
 
@@ -155,7 +169,11 @@ def compute_orphans(resources, left_set, *, partial=False) -> ReconcileResult:
                 kind=kind,
                 env_hint='unknown',
                 reconcilable=False,
-                reason='CF %s 不在 Odoo stored-id 左集；結構孤兒候選（未分類，人工審）' % kind,
+                reason=(
+                    'cluster ns 不在 Odoo live helm_namespace 左集；結構孤兒候選（未分類，人工審）'
+                    if kind == 'namespace'
+                    else 'CF %s 不在 Odoo stored-id 左集；結構孤兒候選（未分類，人工審）' % kind
+                ),
             ))
     return ReconcileResult(dry_run=True, partial=degraded, orphan_candidates=candidates)
 
@@ -197,6 +215,21 @@ def _is_reconcilable(candidate, env_hint, pinned_env):
     return True
 
 
+def _ns_env_hint(name: str) -> str:
+    """#277 ns 專用 env 歸屬（classify_env_hint 的 ``paas-{env}-{sa|sm|cs}`` 格式不認 ``paas-ws-*`` ns）。
+
+    鏡像 operator ``config._env_hint_from_prefix``：dev（test/dev）先判、再 stg、bare ``paas-ws-`` 落
+    prod（prod 部署的實際 prefix，含 agent 的 ``paas-ws-pa-*``）。與 operator 同源避免兩端 env 判定漂移。
+    """
+    if name.startswith('paas-ws-test') or name.startswith('paas-ws-dev'):
+        return 'dev'
+    if name.startswith('paas-ws-stg-'):
+        return 'stg'
+    if name.startswith('paas-ws-'):
+        return 'prod'
+    return 'unknown'
+
+
 def _run_tripwires(candidates, *, pinned_env, shared_tunnel_id):
     """三條 R5 tripwire（fail-loud）：任一 reconcilable=True 候選若違反 → raise（代表 classifier
     有 bug）。首版 reconcilable 恆 False → 正常不 fire；以合成注入測其真的會炸（非擺設）。
@@ -236,7 +269,13 @@ def classify_candidates(result, *, pinned_env, shared_tunnel_id):
     達成 skip，報表層須全列呈現、不得以 reconcilable 過濾 = no-silent-drop invariant）。
     """
     for c in result.orphan_candidates:
-        env_hint, is_cross = classify_env_hint(c.name, pinned_env)
+        if c.kind == 'namespace':
+            # #277 ns 名（paas-ws-*）不符 classify_env_hint 的 paas-{env}-{sa|sm|cs} 格式 → 另判；
+            # 走 _ns_env_hint 後 is_cross 由 env_hint 與 pinned_env 推得（與 classify_env_hint 對稱）。
+            env_hint = _ns_env_hint(c.name)
+            is_cross = env_hint != 'unknown' and env_hint != pinned_env
+        else:
+            env_hint, is_cross = classify_env_hint(c.name, pinned_env)
         c.env_hint = env_hint
         c.reconcilable = _is_reconcilable(c, env_hint, pinned_env)
 

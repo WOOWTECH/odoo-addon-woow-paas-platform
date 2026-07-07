@@ -88,7 +88,9 @@ def _release_exists(namespace: str, release: str) -> bool:
 
 
 def _ensure_namespace(
-    namespace: str, reach_workspace_ids: Optional[List[int]] = None
+    namespace: str,
+    reach_workspace_ids: Optional[List[int]] = None,
+    owner: Optional[str] = None,
 ) -> None:
     """Create/patch the project namespace carrying the ``paas-managed=true``
     label (idempotent apply).
@@ -112,7 +114,9 @@ def _ensure_namespace(
         "kind": "Namespace",
         "metadata": {
             "name": namespace,
-            "labels": build_managed_ns_labels(reach_workspace_ids=reach_workspace_ids),
+            "labels": build_managed_ns_labels(
+                reach_workspace_ids=reach_workspace_ids, owner=owner
+            ),
         },
     })
     # #278 B1：agent per-project ns ResourceQuota（堵零-quota cluster DoS 逃逸口）
@@ -392,7 +396,12 @@ def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundT
         # the private-registry pull secret (F-PILOT-4, symmetric with the
         # marketplace create_namespace_with_quota path) + provision the per-tenant
         # LLM credential Secret (F-PILOT-8) BEFORE install, then sign + install.
-        _ensure_namespace(namespace, reach_workspace_ids=request.project_workspace_ids)
+        # owner 用 project 身分（label value 安全字串，`p{id}` 避免純數字/冒號疑慮）
+        _ensure_namespace(
+            namespace,
+            reach_workspace_ids=request.project_workspace_ids,
+            owner="p%d" % request.project_id,
+        )
         k8s_service.ensure_registry_secret(namespace)
         _provision_llm_secret(namespace, release, request)
         skill_bundle_token = jwt_signer.sign_skill_bundle_token(

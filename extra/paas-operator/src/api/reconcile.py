@@ -13,6 +13,7 @@ reconcile 路徑對 PAAS_ENV **fail-CLOSED**（與 operator 既有 ns-label 的 
 env 未鎖定（不在 prod|stg）→ 503，不沿用 fail-open 預設，避免「漏設」偽裝成「成功讀 prod」
 而跨環境誤判孤兒（R3 env-pin）。
 """
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,10 +21,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from src.config import settings
 from src.models.schemas import CfResource, InventoryResponse, OrphanKind
 from src.services.cloudflare import CloudflareService
+from src.services.helm import KubernetesService
 
 logger = logging.getLogger(__name__)
 
 cloudflare_service = CloudflareService()
+# #277 唯讀反向發現右集：k8s managed ns。純唯讀 list（delete-gate 掃本檔禁破壞動詞，
+# ns 列舉一律走 helm.py 的 list_managed_namespaces，絕不在此 inline subprocess/kubectl）。
+k8s_service = KubernetesService()
 
 router = APIRouter(prefix="/api/reconcile", tags=["reconcile"])
 
@@ -94,6 +99,22 @@ async def get_inventory(env: str = Depends(require_pinned_env)) -> InventoryResp
             failed_kinds.append(kind.value)
             continue
         resources.extend(kind_resources)
+
+    # #277 ns leg：獨立於 CF 迴圈（k8s 是同步 subprocess，CF 是 async），但套同一個
+    # completeness-gate 語意——ns list-all 失敗 → 標 partial + failed_kinds 記 'namespace'，
+    # 該類缺漏不混入，絕不坍成 500 而丟掉已撈到的 CF 類。sync k8s 用 to_thread 併入 async。
+    try:
+        ns_names = await asyncio.to_thread(k8s_service.list_managed_namespaces)
+        resources.extend(
+            CfResource(id=n, name=n, kind=OrphanKind.NAMESPACE) for n in ns_names
+        )
+    except Exception as exc:  # noqa: BLE001 —— 與 CF 類同等 fail-SAFE、可觀測
+        logger.warning(
+            "reconcile inventory: namespace list-all 失敗（%s: %s）→ 標 partial、該類缺漏",
+            type(exc).__name__,
+            exc,
+        )
+        failed_kinds.append(OrphanKind.NAMESPACE.value)
 
     return InventoryResponse(
         paas_env=env,

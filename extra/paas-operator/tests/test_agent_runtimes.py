@@ -504,6 +504,14 @@ class TestSpawnOrAttach:
             assert labels.get("woow.tw/reach-ws-5") == "true"
 
     @patch("src.api.agent_runtimes.k8s_service")
+    def test_ensure_namespace_stamps_project_owner(self, mock_k8s):
+        """#277：agent ns owner 來源＝project（非 workspace），stamp woow.tw/owner。"""
+        from src.api.agent_runtimes import _ensure_namespace
+        _ensure_namespace("paas-ws-pa-abc", reach_workspace_ids=[1], owner="proj-42")
+        ns_manifest = mock_k8s.apply_manifest.call_args_list[0].args[0]
+        assert ns_manifest["metadata"]["labels"]["woow.tw/owner"] == "proj-42"
+
+    @patch("src.api.agent_runtimes.k8s_service")
     def test_ensure_namespace_applies_quota_and_limitrange(self, mock_k8s):
         """#278 B1+B2：_ensure_namespace 貼 Namespace 後，依序 apply ns 級
         ResourceQuota（堵零-quota 逃逸口）與 LimitRange（quota hard-limits 兜底）。"""

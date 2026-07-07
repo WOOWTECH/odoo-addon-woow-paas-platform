@@ -13,7 +13,7 @@ operator 只做**唯讀反向發現**：列帳號級 CF 資源（tunnels / acces
 
 設計 doc Phase A.1 / B.2、§機械守線。
 """
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,13 +26,17 @@ from src.services.cloudflare import CloudflareException
 def client_env_stg():
     """已認證 client + operator env-pin 鎖在 'stg'（reconcile 路徑 fail-closed 通過）。"""
     with patch("src.main.settings") as main_settings, \
-         patch("src.api.reconcile.settings") as rec_settings:
+         patch("src.api.reconcile.settings") as rec_settings, \
+         patch("src.api.reconcile.k8s_service") as rec_k8s:
         main_settings.api_key = "test-api-key"
         main_settings.namespace_prefix = "paas-ws-"
         rec_settings.paas_env = "stg"
         # operator 配置的 shared tunnel id（CLOUDFLARE_TUNNEL_ID）。inventory 回拋它當
         # Odoo reconciler 標 shared tunnel 本體 protected 的權威來源。
         rec_settings.cloudflare_tunnel_id = "55953bfa-1111-2222-3333-444455556666"
+        # #277 ns leg 預設回空（未 mock 到真 kubectl → 測試不確定性）；需要驗 ns 事實的
+        # 測試自行覆寫 rec_k8s.list_managed_namespaces。
+        rec_k8s.list_managed_namespaces = Mock(return_value=[])
         yield TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
@@ -121,6 +125,53 @@ class TestEnvPinFailClosed:
         mock_cf.list_all_tunnels.assert_not_called()
         mock_cf.list_all_access_apps.assert_not_called()
         mock_cf.list_all_reusable_policies.assert_not_called()
+
+
+class TestNamespaceLeg:
+    """#277 ns leg：唯讀列 paas-ws-* managed ns 併入右集當結構孤兒事實來源。"""
+
+    @patch("src.api.reconcile.cloudflare_service")
+    def test_inventory_includes_namespace_facts(self, mock_cf, client_env_stg):
+        """ns leg 把 list_managed_namespaces 的名字以 kind='namespace' 併入 resources，
+        id=name=ns 名（差集鍵非 UUID）；CF 全空時 partial 仍 False。"""
+        mock_cf.list_all_tunnels = AsyncMock(return_value=[])
+        mock_cf.list_all_access_apps = AsyncMock(return_value=[])
+        mock_cf.list_all_reusable_policies = AsyncMock(return_value=[])
+        import src.api.reconcile as rec
+        rec.k8s_service.list_managed_namespaces = Mock(
+            return_value=["paas-ws-abc", "paas-ws-pa-def"]
+        )
+
+        resp = client_env_stg.get("/api/reconcile/inventory")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        ns_facts = [x for x in data["resources"] if x["kind"] == "namespace"]
+        assert {x["id"] for x in ns_facts} == {"paas-ws-abc", "paas-ws-pa-def"}
+        assert all(x["name"] == x["id"] for x in ns_facts)
+        assert data["partial"] is False
+
+    @patch("src.api.reconcile.cloudflare_service")
+    def test_namespace_list_failure_marks_partial_keeps_cf(self, mock_cf, client_env_stg):
+        """ns list-all raise → failed_kinds 記 'namespace' + partial=True，
+        但已撈到的 CF 類不被丟掉（同 completeness-gate 語意，不坍成 500）。"""
+        mock_cf.list_all_tunnels = AsyncMock(return_value=[{"id": "t1", "name": "x"}])
+        mock_cf.list_all_access_apps = AsyncMock(return_value=[])
+        mock_cf.list_all_reusable_policies = AsyncMock(return_value=[])
+        import src.api.reconcile as rec
+        rec.k8s_service.list_managed_namespaces = Mock(
+            side_effect=RuntimeError("kubectl get ns 失敗")
+        )
+
+        resp = client_env_stg.get("/api/reconcile/inventory")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["partial"] is True
+        assert "namespace" in data["failed_kinds"]
+        # CF 類照常回、ns 類缺漏不混入
+        assert ("tunnel", "t1") in {(r["kind"], r["id"]) for r in data["resources"]}
+        assert not [r for r in data["resources"] if r["kind"] == "namespace"]
 
 
 class TestCompletenessGate:
@@ -255,10 +306,12 @@ class TestInventoryReportsSharedTunnelId:
         mock_cf.list_all_access_apps = AsyncMock(return_value=[])
         mock_cf.list_all_reusable_policies = AsyncMock(return_value=[])
         with patch("src.main.settings") as main_settings, \
-             patch("src.api.reconcile.settings") as rec_settings:
+             patch("src.api.reconcile.settings") as rec_settings, \
+             patch("src.api.reconcile.k8s_service") as rec_k8s:
             main_settings.api_key = "test-api-key"
             rec_settings.paas_env = "prod"
             rec_settings.cloudflare_tunnel_id = "328c3a28-9999-8888-7777-666655554444"
+            rec_k8s.list_managed_namespaces = Mock(return_value=[])
             client = TestClient(app, headers={"X-API-Key": "test-api-key"})
             resp = client.get("/api/reconcile/inventory")
         assert resp.status_code == 200

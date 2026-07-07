@@ -163,6 +163,7 @@ REACH_WS_LABEL_PREFIX = "woow.tw/reach-ws-"
 # "1" silently matches nothing (deny-all), the hardest kind of gap to spot. Lock it so
 # the stamp side and the selector side reference one source (same rationale as the keys).
 REACH_WS_LABEL_VALUE = "true"
+OWNER_LABEL = "woow.tw/owner"  # #277：孤兒 ns 失去 Odoo record 後唯一的擁有者線索
 
 
 def reach_ws_label_key(workspace_id: int) -> str:
@@ -175,6 +176,7 @@ def reach_ws_label_key(workspace_id: int) -> str:
 def build_managed_ns_labels(
     workspace_id: Optional[int] = None,
     reach_workspace_ids: Optional[List[int]] = None,
+    owner: Optional[str] = None,
 ) -> Dict[str, str]:
     """Labels stamped on every platform-managed tenant namespace.
 
@@ -213,6 +215,10 @@ def build_managed_ns_labels(
         labels[WORKSPACE_ID_LABEL] = value
     for wid in reach_workspace_ids or ():
         labels[reach_ws_label_key(wid)] = REACH_WS_LABEL_VALUE
+    if owner is not None:
+        # owner 須為合法 label value（int-as-str 或 slug，無冒號）
+        validate_label_value(OWNER_LABEL, owner)
+        labels[OWNER_LABEL] = owner
     return labels
 
 
@@ -880,7 +886,10 @@ class KubernetesService:
             "kind": "Namespace",
             "metadata": {
                 "name": name,
-                "labels": build_managed_ns_labels(workspace_id=workspace_id),
+                "labels": build_managed_ns_labels(
+                    workspace_id=workspace_id,
+                    owner=str(workspace_id) if workspace_id is not None else None,
+                ),
             },
         }
 
@@ -1526,6 +1535,31 @@ class KubernetesService:
         if not output:
             return []
         return output.split()
+
+    def list_managed_namespaces(self) -> List[str]:
+        """#277 唯讀反向發現：列本 env 帶 paas-managed=true 的 ns 名。
+
+        不呼 validate_namespace（反向發現全部、無單一輸入 ns 可驗），邊界靠 label
+        selector 圈定。純唯讀 get，供 reconcile inventory 當右集 ground truth。
+
+        **env-scoped**：prod/stg 共用同一 cluster，故 PAAS_ENV 有設時 AND
+        ``paas.woowtech.io/env=<env>``，只回自 env 的 ns（否則 stg inventory 會回
+        prod 的 paas-ws-* → 反向對帳把別 env 活躍 ns 灌成孤兒噪音）。ns 是 env-labeled
+        資源（與帳號級共用的 CF 資源不同），可在 source 分 env；未帶 env label 的舊 ns
+        被略過＝safe-miss（少報，非誤報）。
+        """
+        selector = "paas-managed=true"
+        if settings.paas_env:
+            selector += ",paas.woowtech.io/env=%s" % settings.paas_env
+        result = self._run_command([
+            "get", "ns", "-l", selector, "-o", "json",
+        ])
+        data = json.loads(result.stdout or "{}")
+        return [
+            item["metadata"]["name"]
+            for item in data.get("items", [])
+            if item.get("metadata", {}).get("name")
+        ]
 
     def label_pvcs(
         self, namespace: str, pvc_names: List[str], labels: Dict[str, str]

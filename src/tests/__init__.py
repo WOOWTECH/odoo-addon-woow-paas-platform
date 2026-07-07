@@ -34,6 +34,8 @@ from . import test_reconciler_classify
 from . import test_reconcile_report
 # feat: L4 reconciler Phase D 報表 endpoints — admin-only + no-silent-drop + reverify（TS-5 Slice C）
 from . import test_reconcile_report_endpoint
+# feat: #277 L4 reconciler namespace 左集差集（CS∪agent union + kind 對映 + ns env 分類）
+from . import test_reconciler_ns
 # feat: L3 deploy_env CF naming env token（config_parameter 接線 + 卸載清理）
 from . import test_deploy_env_config
 from . import test_mcp_integration
