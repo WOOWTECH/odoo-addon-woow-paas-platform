@@ -169,7 +169,11 @@ def compute_orphans(resources, left_set, *, partial=False) -> ReconcileResult:
                 kind=kind,
                 env_hint='unknown',
                 reconcilable=False,
-                reason='CF %s 不在 Odoo stored-id 左集；結構孤兒候選（未分類，人工審）' % kind,
+                reason=(
+                    'cluster ns 不在 Odoo live helm_namespace 左集；結構孤兒候選（未分類，人工審）'
+                    if kind == 'namespace'
+                    else 'CF %s 不在 Odoo stored-id 左集；結構孤兒候選（未分類，人工審）' % kind
+                ),
             ))
     return ReconcileResult(dry_run=True, partial=degraded, orphan_candidates=candidates)
 

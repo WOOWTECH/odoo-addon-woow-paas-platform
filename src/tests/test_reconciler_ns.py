@@ -124,6 +124,19 @@ class TestNamespaceLeftSetUnion(TransactionCase):
         self.assertNotIn(False, ls.namespace_names)
         self.assertNotIn('', ls.namespace_names)
 
+    def test_agent_empty_helm_namespace_not_in_left_set(self):
+        """spawning agent（helm_namespace 為 False）不入左集。
+
+        agent leg 的顯式守護（CS 側已有 test_empty_helm_namespace_not_in_left_set）：
+        _clean 對 CS/agent 兩表對稱，此測試鎖住 agent 半建 ns 不誤當 live、亦不因 leg
+        漏蒐而讓活躍 agent ns 判孤兒。"""
+        self.Agent.create({
+            'project_id': self.project.id, 'state': 'spawning',
+        })
+        ls = collect_left_set(self.env)
+        self.assertNotIn(False, ls.namespace_names)
+        self.assertNotIn('', ls.namespace_names)
+
 
 @tagged('post_install', '-at_install')
 class TestNamespaceEnvHint(TransactionCase):
