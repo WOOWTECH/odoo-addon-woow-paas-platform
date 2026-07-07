@@ -650,6 +650,19 @@ class TestKubernetesService:
         assert len(apply_calls) >= 3
 
     @patch("subprocess.run")
+    def test_update_namespace_quota_applies_full_hard_map(self, mock_run, k8s_service):
+        """#278 A1：整組 hard overwrite ns ResourceQuota 會 apply 一次。"""
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
+        k8s_service.update_namespace_quota("paas-ws-test-abc", "12", "12Gi", "150Gi")
+        apply_calls = [c.args[0] for c in mock_run.call_args_list if "apply" in c.args[0]]
+        assert apply_calls, "should apply the quota"
+
+    def test_update_namespace_quota_rejects_foreign_ns(self, k8s_service):
+        """#278 A1：fail-closed prefix 守衛，非 paas ns 直接 raise。"""
+        with pytest.raises(ValueError):
+            k8s_service.update_namespace_quota("not-a-paas-ns", "8", "8Gi", "100Gi")
+
+    @patch("subprocess.run")
     def test_apply_manifest(self, mock_run, k8s_service):
         """Test apply a K8s manifest via kubectl apply."""
         mock_run.return_value = Mock(

@@ -967,6 +967,34 @@ class KubernetesService:
             }]},
         }
 
+    def update_namespace_quota(self, name: str, cpu_limit: str,
+                               memory_limit: str, storage_limit: str) -> Dict[str, str]:
+        """#278 A1：整組 hard overwrite ns ResourceQuota（不動 ns/NP/secret）。
+        apply 完整 6-key hard map（含 pvc=10），無 stale key。"""
+        validate_namespace(name)
+        import yaml
+        quota_manifest = {
+            "apiVersion": "v1",
+            "kind": "ResourceQuota",
+            "metadata": {"name": f"{name}-quota", "namespace": name},
+            "spec": {"hard": {
+                "requests.cpu": cpu_limit,
+                "requests.memory": memory_limit,
+                "limits.cpu": cpu_limit,
+                "limits.memory": memory_limit,
+                "persistentvolumeclaims": "10",
+                "requests.storage": storage_limit,
+            }},
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(quota_manifest, f)
+            quota_file = f.name
+        try:
+            self._run_command(["apply", "-f", quota_file])
+        finally:
+            Path(quota_file).unlink(missing_ok=True)
+        return {"message": f"Namespace {name} quota updated"}
+
     def _apply_baseline_netpol(self, namespace: str, workspace_id: int) -> None:
         """#279 O4 leg-2: apply the CloudService-namespace baseline NetworkPolicy bundle
         so tenant isolation holds once #280 removes the chart's from-less allows.

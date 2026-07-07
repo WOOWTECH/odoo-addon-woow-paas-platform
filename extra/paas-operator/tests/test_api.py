@@ -584,6 +584,28 @@ class TestNamespaceEndpoints:
         assert response.status_code == 400
 
     @patch("src.api.namespaces.k8s_service")
+    def test_put_quota_ok(self, mock_k8s, client):
+        """#278 A1：PUT quota 端點正常轉呼 update_namespace_quota。"""
+        mock_k8s.update_namespace_quota.return_value = {"message": "ok"}
+        r = client.put(
+            "/api/namespaces/paas-ws-test-abc/quota",
+            json={"cpu_limit": "12", "memory_limit": "12Gi", "storage_limit": "150Gi"},
+        )
+        assert r.status_code == 200
+        mock_k8s.update_namespace_quota.assert_called_once_with(
+            "paas-ws-test-abc", "12", "12Gi", "150Gi")
+
+    @patch("src.api.namespaces.k8s_service")
+    def test_put_quota_bad_ns_400(self, mock_k8s, client):
+        """#278 A1：prefix 守衛 raise ValueError → 400。"""
+        mock_k8s.update_namespace_quota.side_effect = ValueError("bad prefix")
+        r = client.put(
+            "/api/namespaces/xxx/quota",
+            json={"cpu_limit": "8", "memory_limit": "8Gi", "storage_limit": "100Gi"},
+        )
+        assert r.status_code == 400
+
+    @patch("src.api.namespaces.k8s_service")
     def test_backfill_baseline_netpol(self, mock_k8s, client):
         """#279 P5: baseline-netpol backfill applies NP bundle + re-stamps labels."""
         mock_k8s.stamp_managed_ns_labels.return_value = {

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 from src.models.schemas import (
     BaselineNetpolBackfillRequest,
     NamespaceCreateRequest,
+    NamespaceQuotaUpdateRequest,
 )
 from src.services.helm import KubernetesService
 
@@ -57,6 +58,28 @@ async def create_namespace(request: NamespaceCreateRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create namespace: {str(e)}",
+        )
+
+
+@router.put(
+    "/{name}/quota",
+    response_model=Dict[str, str],
+    summary="#278 A1 — 整組 hard overwrite ns ResourceQuota",
+)
+async def update_namespace_quota(name: str, request: NamespaceQuotaUpdateRequest):
+    """整組覆寫既有 ns 的 ResourceQuota（值由 Odoo 依存活 service 集算好傳入）。"""
+    try:
+        result = k8s_service.update_namespace_quota(
+            name, request.cpu_limit, request.memory_limit, request.storage_limit)
+        logger.info(f"Updated quota for namespace {name}")
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update quota for {name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update quota: {str(e)}",
         )
 
 

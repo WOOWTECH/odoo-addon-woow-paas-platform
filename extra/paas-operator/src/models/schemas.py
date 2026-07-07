@@ -106,6 +106,14 @@ class NamespaceCreateRequest(BaseModel):
     )
 
 
+class NamespaceQuotaUpdateRequest(BaseModel):
+    """#278 A1：整組覆寫 ns ResourceQuota（值由 Odoo 依存活 service 集算好傳入）。"""
+
+    cpu_limit: str = Field(..., description="requests.cpu / limits.cpu")
+    memory_limit: str = Field(..., description="requests.memory / limits.memory, e.g. 8Gi")
+    storage_limit: str = Field(..., description="requests.storage, e.g. 100Gi")
+
+
 class BaselineNetpolBackfillRequest(BaseModel):
     """#279 P5 backfill: re-apply the baseline NP bundle + re-stamp managed labels on
     a PRE-EXISTING CloudService namespace created before O4/O1."""
