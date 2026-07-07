@@ -665,6 +665,16 @@ class TestKubernetesService:
         argv = mock_run.call_args_list[0].args[0]
         assert "-l" in argv and "paas-managed=true" in argv
 
+    @patch("subprocess.run")
+    def test_list_managed_namespaces_scopes_by_env(self, mock_run, k8s_service, monkeypatch):
+        """#277：PAAS_ENV 有設時 selector AND paas.woowtech.io/env（不回別 env 的 ns，
+        避免共叢集 stg inventory 把 prod 活躍 ns 灌成孤兒噪音）。"""
+        monkeypatch.setattr("src.config.settings.paas_env", "stg")
+        mock_run.return_value = Mock(returncode=0, stderr="", stdout='{"items": []}')
+        k8s_service.list_managed_namespaces()
+        argv = mock_run.call_args_list[0].args[0]
+        assert "paas-managed=true,paas.woowtech.io/env=stg" in argv
+
     def test_build_limitrange_manifest_shape(self, k8s_service):
         """#278 A2：CS ns LimitRange manifest 形狀正確。"""
         m = k8s_service._build_limitrange_manifest("paas-ws-test-abc")

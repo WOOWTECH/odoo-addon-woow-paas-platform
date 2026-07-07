@@ -1537,13 +1537,22 @@ class KubernetesService:
         return output.split()
 
     def list_managed_namespaces(self) -> List[str]:
-        """#277 唯讀反向發現：列所有帶 paas-managed=true 的 ns 名。
+        """#277 唯讀反向發現：列本 env 帶 paas-managed=true 的 ns 名。
 
         不呼 validate_namespace（反向發現全部、無單一輸入 ns 可驗），邊界靠 label
         selector 圈定。純唯讀 get，供 reconcile inventory 當右集 ground truth。
+
+        **env-scoped**：prod/stg 共用同一 cluster，故 PAAS_ENV 有設時 AND
+        ``paas.woowtech.io/env=<env>``，只回自 env 的 ns（否則 stg inventory 會回
+        prod 的 paas-ws-* → 反向對帳把別 env 活躍 ns 灌成孤兒噪音）。ns 是 env-labeled
+        資源（與帳號級共用的 CF 資源不同），可在 source 分 env；未帶 env label 的舊 ns
+        被略過＝safe-miss（少報，非誤報）。
         """
+        selector = "paas-managed=true"
+        if settings.paas_env:
+            selector += ",paas.woowtech.io/env=%s" % settings.paas_env
         result = self._run_command([
-            "get", "ns", "-l", "paas-managed=true", "-o", "json",
+            "get", "ns", "-l", selector, "-o", "json",
         ])
         data = json.loads(result.stdout or "{}")
         return [
