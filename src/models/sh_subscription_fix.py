@@ -41,6 +41,45 @@ class ShSubscriptionFix(models.Model):
         remaining_days = max(0, (self.sh_end_date - today).days)
         return round(self.sh_plan_price * remaining_days / total_days, 2)
 
+    def _settle_on_entity_delete(self, reason='Service deleted'):
+        """Cancel this subscription and prorata-refund the unused paid cycle
+        to the wallet when the owning entity (CloudService/SmartHome/SA) is
+        deleted (issue #318).
+
+        The entity↔subscription FK is ``ondelete='set null'`` (protects only
+        the reverse direction), so deleting the entity never touches the sub —
+        leaving an ``in_progress`` orphan the billing cron keeps charging.
+
+        Idempotent: only an ``in_progress`` sub is settled. The
+        lifecycle-cleanup path (sub already cancelled, cleanup fired after
+        ``cleanup_months``) and dunning-cancelled subs are ``!= in_progress``
+        → no-op returning ``0.0`` (no double refund). Refund uses the SSOT
+        ``_compute_unused_refund`` (trial → 0). Credited as a ``refund``-typed
+        wallet transaction so reconciliation can tell it from a top-up.
+
+        Returns the amount actually credited (0.0 when trial / already-settled
+        / no partner on the sub — ``sh_partner_id`` is not required upstream).
+        The sub is always cancelled to stop billing even when nothing is
+        credited.
+        """
+        self.ensure_one()
+        if self.state != 'in_progress':
+            return 0.0
+        refund = self._compute_unused_refund()
+        partner = self.sh_partner_id
+        credited = 0.0
+        if refund > 0 and partner:
+            partner.sudo().refund_wallet_points(
+                amount=refund,
+                description='%s refund: %s' % (
+                    reason, self.sh_subscription_plan_id.name),
+                subscription=self,
+            )
+            partner.invalidate_recordset(['wallet_balance'])
+            credited = refund
+        self.sudo().write({'state': 'cancel', 'sh_reason': reason})
+        return credited
+
     @api.model
     def _sh_create_auto_invoice(self):
         """Daily auto-invoice cron with T19 dunning semantics.

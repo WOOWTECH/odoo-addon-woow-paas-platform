@@ -188,3 +188,4 @@ from . import test_project_detail_deployed_flag
 from . import test_show_projects_flag
 # feat: #318 CS 刪除/換 plan 訂閱聯動 — refund 型退點 API + 刪除結算 + 換 plan 退點正名
 from . import test_refund_wallet_points
+from . import test_service_delete_subscription
