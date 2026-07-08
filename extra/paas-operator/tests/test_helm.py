@@ -1,6 +1,7 @@
 """Tests for Helm service."""
 import json
 import subprocess
+import sys
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -119,6 +120,54 @@ class TestHelmService:
         assert result.name == "test-release"
         assert result.namespace == "paas-ws-test"
         assert result.chart == "nginx"
+
+    @patch("subprocess.run")
+    def test_install_adds_pvc_keep_post_renderer(self, mock_run, helm_service):
+        """#317: install must run the PVC-keep post-renderer so chart-owned PVCs
+        get helm.sh/resource-policy: keep baked into the STORED manifest (helm
+        uninstall reads the manifest, not live objects — so post-teardown labeling
+        alone can't save chart-owned PVC data). Invoked via the operator's own
+        python + --post-renderer-args so PyYAML is always present."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "r", "namespace": "paas-ws-test",
+                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "chart": {"metadata": {"name": "n8n", "appVersion": "1.0.0"}},
+            }),
+            stderr="",
+        )
+        helm_service.install(namespace="paas-ws-test", name="r", chart="n8n")
+        cmd = mock_run.call_args[0][0]
+        assert "--post-renderer" in cmd
+        assert cmd[cmd.index("--post-renderer") + 1] == sys.executable
+        assert "--post-renderer-args" in cmd
+        assert cmd[cmd.index("--post-renderer-args") + 1].endswith(
+            "pvc_keep_post_renderer.py"
+        )
+
+    @patch("subprocess.run")
+    def test_upgrade_adds_pvc_keep_post_renderer(self, mock_run, helm_service):
+        """#317: upgrade must ALSO run the post-renderer — it rewrites the stored
+        manifest, so without it an upgrade drops keep and the next uninstall
+        deletes the PVC (regression). This is also the backfill path for existing
+        releases."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "name": "r", "namespace": "paas-ws-test",
+                "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+                "chart": {"metadata": {"name": "n8n", "appVersion": "1.0.0"}},
+            }),
+            stderr="",
+        )
+        helm_service.upgrade(namespace="paas-ws-test", name="r", chart="n8n")
+        cmd = mock_run.call_args[0][0]
+        assert "--post-renderer" in cmd
+        assert cmd[cmd.index("--post-renderer") + 1] == sys.executable
+        assert cmd[cmd.index("--post-renderer-args") + 1].endswith(
+            "pvc_keep_post_renderer.py"
+        )
 
     @patch("subprocess.run")
     def test_install_invalid_namespace(self, mock_run, helm_service):
