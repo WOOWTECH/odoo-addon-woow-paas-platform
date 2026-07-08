@@ -47,6 +47,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **IMPORTANT**: kubectl 請明確指定 `--context`。
 
+### ⛔ 鐵律：woow-k3s 是共用叢集，本 repo（paas 平台開發/維運）的 kubectl 只能操作以下 namespace
+
+> 適用範圍＝**paas 平台相關的開發與維運**（本 repo 及其派出的 agent/workflow）。叢集**全域**維運屬 `woow-machines-operator` agent 職責（可完整操作所有 ns）——需要動非下表 namespace 時，透過該 agent / 叢集運維處理，不要在本 repo 事務中自己動手。
+
+| Namespace | 用途 |
+| --- | --- |
+| `paas-ws-*` | prod 環境中的平台租戶 |
+| `paas-ws-stg-*` | stg 環境中的平台租戶 |
+| `paas-system` | prod 環境中的 paas 平台系統 |
+| `paas-stg-system` | stg 環境中的 paas 平台系統 |
+| `paas-cloudflare-system` | prod 環境中的 cloudflare tunnel（主要用在 ingress） |
+| `paas-stg-cloudflare-system` | stg 環境中的 cloudflare tunnel（主要用在 ingress） |
+| `dev-sandbox-*` | 開發時的 dev sandbox |
+
+其餘 namespace 屬叢集上其他部署（客戶實例、gitea、longhorn-system 等），**絕對不碰**。跨 ns 唯讀盤點（get/list）僅供歸屬分流——非上述 namespace 的資源只列不動，嚴禁任何寫入/刪除；叢集級設定（default StorageClass、Longhorn settings 等）影響全叢集，動之前須與叢集運維協調。（實例教訓：2026-07-08 盤點 48 顆 Released PV，其中 ~39 顆屬其他部署，差點被當平台殘留清理——見 issue #319。）
+
 ## git
 
 PR / Issue / Comment 描述一律使用 zh-tw 繁體中文。
