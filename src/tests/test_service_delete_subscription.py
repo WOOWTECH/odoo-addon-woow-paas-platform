@@ -128,3 +128,59 @@ class TestSettleOnEntityDelete(_DeleteFixture):
 
         self.assertEqual(sub.state, 'cancel')
         self.assertEqual(credited, 0.0)
+
+
+class TestCloudServiceUnlinkSettlesSubscription(_DeleteFixture):
+
+    def test_unlink_cancels_and_refunds_paid_sub(self):
+        svc = self._new_service()
+        sub = self._seed_sub(svc, self.plan_paid)
+        partner = sub.sh_partner_id
+        self.assertEqual(sub.state, 'in_progress')
+
+        svc.unlink()
+
+        self.assertFalse(svc.exists())
+        self.assertTrue(sub.exists())            # 訂閱 record 存活
+        self.assertEqual(sub.state, 'cancel')    # 已停止計費
+        txn = self._refund_txns(partner)
+        self.assertEqual(len(txn), 1)
+        self.assertEqual(txn.amount, 300.0)
+        self.assertEqual(txn.subscription_id.id, sub.id)
+
+    def test_unlink_trial_sub_cancelled_no_refund(self):
+        svc = self._new_service()
+        sub = self._seed_sub(svc, self.plan_trial)
+        partner = sub.sh_partner_id
+
+        svc.unlink()
+
+        self.assertEqual(sub.state, 'cancel')
+        self.assertFalse(self._refund_txns(partner))
+
+    def test_unlink_service_without_subscription_is_clean(self):
+        svc = self._new_service()
+        self.assertFalse(svc.subscription_id)
+        svc.unlink()
+        self.assertFalse(svc.exists())
+
+    def test_helm_failure_aborts_delete_and_preserves_subscription(self):
+        """原子性：helm fail-loud（_cleanup_helm→False）時 unlink raise，
+        訂閱維持 in_progress、無退點、record 保留。"""
+        from odoo.exceptions import UserError
+        svc = self.CloudService.create({
+            'name': 'CS Del Helm', 'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_release_name': 'svc-deadbeef',
+            'helm_namespace': 'paas-ws-stg-cafef00d',
+        })
+        sub = self._seed_sub(svc, self.plan_paid)
+        partner = sub.sh_partner_id
+
+        with patch.object(type(svc), '_cleanup_helm', return_value=False):
+            with self.assertRaises(UserError):
+                svc.unlink()
+
+        self.assertTrue(svc.exists())
+        self.assertEqual(sub.state, 'in_progress')
+        self.assertFalse(self._refund_txns(partner))

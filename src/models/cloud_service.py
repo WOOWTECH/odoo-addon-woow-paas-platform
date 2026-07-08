@@ -1322,6 +1322,14 @@ class CloudService(models.Model):
         workspaces only reachable via this service — so each is reconciled as a pure
         revoke (best-effort; the enforcing cron is authoritative).
         """
+        # #318: 在 super().unlink() 前捕獲仍 in_progress 的關聯訂閱。
+        # subscription_id 是 ondelete='set null'（只保護反向），刪 service
+        # 不會動訂閱 → 孤兒訂閱會被計費 cron 續扣。super().unlink() 後
+        # record 離場但訂閱 record 存活，逐一結算（取消＋按比例退點）。
+        # 僅結算 in_progress；lifecycle-cleanup / dunning 已取消者跳過。
+        subs_to_settle = self.sudo().mapped('subscription_id').filtered(
+            lambda s: s.state == 'in_progress'
+        )
         affected = self.mapped('project_ids')
         old = {p.id: set(p.workspace_ids.ids) for p in affected}
         # #278 A1：pre-delete 捕獲 (workspace, ns)，super().unlink() 後這些
@@ -1358,6 +1366,12 @@ class CloudService(models.Model):
                     "for service id=%s", len(user_mcps), service.id,
                 )
         res = super().unlink()
+        # #318: teardown 成功後才結算訂閱（取消＋按比例退點）。放在
+        # super().unlink() 之後，故 helm fail-loud raise 時不會執行（全交易
+        # rollback、record 保留、訂閱不動）。訂閱是獨立 record，不隨 service
+        # 刪除而消失。
+        for sub in subs_to_settle:
+            sub._settle_on_entity_delete(reason='Service deleted')
         for workspace, helm_namespace in quota_targets:
             self._push_ns_quota(workspace, helm_namespace)
         for project in affected.exists():
