@@ -1006,11 +1006,13 @@ class PaasController(Controller):
             old_sub.sh_plan_price, refund, partner.id,
         )
 
-        # Refund unused points
+        # Refund unused points (#318: refund-typed so reconciliation can tell
+        # it from a top-up; carries subscription_id for audit trail)
         if refund > 0:
-            partner.sudo().add_wallet_points(
+            partner.sudo().refund_wallet_points(
                 amount=refund,
                 description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
+                subscription=old_sub,
             )
             partner.invalidate_recordset(['wallet_balance'])
             _logger.info(

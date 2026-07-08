@@ -342,10 +342,12 @@ class SecurityAccessController(Controller):
             # sudo: crediting wallet points writes loyalty.card.points which
             # portal users can't write; same narrow widening as the role-gated
             # cascade above (mirrors smart_home.api_smarthome_change_plan).
-            partner.sudo().add_wallet_points(
+            # #318: refund-typed + subscription link for reconciliation.
+            partner.sudo().refund_wallet_points(
                 amount=refund,
                 description="Plan change refund: %s"
                             % old_sub.sh_subscription_plan_id.name,
+                subscription=old_sub,
             )
             partner.invalidate_recordset(['wallet_balance'])
         # sudo: closing the old subscription needs sh.subscription.subscription
