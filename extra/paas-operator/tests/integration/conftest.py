@@ -108,10 +108,18 @@ def app_client():
     api_key = os.environ.get("API_KEY") or "integration-test-key"
     os.environ["API_KEY"] = api_key
     os.environ.setdefault("NAMESPACE_PREFIX", "paas-ws-test-op-")
+    # #279 F6 env guard: an unset PAAS_ENV aborts boot on the shared prod/stg
+    # cluster (cross-env label collision). Integration tests run against a
+    # single-env dev/local cluster (docker-desktop), so opt into the documented
+    # dev/local bypass rather than pinning a fake PAAS_ENV. The test prefix
+    # (paas-ws-test-op-) names no real env, so the bypass is accepted. Forced onto
+    # the settings singleton too (it may have been read at import, like api_key).
+    os.environ.setdefault("ALLOW_UNSET_PAAS_ENV", "true")
 
     from src.config import settings
     from src.main import app
     settings.api_key = api_key
+    settings.allow_unset_paas_env = True
     with TestClient(app, headers={"X-API-Key": api_key}) as client:
         yield client
 
