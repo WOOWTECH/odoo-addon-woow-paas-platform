@@ -248,6 +248,7 @@ class HAIntegrationController(Controller):
             'tunnel_token': home.tunnel_token or '',
             'tunnel_id': home.tunnel_id or '',
             'subdomain': fqdn,
+            'mcp': home._get_mcp_integration(),
         })
 
     # ==================== Status Refresh ====================

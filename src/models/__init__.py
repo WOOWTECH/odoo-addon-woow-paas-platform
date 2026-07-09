@@ -5,6 +5,7 @@ from . import res_partner_invoice
 from . import sh_subscription_fix
 from . import sh_subscription_warning_field
 from . import sh_subscription_plan_sa_quota
+from . import sh_subscription_plan_sh_mcp
 from . import subscription_lifecycle_mixin
 from . import subscription_lifecycle_cron
 from . import low_balance_warning_cron

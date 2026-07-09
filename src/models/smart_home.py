@@ -317,6 +317,19 @@ class SmartHome(models.Model):
                 self.name, e.message,
             )
 
+    def _get_mcp_integration(self):
+        """Return the MCP integration string granted by the active plan, or ''.
+
+        Mirrors _get_subscription_info's ``self.sudo().subscription_id`` read:
+        subscription_id is ACL-restricted, so a non-sudo caller (portal user)
+        would hit AccessError without the sudo. Derivation follows the SA
+        pattern (sub.sh_subscription_plan_id.<field>).
+        """
+        self.ensure_one()
+        sub = self.sudo().subscription_id
+        plan = sub.sh_subscription_plan_id if sub else False
+        return (plan.mcp_integration or '') if plan else ''
+
     def to_dict(self):
         """Serialize smart home data for API responses."""
         self.ensure_one()
@@ -338,6 +351,7 @@ class SmartHome(models.Model):
             'deployed_at': self.deployed_at.isoformat() if self.deployed_at else '',
             'created_at': self.create_date.isoformat() if self.create_date else '',
             'subscription': self._get_subscription_info(),
+            'mcp': self._get_mcp_integration(),
         }
 
     # ------------------------------------------------------------------ #

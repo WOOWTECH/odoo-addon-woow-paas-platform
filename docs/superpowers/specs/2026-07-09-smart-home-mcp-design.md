@@ -92,7 +92,8 @@ class ShSubscriptionPlanShMcp(models.Model):
 def _get_mcp_integration(self):
     """Return the MCP integration string granted by the active plan, or ''."""
     self.ensure_one()
-    plan = self.subscription_id.sh_subscription_plan_id if self.subscription_id else False
+    sub = self.sudo().subscription_id
+    plan = sub.sh_subscription_plan_id if sub else False
     return (plan.mcp_integration or '') if plan else ''
 
 # in to_dict():
@@ -100,6 +101,7 @@ def _get_mcp_integration(self):
 ```
 
 - 推導路徑沿用 SA 既有 pattern（`sub.sh_subscription_plan_id.<field>`，見 `security_access.py` 的 `sa_max_routes` 用法）。
+- **`self.sudo().subscription_id`**：`subscription_id` 受 `ir.model.access` 限制，非 sudo 的 `to_dict()` 呼叫者（portal user）會 `AccessError`；沿用同一 `to_dict()` 內既有 sibling `subscription_lifecycle_mixin._get_subscription_info`（`self.sudo().subscription_id`）的作法。
 - 無訂閱／非 MCP 檔 → `""`。
 - **`mcp` 同時掛在 component 兩個可能的同步入口**，消除「掛哪」的相依（component 無論走哪條都拿得到、spec 不依賴另一 repo 現況）：
   1. `smart_home.to_dict()`（home detail，如上）。
