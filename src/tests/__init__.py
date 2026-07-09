@@ -192,3 +192,4 @@ from . import test_refund_wallet_points
 from . import test_service_delete_subscription
 # fix: #324 計費雙缺口 — 上游兩支 wallet cron neutralize + 退點 payment gate
 from . import test_wallet_cron_neutralized
+from . import test_refund_requires_payment

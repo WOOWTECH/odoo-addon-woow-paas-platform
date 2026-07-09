@@ -228,6 +228,13 @@ class TestChangePlanRefundIsRefundTyped(TransactionCase):
         partner = ws.owner_id.partner_id
         self.service._create_and_confirm_subscription(partner, self.plan_a)
         self.partner = partner
+        # #324：換 plan 退點也走 payment gate，fixture 補首購真扣款
+        sub = self.service.sudo().subscription_id
+        self.WalletTx.create({
+            'partner_id': partner.id, 'transaction_type': 'deduct',
+            'amount': -sub.sh_plan_price, 'subscription_id': sub.id,
+            'state': 'done',
+        })
 
     def _make_plan(self, name, price):
         plan = self.Plan.create({

@@ -22,13 +22,39 @@ class ShSubscriptionFix(models.Model):
     """
     _inherit = 'sh.subscription.subscription'
 
+    def _has_paid_current_cycle(self):
+        """本訂閱是否有過成功扣款（``done`` 的 ``deduct`` 交易）。
+
+        真扣款（``_pay_from_wallet`` → ``deduct_wallet_points``）建的
+        wallet.transaction 預設 ``state='done'``；#324 類「付款靜默失敗」
+        訂閱只有 ``state='failed'`` 的 deduct。以此區分「真付過」與
+        「從未付過」。
+
+        註：本訂閱的計費視窗 [sh_start_date, sh_end_date] 於建立時一次寫定、
+        不隨週期在原地推進（續約另建新 sub），故「本訂閱付過」等價於「這個
+        退點視窗付過」；過期視窗另由 ``_prorata_unused_refund`` 的
+        ``max(0, end - today)`` clamp 歸零。NewId（in-memory 記錄）無
+        persisted id，直接回 False（純公式路徑不經此 gate）。
+        """
+        self.ensure_one()
+        if not isinstance(self.id, int):
+            return False
+        return bool(self.env['wallet.transaction'].sudo().search_count([
+            ('subscription_id', '=', self.id),
+            ('transaction_type', '=', 'deduct'),
+            ('state', '=', 'done'),
+        ]))
+
     def _compute_unused_refund(self):
         """Pro-rata refund for the unused portion of the current paid cycle.
 
-        #324 refactor：純比例公式已抽到 ``_prorata_unused_refund``；本方法
-        暫時直接委派（行為與抽取前完全一致，Task 3 才在此加 payment gate）。
+        #324 part (b)：退點前提為「本訂閱有成功扣款」。無成功付款（never-paid
+        或僅 failed deduct）→ 退 0，對齊 trial→0 語意，堵住「付款靜默失敗→
+        刪服務退未賺得點」的套利。有成功付款才套用 ``_prorata_unused_refund``。
         """
         self.ensure_one()
+        if not self._has_paid_current_cycle():
+            return 0
         return self._prorata_unused_refund()
 
     def _prorata_unused_refund(self):
