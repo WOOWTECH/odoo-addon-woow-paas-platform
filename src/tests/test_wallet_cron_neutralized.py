@@ -115,7 +115,11 @@ class TestSoleBillingPathChargesOncePerCycle(_WalletCronFixture):
         done1 = self.WalletTx.search([
             ('subscription_id', '=', sub.id),
             ('transaction_type', '=', 'deduct'), ('state', '=', 'done')])
-        self.assertTrue(done1, "有餘額應成功扣款一次（done deduct）")
+        # pin 到恰 1：#324 本質是重複扣款，若單一 tick 內開兩張 invoice 各扣一次
+        # （invoice reuse 回歸）done1 會是 2，assertTrue 抓不到——必須 assertEqual。
+        self.assertEqual(
+            len(done1), 1,
+            "有餘額應成功扣款恰一次（done deduct），單 tick 不得重複扣")
         self.assertGreater(
             sub.sh_date_of_next_payment, original_next,
             "成功扣款後 next_payment 必須前進一個週期")

@@ -178,6 +178,12 @@ class TestChangePlanRefund(TransactionCase):
             'sh_recurrency': 1,
             'state': 'in_progress',
         })
+        # #324：seed 一筆 done deduct 讓 payment gate 通過，使本測試回歸為驗證
+        # trial 日期 clamp（BUG-5：today < sh_start_date → 0）而非被 gate 短路。
+        self.env['wallet.transaction'].sudo().create({
+            'partner_id': self.partner.id, 'transaction_type': 'deduct',
+            'amount': -100.0, 'subscription_id': sub.id, 'state': 'done',
+        })
         svc.subscription_id = sub.id
         plan_other = self.env['sh.subscription.plan'].sudo().search([], limit=1)
         wiz = self.env['woow_paas_platform.change_plan_wizard'].sudo().create({
