@@ -25,11 +25,19 @@ class ShSubscriptionFix(models.Model):
     def _compute_unused_refund(self):
         """Pro-rata refund for the unused portion of the current paid cycle.
 
-        Returns 0 when the customer has not yet paid for the current cycle
-        (today < sh_start_date — still in trial, or sub not yet started).
-        Without this guard the formula
-        ``price * (end - today) / (end - start)`` overshoots when today is
-        before start, producing refund > price (BUG-5).
+        #324 refactor：純比例公式已抽到 ``_prorata_unused_refund``；本方法
+        暫時直接委派（行為與抽取前完全一致，Task 3 才在此加 payment gate）。
+        """
+        self.ensure_one()
+        return self._prorata_unused_refund()
+
+    def _prorata_unused_refund(self):
+        """純比例退點公式（不驗付款，只算 today 落在 [start, end] 的剩餘比例）。
+
+        Returns 0 when today < sh_start_date（trial / 未開始）、dates 缺失、
+        end < start（歷史壞資料）或 zero-duration cycle。formula
+        ``price * (end - today) / (end - start)``；``max(0, end - today)``
+        clamp 避免過期後為負（BUG-5）。
         """
         self.ensure_one()
         if not self.sh_end_date or not self.sh_start_date:

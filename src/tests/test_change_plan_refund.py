@@ -48,13 +48,13 @@ class TestChangePlanRefund(TransactionCase):
     def test_refund_zero_during_trial_period(self):
         """today < sh_start_date — customer has not paid → refund = 0."""
         sub = self._make_sub(start_offset_days=7, end_offset_days=29, price=100.0)
-        self.assertEqual(sub._compute_unused_refund(), 0)
+        self.assertEqual(sub._prorata_unused_refund(), 0)
 
     def test_refund_zero_when_today_equals_start_date(self):
         """today == sh_start_date — paid for full cycle, none consumed yet."""
         sub = self._make_sub(start_offset_days=0, end_offset_days=29, price=100.0)
         # remaining = total = 29, refund = price.
-        self.assertEqual(sub._compute_unused_refund(), 100.0)
+        self.assertEqual(sub._prorata_unused_refund(), 100.0)
 
     # --- happy path ------------------------------------------------------ #
 
@@ -62,17 +62,17 @@ class TestChangePlanRefund(TransactionCase):
         """Half-way through a paid cycle → ~half refund."""
         sub = self._make_sub(start_offset_days=-15, end_offset_days=15, price=100.0)
         # total=30, remaining=15 → 50.0
-        self.assertEqual(sub._compute_unused_refund(), 50.0)
+        self.assertEqual(sub._prorata_unused_refund(), 50.0)
 
     def test_refund_zero_at_end_of_cycle(self):
         """today == sh_end_date — fully consumed → refund = 0."""
         sub = self._make_sub(start_offset_days=-30, end_offset_days=0, price=100.0)
-        self.assertEqual(sub._compute_unused_refund(), 0)
+        self.assertEqual(sub._prorata_unused_refund(), 0)
 
     def test_refund_zero_after_end_date(self):
         """Past end_date — clamp to 0, do not go negative."""
         sub = self._make_sub(start_offset_days=-40, end_offset_days=-5, price=100.0)
-        self.assertEqual(sub._compute_unused_refund(), 0)
+        self.assertEqual(sub._prorata_unused_refund(), 0)
 
     # --- guards ---------------------------------------------------------- #
 
@@ -84,7 +84,7 @@ class TestChangePlanRefund(TransactionCase):
             'sh_end_date': False,
             'sh_plan_price': 100.0,
         })
-        self.assertEqual(sub._compute_unused_refund(), 0)
+        self.assertEqual(sub._prorata_unused_refund(), 0)
 
     def test_refund_zero_when_start_date_missing(self):
         """Missing sh_start_date alone (mirror of the end-date guard).
@@ -99,7 +99,7 @@ class TestChangePlanRefund(TransactionCase):
             'sh_end_date': date.today() + timedelta(days=10),
             'sh_plan_price': 100.0,
         })
-        self.assertEqual(sub._compute_unused_refund(), 0)
+        self.assertEqual(sub._prorata_unused_refund(), 0)
 
     def test_refund_zero_when_end_before_start(self):
         """``end < start`` invariant violation — historical bad data.
@@ -123,7 +123,7 @@ class TestChangePlanRefund(TransactionCase):
             'sh_end_date': today - timedelta(days=31),
             'sh_plan_price': 100.0,
         })
-        self.assertEqual(sub._compute_unused_refund(), 0)
+        self.assertEqual(sub._prorata_unused_refund(), 0)
 
     def test_refund_zero_when_zero_duration_cycle(self):
         """``end == start`` (zero-day cycle) → div-by-zero guard.
@@ -140,7 +140,7 @@ class TestChangePlanRefund(TransactionCase):
             'sh_end_date': today,
             'sh_plan_price': 100.0,
         })
-        self.assertEqual(sub._compute_unused_refund(), 0)
+        self.assertEqual(sub._prorata_unused_refund(), 0)
 
     # --- wizard parity --------------------------------------------------- #
 
