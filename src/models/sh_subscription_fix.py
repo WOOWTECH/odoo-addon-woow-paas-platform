@@ -81,6 +81,44 @@ class ShSubscriptionFix(models.Model):
         return credited
 
     @api.model
+    def _cron_wallet_charge(self):
+        """[#324] Neutralize 上游 sh_subscription_wallet 的 daily 扣款 cron。
+
+        上游 ``_cron_wallet_charge`` 有缺陷 B（扣款成功不推進
+        ``sh_date_of_next_payment``、且用 ``==`` 等值比對），與本 repo
+        dunning-aware 的 ``_sh_create_auto_invoice`` 職責重疊且互相打架。
+        本 fix 層（MRO 晚於上游）將其 override 成 no-op，讓 invoice-based
+        的 ``_sh_create_auto_invoice`` 成為唯一計費路徑（該路徑為超集：
+        錢包扣款 + auto-topup 刷卡 + dunning 收斂）。
+
+        刻意不呼叫 ``super()``——目的就是完全停用上游行為。以 method
+        override 而非 flip ``ir.cron.active``，是為了耐上游模組升級
+        （升級不會重加此方法，override 恆勝出）。
+        """
+        _logger.info(
+            "[SUB_FIX] _cron_wallet_charge neutralized (#324); "
+            "billing handled solely by _sh_create_auto_invoice"
+        )
+        return
+
+    @api.model
+    def _cron_wallet_charge_retry(self):
+        """[#324] Neutralize 上游 sh_subscription_wallet 的 hourly 重試 cron。
+
+        上游 ``_cron_wallet_charge_retry`` 有缺陷 A：重試失敗時
+        ``_process_wallet_payment`` 會 rollback 後再 create 一筆新的
+        ``state='failed'`` 交易（create_date=now），使「近 24h failed」窗
+        永遠有剛產生的成員 → 窗永不過期 → 每小時無限重試、failed 列爆量
+        （stg 坐實 832 筆）。dunning 重試已由 ``_sh_create_auto_invoice``
+        以有限次數（threshold 後 auto-cancel）承擔，故此處 no-op。
+        """
+        _logger.info(
+            "[SUB_FIX] _cron_wallet_charge_retry neutralized (#324); "
+            "bounded retry handled by _sh_create_auto_invoice dunning"
+        )
+        return
+
+    @api.model
     def _sh_create_auto_invoice(self):
         """Daily auto-invoice cron with T19 dunning semantics.
 
