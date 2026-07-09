@@ -504,6 +504,11 @@ class SecurityAccess(models.Model):
         tunnel survive for the user / cron _do_cleanup to retry. This aligns
         the direct-delete path with the fail-loud contract _do_cleanup already
         establishes for the cron path."""
+        # #322: 比照 CloudService（#318）— super().unlink() 前捕獲 in_progress
+        # 訂閱，刪除成功後結算（取消＋按比例退點）。共用 _settle_on_entity_delete。
+        subs_to_settle = self.sudo().mapped('subscription_id').filtered(
+            lambda s: s.state == 'in_progress'
+        )
         for record in self:
             if record.tunnel_id:
                 record._cleanup_cloudflare()
@@ -516,7 +521,10 @@ class SecurityAccess(models.Model):
         # 軸2: routes are freely deletable (no primary guard), so cascade-delete
         # them directly as part of tearing down the whole SA.
         self.route_ids.unlink()
-        return super().unlink()
+        res = super().unlink()
+        for sub in subs_to_settle:
+            sub._settle_on_entity_delete(reason='Security Access deleted')
+        return res
 
     # ------------------------------------------------------------------ #
     #  Route sync (declarative)                                          #

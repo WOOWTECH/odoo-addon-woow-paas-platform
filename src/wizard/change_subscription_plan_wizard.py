@@ -78,13 +78,15 @@ class ChangeSubscriptionPlanWizard(models.TransientModel):
 
         partner = old_sub.sh_partner_id
 
-        # 1. Refund unused points to wallet
+        # 1. Refund unused points to wallet (#318: refund-typed + subscription
+        # link for reconciliation)
         if self.refund_amount > 0:
-            partner.sudo().add_wallet_points(
+            partner.sudo().refund_wallet_points(
                 amount=self.refund_amount,
                 description="Plan change refund: %s -> %s" % (
                     self.current_plan_id.name, self.new_plan_id.name,
                 ),
+                subscription=old_sub,
             )
             partner.invalidate_recordset(['wallet_balance'])
             _logger.info(

@@ -190,3 +190,83 @@ class TestChangePlanRefund(TransactionCase):
             wiz.refund_amount, 0,
             "Wizard should not refund during trial (BUG-5)",
         )
+
+
+class TestChangePlanRefundIsRefundTyped(TransactionCase):
+    """#318: 換 plan 退點交易須為 refund 型（原本被記成 topup）。"""
+
+    def setUp(self):
+        from unittest.mock import MagicMock, patch
+        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+        super().setUp()
+        self._patch = patch
+        self._MagicMock = MagicMock
+        self.controller = PaasController()
+        self.Plan = self.env['sh.subscription.plan']
+        self.WalletTx = self.env['wallet.transaction']
+        self.plan_a = self._make_plan('CP Refund A', 300.0)
+        self.plan_b = self._make_plan('CP Refund B', 500.0)
+        template = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'CP Refund Tmpl', 'slug': 'cp-refund',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'cp-refund', 'helm_chart_version': '1.0.0',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+            'subscription_plan_ids': [(6, 0, [self.plan_a.id, self.plan_b.id])],
+        })
+        self.owner = self.env['res.users'].create({
+            'name': 'CP Refund Owner', 'login': 'cp_refund_owner',
+            'email': 'cp_refund_owner@example.test',
+        })
+        self.owner.groups_id = [(6, 0, [self.env.ref('base.group_user').id])]
+        ws = self.env['woow_paas_platform.workspace'].create({
+            'name': 'CP Refund WS', 'owner_id': self.owner.id,
+        })
+        self.service = self.env['woow_paas_platform.cloud_service'].create({
+            'name': 'CP Refund Svc', 'workspace_id': ws.id,
+            'template_id': template.id,
+        })
+        partner = ws.owner_id.partner_id
+        self.service._create_and_confirm_subscription(partner, self.plan_a)
+        self.partner = partner
+
+    def _make_plan(self, name, price):
+        plan = self.Plan.create({
+            'name': name, 'sh_plan_price': price, 'sh_duration': 1,
+            'sh_unit': 'month', 'sh_no_of_billing_cycle': -1, 'sh_trial': False,
+        })
+        self.env['product.template'].sudo().create({
+            'name': name + ' P', 'type': 'service', 'sh_product_subscribe': True,
+            'sh_subscription_plan_id': plan.id, 'list_price': price,
+        })
+        return plan
+
+    def _refund_txns(self):
+        return self.WalletTx.search([
+            ('partner_id', '=', self.partner.id),
+            ('transaction_type', '=', 'refund'),
+        ])
+
+    def test_change_plan_refund_is_refund_typed(self):
+        req = self._MagicMock(env=self.env(user=self.owner))
+        with self._patch(
+            'odoo.addons.woow_paas_platform.controllers.paas.request', new=req):
+            res = self.controller.api_service_change_plan(
+                service_id=self.service.id, plan_id=self.plan_b.id)
+        self.assertTrue(res.get('success'))
+        refund_txns = self._refund_txns()
+        self.assertEqual(len(refund_txns), 1)
+        self.assertEqual(refund_txns.amount, 300.0)  # 當天換 → 全額退
+
+    def test_wizard_change_plan_refund_is_refund_typed(self):
+        """後台 wizard 路徑（api「四個入口」之一，與 controller 分開驗證，
+        防 wizard 呼叫點被漏改／回退）。wizard 是 model method，免 patch
+        request。"""
+        wizard = self.env['woow_paas_platform.change_plan_wizard'].create({
+            'cloud_service_id': self.service.id,
+            'current_plan_id': self.plan_a.id,
+            'new_plan_id': self.plan_b.id,
+        })
+        wizard.action_change_plan()
+        refund_txns = self._refund_txns()
+        self.assertEqual(len(refund_txns), 1)
+        self.assertEqual(refund_txns.amount, 300.0)

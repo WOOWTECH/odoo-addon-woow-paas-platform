@@ -260,6 +260,13 @@ class SmartHome(models.Model):
         cleanup, then fail-loud if the tunnel is still live so both the DB row
         and the CF tunnel survive for the user / cron to retry.
         """
+        # #322: 比照 CloudService（#318）— super().unlink() 前捕獲 in_progress
+        # 訂閱，刪除成功後結算（取消＋按比例退點）。共用 _settle_on_entity_delete。
+        # 捕獲在 fail-loud 之前、結算在 super().unlink() 之後：tunnel fail-loud
+        # raise 時不結算，全交易 rollback。
+        subs_to_settle = self.sudo().mapped('subscription_id').filtered(
+            lambda s: s.state == 'in_progress'
+        )
         for record in self:
             if record.tunnel_id:
                 record._cleanup_tunnel()
@@ -269,7 +276,10 @@ class SmartHome(models.Model):
                     "billed. The record was kept so the deletion can be "
                     "retried. Please try again shortly."
                 )
-        return super().unlink()
+        res = super().unlink()
+        for sub in subs_to_settle:
+            sub._settle_on_entity_delete(reason='Smart Home deleted')
+        return res
 
     def action_refresh_status(self):
         """Refresh tunnel status from the PaaS Operator."""

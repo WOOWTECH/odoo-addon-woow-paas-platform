@@ -183,9 +183,11 @@ class SmartHomeController(Controller):
         )
 
         if refund > 0:
-            partner.sudo().add_wallet_points(
+            # #318: refund-typed + subscription link for reconciliation
+            partner.sudo().refund_wallet_points(
                 amount=refund,
                 description="Plan change refund: %s" % old_sub.sh_subscription_plan_id.name,
+                subscription=old_sub,
             )
             partner.invalidate_recordset(['wallet_balance'])
             _logger.info(

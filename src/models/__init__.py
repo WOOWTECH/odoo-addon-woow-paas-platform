@@ -42,4 +42,5 @@ from . import loyalty_card
 from . import payment_transaction
 from . import payment_token
 from . import res_company
+from . import res_partner_wallet
 from . import reconcile_report
