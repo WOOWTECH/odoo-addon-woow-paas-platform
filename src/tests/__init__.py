@@ -1,4 +1,5 @@
 # Test suite for woow_paas_platform
+from . import test_smart_home_mcp
 from . import test_account_move_pay_from_wallet
 from . import test_account_move_skip_hook_field
 from . import test_action_post_hook_isolation
