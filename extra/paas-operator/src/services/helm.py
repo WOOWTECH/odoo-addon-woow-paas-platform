@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,24 @@ from src.models.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# #317: post-renderer that stamps helm.sh/resource-policy: keep on every PVC so
+# chart-owned PVCs survive `helm uninstall`. helm decides deletion from the STORED
+# manifest, not live objects, so keep must be present at install/upgrade time.
+# Run via the operator's own interpreter (sys.executable) so PyYAML is guaranteed,
+# regardless of $PATH / shebang / executable bit.
+_PVC_KEEP_POST_RENDERER = str(
+    Path(__file__).resolve().parent.parent / "pvc_keep_post_renderer.py"
+)
+
+
+def _pvc_keep_post_renderer_args() -> List[str]:
+    """Helm CLI flags to run the PVC-keep post-renderer (shared by install/upgrade)."""
+    return [
+        "--post-renderer", sys.executable,
+        "--post-renderer-args", _PVC_KEEP_POST_RENDERER,
+    ]
 
 # issue #29: the private Helm repo token is passed via ``--password`` on the helm
 # argv. Redact credential values BEFORE they reach the "Executing:" log line and
@@ -431,6 +450,8 @@ class HelmService:
             "--output",
             "json",
         ]
+        # #317: PVC-keep post-renderer — before ALL conditional flags.
+        args.extend(_pvc_keep_post_renderer_args())
 
         if create_namespace:
             args.append("--create-namespace")
@@ -559,6 +580,11 @@ class HelmService:
             "--output",
             "json",
         ]
+        # #317: PVC-keep post-renderer — MUST match install. Placed before ALL
+        # conditional flags (incl. both the --reset-values and --reuse-values
+        # branches) so every upgrade variant rewrites the stored manifest WITH
+        # keep; otherwise the next uninstall would delete the PVC.
+        args.extend(_pvc_keep_post_renderer_args())
 
         if version:
             args.extend(["--version", version])
