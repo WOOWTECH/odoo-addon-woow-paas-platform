@@ -20,7 +20,7 @@
 - **版號**：完成後 `src/__manifest__.py` 版號 bump 一版（現值 `18.0.1.0.48` → `18.0.1.0.49`；開 PR 前 rebase 檢查是否有人先 bump）。
 - **新增 test 檔必註冊**：任何新 test 檔須在 `src/tests/__init__.py` `import`，否則不會被收集。
 - **commit message**：zh-tw、prefix 英文小寫（`feat:`/`fix:`/`test:`…）、不得含任何 AI 產生字樣（不加 Co-Authored-By / Generated with）。
-- **範圍界定**：本 PR 只把 **CloudService** 接上刪除聯動；SmartHome / SecurityAccess 共用同一 mixin 與同缺口，其**刪除**聯動列為 follow-up（`_settle_on_entity_delete` 已設計成三者可共用，未來各自 unlink() 加 2 行即可）。換 plan 的**退點型別**則四個入口（CS controller、CS/SH 共用 wizard、SH controller、SA controller）本次一併正名，因為「退點可辨識」是 issue 明確的對帳要求且為 one-line 呼叫置換。
+- **範圍界定**：刪除聯動涵蓋 **CloudService（#318）＋ SmartHome / SecurityAccess（#322，三者共用同一 mixin 與同缺口，本 PR 一併接上）**——皆呼叫共用的 `_settle_on_entity_delete()`。換 plan 的**退點型別**四個入口（CS controller、CS/SH 共用 wizard、SH controller、SA controller）一併正名為 `refund`。**不在本 PR**：使用者主動取消訂閱（`billing.py api_subscription_cancel`）目前不退點/不拆服務，與刪除退點不對稱＝**#323**（產品決策，另 PR）；刪除終態用 `'cancel'`（對齊 #318 文字）不改。
 
 ---
 
@@ -763,6 +763,203 @@ git commit -m "chore: #318 版號 bump 18.0.1.0.49"
 
 ---
 
+### Task 6: SmartHome / SecurityAccess 刪除聯動 parity（#322）
+
+**Files:**
+- Modify: `src/models/smart_home.py`（`unlink()`，`:251`）
+- Modify: `src/models/security_access.py`（`unlink()`，`:494`）
+- Test: `src/tests/test_service_delete_subscription.py`（append 兩個 entity-specific class）
+
+**Interfaces:**
+- Consumes: `sub._settle_on_entity_delete(reason)`（Task 2，共用、已測）。
+- Produces: 無新對外簽名。行為契約＝`smart_home.unlink()` / `security_access.unlink()` 後其 `in_progress` 訂閱轉 `cancel` 且退點入帳。
+
+**設計備註**：`SmartHome.unlink()`（smart_home.py:251）與 `SecurityAccess.unlink()`（security_access.py:494）皆為「fail-loud teardown 守衛（tunnel/CF）→ `super().unlink()`」的同一結構，與 CS 一致。故接法完全比照 Task 3：`super().unlink()` 前捕獲 in_progress 訂閱、之後結算。結算 method 的邊界（trial→0、冪等、partner-less、原子性）已由 CS 的 `TestSettleOnEntityDelete` / `TestCloudServiceUnlinkSettlesSubscription` 窮舉，且三者共用同一 method；故 SH/SA 各只加**一條 happy-path**（paid→cancel+refund）證明**捕獲+結算的 wiring 已接上**即可，不重複測共用 method 的邊界。
+
+- [ ] **Step 1: 寫失敗測試**
+
+Append 到 `src/tests/test_service_delete_subscription.py`：
+
+```python
+class TestSmartHomeUnlinkSettlesSubscription(TransactionCase):
+    """#322: 刪 SmartHome 聯動取消訂閱＋按比例退點（wiring 驗證）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.Plan = self.env['sh.subscription.plan']
+        self.WalletTx = self.env['wallet.transaction']
+        self.plan = self.Plan.create({
+            'name': 'SH Del Plan', 'sh_plan_price': 300.0, 'sh_duration': 1,
+            'sh_unit': 'month', 'sh_no_of_billing_cycle': -1, 'sh_trial': False,
+        })
+        self.env['product.template'].sudo().create({
+            'name': 'SH Del Plan Product', 'type': 'service',
+            'sh_product_subscribe': True, 'sh_subscription_plan_id': self.plan.id,
+            'list_price': 300.0,
+        })
+        self.owner = self.env['res.users'].create({
+            'name': 'SH Del Owner', 'login': 'sh_del_owner',
+            'email': 'sh_del_owner@example.test',
+        })
+        self.owner.groups_id = [(6, 0, [self.env.ref('base.group_user').id])]
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'SH Del WS', 'owner_id': self.owner.id,
+        })
+        self.smart_home = self.SmartHome.create({
+            'name': 'SH Del Home', 'workspace_id': self.workspace.id,
+        })
+
+    def test_unlink_cancels_and_refunds_paid_sub(self):
+        partner = self.workspace.owner_id.partner_id
+        self.smart_home._create_and_confirm_subscription(partner, self.plan)
+        sub = self.smart_home.sudo().subscription_id
+        self.assertEqual(sub.state, 'in_progress')
+
+        self.smart_home.unlink()
+
+        self.assertTrue(sub.exists())
+        self.assertEqual(sub.state, 'cancel')
+        txn = self.WalletTx.search([
+            ('partner_id', '=', partner.id),
+            ('transaction_type', '=', 'refund')])
+        self.assertEqual(len(txn), 1)
+        self.assertEqual(txn.amount, 300.0)
+        self.assertEqual(txn.subscription_id.id, sub.id)
+
+
+class TestSecurityAccessUnlinkSettlesSubscription(TransactionCase):
+    """#322: 刪 SecurityAccess 聯動取消訂閱＋按比例退點（wiring 驗證）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.SA = self.env['woow_paas_platform.security_access']
+        self.Plan = self.env['sh.subscription.plan']
+        self.WalletTx = self.env['wallet.transaction']
+        self.plan = self.Plan.create({
+            'name': 'SA Del Plan', 'sh_plan_price': 300.0, 'sh_duration': 1,
+            'sh_unit': 'month', 'sh_no_of_billing_cycle': -1, 'sh_trial': False,
+            'sa_max_routes': 3,
+        })
+        # SA fixture 慣例：用 product.product（非 product.template）
+        self.env['product.product'].sudo().create({
+            'name': 'SA Del Plan Product', 'type': 'service',
+            'sh_product_subscribe': True, 'sh_subscription_plan_id': self.plan.id,
+        })
+        # journal 前置（_create_and_confirm_subscription 需要；鏡像既有 SA fixture）
+        company = self.env.company.sudo()
+        if not company.sh_journal_id:
+            journal = self.env['account.journal'].sudo().search(
+                [('type', '=', 'sale')], limit=1)
+            if journal:
+                company.sh_journal_id = journal.id
+        self.owner = self.env['res.users'].create({
+            'name': 'SA Del Owner', 'login': 'sa_del_owner',
+            'email': 'sa_del_owner@example.test',
+        })
+        self.owner.groups_id = [(6, 0, [self.env.ref('base.group_user').id])]
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'SA Del WS', 'owner_id': self.owner.id,
+        })
+        self.sa = self.SA.create({
+            'name': 'SA Del Gateway', 'workspace_id': self.workspace.id,
+        })
+
+    def test_unlink_cancels_and_refunds_paid_sub(self):
+        partner = self.workspace.owner_id.partner_id
+        self.sa._create_and_confirm_subscription(partner, self.plan)
+        sub = self.sa.sudo().subscription_id
+        self.assertEqual(sub.state, 'in_progress')
+
+        self.sa.unlink()
+
+        self.assertTrue(sub.exists())
+        self.assertEqual(sub.state, 'cancel')
+        txn = self.WalletTx.search([
+            ('partner_id', '=', partner.id),
+            ('transaction_type', '=', 'refund')])
+        self.assertEqual(len(txn), 1)
+        self.assertEqual(txn.amount, 300.0)
+        self.assertEqual(txn.subscription_id.id, sub.id)
+```
+
+- [ ] **Step 2: 跑測試確認失敗**
+
+Run: `... --test-tags /woow_paas_platform:TestSmartHomeUnlinkSettlesSubscription,/woow_paas_platform:TestSecurityAccessUnlinkSettlesSubscription`
+Expected: FAIL — `sub.state == 'in_progress'`（現況 SH/SA unlink 不結算）。
+
+- [ ] **Step 3: 寫最小實作**
+
+`src/models/smart_home.py` `unlink()`：`super().unlink()` 前捕獲、之後結算。
+
+```python
+    def unlink(self):
+        """..."""
+        # #322: 比照 CloudService（#318）— super().unlink() 前捕獲 in_progress
+        # 訂閱，刪除成功後結算（取消＋按比例退點）。共用 _settle_on_entity_delete。
+        subs_to_settle = self.sudo().mapped('subscription_id').filtered(
+            lambda s: s.state == 'in_progress'
+        )
+        for record in self:
+            if record.tunnel_id:
+                record._cleanup_tunnel()
+            if record.tunnel_id:
+                raise UserError(
+                    "Cloudflare cleanup failed; the tunnel is still live and "
+                    "billed. The record was kept so the deletion can be "
+                    "retried. Please try again shortly."
+                )
+        res = super().unlink()
+        for sub in subs_to_settle:
+            sub._settle_on_entity_delete(reason='Smart Home deleted')
+        return res
+```
+
+`src/models/security_access.py` `unlink()`：同法（保留既有 route 級聯與 fail-loud）。
+
+```python
+    def unlink(self):
+        """..."""
+        # #322: 比照 CloudService（#318）— 捕獲 in_progress 訂閱，刪除成功後結算。
+        subs_to_settle = self.sudo().mapped('subscription_id').filtered(
+            lambda s: s.state == 'in_progress'
+        )
+        for record in self:
+            if record.tunnel_id:
+                record._cleanup_cloudflare()
+            if record.tunnel_id:
+                raise UserError(
+                    "Cloudflare cleanup failed; the tunnel is still live and "
+                    "billed. The record was kept so the deletion can be "
+                    "retried. Please try again shortly."
+                )
+        # 軸2: routes are freely deletable (no primary guard), so cascade-delete
+        # them directly as part of tearing down the whole SA.
+        self.route_ids.unlink()
+        res = super().unlink()
+        for sub in subs_to_settle:
+            sub._settle_on_entity_delete(reason='Security Access deleted')
+        return res
+```
+
+- [ ] **Step 4: 跑測試確認通過**
+
+Run: `... --test-tags /woow_paas_platform:TestSmartHomeUnlinkSettlesSubscription,/woow_paas_platform:TestSecurityAccessUnlinkSettlesSubscription`
+Expected: PASS（2 tests）
+
+- [ ] **Step 5: 回歸既有 SH/SA 測試 + Commit**
+
+Run: `... --test-tags /woow_paas_platform:TestSmartHomeSubscriptionFlow,/woow_paas_platform:TestSecurityAccessControllerFlow`（含既有刪除/生命週期）
+Expected: PASS
+
+```bash
+git add src/models/smart_home.py src/models/security_access.py \
+        src/tests/test_service_delete_subscription.py
+git commit -m "feat: #322 SmartHome/SecurityAccess.unlink() 刪除聯動取消訂閱並按比例退點"
+```
+
+---
+
 ## Self-Review
 
 **1. Spec coverage（對照 issue #318 待做 / 驗收）**
@@ -781,9 +978,11 @@ git commit -m "chore: #318 版號 bump 18.0.1.0.49"
 - `_settle_on_entity_delete(reason='Service deleted') -> float` — Task 2 定義，Task 3 呼叫一致。✅
 - 退點型別字面值 `'refund'`、刪除終態 `'cancel'`、換 plan 關舊 `'close'` — 全 plan 一致。✅
 
-**開放給 reviewer 挑戰的已決策點（plan-review 時確認）**：
-1. 刪除終態用 `'cancel'`（對齊 issue 文字）vs 沿用使用者主動語意 `'close'`。
+**已決策點（含 review 二次擴充）**：
+1. 刪除終態用 `'cancel'`（對齊 issue #318 文字）；使用者主動取消訂閱不退點/不拆服務的真不一致＝**#323**（產品決策，另 PR），本 PR 不動 `billing.py`、不改 `'cancel'`。
 2. 刪除聯動落在 model `unlink()`（覆蓋所有刪除路徑，含 workspace cascade）vs controller `_delete_service`（僅覆蓋使用者主動刪）。本 plan 選 model 層並以「僅結算 in_progress」保證 cron cleanup 路徑不二次退點。
-3. 換 plan 四入口退點型別本次一併正名（含 SH/SA controller），SH/SA 的**刪除**聯動列 follow-up。
+3. 換 plan 四入口退點型別本次一併正名（含 SH/SA controller）。
+4. **（review 後擴充）SmartHome / SecurityAccess 刪除聯動＝#322，本 PR 一併接上（Task 6）**；三者共用 `_settle_on_entity_delete`，SH/SA 各加 wiring happy-path 測試，共用 method 邊界已由 CS 測試窮舉不重測。
 
-<!-- peer-reviewed: 2026-07-08T16:30:27Z rounds=2 verdict=approved by=miniclaude -->
+
+<!-- peer-reviewed: 2026-07-09T00:08:52Z rounds=3 verdict=approved by=miniclaude -->
