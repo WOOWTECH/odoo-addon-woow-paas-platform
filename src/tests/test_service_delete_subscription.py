@@ -184,3 +184,105 @@ class TestCloudServiceUnlinkSettlesSubscription(_DeleteFixture):
         self.assertTrue(svc.exists())
         self.assertEqual(sub.state, 'in_progress')
         self.assertFalse(self._refund_txns(partner))
+
+
+class TestSmartHomeUnlinkSettlesSubscription(TransactionCase):
+    """#322: 刪 SmartHome 聯動取消訂閱＋按比例退點（wiring 驗證）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.Plan = self.env['sh.subscription.plan']
+        self.WalletTx = self.env['wallet.transaction']
+        self.plan = self.Plan.create({
+            'name': 'SH Del Plan', 'sh_plan_price': 300.0, 'sh_duration': 1,
+            'sh_unit': 'month', 'sh_no_of_billing_cycle': -1, 'sh_trial': False,
+        })
+        self.env['product.template'].sudo().create({
+            'name': 'SH Del Plan Product', 'type': 'service',
+            'sh_product_subscribe': True, 'sh_subscription_plan_id': self.plan.id,
+            'list_price': 300.0,
+        })
+        self.owner = self.env['res.users'].create({
+            'name': 'SH Del Owner', 'login': 'sh_del_owner',
+            'email': 'sh_del_owner@example.test',
+        })
+        self.owner.groups_id = [(6, 0, [self.env.ref('base.group_user').id])]
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'SH Del WS', 'owner_id': self.owner.id,
+        })
+        self.smart_home = self.SmartHome.create({
+            'name': 'SH Del Home', 'workspace_id': self.workspace.id,
+        })
+
+    def test_unlink_cancels_and_refunds_paid_sub(self):
+        partner = self.workspace.owner_id.partner_id
+        self.smart_home._create_and_confirm_subscription(partner, self.plan)
+        sub = self.smart_home.sudo().subscription_id
+        self.assertEqual(sub.state, 'in_progress')
+
+        self.smart_home.unlink()
+
+        self.assertTrue(sub.exists())
+        self.assertEqual(sub.state, 'cancel')
+        txn = self.WalletTx.search([
+            ('partner_id', '=', partner.id),
+            ('transaction_type', '=', 'refund')])
+        self.assertEqual(len(txn), 1)
+        self.assertEqual(txn.amount, 300.0)
+        self.assertEqual(txn.subscription_id.id, sub.id)
+
+
+class TestSecurityAccessUnlinkSettlesSubscription(TransactionCase):
+    """#322: 刪 SecurityAccess 聯動取消訂閱＋按比例退點（wiring 驗證）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.SA = self.env['woow_paas_platform.security_access']
+        self.Plan = self.env['sh.subscription.plan']
+        self.WalletTx = self.env['wallet.transaction']
+        self.plan = self.Plan.create({
+            'name': 'SA Del Plan', 'sh_plan_price': 300.0, 'sh_duration': 1,
+            'sh_unit': 'month', 'sh_no_of_billing_cycle': -1, 'sh_trial': False,
+            'sa_max_routes': 3,
+        })
+        # SA fixture 慣例：用 product.product（非 product.template）
+        self.env['product.product'].sudo().create({
+            'name': 'SA Del Plan Product', 'type': 'service',
+            'sh_product_subscribe': True, 'sh_subscription_plan_id': self.plan.id,
+        })
+        # journal 前置（_create_and_confirm_subscription 需要；鏡像既有 SA fixture）
+        company = self.env.company.sudo()
+        if not company.sh_journal_id:
+            journal = self.env['account.journal'].sudo().search(
+                [('type', '=', 'sale')], limit=1)
+            if journal:
+                company.sh_journal_id = journal.id
+        self.owner = self.env['res.users'].create({
+            'name': 'SA Del Owner', 'login': 'sa_del_owner',
+            'email': 'sa_del_owner@example.test',
+        })
+        self.owner.groups_id = [(6, 0, [self.env.ref('base.group_user').id])]
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'SA Del WS', 'owner_id': self.owner.id,
+        })
+        self.sa = self.SA.create({
+            'name': 'SA Del Gateway', 'workspace_id': self.workspace.id,
+        })
+
+    def test_unlink_cancels_and_refunds_paid_sub(self):
+        partner = self.workspace.owner_id.partner_id
+        self.sa._create_and_confirm_subscription(partner, self.plan)
+        sub = self.sa.sudo().subscription_id
+        self.assertEqual(sub.state, 'in_progress')
+
+        self.sa.unlink()
+
+        self.assertTrue(sub.exists())
+        self.assertEqual(sub.state, 'cancel')
+        txn = self.WalletTx.search([
+            ('partner_id', '=', partner.id),
+            ('transaction_type', '=', 'refund')])
+        self.assertEqual(len(txn), 1)
+        self.assertEqual(txn.amount, 300.0)
+        self.assertEqual(txn.subscription_id.id, sub.id)
