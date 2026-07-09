@@ -65,3 +65,34 @@ class TestRefundRequiresPayment(TransactionCase):
         self.assertFalse(self.WalletTx.search([
             ('partner_id', '=', self.partner.id),
             ('transaction_type', '=', 'refund')]))
+
+    def test_manual_invoice_pay_stamps_subscription_and_enables_refund(self):
+        """#324 F1 回歸：手動付款端點 invoice._pay_from_wallet()（不帶
+        subscription）付掉訂閱週期發票時，deduct 要 stamp 上 subscription_id，
+        退點 gate 才認得 → 真已付的週期刪服務仍按比例退（不因手動付款誤退 0）。"""
+        company = self.env.company.sudo()
+        journal = self.env['account.journal'].sudo().search(
+            [('company_id', '=', company.id), ('type', 'in', ('bank', 'cash'))],
+            limit=1)
+        if not journal:
+            self.env['account.journal'].sudo().create({
+                'name': 'Test Bank 324', 'type': 'bank', 'code': 'TB324',
+                'company_id': company.id})
+        sub = self._mid_cycle_sub()
+        invoice = self.env['account.move'].sudo().create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner.id,
+            'sh_subscription_id': sub.id,
+            'invoice_line_ids': [(0, 0, {
+                'name': 'cycle', 'quantity': 1, 'price_unit': 100.0,
+                'tax_ids': [(5, 0, 0)],
+            })],
+        })
+        self.partner.sudo().add_wallet_points(100.0, description='seed')
+        self.partner.invalidate_recordset(['wallet_balance'])
+
+        invoice._pay_from_wallet()  # 手動付款路徑：不帶 subscription
+
+        # deduct 已被 stamp → gate 認得 → 退點回純比例（非 0）
+        self.assertTrue(sub._has_paid_current_cycle())
+        self.assertEqual(sub._compute_unused_refund(), 50.0)
