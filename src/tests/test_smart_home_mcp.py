@@ -171,3 +171,87 @@ class TestSmartHomeToDictMcp(TransactionCase):
         # 附帶（wire 級）：整個 to_dict() 對受限 owner 也不拋、mcp 正確。
         self.env.invalidate_all()
         self.assertEqual(owner_home.to_dict()['mcp'], 'ha_mcp_tools')
+
+
+@tagged('post_install', '-at_install')
+class TestSmartHomeMcpEndpoints(HttpCase):
+    """§7 準則 2（wire）＋ §4.2 第二入口（tunnel-token）＋準則 4（無迴歸）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.user = self.env.ref('base.user_admin')
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo().create({
+            'name': 'MCP EP WS',
+            'owner_id': self.user.id,
+        })
+        Access = self.env['woow_paas_platform.workspace_access'].sudo()
+        if not Access.search([('workspace_id', '=', self.workspace.id),
+                              ('user_id', '=', self.user.id)]):
+            Access.create({'workspace_id': self.workspace.id,
+                           'user_id': self.user.id, 'role': 'owner'})
+
+        self.plan_mcp = self.env['sh.subscription.plan'].sudo().create({
+            'name': 'SH MCP EP Plan', 'sh_plan_price': 400.0,
+            'sh_duration': 1, 'sh_unit': 'month', 'sh_no_of_billing_cycle': -1,
+            'mcp_integration': 'ha_mcp_tools',
+        })
+        product = self.env['product.template'].sudo().create({
+            'name': 'SH MCP EP Product', 'type': 'service',
+            'sh_product_subscribe': True,
+            'sh_subscription_plan_id': self.plan_mcp.id, 'list_price': 400.0,
+        })
+
+        self.home = self.env['woow_paas_platform.smart_home'].sudo().create({
+            'name': 'MCP EP HA',
+            'workspace_id': self.workspace.id,
+            'state': 'active',
+            'tunnel_id': 'tun-mcp-ep',
+            'tunnel_token': 'tok-mcp-ep',
+            'subdomain': 'paas-sm-mcpep01-02030405',
+            'tunnel_status': 'connected',
+        })
+        # 最輕 fixture：直建 subscription 綁上（getter 只讀 plan）。
+        sub = self.env['sh.subscription.subscription'].sudo().create({
+            'sh_partner_id': self.user.partner_id.id,
+            'product_id': product.product_variant_id.id,
+            'sh_subscription_plan_id': self.plan_mcp.id,
+            'sh_source': 'manual',
+        })
+        self.home.sudo().subscription_id = sub.id
+
+        self.client_rec = self.env.ref(
+            'woow_paas_platform.oauth_client_ha_smart_home')
+        self.token = self.env['woow_paas_platform.oauth_token'].sudo().create({
+            'access_token': 'mcp-ep-bearer-token',
+            'scope': 'smarthome:read smarthome:tunnel',
+            'expires_at': fields.Datetime.now() + timedelta(hours=1),
+            'refresh_expires_at': fields.Datetime.now() + timedelta(days=30),
+            'client_id': self.client_rec.id,
+            'user_id': self.user.id,
+        })
+
+    def _get(self, url):
+        return self.url_open(
+            url,
+            headers={'Authorization': f'Bearer {self.token.access_token}'},
+        )
+
+    def test_get_home_payload_contains_mcp(self):
+        """準則 2（wire）：GET /api/smarthome/homes/<id> payload 含 mcp。"""
+        resp = self._get(f'/api/smarthome/homes/{self.home.id}')
+        self.assertEqual(resp.status_code, 200)
+        home = resp.json()['home']
+        self.assertEqual(home['mcp'], 'ha_mcp_tools')
+
+    def test_tunnel_token_contains_mcp_and_keeps_existing_keys(self):
+        """§4.2 第二入口 ＋ 準則 4：tunnel-token 多回 mcp、既有 key 不變。"""
+        resp = self._get(f'/api/smarthome/homes/{self.home.id}/tunnel-token')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['mcp'], 'ha_mcp_tools')
+        self.assertEqual(
+            set(data.keys()),
+            {'tunnel_token', 'tunnel_id', 'subdomain', 'mcp'},
+        )
+        self.assertEqual(data['tunnel_token'], 'tok-mcp-ep')
+        self.assertEqual(data['tunnel_id'], 'tun-mcp-ep')
