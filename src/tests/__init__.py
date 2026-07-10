@@ -194,3 +194,5 @@ from . import test_service_delete_subscription
 # fix: #324 計費雙缺口 — 上游兩支 wallet cron neutralize + 退點 payment gate
 from . import test_wallet_cron_neutralized
 from . import test_refund_requires_payment
+# fix: #327 退點視窗改以 sh_date_of_next_payment 推導（auto-expire 護欄 + 長壽退比例）
+from . import test_refund_window_next_payment

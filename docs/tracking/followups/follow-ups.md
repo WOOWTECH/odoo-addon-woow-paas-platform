@@ -1808,3 +1808,4 @@ addons_path 缺第三方相依（ai_base_gt 等在 `paas-odoo-ci/addons`）而�
 - **修法方向**：當期視窗改以 `sh_date_of_next_payment` 推導（如 `[next_payment - cycle_delta, next_payment)`）而非凍結的 `sh_end_date`，或每次成功續期推進 `sh_end_date`。牽動 #318 退點公式與所有退點呼叫者，需回歸既有 `test_change_plan_refund` / `test_service_delete_subscription` 對 [start,end] 視窗的假設，並確認 `_sh_auto_expired_subscription`（sh_end_date==today→expire）與長壽 in_progress 的交互。建議獨立 issue + spec，不夾帶進 #324。
 - **對處理**：已開 tea issue [#327](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/327)（掛 `priority:medium`，因牽真金流體驗）；in-code 已在 `_has_paid_current_cycle` docstring 註明此限制指回本條。
 - **何時**：#324 merge 後獨立處理。
+- **已修**（2026-07-10）：`fix/327-refund-window`（Closes #327）— `_prorata_unused_refund` 視窗改以 `sh_date_of_next_payment` 反推 `[next_payment − cycle_delta, next_payment)`，不碰 `sh_end_date`（上游 auto-expire 交互零影響）；三退點呼叫者（CS/SH/SA 刪除 + 4 換 plan 入口）經 SSOT 自動受惠。plan：`docs/superpowers/plans/2026-07-10-327-refund-window-next-payment.md`。

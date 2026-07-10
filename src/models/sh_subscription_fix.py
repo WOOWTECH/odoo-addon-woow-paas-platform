@@ -22,6 +22,24 @@ class ShSubscriptionFix(models.Model):
     """
     _inherit = 'sh.subscription.subscription'
 
+    def _cycle_delta(self):
+        """一個計費週期的 relativedelta（由 sh_unit + sh_recurrency 決定）。
+
+        退點視窗（``_prorata_unused_refund``）與續期推進（``_on_payment_success``）
+        共用，避免 unit→delta 對照表在多處漂移。回 ``None``（呼叫端據此保守退
+        0 / 不推進）於：sh_recurrency 為 0/未設（否則 cycle_delta 為零長度、
+        cycle_days=0，語意無效且會退全額）、或 sh_unit 非 day/week/month/year。
+        """
+        self.ensure_one()
+        if not self.sh_recurrency:
+            return None
+        return {
+            'day': relativedelta(days=self.sh_recurrency),
+            'week': relativedelta(weeks=self.sh_recurrency),
+            'month': relativedelta(months=self.sh_recurrency),
+            'year': relativedelta(years=self.sh_recurrency),
+        }.get(self.sh_unit)
+
     def _has_paid_current_cycle(self):
         """本訂閱是否有過成功扣款（``done`` 的 ``deduct`` 交易）。
 
@@ -32,13 +50,12 @@ class ShSubscriptionFix(models.Model):
         ``state='failed'`` 的 deduct。以此區分「真付過」與「從未付過」，堵住
         「付款靜默失敗→刪服務退未賺得點」的套利。
 
-        範圍限制（沿用 #318，本 gate 不改變）：本方法查「本訂閱歷來任一成功
-        扣款」、不做週期範圍限定。退點金額仍由 ``_prorata_unused_refund`` 以
-        建立時寫定、之後不原地推進的 [sh_start_date, sh_end_date] 視窗計算；
-        遞迴計費只推進 ``sh_date_of_next_payment``。故對「第 2 個週期起、
-        sh_end_date 已過」的長壽 in_progress 訂閱，``max(0, end-today)`` clamp
-        會退 0——此為 #318 退點視窗的既有限制（我改前後皆退 0，非本 PR 引入），
-        待 follow-up 以 next_payment 推導當期視窗修正。
+        範圍限制（沿用 #318）：本方法查「本訂閱歷來任一成功扣款」、不做週期
+        範圍限定——它只回答「有沒有真付過」，退點**金額**由 ``_prorata_unused_
+        refund`` 決定。退點視窗自 #327 起改以 ``sh_date_of_next_payment`` 反推
+        當期區間 ``[next_payment − cycle_delta, next_payment)``，已正確涵蓋
+        「第 2 個週期起、凍結 sh_end_date 已過」的長壽 in_progress 訂閱（不再
+        恆退 0）。本 gate 與視窗計算正交，維持不變。
 
         NewId（in-memory 記錄）無 persisted id，直接回 False（純公式路徑
         ``_prorata_unused_refund`` 不經此 gate）。
@@ -65,22 +82,36 @@ class ShSubscriptionFix(models.Model):
         return self._prorata_unused_refund()
 
     def _prorata_unused_refund(self):
-        """純比例退點公式（不驗付款，只算 today 落在 [start, end] 的剩餘比例）。
+        """純比例退點公式：today 落在「當前已付週期」的剩餘比例（不驗付款）。
 
-        Returns 0 when today < sh_start_date（trial / 未開始）、dates 缺失、
-        end < start（歷史壞資料）或 zero-duration cycle。formula
-        ``price * (end - today) / (end - start)``；``max(0, end - today)``
-        clamp 避免過期後為負（BUG-5）。
+        當前已付週期以 ``sh_date_of_next_payment`` 反推（#327）：遞迴計費只推進
+        next_payment、永不推進凍結的 ``sh_end_date``，故視窗必須跟隨 next_payment
+        才能正確涵蓋 cycle-2+ 的長壽 in_progress 訂閱（否則過期後 clamp 恆退 0）。
+
+        視窗 = ``[next_payment − cycle_delta, next_payment)``；剩餘比例
+        = ``(next_payment − today) / cycle_days``，clamp 到 ``[0, cycle_days]`` 使
+        單次退點 ∈ ``[0, 一週期 plan 價]``（守則：不跨期回溯多退）。
+
+        Returns 0 when next_payment / start_date 缺失、``today < sh_start_date``
+        （trial / 未開始）、或 cycle_delta 無法解析。``sh_start_date`` 僅作 trial
+        guard；視窗起點用動態 ``cycle_start``，不再依賴凍結的 ``sh_end_date``，
+        故對上游 ``_sh_auto_expired_subscription``（sh_end_date==today→expire）
+        零交互影響。
         """
         self.ensure_one()
-        if not self.sh_end_date or not self.sh_start_date:
+        next_payment = self.sh_date_of_next_payment
+        if not next_payment or not self.sh_start_date:
             return 0
         today = fields.Date.today()
         if today < self.sh_start_date:
             return 0
-        total_days = (self.sh_end_date - self.sh_start_date).days or 1
-        remaining_days = max(0, (self.sh_end_date - today).days)
-        return round(self.sh_plan_price * remaining_days / total_days, 2)
+        cycle_delta = self._cycle_delta()
+        if not cycle_delta:
+            return 0
+        cycle_start = next_payment - cycle_delta
+        cycle_days = (next_payment - cycle_start).days or 1
+        remaining_days = max(0, min((next_payment - today).days, cycle_days))
+        return round(self.sh_plan_price * remaining_days / cycle_days, 2)
 
     def _settle_on_entity_delete(self, reason='Service deleted'):
         """Cancel this subscription and prorata-refund the unused paid cycle
@@ -307,13 +338,7 @@ class ShSubscriptionFix(models.Model):
 
     def _on_payment_success(self, subscription, invoice, today):
         """Advance next_payment, reset dunning counter."""
-        unit_deltas = {
-            'day': relativedelta(days=subscription.sh_recurrency),
-            'week': relativedelta(weeks=subscription.sh_recurrency),
-            'month': relativedelta(months=subscription.sh_recurrency),
-            'year': relativedelta(years=subscription.sh_recurrency),
-        }
-        delta = unit_deltas.get(subscription.sh_unit)
+        delta = subscription._cycle_delta()
         vals = {}
         if delta:
             vals['sh_date_of_next_payment'] = today + delta
