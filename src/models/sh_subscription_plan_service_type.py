@@ -1,5 +1,9 @@
+import logging
+
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
+
+_logger = logging.getLogger(__name__)
 
 
 class ShSubscriptionPlanServiceType(models.Model):
@@ -34,6 +38,151 @@ class ShSubscriptionPlanServiceType(models.Model):
              'MCP-ness is carried by cloud_app_template.category, not by '
              'a fourth enum value.',
     )
+
+    # ------------------------------------------------------------------
+    # #330 .52 migration 寫值表（升級 DB force-write；與
+    # data/subscription_products.xml、data/subscription_template_links.xml
+    # 的新裝 seed 同值——雙軌一致性，改一邊必改另一邊）
+    # ------------------------------------------------------------------
+
+    # D1 reprice＋D2 rename＋D3 quota：16 筆沿用 plan（xmlid 定位——
+    # 撞價實例 R8：SA Entry Yearly 舊 1000＝5App 新月價，嚴禁價格/名稱 match）
+    _PRICING_330_PLAN_WRITES = {
+        'plan_odoo_monthly': {
+            'name': 'Odoo Cloud T1（1–3 人）Monthly', 'sh_plan_price': 1000},
+        'plan_odoo_yearly': {
+            'name': 'Odoo Cloud T1（1–3 人）Yearly', 'sh_plan_price': 10000},
+        'plan_n8n_monthly': {
+            'name': 'n8n Cloud T1（1–3 人）Monthly', 'sh_plan_price': 1000},
+        'plan_n8n_yearly': {
+            'name': 'n8n Cloud T1（1–3 人）Yearly', 'sh_plan_price': 10000},
+        'plan_smarthome_monthly': {
+            'name': 'Smart Home Connect Monthly', 'sh_plan_price': 150},
+        'plan_smarthome_yearly': {
+            'name': 'Smart Home Connect Yearly', 'sh_plan_price': 1500},
+        'plan_security_access_entry_monthly': {
+            'name': 'Security Access 5 Application Monthly',
+            'sh_plan_price': 1000, 'sa_max_routes': 5},
+        'plan_security_access_entry_yearly': {
+            'name': 'Security Access 5 Application Yearly',
+            'sh_plan_price': 10000, 'sa_max_routes': 5},
+        'plan_security_access_pro_monthly': {
+            'name': 'Security Access 10 Application Monthly',
+            'sh_plan_price': 2000},
+        'plan_security_access_pro_yearly': {
+            'name': 'Security Access 10 Application Yearly',
+            'sh_plan_price': 20000},
+        'plan_mcp_odoo_monthly': {
+            'name': 'Odoo MCP Server Monthly', 'sh_plan_price': 3000},
+        'plan_mcp_odoo_yearly': {
+            'name': 'Odoo MCP Server Yearly', 'sh_plan_price': 30000},
+        'plan_mcp_n8n_monthly': {
+            'name': 'n8n MCP Server Monthly', 'sh_plan_price': 3000},
+        'plan_mcp_n8n_yearly': {
+            'name': 'n8n MCP Server Yearly', 'sh_plan_price': 30000},
+        'plan_mcp_hermes_monthly': {
+            'name': 'Hermes MCP Server T1（1–3 人）Monthly',
+            'sh_plan_price': 1500},
+        'plan_mcp_hermes_yearly': {
+            'name': 'Hermes MCP Server T1（1–3 人）Yearly',
+            'sh_plan_price': 15000},
+    }
+
+    # D4 backfill：既有 20 筆（含 4 筆 placeholder；anythingllm 為 orphan、
+    # guard 放行）。新增 14 筆由 seed XML 自帶，免 backfill。
+    _PRICING_330_SERVICE_TYPE = {
+        'plan_odoo_monthly': 'cloud_service',
+        'plan_odoo_yearly': 'cloud_service',
+        'plan_n8n_monthly': 'cloud_service',
+        'plan_n8n_yearly': 'cloud_service',
+        'plan_postgresql_monthly': 'cloud_service',
+        'plan_postgresql_yearly': 'cloud_service',
+        'plan_anythingllm_monthly': 'cloud_service',
+        'plan_anythingllm_yearly': 'cloud_service',
+        'plan_mcp_odoo_monthly': 'cloud_service',
+        'plan_mcp_odoo_yearly': 'cloud_service',
+        'plan_mcp_n8n_monthly': 'cloud_service',
+        'plan_mcp_n8n_yearly': 'cloud_service',
+        'plan_mcp_hermes_monthly': 'cloud_service',
+        'plan_mcp_hermes_yearly': 'cloud_service',
+        'plan_smarthome_monthly': 'smart_home',
+        'plan_smarthome_yearly': 'smart_home',
+        'plan_security_access_entry_monthly': 'security_access',
+        'plan_security_access_entry_yearly': 'security_access',
+        'plan_security_access_pro_monthly': 'security_access',
+        'plan_security_access_pro_yearly': 'security_access',
+    }
+
+    # E2 M2M：四個白名單有變動的 template → (6,0) 全量終態。
+    # subscription_template_links.xml（noupdate=0）供新裝與非 sticky DB；
+    # 本表覆蓋 sticky noupdate 被擋的升級 DB（migration force-write）。
+    _PRICING_330_TEMPLATE_WIRING = {
+        'cloud_app_odoo': (
+            'plan_odoo_monthly', 'plan_odoo_yearly',
+            'plan_odoo_t2_monthly', 'plan_odoo_t2_yearly',
+            'plan_odoo_t3_monthly', 'plan_odoo_t3_yearly'),
+        'cloud_app_n8n': (
+            'plan_n8n_monthly', 'plan_n8n_yearly',
+            'plan_n8n_t2_monthly', 'plan_n8n_t2_yearly',
+            'plan_n8n_t3_monthly', 'plan_n8n_t3_yearly'),
+        'cloud_app_mcp_hermes': (
+            'plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly',
+            'plan_mcp_hermes_t2_monthly', 'plan_mcp_hermes_t2_yearly',
+            'plan_mcp_hermes_t3_monthly', 'plan_mcp_hermes_t3_yearly'),
+        'smart_home_home_assistant': (
+            'plan_smarthome_monthly', 'plan_smarthome_yearly',
+            'plan_smarthome_mcp_monthly', 'plan_smarthome_mcp_yearly'),
+    }
+
+    @api.model
+    def _woow_migrate_pricing_330(self):
+        """#330 .52 post-migrate 主體（delegate 到 model method 供單元測試，
+        比照 .42/.43 慣例）。冪等；一律 xmlid 定位；缺 xmlid log-skip 不
+        abort（升級 DB 個別缺 seed 不應中斷整支 migration）。
+
+        grandfathering 已拍板不需要（prod 無人用、stg 純測試）→ 直接
+        force-write、無政策碼。
+        """
+
+        def ref(suffix):
+            record = self.env.ref(
+                'woow_paas_platform.%s' % suffix, raise_if_not_found=False)
+            if not record:
+                _logger.warning(
+                    'pricing-330 migration: xmlid %s 不存在，跳過', suffix)
+            return record
+
+        # D1 reprice＋D2 rename＋D3 quota（plan＋product 同步）
+        for suffix, vals in self._PRICING_330_PLAN_WRITES.items():
+            plan = ref(suffix)
+            if plan:
+                plan.write(vals)
+            product = ref(suffix.replace('plan_', 'product_', 1))
+            if product:
+                product.write({
+                    'list_price': vals['sh_plan_price'],
+                    'name': vals['name'] + ' Subscription',
+                })
+
+        # D4 service_type backfill（既有 20 筆；force-write）
+        for suffix, service_type in self._PRICING_330_SERVICE_TYPE.items():
+            plan = ref(suffix)
+            if plan:
+                plan.service_type = service_type
+
+        # E2 template M2M force-write（(6,0) 全量；缺任一 plan 則跳過該
+        # template 留給 log，避免寫出半套白名單）
+        for tpl_suffix, plan_suffixes in \
+                self._PRICING_330_TEMPLATE_WIRING.items():
+            template = ref(tpl_suffix)
+            if not template:
+                continue
+            plans = [ref(s) for s in plan_suffixes]
+            if not all(plans):
+                continue
+            template.write({
+                'subscription_plan_ids': [(6, 0, [p.id for p in plans])],
+            })
 
     @api.constrains('service_type')
     def _check_service_type_matches_template_family(self):

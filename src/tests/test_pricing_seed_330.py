@@ -343,3 +343,131 @@ class TestTemplatePlanWiring(TransactionCase):
             self.assertEqual(
                 set(template.subscription_plan_ids.ids), expected_ids,
                 '%s 的 plan M2M 應為 %s' % (tpl_suffix, sorted(plan_suffixes)))
+
+
+# ---- G3 migration 模擬用：.51 升級前 DB shape（舊價/舊名） ----
+OLD_PLANS_51 = {
+    'plan_odoo_monthly': (499, 'Odoo Monthly'),
+    'plan_odoo_yearly': (4990, 'Odoo Yearly'),
+    'plan_n8n_monthly': (199, 'n8n Monthly'),
+    'plan_n8n_yearly': (1990, 'n8n Yearly'),
+    'plan_smarthome_monthly': (100, 'Smart Home Monthly'),
+    'plan_smarthome_yearly': (1000, 'Smart Home Yearly'),
+    'plan_security_access_entry_monthly': (100, 'Security Access Entry Monthly'),
+    'plan_security_access_entry_yearly': (1000, 'Security Access Entry Yearly'),
+    'plan_security_access_pro_monthly': (300, 'Security Access Pro Monthly'),
+    'plan_security_access_pro_yearly': (3000, 'Security Access Pro Yearly'),
+    'plan_mcp_odoo_monthly': (499, 'Odoo MCP Server Monthly'),
+    'plan_mcp_odoo_yearly': (4990, 'Odoo MCP Server Yearly'),
+    'plan_mcp_n8n_monthly': (499, 'n8n MCP Server Monthly'),
+    'plan_mcp_n8n_yearly': (4990, 'n8n MCP Server Yearly'),
+    'plan_mcp_hermes_monthly': (499, 'Hermes MCP Server Monthly'),
+    'plan_mcp_hermes_yearly': (4990, 'Hermes MCP Server Yearly'),
+}
+
+# .51 DB 的既有 20 筆（migration D4 backfill 的作用集）
+PRE_EXISTING_20 = list(OLD_PLANS_51) + list(PLACEHOLDER_PLANS)
+
+# .51 DB 的 template M2M（升級前舊白名單；sticky noupdate 情境）
+OLD_TEMPLATE_PLANS_51 = {
+    'cloud_app_odoo': ['plan_odoo_monthly', 'plan_odoo_yearly'],
+    'cloud_app_n8n': ['plan_n8n_monthly', 'plan_n8n_yearly'],
+    'cloud_app_mcp_hermes': ['plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly'],
+    'smart_home_home_assistant': ['plan_smarthome_monthly', 'plan_smarthome_yearly'],
+}
+
+
+def _migrate_fn():
+    # migration 目錄不是 python package，比照 test_security_access_p2_5_migration
+    # 以檔案路徑載入。
+    import importlib.util
+    import os
+    here = os.path.dirname(os.path.dirname(__file__))
+    path = os.path.join(here, 'migrations', '18.0.1.0.52', 'post-migrate.py')
+    spec = importlib.util.spec_from_file_location('p330_post_migrate', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.migrate
+
+
+class TestPricingMigration330(TransactionCase):
+    """G3：模擬 .51→.52 升級——fixture 重建升級前 DB shape（舊價/舊名/
+    routes=3/service_type 空/舊 M2M），驅動 migrate()，斷言 D1–D4＋E2。"""
+
+    def setUp(self):
+        super().setUp()
+        self.migrate = _migrate_fn()
+
+    def _revert_to_51_shape(self):
+        """把 fresh-seed DB 倒回 .51 升級前狀態（xmlid 定位，同 R8 鐵律）。"""
+        for sfx, (price, name) in OLD_PLANS_51.items():
+            _plan(self.env, sfx).write(
+                {'sh_plan_price': price, 'name': name})
+            _product(self.env, sfx).write(
+                {'list_price': price, 'name': name + ' Subscription'})
+        for sfx in ('plan_security_access_entry_monthly',
+                    'plan_security_access_entry_yearly'):
+            _plan(self.env, sfx).sa_max_routes = 3
+        for sfx in PRE_EXISTING_20:
+            _plan(self.env, sfx).service_type = False
+        for tpl_sfx, plan_sfxs in OLD_TEMPLATE_PLANS_51.items():
+            template = self.env.ref('%s.%s' % (MOD, tpl_sfx))
+            template.subscription_plan_ids = [
+                (6, 0, [_plan(self.env, s).id for s in plan_sfxs])]
+
+    def _assert_target_state(self):
+        # D1 reprice＋D2 rename（16 plan＋16 product；xmlid 逐筆）
+        for sfx in OLD_PLANS_51:
+            price, name = EXPECTED_PLANS[sfx]
+            plan = _plan(self.env, sfx)
+            self.assertEqual(plan.sh_plan_price, price, sfx)
+            self.assertEqual(plan.name, name, sfx)
+            product = _product(self.env, sfx)
+            self.assertEqual(product.list_price, price, sfx)
+            self.assertEqual(product.name, name + ' Subscription', sfx)
+        # D3 quota
+        for sfx in ('plan_security_access_entry_monthly',
+                    'plan_security_access_entry_yearly'):
+            self.assertEqual(_plan(self.env, sfx).sa_max_routes, 5, sfx)
+        for sfx in ('plan_security_access_pro_monthly',
+                    'plan_security_access_pro_yearly'):
+            self.assertEqual(_plan(self.env, sfx).sa_max_routes, 10, sfx)
+        # D4 backfill（20 筆；anythingllm orphan 寫入成功＝guard 放行實證）
+        for sfx in PRE_EXISTING_20:
+            self.assertEqual(
+                _plan(self.env, sfx).service_type,
+                EXPECTED_SERVICE_TYPE[sfx], sfx)
+        # E2 M2M（四個變動 template 恢復 6/6/6/4 全量）
+        for tpl_sfx in OLD_TEMPLATE_PLANS_51:
+            template = self.env.ref('%s.%s' % (MOD, tpl_sfx))
+            expected_ids = {
+                _plan(self.env, s).id
+                for s in EXPECTED_TEMPLATE_PLANS[tpl_sfx]}
+            self.assertEqual(
+                set(template.subscription_plan_ids.ids), expected_ids, tpl_sfx)
+        # G5：placeholder 價格/名稱不受 migration 影響
+        for sfx, (price, name) in PLACEHOLDER_PLANS.items():
+            plan = _plan(self.env, sfx)
+            self.assertEqual(plan.sh_plan_price, price, sfx)
+            self.assertEqual(plan.name, name, sfx)
+
+    def test_migration_upgrades_51_shape_to_target(self):
+        self._revert_to_51_shape()
+        self.migrate(self.env.cr, '18.0.1.0.51')
+        self._assert_target_state()
+
+    def test_migration_idempotent(self):
+        self._revert_to_51_shape()
+        self.migrate(self.env.cr, '18.0.1.0.51')
+        self.migrate(self.env.cr, '18.0.1.0.51')
+        self._assert_target_state()
+
+    def test_migration_noop_on_fresh_install(self):
+        """version 為空（fresh install 不跑 migration 腳本；防禦性 guard）→
+        不動任何值。"""
+        self._revert_to_51_shape()
+        self.migrate(self.env.cr, None)
+        for sfx, (price, name) in OLD_PLANS_51.items():
+            plan = _plan(self.env, sfx)
+            self.assertEqual(plan.sh_plan_price, price, sfx)
+            self.assertEqual(plan.name, name, sfx)
