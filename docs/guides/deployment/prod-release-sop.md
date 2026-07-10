@@ -86,7 +86,7 @@ related:
 
 ---
 
-## 2. 當前 prod 版本矩陣（2026-06-14 建立 · 2026-06-21 · 2026-06-25 · 2026-06-26 複驗）
+## 2. 當前 prod 版本矩陣（2026-06-14 建立 · 2026-06-21 · 2026-06-25 · 2026-06-26 · 2026-07-10 複驗）
 
 > ⚠️ 這是**快照**。發版後務必用本節最後的指令重新產生，別照抄。
 > ⚠️ prod image tag 是 **mutable date-tag**（可能被重指）→ **判版本看 digest，不看 tag**。
@@ -95,8 +95,8 @@ related:
 
 | Component | NS | image:tag | digest（sha256，前綴） | chart | chart 版本 | pin 位置（paas-app-bundle-cd） |
 |-----------|----|-----------|----------------------|-------|-----------|-------------------------------|
-| paas-odoo | `paas-system` | `…/paas-odoo:20260625.1514`（addon `18.0.1.0.40`；**2026-06-26 已裝 `woow_paas_platform`**，見下觀察） | `4a687584…4e66`（manifest；pod imageID 因 prod+stg 共 cluster containerd dedup 報 stg repo 別名，內容同此 tag） | Bitnami `odoo`（OCI） | `28.2.10` | tag→`paas-odoo/values-prod.yaml`（image 區塊）；chart→`paas-odoo/fleet.yaml` `helm.version` |
-| paas-operator | `paas-system` | `…/paas-operator:20260624.1022` | `9b937dbb…6b16` | `paas-operator` | **`0.1.16`**（2026-06-25 promote，helm rev 42） | tag→`paas-operator/values-prod.yaml:8`；chart→`paas-operator/fleet.yaml` `version` |
+| paas-odoo | `paas-system` | `…/paas-odoo:20260710.0902`（addon `18.0.1.0.51`；#318/#322 訂閱聯動 + #324 計費雙缺口；commit 281cbae） | `4412ed69…c764`（manifest；pod imageID 因 prod+stg 共 cluster containerd digest dedup 報 stg repo 別名 `paas-odoo-stg:20260710.0349`，內容同此 digest） | Bitnami `odoo`（OCI） | `28.2.10` | tag→`paas-odoo/values-prod.yaml`（image 區塊）；chart→`paas-odoo/fleet.yaml` `helm.version` |
+| paas-operator | `paas-system` | `…/paas-operator:8577944`（short-SHA 非時間戳；#317 PVC keep install-time post-renderer，PR #321） | `35f0d1de…6885` | `paas-operator` | **`0.1.17`**（#315 limitranges RBAC，嚴格超集疊 0.1.16 上） | tag→`paas-operator/values-prod.yaml:8`；chart→`paas-operator/fleet.yaml` `version` |
 | postgresql | `paas-system` | `bitnamilegacy/postgresql:17.6.0-debian-12-r4` | `92635613…0a8d` | （subchart） | — | `paas-odoo/values-prod.yaml`（postgresql 區塊） |
 | cloudflared | `paas-cloudflare-system` | `cloudflare/cloudflared:2026.3.0` | `6b599ca3…31b0` | `cloudflare-tunnel-remote` | **`0.1.2`**（已 pin） | tag→`cloudflare/values-prod.yaml:8`；chart→`cloudflare/fleet.yaml` `version`（issue #19 已於 `a76517e` pin） |
 
@@ -104,9 +104,11 @@ related:
 
 | Component | NS | image:tag | chart 版本 |
 |-----------|----|-----------|-----------|
-| paas-operator-stg | `paas-stg-system` | `…/paas-operator:20260624.1022`（digest `9b937dbb…6b16`） | `0.1.16`（helm rev 65） |
+| paas-operator-stg | `paas-stg-system` | `…/paas-operator:8577944`（digest `35f0d1de…6885`，與 prod 同版 parity） | `0.1.17` |
 | cloudflared-stg | `paas-stg-cloudflare-system` | `cloudflare/cloudflared:2026.3.0` | `0.1.2`（已 pin） |
 | odoo（stg） | — | **不在此 CD**：stg odoo 走 `dev-sandbox-stg`（見 [deploy-stg](../../../CLAUDE.md)） | — |
+
+> **觀察（2026-07-10）：odoo `.48→.51` prod rollout 完成。** prod odoo 由 `20260708.0051`（18.0.1.0.48）升至 **`20260710.0902`（18.0.1.0.51，含 #318/#322 訂閱聯動 + #324 計費雙缺口）**；migration `-u` 0 error、pod digest `4412ed69…c764` 閉環、站點 `/woow /odoo /my /web/login` 全 200（詳見 memory `project_prod_rollout_20260710_51`）。**operator 本輪未動**：現役 **`8577944` / chart `0.1.17`**（`.49/.51` 沒碰 `extra/paas-operator`）——**取代下方 2026-06-25 觀察的 `0.1.16` / `20260624.1022` 快照**；自 #317 PVC keep（PR #321）起 prod/stg operator 仍維持同版 parity（皆 `8577944` / `0.1.17`，digest `35f0d1de…6885`）。**agent-runtime**：operator env 已帶完整 `AGENT_RUNTIME_*`（pin `1.4.2` / chart `0.4.3`、skillRunner on），約 2026-06-26 起 prod **enabled-dormant**（zero 租戶 spawn）——舊「prod 未啟用」認知作廢。
 
 > **觀察（2026-06-25）**：prod operator 已 promote 到 chart `0.1.16` / image `20260624.1022`，**與 stg 同版**（含 **#207/#208** teardown 孤兒修復 + D1-D6 agent 生命週期 + epoch PVC GC 等）。先前「prod 落後 stg」的缺口已消除。**agent-runtime 在 prod 啟用屬 values 層（非 image/chart）**：~~2026-06-25 四向複驗仍未啟用~~ → **2026-06-26 已啟用並端到端驗證**：CD `paas-operator/values-prod.yaml` 加 `config.agentRuntime`（PR #33）→ operator 13 `AGENT_RUNTIME_*` env；`paas-odoo/values-prod.yaml` 加 5 `AGENT_RUNTIME_*` extraEnvVars（PR #34，secret `paas-odoo-agent-runtime`，auth/webhook 與 operator byte-match）；E2E 實證 spawn cold-start 8.5s → agent pod 2/2 Running → state-sync webhook 雙向 200（`spawning→active`）→ cleanup。**prod Bitnami chart `networkPolicy` 預設 allowExternal+allowExternalEgress 已通、無需改**（與 stg dev-sandbox 收緊 NP 不同）。`default_enable_agent_runtime=True`（新 project 自動開）。**LLM key 已設並端到端驗證（2026-06-27，REAL_LLM）**：`ai.config` id=3 WoowBot(MiniMax-M2.7) + `default_ai_assistant_id=2`/`default_ai_config_id=3`，live cold-start E2E WS 回真 LLM（見 §5.3）。詳見 plan `docs/plans/2026-Q2/2026-06-26-prod-agent-runtime-enablement.md`（含執行偏差）。落後幅度大時 promote 仍須先過 §9 坑 #11 的**無回歸超集 gate**。
 
