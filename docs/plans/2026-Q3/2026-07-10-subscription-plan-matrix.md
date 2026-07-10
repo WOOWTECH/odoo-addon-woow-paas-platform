@@ -2,7 +2,7 @@
 
 > **權威來源**：2026-07-10 拍板定案（蓋過 2026-07-01 定價會議 doc 衝突處）。
 > **合併來源**：CS／SH／AI 三份分表草稿＋repo 現況掃描；**SA＋AC 草稿缺件（null）**，該節由拍板定案＋seed 現況重建（重建推導處均有標注）。
-> **現況基準**（最終審查已逐筆對 `src/data/subscription_products.xml` 驗證）：**20 筆 plan＋20 筆 product**，全包在單一 `<data noupdate="1">`（`subscription_products.xml:3`）；版號 `18.0.1.0.50`（`src/__manifest__.py:3`）；本波 PR base＝**.51**。
+> **現況基準**（最終審查已逐筆對 `src/data/subscription_products.xml` 驗證）：**20 筆 plan＋20 筆 product**，全包在單一 `<data noupdate="1">`（`subscription_products.xml:3`）；版號現值＝**.51**（#324 fix 所帶 bump）；本波 PR 目標＝**.52**（2026-07-10 plan-review F4 校正）。
 > **全域規則（拍板）**：年繳＝月繳×10（機械先 seed、後台可改）；trial 統一 7 天（現況 seed 已全為 7 天，無異動）；每個「檔位×週期」＝一筆獨立 `sh.subscription.plan` record；`sh_override_product=True` ⇒ `plan.sh_plan_price` 為權威價、`product.list_price` 僅影響購物車／發票顯示，**兩者必同步改**。
 
 ---
@@ -68,7 +68,7 @@ product 端：`type='service'`、`sale_ok=True`、`purchase_ok=False`、`sh_prod
 
 全檔 `<data noupdate="1">` ⇒ `-u woow_paas_platform` **只建新 xmlid record、不覆寫既有 record 任何欄位**：
 
-1. 16 筆改價（＋改名＋SA quota 調整）**必走 migration**（`src/migrations/18.0.1.0.51/post-migrate.py`，命名循 `.42`/`.43` 現例）。
+1. 16 筆改價（＋改名＋SA quota 調整）**必走 migration**（`src/migrations/18.0.1.0.52/post-migrate.py`，命名循 `.42`/`.43` 現例；⚠️ 目錄 .52 非 .51，plan-review F4）＋**同步改 XML 本身**（fresh-install 路徑，見 checklist C0）。
 2. 14 筆新增 `-u` 自建，無需 migration。
 3. 新欄位（`service_type`、`sa_max_access_emails`）加在 model 上屬 schema 變更，`-u` 自動建欄；但**既有 20 筆 record 的欄位值** noupdate 不會從 XML 回填 → 同支 migration backfill。
 4. **定位鐵律**：migration 一律以 XML id（`env.ref('woow_paas_platform.plan_…')`）定位，嚴禁價格／名稱 match（撞價實例見 R8）。
@@ -246,21 +246,26 @@ product：`product_security_access_entry_monthly`（`:498`，100）／`_entry_ye
 
 ---
 
-## 8. 「定價 seed 重定 PR」落地 checklist（base `.51`）
+## 8. 「定價 seed 重定 PR」落地 checklist（base **`.52`**——2026-07-10 plan-review F4 校正）
 
 ### A. 版本與前置
 
-- [ ] **A1** `src/__manifest__.py:3` 版號 `18.0.1.0.50` → **`18.0.1.0.51`**
-- [ ] **A2**（Q1，merge 前必做）查 stg／prod active subscriptions 掛在 16 個 reprice plan 上的清單；grandfathering 政策拍板並寫入 migration
-- [ ] **A3**（Q2，寫 code 前必做）`service_type` enum 值拍板
+- [ ] **A1** `src/__manifest__.py:3` 版號 `18.0.1.0.51` → **`18.0.1.0.52`**（⚠️ plan-review F4：manifest 已是 .51〔#324 fix 所帶〕，原「.50→.51」不可執行）
+- [x] **A2** ~~grandfathering 政策~~ **已拍板＝不需要**（prod 無人用、stg 純測試）→ 16 筆直接 force-write；merge 前僅做便宜 sanity 複驗「16 plan 無 active 訂閱」
+- [x] **A3** `service_type` enum **已拍板＝3 值**（cloud_service／smart_home／security_access；OQ-A）
 
 ### B. Schema（新欄位，`-u` 自動建欄）
 
-- [ ] **B1** `sh.subscription.plan` 加 **`service_type`** Selection discriminator（新 inherit 檔或併現有；add-only pattern，同 `sa_quota`／`sh_mcp`）
-- [ ] **B2** `src/models/sh_subscription_plan_sa_quota.py` 加 **`sa_max_access_emails`**（Integer，default 0；help 註明「跨訂閱全 route email 去重加總之硬上限；0＋AC 席數」語意）
+- [ ] **B1** `sh.subscription.plan` 加 **`service_type`** Selection discriminator（新檔 `sh_subscription_plan_service_type.py`＋條件式 guard、orphan 放行；add-only pattern，同 `sa_quota`／`sh_mcp`）
+- [ ] **B2**（plan-review F1 校正）新檔 `src/models/sh_subscription_plan_ac.py` 加 **`ac_max_access_seats`**（Integer，default 0；**MAX 上限語意**，help 註明「跨訂閱全 route email 去重加總之硬上限＝0＋已購 AC 席數」）——OQ-B 已拍板定名，原 `sa_max_access_emails` 廢止
 - [ ] **B3**（若 Q4 拍 Option B）新增 `src/models/sh_subscription_plan_cs_spec.py`：`cs_vcpu`／`cs_ram_gb`／`cs_storage_gb`／`cs_odoo_workers`——可與 seed PR 拆開成 follow-up
+- [ ] **B6**（plan-review F7）所有新 model 檔 import 進 `src/models/__init__.py`（漏 import → `-u` 載 seed 直接炸）
 
-### C. Seed XML 新增（`subscription_products.xml`，noupdate 內新 xmlid，`-u` 自建，28 筆）
+### C. Seed XML（`subscription_products.xml`）
+
+- [ ] **C0**（plan-review F2，**與 D1 缺一不可**）直接修改 XML 內 **16 筆既有 plan 的 `sh_plan_price`＋對應 product 的 `list_price`** 為新值——fresh-install 路徑（noupdate=1 只擋 upgrade 重套、不影響首裝取值）；只走 migration 會讓所有 fresh 環境 seed 出舊價
+
+新增（noupdate 內新 xmlid，`-u` 自建，28 筆）
 
 每筆 plan 帶 §2.1 完整 11 欄＋`service_type`＋各自專屬欄；product 用 `product.product`＋4 常數欄＋`sh_subscription_plan_id`：
 
@@ -270,7 +275,7 @@ product：`product_security_access_entry_monthly`（`:498`，100）／`_entry_ye
 - [ ] **C4** AI-Hermes：`plan_mcp_hermes_t2_monthly`(4500)／`_t2_yearly`(45000)／`_t3_monthly`(6000)／`_t3_yearly`(60000)＋`product_mcp_hermes_t2/t3_*`
 - [ ] **C5**（Q3 拍板後，可後補不 block）AC 席數 add-on product（500/seat/月）
 
-### D. Migration `src/migrations/18.0.1.0.51/post-migrate.py`（命名循 `.42`/`.43` 現例；**一律 `env.ref()` xmlid 定位**，R8）
+### D. Migration `src/migrations/18.0.1.0.52/post-migrate.py`（命名循 `.42`/`.43` 現例；**一律 `env.ref()` xmlid 定位**，R8；⚠️ 目錄必為 **.52** 非 .51——manifest 已 .51、.51 目錄會被跳過＝整批 reprice 靜默失效，plan-review F4）
 
 - [ ] **D1** reprice 16 plan `sh_plan_price`＋16 product `list_price`（32 筆）：
   - CS：`plan_odoo_monthly` 499→1000、`plan_odoo_yearly` 4990→10000、`plan_n8n_monthly` 199→1000、`plan_n8n_yearly` 1990→10000（product 同步）
@@ -281,12 +286,12 @@ product：`product_security_access_entry_monthly`（`:498`，100）／`_entry_ye
 - [ ] **D3** SA quota：`plan_security_access_entry_monthly/yearly` 的 `sa_max_routes` 3→**5**（Pro 已=10 不動；其餘 quota 依 Q6）
 - [ ] **D4** `service_type` backfill **既有 20 筆 plan**（含 pg／anythingllm 4 筆 placeholder 也要歸類）；新 14 筆 XML 自帶免 backfill
 - [ ] **D5**（若 B3 同 PR）CS T1 既有 4 筆 backfill `cs_*` 規格值
-- [ ] **D6** grandfathering 處置碼（依 A2 拍板）
+- [x] **D6** ~~grandfathering 處置碼~~ 已拍板不需要（D1 force-write 即終案）
 
 ### E. Template-side（另一支 heal/migration，撞 §2.3 sticky noupdate，非 `-u` 自動）
 
 - [ ] **E1** `cloud_app_odoo.helm_default_values` 的 init script `workers=0` → tier-aware（`cloud_app_templates.xml:170`；比照 `_heal_sticky_helm_value_specs` 加專門重寫 `helm_default_values` 的 heal `<function>`）——**三階規格生效硬前提**（可拆 follow-up，但要與改價 PR 明確掛鉤）
-- [ ] **E2** template `subscription_plan_ids` M2M wiring：odoo↔6 plan、n8n↔6 plan、mcp-odoo/mcp-n8n↔各 2、mcp-hermes↔6、（smarthome／SA 無 template 不涉）——同撞 sticky noupdate，需 migration；不 wire 則 marketplace 抓不到新檔（Q5）
+- [ ] **E2**（plan-review F3 重寫）template M2M wiring＝改 `src/data/subscription_template_links.xml`（**noupdate=0、宣告式、plain `-u` 即生效，不需 bespoke migration**——sticky noupdate 對此檔不適用）：`cloud_app_odoo`↔6、`cloud_app_n8n`↔6、mcp-odoo/mcp-n8n↔各 2、`cloud_app_mcp_hermes`↔6、**`smart_home_home_assistant`↔4（必含 2 個 +MCP 新檔——SH 有薄 template＋M2M＝前端 picker 唯一鑰匙，原「SH 無 template」為誤述）**；SA 不涉的正確理由＝本 PR 0 筆 SA 新 plan。驗收：`api_template_plans`／`api_smarthome_plans` 回傳含新檔（Q5）
 
 ### F. 部署碼（若 Q4 拍 Option B，可拆 follow-up PR）
 
@@ -301,3 +306,7 @@ product：`product_security_access_entry_monthly`（`:498`，100）／`_entry_ye
 - [ ] **G3** migration 測試：模擬 .50→.51 升級，驗 reprice／backfill／quota（noupdate DB 上 `-u` 後斷言）
 - [ ] **G4** 前端 picker 冒煙（Q5）：SH 四選項、CS/Hermes 三階有渲染
 - [ ] **G5** 不刪任何既有 record 斷言（pg／anythingllm 4 筆 placeholder 原價原樣）
+- [ ] **G6** `service_type` 斷言：PR 後 34 筆 plan 全非空；MCP/Hermes 6 筆＝`cloud_service`；guard 對 AnythingLLM orphan 放行不炸
+- [ ] **G7**（plan-review F5）更新既有 seeded-price 斷言：`src/tests/test_mcp_server_template_seed.py:64,66,182,184`（＋~:70-73 product）Hermes 499/4990 → 1500/15000（與 C0 同 commit，否則測試紅）
+
+> 補充（§2.2 對照）：「noupdate 不回填」僅指 **upgrade 路徑**；fresh install 直接取 XML 值——故 C0（改 XML）與 D1（migration）兩半缺一不可（plan-review F2）。後台 view（service_type 顯隱 form）本波 **out-of-scope**（leader 裁決，隨 #331/#332 後補；plan-review F8）。

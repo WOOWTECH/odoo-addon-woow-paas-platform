@@ -332,7 +332,7 @@ src/models/
 | **A2** | 查 stg/prod active subs＋grandfathering 拍板寫入 migration | **拍板解除**；降級為 merge 前快速 sanity 複驗「16 plan 無 active 訂閱」（便宜保險、非 gate）；不需政策碼 | 【已拍板】 |
 | **A3** | `service_type` enum 拍板（寫 code 前必做） | 本報告 §3.1 給定案建議（3 值）；剩 OQ-A confirm 即解鎖 | 【建議待拍】 |
 | **B1** | 加 `service_type` Selection | 具體化：3 值＋**條件式 guard（orphan 放行）**＋落檔 `sh_subscription_plan_service_type.py` | 【建議待拍】 |
-| **B2** | `sa_quota.py` 加 `sa_max_access_emails` | 視 **OQ-B**：若拍更名 `ac_max_access_seats` 則落檔 `sh_subscription_plan_ac.py`；default 0、MAX 語意、help 註明「0＋已購席數；email 去重」皆不變。**兩份 doc 務必統一一個名，避免各 seed 一個** | 命名【建議待拍】 |
+| **B2** | 新檔 `sh_subscription_plan_ac.py` 加 **`ac_max_access_seats`** | **OQ-B ✅ 已拍板定名（2026-07-10）**：default 0、MAX 語意、help 註明「0＋已購席數；email 去重」；原 `sa_max_access_emails` 廢止（總表 B2 已同步校正） | 【已拍板】 |
 | **B-新增建議** | — | B4：`sa_max_email_rules`→`email_routing_max_rules` 改名（未 enforce、便宜；OQ-E）；B5：`backup_*` 佔位欄位（OQ-F，可後補不 block） | 【建議待拍】＋【未來佔位】 |
 | **C1–C3／C5** | — | 不變（C 段每筆 plan 補帶 `service_type`，隨 §2.1 12 欄自動涵蓋） | — |
 | **C4** | 「AI-Hermes 新增 4 筆」 | 內容不變；歸類註記改 **CS-MCP**；XML 自帶 `service_type='cloud_service'` | — |
@@ -360,7 +360,7 @@ src/models/
 
 ## ⑥ 開放問題（按急迫排序，每題附選項＋建議）
 
-### A 組——seed PR 前置 blocker（不拍則欄位/seed 寫不出；三題約 10 分鐘可拍完）
+### A 組——seed PR 前置 blocker（**✅ 2026-07-10 全數拍板照建議**：OQ-A＝3 值 enum／OQ-B＝`ac_max_access_seats`／OQ-C＝不綁 service_type；下表留檔備查）
 
 | # | 問題 | 選項 | 建議 |
 |---|---|---|---|
@@ -393,7 +393,7 @@ Grandfathering 不需要（16 筆直接 force-write）；SH 150/400（400＝+MCP
 
 ### 建議拍板最小集（解鎖路徑）
 
-1. **現在拍**：OQ-A＋OQ-B＋OQ-C（三題皆 confirm 級）→ 解鎖 seed 重定 PR（base .52）全部 schema/seed/migration 工作。
+1. **✅ 已拍（2026-07-10 Eugene「照建議」）**：OQ-A＝3 值 enum／OQ-B＝`ac_max_access_seats`／OQ-C＝capability 不綁 service_type → seed 重定 PR（base .52）已解鎖動工（實作依 plan-review 行動清單，見 `design-doc-plan-review` 報告）。
 2. **同步啟動**：OQ-D 事實查驗（問 `sh_subscription` agent 多 line/qty 能力）→ 拍 carrier → 補 AC product（C5）。
 3. **AC enforce 動工前**：OQ-J（禁網域規則）＋OQ-K（CF 計費單位坐實）。
 4. **follow-up 排期**：OQ-H（tier 規格映射，定價正當性）、OQ-E/OQ-F（Email/Backup 結構）、OQ-L（CS/SH AC 接線）。
