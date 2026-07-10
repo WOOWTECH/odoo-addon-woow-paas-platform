@@ -568,6 +568,13 @@ class TestCloudServiceChangePlanTrialMode(TransactionCase):
             "sh_trial": False,
             "sh_start_date": today - timedelta(days=15),
             "sh_end_date": today + timedelta(days=15),
+            # #327：退點視窗改以 sh_date_of_next_payment 反推，週期中點 sub 的
+            # 下次扣款日對齊當期結束；明確 day/30 cycle 使半額斷言穩定（不受
+            # relativedelta 月份天數浮動）。cycle_start = next_payment − 30d
+            # = today−15 = start，remaining 15/30 → 150。
+            "sh_date_of_next_payment": today + timedelta(days=15),
+            "sh_unit": "day",
+            "sh_recurrency": 30,
         })
         # #324：退點前提為本訂閱真已付 — seed 一筆 done deduct
         self.env['wallet.transaction'].sudo().create({
