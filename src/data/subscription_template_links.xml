@@ -7,7 +7,9 @@
 
         <record id="cloud_app_n8n" model="woow_paas_platform.cloud_app_template">
             <field name="subscription_plan_ids"
-                   eval="[(6, 0, [ref('plan_n8n_monthly'), ref('plan_n8n_yearly')])]"/>
+                   eval="[(6, 0, [ref('plan_n8n_monthly'), ref('plan_n8n_yearly'),
+                                  ref('plan_n8n_t2_monthly'), ref('plan_n8n_t2_yearly'),
+                                  ref('plan_n8n_t3_monthly'), ref('plan_n8n_t3_yearly')])]"/>
         </record>
 
         <record id="cloud_app_postgresql" model="woow_paas_platform.cloud_app_template">
@@ -17,12 +19,16 @@
 
         <record id="cloud_app_odoo" model="woow_paas_platform.cloud_app_template">
             <field name="subscription_plan_ids"
-                   eval="[(6, 0, [ref('plan_odoo_monthly'), ref('plan_odoo_yearly')])]"/>
+                   eval="[(6, 0, [ref('plan_odoo_monthly'), ref('plan_odoo_yearly'),
+                                  ref('plan_odoo_t2_monthly'), ref('plan_odoo_t2_yearly'),
+                                  ref('plan_odoo_t3_monthly'), ref('plan_odoo_t3_yearly')])]"/>
         </record>
 
         <record id="cloud_app_mcp_hermes" model="woow_paas_platform.cloud_app_template">
             <field name="subscription_plan_ids"
-                   eval="[(6, 0, [ref('plan_mcp_hermes_monthly'), ref('plan_mcp_hermes_yearly')])]"/>
+                   eval="[(6, 0, [ref('plan_mcp_hermes_monthly'), ref('plan_mcp_hermes_yearly'),
+                                  ref('plan_mcp_hermes_t2_monthly'), ref('plan_mcp_hermes_t2_yearly'),
+                                  ref('plan_mcp_hermes_t3_monthly'), ref('plan_mcp_hermes_t3_yearly')])]"/>
         </record>
 
         <record id="cloud_app_mcp_odoo" model="woow_paas_platform.cloud_app_template">
@@ -41,7 +47,8 @@
 
         <record id="smart_home_home_assistant" model="woow_paas_platform.smart_home_template">
             <field name="subscription_plan_ids"
-                   eval="[(6, 0, [ref('plan_smarthome_monthly'), ref('plan_smarthome_yearly')])]"/>
+                   eval="[(6, 0, [ref('plan_smarthome_monthly'), ref('plan_smarthome_yearly'),
+                                  ref('plan_smarthome_mcp_monthly'), ref('plan_smarthome_mcp_yearly')])]"/>
         </record>
 
         <!-- Link security_access_template to its subscription plans -->

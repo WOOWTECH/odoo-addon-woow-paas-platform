@@ -59,11 +59,12 @@ class TestMcpServerTemplateSeed(TransactionCase):
         _assert_storage_resources_aligned(self, tmpl)
 
     def test_hermes_plans_seeded_at_odoo_pricing(self):
+        # #330 定價重定：Hermes T1＝1500／15000（沿用 xmlid、原地改 T1）
         monthly = self.env.ref('woow_paas_platform.plan_mcp_hermes_monthly')
         yearly = self.env.ref('woow_paas_platform.plan_mcp_hermes_yearly')
-        self.assertEqual(monthly.sh_plan_price, 499)
+        self.assertEqual(monthly.sh_plan_price, 1500)
         self.assertEqual(monthly.sh_unit, 'month')
-        self.assertEqual(yearly.sh_plan_price, 4990)
+        self.assertEqual(yearly.sh_plan_price, 15000)
         self.assertEqual(yearly.sh_unit, 'year')
 
     def test_hermes_products_link_plans(self):
@@ -177,11 +178,12 @@ class _McpServerSeedAssertions:
         _assert_storage_resources_aligned(self, self.env.ref(self.TMPL))
 
     def test_plans_seeded_at_odoo_pricing(self):
+        # #330 定價重定：MCP 統一單階 3000／30000
         monthly = self.env.ref(self.PLAN_M)
         yearly = self.env.ref(self.PLAN_Y)
-        self.assertEqual(monthly.sh_plan_price, 499)
+        self.assertEqual(monthly.sh_plan_price, 3000)
         self.assertEqual(monthly.sh_unit, 'month')
-        self.assertEqual(yearly.sh_plan_price, 4990)
+        self.assertEqual(yearly.sh_plan_price, 30000)
         self.assertEqual(yearly.sh_unit, 'year')
 
     def test_products_link_plans(self):
