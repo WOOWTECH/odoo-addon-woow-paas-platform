@@ -27,118 +27,93 @@ class TestChangePlanRefund(TransactionCase):
         cls.partner = cls.env.ref('base.partner_admin')
         cls.Sub = cls.env['sh.subscription.subscription'].sudo()
 
-    def _make_sub(self, start_offset_days, end_offset_days, price=100.0):
+    def _make_sub(self, start_offset_days, next_payment_offset_days,
+                  price=100.0, cycle_days=30):
         """Build a sub record without going through confirm/onchange.
 
-        Skips the upstream onchange chain (which would generate invoices /
-        send mail) so the test stays a pure unit test of the helper.
+        #327：視窗改以 sh_date_of_next_payment 推導，故顯式提供 next_payment；
+        day-based cycle（sh_recurrency=cycle_days）使 cycle_days 固定、斷言穩定。
         """
         today = date.today()
         return self.Sub.new({
             'sh_partner_id': self.partner.id,
             'sh_start_date': today + timedelta(days=start_offset_days),
-            'sh_end_date': today + timedelta(days=end_offset_days),
+            'sh_date_of_next_payment': today + timedelta(days=next_payment_offset_days),
             'sh_plan_price': price,
-            'sh_unit': 'month',
-            'sh_recurrency': 1,
+            'sh_unit': 'day', 'sh_recurrency': cycle_days,
         })
 
-    # --- BUG-5 regressions ----------------------------------------------- #
+    # --- BUG-5 regressions（trial guard 保留）---------------------------- #
 
     def test_refund_zero_during_trial_period(self):
         """today < sh_start_date — customer has not paid → refund = 0."""
-        sub = self._make_sub(start_offset_days=7, end_offset_days=29, price=100.0)
+        sub = self._make_sub(start_offset_days=7, next_payment_offset_days=7)
         self.assertEqual(sub._prorata_unused_refund(), 0)
 
-    def test_refund_zero_when_today_equals_start_date(self):
-        """today == sh_start_date — paid for full cycle, none consumed yet."""
-        sub = self._make_sub(start_offset_days=0, end_offset_days=29, price=100.0)
-        # remaining = total = 29, refund = price.
+    def test_refund_full_when_today_at_cycle_start(self):
+        """today == cycle_start（next_payment − cycle）→ 全額（尚未消耗）。"""
+        sub = self._make_sub(start_offset_days=0, next_payment_offset_days=30,
+                             cycle_days=30)
         self.assertEqual(sub._prorata_unused_refund(), 100.0)
 
     # --- happy path ------------------------------------------------------ #
 
     def test_refund_prorated_mid_paid_cycle(self):
         """Half-way through a paid cycle → ~half refund."""
-        sub = self._make_sub(start_offset_days=-15, end_offset_days=15, price=100.0)
-        # total=30, remaining=15 → 50.0
+        # cycle_start=-15, remaining=15, cycle=30 → 50
+        sub = self._make_sub(start_offset_days=-15, next_payment_offset_days=15,
+                             cycle_days=30)
         self.assertEqual(sub._prorata_unused_refund(), 50.0)
 
-    def test_refund_zero_at_end_of_cycle(self):
-        """today == sh_end_date — fully consumed → refund = 0."""
-        sub = self._make_sub(start_offset_days=-30, end_offset_days=0, price=100.0)
+    def test_refund_zero_at_next_payment(self):
+        """today == next_payment（週期用盡）→ refund = 0（原 end-of-cycle 語意）。"""
+        sub = self._make_sub(start_offset_days=-30, next_payment_offset_days=0,
+                             cycle_days=30)
         self.assertEqual(sub._prorata_unused_refund(), 0)
 
-    def test_refund_zero_after_end_date(self):
-        """Past end_date — clamp to 0, do not go negative."""
-        sub = self._make_sub(start_offset_days=-40, end_offset_days=-5, price=100.0)
-        self.assertEqual(sub._prorata_unused_refund(), 0)
+    def test_refund_prorata_past_frozen_end_date(self):
+        """#327 翻紅→翻綠：長壽 in_progress 活過凍結 sh_end_date（過期），但
+        next_payment 在未來 → 退剩餘比例（不再恆退 0）。原 test_refund_zero_
+        after_end_date 固化了「過期即退 0」的 bug，此處按新語意重寫。"""
+        today = date.today()
+        sub = self.Sub.new({
+            'sh_partner_id': self.partner.id,
+            'sh_start_date': today - timedelta(days=90),
+            'sh_end_date': today - timedelta(days=60),          # 凍結 end 已過
+            'sh_date_of_next_payment': today + timedelta(days=15),
+            'sh_plan_price': 100.0, 'sh_unit': 'day', 'sh_recurrency': 30,
+        })
+        self.assertEqual(sub._prorata_unused_refund(), 50.0)
 
-    # --- guards ---------------------------------------------------------- #
+    # --- guards --------------------------------------------------------- #
 
-    def test_refund_zero_when_dates_missing(self):
-        """sh_never_expire plans leave sh_end_date unset → refund = 0."""
+    def test_refund_zero_when_next_payment_missing(self):
+        """無 sh_date_of_next_payment（新視窗來源缺失）→ refund = 0。"""
         sub = self.Sub.new({
             'sh_partner_id': self.partner.id,
             'sh_start_date': date.today() - timedelta(days=5),
-            'sh_end_date': False,
-            'sh_plan_price': 100.0,
+            'sh_date_of_next_payment': False,
+            'sh_plan_price': 100.0, 'sh_unit': 'day', 'sh_recurrency': 30,
         })
         self.assertEqual(sub._prorata_unused_refund(), 0)
 
     def test_refund_zero_when_start_date_missing(self):
-        """Missing sh_start_date alone (mirror of the end-date guard).
-
-        Symmetric NULL guard — neither side of the (start, end) interval
-        is allowed to be NULL before the formula runs. Guards against
-        regressions that would re-introduce ``None - date`` TypeErrors.
-        """
+        """Missing sh_start_date（trial guard 需要）→ refund = 0。"""
         sub = self.Sub.new({
             'sh_partner_id': self.partner.id,
             'sh_start_date': False,
-            'sh_end_date': date.today() + timedelta(days=10),
-            'sh_plan_price': 100.0,
+            'sh_date_of_next_payment': date.today() + timedelta(days=10),
+            'sh_plan_price': 100.0, 'sh_unit': 'day', 'sh_recurrency': 30,
         })
         self.assertEqual(sub._prorata_unused_refund(), 0)
 
-    def test_refund_zero_when_end_before_start(self):
-        """``end < start`` invariant violation — historical bad data.
-
-        Mirrors the shape PR #35 R1 review observed in trial change-plan
-        diag (``sh_end_date = today − 31d`` while ``sh_start_date = today``,
-        i.e. end before start). The ``max(0, end - today)`` clamp keeps
-        refund at 0 so the controller does not return negative or
-        nonsense refunds when historical bad data slips through.
-
-        Pre-#33 this could occur from the dedup-collision force-trial
-        path leaving sh_end_date untouched while onchange backfilled it
-        to ``start - 1 day``. Post-#33 fresh subs no longer reach this
-        state, but legacy rows on prod / stg do, so the guard stays
-        load-bearing.
-        """
-        today = date.today()
+    def test_refund_zero_when_cycle_unresolvable(self):
+        """sh_unit 非法 → _cycle_delta None → refund = 0（div-by-zero 護欄）。"""
         sub = self.Sub.new({
             'sh_partner_id': self.partner.id,
-            'sh_start_date': today,
-            'sh_end_date': today - timedelta(days=31),
-            'sh_plan_price': 100.0,
-        })
-        self.assertEqual(sub._prorata_unused_refund(), 0)
-
-    def test_refund_zero_when_zero_duration_cycle(self):
-        """``end == start`` (zero-day cycle) → div-by-zero guard.
-
-        The ``(end - start).days or 1`` fallback prevents a
-        ``ZeroDivisionError`` when the billing window collapses to a
-        single day. ``max(0, end - today)`` then keeps refund at 0
-        because today coincides with the end of the cycle.
-        """
-        today = date.today()
-        sub = self.Sub.new({
-            'sh_partner_id': self.partner.id,
-            'sh_start_date': today,
-            'sh_end_date': today,
-            'sh_plan_price': 100.0,
+            'sh_start_date': date.today() - timedelta(days=5),
+            'sh_date_of_next_payment': date.today() + timedelta(days=10),
+            'sh_plan_price': 100.0, 'sh_unit': False, 'sh_recurrency': 1,
         })
         self.assertEqual(sub._prorata_unused_refund(), 0)
 
@@ -172,6 +147,7 @@ class TestChangePlanRefund(TransactionCase):
         sub = self.Sub.create({
             'sh_partner_id': self.partner.id,
             'sh_start_date': today + timedelta(days=7),
+            'sh_date_of_next_payment': today + timedelta(days=7),
             'sh_end_date': today + timedelta(days=29),
             'sh_plan_price': 100.0,
             'sh_unit': 'month',
