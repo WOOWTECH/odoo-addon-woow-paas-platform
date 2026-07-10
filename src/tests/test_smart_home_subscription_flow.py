@@ -824,6 +824,14 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
             'sh_start_date': today - timedelta(days=15),
             'sh_end_date': today + timedelta(days=15),
         })
+        # #324：退點前提為本訂閱真已付 — seed 一筆 done deduct
+        self.env['wallet.transaction'].sudo().create({
+            'partner_id': old_sub.sh_partner_id.id,
+            'transaction_type': 'deduct',
+            'amount': -old_sub.sh_plan_price,
+            'subscription_id': old_sub.id,
+            'state': 'done',
+        })
         self.env.invalidate_all()
 
         with _patch_request(self.env(user=self.owner)):

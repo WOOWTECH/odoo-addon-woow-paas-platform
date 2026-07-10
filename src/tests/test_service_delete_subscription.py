@@ -70,6 +70,17 @@ class _DeleteFixture(TransactionCase):
             ('transaction_type', '=', 'refund'),
         ])
 
+    def _mark_cycle_paid(self, sub):
+        """模擬本週期已真扣款：建一筆 done 的 deduct wallet.transaction，
+        讓 _has_paid_current_cycle 為真（#324 gate）。"""
+        return self.WalletTx.create({
+            'partner_id': sub.sh_partner_id.id,
+            'transaction_type': 'deduct',
+            'amount': -sub.sh_plan_price,
+            'subscription_id': sub.id,
+            'state': 'done',
+        })
+
 
 class TestSettleOnEntityDelete(_DeleteFixture):
 
@@ -78,6 +89,7 @@ class TestSettleOnEntityDelete(_DeleteFixture):
         sub = self._seed_sub(svc, self.plan_paid)
         self.assertEqual(sub.state, 'in_progress')
         partner = sub.sh_partner_id
+        self._mark_cycle_paid(sub)  # #324：真已付才退點
 
         refund = sub._settle_on_entity_delete()
 
@@ -137,6 +149,7 @@ class TestCloudServiceUnlinkSettlesSubscription(_DeleteFixture):
         sub = self._seed_sub(svc, self.plan_paid)
         partner = sub.sh_partner_id
         self.assertEqual(sub.state, 'in_progress')
+        self._mark_cycle_paid(sub)  # #324：真已付才退點
 
         svc.unlink()
 
@@ -220,6 +233,12 @@ class TestSmartHomeUnlinkSettlesSubscription(TransactionCase):
         self.smart_home._create_and_confirm_subscription(partner, self.plan)
         sub = self.smart_home.sudo().subscription_id
         self.assertEqual(sub.state, 'in_progress')
+        # #324：真已付才退點 — seed 一筆 done deduct
+        self.WalletTx.create({
+            'partner_id': partner.id, 'transaction_type': 'deduct',
+            'amount': -sub.sh_plan_price, 'subscription_id': sub.id,
+            'state': 'done',
+        })
 
         self.smart_home.unlink()
 
@@ -275,6 +294,12 @@ class TestSecurityAccessUnlinkSettlesSubscription(TransactionCase):
         self.sa._create_and_confirm_subscription(partner, self.plan)
         sub = self.sa.sudo().subscription_id
         self.assertEqual(sub.state, 'in_progress')
+        # #324：真已付才退點 — seed 一筆 done deduct
+        self.WalletTx.create({
+            'partner_id': partner.id, 'transaction_type': 'deduct',
+            'amount': -sub.sh_plan_price, 'subscription_id': sub.id,
+            'state': 'done',
+        })
 
         self.sa.unlink()
 

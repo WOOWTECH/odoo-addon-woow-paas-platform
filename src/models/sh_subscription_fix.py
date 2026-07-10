@@ -22,14 +22,55 @@ class ShSubscriptionFix(models.Model):
     """
     _inherit = 'sh.subscription.subscription'
 
+    def _has_paid_current_cycle(self):
+        """本訂閱是否有過成功扣款（``done`` 的 ``deduct`` 交易）。
+
+        真扣款（``_pay_from_wallet`` → ``deduct_wallet_points``）建的
+        wallet.transaction 預設 ``state='done'`` 且 stamp 上 ``subscription_id``
+        （cron 路徑帶 subscription；手動付款端點經 ``_pay_from_wallet`` 從發票
+        回推 subscription，見 #324）；#324 類「付款靜默失敗」訂閱只有
+        ``state='failed'`` 的 deduct。以此區分「真付過」與「從未付過」，堵住
+        「付款靜默失敗→刪服務退未賺得點」的套利。
+
+        範圍限制（沿用 #318，本 gate 不改變）：本方法查「本訂閱歷來任一成功
+        扣款」、不做週期範圍限定。退點金額仍由 ``_prorata_unused_refund`` 以
+        建立時寫定、之後不原地推進的 [sh_start_date, sh_end_date] 視窗計算；
+        遞迴計費只推進 ``sh_date_of_next_payment``。故對「第 2 個週期起、
+        sh_end_date 已過」的長壽 in_progress 訂閱，``max(0, end-today)`` clamp
+        會退 0——此為 #318 退點視窗的既有限制（我改前後皆退 0，非本 PR 引入），
+        待 follow-up 以 next_payment 推導當期視窗修正。
+
+        NewId（in-memory 記錄）無 persisted id，直接回 False（純公式路徑
+        ``_prorata_unused_refund`` 不經此 gate）。
+        """
+        self.ensure_one()
+        if not isinstance(self.id, int):
+            return False
+        return bool(self.env['wallet.transaction'].sudo().search_count([
+            ('subscription_id', '=', self.id),
+            ('transaction_type', '=', 'deduct'),
+            ('state', '=', 'done'),
+        ]))
+
     def _compute_unused_refund(self):
         """Pro-rata refund for the unused portion of the current paid cycle.
 
-        Returns 0 when the customer has not yet paid for the current cycle
-        (today < sh_start_date — still in trial, or sub not yet started).
-        Without this guard the formula
-        ``price * (end - today) / (end - start)`` overshoots when today is
-        before start, producing refund > price (BUG-5).
+        #324 part (b)：退點前提為「本訂閱有成功扣款」。無成功付款（never-paid
+        或僅 failed deduct）→ 退 0，對齊 trial→0 語意，堵住「付款靜默失敗→
+        刪服務退未賺得點」的套利。有成功付款才套用 ``_prorata_unused_refund``。
+        """
+        self.ensure_one()
+        if not self._has_paid_current_cycle():
+            return 0
+        return self._prorata_unused_refund()
+
+    def _prorata_unused_refund(self):
+        """純比例退點公式（不驗付款，只算 today 落在 [start, end] 的剩餘比例）。
+
+        Returns 0 when today < sh_start_date（trial / 未開始）、dates 缺失、
+        end < start（歷史壞資料）或 zero-duration cycle。formula
+        ``price * (end - today) / (end - start)``；``max(0, end - today)``
+        clamp 避免過期後為負（BUG-5）。
         """
         self.ensure_one()
         if not self.sh_end_date or not self.sh_start_date:
@@ -79,6 +120,44 @@ class ShSubscriptionFix(models.Model):
             credited = refund
         self.sudo().write({'state': 'cancel', 'sh_reason': reason})
         return credited
+
+    @api.model
+    def _cron_wallet_charge(self):
+        """[#324] Neutralize 上游 sh_subscription_wallet 的 daily 扣款 cron。
+
+        上游 ``_cron_wallet_charge`` 有缺陷 B（扣款成功不推進
+        ``sh_date_of_next_payment``、且用 ``==`` 等值比對），與本 repo
+        dunning-aware 的 ``_sh_create_auto_invoice`` 職責重疊且互相打架。
+        本 fix 層（MRO 晚於上游）將其 override 成 no-op，讓 invoice-based
+        的 ``_sh_create_auto_invoice`` 成為唯一計費路徑（該路徑為超集：
+        錢包扣款 + auto-topup 刷卡 + dunning 收斂）。
+
+        刻意不呼叫 ``super()``——目的就是完全停用上游行為。以 method
+        override 而非 flip ``ir.cron.active``，是為了耐上游模組升級
+        （升級不會重加此方法，override 恆勝出）。
+        """
+        _logger.info(
+            "[SUB_FIX] _cron_wallet_charge neutralized (#324); "
+            "billing handled solely by _sh_create_auto_invoice"
+        )
+        return
+
+    @api.model
+    def _cron_wallet_charge_retry(self):
+        """[#324] Neutralize 上游 sh_subscription_wallet 的 hourly 重試 cron。
+
+        上游 ``_cron_wallet_charge_retry`` 有缺陷 A：重試失敗時
+        ``_process_wallet_payment`` 會 rollback 後再 create 一筆新的
+        ``state='failed'`` 交易（create_date=now），使「近 24h failed」窗
+        永遠有剛產生的成員 → 窗永不過期 → 每小時無限重試、failed 列爆量
+        （stg 坐實 832 筆）。dunning 重試已由 ``_sh_create_auto_invoice``
+        以有限次數（threshold 後 auto-cancel）承擔，故此處 no-op。
+        """
+        _logger.info(
+            "[SUB_FIX] _cron_wallet_charge_retry neutralized (#324); "
+            "bounded retry handled by _sh_create_auto_invoice dunning"
+        )
+        return
 
     @api.model
     def _sh_create_auto_invoice(self):

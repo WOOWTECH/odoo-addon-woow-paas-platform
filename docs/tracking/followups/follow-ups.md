@@ -1798,3 +1798,13 @@ addons_path 缺第三方相依（ai_base_gt 等在 `paas-odoo-ci/addons`）而�
 - **殘餘風險（結構性、低機率低衝擊）**：跨套件漂移只靠「兩份獨立 golden literal」把關，無 shared assertion 把 Odoo golden 綁到 operator 實際輸出——若有人改 operator 公式，operator 自家測試會同步改，但 Odoo golden 仍對舊 literal、繼續綠，reconciler 遂靜默誤判。
 - **對處理（fold-into-existing，非 issue）**：唯一實質硬化 = 跨套件 naming contract test，但**現在做不划算**（reconciler 是 dry-run、漂移不會變真刪除）。掛進 **F-ENV-2 deferred ⑦「自動刪除」+ TS-4 DP-MARKER graduation** 的 checklist——等 L4 reconciler 從 dry-run 升級為 active-delete（`reconcilable=True`）時，漂移才會變真刪除風險，屆時再補跨 repo contract test。**不開獨立 issue**。
 - **何時**：gated on F-ENV-2 Phase E / 自動刪除 graduation（見上方 F-ENV-2 條 deferred ⑦）。
+
+## F-BILLING-1 — 退點 prorata 視窗以凍結的 `sh_end_date` 計算，第 2 個週期起已付訂閱中途取消恆退 0（#318 既有限制，#324 對抗覆核揪出）— 待開 issue（2026-07-10）
+
+- **Severity**: major（silently 少退使用者應得款；fail-safe 對公司無損）
+- **Origin**: #324（`feat/324-billing-fix`）3-lens 對抗式 code-review workflow 的 correctness lens，CONFIRMED（primary-source 坐實）
+- **判定**：`_compute_unused_refund` → `_prorata_unused_refund`（`src/models/sh_subscription_fix.py`）以建立時一次寫定的 `[sh_start_date, sh_end_date]` 當「當期已付視窗」。但平台的遞迴計費（`_sh_create_auto_invoice`）只推進 `sh_date_of_next_payment`、**永不推進 `sh_end_date`**（grep 全 src 佐證：只有 lifecycle-mixin 建立/skip-trial 兩處寫 end_date）；且平台是「同一 sub 長壽 in_progress、靠 next_payment 續期」而非 upstream 的「另建子約」（`_on_payment_success` 只動 next_payment）。故第 2 個週期起 `today > sh_end_date` → `max(0, end-today)` clamp = 0 → 已付整期卻退 0。多數取消發生在第 1 個月後，命中率高。
+- **非 #324 引入**：改 gate 前 cycle-2+ 亦退 0（純公式本就 clamp），**#324 的 payment gate 不改變此結果**（gate 因 cycle-1 done deduct 仍在而 True，公式仍回 0）。屬 #318 退點視窗的既有限制，#324 scope 只堵 never-paid 套利，未擴及此。
+- **修法方向**：當期視窗改以 `sh_date_of_next_payment` 推導（如 `[next_payment - cycle_delta, next_payment)`）而非凍結的 `sh_end_date`，或每次成功續期推進 `sh_end_date`。牽動 #318 退點公式與所有退點呼叫者，需回歸既有 `test_change_plan_refund` / `test_service_delete_subscription` 對 [start,end] 視窗的假設，並確認 `_sh_auto_expired_subscription`（sh_end_date==today→expire）與長壽 in_progress 的交互。建議獨立 issue + spec，不夾帶進 #324。
+- **對處理**：leader 決定是否開 tea issue（priority 建議 medium/high，因牽真金流體驗）；in-code 已在 `_has_paid_current_cycle` docstring 註明此限制指回本條。
+- **何時**：#324 merge 後獨立處理。

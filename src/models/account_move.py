@@ -54,6 +54,13 @@ class AccountMove(models.Model):
             failure, or missing payment journal.
         """
         self.ensure_one()
+        # #324：手動付款端點 api_invoice_pay 呼叫時不帶 subscription。若這是
+        # 訂閱週期發票（account.move.sh_subscription_id 有值），從發票回推
+        # subscription，讓 deduct_wallet_points 把 subscription_id stamp 到該筆
+        # done deduct 上——否則退點 gate _has_paid_current_cycle 找不到 stamped
+        # deduct，會把「手動付掉整個週期」的訂閱誤判為未付、刪服務退 0。
+        if subscription is None and self.sh_subscription_id:
+            subscription = self.sh_subscription_id
         partner = self.partner_id.sudo()
         amount = self.amount_total if self.state == 'draft' else self.amount_residual
         _logger.info(

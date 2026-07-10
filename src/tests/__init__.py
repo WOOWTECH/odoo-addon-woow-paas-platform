@@ -190,3 +190,6 @@ from . import test_show_projects_flag
 # feat: #318 CS 刪除/換 plan 訂閱聯動 — refund 型退點 API + 刪除結算 + 換 plan 退點正名
 from . import test_refund_wallet_points
 from . import test_service_delete_subscription
+# fix: #324 計費雙缺口 — 上游兩支 wallet cron neutralize + 退點 payment gate
+from . import test_wallet_cron_neutralized
+from . import test_refund_requires_payment
