@@ -50,13 +50,12 @@ class ShSubscriptionFix(models.Model):
         ``state='failed'`` 的 deduct。以此區分「真付過」與「從未付過」，堵住
         「付款靜默失敗→刪服務退未賺得點」的套利。
 
-        範圍限制（沿用 #318，本 gate 不改變）：本方法查「本訂閱歷來任一成功
-        扣款」、不做週期範圍限定。退點金額仍由 ``_prorata_unused_refund`` 以
-        建立時寫定、之後不原地推進的 [sh_start_date, sh_end_date] 視窗計算；
-        遞迴計費只推進 ``sh_date_of_next_payment``。故對「第 2 個週期起、
-        sh_end_date 已過」的長壽 in_progress 訂閱，``max(0, end-today)`` clamp
-        會退 0——此為 #318 退點視窗的既有限制（我改前後皆退 0，非本 PR 引入），
-        待 follow-up 以 next_payment 推導當期視窗修正。
+        範圍限制（沿用 #318）：本方法查「本訂閱歷來任一成功扣款」、不做週期
+        範圍限定——它只回答「有沒有真付過」，退點**金額**由 ``_prorata_unused_
+        refund`` 決定。退點視窗自 #327 起改以 ``sh_date_of_next_payment`` 反推
+        當期區間 ``[next_payment − cycle_delta, next_payment)``，已正確涵蓋
+        「第 2 個週期起、凍結 sh_end_date 已過」的長壽 in_progress 訂閱（不再
+        恆退 0）。本 gate 與視窗計算正交，維持不變。
 
         NewId（in-memory 記錄）無 persisted id，直接回 False（純公式路徑
         ``_prorata_unused_refund`` 不經此 gate）。
