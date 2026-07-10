@@ -3,11 +3,136 @@
 對應總表 checklist G1–G6（G4 前端 picker 冒煙不在本 PR scope）：
   Task 1: TestPlanTaxonomySchema — service_type Selection 3 值＋條件式 guard
           （orphan 放行）＋ ac_max_access_seats Integer default 0
+  Task 2: TestPricingSeedIntegrity（G1）／TestShMcpSeedLiteral（G2）／
+          TestPlaceholdersUntouched（G5）／TestServiceTypeSeedCoverage（G6）／
+          TestTemplatePlanWiring（E2）
+  Task 3: TestPricingMigration330（G3）— 模擬 .51→.52 升級
 設計依據：docs/plans/2026-Q3/2026-07-10-plan-taxonomy-pricing.md（拍板記錄）
 ＋ docs/plans/2026-Q3/2026-07-10-subscription-plan-matrix.md（30 檔明細）。
 """
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase
+
+MOD = 'woow_paas_platform'
+
+# ---- 30 檔定案 plan：xmlid → (價格, 名稱)（總表 §1/§3–§6 字面） ----
+EXPECTED_PLANS = {
+    # CS — Odoo 三階
+    'plan_odoo_monthly': (1000, 'Odoo Cloud T1（1–3 人）Monthly'),
+    'plan_odoo_yearly': (10000, 'Odoo Cloud T1（1–3 人）Yearly'),
+    'plan_odoo_t2_monthly': (3000, 'Odoo Cloud T2（3–6 人）Monthly'),
+    'plan_odoo_t2_yearly': (30000, 'Odoo Cloud T2（3–6 人）Yearly'),
+    'plan_odoo_t3_monthly': (5000, 'Odoo Cloud T3（6–10 人）Monthly'),
+    'plan_odoo_t3_yearly': (50000, 'Odoo Cloud T3（6–10 人）Yearly'),
+    # CS — n8n 三階
+    'plan_n8n_monthly': (1000, 'n8n Cloud T1（1–3 人）Monthly'),
+    'plan_n8n_yearly': (10000, 'n8n Cloud T1（1–3 人）Yearly'),
+    'plan_n8n_t2_monthly': (3000, 'n8n Cloud T2（3–6 人）Monthly'),
+    'plan_n8n_t2_yearly': (30000, 'n8n Cloud T2（3–6 人）Yearly'),
+    'plan_n8n_t3_monthly': (5000, 'n8n Cloud T3（6–10 人）Monthly'),
+    'plan_n8n_t3_yearly': (50000, 'n8n Cloud T3（6–10 人）Yearly'),
+    # CS-MCP — 統一單階（改價 only、不改名）
+    'plan_mcp_odoo_monthly': (3000, 'Odoo MCP Server Monthly'),
+    'plan_mcp_odoo_yearly': (30000, 'Odoo MCP Server Yearly'),
+    'plan_mcp_n8n_monthly': (3000, 'n8n MCP Server Monthly'),
+    'plan_mcp_n8n_yearly': (30000, 'n8n MCP Server Yearly'),
+    # CS-MCP — Hermes 三階（T3=6000 定案，取代會議 6500）
+    'plan_mcp_hermes_monthly': (1500, 'Hermes MCP Server T1（1–3 人）Monthly'),
+    'plan_mcp_hermes_yearly': (15000, 'Hermes MCP Server T1（1–3 人）Yearly'),
+    'plan_mcp_hermes_t2_monthly': (4500, 'Hermes MCP Server T2（3–6 人）Monthly'),
+    'plan_mcp_hermes_t2_yearly': (45000, 'Hermes MCP Server T2（3–6 人）Yearly'),
+    'plan_mcp_hermes_t3_monthly': (6000, 'Hermes MCP Server T3（6–10 人）Monthly'),
+    'plan_mcp_hermes_t3_yearly': (60000, 'Hermes MCP Server T3（6–10 人）Yearly'),
+    # SH — Connect / +MCP
+    'plan_smarthome_monthly': (150, 'Smart Home Connect Monthly'),
+    'plan_smarthome_yearly': (1500, 'Smart Home Connect Yearly'),
+    'plan_smarthome_mcp_monthly': (400, 'Smart Home + MCP Monthly'),
+    'plan_smarthome_mcp_yearly': (4000, 'Smart Home + MCP Yearly'),
+    # SA — 5/10 Application（沿用 entry/pro xmlid）
+    'plan_security_access_entry_monthly': (1000, 'Security Access 5 Application Monthly'),
+    'plan_security_access_entry_yearly': (10000, 'Security Access 5 Application Yearly'),
+    'plan_security_access_pro_monthly': (2000, 'Security Access 10 Application Monthly'),
+    'plan_security_access_pro_yearly': (20000, 'Security Access 10 Application Yearly'),
+}
+
+# 月/年 檔位配對（年價＝月價×10 機械驗證）
+MONTHLY_YEARLY_PAIRS = [
+    ('plan_odoo_monthly', 'plan_odoo_yearly'),
+    ('plan_odoo_t2_monthly', 'plan_odoo_t2_yearly'),
+    ('plan_odoo_t3_monthly', 'plan_odoo_t3_yearly'),
+    ('plan_n8n_monthly', 'plan_n8n_yearly'),
+    ('plan_n8n_t2_monthly', 'plan_n8n_t2_yearly'),
+    ('plan_n8n_t3_monthly', 'plan_n8n_t3_yearly'),
+    ('plan_mcp_odoo_monthly', 'plan_mcp_odoo_yearly'),
+    ('plan_mcp_n8n_monthly', 'plan_mcp_n8n_yearly'),
+    ('plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly'),
+    ('plan_mcp_hermes_t2_monthly', 'plan_mcp_hermes_t2_yearly'),
+    ('plan_mcp_hermes_t3_monthly', 'plan_mcp_hermes_t3_yearly'),
+    ('plan_smarthome_monthly', 'plan_smarthome_yearly'),
+    ('plan_smarthome_mcp_monthly', 'plan_smarthome_mcp_yearly'),
+    ('plan_security_access_entry_monthly', 'plan_security_access_entry_yearly'),
+    ('plan_security_access_pro_monthly', 'plan_security_access_pro_yearly'),
+]
+
+# 4 筆 placeholder（G5：不動——價格/名稱原樣）
+PLACEHOLDER_PLANS = {
+    'plan_postgresql_monthly': (99, 'PostgreSQL Monthly'),
+    'plan_postgresql_yearly': (990, 'PostgreSQL Yearly'),
+    'plan_anythingllm_monthly': (299, 'AnythingLLM Monthly'),
+    'plan_anythingllm_yearly': (2990, 'AnythingLLM Yearly'),
+}
+
+# 34 筆 plan 的 service_type 歸屬（D4 backfill 對照表；含 placeholder）
+EXPECTED_SERVICE_TYPE = {}
+for _sfx in EXPECTED_PLANS:
+    if _sfx.startswith('plan_smarthome'):
+        EXPECTED_SERVICE_TYPE[_sfx] = 'smart_home'
+    elif _sfx.startswith('plan_security_access'):
+        EXPECTED_SERVICE_TYPE[_sfx] = 'security_access'
+    else:
+        EXPECTED_SERVICE_TYPE[_sfx] = 'cloud_service'
+for _sfx in PLACEHOLDER_PLANS:
+    EXPECTED_SERVICE_TYPE[_sfx] = 'cloud_service'
+
+# E2：template → plan xmlid 集合（(6,0) 全量後的終態）
+EXPECTED_TEMPLATE_PLANS = {
+    'cloud_app_odoo': {
+        'plan_odoo_monthly', 'plan_odoo_yearly',
+        'plan_odoo_t2_monthly', 'plan_odoo_t2_yearly',
+        'plan_odoo_t3_monthly', 'plan_odoo_t3_yearly',
+    },
+    'cloud_app_n8n': {
+        'plan_n8n_monthly', 'plan_n8n_yearly',
+        'plan_n8n_t2_monthly', 'plan_n8n_t2_yearly',
+        'plan_n8n_t3_monthly', 'plan_n8n_t3_yearly',
+    },
+    'cloud_app_mcp_hermes': {
+        'plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly',
+        'plan_mcp_hermes_t2_monthly', 'plan_mcp_hermes_t2_yearly',
+        'plan_mcp_hermes_t3_monthly', 'plan_mcp_hermes_t3_yearly',
+    },
+    'cloud_app_mcp_odoo': {'plan_mcp_odoo_monthly', 'plan_mcp_odoo_yearly'},
+    'cloud_app_mcp_n8n': {'plan_mcp_n8n_monthly', 'plan_mcp_n8n_yearly'},
+    'cloud_app_postgresql': {'plan_postgresql_monthly', 'plan_postgresql_yearly'},
+    'smart_home_home_assistant': {
+        'plan_smarthome_monthly', 'plan_smarthome_yearly',
+        'plan_smarthome_mcp_monthly', 'plan_smarthome_mcp_yearly',
+    },
+    'security_access_default': {
+        'plan_security_access_entry_monthly',
+        'plan_security_access_entry_yearly',
+        'plan_security_access_pro_monthly',
+        'plan_security_access_pro_yearly',
+    },
+}
+
+
+def _plan(env, suffix):
+    return env.ref('%s.%s' % (MOD, suffix))
+
+
+def _product(env, plan_suffix):
+    return env.ref('%s.%s' % (MOD, plan_suffix.replace('plan_', 'product_', 1)))
 
 
 class TestPlanTaxonomySchema(TransactionCase):
@@ -79,3 +204,142 @@ class TestPlanTaxonomySchema(TransactionCase):
             plan = self._make_plan('Guard Orphan Plan 330 %s' % value)
             plan.service_type = value  # 不得 raise
             self.assertEqual(plan.service_type, value)
+
+
+class TestPricingSeedIntegrity(TransactionCase):
+    """G1：30 筆定案 plan 價格＋年=月×10＋全域常數＋product 綁定/同價。"""
+
+    def test_plan_prices_and_names(self):
+        for suffix, (price, name) in EXPECTED_PLANS.items():
+            plan = _plan(self.env, suffix)
+            self.assertEqual(
+                plan.sh_plan_price, price,
+                '%s 價格應為 %s（實際 %s）' % (suffix, price, plan.sh_plan_price))
+            self.assertEqual(
+                plan.name, name,
+                '%s 名稱應為 %r（實際 %r）' % (suffix, name, plan.name))
+
+    def test_yearly_equals_monthly_times_ten(self):
+        for m_sfx, y_sfx in MONTHLY_YEARLY_PAIRS:
+            monthly = _plan(self.env, m_sfx)
+            yearly = _plan(self.env, y_sfx)
+            self.assertEqual(
+                yearly.sh_plan_price, monthly.sh_plan_price * 10,
+                '%s 年價應=月價×10' % y_sfx)
+            self.assertEqual(monthly.sh_unit, 'month', m_sfx)
+            self.assertEqual(yearly.sh_unit, 'year', y_sfx)
+
+    def test_global_constants_all_34_plans(self):
+        """11 欄全域常數（勿照 fixture 6 欄最小集 seed 的機械守線）。"""
+        for suffix in list(EXPECTED_PLANS) + list(PLACEHOLDER_PLANS):
+            plan = _plan(self.env, suffix)
+            self.assertTrue(plan.sh_trial, '%s sh_trial' % suffix)
+            self.assertEqual(plan.sh_trial_duration, 7, suffix)
+            self.assertEqual(plan.sh_trial_unit, 'day', suffix)
+            self.assertTrue(plan.sh_override_product, suffix)
+            self.assertTrue(plan.sh_never_expire, suffix)
+            self.assertEqual(plan.sh_no_of_billing_cycle, -1, suffix)
+            self.assertEqual(plan.sh_duration, 1, suffix)
+            self.assertFalse(plan.sh_start_immediately, suffix)
+            self.assertTrue(plan.sh_is_close_by_customer, suffix)
+            self.assertEqual(len(plan.sh_reminder), 2,
+                             '%s 應帶 2 筆 reminder' % suffix)
+
+    def test_products_bound_and_price_synced(self):
+        for suffix, (price, name) in EXPECTED_PLANS.items():
+            plan = _plan(self.env, suffix)
+            product = _product(self.env, suffix)
+            self.assertEqual(
+                product.sh_subscription_plan_id, plan,
+                '%s product 應綁定其 plan' % suffix)
+            self.assertEqual(
+                product.list_price, price,
+                '%s product list_price 應與 plan 同步=%s' % (suffix, price))
+            self.assertEqual(product.name, name + ' Subscription', suffix)
+            self.assertEqual(product.type, 'service', suffix)
+            self.assertTrue(product.sh_product_subscribe, suffix)
+
+    def test_sa_quota_values(self):
+        """D3：5 Application 檔 sa_max_routes=5；10 Application 檔=10。"""
+        for suffix in ('plan_security_access_entry_monthly',
+                       'plan_security_access_entry_yearly'):
+            self.assertEqual(_plan(self.env, suffix).sa_max_routes, 5, suffix)
+        for suffix in ('plan_security_access_pro_monthly',
+                       'plan_security_access_pro_yearly'):
+            self.assertEqual(_plan(self.env, suffix).sa_max_routes, 10, suffix)
+
+
+class TestShMcpSeedLiteral(TransactionCase):
+    """G2：SH +MCP 檔 mcp_integration 字面精確＝'ha_mcp_tools'；base 檔=''。"""
+
+    def test_mcp_plans_literal(self):
+        for suffix in ('plan_smarthome_mcp_monthly', 'plan_smarthome_mcp_yearly'):
+            self.assertEqual(
+                _plan(self.env, suffix).mcp_integration, 'ha_mcp_tools', suffix)
+
+    def test_base_plans_empty(self):
+        for suffix in ('plan_smarthome_monthly', 'plan_smarthome_yearly'):
+            self.assertFalse(_plan(self.env, suffix).mcp_integration, suffix)
+
+
+class TestPlaceholdersUntouched(TransactionCase):
+    """G5：不刪任何既有 record——pg／anythingllm 4 筆價格/名稱原樣。"""
+
+    def test_placeholder_plans_untouched(self):
+        for suffix, (price, name) in PLACEHOLDER_PLANS.items():
+            plan = _plan(self.env, suffix)
+            self.assertEqual(plan.sh_plan_price, price, suffix)
+            self.assertEqual(plan.name, name, suffix)
+
+    def test_placeholder_products_untouched(self):
+        for suffix, (price, name) in PLACEHOLDER_PLANS.items():
+            product = _product(self.env, suffix)
+            self.assertEqual(product.list_price, price, suffix)
+            self.assertEqual(product.name, name + ' Subscription', suffix)
+
+
+class TestServiceTypeSeedCoverage(TransactionCase):
+    """G6：34 筆 plan service_type 全非空；MCP/Hermes 6 筆＝cloud_service；
+    分佈 26/4/4；guard 對真 seed orphan（AnythingLLM）放行。"""
+
+    def test_all_34_plans_have_service_type(self):
+        for suffix, expected in EXPECTED_SERVICE_TYPE.items():
+            plan = _plan(self.env, suffix)
+            self.assertTrue(
+                plan.service_type,
+                '%s service_type 不得為空' % suffix)
+            self.assertEqual(plan.service_type, expected, suffix)
+
+    def test_mcp_hermes_six_plans_are_cloud_service(self):
+        for suffix in ('plan_mcp_odoo_monthly', 'plan_mcp_odoo_yearly',
+                       'plan_mcp_n8n_monthly', 'plan_mcp_n8n_yearly',
+                       'plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly'):
+            self.assertEqual(
+                _plan(self.env, suffix).service_type, 'cloud_service', suffix)
+
+    def test_distribution_26_4_4(self):
+        counts = {'cloud_service': 0, 'smart_home': 0, 'security_access': 0}
+        for suffix, expected in EXPECTED_SERVICE_TYPE.items():
+            counts[_plan(self.env, suffix).service_type] += 1
+        self.assertEqual(counts,
+                         {'cloud_service': 26, 'smart_home': 4,
+                          'security_access': 4})
+
+    def test_guard_allows_real_seed_orphan_write(self):
+        """AnythingLLM 無 template（orphan）→ 直接 write 不炸＝guard 放行實證。"""
+        plan = _plan(self.env, 'plan_anythingllm_monthly')
+        plan.service_type = 'cloud_service'  # 不得 raise
+        self.assertEqual(plan.service_type, 'cloud_service')
+
+
+class TestTemplatePlanWiring(TransactionCase):
+    """E2：template↔plan M2M 白名單（新裝軌＝subscription_template_links.xml）。"""
+
+    def test_template_plan_sets(self):
+        for tpl_suffix, plan_suffixes in EXPECTED_TEMPLATE_PLANS.items():
+            template = self.env.ref('%s.%s' % (MOD, tpl_suffix))
+            expected_ids = {
+                _plan(self.env, sfx).id for sfx in plan_suffixes}
+            self.assertEqual(
+                set(template.subscription_plan_ids.ids), expected_ids,
+                '%s 的 plan M2M 應為 %s' % (tpl_suffix, sorted(plan_suffixes)))
