@@ -142,6 +142,12 @@ class ShSubscriptionPlanServiceType(models.Model):
 
         grandfathering 已拍板不需要（prod 無人用、stg 純測試）→ 直接
         force-write、無政策碼。
+
+        E2 的 (6,0) 全量覆寫是刻意行為：noupdate=0 的
+        subscription_template_links.xml 本來就在每次 -u 對非 sticky DB 做
+        同樣的 (6,0) 重置；migration 若改「僅空時回填」（比照
+        _ensure_default_template_links）會讓 sticky 與非 sticky DB 收斂到
+        不同白名單。本次是定價重定的一次性 canonical reset，非常駐 heal。
         """
 
         def ref(suffix):
