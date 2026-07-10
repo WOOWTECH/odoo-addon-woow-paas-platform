@@ -176,7 +176,7 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 
 ### Step 6: 部署到 Sandbox（委派 woowprd plugin）
 
-deploy-stg **不再自帶 create.sh**，改委派給 woowprd plugin 的 `/woowprd:k8s-dev-sandbox`（同一套引擎，避免重複程式）。`deploy-stg.sh` 內建 resolver 自動定位 plugin 的 `create.sh`（`$WOOWPRD_PLUGIN_ROOT` → marketplace cache → plugins-local），找不到會 fail-loud。
+deploy-stg **不再自帶 create.sh**，改委派給 woowprd plugin 的 `/woowprd:k8s-dev-sandbox`（同一套引擎，避免重複程式）。`deploy-stg.sh` 內建 resolver 依序定位 plugin 的 `create.sh`：`$WOOWPRD_PLUGIN_ROOT`（env 覆寫）→ `plugins-local/woowprd` → marketplace cache（`cache/*/woow-dev/*`，相容舊名 `woowprd`；多版本取最新）→ cache 根遞迴 fallback（不綁 plugin 名）；全部落空才 fail-loud。
 
 ```bash
 FULL_IMAGE="jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:${DOCKER_TAG}"
