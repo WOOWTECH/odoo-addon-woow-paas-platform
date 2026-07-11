@@ -1,0 +1,337 @@
+---
+title: HA App OAuth 串接與開通包（給 Elmo）
+category: reference
+status: draft（骨架版；開通 API 段待 #336 契約定案後補齊）
+audience: Elmo / HA App 開發團隊
+created: 2026-07-11
+source-of-truth:
+  - src/controllers/oauth2.py（OAuth 2.0 provider：authorize / device_authorization / token / introspect / revoke）
+  - src/models/oauth_client.py（client 註冊、client_type、redirect 比對、scope/grant 解析）
+  - src/models/oauth_token.py（access / refresh token TTL 與驗證）
+  - src/models/oauth_code.py（authorization code 生命週期）
+  - src/models/oauth_device_code.py（RFC 8628 device flow 參數與 polling 狀態機）
+  - src/data/oauth_clients.xml（seed 的 public client `woow-ha-smart-home`）
+  - src/views/oauth_client_views.xml（後台 OAuth Clients 管理畫面）
+related:
+  - docs/reference/api/ha-component-integration.md（HA custom component 串接規格，與本文件的 consumer 不同）
+  - docs/reference/api/woowtech-paas-api-specification.md（平台 API 總規格）
+---
+
+# HA App OAuth 串接與開通包（給 Elmo）
+
+> **文件狀態：骨架版。** 目的是讓 Elmo 拿整包當「HA App AI 開發的輸入 context」（2026-07-10 定價對齊會議決議：把目標＋context 整包丟給 AI 做）。
+>
+> - **OAuth 段（§1–§6）已可用**：平台早已是自寫的 OAuth 2.0 provider，以下每個技術主張都附 code 出處（`file:line`），可直接照做。
+> - **開通 API 段（§7）是 placeholder**：HA instance 的「開通 / 查狀態」HTTP 契約待 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336) 定案後補齊。
+> - **憑證另發**：本文件**不含**任何真實 `client_id` / `client_secret`；HA App 專用 client 由 ops 註冊後另循安全管道發放（見 §3）。
+
+Refs：[#337](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/337)（本串接包 task）、[#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)（HA PaaS 0 元隱藏訂閱＋開通 API）。
+
+---
+
+## 0. 讀者與目標
+
+**讀者**：Elmo 與 HA App（手機原生 App）開發團隊。
+
+**HA App 端到端流程**（會議脈絡，2026-07-10）：
+
+```
+App OAuth 登入  →  打「開通 HA」API  →  App 端輪詢狀態（明確不走 socket 推播，
+HA instance 建立沒那麼快）  →  ready 拿 URL 綁定  →  之後全走 HA endpoint（Webview）
+```
+
+本文件把上面第 1 段（OAuth 登入）講到可以直接實作，第 2–4 段（開通 / 輪詢 / 綁定）先給流程骨架與 placeholder。
+
+### ⚠️ 名詞界定：HA App ≠ HA custom component（很重要，別混）
+
+平台已經有一份 OAuth 串接文件 [`ha-component-integration.md`](ha-component-integration.md)，但它的 consumer 跟本文件**不是同一個東西**，方向相反：
+
+| 對比項 | **HA custom component**（既有） | **HA App**（本文件 / #337） |
+| --- | --- | --- |
+| 是什麼 | 安裝在**使用者已有的 HA instance 內**的 Python component（`woow_paas_smart_home`） | Elmo 開發的**手機原生 App** |
+| 誰連誰 | HA instance → 回連平台，讀既有 SH/SA 服務資料 | App → 平台，**開通一個新的 HA instance** |
+| OAuth client | `woow-ha-smart-home`（seed，`client_id` 硬編在 component `const.py`） | **尚未存在，需 ops 新註冊**（見 §3、§8 風險 1） |
+| redirect 比對 | `ha_callback` mode（scheme∈{http,https}、path 固定） | 需 `exact` mode（App custom scheme / universal link），見 §8 風險 3 |
+
+**不要複用 `woow-ha-smart-home` 這個 client 給 App。** 原因見 §8。
+
+---
+
+## 1. 平台 OAuth 2.0 能力總覽
+
+平台是**自寫**的 OAuth 2.0 provider（非 Odoo 內建），實作在 `src/controllers/oauth2.py`，類別 `OAuth2Controller`（`src/controllers/oauth2.py:132`）。
+
+### 1.1 支援的 grant types
+
+`/oauth2/token` 的 dispatch 在 `src/controllers/oauth2.py:462-478`：
+
+| grant_type | 支援 | 用途 | 實作 |
+| --- | --- | --- | --- |
+| `authorization_code` | ✅ | 標準授權碼流程；**支援 PKCE**（S256 / plain） | `_handle_authorization_code`（`oauth2.py:579`） |
+| `refresh_token` | ✅ | 換發新 access token，**帶 rotation**（舊 token 立即撤銷） | `_handle_refresh_token`（`oauth2.py:662`） |
+| `client_credentials` | ✅ | 機器對機器（無使用者情境，用 SUPERUSER 身分） | `_handle_client_credentials`（`oauth2.py:703`） |
+| `urn:ietf:params:oauth:grant-type:device_code` | ✅ | RFC 8628 裝置授權碼＋輪詢 | `_handle_device_code`（`oauth2.py:740`） |
+
+> **給 App 的建議**：手機原生 App 應走 **Authorization Code + PKCE**（RFC 8252 OAuth for Native Apps 的標準做法），見 §5。Device flow（§6）是替代方案（現有 HA client 已加此 grant，`oauth_clients.xml:21`）。
+
+### 1.2 PKCE
+
+- S256 驗證邏輯：`base64url(sha256(code_verifier))` 去 padding 後與 `code_challenge` 比對（`src/controllers/oauth2.py:61-79`）。
+- **public client 一律強制 PKCE 且只收 S256**（缺 `code_challenge` 或 method≠S256 在 authorize 階段即拒：`oauth2.py:184-207`；token 階段再擋一次 downgrade：`oauth2.py:611-650`）。
+
+---
+
+## 2. Endpoints 一覽
+
+所有路徑相對於平台 base URL（`web.base.url`，實際 stg / prod 網域由 ops 提供）。
+
+| 端點 | Method | auth | 用途 | 出處 |
+| --- | --- | --- | --- | --- |
+| `/oauth2/authorize` | GET | user（需先登入 Odoo session） | 顯示授權同意頁 | `oauth2.py:137` |
+| `/oauth2/authorize` | POST | user | 處理 Allow / Deny，簽發 authorization code | `oauth2.py:255` |
+| `/oauth2/device_authorization` | POST | none | RFC 8628 §3.1–3.2：簽發 `device_code` + `user_code` | `oauth2.py:338` |
+| `/device` | GET / POST | user | RFC 8628 §3.3：使用者輸入 `user_code` 的驗證頁 | `oauth2.py:392` / `oauth2.py:400` |
+| `/oauth2/token` | POST | none | 換發 token（上表 4 種 grant） | `oauth2.py:452` |
+| `/oauth2/introspect` | POST | none | RFC 7662 token 內省（需 client 認證） | `oauth2.py:795` |
+| `/oauth2/revoke` | POST | none | RFC 7009 token 撤銷 | `oauth2.py:843` |
+
+> 其它平台 controller 若要以 Bearer token 保護自家 API，可呼叫 helper `verify_oauth_token(req, required_scopes=[...])`（`oauth2.py:82`）——**#336 的開通 API 預期就是用這支做鑑權**。
+
+---
+
+## 3. OAuth client 註冊與憑證發放機制
+
+### 3.1 Client 資料模型
+
+Client 存在 Odoo model `woow_paas_platform.oauth_client`（`src/models/oauth_client.py:10`）。關鍵欄位：
+
+| 欄位 | 說明 | 出處 |
+| --- | --- | --- |
+| `client_id` | public identifier，預設 `secrets.token_urlsafe(32)`，**readonly**（整合方會硬編此值，旋轉會破壞串接） | `oauth_client.py:26-35` |
+| `client_type` | `confidential` / `public`（native app 應為 **public**） | `oauth_client.py:41` |
+| `client_secret_hash` | 只存 hash；plain secret 僅建立時顯示一次；**public client 必須為空** | `oauth_client.py:36-40`、`oauth_client.py:149-156` |
+| `require_pkce` | public client 一律 True（`_check_client_type_consistency` 強制） | `oauth_client.py:53`、`oauth_client.py:109-133` |
+| `redirect_uris` | 允許的 redirect URI，一行一個 | `oauth_client.py:60` |
+| `redirect_uri_match_mode` | `exact`（逐字比對）/ `ha_callback`（host-flexible，僅 HA component 用） | `oauth_client.py:68` |
+| `scopes` | 空白分隔的允許 scope 清單 | `oauth_client.py:84` |
+| `grant_types` | 逗號分隔的允許 grant 清單 | `oauth_client.py:89` |
+| `is_active` | 停用即拒發 token | `oauth_client.py:95` |
+
+### 3.2 註冊方式（目前）
+
+- **後台 model 管理，無自助註冊 API**：Odoo 後台選單 **Woow PaaS → OAuth Clients**（`src/views/oauth_client_views.xml:85`）由 ops 建立與維護。
+- **憑證發放**：
+  - **public client（App 建議）**：**沒有 client_secret**，只有 `client_id`。持有證明由 PKCE 的 `code_verifier` 提供（`oauth2.py:504-511`：public client 若在 token 端帶 secret 會被直接拒）。
+  - confidential client：後台 form 有「Regenerate Secret」按鈕，secret 一次性彈窗顯示、之後只存 hash（`oauth_client.py:381-399`；該按鈕對 public client 隱藏：`oauth_client_views.xml:32`）。
+- **seed client 範例**（僅供理解結構，**不是**給 App 用的）：`woow-ha-smart-home`，public + PKCE，見 `src/data/oauth_clients.xml:14-24`。
+
+> 🔐 **憑證絕不進版控 / 不寫進本文件。** App 專用 client 註冊後，`client_id`（及 confidential 情境的一次性 secret）由 ops 循安全管道交付 Elmo。
+
+---
+
+## 4. Scopes
+
+平台目前定義的 scope 共 **5 個**，語意在授權同意頁的 `scope_descriptions`（`src/controllers/oauth2.py:224-233`），seed client 的 `scopes` 欄位見 `oauth_clients.xml:22`：
+
+| Scope | 授權範圍 |
+| --- | --- |
+| `workspace:read` | 列舉使用者可存取的 workspace |
+| `smarthome:read` | 讀取 Smart Home 清單 / detail / 狀態 |
+| `smarthome:tunnel` | 取得 Smart Home 的 tunnel token（高權限） |
+| `security-access:read` | 讀取 Security Access 清單 / detail / 狀態 |
+| `security-access:tunnel` | 取得 Security Access 的 tunnel token（高權限） |
+
+> ⚠️ **目前沒有「開通 HA instance」用的 scope。** 上列 5 個全是「讀取既有服務」。HA App 要觸發「開通」這個**寫入 / 佈建**動作，需要一個新 scope（例如 `ha:provision` 或 workspace 寫入類），這屬 #336 開通 API 契約的一部分，見 §7、§8 風險 2。
+>
+> scope 若要新增，seed 是 `noupdate="1"`（`oauth_clients.xml:5`），既有 DB 須靠 idempotent healer（如現有的 `_ensure_ha_smart_home_sa_scopes`，`oauth_client.py:290` + `oauth_scope_updates.xml`）覆蓋升級，不能只改 XML。
+
+---
+
+## 5. 授權流程 A：Authorization Code + PKCE（**App 建議主線**）
+
+Token 生命週期（`src/controllers/oauth2.py:19-21`）：
+
+| Token | TTL | 出處 |
+| --- | --- | --- |
+| access token | **1 小時** | `oauth2.py:19` |
+| refresh token | **30 天**（換發時 rotation，舊的立即 revoke：`oauth2.py:692-693`） | `oauth2.py:20` |
+| authorization code | **10 分鐘**，一次性（`oauth_code.py:70-73`） | `oauth2.py:21` |
+
+### 5.1 步驟
+
+1. App 產生 `code_verifier`（43–128 字隨機），計算 `code_challenge = base64url(sha256(code_verifier))`（去 padding）。
+2. App 用系統瀏覽器 / WebView（iOS `ASWebAuthenticationSession`、Android Custom Tabs）開啟授權頁：
+
+   ```
+   GET https://<平台網域>/oauth2/authorize
+       ?response_type=code
+       &client_id=<APP_CLIENT_ID>
+       &redirect_uri=<APP_REDIRECT_URI>
+       &scope=workspace:read%20smarthome:read
+       &state=<隨機_CSRF>
+       &code_challenge=<CHALLENGE>
+       &code_challenge_method=S256
+   ```
+
+   使用者在此登入平台（`auth='user'`）並於同意頁按 Allow。
+
+3. 平台 302 導回：`<APP_REDIRECT_URI>?code=<CODE>&state=<CSRF>`（`oauth2.py:308-334`）。App 先核對 `state`。
+
+4. App 以授權碼換 token（**public client 不帶 client_secret**）：
+
+   ```bash
+   curl -X POST https://<平台網域>/oauth2/token \
+     -d grant_type=authorization_code \
+     -d code=<CODE> \
+     -d redirect_uri=<APP_REDIRECT_URI> \
+     -d client_id=<APP_CLIENT_ID> \
+     -d code_verifier=<VERIFIER>
+   ```
+
+   回應（`oauth2.py:563-577`）：
+
+   ```json
+   {
+     "access_token": "…",
+     "token_type": "bearer",
+     "expires_in": 3600,
+     "scope": "workspace:read smarthome:read",
+     "refresh_token": "…"
+   }
+   ```
+
+5. 之後呼叫平台 API 帶 `Authorization: Bearer <access_token>`。access token 過期時以 refresh token 換發：
+
+   ```bash
+   curl -X POST https://<平台網域>/oauth2/token \
+     -d grant_type=refresh_token \
+     -d refresh_token=<REFRESH_TOKEN> \
+     -d client_id=<APP_CLIENT_ID>
+   ```
+
+---
+
+## 6. 授權流程 B：Device Authorization Grant（RFC 8628，替代方案）
+
+適用於 App 不便處理 redirect callback、或想用「另一台裝置掃碼登入」的場景。參數：`device_code` 存活 **15 分鐘**、預設輪詢間隔 **5 秒**（`src/models/oauth_device_code.py:7-8`）。
+
+1. App 取得 device / user code：
+
+   ```bash
+   curl -X POST https://<平台網域>/oauth2/device_authorization \
+     -d client_id=<APP_CLIENT_ID> \
+     -d scope=workspace:read
+   ```
+
+   回應（`oauth2.py:383-390`）含 `device_code`、`user_code`、`verification_uri`、`verification_uri_complete`、`expires_in`、`interval`。
+
+2. App 顯示 `user_code` 與 `verification_uri`（可做成 QR），使用者到 `/device` 登入並輸入 `user_code`、按 Allow（`oauth2.py:400-448`）。
+
+3. App 依 `interval` 秒輪詢 `/oauth2/token`：
+
+   ```bash
+   curl -X POST https://<平台網域>/oauth2/token \
+     -d grant_type=urn:ietf:params:oauth:grant-type:device_code \
+     -d device_code=<DEVICE_CODE> \
+     -d client_id=<APP_CLIENT_ID>
+   ```
+
+   狀態機（`oauth2.py:773-791`）：`authorization_pending`（續等）/ `slow_down`（放慢，interval +5）/ `access_denied` / `expired_token`；核准後回與 §5 步驟 4 相同的 token JSON。
+
+> **注意**：這裡的輪詢是 **OAuth token 輪詢**（等使用者授權完成），與 §0 流程圖階段 3 的「**開通狀態**輪詢」（等 HA instance 建好）是**兩個不同的輪詢**，別混。
+
+---
+
+## 7. 開通 API（placeholder — 契約待 #336 定案）
+
+> 🚧 **本節為 placeholder。** 「開通 HA」與「查開通狀態」的實際 HTTP method / path / request / response shape，等 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336) 開通 API 實作定案後補齊。以下僅為**會議脈絡下的預期形狀**，非契約。
+
+依 #336 已拍板的產品決策，開通 API 預期具備以下性質（實作前不保證）：
+
+- **鑑權**：以 §5 / §6 取得的 access token 帶 `Authorization: Bearer <token>` 呼叫；預期用 `verify_oauth_token`（`oauth2.py:82`）＋一個尚未存在的「開通」scope（見 §4、§8 風險 2）。
+- **每帳號限一個**：開通 API 冪等——**已有 HA instance 則回傳既有 instance**，不重複建（#336 工作項 2）。
+- **0 元隱藏訂閱**：開通會掛一筆 0 元 subscription（商品名「HA PaaS」），此 cloud service **不出現在前台 Cloud Service 列表**（#336 背景）。
+- **非同步 + App 端輪詢**：開通不是即時完成，明確**不走 socket 推播**；App 送出開通請求後，**輪詢**狀態端點直到 `ready`，再從回應取得 HA URL（#336 工作項 4）。
+
+**待 #336 補齊的欄位**（本文件屆時更新）：
+
+| 待定項 | 說明 |
+| --- | --- |
+| 開通端點 path / method | 例如 `POST /api/...`（待定） |
+| 開通請求 payload | 是否帶參數、template 選擇等（待定） |
+| 狀態端點 path / method | 輪詢用；回 `provisioning` / `ready` 等狀態（待定） |
+| 狀態回應 shape | `ready` 時如何帶回 HA URL（待定） |
+| 輪詢間隔建議 | 平台建議的 poll interval / backoff（待定） |
+| 所需 scope 名稱 | 「開通」動作的新 scope（待定，見 §8 風險 2） |
+
+---
+
+## 8. HA 開通串接全流程（sequence diagram）
+
+> 階段 1（OAuth）為現況可實作；階段 2–4 的 method / path / payload 為骨架，待 #336。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as HA App（Elmo）
+    participant Browser as 系統瀏覽器 / WebView
+    participant OAuth as 平台 OAuth2<br/>(/oauth2/*)
+    participant Prov as 平台開通 API<br/>(待 #336)
+    participant K8s as K8s / HA instance
+
+    Note over App,OAuth: 階段 1 — OAuth 登入（Authorization Code + PKCE，§5）
+    App->>App: 產生 code_verifier / code_challenge(S256)
+    App->>Browser: 開 /oauth2/authorize?...&code_challenge&state
+    Browser->>OAuth: GET /oauth2/authorize
+    OAuth-->>Browser: 登入頁 + 同意頁
+    Browser->>OAuth: POST /oauth2/authorize (Allow)
+    OAuth-->>Browser: 302 redirect_uri?code=…&state=…
+    Browser-->>App: 回傳 code（custom scheme / universal link）
+    App->>OAuth: POST /oauth2/token (code + code_verifier)
+    OAuth-->>App: access_token + refresh_token
+
+    Note over App,Prov: 階段 2 — 開通 HA（契約待 #336）
+    App->>Prov: 開通 HA（Bearer access_token）
+    Prov-->>App: 已受理 + 每帳號限一（已有則回既有 instance）
+
+    Note over App,K8s: 階段 3 — App 端輪詢（明確不走 socket 推播）
+    loop 每隔數秒輪詢，直到 ready
+        App->>Prov: 查開通狀態（Bearer）
+        Prov->>K8s: HA instance 就緒？
+        Prov-->>App: status = provisioning / ready(+HA URL)
+    end
+
+    Note over App,K8s: 階段 4 — 綁定並改走 HA endpoint
+    App->>App: 取得 HA URL
+    App->>K8s: 之後全走 HA endpoint（Webview）
+```
+
+---
+
+## 9. 風險 / 待拍板（考古發現 — 給 leader / Eugene）
+
+以下是考古 OAuth 現況後，判斷「撐不撐得起 HA App 串接」的缺口。**本文件只記錄，不自行改 `src/`。**
+
+1. **HA App 需要一個全新的 OAuth client（不可複用 `woow-ha-smart-home`）。**
+   - 既有 `woow-ha-smart-home` 是 `ha_callback` redirect mode（`oauth_clients.xml:19`），`client_id` 硬編在 HA component 的 `const.py`（`oauth_client.py:26-35` 註解），consumer 是「HA instance 內的 component」而非手機 App。
+   - **待拍板**：由 ops 為 HA App 新註冊一個 public client（`client_type=public` + `require_pkce=True`），`client_id` 與 redirect 由 App 需求決定。
+
+2. **缺「開通 HA instance」用的 scope。**
+   - 現有 5 個 scope 全是「讀取既有 SH/SA」（§4），沒有觸發佈建的寫入 scope。
+   - **待拍板**：#336 定案時新增一個開通 scope（例如 `ha:provision`），並在既有 DB 以 idempotent healer 升級（seed 是 `noupdate=1`，改 XML 到不了既有 DB）。
+
+3. **redirect_uri scheme 限制：`ha_callback` mode 拒 custom scheme。**
+   - `_check_ha_callback_uri` 只接受 `scheme∈{http,https}`（`oauth_client.py:217`），手機 App 常用的 custom scheme（如 `woowha://callback`）會被拒。
+   - `exact` mode 是純字串逐字比對（`oauth_client.py:190-193`），custom scheme / universal link 可直接註冊。
+   - **待拍板**：App 端 redirect 策略（custom scheme + `exact` mode／universal link／loopback `http://127.0.0.1` per RFC 8252／或改走 §6 device flow 免 redirect）需 App team 與平台一起定，並據此決定新 client 的 `redirect_uri_match_mode` 與 `redirect_uris`。
+
+4. **無自助 client 註冊 / 憑證發放 API。**
+   - 目前只有 Odoo 後台 model（`oauth_client_views.xml`）由 ops 手動建、憑證一次性顯示。
+   - **影響**：HA App client 的建立與憑證交付是**人工 ops 流程**，需納入上線清單；本文件不含真實憑證。
+
+---
+
+## 附錄：token 內省與撤銷
+
+- **內省**（確認 token 是否有效、帶哪些 scope）：`POST /oauth2/introspect`，需 client 認證，回 `active` / `scope` / `client_id` / `username` / `exp` / `sub`（`oauth2.py:795-839`，RFC 7662）。
+- **撤銷**（登出 / 換帳號）：`POST /oauth2/revoke`，帶 `token`＋client 認證，一律回 200（`oauth2.py:843-877`，RFC 7009）。
