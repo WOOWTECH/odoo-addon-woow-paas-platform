@@ -389,6 +389,29 @@
             <field name="mcp_integration">ha_mcp_tools</field>
         </record>
 
+        <!-- ========= HA PaaS（#336：0 元、前台隱藏、無期限、關 trial） =========
+             HA PaaS instance＝CloudService record（未來掛 cloud_app_template，
+             依 taxonomy §3.3 guard family 一致，故 service_type=cloud_service）；
+             sh_trial=False（#336 拍板關 trial，偏離 §2.1 全域常數）；
+             sh_no_of_billing_cycle=-1＋sh_never_expire＝無期限、每月照跑 0 元。
+             不掛任何 template M2M（HA template 等 Elmo 輕量 image，plan 先為 orphan）。 -->
+        <record id="plan_ha_paas_monthly" model="sh.subscription.plan">
+            <field name="name">HA PaaS Free</field>
+            <field name="sh_plan_price">0</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="False"/>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
+        </record>
+
         <!-- Security Access Plans（5/10 Application＝1000/2000；entry routes=5） -->
         <record id="plan_security_access_entry_monthly" model="sh.subscription.plan">
             <field name="name">Security Access 5 Application Monthly</field>
@@ -499,6 +522,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_yearly" model="sh.subscription.plan">
@@ -517,6 +541,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_t2_monthly" model="sh.subscription.plan">
@@ -535,6 +560,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_t2_yearly" model="sh.subscription.plan">
@@ -553,6 +579,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_t3_monthly" model="sh.subscription.plan">
@@ -571,6 +598,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_t3_yearly" model="sh.subscription.plan">
@@ -589,6 +617,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <!-- MCP Server: Odoo Plans（統一單階 3000；改價 only、名稱不動） -->
@@ -868,6 +897,17 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_smarthome_mcp_yearly"/>
+        </record>
+
+        <!-- HA PaaS Free product（#336：0 元） -->
+        <record id="product_ha_paas_monthly" model="product.product">
+            <field name="name">HA PaaS Free</field>
+            <field name="type">service</field>
+            <field name="list_price">0</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_ha_paas_monthly"/>
         </record>
 
         <!-- Security Access Products (one per plan) -->

@@ -2,10 +2,15 @@ import json
 import logging
 import uuid
 
-from odoo import api, fields, models
-from odoo.exceptions import UserError
+from odoo import _, api, fields, models
+from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
+
+# #336：計數「活躍實例」時排除的刪除終態。CloudService 刪除走真 unlink
+# （record 離場），故 state 值集內唯一「即將釋放、不應佔用配額」的過渡態
+# 為 'deleting'（Task 0 校驗：值集無 deleted／terminated）。
+TERMINAL_STATES = ('deleting',)
 
 
 def _unflatten_dotpath_keys(flat_dict):
@@ -1294,6 +1299,39 @@ class CloudService(models.Model):
             cs_done, cs_fail, ar_done, ar_fail)
         return {"cs_done": cs_done, "cs_fail": cs_fail,
                 "ar_done": ar_done, "ar_fail": ar_fail}
+
+    @api.model
+    def _find_active_for_partner(self, template, partner):
+        """回傳該 partner 名下、該 template 的活躍實例（排除刪除終態）。
+
+        供 max_per_partner enforcement 與開通 API 冪等（#337）共用。
+        排除的刪除終態＝module-level TERMINAL_STATES（Task 0 校驗＝('deleting',)）。
+        """
+        return self.sudo().search([
+            ('template_id', '=', template.id),
+            ('workspace_id.owner_id.partner_id', '=', partner.id),
+            ('state', 'not in', list(TERMINAL_STATES)),
+        ])
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """#336：每帳號實例上限 enforcement。
+
+        放 model create（controller、未來 #337 開通 API、shell 等所有入口共用），
+        controller 不另做早驗——避免同一規則兩份漂移。計數口徑＝該 partner 名下、
+        該 template、state 不在刪除終態的 CloudService 數。
+        """
+        records = super().create(vals_list)
+        for rec in records:
+            limit = rec.template_id.max_per_partner
+            if limit and rec.workspace_id.owner_id:
+                partner = rec.workspace_id.owner_id.partner_id
+                count = len(self._find_active_for_partner(rec.template_id, partner))
+                if count > limit:
+                    raise ValidationError(_(
+                        '「%(tpl)s」每個帳號最多 %(limit)s 個實例，'
+                        '您已達上限。', tpl=rec.template_id.name, limit=limit))
+        return records
 
     def unlink(self):
         """Cleanup sidecar-backed user-scope MCP before deleting the service.

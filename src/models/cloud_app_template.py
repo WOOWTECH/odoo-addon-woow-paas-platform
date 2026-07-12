@@ -188,6 +188,13 @@ class CloudAppTemplate(models.Model):
         help='Whether this template is available for deployment',
     )
 
+    max_per_partner = fields.Integer(
+        string='每帳號實例上限',
+        default=0,
+        help='同一 partner（帳號）最多可持有的本範本活躍實例數；'
+             '0＝不限制。HA PaaS 免費方案設 1。',
+    )
+
     @api.constrains('subscription_plan_ids')
     def _check_no_cross_service_type_plans(self):
         """Symmetrical to smart_home_template — a plan belongs to one service type only.

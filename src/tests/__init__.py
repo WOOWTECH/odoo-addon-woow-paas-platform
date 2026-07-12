@@ -196,3 +196,9 @@ from . import test_wallet_cron_neutralized
 from . import test_refund_requires_payment
 # fix: #327 退點視窗改以 sh_date_of_next_payment 推導（auto-expire 護欄 + 長壽退比例）
 from . import test_refund_window_next_payment
+# feat: #336 Wave A plan 前台隱藏旗標 storefront_hidden + 三入口過濾
+from . import test_plan_visibility_336
+# feat: #336 Wave A max_per_partner 每帳號實例上限 + enforcement
+from . import test_template_max_per_partner_336
+# feat: #336 Wave A HA PaaS 0 元 plan seed + 0 元計費路徑坐實
+from . import test_ha_paas_zero_plan_336

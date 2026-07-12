@@ -925,7 +925,10 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Template not found'}
 
         plans = []
-        for plan in template.sudo().subscription_plan_ids:
+        # #336：前台 plans 一律排除 storefront_hidden（既存訂閱不受影響）
+        for plan in template.sudo().subscription_plan_ids.filtered(
+            lambda p: not p.storefront_hidden
+        ):
             plans.append({
                 'id': plan.id,
                 'name': plan.name,
