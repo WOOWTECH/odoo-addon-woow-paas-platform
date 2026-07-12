@@ -8,6 +8,7 @@ from . import sh_subscription_plan_sa_quota
 from . import sh_subscription_plan_sh_mcp
 from . import sh_subscription_plan_service_type
 from . import sh_subscription_plan_ac
+from . import sh_subscription_plan_visibility
 from . import subscription_lifecycle_mixin
 from . import subscription_lifecycle_cron
 from . import low_balance_warning_cron

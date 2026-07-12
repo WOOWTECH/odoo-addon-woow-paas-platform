@@ -196,3 +196,5 @@ from . import test_wallet_cron_neutralized
 from . import test_refund_requires_payment
 # fix: #327 退點視窗改以 sh_date_of_next_payment 推導（auto-expire 護欄 + 長壽退比例）
 from . import test_refund_window_next_payment
+# feat: #336 Wave A plan 前台隱藏旗標 storefront_hidden + 三入口過濾
+from . import test_plan_visibility_336
