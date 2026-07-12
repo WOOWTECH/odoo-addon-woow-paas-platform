@@ -291,6 +291,42 @@
             <field name="is_active" eval="True" />
         </record>
 
+        <!-- MCP Server: Odoo Manage（#338：全模組 CRUD 上架骨架）— is_active=False 待 image。
+             鏡射 cloud_app_mcp_odoo（chart mcp-server 0.1.5、mcp_enabled=False＝MCP 內建於
+             body 非 sidecar）。差異：manage image、config.mcp_server 入口模組。
+             image.tag=latest 為佔位；上架前 follow-up 釘 digest（woow-mcp-server#12）。
+             config.nonSensitive.mcp_server args 的入口模組 mcp_server_odoo_manage.server:server
+             待 woow-mcp-server#12 image 定案後校正。 -->
+        <record id="cloud_app_mcp_odoo_manage" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Odoo Manage MCP</field>
+            <field name="slug">mcp-odoo-manage</field>
+            <field name="description">Odoo Manage MCP — 以 API Key 連接目標 Odoo，全模組 CRUD 操作</field>
+            <field name="full_description">Odoo Manage MCP server：透過 API Key 連接目標 Odoo
+                實例，提供跨全模組的 CRUD 操作能力（無個人權限範圍限制），適合小團隊統一管理。
+                租戶前置需求：目標 Odoo 需開啟 API Key、並安裝對應的 Manage MCP addon。</field>
+            <field name="category">mcp</field>
+            <field name="tags">["mcp", "odoo", "mcp-server", "manage", "ai"]</field>
+
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
+            <field name="helm_chart_version">0.1.5</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "latest"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo_manage.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True" />
+
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">5</field>
+
+            <!-- MCP capability is built into the service body; NO sidecar -->
+            <field name="mcp_enabled" eval="False" />
+            <field name="post_deploy_init_type">none</field>
+
+            <field name="is_active" eval="False" />
+        </record>
+
         <!-- MCP Server: n8n — MCP built into the body, NOT the existing n8n-mcp sidecar.
              ACTIVE. image = launcher sha 2ef1dc16 (n8n-mcp-http), chart 0.1.4.
              n8n-mcp http mode MANDATES a non-empty AUTH_TOKEN (GAP-N2, double-auth) —
