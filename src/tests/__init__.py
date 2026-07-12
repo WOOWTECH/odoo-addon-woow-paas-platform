@@ -198,3 +198,5 @@ from . import test_refund_requires_payment
 from . import test_refund_window_next_payment
 # feat: #336 Wave A plan 前台隱藏旗標 storefront_hidden + 三入口過濾
 from . import test_plan_visibility_336
+# feat: #336 Wave A max_per_partner 每帳號實例上限 + enforcement
+from . import test_template_max_per_partner_336
