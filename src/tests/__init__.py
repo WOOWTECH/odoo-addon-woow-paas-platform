@@ -206,3 +206,8 @@ from . import test_ha_paas_zero_plan_336
 from . import test_mcp_manage_seed_338
 # feat: #332 Wave A CS tier→部署規格映射（cs_* 欄位 + seed + runtime overlay）
 from . import test_cs_spec_332
+# feat: #336 HA PaaS 0 元隱藏訂閱＋開通 API
+from . import test_ha_provision_scope_healer
+from . import test_hidden_template_chain
+from . import test_ha_paas_provision
+from . import test_ha_paas_zero_price_billing
