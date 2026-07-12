@@ -7,6 +7,7 @@
 29	src/controllers/billing.py
 7	src/controllers/dashboard.py
 6	src/controllers/ha_api.py
+17	src/controllers/ha_paas.py
 15	src/controllers/oauth2.py
 27	src/controllers/paas.py
 3	src/controllers/portal.py

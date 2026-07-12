@@ -14,6 +14,7 @@ from odoo import fields
 from odoo.exceptions import ValidationError
 from odoo.http import request, route, Controller
 
+from .ha_paas import HiddenChainMixin
 from ..models.workspace_access import (
     ROLE_OWNER, ROLE_ADMIN, ROLE_USER,
     ASSIGNABLE_ROLES,
@@ -108,7 +109,7 @@ def _validate_mcp_url(url: str, sidecar_backed: bool = False) -> str | None:
     return None
 
 
-class PaasController(Controller):
+class PaasController(HiddenChainMixin, Controller):
     @route("/woow", auth="user", website=False)
     def paas_app(self) -> Any:
         """
@@ -794,7 +795,8 @@ class PaasController(Controller):
         """
         CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
 
-        domain = [('is_active', '=', True)]
+        # #336：排除 hidden template（HA PaaS）不出現在 marketplace
+        domain = [('is_active', '=', True), ('is_hidden', '=', False)]
 
         if category:
             domain.append(('category', '=', category))
@@ -834,7 +836,7 @@ class PaasController(Controller):
         CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
 
         template = CloudAppTemplate.browse(template_id)
-        if not template.exists() or not template.is_active:
+        if not template.exists() or not template.is_active or template.is_hidden:
             return {'success': False, 'error': 'Template not found'}
 
         return {
@@ -921,7 +923,7 @@ class PaasController(Controller):
         """Get available subscription plans for a template."""
         CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
         template = CloudAppTemplate.browse(template_id)
-        if not template.exists() or not template.is_active:
+        if not template.exists() or not template.is_active or template.is_hidden:
             return {'success': False, 'error': 'Template not found'}
 
         plans = []
@@ -950,7 +952,7 @@ class PaasController(Controller):
 
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
-        if not service.exists():
+        if not service.exists() or service.template_id.is_hidden:
             return {'success': False, 'error': 'Service not found'}
 
         workspace = service.workspace_id
@@ -1056,7 +1058,7 @@ class PaasController(Controller):
         """
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
-        if not service.exists():
+        if not service.exists() or service.template_id.is_hidden:
             return {'success': False, 'error': 'Service not found'}
 
         workspace = service.workspace_id
@@ -1079,7 +1081,7 @@ class PaasController(Controller):
         """Skip trial period and start paid billing immediately."""
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
-        if not service.exists():
+        if not service.exists() or service.template_id.is_hidden:
             return {'success': False, 'error': 'Service not found'}
 
         workspace = service.workspace_id
@@ -1174,7 +1176,8 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Workspace not found or access denied'}
 
         service = CloudService.browse(service_id)
-        if not service.exists() or service.workspace_id.id != workspace_id:
+        if (not service.exists() or service.workspace_id.id != workspace_id
+                or service.template_id.is_hidden):
             return {'success': False, 'error': 'Service not found'}
 
         if action == 'get':
@@ -1238,7 +1241,8 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Workspace not found or access denied'}
 
         service = CloudService.browse(service_id)
-        if not service.exists() or service.workspace_id.id != workspace_id:
+        if (not service.exists() or service.workspace_id.id != workspace_id
+                or service.template_id.is_hidden):
             return {'success': False, 'error': 'Service not found'}
 
         return self._rollback_service(service, revision)
@@ -1272,7 +1276,8 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Workspace not found or access denied'}
 
         service = CloudService.browse(service_id)
-        if not service.exists() or service.workspace_id.id != workspace_id:
+        if (not service.exists() or service.workspace_id.id != workspace_id
+                or service.template_id.is_hidden):
             return {'success': False, 'error': 'Service not found'}
 
         return self._get_service_revisions(service)
@@ -1292,7 +1297,7 @@ class PaasController(Controller):
             return {'success': True, 'modules': {}}
 
         service = request.env['woow_paas_platform.cloud_service'].browse(service_id)
-        if not service.exists():
+        if not service.exists() or service.template_id.is_hidden:
             return {'success': False, 'error': 'Service not found'}
 
         workspace = service.workspace_id
@@ -1364,7 +1369,8 @@ class PaasController(Controller):
             return {'success': False, 'error': 'Workspace not found or access denied'}
 
         service = CloudService.browse(service_id)
-        if not service.exists() or service.workspace_id.id != workspace_id:
+        if (not service.exists() or service.workspace_id.id != workspace_id
+                or service.template_id.is_hidden):
             return {'success': False, 'error': 'Service not found'}
 
         if action == 'list':
@@ -2036,6 +2042,7 @@ class PaasController(Controller):
 
         services = CloudService.search([
             ('workspace_id', '=', workspace.id),
+            ('template_id', 'not in', self._hidden_template_ids(request.env)),
         ])
 
         # Update status for services in transitional states
@@ -2050,6 +2057,7 @@ class PaasController(Controller):
         # Re-read after status updates
         services = CloudService.search([
             ('workspace_id', '=', workspace.id),
+            ('template_id', 'not in', self._hidden_template_ids(request.env)),
         ])
 
         data = [self._format_service(svc) for svc in services]
@@ -2077,8 +2085,10 @@ class PaasController(Controller):
         CloudService = request.env['woow_paas_platform.cloud_service']
 
         template = CloudAppTemplate.browse(template_id)
-        if not template.exists() or not template.is_active:
-            return {'success': False, 'error': 'Template not found'}
+        # #336：generic create 拒絕 hidden template（hidden 只能經 provision 端點建）
+        if not template.exists() or not template.is_active or template.is_hidden:
+            return {'success': False,
+                    'error': 'This template cannot be deployed directly.'}
 
         # Validate subscription plan
         Plan = request.env['sh.subscription.plan'].sudo()
