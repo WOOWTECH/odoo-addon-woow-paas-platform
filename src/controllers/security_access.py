@@ -224,7 +224,8 @@ class SecurityAccessController(Controller):
                 "max_custom_domains": p.sa_max_custom_domains,
                 "max_email_rules": p.sa_max_email_rules,
             }
-            for p in template.subscription_plan_ids
+            # #336：前台 plans 一律排除 storefront_hidden（既存訂閱不受影響）
+            for p in template.subscription_plan_ids.filtered(lambda p: not p.storefront_hidden)
         ]}
 
     # ==================== Subscription trio ====================
