@@ -202,3 +202,5 @@ from . import test_plan_visibility_336
 from . import test_template_max_per_partner_336
 # feat: #336 Wave A HA PaaS 0 元 plan seed + 0 元計費路徑坐實
 from . import test_ha_paas_zero_plan_336
+# feat: #338 Wave A Odoo Manage MCP 上架骨架 seed（template+plan，is_active=False）
+from . import test_mcp_manage_seed_338

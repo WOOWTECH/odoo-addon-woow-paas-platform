@@ -1177,7 +1177,9 @@ class TestPlanSpecOverlay(TransactionCase):
 ### 校驗發現與 leader 待決
 
 - **① T1_BASELINE storage 與 CS_SPEC matrix 不一致（block A6-2/PR-A3，不影響 PR-A1/A2）**：matrix draft 的 T1 `cs_storage_gb`（odoo=20、n8n=10）既不等於 `template.min_storage_gb`（10、5）也不等於 helm `persistence.size`（10Gi、2Gi）；vcpu/ram 一致。`test_t1_equals_template_baseline` 活契約會 FAIL。依 plan A6-2「不相等即停下回報 leader，嚴禁改斷言遷就」——**PR-A3 開工前需 leader 裁定** storage 目標值（是否 T1 就要放大 storage＝刻意 tier 提升，或 matrix draft 打錯應對齊 template 現值）。
+  - **【已裁定 2026-07-12 by Eugene】採 matrix 值**（odoo `cs_storage_gb=20`、n8n=10）。理由：matrix 是對外規格承諾；「不 regress」＝不小於現狀（20>10 為提升非回歸）；A6 只接 create 路徑、既存服務不 redeploy、新服務 PVC 直接 20Gi 合法。配套：`test_t1_equals_template_baseline` **改名為 T1 規格斷言、改語意**——斷言 `cs_vcpu`/`cs_ram_gb == template.min_vcpu/min_ram_gb`（兩維相等仍成立）＋ `cs_storage_gb == matrix 常數`（odoo 20/n8n 10）**且** `>= template.min_storage_gb`（不縮保證）。
 - **② A6-4 workers 正則與實際 seed 格式不符（block A6-4/PR-A3）**：odoo `customPostInitScripts` 內 workers 是 `echo 'workers = 0' >> "$CONF"`（shell append 語句），**非裸行 `workers = 0`**；plan A6-4 正則 `^workers = \d+$`(re.M) 無法 match。同理 `limit_memory_hard/soft`。PR-A3 A6-4 實作時正則需改為 match `echo 'workers = N'` 樣式——屬「plan 具體實作碼與現實不符」，做到 A6-4 前回報確認。
+  - **【已裁定 2026-07-12 by Eugene】棄 re.M 正則、改精確字串替換**：`body.replace("workers = 0", f"workers = {n}")`；替換前 assert `body.count("workers = 0") == 1`（0 次或多次＝base 已漂移，`raise ValueError` fail-loud、不得靜默 no-op）。`limit_memory_hard = 0`／`limit_memory_soft = 0` 同法（各 `count==1` 斷言）。A6-4 測試斷言（替換後含 `workers = 4`、不含 `workers = 0`）維持不變。
 - **③ TERMINAL_STATES 佔位補實（不 block，Task 0 明文要求）**：plan A2-2 佔位 `('deleted','terminated')` 該兩 state 不存在；校驗補實為 `('deleting',)`，A2-2 實作時採用並於 commit message 註明（符合 plan「必須換成校驗值」指示）。
 
 <!-- peer-reviewed: 2026-07-12T09:35:30Z rounds=2 verdict=approved by=miniclaude -->
