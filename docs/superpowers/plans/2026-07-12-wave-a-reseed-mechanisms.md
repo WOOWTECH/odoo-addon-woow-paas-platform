@@ -1161,15 +1161,23 @@ class TestPlanSpecOverlay(TransactionCase):
 
 ## Task 0 校驗結果（執行 agent 填寫）
 
+> 校驗環境：本機 docker-desktop `paas-odoo:20260627.1023` + bind-mount worktree src（base=be4de29=origin/develop=.53）。行號以 .53 為準。
+
 | # | 項目 | 結果 |
 |---|---|---|
-| 1 | TERMINAL_STATES | （待填） |
-| 2 | HELM_ASSEMBLY_SITE | （待填） |
-| 3 | T1_BASELINE（odoo／n8n） | （待填） |
-| 4 | plan record 格式範本確認 | （待填） |
-| 5 | tests/__init__ 慣例 | （待填） |
-| 6 | 既有 suite 綠基線 | （待填） |
-| 7 | plan_id dispatch 行 | （待填） |
-| 8 | Hermes 行號複驗 | （待填） |
+| 1 | **TERMINAL_STATES** | `cloud_service.py:96-110` state 值集＝`pending/deploying/initializing/running/error/upgrading/suspended/deleting`（8 值）。**無 `deleted`／`terminated`**——plan A2-2 佔位值不存在於值集。`unlink`(:1298) 走 `super().unlink()`＝record 真離場（非改 state 保留），故已刪除者自然不入計數。**校驗定案值＝`('deleting',)`**（計數活躍實例排除「刪除中／即將釋放」）。cloud_service.py **無既有 create override**（僅 `unlink`＋`import json/logging/uuid`；無 `import re`）。 |
+| 2 | **HELM_ASSEMBLY_SITE** | `_create_service`(paas.py:2060)：`default_values=json.loads(template.helm_default_values)`@:2105 → **`merged_values=self._deep_merge(default_values, nested_user_values)`@:2139**（主組裝）→ 可選 mcp_api_key `_deep_merge`@:2155（僅 `mcp_enabled` template）→ 定案 **`'helm_values': json.dumps(merged_values)`@:2169**。**A6-4 overlay 注入點＝:2155 block 後、:2169 前，變數名 `merged_values`**。`allocated_*`@:2171-2173（抄 `template.min_vcpu/min_ram_gb/min_storage_gb`）＝A6-3 落點；`plan`(=Plan.browse@:2082) 在 scope。 |
+| 3 | **T1_BASELINE** | `cloud_app_odoo`(:148)：min=(vcpu **2**, ram **2.0**, storage **10**)、helm `persistence.size="10Gi"`、`resources` req(cpu 200m/mem 512Mi)/lim(cpu 2000m/mem 2Gi)、**有** `customPostInitScripts`（workers 為 `echo 'workers = 0' >> "$CONF"` 格式）。`cloud_app_n8n`(:43)：min=(vcpu **1**, ram **1.0**, storage **5**)、`persistence.size="2Gi"`、req(100m/256Mi)/lim(1000m/1Gi)、**無** customPostInitScripts。**⚠️ 與 plan 不符（見下方發現①，block A6-2）**：matrix T1 storage(odoo=20/n8n=10)≠min_storage(10/5)也≠persistence.size(10Gi/2Gi)；vcpu/ram 一致。 |
+| 4 | **plan record 格式範本** | `plan_smarthome_monthly`(:318-334)：`name`／`sh_duration`／`sh_unit`／`sh_plan_price`／`sh_override_product`(eval True)／`sh_no_of_billing_cycle`(-1)／`sh_never_expire`(eval True)／`sh_trial`(eval True)＋`sh_trial_duration`／`sh_trial_unit`／`sh_start_immediately`(eval False)／`sh_is_close_by_customer`(eval True)／`sh_reminder`(eval `[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]`)／`service_type`。A3-1 HA PaaS seed 格式一致（關 trial 時去 duration/unit 兩欄語意成立）。 |
+| 5 | **tests/__init__ 慣例** | `src/tests/__init__.py`（198 行）＝逐行 `from . import test_xxx`，上方可帶 `# feat/fix: 描述` 註解。新測試檔 append 至檔尾。 |
+| 6 | **既有 suite 綠基線** | `test_pricing_seed_330.py` 全 7 class（TestPlanTaxonomySchema／TestPricingSeedIntegrity／TestShMcpSeedLiteral／TestPlaceholdersUntouched／TestServiceTypeSeedCoverage／TestTemplatePlanWiring／TestPricingMigration330）：**`0 failed, 0 error(s) of 22 tests`**。install 62.8s。 |
+| 7 | **plan_id dispatch 行** | `api_workspace_services`(:1102) `action=='create'`(:1133)→`plan_id=kw.get('plan_id')`**@:1137**→`_create_service(..., plan_id=plan_id)`@:1138；`_create_service`(:2060) `plan=Plan.browse(plan_id)`@:2082，:2086 驗 `plan not in template.sudo().subscription_plan_ids`。 |
+| 8 | **Hermes 行號複驗** | plans @:486/504/522/540/558/576（xmlid `plan_mcp_hermes_{monthly,yearly,t2_monthly,t2_yearly,t3_monthly,t3_yearly}`，與 plan `HERMES_PLAN_XMLIDS` 完全一致）；products @:912/922/932/942/952/962；M2M `subscription_template_links.xml:27-31`。全部複驗 ✓。 |
+
+### 校驗發現與 leader 待決
+
+- **① T1_BASELINE storage 與 CS_SPEC matrix 不一致（block A6-2/PR-A3，不影響 PR-A1/A2）**：matrix draft 的 T1 `cs_storage_gb`（odoo=20、n8n=10）既不等於 `template.min_storage_gb`（10、5）也不等於 helm `persistence.size`（10Gi、2Gi）；vcpu/ram 一致。`test_t1_equals_template_baseline` 活契約會 FAIL。依 plan A6-2「不相等即停下回報 leader，嚴禁改斷言遷就」——**PR-A3 開工前需 leader 裁定** storage 目標值（是否 T1 就要放大 storage＝刻意 tier 提升，或 matrix draft 打錯應對齊 template 現值）。
+- **② A6-4 workers 正則與實際 seed 格式不符（block A6-4/PR-A3）**：odoo `customPostInitScripts` 內 workers 是 `echo 'workers = 0' >> "$CONF"`（shell append 語句），**非裸行 `workers = 0`**；plan A6-4 正則 `^workers = \d+$`(re.M) 無法 match。同理 `limit_memory_hard/soft`。PR-A3 A6-4 實作時正則需改為 match `echo 'workers = N'` 樣式——屬「plan 具體實作碼與現實不符」，做到 A6-4 前回報確認。
+- **③ TERMINAL_STATES 佔位補實（不 block，Task 0 明文要求）**：plan A2-2 佔位 `('deleted','terminated')` 該兩 state 不存在；校驗補實為 `('deleting',)`，A2-2 實作時採用並於 commit message 註明（符合 plan「必須換成校驗值」指示）。
 
 <!-- peer-reviewed: 2026-07-12T09:35:30Z rounds=2 verdict=approved by=miniclaude -->
