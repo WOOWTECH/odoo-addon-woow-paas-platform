@@ -38,6 +38,10 @@ class TestPlansApiFiltersHidden(TransactionCase):
         template = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
         all_plans = template.sudo().subscription_plan_ids
         self.assertTrue(all_plans, '前置：Hermes template 應有掛 plans')
+        # 註：A1-2 已把 Hermes 全數封存（storefront_hidden=True）；本測試只驗
+        # filtered 語意本身，與 seed 的封存狀態無關，故先把 fixture 重置為
+        # 全可見的已知初始態（TransactionCase 於測試結束會 rollback，不落 DB）。
+        all_plans.storefront_hidden = False
         one = all_plans[0]
         one.storefront_hidden = True
         visible = all_plans.filtered(lambda p: not p.storefront_hidden)
@@ -54,3 +58,39 @@ class TestPlansApiFiltersHidden(TransactionCase):
             src = inspect.getsource(mod)
             self.assertIn('storefront_hidden', src,
                           f'{mod.__name__} 的 plans API 漏掉 storefront_hidden 過濾')
+
+
+HERMES_PLAN_XMLIDS = [
+    'plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly',
+    'plan_mcp_hermes_t2_monthly', 'plan_mcp_hermes_t2_yearly',
+    'plan_mcp_hermes_t3_monthly', 'plan_mcp_hermes_t3_yearly',
+]
+
+
+@tagged('post_install', '-at_install')
+class TestHermesArchived(TransactionCase):
+    """A5：Hermes 6 筆封存（前台不可見、價格與既存訂閱不動）。"""
+
+    def test_hermes_seed_hidden(self):
+        for xmlid in HERMES_PLAN_XMLIDS:
+            plan = self.env.ref(f'woow_paas_platform.{xmlid}')
+            self.assertTrue(plan.storefront_hidden, f'{xmlid} 應為前台隱藏')
+
+    def test_hermes_prices_untouched(self):
+        expected = {
+            'plan_mcp_hermes_monthly': 1500, 'plan_mcp_hermes_yearly': 15000,
+            'plan_mcp_hermes_t2_monthly': 4500, 'plan_mcp_hermes_t2_yearly': 45000,
+            'plan_mcp_hermes_t3_monthly': 6000, 'plan_mcp_hermes_t3_yearly': 60000,
+        }
+        for xmlid, price in expected.items():
+            plan = self.env.ref(f'woow_paas_platform.{xmlid}')
+            self.assertEqual(plan.sh_plan_price, price)
+
+    def test_migration_idempotent(self):
+        """migration delegate 可重跑（升級軌）。"""
+        Plan = self.env['sh.subscription.plan']
+        Plan._woow_migrate_hide_hermes_336()
+        Plan._woow_migrate_hide_hermes_336()
+        for xmlid in HERMES_PLAN_XMLIDS:
+            self.assertTrue(
+                self.env.ref(f'woow_paas_platform.{xmlid}').storefront_hidden)

@@ -499,6 +499,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_yearly" model="sh.subscription.plan">
@@ -517,6 +518,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_t2_monthly" model="sh.subscription.plan">
@@ -535,6 +537,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_t2_yearly" model="sh.subscription.plan">
@@ -553,6 +556,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_t3_monthly" model="sh.subscription.plan">
@@ -571,6 +575,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <record id="plan_mcp_hermes_t3_yearly" model="sh.subscription.plan">
@@ -589,6 +594,7 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
+            <field name="storefront_hidden" eval="True"/>
         </record>
 
         <!-- MCP Server: Odoo Plans（統一單階 3000；改價 only、名稱不動） -->
