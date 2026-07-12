@@ -315,6 +315,27 @@ class OAuthClient(models.Model):
             client.scopes = ' '.join(sorted(granted | set(missing)))
 
     @api.model
+    def _ensure_ha_app_provision_scope(self) -> None:
+        """冪等把 ha:provision 併進 seed 的 HA App public client（#336）。
+
+        比照 _ensure_ha_smart_home_sa_scopes：oauth_clients.xml 是 noupdate=1，
+        改 seed XML 到不了既有 DB。本 method 從 post_init（新裝）與
+        data/oauth_ha_provision_scope_update.xml <function>（每次 -u）兩處呼叫，
+        覆蓋新裝與升級兩條路徑。缺 client 時 no-op（fail-safe）。
+        """
+        required = ('ha:provision',)
+        client = self.env.ref(
+            'woow_paas_platform.oauth_client_ha_app',
+            raise_if_not_found=False,
+        )
+        if not client:
+            return
+        granted = set((client.scopes or '').split())
+        missing = [s for s in required if s not in granted]
+        if missing:
+            client.scopes = ' '.join(sorted(granted | set(missing)))
+
+    @api.model
     def _ensure_ha_smart_home_redirect_mode(self) -> None:
         """Idempotently migrate the seeded HA client to host-flexible callback
         matching. ``oauth_clients.xml`` is ``noupdate="1"`` (sticky), so the

@@ -384,6 +384,28 @@
             <field name="is_active" eval="True" />
         </record>
 
+        <!-- HA PaaS（免費雲端 Home Assistant，#336）。工作項5（Elmo 輕量 HA image）
+             未交付前 helm_* 為佔位、is_active=False（供 provision 端點 deployability
+             檢查、未備回 503 不建 service）。工作項5 落地：填真 image + is_active=True
+             + -u 即生效，無 migration。is_hidden=True：不出現在 /woow 前台任何清單。
+             此檔 noupdate=0，新 xmlid 首建不受 sticky flag 影響、M2M link 每 -u 重套。 -->
+        <record id="cloud_app_ha_paas" model="woow_paas_platform.cloud_app_template">
+            <field name="name">HA PaaS</field>
+            <field name="slug">ha-paas</field>
+            <field name="description">免費雲端 Home Assistant（平台自動開通）</field>
+            <field name="category">container</field>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="False"/>
+            <field name="helm_repo_url">TBD-elmo-lightweight-ha</field>
+            <field name="helm_chart_name">TBD</field>
+            <field name="helm_chart_version">0.0.0</field>
+            <field name="default_port">8123</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">5</field>
+        </record>
+
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
              helm_value_specs above is silently skipped on -u. <function> runs on every

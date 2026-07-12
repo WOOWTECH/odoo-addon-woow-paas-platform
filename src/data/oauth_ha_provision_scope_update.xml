@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- noupdate="0" (default)：下方 <function> 每次 -u 重跑，與它觸碰的 seed
+         record 的 noupdate flag 無關。oauth_clients.xml 是 noupdate="1"，改 seed
+         的 scopes 只到 *fresh* install；既有 DB（sandbox / stg / prod 都跑 -u）
+         永遠拿不到 XML 裡的新 scope。
+
+         merge 邏輯在 oauth_client model（_ensure_ha_app_provision_scope），冪等，
+         每次 upgrade 重跑安全。post_init_hook 也呼叫它走 fresh-install 路徑。
+         缺 ha:provision 會讓 HA App 無法開通（#336）。 -->
+    <function
+        model="woow_paas_platform.oauth_client"
+        name="_ensure_ha_app_provision_scope"/>
+</odoo>

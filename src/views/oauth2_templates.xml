@@ -315,7 +315,7 @@
                     <div class="device-code-confirm">Confirm this code matches the one shown on your device:</div>
                     <div class="device-code"><t t-esc="user_code"/></div>
                     <div class="oauth-scopes">
-                        <t t-foreach="scopes" t-as="s"><div class="oauth-scope-item"><t t-esc="s"/></div></t>
+                        <t t-foreach="scopes" t-as="s"><div class="oauth-scope-item"><t t-esc="s['description']"/></div></t>
                     </div>
                     <form method="POST" action="/device">
                         <input type="hidden" name="csrf_token" t-att-value="request.csrf_token(None)"/>

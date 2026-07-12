@@ -7,10 +7,14 @@ from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
-# #336：計數「活躍實例」時排除的刪除終態。CloudService 刪除走真 unlink
+# #336（Wave A）：計數「活躍實例」時排除的刪除終態。CloudService 刪除走真 unlink
 # （record 離場），故 state 值集內唯一「即將釋放、不應佔用配額」的過渡態
 # 為 'deleting'（Task 0 校驗：值集無 deleted／terminated）。
 TERMINAL_STATES = ('deleting',)
+
+# provision「每帳號限一」的 advisory-lock namespace（比照 project_project 的
+# _REACH_LOCK_NS reach-lock；任意固定 int、全 module 唯一即可）。'HAPA' = 0x48415041。
+_HA_PROVISION_LOCK_NS = 0x48415041
 
 
 def _unflatten_dotpath_keys(flat_dict):
@@ -77,6 +81,13 @@ class CloudService(models.Model):
         required=True,
         ondelete='restrict',
         help='The application template used to create this service',
+    )
+    provision_partner_id = fields.Many2one(
+        comodel_name='res.partner',
+        string='Provision Owner（每帳號限一）',
+        index=True,
+        help='僅平台自動開通的「每帳號限一」服務（如 HA PaaS）填值，供 partial '
+             'unique index 保證同一 partner 至多一份。一般服務留空（#336）。',
     )
 
     # Identity
@@ -244,6 +255,20 @@ class CloudService(models.Model):
         groups='base.group_system',
         help='JSON parameters for pending deployment (expose_config, mcp_api_key, etc.)',
     )
+
+    def init(self):
+        """建 partial unique index：同一 provision_partner_id 至多一列（#336 每帳號
+        限一的 DB backstop）。比照 skill.py init 的 partial-unique-index 慣例——Odoo
+        原生 hook，每次 install / -u 自動跑、冪等（IF NOT EXISTS），涵蓋新裝與升級
+        兩條路徑，免 migration + post_init 三件套。不加 state 條件——排除 deleting
+        會放行 delete/create race（並發第二筆 INSERT commit 撞 IntegrityError →
+        provision controller catch → 回既有）。"""
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                woow_paas_cloud_service_provision_partner_uniq
+            ON woow_paas_platform_cloud_service (provision_partner_id)
+            WHERE provision_partner_id IS NOT NULL
+        """)
 
     # ------------------------------------------------------------------ #
     #  Actions                                                            #

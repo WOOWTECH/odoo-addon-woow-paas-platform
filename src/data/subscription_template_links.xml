@@ -47,6 +47,12 @@
                    eval="[(6, 0, [ref('plan_mcp_odoo_manage_monthly'), ref('plan_mcp_odoo_manage_yearly')])]"/>
         </record>
 
+        <!-- HA PaaS 0 元隱藏 template ↔ 0 元 plan（#336）。noupdate=0 每 -u 重套；
+             cloud_app_ha_paas 是新 xmlid，首建與 M2M 同一次 -u 寫入，無 sticky 風險。 -->
+        <record id="cloud_app_ha_paas" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids" eval="[(6, 0, [ref('plan_ha_paas')])]"/>
+        </record>
+
         <!-- AnythingLLM template does not exist yet; plans will be linked when created -->
 
         <!-- Link smart_home_template to its subscription plans -->
