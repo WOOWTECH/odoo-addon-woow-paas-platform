@@ -1310,6 +1310,57 @@ class CloudService(models.Model):
         }
 
     @api.model
+    def _apply_plan_spec_overlay(self, values, template, plan):
+        """#332 runtime overlay：把選定 plan 的 cs_* 疊進 helm values。
+
+        刻意不改 template seed（避開 sticky noupdate）；cs_* 為 0 的維度一律
+        不碰＝與現狀 bit-for-bit 相同。就地疊加並回傳同一 dict。
+
+        workers／memory 用精確字串替換（裁定② 2026-07-12 by Eugene）：seed 內
+        為 `echo 'workers = 0'`（非裸行），故 body.replace + 逐 marker「全 script
+        合計恰 1 處」的 count 斷言 fail-loud——base 漂移（0 或多處）即 raise、
+        不得靜默 no-op。
+        """
+        if plan.cs_vcpu:
+            res = values.setdefault('resources', {})
+            for key in ('requests', 'limits'):
+                res.setdefault(key, {})['cpu'] = str(plan.cs_vcpu)
+        if plan.cs_ram_gb:
+            mem = (f'{int(plan.cs_ram_gb)}Gi'
+                   if float(plan.cs_ram_gb).is_integer()
+                   else f'{int(plan.cs_ram_gb * 1024)}Mi')
+            res = values.setdefault('resources', {})
+            for key in ('requests', 'limits'):
+                res.setdefault(key, {})['memory'] = mem
+        if plan.cs_storage_gb:
+            values.setdefault('persistence', {})['size'] = f'{plan.cs_storage_gb}Gi'
+        scripts = values.get('customPostInitScripts')
+        if plan.cs_odoo_workers and scripts:
+            n = plan.cs_odoo_workers
+            replacements = [('workers = 0', f'workers = {n}')]
+            if plan.cs_ram_gb:
+                # workers>0 ⟹ cs_ram_gb>0（A6-1 constraint 保證），per-worker
+                # memory 上限＝官方建議比例（hard 0.85／soft 0.70）。
+                ram_bytes = int(plan.cs_ram_gb * 1024 ** 3)
+                replacements += [
+                    ('limit_memory_hard = 0',
+                     f'limit_memory_hard = {int(ram_bytes * 0.85 / n)}'),
+                    ('limit_memory_soft = 0',
+                     f'limit_memory_soft = {int(ram_bytes * 0.70 / n)}'),
+                ]
+            for marker, repl in replacements:
+                total = sum(body.count(marker) for body in scripts.values())
+                if total != 1:
+                    raise ValueError(
+                        "customPostInitScripts 內 '%s' 預期恰 1 處、實得 %d"
+                        "（base 已漂移，fail-loud 不靜默 no-op）" % (marker, total)
+                    )
+                for name, body in list(scripts.items()):
+                    if marker in body:
+                        scripts[name] = body.replace(marker, repl)
+        return values
+
+    @api.model
     def _find_active_for_partner(self, template, partner):
         """回傳該 partner 名下、該 template 的活躍實例（排除刪除終態）。
 

@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """#332：CS tier→部署規格映射（plan cs_* 欄位＋runtime overlay）。"""
+import copy
+import json
+
 from odoo.tests.common import TransactionCase, tagged
 
 
@@ -116,3 +119,61 @@ class TestAllocatedFromPlan(TransactionCase):
             'allocated_ram_gb': tpl.min_ram_gb,
             'allocated_storage_gb': tpl.min_storage_gb,
         })
+
+
+@tagged('post_install', '-at_install')
+class TestPlanSpecOverlay(TransactionCase):
+
+    def _base_values(self):
+        tpl = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        return json.loads(tpl.helm_default_values)
+
+    def test_overlay_resources_and_persistence(self):
+        Svc = self.env['woow_paas_platform.cloud_service']
+        tpl = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        plan = self.env.ref('woow_paas_platform.plan_odoo_t3_monthly')
+        base = self._base_values()
+        out = Svc._apply_plan_spec_overlay(copy.deepcopy(base), tpl, plan)
+        self.assertEqual(out['resources']['requests']['cpu'], '3')
+        self.assertEqual(out['resources']['requests']['memory'], '4Gi')
+        self.assertEqual(out['persistence']['size'], '40Gi')
+
+    def test_overlay_workers_substitution(self):
+        Svc = self.env['woow_paas_platform.cloud_service']
+        tpl = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        plan = self.env.ref('woow_paas_platform.plan_odoo_t3_monthly')
+        out = Svc._apply_plan_spec_overlay(self._base_values(), tpl, plan)
+        scripts = json.dumps(out.get('customPostInitScripts', {}))
+        self.assertIn('workers = 4', scripts)
+        self.assertNotIn('workers = 0', scripts)
+        self.assertNotIn('limit_memory_hard = 0', scripts)
+
+    def test_zero_spec_plan_is_noop(self):
+        """cs_* 全 0 → overlay 輸出必須與輸入完全相同（現狀零變保證）。"""
+        Svc = self.env['woow_paas_platform.cloud_service']
+        tpl = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        zero_plan = self.env.ref('woow_paas_platform.plan_smarthome_monthly')
+        base = self._base_values()
+        out = Svc._apply_plan_spec_overlay(copy.deepcopy(base), tpl, zero_plan)
+        self.assertEqual(out, base)
+
+    def test_n8n_no_workers_touch(self):
+        """n8n plan（workers=0）：不碰 script；resources 照 overlay。"""
+        Svc = self.env['woow_paas_platform.cloud_service']
+        tpl = self.env.ref('woow_paas_platform.cloud_app_n8n')
+        plan = self.env.ref('woow_paas_platform.plan_n8n_t3_monthly')
+        base = json.loads(tpl.helm_default_values)
+        out = Svc._apply_plan_spec_overlay(copy.deepcopy(base), tpl, plan)
+        self.assertEqual(out['resources']['requests']['cpu'], '2')
+        self.assertEqual(
+            out.get('customPostInitScripts'), base.get('customPostInitScripts'))
+
+    def test_overlay_wired_into_create_path(self):
+        """接線守衛：overlay 必須在部署組裝路徑上被呼叫（定義 1 次＋呼叫 ≥1 次）。"""
+        import inspect
+        from odoo.addons.woow_paas_platform.controllers import paas
+        from odoo.addons.woow_paas_platform.models import cloud_service
+        combined = (inspect.getsource(paas) + inspect.getsource(cloud_service))
+        self.assertGreaterEqual(
+            combined.count('_apply_plan_spec_overlay'), 2,
+            'overlay 已定義但未接進 _create_service 部署組裝路徑')

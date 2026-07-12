@@ -2157,6 +2157,11 @@ class PaasController(Controller):
             )
             merged_values = self._deep_merge(merged_values, api_key_nested)
 
+        # #332：部署前把選定 plan 的 cs_* 規格 overlay 進 helm values
+        # （runtime overlay，template seed 不動；cs_* 全 0＝與現狀 bit-for-bit 相同）
+        merged_values = CloudService._apply_plan_spec_overlay(
+            merged_values, template, plan)
+
         try:
             # Create service record in pending state (cron picks up 'pending')
             service_vals = {
