@@ -694,6 +694,45 @@
             <field name="service_type">cloud_service</field>
         </record>
 
+        <!-- MCP Server: Odoo Manage Plans（#338）。年繳 24000＝×8（Elmo 07-12 定價
+             HTML 權威 ID 1202/1203）；既有 MCP odoo/n8n 年繳 30000（×10）本 PR 不動，
+             全平台年繳倍率統一至 ×8 屬 Wave B base reprice。 -->
+        <record id="plan_mcp_odoo_manage_monthly" model="sh.subscription.plan">
+            <field name="name">Odoo Manage MCP Server Monthly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">3000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
+        <record id="plan_mcp_odoo_manage_yearly" model="sh.subscription.plan">
+            <field name="name">Odoo Manage MCP Server Yearly</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">24000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
         <!-- ============================================================ -->
         <!--  Products (one per plan, each links to its plan)             -->
         <!--  sh_subscription_plan_id is on product.template              -->
@@ -1049,6 +1088,27 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_n8n_yearly"/>
+        </record>
+
+        <!-- MCP Server: Odoo Manage Products（#338） -->
+        <record id="product_mcp_odoo_manage_monthly" model="product.product">
+            <field name="name">Odoo Manage MCP Server Monthly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">3000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_mcp_odoo_manage_monthly"/>
+        </record>
+
+        <record id="product_mcp_odoo_manage_yearly" model="product.product">
+            <field name="name">Odoo Manage MCP Server Yearly Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">24000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_mcp_odoo_manage_yearly"/>
         </record>
 
     </data>

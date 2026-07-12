@@ -41,6 +41,12 @@
                    eval="[(6, 0, [ref('plan_mcp_n8n_monthly'), ref('plan_mcp_n8n_yearly')])]"/>
         </record>
 
+        <!-- #338：Odoo Manage MCP template ↔ 兩 plan（3000/24000） -->
+        <record id="cloud_app_mcp_odoo_manage" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_mcp_odoo_manage_monthly'), ref('plan_mcp_odoo_manage_yearly')])]"/>
+        </record>
+
         <!-- AnythingLLM template does not exist yet; plans will be linked when created -->
 
         <!-- Link smart_home_template to its subscription plans -->
