@@ -200,3 +200,5 @@ from . import test_refund_window_next_payment
 from . import test_plan_visibility_336
 # feat: #336 Wave A max_per_partner 每帳號實例上限 + enforcement
 from . import test_template_max_per_partner_336
+# feat: #336 Wave A HA PaaS 0 元 plan seed + 0 元計費路徑坐實
+from . import test_ha_paas_zero_plan_336
