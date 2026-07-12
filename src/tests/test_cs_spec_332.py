@@ -91,3 +91,28 @@ class TestCsSpecSeed(TransactionCase):
             self.assertEqual(
                 (p.cs_vcpu, p.cs_ram_gb, p.cs_storage_gb, p.cs_odoo_workers),
                 snap, f'{xmlid}：XML 軌與 migration 軌漂移')
+
+
+@tagged('post_install', '-at_install')
+class TestAllocatedFromPlan(TransactionCase):
+
+    def test_allocated_prefers_plan_spec(self):
+        Svc = self.env['woow_paas_platform.cloud_service']
+        plan = self.env.ref('woow_paas_platform.plan_odoo_t3_monthly')
+        tpl = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        vals = Svc._allocated_vals_from(tpl, plan)
+        self.assertEqual(vals, {
+            'allocated_vcpu': 3, 'allocated_ram_gb': 4.0,
+            'allocated_storage_gb': 40,
+        })
+
+    def test_allocated_fallback_template(self):
+        Svc = self.env['woow_paas_platform.cloud_service']
+        zero_plan = self.env.ref('woow_paas_platform.plan_smarthome_monthly')  # cs_* 全 0
+        tpl = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        vals = Svc._allocated_vals_from(tpl, zero_plan)
+        self.assertEqual(vals, {
+            'allocated_vcpu': tpl.min_vcpu,
+            'allocated_ram_gb': tpl.min_ram_gb,
+            'allocated_storage_gb': tpl.min_storage_gb,
+        })

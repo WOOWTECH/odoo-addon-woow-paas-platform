@@ -1301,6 +1301,15 @@ class CloudService(models.Model):
                 "ar_done": ar_done, "ar_fail": ar_fail}
 
     @api.model
+    def _allocated_vals_from(self, template, plan):
+        """#332：規格顯示值——plan cs_* 優先、0 值 fallback template.min_*。"""
+        return {
+            'allocated_vcpu': plan.cs_vcpu or template.min_vcpu,
+            'allocated_ram_gb': plan.cs_ram_gb or template.min_ram_gb,
+            'allocated_storage_gb': plan.cs_storage_gb or template.min_storage_gb,
+        }
+
+    @api.model
     def _find_active_for_partner(self, template, partner):
         """回傳該 partner 名下、該 template 的活躍實例（排除刪除終態）。
 

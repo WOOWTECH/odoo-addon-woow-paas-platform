@@ -2171,9 +2171,8 @@ class PaasController(Controller):
                 'helm_namespace': helm_namespace,
                 'helm_values': json.dumps(merged_values),
                 'helm_chart_version': template.helm_chart_version,
-                'allocated_vcpu': template.min_vcpu,
-                'allocated_ram_gb': template.min_ram_gb,
-                'allocated_storage_gb': template.min_storage_gb,
+                # #332：allocated_* 改讀選定 plan 規格、0 值 fallback template.min_*
+                **CloudService._allocated_vals_from(template, plan),
             }
             # Store init params for post-deploy initialization
             if init_params.get('owner_email'):
