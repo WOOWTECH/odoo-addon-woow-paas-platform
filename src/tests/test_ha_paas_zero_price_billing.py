@@ -16,7 +16,7 @@ class TestHAPaaSZeroPriceBilling(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.plan = self.env.ref('woow_paas_platform.plan_ha_paas')
+        self.plan = self.env.ref('woow_paas_platform.plan_ha_paas_monthly')
         self.partner = self.env['res.partner'].create({'name': 'Zero Price User'})
         self.Sub = self.env['sh.subscription.subscription'].sudo()
         self.WalletTxn = self.env['wallet.transaction'].sudo()

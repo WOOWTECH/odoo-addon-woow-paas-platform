@@ -271,6 +271,6 @@ class HAPaaSController(Controller):
             'deploy_params': json.dumps(deploy_params) if deploy_params else False,
             'provision_partner_id': partner.id})
         svc._create_and_confirm_subscription(
-            partner, env.ref('woow_paas_platform.plan_ha_paas'))
+            partner, env.ref('woow_paas_platform.plan_ha_paas_monthly'))
         self._trigger_deploy_cron()
         return svc

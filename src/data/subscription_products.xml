@@ -1159,35 +1159,11 @@
             <field name="sh_subscription_plan_id" ref="plan_mcp_odoo_manage_yearly"/>
         </record>
 
-        <!-- HA PaaS 0 元 plan（#336）：客人無地端設備也能一鍵開雲端 HA。0 價原生
-             可表達（sh_plan_price=0），走 active 路徑（sh_trial=False，不走 trial）。
-             每帳號限一由開通端點 enforce。service_type=cloud_service 與掛載它的
-             cloud_app_ha_paas 家族一致（_check_service_type_matches_template_family）。
-             sh_reminder 對齊既有 cloud_service plan 慣例。 -->
-        <record id="plan_ha_paas" model="sh.subscription.plan">
-            <field name="name">HA PaaS（免費雲端 Home Assistant）</field>
-            <field name="sh_duration">1</field>
-            <field name="sh_unit">month</field>
-            <field name="sh_plan_price">0</field>
-            <field name="sh_override_product" eval="True"/>
-            <field name="sh_no_of_billing_cycle">-1</field>
-            <field name="sh_never_expire" eval="True"/>
-            <field name="sh_trial" eval="False"/>
-            <field name="sh_start_immediately" eval="False"/>
-            <field name="sh_is_close_by_customer" eval="True"/>
-            <field name="sh_reminder"
-                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
-            <field name="service_type">cloud_service</field>
-        </record>
-        <record id="product_ha_paas" model="product.product">
-            <field name="name">HA PaaS（免費雲端 Home Assistant）Subscription</field>
-            <field name="type">service</field>
-            <field name="list_price">0</field>
-            <field name="sale_ok" eval="True"/>
-            <field name="purchase_ok" eval="False"/>
-            <field name="sh_product_subscribe" eval="True"/>
-            <field name="sh_subscription_plan_id" ref="plan_ha_paas"/>
-        </record>
+        <!-- #341（Wave A）撞車收斂：HA PaaS 0 元 plan/product 沿用 Wave A 已在 develop
+             的 plan_ha_paas_monthly / product_ha_paas_monthly（自帶 storefront_hidden=True），
+             本 PR 原有的 plan_ha_paas / product_ha_paas 已移除避免重複 0 元 HA seed。
+             plan 刻意 orphan（不掛任何 template M2M，保 Wave A test_orphan_no_template_links）；
+             provision 端點直接把 plan ref 傳給 _create_and_confirm_subscription，不需 M2M。 -->
 
     </data>
 </odoo>

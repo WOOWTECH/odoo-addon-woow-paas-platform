@@ -47,11 +47,12 @@
                    eval="[(6, 0, [ref('plan_mcp_odoo_manage_monthly'), ref('plan_mcp_odoo_manage_yearly')])]"/>
         </record>
 
-        <!-- HA PaaS 0 元隱藏 template ↔ 0 元 plan（#336）。noupdate=0 每 -u 重套；
-             cloud_app_ha_paas 是新 xmlid，首建與 M2M 同一次 -u 寫入，無 sticky 風險。 -->
-        <record id="cloud_app_ha_paas" model="woow_paas_platform.cloud_app_template">
-            <field name="subscription_plan_ids" eval="[(6, 0, [ref('plan_ha_paas')])]"/>
-        </record>
+        <!-- #341（Wave A）撞車收斂：HA PaaS plan（plan_ha_paas_monthly）刻意 orphan——
+             不掛任何 template M2M（Wave A test_orphan_no_template_links 斷言 M2M=0，且
+             storefront_hidden 已在 plan 層擋前台）。provision 端點直接把 plan ref 傳給
+             _create_and_confirm_subscription 建 sub，不經 template↔plan M2M，故本 PR 原有的
+             cloud_app_ha_paas ↔ plan M2M link 已移除。cloud_app_ha_paas template 本身仍由
+             cloud_app_templates.xml 定義（is_hidden=True／is_active=False）。 -->
 
         <!-- AnythingLLM template does not exist yet; plans will be linked when created -->
 

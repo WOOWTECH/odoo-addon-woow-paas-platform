@@ -17,15 +17,21 @@ class TestHAPaaSSeed(TransactionCase):
         self.assertFalse(tpl.is_active, '工作項5 image 未備前 template 不可 deployable')
 
     def test_ha_paas_plan_zero_price_cloud_service(self):
-        plan = self.env.ref('woow_paas_platform.plan_ha_paas')
+        plan = self.env.ref('woow_paas_platform.plan_ha_paas_monthly')
         self.assertEqual(plan.sh_plan_price, 0.0)
         self.assertEqual(plan.service_type, 'cloud_service')
         self.assertFalse(plan.sh_trial, '0 元不走 trial 路徑')
 
-    def test_ha_paas_template_linked_to_zero_plan(self):
-        tpl = self.env.ref('woow_paas_platform.cloud_app_ha_paas')
-        plan = self.env.ref('woow_paas_platform.plan_ha_paas')
-        self.assertIn(plan, tpl.subscription_plan_ids)
+    def test_ha_paas_plan_is_orphan(self):
+        # #341（Wave A）撞車收斂：HA PaaS plan 刻意 orphan——不掛任何 template M2M。
+        # 前台隱藏由兩層縱深達成：plan 層 storefront_hidden（擋購買選項）＋ template 層
+        # is_hidden（擋服務/訂閱/發票鏈）。provision 端點直接把 plan ref 傳給
+        # _create_and_confirm_subscription，不經 template↔plan M2M，故 plan 無需掛 template。
+        # 與 Wave A test_ha_paas_zero_plan_336.test_orphan_no_template_links 一致。
+        plan = self.env.ref('woow_paas_platform.plan_ha_paas_monthly')
+        linked = self.env['woow_paas_platform.cloud_app_template'].sudo().search_count(
+            [('subscription_plan_ids', 'in', plan.id)])
+        self.assertEqual(linked, 0, 'HA PaaS plan 不掛任何 template（orphan 設計）')
 
     def test_existing_templates_default_visible(self):
         n8n = self.env.ref('woow_paas_platform.cloud_app_n8n')
@@ -49,7 +55,7 @@ class TestHiddenChainFiltering(HttpCase):
         self.partner = self.env.ref('base.partner_admin')
         self.admin_user = self.env.ref('base.user_admin')
         self.tpl = self.env.ref('woow_paas_platform.cloud_app_ha_paas')
-        self.plan = self.env.ref('woow_paas_platform.plan_ha_paas')
+        self.plan = self.env.ref('woow_paas_platform.plan_ha_paas_monthly')
         # 由 admin 擁有的 hidden HA PaaS 服務＋0 元訂閱（owner 本人也不該看到）
         self.ws = self.env['woow_paas_platform.workspace'].create({
             'name': 'HA PaaS WS 336', 'owner_id': self.admin_user.id})
