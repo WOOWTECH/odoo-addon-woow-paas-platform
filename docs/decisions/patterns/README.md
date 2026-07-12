@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 24 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 25 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -32,6 +32,7 @@
 | pattern | 何時觸發 / 必看 |
 |---|---|
 | [[resource-ownership-vs-template-activation]] | 平台資源（skill / mcp_server）同時要「屬於誰」與「哪個 agent 啟用」兩種語意 → 歸屬 = 資源端 M2O FK（1:N）+ 配置 = template 端 M2M + subset constraint 黏合；新增第三種資源類型照抄 4 件套；看到「project O2M 與 template M2M 好像重複」或想讓 agent 隱式全吃 project 資源時必讀 |
+| [[template-vs-plan-property-boundary]] | 新商品變體上架猶豫「開新 CloudAppTemplate 還是同 template 加 plan」時：需要不同 **template 級屬性**（image/chart/init script）＝必開新 template；只差 plan 級（價格/cs_* 規格/AC 席數/可見性）＝同 template 多 plan；有人提議「plan 加 image 欄位」時必讀 |
 
 ### ORM 寫入 / lifecycle / cleanup
 
@@ -82,6 +83,7 @@
 - [sidecar-backed-flag-lifecycle](sidecar-backed-flag-lifecycle.md)
 - [spawn-install-values-missed-forward](spawn-install-values-missed-forward.md)
 - [su-env-exempt-guard-false-green](su-env-exempt-guard-false-green.md)
+- [template-vs-plan-property-boundary](template-vs-plan-property-boundary.md)
 - [two-layer-acl-lockstep](two-layer-acl-lockstep.md)
 - [two-stage-remote-provision-idempotency](two-stage-remote-provision-idempotency.md)
 - [unbound-project-acl-dual-leg](unbound-project-acl-dual-leg.md)
