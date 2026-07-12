@@ -1,7 +1,7 @@
 ---
 title: HA App OAuth 串接與開通包（給 Elmo）
 category: reference
-status: draft（骨架版；開通 API 段待 #336 契約定案後補齊）
+status: contract-v1（OAuth 段可實作；§7 開通契約已定、平台實作追 #336）
 audience: Elmo / HA App 開發團隊
 created: 2026-07-11
 source-of-truth:
@@ -19,10 +19,10 @@ related:
 
 # HA App OAuth 串接與開通包（給 Elmo）
 
-> **文件狀態：骨架版。** 目的是讓 Elmo 拿整包當「HA App AI 開發的輸入 context」（2026-07-10 定價對齊會議決議：把目標＋context 整包丟給 AI 做）。
+> **文件狀態：OAuth 段可實作、開通契約 v1 已定（contract-first）。** 目的是讓 Elmo 拿整包當「HA App AI 開發的輸入 context」（2026-07-10 定價對齊會議決議：把目標＋context 整包丟給 AI 做）。
 >
 > - **OAuth 段（§1–§6）已可用**：平台早已是自寫的 OAuth 2.0 provider，以下每個技術主張都附 code 出處（`file:line`），可直接照做。
-> - **開通 API 段（§7）是 placeholder**：HA instance 的「開通 / 查狀態」HTTP 契約待 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336) 定案後補齊。
+> - **開通 API 段（§7）是契約 v1**：2026-07-12 拍板 contract-first——App 與平台 #336 實作**雙方依 §7 為準**；平台端實作進度追 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)。
 > - **憑證另發**：本文件**不含**任何真實 `client_id` / `client_secret`；HA App 專用 client 由 ops 註冊後另循安全管道發放（見 §3）。
 
 Refs：[#337](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/337)（本串接包 task）、[#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)（HA PaaS 0 元隱藏訂閱＋開通 API）、[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)（App 專用 public client 建置＋stg device flow 驗證＋憑證交付）。
@@ -40,7 +40,7 @@ App OAuth 登入  →  打「開通 HA」API  →  App 端輪詢狀態（明確�
 HA instance 建立沒那麼快）  →  ready 拿 URL 綁定  →  之後全走 HA endpoint（Webview）
 ```
 
-本文件把上面第 1 段（OAuth 登入）講到可以直接實作，第 2–4 段（開通 / 輪詢 / 綁定）先給流程骨架與 placeholder。
+本文件把上面第 1 段（OAuth 登入）講到可以直接實作，第 2–4 段（開通 / 輪詢 / 綁定）依 §7 契約 v1（平台端實作追 #336）。
 
 ### ⚠️ 名詞界定：HA App ≠ HA custom component（很重要，別混）
 
@@ -65,7 +65,7 @@ HA instance 建立沒那麼快）  →  ready 拿 URL 綁定  →  之後全走 
   1. 等 ops 交付 **App 專用 `client_id`**（前置 [#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)）。
   2. 照 **§6** 接 device flow，先用**既有 read scopes**（如 `workspace:read`、`smarthome:read`）**驗通登入取 token**——這條路現況即可跑，不需等開通 API。
   3. 以取得的 token 呼叫既有讀取端點，確認 OAuth 端到端打通。
-- **階段 B — 等 #336**（開通 API 契約定案後）：待 **§7** placeholder 補齊，接「開通 HA」＋「App 端狀態輪詢」＋ ready 拿 URL 綁定（見 §8 階段 2–4）。
+- **階段 B — 可與平台平行開發**（契約 v1 已定）：照 **§7** 契約 v1 實作開通（`POST /api/ha-paas/provision`）＋狀態輪詢（`GET /api/ha-paas/status`）＋ ready 拿 URL 綁定（見 §8 階段 2–4）；平台 #336 完成後 **stg 聯調**。
 
 **等 ops 交付的前置**：App 專用 `client_id`（[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)：client 建置＋stg device flow 驗證＋憑證交付）。
 
@@ -155,7 +155,7 @@ Client 存在 Odoo model `woow_paas_platform.oauth_client`（`src/models/oauth_c
 | `security-access:read` | 讀取 Security Access 清單 / detail / 狀態 |
 | `security-access:tunnel` | 取得 Security Access 的 tunnel token（高權限） |
 
-> ⚠️ **目前沒有「開通 HA instance」用的 scope。** 上列 5 個全是「讀取既有服務」。HA App 要觸發「開通」這個**寫入 / 佈建**動作，需要一個新 scope（例如 `ha:provision` 或 workspace 寫入類），這屬 #336 開通 API 契約的一部分，見 §7、§9 風險 2。
+> ⚠️ **開通 scope 已定名 `ha:provision`（§7 契約 v1）。** 上列 5 個現有 scope 全是「讀取既有服務」；HA App 觸發「開通」這個**寫入 / 佈建**動作用新增的 `ha:provision`（App 主流程唯一必要 scope）。實作（seed＋idempotent healer）隨 #336、client 掛上此 scope 隨 #340，見 §7、§9 風險 2。
 >
 > scope 若要新增，seed 是 `noupdate="1"`（`oauth_clients.xml:5`），既有 DB 須靠 idempotent healer（如現有的 `_ensure_ha_smart_home_sa_scopes`，`oauth_client.py:290` + `oauth_scope_updates.xml`）覆蓋升級，不能只改 XML。
 
@@ -258,33 +258,51 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 
 ---
 
-## 7. 開通 API（placeholder — 契約待 #336 定案）
+## 7. 開通 API（契約 v1 — App 與 #336 實作雙方依此為準）
 
-> 🚧 **本節為 placeholder。** 「開通 HA」與「查開通狀態」的實際 HTTP method / path / request / response shape，等 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336) 開通 API 實作定案後補齊。以下僅為**會議脈絡下的預期形狀**，非契約。
+> ✅ **契約 v1（2026-07-12 拍板 contract-first）。** Elmo 的 App 照本節實作、平台 #336 照本節實作。任何變更需**雙向知會並更新本節**（本節即 single source of truth）。平台端實作進度追 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)。
 
-依 #336 已拍板的產品決策，開通 API 預期具備以下性質（實作前不保證）：
+所有路徑相對於平台 base URL（實際 stg / prod 網域由 ops 提供）。鑑權一律帶 `Authorization: Bearer <access_token>`（token 取得見 §6 device flow 主線 / §5 替代），所需 scope 見 §7.1。
 
-- **鑑權**：以 §6 / §5 取得的 access token 帶 `Authorization: Bearer <token>` 呼叫；預期用 `verify_oauth_token`（`oauth2.py:82`）＋一個尚未存在的「開通」scope（見 §4、§9 風險 2）。
-- **每帳號限一個**：開通 API 冪等——**已有 HA instance 則回傳既有 instance**，不重複建（#336 工作項 2）。
-- **0 元隱藏訂閱**：開通會掛一筆 0 元 subscription（商品名「HA PaaS」），此 cloud service **不出現在前台 Cloud Service 列表**（#336 背景）。
-- **非同步 + App 端輪詢**：開通不是即時完成，明確**不走 socket 推播**；App 送出開通請求後，**輪詢**狀態端點直到 `ready`，再從回應取得 HA URL（#336 工作項 4）。
+### 7.1 Scope
 
-**待 #336 補齊的欄位**（本文件屆時更新）：
+| Scope | 用途 | 狀態 |
+| --- | --- | --- |
+| `ha:provision` | 開通 HA instance（App 主流程**唯一必要** scope） | **新增**；seed＋idempotent healer 隨 #336 實作、client 掛上此 scope 隨 #340 建立 |
 
-| 待定項 | 說明 |
-| --- | --- |
-| 開通端點 path / method | 例如 `POST /api/...`（待定） |
-| 開通請求 payload | 是否帶參數、template 選擇等（待定） |
-| 狀態端點 path / method | 輪詢用；回 `provisioning` / `ready` 等狀態（待定） |
-| 狀態回應 shape | `ready` 時如何帶回 HA URL（待定） |
-| 輪詢間隔建議 | 平台建議的 poll interval / backoff（待定） |
-| 所需 scope 名稱 | 「開通」動作的新 scope（待定，見 §9 風險 2） |
+### 7.2 `POST /api/ha-paas/provision` — 觸發開通
+
+- **Auth**：`Authorization: Bearer <access_token>`（scope：`ha:provision`）。
+- **語意**：**冪等、每帳號限一**——已存在則回現況、不重複建。
+- **回應**：
+  - `202 {"status": "provisioning"}` — 首次觸發，開通進行中。
+  - `200 {"status": "ready", "ha_url": "https://…"}` — 已就緒（重複呼叫或已開通完成）。
+- **重試**：`status=error` 時（由 §7.3 status 端點得知）可**再次 POST** 重試佈建。
+- **錯誤**：`401` = token 無效；`403` = scope 不足（缺 `ha:provision`）。
+
+### 7.3 `GET /api/ha-paas/status` — 查開通狀態（輪詢用）
+
+- **Auth**：同 §7.2（`Bearer` token，scope `ha:provision`）。
+- **回應**：`200 {"status": "none"|"provisioning"|"ready"|"error", "ha_url": …, "error": …}`
+  - `status`：`none`（尚未開通）／`provisioning`（建置中）／`ready`（就緒）／`error`（佈建失敗）。
+  - `ha_url`：**僅 `ready` 時給**。
+  - `error`：**僅 `error` 時給**。
+
+### 7.4 輪詢建議
+
+- **5 秒起步**，**指數退避至 30 秒**。
+- **逾 10 分鐘**視為異常 → 引導使用者重試或聯繫支援。
+
+### 7.5 App 端須知
+
+- **App 不需知道 workspace 概念**：隱藏 workspace／訂閱掛載（0 元「HA PaaS」訂閱、不出現在前台 Cloud Service 列表）全由平台處理（#336 背景）。
+- 端到端串接次序見 §8 sequence diagram 階段 2–4。
 
 ---
 
 ## 8. HA 開通串接全流程（sequence diagram）
 
-> 階段 1（OAuth）為現況可實作；階段 2–4 的 method / path / payload 為骨架，待 #336。
+> 階段 1（OAuth）為現況可實作；階段 2–4 依 §7 契約 v1；平台實作追 #336。
 
 ```mermaid
 sequenceDiagram
@@ -292,7 +310,7 @@ sequenceDiagram
     participant App as HA App（Elmo）
     participant Browser as 系統瀏覽器 / WebView
     participant OAuth as 平台 OAuth2<br/>(/oauth2/*)
-    participant Prov as 平台開通 API<br/>(待 #336)
+    participant Prov as 平台開通 API<br/>(§7 契約 v1)
     participant K8s as K8s / HA instance
 
     Note over App,OAuth: 階段 1 — OAuth 登入（Device Flow / RFC 8628，主線，§6）
@@ -306,15 +324,15 @@ sequenceDiagram
     end
     OAuth-->>App: access_token + refresh_token
 
-    Note over App,Prov: 階段 2 — 開通 HA（契約待 #336）
-    App->>Prov: 開通 HA（Bearer access_token）
-    Prov-->>App: 已受理 + 每帳號限一（已有則回既有 instance）
+    Note over App,Prov: 階段 2 — 開通 HA（§7 契約 v1）
+    App->>Prov: POST /api/ha-paas/provision（Bearer, ha:provision）
+    Prov-->>App: 202 provisioning ／ 200 ready（冪等·每帳號限一）
 
     Note over App,K8s: 階段 3 — App 端輪詢（明確不走 socket 推播）
-    loop 每隔數秒輪詢，直到 ready
-        App->>Prov: 查開通狀態（Bearer）
+    loop 5s 起步·指數退避至 30s·逾 10min 異常
+        App->>Prov: GET /api/ha-paas/status（Bearer）
         Prov->>K8s: HA instance 就緒？
-        Prov-->>App: status = provisioning / ready(+HA URL)
+        Prov-->>App: 200 status＝none/provisioning/ready/error（ha_url 僅 ready）
     end
 
     Note over App,K8s: 階段 4 — 綁定並改走 HA endpoint
@@ -324,7 +342,7 @@ sequenceDiagram
 
 ---
 
-## 9. 風險 / 待拍板（考古發現 — 給 leader / Eugene）
+## 9. 風險 / 待辦（考古發現 — 給 leader / Eugene）
 
 以下是考古 OAuth 現況後，判斷「撐不撐得起 HA App 串接」的缺口。**本文件只記錄，不自行改 `src/`。**
 
@@ -334,9 +352,9 @@ sequenceDiagram
    - **grants**：走 device flow 主線，新 client 的 `grant_types` 需含 `urn:ietf:params:oauth:grant-type:device_code` 與 `refresh_token`（若也保留 §5 替代路徑再加 `authorization_code`）。
    - **redirect_uris**：純 device flow 下 redirect 不參與流程，但 model 的 `redirect_uris` 目前為 `required`（`oauth_client.py:60`），**能否留空／需填佔位值待 #340 於 stg 驗證**。
 
-2. **缺「開通 HA instance」用的 scope。**
-   - 現有 5 個 scope 全是「讀取既有 SH/SA」（§4），沒有觸發佈建的寫入 scope。
-   - **待拍板**：#336 定案時新增一個開通 scope（例如 `ha:provision`），並在既有 DB 以 idempotent healer 升級（seed 是 `noupdate=1`，改 XML 到不了既有 DB）。
+2. **開通 scope `ha:provision`（契約 v1 已定名）。**
+   - 現有 5 個 scope 全是「讀取既有 SH/SA」（§4），開通用的寫入 scope `ha:provision` 已於 §7 契約 v1 定名。
+   - **實作追 #336**：新增 `ha:provision` 並在既有 DB 以 idempotent healer 升級（seed 是 `noupdate=1`，改 XML 到不了既有 DB）；healer 需求不變。client 掛上此 scope 隨 #340。
 
 3. **redirect_uri scheme 限制：`ha_callback` mode 拒 custom scheme。**（**2026-07-12 已拍板走 §6 device flow 繞開此題，前置 [#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)；以下保留供考古**）
    - `_check_ha_callback_uri` 只接受 `scheme∈{http,https}`（`oauth_client.py:217`），手機 App 常用的 custom scheme（如 `woowha://callback`）會被拒。
