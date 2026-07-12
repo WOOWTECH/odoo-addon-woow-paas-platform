@@ -34,3 +34,29 @@ class ShSubscriptionPlanCsSpec(models.Model):
                 raise ValidationError(_(
                     'cs_odoo_workers 大於 0 時必須同時設定 cs_ram_gb，'
                     '否則無法計算 per-worker 記憶體上限（OOM 風險）。'))
+
+    # 裁定①（2026-07-12 by Eugene）：T1 storage 採 matrix 值（odoo 20/n8n 10）＝
+    # 刻意 tier 提升（>現行 min）。cs_vcpu/cs_ram_gb 兩維＝template.min_*。
+    _CS_SPEC_332 = {
+        'plan_odoo_monthly': (2, 2.0, 20, 2), 'plan_odoo_yearly': (2, 2.0, 20, 2),
+        'plan_odoo_t2_monthly': (2, 4.0, 30, 3), 'plan_odoo_t2_yearly': (2, 4.0, 30, 3),
+        'plan_odoo_t3_monthly': (3, 4.0, 40, 4), 'plan_odoo_t3_yearly': (3, 4.0, 40, 4),
+        'plan_n8n_monthly': (1, 1.0, 10, 0), 'plan_n8n_yearly': (1, 1.0, 10, 0),
+        'plan_n8n_t2_monthly': (1, 2.0, 20, 0), 'plan_n8n_t2_yearly': (1, 2.0, 20, 0),
+        'plan_n8n_t3_monthly': (2, 2.0, 30, 0), 'plan_n8n_t3_yearly': (2, 2.0, 30, 0),
+    }
+
+    def _woow_migrate_cs_spec_332(self):
+        """#332 升級軌：CS 12 筆 backfill cs_*（xmlid 定位、冪等）。
+
+        一律 env.ref() xmlid 定位（R8 鐵律）；xmlid 不存在（fresh DB 未載 seed）
+        時跳過不炸。與 XML fresh 軌（subscription_products.xml）為同源兩份手寫，
+        test_xml_and_migration_tracks_identical 守其一致。
+        """
+        for xmlid, (vcpu, ram, storage, workers) in self._CS_SPEC_332.items():
+            plan = self.env.ref(f'woow_paas_platform.{xmlid}',
+                                raise_if_not_found=False)
+            if plan:
+                plan.write({'cs_vcpu': vcpu, 'cs_ram_gb': ram,
+                            'cs_storage_gb': storage,
+                            'cs_odoo_workers': workers})
