@@ -204,3 +204,5 @@ from . import test_template_max_per_partner_336
 from . import test_ha_paas_zero_plan_336
 # feat: #338 Wave A Odoo Manage MCP 上架骨架 seed（template+plan，is_active=False）
 from . import test_mcp_manage_seed_338
+# feat: #332 Wave A CS tier→部署規格映射（cs_* 欄位 + seed + runtime overlay）
+from . import test_cs_spec_332
