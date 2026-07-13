@@ -211,3 +211,5 @@ from . import test_ha_provision_scope_healer
 from . import test_hidden_template_chain
 from . import test_ha_paas_provision
 from . import test_ha_paas_zero_price_billing
+# feat: Wave B base reprice（含 SA 四級 B7 拍板）＋新增 n8n t4／SA r1·r3
+from . import test_reseed_b_330

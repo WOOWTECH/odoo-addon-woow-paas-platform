@@ -155,6 +155,51 @@
             <field name="cs_odoo_workers">0</field>
         </record>
 
+        <!-- n8n 10 人級（Wave B 新增；外推 t3 一級 cs_ram/storage、workers=0） -->
+        <record id="plan_n8n_t4_monthly" model="sh.subscription.plan">
+            <field name="name">n8n 雲端訂閱服務（10 人）</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">7500</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">2</field>
+            <field name="cs_ram_gb">4.0</field>
+            <field name="cs_storage_gb">40</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+
+        <record id="plan_n8n_t4_yearly" model="sh.subscription.plan">
+            <field name="name">n8n 雲端訂閱服務（10 人）</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">60000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">2</field>
+            <field name="cs_ram_gb">4.0</field>
+            <field name="cs_storage_gb">40</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+
         <!-- PostgreSQL Plans（placeholder，價格/名稱不動——總表 Q9） -->
         <record id="plan_postgresql_monthly" model="sh.subscription.plan">
             <field name="name">PostgreSQL Monthly</field>
@@ -553,6 +598,99 @@
             <field name="sa_max_emails_per_policy">20</field>
         </record>
 
+        <!-- SA 1 組／3 組級（Wave B 新增；quota 隨 routes 對齊、年繳 ×9） -->
+        <record id="plan_security_access_r1_monthly" model="sh.subscription.plan">
+            <field name="name">遠端安全連結訂閱服務（1 組）</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">200</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">security_access</field>
+            <field name="sa_max_routes">1</field>
+            <field name="sa_max_access_policies">1</field>
+            <field name="sa_max_custom_domains">1</field>
+            <field name="sa_max_email_rules">0</field>
+            <field name="sa_max_emails_per_policy">20</field>
+        </record>
+
+        <record id="plan_security_access_r1_yearly" model="sh.subscription.plan">
+            <field name="name">遠端安全連結訂閱服務（1 組）</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">1800</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">security_access</field>
+            <field name="sa_max_routes">1</field>
+            <field name="sa_max_access_policies">1</field>
+            <field name="sa_max_custom_domains">1</field>
+            <field name="sa_max_email_rules">0</field>
+            <field name="sa_max_emails_per_policy">20</field>
+        </record>
+
+        <record id="plan_security_access_r3_monthly" model="sh.subscription.plan">
+            <field name="name">遠端安全連結訂閱服務（3 組）</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">600</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">security_access</field>
+            <field name="sa_max_routes">3</field>
+            <field name="sa_max_access_policies">3</field>
+            <field name="sa_max_custom_domains">1</field>
+            <field name="sa_max_email_rules">0</field>
+            <field name="sa_max_emails_per_policy">20</field>
+        </record>
+
+        <record id="plan_security_access_r3_yearly" model="sh.subscription.plan">
+            <field name="name">遠端安全連結訂閱服務（3 組）</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">5400</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">security_access</field>
+            <field name="sa_max_routes">3</field>
+            <field name="sa_max_access_policies">3</field>
+            <field name="sa_max_custom_domains">1</field>
+            <field name="sa_max_email_rules">0</field>
+            <field name="sa_max_emails_per_policy">20</field>
+        </record>
+
         <!-- MCP Server: Hermes Plans (T1-T3, 月 1500/4500/6000) -->
         <record id="plan_mcp_hermes_monthly" model="sh.subscription.plan">
             <field name="name">Hermes MCP Server T1（1–3 人）Monthly</field>
@@ -846,6 +984,26 @@
             <field name="sh_subscription_plan_id" ref="plan_n8n_t3_yearly"/>
         </record>
 
+        <record id="product_n8n_t4_monthly" model="product.product">
+            <field name="name">n8n 雲端訂閱服務（10 人） Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">7500</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_n8n_t4_monthly"/>
+        </record>
+
+        <record id="product_n8n_t4_yearly" model="product.product">
+            <field name="name">n8n 雲端訂閱服務（10 人） Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">60000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_n8n_t4_yearly"/>
+        </record>
+
         <record id="product_postgresql_monthly" model="product.product">
             <field name="name">PostgreSQL Monthly Subscription</field>
             <field name="type">service</field>
@@ -1036,6 +1194,46 @@
         </record>
 
         <!-- MCP Server: Hermes Products (one per plan) -->
+        <record id="product_security_access_r1_monthly" model="product.product">
+            <field name="name">遠端安全連結訂閱服務（1 組） Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">200</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_security_access_r1_monthly"/>
+        </record>
+
+        <record id="product_security_access_r1_yearly" model="product.product">
+            <field name="name">遠端安全連結訂閱服務（1 組） Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">1800</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_security_access_r1_yearly"/>
+        </record>
+
+        <record id="product_security_access_r3_monthly" model="product.product">
+            <field name="name">遠端安全連結訂閱服務（3 組） Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">600</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_security_access_r3_monthly"/>
+        </record>
+
+        <record id="product_security_access_r3_yearly" model="product.product">
+            <field name="name">遠端安全連結訂閱服務（3 組） Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">5400</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_security_access_r3_yearly"/>
+        </record>
+
         <record id="product_mcp_hermes_monthly" model="product.product">
             <field name="name">Hermes MCP Server T1（1–3 人）Monthly Subscription</field>
             <field name="type">service</field>
