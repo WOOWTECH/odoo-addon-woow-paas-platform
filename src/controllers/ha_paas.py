@@ -120,8 +120,9 @@ class HAPaaSController(Controller):
         return tpl.sudo() if tpl else tpl
 
     def _template_deployable(self, tpl):
-        # 工作項 5（Elmo 輕量 HA image）未 ready 前，seed 以 is_active=False ＋
-        # helm_chart_name 佔位（TBD-*），此時不得建 service（provision 回 503）。
+        # 工作項5 stopgap 落地後 seed 已 is_active=True ＋ pin 到 OCI chart，常態即
+        # deployable。此 gate 仍保留為安全網：template 被停用（is_active=False）或
+        # helm_chart_name 回退成佔位（TBD-*）時不得建 service，provision 回 503。
         return bool(tpl) and tpl.is_active \
             and not (tpl.helm_chart_name or '').startswith('TBD')
 
