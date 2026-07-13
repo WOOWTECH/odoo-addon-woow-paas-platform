@@ -44,8 +44,8 @@ generator 內建下列權威對映表／常數（改結構才需要動它們，�
 
 ### 3c. 新增 tier／新家族
 
-1. base plan/product record 手寫新增（鏡射同家族既有 record 全欄位；帶 §2.1 全域常數 11 欄＋service_type＋專屬欄）＋M2M links。
-2. generator 三張對映表加對應項 → 重跑。
+1. base plan/product record 手寫新增（鏡射同家族既有 record 全欄位；帶 `docs/plans/2026-Q3/2026-07-10-subscription-plan-matrix.md` §2.1 全域常數 11 欄＋service_type＋專屬欄）＋M2M links。
+2. generator 對映表加對應項 → 重跑。新家族最少要動：`_FAMILY_RULES`（manifest 名稱→家族/tier 分類）＋`TIER_BASE_XMLID`（(家族,tier)→base plan xmlid）＋`FAMILY_SERVICE_TYPE`（家族→service_type），CS/SA 家族另加 `CS_SPECS`／`SA_QUOTA`；並補函式內嵌對映 `_template_xmlid`（(家族,tier)→template xmlid）／`_template_model`（家族→template model）。**務必把新 template xmlid 加進 `_TEMPLATE_ORDER`**——否則 `emit_links_xml` 的 `for tpl in _TEMPLATE_ORDER: if tpl not in groups: continue` 會**靜默略過**該家族變體的 M2M links（變體 plan/product 照生成，卻沒掛任何 template＝孤兒）。
 3. 版號 bump（純新增走 `-u` 自建、無 migration）。
 
 ### 3d. 守線清單（agent 執行時逐條核）
