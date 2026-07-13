@@ -399,9 +399,14 @@ class TestTemplatePlanWiring(TransactionCase):
             template = self.env.ref('%s.%s' % (MOD, tpl_suffix))
             expected_ids = {
                 _plan(self.env, sfx).id for sfx in plan_suffixes}
+            # Wave B 後 template 另掛 208 個 access 變體（ac_max_access_seats>0）；
+            # 本 E2 驗 base plan M2M 白名單，故過濾變體只比 base 集（變體↔template
+            # 綁定另由 test_plan_variants_generated 全量驗）。
+            base_ids = set(template.subscription_plan_ids.filtered(
+                lambda p: p.ac_max_access_seats == 0).ids)
             self.assertEqual(
-                set(template.subscription_plan_ids.ids), expected_ids,
-                '%s 的 plan M2M 應為 %s' % (tpl_suffix, sorted(plan_suffixes)))
+                base_ids, expected_ids,
+                '%s 的 base plan M2M 應為 %s' % (tpl_suffix, sorted(plan_suffixes)))
 
 
 # ---- G3 migration 模擬用：.51 升級前 DB shape（舊價/舊名） ----

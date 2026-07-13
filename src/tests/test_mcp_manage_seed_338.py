@@ -39,7 +39,10 @@ class TestMcpManagePlansSeed(TransactionCase):
     def test_products_and_m2m(self):
         tpl = self.env.ref('woow_paas_platform.cloud_app_mcp_odoo_manage')
         plans = tpl.sudo().subscription_plan_ids
-        self.assertEqual(len(plans), 2)
+        # Wave B 後另掛 access 變體（ac_max_access_seats>0）；本測驗 base 骨架，
+        # 故過濾變體只數 base（monthly+yearly）。
+        base_plans = plans.filtered(lambda p: p.ac_max_access_seats == 0)
+        self.assertEqual(len(base_plans), 2)
         for xmlid in self.EXPECTED:
             plan = self.env.ref(f'woow_paas_platform.{xmlid}')
             self.assertIn(plan, plans)
