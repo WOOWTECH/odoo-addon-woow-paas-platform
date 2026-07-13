@@ -47,6 +47,13 @@
                    eval="[(6, 0, [ref('plan_mcp_odoo_manage_monthly'), ref('plan_mcp_odoo_manage_yearly')])]"/>
         </record>
 
+        <!-- #341（Wave A）撞車收斂：HA PaaS plan（plan_ha_paas_monthly）刻意 orphan——
+             不掛任何 template M2M（Wave A test_orphan_no_template_links 斷言 M2M=0，且
+             storefront_hidden 已在 plan 層擋前台）。provision 端點直接把 plan ref 傳給
+             _create_and_confirm_subscription 建 sub，不經 template↔plan M2M，故本 PR 原有的
+             cloud_app_ha_paas ↔ plan M2M link 已移除。cloud_app_ha_paas template 本身仍由
+             cloud_app_templates.xml 定義（is_hidden=True／is_active=False）。 -->
+
         <!-- AnythingLLM template does not exist yet; plans will be linked when created -->
 
         <!-- Link smart_home_template to its subscription plans -->

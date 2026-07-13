@@ -23,6 +23,21 @@ AUTH_CODE_LIFETIME = timedelta(minutes=10)
 # RFC 8628 device authorization grant
 DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 
+# OAuth scope 的人話描述。抽為 module 級供 authorize 頁與 device 同意頁共用
+# （#336 F1：device 同意頁原本直印 raw scope 字串、不讀此 dict，故 App 走 device
+# flow 只看到 'ha:provision' 這種機器字串。抽出後兩頁一致顯示人話描述）。
+SCOPE_DESCRIPTIONS = {
+    'smarthome:read': 'Read your Smart Home and Workspace data',
+    'smarthome:tunnel': 'Access tunnel connections to your devices',
+    'workspace:read': 'Read your Workspace information',
+    'security-access:read':
+        'Read your Security Access services and subscription',
+    'security-access:tunnel':
+        'Access the Cloudflare Tunnel token for your Security '
+        'Access connector',
+    'ha:provision': 'Create and manage your cloud Home Assistant instance',
+}
+
 
 def _json_error(error: str, description: str, status: int = 400) -> http.Response:
     """Return a JSON error response per RFC 6749 Section 5.2."""
@@ -220,22 +235,11 @@ class OAuth2Controller(Controller):
         if not requested_scopes:
             requested_scopes = sorted(allowed_scopes)
 
-        # Scope descriptions for display
-        scope_descriptions = {
-            'smarthome:read': 'Read your Smart Home and Workspace data',
-            'smarthome:tunnel': 'Access tunnel connections to your devices',
-            'workspace:read': 'Read your Workspace information',
-            'security-access:read':
-                'Read your Security Access services and subscription',
-            'security-access:tunnel':
-                'Access the Cloudflare Tunnel token for your Security '
-                'Access connector',
-        }
-
+        # Scope descriptions for display（共用 module 級 SCOPE_DESCRIPTIONS）
         scopes_display = [
             {
                 'name': s,
-                'description': scope_descriptions.get(s, s),
+                'description': SCOPE_DESCRIPTIONS.get(s, s),
             }
             for s in requested_scopes
         ]
@@ -440,11 +444,19 @@ class OAuth2Controller(Controller):
                                   {'approved': False, 'message': None})
 
         # Stage 1 (verify pressed): show consent with scopes + possession check.
-        scopes = [s for s in (device.scope or '').split() if s]
+        # #336 F1：轉成 {name, description}（比照 authorize 頁），讓 device 同意頁
+        # 顯示人話描述而非 raw scope 字串（App 走 device flow，此頁是使用者唯一看到
+        # 授權範圍的地方）。
+        scope_names = [s for s in (device.scope or '').split() if s] \
+            or list(device.client_id.get_allowed_scopes())
+        scopes_display = [
+            {'name': s, 'description': SCOPE_DESCRIPTIONS.get(s, s)}
+            for s in scope_names
+        ]
         return request.render('woow_paas_platform.device_consent', {
             'client_name': device.client_id.name,
             'user_code': device.user_code,
-            'scopes': scopes or list(device.client_id.get_allowed_scopes()),
+            'scopes': scopes_display,
         })
 
     # ==================== Token Endpoint ====================

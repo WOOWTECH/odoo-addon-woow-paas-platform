@@ -1159,5 +1159,11 @@
             <field name="sh_subscription_plan_id" ref="plan_mcp_odoo_manage_yearly"/>
         </record>
 
+        <!-- #341（Wave A）撞車收斂：HA PaaS 0 元 plan/product 沿用 Wave A 已在 develop
+             的 plan_ha_paas_monthly / product_ha_paas_monthly（自帶 storefront_hidden=True），
+             本 PR 原有的 plan_ha_paas / product_ha_paas 已移除避免重複 0 元 HA seed。
+             plan 刻意 orphan（不掛任何 template M2M，保 Wave A test_orphan_no_template_links）；
+             provision 端點直接把 plan ref 傳給 _create_and_confirm_subscription，不需 M2M。 -->
+
     </data>
 </odoo>

@@ -19,6 +19,7 @@ from typing import Any
 from odoo.http import request, route, Controller
 
 from ..models.subscription_lifecycle_mixin import _subscription_total_with_tax
+from .ha_paas import HiddenChainMixin
 
 _logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ _ACTION_MAP = {
 }
 
 
-class DashboardController(Controller):
+class DashboardController(HiddenChainMixin, Controller):
     _name = 'woow_paas_platform.dashboard'
 
     @route("/api/dashboard/summary", auth="user", methods=["POST"], type="json")
@@ -102,8 +103,11 @@ class DashboardController(Controller):
         sensible calendar-month fallbacks for the cycle and `null` for the
         next-bill fields (frontend renders "—").
         """
+        # #336：先濾掉 hidden（0 元 HA PaaS）sub 再取 primary，避免 0 元 sub
+        # 搶 primary 綁架 cycle/next_bill 估算。
         active_subs = request.env['sh.subscription.subscription'].sudo().search(
-            [('sh_partner_id', '=', partner.id), ('state', '=', 'in_progress')],
+            [('sh_partner_id', '=', partner.id), ('state', '=', 'in_progress'),
+             ('id', 'not in', self._hidden_subscription_ids(request.env))],
             order='sh_start_date desc, id desc',
         )
 
@@ -183,6 +187,10 @@ class DashboardController(Controller):
         as one of the selection values.
         """
         workspace_ids = self._accessible_workspace_ids(user)
+        # #336：剔除 HA PaaS 專屬 hidden workspace（D2 不變式：hidden service 住
+        # 自建專屬 workspace），讓 workspace 計數不含隱藏 workspace。
+        hidden_ws = set(self._hidden_workspace_ids(request.env))
+        workspace_ids = [wid for wid in workspace_ids if wid not in hidden_ws]
         if not workspace_ids:
             return {
                 'total': 0,
@@ -191,11 +199,16 @@ class DashboardController(Controller):
             }
 
         CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
+        # 服務計數再加 template 過濾（defense-in-depth：即使某 hidden service 意外
+        # 不住 hidden workspace 也不計入）。
+        hidden_tpl = self._hidden_template_ids(request.env)
         services_total = CloudService.search_count(
-            [('workspace_id', 'in', workspace_ids)],
+            [('workspace_id', 'in', workspace_ids),
+             ('template_id', 'not in', hidden_tpl)],
         )
         services_running = CloudService.search_count(
-            [('workspace_id', 'in', workspace_ids), ('state', '=', 'running')],
+            [('workspace_id', 'in', workspace_ids), ('state', '=', 'running'),
+             ('template_id', 'not in', hidden_tpl)],
         )
         return {
             'total': len(workspace_ids),

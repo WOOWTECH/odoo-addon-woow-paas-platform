@@ -23,5 +23,25 @@
             <field name="is_active" eval="True"/>
         </record>
 
+        <!-- HA App（Elmo 手機原生 App）專用 public client。與 HA component 的
+             oauth_client_ha_smart_home 是不同 consumer（App→平台開通新 instance，
+             見契約 §0/§9）。client_id 硬編在 App、readonly、不可旋轉。走 device
+             flow 主線（無 redirect）；redirect_uris 為 model 必填欄位的佔位值，
+             exact mode 對其內容無 _check（device flow 不參與 redirect 比對）。
+             scopes 含 ha:provision（開通寫入 scope，其餘為 App 讀取用）。此檔
+             noupdate=1、新 client 的 scope 靠 oauth_ha_provision_scope_update.xml
+             的 <function> healer 補既有 DB（比照 ha_smart_home）。 -->
+        <record id="oauth_client_ha_app" model="woow_paas_platform.oauth_client">
+            <field name="name">Home Assistant App（Provisioning）</field>
+            <field name="client_id">woow-ha-app</field>
+            <field name="client_type">public</field>
+            <field name="require_pkce" eval="True"/>
+            <field name="redirect_uri_match_mode">exact</field>
+            <field name="redirect_uris">urn:ietf:wg:oauth:2.0:oob</field>
+            <field name="grant_types">urn:ietf:params:oauth:grant-type:device_code,refresh_token</field>
+            <field name="scopes">workspace:read smarthome:read ha:provision</field>
+            <field name="is_active" eval="True"/>
+        </record>
+
     </data>
 </odoo>

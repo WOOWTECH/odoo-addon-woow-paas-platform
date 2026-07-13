@@ -10,6 +10,8 @@ from typing import Any
 from odoo import _, fields
 from odoo.exceptions import UserError, ValidationError
 from odoo.http import request, route, Controller
+
+from .ha_paas import HiddenChainMixin
 from odoo.tools import str2bool
 
 _logger = logging.getLogger(__name__)
@@ -47,7 +49,7 @@ def _sanitize_phone_for_ecpay(raw):
     return digits if len(digits) >= 7 else ''
 
 
-class BillingController(Controller):
+class BillingController(HiddenChainMixin, Controller):
     _name = 'woow_paas_platform.billing'
 
     # ==================== Internal helpers ====================
@@ -783,7 +785,9 @@ class BillingController(Controller):
         partner = request.env.user.partner_id
         Subscription = request.env['sh.subscription.subscription'].sudo()
 
-        domain = [('sh_partner_id', '=', partner.id)]
+        # #336：排除 hidden（0 元 HA PaaS）訂閱，不出現在前台訂閱清單。
+        domain = [('sh_partner_id', '=', partner.id),
+                  ('id', 'not in', self._hidden_subscription_ids(request.env))]
 
         if filter == 'active':
             domain.append(('state', 'in', ('in_progress',)))
@@ -816,7 +820,8 @@ class BillingController(Controller):
         partner = request.env.user.partner_id
         sub = request.env['sh.subscription.subscription'].sudo().browse(subscription_id)
 
-        if not sub.exists() or sub.sh_partner_id != partner:
+        if (not sub.exists() or sub.sh_partner_id != partner
+                or sub.id in self._hidden_subscription_ids(request.env)):
             return {'success': False, 'error': 'Subscription not found'}
 
         # Associated cloud services
@@ -910,6 +915,7 @@ class BillingController(Controller):
             ('state', '=', 'in_progress'),
             ('sh_date_of_next_payment', '>=', today),
             ('sh_date_of_next_payment', '<=', cutoff),
+            ('id', 'not in', self._hidden_subscription_ids(request.env)),  # #336 排除 0 元 HA PaaS
         ])
 
         upcoming = []
@@ -995,6 +1001,8 @@ class BillingController(Controller):
         domain = [
             ('partner_id', '=', partner.id),
             ('move_type', '=', 'out_invoice'),
+            # #336：排除 hidden sub 的 0 元發票（not in 對 NULL 為真 → topup 發票不受影響）
+            ('sh_subscription_id', 'not in', self._hidden_subscription_ids(request.env)),
         ]
 
         today = fields.Date.today()
@@ -1051,7 +1059,8 @@ class BillingController(Controller):
         partner = request.env.user.partner_id
         invoice = request.env['account.move'].sudo().browse(invoice_id)
 
-        if not invoice.exists() or invoice.partner_id != partner:
+        if (not invoice.exists() or invoice.partner_id != partner
+                or invoice.sh_subscription_id.id in self._hidden_subscription_ids(request.env)):
             return {'success': False, 'error': 'Invoice not found'}
 
         # Line items (skip section/note display lines)

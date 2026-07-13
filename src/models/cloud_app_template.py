@@ -188,11 +188,23 @@ class CloudAppTemplate(models.Model):
         help='Whether this template is available for deployment',
     )
 
+    # #341（Wave A）每帳號實例上限：model 層 create() 計數守衛（check-after-act）。
+    # HA PaaS 刻意不設值（留 default 0＝不限制）——其每帳號限一改由 provision 端點的
+    # provision_partner_id partial unique index ＋ advisory lock 承擔（race-safe）。
     max_per_partner = fields.Integer(
         string='每帳號實例上限',
         default=0,
         help='同一 partner（帳號）最多可持有的本範本活躍實例數；'
              '0＝不限制。HA PaaS 免費方案設 1。',
+    )
+
+    is_hidden = fields.Boolean(
+        string='Hidden',
+        default=False,
+        help='若為真，此 template 及其 services／訂閱／發票不出現在 /woow '
+             '前台任何清單（marketplace、workspace、dashboard、billing）。'
+             '呈現層過濾、非 ACL（租戶知 id 仍可打 JSON 端點、Odoo 原生 /my '
+             '與 /report 繞過本層）。用於 HA PaaS 這類平台自動開通的隱藏服務（#336）。',
     )
 
     @api.constrains('subscription_plan_ids')

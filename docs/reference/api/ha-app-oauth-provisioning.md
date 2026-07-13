@@ -1,7 +1,7 @@
 ---
 title: HA App OAuth 串接與開通包（給 Elmo）
 category: reference
-status: contract-v1（OAuth 段可實作；§7 開通契約已定、平台實作追 #336）
+status: contract-v1.1（OAuth 段可實作；§7 開通契約已定、平台端已實作 Refs #336；status 枚舉 v1.1 6 值）
 audience: Elmo / HA App 開發團隊
 created: 2026-07-11
 source-of-truth:
@@ -21,8 +21,9 @@ related:
 
 > **文件狀態：OAuth 段可實作、開通契約 v1 已定（contract-first）。** 目的是讓 Elmo 拿整包當「HA App AI 開發的輸入 context」（2026-07-10 定價對齊會議決議：把目標＋context 整包丟給 AI 做）。
 >
+> - **2026-07-12 契約 §7 升 v1.1**：status 枚舉由 4 值擴為 6 值（新增 `suspended`／`deleting` 直映 `cloud_service.state`）；`ha_url` 仍僅 `ready` 給。詳見 §7.3。平台端已隨 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336) 實作完成（`POST /api/ha-paas/provision`＋`GET /api/ha-paas/status`）。
 > - **OAuth 段（§1–§6）已可用**：平台早已是自寫的 OAuth 2.0 provider，以下每個技術主張都附 code 出處（`file:line`），可直接照做。
-> - **開通 API 段（§7）是契約 v1**：2026-07-12 拍板 contract-first——App 與平台 #336 實作**雙方依 §7 為準**；平台端實作進度追 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)。
+> - **開通 API 段（§7）是契約 v1.1**：2026-07-12 拍板 contract-first——App 與平台 #336 實作**雙方依 §7 為準**；平台端實作已完成（Refs [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)）。
 > - **憑證另發**：本文件**不含**任何真實 `client_id` / `client_secret`；HA App 專用 client 由 ops 註冊後另循安全管道發放（見 §3）。
 
 Refs：[#337](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/337)（本串接包 task）、[#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)（HA PaaS 0 元隱藏訂閱＋開通 API）、[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)（App 專用 public client 建置＋stg device flow 驗證＋憑證交付）。
@@ -258,9 +259,9 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 
 ---
 
-## 7. 開通 API（契約 v1 — App 與 #336 實作雙方依此為準）
+## 7. 開通 API（契約 v1.1 — App 與 #336 實作雙方依此為準）
 
-> ✅ **契約 v1（2026-07-12 拍板 contract-first）。** Elmo 的 App 照本節實作、平台 #336 照本節實作。任何變更需**雙向知會並更新本節**（本節即 single source of truth）。平台端實作進度追 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)。
+> ✅ **契約 v1.1（2026-07-12 拍板 contract-first；同日 status 枚舉擴為 6 值）。** Elmo 的 App 照本節實作、平台 #336 照本節實作。任何變更需**雙向知會並更新本節**（本節即 single source of truth）。平台端實作已完成（Refs [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)）。
 
 所有路徑相對於平台 base URL（實際 stg / prod 網域由 ops 提供）。鑑權一律帶 `Authorization: Bearer <access_token>`（token 取得見 §6 device flow 主線 / §5 替代），所需 scope 見 §7.1。
 
@@ -277,16 +278,19 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 - **回應**：
   - `202 {"status": "provisioning"}` — 首次觸發，開通進行中。
   - `200 {"status": "ready", "ha_url": "https://…"}` — 已就緒（重複呼叫或已開通完成）。
-- **重試**：`status=error` 時（由 §7.3 status 端點得知）可**再次 POST** 重試佈建。
+  - `409 {"status": "suspended", "error": …}` — 服務已停用（蓄意 suspend），不自動 resume；App 引導使用者聯繫支援。
+  - `409 {"status": "deleting", "error": …}` — 前一個 instance 正在刪除中，不復活；App 稍後可重新 POST 開通。
+- **重試**：`status=error` 時（由 §7.3 status 端點得知）可**再次 POST** 重試佈建（平台鎖內翻 `error→pending` 並重新觸發部署）。
 - **錯誤**：`401` = token 無效；`403` = scope 不足（缺 `ha:provision`）。
 
 ### 7.3 `GET /api/ha-paas/status` — 查開通狀態（輪詢用）
 
 - **Auth**：同 §7.2（`Bearer` token，scope `ha:provision`）。
-- **回應**：`200 {"status": "none"|"provisioning"|"ready"|"error", "ha_url": …, "error": …}`
-  - `status`：`none`（尚未開通）／`provisioning`（建置中）／`ready`（就緒）／`error`（佈建失敗）。
+- **回應**：`200 {"status": "none"|"provisioning"|"ready"|"error"|"suspended"|"deleting", "ha_url": …, "error": …}`
+  - `status`（**v1.1 6 值**）：`none`（尚未開通）／`provisioning`（建置中）／`ready`（就緒）／`error`（佈建失敗）／`suspended`（服務已停用，直映平台 `cloud_service.state`）／`deleting`（刪除中，直映平台 `cloud_service.state`）。
   - `ha_url`：**僅 `ready` 時給**。
   - `error`：**僅 `error` 時給**。
+  - **App 指引**：`suspended` → 顯示「服務已暫停，請聯繫支援」；`deleting` → 顯示「刪除中，稍後可重新開通」，稍後再輪詢／重試 provision。
 
 ### 7.4 輪詢建議
 
@@ -332,7 +336,7 @@ sequenceDiagram
     loop 5s 起步·指數退避至 30s·逾 10min 異常
         App->>Prov: GET /api/ha-paas/status（Bearer）
         Prov->>K8s: HA instance 就緒？
-        Prov-->>App: 200 status＝none/provisioning/ready/error（ha_url 僅 ready）
+        Prov-->>App: 200 status＝none/provisioning/ready/error/suspended/deleting（ha_url 僅 ready）
     end
 
     Note over App,K8s: 階段 4 — 綁定並改走 HA endpoint
