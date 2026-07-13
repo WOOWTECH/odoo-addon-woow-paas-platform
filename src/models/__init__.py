@@ -49,3 +49,4 @@ from . import payment_token
 from . import res_company
 from . import res_partner_wallet
 from . import reconcile_report
+from . import sh_subscription_plan_reseed_b

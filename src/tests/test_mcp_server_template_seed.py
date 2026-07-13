@@ -178,12 +178,12 @@ class _McpServerSeedAssertions:
         _assert_storage_resources_aligned(self, self.env.ref(self.TMPL))
 
     def test_plans_seeded_at_odoo_pricing(self):
-        # #330 定價重定：MCP 統一單階 3000／30000
+        # Wave B 重定：MCP odoo/n8n 月 3000 不動、年 30000→24000（×8 對齊）
         monthly = self.env.ref(self.PLAN_M)
         yearly = self.env.ref(self.PLAN_Y)
         self.assertEqual(monthly.sh_plan_price, 3000)
         self.assertEqual(monthly.sh_unit, 'month')
-        self.assertEqual(yearly.sh_plan_price, 30000)
+        self.assertEqual(yearly.sh_plan_price, 24000)
         self.assertEqual(yearly.sh_unit, 'year')
 
     def test_products_link_plans(self):

@@ -15,44 +15,66 @@ from odoo.tests.common import TransactionCase
 
 MOD = 'woow_paas_platform'
 
-# ---- 30 檔定案 plan：xmlid → (價格, 名稱)（總表 §1/§3–§6 字面） ----
+# ---- 30 檔 plan：xmlid → (價格, 名稱)（Wave B reprice 後的 .59 fresh 值） ----
 EXPECTED_PLANS = {
-    # CS — Odoo 三階
-    'plan_odoo_monthly': (1000, 'Odoo Cloud T1（1–3 人）Monthly'),
-    'plan_odoo_yearly': (10000, 'Odoo Cloud T1（1–3 人）Yearly'),
-    'plan_odoo_t2_monthly': (3000, 'Odoo Cloud T2（3–6 人）Monthly'),
-    'plan_odoo_t2_yearly': (30000, 'Odoo Cloud T2（3–6 人）Yearly'),
-    'plan_odoo_t3_monthly': (5000, 'Odoo Cloud T3（6–10 人）Monthly'),
-    'plan_odoo_t3_yearly': (50000, 'Odoo Cloud T3（6–10 人）Yearly'),
-    # CS — n8n 三階
-    'plan_n8n_monthly': (1000, 'n8n Cloud T1（1–3 人）Monthly'),
-    'plan_n8n_yearly': (10000, 'n8n Cloud T1（1–3 人）Yearly'),
-    'plan_n8n_t2_monthly': (3000, 'n8n Cloud T2（3–6 人）Monthly'),
-    'plan_n8n_t2_yearly': (30000, 'n8n Cloud T2（3–6 人）Yearly'),
-    'plan_n8n_t3_monthly': (5000, 'n8n Cloud T3（6–10 人）Monthly'),
-    'plan_n8n_t3_yearly': (50000, 'n8n Cloud T3（6–10 人）Yearly'),
-    # CS-MCP — 統一單階（改價 only、不改名）
+    # CS — Odoo 三階（Wave B：改名為中文＋級距語意 4-7/8-11、年繳 ×8）
+    'plan_odoo_monthly': (1500, 'Odoo 訂閱服務（1-3 人）'),
+    'plan_odoo_yearly': (12000, 'Odoo 訂閱服務（1-3 人）'),
+    'plan_odoo_t2_monthly': (4500, 'Odoo 訂閱服務（4-7 人）'),
+    'plan_odoo_t2_yearly': (36000, 'Odoo 訂閱服務（4-7 人）'),
+    'plan_odoo_t3_monthly': (7500, 'Odoo 訂閱服務（8-11 人）'),
+    'plan_odoo_t3_yearly': (60000, 'Odoo 訂閱服務（8-11 人）'),
+    # CS — n8n 三階（年繳 ×8）
+    'plan_n8n_monthly': (750, 'n8n 雲端訂閱服務（1 人）'),
+    'plan_n8n_yearly': (6000, 'n8n 雲端訂閱服務（1 人）'),
+    'plan_n8n_t2_monthly': (2250, 'n8n 雲端訂閱服務（3 人）'),
+    'plan_n8n_t2_yearly': (18000, 'n8n 雲端訂閱服務（3 人）'),
+    'plan_n8n_t3_monthly': (4500, 'n8n 雲端訂閱服務（6 人）'),
+    'plan_n8n_t3_yearly': (36000, 'n8n 雲端訂閱服務（6 人）'),
+    # CS-MCP — 統一單階（改價 only、不改名；年 30000→24000 對齊 ×8）
     'plan_mcp_odoo_monthly': (3000, 'Odoo MCP Server Monthly'),
-    'plan_mcp_odoo_yearly': (30000, 'Odoo MCP Server Yearly'),
+    'plan_mcp_odoo_yearly': (24000, 'Odoo MCP Server Yearly'),
     'plan_mcp_n8n_monthly': (3000, 'n8n MCP Server Monthly'),
-    'plan_mcp_n8n_yearly': (30000, 'n8n MCP Server Yearly'),
-    # CS-MCP — Hermes 三階（T3=6000 定案，取代會議 6500）
+    'plan_mcp_n8n_yearly': (24000, 'n8n MCP Server Yearly'),
+    # CS-MCP — Hermes 三階（封存原價、Wave B 不動；年繳 ×10）
     'plan_mcp_hermes_monthly': (1500, 'Hermes MCP Server T1（1–3 人）Monthly'),
     'plan_mcp_hermes_yearly': (15000, 'Hermes MCP Server T1（1–3 人）Yearly'),
     'plan_mcp_hermes_t2_monthly': (4500, 'Hermes MCP Server T2（3–6 人）Monthly'),
     'plan_mcp_hermes_t2_yearly': (45000, 'Hermes MCP Server T2（3–6 人）Yearly'),
     'plan_mcp_hermes_t3_monthly': (6000, 'Hermes MCP Server T3（6–10 人）Monthly'),
     'plan_mcp_hermes_t3_yearly': (60000, 'Hermes MCP Server T3（6–10 人）Yearly'),
-    # SH — Connect / +MCP
+    # SH — Connect（月 150 不動、年 1500→1200）／+MCP（400→300、4000→2400）
+    'plan_smarthome_monthly': (150, 'Smart Home Connect Monthly'),
+    'plan_smarthome_yearly': (1200, 'Smart Home Connect Yearly'),
+    'plan_smarthome_mcp_monthly': (300, 'Smart Home + MCP Monthly'),
+    'plan_smarthome_mcp_yearly': (2400, 'Smart Home + MCP Yearly'),
+    # SA — 6 組／10 組（改名＋reprice；quota 隨 routes、年繳 ×9）
+    'plan_security_access_entry_monthly': (1200, '遠端安全連結訂閱服務（6 組）'),
+    'plan_security_access_entry_yearly': (10800, '遠端安全連結訂閱服務（6 組）'),
+    'plan_security_access_pro_monthly': (2000, '遠端安全連結訂閱服務（10 組）'),
+    'plan_security_access_pro_yearly': (18000, '遠端安全連結訂閱服務（10 組）'),
+}
+
+# .52 migration 目標（TestPricingMigration330 專用；凍結 .52 狀態，與 fresh
+# seed 的 .59 EXPECTED_PLANS 解耦——.52 歷史 migration 恆產 .52 值，不隨 Wave B
+# reprice 漂移）。鍵＝OLD_PLANS_51（16 筆）。
+MIG_52_TARGET = {
+    'plan_odoo_monthly': (1000, 'Odoo Cloud T1（1–3 人）Monthly'),
+    'plan_odoo_yearly': (10000, 'Odoo Cloud T1（1–3 人）Yearly'),
+    'plan_n8n_monthly': (1000, 'n8n Cloud T1（1–3 人）Monthly'),
+    'plan_n8n_yearly': (10000, 'n8n Cloud T1（1–3 人）Yearly'),
     'plan_smarthome_monthly': (150, 'Smart Home Connect Monthly'),
     'plan_smarthome_yearly': (1500, 'Smart Home Connect Yearly'),
-    'plan_smarthome_mcp_monthly': (400, 'Smart Home + MCP Monthly'),
-    'plan_smarthome_mcp_yearly': (4000, 'Smart Home + MCP Yearly'),
-    # SA — 5/10 Application（沿用 entry/pro xmlid）
     'plan_security_access_entry_monthly': (1000, 'Security Access 5 Application Monthly'),
     'plan_security_access_entry_yearly': (10000, 'Security Access 5 Application Yearly'),
     'plan_security_access_pro_monthly': (2000, 'Security Access 10 Application Monthly'),
     'plan_security_access_pro_yearly': (20000, 'Security Access 10 Application Yearly'),
+    'plan_mcp_odoo_monthly': (3000, 'Odoo MCP Server Monthly'),
+    'plan_mcp_odoo_yearly': (30000, 'Odoo MCP Server Yearly'),
+    'plan_mcp_n8n_monthly': (3000, 'n8n MCP Server Monthly'),
+    'plan_mcp_n8n_yearly': (30000, 'n8n MCP Server Yearly'),
+    'plan_mcp_hermes_monthly': (1500, 'Hermes MCP Server T1（1–3 人）Monthly'),
+    'plan_mcp_hermes_yearly': (15000, 'Hermes MCP Server T1（1–3 人）Yearly'),
 }
 
 # 月/年 檔位配對（年價＝月價×10 機械驗證）
@@ -94,8 +116,44 @@ for _sfx in EXPECTED_PLANS:
 for _sfx in PLACEHOLDER_PLANS:
     EXPECTED_SERVICE_TYPE[_sfx] = 'cloud_service'
 
-# E2：template → plan xmlid 集合（(6,0) 全量後的終態）
+# E2：template → plan xmlid 集合（fresh .59 終態；n8n +t4、SA +r1/r3）
 EXPECTED_TEMPLATE_PLANS = {
+    'cloud_app_odoo': {
+        'plan_odoo_monthly', 'plan_odoo_yearly',
+        'plan_odoo_t2_monthly', 'plan_odoo_t2_yearly',
+        'plan_odoo_t3_monthly', 'plan_odoo_t3_yearly',
+    },
+    'cloud_app_n8n': {
+        'plan_n8n_monthly', 'plan_n8n_yearly',
+        'plan_n8n_t2_monthly', 'plan_n8n_t2_yearly',
+        'plan_n8n_t3_monthly', 'plan_n8n_t3_yearly',
+        'plan_n8n_t4_monthly', 'plan_n8n_t4_yearly',
+    },
+    'cloud_app_mcp_hermes': {
+        'plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly',
+        'plan_mcp_hermes_t2_monthly', 'plan_mcp_hermes_t2_yearly',
+        'plan_mcp_hermes_t3_monthly', 'plan_mcp_hermes_t3_yearly',
+    },
+    'cloud_app_mcp_odoo': {'plan_mcp_odoo_monthly', 'plan_mcp_odoo_yearly'},
+    'cloud_app_mcp_n8n': {'plan_mcp_n8n_monthly', 'plan_mcp_n8n_yearly'},
+    'cloud_app_postgresql': {'plan_postgresql_monthly', 'plan_postgresql_yearly'},
+    'smart_home_home_assistant': {
+        'plan_smarthome_monthly', 'plan_smarthome_yearly',
+        'plan_smarthome_mcp_monthly', 'plan_smarthome_mcp_yearly',
+    },
+    'security_access_default': {
+        'plan_security_access_r1_monthly', 'plan_security_access_r1_yearly',
+        'plan_security_access_r3_monthly', 'plan_security_access_r3_yearly',
+        'plan_security_access_entry_monthly',
+        'plan_security_access_entry_yearly',
+        'plan_security_access_pro_monthly',
+        'plan_security_access_pro_yearly',
+    },
+}
+
+# .52-era template 集合（TestPricingMigration330 E2 專用；凍結——.52 migration
+# 只知 .52 期的 plan，不含 Wave B 新增的 n8n t4，故與 fresh 的 cloud_app_n8n 相異）
+MIG_52_TEMPLATE_PLANS = {
     'cloud_app_odoo': {
         'plan_odoo_monthly', 'plan_odoo_yearly',
         'plan_odoo_t2_monthly', 'plan_odoo_t2_yearly',
@@ -111,18 +169,9 @@ EXPECTED_TEMPLATE_PLANS = {
         'plan_mcp_hermes_t2_monthly', 'plan_mcp_hermes_t2_yearly',
         'plan_mcp_hermes_t3_monthly', 'plan_mcp_hermes_t3_yearly',
     },
-    'cloud_app_mcp_odoo': {'plan_mcp_odoo_monthly', 'plan_mcp_odoo_yearly'},
-    'cloud_app_mcp_n8n': {'plan_mcp_n8n_monthly', 'plan_mcp_n8n_yearly'},
-    'cloud_app_postgresql': {'plan_postgresql_monthly', 'plan_postgresql_yearly'},
     'smart_home_home_assistant': {
         'plan_smarthome_monthly', 'plan_smarthome_yearly',
         'plan_smarthome_mcp_monthly', 'plan_smarthome_mcp_yearly',
-    },
-    'security_access_default': {
-        'plan_security_access_entry_monthly',
-        'plan_security_access_entry_yearly',
-        'plan_security_access_pro_monthly',
-        'plan_security_access_pro_yearly',
     },
 }
 
@@ -219,13 +268,21 @@ class TestPricingSeedIntegrity(TransactionCase):
                 plan.name, name,
                 '%s 名稱應為 %r（實際 %r）' % (suffix, name, plan.name))
 
-    def test_yearly_equals_monthly_times_ten(self):
+    def test_yearly_equals_monthly_times_ratio(self):
+        """年繳倍率（Wave B 混合制）：Hermes ×10（原制封存）、SA ×9（CF Tunnel
+        慣例）、其餘 ×8（正式 214 manifest 對齊）。"""
         for m_sfx, y_sfx in MONTHLY_YEARLY_PAIRS:
             monthly = _plan(self.env, m_sfx)
             yearly = _plan(self.env, y_sfx)
+            if 'hermes' in m_sfx:
+                ratio = 10
+            elif 'security_access' in m_sfx:
+                ratio = 9
+            else:
+                ratio = 8
             self.assertEqual(
-                yearly.sh_plan_price, monthly.sh_plan_price * 10,
-                '%s 年價應=月價×10' % y_sfx)
+                yearly.sh_plan_price, monthly.sh_plan_price * ratio,
+                '%s 年價應=月價×%d' % (y_sfx, ratio))
             self.assertEqual(monthly.sh_unit, 'month', m_sfx)
             self.assertEqual(yearly.sh_unit, 'year', y_sfx)
 
@@ -260,10 +317,12 @@ class TestPricingSeedIntegrity(TransactionCase):
             self.assertTrue(product.sh_product_subscribe, suffix)
 
     def test_sa_quota_values(self):
-        """D3：5 Application 檔 sa_max_routes=5；10 Application 檔=10。"""
+        """Wave B：6 組檔 sa_max_routes=6（policies 亦 3→6）；10 組檔 routes=10。"""
         for suffix in ('plan_security_access_entry_monthly',
                        'plan_security_access_entry_yearly'):
-            self.assertEqual(_plan(self.env, suffix).sa_max_routes, 5, suffix)
+            plan = _plan(self.env, suffix)
+            self.assertEqual(plan.sa_max_routes, 6, suffix)
+            self.assertEqual(plan.sa_max_access_policies, 6, suffix)
         for suffix in ('plan_security_access_pro_monthly',
                        'plan_security_access_pro_yearly'):
             self.assertEqual(_plan(self.env, suffix).sa_max_routes, 10, suffix)
@@ -417,8 +476,9 @@ class TestPricingMigration330(TransactionCase):
 
     def _assert_target_state(self):
         # D1 reprice＋D2 rename（16 plan＋16 product；xmlid 逐筆）
+        # 目標＝.52 凍結值（MIG_52_TARGET），與 fresh .59 EXPECTED_PLANS 解耦。
         for sfx in OLD_PLANS_51:
-            price, name = EXPECTED_PLANS[sfx]
+            price, name = MIG_52_TARGET[sfx]
             plan = _plan(self.env, sfx)
             self.assertEqual(plan.sh_plan_price, price, sfx)
             self.assertEqual(plan.name, name, sfx)
@@ -437,12 +497,13 @@ class TestPricingMigration330(TransactionCase):
             self.assertEqual(
                 _plan(self.env, sfx).service_type,
                 EXPECTED_SERVICE_TYPE[sfx], sfx)
-        # E2 M2M（四個變動 template 恢復 6/6/6/4 全量）
+        # E2 M2M（四個變動 template 恢復 .52-era 全量 6/6/6/4；用凍結集合，
+        # 因 fresh cloud_app_n8n 已含 Wave B t4，.52 migration 不產出 t4）
         for tpl_sfx in OLD_TEMPLATE_PLANS_51:
             template = self.env.ref('%s.%s' % (MOD, tpl_sfx))
             expected_ids = {
                 _plan(self.env, s).id
-                for s in EXPECTED_TEMPLATE_PLANS[tpl_sfx]}
+                for s in MIG_52_TEMPLATE_PLANS[tpl_sfx]}
             self.assertEqual(
                 set(template.subscription_plan_ids.ids), expected_ids, tpl_sfx)
         # G5：placeholder 價格/名稱不受 migration 影響
