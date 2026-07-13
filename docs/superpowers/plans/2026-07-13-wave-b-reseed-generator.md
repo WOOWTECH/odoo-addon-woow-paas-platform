@@ -628,17 +628,22 @@ Expected: 仍全綠——特別是 M2M 斷言（base `(6,0)` 重設後變體 `(4
 
 ---
 
-## Task 0 校驗結果（執行 agent 填寫）
+## Task 0 校驗結果（執行 agent 填寫，2026-07-13）
 
 | # | 項目 | 結果 |
 |---|---|---|
-| 1 | 版號錨定 VER_B2/VER_B3（現值＋.58 佔用） | （待填） |
-| 2 | SA_TEMPLATE_XMLID＋M2M 現況 | （待填） |
-| 3 | SA 既存訂閱 sanity | （待填） |
-| 4 | 會撞紅的既有斷言清單 | （待填） |
-| 5 | n8n/SA record 範本 | （待填） |
-| 6 | links (6,0) 複驗 | （待填） |
-| 7 | 綠基線 | （待填） |
-| 8 | manifest data 插入點 | （待填） |
+| 1 | 版號錨定 VER_B2/VER_B3（現值＋.58 佔用） | manifest 現值＝`18.0.1.0.57`（＝#343 HA PaaS，符預期）；`.58` **無 open PR／未 merge**（leader3 MCP 標準版重釘 PR 尚未開，`tea pr list --state open` 空、manifest 仍 .57）→ 錨定 **VER_B2=`18.0.1.0.59`**、**VER_B3=`.60`**（plan 預設）。⚠️ 排序依賴：leader3 `.58` 須在本 wave `.59/.60` land 前先進 develop，否則版號回退——屬 leader 跨隊協調，本 agent 續依 .59/.60 開發。 |
+| 2 | SA_TEMPLATE_XMLID＋M2M 現況 | xmlid＝`security_access_default`（model `woow_paas_platform.security_access_template`、rel `woow_security_access_template_plan_rel`）。M2M＝`subscription_template_links.xml:68` 的 `(6,0)` record（entry/pro 4 筆）＋line 82 `_ensure_default_template_links` **healer**（ensure-only：`if subscription_plan_ids: return`，僅空集回填 entry/pro）。SA seed（`security_access_templates.xml`）為 `noupdate="0"`（非 sticky）。→ PR-B2 把 r1/r3 加進 `(6,0)`（4→8）；PR-B3 變體走 `(4,)` 疊加（healer 不洗）。**發現**：healer 回填清單僅 entry/pro（未含 r1/r3）——sticky 升級 DB 首 `-u` 短暫缺 r1/r3；PR-B2 一併補 healer 清單（防禦）。 |
+| 3 | SA 既存訂閱 sanity | 本地 fresh DB＝0 筆依賴 SA 舊 quota；prod 甫公開前預期 0（plan 註 stg/local fresh 即可）→ 無平移風險，quota 可直接改。 |
+| 4 | 會撞紅的既有斷言清單 | **超出「單純改 dict」**，PR-B2 需處理：① `test_pricing_seed_330.py`：`EXPECTED_PLANS`（價+名：現「Odoo Cloud T2（3–6 人）」×10 → 目標「Odoo 訂閱服務（4-7 人）」×8，級距語意也變）、`test_yearly_equals_monthly_times_ten`（×10 全毀→新比率 ×8/SA×9/Hermes×10 混合，需改寫 per-family）、`test_sa_quota_values`（entry routes 5→6、policies 3→6）、`TestPricingMigration330`（.52 migration sim 耦合 `EXPECTED_PLANS`——需拆 frozen `.52` target dict，否則升 EXPECTED_PLANS 反噬 .52 測試）。② `test_mcp_server_template_seed.py:186`（yearly 30000→24000，G7）。**不受影響**：`test_cs_spec_332.py`（只斷言 cs_*）、`test_plan_visibility_336.py`（Hermes untouched）。 |
+| 5 | n8n/SA record 範本 | 已取全欄。plan 欄：name/sh_duration/sh_unit/sh_plan_price/sh_override_product(T)/sh_no_of_billing_cycle(-1)/sh_never_expire(T)/sh_trial(T)/sh_trial_duration(7)/sh_trial_unit(day)/sh_start_immediately(F)/sh_is_close_by_customer(T)/sh_reminder([(4,ref)×2])/service_type ＋CS 族 cs_vcpu/cs_ram_gb/cs_storage_gb/cs_odoo_workers／SA 族 sa_max_routes/policies/custom_domains/email_rules/emails_per_policy／SH p2 mcp_integration。product 7 欄：name(+" Subscription")/type(service)/list_price/sale_ok(T)/purchase_ok(F)/sh_product_subscribe(T)/sh_subscription_plan_id(ref)。CS specs（TIER_SPECS）：odoo t1=2/2.0/20/2、t2=2/4.0/30/3、t3=3/4.0/40/4；n8n t1=1/1.0/10/0、t2=1/2.0/20/0、t3=2/2.0/30/0、t4=2/4.0/40/0（外推）。SA quota：r6(entry)=6/6/1/0/20、r10(pro)=10/10/3/10/20、r1=1/1/1/0/20、r3=3/3/1/0/20。 |
+| 6 | links (6,0) 複驗 | `subscription_template_links.xml` 整檔 `<data noupdate="0">`，全 template↔plan `(6,0)` 每 `-u` 重設。→ PR-B3 變體 links 用 `(4, ref(...))` append（noupdate=0、載於 base links 後），符鐵律。7 個變體 template record：cloud_app_odoo(42)/cloud_app_n8n(40)/cloud_app_mcp_odoo(2)/cloud_app_mcp_odoo_manage(2)/cloud_app_mcp_n8n(2)/smart_home_home_assistant(40)/security_access_default(80)＝208。 |
+| 7 | 綠基線 | Docker 全模組 suite 背景執行中（pg-waveb/odoo-waveb bind-mount B1 worktree src＝origin/develop）；完成後於 PR-B1 收尾補述。 |
+| 8 | manifest data 插入點 | `src/__manifest__.py` data 清單：line 27 `data/subscription_products.xml`、line 28 `data/subscription_template_links.xml`（連續）。→ PR-B3 兩生成 XML 插 line 28 之後（`..._variants.xml` 必在 `subscription_template_links.xml` 後，符鐵律）。 |
+
+### Task 0 附帶決策（plan 未明定處，本 agent 定案）
+
+- **變體命名**：plan/product name 採 manifest 名稱 **verbatim**（單一事實源、對齊 Elmo 已建 214 商品目錄；plan 未指定、生成測試不斷言 name）。實作上 `Variant` 增 `name` 欄由 `classify` 從 `Item.name` 帶入（不改 5 欄語意 tuple 斷言）。
+- **PR-B3 前台不滲漏測試**：plan 範例的 model 名 `'cloud.app.template'` 有誤（正確＝`woow_paas_platform.cloud_app_template`）且只查一個 model；生成測試改用正確 model 名並涵蓋全 3 template model（cloud_app/smart_home/security_access），為強化非改設計。
 
 <!-- peer-reviewed: 2026-07-13T00:40:37Z rounds=2 verdict=approved by=miniclaude -->
