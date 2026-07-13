@@ -384,21 +384,30 @@
             <field name="is_active" eval="True" />
         </record>
 
-        <!-- HA PaaS（免費雲端 Home Assistant，#336）。工作項5（Elmo 輕量 HA image）
-             未交付前 helm_* 為佔位、is_active=False（供 provision 端點 deployability
-             檢查、未備回 503 不建 service）。工作項5 落地：填真 image + is_active=True
-             + -u 即生效，無 migration。is_hidden=True：不出現在 /woow 前台任何清單。
-             此檔 noupdate=0，新 xmlid 首建不受 sticky flag 影響、M2M link 每 -u 重套。 -->
+        <!-- HA PaaS（免費雲端 Home Assistant，#336）。工作項5 stopgap 落地：pin 到
+             woow-paas-charts 已發佈的 HA chart OCI（0.1.0，helm pull 實測可 pull）＋
+             HA 官方 image，翻 is_active=True 即 deployable。is_hidden=True：不出現在
+             /woow 前台任何清單，僅由 /api/ha-paas/provision 端點自動開通。
+             migration：本 xmlid 首建即在 noupdate=0 塊（commit ed6287f4 晚於 noupdate=0
+             收斂 d1cb2e32，git 實證），故既有 DB ir.model.data.noupdate=False，-u 直接
+             重套下列欄位、無需 migration；healer 另清任何殘留 sticky flag。 -->
         <record id="cloud_app_ha_paas" model="woow_paas_platform.cloud_app_template">
             <field name="name">HA PaaS</field>
             <field name="slug">ha-paas</field>
             <field name="description">免費雲端 Home Assistant（平台自動開通）</field>
             <field name="category">container</field>
             <field name="is_hidden" eval="True"/>
-            <field name="is_active" eval="False"/>
-            <field name="helm_repo_url">TBD-elmo-lightweight-ha</field>
-            <field name="helm_chart_name">TBD</field>
-            <field name="helm_chart_version">0.0.0</field>
+            <field name="is_active" eval="True"/>
+            <!-- 對齊現有 OCI template 慣例（postgresql/n8n/redis）：helm_repo_url 空、
+                 helm_chart_name 帶完整 oci://。chart 由 woow-paas-charts repo 發佈。 -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <!-- HA 官方 image + /config PVC 5Gi；haProxy.trustedProxies=woow-k3s Pod
+                 CIDR（4 node podCIDR 皆 10.42.X.0/24 → cluster 10.42.0.0/16），讓 HA
+                 信任反向代理的 X-Forwarded-For、避免 "400 Bad Request from a reverse
+                 proxy" 阻擋。 -->
+            <field name="helm_default_values">{"image":{"repository":"ghcr.io/home-assistant/home-assistant","tag":"2026.7.2"},"persistence":{"mountPath":"/config","size":"5Gi"},"service":{"port":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"trustedProxies":["10.42.0.0/16"]},"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}}</field>
             <field name="default_port">8123</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
