@@ -83,6 +83,10 @@ class SecurityAccessTemplate(models.Model):
             return
         plans = self.env['sh.subscription.plan']
         for xml_id in (
+            'woow_paas_platform.plan_security_access_r1_monthly',
+            'woow_paas_platform.plan_security_access_r1_yearly',
+            'woow_paas_platform.plan_security_access_r3_monthly',
+            'woow_paas_platform.plan_security_access_r3_yearly',
             'woow_paas_platform.plan_security_access_entry_monthly',
             'woow_paas_platform.plan_security_access_entry_yearly',
             'woow_paas_platform.plan_security_access_pro_monthly',
