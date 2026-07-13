@@ -18,4 +18,5 @@
 1	src/data/reconcile_report_cron.xml
 1	src/data/subscription_lifecycle_cron.xml
 1	src/data/subscription_products.xml
+1	src/data/subscription_products_variants.xml
 1	src/data/topup_plans.xml

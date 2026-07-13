@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.59",
+    "version": "18.0.1.0.60",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -26,6 +26,9 @@
         "data/topup_plans.xml",
         "data/subscription_products.xml",
         "data/subscription_template_links.xml",
+        # Wave B：208 變體（GENERATED；必排在 base links 之後——M2M noupdate 鐵律）
+        "data/subscription_products_variants.xml",
+        "data/subscription_template_links_variants.xml",
         "data/subscription_journal_config.xml",
         "views/menu.xml",
         "data/ai_assistant_data.xml",
