@@ -291,26 +291,36 @@
             <field name="is_active" eval="True" />
         </record>
 
-        <!-- MCP Server: Odoo Manage（#338：全模組 CRUD 上架骨架）— is_active=False 待 image。
+        <!-- MCP Server: Odoo Manage（#338 範疇①：真 image 接線）— is_active=True 上架。
              鏡射 cloud_app_mcp_odoo（chart mcp-server 0.1.5、mcp_enabled=False＝MCP 內建於
-             body 非 sidecar）。差異：manage image、config.mcp_server 入口模組。
-             image.tag=latest 為佔位；上架前 follow-up 釘 digest（woow-mcp-server#12）。
-             config.nonSensitive.mcp_server args 的入口模組 mcp_server_odoo_manage.server:server
-             待 woow-mcp-server#12 image 定案後校正。 -->
+             body 非 sidecar）。image 雙釘 git-sha@sha256（odoo-manage-mcp-admin，woow-mcp-server
+             #14 打包 ivnvxd/mcp-server-odoo 0.7.1；linux/amd64）。
+             啟動契約與標準版不同：標準 odoo 的底層 server 是 stdio-only，故經 core 的
+             mcp_sse_wrapper 包（command=python）；ivnvxd 0.7.1 改用 FastMCP、原生支援
+             StreamableHTTP，故直跑 console script（command=mcp-server-odoo、args
+             transport=streamable-http、port=8000），比照 n8n 直跑原生 http 的模式。ivnvxd
+             0.7.1 無 module-level server 物件，wrapper spec 對它不適用（骨架的
+             mcp_server_odoo_manage.server:server 是 Wave A 佔位猜測、實不存在）。內部 8000 由
+             admin proxy 反代 /mcp（mcp SDK 1.28.1 原生正確處理裸 /mcp，實測 POST 回 200 建 session）。
+             app=odoo-manage：純 observability label（mcp.woowtech.io/app + MCP_APP env）；chart
+             資源名/selector 皆 release-scoped 不撞、image 源不讀 MCP_APP，功能惰性。
+             migration：本 xmlid 首建即在 noupdate=0 塊（commit 6817eacd），故既有 DB
+             ir.model.data.noupdate=False、-u 直接重套下列欄位，無需 migration。 -->
         <record id="cloud_app_mcp_odoo_manage" model="woow_paas_platform.cloud_app_template">
             <field name="name">Odoo Manage MCP</field>
             <field name="slug">mcp-odoo-manage</field>
             <field name="description">Odoo Manage MCP — 以 API Key 連接目標 Odoo，全模組 CRUD 操作</field>
             <field name="full_description">Odoo Manage MCP server：透過 API Key 連接目標 Odoo
                 實例，提供跨全模組的 CRUD 操作能力（無個人權限範圍限制），適合小團隊統一管理。
-                租戶前置需求：目標 Odoo 需開啟 API Key、並安裝對應的 Manage MCP addon。</field>
+                租戶前置需求：目標 Odoo 需 (1) 建立 API Key（設定 → 開發人員 → API 金鑰），
+                (2) 安裝提供 /mcp 認證端點的 MCP addon 以啟用權限模型。</field>
             <field name="category">mcp</field>
             <field name="tags">["mcp", "odoo", "mcp-server", "manage", "ai"]</field>
 
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "latest"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo_manage.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo-manage", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "5d321063fcefdbda729232a407b0dda51c328118@sha256:32cb6c7ddf2269daef6ce0f30e87449355a8e39048b97dd70b14ced6ddc762cb"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"nonSensitive": {"mcp_server": {"command": "mcp-server-odoo", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -324,7 +334,7 @@
             <field name="mcp_enabled" eval="False" />
             <field name="post_deploy_init_type">none</field>
 
-            <field name="is_active" eval="False" />
+            <field name="is_active" eval="True" />
         </record>
 
         <!-- MCP Server: n8n — MCP built into the body, NOT the existing n8n-mcp sidecar.

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""#338：Odoo Manage MCP 上架骨架 seed。"""
+"""#338 範疇①：Odoo Manage MCP 真 image 接線 seed。"""
 import json
 from odoo.tests.common import TransactionCase, tagged
 
@@ -10,10 +10,31 @@ class TestMcpManageTemplateSeed(TransactionCase):
     def test_template_seed(self):
         tpl = self.env.ref('woow_paas_platform.cloud_app_mcp_odoo_manage')
         self.assertEqual(tpl.category, 'mcp')
-        self.assertFalse(tpl.is_active, 'image 未 ready 前必須隱藏（#338）')
+        # 範疇①上架：image ready 後翻 is_active=True（原骨架為 False）。
+        self.assertTrue(tpl.is_active, 'image ready 後上架，應 is_active=True（#338 範疇①）')
         self.assertFalse(tpl.mcp_enabled, 'MCP 內建於 body、非 sidecar（比照三 MCP admin）')
         values = json.loads(tpl.helm_default_values)
         self.assertIn('odoo-manage-mcp-admin', values['image']['repository'])
+
+    def test_image_tag_is_pinned_digest(self):
+        """上架必須釘死 digest（不得留 latest 佔位）——雙釘 git-sha@sha256。"""
+        tpl = self.env.ref('woow_paas_platform.cloud_app_mcp_odoo_manage')
+        tag = json.loads(tpl.helm_default_values)['image']['tag']
+        self.assertNotEqual(tag, 'latest', '上架不得留 latest 佔位')
+        self.assertIn('@sha256:', tag, 'image tag 必須雙釘 git-sha@sha256')
+
+    def test_mcp_server_launch_uses_native_streamable_http(self):
+        """啟動契約守線：ivnvxd mcp-server-odoo 0.7.1 用 FastMCP、原生 StreamableHTTP，
+        直跑 console script（比照 n8n），NOT 標準 odoo 的 mcp_sse_wrapper 包。骨架的
+        mcp_server_odoo_manage.server:server 是 Wave A 佔位猜測、對 ivnvxd 不存在，若回退到
+        wrapper spec 會 ImportError；此測鎖定正確入口。"""
+        tpl = self.env.ref('woow_paas_platform.cloud_app_mcp_odoo_manage')
+        mcp = json.loads(tpl.helm_default_values)['config']['nonSensitive']['mcp_server']
+        self.assertEqual(mcp['command'], 'mcp-server-odoo')
+        self.assertIn('streamable-http', mcp['args'])
+        self.assertNotIn('mcp_admin_core.mcp_sse_wrapper', mcp['args'],
+                         'ivnvxd 原生 http、不經 wrapper')
+        self.assertEqual(mcp['port'], 8000)
 
     def test_description_mentions_prereq(self):
         """租戶側前置說明（API Key／addon）放 description（#338 工作項 3）。"""
