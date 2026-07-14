@@ -209,6 +209,8 @@ class SecurityAccessController(Controller):
         if not template.subscription_plan_ids:
             return {"success": False,
                     "error": "Template has no subscription plans configured"}
+        # #330 Wave C：base plan 附掛隱藏席數變體（xmlid 反查、無變體＝[]）。
+        variants_by_base = template.subscription_plan_ids._attach_variants()
         return {"success": True, "data": [
             {
                 "id": p.id,
@@ -223,6 +225,7 @@ class SecurityAccessController(Controller):
                 "max_access_policies": p.sa_max_access_policies,
                 "max_custom_domains": p.sa_max_custom_domains,
                 "max_email_rules": p.sa_max_email_rules,
+                "variants": variants_by_base.get(p.id, []),
             }
             # #336：前台 plans 一律排除 storefront_hidden（既存訂閱不受影響）
             for p in template.subscription_plan_ids.filtered(lambda p: not p.storefront_hidden)
