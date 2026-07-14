@@ -928,9 +928,11 @@ class PaasController(HiddenChainMixin, Controller):
 
         plans = []
         # #330 Wave C：base plan 附掛隱藏席數變體（xmlid 反查、無變體＝[]）。
-        variants_by_base = template.sudo().subscription_plan_ids._attach_variants()
+        # 單一 sudo recordset 複用（helper 與 filtered 共用，避免重複 sudo/browse）。
+        plan_recs = template.sudo().subscription_plan_ids
+        variants_by_base = plan_recs._attach_variants()
         # #336：前台 plans 一律排除 storefront_hidden（既存訂閱不受影響）
-        for plan in template.sudo().subscription_plan_ids.filtered(
+        for plan in plan_recs.filtered(
             lambda p: not p.storefront_hidden
         ):
             plans.append({
