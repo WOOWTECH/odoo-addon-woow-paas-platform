@@ -188,9 +188,11 @@ class CloudAppTemplate(models.Model):
         help='Whether this template is available for deployment',
     )
 
-    # #341（Wave A）每帳號實例上限：model 層 create() 計數守衛（check-after-act）。
-    # HA PaaS 刻意不設值（留 default 0＝不限制）——其每帳號限一改由 provision 端點的
-    # provision_partner_id partial unique index ＋ advisory lock 承擔（race-safe）。
+    # #341（Wave A）每帳號實例上限：model 層 create() 計數守衛（#345 補 advisory
+    # lock 序列化，race-safe，見 cloud_service.py create()）。HA PaaS 於 seed 補
+    # max_per_partner=1（#345 defense-in-depth）——其每帳號限一的主防護仍由 provision
+    # 端點的 provision_partner_id partial unique index ＋ advisory lock 承擔，此 model
+    # 層值為縱深一致守衛（與下方 help「HA PaaS 免費方案設 1」對齊）。
     max_per_partner = fields.Integer(
         string='每帳號實例上限',
         default=0,
