@@ -413,6 +413,11 @@
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
             <field name="min_storage_gb">5</field>
+            <!-- 每帳號限一（#345 defense-in-depth）：主防護由 /api/ha-paas/provision
+                 端點的 provision_partner_id partial unique index ＋ advisory lock 承擔
+                 （race-safe，見 cloud_service.py init／ha_paas.py）；此處補 model 層
+                 max_per_partner=1 作縱深一致守衛。noupdate=0，-u 自動套用、無需 migration。 -->
+            <field name="max_per_partner" eval="1"/>
         </record>
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block

@@ -1400,13 +1400,39 @@ class CloudService(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        """#336：每帳號實例上限 enforcement。
+        """#336：每帳號實例上限 enforcement（#345 補並發防護）。
 
-        放 model create（controller、未來 #337 開通 API、shell 等所有入口共用），
+        放 model create（controller、#337 開通 API、shell 等所有入口共用），
         controller 不另做早驗——避免同一規則兩份漂移。計數口徑＝該 partner 名下、
-        該 template、state 不在刪除終態的 CloudService 數。
+        該 template、state 不在刪除終態的 CloudService 數。enforcement 對所有入口
+        （含測試 su env）一律生效、無 su/group 豁免（否則 TransactionCase 假綠）。
+
+        #345 並發防護：原為 check-after-act（super().create() 後才 count、無鎖），
+        兩並發 create 同 (template, partner) 各見自身 count=1 雙雙放行 → 可繞上限。
+        改為 count 前先取 (template_id, partner_id) 為鍵的 advisory xact lock 序列化
+        （比照 provision 端點 _HA_PROVISION_LOCK_NS 慣例，見 ha_paas.py）。順序
+        INSERT→lock→count 仍正確：READ COMMITTED 下，輸家取得鎖後的 count SELECT
+        用新 snapshot，看得到贏家已 commit 的列 → count>limit 觸發 rollback（撤回
+        自身 INSERT）。xact lock 於本 tx 結束（commit/rollback）自動釋放。
+        max_per_partner=0 的常態不進迴圈＝零鎖開銷。多筆 vals：先收集 distinct
+        (template, partner) 排序後依序取鎖，消除跨組交錯的 lock-ordering 死鎖。
+
+        DB unique-index 無法表達「每 (partner, template) ≤N」的一般 N 上限
+        （partial unique index 只能保證「至多一列」，見 provision_partner_id），
+        故泛化上限只能靠 advisory lock；單連線 TransactionCase 無法真並發，既有
+        功能測試僅證非回歸、鎖的競態正確性靠與 provision 先例一致性 + code review。
         """
         records = super().create(vals_list)
+        # 收集需 enforcement 的 (template_id, partner_id)，排序去重後依序取鎖：
+        # 排序消除多筆跨組的 lock-ordering 死鎖；max_per_partner=0 常態集合為空、零開銷。
+        lock_pairs = sorted({
+            (rec.template_id.id, rec.workspace_id.owner_id.partner_id.id)
+            for rec in records
+            if rec.template_id.max_per_partner and rec.workspace_id.owner_id
+        })
+        for tpl_id, partner_id in lock_pairs:
+            self.env.cr.execute(
+                'SELECT pg_advisory_xact_lock(%s, %s)', (tpl_id, partner_id))
         for rec in records:
             limit = rec.template_id.max_per_partner
             if limit and rec.workspace_id.owner_id:
