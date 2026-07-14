@@ -258,3 +258,22 @@ class TestMcpN8nTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     IMAGE_REPO_SUFFIX = 'n8n-mcp-admin'
     APP = 'n8n'
     EXPECT_MCP_COMMAND = 'n8n-mcp-http'
+
+
+class TestMcpOdooManageTemplateSeed(_McpServerSeedAssertions, TransactionCase):
+    """mcp-odoo-manage template（#338 範疇①）: tenant-neutral, sidecar-free, odoo-level pricing.
+
+    Active（image 真接線: odoo-manage-mcp-admin 雙釘 digest, woow-mcp-server #14 打包
+    ivnvxd/mcp-server-odoo 0.7.1）. 底層 server 用 FastMCP、原生 StreamableHTTP，故直跑
+    console script `mcp-server-odoo`（NOT 標準 odoo 的 mcp_sse_wrapper 包）——ivnvxd 無
+    module-level server 物件，wrapper spec 對它不存在. EXPECT_ACTIVE defaults to True.
+    """
+
+    SLUG = 'mcp-odoo-manage'
+    TMPL = 'woow_paas_platform.cloud_app_mcp_odoo_manage'
+    PLAN_M = 'woow_paas_platform.plan_mcp_odoo_manage_monthly'
+    PLAN_Y = 'woow_paas_platform.plan_mcp_odoo_manage_yearly'
+    PROD_M = 'woow_paas_platform.product_mcp_odoo_manage_monthly'
+    IMAGE_REPO_SUFFIX = 'odoo-manage-mcp-admin'
+    APP = 'odoo-manage'
+    EXPECT_MCP_COMMAND = 'mcp-server-odoo'
