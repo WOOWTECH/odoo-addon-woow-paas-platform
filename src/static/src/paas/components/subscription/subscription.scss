@@ -57,6 +57,19 @@
     color: var(--woow-text-tertiary, #9ca3af);
     padding: 12px;
   }
+
+  // Wave C：AC 席數第二步（sibling 於 __cards）
+  &__seats {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--woow-border, #e5e7eb);
+  }
+
+  &__seat_options {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
 }
 
 .o_woow_plan_card {
@@ -98,6 +111,50 @@
   &__trial {
     font-size: 11px;
     color: var(--woow-text-secondary, #6b7280);
+  }
+
+  // Wave C：帶席數變體卡片的提示（無變體卡片不渲染此元素）
+  &__seats_hint {
+    margin-top: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--woow-primary, #6366f1);
+  }
+}
+
+// Wave C：AC 席數 chip（比照 .o_woow_plan_card 為獨立區塊）
+.o_woow_plan_seat {
+  min-width: 76px;
+  padding: 8px 14px;
+  border: 2px solid var(--woow-border, #e5e7eb);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: var(--woow-surface, #fff);
+  text-align: center;
+
+  &:hover {
+    border-color: var(--woow-primary, #6366f1);
+    background: rgba(#6366f1, 0.03);
+  }
+
+  &--selected {
+    border-color: var(--woow-primary, #6366f1);
+    background: rgba(#6366f1, 0.06);
+    box-shadow: 0 0 0 1px var(--woow-primary, #6366f1);
+  }
+
+  &__label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--woow-text-primary, #111827);
+    margin-bottom: 2px;
+  }
+
+  &__price {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--woow-primary, #6366f1);
   }
 }
 

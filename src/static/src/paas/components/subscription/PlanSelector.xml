@@ -11,8 +11,31 @@
             <div class="o_woow_plan_card__price" t-esc="formatPrice(plan)"/>
             <div t-if="plan.has_trial"
                  class="o_woow_plan_card__trial" t-esc="formatTrial(plan)"/>
+            <!-- Wave C：帶席數變體的卡片標示「可加購 AC 席數」（無變體卡片不渲染） -->
+            <div t-if="plan.variants and plan.variants.length"
+                 class="o_woow_plan_card__seats_hint">可加購 AC 席數</div>
           </div>
         </t>
+      </div>
+      <!-- Wave C 第二步：AC 席數（sibling 於 __cards，避免 chip click 冒泡到卡片）。
+           只在選中的 base 帶變體時出現；不加購＝base 自身、n 席＝對應變體。 -->
+      <t t-set="seatBase" t-value="selectedBaseWithVariants()"/>
+      <div t-if="seatBase" class="o_woow_plan_selector__seats">
+        <div class="o_woow_plan_selector__label">AC 席數：</div>
+        <div class="o_woow_plan_selector__seat_options">
+          <div t-attf-class="o_woow_plan_seat {{isSeatSelected(seatBase, null) ? 'o_woow_plan_seat--selected' : ''}}"
+               t-on-click="() => this.onSeatSelect(seatBase, null)">
+            <div class="o_woow_plan_seat__label">不加購</div>
+            <div class="o_woow_plan_seat__price" t-esc="formatSeatPrice(seatBase, null)"/>
+          </div>
+          <t t-foreach="seatBase.variants" t-as="variant" t-key="variant.plan_id">
+            <div t-attf-class="o_woow_plan_seat {{isSeatSelected(seatBase, variant) ? 'o_woow_plan_seat--selected' : ''}}"
+                 t-on-click="() => this.onSeatSelect(seatBase, variant)">
+              <div class="o_woow_plan_seat__label"><t t-esc="variant.seats"/> 席</div>
+              <div class="o_woow_plan_seat__price" t-esc="formatSeatPrice(seatBase, variant)"/>
+            </div>
+          </t>
+        </div>
       </div>
       <div t-if="!props.plans.length" class="o_woow_plan_selector__empty">
         No plans available

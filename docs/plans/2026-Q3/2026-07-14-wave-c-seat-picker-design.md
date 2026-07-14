@@ -24,7 +24,7 @@
 - **換 plan 不觸發 redeploy**（#342 code 層定案）——變體 `cs_*`＝同 tier base（生成測試斷言），改席數只改計費：**語意上正確**，無部署副作用。
 - **三 surface 共用單一 `PlanSelector`**（`src/static/src/paas/components/subscription/PlanSelector.js`，受控卡片列、emit `plan.id`）——改一處覆蓋三面。
 - **席數範圍依 tier**：odoo 1-3/1-7/1-11、n8n 1/1-3/1-6/1-10、SA/SH 全 1-10、mcp 固定 1（退化為單選）。**前端不硬編**：席數選項＝該 base 的 `variants[].seats` 實際集合，tier 差異自然解決。
-- **價格為 manifest 絕對值**（非 base+500×n runtime 公式）——UI 直接顯示變體全價，零價格運算。
+- **價格為 manifest 絕對值**（非 base+600×n runtime 公式）——UI 直接顯示變體全價，零價格運算。
 - **cycle 天然分離**：monthly/yearly base 是兩筆 plan、各有自己的變體集（`_ac{n}_monthly`／`_ac{n}_yearly`）——variants 掛各自 base 下，三步不需處理 cycle 維度。
 - **7 個 template 有變體**：odoo(42)/n8n(40)/mcp×3(各2)/SH(40)/SA(80)＝208；Hermes、postgresql 無變體（variants 為空陣列即可，前端 fallback 單步）。
 
