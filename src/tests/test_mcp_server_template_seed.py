@@ -97,9 +97,16 @@ class _McpServerSeedAssertions:
     """Shared seed assertions for an mcp-* cloud service template.
 
     Subclasses bind app-specific xmlids/values. This mixin is intentionally
-    NOT a TransactionCase, so Odoo's test runner skips it and only runs the
-    concrete odoo / n8n subclasses below.
+    NOT a TransactionCase, so Odoo's test runner would skip it and only run
+    the concrete odoo / n8n subclasses below — except that without
+    ``allow_inherited_tests_method = True`` the runner also walks past every
+    ``test_*`` method defined HERE (mixin is not in the subclass'
+    ``__dict__``), so the subclasses silently contributed 0 tests (false-green,
+    #356). The flag propagates via the MRO to both concrete subclasses.
     """
+
+    # #356: collect inherited test_* methods from this mixin via the subclasses.
+    allow_inherited_tests_method = True
 
     SLUG = None
     TMPL = None
