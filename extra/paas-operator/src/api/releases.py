@@ -626,13 +626,20 @@ def reset_release_config(
         ) from e
 
     try:
+        # The release name is not the Deployment name (chart fullname renders
+        # '{release}-mcp-server'), so discover it the same way the pod lookup
+        # above does.
+        deployment_name = k8s_service.get_deployment_name(
+            namespace=namespace,
+            label_selector=f"app.kubernetes.io/instance={name}",
+        )
         k8s_service.rollout_restart_deployment(
             namespace=namespace,
-            deployment_name=name,
+            deployment_name=deployment_name,
         )
         k8s_service.rollout_status_deployment(
             namespace=namespace,
-            deployment_name=name,
+            deployment_name=deployment_name,
         )
     except KubectlException as e:
         recovery_error = _rollback_reset(
@@ -709,8 +716,12 @@ def _rollback_reset(
         recovery_failed = True
     if config_patched and not recovery_failed:
         try:
-            k8s_service.rollout_restart_deployment(namespace, name)
-            k8s_service.rollout_status_deployment(namespace, name)
+            deployment_name = k8s_service.get_deployment_name(
+                namespace=namespace,
+                label_selector=f"app.kubernetes.io/instance={name}",
+            )
+            k8s_service.rollout_restart_deployment(namespace, deployment_name)
+            k8s_service.rollout_status_deployment(namespace, deployment_name)
         except KubectlException as e:
             logger.error("reset-config rollback rollout failed for %s/%s: %s", namespace, name, e)
             recovery_failed = True

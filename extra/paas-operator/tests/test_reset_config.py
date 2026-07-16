@@ -34,6 +34,7 @@ class TestResetConfigSchema:
 
 
 class TestResetConfigEndpoint:
+    @patch("src.api.releases.k8s_service.get_deployment_name", return_value="svc-abc-mcp-server")
     @patch("src.api.releases.k8s_service.exec_in_pod")
     @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
     @patch("src.api.releases.k8s_service.rollout_status_deployment")
@@ -42,7 +43,7 @@ class TestResetConfigEndpoint:
     @patch("src.api.releases.helm_service.get")
     def test_happy_path_uses_stdin_and_preserves_config(
         self, mock_get_release, mock_upgrade, mock_restart, mock_status,
-        mock_pod, mock_exec,
+        mock_pod, mock_exec, mock_deployment,
     ):
         mock_get_release.return_value = MagicMock(revision=7)
         mock_upgrade.return_value = MagicMock(revision=8)
@@ -64,11 +65,24 @@ class TestResetConfigEndpoint:
         patch_call = mock_exec.call_args_list[0].kwargs
         assert patch_call["command"][:3] == ["python3", "-c", patch_call["command"][2]]
         assert "admin_password" in patch_call["command"][2]
-        assert "new-pwd-xyz" not in patch_call["command"]
+        # C19: substring, not list membership — a bare `not in [list]` only
+        # catches a whole-element match and would miss an f-string that
+        # interpolated the password into the script body.
+        assert "new-pwd-xyz" not in " ".join(patch_call["command"])
         assert patch_call["input_data"] == json.dumps({"admin_password": "new-pwd-xyz"})
         assert patch_call["command"][3].startswith("/data/.config.json.reset-backup-")
-        mock_restart.assert_called_once_with(namespace="paas-ws-test", deployment_name="svc-abc")
-        mock_status.assert_called_once_with(namespace="paas-ws-test", deployment_name="svc-abc")
+        # C04: the Deployment is '{release}-mcp-server', discovered by label —
+        # never the release name itself.
+        mock_deployment.assert_called_once_with(
+            namespace="paas-ws-test",
+            label_selector="app.kubernetes.io/instance=svc-abc",
+        )
+        mock_restart.assert_called_once_with(
+            namespace="paas-ws-test", deployment_name="svc-abc-mcp-server",
+        )
+        mock_status.assert_called_once_with(
+            namespace="paas-ws-test", deployment_name="svc-abc-mcp-server",
+        )
         assert mock_exec.call_count == 2  # patch + backup cleanup
 
     def test_rejects_missing_password(self):
@@ -102,6 +116,7 @@ class TestResetConfigEndpoint:
         assert error.value.status_code == 500
         mock_rollback.assert_called_once_with("paas-ws-test", "svc-abc", 7)
 
+    @patch("src.api.releases.k8s_service.get_deployment_name", return_value="svc-abc-mcp-server")
     @patch("src.api.releases.helm_service.rollback")
     @patch("src.api.releases.k8s_service.rollout_status_deployment")
     @patch("src.api.releases.k8s_service.rollout_restart_deployment")
@@ -111,7 +126,7 @@ class TestResetConfigEndpoint:
     @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
     def test_rollout_failure_restores_config_and_secret(
         self, mock_get, mock_upgrade, mock_pod, mock_exec, mock_restart,
-        mock_status, mock_rollback,
+        mock_status, mock_rollback, mock_deployment,
     ):
         mock_exec.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mock_status.side_effect = [
@@ -125,6 +140,12 @@ class TestResetConfigEndpoint:
         mock_rollback.assert_called_once_with("paas-ws-test", "svc-abc", 7)
         restore_call = mock_exec.call_args_list[1].kwargs
         assert "os.replace" in restore_call["command"][2]
+        # C04 (the lethal half): the compensating rollout must resolve the real
+        # Deployment too. Reusing the release name here meant a failed main path
+        # dragged the rollback down with it — recovery_failed=True and a 500
+        # telling the tenant to call an operator.
+        assert mock_restart.call_args_list[-1].args == ("paas-ws-test", "svc-abc-mcp-server")
+        assert mock_status.call_args_list[-1].args == ("paas-ws-test", "svc-abc-mcp-server")
 
     @patch("src.api.releases.helm_service.rollback")
     @patch("src.api.releases.k8s_service.exec_in_pod")
@@ -155,5 +176,62 @@ class TestExecInPodStdin:
             )
         args = run.call_args.args[0]
         assert "--stdin" in args
-        assert "secret" not in args
+        # C19: same list-membership blind spot as the argv assertion above —
+        # `not in args` passes even when a secret is embedded inside an element.
+        assert "secret" not in " ".join(args)
         assert run.call_args.kwargs["input_data"] == '{"admin_password":"secret"}'
+
+
+class TestGetDeploymentName:
+    """C04: a release name is not a Deployment name — discover it by label."""
+
+    def test_resolves_fullname_from_label_selector(self):
+        with patch.object(KubernetesService, "_run_command") as run:
+            run.return_value = MagicMock(
+                returncode=0, stdout="svc-abc-mcp-server\n", stderr="",
+            )
+            name = KubernetesService().get_deployment_name(
+                namespace="paas-ws-test",
+                label_selector="app.kubernetes.io/instance=svc-abc",
+            )
+        assert name == "svc-abc-mcp-server"
+        args = run.call_args.args[0]
+        assert args[:2] == ["get", "deployments"]
+        assert "--selector" in args
+        assert args[args.index("--selector") + 1] == "app.kubernetes.io/instance=svc-abc"
+        # '.items[*]' (not '.items[0]') is what makes the >1 check below possible.
+        assert "jsonpath={.items[*].metadata.name}" in args
+
+    def test_raises_when_no_deployment_matches(self):
+        with patch.object(KubernetesService, "_run_command") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with pytest.raises(KubectlException) as error:
+                KubernetesService().get_deployment_name(
+                    namespace="paas-ws-test",
+                    label_selector="app.kubernetes.io/instance=svc-gone",
+                )
+        assert "No deployments found" in error.value.message
+
+    def test_raises_when_selector_is_ambiguous(self):
+        with patch.object(KubernetesService, "_run_command") as run:
+            run.return_value = MagicMock(
+                returncode=0, stdout="svc-abc-mcp-server svc-abc-sidecar\n", stderr="",
+            )
+            with pytest.raises(KubectlException) as error:
+                KubernetesService().get_deployment_name(
+                    namespace="paas-ws-test",
+                    label_selector="app.kubernetes.io/instance=svc-abc",
+                )
+        # Fail loudly rather than restarting an arbitrary workload: today the
+        # chart renders exactly one Deployment per release, and this assertion
+        # is what stops that assumption from silently rotting.
+        assert "Ambiguous selector" in error.value.message
+        assert "svc-abc-mcp-server" in error.value.message
+        assert "svc-abc-sidecar" in error.value.message
+
+    def test_rejects_namespace_outside_prefix(self):
+        with pytest.raises(ValueError):
+            KubernetesService().get_deployment_name(
+                namespace="kube-system",
+                label_selector="app.kubernetes.io/instance=svc-abc",
+            )

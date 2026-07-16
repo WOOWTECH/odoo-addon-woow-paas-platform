@@ -214,6 +214,32 @@ def statefulset_release(test_namespace):
 
 
 @pytest.fixture
+def chart_fullname_release(test_namespace):
+    """#357 C04: a release whose Deployment is named like the mcp-server chart.
+
+    The chart's fullname renders ``{{ .Release.Name }}-{{ .Chart.Name }}``, so
+    the Deployment is ``{release}-mcp-server`` — NOT the release name. Only the
+    ``app.kubernetes.io/instance`` label ties it back to the release. The unit
+    suite mocks this boundary away, which is exactly why the reset handler could
+    restart ``deployment/{release}`` for months with 9/9 tests green.
+    """
+    release = "svc-c04rel"
+    name = f"{release}-mcp-server"
+    _apply_manifest(_make_deployment(test_namespace, name, release))
+    return {"namespace": test_namespace, "release": release, "name": name}
+
+
+@pytest.fixture
+def ambiguous_instance_label(test_namespace):
+    """Two Deployments sharing one instance label — the >1 discovery branch."""
+    release = "svc-c04dup"
+    names = [f"{release}-mcp-server", f"{release}-sidecar"]
+    for name in names:
+        _apply_manifest(_make_deployment(test_namespace, name, release))
+    return {"namespace": test_namespace, "release": release, "names": names}
+
+
+@pytest.fixture
 def mixed_release(test_namespace):
     """Same release label drives one Deployment AND one StatefulSet.
 

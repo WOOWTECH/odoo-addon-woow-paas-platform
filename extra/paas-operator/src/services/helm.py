@@ -1784,6 +1784,55 @@ class KubernetesService:
             )
         return pod_name
 
+    def get_deployment_name(self, namespace: str, label_selector: str) -> str:
+        """Resolve a Deployment name from a label selector.
+
+        A Helm release name is NOT its Deployment name: the chart fullname
+        renders ``{release}-{chart}``. Callers must discover the real name via
+        the ``app.kubernetes.io/instance`` label rather than assume they match.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Label selector (e.g. 'app.kubernetes.io/instance=svc-abc')
+
+        Returns:
+            Deployment name
+
+        Raises:
+            KubectlException: If no Deployment matches, or if more than one does.
+                An ambiguous selector fails loudly instead of restarting an
+                arbitrary workload — unlike ``get_pod_name``, which takes
+                ``.items[0]`` because a release's pods are interchangeable
+                replicas.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "deployments",
+            "--namespace", namespace,
+            "--selector", label_selector,
+            "--output", "jsonpath={.items[*].metadata.name}",
+        ]
+
+        result = self._run_command(args)
+        names = result.stdout.split()
+        if not names:
+            raise KubectlException(
+                message=f"No deployments found matching selector '{label_selector}'",
+                command=" ".join(args),
+                stderr="",
+            )
+        if len(names) > 1:
+            raise KubectlException(
+                message=(
+                    f"Ambiguous selector '{label_selector}': expected exactly one "
+                    f"deployment, found {len(names)} ({', '.join(names)})"
+                ),
+                command=" ".join(args),
+                stderr="",
+            )
+        return names[0]
+
     def exec_in_pod(
         self,
         namespace: str,
