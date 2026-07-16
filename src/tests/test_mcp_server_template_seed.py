@@ -178,6 +178,33 @@ class _McpServerSeedAssertions:
         self.assertEqual(command, self.EXPECT_MCP_COMMAND)
         self.assertNotEqual(command, 'hermes-mcp-server')
 
+    def test_template_requires_platform_admin_password(self):
+        """#357 C01+C02：admin_password 供給契約的 seed 側守線。
+
+        C01（has_admin_gui）：這三個 template 的 admin GUI 內建於 image，需平台供給
+        admin_password。閘門必須是 has_admin_gui——不能用 mcp_enabled，後者是「外掛
+        MCP sidecar」語意、對 body-內建的這三者恆 False（見
+        test_template_is_not_sidecar_backed），拿它當閘門 create() 會過濾成空集合、
+        secret 從不建立、租戶拿到一組永不生效的密碼（#357 根因）。
+
+        C02（requiredFields）：chart mcp-server 0.1.5 的 config.requiredFields 預設
+        8 條，覆寫語意是 REPLACE 而非 merge（deployment.yaml 用 join "," 餵
+        initContainer 的 SEED_REQUIRED_PATHS）。本波平台只供給 admin_password 一條，
+        故必須覆寫成單條——connection.*（租戶自行在 GUI 填）與 mcp_auth_token
+        （不在本波）若留在 requiredFields，initContainer 會因缺值讓 pod 永遠卡 Init。
+        """
+        tmpl = self.env.ref(self.TMPL)
+        self.assertTrue(
+            tmpl.has_admin_gui,
+            'admin GUI 內建 → 必須 has_admin_gui=True 才會觸發平台供給 admin_password')
+        values = json.loads(tmpl.helm_default_values)
+        self.assertTrue(values['config']['requireFields'])
+        self.assertEqual(values['config']['sensitive'], {})
+        self.assertEqual(
+            values['config']['requiredFields'], ['admin_password'],
+            'requiredFields 覆寫＝REPLACE：只列本波真正供給的路徑，'
+            '多列一條就讓 pod 卡 Init')
+
     def test_template_storage_and_resources_match_advertised_spec(self):
         """#268: PVC size + container limits must equal the advertised spec
         (min_storage_gb / min_ram_gb / min_vcpu) — guards the 2Gi-vs-5G and

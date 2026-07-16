@@ -18,6 +18,7 @@ from . import workspace
 from . import workspace_access
 from . import project_access
 from . import cloud_app_template
+from . import cloud_service_secret
 from . import smart_home_template
 from . import security_access_template
 from . import security_access

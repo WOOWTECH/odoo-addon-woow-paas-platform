@@ -1,5 +1,6 @@
 import json
 import logging
+import secrets
 import uuid
 
 from odoo import _, api, fields, models
@@ -228,7 +229,6 @@ class CloudService(models.Model):
         readonly=True,
         groups='base.group_system',
     )
-
     # Timestamps
     deployed_at = fields.Datetime(
         string='Deployed At',
@@ -306,7 +306,10 @@ class CloudService(models.Model):
         if release_exists:
             # Upgrade in-place — preserves PVCs and data
             template = self.template_id
-            values = json.loads(self.helm_values) if self.helm_values else None
+            values = self._strip_mcp_sensitive_values(
+                json.loads(self.helm_values) if self.helm_values else None
+            )
+            sensitive_values = self._build_mcp_sensitive_values()
             try:
                 release_info = client.upgrade_release(
                     namespace=self.helm_namespace,
@@ -314,6 +317,7 @@ class CloudService(models.Model):
                     chart=template.helm_chart_name,
                     version=template.helm_chart_version,
                     values=values,
+                    sensitive_values=sensitive_values or None,
                     reuse_values=True,
                 )
             except PaaSOperatorError as e:
@@ -363,6 +367,141 @@ class CloudService(models.Model):
                 cron._trigger()
 
         return True
+
+    # #357 — admin_password 重置
+    # ------------------------------------------------------------------ #
+
+    def _reset_admin_password(self):
+        """#357 外科式 reset mcp admin password（保留 GUI 自填 connection/tools）。
+
+        密碼只短暫存在記憶體與 ``cloud_service_secret``；不寫回 ``helm_values``。
+        先用 current user 的存取規則驗證 service，再 sudo 讀寫該 service 的 secret。
+
+        #357 C05：**必須維持 ``_`` 開頭（private）**。本方法尾端回傳明文新密碼，
+        而授權（workspace role=admin）只存在 controller 層。命名為 ``action_*``
+        時它是 RPC 可達的：任何 workspace 成員（含 role=user/guest——cloud_service
+        的 ACL 對 group_user 全開、ir.rule 只驗「是該 workspace 成員」）可繞過
+        controller 的 role gate 直接 ``POST /web/dataset/call_kw``，RPC 回傳值
+        即明文新密碼，同時把真 admin 的密碼換掉（提權 + DoS）。這是「controller
+        filter 擋不住 ORM 直呼」的實例，見 docs/decisions/patterns/
+        paas-workspace-member-acl-tightening.md §Controller filter 不夠。
+
+        Odoo 18 由 ``get_public_method``（odoo/service/model.py:43
+        ``if name.startswith('_') ... raise AccessError``）擋下 ``_`` 開頭方法的
+        遠端呼叫，**兩條** RPC 路徑均已覆蓋：JSON-RPC 走
+        odoo/addons/web/controllers/dataset.py:34（call_kw 與 call_button）、
+        XML-RPC 走 odoo/service/model.py:71（execute_cr）。
+        ⚠️ 勿照 17.0 經驗判斷：17.0 用的是 ``check_method_name``，該函式在 18.0
+        雖仍定義於 models.py:155 但**已無任何呼叫點＝遺留死碼**（本 repo 是 18.0，
+        於 18.0 容器內 grep 實證）。
+
+        改回 public 命名（或加上會被 RPC 觸及的 wrapper）即重新打開該洞，
+        ``TestResetAdminPasswordAuthorization`` 會紅。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorError,
+            PaaSOperatorTimeoutError,
+        )
+
+        # Hold a row lock across the operator saga.  A second reset waits for
+        # the first request to commit, then observes state='upgrading' below
+        # instead of interleaving Secret/config rollback with a newer reset.
+        #
+        # #357 C11: this serialises the success path only. On a client timeout
+        # the lock is released while the operator's saga keeps running — it is a
+        # sync handler, so the client hanging up cancels nothing — and state
+        # stays 'running' because a timeout stores nothing. The retry message
+        # below therefore asks the tenant to wait rather than press again at
+        # once, which would race the in-flight saga.
+        self.env.cr.execute(
+            "SELECT id FROM woow_paas_platform_cloud_service WHERE id = %s FOR UPDATE",
+            [self.id],
+        )
+        self.invalidate_recordset()
+        if self.state == 'upgrading':
+            # #357 C11: a successful reset stamps 'upgrading', so this is the
+            # message a tenant hits when they reset, lose the password, and
+            # immediately try again. The generic text below reads as breakage;
+            # _cron_check_deploying_services polls every minute and flips it
+            # back to 'running', so say that instead.
+            raise UserError(
+                "Service is finishing an update (usually under a minute). "
+                "Please wait and try again."
+            )
+        if self.state != 'running':
+            raise UserError(
+                "Service must be running before resetting its admin password."
+            )
+
+        if not (self.helm_release_name and self.helm_namespace):
+            raise UserError(
+                "Service has no helm release yet — deploy first before resetting password."
+            )
+
+        # #357 C03：不檢查既有 secret。reset 是「重新生成並下發」而非「讀舊密碼」，
+        # 舊 secret 缺席（legacy 服務建立時平台尚未供給 admin_password）不是錯誤——
+        # 這正是租戶要 reset 的情境。_set_admin_password_secret 會 create-or-write。
+
+        # C20: the single generation point — never inline token_urlsafe here.
+        new_password = self._generate_admin_password()
+        values = self._strip_mcp_sensitive_values(
+            json.loads(self.helm_values) if self.helm_values else {}
+        )
+        operator_sensitive_values = self._build_mcp_sensitive_values(new_password)
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError("PaaS Operator not configured. Contact administrator.")
+
+        try:
+            client.reset_release_config(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+                chart=self.template_id.helm_chart_name,
+                version=self.template_id.helm_chart_version,
+                values=values,
+                sensitive_values=operator_sensitive_values or None,
+                reuse_values=True,
+            )
+        except PaaSOperatorTimeoutError as e:
+            # #357 C11: our 120s client budget is not the operator's. reset-config
+            # runs helm upgrade --atomic + exec + rollout wait in a sync handler,
+            # so a client timeout aborts our *wait*, not the saga — the rotation
+            # can still land. "Reset failed" would be a lie the tenant acts on:
+            # they close the dialog, the cluster rotates to a password nobody
+            # holds, and the admin GUI is locked out for good.
+            #
+            # Deliberately NOT stored: the invariant is that a password in the DB
+            # is one that really took effect. Reset is idempotent — pressing it
+            # again mints a fresh password and replays the whole saga, so the
+            # cluster and the DB converge on the newest attempt.
+            _logger.error(
+                "reset-admin-password timed out for service %s (id=%s): %s — "
+                "operator saga may still be in flight; new password NOT stored",
+                self.name, self.id, e.detail or e.message,
+            )
+            raise UserError(
+                "Reset status unknown — the request timed out before the service "
+                "confirmed it. The reset may still have taken effect, so the "
+                "password was not saved. Wait a few minutes, then press Reset "
+                "again to issue a new password."
+            ) from e
+        except PaaSOperatorError as e:
+            _logger.error(
+                "reset-admin-password failed for service %s (id=%s): %s",
+                self.name, self.id, e.detail or e.message,
+            )
+            raise UserError("Reset failed. Check service status and retry.") from e
+
+        self._set_admin_password_secret(new_password)
+
+        self.write({
+            'state': 'upgrading',
+            'error_message': False,
+        })
+        return new_password
 
     # ------------------------------------------------------------------ #
     #  Cron: process pending deployments                                  #
@@ -419,7 +558,9 @@ class CloudService(models.Model):
         template = self.template_id
         helm_namespace = self.helm_namespace
         helm_release_name = self.helm_release_name
-        merged_values = json.loads(self.helm_values) if self.helm_values else {}
+        merged_values = self._strip_mcp_sensitive_values(
+            json.loads(self.helm_values) if self.helm_values else {}
+        )
 
         # Inject StorageClass for PVC lifecycle management
         storage_class = self.env['ir.config_parameter'].sudo().get_param(
@@ -453,6 +594,8 @@ class CloudService(models.Model):
                     merged_values[key].update(val)
                 else:
                     merged_values[key] = val
+
+        sensitive_values = self._build_mcp_sensitive_values()
 
         # Recover deploy params stored at creation time
         params = json.loads(self.deploy_params) if self.deploy_params else {}
@@ -492,6 +635,7 @@ class CloudService(models.Model):
                 repo_url=template.helm_repo_url,
                 version=template.helm_chart_version,
                 values=merged_values,
+                sensitive_values=sensitive_values or None,
                 create_namespace=True,
                 expose=expose_config,
             )
@@ -708,6 +852,71 @@ class CloudService(models.Model):
             existing.append(secret_name)
         values['global']['imagePullSecrets'] = existing
         return values
+
+    @staticmethod
+    def _generate_admin_password():
+        """#357 C20：mcp admin password 的**唯一**生成點。
+
+        ``secrets.token_urlsafe(24)`` 給 ~32 chars url-safe base64，強度足夠
+        mcp-admin-core 的明文比對（auth/middleware.py 的 secrets.compare_digest）。
+        只在建立 / reset 成功的 response 回傳一次，後續 API 一律走
+        ``PaasController._sanitize_helm_values`` 遮蔽 config.sensitive.*。
+
+        收斂理由：原本 controller（自己 import secrets 生一份）與 model create()
+        各寫一次 ``token_urlsafe(24)``，同一條安全屬性散在兩處＝改強度時容易只改
+        一邊，且「密碼唯一性」測試找不到單一標的。所有生成路徑都必須呼叫這裡。
+        """
+        return secrets.token_urlsafe(24)
+
+    def _get_secret_record(self):
+        self.ensure_one()
+        return self.env['woow_paas_platform.cloud_service_secret'].sudo().search(
+            [('service_id', '=', self.id)],
+            limit=1,
+        )
+
+    def _set_admin_password_secret(self, admin_password):
+        self.ensure_one()
+        Secret = self.env['woow_paas_platform.cloud_service_secret'].sudo()
+        secret = self._get_secret_record()
+        vals = {'admin_password': admin_password, 'updated_at': fields.Datetime.now()}
+        if secret:
+            secret.write(vals)
+            return secret
+        return Secret.create(dict(vals, service_id=self.id))
+
+    def _build_mcp_sensitive_values(self, admin_password=None):
+        self.ensure_one()
+        if not self.template_id.has_admin_gui:
+            return {}
+        if admin_password is None:
+            secret = self._get_secret_record()
+            if not secret:
+                # #357 C03（方案 A）：secret 缺席回 {}，不 raise、不亂生密碼。
+                # 供給鏈接上前建立的 legacy 服務沒有 secret，redeploy 會走到這裡。
+                # 回 {} 讓 helm 沿用現有 Secret：這批服務的 chart Secret 本來就是
+                # config.secret.json="{}"（平台從沒供給過 admin_password）→「{} → {}」
+                # 零變化；chart deployment.yaml 的 config.json 是 write-only-if-absent，
+                # 既有 config.json 不動；chart 對 admin_password 無 self-generate
+                # （randAlphaNum 只給 app=n8n 的 authToken）→ 不會把密碼洗成空。
+                # 租戶要取得密碼走 reset 流程（唯一同時換 Secret + patch config.json 者）。
+                return {}
+            admin_password = secret.admin_password
+        return {'config': {'sensitive': {'admin_password': admin_password}}}
+
+    @staticmethod
+    def _strip_mcp_sensitive_values(values):
+        if not values or not isinstance(values, dict):
+            return values
+        result = json.loads(json.dumps(values))
+        config = result.get('config')
+        if isinstance(config, dict):
+            config.pop('sensitive', None)
+        return result
+
+    def _has_mcp_admin_secret(self):
+        self.ensure_one()
+        return bool(self.template_id.has_admin_gui and self._get_secret_record())
 
     def _build_mcp_sidecar_config(
         self, template, auth_token, api_key=None, helm_release_name=None,
@@ -1422,7 +1631,20 @@ class CloudService(models.Model):
         故泛化上限只能靠 advisory lock；單連線 TransactionCase 無法真並發，既有
         功能測試僅證非回歸、鎖的競態正確性靠與 provision 先例一致性 + code review。
         """
-        records = super().create(vals_list)
+        normalized_vals_list = []
+        for vals in vals_list:
+            normalized = dict(vals)
+            raw_values = normalized.get('helm_values')
+            if raw_values:
+                try:
+                    normalized['helm_values'] = json.dumps(
+                        self._strip_mcp_sensitive_values(json.loads(raw_values))
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            normalized_vals_list.append(normalized)
+
+        records = super().create(normalized_vals_list)
         # 收集需 enforcement 的 (template_id, partner_id)，排序去重後依序取鎖：
         # 排序消除多筆跨組的 lock-ordering 死鎖；max_per_partner=0 常態集合為空、零開銷。
         lock_pairs = sorted({
@@ -1442,6 +1664,13 @@ class CloudService(models.Model):
                     raise ValidationError(_(
                         '「%(tpl)s」每個帳號最多 %(limit)s 個實例，'
                         '您已達上限。', tpl=rec.template_id.name, limit=limit))
+        for rec in records.filtered(lambda r: r.template_id.has_admin_gui):
+            if not rec._get_secret_record():
+                secret_password = self.env.context.get('mcp_admin_password')
+                if not secret_password:
+                    # #357 C20：走單一生成點，不在此處自行 token_urlsafe。
+                    secret_password = self._generate_admin_password()
+                rec._set_admin_password_secret(secret_password)
         return records
 
     def unlink(self):

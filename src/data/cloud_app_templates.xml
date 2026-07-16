@@ -272,7 +272,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "7b5944c483779b35f74903b9a875440a06577888@sha256:f76fc569565aadeff34d5a7a6515b89959d9136f0c349f4f0f0d0a4073d67876"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "7b5944c483779b35f74903b9a875440a06577888@sha256:f76fc569565aadeff34d5a7a6515b89959d9136f0c349f4f0f0d0a4073d67876"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -286,6 +286,13 @@
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
+            <!-- #357 C01：image 內建 mcp-admin-core admin GUI，需平台供給
+                 admin_password（與 mcp_enabled 正交，見 cloud_app_template.py）。
+                 migration：本 xmlid 首建即在 noupdate=0 塊（cloud_app_mcp_odoo /
+                 cloud_app_mcp_n8n＝commit a4863518 2026-07-01、cloud_app_mcp_odoo_manage
+                 ＝6817eacd，皆晚於 noupdate=0 收斂 d1cb2e32 2026-04-06，git 實證），
+                 故既有 DB ir.model.data.noupdate=False、-u 直接重套，無需 migration。 -->
+            <field name="has_admin_gui" eval="True" />
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True" />
@@ -320,7 +327,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo-manage", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "5d321063fcefdbda729232a407b0dda51c328118@sha256:32cb6c7ddf2269daef6ce0f30e87449355a8e39048b97dd70b14ced6ddc762cb"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"nonSensitive": {"mcp_server": {"command": "mcp-server-odoo", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo-manage", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "5d321063fcefdbda729232a407b0dda51c328118@sha256:32cb6c7ddf2269daef6ce0f30e87449355a8e39048b97dd70b14ced6ddc762cb"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "mcp-server-odoo", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -332,6 +339,13 @@
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
+            <!-- #357 C01：image 內建 mcp-admin-core admin GUI，需平台供給
+                 admin_password（與 mcp_enabled 正交，見 cloud_app_template.py）。
+                 migration：本 xmlid 首建即在 noupdate=0 塊（cloud_app_mcp_odoo /
+                 cloud_app_mcp_n8n＝commit a4863518 2026-07-01、cloud_app_mcp_odoo_manage
+                 ＝6817eacd，皆晚於 noupdate=0 收斂 d1cb2e32 2026-04-06，git 實證），
+                 故既有 DB ir.model.data.noupdate=False、-u 直接重套，無需 migration。 -->
+            <field name="has_admin_gui" eval="True" />
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True" />
@@ -375,7 +389,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "ed098b6070cde0c74ed0bccb47a33d6fdf40d9c6@sha256:618ac675b85501f5e204b51286284d4b52d487de1b6593d6dcc1e6db8525dcc7"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "ed098b6070cde0c74ed0bccb47a33d6fdf40d9c6@sha256:618ac675b85501f5e204b51286284d4b52d487de1b6593d6dcc1e6db8525dcc7"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -389,6 +403,13 @@
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
+            <!-- #357 C01：image 內建 mcp-admin-core admin GUI，需平台供給
+                 admin_password（與 mcp_enabled 正交，見 cloud_app_template.py）。
+                 migration：本 xmlid 首建即在 noupdate=0 塊（cloud_app_mcp_odoo /
+                 cloud_app_mcp_n8n＝commit a4863518 2026-07-01、cloud_app_mcp_odoo_manage
+                 ＝6817eacd，皆晚於 noupdate=0 收斂 d1cb2e32 2026-04-06，git 實證），
+                 故既有 DB ir.model.data.noupdate=False、-u 直接重套，無需 migration。 -->
+            <field name="has_admin_gui" eval="True" />
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True" />

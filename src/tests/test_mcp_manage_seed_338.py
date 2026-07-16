@@ -15,6 +15,8 @@ class TestMcpManageTemplateSeed(TransactionCase):
         self.assertFalse(tpl.mcp_enabled, 'MCP 內建於 body、非 sidecar（比照三 MCP admin）')
         values = json.loads(tpl.helm_default_values)
         self.assertIn('odoo-manage-mcp-admin', values['image']['repository'])
+        self.assertTrue(values['config']['requireFields'])
+        self.assertEqual(values['config']['sensitive'], {})
 
     def test_image_tag_is_pinned_digest(self):
         """上架必須釘死 digest（不得留 latest 佔位）——雙釘 git-sha@sha256。"""

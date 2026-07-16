@@ -164,6 +164,24 @@ class CloudAppTemplate(models.Model):
              'MCP sidecar (as env var).',
     )
 
+    # Admin GUI Configuration（#357）
+    # 與上方 mcp_enabled 正交，勿混用：mcp_enabled＝「外掛一顆 MCP sidecar container」
+    # 的部署形態；has_admin_gui＝「image 內建 mcp-admin-core 的 admin GUI、需平台供給
+    # admin_password」的供給契約。三個 standalone MCP template（mcp-odoo /
+    # mcp-odoo-manage / mcp-n8n）MCP 內建於 body 故 mcp_enabled=False，卻都需要
+    # admin_password；反之 cloud_app_n8n（plain n8n + n8n-mcp sidecar）mcp_enabled=True
+    # 但沒有 admin-core GUI、不需要。用 mcp_enabled 當 admin_password 供給鏈的閘門會
+    # 同時錯放與錯擋（#357 根因 C01）——本欄位是該供給鏈的 single source of truth，
+    # model（cloud_service）與 controller（paas）兩端都必須讀它、不得自建 slug allowlist。
+    has_admin_gui = fields.Boolean(
+        string='Admin GUI 內建',
+        default=False,
+        help='image 內建 mcp-admin-core 的 admin GUI，需平台供給 admin_password '
+             '（建立服務時生成、存入 cloud_service_secret、經 Helm sensitive values '
+             '注入）。與「Enable MCP Sidecar」正交：MCP 內建於 body 的 template '
+             'mcp_enabled=False 但 has_admin_gui=True。',
+    )
+
     # Post-Deploy Initialization
     post_deploy_init_type = fields.Selection(
         selection=[

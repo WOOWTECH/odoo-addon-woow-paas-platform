@@ -405,6 +405,23 @@ export const cloudService = reactive({
         }
     },
 
+    async resetAdminPassword(workspaceId, serviceId) {
+        this.operationLoading.resetAdminPassword = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/reset-admin-password`,
+                {}
+            );
+            return result.success
+                ? { success: true, data: result.data }
+                : { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.resetAdminPassword = false;
+        }
+    },
+
     /**
      * Update/upgrade a service
      * @param {number} workspaceId - Workspace ID

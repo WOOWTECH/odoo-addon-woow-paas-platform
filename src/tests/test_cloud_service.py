@@ -1,8 +1,9 @@
 """Tests for Cloud Service model."""
+import json
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 
 
 class TestCloudService(TransactionCase):
@@ -109,6 +110,57 @@ class TestCloudService(TransactionCase):
         self.assertEqual(service.helm_revision, 1)
         self.assertIn('replicas', service.helm_values)
 
+    def test_mcp_service_secret_is_stored_separately(self):
+        template = self.Template.create({
+            'name': 'MCP Template',
+            'slug': 'mcp-odoo',
+            'category': 'mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'mcp-server',
+            'helm_chart_version': '1.0.0',
+            # #357 C01：對齊真實 seed 形態——MCP 內建於 body（mcp_enabled=False），
+            # admin_password 供給鏈的閘門是 has_admin_gui。
+            'mcp_enabled': False,
+            'has_admin_gui': True,
+        })
+        # #357 C19：fixture 必須「先塞入」config.sensitive.admin_password，create()
+        # 的 _strip_mcp_sensitive_values 才有東西可剝。原本 fixture 的 helm_values
+        # 根本沒有 sensitive 子樹 → assertNotIn 恆真 → 把 strip 實作整段刪掉測試照樣
+        # 綠（vacuous assertion＝零鑑別力，正是本輪 WIP 全是紙上綠的典型）。
+        service = self.Service.with_context(
+            mcp_admin_password='secret-password',
+        ).create({
+            'name': 'MCP Service',
+            'workspace_id': self.workspace.id,
+            'template_id': template.id,
+            'helm_values': json.dumps({
+                'config': {
+                    'sensitive': {'admin_password': 'must-be-stripped-at-create'},
+                    'nonSensitive': {'connection': {'url': 'https://tenant.example'}},
+                },
+            }),
+        })
+
+        self.assertNotIn('admin_password', self.Service._fields)
+        # 密碼不得留在 helm_values——它是 git / API / helm history 可見面。
+        stored = json.loads(service.helm_values)
+        self.assertNotIn(
+            'sensitive', stored['config'],
+            'create() 必須剝掉整個 config.sensitive 子樹（_strip_mcp_sensitive_values）')
+        self.assertNotIn('must-be-stripped-at-create', service.helm_values)
+        # 反向鎖：strip 不得誤傷 GUI 自填的 nonSensitive（改成整段清空 config 會紅）。
+        self.assertEqual(
+            stored['config']['nonSensitive']['connection'],
+            {'url': 'https://tenant.example'},
+            'strip 只能拿掉 sensitive，不得動 GUI 自填的 connection/tools')
+
+        secret = self.env['woow_paas_platform.cloud_service_secret'].search([
+            ('service_id', '=', service.id),
+        ], limit=1)
+        self.assertTrue(secret)
+        self.assertEqual(secret.admin_password, 'secret-password')
+        self.assertEqual(secret.service_id.id, service.id)
+
     def test_service_network_configuration(self):
         """Test network configuration fields."""
         service = self.Service.create({
@@ -163,6 +215,87 @@ class TestCloudService(TransactionCase):
 
         # Service should be deleted
         self.assertFalse(self.Service.browse(service_id).exists())
+
+    def test_secret_cascades_with_service(self):
+        template = self.Template.create({
+            'name': 'MCP Template',
+            'slug': 'mcp-odoo',
+            'category': 'mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'mcp-server',
+            'helm_chart_version': '1.0.0',
+            # #357 C01：對齊真實 seed 形態——MCP 內建於 body（mcp_enabled=False），
+            # admin_password 供給鏈的閘門是 has_admin_gui。
+            'mcp_enabled': False,
+            'has_admin_gui': True,
+        })
+        service = self.Service.with_context(
+            mcp_admin_password='secret-password',
+        ).create({
+            'name': 'Secret Cascade',
+            'workspace_id': self.workspace.id,
+            'template_id': template.id,
+        })
+        secret = self.env['woow_paas_platform.cloud_service_secret'].search([
+            ('service_id', '=', service.id),
+        ], limit=1)
+        self.assertTrue(secret.exists())
+
+        service.unlink()
+        self.assertFalse(secret.exists())
+
+    def test_secret_is_not_readable_by_regular_user(self):
+        template = self.Template.create({
+            'name': 'MCP Template',
+            'slug': 'mcp-odoo',
+            'category': 'mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'mcp-server',
+            'helm_chart_version': '1.0.0',
+            # #357 C01：對齊真實 seed 形態——MCP 內建於 body（mcp_enabled=False），
+            # admin_password 供給鏈的閘門是 has_admin_gui。
+            'mcp_enabled': False,
+            'has_admin_gui': True,
+        })
+        service = self.Service.with_context(
+            mcp_admin_password='secret-password',
+        ).create({
+            'name': 'Secret ACL',
+            'workspace_id': self.workspace.id,
+            'template_id': template.id,
+        })
+        secret_model = self.env['woow_paas_platform.cloud_service_secret']
+        # #357 C21：原本這裡直接引用未定義的 `secret` → NameError（而非 AccessError），
+        # 測試恆 ERROR＝整波從未真跑。先實證 C01 修好後 create() 真的建了 secret
+        # （C01 未修時 create() 用 mcp_enabled 過濾 → 空集合 → 這行就會紅），
+        # 再斷言 regular user 讀不到。
+        secret = secret_model.sudo().search([
+            ('service_id', '=', service.id),
+        ], limit=1)
+        self.assertTrue(
+            secret, '供給鏈接上後 create() 必須為 has_admin_gui template 建 secret')
+        self.assertEqual(secret.admin_password, 'secret-password')
+
+        # #357 C22：自建 regular user，不用 self.env.ref('base.user_demo')。
+        # demo user 只在「有載入 demo data」的 DB 存在：任何 --without-demo 的 DB
+        # （CI 常態）會在 env.ref 當場 ValueError＝整支 ERROR 而非 skip → 這條守著
+        # C05 提權洞的 ACL 斷言在那些環境**從未真的執行過**，是 false-green 的溫床。
+        # 自建 user 只依賴 base.group_user（base module 的 data、非 demo），讓本測試
+        # 在有無 demo data 的 DB 都真的跑得到 deny 分支。
+        regular_user = self.env['res.users'].create({
+            'name': 'Regular Tenant User',
+            'login': 'warden-c22-regular-user',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        # 上面的 sudo().search 已把 admin_password 讀進 cache，且 Odoo 的 cache 以
+        # (field, record id) 為 key、跨 env 共用（api.py:1117-1122），故 regular_user
+        # 的 env 看得到同一份。本例的 AccessError 其實來自 read() 在 fetch 前跑的
+        # model-level ACL 檢查（ir.model.access 只給 base.group_system），與 cache 無關
+        # ——invalidate_all 是保險，確保斷言測的是真 ACL 而非快取殘留。
+        self.env.invalidate_all()
+
+        with self.assertRaises(AccessError):
+            secret_model.with_user(regular_user).browse(secret.id).read(['admin_password'])
 
     def test_multiple_services_per_workspace(self):
         """Test creating multiple services in same workspace."""
@@ -609,4 +742,3 @@ class TestInjectStorageClass(TransactionCase):
         for slug in ('mcp-odoo', 'mcp-n8n'):
             out = CloudService._inject_storage_class({}, slug, 'sc-x')
             self.assertEqual(out['persistence']['storageClass'], 'sc-x')
-

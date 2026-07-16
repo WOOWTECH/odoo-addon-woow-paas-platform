@@ -251,6 +251,11 @@
                         </t>
                     </WoowButton>
                 </div>
+
+                <AdminPasswordModal
+                    t-if="state.adminPassword"
+                    password="state.adminPassword"
+                    onClose.bind="onAdminPasswordClose"/>
             </t>
         </div>
     </t>

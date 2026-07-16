@@ -89,6 +89,15 @@
                             Skip Trial
                         </WoowButton>
                         <WoowButton
+                            t-if="isMcpAdminService"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="resetAdminPassword"
+                            disabled="!canPerformActions or isResetAdminPasswordLoading">
+                            <WoowIcon name="'key'" size="18"/>
+                            Reset Admin Password
+                        </WoowButton>
+                        <WoowButton
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="showChangePlan"
@@ -126,6 +135,10 @@
                 <div t-if="service.error_message" class="o_woow_service_error_banner">
                     <WoowIcon name="'error'" size="20"/>
                     <span t-esc="service.error_message"/>
+                </div>
+                <div t-if="state.resetPasswordError" class="o_woow_service_error_banner">
+                    <WoowIcon name="'error'" size="20"/>
+                    <span t-esc="state.resetPasswordError"/>
                 </div>
 
                 <!-- Tab Navigation -->
@@ -226,6 +239,11 @@
                 cloudServiceName="service and service.name"
                 onClose.bind="hideCreateProject"
                 onCreated.bind="onProjectCreated"/>
+
+            <AdminPasswordModal
+                t-if="state.adminPassword"
+                password="state.adminPassword"
+                onClose.bind="closeAdminPassword"/>
         </div>
     </t>
 </templates>

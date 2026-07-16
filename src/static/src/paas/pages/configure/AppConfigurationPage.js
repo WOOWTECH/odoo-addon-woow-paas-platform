@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { HelmValueForm } from "../../components/config/HelmValueForm";
 import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddonSelector";
 import { PlanSelector } from "../../components/subscription/PlanSelector";
+import { AdminPasswordModal } from "../../components/modal/AdminPasswordModal";
 import { cloudService } from "../../services/cloud_service";
 import { workspaceService } from "../../services/workspace_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -17,7 +18,7 @@ import { router } from "../../core/router";
  */
 export class AppConfigurationPage extends Component {
     static template = "woow_paas_platform.AppConfigurationPage";
-    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, AdminPasswordModal };
     static props = {
         workspaceId: { type: Number },
         templateId: { type: Number },
@@ -42,6 +43,8 @@ export class AppConfigurationPage extends Component {
             // Launch state
             launching: false,
             launchError: null,
+            adminPassword: null,
+            createdServiceId: null,
         });
         this.router = useState(router);
 
@@ -304,9 +307,13 @@ export class AppConfigurationPage extends Component {
             const result = await cloudService.createService(this.props.workspaceId, payload);
 
             if (result.success) {
-                // Navigate to service detail page
                 const serviceId = result.data.id;
-                this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
+                if (result.data.admin_password) {
+                    this.state.adminPassword = result.data.admin_password;
+                    this.state.createdServiceId = serviceId;
+                } else {
+                    this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
+                }
             } else {
                 this.state.launchError = result.error || 'Failed to create service';
             }
@@ -322,5 +329,12 @@ export class AppConfigurationPage extends Component {
      */
     goBack() {
         this.router.navigate(`workspace/${this.props.workspaceId}/marketplace`);
+    }
+
+    onAdminPasswordClose() {
+        const serviceId = this.state.createdServiceId;
+        this.state.adminPassword = null;
+        this.state.createdServiceId = null;
+        this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
     }
 }

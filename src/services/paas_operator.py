@@ -275,6 +275,7 @@ class PaaSOperatorClient:
         repo_url: Optional[str] = None,
         version: Optional[str] = None,
         values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
         create_namespace: bool = False,
         expose: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -287,6 +288,7 @@ class PaaSOperatorClient:
             repo_url: Helm repository URL (optional, for adding repo)
             version: Chart version (optional)
             values: Helm values override
+            sensitive_values: Sensitive values merged in memory only
             create_namespace: Whether to create namespace if not exists
             expose: Cloudflare Tunnel expose configuration
                     e.g., {'enabled': True, 'subdomain': 'myapp', 'service_port': 8080}
@@ -315,13 +317,22 @@ class PaaSOperatorClient:
             data['version'] = version
         if values:
             data['values'] = values
+        if sensitive_values:
+            data['sensitive_values'] = sensitive_values
         if expose:
             data['expose'] = expose
             _logger.info("install_release: Adding expose config to request: %s", expose)
         else:
             _logger.info("install_release: No expose config provided")
 
-        _logger.debug("install_release: Full request data: %s", data)
+        _logger.debug(
+            "install_release: request namespace=%s release=%s chart=%s values_keys=%s sensitive_keys=%s",
+            namespace,
+            release_name,
+            chart,
+            sorted((values or {}).keys()),
+            sorted((sensitive_values or {}).keys()),
+        )
 
         return self._request(
             'POST',
@@ -353,6 +364,7 @@ class PaaSOperatorClient:
         namespace: str,
         release_name: str,
         values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
         version: Optional[str] = None,
         chart: Optional[str] = None,
         reset_values: bool = False,
@@ -385,10 +397,61 @@ class PaaSOperatorClient:
             data['version'] = version
         if values:
             data['values'] = values
+        if sensitive_values:
+            data['sensitive_values'] = sensitive_values
 
         return self._request(
             'PATCH',
             f'/api/releases/{namespace}/{release_name}',
+            data=data,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def reset_release_config(
+        self,
+        namespace: str,
+        release_name: str,
+        values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
+        chart: Optional[str] = None,
+        version: Optional[str] = None,
+        reuse_values: bool = True,
+    ) -> Dict[str, Any]:
+        """#357 外科式 reset admin_password（read-modify-write config.json + 重啟）。
+
+        Operator 端點內部 read-modify-write ``/data/config.json`` 只替換
+        ``admin_password`` leaf（保留 connection/tools/mcp_server.env/token_history），
+        helm upgrade 對齊 Secret，rollout_restart_deployment 讓 ConfigStore
+        cache 從新檔讀。比「砍整份 + re-seed」少一次完整 PVC 重置。
+
+        Args:
+            namespace: helm release namespace
+            release_name: helm release name
+            values: 新 values（非敏感）
+            sensitive_values: 新敏感值（須含 config.sensitive.admin_password）
+            chart: chart ref（如需升版；通常省略）
+            version: chart version（如需升版）
+            reuse_values: 複用既有 release values（default True）
+
+        Returns:
+            Operator 回應 dict（含 helm_revision、config_json_patched、helm_upgraded）
+
+        Raises:
+            PaaSOperatorError: 任一子步失敗
+        """
+        data: Dict[str, Any] = {'reuse_values': reuse_values}
+        if values:
+            data['values'] = values
+        if sensitive_values:
+            data['sensitive_values'] = sensitive_values
+        if chart:
+            data['chart'] = chart
+        if version:
+            data['version'] = version
+
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/reset-config',
             data=data,
             timeout=HELM_OPERATION_TIMEOUT,
         )
