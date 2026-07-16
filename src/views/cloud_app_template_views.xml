@@ -61,6 +61,12 @@
                             <group>
                                 <field name="mcp_enabled"/>
                             </group>
+                            <!-- #357：與 mcp_enabled 正交（MCP 內建於 body 的
+                                 template mcp_enabled=False 但 has_admin_gui=True），
+                                 故不放進下方 invisible="not mcp_enabled" 區塊。 -->
+                            <group string="Admin GUI（平台供給 admin_password）">
+                                <field name="has_admin_gui"/>
+                            </group>
                             <group invisible="not mcp_enabled">
                                 <group string="Sidecar Image">
                                     <field name="mcp_sidecar_image"
@@ -97,6 +103,7 @@
                 <field name="helm_chart_name"/>
                 <field name="helm_chart_version"/>
                 <field name="mcp_enabled"/>
+                <field name="has_admin_gui"/>
                 <field name="is_active"/>
             </list>
         </field>

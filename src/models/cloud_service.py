@@ -401,9 +401,9 @@ class CloudService(models.Model):
                 "Service has no helm release yet — deploy first before resetting password."
             )
 
-        secret = self._get_secret_record()
-        if self.template_id.mcp_enabled and not secret:
-            raise UserError("Missing admin password secret for this MCP service.")
+        # #357 C03：不檢查既有 secret。reset 是「重新生成並下發」而非「讀舊密碼」，
+        # 舊 secret 缺席（legacy 服務建立時平台尚未供給 admin_password）不是錯誤——
+        # 這正是租戶要 reset 的情境。_set_admin_password_secret 會 create-or-write。
 
         # Generate a strong random password (~32 chars url-safe base64).
         new_password = secrets.token_urlsafe(24)
@@ -810,12 +810,20 @@ class CloudService(models.Model):
 
     def _build_mcp_sensitive_values(self, admin_password=None):
         self.ensure_one()
-        if not self.template_id.mcp_enabled:
+        if not self.template_id.has_admin_gui:
             return {}
         if admin_password is None:
             secret = self._get_secret_record()
             if not secret:
-                raise UserError("Missing admin password secret for this MCP service.")
+                # #357 C03（方案 A）：secret 缺席回 {}，不 raise、不亂生密碼。
+                # 供給鏈接上前建立的 legacy 服務沒有 secret，redeploy 會走到這裡。
+                # 回 {} 讓 helm 沿用現有 Secret：這批服務的 chart Secret 本來就是
+                # config.secret.json="{}"（平台從沒供給過 admin_password）→「{} → {}」
+                # 零變化；chart deployment.yaml 的 config.json 是 write-only-if-absent，
+                # 既有 config.json 不動；chart 對 admin_password 無 self-generate
+                # （randAlphaNum 只給 app=n8n 的 authToken）→ 不會把密碼洗成空。
+                # 租戶要取得密碼走 reset 流程（唯一同時換 Secret + patch config.json 者）。
+                return {}
             admin_password = secret.admin_password
         return {'config': {'sensitive': {'admin_password': admin_password}}}
 
@@ -831,7 +839,7 @@ class CloudService(models.Model):
 
     def _has_mcp_admin_secret(self):
         self.ensure_one()
-        return bool(self.template_id.mcp_enabled and self._get_secret_record())
+        return bool(self.template_id.has_admin_gui and self._get_secret_record())
 
     def _build_mcp_sidecar_config(
         self, template, auth_token, api_key=None, helm_release_name=None,
@@ -1579,7 +1587,7 @@ class CloudService(models.Model):
                     raise ValidationError(_(
                         '「%(tpl)s」每個帳號最多 %(limit)s 個實例，'
                         '您已達上限。', tpl=rec.template_id.name, limit=limit))
-        for rec in records.filtered(lambda r: r.template_id.mcp_enabled):
+        for rec in records.filtered(lambda r: r.template_id.has_admin_gui):
             if not rec._get_secret_record():
                 secret_password = self.env.context.get('mcp_admin_password')
                 if not secret_password:

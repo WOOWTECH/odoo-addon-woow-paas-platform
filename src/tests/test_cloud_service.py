@@ -117,7 +117,10 @@ class TestCloudService(TransactionCase):
             'helm_repo_url': 'https://charts.example.com',
             'helm_chart_name': 'mcp-server',
             'helm_chart_version': '1.0.0',
-            'mcp_enabled': True,
+            # #357 C01：對齊真實 seed 形態——MCP 內建於 body（mcp_enabled=False），
+            # admin_password 供給鏈的閘門是 has_admin_gui。
+            'mcp_enabled': False,
+            'has_admin_gui': True,
         })
         service = self.Service.with_context(
             mcp_admin_password='secret-password',
@@ -201,7 +204,10 @@ class TestCloudService(TransactionCase):
             'helm_repo_url': 'https://charts.example.com',
             'helm_chart_name': 'mcp-server',
             'helm_chart_version': '1.0.0',
-            'mcp_enabled': True,
+            # #357 C01：對齊真實 seed 形態——MCP 內建於 body（mcp_enabled=False），
+            # admin_password 供給鏈的閘門是 has_admin_gui。
+            'mcp_enabled': False,
+            'has_admin_gui': True,
         })
         service = self.Service.with_context(
             mcp_admin_password='secret-password',
@@ -226,7 +232,10 @@ class TestCloudService(TransactionCase):
             'helm_repo_url': 'https://charts.example.com',
             'helm_chart_name': 'mcp-server',
             'helm_chart_version': '1.0.0',
-            'mcp_enabled': True,
+            # #357 C01：對齊真實 seed 形態——MCP 內建於 body（mcp_enabled=False），
+            # admin_password 供給鏈的閘門是 has_admin_gui。
+            'mcp_enabled': False,
+            'has_admin_gui': True,
         })
         service = self.Service.with_context(
             mcp_admin_password='secret-password',
@@ -236,7 +245,21 @@ class TestCloudService(TransactionCase):
             'template_id': template.id,
         })
         secret_model = self.env['woow_paas_platform.cloud_service_secret']
+        # #357 C21：原本這裡直接引用未定義的 `secret` → NameError（而非 AccessError），
+        # 測試恆 ERROR＝整波從未真跑。先實證 C01 修好後 create() 真的建了 secret
+        # （C01 未修時 create() 用 mcp_enabled 過濾 → 空集合 → 這行就會紅），
+        # 再斷言 regular user 讀不到。
+        secret = secret_model.sudo().search([
+            ('service_id', '=', service.id),
+        ], limit=1)
+        self.assertTrue(
+            secret, '供給鏈接上後 create() 必須為 has_admin_gui template 建 secret')
+        self.assertEqual(secret.admin_password, 'secret-password')
+
         demo_user = self.env.ref('base.user_demo')
+        # 上面的 sudo().search 已把值讀進 cache；不清掉的話 read() 可能吃 cache
+        # 而非真打 ACL（cache priming 假綠）。
+        self.env.invalidate_all()
 
         with self.assertRaises(AccessError):
             secret_model.with_user(demo_user).browse(secret.id).read(['admin_password'])

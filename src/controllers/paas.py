@@ -1256,8 +1256,8 @@ class PaasController(HiddenChainMixin, Controller):
     def api_service_reset_admin_password(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
         """#357 重置 mcp admin password（一次性顯示新密碼）。
 
-        三 template（mcp-odoo / mcp-odoo-manage / mcp-n8n）限定；非此三 template
-        回 400。流程：model.action_reset_admin_password 重生成強隨機密碼 → operator
+        限 ``template.has_admin_gui``（image 內建 admin GUI、由平台供給 admin_password）
+        的 template；其餘回 400。流程：model.action_reset_admin_password 重生成強隨機密碼 → operator
         POST /api/releases/{ns}/{name}/reset-config → operator 內部 read-modify-write
         config.json + helm upgrade + rollout_restart。
 
@@ -1282,12 +1282,15 @@ class PaasController(HiddenChainMixin, Controller):
         if (not service.exists() or service.workspace_id.id != workspace_id):
             return {'success': False, 'error': 'Service not found'}
 
-        template_slug = service.template_id.slug
-        if template_slug not in ('mcp-odoo', 'mcp-odoo-manage', 'mcp-n8n'):
+        # #357 C01：判別器讀 template.has_admin_gui，與 model 端（cloud_service
+        # create/_build_mcp_sensitive_values）收斂到同一判準。原本這裡是 slug
+        # allowlist、model 端卻判 mcp_enabled → 兩端不一致（controller 放行並生密碼、
+        # model 過濾成空集合不建 secret）＝密碼永不生效的根因。
+        if not service.template_id.has_admin_gui:
             return {
                 'success': False,
-                'error': 'Reset admin password is only supported on mcp-odoo / '
-                         'mcp-odoo-manage / mcp-n8n templates',
+                'error': 'Reset admin password is only supported on templates '
+                         'with a built-in admin GUI',
             }
 
         try:
@@ -2267,11 +2270,12 @@ class PaasController(HiddenChainMixin, Controller):
             )
             merged_values = self._deep_merge(merged_values, api_key_nested)
 
-        # #357: 對 standalone MCP template（odoo / odoo-manage / n8n）生成
-        # admin_password。密碼只放進 cloud_service_secret + 一次性 response，
-        # 不寫回 helm_values。
+        # #357: 對 admin GUI 內建的 template 生成 admin_password。密碼只放進
+        # cloud_service_secret + 一次性 response，不寫回 helm_values。
+        # C01：判別器＝template.has_admin_gui（與 model 端 create() 供給閘門同源），
+        # 不用 slug allowlist——否則新增 template 要兩處各補一次、且與 model 端會漂移。
         admin_password = None
-        if template.slug in ('mcp-odoo', 'mcp-odoo-manage', 'mcp-n8n'):
+        if template.has_admin_gui:
             admin_password = self._generate_admin_password()
             _logger.info(
                 "[#357] generated admin_password for service '%s' (template=%s)",

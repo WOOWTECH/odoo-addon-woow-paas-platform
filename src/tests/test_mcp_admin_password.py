@@ -20,7 +20,10 @@ class TestMcpAdminPassword(TransactionCase):
             'category': 'mcp',
             'helm_chart_name': 'oci://example/mcp-server',
             'helm_chart_version': '0.1.5',
-            'mcp_enabled': True,
+            # #357 C01：對齊真實 seed 形態——MCP 內建於 body（mcp_enabled=False），
+            # admin_password 供給鏈的閘門是 has_admin_gui。
+            'mcp_enabled': False,
+            'has_admin_gui': True,
         })
         self.service = self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',
@@ -114,3 +117,96 @@ class TestMcpAdminPassword(TransactionCase):
             client.reset_release_config.call_args.kwargs['sensitive_values'],
             {'config': {'sensitive': {'admin_password': new_password}}},
         )
+
+    # ------------------------------------------------------------------
+    # #357 C01/C03：admin_password 供給鏈（create → secret → helm sensitive）
+    # ------------------------------------------------------------------
+
+    def _secret_of(self, service):
+        return self.env['woow_paas_platform.cloud_service_secret'].sudo().search(
+            [('service_id', '=', service.id)], limit=1,
+        )
+
+    def test_create_supplies_admin_password_end_to_end(self):
+        """C01 正面全鏈：has_admin_gui template 建 CS → 密碼落 secret →
+        _build_mcp_sensitive_values 產出 helm 要吃的 config.sensitive.admin_password。
+
+        修復前：create() 用 mcp_enabled 過濾（三個目標 template 皆 False）→ 空集合 →
+        secret 從不建立 → 這裡的 assertTrue(secret) 紅。
+        """
+        secret = self._secret_of(self.service)
+        self.assertTrue(secret, 'has_admin_gui template 必須在 create() 就備妥 secret')
+        self.assertEqual(secret.admin_password, 'old-password')
+
+        # 供給鏈末端：helm 實際會收到的 sensitive values。
+        self.assertEqual(
+            self.service._build_mcp_sensitive_values(),
+            {'config': {'sensitive': {'admin_password': 'old-password'}}},
+        )
+        self.assertTrue(self.service._has_mcp_admin_secret())
+        # 密碼不得外洩到 helm_values（git/API 可見面）。
+        self.assertNotIn('old-password', self.service.helm_values or '')
+
+    def test_sidecar_template_without_admin_gui_gets_no_password(self):
+        """C01 負面（判別器鑑別力）：mcp_enabled=True 但 has_admin_gui=False——
+        即 cloud_app_n8n（plain n8n + n8n-mcp sidecar）的形態——不該被供給
+        admin_password：它沒有 mcp-admin-core 的 admin GUI，chart 也不吃這條路徑。
+
+        這支是「判別器真的從 mcp_enabled 換成 has_admin_gui」的證據：修復前
+        create() 判 mcp_enabled → 會為它建 secret（錯放）→ assertFalse 紅。
+        """
+        sidecar_tmpl = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'Sidecar-backed n8n',
+            'slug': 'n8n-sidecar-test',
+            'helm_chart_name': 'oci://example/n8n',
+            'helm_chart_version': '1.0.0',
+            'mcp_enabled': True,      # 外掛 sidecar
+            'has_admin_gui': False,   # 但沒有 admin-core GUI
+        })
+        service = self.env['woow_paas_platform.cloud_service'].with_context(
+            mcp_admin_password='should-not-be-stored',
+        ).create({
+            'name': 'Sidecar n8n',
+            'workspace_id': self.workspace.id,
+            'template_id': sidecar_tmpl.id,
+        })
+        self.assertFalse(
+            self._secret_of(service),
+            'mcp_enabled 是 sidecar 語意，不得觸發 admin_password 供給')
+        self.assertEqual(service._build_mcp_sensitive_values(), {})
+        self.assertFalse(service._has_mcp_admin_secret())
+
+    def test_legacy_service_without_secret_yields_empty_sensitive_values(self):
+        """C03（方案 A）：secret 缺席回 {}，不 raise。
+
+        供給鏈接上前建立的 legacy 服務沒有 secret，redeploy 會走到這裡。修復前是
+        raise UserError → 既有服務一 redeploy 就炸。回 {} 讓 helm 沿用現有 Secret：
+        這批服務的 chart Secret 本來就是 config.secret.json="{}"（平台從沒供給過
+        admin_password）→「{} → {}」零變化。
+        """
+        # 製造 legacy 形態：has_admin_gui=True 但 secret 不存在。
+        self._secret_of(self.service).unlink()
+        self.assertFalse(self._secret_of(self.service))
+
+        self.assertEqual(
+            self.service._build_mcp_sensitive_values(), {},
+            'secret 缺席應回 {} 沿用現有 Secret，不得 raise 也不得亂生密碼')
+        self.assertFalse(self.service._has_mcp_admin_secret())
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_reset_backfills_secret_for_legacy_service(self, get_client):
+        """C03 配套：reset 不需要舊密碼。legacy 服務（secret 缺席）reset 應成功並
+        補建 secret——這正是租戶取得密碼的路徑。修復前 action_reset_admin_password
+        開頭的 `if mcp_enabled and not secret: raise` 會擋掉（且判別器還是錯的）。
+        """
+        get_client.return_value = MagicMock()
+        self._secret_of(self.service).unlink()
+        self.assertFalse(self._secret_of(self.service))
+
+        new_password = self.service.action_reset_admin_password()
+
+        secret = self._secret_of(self.service)
+        self.assertTrue(secret, 'reset 應為 legacy 服務補建 secret')
+        self.assertEqual(secret.admin_password, new_password)
