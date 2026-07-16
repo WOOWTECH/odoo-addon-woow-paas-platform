@@ -1257,7 +1257,7 @@ class PaasController(HiddenChainMixin, Controller):
         """#357 重置 mcp admin password（一次性顯示新密碼）。
 
         限 ``template.has_admin_gui``（image 內建 admin GUI、由平台供給 admin_password）
-        的 template；其餘回 400。流程：model.action_reset_admin_password 重生成強隨機密碼 → operator
+        的 template；其餘回 400。流程：model._reset_admin_password 重生成強隨機密碼 → operator
         POST /api/releases/{ns}/{name}/reset-config → operator 內部 read-modify-write
         config.json + helm upgrade + rollout_restart。
 
