@@ -2,6 +2,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
+from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
@@ -92,7 +93,7 @@ class TestMcpAdminPassword(TransactionCase):
         client = MagicMock()
         get_client.return_value = client
 
-        new_password = self.service.action_reset_admin_password()
+        new_password = self.service._reset_admin_password()
 
         self.assertNotEqual(new_password, 'old-password')
         values = json.loads(self.service.helm_values)
@@ -124,6 +125,110 @@ class TestMcpAdminPassword(TransactionCase):
             client.reset_release_config.call_args.kwargs['sensitive_values'],
             {'config': {'sensitive': {'admin_password': new_password}}},
         )
+
+    # ------------------------------------------------------------------
+    # #357 C11：逾時語意 —— 落庫在後 + 冪等重試
+    # ------------------------------------------------------------------
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_timeout_keeps_stored_password_and_says_status_unknown(self, get_client):
+        """C11：逾時 → 不落庫、不謊稱失敗。
+
+        client 預算（120s）與 operator 的 saga 預算是兩回事，且 operator 的
+        handler 是同步的——client 斷線不會取消它。所以逾時＝「狀態不明」，
+        不是「沒發生」。不落庫是為了守住不變式：DB 有的密碼＝叢集真正生效的。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorTimeoutError,
+        )
+        client = MagicMock()
+        client.reset_release_config.side_effect = PaaSOperatorTimeoutError(
+            message='Request to PaaS Operator timed out',
+        )
+        get_client.return_value = client
+        before = self._secret_of(self.service).admin_password
+
+        with self.assertRaises(UserError) as caught:
+            self.service._reset_admin_password()
+
+        # 「失敗」會誤導租戶關掉 modal → 叢集可能已輪換成沒人握有的密碼。
+        self.assertIn('status unknown', str(caught.exception).lower())
+        self.assertNotIn('reset failed', str(caught.exception).lower())
+        self.assertEqual(
+            self._secret_of(self.service).admin_password, before,
+            'C11：逾時不得落庫——否則 DB 存的密碼可能從未在叢集生效',
+        )
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_reset_is_retryable_after_timeout(self, get_client):
+        """C11：逾時後 state 仍是 running → 重按當下就成立（冪等收斂）。
+
+        逾時的 raise 發生在 write state 之前，所以 record 沒有中間狀態卡住。
+        重按會生成新密碼再跑一遍 saga，叢集與 DB 最終收斂到最新那次。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorTimeoutError,
+        )
+        client = MagicMock()
+        client.reset_release_config.side_effect = PaaSOperatorTimeoutError(
+            message='Request to PaaS Operator timed out',
+        )
+        get_client.return_value = client
+        with self.assertRaises(UserError):
+            self.service._reset_admin_password()
+
+        self.assertEqual(
+            self.service.state, 'running',
+            'C11：逾時不得留下中間狀態，否則 :394 的 guard 會擋掉重試',
+        )
+
+        client.reset_release_config.side_effect = None
+        retried = self.service._reset_admin_password()
+
+        self.assertNotEqual(retried, 'old-password')
+        self.assertEqual(self._secret_of(self.service).admin_password, retried)
+        self.assertEqual(client.reset_release_config.call_count, 2)
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_non_timeout_failure_still_reads_as_failed(self, get_client):
+        """C11 的另一半：真失敗仍要說失敗，否則「狀態不明」就沒有訊號價值。"""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorAPIError,
+        )
+        client = MagicMock()
+        client.reset_release_config.side_effect = PaaSOperatorAPIError(
+            message='reset-config: failed to update the chart Secret',
+            status_code=500,
+        )
+        get_client.return_value = client
+        before = self._secret_of(self.service).admin_password
+
+        with self.assertRaises(UserError) as caught:
+            self.service._reset_admin_password()
+
+        self.assertIn('reset failed', str(caught.exception).lower())
+        self.assertEqual(self._secret_of(self.service).admin_password, before)
+
+    def test_reset_while_upgrading_explains_the_wait(self):
+        """C11：成功 reset 會 stamp 'upgrading'，租戶立刻重按會撞到這裡。
+
+        通用訊息（must be running）讀起來像壞掉，但 cron 每分鐘就會翻回
+        running。訊息要講「在更新中、稍候」而不是「必須是 running」。
+        """
+        self.service.state = 'upgrading'
+
+        with self.assertRaises(UserError) as caught:
+            self.service._reset_admin_password()
+
+        message = str(caught.exception).lower()
+        self.assertIn('update', message)
+        self.assertNotIn('must be running', message)
 
     # ------------------------------------------------------------------
     # #357 C01/C03：admin_password 供給鏈（create → secret → helm sensitive）
@@ -222,7 +327,7 @@ class TestMcpAdminPassword(TransactionCase):
         self._secret_of(self.service).unlink()
         self.assertFalse(self._secret_of(self.service))
 
-        new_password = self.service.action_reset_admin_password()
+        new_password = self.service._reset_admin_password()
 
         secret = self._secret_of(self.service)
         self.assertTrue(secret, 'reset 應為 legacy 服務補建 secret')
