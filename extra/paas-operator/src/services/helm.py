@@ -1741,7 +1741,7 @@ class KubernetesService:
         Args:
             namespace: Namespace name
             pod_name: Pod name
-            container: Container name
+            container: Container name (empty → kubectl default = first container)
             command: Command to execute
             timeout: Timeout in seconds
 
@@ -1753,12 +1753,15 @@ class KubernetesService:
         """
         validate_namespace(namespace)
 
-        args = [
-            "exec", pod_name,
-            "--namespace", namespace,
-            "--container", container,
-            "--",
-        ] + command
+        args = ["exec", pod_name, "--namespace", namespace]
+        # kubectl ``--container <empty>`` is rejected; fall through to its default
+        # (first container) when caller doesn't pin one — needed for pods whose
+        # release name matches the chart main container but we don't want to
+        # hardcode a per-chart container name in this generic helper.
+        if container:
+            args.extend(["--container", container])
+        args.append("--")
+        args.extend(command)
 
         cmd = [self.kubectl_bin] + args
         logger.info(f"Executing: {' '.join(cmd)}")

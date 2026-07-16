@@ -393,6 +393,51 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def reset_release_config(
+        self,
+        namespace: str,
+        release_name: str,
+        values: Optional[Dict[str, Any]] = None,
+        chart: Optional[str] = None,
+        version: Optional[str] = None,
+        reuse_values: bool = True,
+    ) -> Dict[str, Any]:
+        """#357 外科式 reset admin_password（read-modify-write config.json + 重啟）。
+
+        Operator 端點內部 read-modify-write ``/data/config.json`` 只替換
+        ``admin_password`` leaf（保留 connection/tools/mcp_server.env/token_history），
+        helm upgrade 對齊 Secret，rollout_restart_deployment 讓 ConfigStore
+        cache 從新檔讀。比「砍整份 + re-seed」少一次完整 PVC 重置。
+
+        Args:
+            namespace: helm release namespace
+            release_name: helm release name
+            values: 新 values（須含 config.sensitive.admin_password）
+            chart: chart ref（如需升版；通常省略）
+            version: chart version（如需升版）
+            reuse_values: 複用既有 release values（default True）
+
+        Returns:
+            Operator 回應 dict（含 helm_revision、config_json_patched、helm_upgraded）
+
+        Raises:
+            PaaSOperatorError: 任一子步失敗
+        """
+        data: Dict[str, Any] = {'reuse_values': reuse_values}
+        if values:
+            data['values'] = values
+        if chart:
+            data['chart'] = chart
+        if version:
+            data['version'] = version
+
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/reset-config',
+            data=data,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def uninstall_release(
         self,
         namespace: str,

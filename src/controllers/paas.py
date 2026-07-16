@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from odoo import fields
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 from odoo.http import request, route, Controller
 
 from .ha_paas import HiddenChainMixin
@@ -1252,6 +1252,71 @@ class PaasController(HiddenChainMixin, Controller):
 
         return self._rollback_service(service, revision)
 
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/reset-admin-password", auth="user", methods=["POST"], type="json")
+    def api_service_reset_admin_password(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
+        """#357 重置 mcp admin password（一次性顯示新密碼）。
+
+        三 template（mcp-odoo / mcp-odoo-manage / mcp-n8n）限定；非此三 template
+        回 400。流程：model.action_reset_admin_password 重生成強隨機密碼 → operator
+        POST /api/releases/{ns}/{name}/reset-config → operator 內部 read-modify-write
+        config.json + helm upgrade + rollout_restart。
+
+        Returns:
+            success=true 帶 data.admin_password 明文（一次性）
+            success=false 帶 error
+        """
+        Workspace = request.env['woow_paas_platform.workspace']
+        CloudService = request.env['woow_paas_platform.cloud_service']
+
+        workspace = Workspace.browse(workspace_id)
+        if not workspace.exists():
+            return {'success': False, 'error': 'Workspace not found or access denied'}
+
+        access = workspace.check_user_access(
+            request.env.user, required_role=ROLE_ADMIN,
+        )
+        if not access:
+            return {'success': False, 'error': 'Workspace not found or access denied'}
+
+        service = CloudService.browse(service_id)
+        if (not service.exists() or service.workspace_id.id != workspace_id):
+            return {'success': False, 'error': 'Service not found'}
+
+        template_slug = service.template_id.slug
+        if template_slug not in ('mcp-odoo', 'mcp-odoo-manage', 'mcp-n8n'):
+            return {
+                'success': False,
+                'error': 'Reset admin password is only supported on mcp-odoo / '
+                         'mcp-odoo-manage / mcp-n8n templates',
+            }
+
+        try:
+            new_password = service.action_reset_admin_password()
+        except UserError as e:
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.error(
+                "[#357] reset-admin-password failed for service %s: %s\n%s",
+                service.id, str(e), traceback.format_exc(),
+            )
+            return {
+                'success': False,
+                'error': 'Reset failed. Check operator logs for details.',
+            }
+
+        return {
+            'success': True,
+            'data': {
+                'service_id': service.id,
+                'admin_password': new_password,
+                'revealed_at': fields.Datetime.to_string(
+                    service.admin_password_revealed_at,
+                ) if service.admin_password_revealed_at else None,
+                'message': 'Admin password reset. Save the new password now — '
+                           'it will not be shown again.',
+            },
+        }
+
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/revisions", auth="user", methods=["POST"], type="json")
     def api_service_revisions(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
         """
@@ -1962,21 +2027,39 @@ class PaasController(HiddenChainMixin, Controller):
     def _sanitize_helm_values(values: dict, template: Any) -> dict:
         """Remove secret values from helm_values before exposing in API responses.
 
-        Replaces values under 'secret' keys with masked versions to prevent
-        leaking credentials (e.g., N8N_API_KEY) through the service API.
+        Replaces values under both 'secret' (legacy n8n_owner_password pattern)
+        AND ``config.sensitive`` (mcp-admin-core secret channel — admin_password
+        等) keys with masked versions. Without the ``config.sensitive`` mask,
+        the service-detail API (#3004) leaks admin_password 明文 to every
+        authenticated workspace member (#357 security fix).
+
+        Mask surface: prefix 8 chars + '...' when long enough, else '***'.
+        Depth bounded at 5 to bound CPU on adversarial payloads.
         """
         if not values:
             return values
+
+        def _mask_value(v):
+            if not v:
+                return '***'
+            sv = str(v)
+            return f'{sv[:8]}...' if len(sv) > 8 else '***'
 
         def _mask_secrets(d: dict, depth: int = 0) -> dict:
             result = {}
             for key, val in d.items():
                 if key == 'secret' and isinstance(val, dict):
-                    # Mask all values under 'secret' keys
-                    result[key] = {
-                        k: f'{str(v)[:8]}...' if v and len(str(v)) > 8 else '***'
-                        for k, v in val.items()
-                    }
+                    # legacy N8N_API_KEY / etc under top-level 'secret'
+                    result[key] = {k: _mask_value(v) for k, v in val.items()}
+                elif (
+                    key == 'sensitive'
+                    and isinstance(val, dict)
+                    and isinstance(d.get('config'), dict)
+                ):
+                    # mcp-server chart sensitive channel: mask every leaf under
+                    # config.sensitive (admin_password, mcp_auth_token,
+                    # connection.*, proxy.bearer_token).
+                    result[key] = {k: _mask_value(v) for k, v in val.items()}
                 elif isinstance(val, dict) and depth < 5:
                     result[key] = _mask_secrets(val, depth + 1)
                 else:
@@ -2072,6 +2155,19 @@ class PaasController(HiddenChainMixin, Controller):
             'data': data,
             'count': len(data),
         }
+
+    @staticmethod
+    def _generate_admin_password():
+        """#357: 生成一次性 mcp admin password（每 CS 唯一、~32 chars url-safe）。
+
+        ``secrets.token_urlsafe(24)`` 給 ~32 chars url-safe base64 編碼，強度足
+        mcp-admin-core 明文比對（auth/middleware.py:46 secrets.compare_digest）；
+        注入 chart ``config.sensitive.admin_password`` → Secret → seed-config
+        initContainer 寫入 /data/config.json。明文只在建立/reset 成功 response
+        回傳一次，後續 API 走 _sanitize_helm_values 遮 config.sensitive.*。
+        """
+        import secrets as _secrets
+        return _secrets.token_urlsafe(24)
 
     def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
@@ -2172,6 +2268,23 @@ class PaasController(HiddenChainMixin, Controller):
             )
             merged_values = self._deep_merge(merged_values, api_key_nested)
 
+        # #357: 對 standalone MCP template（odoo / odoo-manage / n8n）生成
+        # admin_password，注入 chart config.sensitive.admin_password。chart
+        # seed-config initContainer 寫入 /data/config.json，租戶登入 GUI 用。
+        # 一次性顯示：建立成功 response.data.admin_password 回明文，後續 GET
+        # 走 _sanitize_helm_values 遮 config.sensitive.*，平台不再提供明文。
+        admin_password = None
+        if template.slug in ('mcp-odoo', 'mcp-odoo-manage', 'mcp-n8n'):
+            admin_password = self._generate_admin_password()
+            merged_values = self._deep_merge(
+                merged_values,
+                {'config': {'sensitive': {'admin_password': admin_password}}},
+            )
+            _logger.info(
+                "[#357] generated admin_password for service '%s' (template=%s)",
+                name, template.name,
+            )
+
         # #332：部署前把選定 plan 的 cs_* 規格 overlay 進 helm values
         # （runtime overlay，template seed 不動；cs_* 全 0＝與現狀 bit-for-bit 相同）
         merged_values = CloudService._apply_plan_spec_overlay(
@@ -2199,6 +2312,12 @@ class PaasController(HiddenChainMixin, Controller):
                 service_vals['n8n_owner_email'] = init_params['owner_email']
             if init_params.get('owner_password'):
                 service_vals['n8n_owner_password'] = init_params['owner_password']
+            # #357: 一次性 admin_password 寫進 record + revealed_at。CS record 內
+            # admin_password 與 helm_values.config.sensitive.admin_password 同步；
+            # 兩者皆明文儲存（同 n8n_owner_password 既有模式）。
+            if admin_password:
+                service_vals['admin_password'] = admin_password
+                service_vals['admin_password_revealed_at'] = fields.Datetime.now()
 
             # Resolve Odoo addon selection (with dependency expansion)
             resolved_addon_ids = []
@@ -2252,9 +2371,15 @@ class PaasController(HiddenChainMixin, Controller):
             if cron:
                 cron._trigger()
 
+            resp_data = self._format_service(service)
+            # #357: 一次性顯示密碼。建立成功時唯一一次回明文，前端 modal copy 後
+            # 下次 GET 走 _sanitize_helm_values 遮 config.sensitive.*，record 內
+            # admin_password 仍明文（同 n8n_owner_password 模式）。
+            if admin_password:
+                resp_data['admin_password'] = admin_password
             return {
                 'success': True,
-                'data': self._format_service(service),
+                'data': resp_data,
             }
 
         except Exception as e:
@@ -2345,7 +2470,8 @@ class PaasController(HiddenChainMixin, Controller):
             # the service record, e.g. n8n_owner_password). They are NOT Helm values and
             # must never be merged into helm_values on reconfigure — doing so would
             # persist the admin password in plaintext and echo it back unmasked via the
-            # service-detail API (_sanitize_helm_values only masks 'secret' dicts).
+            # service-detail API (_sanitize_helm_values masks 'secret' dicts AND
+            # #357 config.sensitive.* — both secret channels).
             filtered_user_values = {k: v for k, v in filtered_user_values.items() if not k.startswith('_init.')}
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)

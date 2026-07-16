@@ -1,5 +1,6 @@
 import json
 import logging
+import secrets
 import uuid
 
 from odoo import _, api, fields, models
@@ -228,6 +229,27 @@ class CloudService(models.Model):
         readonly=True,
         groups='base.group_system',
     )
+    # #357: mcp-admin-core /api/auth/login 明文比對（auth/middleware.py:46）。
+    # 平台 CS 建立時生成 → 注入 chart config.sensitive.admin_password → seed-config
+    # initContainer 寫入 /data/config.json → GUI 登入。一次性顯示：建立/reset
+    # 成功 response 回明文，後續 GET service-detail 走 _sanitize_helm_values 遮
+    # config.sensitive.* → 平台不再提供明文（除 helm_values 同欄位 DB 內仍明文
+    # 儲存供後續 helm upgrade 同步）。revealed_at 給 UI 顯示「已揭示」狀態，
+    # 但不提供明文回取 API。
+    admin_password = fields.Char(
+        string='MCP Admin Password',
+        readonly=True,
+        groups='base.group_system',
+        help='#357: Platform-generated admin password for the MCP admin GUI. '
+        '明文只在 create/reset 成功 response 回傳一次，之後不再提供明文回取。'
+        '實際值同步在 helm_values.config.sensitive.admin_password。',
+    )
+    admin_password_revealed_at = fields.Datetime(
+        string='MCP Admin Password Revealed At',
+        readonly=True,
+        help='#357: 最近一次明文揭示給用戶的時間。UI 用此顯示狀態、'
+        '無明文回取 API。',
+    )
 
     # Timestamps
     deployed_at = fields.Datetime(
@@ -363,6 +385,83 @@ class CloudService(models.Model):
                 cron._trigger()
 
         return True
+
+    # #357 — admin_password 重置
+    # ------------------------------------------------------------------ #
+
+    def action_reset_admin_password(self):
+        """#357 外科式 reset mcp admin password（保留 GUI 自填 connection/tools）。
+
+        流程：
+        1. 重生成 ``secrets.token_urlsafe(24)`` 強隨機密碼
+        2. deep-merge 進 ``helm_values.config.sensitive.admin_password``
+        3. 寫新密碼到 ``self.admin_password`` 欄位（同 n8n_owner_password 模式）
+        4. 戳 ``admin_password_revealed_at = now``
+        5. 呼叫 operator 新端點 ``POST /api/releases/{ns}/{name}/reset-config``
+           → 內部：read-modify-write /data/config.json（保留其他 leaf）
+                   → helm upgrade（Secret 對齊）
+                   → rollout_restart_deployment（Recreate 觸發 ConfigStore cache 重建）
+        6. 成功 → ``state='upgrading'``（讓 cron/前端 poll 觀察 pod）
+                   **回傳明文密碼**（controller 包成 response.data）
+        7. 失敗 → ``state='error'`` + error_message、**不回明文**
+
+        chart seed-if-absent 在 /data/config.json 存在時 skip seed，純 helm upgrade
+        無法讓新密碼生效；故走 operator 的 read-modify-write 走 surgical 路線。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorError,
+        )
+
+        if not (self.helm_release_name and self.helm_namespace):
+            raise UserError(
+                "Service has no helm release yet — deploy first before resetting password."
+            )
+
+        # Generate a strong random password (~32 chars url-safe base64).
+        new_password = secrets.token_urlsafe(24)
+
+        # deep-merge into helm_values.config.sensitive.admin_password.
+        values = json.loads(self.helm_values) if self.helm_values else {}
+        values.setdefault('config', {}).setdefault('sensitive', {})['admin_password'] = new_password
+
+        # Build payload for operator reset-config endpoint. chart Secret slot is
+        # /seed/secret/config.secret.json → operator only needs the new
+        # sensitive fragment; reuse_values=True keeps the rest of the chart values.
+        operator_values = {'config': {'sensitive': {'admin_password': new_password}}}
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError("PaaS Operator not configured. Contact administrator.")
+
+        try:
+            client.reset_release_config(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+                chart=self.template_id.helm_chart_name,
+                version=self.template_id.helm_chart_version,
+                values=operator_values,
+                reuse_values=True,
+            )
+        except PaaSOperatorError as e:
+            _logger.error(
+                "reset-admin-password failed for service %s (id=%s): %s",
+                self.name, self.id, e.detail or e.message,
+            )
+            raise UserError(
+                f"Reset failed: {e.detail or e.message}"
+            ) from e
+
+        # Persist new state + persist the new password on the record.
+        self.write({
+            'helm_values': json.dumps(values),
+            'admin_password': new_password,
+            'admin_password_revealed_at': fields.Datetime.now(),
+            'state': 'upgrading',
+            'error_message': False,
+        })
+        return new_password
 
     # ------------------------------------------------------------------ #
     #  Cron: process pending deployments                                  #
