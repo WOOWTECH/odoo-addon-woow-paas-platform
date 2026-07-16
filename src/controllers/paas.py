@@ -1294,7 +1294,15 @@ class PaasController(HiddenChainMixin, Controller):
             }
 
         try:
-            new_password = service.action_reset_admin_password()
+            # #357 C05：model 端刻意是 private（_reset_admin_password）——它回傳明文
+            # 密碼，而授權只有上面那道 ROLE_ADMIN gate。public 命名會讓任何 workspace
+            # 成員經 /web/dataset/call_kw 繞過本 gate 直接拿密碼，見 model 端 docstring。
+            # 本 endpoint 是該 method 的唯一 entry（grep action_reset/_reset_admin_password
+            # 全 repo 確認：無其他 controller、無 XML view button）。
+            # 刻意「不」用 sudo()：method 內部對 secret 的讀寫已自行 sudo，外層保持
+            # current-user env，ir.rule 才會繼續驗這位 admin 對該 service 的可及性
+            # （sudo 會連這層一起關掉，等於把 workspace 邊界交給本 handler 獨力承擔）。
+            new_password = service._reset_admin_password()
         except UserError as e:
             return {'success': False, 'error': str(e)}
         except Exception as e:
@@ -2039,17 +2047,31 @@ class PaasController(HiddenChainMixin, Controller):
             return values
 
         def _mask_value(v):
+            """Legacy top-level ``secret`` 子樹：保留 8 字元前綴。
+
+            n8n 既有 UI 靠前綴辨識是哪把 key（N8N_API_KEY 等），故此處維持原狀。
+            """
             if not v:
                 return '***'
             sv = str(v)
             return f'{sv[:8]}...' if len(sv) > 8 else '***'
 
-        def _mask_secret_tree(value):
+        def _mask_value_fully(v):
+            """#357 C19：``config.sensitive.*`` 一律全遮、**不留前綴**。
+
+            遮罩是「_strip_mcp_sensitive_values 失效時」的第二道防線，第二道防線
+            自身不該洩漏任何明文：admin_password 走 mcp-admin-core 的明文比對
+            （secrets.compare_digest），前 8 字元對攻擊者是實打實的熵折損。
+            與 _mask_value 的差別是刻意的——見該函式 docstring。
+            """
+            return '***'
+
+        def _mask_secret_tree(value, masker=_mask_value):
             if isinstance(value, dict):
-                return {key: _mask_secret_tree(item) for key, item in value.items()}
+                return {key: _mask_secret_tree(item, masker) for key, item in value.items()}
             if isinstance(value, list):
-                return [_mask_secret_tree(item) for item in value]
-            return _mask_value(value)
+                return [_mask_secret_tree(item, masker) for item in value]
+            return masker(value)
 
         def _mask_secrets(d: dict, path: tuple[str, ...] = (), depth: int = 0) -> dict:
             result = {}
@@ -2062,7 +2084,9 @@ class PaasController(HiddenChainMixin, Controller):
                     # mcp-server chart sensitive channel: mask every leaf under
                     # config.sensitive (admin_password, mcp_auth_token,
                     # connection.*, proxy.bearer_token).
-                    result[key] = _mask_secret_tree(val)
+                    # #357 C19：這條分支用 _mask_value_fully（無前綴）——不同於上面
+                    # legacy 'secret' 分支刻意保留的 8 字元前綴。
+                    result[key] = _mask_secret_tree(val, _mask_value_fully)
                 elif isinstance(val, dict) and depth < 5:
                     result[key] = _mask_secrets(val, child_path, depth + 1)
                 else:
@@ -2161,15 +2185,14 @@ class PaasController(HiddenChainMixin, Controller):
 
     @staticmethod
     def _generate_admin_password():
-        """#357: 生成一次性 mcp admin password（每 CS 唯一、~32 chars url-safe）。
+        """#357 C20：委派給 model 的單一生成點，不在 controller 另生一份。
 
-        ``secrets.token_urlsafe(24)`` 給 ~32 chars url-safe base64 編碼，強度足
-        mcp-admin-core 明文比對（auth/middleware.py:46 secrets.compare_digest）；
-        只在建立/reset 成功 response 回傳一次，後續 API 走
-        _sanitize_helm_values 遮 config.sensitive.*。
+        原本這裡自己 ``import secrets`` 再 ``token_urlsafe(24)``，與
+        ``CloudService._generate_admin_password`` / create() 是同一條安全屬性
+        寫三處——改強度時容易只改一邊，且唯一性測試沒有單一標的可鎖。
+        保留本 wrapper 只為不動既有 controller 呼叫點的命名。
         """
-        import secrets as _secrets
-        return _secrets.token_urlsafe(24)
+        return request.env['woow_paas_platform.cloud_service']._generate_admin_password()
 
     def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
