@@ -2,7 +2,7 @@
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 
 
 class TestCloudService(TransactionCase):
@@ -109,6 +109,35 @@ class TestCloudService(TransactionCase):
         self.assertEqual(service.helm_revision, 1)
         self.assertIn('replicas', service.helm_values)
 
+    def test_mcp_service_secret_is_stored_separately(self):
+        template = self.Template.create({
+            'name': 'MCP Template',
+            'slug': 'mcp-odoo',
+            'category': 'mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'mcp-server',
+            'helm_chart_version': '1.0.0',
+            'mcp_enabled': True,
+        })
+        service = self.Service.with_context(
+            mcp_admin_password='secret-password',
+        ).create({
+            'name': 'MCP Service',
+            'workspace_id': self.workspace.id,
+            'template_id': template.id,
+            'helm_values': '{"config": {"nonSensitive": {"connection": {"url": "https://tenant.example"}}}}',
+        })
+
+        self.assertNotIn('admin_password', self.Service._fields)
+        self.assertNotIn('admin_password', service.helm_values)
+
+        secret = self.env['woow_paas_platform.cloud_service_secret'].search([
+            ('service_id', '=', service.id),
+        ], limit=1)
+        self.assertTrue(secret)
+        self.assertEqual(secret.admin_password, 'secret-password')
+        self.assertEqual(secret.service_id.id, service.id)
+
     def test_service_network_configuration(self):
         """Test network configuration fields."""
         service = self.Service.create({
@@ -163,6 +192,54 @@ class TestCloudService(TransactionCase):
 
         # Service should be deleted
         self.assertFalse(self.Service.browse(service_id).exists())
+
+    def test_secret_cascades_with_service(self):
+        template = self.Template.create({
+            'name': 'MCP Template',
+            'slug': 'mcp-odoo',
+            'category': 'mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'mcp-server',
+            'helm_chart_version': '1.0.0',
+            'mcp_enabled': True,
+        })
+        service = self.Service.with_context(
+            mcp_admin_password='secret-password',
+        ).create({
+            'name': 'Secret Cascade',
+            'workspace_id': self.workspace.id,
+            'template_id': template.id,
+        })
+        secret = self.env['woow_paas_platform.cloud_service_secret'].search([
+            ('service_id', '=', service.id),
+        ], limit=1)
+        self.assertTrue(secret.exists())
+
+        service.unlink()
+        self.assertFalse(secret.exists())
+
+    def test_secret_is_not_readable_by_regular_user(self):
+        template = self.Template.create({
+            'name': 'MCP Template',
+            'slug': 'mcp-odoo',
+            'category': 'mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'mcp-server',
+            'helm_chart_version': '1.0.0',
+            'mcp_enabled': True,
+        })
+        service = self.Service.with_context(
+            mcp_admin_password='secret-password',
+        ).create({
+            'name': 'Secret ACL',
+            'workspace_id': self.workspace.id,
+            'template_id': template.id,
+        })
+        secret_model = self.env['woow_paas_platform.cloud_service_secret']
+        demo_user = self.env.ref('base.user_demo')
+
+        with self.assertRaises(AccessError):
+            secret_model.with_user(demo_user).browse(secret.id).read(['admin_password'])
 
     def test_multiple_services_per_workspace(self):
         """Test creating multiple services in same workspace."""
@@ -609,4 +686,3 @@ class TestInjectStorageClass(TransactionCase):
         for slug in ('mcp-odoo', 'mcp-n8n'):
             out = CloudService._inject_storage_class({}, slug, 'sc-x')
             self.assertEqual(out['persistence']['storageClass'], 'sc-x')
-

@@ -95,6 +95,41 @@ def _redact_cmd(cmd: List[str]) -> List[str]:
     return redacted
 
 
+def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge_dicts(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _sanitize_release_values(values: Any) -> Any:
+    def _mask_tree(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {key: _mask_tree(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [_mask_tree(item) for item in node]
+        return "***"
+
+    def _walk(node: Any, path: tuple[str, ...] = ()) -> Any:
+        if isinstance(node, dict):
+            result: Dict[str, Any] = {}
+            for key, value in node.items():
+                child_path = path + (key,)
+                if key == "secret" or child_path[-2:] == ("config", "sensitive"):
+                    result[key] = _mask_tree(value)
+                else:
+                    result[key] = _walk(value, child_path)
+            return result
+        if isinstance(node, list):
+            return [_walk(item, path) for item in node]
+        return node
+
+    return _walk(values)
+
+
 def validate_namespace(namespace: str) -> None:
     """Validate that namespace starts with allowed prefix."""
     prefix = settings.namespace_prefix
@@ -407,6 +442,7 @@ class HelmService:
         name: str,
         chart: str,
         values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
         version: Optional[str] = None,
         create_namespace: bool = False,
         repo: Optional[str] = None,
@@ -420,6 +456,7 @@ class HelmService:
             name: Release name
             chart: Chart reference
             values: Values override
+            sensitive_values: Sensitive values merged in memory only
             version: Chart version
             create_namespace: Create namespace if not exists
             repo: Optional classic Helm repo URL for stateless fetch (--repo).
@@ -470,14 +507,18 @@ class HelmService:
         if password:
             args.extend(["--password", password])
 
+        merged_values = values or {}
+        if sensitive_values:
+            merged_values = _deep_merge_dicts(merged_values, sensitive_values)
+
         # Write values to temp file if provided
-        if values:
+        if merged_values:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".yaml", delete=False
             ) as f:
                 import yaml
 
-                yaml.dump(values, f)
+                yaml.dump(merged_values, f)
                 args.extend(["--values", f.name])
                 temp_file = f.name
 
@@ -486,7 +527,7 @@ class HelmService:
             release_data = json.loads(result.stdout)
             return self._parse_release_info(release_data)
         finally:
-            if values:
+            if merged_values:
                 Path(temp_file).unlink(missing_ok=True)
 
     def get(self, namespace: str, name: str) -> ReleaseInfo:
@@ -530,6 +571,7 @@ class HelmService:
         name: str,
         chart: Optional[str] = None,
         values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
         version: Optional[str] = None,
         reset_values: bool = False,
         reuse_values: bool = True,
@@ -545,6 +587,7 @@ class HelmService:
             name: Release name
             chart: Chart reference (full URL like oci://... or repo/chart)
             values: Values override
+            sensitive_values: Sensitive values merged in memory only
             version: Chart version
             reset_values: Reset to chart default values
             reuse_values: Reuse last release values
@@ -605,13 +648,17 @@ class HelmService:
         if password:
             args.extend(["--password", password])
 
-        if values:
+        merged_values = values or {}
+        if sensitive_values:
+            merged_values = _deep_merge_dicts(merged_values, sensitive_values)
+
+        if merged_values:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".yaml", delete=False
             ) as f:
                 import yaml
 
-                yaml.dump(values, f)
+                yaml.dump(merged_values, f)
                 args.extend(["--values", f.name])
                 temp_file = f.name
 
@@ -620,7 +667,7 @@ class HelmService:
             release_data = json.loads(result.stdout)
             return self._parse_release_info(release_data)
         finally:
-            if values:
+            if merged_values:
                 Path(temp_file).unlink(missing_ok=True)
 
     def uninstall(self, namespace: str, name: str) -> Dict[str, str]:
@@ -741,7 +788,7 @@ class HelmService:
             app_version=chart_metadata.get("appVersion", ""),
             updated=info.get("last_deployed", ""),
             description=info.get("description"),
-            values=data.get("config"),
+            values=_sanitize_release_values(data.get("config")),
         )
 
     def _parse_list_release_info(self, data: Dict[str, Any]) -> ReleaseInfo:

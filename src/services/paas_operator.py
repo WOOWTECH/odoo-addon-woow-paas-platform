@@ -275,6 +275,7 @@ class PaaSOperatorClient:
         repo_url: Optional[str] = None,
         version: Optional[str] = None,
         values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
         create_namespace: bool = False,
         expose: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -287,6 +288,7 @@ class PaaSOperatorClient:
             repo_url: Helm repository URL (optional, for adding repo)
             version: Chart version (optional)
             values: Helm values override
+            sensitive_values: Sensitive values merged in memory only
             create_namespace: Whether to create namespace if not exists
             expose: Cloudflare Tunnel expose configuration
                     e.g., {'enabled': True, 'subdomain': 'myapp', 'service_port': 8080}
@@ -315,13 +317,22 @@ class PaaSOperatorClient:
             data['version'] = version
         if values:
             data['values'] = values
+        if sensitive_values:
+            data['sensitive_values'] = sensitive_values
         if expose:
             data['expose'] = expose
             _logger.info("install_release: Adding expose config to request: %s", expose)
         else:
             _logger.info("install_release: No expose config provided")
 
-        _logger.debug("install_release: Full request data: %s", data)
+        _logger.debug(
+            "install_release: request namespace=%s release=%s chart=%s values_keys=%s sensitive_keys=%s",
+            namespace,
+            release_name,
+            chart,
+            sorted((values or {}).keys()),
+            sorted((sensitive_values or {}).keys()),
+        )
 
         return self._request(
             'POST',
@@ -353,6 +364,7 @@ class PaaSOperatorClient:
         namespace: str,
         release_name: str,
         values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
         version: Optional[str] = None,
         chart: Optional[str] = None,
         reset_values: bool = False,
@@ -385,6 +397,8 @@ class PaaSOperatorClient:
             data['version'] = version
         if values:
             data['values'] = values
+        if sensitive_values:
+            data['sensitive_values'] = sensitive_values
 
         return self._request(
             'PATCH',
@@ -398,6 +412,7 @@ class PaaSOperatorClient:
         namespace: str,
         release_name: str,
         values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
         chart: Optional[str] = None,
         version: Optional[str] = None,
         reuse_values: bool = True,
@@ -412,7 +427,8 @@ class PaaSOperatorClient:
         Args:
             namespace: helm release namespace
             release_name: helm release name
-            values: 新 values（須含 config.sensitive.admin_password）
+            values: 新 values（非敏感）
+            sensitive_values: 新敏感值（須含 config.sensitive.admin_password）
             chart: chart ref（如需升版；通常省略）
             version: chart version（如需升版）
             reuse_values: 複用既有 release values（default True）
@@ -426,6 +442,8 @@ class PaaSOperatorClient:
         data: Dict[str, Any] = {'reuse_values': reuse_values}
         if values:
             data['values'] = values
+        if sensitive_values:
+            data['sensitive_values'] = sensitive_values
         if chart:
             data['chart'] = chart
         if version:

@@ -23,6 +23,7 @@ from src.models.schemas import (
 )
 from src.services.cloudflare import CloudflareException, CloudflareService
 from src.services.helm import HelmException, HelmService, KubectlException, KubernetesService
+from src.services.helm import _sanitize_release_values
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/releases", tags=["releases"])
@@ -67,9 +68,12 @@ async def create_release(request: ReleaseCreateRequest):
             name=request.name,
             chart=request.chart,
             values=values,
+            sensitive_values=request.sensitive_values,
             version=request.version,
             create_namespace=request.create_namespace,
         )
+        if release.values is not None:
+            release.values = _sanitize_release_values(release.values)
         logger.info(f"Installed release {request.name} in {request.namespace}")
 
         # Handle Cloudflare Tunnel route creation if expose is enabled
@@ -168,10 +172,13 @@ def upgrade_release(
             name=name,
             chart=request.chart,
             values=request.values,
+            sensitive_values=request.sensitive_values,
             version=request.version,
             reset_values=request.reset_values,
             reuse_values=request.reuse_values,
         )
+        if release.values is not None:
+            release.values = _sanitize_release_values(release.values)
         logger.info(f"Upgraded release {name} in {namespace}")
         return release
 
@@ -534,14 +541,14 @@ def reset_release_config(
     """
     _validate_namespace_or_raise(namespace)
 
-    if not request.values:
+    if not request.sensitive_values:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reset-config requires values containing new admin_password",
+            detail="reset-config requires sensitive_values containing new admin_password",
         )
 
     new_password = (
-        (request.values or {})
+        (request.sensitive_values or {})
         .get("config", {})
         .get("sensitive", {})
         .get("admin_password")
@@ -549,7 +556,7 @@ def reset_release_config(
     if not new_password or not isinstance(new_password, str):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="values.config.sensitive.admin_password is required",
+            detail="sensitive_values.config.sensitive.admin_password is required",
         )
 
     try:
@@ -559,6 +566,7 @@ def reset_release_config(
             name=name,
             chart=request.chart,
             values=request.values,
+            sensitive_values=request.sensitive_values,
             version=request.version,
             reuse_values=request.reuse_values,
             atomic=True,
@@ -602,7 +610,7 @@ def reset_release_config(
             input_data=json.dumps({"admin_password": new_password}),
         )
     except KubectlException as e:
-        _rollback_reset(
+        recovery_failed = _rollback_reset(
             # The exec connection can fail after the atomic rename. Treat the
             # write as applied unless proven otherwise, so recovery never leaves
             # a potentially patched config.json behind.
@@ -610,7 +618,11 @@ def reset_release_config(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="reset-config: failed to patch config.json; chart Secret restored",
+            detail=(
+                "reset-config: failed to patch config.json; previous password restored"
+                if not recovery_failed else
+                "reset-config: failed to patch config.json and recovery failed; operator intervention required"
+            ),
         ) from e
 
     try:

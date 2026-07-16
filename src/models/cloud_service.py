@@ -306,7 +306,10 @@ class CloudService(models.Model):
         if release_exists:
             # Upgrade in-place — preserves PVCs and data
             template = self.template_id
-            values = json.loads(self.helm_values) if self.helm_values else None
+            values = self._strip_mcp_sensitive_values(
+                json.loads(self.helm_values) if self.helm_values else None
+            )
+            sensitive_values = self._build_mcp_sensitive_values()
             try:
                 release_info = client.upgrade_release(
                     namespace=self.helm_namespace,
@@ -314,6 +317,7 @@ class CloudService(models.Model):
                     chart=template.helm_chart_name,
                     version=template.helm_chart_version,
                     values=values,
+                    sensitive_values=sensitive_values or None,
                     reuse_values=True,
                 )
             except PaaSOperatorError as e:
@@ -370,19 +374,8 @@ class CloudService(models.Model):
     def action_reset_admin_password(self):
         """#357 外科式 reset mcp admin password（保留 GUI 自填 connection/tools）。
 
-        流程：
-        1. 重生成 ``secrets.token_urlsafe(24)`` 強隨機密碼
-        2. deep-merge 進 ``helm_values.config.sensitive.admin_password``
-        3. 呼叫 operator 新端點 ``POST /api/releases/{ns}/{name}/reset-config``
-           → atomic Helm Secret upgrade + config.json leaf patch + rollout
-           → 任一失敗由 operator rollback，不回傳新密碼
-        4. 成功後才把新值寫入 helm_values，避免平台／Secret 不一致
-        5. 成功 → ``state='upgrading'``（讓 cron/前端 poll 觀察 pod）
-                   **回傳明文密碼**（controller 包成 response.data）
-        6. 失敗 → **不回明文**
-
-        chart seed-if-absent 在 /data/config.json 存在時 skip seed，純 helm upgrade
-        無法讓新密碼生效；故走 operator 的 read-modify-write 走 surgical 路線。
+        密碼只短暫存在記憶體與 ``cloud_service_secret``；不寫回 ``helm_values``。
+        先用 current user 的存取規則驗證 service，再 sudo 讀寫該 service 的 secret。
         """
         self.ensure_one()
         from ..services.paas_operator import (
@@ -408,17 +401,16 @@ class CloudService(models.Model):
                 "Service has no helm release yet — deploy first before resetting password."
             )
 
+        secret = self._get_secret_record()
+        if self.template_id.mcp_enabled and not secret:
+            raise UserError("Missing admin password secret for this MCP service.")
+
         # Generate a strong random password (~32 chars url-safe base64).
         new_password = secrets.token_urlsafe(24)
-
-        # deep-merge into helm_values.config.sensitive.admin_password.
-        values = json.loads(self.helm_values) if self.helm_values else {}
-        values.setdefault('config', {}).setdefault('sensitive', {})['admin_password'] = new_password
-
-        # Build payload for operator reset-config endpoint. chart Secret slot is
-        # /seed/secret/config.secret.json → operator only needs the new
-        # sensitive fragment; reuse_values=True keeps the rest of the chart values.
-        operator_values = {'config': {'sensitive': {'admin_password': new_password}}}
+        values = self._strip_mcp_sensitive_values(
+            json.loads(self.helm_values) if self.helm_values else {}
+        )
+        operator_sensitive_values = self._build_mcp_sensitive_values(new_password)
 
         client = get_paas_operator_client(self.env)
         if not client:
@@ -430,7 +422,8 @@ class CloudService(models.Model):
                 release_name=self.helm_release_name,
                 chart=self.template_id.helm_chart_name,
                 version=self.template_id.helm_chart_version,
-                values=operator_values,
+                values=values,
+                sensitive_values=operator_sensitive_values or None,
                 reuse_values=True,
             )
         except PaaSOperatorError as e:
@@ -440,9 +433,9 @@ class CloudService(models.Model):
             )
             raise UserError("Reset failed. Check service status and retry.") from e
 
-        # Persist new state + persist the new password on the record.
+        self._set_admin_password_secret(new_password)
+
         self.write({
-            'helm_values': json.dumps(values),
             'state': 'upgrading',
             'error_message': False,
         })
@@ -503,7 +496,9 @@ class CloudService(models.Model):
         template = self.template_id
         helm_namespace = self.helm_namespace
         helm_release_name = self.helm_release_name
-        merged_values = json.loads(self.helm_values) if self.helm_values else {}
+        merged_values = self._strip_mcp_sensitive_values(
+            json.loads(self.helm_values) if self.helm_values else {}
+        )
 
         # Inject StorageClass for PVC lifecycle management
         storage_class = self.env['ir.config_parameter'].sudo().get_param(
@@ -537,6 +532,8 @@ class CloudService(models.Model):
                     merged_values[key].update(val)
                 else:
                     merged_values[key] = val
+
+        sensitive_values = self._build_mcp_sensitive_values()
 
         # Recover deploy params stored at creation time
         params = json.loads(self.deploy_params) if self.deploy_params else {}
@@ -576,6 +573,7 @@ class CloudService(models.Model):
                 repo_url=template.helm_repo_url,
                 version=template.helm_chart_version,
                 values=merged_values,
+                sensitive_values=sensitive_values or None,
                 create_namespace=True,
                 expose=expose_config,
             )
@@ -792,6 +790,48 @@ class CloudService(models.Model):
             existing.append(secret_name)
         values['global']['imagePullSecrets'] = existing
         return values
+
+    def _get_secret_record(self):
+        self.ensure_one()
+        return self.env['woow_paas_platform.cloud_service_secret'].sudo().search(
+            [('service_id', '=', self.id)],
+            limit=1,
+        )
+
+    def _set_admin_password_secret(self, admin_password):
+        self.ensure_one()
+        Secret = self.env['woow_paas_platform.cloud_service_secret'].sudo()
+        secret = self._get_secret_record()
+        vals = {'admin_password': admin_password, 'updated_at': fields.Datetime.now()}
+        if secret:
+            secret.write(vals)
+            return secret
+        return Secret.create(dict(vals, service_id=self.id))
+
+    def _build_mcp_sensitive_values(self, admin_password=None):
+        self.ensure_one()
+        if not self.template_id.mcp_enabled:
+            return {}
+        if admin_password is None:
+            secret = self._get_secret_record()
+            if not secret:
+                raise UserError("Missing admin password secret for this MCP service.")
+            admin_password = secret.admin_password
+        return {'config': {'sensitive': {'admin_password': admin_password}}}
+
+    @staticmethod
+    def _strip_mcp_sensitive_values(values):
+        if not values or not isinstance(values, dict):
+            return values
+        result = json.loads(json.dumps(values))
+        config = result.get('config')
+        if isinstance(config, dict):
+            config.pop('sensitive', None)
+        return result
+
+    def _has_mcp_admin_secret(self):
+        self.ensure_one()
+        return bool(self.template_id.mcp_enabled and self._get_secret_record())
 
     def _build_mcp_sidecar_config(
         self, template, auth_token, api_key=None, helm_release_name=None,
@@ -1506,7 +1546,20 @@ class CloudService(models.Model):
         故泛化上限只能靠 advisory lock；單連線 TransactionCase 無法真並發，既有
         功能測試僅證非回歸、鎖的競態正確性靠與 provision 先例一致性 + code review。
         """
-        records = super().create(vals_list)
+        normalized_vals_list = []
+        for vals in vals_list:
+            normalized = dict(vals)
+            raw_values = normalized.get('helm_values')
+            if raw_values:
+                try:
+                    normalized['helm_values'] = json.dumps(
+                        self._strip_mcp_sensitive_values(json.loads(raw_values))
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            normalized_vals_list.append(normalized)
+
+        records = super().create(normalized_vals_list)
         # 收集需 enforcement 的 (template_id, partner_id)，排序去重後依序取鎖：
         # 排序消除多筆跨組的 lock-ordering 死鎖；max_per_partner=0 常態集合為空、零開銷。
         lock_pairs = sorted({
@@ -1526,6 +1579,12 @@ class CloudService(models.Model):
                     raise ValidationError(_(
                         '「%(tpl)s」每個帳號最多 %(limit)s 個實例，'
                         '您已達上限。', tpl=rec.template_id.name, limit=limit))
+        for rec in records.filtered(lambda r: r.template_id.mcp_enabled):
+            if not rec._get_secret_record():
+                secret_password = self.env.context.get('mcp_admin_password')
+                if not secret_password:
+                    secret_password = secrets.token_urlsafe(24)
+                rec._set_admin_password_secret(secret_password)
         return records
 
     def unlink(self):

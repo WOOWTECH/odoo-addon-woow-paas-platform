@@ -12,7 +12,8 @@ from src.services.helm import HelmException, KubectlException, KubernetesService
 
 def _request():
     return ReleaseResetConfigRequest(
-        values={"config": {"sensitive": {"admin_password": "new-pwd-xyz"}}},
+        values={"config": {"nonSensitive": {"connection": {"url": "https://tenant.example"}}}},
+        sensitive_values={"config": {"sensitive": {"admin_password": "new-pwd-xyz"}}},
         chart="oci://example/mcp-server",
         version="0.1.5",
     )
@@ -22,6 +23,7 @@ class TestResetConfigSchema:
     def test_defaults(self):
         request = ReleaseResetConfigRequest()
         assert request.values == {}
+        assert request.sensitive_values == {}
         assert request.reuse_values is True
 
     def test_namespace_validation(self):
@@ -54,6 +56,7 @@ class TestResetConfigEndpoint:
             name="svc-abc",
             chart="oci://example/mcp-server",
             values=_request().values,
+            sensitive_values=_request().sensitive_values,
             version="0.1.5",
             reuse_values=True,
             atomic=True,
@@ -73,7 +76,7 @@ class TestResetConfigEndpoint:
             reset_release_config(
                 "paas-ws-test",
                 "svc-abc",
-                ReleaseResetConfigRequest(values={"config": {"sensitive": {}}}),
+                ReleaseResetConfigRequest(values={}, sensitive_values={}),
             )
         assert error.value.status_code == 400
 
@@ -122,6 +125,21 @@ class TestResetConfigEndpoint:
         mock_rollback.assert_called_once_with("paas-ws-test", "svc-abc", 7)
         restore_call = mock_exec.call_args_list[1].kwargs
         assert "os.replace" in restore_call["command"][2]
+
+    @patch("src.api.releases.helm_service.rollback")
+    @patch("src.api.releases.k8s_service.exec_in_pod")
+    @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
+    def test_patch_failure_when_recovery_also_fails_requires_intervention(
+        self, mock_get, mock_upgrade, mock_pod, mock_exec, mock_rollback,
+    ):
+        mock_exec.side_effect = KubectlException("failed", "kubectl", "stderr")
+        mock_rollback.side_effect = HelmException("rollback failed", "helm", "stderr")
+        with pytest.raises(HTTPException) as error:
+            reset_release_config("paas-ws-test", "svc-abc", _request())
+        assert error.value.status_code == 500
+        assert "operator intervention required" in error.value.detail
 
 
 class TestExecInPodStdin:

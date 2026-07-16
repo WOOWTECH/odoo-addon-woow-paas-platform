@@ -61,6 +61,10 @@ class ReleaseCreateRequest(BaseModel):
     values: Optional[Dict[str, Any]] = Field(
         default_factory=dict, description="Helm values override"
     )
+    sensitive_values: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Sensitive Helm values merged in memory only",
+    )
     create_namespace: bool = Field(
         default=False, description="Create namespace if not exists"
     )
@@ -77,6 +81,10 @@ class ReleaseUpgradeRequest(BaseModel):
     version: Optional[str] = Field(None, description="Chart version")
     values: Optional[Dict[str, Any]] = Field(
         default_factory=dict, description="Helm values override"
+    )
+    sensitive_values: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Sensitive Helm values merged in memory only",
     )
     reset_values: bool = Field(
         default=False, description="Reset values to chart defaults"
@@ -97,8 +105,8 @@ class ReleaseResetConfigRequest(BaseModel):
 
     只替換 ``/data/config.json`` 的 ``admin_password`` leaf，保留租戶 GUI 自填的
     connection / tools / mcp_server.env / token_history。比「砍整份 + re-seed」
-    少一次完整 PVC 重置；Secret 不動（應用 main container 不掛 Secret、僅
-    seed-config 一次性讀取 → 應用永遠讀 config.json）。
+    少一次完整 PVC 重置；敏感值走 ``sensitive_values``，不落持久化 values；
+    main container 不掛 Secret、僅 seed-config 一次性讀取 → 應用永遠讀 config.json。
 
     任一子步失敗 → operator 報 5xx、不做半套。chart values 經 --values tmp file
     不印明文，cmdline secret value 走既有 _redact_cmd 遮罩；reset_config.py
@@ -108,7 +116,11 @@ class ReleaseResetConfigRequest(BaseModel):
     values: Optional[Dict[str, Any]] = Field(
         default_factory=dict,
         description="Helm values to merge with the existing release (包含新 "
-        "admin_password 於 config.sensitive.admin_password)。",
+        "admin_password 走 sensitive_values，不落持久化 values).",
+    )
+    sensitive_values: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Sensitive Helm values merged in memory only",
     )
     chart: Optional[str] = Field(None, description="Chart reference（如需升版）")
     version: Optional[str] = Field(None, description="Chart version（如需升版）")

@@ -88,6 +88,45 @@ class TestReleaseEndpoints:
         assert data["status"] == "deployed"
 
     @patch("src.api.releases.helm_service")
+    def test_create_release_forwards_sensitive_values_and_masks_response(
+        self, mock_helm, client
+    ):
+        """Sensitive values must travel separately and never echo back."""
+        mock_helm.install.return_value = ReleaseInfo(
+            name="mcp-x",
+            namespace="paas-ws-test",
+            revision=1,
+            status=ReleaseStatus.DEPLOYED,
+            chart="mcp-server",
+            app_version="1.0.0",
+            updated="2024-01-01T00:00:00Z",
+            values={
+                "config": {
+                    "sensitive": {"admin_password": "secret-password"},
+                    "nonSensitive": {"connection": {"url": "https://tenant.example"}},
+                }
+            },
+        )
+
+        response = client.post(
+            "/api/releases",
+            json={
+                "namespace": "paas-ws-test",
+                "name": "mcp-x",
+                "chart": "oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server",
+                "values": {"config": {"nonSensitive": {"connection": {"url": "https://tenant.example"}}}},
+                "sensitive_values": {"config": {"sensitive": {"admin_password": "secret-password"}}},
+            },
+        )
+
+        assert response.status_code == 201
+        call_kwargs = mock_helm.install.call_args.kwargs
+        assert call_kwargs["sensitive_values"] == {
+            "config": {"sensitive": {"admin_password": "secret-password"}}
+        }
+        assert response.json()["values"]["config"]["sensitive"]["admin_password"] == "***"
+
+    @patch("src.api.releases.helm_service")
     def test_create_release_injects_image_pull_secret(self, mock_helm, client):
         """releases install must inject imagePullSecrets so the kubelet can pull
         private images. layer-3 gap: the cloud-service install path missed this
@@ -194,6 +233,31 @@ class TestReleaseEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["revision"] == 3
+
+    @patch("src.api.releases.helm_service")
+    def test_upgrade_release_forwards_sensitive_values(self, mock_helm, client):
+        mock_helm.upgrade.return_value = ReleaseInfo(
+            name="test-release",
+            namespace="paas-ws-test",
+            revision=3,
+            status=ReleaseStatus.DEPLOYED,
+            chart="nginx",
+            app_version="1.1.0",
+            updated="2024-01-02T00:00:00Z",
+        )
+
+        client.patch(
+            "/api/releases/paas-ws-test/test-release",
+            json={
+                "version": "1.1.0",
+                "values": {"replicas": 3},
+                "sensitive_values": {"config": {"sensitive": {"admin_password": "secret"}}},
+            },
+        )
+
+        assert mock_helm.upgrade.call_args.kwargs["sensitive_values"] == {
+            "config": {"sensitive": {"admin_password": "secret"}}
+        }
 
     @patch("src.api.releases.helm_service")
     def test_delete_release(self, mock_helm, client):
