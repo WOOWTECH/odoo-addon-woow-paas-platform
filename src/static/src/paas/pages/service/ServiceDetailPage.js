@@ -12,6 +12,7 @@ import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
+import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
@@ -49,6 +50,7 @@ export class ServiceDetailPage extends Component {
         RollbackModal,
         SkipTrialModal,
         EditDomainModal,
+        ChangePlanModal,
         CreateProjectModal,
     };
     static props = {
@@ -67,6 +69,7 @@ export class ServiceDetailPage extends Component {
             showRollbackModal: false,
             showSkipTrialModal: false,
             showDomainModal: false,
+            showChangePlanModal: false,
             showCreateProjectModal: false,
             supportProject: null,
             supportProjectLoading: false,
@@ -273,6 +276,30 @@ export class ServiceDetailPage extends Component {
 
     confirmCloudServiceSkip = () => {
         return cloudService.skipTrial(this.props.serviceId);
+    };
+
+    // Change Plan Modal — 改方案／改席數（復用 ChangePlanModal + PlanSelector）
+    showChangePlan() {
+        this.state.showChangePlanModal = true;
+    }
+
+    hideChangePlan() {
+        this.state.showChangePlanModal = false;
+    }
+
+    onPlanChanged() {
+        this.hideChangePlan();
+        this.loadService();
+    }
+
+    // Change-plan callbacks bound to cloudService — 傳給 ChangePlanModal，
+    // 讓同一 modal 免 branch 服務於三 surface。CS 直接用已知的 template.id。
+    loadCloudServicePlans = () => {
+        return cloudService.fetchPlans(this.service.template.id);
+    };
+
+    confirmCloudServiceChangePlan = (planId) => {
+        return cloudService.changePlan(this.props.serviceId, planId);
     };
 
     // Domain Modal

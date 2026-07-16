@@ -72,6 +72,13 @@
                             Refresh
                         </WoowButton>
                         <WoowButton
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showChangePlan">
+                            <WoowIcon name="'swap_horiz'" size="18"/>
+                            變更方案
+                        </WoowButton>
+                        <WoowButton
                             variant="'danger'"
                             size="'md'"
                             onClick.bind="showDeleteConfirm">
@@ -188,6 +195,15 @@
                 confirmSkip="confirmSmartHomeSkip"
                 onClose.bind="hideSkipTrial"
                 onSkipped.bind="onTrialSkipped"/>
+
+            <!-- Change Plan Modal（改方案／改席數，內嵌 PlanSelector） -->
+            <ChangePlanModal
+                t-if="state.showChangePlanModal and home"
+                service="home"
+                loadPlans="loadSmartHomePlans"
+                confirmChange="confirmSmartHomeChangePlan"
+                onClose.bind="hideChangePlan"
+                onChanged.bind="onPlanChanged"/>
 
             <!-- Delete Confirmation Modal -->
             <t t-if="state.showDeleteConfirm">

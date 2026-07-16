@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
+import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
 import { AddPolicyModal } from "../../components/modal/AddPolicyModal";
 import { securityAccessService } from "../../services/security_access";
 import { router } from "../../core/router";
@@ -56,7 +57,7 @@ export class SecurityAccessDetailPage extends Component {
   static template = "woow_paas_platform.SecurityAccessDetailPage";
   static components = {
     WoowCard, WoowButton, WoowIcon, StatusBadge, SkipTrialModal,
-    AddPolicyModal,
+    ChangePlanModal, AddPolicyModal,
   };
   static props = {
     workspaceId: { type: Number },
@@ -80,6 +81,7 @@ export class SecurityAccessDetailPage extends Component {
       prefixCheck: null, // null | {available, reason}
       prefixChecking: false,
       showSkipTrialModal: false,
+      showChangePlanModal: false,
       showDeleteConfirm: false,
       // Access tab (P2.5 per-route) — policy modal + which route it targets,
       // and which protected route cards are expanded (keyed by route id).
@@ -497,6 +499,30 @@ export class SecurityAccessDetailPage extends Component {
 
   onTrialSkipped = () => {
     this.state.showSkipTrialModal = false;
+    this.loadDetail();
+  };
+
+  // ---- ChangePlanModal 接線（改方案／改席數） ----
+  // SA to_dict 不吐 template_id，故循 CreateSecurityAccessModal 路徑先取唯一
+  // SA template（本 surface 僅一個）再抓 plans；plans 已含 C1 席數變體。
+  loadSaPlans = async () => {
+    const t = await securityAccessService.fetchTemplates();
+    if (!t.success || !t.data.length) {
+      return {
+        success: false,
+        error: t.error || "No Security Access template available",
+      };
+    }
+    return securityAccessService.fetchPlans(t.data[0].id);
+  };
+
+  confirmSaChangePlan = (planId) => {
+    return securityAccessService.changePlan(
+      this.props.workspaceId, this.props.saId, planId);
+  };
+
+  onPlanChanged = () => {
+    this.state.showChangePlanModal = false;
     this.loadDetail();
   };
 }

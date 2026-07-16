@@ -1,0 +1,45 @@
+// ChangePlanModal — 改方案／改席數 modal（內嵌 PlanSelector）
+.o_woow_change_plan {
+  // 目前方案顯示列（label + 值，底線分隔於選擇器之上）
+  &__current {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding-bottom: 12px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--woow-border, #e5e7eb);
+  }
+
+  &__current_label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--woow-text-secondary, #6b7280);
+  }
+
+  &__current_value {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--woow-text-primary, #111827);
+  }
+
+  // 退點通用說明 note box（無退點預覽 API，故僅通用說明）
+  &__advisory {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 16px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(#6366f1, 0.06);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--woow-text-secondary, #6b7280);
+
+    // WoowIcon 渲染的 root class 是 material-symbols-outlined（見 WoowIcon.xml），
+    // 循 EditDomainModal.scss / RollbackModal.scss 既有慣例以此選擇器上色。
+    .material-symbols-outlined {
+      flex-shrink: 0;
+      color: var(--woow-primary, #6366f1);
+    }
+  }
+}
