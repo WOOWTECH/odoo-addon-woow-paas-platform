@@ -178,6 +178,11 @@ class _McpServerSeedAssertions:
         self.assertEqual(command, self.EXPECT_MCP_COMMAND)
         self.assertNotEqual(command, 'hermes-mcp-server')
 
+    def test_template_requires_platform_admin_password(self):
+        values = json.loads(self.env.ref(self.TMPL).helm_default_values)
+        self.assertTrue(values['config']['requireFields'])
+        self.assertEqual(values['config']['sensitive'], {})
+
     def test_template_storage_and_resources_match_advertised_spec(self):
         """#268: PVC size + container limits must equal the advertised spec
         (min_storage_gb / min_ram_gb / min_vcpu) — guards the 2Gi-vs-5G and

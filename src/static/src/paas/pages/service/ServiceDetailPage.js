@@ -14,6 +14,7 @@ import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
+import { AdminPasswordModal } from "../../components/modal/AdminPasswordModal";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -52,6 +53,7 @@ export class ServiceDetailPage extends Component {
         EditDomainModal,
         ChangePlanModal,
         CreateProjectModal,
+        AdminPasswordModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -73,6 +75,8 @@ export class ServiceDetailPage extends Component {
             showCreateProjectModal: false,
             supportProject: null,
             supportProjectLoading: false,
+            adminPassword: null,
+            resetPasswordError: null,
         });
         this.router = useState(router);
         this.pollingInterval = null;
@@ -165,6 +169,16 @@ export class ServiceDetailPage extends Component {
 
     get isOdooService() {
         return this.service?.template?.slug === 'odoo';
+    }
+
+    get isMcpAdminService() {
+        return ["mcp-odoo", "mcp-odoo-manage", "mcp-n8n"].includes(
+            this.service?.template?.slug
+        );
+    }
+
+    get isResetAdminPasswordLoading() {
+        return !!cloudService.operationLoading.resetAdminPassword;
     }
 
     // Support Project
@@ -314,6 +328,24 @@ export class ServiceDetailPage extends Component {
     onDomainSaved() {
         this.hideDomainModal();
         this.loadService();
+    }
+
+    async resetAdminPassword() {
+        this.state.resetPasswordError = null;
+        const result = await cloudService.resetAdminPassword(
+            this.props.workspaceId,
+            this.props.serviceId
+        );
+        if (result.success) {
+            this.state.adminPassword = result.data.admin_password;
+            await this.loadService();
+        } else {
+            this.state.resetPasswordError = result.error || "Failed to reset admin password";
+        }
+    }
+
+    closeAdminPassword() {
+        this.state.adminPassword = null;
     }
 
     async handleConfigSave(values) {

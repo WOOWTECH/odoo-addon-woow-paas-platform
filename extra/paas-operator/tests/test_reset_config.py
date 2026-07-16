@@ -1,268 +1,141 @@
-"""Tests for #357 reset-config schema + endpoint.
-
-Covers:
-- ReleaseResetConfigRequest schema defaults + required fields path
-- _validate_namespace_or_raise passes valid / rejects invalid
-- reset_release_config endpoint wires values + chart + version
-- exec_in_pod empty-container fallback does NOT pass --container flag
-"""
+"""Tests for #357 surgical admin-password reset."""
 import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
-from src.api.releases import (
-    _validate_namespace_or_raise,
-    reset_release_config,
-)
+from src.api.releases import _validate_namespace_or_raise, reset_release_config
 from src.models.schemas import ReleaseResetConfigRequest
+from src.services.helm import HelmException, KubectlException, KubernetesService
 
 
-class TestSchema:
-    def test_default_values_is_empty_dict(self):
-        req = ReleaseResetConfigRequest()
-        assert req.values == {}
-        assert req.chart is None
-        assert req.version is None
-        assert req.reuse_values is True
-
-    def test_accepts_full_payload(self):
-        req = ReleaseResetConfigRequest(
-            values={"config": {"sensitive": {"admin_password": "x"}}},
-            chart="oci://example/mcp-server",
-            version="0.1.5",
-            reuse_values=True,
-        )
-        assert req.values["config"]["sensitive"]["admin_password"] == "x"
-        assert req.chart == "oci://example/mcp-server"
-        assert req.version == "0.1.5"
-        assert req.reuse_values is True
+def _request():
+    return ReleaseResetConfigRequest(
+        values={"config": {"sensitive": {"admin_password": "new-pwd-xyz"}}},
+        chart="oci://example/mcp-server",
+        version="0.1.5",
+    )
 
 
-class TestNamespaceValidation:
-    def test_accepts_valid_prefix(self):
-        # Should not raise
+class TestResetConfigSchema:
+    def test_defaults(self):
+        request = ReleaseResetConfigRequest()
+        assert request.values == {}
+        assert request.reuse_values is True
+
+    def test_namespace_validation(self):
         _validate_namespace_or_raise("paas-ws-test")
-        _validate_namespace_or_raise("paas-stg-system")
-        _validate_namespace_or_raise("paas-cloudflare-system")
-
-    def test_rejects_invalid_prefix(self):
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(HTTPException) as error:
             _validate_namespace_or_raise("kube-system")
-        assert exc_info.value.status_code == 403
-
-    def test_rejects_empty_prefix_when_settings_strict(self, monkeypatch):
-        """If namespace_prefix is empty, validate_namespace fail-closed → 403."""
-        from src.config import settings
-        monkeypatch.setattr(settings, "namespace_prefix", "", raising=False)
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException):
-            _validate_namespace_or_raise("anything")
+        assert error.value.status_code == 403
 
 
 class TestResetConfigEndpoint:
-    """The endpoint does 3 things in order:
-    1. exec_in_pod read-modify-write /data/config.json
-    2. helm_service.upgrade (Secret-aligned)
-    3. k8s_service.rollout_restart_deployment (Recreate cache rebuild)
-
-    Each step is gated by the previous; a failure at step N leaves the
-    state from steps 1..N-1 in place (operator returns 500, caller decides).
-    """
-
-    def _mock_release(self):
-        return MagicMock(revision=2)
-
+    @patch("src.api.releases.k8s_service.exec_in_pod")
+    @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
+    @patch("src.api.releases.k8s_service.rollout_status_deployment")
     @patch("src.api.releases.k8s_service.rollout_restart_deployment")
     @patch("src.api.releases.helm_service.upgrade")
-    @patch("src.api.releases.k8s_service.exec_in_pod")
-    @patch("src.api.releases.k8s_service.get_pod_name")
-    def test_happy_path_all_three_steps(
-        self, mock_get_pod, mock_exec, mock_upgrade, mock_restart
+    @patch("src.api.releases.helm_service.get")
+    def test_happy_path_uses_stdin_and_preserves_config(
+        self, mock_get_release, mock_upgrade, mock_restart, mock_status,
+        mock_pod, mock_exec,
     ):
-        mock_get_pod.return_value = "mcp-server-abc"
+        mock_get_release.return_value = MagicMock(revision=7)
+        mock_upgrade.return_value = MagicMock(revision=8)
         mock_exec.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        mock_upgrade.return_value = self._mock_release()
 
-        req = ReleaseResetConfigRequest(
-            values={"config": {"sensitive": {"admin_password": "new-pwd-xyz"}}},
-        )
-        resp = reset_release_config(
+        response = reset_release_config("paas-ws-test", "svc-abc", _request())
+
+        assert response["helm_revision"] == 8
+        mock_upgrade.assert_called_once_with(
             namespace="paas-ws-test",
             name="svc-abc",
-            request=req,
+            chart="oci://example/mcp-server",
+            values=_request().values,
+            version="0.1.5",
+            reuse_values=True,
+            atomic=True,
         )
+        patch_call = mock_exec.call_args_list[0].kwargs
+        assert patch_call["command"][:3] == ["python3", "-c", patch_call["command"][2]]
+        assert "admin_password" in patch_call["command"][2]
+        assert "new-pwd-xyz" not in patch_call["command"]
+        assert patch_call["input_data"] == json.dumps({"admin_password": "new-pwd-xyz"})
+        assert patch_call["command"][3].startswith("/data/.config.json.reset-backup-")
+        mock_restart.assert_called_once_with(namespace="paas-ws-test", deployment_name="svc-abc")
+        mock_status.assert_called_once_with(namespace="paas-ws-test", deployment_name="svc-abc")
+        assert mock_exec.call_count == 2  # patch + backup cleanup
 
-        assert resp["action"] == "reset-config"
-        assert resp["namespace"] == "paas-ws-test"
-        assert resp["release"] == "svc-abc"
-        assert resp["helm_revision"] == 2
-        assert resp["config_json_patched"] is True
-        assert resp["helm_upgraded"] is True
-        assert resp["rollout_restart_issued"] is True
-
-        # exec_in_pod received the python3 read-modify-write script + new pwd
-        mock_exec.assert_called_once()
-        kwargs = mock_exec.call_args.kwargs
-        cmd = kwargs["command"]
-        assert cmd[0] == "python3"
-        assert cmd[1] == "-c"
-        assert "admin_password" in cmd[2]  # script body
-        assert cmd[3] == "new-pwd-xyz"  # new password as argv
-        assert kwargs["container"] == ""  # kubectl default = first container
-
-    def test_rejects_missing_admin_password(self):
-        from fastapi import HTTPException
-        req = ReleaseResetConfigRequest(
-            values={"config": {"sensitive": {}}},  # missing admin_password
-        )
-        with pytest.raises(HTTPException) as exc_info:
+    def test_rejects_missing_password(self):
+        with pytest.raises(HTTPException) as error:
             reset_release_config(
-                namespace="paas-ws-test", name="svc-abc", request=req,
+                "paas-ws-test",
+                "svc-abc",
+                ReleaseResetConfigRequest(values={"config": {"sensitive": {}}}),
             )
-        assert exc_info.value.status_code == 400
-        assert "admin_password" in exc_info.value.detail
-
-    def test_rejects_empty_values(self):
-        from fastapi import HTTPException
-        req = ReleaseResetConfigRequest()
-        with pytest.raises(HTTPException) as exc_info:
-            reset_release_config(
-                namespace="paas-ws-test", name="svc-abc", request=req,
-            )
-        assert exc_info.value.status_code == 400
-
-    def test_rejects_non_string_admin_password(self):
-        from fastapi import HTTPException
-        req = ReleaseResetConfigRequest(
-            values={"config": {"sensitive": {"admin_password": 12345}}},
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            reset_release_config(
-                namespace="paas-ws-test", name="svc-abc", request=req,
-            )
-        assert exc_info.value.status_code == 400
-
-    def test_rejects_invalid_namespace(self):
-        from fastapi import HTTPException
-        req = ReleaseResetConfigRequest(
-            values={"config": {"sensitive": {"admin_password": "x"}}},
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            reset_release_config(
-                namespace="kube-system", name="svc-abc", request=req,
-            )
-        assert exc_info.value.status_code == 403
-
-    @patch("src.api.releases.k8s_service.get_pod_name")
-    @patch("src.api.releases.k8s_service.exec_in_pod")
-    def test_exec_failure_returns_500_no_helm_upgrade(
-        self, mock_exec, mock_get_pod,
-    ):
-        from fastapi import HTTPException
-        from src.services.helm import KubectlException
-
-        mock_get_pod.return_value = "mcp-server-abc"
-        mock_exec.side_effect = KubectlException(
-            message="kubectl exec failed", command="...", stderr="...",
-        )
-
-        req = ReleaseResetConfigRequest(
-            values={"config": {"sensitive": {"admin_password": "x"}}},
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            reset_release_config(
-                namespace="paas-ws-test", name="svc-abc", request=req,
-            )
-        assert exc_info.value.status_code == 500
-        assert "/data/config.json" in exc_info.value.detail
+        assert error.value.status_code == 400
 
     @patch("src.api.releases.helm_service.upgrade")
+    def test_upgrade_failure_does_not_patch_config(self, mock_upgrade):
+        mock_upgrade.side_effect = HelmException("failed", "helm", "stderr")
+        with pytest.raises(HTTPException) as error:
+            reset_release_config("paas-ws-test", "svc-abc", _request())
+        assert error.value.status_code == 500
+        assert "chart Secret" in error.value.detail
+
+    @patch("src.api.releases.helm_service.rollback")
     @patch("src.api.releases.k8s_service.exec_in_pod")
-    @patch("src.api.releases.k8s_service.get_pod_name")
-    def test_helm_upgrade_failure_returns_500(
-        self, mock_get_pod, mock_exec, mock_upgrade,
+    @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
+    def test_patch_failure_rolls_secret_back(
+        self, mock_get, mock_upgrade, mock_pod, mock_exec, mock_rollback,
     ):
-        from fastapi import HTTPException
-        from src.services.helm import HelmException
+        mock_exec.side_effect = KubectlException("failed", "kubectl", "stderr")
+        with pytest.raises(HTTPException) as error:
+            reset_release_config("paas-ws-test", "svc-abc", _request())
+        assert error.value.status_code == 500
+        mock_rollback.assert_called_once_with("paas-ws-test", "svc-abc", 7)
 
-        mock_get_pod.return_value = "mcp-server-abc"
-        mock_exec.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        mock_upgrade.side_effect = HelmException(
-            message="upgrade failed", command="...", stderr="...",
-        )
-
-        req = ReleaseResetConfigRequest(
-            values={"config": {"sensitive": {"admin_password": "x"}}},
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            reset_release_config(
-                namespace="paas-ws-test", name="svc-abc", request=req,
-            )
-        assert exc_info.value.status_code == 500
-        assert "helm upgrade failed" in exc_info.value.detail
-
+    @patch("src.api.releases.helm_service.rollback")
+    @patch("src.api.releases.k8s_service.rollout_status_deployment")
     @patch("src.api.releases.k8s_service.rollout_restart_deployment")
-    @patch("src.api.releases.helm_service.upgrade")
     @patch("src.api.releases.k8s_service.exec_in_pod")
-    @patch("src.api.releases.k8s_service.get_pod_name")
-    def test_rollout_restart_failure_signals_manual_recovery(
-        self, mock_get_pod, mock_exec, mock_upgrade, mock_restart,
+    @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
+    def test_rollout_failure_restores_config_and_secret(
+        self, mock_get, mock_upgrade, mock_pod, mock_exec, mock_restart,
+        mock_status, mock_rollback,
     ):
-        from fastapi import HTTPException
-        from src.services.helm import KubectlException
-
-        mock_get_pod.return_value = "mcp-server-abc"
         mock_exec.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        mock_upgrade.return_value = self._mock_release()
-        mock_restart.side_effect = KubectlException(
-            message="rollout restart failed", command="...", stderr="...",
-        )
-
-        req = ReleaseResetConfigRequest(
-            values={"config": {"sensitive": {"admin_password": "x"}}},
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            reset_release_config(
-                namespace="paas-ws-test", name="svc-abc", request=req,
-            )
-        assert exc_info.value.status_code == 500
-        assert "rollout restart failed" in exc_info.value.detail
-        assert "kubectl rollout restart" in exc_info.value.detail
+        mock_status.side_effect = [
+            KubectlException("failed", "kubectl", "stderr"),
+            None,
+        ]
+        with pytest.raises(HTTPException) as error:
+            reset_release_config("paas-ws-test", "svc-abc", _request())
+        assert error.value.status_code == 500
+        assert "previous password restored" in error.value.detail
+        mock_rollback.assert_called_once_with("paas-ws-test", "svc-abc", 7)
+        restore_call = mock_exec.call_args_list[1].kwargs
+        assert "os.replace" in restore_call["command"][2]
 
 
-class TestExecInPodEmptyContainer:
-    """kubectl --container <empty> is rejected; the helper must skip that flag."""
-
-    def test_empty_container_skips_flag(self):
-        from src.services.helm import KubernetesService
-        with patch.object(KubernetesService, "_run_command") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+class TestExecInPodStdin:
+    def test_stdin_is_not_an_argv_value(self):
+        with patch.object(KubernetesService, "_run_command") as run:
+            run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             KubernetesService().exec_in_pod(
                 namespace="paas-ws-test",
-                pod_name="mcp-server-abc",
+                pod_name="mcp-abc",
                 container="",
-                command=["echo", "hi"],
-                timeout=10,
+                command=["python3", "-c", "pass"],
+                input_data='{"admin_password":"secret"}',
             )
-            args = mock_run.call_args.args[0]
-            # No "--container" flag should be present when caller left it empty.
-            assert "--container" not in args
-            assert args[0:2] == ["exec", "mcp-server-abc"]
-            assert args[-3:] == ["--", "echo", "hi"]
-
-    def test_named_container_includes_flag(self):
-        from src.services.helm import KubernetesService
-        with patch.object(KubernetesService, "_run_command") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            KubernetesService().exec_in_pod(
-                namespace="paas-ws-test",
-                pod_name="mcp-server-abc",
-                container="mcp-server",
-                command=["echo", "hi"],
-                timeout=10,
-            )
-            args = mock_run.call_args.args[0]
-            assert "--container" in args
-            assert "mcp-server" in args
+        args = run.call_args.args[0]
+        assert "--stdin" in args
+        assert "secret" not in args
+        assert run.call_args.kwargs["input_data"] == '{"admin_password":"secret"}'

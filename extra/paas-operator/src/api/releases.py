@@ -2,8 +2,9 @@
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -516,35 +517,22 @@ def reset_release_config(
     name: str,
     request: ReleaseResetConfigRequest,
 ):
-    """``#357`` 對 mcp-server chart release 的 admin_password 重置。
+    """Reset the GUI password without replacing tenant-owned config.json.
 
-    chart ``seed-config.py`` 的 seed-if-absent 邏輯在 PVC 上 ``/data/config.json``
-    存在時 skip seed，純 helm upgrade 無法讓新密碼真正生效。本端點用外科式
-    read-modify-write（只替換 admin_password leaf，保留 connection/tools/
-    mcp_server.env/token_history），再 ``rollout_restart_deployment`` 觸發
-    ``ConfigStore._cache`` 重建讀新檔。
+    Helm's Secret and the PVC-backed config file cannot be updated in one
+    transaction.  This endpoint therefore uses a compensating saga:
 
-    action 序列（任一失敗 → abort、不做半套）：
+    1. Atomically upgrade the Helm Secret and wait for success.
+    2. Read-modify-write only ``admin_password`` in config.json, retaining a
+       same-volume backup of the complete original file.
+    3. Restart and wait for the deployment, then remove that backup.
 
-    1. 透過 ``kubectl exec`` 在 main container 內 ``python3 -c``：
-       - 讀 ``/data/config.json`` → JSON 解析
-       - **保留** ``connection``/``tools``/``mcp_server``/``proxy``/``token_history``
-       - 只改寫 ``admin_password`` leaf
-       - 原子寫入（tmp + rename）
-    2. ``kubectl rollout restart deployment/{name}`` → Recreate strategy 觸發
-       → initContainer 見 config.json 存在 skip → main container 起 → cache
-       重建讀新密碼 → 生效
-
-    Secret 不動（main container 不掛 Secret、應用永遠讀 config.json）；同時
-    對 ``request.values``（含新 admin_password 於 config.sensitive.admin_password）
-    做 helm upgrade —— 後續若 Secret-driven helm upgrade 重 seed 流程（如有
-    一天 chart 改支援）能對齊。
-
-    admin_password 透過 argv 帶進 kubectl exec，會在 /proc/<pid>/cmdline 短暫
-    可見；operator log 走既有 ``_redact_cmd`` 遮密碼字眼；pod 是 RWO single-tenant
-    + 短暫 5-10s 重啟期，業界標準 secret 傳遞權衡。
+    A failure after step 1 rolls Helm back to the prior revision.  A failure
+    after step 2 additionally restores the original config file and rolls the
+    workload back.  The password enters the container via exec stdin only, not
+    process argv, logs, or a temporary file.
     """
-    validate_namespace_value = _validate_namespace_or_raise(namespace)
+    _validate_namespace_or_raise(namespace)
 
     if not request.values:
         raise HTTPException(
@@ -564,54 +552,8 @@ def reset_release_config(
             detail="values.config.sensitive.admin_password is required",
         )
 
-    # 1) Read-modify-write /data/config.json in the main container. Uses python3
-    # (the chart image carries python3 — verified by seed-config.py relying on
-    # it in the same initContainer image chain). Single argv-pass keeps the
-    # operator log redaction surface narrow.
-    script = (
-        "import json, os, sys, tempfile;"
-        "p='/data/config.json';"
-        "d=json.load(open(p)) if os.path.exists(p) else {};"
-        "d['admin_password']=sys.argv[1];"
-        "fd, tmp = tempfile.mkstemp(dir='/data');"
-        "os.write(fd, json.dumps(d, indent=2, ensure_ascii=False).encode());"
-        "os.close(fd);"
-        "os.replace(tmp, p)"
-    )
-
-    # Find a running pod carrying the release label.
-    pod_name = k8s_service.get_pod_name(
-        namespace=namespace,
-        label_selector=f"app.kubernetes.io/instance={name}",
-    )
-
     try:
-        result = k8s_service.exec_in_pod(
-            namespace=namespace,
-            pod_name=pod_name,
-            container="",  # kubectl default: first container in pod
-            command=["python3", "-c", script, new_password],
-            timeout=30,
-        )
-        logger.info(
-            "reset-config: read-modify-write /data/config.json in %s/%s "
-            "(admin_password updated; connection/tools preserved)",
-            namespace, name,
-        )
-    except KubectlException as e:
-        logger.error(
-            f"reset-config exec_in_pod failed for {namespace}/{name}: "
-            f"{e.message}\nStderr: {e.stderr}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="reset-config: failed to patch /data/config.json",
-        )
-
-    # 2) Helm upgrade — keeps the chart Secret aligned with values.config.sensitive
-    # so any future helm-upgrade-driven reseed path converges. Safe even though
-    # the main container doesn't read Secret (chart seed-if-absent skips on PVC).
-    try:
+        previous_revision = helm_service.get(namespace, name).revision
         release = helm_service.upgrade(
             namespace=namespace,
             name=name,
@@ -619,44 +561,93 @@ def reset_release_config(
             values=request.values,
             version=request.version,
             reuse_values=request.reuse_values,
-        )
-        logger.info(
-            f"reset-config: helm upgrade ok for {namespace}/{name} rev={release.revision}"
+            atomic=True,
         )
     except (ValueError, HelmException) as e:
-        logger.error(
-            f"reset-config helm upgrade failed for {namespace}/{name}: {e}"
+        logger.error("reset-config Helm upgrade failed for %s/%s: %s", namespace, name, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="reset-config: failed to update the chart Secret",
+        )
+
+    backup_name = f"/data/.config.json.reset-backup-{uuid.uuid4().hex}"
+    # The chart's main image carries python3 for seed-config.py.  Deliberately
+    # fail if config.json is absent: replacing it with a generated skeleton
+    # would destroy GUI-owned connection/tools state.
+    script = (
+        "import json, os, sys, tempfile;"
+        "p='/data/config.json';b=sys.argv[1];"
+        "original=open(p,'rb').read();"
+        "payload=json.load(sys.stdin);"
+        "d=json.loads(original);"
+        "d['admin_password']=payload['admin_password'];"
+        "open(b,'xb').write(original);"
+        "fd,tmp=tempfile.mkstemp(dir='/data',prefix='.config.json.reset-');"
+        "os.write(fd,json.dumps(d,indent=2,ensure_ascii=False).encode());"
+        "os.fsync(fd);os.close(fd);"
+        "os.replace(tmp, p)"
+    )
+
+    try:
+        pod_name = k8s_service.get_pod_name(
+            namespace=namespace,
+            label_selector=f"app.kubernetes.io/instance={name}",
+        )
+        k8s_service.exec_in_pod(
+            namespace=namespace,
+            pod_name=pod_name,
+            container="",
+            command=["python3", "-c", script, backup_name],
+            timeout=30,
+            input_data=json.dumps({"admin_password": new_password}),
+        )
+    except KubectlException as e:
+        _rollback_reset(
+            # The exec connection can fail after the atomic rename. Treat the
+            # write as applied unless proven otherwise, so recovery never leaves
+            # a potentially patched config.json behind.
+            namespace, name, previous_revision, backup_name, config_patched=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"reset-config: config patched but helm upgrade failed: "
-                   f"{getattr(e, 'message', str(e))}",
-        )
+            detail="reset-config: failed to patch config.json; chart Secret restored",
+        ) from e
 
-    # 3) rollout_restart_deployment — Recreate strategy triggers, main
-    # container comes up fresh, ConfigStore reads new admin_password from
-    # /data/config.json. PVC kept (connection/tools intact).
-    deployment_name = name  # mcp-server chart release name == deployment name
     try:
         k8s_service.rollout_restart_deployment(
             namespace=namespace,
-            deployment_name=deployment_name,
+            deployment_name=name,
         )
-        logger.info(
-            f"reset-config: rollout restart issued for deployment/{deployment_name}"
+        k8s_service.rollout_status_deployment(
+            namespace=namespace,
+            deployment_name=name,
         )
     except KubectlException as e:
-        logger.error(
-            f"reset-config rollout restart failed for {namespace}/{name}: "
-            f"{e.message}"
+        recovery_error = _rollback_reset(
+            namespace, name, previous_revision, backup_name, config_patched=True,
         )
-        # Config patched + helm upgrade ok; just signal manual restart needed.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="reset-config: config patched + helm upgraded but rollout "
-                   "restart failed — manually `kubectl rollout restart "
-                   f"deployment/{deployment_name} -n {namespace}`",
+            detail=(
+                "reset-config: rollout failed; previous password restored"
+                if not recovery_error else
+                "reset-config: rollout failed and recovery failed; operator intervention required"
+            ),
+        ) from e
+
+    try:
+        k8s_service.exec_in_pod(
+            namespace=namespace,
+            pod_name=k8s_service.get_pod_name(
+                namespace=namespace,
+                label_selector=f"app.kubernetes.io/instance={name}",
+            ),
+            container="",
+            command=["python3", "-c", "import os,sys;os.unlink(sys.argv[1])", backup_name],
+            timeout=30,
         )
+    except KubectlException as e:
+        logger.warning("reset-config backup cleanup failed for %s/%s: %s", namespace, name, e)
 
     return {
         "action": "reset-config",
@@ -668,6 +659,50 @@ def reset_release_config(
         "rollout_restart_issued": True,
         "note": "preserve connection/tools — read-modify-write only admin_password",
     }
+
+
+def _rollback_reset(
+    namespace: str,
+    name: str,
+    previous_revision: int,
+    backup_name: str,
+    config_patched: bool,
+) -> bool:
+    """Compensate a reset failure without reading an old password value."""
+    recovery_failed = False
+    if config_patched:
+        try:
+            pod_name = k8s_service.get_pod_name(
+                namespace=namespace,
+                label_selector=f"app.kubernetes.io/instance={name}",
+            )
+            k8s_service.exec_in_pod(
+                namespace=namespace,
+                pod_name=pod_name,
+                container="",
+                command=[
+                    "python3", "-c",
+                    "import os,sys;p,b=sys.argv[1:];os.replace(b,p)",
+                    "/data/config.json", backup_name,
+                ],
+                timeout=30,
+            )
+        except KubectlException as e:
+            logger.error("reset-config config rollback failed for %s/%s: %s", namespace, name, e)
+            recovery_failed = True
+    try:
+        helm_service.rollback(namespace, name, previous_revision)
+    except HelmException as e:
+        logger.error("reset-config Helm rollback failed for %s/%s: %s", namespace, name, e)
+        recovery_failed = True
+    if config_patched and not recovery_failed:
+        try:
+            k8s_service.rollout_restart_deployment(namespace, name)
+            k8s_service.rollout_status_deployment(namespace, name)
+        except KubectlException as e:
+            logger.error("reset-config rollback rollout failed for %s/%s: %s", namespace, name, e)
+            recovery_failed = True
+    return recovery_failed
 
 
 def _validate_namespace_or_raise(namespace: str) -> None:

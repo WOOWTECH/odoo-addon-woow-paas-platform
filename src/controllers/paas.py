@@ -1309,9 +1309,6 @@ class PaasController(HiddenChainMixin, Controller):
             'data': {
                 'service_id': service.id,
                 'admin_password': new_password,
-                'revealed_at': fields.Datetime.to_string(
-                    service.admin_password_revealed_at,
-                ) if service.admin_password_revealed_at else None,
                 'message': 'Admin password reset. Save the new password now — '
                            'it will not be shown again.',
             },
@@ -2045,12 +2042,19 @@ class PaasController(HiddenChainMixin, Controller):
             sv = str(v)
             return f'{sv[:8]}...' if len(sv) > 8 else '***'
 
+        def _mask_secret_tree(value):
+            if isinstance(value, dict):
+                return {key: _mask_secret_tree(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [_mask_secret_tree(item) for item in value]
+            return _mask_value(value)
+
         def _mask_secrets(d: dict, depth: int = 0) -> dict:
             result = {}
             for key, val in d.items():
                 if key == 'secret' and isinstance(val, dict):
                     # legacy N8N_API_KEY / etc under top-level 'secret'
-                    result[key] = {k: _mask_value(v) for k, v in val.items()}
+                    result[key] = _mask_secret_tree(val)
                 elif (
                     key == 'sensitive'
                     and isinstance(val, dict)
@@ -2059,7 +2063,7 @@ class PaasController(HiddenChainMixin, Controller):
                     # mcp-server chart sensitive channel: mask every leaf under
                     # config.sensitive (admin_password, mcp_auth_token,
                     # connection.*, proxy.bearer_token).
-                    result[key] = {k: _mask_value(v) for k, v in val.items()}
+                    result[key] = _mask_secret_tree(val)
                 elif isinstance(val, dict) and depth < 5:
                     result[key] = _mask_secrets(val, depth + 1)
                 else:
@@ -2312,13 +2316,6 @@ class PaasController(HiddenChainMixin, Controller):
                 service_vals['n8n_owner_email'] = init_params['owner_email']
             if init_params.get('owner_password'):
                 service_vals['n8n_owner_password'] = init_params['owner_password']
-            # #357: 一次性 admin_password 寫進 record + revealed_at。CS record 內
-            # admin_password 與 helm_values.config.sensitive.admin_password 同步；
-            # 兩者皆明文儲存（同 n8n_owner_password 既有模式）。
-            if admin_password:
-                service_vals['admin_password'] = admin_password
-                service_vals['admin_password_revealed_at'] = fields.Datetime.now()
-
             # Resolve Odoo addon selection (with dependency expansion)
             resolved_addon_ids = []
             if odoo_addon_ids and template.slug == 'odoo':
@@ -2372,9 +2369,8 @@ class PaasController(HiddenChainMixin, Controller):
                 cron._trigger()
 
             resp_data = self._format_service(service)
-            # #357: 一次性顯示密碼。建立成功時唯一一次回明文，前端 modal copy 後
-            # 下次 GET 走 _sanitize_helm_values 遮 config.sensitive.*，record 內
-            # admin_password 仍明文（同 n8n_owner_password 模式）。
+            # #357: 一次性顯示密碼。建立成功時唯一一次回明文；後續 GET
+            # 走 _sanitize_helm_values 遮 config.sensitive.*，不提供回取 API。
             if admin_password:
                 resp_data['admin_password'] = admin_password
             return {

@@ -217,3 +217,4 @@ from . import test_reseed_b_330
 from . import test_plan_variants_generated
 # feat: Wave C PR-C1 後端 variants 回帶（_attach_variants ＋ 三端點擴充，Refs #330）
 from . import test_wave_c_variants_attach_330
+from . import test_mcp_admin_password

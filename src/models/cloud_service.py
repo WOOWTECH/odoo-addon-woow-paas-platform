@@ -229,28 +229,6 @@ class CloudService(models.Model):
         readonly=True,
         groups='base.group_system',
     )
-    # #357: mcp-admin-core /api/auth/login 明文比對（auth/middleware.py:46）。
-    # 平台 CS 建立時生成 → 注入 chart config.sensitive.admin_password → seed-config
-    # initContainer 寫入 /data/config.json → GUI 登入。一次性顯示：建立/reset
-    # 成功 response 回明文，後續 GET service-detail 走 _sanitize_helm_values 遮
-    # config.sensitive.* → 平台不再提供明文（除 helm_values 同欄位 DB 內仍明文
-    # 儲存供後續 helm upgrade 同步）。revealed_at 給 UI 顯示「已揭示」狀態，
-    # 但不提供明文回取 API。
-    admin_password = fields.Char(
-        string='MCP Admin Password',
-        readonly=True,
-        groups='base.group_system',
-        help='#357: Platform-generated admin password for the MCP admin GUI. '
-        '明文只在 create/reset 成功 response 回傳一次，之後不再提供明文回取。'
-        '實際值同步在 helm_values.config.sensitive.admin_password。',
-    )
-    admin_password_revealed_at = fields.Datetime(
-        string='MCP Admin Password Revealed At',
-        readonly=True,
-        help='#357: 最近一次明文揭示給用戶的時間。UI 用此顯示狀態、'
-        '無明文回取 API。',
-    )
-
     # Timestamps
     deployed_at = fields.Datetime(
         string='Deployed At',
@@ -395,15 +373,13 @@ class CloudService(models.Model):
         流程：
         1. 重生成 ``secrets.token_urlsafe(24)`` 強隨機密碼
         2. deep-merge 進 ``helm_values.config.sensitive.admin_password``
-        3. 寫新密碼到 ``self.admin_password`` 欄位（同 n8n_owner_password 模式）
-        4. 戳 ``admin_password_revealed_at = now``
-        5. 呼叫 operator 新端點 ``POST /api/releases/{ns}/{name}/reset-config``
-           → 內部：read-modify-write /data/config.json（保留其他 leaf）
-                   → helm upgrade（Secret 對齊）
-                   → rollout_restart_deployment（Recreate 觸發 ConfigStore cache 重建）
-        6. 成功 → ``state='upgrading'``（讓 cron/前端 poll 觀察 pod）
+        3. 呼叫 operator 新端點 ``POST /api/releases/{ns}/{name}/reset-config``
+           → atomic Helm Secret upgrade + config.json leaf patch + rollout
+           → 任一失敗由 operator rollback，不回傳新密碼
+        4. 成功後才把新值寫入 helm_values，避免平台／Secret 不一致
+        5. 成功 → ``state='upgrading'``（讓 cron/前端 poll 觀察 pod）
                    **回傳明文密碼**（controller 包成 response.data）
-        7. 失敗 → ``state='error'`` + error_message、**不回明文**
+        6. 失敗 → **不回明文**
 
         chart seed-if-absent 在 /data/config.json 存在時 skip seed，純 helm upgrade
         無法讓新密碼生效；故走 operator 的 read-modify-write 走 surgical 路線。
@@ -413,6 +389,19 @@ class CloudService(models.Model):
             get_paas_operator_client,
             PaaSOperatorError,
         )
+
+        # Hold a row lock across the operator saga.  A second reset waits for
+        # the first request to commit, then observes state='upgrading' below
+        # instead of interleaving Secret/config rollback with a newer reset.
+        self.env.cr.execute(
+            "SELECT id FROM woow_paas_platform_cloud_service WHERE id = %s FOR UPDATE",
+            [self.id],
+        )
+        self.invalidate_recordset()
+        if self.state != 'running':
+            raise UserError(
+                "Service must be running before resetting its admin password."
+            )
 
         if not (self.helm_release_name and self.helm_namespace):
             raise UserError(
@@ -449,15 +438,11 @@ class CloudService(models.Model):
                 "reset-admin-password failed for service %s (id=%s): %s",
                 self.name, self.id, e.detail or e.message,
             )
-            raise UserError(
-                f"Reset failed: {e.detail or e.message}"
-            ) from e
+            raise UserError("Reset failed. Check service status and retry.") from e
 
         # Persist new state + persist the new password on the record.
         self.write({
             'helm_values': json.dumps(values),
-            'admin_password': new_password,
-            'admin_password_revealed_at': fields.Datetime.now(),
             'state': 'upgrading',
             'error_message': False,
         })

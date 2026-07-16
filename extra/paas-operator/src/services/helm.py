@@ -536,6 +536,7 @@ class HelmService:
         repo: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        atomic: bool = False,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
 
@@ -593,6 +594,8 @@ class HelmService:
             args.append("--reset-values")
         elif reuse_values:
             args.append("--reuse-values")
+        if atomic:
+            args.append("--atomic")
 
         # Classic Helm repo (stateless) — mirrors install(); see its note.
         if repo:
@@ -774,7 +777,12 @@ class KubernetesService:
     def __init__(self):
         self.kubectl_bin = "kubectl"
 
-    def _run_command(self, args: List[str]) -> subprocess.CompletedProcess:
+    def _run_command(
+        self,
+        args: List[str],
+        input_data: Optional[str] = None,
+        timeout: int = 30,
+    ) -> subprocess.CompletedProcess:
         """Execute a kubectl command.
 
         Args:
@@ -797,7 +805,8 @@ class KubernetesService:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                input=input_data,
+                timeout=timeout,
                 check=False,
             )
 
@@ -812,7 +821,7 @@ class KubernetesService:
 
         except subprocess.TimeoutExpired as e:
             raise KubectlException(
-                message="kubectl command timed out after 30s",
+                message=f"kubectl command timed out after {timeout}s",
                 command=safe_cmd,
                 stderr=str(e),
             )
@@ -1735,6 +1744,7 @@ class KubernetesService:
         container: str,
         command: List[str],
         timeout: int = 30,
+        input_data: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Execute a command in a pod container.
 
@@ -1760,36 +1770,23 @@ class KubernetesService:
         # hardcode a per-chart container name in this generic helper.
         if container:
             args.extend(["--container", container])
+        if input_data is not None:
+            args.append("--stdin")
         args.append("--")
         args.extend(command)
 
-        cmd = [self.kubectl_bin] + args
-        logger.info(f"Executing: {' '.join(cmd)}")
-
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
+            return self._run_command(
+                args,
+                input_data=input_data,
                 timeout=timeout,
-                check=False,
             )
-
-            if result.returncode != 0:
-                raise KubectlException(
-                    message=f"kubectl exec failed with code {result.returncode}",
-                    command=" ".join(cmd),
-                    stderr=result.stderr,
-                )
-
-            return result
-
-        except subprocess.TimeoutExpired as e:
+        except KubectlException as e:
             raise KubectlException(
-                message=f"kubectl exec timed out after {timeout}s",
-                command=" ".join(cmd),
-                stderr=str(e),
-            )
+                message=f"kubectl exec failed: {e.message}",
+                command=e.command,
+                stderr=e.stderr,
+            ) from e
 
     def patch_secret(
         self,
@@ -1960,6 +1957,24 @@ class KubernetesService:
             f"deployment/{deployment_name}",
             "--namespace", namespace,
         ])
+
+    def rollout_status_deployment(
+        self,
+        namespace: str,
+        deployment_name: str,
+        timeout_seconds: int = 120,
+    ) -> None:
+        """Wait until a deployment rollout has completed successfully."""
+        validate_namespace(namespace)
+        self._run_command(
+            [
+                "rollout", "status",
+                f"deployment/{deployment_name}",
+                "--namespace", namespace,
+                f"--timeout={timeout_seconds}s",
+            ],
+            timeout=timeout_seconds + 10,
+        )
 
     @staticmethod
     def _calculate_age(created_timestamp: str) -> str:
