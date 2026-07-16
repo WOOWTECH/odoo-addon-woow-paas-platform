@@ -257,8 +257,11 @@ class TestCloudService(TransactionCase):
         self.assertEqual(secret.admin_password, 'secret-password')
 
         demo_user = self.env.ref('base.user_demo')
-        # 上面的 sudo().search 已把值讀進 cache；不清掉的話 read() 可能吃 cache
-        # 而非真打 ACL（cache priming 假綠）。
+        # 上面的 sudo().search 已把 admin_password 讀進 cache，且 Odoo 的 cache 以
+        # (field, record id) 為 key、跨 env 共用（api.py:1117-1122），故 demo_user 的
+        # env 看得到同一份。本例的 AccessError 其實來自 read() 在 fetch 前跑的
+        # model-level ACL 檢查（ir.model.access 只給 base.group_system），與 cache 無關
+        # ——invalidate_all 是保險，確保斷言測的是真 ACL 而非快取殘留。
         self.env.invalidate_all()
 
         with self.assertRaises(AccessError):

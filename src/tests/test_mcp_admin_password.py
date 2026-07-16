@@ -18,6 +18,10 @@ class TestMcpAdminPassword(TransactionCase):
             'name': 'MCP Odoo test',
             'slug': 'mcp-odoo',
             'category': 'mcp',
+            # helm_repo_url 是 required（DB NOT NULL）：不給 → setUp 就 NotNullViolation，
+            # 整個 class 每支測試 ERROR（本檔 WIP 期間 3/3 全 ERROR＝從未真跑）。
+            # OCI chart 慣例是空字串，對齊真實 seed。
+            'helm_repo_url': '',
             'helm_chart_name': 'oci://example/mcp-server',
             'helm_chart_version': '0.1.5',
             # #357 C01：對齊真實 seed 形態——MCP 內建於 body（mcp_enabled=False），
@@ -25,6 +29,9 @@ class TestMcpAdminPassword(TransactionCase):
             'mcp_enabled': False,
             'has_admin_gui': True,
         })
+        # controller._create_service 要求 plan_id；上面兩個 template 都沒掛
+        # subscription_plan_ids，故 controller 不做歸屬檢查，借現成 seed plan 即可。
+        self.plan = self.env.ref('woow_paas_platform.plan_mcp_odoo_monthly')
         self.service = self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',
         ).create({
@@ -158,6 +165,7 @@ class TestMcpAdminPassword(TransactionCase):
         sidecar_tmpl = self.env['woow_paas_platform.cloud_app_template'].create({
             'name': 'Sidecar-backed n8n',
             'slug': 'n8n-sidecar-test',
+            'helm_repo_url': '',
             'helm_chart_name': 'oci://example/n8n',
             'helm_chart_version': '1.0.0',
             'mcp_enabled': True,      # 外掛 sidecar
@@ -197,9 +205,18 @@ class TestMcpAdminPassword(TransactionCase):
         'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
     )
     def test_reset_backfills_secret_for_legacy_service(self, get_client):
-        """C03 配套：reset 不需要舊密碼。legacy 服務（secret 缺席）reset 應成功並
-        補建 secret——這正是租戶取得密碼的路徑。修復前 action_reset_admin_password
-        開頭的 `if mcp_enabled and not secret: raise` 會擋掉（且判別器還是錯的）。
+        """C03 配套：legacy 服務（secret 缺席）reset 應成功並補建 secret——這正是
+        租戶取得密碼的路徑。
+
+        本測試守的是 _set_admin_password_secret 的 create-or-write 分支（把
+        :801-809 的 create 分支拿掉即紅）。
+
+        誠實註記（勿再寫成「revert C03 的 reset guard 這裡會紅」——實跑證實不會）：
+        被移除的舊 guard 原文是 `if self.template_id.mcp_enabled and not secret`，
+        而本檔 fixture 對齊真實 seed 設 mcp_enabled=False → `False and ...` 短路 →
+        該 guard 對三個目標 template 從不觸發、本就是死碼，移除屬清理而非行為修復。
+        （它對 mcp_enabled=True 且無 secret 的 legacy 服務才是活的，但那形態的
+        reset 已先被 controller 的 has_admin_gui 判別器擋下。）
         """
         get_client.return_value = MagicMock()
         self._secret_of(self.service).unlink()
@@ -210,3 +227,93 @@ class TestMcpAdminPassword(TransactionCase):
         secret = self._secret_of(self.service)
         self.assertTrue(secret, 'reset 應為 legacy 服務補建 secret')
         self.assertEqual(secret.admin_password, new_password)
+
+    # ------------------------------------------------------------------
+    # #357 C01：controller ↔ model 兩端判別器收斂（#357 根因＝兩端漂移）
+    #
+    # 鑑別力關鍵：fixture 的 slug 必須「不在」舊 allowlist
+    # ('mcp-odoo','mcp-odoo-manage','mcp-n8n') 內，否則兩種判別器都會命中、
+    # 測不出差異。下面兩支分別鎖死漂移的兩個方向。
+    # ------------------------------------------------------------------
+
+    def _patch_paas_request(self):
+        return patch(
+            'odoo.addons.woow_paas_platform.controllers.paas.request',
+            new=MagicMock(env=self.env),
+        )
+
+    def test_controller_create_uses_has_admin_gui_not_slug_allowlist(self):
+        """C01 收斂（錯擋方向）：slug 不在舊 allowlist 但 has_admin_gui=True 的
+        template，controller 仍須生密碼，且該密碼必須就是落庫那組。
+
+        這一條同時鎖死三段：controller 生成 → with_context 傳遞 → model 落庫。
+        若把 controller:2278 改回 slug allowlist，這個「未來新增的 has_admin_gui
+        template」拿不到密碼 → 紅。反之若 response 密碼 != secret 密碼，就是 #357
+        的病灶本身（租戶拿到一組永不生效的密碼）。
+        """
+        future_tmpl = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'Future MCP app',
+            'slug': 'mcp-future-app',   # 刻意不在舊 slug allowlist 內
+            'category': 'mcp',
+            'helm_repo_url': '',
+            'helm_chart_name': 'oci://example/mcp-server',
+            'helm_chart_version': '0.1.5',
+            'mcp_enabled': False,
+            'has_admin_gui': True,
+        })
+        with self._patch_paas_request():
+            result = self.controller._create_service(
+                workspace=self.workspace,
+                template_id=future_tmpl.id,
+                name='Future MCP',
+                values={},
+                plan_id=self.plan.id,
+            )
+        self.assertTrue(result.get('success'), result.get('error'))
+        password = result['data'].get('admin_password')
+        self.assertTrue(
+            password, 'has_admin_gui=True → 建立 response 必須帶一次性明文密碼')
+
+        service = self.env['woow_paas_platform.cloud_service'].browse(
+            result['data']['id'])
+        secret = self._secret_of(service)
+        self.assertTrue(secret, 'controller 生成的密碼必須經 model 落庫')
+        self.assertEqual(
+            secret.admin_password, password,
+            'response 的密碼必須等於落庫那組——不相等即 #357 病灶：'
+            '租戶看到一組永不生效的密碼')
+
+    def test_controller_create_skips_slug_lookalike_without_admin_gui(self):
+        """C01 收斂（錯放方向）：slug 在舊 allowlist 內、但 has_admin_gui=False 的
+        template 不得被供給 admin_password。
+
+        若把 controller:2278 改回 slug allowlist，這個 template 會拿到一組密碼、
+        但 model 端閘門（has_admin_gui）不會建 secret → 密碼被丟棄卻已回給租戶
+        ＝#357 原病灶重現 → 紅。
+        """
+        lookalike = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'Slug lookalike without admin GUI',
+            'slug': 'mcp-odoo-manage',   # 在舊 slug allowlist 內
+            'category': 'mcp',
+            'helm_repo_url': '',
+            'helm_chart_name': 'oci://example/mcp-server',
+            'helm_chart_version': '0.1.5',
+            'mcp_enabled': False,
+            'has_admin_gui': False,      # 但沒有 admin GUI
+        })
+        with self._patch_paas_request():
+            result = self.controller._create_service(
+                workspace=self.workspace,
+                template_id=lookalike.id,
+                name='Lookalike',
+                values={},
+                plan_id=self.plan.id,
+            )
+        self.assertTrue(result.get('success'), result.get('error'))
+        self.assertNotIn(
+            'admin_password', result['data'],
+            'has_admin_gui=False → 不得回密碼（slug 像不算數）')
+        service = self.env['woow_paas_platform.cloud_service'].browse(
+            result['data']['id'])
+        self.assertFalse(
+            self._secret_of(service), 'has_admin_gui=False 不得建 secret')
