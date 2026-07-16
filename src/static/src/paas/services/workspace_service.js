@@ -462,6 +462,38 @@ export const workspaceService = reactive({
     },
 
     /**
+     * Change a Smart Home subscription's plan（含 AC 席數變體切換）.
+     *
+     * 後端 `api_smarthome_change_plan`（controllers/smart_home.py）已完成
+     * refund→wallet→close-old→open-new cascade；此 client 讓 SH detail 面的
+     * ChangePlanModal 能觸發它——補齊 SH 端唯一缺的前端綁定（對齊
+     * cloud_service.changePlan / securityAccessService.changePlan）。席數變化
+     * 靠選到不同的席數變體 plan 表達，故 payload 與 CS/SA 一致只送 plan_id。
+     *
+     * @param {number} workspaceId
+     * @param {number} homeId
+     * @param {number} planId - 目標方案 id（base 或席數變體）
+     * @returns {Promise<ApiResponse<Object>>}
+     */
+    async changeSmartHomePlan(workspaceId, homeId, planId) {
+        this.operationLoading.changeSmartHomePlan = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/smarthomes/${homeId}/change-plan`,
+                { plan_id: planId },
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.changeSmartHomePlan = false;
+        }
+    },
+
+    /**
      * Fetch all smart homes for a workspace
      * @param {number} workspaceId - Target workspace ID
      * @returns {Promise<ApiResponse<Object[]>>}

@@ -5,6 +5,7 @@ import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
+import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
 import { workspaceService } from "../../services/workspace_service";
 import { getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -30,6 +31,7 @@ export class SmartHomeDetailPage extends Component {
     static template = "woow_paas_platform.SmartHomeDetailPage";
     static components = {
         WoowCard, WoowIcon, WoowButton, StatusBadge, SkipTrialModal,
+        ChangePlanModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -47,6 +49,7 @@ export class SmartHomeDetailPage extends Component {
             deleteError: null,
             refreshing: false,
             showSkipTrialModal: false,
+            showChangePlanModal: false,
             domain: "woowtech.io",
         });
         this.router = useState(router);
@@ -245,6 +248,41 @@ export class SmartHomeDetailPage extends Component {
     confirmSmartHomeSkip = () => {
         return workspaceService.skipTrialSmartHome(
             this.props.workspaceId, this.props.homeId,
+        );
+    };
+
+    // -- Change Plan（改方案／改席數，復用 ChangePlanModal + PlanSelector）----
+
+    showChangePlan() {
+        this.state.showChangePlanModal = true;
+    }
+
+    hideChangePlan() {
+        this.state.showChangePlanModal = false;
+    }
+
+    onPlanChanged() {
+        this.hideChangePlan();
+        this.loadSmartHome();
+    }
+
+    // SH 記錄無 template FK，故循 CreateSmartHomeModal 路徑先取唯一 SH template
+    // （本 surface 僅一個）再抓 plans；plans 已含 C1 席數變體。confirmChange 打
+    // 本 PR 於 workspace_service 補上的 changeSmartHomePlan client。
+    loadSmartHomePlans = async () => {
+        const t = await workspaceService.fetchSmartHomeTemplates();
+        if (!t.success || !t.data.length) {
+            return {
+                success: false,
+                error: t.error || "No Smart Home template available",
+            };
+        }
+        return workspaceService.fetchSmartHomePlans(t.data[0].id);
+    };
+
+    confirmSmartHomeChangePlan = (planId) => {
+        return workspaceService.changeSmartHomePlan(
+            this.props.workspaceId, this.props.homeId, planId,
         );
     };
 }

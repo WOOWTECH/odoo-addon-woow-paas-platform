@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.ChangePlanModal">
+    <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <h2>變更方案</h2>
+          <button
+            class="o_woow_modal_close"
+            t-on-click="props.onClose"
+            t-att-disabled="state.changing">
+            <WoowIcon name="'close'" size="20"/>
+          </button>
+        </div>
+
+        <div class="o_woow_modal_body">
+          <!-- 目前方案（變體 plan 名已含席數，直接顯示） -->
+          <div class="o_woow_change_plan__current">
+            <span class="o_woow_change_plan__current_label">目前方案</span>
+            <span class="o_woow_change_plan__current_value" t-esc="currentPlanName"/>
+          </div>
+
+          <!-- 載入方案清單中 -->
+          <t t-if="state.loadingPlans">
+            <div class="o_woow_pay_confirm_text">
+              <WoowIcon name="'sync'" size="20" class="'o_woow_spin'"/>
+              <p>載入方案中…</p>
+            </div>
+          </t>
+
+          <!-- 方案清單載入失敗 -->
+          <t t-if="!state.loadingPlans and state.plansError">
+            <div class="o_woow_error_message">
+              <WoowIcon name="'error'" size="16"/>
+              <span t-esc="state.plansError"/>
+            </div>
+          </t>
+
+          <!-- 方案選擇器（內嵌 PlanSelector，變體自動展開席數第二步） -->
+          <t t-if="!state.loadingPlans and !state.plansError">
+            <div class="o_woow_form_group">
+              <label>選擇新方案</label>
+              <PlanSelector
+                plans="state.plans"
+                selectedPlanId="state.selectedPlanId"
+                onSelect.bind="onSelectPlan"/>
+            </div>
+
+            <!-- 退點通用說明（無退點預覽 API，實際金額於確認後呈現） -->
+            <div class="o_woow_change_plan__advisory">
+              <WoowIcon name="'info'" size="16"/>
+              <span>
+                變更方案會關閉目前訂閱並依新方案重新計費；目前週期未使用的部分
+                將按比例退點至錢包（試用中或本期尚未扣款則不退點）。
+              </span>
+            </div>
+          </t>
+
+          <div t-if="state.error" class="o_woow_error_message">
+            <WoowIcon name="'error'" size="16"/>
+            <span t-esc="state.error"/>
+          </div>
+        </div>
+
+        <div class="o_woow_modal_footer">
+          <WoowButton
+            variant="'secondary'"
+            size="'md'"
+            onClick="props.onClose"
+            disabled="state.changing">
+            取消
+          </WoowButton>
+          <WoowButton
+            variant="'primary'"
+            size="'md'"
+            onClick.bind="onConfirm"
+            disabled="!canConfirm">
+            <t t-if="state.changing">
+              <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+              處理中…
+            </t>
+            <t t-else="">
+              <WoowIcon name="'swap_horiz'" size="18"/>
+              確認變更
+            </t>
+          </WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

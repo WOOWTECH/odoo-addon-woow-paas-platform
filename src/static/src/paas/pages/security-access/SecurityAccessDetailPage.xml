@@ -34,6 +34,11 @@
           <div class="o_woow_sa_detail__actions">
             <WoowButton t-if="state.sa.state === 'pending' or state.sa.state === 'error'"
                         variant="'primary'" onClick.bind="provision">Provision</WoowButton>
+            <WoowButton variant="'secondary'"
+                        onClick="() => state.showChangePlanModal = true">
+              <WoowIcon name="'swap_horiz'" size="16"/>
+              變更方案
+            </WoowButton>
             <WoowButton variant="'danger'"
                         onClick="() => state.showDeleteConfirm = true">
               <WoowIcon name="'delete'" size="16"/>
@@ -401,6 +406,13 @@
             confirmSkip="confirmSkipTrial"
             onClose="() => state.showSkipTrialModal = false"
             onSkipped="onTrialSkipped"/>
+
+        <ChangePlanModal t-if="state.showChangePlanModal"
+            service="state.sa"
+            loadPlans="loadSaPlans"
+            confirmChange="confirmSaChangePlan"
+            onClose="() => state.showChangePlanModal = false"
+            onChanged="onPlanChanged"/>
 
         <AddPolicyModal t-if="state.showPolicyModal and state.policyModalRoute"
             workspaceId="props.workspaceId" saId="props.saId"
