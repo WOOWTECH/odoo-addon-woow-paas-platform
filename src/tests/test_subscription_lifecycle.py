@@ -582,11 +582,18 @@ class TestForceTrialDatesFromPlan(TransactionCase):
         )
         self.assertEqual(sub.sh_date_of_next_payment, expected_start)
 
-    def test_dedup_collision_still_forces_trial_dates(self):
-        """Second sub on the same plan + partner triggers sh_subscription
-        dedup. The unconditional force path still writes a coherent date
-        triple — this is the path that worked pre-#33 and must not
-        regress."""
+    def test_returning_partner_second_sub_enters_active_no_trial(self):
+        """#367: a second subscription for the same partner (the dedup-
+        collision path — same plan + product) must NOT restart the trial.
+
+        Pre-#367 the unconditional force-trial path re-granted a fresh trial
+        even on this collision path — part of the very bug #367 fixes (the
+        third-party sub_exists already flagged the collision, but the platform
+        override re-enabled trial anyway). The partner is now a returning
+        customer, so the new sub enters the active (non-trial) state; the
+        date-triple coherence invariant (#33/#39) still holds on the active
+        branch. Cf. the #327 refund-window test rewrite.
+        """
         first = self._make_smart_home('First Home')
         first._create_and_confirm_subscription(self.partner, self.plan_trial)
 
@@ -595,16 +602,16 @@ class TestForceTrialDatesFromPlan(TransactionCase):
         sub = second.sudo().subscription_id
 
         today = date.today()
-        expected_trial_end = today + timedelta(days=7) - timedelta(days=1)
-        expected_start = expected_trial_end + timedelta(days=1)
-        expected_end = (
-            expected_start + relativedelta(months=1) - timedelta(days=1)
-        )
+        expected_end = today + relativedelta(months=1) - timedelta(days=1)
 
-        self.assertTrue(sub.sh_trial)
-        self.assertEqual(sub.sh_trial_end_date, expected_trial_end)
-        self.assertEqual(sub.sh_start_date, expected_start)
+        self.assertFalse(
+            sub.sh_trial,
+            '#367: returning partner second sub must not restart trial',
+        )
+        self.assertFalse(sub.sh_trial_end_date)
+        self.assertEqual(sub.sh_start_date, today)
         self.assertEqual(sub.sh_end_date, expected_end)
+        self.assertGreaterEqual(sub.sh_end_date, sub.sh_start_date)
 
     def test_non_trial_plan_leaves_trial_fields_inert(self):
         """``plan.sh_trial=False`` must skip the trial helper entirely so

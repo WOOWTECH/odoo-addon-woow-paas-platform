@@ -161,11 +161,27 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         subscription._onchange_sh_trial_subcription_start_date()
         subscription._onchange_sh_trial_subcription_end_date()
 
+        # #367: an existing customer changing plans (change-plan closes the old
+        # subscription then creates a new one) must NOT restart the 7-day free
+        # trial. Respect the third-party ``sub_exists`` semantics — "does this
+        # partner already hold a subscription record", including closed /
+        # cancelled ones (its search domain carries no state filter) — but widen
+        # the scope from per-(partner, plan, product) to per-partner: Eugene's
+        # #367 decision is that ANY prior subscription (even under a different
+        # plan/product, as change-plan always is) disqualifies a fresh trial.
+        # Only a brand-new partner gets the trial. The just-created
+        # ``subscription`` is excluded via the id guard, mirroring the
+        # third-party's own ``sub_exists[-1].id != self.id`` self-exclusion.
+        partner_has_prior_sub = bool(Subscription.sudo().search_count([
+            ('sh_partner_id', '=', partner.id),
+            ('id', '!=', subscription.id),
+        ]))
+
         # Always override the onchange-chain-computed dates with plan-driven
         # values; the third-party onchange compute is unreliable on both
         # branches (issue #33 for trial, #39 for non-trial). See helper
         # docstrings for the specific arithmetic each branch corrects.
-        if plan.sh_trial:
+        if plan.sh_trial and not partner_has_prior_sub:
             self._force_trial_dates_from_plan(subscription, plan)
         else:
             self._force_active_dates_from_plan(subscription, plan)
@@ -221,7 +237,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         )
 
     def _force_active_dates_from_plan(self, subscription, plan):
-        """Force start/end/next-payment fields on a non-trial ``subscription``.
+        """Force ``subscription`` into a coherent non-trial (active) state.
 
         Plan-driven (start_date=today, end_date=start+cycle_delta-1d) so
         downstream readers never see end < start; cycle_delta does NOT
@@ -231,6 +247,13 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         ``sh_date_of_next_payment`` is seeded to ``start_date``;
         ``sh_subscription_confirm()`` advances it by one cycle to
         ``start + cycle_delta`` after creating the first invoice.
+
+        #367: also clears ``sh_trial`` / ``sh_trial_end_date``. This helper is
+        the active branch, reachable for a trial plan when the partner is a
+        returning customer — the onchange chain may have flipped
+        ``sh_trial=True`` (its per-(partner,plan,product) sub_exists is empty for
+        the new plan), so the flag must be cleared to stay consistent with the
+        active date triple.
         """
         cycle_delta = {
             'day': relativedelta(days=plan.sh_duration),
@@ -241,6 +264,11 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         start_date = date.today()
         end_date = start_date + cycle_delta - relativedelta(days=1)
         subscription.write({
+            # #367: the onchange chain may have left sh_trial=True; the active
+            # path is non-trial by definition, so clear the flag and any
+            # trial-end residue to keep sh_trial and the date triple consistent.
+            'sh_trial': False,
+            'sh_trial_end_date': False,
             'sh_start_date': start_date,
             'sh_end_date': end_date,
             'sh_date_of_next_payment': start_date,
