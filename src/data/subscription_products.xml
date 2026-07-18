@@ -932,6 +932,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_n8n_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_n8n_yearly" model="product.product">
@@ -942,6 +943,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_n8n_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_n8n_t2_monthly" model="product.product">
@@ -952,6 +954,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_n8n_t2_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_n8n_t2_yearly" model="product.product">
@@ -962,6 +965,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_n8n_t2_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_n8n_t3_monthly" model="product.product">
@@ -972,6 +976,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_n8n_t3_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_n8n_t3_yearly" model="product.product">
@@ -982,6 +987,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_n8n_t3_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_n8n_t4_monthly" model="product.product">
@@ -992,6 +998,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_n8n_t4_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_n8n_t4_yearly" model="product.product">
@@ -1002,6 +1009,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_n8n_t4_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_postgresql_monthly" model="product.product">
@@ -1012,6 +1020,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_postgresql_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_postgresql_yearly" model="product.product">
@@ -1022,6 +1031,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_postgresql_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_odoo_monthly" model="product.product">
@@ -1032,6 +1042,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_odoo_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_odoo_yearly" model="product.product">
@@ -1042,6 +1053,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_odoo_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_odoo_t2_monthly" model="product.product">
@@ -1052,6 +1064,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_odoo_t2_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_odoo_t2_yearly" model="product.product">
@@ -1062,6 +1075,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_odoo_t2_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_odoo_t3_monthly" model="product.product">
@@ -1072,6 +1086,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_odoo_t3_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_odoo_t3_yearly" model="product.product">
@@ -1082,6 +1097,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_odoo_t3_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_anythingllm_monthly" model="product.product">
@@ -1092,6 +1108,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_anythingllm_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_anythingllm_yearly" model="product.product">
@@ -1102,6 +1119,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_anythingllm_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_smarthome_monthly" model="product.product">
@@ -1112,6 +1130,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_smarthome_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_smarthome_yearly" model="product.product">
@@ -1122,6 +1141,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_smarthome_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_smarthome_mcp_monthly" model="product.product">
@@ -1132,6 +1152,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_smarthome_mcp_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_smarthome_mcp_yearly" model="product.product">
@@ -1142,6 +1163,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_smarthome_mcp_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <!-- HA PaaS Free product（#336：0 元） -->
@@ -1153,6 +1175,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_ha_paas_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <!-- Security Access Products (one per plan) -->
@@ -1164,6 +1187,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_entry_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
         <record id="product_security_access_entry_yearly" model="product.product">
             <field name="name">遠端安全連結訂閱服務（6 組） Subscription</field>
@@ -1173,6 +1197,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_entry_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
         <record id="product_security_access_pro_monthly" model="product.product">
             <field name="name">遠端安全連結訂閱服務（10 組） Subscription</field>
@@ -1182,6 +1207,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_pro_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
         <record id="product_security_access_pro_yearly" model="product.product">
             <field name="name">遠端安全連結訂閱服務（10 組） Subscription</field>
@@ -1191,6 +1217,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_pro_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <!-- MCP Server: Hermes Products (one per plan) -->
@@ -1202,6 +1229,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_r1_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_security_access_r1_yearly" model="product.product">
@@ -1212,6 +1240,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_r1_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_security_access_r3_monthly" model="product.product">
@@ -1222,6 +1251,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_r3_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_security_access_r3_yearly" model="product.product">
@@ -1232,6 +1262,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_security_access_r3_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_hermes_monthly" model="product.product">
@@ -1242,6 +1273,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_hermes_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_hermes_yearly" model="product.product">
@@ -1252,6 +1284,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_hermes_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_hermes_t2_monthly" model="product.product">
@@ -1262,6 +1295,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_hermes_t2_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_hermes_t2_yearly" model="product.product">
@@ -1272,6 +1306,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_hermes_t2_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_hermes_t3_monthly" model="product.product">
@@ -1282,6 +1317,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_hermes_t3_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_hermes_t3_yearly" model="product.product">
@@ -1292,6 +1328,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_hermes_t3_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <!-- MCP Server: Odoo Products (one per plan) -->
@@ -1303,6 +1340,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_odoo_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_odoo_yearly" model="product.product">
@@ -1313,6 +1351,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_odoo_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <!-- MCP Server: n8n Products (one per plan) -->
@@ -1324,6 +1363,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_n8n_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_n8n_yearly" model="product.product">
@@ -1334,6 +1374,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_n8n_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <!-- MCP Server: Odoo Manage Products（#338） -->
@@ -1345,6 +1386,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_odoo_manage_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <record id="product_mcp_odoo_manage_yearly" model="product.product">
@@ -1355,6 +1397,7 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_odoo_manage_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
         <!-- #341（Wave A）撞車收斂：HA PaaS 0 元 plan/product 沿用 Wave A 已在 develop
