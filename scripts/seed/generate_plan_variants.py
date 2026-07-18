@@ -242,6 +242,8 @@ def _product_record(v):
         '            <field name="purchase_ok" eval="False"/>',
         '            <field name="sh_product_subscribe" eval="True"/>',
         f'            <field name="sh_subscription_plan_id" ref="{_plan_xmlid(v)}"/>',
+        # #366：pts 交易免稅——明寫空 taxes_id，不繼承 company 預設銷項稅
+        '            <field name="taxes_id" eval="[(6, 0, [])]"/>',
         '        </record>',
     ])
 

@@ -220,3 +220,5 @@ from . import test_wave_c_variants_attach_330
 from . import test_mcp_admin_password
 # feat: #357 C05/C19/C20 reset admin password 授權守線與明文外洩面
 from . import test_mcp_admin_password_authz
+# fix: #366 訂閱方案 product 不應課稅（seed 明寫空 taxes_id + migration force-write）
+from . import test_subscription_tax_clear_366
