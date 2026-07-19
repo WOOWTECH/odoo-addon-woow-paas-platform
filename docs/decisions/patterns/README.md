@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 27 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 28 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -26,6 +26,7 @@
 | [[constraint-input-trust-expansion]] | model 有 attacker-writable Many2many + ir.rule / `@api.constrains` 用該 m2m 做 subset / authority 推導時 |
 | [[attachment-row-level-acl-and-anchor-stamping]] | 自家 model 透過 `ir.attachment` 存敏感 / RCE-class binary payload → anchor stamping + ir.attachment ir.rule 兩層 |
 | [[odoo-std-field-no-override]] | 任何想動 Odoo std model 欄位型態 / shape 的 PR |
+| [[hidden-template-presentation-chain]] | 新增/修改 /woow controllers 曝光點（list、by-id、dashboard、訂閱/發票清單）時 — template.is_hidden SSOT＋DRY helper 全鏈呈現層過濾（非 ACL；/my、/report 繞過；D2 專屬 hidden workspace 不變式） |
 
 ### 資料模型 / relation 設計（新增 agent 資源類型或動 binding 模型前）
 
@@ -70,6 +71,7 @@
 - [constraint-input-trust-expansion](constraint-input-trust-expansion.md)
 - [credential-claim-test-fixture-coupling](credential-claim-test-fixture-coupling.md)
 - [external-resource-env-token-naming](external-resource-env-token-naming.md)
+- [hidden-template-presentation-chain](hidden-template-presentation-chain.md)
 - [invariant-recompute-on-orm-write-hook](invariant-recompute-on-orm-write-hook.md)
 - [mcp-acl-6-rule-split](mcp-acl-6-rule-split.md)
 - [ns-quota-hard-limits-limitrange-lockstep](ns-quota-hard-limits-limitrange-lockstep.md)

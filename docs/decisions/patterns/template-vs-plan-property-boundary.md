@@ -11,6 +11,8 @@
 
 **技術根據**：plan 的規格 overlay（`CloudService._apply_plan_spec_overlay`，#332）只疊 `resources`／`persistence.size`／workers 字串替換——**刻意不碰 image 與 chart**。要換 image 沒有 plan 級機制，只能開新 template。
 
+**`storefront_hidden` 為何不用 Odoo `active`**：`active=False` 會被 ORM `active_test` 全域過濾——帶封存 plan 的既存訂閱在 cron／結算／報表**任何 search 路徑**都會被靜默漏掉（repo 實證教訓）。`storefront_hidden` 語意＝**僅前台購買選項不顯示**，既存訂閱的計費／續期／退點完全照常（rationale 見 `src/models/sh_subscription_plan_visibility.py` 模組 docstring）。
+
 ## 何時必看
 
 - 新商品變體要上架，猶豫「開新 template 還是加 plan」時。
@@ -22,7 +24,7 @@
 |---|---|---|
 | Odoo CS 三階（T1/T2/T3） | 同一筆 `cloud_app_odoo` ↔ 6 plans | 同 image，只差價格與 cs_* 規格（taxonomy §3.3 Option B 拍板） |
 | MCP 標準版 vs Manage 版（#338） | 兩筆 template（`cloud_app_mcp_odoo` / `cloud_app_mcp_odoo_manage`） | 同是 Odoo MCP 但 **image 不同**（`odoo-mcp-admin` vs `odoo-manage-mcp-admin`）＋連線模型不同 |
-| free HA PaaS（#336，未來） | 獨立 template（掛 Elmo 輕量 lite image、`max_per_partner=1`、隱藏） | 付費 HA（若有）必為完整版 image → 屆時另開一筆，可見性也各自乾淨（free 永遠隱藏、付費公開） |
+| free HA PaaS（#336，已落地） | 獨立 template `cloud_app_ha_paas`（PR #343 provision API＋PR #350 seed `is_active=True`；`max_per_partner=1`、`is_hidden=True`）；目前 pin 官方 HA image（stopgap），Elmo 輕量 image 到位後換 pin | 付費 HA（若有）必為完整版 image → 屆時另開一筆，可見性也各自乾淨（free 永遠隱藏、付費公開） |
 
 ## 反向邊界（本 pattern 不管的）
 

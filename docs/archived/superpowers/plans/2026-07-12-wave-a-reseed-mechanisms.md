@@ -1,3 +1,13 @@
+---
+title: Wave A Re-seed 機制件實作計畫（A1–A6，三 PR）
+category: archived
+status: archived
+created: 2026-07-12
+archived: 2026-07-19
+archived-from: docs/superpowers/plans/2026-07-12-wave-a-reseed-mechanisms.md
+archived-reason: "機制已全落地（PR #341/#344/#346＋follow-up #353），設計邊界與 SOP 現行權威為 docs/decisions/patterns/template-vs-plan-property-boundary.md 與 docs/guides/maintenance/plan-catalog-update.md，規格權威為 docs/plans/2026-Q3/ 定價雙檔"
+---
+
 # Wave A Re-seed 機制件實作計畫（A1–A6，三 PR）
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -47,7 +57,7 @@
 ### Task 0: 校驗清單與基線
 
 **Files:**
-- Read only（本 task 不改碼）＋ Copy: 本 plan 檔 → `docs/superpowers/plans/2026-07-12-wave-a-reseed-mechanisms.md`
+- Read only（本 task 不改碼）＋ Copy: 本 plan 檔 → `docs/archived/superpowers/plans/2026-07-12-wave-a-reseed-mechanisms.md`
 
 **Interfaces:**
 - Produces: 校驗結果表（填進本 plan 檔尾「Task 0 校驗結果」節），後續 task 引用其中的具名參數

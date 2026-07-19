@@ -20,6 +20,7 @@ superpowers（brainstorming / writing-plans）產出中**已落地且知識已�
 | [2026-06-14-agent-idle-reaper.md](plans/2026-06-14-agent-idle-reaper.md) | D4 idle reaper（scale-to-0）計畫；已落地 | 同上（2026-06-25 批次歸檔） |
 | [2026-06-14-drift-reaped-gc-eligibility.md](plans/2026-06-14-drift-reaped-gc-eligibility.md) | drift/webhook 讓 reaped session GC 免疫的修復計畫；PR #200 落地（.40） | 知識已轉入 pitfall `reaped-since-single-path-stamp-gc-immunity` |
 | [2026-07-10-330-pricing-seed-redesign-plan.md](plans/2026-07-10-330-pricing-seed-redesign-plan.md) | #330 定價 seed 重定＋taxonomy 實作 plan；PR #333 merged | 現行 SOP＝`guides/maintenance/plan-catalog-update.md`；拍板權威＝`plans/2026-Q3/2026-07-10-plan-taxonomy-pricing.md`；價目已被 Wave B 對齊 214 manifest 取代 |
+| [2026-07-12-wave-a-reseed-mechanisms.md](plans/2026-07-12-wave-a-reseed-mechanisms.md) | Wave A 六機制件三 PR 實作計畫（.54/.55/.56）；PR #341/#344/#346＋follow-up #353 全 merged | 設計邊界＝`decisions/patterns/template-vs-plan-property-boundary.md`；SOP＝`guides/maintenance/plan-catalog-update.md`；規格權威＝`plans/2026-Q3/` 定價雙檔 |
 
 ## specs/
 

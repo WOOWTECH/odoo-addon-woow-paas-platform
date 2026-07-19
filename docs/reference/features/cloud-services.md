@@ -670,6 +670,43 @@ class CloudService(models.Model):
     last_upgraded_at = fields.Datetime()
 ```
 
+#### Plan 規格 overlay（cs_\*，#332）
+
+> 2026-07 補錄；機制出自 Wave A A6，來源：
+> `docs/archived/superpowers/plans/2026-07-12-wave-a-reseed-mechanisms.md`。
+
+`sh.subscription.plan` 上有四個規格欄位 `cs_vcpu` / `cs_ram_gb` /
+`cs_storage_gb` / `cs_odoo_workers`（定義在
+`src/models/sh_subscription_plan_cs_spec.py:14`）。建立服務時，
+`_create_service` 組完 `merged_values` 後呼叫
+`CloudService._apply_plan_spec_overlay`（`src/controllers/paas.py:2314`、
+實作 `src/models/cloud_service.py:1547`）把選定 plan 的規格疊進 helm values：
+
+- `cs_vcpu` → `resources.{requests,limits}.cpu`
+- `cs_ram_gb` → `resources.{requests,limits}.memory`（整數 GB 用 `Gi`、否則換算 `Mi`）
+- `cs_storage_gb` → `persistence.size`
+- `cs_odoo_workers` → 改寫 `customPostInitScripts` 內的 `workers = 0`，
+  並依 `cs_ram_gb` 換算 `limit_memory_hard`（0.85／worker）與
+  `limit_memory_soft`（0.70／worker）
+
+**行為邊界**：
+
+- **cs_\* 為 0 的維度一律不碰**＝與 template 預設 bit-for-bit 相同；
+  刻意不改 template seed（避開 sticky noupdate），見
+  `src/models/cloud_service.py:1550` docstring。
+- **workers 替換是精確字串 replace、非正則**：逐 marker 斷言全部 script
+  合計恰 1 處，count != 1 直接 raise（fail-loud，不靜默 no-op），見
+  `src/models/cloud_service.py:1585-1591`。
+- **上方 `allocated_*` 欄位改讀選定 plan 規格**，template `min_*` 退為
+  fallback（`_allocated_vals_from`，`src/models/cloud_service.py:1541-1543`：
+  `plan.cs_vcpu or template.min_vcpu` 依此類推）。
+- **overlay 只接 create 路徑**：change-plan endpoint
+  （`src/controllers/paas.py:956`）只換訂閱、不觸發 redeploy，
+  既有實例規格不隨新 plan 更新（#342 待排期）。
+
+template（產品形狀）與 plan（規格檔位）的屬性歸屬邊界見
+`../../decisions/patterns/template-vs-plan-property-boundary.md`。
+
 ### CloudServiceBackup _(Future Phase)_
 
 ### CloudServiceLog _(Future Phase)_

@@ -11,7 +11,7 @@
 | **AC 席數變體**（`+N access`，208 筆） | `src/data/subscription_products_variants.xml`＋`src/data/subscription_template_links_variants.xml`＋`src/tests/test_plan_variants_generated.py` | **全自動生成，嚴禁手改**（檔頭有 GENERATED 標記）；改價＝改 manifest 重跑 generator |
 | **升級軌** | `src/migrations/18.0.1.0.NN/post-migrate.py` → delegate 到 `src/models/sh_subscription_plan_*.py` 的 `_woow_migrate_*` method | 每次 base 改價新開一支（版號＝該 PR 改完的 manifest 版號） |
 
-**單一事實源**：`docs/plans/2026-Q3/2026-07-12-cloud-services-214-manifest.md`（Elmo 官方定價 manifest）。所有變體價格只能來自它；base 價格的權威對照表在 `docs/superpowers/plans/2026-07-13-wave-b-reseed-generator.md` 的「PR-B2 base reprice 權威表」。
+**單一事實源**：`docs/plans/2026-Q3/2026-07-12-cloud-services-214-manifest.md`（Elmo 官方定價 manifest）。所有變體價格只能來自它；base 價格的權威對照表在 `docs/plans/2026-Q3/2026-07-13-wave-b-reseed-generator.md` 的「PR-B2 base reprice 權威表」。
 
 ## 2. Scripts
 
@@ -94,4 +94,4 @@ base record 手寫（鏡射同家族欄位集）＋generator 對映表擴充＋�
 ## 5. 歷史脈絡（為什麼長這樣）
 
 - 甲路線全展開（2026-07-12 拍板）：每個「服務×tier×AC 席數」＝獨立 plan，訂閱 header-only 結算原樣。
-- 設計文件：`docs/superpowers/plans/2026-07-13-wave-b-reseed-generator.md`（generator＋reprice）、`docs/plans/2026-Q3/2026-07-10-plan-taxonomy-pricing.md`（欄位佈局）、`docs/decisions/patterns/template-vs-plan-property-boundary.md`（何時開新 template）。
+- 設計文件：`docs/plans/2026-Q3/2026-07-13-wave-b-reseed-generator.md`（generator＋reprice）、`docs/plans/2026-Q3/2026-07-10-plan-taxonomy-pricing.md`（欄位佈局）、`docs/decisions/patterns/template-vs-plan-property-boundary.md`（何時開新 template）。
