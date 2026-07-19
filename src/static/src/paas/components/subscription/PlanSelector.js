@@ -129,6 +129,11 @@ export class PlanSelector extends Component {
   formatPrice(plan) {
     return `${plan.price} pts/${this._unitLabel(plan.unit)}`;
   }
+  formatTrial(plan) {
+    if (!plan.has_trial) return "";
+    const unit = plan.trial_unit === "day" ? "day" : plan.trial_unit;
+    return `${plan.trial_duration}-${unit} free trial`;
+  }
   // 增量：一律 base.unit（年繳為年值；寫死 /月＝12 倍 bug）；不加購由 template 標「已含」
   formatSeatDelta(base, variant) {
     const delta = variant.price - base.price;
