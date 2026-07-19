@@ -523,7 +523,10 @@
                 vendored od_mcp_server，提供設計稿讀取與操作工具集。治理採 advisory
                 （紅標＋文件）：per-tool 停用僅顯示層、危險工具仍暴露，非硬性封鎖。
                 租戶前置需求：於 admin Connection 頁填入 od_api_base，指向 Open Design
-                daemon（/api/*，例 http://open-design-svc:7457）；此為必填欄，
+                daemon（/api/*；指向平台上架的 Open Design 完整應用 cloud_app_opendesign 時，
+                其 Service 為 release 命名 svc-{ref[:8]}、非固定名，例 http://svc-xxxxxxxx:7457，
+                實際名見該服務詳情，且該應用預設有 basic-auth 閘、存取需帶憑證——mcp 側帶
+                basic-auth 或內部存取策略待協調）；此為必填欄，
                 od_chat_timeout（AI 生成最長等待秒數）為選配。</field>
             <field name="category">mcp</field>
             <field name="tags">["mcp", "opendesign", "design", "mcp-server", "ai"]</field>
@@ -585,52 +588,59 @@
         </record>
 
         <!-- Open Design 完整應用（#380）：daemon + console 上架為可訂閱 cloud service，
-             補上 #375 mcp-opendesign 的生態缺口（其必填欄 od_api_base 需指向本 daemon，
-             例 http://open-design-svc:7457）。上架前台販售：is_active=True、不隱藏
-             （is_hidden 預設 False）。chart 由 woow-paas-charts repo 的 charts/open-design
-             發佈（支線 A）；image 由 woow-paas-ci build Dockerfile.open-design 推送（支線 B）。
-             獨立 template（非掛 cloud_app_mcp_opendesign）＝template-vs-plan 判準：完整應用
-             image（open-design）與 MCP（opendesign-mcp-admin）不同、chart 亦不同 → 必開新
-             template。契約源＝上游 WOOWTECH/Woow_opendesign_docker_compose_all/k8s-manifests
-             實證（daemon containerPort 7457、readiness／liveness 皆 GET /api/health、strategy
-             Recreate、securityContext.fsGroup 1001、雙 PVC：data 8Gi 掛 /app/.od＋home 2Gi
-             掛 /home/opendesign、resources requests 1c/2Gi limits 4c/8Gi）。
-             注意 1（values 鍵名待對齊）：下列 helm_default_values 為依上游 k8s-manifests
-             推導的草稿，鍵名結構以支線 A charts/open-design 的 values 契約為準，收到後同步
-             （見 PR 描述「待對齊」清單）。
-             注意 2（API auth 紅線）：不沿用上游 OD_DISABLE_API_AUTH=1（那是躲在私有
-             Cloudflare Tunnel 後的設計，平台租戶 URL 公開），故 config.OD_DISABLE_API_AUTH
-             明寫 "0"；OD_API_TOKEN 需由平台代生成注入（per-service sensitive），其供給機制
-             待 leader 拍板（見 issue #380 未決事項）。本 seed 刻意不設 has_admin_gui＝True，
-             因該機制注入路徑 config.sensitive.admin_password 為 mcp-admin-core 專屬、語意是
-             GUI 登入密碼，與 daemon 的 OD_API_TOKEN（bearer token）不同，硬套會錯放。
-             migration：本 xmlid 首建即在本檔 noupdate=0 塊、-u 自建、無 migration。 -->
+             補上 #375 mcp-opendesign 的生態缺口（其必填欄 od_api_base 需指向本 daemon）。
+             上架前台販售：is_active=True、不隱藏（is_hidden 預設 False）。chart＝
+             woow-paas-charts 的 charts/open-design（支線 A，PR #41 feat/open-design-chart）；
+             image＝woow-paas-ci build Dockerfile.open-design（支線 B）。獨立 template
+             （非掛 cloud_app_mcp_opendesign）＝template-vs-plan 判準：完整應用 image
+             （open-design）與 MCP（opendesign-mcp-admin）不同、chart 亦不同 → 必開新 template。
+             auth 模型（C 案，issue #380 comment 定稿）：上游 v0.15.1 直接 bearer 會鎖死
+             租戶 UI（web app 無 attach token 介面），故 chart 用 nginx auth-proxy sidecar：
+             daemon 綁 loopback、Service→proxy:8080、以 HTTP basic-auth 閘（帳號 admin、密碼
+             ＝config.sensitive.admin_password）罩住 UI 與 /api/*，console 同一閘。因此本
+             seed 設 has_admin_gui=True——平台 #357 機制注入 config.sensitive.admin_password
+             ＝租戶 basic-auth 登入密碼（真憑證，一次性顯示＋reset 全複用）；OD_API_TOKEN 由
+             chart 自產內部化（auth.odApiToken lookup+persist）、租戶不碰，故 helm_default_values
+             不放它。
+             helm_default_values 已對齊支線 A charts/open-design/values.yaml（PR #41）鍵名：
+             image／service.port／persistence（扁平 data/home）／resources／authProxy／
+             console；只放平台 pin/覆寫值，chart 內部契約（Recreate、fsGroup 1001、probe
+             /api/health、bindHost loopback）由 chart 預設＋chart tests 承擔、seed 不重寫。
+             service.name 刻意留空（＝release fullname svc-{ref[:8]}）：CS 共用 workspace
+             namespace，固定名同 ns 開兩台會 Service 撞名，且對齊 mcp-server／ha-paas 慣例。
+             image.tag＝PENDING 佔位待支線 B digest（PR 前必補真值＋docker manifest inspect
+             自驗）。migration：本 xmlid 首建即在本檔 noupdate=0 塊、-u 自建、無 migration。 -->
         <record id="cloud_app_opendesign" model="woow_paas_platform.cloud_app_template">
             <field name="name">Open Design</field>
             <field name="slug">open-design</field>
-            <field name="description">AI 設計協作應用（daemon + console，內建 Claude Code／OpenCode）</field>
-            <field name="full_description">Open Design 完整雲端應用：daemon（設計稿 API 服務，
-                對外埠 7457）＋ console（ttyd web terminal + Flask dashboard）。console 可
-                互動執行 claude login 完成 Claude 登入（登入態與 opencode 設定存 od-home PVC，
-                跨 Pod 重啟保留），亦可於部署時自帶 ANTHROPIC_API_KEY。與 Open Design MCP
-                （mcp-opendesign）形成生態閉環：MCP 的必填欄 od_api_base 可指向本服務於同一
-                workspace 的內部位址（例 http://open-design-svc:7457）。</field>
+            <field name="description">AI 設計協作應用（daemon + console，內建 Claude Code／OpenCode），basic-auth 憑證登入</field>
+            <field name="full_description">Open Design 完整雲端應用（上游 nexu-io/open-design
+                v0.15.1）：daemon（設計稿 API 服務，對外埠 7457）＋ console（ttyd web terminal
+                + Flask dashboard）。存取以 HTTP basic-auth 憑證登入（帳號 admin、密碼由平台
+                建立服務時產生並一次性顯示、可重置）：nginx auth-proxy 閘同時罩住 daemon UI／API
+                與 console，瀏覽器原生登入、免改上游。console 可互動執行 claude login 完成
+                Claude 登入（登入態與 opencode 設定存 od-home PVC、跨 Pod 重啟保留），亦可於
+                部署時自帶 ANTHROPIC_API_KEY。與 Open Design MCP（mcp-opendesign）形成生態
+                閉環：MCP 的必填欄 od_api_base 可指向本服務於同一 workspace 的內部位址
+                （release 命名，例 http://svc-xxxxxxxx:7457；需帶 basic-auth 憑證）。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["design", "ai", "opendesign", "claude-code", "opencode"]</field>
 
             <field name="documentation_url">https://github.com/nexu-io/open-design</field>
 
-            <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈，支線 A）。
-                 image.tag＝支線 B 交付後雙釘 git-sha@sha256（現為 PENDING 佔位，PR 前必補
-                 真值＋docker manifest inspect 自驗 digest）。helm_default_values 鍵名待對齊
-                 支線 A values 契約（見上方註解）。 -->
+            <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈，支線 A PR #41）。
+                 helm_default_values 鍵名對齊 charts/open-design/values.yaml；只放平台 pin/覆寫
+                 值。image.tag＝支線 B 交付後雙釘 git-sha@sha256（現 PENDING 佔位）。
+                 authProxy.enabled=true＋basicAuth＝C 案租戶邊界（明寫防 chart 預設漂移把閘關掉）。
+                 admin_password（config.sensitive）由 #357 has_admin_gui 注入、OD_API_TOKEN 由
+                 chart 自產，兩者皆不在此 git values（sensitive）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
             <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "PENDING_BRANCH_B_DIGEST"}, "service": {"port": 7457}, "updateStrategy": {"type": "Recreate"}, "podSecurityContext": {"fsGroup": 1001}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1000m", "memory": "2Gi"}, "limits": {"cpu": "4000m", "memory": "8Gi"}}, "probes": {"readiness": {"path": "/api/health", "port": 7457, "initialDelaySeconds": 20, "periodSeconds": 10, "failureThreshold": 12}, "liveness": {"path": "/api/health", "port": 7457, "initialDelaySeconds": 60, "periodSeconds": 30, "failureThreshold": 5}}, "console": {"enabled": true}, "config": {"OD_PORT": "7457", "OD_BIND_HOST": "0.0.0.0", "OD_DISABLE_API_AUTH": "0"}, "ingress": {"enabled": false, "host": "", "className": ""}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "PENDING_BRANCH_B_DIGEST"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
-                {"key": "config.ANTHROPIC_API_KEY", "label": "Anthropic API Key", "type": "password",
-                "description": "自帶 Claude API Key（選填）；留空則於 console 互動執行 claude login"}
+                {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
+                "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"}
                 ]}</field>
 
             <!-- Service Configuration -->
@@ -645,6 +655,10 @@
             <!-- MCP 能力不在本 template（本體是完整應用，非 MCP server）；MCP 生態由
                  獨立的 cloud_app_mcp_opendesign 承擔，透過 od_api_base 指向本 daemon。 -->
             <field name="mcp_enabled" eval="False"/>
+            <!-- #357 C 案：image（nginx auth-proxy sidecar）以 basic-auth 閘保護，密碼＝
+                 config.sensitive.admin_password，由平台 has_admin_gui 供給鏈注入（建立服務時
+                 生成、存入 cloud_service_secret、經 Helm sensitive values 注入、一次性顯示＋reset）。 -->
+            <field name="has_admin_gui" eval="True"/>
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True"/>

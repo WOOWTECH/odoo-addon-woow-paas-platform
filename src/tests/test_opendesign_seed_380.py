@@ -3,13 +3,18 @@
 
 鏡射 test_mcp_3type_seed_375.py 結構。此為「完整應用」（非 MCP server）：獨立 image
 open-design、獨立 chart open-design、category=ai_llm、daemon 對外埠 7457、雙 PVC、
-console.enabled。契約源＝上游 WOOWTECH/Woow_opendesign_docker_compose_all/k8s-manifests
-實證（04-deployment / 03-pvc / 05-service / 02-config）。
+console.enabled。helm_default_values 已對齊支線 A charts/open-design/values.yaml
+（woow-paas-charts PR #41），只驗平台 pin/覆寫值；chart 內部契約（Recreate、fsGroup、
+probe /api/health、daemon loopback bind）由 chart 預設＋chart tests 承擔、seed 不重寫。
+
+auth（C 案，issue #380 comment 定稿）：daemon 綁 loopback、nginx auth-proxy sidecar
+以 HTTP basic-auth 閘（帳號 admin、密碼＝config.sensitive.admin_password）罩住 UI／API
+與 console，故設 has_admin_gui=True 複用 #357 供給鏈；OD_API_TOKEN 由 chart 自產內部化、
+不入 git values。
 
 注意（pin）：helm image.tag 現為 PENDING_BRANCH_B_DIGEST 佔位，支線 B 交付 digest 後補
 真值；test_image_tag_pinned_digest 在 pin 補上前為**預期紅**（fail-loud，PR 前必轉綠、
-不 skip 以免忘補）。注意（values）：helm_default_values 鍵名為依上游 k8s-manifests 推導
-的草稿，待支線 A charts/open-design 的 values 契約對齊後同步（見 PR 描述「待對齊」清單）。
+不 skip 以免忘補）。
 """
 import json
 from odoo.tests.common import TransactionCase, tagged
@@ -35,15 +40,16 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertEqual(tpl.default_port, 7457)
         self.assertTrue(tpl.ingress_enabled)
 
-    def test_not_mcp_and_no_admin_gui(self):
-        """完整應用非 MCP server：mcp_enabled=False；OD_API_TOKEN 供給機制待拍板，
-        故刻意不設 has_admin_gui（該注入路徑 config.sensitive.admin_password 為
-        mcp-admin-core 專屬、語意是 GUI 登入密碼，與 daemon bearer token 不符）。"""
-        tpl = self._tpl()
-        self.assertFalse(tpl.mcp_enabled)
-        self.assertFalse(
-            tpl.has_admin_gui,
-            'OD_API_TOKEN ≠ mcp admin_password，不套 has_admin_gui 供給鏈')
+    def test_not_mcp(self):
+        """完整應用非 MCP server：mcp_enabled=False（MCP 生態由 mcp-opendesign 承擔）。"""
+        self.assertFalse(self._tpl().mcp_enabled)
+
+    def test_has_admin_gui_c_option(self):
+        """C 案 auth 接線：has_admin_gui=True——nginx auth-proxy 以 basic-auth 閘保護，
+        密碼＝config.sensitive.admin_password，走 #357 供給鏈（生成＋一次性顯示＋reset）。"""
+        self.assertTrue(
+            self._tpl().has_admin_gui,
+            'C 案 basic-auth 憑證＝#357 admin_password，須開 has_admin_gui 供給鏈')
 
     def test_chart_oci(self):
         """chart＝woow-paas-charts 發佈的獨立 open-design chart（非共用 mcp-server）。"""
@@ -70,12 +76,12 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertIn('@sha256:', tag, 'image tag 必須雙釘 git-sha@sha256')
 
     def test_daemon_service_port_7457(self):
-        """daemon 對外埠 7457（上游 05-service 實證）。"""
+        """service.port 7457（＝default_port；C 案 targetPort 由 chart 轉 authProxy）。"""
         self.assertEqual(self._values()['service']['port'], 7457)
 
     def test_dual_pvc(self):
-        """雙 PVC（上游 03-pvc 實證）：data 8Gi→/app/.od、home 2Gi→/home/opendesign。
-        home PVC 保 claude login／opencode 設定跨重啟。"""
+        """雙 PVC（values.yaml 扁平 data/home）：data 8Gi→/app/.od、home 2Gi→
+        /home/opendesign（home 保 claude login／opencode 設定跨重啟）。"""
         p = self._values()['persistence']
         self.assertEqual(p['data']['size'], '8Gi')
         self.assertEqual(p['data']['mountPath'], '/app/.od')
@@ -83,39 +89,32 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertEqual(p['home']['mountPath'], '/home/opendesign')
 
     def test_resources(self):
-        """daemon resources（上游 04-deployment 實證）：requests 1c/2Gi、limits 4c/8Gi
-        （平台目前最重的服務）。"""
+        """daemon resources（平台最重服務；對齊 values.yaml 字面 cpu "1"/"4"）：
+        requests 1c/2Gi、limits 4c/8Gi。"""
         r = self._values()['resources']
-        self.assertEqual(r['requests']['cpu'], '1000m')
+        self.assertEqual(r['requests']['cpu'], '1')
         self.assertEqual(r['requests']['memory'], '2Gi')
-        self.assertEqual(r['limits']['cpu'], '4000m')
+        self.assertEqual(r['limits']['cpu'], '4')
         self.assertEqual(r['limits']['memory'], '8Gi')
 
-    def test_probe_health_path(self):
-        """readiness/liveness 皆 GET /api/health:7457（上游 04-deployment 實證）。"""
-        pr = self._values()['probes']
-        self.assertEqual(pr['readiness']['path'], '/api/health')
-        self.assertEqual(pr['readiness']['port'], 7457)
-        self.assertEqual(pr['liveness']['path'], '/api/health')
-        self.assertEqual(pr['liveness']['port'], 7457)
+    def test_auth_proxy_gate(self):
+        """C 案租戶邊界：authProxy.enabled＋basicAuth.enabled、帳號 admin（明寫防 chart
+        預設漂移把閘關掉；密碼＝#357 注入的 config.sensitive.admin_password）。"""
+        ap = self._values()['authProxy']
+        self.assertTrue(ap['enabled'], 'C 案須開 auth-proxy 閘')
+        self.assertTrue(ap['basicAuth']['enabled'])
+        self.assertEqual(ap['basicAuth']['username'], 'admin')
 
     def test_console_enabled(self):
         """console（ttyd + Flask dashboard）上架（拍板 2）：console.enabled=True。"""
         self.assertTrue(self._values()['console']['enabled'])
 
-    def test_recreate_and_fsgroup(self):
-        """單寫者存儲＝Recreate；securityContext.fsGroup 1001（上游 04-deployment 實證）。"""
-        v = self._values()
-        self.assertEqual(v['updateStrategy']['type'], 'Recreate')
-        self.assertEqual(v['podSecurityContext']['fsGroup'], 1001)
-
-    def test_api_auth_not_bypassed(self):
-        """API auth 紅線（拍板 4）：不沿用上游 OD_DISABLE_API_AUTH=1（那是躲在私有 CF
-        Tunnel 後的設計，平台租戶 URL 公開）。"""
-        cfg = self._values()['config']
-        self.assertNotEqual(
-            cfg.get('OD_DISABLE_API_AUTH'), '1',
-            '平台租戶 URL 公開，不得旁路 daemon API auth')
+    def test_no_od_api_token_in_git_values(self):
+        """OD_API_TOKEN 由 chart 自產內部化（auth.odApiToken lookup+persist），租戶不碰，
+        不得出現在 git helm_default_values（sensitive 邊界）。"""
+        raw = self._tpl().helm_default_values
+        self.assertNotIn('OD_API_TOKEN', raw)
+        self.assertNotIn('odApiToken', raw)
 
     def test_lockstep_min_specs(self):
         """min_* 與 chart 一致：vcpu1／ram2.0／storage10（8Gi data + 2Gi home）。"""
@@ -124,13 +123,24 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertEqual(tpl.min_ram_gb, 2.0)
         self.assertEqual(tpl.min_storage_gb, 10)
 
-    def test_ecosystem_hint_in_description(self):
-        """description／full_description 提及與 mcp-opendesign 的 od_api_base 生態閉環
-        （內部位址 open-design-svc:7457 形態）。"""
+    def test_anthropic_key_optional_spec(self):
+        """helm_value_specs：ANTHROPIC_API_KEY 為選填（key 對齊 values.yaml auth.anthropicApiKey）;
+        留空則走 console TUI claude login。"""
+        specs = json.loads(self._tpl().helm_value_specs)
+        self.assertEqual(specs['required'], [])
+        keys = [o['key'] for o in specs['optional']]
+        self.assertIn('auth.anthropicApiKey', keys)
+
+    def test_description_basic_auth_and_ecosystem(self):
+        """description／full_description：basic-auth 登入（帳號 admin）／上游 v0.15.1／
+        與 mcp-opendesign 的 od_api_base 生態閉環（daemon 埠 7457）。"""
         tpl = self._tpl()
         text = (tpl.description or '') + (tpl.full_description or '')
+        self.assertIn('basic-auth', text)
+        self.assertIn('admin', text)
+        self.assertIn('v0.15.1', text)
         self.assertIn('od_api_base', text)
-        self.assertIn('open-design-svc:7457', text)
+        self.assertIn('7457', text)
 
 
 @tagged('post_install', '-at_install')
