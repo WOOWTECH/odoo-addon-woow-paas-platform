@@ -409,6 +409,7 @@
 
         <ChangePlanModal t-if="state.showChangePlanModal"
             service="state.sa"
+            currentPlanId="state.sa.subscription?.plan_id ?? undefined"
             loadPlans="loadSaPlans"
             confirmChange="confirmSaChangePlan"
             onClose="() => state.showChangePlanModal = false"

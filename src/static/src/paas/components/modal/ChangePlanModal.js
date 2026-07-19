@@ -3,6 +3,7 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { PlanSelector } from "../subscription/PlanSelector";
+import { PlanTotalBar } from "../subscription/PlanTotalBar";
 
 /**
  * ChangePlanModal Component
@@ -23,6 +24,10 @@ import { PlanSelector } from "../subscription/PlanSelector";
  * Props:
  *   - service (Object): 顯示用，{ name, subscription: { plan_name, plan_price } }。
  *     modal 不從 service 推導請求對象——callback 已知道要打哪個後端。
+ *   - currentPlanId (Number, optional): 目前方案 plan_id（來自 _get_subscription_info
+ *     的新增欄位）。開啟即以它定位 PlanSelector 的高亮（cycle×group×seats 反推）並
+ *     擋「churn 成同方案」（selectedPlanId===currentPlanId 時 canConfirm=false）。
+ *     缺（無訂閱／無 plan）時退回未選態。
  *   - loadPlans (Function): () => Promise<ApiResponse<Plan[]>>。onMounted 時呼叫，
  *     回傳的每個 plan 可帶 variants=[{seats,plan_id,price}]。應為 side-effect-free。
  *   - confirmChange (Function): (planId) => Promise<ApiResponse<{refund_amount,...}>>。
@@ -33,9 +38,10 @@ import { PlanSelector } from "../subscription/PlanSelector";
  */
 export class ChangePlanModal extends Component {
   static template = "woow_paas_platform.ChangePlanModal";
-  static components = { WoowButton, WoowIcon, PlanSelector };
+  static components = { WoowButton, WoowIcon, PlanSelector, PlanTotalBar };
   static props = {
     service: { type: Object },
+    currentPlanId: { type: Number, optional: true },
     loadPlans: { type: Function },
     confirmChange: { type: Function },
     onClose: { type: Function },
@@ -45,12 +51,14 @@ export class ChangePlanModal extends Component {
   setup() {
     this.state = useState({
       plans: [],
-      // 起始未選：使用者需主動選新方案才可確認（避免誤點確認 churn 成同方案）。
-      // 用 undefined 而非 null——PlanSelector 的 selectedPlanId 是 optional
-      // Number，OWL props 驗證只對 undefined 放行（null 會被當非法 Number 型別
-      // 而在 dev/assets 模式拋錯）；PlanSelector 內部 `sel == null` 寬鬆比較同時
-      // 涵蓋 undefined，故未選語意（無高亮、不展開席數第二步）完全一致。
-      selectedPlanId: undefined,
+      // 開啟即定位目前方案（#368 PR-3）：selectedPlanId 初值＝currentPlanId。
+      // PlanSelector 受 xml 的 t-if="!loadingPlans" 保護、於 plans 載入「後」才首次
+      // 掛載，故其 setup 反推 cycle×group×seats 時 plans 已就緒、目前方案正確高亮。
+      // currentPlanId 缺（無訂閱／無 plan）時退回 undefined＝未選態。用 undefined 而非
+      // null——PlanSelector 的 selectedPlanId 是 optional Number，OWL props 驗證只對
+      // undefined 放行（null 會被當非法 Number 型別而在 dev/assets 模式拋錯）；內部
+      // `sel == null` 寬鬆比較同涵蓋 undefined，未選語意（無高亮、不展開席數）一致。
+      selectedPlanId: this.props.currentPlanId ?? undefined,
       loadingPlans: true,
       plansError: null,
       changing: false,
@@ -91,6 +99,10 @@ export class ChangePlanModal extends Component {
       !this.state.loadingPlans &&
       !this.state.plansError &&
       !!this.state.selectedPlanId &&
+      // 不可 churn 成同方案：定位後（selectedPlanId===currentPlanId）確認鈕維持
+      // disabled，使用者需真的改選另一方案／席數才 arm。currentPlanId 缺時此條恆真
+      // （undefined !== 任何 plan id），退化為單純「有選才可確認」。
+      this.state.selectedPlanId !== this.props.currentPlanId &&
       !this.state.changing
     );
   }

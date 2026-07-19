@@ -219,6 +219,7 @@
             <ChangePlanModal
                 t-if="state.showChangePlanModal and serviceForModal"
                 service="serviceForModal"
+                currentPlanId="serviceForModal.subscription?.plan_id ?? undefined"
                 loadPlans="loadCloudServicePlans"
                 confirmChange="confirmCloudServiceChangePlan"
                 onClose.bind="hideChangePlan"

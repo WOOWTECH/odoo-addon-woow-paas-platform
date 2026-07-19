@@ -200,6 +200,7 @@
             <ChangePlanModal
                 t-if="state.showChangePlanModal and home"
                 service="home"
+                currentPlanId="home.subscription?.plan_id ?? undefined"
                 loadPlans="loadSmartHomePlans"
                 confirmChange="confirmSmartHomeChangePlan"
                 onClose.bind="hideChangePlan"

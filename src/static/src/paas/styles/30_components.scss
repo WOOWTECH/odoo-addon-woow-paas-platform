@@ -261,6 +261,12 @@
     &.o_woow_modal_md {
         max-width: 560px;
     }
+
+    // #368 PR-3：ChangePlanModal 加寬版（cycle toggle + 卡片橫排 + 席數第二步需
+    // 更寬橫向空間）。新 class、不動 _sm/_md，對既有 modal 零回歸。
+    &.o_woow_modal_lg {
+        max-width: 760px;
+    }
 }
 
 .o_woow_modal_header {
