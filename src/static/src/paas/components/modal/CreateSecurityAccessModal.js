@@ -3,6 +3,8 @@ import { Component, useState, onWillStart } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { PlanSelector } from "../subscription/PlanSelector";
+import { PlanTotalBar } from "../subscription/PlanTotalBar";
+import { pickDefaultPlan } from "../subscription/plan_selector_utils";
 import { securityAccessService } from "../../services/security_access";
 
 /**
@@ -22,7 +24,7 @@ import { securityAccessService } from "../../services/security_access";
  */
 export class CreateSecurityAccessModal extends Component {
   static template = "woow_paas_platform.CreateSecurityAccessModal";
-  static components = { WoowButton, WoowIcon, PlanSelector };
+  static components = { WoowButton, WoowIcon, PlanSelector, PlanTotalBar };
   static props = {
     workspaceId: { type: Number },
     onClose: { type: Function },
@@ -35,7 +37,7 @@ export class CreateSecurityAccessModal extends Component {
       templates: [],
       templateId: null,
       plans: [],
-      selectedPlanId: null,
+      selectedPlanId: undefined,
       loading: false,
       error: null,
       // provision 串接 step machine（鏡像 CreateSmartHomeModal）：
@@ -61,7 +63,7 @@ export class CreateSecurityAccessModal extends Component {
     const res = await securityAccessService.fetchPlans(this.state.templateId);
     if (res.success) {
       this.state.plans = res.data;
-      this.state.selectedPlanId = res.data.length ? res.data[0].id : null;
+      this.state.selectedPlanId = pickDefaultPlan(res.data);
     } else {
       this.state.error = res.error;
     }

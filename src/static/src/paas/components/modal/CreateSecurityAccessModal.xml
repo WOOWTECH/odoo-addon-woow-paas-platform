@@ -79,6 +79,7 @@
         </div>
 
         <div class="o_woow_modal_footer" t-if="state.step === 'form'">
+          <PlanTotalBar plans="state.plans" selectedPlanId="state.selectedPlanId"/>
           <WoowButton
             variant="'ghost'"
             size="'md'"
