@@ -286,6 +286,8 @@ class SmartHomeController(Controller):
         data = []
         # #330 Wave C：base plan 附掛隱藏席數變體（xmlid 反查、無變體＝[]）。
         variants_by_base = template.subscription_plan_ids._attach_variants()
+        # #368：group_key 配對月/年同 tier、specs 供前台卡片顯示
+        group_keys = template.subscription_plan_ids._group_keys()
         # #336：前台 plans 一律排除 storefront_hidden（既存訂閱不受影響）
         for plan in template.subscription_plan_ids.filtered(
             lambda p: not p.storefront_hidden
@@ -300,6 +302,8 @@ class SmartHomeController(Controller):
                 "trial_duration": plan.sh_trial_duration if plan.sh_trial else 0,
                 "trial_unit": plan.sh_trial_unit if plan.sh_trial else None,
                 "variants": variants_by_base.get(plan.id, []),
+                "group_key": group_keys.get(plan.id),
+                "specs": plan._get_display_specs(),
             })
         return {"success": True, "data": data}
 

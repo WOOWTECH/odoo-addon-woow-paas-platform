@@ -224,3 +224,5 @@ from . import test_mcp_admin_password_authz
 from . import test_subscription_tax_clear_366
 # fix: #367 已訂閱用戶換方案不得重啟 trial（per-partner trial reset guard）
 from . import test_trial_reset_guard_367
+# feat: #368 PR-1 選擇器重設計後端鋪路（group_key 配對 cycle + specs 顯示）
+from . import test_plan_group_keys_368

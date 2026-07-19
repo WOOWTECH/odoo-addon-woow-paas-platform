@@ -18,6 +18,9 @@ _VARIANT_XMLID_RE = re.compile(
     r'^(?P<base>.+)_ac\d+_(?P<cycle>monthly|yearly)$')
 _SEED_MODULE = 'woow_paas_platform'
 
+# #368：錨定 $ 只截 cycle 尾綴（group_key = base xmlid 去 _monthly/_yearly）
+_CYCLE_SUFFIX_RE = re.compile(r'_(monthly|yearly)$')
+
 
 class ShSubscriptionPlanVisibility(models.Model):
     _inherit = 'sh.subscription.plan'
@@ -110,6 +113,63 @@ class ShSubscriptionPlanVisibility(models.Model):
         for entries in result.values():
             entries.sort(key=lambda entry: entry['seats'])
         return result
+
+    def _group_keys(self):
+        """回 {base_plan_id: group_key}。group_key = base xmlid 去 _monthly/_yearly
+        尾綴（月/年同 tier 得同 group_key，前端據此配對 cycle toggle）。
+
+        只對【可見 base】（ac_max_access_seats==0 ∧ not storefront_hidden）算，
+        單次批次 ir.model.data 反查（禁 N+1）。無 xmlid／不符 _cycle 慣例 →
+        _logger.error＋略過（該 plan 前端 fallback 用 id 當獨立 group，端點不炸）。
+        """
+        bases = self.filtered(
+            lambda p: p.ac_max_access_seats == 0 and not p.storefront_hidden)
+        if not bases:
+            return {}
+        imd = self.env['ir.model.data'].sudo()
+        rows = imd.search([
+            ('model', '=', 'sh.subscription.plan'),
+            ('module', '=', _SEED_MODULE),
+            ('res_id', 'in', bases.ids),
+        ])
+        result = {}
+        for row in rows:
+            gk = _CYCLE_SUFFIX_RE.sub('', row.name)
+            if gk == row.name:
+                _logger.error(
+                    '_group_keys：base xmlid %s 無 _monthly/_yearly 尾綴，略過',
+                    row.name)
+                continue
+            result[row.res_id] = gk
+        return result
+
+    def _get_display_specs(self, template=None):
+        """前台卡片規格 [{'icon','label'}]，service_type 分流；一套元件走天下。
+
+        CS：vCPU/RAM（plan.cs_* 為 0＝沿用 template 預設 → fallback template.min_*）。
+        SA：routes/policies。SH：p2（mcp_integration 非空）顯示 MCP 加密、p1 無規格。
+        變體規格恆等於同 tier base，故此 method 只需對 base 呼叫。
+        """
+        self.ensure_one()
+        specs = []
+        if self.service_type == 'cloud_service':
+            vcpu = self.cs_vcpu or (template.min_vcpu if template else 0)
+            ram = self.cs_ram_gb or (template.min_ram_gb if template else 0.0)
+            if vcpu:
+                specs.append({
+                    'icon': 'memory',
+                    'label': '%s vCPU · %s GB RAM' % (vcpu, ram),
+                })
+        elif self.service_type == 'security_access':
+            specs.append({
+                'icon': 'route',
+                'label': '%s routes · %s policies' % (
+                    self.sa_max_routes, self.sa_max_access_policies),
+            })
+        elif self.service_type == 'smart_home':
+            if self.mcp_integration:
+                specs.append({'icon': 'lock', 'label': 'MCP 加密連線'})
+        return specs
 
     def _woow_migrate_hide_hermes_336(self):
         """A5 封存 Hermes：升級軌 force-write（noupdate XML 不會回填既有 record）。
