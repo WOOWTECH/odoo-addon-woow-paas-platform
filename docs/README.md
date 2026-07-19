@@ -82,7 +82,7 @@ related: [docs/decisions/xxx.md, .claude/epics/yyy/epic.md]
 - **先建 stub**（`/docs:new` 產 frontmatter，設 `status: draft`）再用 `[[wikilink]]` 指它；
 - 或對已存在的 doc 用相對 `[text](path.md)` 連結。
 
-`[[wikilink]]` 僅在目標檔**已存在**於 `docs/decisions/patterns/` 或 `docs/tracking/` 時使用。
+`[[wikilink]]` 僅在目標檔**已存在**於 `docs/` 主結構（patterns、pitfalls、refactor、reviews、plans、reference 等）時使用——slug＝檔名去 `.md`。（2026-07-19 修訂：原「僅限 patterns/tracking」與實務脫節——實際 170+ 處 wikilink 指向 refactor/reviews/plans 且皆有效；lint / 解析工具應以全 docs 為解析域。）指向 user-level memory 的 slug 一律用 inline code，不用 wikilink。
 
 ## 工具介接
 

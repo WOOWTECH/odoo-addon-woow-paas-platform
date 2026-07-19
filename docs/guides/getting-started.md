@@ -180,20 +180,9 @@ K8s Dev Sandbox 的 `post-create.sh` hook 會**自動探索 in-cluster 的 PaaS 
 ```bash
 # 在沙盒內跑模組測試（推薦）
 /woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
-
-# 或手動在 Odoo pod 內執行（NS=dev-sandbox-<slug>、DB=woow_<branch>）
-NS=dev-sandbox-<slug>; ODOO=$(kubectl get deploy -n $NS -o name | grep odoo | head -1)
-kubectl exec -n $NS $ODOO -- \
-  odoo -d woow_<branch> --test-enable --test-tags woow_paas_platform --stop-after-init
-
-# 指定測試檔（清單見 src/tests/，<test_file> 換實際檔名）
-kubectl exec -n $NS $ODOO -- \
-  odoo -d woow_<branch> --test-enable --test-tags woow_paas_platform.<test_file> --stop-after-init
-
-# verbose
-kubectl exec -n $NS $ODOO -- \
-  odoo -d woow_<branch> --test-enable --test-tags woow_paas_platform --log-level=test --stop-after-init
 ```
+
+完整變體（pod 內手動執行、指定測試檔、verbose、integration、troubleshooting）**權威見 [`testing/TESTING.md`](testing/TESTING.md)**，此處不重複維護。
 
 ### PaaS Operator Tests
 
@@ -268,6 +257,8 @@ local 模式以 hostPath 即時掛載 `src/`，故檔案編輯立即反映在 po
 ---
 
 ## Adding New Features
+
+> 檢查清單權威＝repo 根 `CLAUDE.md` §Odoo Module Patterns（含 `config_parameter` 卸載清理鐵律——新增 config_parameter 欄位必同步 `src/hooks.py` `_CONFIG_PARAMETERS`）。本節為含完整程式碼樣板的教學展開。
 
 ### Adding a New Odoo Model
 
@@ -393,33 +384,7 @@ local 模式以 hostPath 即時掛載 `src/`，故檔案編輯立即反映在 po
 
 ## Code Style Guidelines
 
-### Python (Odoo)
-
-Follow Odoo coding conventions:
-
-```python
-# Good
-class WorkspaceService(models.Model):
-    _name = 'woow_paas_platform.workspace_service'
-    _description = 'Workspace Service'
-
-    name = fields.Char(
-        string='Name',
-        required=True,
-        help='Service display name',
-    )
-
-    def action_deploy(self):
-        """Deploy the service to Kubernetes."""
-        self.ensure_one()
-        # Implementation
-```
-
-**Key Rules**:
-- Use 4 spaces for indentation
-- Max line length: 120 characters
-- Use docstrings for all public methods
-- Follow PEP 8 naming conventions
+> **Odoo Python / JavaScript-OWL / SCSS / XML ID 的 style 權威＝repo 根 `CLAUDE.md` §Code Style Guide**（每 session 載入，含命名樣板與縮排規則），此處不重複維護。以下僅保留 CLAUDE.md 未涵蓋的 PaaS Operator style。
 
 ### Python (PaaS Operator)
 
@@ -444,69 +409,6 @@ class ReleaseRequest(BaseModel):
 - Use Pydantic for validation
 - Add docstrings to all routes
 - Use async/await consistently
-
-### JavaScript/OWL
-
-Follow Odoo OWL conventions:
-
-```javascript
-// Good
-/** @odoo-module **/
-
-import { Component } from "@odoo/owl";
-
-export class ServiceCard extends Component {
-    static template = "woow_paas_platform.ServiceCard";
-
-    static props = {
-        service: Object,
-        onDeploy: Function,
-    };
-
-    setup() {
-        // Component setup
-    }
-
-    handleDeploy() {
-        this.props.onDeploy(this.props.service);
-    }
-}
-```
-
-**Key Rules**:
-- Use `/** @odoo-module **/` at top of each file
-- Define `static props` for all components
-- Use camelCase for methods and variables
-- Use PascalCase for component names
-
-### SCSS
-
-Follow BEM-like naming:
-
-```scss
-// Good
-.o_woow_service_card {
-    &__header {
-        display: flex;
-        justify-content: space-between;
-    }
-
-    &__title {
-        font-size: 1.2rem;
-        font-weight: 600;
-    }
-
-    &--deployed {
-        border-color: var(--woow-color-success);
-    }
-}
-```
-
-**Key Rules**:
-- Use `.o_woow_` prefix for isolation
-- Use CSS variables for colors
-- Use rem units for sizing
-- Keep specificity low
 
 ---
 

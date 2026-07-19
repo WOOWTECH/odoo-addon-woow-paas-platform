@@ -71,6 +71,8 @@ From the odoo-bin directory:
 ./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init
 ```
 
+> 註：`--test-tags woow_paas_platform`（tag 位置）與 `--test-tags /woow_paas_platform`（module 位置，CLAUDE.md 用法）語意等價——Odoo 自動把模組名加為每個 test class 的 tag，兩種寫法都選中本模組全部測試。
+
 ### Run in K8s Dev Sandbox
 
 If using the K8s dev sandbox:
