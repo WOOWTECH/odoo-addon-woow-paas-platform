@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.PlanTotalBar">
+    <div class="o_woow_plan_total">
+      <span class="o_woow_plan_total__label">
+        <t t-if="props.mode === 'change'">新方案總計</t>
+        <t t-else="">總計</t>
+      </span>
+      <span t-if="selected" class="o_woow_plan_total__value">
+        <t t-esc="selected.price"/> pts/<t t-esc="_unitLabel(selected.unit)"/>
+      </span>
+      <span t-else="" class="o_woow_plan_total__value o_woow_plan_total__value--empty">—</span>
+    </div>
+  </t>
+</templates>

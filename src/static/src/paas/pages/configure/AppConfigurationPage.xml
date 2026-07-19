@@ -228,28 +228,31 @@
 
                 <!-- Footer Actions -->
                 <div class="o_woow_configure_footer">
-                    <WoowButton
-                        variant="'secondary'"
-                        size="'lg'"
-                        onClick.bind="onCancel"
-                    >
-                        Cancel
-                    </WoowButton>
-                    <WoowButton
-                        variant="'primary'"
-                        size="'lg'"
-                        onClick.bind="onLaunch"
-                        disabled="state.launching"
-                    >
-                        <t t-if="state.launching">
-                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
-                            Launching...
-                        </t>
-                        <t t-else="">
-                            <WoowIcon name="'rocket_launch'" size="18"/>
-                            Launch Application
-                        </t>
-                    </WoowButton>
+                    <PlanTotalBar plans="state.plans" selectedPlanId="state.selectedPlanId"/>
+                    <div class="o_woow_configure_footer__actions">
+                        <WoowButton
+                            variant="'secondary'"
+                            size="'lg'"
+                            onClick.bind="onCancel"
+                        >
+                            Cancel
+                        </WoowButton>
+                        <WoowButton
+                            variant="'primary'"
+                            size="'lg'"
+                            onClick.bind="onLaunch"
+                            disabled="state.launching"
+                        >
+                            <t t-if="state.launching">
+                                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                                Launching...
+                            </t>
+                            <t t-else="">
+                                <WoowIcon name="'rocket_launch'" size="18"/>
+                                Launch Application
+                            </t>
+                        </WoowButton>
+                    </div>
                 </div>
 
                 <AdminPasswordModal

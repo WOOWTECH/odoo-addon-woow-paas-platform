@@ -189,3 +189,87 @@
     flex-shrink: 0;
   }
 }
+
+// #368：cycle toggle（頂部常駐月/年）
+.o_woow_plan_cycle_toggle {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 16px;
+  background: var(--woow-surface-alt, #f3f4f6);
+  border-radius: 10px;
+
+  &__opt {
+    padding: 6px 16px;
+    border: none;
+    background: transparent;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--woow-text-secondary, #6b7280);
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &--active {
+      background: var(--woow-surface, #fff);
+      color: var(--woow-primary, #6366f1);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+  }
+}
+
+// #368：席數增量（chip 顯示 +N，取代原絕對價 __price）
+.o_woow_plan_seat__delta {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--woow-primary, #6366f1);
+}
+
+// #368：席數 checkbox 降級（mcp 固定 1 席）
+.o_woow_plan_seat_checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 10px 14px;
+  border: 2px solid var(--woow-border, #e5e7eb);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--woow-text-primary, #111827);
+
+  input { cursor: pointer; }
+}
+
+// #368：卡片規格（vCPU/RAM 等）
+.o_woow_plan_card__specs {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.o_woow_plan_card__spec {
+  font-size: 11px;
+  color: var(--woow-text-secondary, #6b7280);
+}
+
+// #368：總價條（PlanTotalBar，4 處內嵌；footer 內靠左）
+.o_woow_plan_total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-right: auto; // footer 內把按鈕推到右側
+
+  &__label {
+    font-size: 13px;
+    color: var(--woow-text-secondary, #6b7280);
+  }
+  &__value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--woow-primary, #6366f1);
+
+    &--empty { color: var(--woow-text-tertiary, #9ca3af); }
+  }
+}

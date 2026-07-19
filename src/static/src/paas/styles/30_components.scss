@@ -248,6 +248,12 @@
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
     animation: slideUp 0.3s ease;
 
+    // #368：矮 viewport 下長內容（如 PlanSelector 展開席數）撐破 modal、
+    // footer 貼底點不到——限高 + body 自捲，footer 常駐。全域 modal 改動。
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 2rem);
+
     &.o_woow_modal_sm {
         max-width: 400px;
     }
@@ -289,6 +295,11 @@
 
 .o_woow_modal_body {
     padding: 1.5rem;
+
+    // #368：搭配 .o_woow_modal 限高——body 自己捲動，footer 不被推出視窗外
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
 }
 
 .o_woow_modal_footer {
@@ -297,6 +308,10 @@
     gap: 0.75rem;
     padding: 1.5rem;
     border-top: 1px solid $woow-border-light;
+
+    // #368：常駐貼底，不隨 body 捲走；不改 justify-content——PlanTotalBar
+    // 靠自身 margin-right:auto 靠左，避免動到其他無 PlanTotalBar 的 modal 佈局
+    flex-shrink: 0;
 }
 
 // -----------------------------------------------------------------------------

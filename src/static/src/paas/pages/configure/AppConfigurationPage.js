@@ -6,6 +6,8 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { HelmValueForm } from "../../components/config/HelmValueForm";
 import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddonSelector";
 import { PlanSelector } from "../../components/subscription/PlanSelector";
+import { PlanTotalBar } from "../../components/subscription/PlanTotalBar";
+import { pickDefaultPlan } from "../../components/subscription/plan_selector_utils";
 import { AdminPasswordModal } from "../../components/modal/AdminPasswordModal";
 import { cloudService } from "../../services/cloud_service";
 import { workspaceService } from "../../services/workspace_service";
@@ -18,7 +20,7 @@ import { router } from "../../core/router";
  */
 export class AppConfigurationPage extends Component {
     static template = "woow_paas_platform.AppConfigurationPage";
-    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, AdminPasswordModal };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, PlanTotalBar, AdminPasswordModal };
     static props = {
         workspaceId: { type: Number },
         templateId: { type: Number },
@@ -36,7 +38,7 @@ export class AppConfigurationPage extends Component {
             showAdvanced: false,
             // Subscription plan
             plans: [],
-            selectedPlanId: null,
+            selectedPlanId: undefined,
             plansError: null,
             // Validation errors
             errors: {},
@@ -75,9 +77,8 @@ export class AppConfigurationPage extends Component {
             const plansResult = await cloudService.fetchPlans(this.props.templateId);
             if (plansResult.success) {
                 this.state.plans = plansResult.data;
-                if (this.state.plans.length > 0) {
-                    this.state.selectedPlanId = this.state.plans[0].id;
-                }
+                // 決定性預設：最低 price × month × 0 席（取代 plans[0].id 語意任意）
+                this.state.selectedPlanId = pickDefaultPlan(this.state.plans);
             } else {
                 this.state.plans = [];
                 this.state.plansError = plansResult.error;

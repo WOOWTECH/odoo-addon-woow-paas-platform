@@ -349,11 +349,29 @@
     padding-top: 2rem;
     border-top: 1px solid $woow-border-light;
 
+    // #368：sticky footer——長頁捲動時總價（PlanTotalBar）與 actions 常駐
+    position: sticky;
+    bottom: 0;
+    z-index: 10;                          // 高於卡片、低於 modal backdrop(1000)
+    background: $woow-card-light;         // opaque，防下方 section 透出
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.06);
+    align-items: center;
+    padding: 1rem 0;                      // sticky 貼底時的內距
+
+    &__actions {
+        display: flex;
+        gap: 1rem;
+    }
+
     @media (max-width: 640px) {
         flex-direction: column-reverse;
 
         .o_woow_btn {
             width: 100%;
         }
+    }
+
+    @media (max-width: 768px) {
+        position: static;                 // mobile 改回正常流，避開 fixed .o_woow_bottom_nav(z-index:100)
     }
 }

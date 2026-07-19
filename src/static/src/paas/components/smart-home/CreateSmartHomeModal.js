@@ -3,6 +3,8 @@ import { Component, useState } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { PlanSelector } from "../subscription/PlanSelector";
+import { PlanTotalBar } from "../subscription/PlanTotalBar";
+import { pickDefaultPlan } from "../subscription/plan_selector_utils";
 import { workspaceService } from "../../services/workspace_service";
 
 /**
@@ -18,7 +20,7 @@ import { workspaceService } from "../../services/workspace_service";
  */
 export class CreateSmartHomeModal extends Component {
     static template = "woow_paas_platform.CreateSmartHomeModal";
-    static components = { WoowButton, WoowIcon, PlanSelector };
+    static components = { WoowButton, WoowIcon, PlanSelector, PlanTotalBar };
     static props = {
         workspaceId: { type: Number },
         onClose: { type: Function },
@@ -31,7 +33,7 @@ export class CreateSmartHomeModal extends Component {
             templates: [],
             selectedTemplateId: null,
             plans: [],
-            selectedPlanId: null,
+            selectedPlanId: undefined,
             loading: false,
             loadingTemplates: true,
             loadingPlans: false,
@@ -69,7 +71,7 @@ export class CreateSmartHomeModal extends Component {
 
     async onTemplateSelect(templateId) {
         this.state.selectedTemplateId = templateId;
-        this.state.selectedPlanId = null;
+        this.state.selectedPlanId = undefined;
         this.state.plans = [];
         this.state.error = null;
         this.state.plansError = null;
@@ -81,9 +83,7 @@ export class CreateSmartHomeModal extends Component {
             return;
         }
         this.state.plans = result.data;
-        if (this.state.plans.length > 0) {
-            this.state.selectedPlanId = this.state.plans[0].id;
-        }
+        this.state.selectedPlanId = pickDefaultPlan(this.state.plans);
     }
 
     onTemplateChange(ev) {
