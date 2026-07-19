@@ -14,7 +14,7 @@ source-of-truth:
   - src/views/oauth_client_views.xml（後台 OAuth Clients 管理畫面）
 related:
   - docs/reference/api/ha-component-integration.md（HA custom component 串接規格，與本文件的 consumer 不同）
-  - docs/reference/api/woowtech-paas-api-specification.md（平台 API 總規格）
+  - docs/archived/reference/woowtech-paas-api-specification.md（早期 API 設計稿，已 archived；現行端點以 src/controllers @route 為準）
 ---
 
 # HA App OAuth 串接與開通包（給 Elmo）

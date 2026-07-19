@@ -12,7 +12,7 @@ related:
   - src/models/smart_home.py（smart_home.to_dict）
   - src/models/oauth_client.py（public client 驗證、scope 解析）
   - src/data/oauth_clients.xml（public client `woow-ha-smart-home` 的 seed）
-  - docs/reference/api/woowtech-paas-api-specification.md（平台 API 總規格）
+  - docs/archived/reference/woowtech-paas-api-specification.md（早期 API 設計稿，已 archived；現行端點以 src/controllers @route 為準）
 ---
 
 # HA Component 串接 API — 概念 / OAuth / Smart Home
@@ -448,5 +448,5 @@ Smart Home，可多選 SA。SA 同樣是「取 Cloudflare tunnel token → 跑 c
 
 E2E 驗證 / 開發時若需要可串接的 workspace + 實例 + 訂閱，請走
 `/woowprd:k8s-dev-sandbox` 沙盒並用 repo 自帶 seed hook，或參考
-[`woowtech-paas-api-specification.md`](woowtech-paas-api-specification.md) 的對應端點
+[`woowtech-paas-api-specification.md`](../../archived/reference/woowtech-paas-api-specification.md)（歷史設計稿） 的對應端點
 手動建立。本文件只描述 API contract，不固定 seed 腳本（易腐爛）。

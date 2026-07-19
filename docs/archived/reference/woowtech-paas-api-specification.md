@@ -2,6 +2,10 @@
 title: WoowTech PaaS Platform - API 串接規格文件
 category: reference
 implementation_status: partial
+status: archived
+archived-from: docs/reference/api/woowtech-paas-api-specification.md
+archived: 2026-07-19
+archived-reason: "早期（Stitch 時期）整站 API 設計稿；19 處自承與實作不符。現行端點權威=grep @route 於 src/controllers/ 與 src/static/src/paas/core/router.js"
 ---
 
 # WoowTech PaaS Platform - API 串接規格文件
