@@ -1,3 +1,13 @@
+---
+title: Wave B Re-seed 主體實作計畫（generator＋base reprice＋208 變體，三 PR）
+category: plans
+status: done
+created: 2026-07-13
+updated: 2026-07-19
+source: docs/superpowers/plans/2026-07-13-wave-b-reseed-generator.md
+promoted-at: 2026-07-19
+---
+
 # Wave B Re-seed 主體實作計畫（generator＋base reprice＋208 變體，三 PR）
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

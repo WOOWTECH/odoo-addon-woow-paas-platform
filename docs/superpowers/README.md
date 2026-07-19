@@ -34,7 +34,8 @@ obra/superpowers 是 Plugin 形式安裝（`~/.claude/plugins/cache/claude-plugi
 - promote：新檔 frontmatter 加 `source: docs/superpowers/<sub>/<file>.md` + `promoted-at`
 - archive：frontmatter 加 `archived-from` + `archived-reason`
 - **同步改寫全 repo inbound 引用**（含 CLAUDE.md、`.claude/hooks/pattern-guard-map.json`、src/tests docstring）——搬移前先 `git grep <basename>` 建引用清單
-- 2026-07-19 批次整理：07-10（含）以前的 39 檔已全數搬出（29 promote / 10 archive），逐檔去向見 `docs/archived/superpowers/README.md` 與 git log
+- 2026-07-19 批次整理（一）：07-10（含）以前的 39 檔已全數搬出（29 promote / 10 archive），逐檔去向見 `docs/archived/superpowers/README.md` 與 git log
+- 2026-07-19 批次整理（二）：07-13（含）以前的 3 檔搬出（336-ha-paas-provision 與 wave-b-reseed-generator promote 至 `docs/plans/2026-Q3/`、wave-a-reseed-mechanisms archive）
 
 ## CI 例外
 
