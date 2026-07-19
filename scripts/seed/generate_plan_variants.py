@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""220 manifest → 平台 seed 生成器（Wave B；#375 追加三型 MCP：k8s/vk/opendesign）。
+"""222 manifest → 平台 seed 生成器（Wave B；#375 三型 MCP；#380 Open Design 完整應用）。
 
 單一事實源＝docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md。
 改價＝改 manifest 後重跑本腳本；輸出冪等（同輸入 byte-identical）。
@@ -42,6 +42,9 @@ _FAMILY_RULES = [
     ('Kubernetes MCP 管理', 'mcp', {'': 'k8s'}),
     ('Vibe Kanban MCP', 'mcp', {'': 'vk'}),
     ('Open Design MCP', 'mcp', {'': 'opendesign'}),
+    # #380 Open Design 完整應用（daemon+console）：獨立 family，prefix 與「Open Design
+    # MCP」不互為前綴（第 12 字元起「雲端」vs「MCP」）→ startswith 不誤配。
+    ('Open Design 雲端訂閱服務', 'opendesign', {'': 'app'}),
 ]
 
 _VAR = re.compile(r"\+(\d+)access(月|年)繳$")
@@ -109,6 +112,8 @@ TIER_BASE_XMLID = {
     ('mcp', 'k8s'): 'plan_mcp_k8s',
     ('mcp', 'vk'): 'plan_mcp_vk',
     ('mcp', 'opendesign'): 'plan_mcp_opendesign',
+    # #380 Open Design 完整應用（≠ mcp opendesign；base xmlid plan_opendesign）
+    ('opendesign', 'app'): 'plan_opendesign',
 }
 
 # (family, tier_key) → CS 規格（odoo/n8n）；＝同 tier base plan 的 cs_* 值
@@ -142,6 +147,7 @@ SA_QUOTA = {
 # family → service_type
 FAMILY_SERVICE_TYPE = {
     'odoo': 'cloud_service', 'n8n': 'cloud_service', 'mcp': 'cloud_service',
+    'opendesign': 'cloud_service',
     'sa': 'security_access', 'sh': 'smart_home',
 }
 
@@ -150,6 +156,7 @@ _TEMPLATE_ORDER = [
     'cloud_app_odoo', 'cloud_app_n8n', 'cloud_app_mcp_odoo',
     'cloud_app_mcp_odoo_manage', 'cloud_app_mcp_n8n',
     'cloud_app_mcp_k8s', 'cloud_app_mcp_vk', 'cloud_app_mcp_opendesign',
+    'cloud_app_opendesign',
     'smart_home_home_assistant', 'security_access_default',
 ]
 
@@ -181,7 +188,8 @@ def _template_xmlid(v):
                 'opendesign': 'cloud_app_mcp_opendesign'}[v.tier_key]
     return {'odoo': 'cloud_app_odoo', 'n8n': 'cloud_app_n8n',
             'sa': 'security_access_default',
-            'sh': 'smart_home_home_assistant'}[v.family]
+            'sh': 'smart_home_home_assistant',
+            'opendesign': 'cloud_app_opendesign'}[v.family]
 
 
 def _template_model(v):
@@ -262,7 +270,7 @@ def emit_variants_xml(variants):
         '<?xml version="1.0" encoding="UTF-8"?>',
         _GEN_HEADER_XML,
         '<odoo>',
-        '    <!-- 214 個 AC 席數變體 plan/product。noupdate=1：record 欄位不被',
+        '    <!-- 216 個 AC 席數變體 plan/product。noupdate=1：record 欄位不被',
         '         升級覆寫（改值＝改 manifest／對映表後重跑 generator）。全數',
         '         storefront_hidden=True——Wave C picker 落地前不上前台。 -->',
         '    <data noupdate="1">',
@@ -316,11 +324,11 @@ def emit_links_xml(variants):
 
 _TESTS_TEMPLATE = '''# -*- coding: utf-8 -*-
 __GEN_HEADER__
-"""214 AC 席數變體 seed 全量斷言（Wave B PR-B3；#375 追加三型 MCP）。
+"""216 AC 席數變體 seed 全量斷言（Wave B PR-B3；#375 三型 MCP；#380 Open Design 完整應用）。
 
 改本檔＝改 manifest／對映表後重跑 scripts/seed/generate_plan_variants.py。
 每筆斷言：價格／席數／前台隱藏／service_type／cs_* 或 sa quota == 同 tier base／
-M2M 掛載於對應 template。另總數 base 49＋變體 214＝263、前台不滲漏冒煙。
+M2M 掛載於對應 template。另總數 base 51＋變體 216＝267、前台不滲漏冒煙。
 """
 from odoo.tests.common import TransactionCase, tagged
 
@@ -363,17 +371,17 @@ class TestPlanVariantsGenerated(TransactionCase):
             template = self.env.ref('%s.%s' % (MOD, e['template']))
             self.assertIn(plan, template.sudo().subscription_plan_ids, xmlid)
 
-    def test_total_263_plans(self):
-        """base 49＋變體 214＝263（以 module 的 ir.model.data 計數）。"""
+    def test_total_267_plans(self):
+        """base 51＋變體 216＝267（以 module 的 ir.model.data 計數）。"""
         count = self.env['ir.model.data'].search_count([
             ('module', '=', MOD), ('model', '=', 'sh.subscription.plan')])
-        self.assertEqual(count, 263, 'plan 總數應為 base 49＋變體 214＝263')
+        self.assertEqual(count, 267, 'plan 總數應為 base 51＋變體 216＝267')
 
     def test_variants_never_reach_storefront(self):
-        """214 變體全 hidden：三個 template model 的可見 plan 皆無變體滲漏。"""
+        """216 變體全 hidden：三個 template model 的可見 plan 皆無變體滲漏。"""
         variants = self.env['sh.subscription.plan'].search(
             [('ac_max_access_seats', '>', 0), ('storefront_hidden', '=', True)])
-        self.assertEqual(len(variants), 214)
+        self.assertEqual(len(variants), 216)
         for tpl_model in ('woow_paas_platform.cloud_app_template',
                           'woow_paas_platform.smart_home_template',
                           'woow_paas_platform.security_access_template'):

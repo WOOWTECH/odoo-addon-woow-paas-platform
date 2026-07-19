@@ -1,6 +1,6 @@
-# 雲端連線服務擴充清單（220項，已全數建置完成）
+# 雲端連線服務擴充清單（222項，已全數建置完成）
 
-狀態：✅ 214 項已於 2026-07-11 全數建立於 Odoo 產品目錄，分類「雲端連線服務」（ID 111）；2026-07-19（#375）新增三型 MCP admin（k8s / vk / opendesign）+1access 變體 6 列（215-220），總計 220 項。
+狀態：✅ 214 項已於 2026-07-11 全數建立於 Odoo 產品目錄，分類「雲端連線服務」（ID 111）；2026-07-19（#375）新增三型 MCP admin（k8s / vk / opendesign）+1access 變體 6 列（215-220）；2026-07-19（#380）新增 Open Design 完整應用（daemon+console）+1access 變體 2 列（221-222），總計 222 項。
 
 ⚠️ 目前為商品殼（名稱/價格/分類/敘述），與 sh_subscription 訂閱方案（Plan）的實際綁定待模組部署後補設定。
 
@@ -226,3 +226,5 @@
 | 218 | Vibe Kanban MCP+1access年繳 | 28,800 | +access變體 |
 | 219 | Open Design MCP+1access月繳 | 3,600 | +access變體 |
 | 220 | Open Design MCP+1access年繳 | 28,800 | +access變體 |
+| 221 | Open Design 雲端訂閱服務+1access月繳 | 5,100 | +access變體 |
+| 222 | Open Design 雲端訂閱服務+1access年繳 | 40,800 | +access變體 |

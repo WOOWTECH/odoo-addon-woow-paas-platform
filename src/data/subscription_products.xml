@@ -1030,6 +1030,46 @@
             <field name="service_type">cloud_service</field>
         </record>
 
+        <!-- Open Design 完整應用（#380）base plan：單級距 月 4500／年 36000（年×8）。
+             +1access 變體（5100/40800）由 generator 生成於 subscription_products_variants.xml。
+             獨立 template cloud_app_opendesign（完整應用 daemon+console、非 MCP）；
+             service_type=cloud_service，與 #375 MCP base plan 同模式。 -->
+        <record id="plan_opendesign_monthly" model="sh.subscription.plan">
+            <field name="name">Open Design 雲端訂閱服務 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">4500</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
+        <record id="plan_opendesign_yearly" model="sh.subscription.plan">
+            <field name="name">Open Design 雲端訂閱服務 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">36000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
         <!-- ============================================================ -->
         <!--  Products (one per plan, each links to its plan)             -->
         <!--  sh_subscription_plan_id is on product.template              -->
@@ -1575,6 +1615,29 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_mcp_opendesign_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <!-- Open Design 完整應用（#380）base product：taxes_id 明寫空、pts 免稅（#366）。 -->
+        <record id="product_opendesign_monthly" model="product.product">
+            <field name="name">Open Design 雲端訂閱服務 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">4500</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_opendesign_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <record id="product_opendesign_yearly" model="product.product">
+            <field name="name">Open Design 雲端訂閱服務 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">36000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_opendesign_yearly"/>
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
