@@ -168,7 +168,7 @@ def migrate(cr, version):
 **反對 sniff 的理由**：
 
 1. **Stale state**：service rename / namespace 變動後，sidecar URL 仍然是 cluster.local 形態但 backing service 已沒 reference — sniff 無法區分「fresh sidecar」與「stale snapshot」
-2. **User 可手動填 cluster.local**：[[mcp-url-redesign]] plan AC #28 明示「endpoint 故意不 enforce URL ↔ flag 一致性」— user 把 sidecar URL 貼到 External form 是合法 UX，sniff 會把它錯歸 sidecar-backed → 後續 service 刪時誤殺
+2. **User 可手動填 cluster.local**：[[mcp-url-redesign]] plan AC #28 明示「endpoint 故意不 enforce URL ↔ flag 一致性」— user 把 sidecar URL 貼到 External form 是合法 UX，sniff 會把它錯歸 sidecar-backed → 後續 service 刪時誤殺。（2026-07 起此「不 enforce」僅剩 `sidecar_backed=False` 方向仍成立，見下方反轉補記）
 3. **Cross-cluster URL 形式可能變**：未來支援 multi-cluster，cluster.local 不再唯一 → sniff 規則要追著改
 
 **Flag 是 explicit declaration**：「這 row 物理依賴 backing service」是 create-time 決定的事實，不該 runtime 推斷。
@@ -197,7 +197,24 @@ design intent：UI shortcut 是**UX 模型**而非**強制契約**。User 可以
 
 兩個 case 都比「endpoint 強制 enforce」對 UX 友善 — user 對 ownership 有掌控。
 
-### 為什麼新增 `sidecar_backed` 而非語意擴張 `auto_created`
+### 2026-07 反轉補記（#271）：`sidecar_backed=True` 方向已改為硬 enforce
+
+上一節的「endpoint 不 enforce」設計在 #271（PR #308）落地後**部分反轉**：
+
+- **`sidecar_backed=True` ⟹ URL 必須 in-cluster** 現在是 model 層硬 invariant：
+  `@api.constrains('sidecar_backed', 'url')` `_check_sidecar_url_in_cluster`
+  （`src/models/mcp_server.py:152`）強制 http scheme + hostname 以
+  `.svc.cluster.local` 結尾，**無 su / group bypass**（對 sudo 寫入同樣生效）。
+  判斷邏輯單一來源 `_is_in_cluster_url()`（`src/models/mcp_server.py:136`），
+  controller 層 friendly error 與 migration healer
+  `_heal_sidecar_backed_non_cluster_url`（`src/models/mcp_server.py:172`）共用同一函式。
+- 反轉理由：sidecar-backed row 掛 public hostname 會讓 in-cluster agent
+  data-plane 撞 CF Access login page，且 teardown 的 URL-prefix filter 會 miss
+  該 row 變 orphan — 不再是「user 自找的」tradeoff，而是安全 / lifecycle 破口。
+  詳見 `docs/plans/2026-Q3/2026-07-06-271-internal-mcp-bypass-guard-design.md` §3（Invariant）/ §4（設計，含 healer 決策）。
+- **`sidecar_backed=False` 方向不變**：user 在 External form 貼 cluster.local
+  URL 仍合法（service 拆時保留 zombie URL、user 自理）— 上一節的 design intent
+  對 external MCP 仍成立。「不 enforce」如今是**單向**的。
 
 PR #47 用 `auto_created` 表「自動建」。Cycle 4 拆 auto-create 後：
 
@@ -219,7 +236,7 @@ PR #47 用 `auto_created` 表「自動建」。Cycle 4 拆 auto-create 後：
 | 「`_do_cleanup` 改 filter，`unlink()` override 忘改」 | Controller direct unlink path 誤殺 external |
 | 「Create path 漏設 flag（如 endpoint payload 不收）」 | UI shortcut row 變 zombie（service 拆後 URL 失效但 row 留） |
 | 「Form view 讓 user 直接 toggle `sidecar_backed`」 | User 錯誤 toggle 後 cleanup 行為亂掉 — readonly + UI flow 內部 set 才對 |
-| 「Endpoint enforce URL ↔ flag 一致性」 | 違反 [[mcp-url-redesign]] design intent — frontend 負責 mental model |
+| 「Endpoint enforce URL ↔ flag 一致性」（僅指 `sidecar_backed=False` 方向） | 違反 [[mcp-url-redesign]] design intent — frontend 負責 mental model。⚠ `sidecar_backed=True` 方向自 #271 起**必須** enforce（model constraint 已存在，勿移除），見「2026-07 反轉補記」 |
 | 「URL sniff 推斷 flag 而非 explicit」 | Stale state + user override 場景錯誤歸類 |
 | 「同 model 加第二個類似 flag（如 `auto_created` + `sidecar_backed` 並存）」 | 短期 maintainability debt — 長期須清理至 single flag |
 
@@ -240,8 +257,10 @@ PR #47 用 `auto_created` 表「自動建」。Cycle 4 拆 auto-create 後：
 - [[mcp-project-decouple]] §Invariants #4 — cleanup hook 順序（與本 pattern 的 filter 條件配合）
 - [[cloud-service-unlink-override-cleanup]] — 雙 path cleanup idiom（本 pattern 是其延伸：filter 條件擴一個維度）
 - [[direct-unlink-bypass-cleanup-hook]] — 沒走 unlink override pattern 會踩的 zombie row 坑
+- `docs/plans/2026-Q3/2026-07-06-271-internal-mcp-bypass-guard-design.md` §3/§4 — #271 in-cluster 硬 enforce 反轉的設計依據
 - 關鍵 code：
   - `src/models/mcp_server.py` `sidecar_backed` field — readonly Boolean
+  - `src/models/mcp_server.py:152` `_check_sidecar_url_in_cluster` — #271 硬 constraint（sidecar_backed=True ⟹ in-cluster URL，無 bypass）
   - `src/models/cloud_service.py:_do_cleanup` + `unlink()` override — 雙 path filter `lambda s: s.scope == 'user' and s.sidecar_backed`
   - `src/controllers/paas.py:_create_project_mcp_server` — endpoint payload 寫入
   - `src/static/src/paas/pages/project-detail/sections/McpServersSection.js:submitForm` — frontend flow 區分

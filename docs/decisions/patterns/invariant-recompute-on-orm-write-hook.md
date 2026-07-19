@@ -97,7 +97,7 @@ def write(self, vals):
 
 ## 落地（本 epic）
 
-- spec `docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` §① model 層 — `create()` / `write()` 收斂 `_recompute_is_latest`
+- spec `docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md` §① model 層 — `create()` / `write()` 收斂 `_recompute_is_latest`
 - impl commit `94a63a6` — `fix(skill): close is_latest drift on create/write to published state`（`src/models/skill.py:103-130`）
 - 配套 migration commit `be75361` — `src/migrations/18.0.1.0.28/post-fix-is-latest.py`（既有資料的兜底）
 - regression test commit `94a63a6`（同 commit）— `TestSkillIsLatestDriftRegression`（`src/tests/test_skill_is_latest_drift_regression.py`）6 case，鎖 hook 行為（含 `test_action_publish_still_works_after_hook` 確保不破 transition method 既有路徑）

@@ -1,7 +1,7 @@
 /**
  * E2E (browser) — skill admin form transition button UI wiring.
  *
- * Spec: docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md §④-b
+ * Spec: docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md §④-b
  *
  * 測什麼（UI wiring）：
  * - admin 登入 → Skills menu → list → 開 draft skill form

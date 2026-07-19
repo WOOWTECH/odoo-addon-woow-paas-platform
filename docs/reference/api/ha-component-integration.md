@@ -337,7 +337,8 @@ Authorization: Bearer <access_token>
       "end_date": null,
       "next_payment": "2026-07-06",
       "last_payment_status": "paid"
-    }
+    },
+    "mcp": "ha_mcp_tools"
   }
 }
 ```
@@ -353,6 +354,11 @@ Authorization: Bearer <access_token>
   為 `null`**（非 `{}`）。
 - `subdomain` 是 prefix；對外 FQDN = `{subdomain}.{paas_domain}`，由 §4.4
   tunnel-token 端點組好回傳。
+- `mcp`（2026-07 補錄，#270）：字串，值為 `""` 或 `"ha_mcp_tools"`，來自
+  active plan 的 `mcp_integration`（`smart_home.to_dict()` →
+  `_get_mcp_integration()`，`src/models/smart_home.py:320`；欄位定義
+  `src/models/sh_subscription_plan_sh_mcp.py:14`）。無訂閱 / plan 無旗標
+  一律回 `""`（非 `null`、非缺欄位）。語意見 §4.4 的 reconcile 說明。
 
 ### 4.4 `GET /api/smarthome/homes/{id}/tunnel-token`
 
@@ -363,12 +369,25 @@ Authorization: Bearer <access_token>
 {
   "tunnel_token": "eyJ...",
   "tunnel_id": "f3a1...",
-  "subdomain": "my-home.paas.example.com"
+  "subdomain": "my-home.paas.example.com",
+  "mcp": "ha_mcp_tools"
 }
 ```
 
 > 這裡的 `subdomain` 是**完整 FQDN**（`{prefix}.{paas_domain}`，controller 組好），
-> 與 detail 裡的 `subdomain`（prefix）不同。三欄缺值皆回 `""`。
+> 與 detail 裡的 `subdomain`（prefix）不同。各欄缺值皆回 `""`。
+
+`mcp` 欄位（2026-07 補錄，#270；`src/controllers/ha_api.py:251`）與 §4.3
+`to_dict()` 同源同值。component 端契約＝**每次同步 reconcile 到當前值**
+（冪等收斂，非一次性建立）：
+
+- `mcp == "ha_mcp_tools"` → 確保存在一顆 MCP sensor entity，狀態三態
+  （未安裝 / 已安裝未啟動 / 運作中）。
+- `mcp == ""`（或缺欄位）→ 確保 sensor 不存在——**含先前建過的移除路徑**
+  （降頻、退訂、換非 MCP 檔）；平台每次同步廣播當前值，不另發「取消」信號。
+- sensor 純 HA 本地 entity；**平台不回讀 component 狀態**（軟性、無 enforcement）。
+
+設計依據：[`../../plans/2026-Q3/2026-07-09-smart-home-mcp-design.md`](../../plans/2026-Q3/2026-07-09-smart-home-mcp-design.md) §4.2、§5。
 
 啟動：
 
@@ -410,8 +429,9 @@ Smart Home，可多選 SA。SA 同樣是「取 Cloudflare tunnel token → 跑 c
 
 與 Smart Home 的 4 個關鍵差異：
 
-1. **tunnel-token 不含 hostname**：SH 版回 `{tunnel_token, tunnel_id, subdomain}`
-   （含 FQDN）；SA 版只回 `{tunnel_token, tunnel_id}`。SA 是一條 bare Cloudflare
+1. **tunnel-token 不含 hostname**：SH 版回 `{tunnel_token, tunnel_id, subdomain,
+   mcp}`（含 FQDN 與 MCP 旗標，§4.4）；SA 版只回 `{tunnel_token, tunnel_id}`
+   （無 `mcp`）。SA 是一條 bare Cloudflare
    Tunnel + N 條 application route，沒有單一 hostname。要顯示主機名 → 讀 SA
    detail 的 `routes[].hostname`。
 2. **啟 tunnel 方式完全相同**（`cloudflared tunnel run --token <token>`）。SA 是

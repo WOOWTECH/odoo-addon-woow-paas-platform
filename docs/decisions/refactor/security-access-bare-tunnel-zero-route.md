@@ -27,7 +27,7 @@
 
 ### 設計意圖落差（本決策的核心）
 
-P2.5 per-route Access 重構（`docs/superpowers/plans/2026-06-09-security-access-p2.5-per-route-access.md`）廢除的是 **user-facing「Primary」概念**：Primary badge（commit `8e33ece` 已移除）+ SA 層 `primary_hostname` 殘留欄位。follow-ups（2026-06-10）起因明載「使用者 review stg 發現 Primary badge / primary_hostname 殘留」。
+P2.5 per-route Access 重構（`docs/plans/2026-Q2/2026-06-09-security-access-p2.5-per-route-access.md`）廢除的是 **user-facing「Primary」概念**：Primary badge（commit `8e33ece` 已移除）+ SA 層 `primary_hostname` 殘留欄位。follow-ups（2026-06-10）起因明載「使用者 review stg 發現 Primary badge / primary_hostname 殘留」。
 
 **但 plan 從未要求廢除「provision 自動建一條 route」這個內部機制** —— 相反地，P2.5 migration（`post-migrate.py:158`）還**主動使用** `is_primary` 當錨點把 legacy policy re-home 過去。換言之：截圖那條 route 不是「plan 漏清的殘留」，而是 plan 刻意保留、承載 tunnel 可達性的內部 anchor。**使用者想拔掉內部 auto-route 機制，比 plan 授權的範圍更激進。**
 
@@ -176,5 +176,5 @@ docker-desktop dev sandbox（local mode 掛工作區 src/、`woow_paas_platform`
 - cron 生命週期：`src/models/subscription_lifecycle_cron.py:80,97,109`、SA `_do_suspend/_do_resume` `security_access.py:669,699`
 - 前端範本：`src/static/src/paas/components/smart-home/CreateSmartHomeModal.js:12,157-181`
 - PR #1 實作：commit `8633026`（`CreateSecurityAccessModal.js` / `.xml`）
-- 相關 plan：`docs/superpowers/plans/2026-06-09-security-access-p2.5-per-route-access.md`、`docs/superpowers/plans/2026-06-06-security-access-p1-mainline.md`
+- 相關 plan：`docs/plans/2026-Q2/2026-06-09-security-access-p2.5-per-route-access.md`、`docs/plans/2026-Q2/2026-06-06-security-access-p1-mainline.md`
 - 相關 pattern / pitfall：[[two-stage-remote-provision-idempotency]]、[[seed-noupdate-sticky-template-links]]、[[owl-template-crash-class-syntax]]、`operator-cf-access-delete-202-mock-contract.md`

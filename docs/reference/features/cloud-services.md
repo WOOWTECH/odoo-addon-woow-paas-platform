@@ -679,7 +679,7 @@ class CloudService(models.Model):
 ## Agent Context 揭露白名單
 
 task agent chat 會把綁定 cloud service 的資訊注入 AI system context
-（spec `docs/superpowers/specs/2026-06-04-agent-context-enrichment-design.md`）。
+（spec `docs/plans/2026-Q2/2026-06-04-agent-context-enrichment-design.md`）。
 
 **基礎集（永遠注入）**：`template.name` / `template.category` /
 `template.description`、`service.name` / `state` / 外部 URL

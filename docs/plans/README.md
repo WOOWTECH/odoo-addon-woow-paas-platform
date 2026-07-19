@@ -17,6 +17,7 @@
 | 路徑 | 內容 |
 |------|------|
 | [`2026-Q2/`](2026-Q2/) | 2026 年 4-6 月計畫（含 wallet-billing、subscription-integration、refactor 等） |
+| [`2026-Q3/`](2026-Q3/) | 2026 年 7-9 月計畫（含 netpol 租戶隔離、harness 蒸餾、定價 taxonomy/manifest、wave-c picker 等） |
 | [`journal/`](journal/) | 過程側記（非完整 plan，是「邊做邊記」） |
 
 ## 命名

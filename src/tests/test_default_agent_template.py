@@ -1,7 +1,7 @@
 """Platform default agent template — Settings field + resolution fallback.
 
-Spec: docs/superpowers/specs/2026-06-01-default-agent-template-design.md
-Plan: docs/superpowers/plans/2026-06-01-default-agent-template.md
+Spec: docs/archived/superpowers/specs/2026-06-01-default-agent-template-design.md
+Plan: docs/archived/superpowers/plans/2026-06-01-default-agent-template.md
 
 Covers:
   S-1  res.config.settings.woow_default_agent_template_id round-trips through

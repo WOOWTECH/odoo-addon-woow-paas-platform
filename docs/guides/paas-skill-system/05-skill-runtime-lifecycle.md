@@ -19,7 +19,7 @@ related:
 > 固定 entrypoint 的 StructuredTool）」改為 **Claude Code 模型**（SKILL.md 指令注入 +
 > `skill:load_skill` + 通用 `bash:execute`，bash 跑在異 UID 的 `bash_bridge` sidecar）。
 > **STG 已上線並驗證（agent-runtime 1.4.0）；prod 待 Fleet flip**。設計依據見
-> `docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md`，
+> `docs/plans/2026-Q2/2026-06-08-skill-claude-code-model-redesign-design.md`，
 > sidecar 細節見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 
 > ℹ️ **本篇是概念層**；Pod 內部的實際模組（WS 伺服器 / auth / langgraph / skill loader / 熱重載 / 安全）逐項對程式碼的細節見 [agent-runtime Pod 內部](06-pod-internals.md)。runtime 程式碼在另一個 repo `paas-agent-runtime`，本 repo（Odoo + operator）只定義 contract：下載端點、webhook、env 與 bundle 格式。

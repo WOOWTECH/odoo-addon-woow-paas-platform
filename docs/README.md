@@ -72,7 +72,7 @@ related: [docs/decisions/xxx.md, .claude/epics/yyy/epic.md]
 | docs/ → ccpm | frontmatter `source: .claude/epics/<name>/epic.md` 或 `related: [.claude/...]` |
 | ccpm → docs/ | epic.md / task.md 行內 `> Promoted to: docs/decisions/<file>.md`（不動 ccpm schema 欄位） |
 | docs/ → superpowers | frontmatter `source: docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` |
-| superpowers → docs/ | 原檔頂端 `> Promoted to: docs/decisions/<file>.md` |
+| superpowers → docs/ | promote＝git mv 搬入主結構（原檔不留副本，2026-07-19 起），新檔 frontmatter `source:` 記原路徑；inbound 引用同步改寫 |
 | docs/ → docs/ | 相對路徑（範例：從 `plans/<quarter>/` 引用 decisions 寫 `../../decisions/<file>.md`）— CI link check 友善 |
 | 外部（GitHub / Gitea PR/issue） | 永遠用絕對 URL |
 

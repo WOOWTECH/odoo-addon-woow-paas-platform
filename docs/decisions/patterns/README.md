@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 25 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 27 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -33,6 +33,7 @@
 |---|---|
 | [[resource-ownership-vs-template-activation]] | 平台資源（skill / mcp_server）同時要「屬於誰」與「哪個 agent 啟用」兩種語意 → 歸屬 = 資源端 M2O FK（1:N）+ 配置 = template 端 M2M + subset constraint 黏合；新增第三種資源類型照抄 4 件套；看到「project O2M 與 template M2M 好像重複」或想讓 agent 隱式全吃 project 資源時必讀 |
 | [[template-vs-plan-property-boundary]] | 新商品變體上架猶豫「開新 CloudAppTemplate 還是同 template 加 plan」時：需要不同 **template 級屬性**（image/chart/init script）＝必開新 template；只差 plan 級（價格/cs_* 規格/AC 席數/可見性）＝同 template 多 plan；有人提議「plan 加 image 欄位」時必讀 |
+| [[seed-agent-template-design]] | 動 `src/data/agent_template_default.xml` / `src/hooks.py` 的平台預設 template seed 前：tenant-neutral invariant（unbound＋無 user-scope 綁定）的設計依據與 trade-off 全文（pattern-guard seed-default-template class 必讀件；2026-07-19 自 superpowers promote 入列） |
 
 ### ORM 寫入 / lifecycle / cleanup
 
@@ -44,6 +45,7 @@
 | [[spawn-install-values-missed-forward]] | 有組裝點把上游資料 → 下游 helm install values / config，下游硬性 `required`：撞「缺一個 value」時通常系統性漏轉多個 → 修一個就全盤對齊 + 加 contract test |
 | [[plan-driven-date-helper]] | subscription 日期由 plan 強制覆寫（trial / non-trial path），且與第三方 onchange 有 post-confirm coupling 時 |
 | [[two-stage-remote-provision-idempotency]] | provision method 先建遠端資源（CF tunnel / 雲端 DNS / SaaS 帳號 / k8s ns）再跑後續步驟，且 UI 把 retry 掛在 `error` 上 → 第二段失敗讓遠端資源孤兒掛著、retry 重跑第一段在雲端再建一條（永久孤兒 / 計費外洩）→ 遠端建立步驟必須被 stored-id guard 包住，每條失敗路徑保留 stored id 讓 retry 安全（單段 method 的免-guard 安全是單段性換來的，加段就要買回來） |
+| [[ns-quota-hard-limits-limitrange-lockstep]] | 新 ns 類型要加 ResourceQuota、或動既有 ns quota hard map 時：hard 一旦宣告 `limits.cpu/memory`，admission 強制 ns 內每個 container（含 init/sidecar）必帶 limits，缺者拒建且訊息隱晦 → LimitRange default（500m/512Mi）是 correctness requirement 非 best-practice，兩者必須同 PR 同落點 lock-step（出自 #278/PR #312） |
 | [[external-resource-env-token-naming]] | 平台代為在 prod/stg **共用**的外部系統（CF account/zone、雲端 DNS、SaaS 帳號）產生資源時，命名/標籤要帶可一眼辨識 prod/stg 的 env token（共用帳號裡無此 token → 孤兒清理 / 稽核無法自證歸屬）→ 注入在「平台命名的單一根」（本 repo = Odoo `naming.py` 的 `canonical_name`，一改全覆蓋 tunnel/DNS/Access 且 create/delete 天然對稱），env 源用**顯式** config（禁從 `namespace_prefix` 隱式推 prod=空字串），只注入不參與反查的標籤欄位（name/comment/tag），靠重算 name 反推的路徑（`generate_subdomain`）須 create↔delete 雙向對稱 |
 
 ### 測試紀律（multi-phase / credential 硬化）
@@ -70,6 +72,7 @@
 - [external-resource-env-token-naming](external-resource-env-token-naming.md)
 - [invariant-recompute-on-orm-write-hook](invariant-recompute-on-orm-write-hook.md)
 - [mcp-acl-6-rule-split](mcp-acl-6-rule-split.md)
+- [ns-quota-hard-limits-limitrange-lockstep](ns-quota-hard-limits-limitrange-lockstep.md)
 - [odoo-addon-std-rule-symmetric-deactivation](odoo-addon-std-rule-symmetric-deactivation.md)
 - [odoo-std-field-no-override](odoo-std-field-no-override.md)
 - [orm-vs-endpoint-acl-test-coverage](orm-vs-endpoint-acl-test-coverage.md)
@@ -80,6 +83,7 @@
 - [plan-gap-stop-and-report](plan-gap-stop-and-report.md)
 - [resource-ownership-vs-template-activation](resource-ownership-vs-template-activation.md)
 - [scope-flip-write-guard-not-ir-rule](scope-flip-write-guard-not-ir-rule.md)
+- [seed-agent-template-design](seed-agent-template-design.md)
 - [sidecar-backed-flag-lifecycle](sidecar-backed-flag-lifecycle.md)
 - [spawn-install-values-missed-forward](spawn-install-values-missed-forward.md)
 - [su-env-exempt-guard-false-green](su-env-exempt-guard-false-green.md)

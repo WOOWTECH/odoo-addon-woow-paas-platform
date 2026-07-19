@@ -1,6 +1,6 @@
 """TDD — skill admin backend lifecycle transitions + is_latest invariant.
 
-Spec: docs/superpowers/specs/2026-05-27-skill-admin-backend-ui-design.md §①
+Spec: docs/plans/2026-Q2/2026-05-27-skill-admin-backend-ui-design.md §①
 """
 import hashlib
 import uuid

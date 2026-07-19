@@ -5,7 +5,7 @@ status: active
 created: 2026-07-10
 topic: 324-stg-cleanup
 related:
-  - docs/superpowers/plans/2026-07-10-324-billing-dual-gap-fix.md
+  - docs/plans/2026-Q3/2026-07-10-324-billing-dual-gap-fix.md
   - scripts/maintenance/cleanup_324_stg.py
   - src/models/sh_subscription_fix.py
 ---

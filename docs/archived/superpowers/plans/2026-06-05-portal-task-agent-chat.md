@@ -8,7 +8,7 @@
 
 **Tech Stack:** Odoo 18（QWeb inherit、HttpCase、ir.rule mirror）、OWL（public_components）、SSE EventSource、marked + DOMPurify。
 
-**Spec:** `docs/superpowers/specs/2026-06-05-portal-task-agent-chat-design.md`（已核可）
+**Spec:** `docs/archived/superpowers/specs/2026-06-05-portal-task-agent-chat-design.md`（已核可）
 
 ---
 

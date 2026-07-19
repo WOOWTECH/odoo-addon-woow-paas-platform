@@ -1,6 +1,6 @@
 """TDD — is_latest drift regression locks.
 
-Spec: docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md §①
+Spec: docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md §①
 
 Rationale: PR #81 維護 is_latest 不變式只在三個 transition method 結尾收斂。
 任何繞過 transition 直接 ``create({'state':'published'})`` 或

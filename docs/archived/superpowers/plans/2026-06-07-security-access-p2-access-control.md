@@ -8,7 +8,7 @@
 
 **Tech Stack:** Odoo 18（Python/OWL/QWeb/SCSS）、FastAPI（paas-operator）、Cloudflare Access API（apps + reusable policies + identity_providers）。
 
-**Spec:** `docs/superpowers/specs/2026-06-06-security-access-subscription-design.md` §1（access_policy 子模型、主模型 access 欄位）/ §2（operator Access endpoints）/ §4（Access tab UI）。
+**Spec:** `docs/plans/2026-Q2/2026-06-06-security-access-subscription-design.md` §1（access_policy 子模型、主模型 access 欄位）/ §2（operator Access endpoints）/ §4（Access tab UI）。
 
 **P1 已就緒可複用：** `route.is_protected` 欄位（P1 已建、inert）、`sa_max_access_policies` quota 欄位（P1 已建、未 enforce）、SA 宣告式 sync pattern（`_build_route_payload` / `_sync_routes_to_operator`）、BFF 三層 gate（workspace → role → `_check_operation_allowed`）、前端 Access tab Coming Soon 佔位、`o_woow_checkbox` / `o_woow_modal_*` 既有元件。
 
@@ -59,7 +59,7 @@
   src/tests/test_security_access_access_policy.py          # 新檔：model + 宣告式 sync 測試
   src/tests/test_security_access_endpoints.py              # 追加 policy CRUD HttpCase cross-user negative
   src/tests/__init__.py                                    # + import
-  docs/superpowers/specs/2026-06-06-security-access-subscription-design.md  # 收尾標 P2 implemented
+  docs/plans/2026-Q2/2026-06-06-security-access-subscription-design.md  # 收尾標 P2 implemented
 ```
 
 **依賴順序**：operator（Task 1-4）→ Odoo client（Task 5）→ model（Task 6-9）→ ACL/quota（Task 10）→ BFF（Task 11-12）→ 前端（Task 13-14）→ HttpCase（Task 15）→ 收尾（Task 16）。
@@ -2271,7 +2271,7 @@ Expected: 0 failed 0 error（含 P1 全部 + P2 新增；既有 SA/smart home/cl
 Run: `cd extra/paas-operator && /tmp/sa-op-venv/bin/python -m pytest tests/ -m "not integration"`
 Expected: 全 PASS
 
-- [ ] **Step 3: 更新 spec 狀態** — `docs/superpowers/specs/2026-06-06-security-access-subscription-design.md` 頂部狀態行改：
+- [ ] **Step 3: 更新 spec 狀態** — `docs/plans/2026-Q2/2026-06-06-security-access-subscription-design.md` 頂部狀態行改：
 
 ```
 > 狀態：P1 + P2(Access) implemented；P3 Domains / P4 Email 待開。
@@ -2280,7 +2280,7 @@ Expected: 全 PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-06-security-access-subscription-design.md
+git add docs/plans/2026-Q2/2026-06-06-security-access-subscription-design.md
 git commit -m "docs: mark security access p2 access control implemented"
 ```
 

@@ -76,7 +76,7 @@ def _sanitize_helm_values(helm_values_json):
 
 
 # ---- unified system-context builder ----
-# spec: docs/superpowers/specs/2026-06-04-agent-context-enrichment-design.md
+# spec: docs/plans/2026-Q2/2026-06-04-agent-context-enrichment-design.md
 # pod has ZERO input truncation (confirmed w/ paas-agent-runtime repo), so
 # the Odoo side is the only place that caps context size.
 CTX_DESC_CAP = 1500       # chars per project/task description (post-html2plaintext)

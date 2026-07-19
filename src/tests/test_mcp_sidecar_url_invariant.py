@@ -1,7 +1,7 @@
 """TDD — #271 mcp_server sidecar-backed url in-cluster invariant.
 
 Model-layer @api.constrains + shared _is_in_cluster_url helper.
-Design: docs/superpowers/specs/2026-07-06-271-internal-mcp-bypass-guard-design.md §4 ①
+Design: docs/plans/2026-Q3/2026-07-06-271-internal-mcp-bypass-guard-design.md §4 ①
 
 Red expectation (pre-impl):
   * _is_in_cluster_url helper does not exist yet → AttributeError.

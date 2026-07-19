@@ -1,6 +1,6 @@
 """E2E — skill lifecycle ↔ download endpoint visibility ↔ is_latest invariant.
 
-Spec: docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md §④-a
+Spec: docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md §④-a
 
 測什麼：
 - lifecycle transition（action_publish / deprecate / archive_skill）→

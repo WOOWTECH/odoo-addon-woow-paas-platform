@@ -8,7 +8,7 @@ cluster 唯讀列 ``paas-ws-*`` ns 當右集；Odoo 對 live ``helm_namespace`` 
 活躍 agent ns 誤判孤兒（災難）。``state='deleting'`` 的 CS 排除（過渡態）；helm_namespace
 非唯一（多 CS 共用）→ 入 set 去重。
 
-設計 spec：``docs/superpowers/specs/2026-07-07-w1-ns-quota-governance-design.md``。
+設計 spec：``docs/plans/2026-Q3/2026-07-07-w1-ns-quota-governance-design.md``。
 """
 from odoo.tests import TransactionCase, tagged
 

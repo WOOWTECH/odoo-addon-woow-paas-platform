@@ -268,7 +268,7 @@ class TestPhaseCSkillBundleEndpoint(HttpCase):
             b'\x1f\x8b\x08RAW-skill-bundle-bytes-' + self.suffix.encode()
         )
         # Note (post 2026-05-28 drift fix, spec
-        # docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md):
+        # docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md):
         # 此 fixture 直接 create({'state':'published'}) 走的是「程式化捷徑」，
         # 修法後 Skill.create() override 會自動觸發 _recompute_is_latest 並補
         # published_at → 該 fixture skill 現在 is_latest=True、published_at 有值。

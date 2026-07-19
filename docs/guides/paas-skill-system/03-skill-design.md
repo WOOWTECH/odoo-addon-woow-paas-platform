@@ -19,7 +19,7 @@ related:
 > 固定 entrypoint 的 StructuredTool）」改為 **Claude Code 模型**（SKILL.md 指令注入 +
 > `skill:load_skill` + 通用 `bash:execute`，bash 跑在異 UID 的 `bash_bridge` sidecar）。
 > **STG 已上線並驗證（agent-runtime 1.4.0）；prod 待 Fleet flip**。設計依據見
-> `docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md`，
+> `docs/plans/2026-Q2/2026-06-08-skill-claude-code-model-redesign-design.md`，
 > sidecar 細節見 [skill-runner（bash sidecar）](12-skill-runner-bash-sidecar.md)。
 
 ## 🎯 什麼是 Skill？

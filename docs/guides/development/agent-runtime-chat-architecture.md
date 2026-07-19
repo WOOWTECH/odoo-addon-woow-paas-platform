@@ -8,7 +8,7 @@ tags: [paas, agent-runtime, chat, sse, websocket, secret, state-sync, cold-start
 related:
   - ../paas-skill-system/02-conversation-streaming.md
   - ../paas-skill-system/08-webhook-ws-token.md
-  - ../../superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md
+  - ../../archived/superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md
   - ../../tracking/pitfalls/agent-runtime-stg-enablement-gap-chain.md
 ---
 
@@ -200,7 +200,7 @@ handler `spawn_or_attach`（`extra/paas-operator/src/api/agent_runtimes.py:339`�
 
 - **pod 數不隨人數 / task 數成長**（per-user → per-project 是 epic 中已拍板的 pivot）。
 - **同時串流人數**的上限受 Odoo worker 數限制（design doc 既有約束：100 active 對話 = 100 worker slot，`docs/plans/2026-Q2/agent-runtime-pod-design.md:129`）；對外開放（如 portal task 頁 chat）時要看的是這個維度，**不是** pod 資源。
-- 量大時的演進路徑是瀏覽器側改 bus WebSocket 推播（整則訊息、非逐字），釋放 worker——見 `docs/superpowers/specs/2026-06-05-portal-task-agent-chat-design.md` 的風險節。
+- 量大時的演進路徑是瀏覽器側改 bus WebSocket 推播（整則訊息、非逐字），釋放 worker——見 `docs/archived/superpowers/specs/2026-06-05-portal-task-agent-chat-design.md` 的風險節。
 
 ---
 
@@ -285,7 +285,7 @@ mcp_server.write(name/url/transport 變動) ┘
 
 ### 5.3 對照連結
 
-- 修復計畫（把 §4 這條 loop 接起來）：[`docs/superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md`](../../superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md)
+- 修復計畫（把 §4 這條 loop 接起來）：[`docs/archived/superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md`](../../archived/superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md)
 - 同家族 pitfall（stg 啟用的 5 層 fail-closed gap chain）：[`docs/tracking/pitfalls/agent-runtime-stg-enablement-gap-chain.md`](../../tracking/pitfalls/agent-runtime-stg-enablement-gap-chain.md)
 
 ---
@@ -345,5 +345,5 @@ per-project 的隔離**不是**靠每個 project 一把 key（auth key 是**共�
 - [Agent 對話與串流](../paas-skill-system/02-conversation-streaming.md) — 對話那一段的放大（含 legacy 路徑、15 種 envelope type）
 - [Webhook 回呼與 ws_token](../paas-skill-system/08-webhook-ws-token.md) — `ws_token` / WebSocket 認證細節
 - [PaaS Skill 系統總覽](../paas-skill-system/README.md) — agent-runtime / skill-bundle / pod 子系統的漸進式載入起點
-- [State-sync webhook 修復計畫](../../superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md)
+- [State-sync webhook 修復計畫](../../archived/superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md)
 - [stg 啟用 5 層 gap chain（pitfall）](../../tracking/pitfalls/agent-runtime-stg-enablement-gap-chain.md)

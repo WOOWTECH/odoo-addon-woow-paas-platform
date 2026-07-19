@@ -8,7 +8,7 @@
 2. **評估機械化**（`/retro` skill 的分流，按強度優先）：可 grep/parse 判定 → `scripts/audit/repo-lint.py` 加 check；綁特定路徑 → `.claude/hooks/pattern-guard-map.json` append；皆不可 → 狀態欄留 `—`。
 3. 教訓已被 code guard / gate 取代時，更新狀態欄並讓 doc 記錄 guard 位置（file:line）。
 
-## 索引（31 條）
+## 索引（33 條）
 
 | pitfall | 一行症狀 | 機械化狀態 |
 | --- | --- | --- |
@@ -31,6 +31,7 @@
 | [httpcase-orm-flush-ordering-raw-sql](httpcase-orm-flush-ordering-raw-sql.md) | HttpCase 內 raw SQL 造的 drift sample 被 ORM buffered write flush 覆蓋 | — |
 | [legacy-endpoint-scope-blindness](legacy-endpoint-scope-blindness.md) | plan AC 只 cover 新 endpoint，legacy 同源 code path 漏裝同層 security helper | — |
 | [netpol-enforced-except-fresh-pod-startup-window-k3s-kube-router](netpol-enforced-except-fresh-pod-startup-window-k3s-kube-router.md) | NP 對新建 pod 有啟動編程空窗 → 用臨時 pod 測 NP 會系統性誤判「控制器全毀」 | — |
+| [odoo-session-info-deleted-after-boot](odoo-session-info-deleted-after-boot.md) | 前端直讀 bare `odoo.__session_info__` 恆 undefined（session service boot 後即 delete）→ flag 靜默失效，XML/Py 測試全綠唯 headed E2E 測得出；正解 `@web/session` | — |
 | [operator-cf-access-delete-202-mock-contract](operator-cf-access-delete-202-mock-contract.md) | operator 包 CF Access 的 DELETE 白名單寫死 200，真 CF 回 202 → teardown 中斷孤兒 policy；mock 狀態碼要對齊真實 API | pattern-guard（paas-operator class） |
 | [orm-test-green-endpoint-leak-blindness](orm-test-green-endpoint-leak-blindness.md) | backend ORM test 全綠遮蔽 controller layer sudo bypass；ORM 綠 ≠ endpoint secure | repo-lint gate（controller-sudo）+ pattern-guard |
 | [owl-template-crash-class-syntax](owl-template-crash-class-syntax.md) | OWL template 語法錯誤（component `t-att-`、`.enter` modifier）過三層測試、runtime 全站白屏 | repo-lint gate（owl-template） |
@@ -39,6 +40,7 @@
 | [sandbox-module-test-false-green](sandbox-module-test-false-green.md) | K8s dev sandbox `test.sh` 0 tests 也報「✅ All tests passed」（false green） | — |
 | [seed-noupdate-sticky-template-links](seed-noupdate-sticky-template-links.md) | seed `noupdate="1"` 寫進 ir.model.data 變 sticky → 其他 data 檔對同 record 的 `-u` 更新被靜默 skip；fresh install 綠 ≠ 升級路徑綠 | repo-lint gate（data-noupdate）+ pattern-guard |
 | [skill-same-name-dual-bind-snapshot-collision](skill-same-name-dual-bind-snapshot-collision.md) | skill 同名雙綁 → snapshot 撞名 + 下拉無法區分同名 system/user skill | — |
+| [sudo-getter-acl-cache-priming-false-green](sudo-getter-acl-cache-priming-false-green.md) | 測 sudo getter ACL fix 假綠雙陷阱：sandbox 灌 admin 群組讓受限 owner 不受限＋admin 讀過的 ORM cache 讓 owner env 繞過 ACL；必須 groups 硬重設＋`invalidate_all()` 直呼 getter（pre-fix 紅／post-fix 綠判準） | — |
 | [system-mcp-create-acl-bypass](system-mcp-create-acl-bypass.md) | dual-leg rule + `perm_create=True` → 經 always-true leg 提權 | pattern-guard（acl-security class） |
 | [tag-scoped-test-misses-full-u-failures](tag-scoped-test-misses-full-u-failures.md) | `--test-tags` scope-limited 驗綠 → cross-module stale schema reference 漏抓 | — |
 | [two-layer-acl-asymmetric-deny](two-layer-acl-asymmetric-deny.md) | 兩層 ACL 收緊一層 silent 漏另一層——partial fix 比沒 fix 更糟 | pattern-guard（controller-endpoint class） |
