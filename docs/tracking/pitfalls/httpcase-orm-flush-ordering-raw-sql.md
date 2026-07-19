@@ -105,7 +105,7 @@ self.env.invalidate_all()
 
 ## Related
 
-- 落地 case：spec `docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` §④-a + 「實作注意」最後一條；impl commit `c018e92` `test(skill): fix drift sample buffer-ordering in migration e2e`（採方案 A）；tester report `/tmp/skill-list-tester-report.md`（首次撞紅 + 三方案分析）。
+- 落地 case：spec `docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md` §④-a + 「實作注意」最後一條；impl commit `c018e92` `test(skill): fix drift sample buffer-ordering in migration e2e`（採方案 A）；tester report `/tmp/skill-list-tester-report.md`（首次撞紅 + 三方案分析）。
 - 配套 pattern：[[invariant-recompute-on-orm-write-hook]] — 本 pitfall 是為該 pattern 寫 regression test 時撞到的 fixture mechanics 雷；兩者一組（pattern 是「修法本身」、pitfall 是「為此 pattern 寫 e2e 時撞到的雷」）。
 - 守線 pattern：[[plan-gap-stop-and-report]] — tester 撞此雷時的處置（不 bend impl 湊綠、原樣 escalate，由 implementation 階段選方案 A/B/C）。本 pitfall 是該守線在「fixture mechanics layer」的延伸 instance：tester 階段如果不停下回報，最自然的反應是把 assertion 拿掉 / 改寫期望 → 偽綠（migration 是否真修補從未被驗）。
 - 同 family（ORM cache 與 Python state 不同步的雷）：

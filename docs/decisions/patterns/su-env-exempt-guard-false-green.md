@@ -71,4 +71,4 @@ if 'subdomain_prefix' in vals and not self.env.su:
 
 - 同族不同層：[[scope-flip-write-guard-not-ir-rule]] —— 那條講「scope / tenancy 不可變必須靠 model `write()` guard 而非 ir.rule」（**用 write guard** 這層）；本條講「write / create guard **本身的豁免條件**怎麼寫才測得到、才不被 sudo 繞過」（guard 的**條件**這層）。關鍵分野：scope-flip 的不變量是「值轉移 gated」（有合法改值路徑，`env.su` + admin 放行**是對的**）；本條的不變量是「值不可變」（**沒有**合法改值路徑，任何 su 豁免都是洞 + 假綠）。改 identity guard 前先分清自己在哪一邊。
 - 同主旨（驗綠範圍 / 證據不對 → 漏抓）：[[orm-vs-endpoint-acl-test-coverage]]、pitfall `sandbox-module-test-false-green.md`（0 tests 也報綠）—— 三者共通：**測試「綠」不等於守線存在，要看它有沒有真的走到該守的分支**。
-- 原始來源（合成材料、不複製）：commit `5088a31` / `a8f1ba7` / `16fd427` + plan `docs/superpowers/plans/2026-06-06-security-access-p1-mainline.md`。
+- 原始來源（合成材料、不複製）：commit `5088a31` / `a8f1ba7` / `16fd427` + plan `docs/plans/2026-Q2/2026-06-06-security-access-p1-mainline.md`。

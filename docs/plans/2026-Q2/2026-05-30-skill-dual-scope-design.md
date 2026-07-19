@@ -11,7 +11,7 @@ related:
   - src/models/mcp_server.py
   - src/controllers/agent_runtime_skill.py
   - src/controllers/ai_assistant.py
-  - docs/superpowers/specs/2026-05-27-skill-admin-backend-ui-design.md
+  - docs/plans/2026-Q2/2026-05-27-skill-admin-backend-ui-design.md
   - docs/decisions/patterns/mcp-acl-6-rule-split.md
   - docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md
   - docs/decisions/patterns/invariant-recompute-on-orm-write-hook.md
@@ -29,7 +29,7 @@ related:
 - `project_id` 為 `required=True`（`skill.py:33-38`），每筆 skill 必綁一個 project。
 - **沒有 `scope` 欄位**，沒有「平台級共用 skill」的概念。
 - 沒有任何上傳途徑：整個 repo **沒有**接收 tar.gz、解 `SKILL.md` frontmatter、算 sha256 的程式碼。skill record 目前只能透過 ORM（測試 fixture / migration）或外部 XML-RPC 建立。`agent_runtime_skill.py` 只有 GET download。
-- 後台 Skills view（`src/views/skill_views.xml`）刻意 `create="false"`（見 `docs/superpowers/specs/2026-05-27-skill-admin-backend-ui-design.md`），只做唯讀檢視 + lifecycle transition。
+- 後台 Skills view（`src/views/skill_views.xml`）刻意 `create="false"`（見 `docs/plans/2026-Q2/2026-05-27-skill-admin-backend-ui-design.md`），只做唯讀檢視 + lifecycle transition。
 
 對照組 `woow_paas_platform.mcp_server` 已是 **dual-scope**（`mcp_server.py:49-57`）：`scope` Selection（system/user）、`project_id` nullable、D4 `@api.constrains` 雙向（`mcp_server.py:118-132`）。system MCP 綁在 `ai.assistant` 層（`ai_assistant.py:10` `domain=[('scope','=','system')]`）→ **永遠載入、不靠 template 綁**；user MCP 經 channel/project 載入並與 system 聯集（`ai_assistant.py:455-460`）。
 
@@ -197,7 +197,7 @@ Phase 1 無上傳 pipeline，system skill 以 **demo 資料**種子建立，讓 
 - **共用解析 helper**（skill model method，backend wizard 與 frontend controller 共用）：
   - 接 tar.gz → **解壓前 size cap**（reuse ai_assistant 10MB 或另定）→ **絕不 `extractall`**（zip-bomb / path-traversal / symlink 防護）→ `extractfile(SKILL.md)` 設 byte cap → parse frontmatter（**極簡手寫 parser**，零依賴；契約只要 `name`/`version`，其餘原樣存 `skill_metadata` JSON；PyYAML 在 Odoo image 是否可用待確認，預設不依賴）→ 算 sha256（**對實際被服務的 raw bytes**，須與 pod `resp.read()` 一致）+ size_kb → 建 `ir.attachment`（**sudo**，因 frontend 走 base.group_user 而 attachment 受 HC-4 rule 管）→ anchor → create skill（draft）。
 - **Backend wizard**（`TransientModel` + binary 欄位）：建 **system** skill，gated `base.group_system`；掛在 Skills list header button。後台 list action 加 `domain=[('scope','=','system')]`（鏡像 `mcp_server_views.xml:98`，admin 不看每個租戶的 user skill）。
-- **/woow 前台**（multipart endpoint，`/api/.../skills`）：建 **user** skill，gated project role（owner/admin，reuse `_resolve_project_access`）。鏡像 MCP 的前台 section pattern（如 `McpServersSection`）。（2026-06-05 更新：user skill 建立改走後台 wizard〔scope/project 擴充〕，前台上傳不做 — 見 `docs/superpowers/specs/2026-06-05-skill-binding-ux-design.md`。）
+- **/woow 前台**（multipart endpoint，`/api/.../skills`）：建 **user** skill，gated project role（owner/admin，reuse `_resolve_project_access`）。鏡像 MCP 的前台 section pattern（如 `McpServersSection`）。（2026-06-05 更新：user skill 建立改走後台 wizard〔scope/project 擴充〕，前台上傳不做 — 見 `docs/plans/2026-Q2/2026-06-05-skill-binding-ux-design.md`。）
 - **Phase 2 待決**：frontmatter schema / SKILL.md 位置慣例（top-level only vs single-root-dir）/ version 是否強制 semver / 重複上傳行為（hard error vs auto-bump）/ 上傳後 draft vs auto-publish / 前台 CSRF / max size。
 
 ---

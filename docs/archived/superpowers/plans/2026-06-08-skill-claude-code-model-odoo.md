@@ -8,7 +8,7 @@
 
 **Tech Stack:** Odoo 18 addon、Python 3.11、pytest 風格的 Odoo `TransactionCase`、tarfile/gzip。
 
-**Spec:** `docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md`（§7 bundle 合約、§8 Odoo 改動）。
+**Spec:** `docs/plans/2026-Q2/2026-06-08-skill-claude-code-model-redesign-design.md`（§7 bundle 合約、§8 Odoo 改動）。
 
 ---
 

@@ -1,6 +1,6 @@
 """Smoke — skill admin backend views registered + admin-only menu.
 
-Spec: docs/superpowers/specs/2026-05-27-skill-admin-backend-ui-design.md §②③
+Spec: docs/plans/2026-Q2/2026-05-27-skill-admin-backend-ui-design.md §②③
 """
 import ast
 

@@ -22,17 +22,19 @@ obra/superpowers 是 Plugin 形式安裝（`~/.claude/plugins/cache/claude-plugi
 ## promote 規則
 
 - **進行中 / 短期參考** → 留在這
-- **已落地、含長期價值** → 用 `/docs:promote superpowers:<file>` 升級到主結構：
+- **已落地、仍是唯一權威來源**（被 CLAUDE.md / hooks / tests 引用為設計依據、含主 docs 沒有的規格或 trade-off 論述） → 用 `/docs:promote superpowers:<file>` 升級到主結構：
   - 含 trade-off 論述 → `docs/decisions/`
   - 完整 design+impl plan → `docs/plans/<quarter>/`
   - 含 pitfall / incident → `docs/tracking/pitfalls/`
-- **過期、未落地** → 留原處，archive 邏輯延後設計
+- **已落地且知識已被主 docs 等值覆蓋、或被推翻/過時** → 移到 `docs/archived/superpowers/{plans,specs}/`，frontmatter 標 `status: archived` + `archived-reason`（指向現行權威），並在該區 README 補一行索引
 
-## promote 後
+## promote / archive 後（2026-07-19 起新政策）
 
-- 原檔頂端加 `> Promoted to: docs/<path>` 註記
-- **不刪原檔**（保留探索脈絡）
-- 主結構新檔 frontmatter 加 `source: docs/superpowers/specs/<file>.md`
+- **原檔直接搬走（git mv），不留原地副本**——搬移即刪除，減少文件量；探索脈絡由 git history 與新位置 frontmatter 保留
+- promote：新檔 frontmatter 加 `source: docs/superpowers/<sub>/<file>.md` + `promoted-at`
+- archive：frontmatter 加 `archived-from` + `archived-reason`
+- **同步改寫全 repo inbound 引用**（含 CLAUDE.md、`.claude/hooks/pattern-guard-map.json`、src/tests docstring）——搬移前先 `git grep <basename>` 建引用清單
+- 2026-07-19 批次整理：07-10（含）以前的 39 檔已全數搬出（29 promote / 10 archive），逐檔去向見 `docs/archived/superpowers/README.md` 與 git log
 
 ## CI 例外
 

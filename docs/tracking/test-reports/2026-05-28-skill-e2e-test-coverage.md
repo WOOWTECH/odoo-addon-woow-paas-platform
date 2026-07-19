@@ -3,8 +3,8 @@ name: 2026-05-28-skill-e2e-test-coverage
 phase: red-explained
 team: skill-list
 test_explainer: skill-list-test-explainer
-spec_ref: docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md
-plan_ref: docs/superpowers/plans/2026-05-28-skill-e2e-and-is-latest-drift-fix.md
+spec_ref: docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md
+plan_ref: docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix.md
 tester_commits:
   - 5b17c83  # test(skill): add is_latest drift regression locks (TDD red)
   - 9fd2f12  # test(skill): add backend e2e for lifecycle, download, is_latest invariant
@@ -15,8 +15,8 @@ created: 2026-05-28
 status: ready-for-implementation
 scope: PR #81 follow-up — is_latest drift（model 層 create/write 漏 hook）+ 含瀏覽器 UI 的 e2e
 related:
-  - docs/superpowers/specs/2026-05-27-skill-admin-backend-ui-design.md  # PR #81 spec
-  - docs/superpowers/plans/2026-05-27-skill-admin-backend-ui.md         # PR #81 plan
+  - docs/plans/2026-Q2/2026-05-27-skill-admin-backend-ui-design.md  # PR #81 spec
+  - docs/plans/2026-Q2/2026-05-27-skill-admin-backend-ui.md         # PR #81 plan
 ---
 
 # Test Coverage Report — Skill is_latest drift + E2E（人類可讀版）

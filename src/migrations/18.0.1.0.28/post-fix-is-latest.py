@@ -1,6 +1,6 @@
 """Backfill is_latest invariant for all skills (idempotent).
 
-Spec: docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md §②
+Spec: docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md §②
 
 幂等：對每個 (project_id, name) group 重算 is_latest，保證不變式
 （at most one is_latest=True per group, must be the most-recently-published

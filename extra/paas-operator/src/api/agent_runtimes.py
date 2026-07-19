@@ -510,7 +510,7 @@ def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundT
     # 404), and the drift cron skips state='absent'. Re-notifying on every
     # attach converges the row to 'active' on the next chat turn. Do NOT
     # "optimize" this to transition-only — that reintroduces the stuck-'absent'
-    # bug this change fixes. See docs/superpowers/plans/
+    # bug this change fixes. See docs/archived/superpowers/plans/
     # 2026-06-01-agent-runtime-state-sync-webhook.md.
     background_tasks.add_task(
         webhook_dispatcher.notify_state_update,

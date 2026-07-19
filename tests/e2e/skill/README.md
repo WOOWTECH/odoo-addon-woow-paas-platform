@@ -1,7 +1,7 @@
 # Skill Admin Form — Browser E2E
 
-Spec: `docs/superpowers/specs/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` §④-b
-Plan: `docs/superpowers/plans/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` Task 4
+Spec: `docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix-design.md` §④-b
+Plan: `docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` Task 4
 
 ## 前置
 

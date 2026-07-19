@@ -69,7 +69,7 @@ write 端補上後，**升級前已存在**的壞列不會自己好。補 `state
 ## Related
 
 - 修復：PR #200（`fix/drift-reaped-gc-eligibility` → develop），commits `ca88112`（write）/`bf55d1d`（migration 18.0.1.0.40）/`f105c8e`（create 對稱）
-- 設計 / 計畫：`docs/superpowers/specs/2026-06-14-drift-reaped-gc-eligibility-design.md`、`docs/superpowers/plans/2026-06-14-drift-reaped-gc-eligibility.md`
+- 設計 / 計畫：`docs/archived/superpowers/specs/2026-06-14-drift-reaped-gc-eligibility-design.md`、`docs/archived/superpowers/plans/2026-06-14-drift-reaped-gc-eligibility.md`
 - 同 e2e session 的姊妹發現（operator 跨元件）：[[agent-runtime-stg-enablement-gap-chain]] Gap #1「operator image 過舊」第二實例（D1 teardown 在 stg 因 operator 過舊而無效，bump `operator-v20260614.0841` 經 Fleet 修復）
 - pattern：[[scope-flip-write-guard-not-ir-rule]]（invariant 屬 write）、[[su-env-exempt-guard-false-green]]（create+write 雙向對稱）、[[two-layer-acl-lockstep]]（gate 與來源 lock-step）
 - false-green 家族：[[orm-test-green-endpoint-leak-blindness]]、[[sandbox-module-test-false-green]]（mock/單路徑綠 ≠ 真實多路徑正確）

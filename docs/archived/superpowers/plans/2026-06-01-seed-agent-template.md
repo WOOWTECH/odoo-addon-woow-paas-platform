@@ -8,7 +8,7 @@
 
 **Tech Stack:** Odoo 18 addon (XML data records, Python init hooks, `TransactionCase` tests).
 
-**Spec:** `docs/superpowers/specs/2026-06-01-seed-agent-template-design.md`
+**Spec:** `docs/decisions/patterns/seed-agent-template-design.md`
 
 ---
 

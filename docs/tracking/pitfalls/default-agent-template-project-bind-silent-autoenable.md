@@ -2,7 +2,7 @@
 
 > 來源:stg debug session 2026-06-02。症狀是 stg 上已開「Auto-enable Agent Runtime for New Projects」,但新建的 project(`test2`)`use_agent_runtime` 沒被翻 True。逐條驗 readiness gate 才發現:**平台預設 template `agent_template_default`(id=2)被綁到了某個 project(`test1`)**,觸發 `_platform_default_agent_template` 的跨租戶外洩 guard(`not project_ids`)→ 判它不合格 → gate 第 3 條(合格平台預設)永遠 False → **每個新 project 都靜默不 auto-enable,且無任何錯誤訊息**。
 >
-> 這是 [[agent-runtime-stg-enablement-gap-chain]] gap #3「project 無 agent_template」的**緩解措施(seed 平台預設 + post_init auto-point)反被打破**的失敗模式:seed 機制讓「新環境天生有合格平台預設」,但**任何人把那筆 seed 預設綁到一個 project,就同時毀掉全 cluster 的 fallback**。tenant-neutral invariant 的設計依據見 [`docs/superpowers/specs/2026-06-01-seed-agent-template-design.md`](../../superpowers/specs/2026-06-01-seed-agent-template-design.md) 與 `CLAUDE.md`「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條。
+> 這是 [[agent-runtime-stg-enablement-gap-chain]] gap #3「project 無 agent_template」的**緩解措施(seed 平台預設 + post_init auto-point)反被打破**的失敗模式:seed 機制讓「新環境天生有合格平台預設」,但**任何人把那筆 seed 預設綁到一個 project,就同時毀掉全 cluster 的 fallback**。tenant-neutral invariant 的設計依據見 [`docs/decisions/patterns/seed-agent-template-design.md`](../../decisions/patterns/seed-agent-template-design.md) 與 `CLAUDE.md`「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條。
 >
 > 程式守衛(防再犯):PR #125 `fix/agent-template-default-bind-guard`。
 
@@ -82,5 +82,5 @@ T.browse(tid).write({'project_ids': [(3, <project_id>)]}); env.cr.commit()
 
 - 上游 gap chain:[[agent-runtime-stg-enablement-gap-chain]] —— 本篇是其 gap #3 緩解措施(seed default)被打破的失敗模式;gate 第 3 條 = 該 chain 的 template 關卡在 auto-enable 路徑上的對應。
 - 同 family(fail-closed「悄悄回空」難 debug、單點失效不可觀測):[[agent-runtime-stg-enablement-gap-chain]] 的「refused ≠ timeout」辨錯;本篇的「無錯誤訊息的 auto-enable no-op」。
-- 設計依據:`docs/superpowers/specs/2026-06-01-seed-agent-template-design.md`(seed tenant-neutral invariant)+ `docs/plans/2026-Q2/2026-06-01-auto-enable-agent-runtime.md`(auto-enable 只翻 flag、template 交給 resolve fallback 的決策)。
+- 設計依據:`docs/decisions/patterns/seed-agent-template-design.md`(seed tenant-neutral invariant)+ `docs/plans/2026-Q2/2026-06-01-auto-enable-agent-runtime.md`(auto-enable 只翻 flag、template 交給 resolve fallback 的決策)。
 - 關鍵 code 落點:`src/controllers/ai_assistant.py:18`(`_platform_default_agent_template` 合格判定)/ `:43`(`_agent_runtime_autoenable_ready` 三 gate)/ `:831`+`:850`(`_resolve_agent_template` ④ fallback)/ `:1336`(`_create_project` 唯一翻 flag 處);`src/models/agent_template.py` `_check_not_platform_default_when_bound`(PR #125 守衛);`src/hooks.py:143`(`_ensure_default_agent_template` post_init auto-point,不覆寫)。

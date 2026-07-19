@@ -94,7 +94,7 @@ related: ["docs/plans/2026-Q3/2026-07-06-harness-distillation-design.md"]
       "pattern": "^(src/data/agent_template_default\\.xml|src/hooks\\.py)$",
       "why": "agent_template_default 是跨租戶 cluster-wide fallback，必須維持 tenant-neutral（unbound + 無 user-scope 綁定）",
       "docs": [
-        "docs/superpowers/specs/2026-06-01-seed-agent-template-design.md — seeded default 的設計依據與 invariant",
+        "docs/decisions/patterns/seed-agent-template-design.md — seeded default 的設計依據與 invariant",
         "docs/tracking/pitfalls/default-agent-template-project-bind-silent-autoenable.md — default 被綁 project → auto-enable 靜默全失效；demo 與 default 分工勿互換",
         "CLAUDE.md「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條 — post_init 未設才指、不覆寫 admin 已選"
       ]
@@ -200,7 +200,7 @@ git commit -m "feat: harness pattern-guard hook + repo-lint 假綠 gates（read-
 唯二留本檔的高頻 invariant：
 
 - **CloudService / Project decoupling**：7 條 Invariants 見 `docs/decisions/refactor/cloud-service-project-decouple.md`。
-- **Seeded `agent_template_default` 必須 tenant-neutral**（unbound + 無 user-scope 綁定；經 sudo 廣播為全租戶 fallback）。綁定當下有 code guard fail-loud（`src/models/agent_template.py:125`）；設計依據 `docs/superpowers/specs/2026-06-01-seed-agent-template-design.md`；與 `agent_template_demo`（draft、可綁 project 測試）分工勿互換。
+- **Seeded `agent_template_default` 必須 tenant-neutral**（unbound + 無 user-scope 綁定；經 sudo 廣播為全租戶 fallback）。綁定當下有 code guard fail-loud（`src/models/agent_template.py:125`）；設計依據 `docs/decisions/patterns/seed-agent-template-design.md`；與 `agent_template_demo`（draft、可綁 project 測試）分工勿互換。
 
 可機械判定的守線改進 `scripts/audit/repo-lint.py`（gate 比散文強）。
 ```

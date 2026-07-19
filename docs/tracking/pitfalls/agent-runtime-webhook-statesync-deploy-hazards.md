@@ -2,7 +2,7 @@
 
 > 來源：stg session 2026-06-01。in-repo 的 §5.5 webhook code（Tasks 1-5，`feat/agent-runtime-state-sync-webhook` → develop #118）落地後，把它**實際在 stg 接通**（plan Tasks 6-8：重建 operator + 兩端 secret + e2e）時踩到三層部署陷阱。其中第 2 條一次刪光 `dev-sandbox-stg` 的 DB。
 >
-> 這是 [[agent-runtime-stg-enablement-gap-chain]] 的**第 6 層**（前 5 層讓 *pod round-trip* 通；本篇讓 *operator→Odoo 狀態回寫* 通）。webhook 的 code/設計與 6 條延後項見 `docs/tracking/followups/follow-ups.md` 的 `F-ASW-1~6`、plan `docs/superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md`、架構 `docs/guides/development/agent-runtime-chat-architecture.md`。本篇只記**部署/環境層**踩雷，不重複 code 細節。
+> 這是 [[agent-runtime-stg-enablement-gap-chain]] 的**第 6 層**（前 5 層讓 *pod round-trip* 通；本篇讓 *operator→Odoo 狀態回寫* 通）。webhook 的 code/設計與 6 條延後項見 `docs/tracking/followups/follow-ups.md` 的 `F-ASW-1~6`、plan `docs/archived/superpowers/plans/2026-06-01-agent-runtime-state-sync-webhook.md`、架構 `docs/guides/development/agent-runtime-chat-architecture.md`。本篇只記**部署/環境層**踩雷，不重複 code 細節。
 
 ## Symptom
 

@@ -36,7 +36,7 @@ Phase 1（dual-scope 地基）已讓 `woow_paas_platform.skill` 支援 system/us
 
 | 決策 | 結果 | 來源 |
 |------|------|------|
-| 範圍 | **只做後台 wizard（system skill）**；`/woow` 前台 user skill 為獨立後續 phase（2026-06-05：後台 wizard 已擴充支援 user-scope 上傳，前台上傳由 skill-binding-ux 決議取消 — 見 `docs/superpowers/specs/2026-06-05-skill-binding-ux-design.md`） | user |
+| 範圍 | **只做後台 wizard（system skill）**；`/woow` 前台 user skill 為獨立後續 phase（2026-06-05：後台 wizard 已擴充支援 user-scope 上傳，前台上傳由 skill-binding-ux 決議取消 — 見 `docs/plans/2026-Q2/2026-06-05-skill-binding-ux-design.md`） | user |
 | Odoo 是否解析 bundle | **否**——只存 bytes + 算 sha256，不解壓不讀 SKILL.md | user |
 | name/version 來源 | **wizard 欄位由 admin 填**（非從 bundle 提取） | user |
 | 重複上傳（同 scope+name+version） | **硬錯誤** `UserError`，要求改版號（尊重 bundle immutability + partial unique index） | user |
@@ -152,7 +152,7 @@ self.ensure_one()
 
 ## 非目標（Non-goals / YAGNI）
 
-- **`/woow` 前台 user skill 上傳**（OWL section + multipart endpoint + project-role gate）——獨立後續 phase。（2026-06-05：本項由 skill-binding-ux 決議取消 — 後台 wizard 已支援 user-scope，見 `docs/superpowers/specs/2026-06-05-skill-binding-ux-design.md`。）
+- **`/woow` 前台 user skill 上傳**（OWL section + multipart endpoint + project-role gate）——獨立後續 phase。（2026-06-05：本項由 skill-binding-ux 決議取消 — 後台 wizard 已支援 user-scope，見 `docs/plans/2026-Q2/2026-06-05-skill-binding-ux-design.md`。）
 - **Odoo 端 bundle 解壓 / SKILL.md 解析 / 結構驗證**——pod 負責。
 - **從 bundle 自動帶出 name/version**——admin 手填（使用者決策）。
 - **後台手動 create skill**（非 wizard 路徑）——維持 `create="false"`。

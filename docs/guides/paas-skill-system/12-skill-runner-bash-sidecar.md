@@ -10,7 +10,7 @@ related:
   - 06-pod-internals.md
   - 07-deployment.md
   - 09-security-model.md
-source: docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md
+source: docs/plans/2026-Q2/2026-06-08-skill-claude-code-model-redesign-design.md
 ---
 
 # skill-runner（bash sidecar / Drop B）
@@ -19,8 +19,8 @@ source: docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-desig
 > **安全地執行那些 bash** 的 sidecar。本篇講它是什麼、為什麼是 sidecar、以及驅動它的單一 kill-switch。
 >
 > **STG 已上線並驗證（2026-06-09）；prod 待 Fleet flip**。設計依據見
-> `docs/superpowers/specs/2026-06-08-skill-claude-code-model-redesign-design.md`，
-> 跨 repo land 步驟見 `docs/superpowers/plans/2026-06-08-skill-claude-code-model-LAND-runbook.md`。
+> `docs/plans/2026-Q2/2026-06-08-skill-claude-code-model-redesign-design.md`，
+> 跨 repo land 步驟見 `docs/archived/superpowers/plans/2026-06-08-skill-claude-code-model-LAND-runbook.md`。
 
 ## 🎯 一句話
 
