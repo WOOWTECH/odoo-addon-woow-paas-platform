@@ -1,25 +1,21 @@
 /** @odoo-module **/
-import { Component, useState, onWillStart } from "@odoo/owl";
+import { Component, useState, onWillUpdateProps } from "@odoo/owl";
+import { groupPlansByCycle } from "./plan_selector_utils";
 
 /**
- * PlanSelector Component
+ * PlanSelector（#368 重設計）
  *
- * Displays subscription plan cards for user selection.
- *
- * Wave C（#330）：base plan 卡片上若帶 AC 席數變體，選中後於卡片下方
- * 展開第二步「AC 席數」選項；選「不加購」emit base plan id、選 n 席
- * emit 對應變體 plan_id。選中的 base 完全由 `selectedPlanId` 反推
- * （不維護內部 state）——無 variants 時退化為原本「emit plan.id」行為，
- * 與改動前 bit-for-bit 相同（Hermes/postgresql/HA PaaS 零感知）。
+ * 頂部常駐 cycle toggle（月|年）＝view-state；只顯示當前 cycle 的每 tier 一張卡。
+ * 選中帶 AC 席數變體的 base → 展開第二步席數（增量 chip；{0,1} 降級 checkbox）。
+ * selectedPlanId（props）是唯一「選擇」事實源；state.cycle 是唯一 view-state，
+ * 用 onWillUpdateProps 同步避免與 selectedPlanId desync。無 variants 行為與
+ * 改動前 bit-for-bit 相同。退化規則 R1/R2/R3 全由資料驅動、零 service_type 分支。
  *
  * Props:
- *   - plans (Array): Available plans
- *       [{ id, name, price, duration, unit, has_trial, trial_duration,
- *          trial_unit, variants }]
- *       其中 variants（選填、C1 後端回帶）＝
- *       [{ seats, plan_id, price }, ...]（seats 升序、絕對總價、無變體＝[]）
- *   - selectedPlanId (Number|null): 目前選定 plan id（可為 base 或變體）
- *   - onSelect (Function): 使用者選定時以最終 plan id 呼叫
+ *   - plans (Array): [{id,name,price,unit,group_key,specs,variants,...}]
+ *   - selectedPlanId (Number|null): 目前選擇（base 或變體 plan_id）
+ *   - onSelect (Function): 使用者選定時以最終 plan_id 呼叫
+ *   - currentPlanId (Number, optional): PR-3 用（本版僅佔位、不消費）
  */
 export class PlanSelector extends Component {
   static template = "woow_paas_platform.PlanSelector";
@@ -27,79 +23,128 @@ export class PlanSelector extends Component {
     plans: { type: Array },
     selectedPlanId: { type: Number, optional: true },
     onSelect: { type: Function },
+    currentPlanId: { type: Number, optional: true },
   };
 
-  _unitLabel(unit) {
-    return unit === "month" ? "mo" : unit === "year" ? "yr" : unit;
+  setup() {
+    // cycle 是唯一 view-state：初始由選中 plan 反推，無選中則 'month'。
+    this.state = useState({
+      cycle: this._cycleOf(this.props.selectedPlanId) || "month",
+    });
+    // desync 守線：父層在不 remount 下改 selectedPlanId 到另一 cycle 的 plan
+    // （如 CreateSmartHomeModal 切模板、PR-3 定位目前方案）時同步 state.cycle。
+    onWillUpdateProps((next) => {
+      if (next.selectedPlanId !== this.props.selectedPlanId) {
+        const c = this._cycleOf(next.selectedPlanId, next.plans);
+        if (c) this.state.cycle = c;
+      }
+    });
   }
 
-  formatPrice(plan) {
-    return `${plan.price} pts/${this._unitLabel(plan.unit)}`;
-  }
-
-  formatTrial(plan) {
-    if (!plan.has_trial) return "";
-    const unit = plan.trial_unit === "day" ? "day" : plan.trial_unit;
-    return `${plan.trial_duration}-${unit} free trial`;
-  }
-
-  /**
-   * 找出目前 `selectedPlanId` 所屬的 base plan id：
-   * 若它本身是某 base 卡片 id → 回該 id；若它是某 base 的變體 plan_id
-   * → 回該 base 的 id；找不到（null / 未選）→ 回 null。
-   * 讓 base 卡片在選了變體時仍維持高亮，並保持受控元件契約
-   * （selectedPlanId 是唯一事實源）。
-   */
-  _ownerBaseId() {
-    const sel = this.props.selectedPlanId;
-    if (sel == null) return null;
-    for (const plan of this.props.plans) {
-      if (plan.id === sel) return plan.id;
-      if ((plan.variants || []).some((v) => v.plan_id === sel)) return plan.id;
+  // ---- cycle 反推（view-state 來源）----
+  _cycleOf(planId, plans = this.props.plans) {
+    if (planId == null) return null;
+    for (const p of plans) {
+      if (p.id === planId) return p.unit;
+      if ((p.variants || []).some((v) => v.plan_id === planId)) return p.unit;
     }
     return null;
   }
 
-  isSelected(plan) {
-    return this._ownerBaseId() === plan.id;
+  get cycles() {
+    return [...new Set(this.props.plans.map((p) => p.unit))];
+  }
+  get showCycleToggle() {
+    return this.cycles.length > 1; // R1：單一 cycle 不渲染 toggle
   }
 
-  /**
-   * 目前選中、且帶席數變體的 base plan（決定第二步是否顯示）；
-   * 無選中／選中的 base 無變體 → 回 null（第二步不渲染）。
-   */
+  // 當前 cycle 的每 group 一張卡（groupPlansByCycle 已 by price 升序）
+  get visibleGroups() {
+    return groupPlansByCycle(this.props.plans)
+      .map((g) => g.byCycle[this.state.cycle])
+      .filter(Boolean);
+  }
+
+  onCycleToggle(cycle) {
+    this.state.cycle = cycle;
+    const sel = this.props.selectedPlanId;
+    if (sel == null) return; // 未選態：只切顯示、不 emit（不 arm canConfirm）
+    const owner = this._ownerBase(sel);
+    if (!owner) return;
+    const seats = this._selectedSeats(sel, owner);
+    const target = this._findInCycle(owner.group_key, cycle, seats);
+    if (target != null) this.props.onSelect(target); // 保留檔位（同 tier 同席數）
+  }
+
+  // ---- 選中反推（受控，selectedPlanId 是唯一事實源）----
+  _ownerBase(planId) {
+    if (planId == null) return null;
+    for (const p of this.props.plans) {
+      if (p.id === planId) return p;
+      if ((p.variants || []).some((v) => v.plan_id === planId)) return p;
+    }
+    return null;
+  }
+  _selectedSeats(planId, base) {
+    if (planId === base.id) return 0;
+    const v = (base.variants || []).find((x) => x.plan_id === planId);
+    return v ? v.seats : 0;
+  }
+  _findInCycle(groupKey, cycle, seats) {
+    if (!groupKey) return null; // 無 xmlid 的獨立 group 不支援跨 cycle 對映
+    const target = this.props.plans.find(
+      (p) => p.group_key === groupKey && p.unit === cycle);
+    if (!target) return null; // 該 group 在此 cycle 無 base（R1 已擋，理論不達）
+    if (seats === 0) return target.id;
+    const v = (target.variants || []).find((x) => x.seats === seats);
+    return v ? v.plan_id : target.id; // 該席數在新 cycle 不存在 → 退 0 席 base
+  }
+
+  isSelected(base) {
+    return this._ownerBase(this.props.selectedPlanId)?.id === base.id;
+  }
+
+  // 選中且帶變體的 base（決定席數第二步是否顯示）；R3 退化在此與 template 判斷
   selectedBaseWithVariants() {
-    const baseId = this._ownerBaseId();
-    if (baseId == null) return null;
-    const base = this.props.plans.find((p) => p.id === baseId);
-    return base && base.variants && base.variants.length ? base : null;
+    const owner = this._ownerBase(this.props.selectedPlanId);
+    return owner && owner.variants && owner.variants.length ? owner : null;
   }
 
-  /**
-   * 席數選項是否為目前選擇。variant=null 代表「不加購」＝base 自身。
-   */
-  isSeatSelected(basePlan, variant) {
-    const target = variant ? variant.plan_id : basePlan.id;
+  // R3：variants 只有 1 席且 seats===1（mcp）→ 降級 checkbox
+  isSeatCheckbox(base) {
+    return (
+      base.variants &&
+      base.variants.length === 1 &&
+      base.variants[0].seats === 1
+    );
+  }
+  isSeatSelected(base, variant) {
+    const target = variant ? variant.plan_id : base.id;
     return this.props.selectedPlanId === target;
   }
 
-  /**
-   * 席數選項的價格顯示：一律用 base 的 unit（變體與 base 同 cycle），
-   * variant.price 為絕對總價、「不加購」＝base 全價。
-   */
-  formatSeatPrice(basePlan, variant) {
-    const price = variant ? variant.price : basePlan.price;
-    return `${price} pts/${this._unitLabel(basePlan.unit)}`;
+  _unitLabel(unit) {
+    return unit === "month" ? "mo" : unit === "year" ? "yr" : unit;
+  }
+  formatPrice(plan) {
+    return `${plan.price} pts/${this._unitLabel(plan.unit)}`;
+  }
+  // 增量：一律 base.unit（年繳為年值；寫死 /月＝12 倍 bug）；不加購由 template 標「已含」
+  formatSeatDelta(base, variant) {
+    const delta = variant.price - base.price;
+    return `+${delta} pts/${this._unitLabel(base.unit)}`;
   }
 
-  onPlanClick(plan) {
-    // 選 base 卡片＝回到該方案「不加購」基準（emit base id）；
-    // 有變體時第二步隨即出現供加購席數。
-    this.props.onSelect(plan.id);
+  onPlanClick(base) {
+    this.props.onSelect(base.id); // 選 base＝回「不加購」基準；有變體時第二步隨即出現
   }
-
-  onSeatSelect(basePlan, variant) {
-    // 不加購 → emit base id；選 n 席 → emit 對應變體 plan_id。
-    this.props.onSelect(variant ? variant.plan_id : basePlan.id);
+  onSeatSelect(base, variant) {
+    this.props.onSelect(variant ? variant.plan_id : base.id);
+  }
+  onSeatCheckbox(base) {
+    const v = base.variants[0];
+    // 勾＝選變體、取消＝回 base；受控（依當前 selectedPlanId 決定 toggle 方向）
+    this.props.onSelect(
+      this.props.selectedPlanId === v.plan_id ? base.id : v.plan_id);
   }
 }
