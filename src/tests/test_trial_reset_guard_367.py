@@ -5,10 +5,12 @@ seed 的 251 plan 全 ``sh_trial=True``。舊行為：``_create_and_confirm_subs
 內建的 ``sub_exists``「既有 partner 不再給試用」保護，於是老客戶走 change-plan
 （先關舊訂閱再建新訂閱）會以全新 7 天 trial 重啟、首期扣 0。
 
-修法（尊重第三方 ``sub_exists`` 的 partner-scoped＋不 filter state 語意，scope
-對齊 Eugene #367 決策放寬到 per-partner）：建新 sub 前判斷 partner 是否已有任何
-訂閱（含已關閉、任何 plan/product，排除剛建立的自己）；有 → 既有客戶，不進 trial
-（走 active dates、首期實扣）。全新 partner 首購仍給 7 天 trial。
+修法（per-entity，依 Eugene 2026-07-19 #367 留言的語意修正——試用綁 service/
+entity、一生一次、不綁 partner）：建新 sub 前看「此 entity 是否已持有訂閱」
+（``self.subscription_id``；change-plan 只把舊 sub 設 close、不解綁連結，resume
+不重建 sub）——已持有 → 同一 service 的換方案/加席/暫停後重啟，不進 trial（走
+active dates、首期實扣）；未持有 → 全新 service（含同一 partner 的第 2、3 個
+service），各自享有自己的 7 天 trial。
 """
 from datetime import date, timedelta
 
@@ -20,7 +22,8 @@ from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 
 
 class TestTrialResetGuard367(TransactionCase):
-    """已訂閱用戶換方案 / 加席 / 第二個 service 都不得重啟 trial；全新首購仍給。"""
+    """per-entity：同一 service 的換方案 / 加席 / 暫停後重啟不得重啟 trial；
+    全新 service（含同 partner 的第二個 service）與全新首購各自享有 7 天 trial。"""
 
     @classmethod
     def setUpClass(cls):
@@ -66,7 +69,7 @@ class TestTrialResetGuard367(TransactionCase):
         return plan
 
     def _fresh_partner_and_service(self, tag):
-        """每個測試用獨立 owner/partner，確保 per-partner 判斷不被跨測試污染。"""
+        """每個測試用獨立 owner/partner + 全新 service（entity），避免跨測試污染。"""
         owner = self.Users.create({
             'name': '367 Owner %s' % tag, 'login': '367_owner_%s' % tag,
             'email': '367_owner_%s@example.test' % tag,
@@ -152,23 +155,38 @@ class TestTrialResetGuard367(TransactionCase):
         )
         self.assertEqual(new_sub.sh_subscription_plan_id.ac_max_access_seats, 1)
 
-    # -- per-partner 核心：同 partner 第二個 service → 無 trial ---------- #
+    # -- per-entity 判別（load-bearing）：同 partner 第二個新 service → 有 trial - #
 
-    def test_second_service_same_partner_no_trial(self):
+    def test_second_service_same_partner_gets_trial(self):
+        """#367 per-entity 語意判別（最重要一條）：試用綁 service/entity、一生
+        一次、不綁 partner。同一 partner 開第二個「新 service」是全新 entity
+        （自己的 subscription_id 為空），必須享有自己的 7 天 trial。
+
+        per-partner 舊實作（partner 已訂閱過就不給）會讓這條變紅——正是本次
+        per-partner → per-entity 修正的判別點。
+        """
         _, partner, svc1 = self._fresh_partner_and_service('multi')
         svc1._create_and_confirm_subscription(partner, self.plan_base)
         self.assertTrue(
             svc1.sudo().subscription_id.sh_trial, '首個 service 首購有 trial')
 
-        # 同 partner 第二個 service（partner 已訂閱過）→ 不再給 trial。
+        # 同 partner 第二個 service = 全新 entity（自己沒訂閱過）→ 有自己的 trial。
         svc2 = self.Service.create({
             'name': '367 Svc multi-2', 'workspace_id': svc1.workspace_id.id,
             'template_id': self.template.id,
         })
         svc2._create_and_confirm_subscription(partner, self.plan_base)
         sub2 = svc2.sudo().subscription_id
-        self.assertFalse(
+        self.assertTrue(
             sub2.sh_trial,
-            '#367：partner 已訂閱過，第二個 service 不再給 trial',
+            '#367 per-entity：第二個新 service 是全新 entity，享有自己的 7 天 trial',
         )
-        self.assertEqual(sub2.sh_start_date, date.today())
+        today = date.today()
+        expected_trial_end = today + timedelta(days=7) - timedelta(days=1)
+        self.assertEqual(sub2.sh_trial_end_date, expected_trial_end)
+        # trial 期未開始計費 → sh_start_date 在未來 → 不建首期發票（扣 0）。
+        self.assertEqual(sub2.sh_start_date, expected_trial_end + timedelta(days=1))
+        self.assertFalse(
+            self.Move.search([('sh_subscription_id', '=', sub2.id)]),
+            '第二個 service 的 trial 首購同樣不應產生首期發票（扣 0）',
+        )
