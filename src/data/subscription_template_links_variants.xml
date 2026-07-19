@@ -115,6 +115,24 @@
                           (4, ref('plan_mcp_n8n_ac1_yearly'))]"/>
         </record>
 
+        <record id="cloud_app_mcp_k8s" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(4, ref('plan_mcp_k8s_ac1_monthly')),
+                          (4, ref('plan_mcp_k8s_ac1_yearly'))]"/>
+        </record>
+
+        <record id="cloud_app_mcp_vk" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(4, ref('plan_mcp_vk_ac1_monthly')),
+                          (4, ref('plan_mcp_vk_ac1_yearly'))]"/>
+        </record>
+
+        <record id="cloud_app_mcp_opendesign" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(4, ref('plan_mcp_opendesign_ac1_monthly')),
+                          (4, ref('plan_mcp_opendesign_ac1_yearly'))]"/>
+        </record>
+
         <record id="smart_home_home_assistant" model="woow_paas_platform.smart_home_template">
             <field name="subscription_plan_ids"
                    eval="[(4, ref('plan_smarthome_ac1_monthly')),

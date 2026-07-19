@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""214 manifest → 平台 seed 生成器（Wave B）。
+"""220 manifest → 平台 seed 生成器（Wave B；#375 追加三型 MCP：k8s/vk/opendesign）。
 
-單一事實源＝docs/plans/2026-Q3/2026-07-12-cloud-services-214-manifest.md。
+單一事實源＝docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md。
 改價＝改 manifest 後重跑本腳本；輸出冪等（同輸入 byte-identical）。
 """
 import re
@@ -39,6 +39,9 @@ _FAMILY_RULES = [
     ('ODOO MCP 標準版', 'mcp', {'': 'odoo'}),
     ('ODOO MCP 管理控制台', 'mcp', {'': 'manage'}),
     ('n8n MCP 工具包', 'mcp', {'': 'n8n'}),
+    ('Kubernetes MCP 管理', 'mcp', {'': 'k8s'}),
+    ('Vibe Kanban MCP', 'mcp', {'': 'vk'}),
+    ('Open Design MCP', 'mcp', {'': 'opendesign'}),
 ]
 
 _VAR = re.compile(r"\+(\d+)access(月|年)繳$")
@@ -103,6 +106,9 @@ TIER_BASE_XMLID = {
     ('mcp', 'odoo'): 'plan_mcp_odoo',
     ('mcp', 'manage'): 'plan_mcp_odoo_manage',
     ('mcp', 'n8n'): 'plan_mcp_n8n',
+    ('mcp', 'k8s'): 'plan_mcp_k8s',
+    ('mcp', 'vk'): 'plan_mcp_vk',
+    ('mcp', 'opendesign'): 'plan_mcp_opendesign',
 }
 
 # (family, tier_key) → CS 規格（odoo/n8n）；＝同 tier base plan 的 cs_* 值
@@ -143,6 +149,7 @@ FAMILY_SERVICE_TYPE = {
 _TEMPLATE_ORDER = [
     'cloud_app_odoo', 'cloud_app_n8n', 'cloud_app_mcp_odoo',
     'cloud_app_mcp_odoo_manage', 'cloud_app_mcp_n8n',
+    'cloud_app_mcp_k8s', 'cloud_app_mcp_vk', 'cloud_app_mcp_opendesign',
     'smart_home_home_assistant', 'security_access_default',
 ]
 
@@ -169,7 +176,9 @@ def _product_xmlid(v):
 def _template_xmlid(v):
     if v.family == 'mcp':
         return {'odoo': 'cloud_app_mcp_odoo', 'manage': 'cloud_app_mcp_odoo_manage',
-                'n8n': 'cloud_app_mcp_n8n'}[v.tier_key]
+                'n8n': 'cloud_app_mcp_n8n', 'k8s': 'cloud_app_mcp_k8s',
+                'vk': 'cloud_app_mcp_vk',
+                'opendesign': 'cloud_app_mcp_opendesign'}[v.tier_key]
     return {'odoo': 'cloud_app_odoo', 'n8n': 'cloud_app_n8n',
             'sa': 'security_access_default',
             'sh': 'smart_home_home_assistant'}[v.family]
@@ -253,7 +262,7 @@ def emit_variants_xml(variants):
         '<?xml version="1.0" encoding="UTF-8"?>',
         _GEN_HEADER_XML,
         '<odoo>',
-        '    <!-- 208 個 AC 席數變體 plan/product。noupdate=1：record 欄位不被',
+        '    <!-- 214 個 AC 席數變體 plan/product。noupdate=1：record 欄位不被',
         '         升級覆寫（改值＝改 manifest／對映表後重跑 generator）。全數',
         '         storefront_hidden=True——Wave C picker 落地前不上前台。 -->',
         '    <data noupdate="1">',
@@ -307,11 +316,11 @@ def emit_links_xml(variants):
 
 _TESTS_TEMPLATE = '''# -*- coding: utf-8 -*-
 __GEN_HEADER__
-"""208 AC 席數變體 seed 全量斷言（Wave B PR-B3）。
+"""214 AC 席數變體 seed 全量斷言（Wave B PR-B3；#375 追加三型 MCP）。
 
 改本檔＝改 manifest／對映表後重跑 scripts/seed/generate_plan_variants.py。
 每筆斷言：價格／席數／前台隱藏／service_type／cs_* 或 sa quota == 同 tier base／
-M2M 掛載於對應 template。另總數 base 43＋變體 208＝251、前台不滲漏冒煙。
+M2M 掛載於對應 template。另總數 base 49＋變體 214＝263、前台不滲漏冒煙。
 """
 from odoo.tests.common import TransactionCase, tagged
 
@@ -354,17 +363,17 @@ class TestPlanVariantsGenerated(TransactionCase):
             template = self.env.ref('%s.%s' % (MOD, e['template']))
             self.assertIn(plan, template.sudo().subscription_plan_ids, xmlid)
 
-    def test_total_251_plans(self):
-        """base 43＋變體 208＝251（以 module 的 ir.model.data 計數）。"""
+    def test_total_263_plans(self):
+        """base 49＋變體 214＝263（以 module 的 ir.model.data 計數）。"""
         count = self.env['ir.model.data'].search_count([
             ('module', '=', MOD), ('model', '=', 'sh.subscription.plan')])
-        self.assertEqual(count, 251, 'plan 總數應為 base 43＋變體 208＝251')
+        self.assertEqual(count, 263, 'plan 總數應為 base 49＋變體 214＝263')
 
     def test_variants_never_reach_storefront(self):
-        """208 變體全 hidden：三個 template model 的可見 plan 皆無變體滲漏。"""
+        """214 變體全 hidden：三個 template model 的可見 plan 皆無變體滲漏。"""
         variants = self.env['sh.subscription.plan'].search(
             [('ac_max_access_seats', '>', 0), ('storefront_hidden', '=', True)])
-        self.assertEqual(len(variants), 208)
+        self.assertEqual(len(variants), 214)
         for tpl_model in ('woow_paas_platform.cloud_app_template',
                           'woow_paas_platform.smart_home_template',
                           'woow_paas_platform.security_access_template'):
@@ -394,7 +403,7 @@ def emit_tests_py(variants):
 
 def main():
     root = Path(__file__).resolve().parents[2]
-    manifest = root / 'docs/plans/2026-Q3/2026-07-12-cloud-services-214-manifest.md'
+    manifest = root / 'docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md'
     variants = [classify(i) for i in parse_manifest(manifest)
                 if i.kind == '+access變體']
     outputs = {

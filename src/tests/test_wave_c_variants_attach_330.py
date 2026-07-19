@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Wave C PR-C1：後端 variants 回帶（_attach_variants helper ＋ 三端點擴充）。
 
-- TestAttachVariantsCorpus：全庫 208 hidden 席數變體以 xmlid 反查歸戶，零跳過、
+- TestAttachVariantsCorpus：全庫 214 hidden 席數變體以 xmlid 反查歸戶，零跳過、
   皆掛到「可見」base（fail-loud 測試層，把 generator xmlid 慣例釘死）。
 - TestAttachVariantsShape：抽 tier 代表驗 seats 集合／升序／price／plan_id 反查。
 - TestEndpointsWiring：機械守衛三端點皆呼叫 helper 並塞 variants key。
@@ -18,13 +18,13 @@ MOD = 'woow_paas_platform'
 
 @tagged('post_install', '-at_install')
 class TestAttachVariantsCorpus(TransactionCase):
-    """全庫反解斷言：208 變體零跳過、皆掛可見 base。"""
+    """全庫反解斷言：214 變體零跳過、皆掛可見 base。"""
 
     def test_all_hidden_variants_resolve(self):
         Plan = self.env['sh.subscription.plan']
         variants = Plan.search(
             [('ac_max_access_seats', '>', 0), ('storefront_hidden', '=', True)])
-        self.assertEqual(len(variants), 208, '前置：208 個 hidden 席數變體')
+        self.assertEqual(len(variants), 214, '前置：214 個 hidden 席數變體')
 
         # helper 對「全庫」跑：base 反解走 ir.model.data，不依賴 base 在 self 內。
         result = Plan.search([])._attach_variants()
