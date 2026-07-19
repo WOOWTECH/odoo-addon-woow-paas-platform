@@ -50,3 +50,6 @@ claudedocs/
 
 # Local symlink to meeting notes (absolute path, machine-specific — never commit)
 docs/meeting
+
+# docs 內 explain-by-html 衍生產物不入版控（.md 源檔才是文件本體）
+docs/**/*.html

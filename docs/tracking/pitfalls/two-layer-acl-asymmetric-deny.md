@@ -203,8 +203,8 @@ def test_endpoint_paas_resolve_project_access_unbound_non_follower_update_denied
   - `src/security/ir_rules.xml` `mcp_server_rule_workspace_user` + `mcp_tool_rule_workspace_user` — dual-leg domain leg 2
   - `src/tests/test_mcp_acl_unbound_isolation.py:849-1060` `TestPaasEndpointUnboundNonFollower` — Layer 2b explicit endpoint regression lock（3 case）
 - Reports：
-  - `docs/tracking/caqa-report-2026-05-20-mcp-refactor.md` line 190 — CAQA 把同 surface 兩 helper 處理為 code style 問題，沒分析 silent IDOR 後果
-  - `docs/tracking/reviewer-report-2026-05-20-mcp-refactor.md` §Hard caveats HC-2 — silent-failure-hunter 抓到的 attack vector trace
+  - `docs/archived/tracking/caqa-report-2026-05-20-mcp-refactor.md` line 190 — CAQA 把同 surface 兩 helper 處理為 code style 問題，沒分析 silent IDOR 後果
+  - `docs/archived/tracking/reviewer-report-2026-05-20-mcp-refactor.md` §Hard caveats HC-2 — silent-failure-hunter 抓到的 attack vector trace
 - 上游 ACL 原理：
   - Odoo sudo() bypass ir.rule + ir.model.access — controller sudo path 必須 manual access check 對齊 ir.rule domain，不可只靠 ORM ir.rule
   - Per-endpoint access resolver 是 controller-level idiom，不是 model-level — 多個 endpoint 不會自動共用 ACL 邏輯

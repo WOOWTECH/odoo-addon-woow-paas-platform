@@ -11,7 +11,7 @@ related:
   - src/models/subscription_lifecycle_mixin.py（_get_subscription_info）
   - src/data/oauth_clients.xml（public client `woow-ha-smart-home` 的 scopes）
   - src/data/oauth_scope_updates.xml（既有 DB 的 SA scope 補丁 _ensure_ha_smart_home_sa_scopes）
-  - docs/reference/api/woowtech-paas-api-specification.md（平台 API 總規格）
+  - docs/archived/reference/woowtech-paas-api-specification.md（早期 API 設計稿，已 archived；現行端點以 src/controllers @route 為準）
   - docs/decisions/patterns/su-env-exempt-guard-false-green.md（route subdomain_prefix 不可變 guard 的內部視角）
   - docs/decisions/refactor/security-access-bare-tunnel-zero-route.md（bare tunnel + N route 架構與 route 生命週期）
 ---

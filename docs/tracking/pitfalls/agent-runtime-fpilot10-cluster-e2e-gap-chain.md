@@ -95,4 +95,4 @@ echo round-trip（pilot）不打外網、不跑 LLM → external egress 與 LLM-
 - [[credential-claim-test-fixture-coupling]] — 同 epic test-discipline
 - `docs/tracking/pitfalls/ci-workflow-container-missing-node.md` — 同 epic「驗綠 ≠ 真驗」family
 - `follow-ups.md` §F-PILOT-10 cluster e2e gaps — 本 chain 的 durable 回收 + lane 分派
-- review-takeaway 三層 gate：`docs/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md`（R10-1 observability / C10-1 NP 等本 chain 印證的 caveat）
+- review-takeaway 三層 gate：`docs/archived/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md`（R10-1 observability / C10-1 NP 等本 chain 印證的 caveat）

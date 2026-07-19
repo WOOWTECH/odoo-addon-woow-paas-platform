@@ -249,9 +249,9 @@ Regression lock：`test_mcp_acl_unbound_isolation.py` 12-method matrix（H.1–H
   - `docs/plans/2026-Q2/2026-05-20-mcp-refactor-url-redesign-design.md`（三方案 8 維度 tradeoff matrix）
   - `docs/plans/2026-Q2/2026-05-20-mcp-refactor-url-redesign-plan.md`（44 AC + 9 OR-X + sign-off log）
 - **Inputs（reporter 合成來源 — 不重複，只列引用）**：
-  - `docs/tracking/test-reports/test-coverage-mcp-refactor-2026-05-20.md`（test report — A–H group rationale + OR-X9 矩陣 + 3 GREEN regression lock）
-  - `docs/tracking/caqa-report-2026-05-20-mcp-refactor.md`（CAQA — 11 invariants verify + 32-case cell map + 4 caveat M1/M2/L1/L4）
-  - `docs/tracking/reviewer-report-2026-05-20-mcp-refactor.md`（reviewer — 3 HC + 20 SC + round 2 attack chain closure）
+  - `docs/archived/tracking/test-coverage-mcp-refactor-2026-05-20.md`（test report — A–H group rationale + OR-X9 矩陣 + 3 GREEN regression lock）
+  - `docs/archived/tracking/caqa-report-2026-05-20-mcp-refactor.md`（CAQA — 11 invariants verify + 32-case cell map + 4 caveat M1/M2/L1/L4）
+  - `docs/archived/tracking/reviewer-report-2026-05-20-mcp-refactor.md`（reviewer — 3 HC + 20 SC + round 2 attack chain closure）
 - **Follow-ups（cycle 4 cluster）**：見 [[follow-ups]] §Cycle 4 — F22/F23 RESOLVED；新增 F-X1（cron query gap）/ F-X2（ai_assistant edge case + F4/F10 cluster）/ F-X3（comment ref noise）/ F-X4（URL helper duplication）/ F-X5（SSRF error format）/ F-X6（test docstring stale）/ F-X7（`auto_created` column drop）/ F-X8（worktree env gap）
 - **關鍵 code（reporter finalize 時對齊 implementation）**：
   - `src/__manifest__.py:3` — version `18.0.1.0.25`

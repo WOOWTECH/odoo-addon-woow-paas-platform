@@ -10,8 +10,8 @@
 
 ## 退出條件
 
-- 議題 close、follow-up 完成 → **仍留在 tracking/**（不 archive，作歷史紀錄）
-- 唯一搬走情境：超過 2 年且確認再無回查需求 → `archived/`
+- **長期資產不 archive**：pitfalls/、followups/ 留在 tracking/（被 CLAUDE.md / pattern-guard hook 常態引用）
+- **一次性報告收官即歸檔**：CAQA / reviewer / test coverage / deliverables 報告在對應 cycle 收官後整批移 [`../archived/tracking/`](../archived/tracking/README.md)，**inbound 引用同步改寫**（2026-07-19 首批 42 檔已執行）
 
 ## 子目錄
 
@@ -23,11 +23,11 @@
 | [`test-reports/`](test-reports/) | **測試覆蓋 / 結果報告**：test scope report、coverage report、TDD red 解釋、CAQA test report |
 | [`reports/`](reports/) | **交付物（deliverables）報告**：cycle / phase 收尾的 docs 清單 + commit message draft + PR description draft + leader hand-off 清單 + retro |
 
-> **根層 loose `.md` 為歷史遺留**：tracking/ 根層目前散著多個 per-epic 快照檔（`caqa-report-*`、`reviewer-report-*`、`agent-runtime-pod-phase-*` 等），都是某次 epic / phase 的 point-in-time 報告。**慣例上這類報告應歸 [`test-reports/`](test-reports/)**（測試覆蓋 / review / CAQA 結果），根層既有檔僅因早期未分目錄而遺留。**未來新增請直接放對應子目錄，不要再落根層**；本次不搬動既有檔（避免打斷 CLAUDE.md / 其他 doc 的路徑引用），日後若整批搬遷再連同引用一起更新。
+> **根層不放報告**：過往散在根層的 per-epic 快照檔（`caqa-report-*`、`reviewer-report-*`、`agent-runtime-pod-phase-*` 等）已於 2026-07-19 整批遷至 [`../archived/tracking/`](../archived/tracking/README.md)（42 檔，全 repo inbound 引用同步改寫）。**新報告一律寫進對應子目錄**（test-reports/、reports/——目前為空屬正常，寫入即重建），收官後批次歸檔。
 
 ## 命名
 
-- `issues/`：`<incident-slug>.md`（如 `sandbox-hostpath-rot.md`、`stg-sandbox-networkpolicy-cross-ns-block.md`）
+- `issues/`：`<incident-slug>.md`（已收官案例見 `../archived/tracking/`，如 `sandbox-hostpath-rot.md`）
 - `pitfalls/`：`<incident-slug>.md`（如 `cross-workspace-task-data-leak.md`）
 - `followups/`：固定 `follow-ups.md`，內部用 F1, F2, ... 連續編號（跨 cycle 不重置）
 - `test-reports/`：`<feature>-<aspect>-YYYY-MM-DD.md` 或 `issue-<N>-test-coverage.md`

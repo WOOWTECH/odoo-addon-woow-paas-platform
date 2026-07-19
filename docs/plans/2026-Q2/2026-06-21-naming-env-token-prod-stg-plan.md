@@ -5,8 +5,8 @@ status: draft
 created: 2026-06-21
 updated: 2026-06-21
 related:
-  - docs/tracking/cf-env-token-paas-env-feasibility.md
-  - docs/tracking/cf-ns-prod-stg-audit-report.md
+  - docs/archived/tracking/cf-env-token-paas-env-feasibility.md
+  - docs/archived/tracking/cf-ns-prod-stg-audit-report.md
   - docs/decisions/patterns/external-resource-env-token-naming.md
 ---
 

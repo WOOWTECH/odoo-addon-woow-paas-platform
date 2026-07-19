@@ -6,7 +6,7 @@ created: 2026-06-25
 updated: 2026-06-25
 related:
   - docs/plans/2026-Q2/2026-06-21-naming-env-token-prod-stg-plan.md
-  - docs/tracking/2026-06-25-fenv2-l4-reconciler-explainer.md
+  - docs/archived/tracking/2026-06-25-fenv2-l4-reconciler-explainer.md
   - docs/tracking/pitfalls/cf-ns-orphan-no-account-gc.md
   - docs/tracking/followups/follow-ups.md
 ---

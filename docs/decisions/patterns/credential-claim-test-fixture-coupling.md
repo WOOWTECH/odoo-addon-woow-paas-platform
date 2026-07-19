@@ -52,9 +52,9 @@ E0 把這 pitfall 的**第二種形態**顯影：不是「fixture 沒補 → 紅
 
 ## See also
 
-- 落地 case：`docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §takeaway；impl `e94991d`（Phase D forward-coupling fixtures）；CAQA Phase D §Quality info（forward-coupling blast radius）。
-- 落地 case（E0 missing-negative）：`docs/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §5（key-present 鎖 / key-absent mutation 證實漏鎖）；test `cdf5368`（`test_T81c` mutation-resistant negative lock）；`docs/tracking/caqa-report-2026-05-27-agent-runtime-pod-phase-e0.md` §Known pitfalls（CAQA 委派 reviewer 核此分支）。
-- 落地 case（F-PILOT-10 **正面範例**）：`docs/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §1 headline + §10（empty-bearer lock-step genuine + forward-coupling 乾淨，reviewer 對比 E0 缺口點名）；`docs/tracking/caqa-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §Known pitfalls。
+- 落地 case：`docs/archived/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §takeaway；impl `e94991d`（Phase D forward-coupling fixtures）；CAQA Phase D §Quality info（forward-coupling blast radius）。
+- 落地 case（E0 missing-negative）：`docs/archived/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §5（key-present 鎖 / key-absent mutation 證實漏鎖）；test `cdf5368`（`test_T81c` mutation-resistant negative lock）；`docs/archived/tracking/caqa-report-2026-05-27-agent-runtime-pod-phase-e0.md` §Known pitfalls（CAQA 委派 reviewer 核此分支）。
+- 落地 case（F-PILOT-10 **正面範例**）：`docs/archived/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §1 headline + §10（empty-bearer lock-step genuine + forward-coupling 乾淨，reviewer 對比 E0 缺口點名）；`docs/archived/tracking/caqa-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §Known pitfalls。
 - 觸發本 pattern 的硬化（同 epic）：[[constraint-input-trust-expansion]]（HC-2 / token_use claim 硬化 → 自建 token 的 test 受 coupling）。
 - 同 family（test 工程品質）：
   - [[phase-versioned-test-assertion]] —— 姐妹 pattern：那條是「test 斷言內容鎖死 schema 快照」，本條是「硬化 credential → 自建該 credential 的 fixture lock-step」；都屬「test 本身要跟著演進，否則紅得 confusing 或假綠」。

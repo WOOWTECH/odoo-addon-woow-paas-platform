@@ -141,7 +141,7 @@ Root cause chain：
 References：
 
 - Spec D9 / AC #29 / OR-9：`docs/plans/2026-Q2/2026-05-19-project-detail-page-design.md`
-- CAQA B-1 fix verified：`docs/tracking/caqa-report-2026-05-20-project-detail-page-issue-48.md` §B-1
+- CAQA B-1 fix verified：`docs/archived/tracking/caqa-report-2026-05-20-project-detail-page-issue-48.md` §B-1
 - Fix landed in `src/security/ir_rules.xml:230-233`（補第 3 條 ref 進 `<function>` eval list）— 同 PR 內
 
 ## Related

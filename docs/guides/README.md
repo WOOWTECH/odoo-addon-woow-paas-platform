@@ -22,6 +22,8 @@
 | [`tutorials/`](tutorials/cloud-odoo-addon-management.md) | 完整逐步指引（cloud odoo addon management） |
 | [`frameworks/`](frameworks/) | Claude Code framework 使用指南（ccpm、superpowers、SuperClaude） |
 | [`paas-skill-system/`](paas-skill-system/) | PaaS Skill 系統（agent-runtime-pod）onboarding 知識庫（含端到端流程、對話/串流、Pod 內部、安全模型、術語表等；篇數見該目錄 README） |
+| [`maintenance/`](maintenance/plan-catalog-update.md) | 維運 SOP：[plan catalog 改價](maintenance/plan-catalog-update.md)、[stg 清理（#324）](maintenance/2026-07-10-324-stg-cleanup-sop.md) |
+| [`smart-home-half-year-gift-points-admin-sop.md`](smart-home-half-year-gift-points-admin-sop.md) | Smart Home 半年贈點 eWallet 發放 SOP（admin 操作） |
 
 ## 命名
 

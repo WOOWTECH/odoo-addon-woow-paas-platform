@@ -71,9 +71,9 @@
 |-----|------|
 | `docs/plans/2026-Q2/agent-runtime-pod-design.md` | §1.3.2 ACL Invariants 新加 Inv A1 + Inv A2（Phase A #8 invariant cluster）；§4.1 字面化 `_check_project_ids_grantor_authority` constraint body |
 | `docs/plans/2026-Q2/agent-runtime-pod-plan.md` | Phase A 19-task scope（落 13；leader 拍板 defer 5 view files OQ-A-3 → F-PA-4） |
-| `docs/tracking/test-reports/test-coverage-agent-runtime-phase-a-2026-05-22.md` | cell map + Q1/Q2 sign-off 落地 + 3 條 regression lock |
-| `docs/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` | §1 invariant verify + §6 B-1 BLOCKER（round 1）+ §7 5 Caveat + §13 round 2 verify（B-1 closed + OQ-A-2 closed）+ §14 round 3 verify（HC-3 + HC-4 closure + std rule symmetric deactivation 紅線 independent grep verified）|
-| `docs/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` | §3 4 HC（HC-1/HC-2/HC-3/HC-4 — CAQA 漏抓）+ §5 28 SC + §6 CAQA cross-check + §12 round 2 HC-3 + HC-4 closure + §12.4 EC-3a/4a edge cases |
+| `docs/archived/tracking/test-coverage-agent-runtime-phase-a-2026-05-22.md` | cell map + Q1/Q2 sign-off 落地 + 3 條 regression lock |
+| `docs/archived/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` | §1 invariant verify + §6 B-1 BLOCKER（round 1）+ §7 5 Caveat + §13 round 2 verify（B-1 closed + OQ-A-2 closed）+ §14 round 3 verify（HC-3 + HC-4 closure + std rule symmetric deactivation 紅線 independent grep verified）|
+| `docs/archived/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` | §3 4 HC（HC-1/HC-2/HC-3/HC-4 — CAQA 漏抓）+ §5 28 SC + §6 CAQA cross-check + §12 round 2 HC-3 + HC-4 closure + §12.4 EC-3a/4a edge cases |
 | `docs/decisions/patterns/constraint-input-trust-expansion.md`（**新加，本 PR reporter phase**）| HC-3 抽 pattern — m2m write constraint grantor authority check |
 | `docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`（**新加，本 PR reporter phase**）| HC-4 抽 pattern — bundle attachment defense in depth (anchor stamping + `ir.attachment` row-level ir.rule) |
 | `docs/tracking/followups/follow-ups.md` | F-PA-1~F-PA-12 round 2 落地 + F-PA-13~F-PA-16 round 3 落地（HC-1 / HC-2 defer + EC-3a / EC-4a 提醒）|

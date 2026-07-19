@@ -160,6 +160,6 @@ trial 與 `:235-240` active），字面重複 9 LoC。Plan C4 列為 optional re
 - Plan docs：
   - `docs/plans/2026-05-17-sh-end-date-fresh-non-trial.md`（PR #42）
   - PR #38 plan（trial path 對應 plan，記憶位置 `docs/plans/2026-05-*-trial-dates-from-plan*.md`）
-- Test report：`docs/tracking/test-reports/issue-39-test-coverage.md`
+- Test report：`docs/archived/tracking/issue-39-test-coverage.md`
 - 第三方公式：`sh_subscription/models/sh_subscription_subscription.py`（onchange 公式 line 180-186；confirm advancement line 274-304）
 - 相關 invariant：refund clamp `src/models/sh_subscription_fix.py`（`_compute_unused_refund` 的 `max(0, end-today)` + `today<start→0` guard 守住財務面，UI 下游讀者沒有對等 clamp — 這是 helper 必須存在的原因）

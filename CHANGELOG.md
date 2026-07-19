@@ -11,7 +11,7 @@ tag 以 `v{version}` 形式推送，並觸發 `paas-odoo-ci` 打包 image。
 ### 文件
 - 新增 `CHANGELOG.md`，追溯涵蓋 `v18.0.1.0.4` 到 `v18.0.1.0.11`。
   (`7c87b49`)
-- 在 `docs/plans/2026-04-19-e2e-test-results.md` 標記 Phase 2c #5 已
+- 在 `docs/archived/plans/2026/2026-04-19-e2e-test-results.md` 標記 Phase 2c #5 已
   在 staging 驗證完成。(`fb4ead0`)
 
 ## [18.0.1.0.11] — 2026-04-21

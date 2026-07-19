@@ -193,7 +193,7 @@ def _validate_mcp_url(url):
   - `src/static/src/paas/services/cloud_service.js:587/612/638` — frontend 主動使用 legacy endpoint（verify「不是 dead code」）
   - `src/tests/test_mcp_external_url_creation.py:343-568` `TestLegacySsrfCheckOnMcpUrlCreate` — 4 test 鎖 legacy endpoint SSRF gate
 - Reports：
-  - `docs/tracking/caqa-report-2026-05-20-mcp-refactor.md` §Security 重點 3 — CAQA 只 verify 新端點 SSRF coverage，沒 grep legacy 端點
-  - `docs/tracking/reviewer-report-2026-05-20-mcp-refactor.md` §Hard caveats HC-1 — code-reviewer agent 透過 grep + frontend caller 追蹤抓到
+  - `docs/archived/tracking/caqa-report-2026-05-20-mcp-refactor.md` §Security 重點 3 — CAQA 只 verify 新端點 SSRF coverage，沒 grep legacy 端點
+  - `docs/archived/tracking/reviewer-report-2026-05-20-mcp-refactor.md` §Hard caveats HC-1 — code-reviewer agent 透過 grep + frontend caller 追蹤抓到
 - 上游 codebase pattern：
   - PR #47 cycle 2 也踩過：`_sanitize_helm_values` 只裝在 `discuss_channel.py` non-streaming path，`ai_assistant.py` SSE streaming path 漏裝（F12 cluster）— 同 pattern 不同 helper

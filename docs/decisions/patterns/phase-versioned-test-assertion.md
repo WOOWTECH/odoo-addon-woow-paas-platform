@@ -89,7 +89,7 @@ self.assertGreaterEqual(
 
 ## See also
 
-- 落地 case：`docs/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md` §5（M.9 第二次撞牆敘事）；impl commit `d3aa60e`（`src/tests/test_agent_pod_phase_a_migration.py` M.9 改寫）。
+- 落地 case：`docs/archived/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md` §5（M.9 第二次撞牆敘事）；impl commit `d3aa60e`（`src/tests/test_agent_pod_phase_a_migration.py` M.9 改寫）。
 - [[tag-scoped-test-misses-full-u-failures]] — 另一個「test 守法不對 → 漏抓 / 誤報」的 pitfall（驗證**範圍**錯 vs 本 pattern 的斷言**內容**太緊）；兩者同屬「test 本身的工程品質」family。
 - [[plan-vs-odoo-schema-mismatch]] — 互補：該 pitfall 是「plan 引用不存在的 schema 值（phantom）」，本 pattern 是「test 鎖死存在但會演進的 schema 值」；都根於「把某一刻的 schema 當永久事實」。
 - `docs/plans/2026-Q2/agent-runtime-pod-plan.md` §Phase A Task 19（M.9 的 original intent — manifest bump 啟動 migration）。

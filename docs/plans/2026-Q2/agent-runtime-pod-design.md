@@ -598,7 +598,7 @@ res.users
 
   此 pattern 已抽到 `docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md`；對 Odoo 18 base + bundled addons 必須 grep verify **0 std ir.rule on ir.attachment for base.group_user**（[[odoo-addon-std-rule-symmetric-deactivation]] 紅線 — Phase A CAQA round 3 §14.4 已 independent grep verified）才能加 Layer 2 不撞 OR-bypass 災情；本 epic Phase A 補的 2 條 `ir_attachment_rule_skill_bundle_*` 是該 pattern 的 first instance。
 
-> **Inv A1 + Inv A2 合起來對應**：CAQA report `docs/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.7 invariant verify table 中 **「Phase A #8 (HC-3 grantor authority + HC-4 attachment row-level)」**新加 invariant — 三件套（(a) agent_template grantor authority constraint + (b) skill bundle attachment row-level deny + (c) anchor stamping ensure delegation target correct）；reporter phase 把 (a) 落在 Inv A1、(b)+(c) 落在 Inv A2，便於 future maintainer 兩條獨立查。
+> **Inv A1 + Inv A2 合起來對應**：CAQA report `docs/archived/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.7 invariant verify table 中 **「Phase A #8 (HC-3 grantor authority + HC-4 attachment row-level)」**新加 invariant — 三件套（(a) agent_template grantor authority constraint + (b) skill bundle attachment row-level deny + (c) anchor stamping ensure delegation target correct）；reporter phase 把 (a) 落在 Inv A1、(b)+(c) 落在 Inv A2，便於 future maintainer 兩條獨立查。
 
 #### §1.3.3 對 refactor branch 已 fix 範圍的明確引用
 

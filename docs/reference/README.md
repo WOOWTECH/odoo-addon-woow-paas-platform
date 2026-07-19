@@ -16,7 +16,7 @@
 
 | 路徑 | 內容 |
 |------|------|
-| [`api/`](api/) | API contract：[`woowtech-paas-api-specification`](api/woowtech-paas-api-specification.md)（整站串接規格）、[`agent-runtime-ws-protocol`](api/agent-runtime-ws-protocol.md)（Agent-Runtime Pod WebSocket 協定）、[`ha-component-integration`](api/ha-component-integration.md)（HA component 串接總覽：概念 / OAuth / Smart Home API，SA 速覽）、[`security-access-ha-integration`](api/security-access-ha-integration.md)（Security Access HA 端點權威規格） |
+| [`api/`](api/) | API contract：[`agent-runtime-ws-protocol`](api/agent-runtime-ws-protocol.md)（Agent-Runtime Pod WebSocket 協定）、[`ha-component-integration`](api/ha-component-integration.md)（HA component 串接總覽：概念 / OAuth / Smart Home API，SA 速覽）、[`security-access-ha-integration`](api/security-access-ha-integration.md)（Security Access HA 端點權威規格）、[`ha-app-oauth-provisioning`](api/ha-app-oauth-provisioning.md)（給 HA App 的 OAuth＋開通串接包）。整站端點權威=`grep @route`（src/controllers/）與 `src/static/src/paas/core/router.js`；早期整站設計稿已 archive（`../archived/reference/`） |
 | [`features/`](features/) | 功能規格（workspace、cloud-services、odoo-service-config、subscription-integration-design、subscription-integration-workflow、subscription-failure-handling-gap） |
 | [`architecture/`](architecture/) | 架構生命週期圖（目前：[`n8n-cloud-service-lifecycle`](architecture/n8n-cloud-service-lifecycle.md)） |
 | [`pencil/`](pencil/) | `.pen` 設計檔（圖表） |

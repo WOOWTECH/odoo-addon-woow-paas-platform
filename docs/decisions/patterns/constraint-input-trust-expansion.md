@@ -280,12 +280,12 @@ read-site comment（`project_project.py:119-128`）已就地警告此 SET-SITE i
 ## See also
 
 - 真實落地 case：
-  - **Phase D HC-2 / F-PA-14**（owner-bootstrap hint，4th instance）：`docs/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` §Security focus 2 + §Caveat「forward-looking invariant」/ `docs/tracking/reviewer-report-2026-05-25-agent-runtime-pod-phase-d.md` §4（security-auditor 獨立確認 airtight，延伸 framework-substrate 驗 indirect injection 關閉）
-  - **Phase C C-1**（token_use claim，token 層 3rd instance）：`docs/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md` §4
-  - **Phase B HC-2**（WS payload→claims，image 端 2nd instance）：`docs/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` §4
-  - **Phase A HC-3**：`docs/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.2 — agent_template grantor authority constraint closure
-  - **Phase A HC-3**：`docs/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §3.1 HC-3 + §12.2 closure 證據
-  - **Phase A reviewer EC-3a**：`docs/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §12.4 — Phase B-E controller sudo path lock-step 提醒
+  - **Phase D HC-2 / F-PA-14**（owner-bootstrap hint，4th instance）：`docs/archived/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` §Security focus 2 + §Caveat「forward-looking invariant」/ `docs/archived/tracking/reviewer-report-2026-05-25-agent-runtime-pod-phase-d.md` §4（security-auditor 獨立確認 airtight，延伸 framework-substrate 驗 indirect injection 關閉）
+  - **Phase C C-1**（token_use claim，token 層 3rd instance）：`docs/archived/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md` §4
+  - **Phase B HC-2**（WS payload→claims，image 端 2nd instance）：`docs/archived/tracking/agent-runtime-pod-phase-b-image-source-2026-05-23.md` §4
+  - **Phase A HC-3**：`docs/archived/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.2 — agent_template grantor authority constraint closure
+  - **Phase A HC-3**：`docs/archived/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §3.1 HC-3 + §12.2 closure 證據
+  - **Phase A reviewer EC-3a**：`docs/archived/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §12.4 — Phase B-E controller sudo path lock-step 提醒
 - 同 family pitfall（PR #54 cycle 4 HC-2）：
   - `docs/tracking/pitfalls/two-layer-acl-asymmetric-deny.md` — 同 family「ACL 信任 attacker-controlled input」的 controller layer variant
   - `docs/decisions/refactor/mcp-url-redesign.md` §HC-2 — silent IDOR via 兩層 carve-out divergence

@@ -35,7 +35,7 @@ planner 寫 plan 時對「哪個 chart 在哪個 repo」是按假設寫的；pla
 
 ## Related
 
-- 落地 case：`docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §takeaway；plan `docs/plans/2026-Q2/agent-runtime-pod-plan.md` Phase D WS1 charts 條（「落點修正 2026-05-24」+ Tester hand-off `⚡ charts | 本 repo charts/odoo-dev-sandbox`）；凍結 5 env 表。
+- 落地 case：`docs/archived/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §takeaway；plan `docs/plans/2026-Q2/agent-runtime-pod-plan.md` Phase D WS1 charts 條（「落點修正 2026-05-24」+ Tester hand-off `⚡ charts | 本 repo charts/odoo-dev-sandbox`）；凍結 5 env 表。
 - chart 落點事實：`CLAUDE.md` §K8s Dev Sandbox（`charts/odoo-dev-sandbox` 在本 repo）；design §3.4 line 3256（agent-runtime pod chart 在 `woow-paas-charts`）。
 - 同 family（plan 假設 vs 實況，勘查/實作時才現形）：
   - [[plan-vs-odoo-schema-mismatch]] —— plan 引用不存在的 schema 欄位；本 pitfall 是 plan 假設錯 artifact 的 repo 落點。兩者都根於「plan 抽象層未核對實體事實」。
