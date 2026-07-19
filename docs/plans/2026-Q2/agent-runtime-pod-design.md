@@ -20,7 +20,7 @@ related:
 
 > **Status**：Phase 1（§1 review）— 等 leader sign-off 後推進 §2~§7。
 >
-> 本 doc 為 living document，逐節 sign-off 後累加。§2~§7 目前只有標題佔位。
+> 本 doc 為 living document，逐節 sign-off 後累加。全章節（§1–§8）已完成（2026-07-19 校正：原「§2~§7 佔位」註記早已過時）。
 
 ## Context
 
