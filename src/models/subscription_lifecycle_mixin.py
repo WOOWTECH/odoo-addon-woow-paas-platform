@@ -537,6 +537,10 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         return {
             'id': sub.id,
             'state': sub.state,
+            # #368 PR-3：ChangePlanModal 用 plan_id 定位目前方案（cycle×group×seats
+            # 由前端 PlanSelector 反推）並擋「churn 成同方案」。三 surface（CS/SA/SH）
+            # 皆以此 dict 為 subscription 資料源，故補在 mixin 一處即全數受惠。
+            'plan_id': sub.sh_subscription_plan_id.id if sub.sh_subscription_plan_id else None,
             'plan_name': sub.sh_subscription_plan_id.name if sub.sh_subscription_plan_id else None,
             'plan_price': sub.sh_plan_price,
             'is_trial': sub.sh_trial,

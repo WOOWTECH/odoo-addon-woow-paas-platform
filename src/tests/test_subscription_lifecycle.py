@@ -288,6 +288,25 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
         self.assertIsNotNone(info)
         self.assertEqual(info['state'], 'in_progress')
 
+    def test_subscription_info_has_plan_id(self):
+        """#368 PR-3：_get_subscription_info 須帶 plan_id，供 ChangePlanModal
+        開啟即以 currentPlanId 定位目前方案（cycle×group×seats 由 PlanSelector
+        反推）。無 plan_id 前端就無法預選高亮／擋 churn 成同方案。"""
+        service = self._create_service()
+        sub = self._mock_subscription(service, state='in_progress')
+        info = service._get_subscription_info()
+        self.assertIn('plan_id', info)
+        self.assertEqual(info['plan_id'], sub.sh_subscription_plan_id.id)
+
+    def test_subscription_info_plan_id_none_when_no_plan(self):
+        """訂閱存在但無 sh_subscription_plan_id 時，plan_id 為 None（非炸）。"""
+        service = self._create_service()
+        sub = self._mock_subscription(service, state='in_progress')
+        sub.write({'sh_subscription_plan_id': False})
+        info = service._get_subscription_info()
+        self.assertIn('plan_id', info)
+        self.assertIsNone(info['plan_id'])
+
     # ----------------------------------------------------------------
     # Helper
     # ----------------------------------------------------------------
