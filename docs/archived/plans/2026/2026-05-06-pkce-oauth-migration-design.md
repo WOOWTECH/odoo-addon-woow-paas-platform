@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-05-06-pkce-oauth-migration-design.md
+archived: 2026-07-19
+archived-reason: "PKCE 已上線；現況=src/controllers/oauth2.py 與 guides/development/oauth2-architecture.md"
+---
+
 # PKCE-only OAuth2 migration — paas-platform ↔ HA Smart Home
 
 > **狀態**：已實作完成（PR #21、PR #22 均 merged 進 develop）

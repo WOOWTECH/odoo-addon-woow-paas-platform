@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/journal/2026-05-06-pkce-oauth-migration.md
+archived: 2026-07-19
+archived-reason: "PKCE 已上線；現況=src/controllers/oauth2.py 與 guides/development/oauth2-architecture.md"
+---
+
 # PKCE-only OAuth2 migration — 開發過程紀錄
 
 > 對應 plan：`docs/plans/2026-05-06-pkce-oauth-migration-design.md`

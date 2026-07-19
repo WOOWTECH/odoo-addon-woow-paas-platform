@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-05-backend-views-cloud-service-odoo-addon-design.md
+archived: 2026-07-19
+archived-reason: "已落地；規格現行權威=docs/reference/features/cloud-services.md"
+---
+
 # Backend Views: Cloud Service & Odoo Addon
 
 **Date**: 2026-04-05

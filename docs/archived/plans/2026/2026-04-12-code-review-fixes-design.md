@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-12-code-review-fixes-design.md
+archived: 2026-07-19
+archived-reason: "一次性 review 修正批，已落地"
+---
+
 # Code Review Fixes Design
 
 ## Context

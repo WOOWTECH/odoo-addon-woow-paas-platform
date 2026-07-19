@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-08-addon-deselection-safe-removal.md
+archived: 2026-07-19
+archived-reason: "已落地；addon 安全移除現況在 src 與 reference/features/cloud-services.md"
+---
+
 # Addon Deselection Safe Removal — Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

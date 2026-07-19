@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-28-hotfix-bundle.md
+archived: 2026-07-19
+archived-reason: "一次性 hotfix 批次，已落地"
+---
+
 # Hotfix Bundle Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

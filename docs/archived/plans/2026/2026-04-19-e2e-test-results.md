@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-19-e2e-test-results.md
+archived: 2026-07-19
+archived-reason: "一次性 E2E 測試快照（2026-04-19）"
+---
+
 # E2E Test Results — Phase 2a (Payment Methods) + Phase 2b (Auto-topup)
 
 **Date**: 2026-04-19 / 2026-04-20 (cross-day session)

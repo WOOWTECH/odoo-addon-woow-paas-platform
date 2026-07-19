@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-05-10-smart-home-role-check-audit.md
+archived: 2026-07-19
+archived-reason: "一次性角色檢查稽核，已落地"
+---
+
 # Smart Home Role Check Audit：把 mutating endpoints 拉到 Cloud-Service 同水位
 
 **Status：** Backlog — issue #24 https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/24

@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-21-ecpg-topup-charge-implementation.md
+archived: 2026-07-19
+archived-reason: "已落地；ECPG 整合現況在 src，操作指南=ecpay skill"
+---
+
 # ECPG Top-up Charge Flow — Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-05-10-smart-home-subscription-template-design.md
+archived: 2026-07-19
+archived-reason: "已落地；訂閱模板現況=src/models/smart_home 系列與 data seed"
+---
+
 # Smart Home Subscription: Align with Cloud-Service Template-Bound Design
 
 **Status:** PR #23 open against `develop` — https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/pulls/23

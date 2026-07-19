@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-20-settings-profile-implementation.md
+archived: 2026-07-19
+archived-reason: "已落地（Settings UI build phase）；現況=src/static/src/paas"
+---
+
 # Phase 2c #6 Implementation Plan: /settings/profile page
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

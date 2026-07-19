@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-20-session-loss-3ds-bind-implementation.md
+archived: 2026-07-19
+archived-reason: "已落地；3DS 綁卡流程現況=src/controllers/billing.py"
+---
+
 # Phase 2c #1 Implementation Plan: session loss after 3DS bind
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

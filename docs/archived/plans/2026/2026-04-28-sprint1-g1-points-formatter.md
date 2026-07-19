@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-28-sprint1-g1-points-formatter.md
+archived: 2026-07-19
+archived-reason: "一次性 sprint 微任務，已落地"
+---
+
 # G1: Unified Points Formatter — Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

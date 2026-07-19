@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-12-wallet-billing-design.md
+archived: 2026-07-19
+archived-reason: "已落地；設計論述現行權威=docs/decisions/philosophy/billing-philosophy.md"
+---
+
 # Wallet & Billing Dashboard Design (v2)
 
 ## Context

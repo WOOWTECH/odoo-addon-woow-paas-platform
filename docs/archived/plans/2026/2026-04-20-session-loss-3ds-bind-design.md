@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-20-session-loss-3ds-bind-design.md
+archived: 2026-07-19
+archived-reason: "已落地；3DS 綁卡流程現況=src/controllers/billing.py"
+---
+
 # Phase 2c #1：修復 3DS 綁卡後 session 流失
 
 **日期**：2026-04-20

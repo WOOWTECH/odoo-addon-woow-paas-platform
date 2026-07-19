@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-20-settings-profile-design.md
+archived: 2026-07-19
+archived-reason: "已落地（Settings UI build phase）；現況=src/static/src/paas"
+---
+
 # Phase 2c #6：/settings/profile 個人資料頁面
 
 **日期**：2026-04-20

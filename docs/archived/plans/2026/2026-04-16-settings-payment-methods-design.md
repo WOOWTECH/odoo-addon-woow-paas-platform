@@ -1,3 +1,10 @@
+---
+status: archived
+archived-from: docs/plans/2026-Q2/2026-04-16-settings-payment-methods-design.md
+archived: 2026-07-19
+archived-reason: "已落地（Settings UI build phase）；現況=src/static/src/paas"
+---
+
 # Settings 頁面 + Payment Methods + ECPay 整合設計（兩階段）
 
 **日期**：2026-04-16
