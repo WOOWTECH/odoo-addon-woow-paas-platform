@@ -226,3 +226,5 @@ from . import test_subscription_tax_clear_366
 from . import test_trial_reset_guard_367
 # feat: #368 PR-1 選擇器重設計後端鋪路（group_key 配對 cycle + specs 顯示）
 from . import test_plan_group_keys_368
+# feat: #375 三型 MCP admin（k8s/vk/opendesign）上架 seed（template/plan/link/launch contract）
+from . import test_mcp_3type_seed_375

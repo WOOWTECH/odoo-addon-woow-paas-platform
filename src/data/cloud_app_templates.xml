@@ -415,6 +415,139 @@
             <field name="is_active" eval="True" />
         </record>
 
+        <!-- MCP admin 三型（#375）：k8s / vk / opendesign。皆鏡射
+             cloud_app_mcp_odoo_manage 骨架（chart mcp-server 0.1.5、category=mcp、
+             has_admin_gui=True、mcp_enabled=False＝MCP 內建於 body 非 sidecar）。
+             三型 image 統一釘 woow-mcp-server main HEAD 723182e（該 push 動共用
+             mcp-admin-core、觸發全 app rebuild，三型皆具此 tag），雙釘 git-sha@sha256。
+             config.mcp_server 契約逐字取自各 app k8s-deploy.yaml 檔頭（#375 comment）
+             ＋port 實查：三型對外 8080、內部 mcp_server.port 齊一 8000＝args 內 port
+             （core proxy 反代目標，兩者不一致 proxy 一律 502）。三型 launch 契約與治理
+             語意各異、勿互抄。三 xmlid 首建於本檔 noupdate=0 塊、-u 自建、無 migration。 -->
+
+        <!-- k8s：kubernetes-mcp-server（Go binary 原生 http，command=k8s-mcp-http，
+             非 supergateway 橋）。治理三 toggle 走 mcp_server.env 全名
+             （K8S_MCP_READ_ONLY／DISABLE_DESTRUCTIVE／ALLOW_SECRETS）＋TOOLSETS，
+             launcher 轉 TOML disabled_tools 真傳導、restart 生效（出廠即唯讀鎖，
+             tools.disabled 亦真生效）；env_prefix=K8S_MCP_ 只作用於 connection 鍵
+             （kubeconfig／in_cluster）。bind-address 127.0.0.1 與 disable-multi-cluster
+             由 launcher 硬編（安全邊界，seed 不覆寫）。租戶前置：外部叢集建
+             ServiceAccount 綁 view ClusterRole，產生 token 組 kubeconfig，經 admin
+             Connection 頁貼入。 -->
+        <record id="cloud_app_mcp_k8s" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Kubernetes MCP</field>
+            <field name="slug">mcp-k8s</field>
+            <field name="description">Kubernetes MCP — 以 kubeconfig 連接外部 K8s 叢集，治理工具出廠唯讀鎖定</field>
+            <field name="full_description">Kubernetes MCP server：以 kubeconfig 連接
+                「外部」Kubernetes 叢集，提供 core／config／helm 工具集的唯讀治理能力。
+                治理三 toggle（READ_ONLY／DISABLE_DESTRUCTIVE／ALLOW_SECRETS）於子行程
+                真傳導、出廠即全鎖，危險與寫入工具預設封鎖。租戶前置需求：於目標外部叢集
+                (1) 建立 ServiceAccount 並綁定 view ClusterRole（寫操作另行授權），
+                (2) 產生 token 組成 kubeconfig，(3) 於 admin Connection 頁貼入 kubeconfig。</field>
+            <field name="category">mcp</field>
+            <field name="tags">["mcp", "kubernetes", "k8s", "mcp-server", "ai"]</field>
+
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
+            <field name="helm_chart_version">0.1.5</field>
+            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "723182e3ea1dab1162a5703ef6ac05d31229045c@sha256:1a7b52c45f72456ce6fa1cabd71e9523d84c140b3f9d7ac3e3bd28526ea8fb17"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True" />
+
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">5</field>
+
+            <field name="mcp_enabled" eval="False" />
+            <field name="has_admin_gui" eval="True" />
+            <field name="post_deploy_init_type">none</field>
+
+            <field name="is_active" eval="True" />
+        </record>
+
+        <!-- vk：Vibe Kanban vibe-kanban-mcp（stdio-only，command=supergateway 橋
+             stdio 到 streamableHttp；image 已預裝 supergateway@3.4.3）。args 顯式帶
+             outputTransport=streamableHttp（不給則預設 sse、不開 /mcp）與 healthEndpoint。
+             env_prefix 空＝connection 鍵大寫即注入（vibe_backend_url 到 VIBE_BACKEND_URL）。
+             租戶前置：admin Connection 頁填 vibe_backend_url 指向外部 Vibe Kanban 後端
+             （/api/*，例 http://vk-host:3000），為必填欄。 -->
+        <record id="cloud_app_mcp_vk" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Vibe Kanban MCP</field>
+            <field name="slug">mcp-vk</field>
+            <field name="description">Vibe Kanban MCP — 橋接 Vibe Kanban 看板後端，提供任務與看板管理工具</field>
+            <field name="full_description">Vibe Kanban MCP server：經 supergateway 橋接
+                vibe-kanban-mcp（global 模式），提供任務與看板管理工具集。租戶前置需求：
+                於 admin Connection 頁填入 vibe_backend_url，指向外部 Vibe Kanban 後端服務
+                （/api/*，例 http://vk-host:3000）；此為必填欄。</field>
+            <field name="category">mcp</field>
+            <field name="tags">["mcp", "vibe-kanban", "vk", "kanban", "mcp-server", "ai"]</field>
+
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
+            <field name="helm_chart_version">0.1.5</field>
+            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "723182e3ea1dab1162a5703ef6ac05d31229045c@sha256:9284a5b239a6b8b6026b8592b2e26def688c1d256b64a52dbfc0cc51b1f60567"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True" />
+
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">5</field>
+
+            <field name="mcp_enabled" eval="False" />
+            <field name="has_admin_gui" eval="True" />
+            <field name="post_deploy_init_type">none</field>
+
+            <field name="is_active" eval="True" />
+        </record>
+
+        <!-- opendesign：vendored od_mcp_server（stdio-only，command=supergateway 橋
+             python -m opendesign_mcp_server 到 streamableHttp；image 預裝
+             supergateway@3.4.3、PATH 前置 venv）。args 顯式釘 streamableHttpPath=/mcp
+             （對齊 core proxy、杜絕版本語意漂移）與 outputTransport／healthEndpoint。
+             env_prefix 空＝connection 鍵大寫即注入（od_api_base 到 OD_API_BASE）。
+             治理採 advisory：此架構（supergateway／FastMCP）per-tool 停用不生效、僅
+             顯示層，delete_project 等危險工具實際仍全數暴露（要真封鎖須 v2），故不 seed
+             tools.disabled；亦不設 od_api_token（現行 wrapper 不送 Authorization、為
+             死欄）。與 k8s 治理真傳導語意相反、勿互抄。租戶前置：admin Connection 頁填
+             od_api_base 指向 Open Design daemon（/api/*，例 http://open-design-svc:7457，
+             必填）；od_chat_timeout 選配。 -->
+        <record id="cloud_app_mcp_opendesign" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Open Design MCP</field>
+            <field name="slug">mcp-opendesign</field>
+            <field name="description">Open Design MCP — 橋接 Open Design daemon，提供設計稿操作工具（治理 advisory）</field>
+            <field name="full_description">Open Design MCP server：經 supergateway 橋接
+                vendored od_mcp_server，提供設計稿讀取與操作工具集。治理採 advisory
+                （紅標＋文件）：per-tool 停用僅顯示層、危險工具仍暴露，非硬性封鎖。
+                租戶前置需求：於 admin Connection 頁填入 od_api_base，指向 Open Design
+                daemon（/api/*，例 http://open-design-svc:7457）；此為必填欄，
+                od_chat_timeout（AI 生成最長等待秒數）為選配。</field>
+            <field name="category">mcp</field>
+            <field name="tags">["mcp", "opendesign", "design", "mcp-server", "ai"]</field>
+
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
+            <field name="helm_chart_version">0.1.5</field>
+            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "723182e3ea1dab1162a5703ef6ac05d31229045c@sha256:22e9b758c1e6b46643b7ddb025cb46cb35ae99d17d0272f97f784c78a91c1895"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True" />
+
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">5</field>
+
+            <field name="mcp_enabled" eval="False" />
+            <field name="has_admin_gui" eval="True" />
+            <field name="post_deploy_init_type">none</field>
+
+            <field name="is_active" eval="True" />
+        </record>
+
         <!-- HA PaaS（免費雲端 Home Assistant，#336）。工作項5 stopgap 落地：pin 到
              woow-paas-charts 已發佈的 HA chart OCI（0.1.0，helm pull 實測可 pull）＋
              HA 官方 image，翻 is_active=True 即 deployable。is_hidden=True：不出現在
