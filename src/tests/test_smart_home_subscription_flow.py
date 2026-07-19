@@ -718,17 +718,14 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
             sub.write({'sh_end_date': False})
         self.env.invalidate_all()
 
-    def test_trial_to_trial_new_sub_restarts_trial(self):
-        """Q1: trial -> trial change-plan creates a new sub in trial state
-        with the new plan's trial duration counted from today.
+    def test_trial_to_trial_change_plan_no_longer_restarts_trial(self):
+        """#367: trial -> trial change-plan must NOT restart the trial.
 
-        Post-#33 the date triple (start, trial_end, end) is asserted: the
-        unconditional plan-driven force in
-        ``_force_trial_dates_from_plan`` runs for every trial sub,
-        regardless of whether the onchange chain already flipped
-        sh_trial=True. Pre-#33 these assertions had to be skipped because
-        the dedup gate short-circuited the helper on the onchange-set
-        sh_trial=True path.
+        The seeded partner already holds a subscription (the just-closed old
+        sub), so per #367 the new sub enters the active (non-trial) state with
+        immediate billing rather than a fresh 14-day trial. Supersedes the
+        pre-#367 behaviour this test previously locked in — the very bug #367
+        fixes (cf. the #327 refund-window test rewrite).
         """
         from datetime import date, timedelta
         from dateutil.relativedelta import relativedelta
@@ -746,21 +743,21 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
         self.assertTrue(res['success'], res.get('error'))
 
         new_sub = self.smart_home.sudo().subscription_id
-        self.assertTrue(new_sub.sh_trial, 'new sub should be in trial state')
+        self.assertFalse(
+            new_sub.sh_trial,
+            '#367: returning partner change-plan must not restart trial',
+        )
+        self.assertFalse(new_sub.sh_trial_end_date)
         self.assertEqual(new_sub.sh_subscription_plan_id, self.plan_b_trial14)
         # Old sub was trial -> _compute_unused_refund returns 0.
         self.assertEqual(res['data']['refund_amount'], 0)
 
-        # #33: date triple is plan-driven, not onchange-derived.
+        # Active date triple is plan-driven (start=today, no trial offset).
         today = date.today()
-        expected_trial_end = today + timedelta(days=14) - timedelta(days=1)
-        expected_start = expected_trial_end + timedelta(days=1)
-        expected_end = (
-            expected_start + relativedelta(months=1) - timedelta(days=1)
-        )
-        self.assertEqual(new_sub.sh_trial_end_date, expected_trial_end)
-        self.assertEqual(new_sub.sh_start_date, expected_start)
+        expected_end = today + relativedelta(months=1) - timedelta(days=1)
+        self.assertEqual(new_sub.sh_start_date, today)
         self.assertEqual(new_sub.sh_end_date, expected_end)
+        self.assertGreaterEqual(new_sub.sh_end_date, new_sub.sh_start_date)
 
     def test_trial_to_no_trial_enters_active(self):
         """Q2: trial -> no-trial change-plan creates an active (non-trial)

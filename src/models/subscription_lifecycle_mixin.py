@@ -115,9 +115,29 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             sh.subscription.subscription record
         """
         self.ensure_one()
+        # #367 (per-entity): capture whether THIS entity already holds a
+        # subscription BEFORE we create/link the new one. The 7-day trial is a
+        # per-service (per-entity) one-time grant — NOT per-partner (Eugene's
+        # 2026-07-19 #367 clarification): every new service gets its own trial;
+        # only a re-subscription on a service that already had one (change-plan;
+        # or a hypothetical suspend-resume that recreates a sub) must not
+        # restart it.
+        #
+        # ``subscription_id`` is the entity's canonical "is subscribed" pointer
+        # and is the reliable, entity-scoped signal here:
+        #   • brand-new entity (incl. a partner's 2nd/3rd service) → empty → trial
+        #   • change-plan → the wizard / HTTP endpoints close the old sub
+        #     (state='close') but do NOT unlink subscription_id (no code path
+        #     sets it False; ondelete='set null' only fires on delete, and
+        #     change-plan closes — never deletes) → truthy → no trial
+        #   • suspend/resume → _do_resume flips state without recreating a
+        #     subscription, so it never reaches this method → trial untouched
+        # Read here, before the create + the trailing self.write() that replaces
+        # it at the end of this method, so it reflects the entity's PRIOR state.
+        entity_has_prior_sub = bool(self.sudo().subscription_id)
         _logger.info(
-            "[SUB_MIXIN] _create_and_confirm_subscription entry entity=%s:%s partner=%s plan=%s",
-            self._name, self.id, partner.id, plan.id,
+            "[SUB_MIXIN] _create_and_confirm_subscription entry entity=%s:%s partner=%s plan=%s prior_sub=%s",
+            self._name, self.id, partner.id, plan.id, entity_has_prior_sub,
         )
         Subscription = self.env['sh.subscription.subscription']
 
@@ -165,7 +185,13 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         # values; the third-party onchange compute is unreliable on both
         # branches (issue #33 for trial, #39 for non-trial). See helper
         # docstrings for the specific arithmetic each branch corrects.
-        if plan.sh_trial:
+        #
+        # #367 (per-entity): grant the trial only when the plan offers one AND
+        # this entity had no prior subscription (``entity_has_prior_sub``,
+        # captured at entry above). A brand-new service — including a partner's
+        # 2nd/3rd — gets its own 7-day trial; a change-plan / resume on a
+        # service that already had one enters the active (non-trial) state.
+        if plan.sh_trial and not entity_has_prior_sub:
             self._force_trial_dates_from_plan(subscription, plan)
         else:
             self._force_active_dates_from_plan(subscription, plan)
@@ -221,7 +247,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         )
 
     def _force_active_dates_from_plan(self, subscription, plan):
-        """Force start/end/next-payment fields on a non-trial ``subscription``.
+        """Force ``subscription`` into a coherent non-trial (active) state.
 
         Plan-driven (start_date=today, end_date=start+cycle_delta-1d) so
         downstream readers never see end < start; cycle_delta does NOT
@@ -231,6 +257,13 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         ``sh_date_of_next_payment`` is seeded to ``start_date``;
         ``sh_subscription_confirm()`` advances it by one cycle to
         ``start + cycle_delta`` after creating the first invoice.
+
+        #367: also clears ``sh_trial`` / ``sh_trial_end_date``. This helper is
+        the active branch, reachable for a trial plan when the entity already
+        holds a subscription (per-entity guard: a change-plan / resume on an
+        existing service) — the onchange chain may have flipped
+        ``sh_trial=True``, so the flag must be cleared to stay consistent with
+        the active date triple.
         """
         cycle_delta = {
             'day': relativedelta(days=plan.sh_duration),
@@ -241,6 +274,11 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         start_date = date.today()
         end_date = start_date + cycle_delta - relativedelta(days=1)
         subscription.write({
+            # #367: the onchange chain may have left sh_trial=True; the active
+            # path is non-trial by definition, so clear the flag and any
+            # trial-end residue to keep sh_trial and the date triple consistent.
+            'sh_trial': False,
+            'sh_trial_end_date': False,
             'sh_start_date': start_date,
             'sh_end_date': end_date,
             'sh_date_of_next_payment': start_date,

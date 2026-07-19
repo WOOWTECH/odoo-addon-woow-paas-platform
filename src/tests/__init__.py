@@ -222,3 +222,5 @@ from . import test_mcp_admin_password
 from . import test_mcp_admin_password_authz
 # fix: #366 訂閱方案 product 不應課稅（seed 明寫空 taxes_id + migration force-write）
 from . import test_subscription_tax_clear_366
+# fix: #367 已訂閱用戶換方案不得重啟 trial（per-partner trial reset guard）
+from . import test_trial_reset_guard_367

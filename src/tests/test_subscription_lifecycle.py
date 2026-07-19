@@ -582,11 +582,19 @@ class TestForceTrialDatesFromPlan(TransactionCase):
         )
         self.assertEqual(sub.sh_date_of_next_payment, expected_start)
 
-    def test_dedup_collision_still_forces_trial_dates(self):
-        """Second sub on the same plan + partner triggers sh_subscription
-        dedup. The unconditional force path still writes a coherent date
-        triple — this is the path that worked pre-#33 and must not
-        regress."""
+    def test_second_entity_same_partner_gets_own_trial(self):
+        """#367 (per-entity): a second *entity* for the same partner is a
+        brand-new service (its own ``subscription_id`` is empty), so it gets
+        its OWN 7-day trial. The trial is a per-service one-time grant, not
+        per-partner.
+
+        This supersedes the earlier per-partner reading (a leader over-widening
+        during transcription): Eugene's 2026-07-19 clarification on #367 is
+        per-entity — every new service gets a trial; only same-service
+        change-plan / suspend-resume does not restart it. The per-partner impl
+        (which denied a second entity its trial) makes this test red — the
+        load-bearing discriminator.
+        """
         first = self._make_smart_home('First Home')
         first._create_and_confirm_subscription(self.partner, self.plan_trial)
 
@@ -596,15 +604,15 @@ class TestForceTrialDatesFromPlan(TransactionCase):
 
         today = date.today()
         expected_trial_end = today + timedelta(days=7) - timedelta(days=1)
-        expected_start = expected_trial_end + timedelta(days=1)
-        expected_end = (
-            expected_start + relativedelta(months=1) - timedelta(days=1)
-        )
 
-        self.assertTrue(sub.sh_trial)
+        self.assertTrue(
+            sub.sh_trial,
+            '#367 per-entity: a second entity is a new service → own trial',
+        )
         self.assertEqual(sub.sh_trial_end_date, expected_trial_end)
-        self.assertEqual(sub.sh_start_date, expected_start)
-        self.assertEqual(sub.sh_end_date, expected_end)
+        # Trial has not started billing yet → sh_start_date is in the future.
+        self.assertEqual(sub.sh_start_date, expected_trial_end + timedelta(days=1))
+        self.assertGreaterEqual(sub.sh_end_date, sub.sh_start_date)
 
     def test_non_trial_plan_leaves_trial_fields_inert(self):
         """``plan.sh_trial=False`` must skip the trial helper entirely so
