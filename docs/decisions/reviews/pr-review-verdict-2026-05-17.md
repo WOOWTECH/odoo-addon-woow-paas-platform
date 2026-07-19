@@ -4,8 +4,8 @@ phase: review
 team: refactor
 reviewer: refactor-reviewer
 plan_ref: docs/plans/2026-Q2/2026-05-16-cloud-service-project-decouple-plan.md
-test_scope_ref: docs/tracking/test-reports/test-scope-report-2026-05-16.md
-test_report_ref: docs/tracking/test-reports/test-report-2026-05-16.md
+test_scope_ref: docs/archived/tracking/test-scope-report-2026-05-16.md
+test_report_ref: docs/archived/tracking/test-report-2026-05-16.md
 caqa_ref: docs/decisions/reviews/caqa-2026-05-16.md
 pr_draft_ref: docs/decisions/reviews/pr-description-draft.md
 diff_range: 3081a41^..HEAD (8 commits)

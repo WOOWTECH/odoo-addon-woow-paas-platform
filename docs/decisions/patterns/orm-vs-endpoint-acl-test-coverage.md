@@ -280,5 +280,5 @@ grep -rn "request\.env\[.*\]\.sudo()\.create\|\.sudo()\.create" src/controllers/
 - [[cross-workspace-task-data-leak]] — B1 incident (root cause family)
 - [[orm-test-green-endpoint-leak-blindness]] — cycle 6 pitfall：本 pattern 的 symptom-side 記錄
 - [[cloud-service-project-decouple]] §Invariants #5 — `base.group_user` Project/Task ACL + ir.rule 對齊
-- `docs/tracking/caqa-report-2026-05-28-decuple-project-frontend.md` §同源 sudo bypass scan + §Mini Re-verdict §2 Task.sudo() unify 對等性驗證 — 33+34 處 sudo() audit 範本 + 變體 C unify (option b) caqa-recommended reasoning
-- `docs/tracking/reviewer-report-2026-05-28-decuple-project-frontend.md` §5 同源 code path 檢查 — 對等 audit 不擴 scope 的 reviewer 紀律對齊
+- `docs/archived/tracking/caqa-report-2026-05-28-decuple-project-frontend.md` §同源 sudo bypass scan + §Mini Re-verdict §2 Task.sudo() unify 對等性驗證 — 33+34 處 sudo() audit 範本 + 變體 C unify (option b) caqa-recommended reasoning
+- `docs/archived/tracking/reviewer-report-2026-05-28-decuple-project-frontend.md` §5 同源 code path 檢查 — 對等 audit 不擴 scope 的 reviewer 紀律對齊

@@ -183,5 +183,5 @@ grep -rn "request\.env\[.*\]\.sudo()\.search\|sudo()\.browse\|sudo()\.read" src/
 - [[legacy-endpoint-scope-blindness]] — 類似機制（plan AC 只 cover 新 endpoint，legacy same-source path 漏裝 helper）
 - [[two-layer-acl-asymmetric-deny]] — 類似機制（一層收緊另一層 silent 漏，partial fix 比沒 fix 更糟）
 - [[tag-scoped-test-misses-full-u-failures]] — 同類「test 設計 vs 真實隔離」斷層
-- `docs/tracking/caqa-report-2026-05-28-decuple-project-frontend.md` §同源 sudo bypass scan — 33 處逐處分類，本 pitfall 的 audit baseline
-- `docs/tracking/test-reports/2026-05-28-decouple-project-frontend-endpoint.md` — T1-T4 endpoint test 設計（cycle 6 補 L3 守線）
+- `docs/archived/tracking/caqa-report-2026-05-28-decuple-project-frontend.md` §同源 sudo bypass scan — 33 處逐處分類，本 pitfall 的 audit baseline
+- `docs/archived/tracking/2026-05-28-decouple-project-frontend-endpoint.md` — T1-T4 endpoint test 設計（cycle 6 補 L3 守線）

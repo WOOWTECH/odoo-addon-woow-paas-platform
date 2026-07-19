@@ -4,8 +4,8 @@
 > **前置 code**：agent-runtime-pod epic Phase A–D 已 ship `develop`（#60 merged，全 flag-gated、inert）。flip / 部署 / 觀察由使用者依本文件自跑。
 > **論述源（本文件只引用、不複製論述）**：
 > - `docs/plans/2026-Q2/agent-runtime-pod-plan.md` §Pilot runbook / §Flip-gate caveats（**D-CAVEAT-1/2** 完整論述）/ §Flip gate 驗收
-> - `docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §5（剩給使用者的 flip-gate）
-> - `docs/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` §Caveat（D-CAVEAT-1/2 機制詳述）
+> - `docs/archived/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §5（剩給使用者的 flip-gate）
+> - `docs/archived/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` §Caveat（D-CAVEAT-1/2 機制詳述）
 
 ## 圖例
 
@@ -236,7 +236,7 @@ flip 後 pilot project 第一次 chat invoke 觸發：
 ## Related
 
 - Plan：`docs/plans/2026-Q2/agent-runtime-pod-plan.md` §Pilot runbook / §Flip-gate caveats（D-CAVEAT-1/2 論述源）/ §Flip gate 驗收
-- Reporter durable：`docs/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §5
-- Review：`docs/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` / `docs/tracking/reviewer-report-2026-05-25-agent-runtime-pod-phase-d.md`
+- Reporter durable：`docs/archived/tracking/agent-runtime-pod-phase-d-enable-gate-2026-05-25.md` §5
+- Review：`docs/archived/tracking/caqa-report-2026-05-25-agent-runtime-pod-phase-d.md` / `docs/archived/tracking/reviewer-report-2026-05-25-agent-runtime-pod-phase-d.md`
 - Follow-ups：`docs/tracking/followups/follow-ups.md` §Phase D enablement gate
 - Cross-repo：`paas-agent-runtime` F-PC-7 A 嚴格（`a8b3ce2`+`dabb275`）— **[2026-05-26 更正] 已 merge main（PR #3 `bb31676`，origin/main `3263352`/PR#4）+ build 進所有發佈 image，stg closed**；prod 全簽 gate 見上 §Prod 上線 gate

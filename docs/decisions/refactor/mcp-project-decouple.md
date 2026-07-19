@@ -308,8 +308,8 @@ Leader 選 **Option A (port 既有 class)** 而非 Option B (retire 3 class)：p
 - Plan:
   - `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md`（本 decision 的 implementation plan，25 AC）
 - Inputs（reporter 合成來源 — 不在 durable docs 重複，只列引用）:
-  - `docs/tracking/test-reports/test-scope-report-mcp-2026-05-18.md`（26 cases red proof + cycle-3 fixture rationale）
-  - `docs/tracking/test-reports/test-coverage-mcp-project-decouple.md`（test-explainer 視角 coverage report）
+  - `docs/archived/tracking/test-scope-report-mcp-2026-05-18.md`（26 cases red proof + cycle-3 fixture rationale）
+  - `docs/archived/tracking/test-coverage-mcp-project-decouple.md`（test-explainer 視角 coverage report）
   - `docs/decisions/reviews/caqa-2026-05-18.md`（CAQA 14 invariants check + C1 / F12 / Inv #7 caveat）
   - `docs/decisions/reviews/pr-review-verdict-mcp-2026-05-18.md`（round 1 NEEDS REVISION，2 BLOCKER + 2 MAJOR + 17 minor）
   - `docs/decisions/reviews/pr-review-verdict-mcp-round2-2026-05-18.md`（round 2 APPROVED WITH CAVEATS，4 finding closed + 4 new minor）

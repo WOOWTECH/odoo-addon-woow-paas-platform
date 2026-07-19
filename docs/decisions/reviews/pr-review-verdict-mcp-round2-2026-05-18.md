@@ -143,7 +143,7 @@ Reviewer 結案進 standby。
 - [[caqa-2026-05-18]] — CAQA 報告
 - [[cross-workspace-task-data-leak]] — B1 pitfall（reviewer round 2 確認新 6-rule split 仍守住 B1 sub-model parity）
 - `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md` — 25 AC plan（round 2 4ff8f4b 同步更新 MAJOR 1 fix）
-- `docs/tracking/test-reports/test-coverage-mcp-project-decouple.md` — coverage report
+- `docs/archived/tracking/test-coverage-mcp-project-decouple.md` — coverage report
 
 ---
 

@@ -73,6 +73,6 @@ agent 端在每個 gap 自問：**「我手上有正確來源能填這個嗎？�
 - [[agent-runtime-pilot-e2e-gap-chain]] — 三個 plan-gap instance 所在的完整 chain
 - [[constraint-input-trust-expansion]] — 「別讓便利機制退化成攻擊面」同源警覺（硬塞 owner / creds 的 B1-relapse 風險）
 - [[credential-claim-test-fixture-coupling]] — impl/test 層延伸的鏡像：那條是「改 test 去配合 impl（假綠 / missing-negative）」，本條 impl/test 段是「改 impl 去配合錯 test（湊綠）」，同根
-- `docs/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §2 + commit `e2a3d7b` — T4.1a mock-target 修 test 非改 impl 的落地 case
-- `docs/tracking/caqa-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §C10-1 + `docs/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §5 — F-PILOT-10 C10-1 SSRF cross-repo NP hard gate（defense-in-depth vs 主防線 paas-charts NP）；commit `33178e3` — Gap 3 skill_snapshot hybrid 解
+- `docs/archived/tracking/reviewer-report-2026-05-27-agent-runtime-pod-phase-e0.md` §2 + commit `e2a3d7b` — T4.1a mock-target 修 test 非改 impl 的落地 case
+- `docs/archived/tracking/caqa-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §C10-1 + `docs/archived/tracking/reviewer-report-2026-05-27-agent-runtime-fpilot10-code-prs.md` §5 — F-PILOT-10 C10-1 SSRF cross-repo NP hard gate（defense-in-depth vs 主防線 paas-charts NP）；commit `33178e3` — Gap 3 skill_snapshot hybrid 解
 - `follow-ups.md` §F-PILOT-4 / §F-PILOT-8 / §F-PILOT-10（review takeaway 三層 gate）— plan-gap 的 durable 追蹤條目（operator green 已落 Phase E0、真 LLM code 已落 F-PILOT-10，見 §F-PILOT 收口）

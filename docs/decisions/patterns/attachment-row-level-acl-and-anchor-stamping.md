@@ -348,9 +348,9 @@ grep -rEn "(model_ir_attachment|model.*'ir.attachment')" \
 ## See also
 
 - 真實落地 case：
-  - **Phase A HC-4**：`docs/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.3 — skill bundle attachment row-level deny + anchor stamping closure
-  - **Phase A HC-4**：`docs/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §3.1 HC-4 + §12.3 closure 證據 + §12.4 EC-4a/b/c/d/e/f edge cases
-  - **Phase A HC-4**：`docs/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.4 — independent grep verify Odoo 18 base 0 std rule on ir.attachment for base.group_user
+  - **Phase A HC-4**：`docs/archived/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.3 — skill bundle attachment row-level deny + anchor stamping closure
+  - **Phase A HC-4**：`docs/archived/tracking/reviewer-report-2026-05-22-agent-runtime-pod-phase-a.md` §3.1 HC-4 + §12.3 closure 證據 + §12.4 EC-4a/b/c/d/e/f edge cases
+  - **Phase A HC-4**：`docs/archived/tracking/caqa-report-2026-05-22-agent-runtime-pod-phase-a.md` §14.4 — independent grep verify Odoo 18 base 0 std rule on ir.attachment for base.group_user
 - 互補 pattern：
   - [[odoo-addon-std-rule-symmetric-deactivation]] — 第一次加 base.group_user ir.rule 在某 model 上的 pattern；本 pattern 是該 pattern 的 attachment 版本 — 守 std rule 紅線 + 補 admin_full bypass
   - [[mcp-acl-6-rule-split]] — 6-rule split per model triplet；本 pattern 是「2-rule split for ir.attachment per sensitive model」（user_scope_deny + admin_full）— 抽象 invariant 一致

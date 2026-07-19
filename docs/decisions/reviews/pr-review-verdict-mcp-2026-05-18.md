@@ -5,8 +5,8 @@ team: refactor
 reviewer: refactor-reviewer
 plan_ref: docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md
 decision_ref: docs/decisions/refactor/mcp-project-decouple.md
-test_scope_ref: docs/tracking/test-reports/test-scope-report-mcp-2026-05-18.md
-test_coverage_ref: docs/tracking/test-reports/test-coverage-mcp-project-decouple.md
+test_scope_ref: docs/archived/tracking/test-scope-report-mcp-2026-05-18.md
+test_coverage_ref: docs/archived/tracking/test-coverage-mcp-project-decouple.md
 caqa_ref: docs/decisions/reviews/caqa-2026-05-18.md
 diff_range: 5c5d980^..90ee0eb (8 commits; excl. 45afbbe k8s-dev-sandbox unrelated)
 created: 2026-05-18T14:22:20Z
@@ -261,8 +261,8 @@ red → 2 gap fill → fixture patch → implementation → docs publish → CAQ
 - [[caqa-2026-05-18]] — CAQA 報告（reviewer 基線；本 verdict 補抓 CAQA 明文排除範圍）
 - [[cross-workspace-task-data-leak]] — B1 pitfall（本次 mcp_tool 對等 rule 守住）
 - `docs/plans/2026-Q2/2026-05-18-mcp-project-decouple-plan.md` — 25 AC plan
-- `docs/tracking/test-reports/test-scope-report-mcp-2026-05-18.md` — 26 cases red proof
-- `docs/tracking/test-reports/test-coverage-mcp-project-decouple.md` — coverage report（test-explainer）
+- `docs/archived/tracking/test-scope-report-mcp-2026-05-18.md` — 26 cases red proof
+- `docs/archived/tracking/test-coverage-mcp-project-decouple.md` — coverage report（test-explainer）
 - `docs/decisions/reviews/pr-review-verdict-2026-05-17.md` — 前次 review verdict（同一 reviewer role 樣板）
 
 ---
