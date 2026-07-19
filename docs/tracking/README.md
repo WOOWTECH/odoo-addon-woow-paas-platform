@@ -52,11 +52,13 @@ CLAUDE.md `Known patterns` 直接以路徑引用 pitfall 檔，所以**不加 YA
 
 可選加 `## Timeline`（含 incident 時序）、`## Reproducer`（重現步驟）、`## Related`（連結 decision / pattern）。
 
-### followups/follow-ups.md — F# 流水號 + 頂部 Index 表格
+### followups/follow-ups.md — F# 流水號 + 頂部 Index 表格 + 冷熱輪替
 
 跨 refactor cycle 連續編號（F1, F2, F3, ...）。**新 entry 先 append 在文末（標記 `pending F#`），reporter 整理時統一指派編號並加進 Index 表格**。每條附 severity / origin / cycle / status。
 
 檔案開頭（State 段之後、`## Index` 之前）維護一個 **「Active backlog 摘要」** block：只列尚未處理（status 非 done/resolved/closed）的 F#，按系列分組 + 一句話狀態，讓讀者開頭即可掃出所有 open/pending；已 RESOLVED/CLOSED 的 F# 不在此重列，但仍完整保留在 `## Index` 表原列（不刪除、不重編號）。每次新增或關閉 F# 時須同步更新此摘要。
+
+**冷熱輪替（2026-07-19 起）**：主檔被 CLAUDE.md 每 session 指向，必須保持輕量。關閉 F# 時——backlog 摘要移除該號、Index 標 status、**該號區段全文移至 [`followups/follow-ups-archive.md`](followups/follow-ups-archive.md)**；State 段每次 cycle 收口重寫為現況、舊敘事輪替至 archive 檔（膨脹教訓：主檔曾達 340KB，State 歷史佔 102KB）。
 
 ### issues/ — 自由結構，重視可追蹤性
 

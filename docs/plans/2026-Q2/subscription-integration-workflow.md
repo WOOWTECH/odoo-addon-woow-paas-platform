@@ -2,6 +2,9 @@
 title: Subscription Integration — Implementation Workflow
 category: reference
 implementation_status: implemented
+moved-from: docs/reference/features/subscription-integration-workflow.md
+moved-at: 2026-07-19
+moved-reason: "已 ship 的建置藍圖（design+phases 過程紀錄），錯置於 reference/；歸位 plans/2026-Q2"
 ---
 
 # Subscription Integration — Implementation Workflow
