@@ -29,8 +29,8 @@ archived-reason: "早期（Stitch 時期）整站 API 設計稿；19 處自承�
 > 端點路徑為 `/api/*` 而非設計稿中的 `/paas/api/v1/*`。
 > **Security Access** ✅ 已實作（stg E2E 全綠）—— HA component 串接的 REST 端點
 > （OAuth Bearer + Cloudflare tunnel token）詳見
-> [`ha-component-integration.md`](ha-component-integration.md) 與
-> [`security-access-ha-integration.md`](security-access-ha-integration.md)。
+> [`ha-component-integration.md`](../../reference/api/ha-component-integration.md) 與
+> [`security-access-ha-integration.md`](../../reference/api/security-access-ha-integration.md)。
 > 下方 §4.6 的 `/paas/api/v1/...tunnels` 是早期設計稿、未採用，實際路由是
 > `/api/security-access/*`。
 > 尚未實作的模組：Settings。
@@ -551,8 +551,8 @@ Response (success):
 > **下方為早期設計稿，未採用。** 實際 Security Access 已實作並走 OAuth Bearer +
 > REST，路由為 `/api/security-access/*`（非 `/paas/api/v1/.../tunnels`）。HA
 > component 串接的端點、scope、完整 response shape 詳見
-> [`security-access-ha-integration.md`](security-access-ha-integration.md)
-> （權威規格）與 [`ha-component-integration.md`](ha-component-integration.md)
+> [`security-access-ha-integration.md`](../../reference/api/security-access-ha-integration.md)
+> （權威規格）與 [`ha-component-integration.md`](../../reference/api/ha-component-integration.md)
 > （串接總覽）。下方 YAML 僅保留作歷史對照。
 
 ```yaml

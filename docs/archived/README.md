@@ -17,7 +17,9 @@
 |------|------|
 | [`ccpm-v1/`](ccpm-v1/) | 舊 ccpm v1 的 project context 文件（v2 不再維護） |
 | [`superpowers/`](superpowers/README.md) | 退役的 superpowers 探索文件（被推翻 / 被取代 / 知識已轉入主 docs），逐檔原因見其 README |
-| `plans/` | 退役的 plan（按 `<year>/` 切分）（首次歸檔 plan 時建立） |
+| [`plans/`](plans/README.md) | 已收官 epic 的 plan（按 `<year>/` 切分），逐檔去向見其 README |
+| [`tracking/`](tracking/README.md) | 已收官的一次性報告（CAQA / reviewer / test coverage / deliverables），逐檔原因見其 README |
+| [`reference/`](reference/) | 被取代的 spec（如早期整站 API 設計稿 `woowtech-paas-api-specification.md`） |
 
 ## 命名
 

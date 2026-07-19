@@ -9,7 +9,8 @@
 
 ## 退出條件
 
-- epic 完成且回顧已 promote 到 `decisions/` 或 `tracking/` → 移到 `archived/plans/<year>/`（首次歸檔時建立）
+- epic 完成且回顧已 promote 到 `decisions/` 或 `tracking/` → 移到 `archived/plans/<year>/`（2026-07-19 首批已執行：April–May 26 檔，見 [`../archived/plans/README.md`](../archived/plans/README.md)）
+- **歸檔前必過 brace-aware inbound 掃描**——被 code / CLAUDE.md / hooks 以 `{design,implementation}` 花括號形式引用的檔 naive grep 抓不到，屬 load-bearing 不得歸檔
 - 跨年的 plan 留在原 quarter，不重歸檔
 
 ## 子目錄
@@ -18,7 +19,7 @@
 |------|------|
 | [`2026-Q2/`](2026-Q2/) | 2026 年 4-6 月計畫（含 wallet-billing、subscription-integration、refactor 等） |
 | [`2026-Q3/`](2026-Q3/) | 2026 年 7-9 月計畫（含 netpol 租戶隔離、harness 蒸餾、定價 taxonomy/manifest、wave-c picker 等） |
-| [`journal/`](journal/) | 過程側記（非完整 plan，是「邊做邊記」） |
+| `journal/` | 過程側記（非完整 plan，是「邊做邊記」）；目前空——過往側記已隨對應 epic 歸檔 |
 
 ## 命名
 

@@ -21,6 +21,7 @@
 | [`refactor/`](refactor/) | 大規模重構決策（含 invariants） |
 | [`patterns/`](patterns/) | 可複用的 pattern（odoo addon override、ACL 收緊、date helper）——完整索引見 [`patterns/README.md`](patterns/README.md) |
 | [`reviews/`](reviews/) | PR review verdict、CAQA report、PR description draft |
+| （根層） | 不屬上列子類的獨立裁定：[`agent-dataplane-in-cluster-no-cf-access-ip-bypass`](agent-dataplane-in-cluster-no-cf-access-ip-bypass.md)（agent 資料面全 in-cluster）、[`agent-runtime-operator-chart-install-contract`](agent-runtime-operator-chart-install-contract.md)（operator chart 安裝契約）、[`namespace-prefix-enforcement-app-layer-not-rbac`](namespace-prefix-enforcement-app-layer-not-rbac.md)（ns prefix 由 app 層強制） |
 
 ## 命名
 
