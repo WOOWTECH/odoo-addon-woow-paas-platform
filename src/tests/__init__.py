@@ -228,3 +228,5 @@ from . import test_trial_reset_guard_367
 from . import test_plan_group_keys_368
 # feat: #375 三型 MCP admin（k8s/vk/opendesign）上架 seed（template/plan/link/launch contract）
 from . import test_mcp_3type_seed_375
+# feat: #380 Open Design 完整應用（daemon+console）上架 seed（template/base plan/link/變體）
+from . import test_opendesign_seed_380
