@@ -42,4 +42,20 @@
       color: var(--woow-primary, #6366f1);
     }
   }
+
+  // #342 未落地前的「下週期生效」提示（TODO Refs #342：生效 re-apply 落地後移除）。
+  // 語氣較 advisory 弱（次要文字色），提醒改方案的規格於下個週期才 re-apply。
+  &__notice {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--woow-text-secondary, #6b7280);
+
+    .material-symbols-outlined {
+      flex-shrink: 0;
+      color: var(--woow-text-secondary, #6b7280);
+    }
+  }
 }

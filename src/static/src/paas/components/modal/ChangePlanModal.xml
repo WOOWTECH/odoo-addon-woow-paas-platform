@@ -2,7 +2,7 @@
 <templates xml:space="preserve">
   <t t-name="woow_paas_platform.ChangePlanModal">
     <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
-      <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+      <div class="o_woow_modal o_woow_modal_lg" t-on-click.stop="">
         <div class="o_woow_modal_header">
           <h2>變更方案</h2>
           <button
@@ -43,6 +43,7 @@
               <PlanSelector
                 plans="state.plans"
                 selectedPlanId="state.selectedPlanId"
+                currentPlanId="props.currentPlanId"
                 onSelect.bind="onSelectPlan"/>
             </div>
 
@@ -54,6 +55,14 @@
                 將按比例退點至錢包（試用中或本期尚未扣款則不退點）。
               </span>
             </div>
+
+            <!-- #342 未落地前的誠實處置：改方案後的規格（vCPU/RAM/席數）於下個
+                 計費週期才 re-apply、非即時。TODO(Refs #342)：#342 生效 re-apply
+                 落地後移除此提示（見 docs/tracking/followups/follow-ups.md）。 -->
+            <div class="o_woow_change_plan__notice">
+              <WoowIcon name="'schedule'" size="14"/>
+              <span>資源將於下個計費週期生效。</span>
+            </div>
           </t>
 
           <div t-if="state.error" class="o_woow_error_message">
@@ -63,6 +72,13 @@
         </div>
 
         <div class="o_woow_modal_footer">
+          <!-- 總價常駐 footer（o_woow_modal_footer flex-shrink:0，不隨 body 捲走）；
+               PlanTotalBar 自身 margin-right:auto 靠左、按鈕推右（與其他 3 個
+               PlanTotalBar 嵌入點一致）；plans 未載入時回退顯示「—」。 -->
+          <PlanTotalBar
+            plans="state.plans"
+            selectedPlanId="state.selectedPlanId"
+            mode="'change'"/>
           <WoowButton
             variant="'secondary'"
             size="'md'"
