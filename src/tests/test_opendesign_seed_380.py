@@ -12,9 +12,9 @@ auth（C 案，issue #380 comment 定稿）：daemon 綁 loopback、nginx auth-p
 與 console，故設 has_admin_gui=True 複用 #357 供給鏈；OD_API_TOKEN 由 chart 自產內部化、
 不入 git values。
 
-注意（pin）：helm image.tag 現為 PENDING_BRANCH_B_DIGEST 佔位，支線 B 交付 digest 後補
-真值；test_image_tag_pinned_digest 在 pin 補上前為**預期紅**（fail-loud，PR 前必轉綠、
-不 skip 以免忘補）。
+pin：daemon 與 console image 皆已雙釘 tag@sha256（支線 B 交付；digest 來源＝paas-ci
+CI push＋docker manifest inspect 雙來源交叉確認）。test_image_tag_pinned_digest ／
+test_console_image_pinned_digest 守住不得回退為 latest／PENDING。
 """
 import json
 from odoo.tests.common import TransactionCase, tagged
@@ -68,12 +68,21 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertNotIn('mcp', repo, '完整應用 image 非 MCP image')
 
     def test_image_tag_pinned_digest(self):
-        """上架必雙釘 git-sha@sha256（支線 B 交付後補；PENDING 佔位期為預期紅）。"""
+        """daemon image 雙釘 tag@sha256、不得留 latest／PENDING（支線 B 已交付）。"""
         tag = self._values()['image']['tag']
         self.assertNotEqual(tag, 'latest', '不得留 latest 佔位')
         self.assertNotEqual(
             tag, 'PENDING_BRANCH_B_DIGEST', '支線 B digest 未補（PR 前必補真值）')
-        self.assertIn('@sha256:', tag, 'image tag 必須雙釘 git-sha@sha256')
+        self.assertIn('@sha256:', tag, 'image tag 必須雙釘 tag@sha256')
+
+    def test_console_image_pinned_digest(self):
+        """console image 亦雙釘 tag@sha256（不留 latest mutable；ConfigMap 注入 app）。"""
+        img = self._values()['console']['image']
+        self.assertEqual(
+            img['repository'],
+            'jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console')
+        self.assertNotEqual(img['tag'], 'latest', 'console 不得留 latest')
+        self.assertIn('@sha256:', img['tag'], 'console image 必須雙釘 tag@sha256')
 
     def test_daemon_service_port_7457(self):
         """service.port 7457（＝default_port；C 案 targetPort 由 chart 轉 authProxy）。"""
