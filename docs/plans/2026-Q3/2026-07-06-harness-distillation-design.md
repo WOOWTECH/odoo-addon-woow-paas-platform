@@ -135,7 +135,7 @@ Harness 對模型行為的約束力有四層，由強到弱：
 
 | 段落 | 判定 | 依據 |
 | --- | --- | --- |
-| K8s Dev Sandbox 兩大段 | 縮（指 plugin SKILL.md） | 已移植 woowprd plugin，CLAUDE.md 自述 plugin 優先 |
+| K8s Dev Sandbox 兩大段 | 縮（指 plugin SKILL.md） | 已移植 woow-dev plugin，CLAUDE.md 自述 plugin 優先 |
 | deploy-stg 全流程圖表 | 縮（指 skill） | `/woow:deploy-stg` skill 為權威 |
 | Release & Build 手動步驟 | 縮（指 skill） | `/woow:deploy` skill 為權威 |
 | Framework integration 三套表 | 保留 | 入口性質，已是漸進載入設計 |

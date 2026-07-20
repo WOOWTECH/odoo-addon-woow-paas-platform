@@ -60,8 +60,8 @@ Branch: alpha/ai-assistant
 #### 1.1 啟動並訪問 Odoo
 
 ```bash
-# 沙盒應已運行（否則 /woowprd:k8s-dev-sandbox up --context docker-desktop）
-/woowprd:k8s-dev-sandbox status <sandbox-name>
+# 沙盒應已運行（否則 /woow-dev:k8s-dev-sandbox up --context docker-desktop）
+/woow-dev:k8s-dev-sandbox status <sandbox-name>
 
 # 訪問 Odoo（先 port-forward）
 kubectl port-forward -n dev-sandbox-<slug> svc/<slug>-odoo-dev-sandbox-nginx 8080:80
@@ -438,7 +438,7 @@ describe('AI Chat E2E Tests', () => {
 完成以上所有測試步驟後，AI Chat 功能應該已經完整驗證。如果遇到任何問題，請參考常見問題排解章節，或查看 Odoo 日誌：
 
 ```bash
-/woowprd:k8s-dev-sandbox logs <sandbox-name> --service odoo --follow | grep -i "ai\|chat"
+/woow-dev:k8s-dev-sandbox logs <sandbox-name> --service odoo --follow | grep -i "ai\|chat"
 ```
 
 ## 相關檔案

@@ -142,10 +142,10 @@ echo -e "${BLUE}Using kubectl context:${NC} ${GREEN}${KUBE_CONTEXT}${NC}"
 kubectl config use-context "$KUBE_CONTEXT" >/dev/null
 export KUBE_CONTEXT
 
-# --- Resolve woowprd plugin's k8s-dev-sandbox create.sh ---
+# --- Resolve woow-dev plugin's k8s-dev-sandbox create.sh ---
 #
-# deploy-stg 把「建沙盒」委派給 woowprd plugin 的 create.sh（即
-# /woowprd:k8s-dev-sandbox 的引擎），不再自帶一份重複的 create.sh。
+# deploy-stg 把「建沙盒」委派給 woow-dev plugin 的 create.sh（即
+# /woow-dev:k8s-dev-sandbox 的引擎），不再自帶一份重複的 create.sh。
 # CLAUDE_PLUGIN_ROOT 在純 bash 不可用，故依序解析 plugin 安裝路徑：
 #   1) WOOWPRD_PLUGIN_ROOT env 覆寫（最高優先；指到的檔存在才採用，否則往下）
 #   2) 本機 dev copy（plugins-local，開發中的活版本）
@@ -198,13 +198,13 @@ resolve_plugin_create_sh() {
 }
 
 if ! PLUGIN_CREATE_SH="$(resolve_plugin_create_sh)"; then
-    echo -e "${RED}ERROR: 找不到 woowprd plugin 的 k8s-dev-sandbox create.sh。${NC}" >&2
-    echo -e "${YELLOW}deploy-stg 已改為委派給 woowprd plugin 建沙盒（不再自帶 create.sh）。${NC}" >&2
-    echo -e "${YELLOW}請安裝 woowprd plugin，或設 WOOWPRD_PLUGIN_ROOT 指向其根目錄。${NC}" >&2
+    echo -e "${RED}ERROR: 找不到 woow-dev plugin 的 k8s-dev-sandbox create.sh。${NC}" >&2
+    echo -e "${YELLOW}deploy-stg 已改為委派給 woow-dev plugin 建沙盒（不再自帶 create.sh）。${NC}" >&2
+    echo -e "${YELLOW}請安裝 woow-dev plugin，或設 WOOWPRD_PLUGIN_ROOT 指向其根目錄。${NC}" >&2
     echo -e "${YELLOW}  已找：\$WOOWPRD_PLUGIN_ROOT / ~/.claude/plugins-local/woowprd / ~/.claude/plugins/cache/*/{woow-dev,woowprd}/* / cache 遞迴 fallback${NC}" >&2
     exit 1
 fi
-echo -e "${BLUE}Delegating sandbox creation to woowprd plugin:${NC} ${PLUGIN_CREATE_SH}"
+echo -e "${BLUE}Delegating sandbox creation to woow-dev plugin:${NC} ${PLUGIN_CREATE_SH}"
 
 # web.base.url + freeze 的 seed 已宣告式化：.sandbox.yml 的 config_params_stg，
 # 由 plugin create.sh 在部署時 diff-aware 套用（值變才 restart、失敗則 create 非零退出）。
@@ -227,7 +227,7 @@ fi
 if [ -z "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
     echo -e "${YELLOW}Note: AGENT_RUNTIME_NAMESPACE_SECRET 未在當下 env 偵測到。${NC}" >&2
     echo -e "${YELLOW}  若 onboard profile 已記錄，create.sh 載入後仍會啟用 agent-runtime；兩處都沒有則保持停用（legacy AI chat 不受影響）。${NC}" >&2
-    echo -e "${YELLOW}  持久供值：/woowprd:k8s-dev-sandbox onboard --repo \"\$(git rev-parse --show-toplevel)\" --set AGENT_RUNTIME_NAMESPACE_SECRET=<value>${NC}" >&2
+    echo -e "${YELLOW}  持久供值：/woow-dev:k8s-dev-sandbox onboard --repo \"\$(git rev-parse --show-toplevel)\" --set AGENT_RUNTIME_NAMESPACE_SECRET=<value>${NC}" >&2
     echo -e "${YELLOW}  (AUTH + WEBHOOK auto-source from the operator secret; export AGENT_RUNTIME_AUTH_SECRET_CURRENT / AGENT_RUNTIME_WEBHOOK_SECRET to override.)${NC}" >&2
 fi
 

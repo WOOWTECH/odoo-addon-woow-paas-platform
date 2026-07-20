@@ -117,7 +117,7 @@ kubectl config use-context docker-desktop
 # First time only: install deps
 pip install -r requirements.txt
 
-# Run (~10s on a clean cluster, 7 tests)
+# Run (21 tests)
 HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
 ```
 
@@ -130,7 +130,7 @@ Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正
 
 ### K8s Dev Sandbox (Recommended)
 
-本機開發與測試首選（namespace 隔離、TTL 自動清理、可跑測試）。**已移植成 `woowprd` plugin 通用工具，優先用 `/woowprd:k8s-dev-sandbox <command>`**（onboard / create / up / list / status / logs / test / extend / destroy / build；被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`，`create`/`destroy` 必帶 `--context`）。架構、三種模式（local hostPath / ci-local / stg 的 addons 路徑差異）、平台 seed 的 `.sandbox/{pre-install,post-create}.sh` opt-in hook 詳見 plugin 的 SKILL.md；移植設計見 `docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
+本機開發與測試首選（namespace 隔離、TTL 自動清理、可跑測試）。**已移植成 `woow-dev` plugin 通用工具（舊名 `woowprd`），優先用 `/woow-dev:k8s-dev-sandbox <command>`**（onboard / create / up / list / status / logs / test / extend / destroy / build；被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`，`create`/`destroy` 必帶 `--context`）。架構、三種模式（local hostPath / ci-local / stg 的 addons 路徑差異）、平台 seed 的 `.sandbox/{pre-install,post-create}.sh` opt-in hook 詳見 plugin 的 SKILL.md；移植設計見 `docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
 
 in-repo `.claude/skills/k8s-dev-sandbox/` 僅剩未進通用 plugin 的 woow 專屬工具：`test.sh`（沙盒內跑模組測試，`--keep-on-fail`）、`extend.sh`（TTL）、`e2e-seed.sh` / `seed-from-stg.sh`（e2e fixture / stg clone helper）。
 
@@ -182,7 +182,7 @@ docker exec -it <odoo-container> curl http://host.docker.internal:8000/health
 
 ### Deploy Staging (deploy-stg)
 
-部署 staging 到 K8s dev sandbox：`/woow:deploy-stg [ref] [--slug x] [--image ...]`（tea 建 `stg-*` tag 觸發 CI → 輪詢完成 → 委派 plugin create.sh 部署到 `dev-sandbox-{slug}`）。前置：`tea login add --name gitea --url https://git-prod.woowtech.io --token <token>`（repo + write:packages scope）。完整流程、skip-build 用法、image 命名規則見 [`.claude/skills/deploy-stg/SKILL.md`](.claude/skills/deploy-stg/SKILL.md)；日誌 / 銷毀走 `/woowprd:k8s-dev-sandbox logs|destroy`。
+部署 staging 到 K8s dev sandbox：`/woow:deploy-stg [ref] [--slug x] [--image ...]`（tea 建 `stg-*` tag 觸發 CI → 輪詢完成 → 委派 plugin create.sh 部署到 `dev-sandbox-{slug}`）。前置：`tea login add --name gitea --url https://git-prod.woowtech.io --token <token>`（repo + write:packages scope）。完整流程、skip-build 用法、image 命名規則見 [`.claude/skills/deploy-stg/SKILL.md`](.claude/skills/deploy-stg/SKILL.md)；日誌 / 銷毀走 `/woow-dev:k8s-dev-sandbox logs|destroy`。
 
 ## Architecture
 
@@ -192,7 +192,7 @@ docker exec -it <odoo-container> curl http://host.docker.internal:8000/health
 woow_paas_platform/
 ├── src/                          # Odoo addon 源碼（models / controllers / OWL app at /woow，數量見各目錄）
 │   ├── __manifest__.py
-│   ├── controllers/              # HTTP / JSON API（paas、billing、dashboard、ai_assistant、smart_home、profile、ha_api、oauth2、agent_runtime_skill、agent_runtime_webhook）
+│   ├── controllers/              # HTTP / JSON API（paas、billing、dashboard、ai_assistant、smart_home、profile、ha_api、ha_paas、oauth2、portal、reconcile_report、security_access、agent_runtime_skill、agent_runtime_webhook）
 │   ├── models/                   # Workspace、CloudService、Wallet/Billing、AI、MCP、OAuth2、SmartHome、Subscription、Project/Account...
 │   ├── views/                    # backend XML views + menu
 │   ├── data/                     # demo data、cron、subscription products、templates
@@ -202,7 +202,7 @@ woow_paas_platform/
 │   ├── paas-operator/            # FastAPI service 包 Helm CLI（helm chart 已移至 woow-paas-charts repo）
 │   └── cloudflare/               # Cloudflare 整合
 ├── docs/                         # 6 類 docs（guides / reference / decisions / plans / tracking / archived + superpowers）
-└── .claude/skills/               # Project skills（ccpm、k8s-dev-sandbox、deploy-stg、deploy-local、build-operator、ecpay、playwright-cli）
+└── .claude/skills/               # Project skills（ccpm、k8s-dev-sandbox、deploy-stg、deploy-local、build-operator、ecpay、playwright-cli、retro）
 ```
 
 詳細結構與檔案列表已交由其他文件維護，避免雙寫漂移：
@@ -234,7 +234,11 @@ The module provides an independent frontend application:
 | `smart_home.py`            | smart home 模板與裝置                                                                   |
 | `profile.py`               | `/api/me` partner self-update                                                           |
 | `ha_api.py`                | Home Assistant API proxy                                                                |
+| `ha_paas.py`               | HA PaaS 0 元開通（`/api/ha-paas/provision`、`/api/ha-paas/status`）                     |
 | `oauth2.py`                | OAuth2 server endpoints                                                                 |
+| `portal.py`                | 原生 portal 頁擴充（project/task view values 注入 agent 卡片；無自有 route）            |
+| `reconcile_report.py`      | 對帳報表（`/api/reconcile-report/list`、`/api/reconcile-report/reverify`）              |
+| `security_access.py`       | workspace Security Access CRUD 與 routes（`/api/workspaces/<id>/security-accesses`…）  |
 | `agent_runtime_skill.py`   | agent-runtime skill bundle（`/api/agent-runtimes/skill-bundle`）                        |
 | `agent_runtime_webhook.py` | agent-runtime 狀態回呼（`/api/agent-runtimes/webhook/state-update`）                    |
 

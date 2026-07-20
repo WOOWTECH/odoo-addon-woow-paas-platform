@@ -129,7 +129,7 @@ from . import test_smart_home_mcp
 
 - [ ] **Step 2: 跑測試確認失敗**
 
-Run（sandbox 內，`/woowprd:k8s-dev-sandbox test` 或 docker-desktop paas-odoo image 掛 worktree src；`-u` 讓新欄位建欄）：
+Run（sandbox 內，`/woow-dev:k8s-dev-sandbox test` 或 docker-desktop paas-odoo image 掛 worktree src；`-u` 讓新欄位建欄）：
 
 ```
 odoo -c odoo.conf -u woow_paas_platform --test-enable \

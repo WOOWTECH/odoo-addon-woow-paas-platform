@@ -1170,7 +1170,7 @@ Expected: PASS — summary `0 failed, 0 error(s)`；deployed 服務 flag True、
 
 前端只動純 boolean getter（無新 template 語法），用 headed 瀏覽器實走驗證按鈕顯隱：
 
-1. 部署本改動到 dev sandbox：`/woowprd:k8s-dev-sandbox up --context docker-desktop`（或既有 sandbox 重載 assets）。
+1. 部署本改動到 dev sandbox：`/woow-dev:k8s-dev-sandbox up --context docker-desktop`（或既有 sandbox 重載 assets）。
 2. `playwright-cli`（`open --headed`）登入 `/woow`，用 curl session 注入免打密碼（memory `woow playwright E2E gotchas`）。
 3. 導航到一個 **mcp_enabled 但未部署** 的服務的 project-detail settings 頁（`/woow` 是 OWL SPA + hash 路由，深路由直接開會 404 → 須 in-app 點擊導航）→ 確認 **`Add Sidecar MCP` 按鈕不顯示**、`Add External MCP` 仍顯示。
 4. 導航到一個 **已部署** 的 mcp_enabled 服務 → 確認 `Add Sidecar MCP` 按鈕顯示。

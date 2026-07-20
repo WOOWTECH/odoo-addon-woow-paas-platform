@@ -1,5 +1,7 @@
 # k8s-dev-sandbox Onboarding Implementation Plan
 
+> **名稱異動註記（2026-07-20）**：本文所述 `woowprd` plugin 其後拆分更名——`k8s-dev-sandbox` 現屬 `woow-dev` plugin（marketplace `woowprd-local`，源 `~/.claude/plugins-local/woowprd`），invocation 改為 `/woow-dev:k8s-dev-sandbox`。本文為歷史紀錄，內文保留當時名稱。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推薦）或 superpowers:executing-plans 逐 task 執行。步驟用 checkbox（`- [ ]`）追蹤。
 
 **Goal:** 為 `/woowprd:k8s-dev-sandbox` 補上三層設定模型的第③層（user-scope 執行期供值）：新增 `onboard` 子命令、`~/.sandbox/{project-key}/config.env` profile、`.sandbox.yml` 的 `env_required`/`env_optional`/`config_params(_{mode})` 宣告區塊，讓任意 addon repo 的任意 worktree 零互動開沙盒跑 e2e。

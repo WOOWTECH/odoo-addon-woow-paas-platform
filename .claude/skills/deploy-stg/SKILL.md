@@ -49,7 +49,7 @@ tea login add --name gitea --url https://git-prod.woowtech.io --token <your-toke
 ```bash
 # 方式 1（推薦，一次性）：onboard 進 user-scope profile —— 之後任何 checkout / worktree
 # 跑 deploy-stg 都自動帶值（create.sh 載入 ~/.sandbox/{project-key}/config.env）
-/woowprd:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" \
+/woow-dev:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" \
   --set AGENT_RUNTIME_NAMESPACE_SECRET=<odoo 端固定值>
 
 # 方式 2（每次）：export 後再跑 deploy-stg
@@ -174,9 +174,9 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 # - (空)         → CI 尚未開始，繼續等待
 ```
 
-### Step 6: 部署到 Sandbox（委派 woowprd plugin）
+### Step 6: 部署到 Sandbox（委派 woow-dev plugin）
 
-deploy-stg **不再自帶 create.sh**，改委派給 woowprd plugin 的 `/woowprd:k8s-dev-sandbox`（同一套引擎，避免重複程式）。`deploy-stg.sh` 內建 resolver 依序定位 plugin 的 `create.sh`：`$WOOWPRD_PLUGIN_ROOT`（env 覆寫）→ `plugins-local/woowprd` → marketplace cache（`cache/*/woow-dev/*`，相容舊名 `woowprd`；多版本取最新）→ cache 根遞迴 fallback（不綁 plugin 名）；全部落空才 fail-loud。
+deploy-stg **不再自帶 create.sh**，改委派給 woow-dev plugin 的 `/woow-dev:k8s-dev-sandbox`（同一套引擎，避免重複程式）。`deploy-stg.sh` 內建 resolver 依序定位 plugin 的 `create.sh`：`$WOOWPRD_PLUGIN_ROOT`（env 覆寫）→ `plugins-local/woowprd` → marketplace cache（`cache/*/woow-dev/*`，相容舊名 `woowprd`；多版本取最新）→ cache 根遞迴 fallback（不綁 plugin 名）；全部落空才 fail-loud。
 
 ```bash
 FULL_IMAGE="jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:${DOCKER_TAG}"
@@ -191,12 +191,12 @@ bash "<plugin>/skills/k8s-dev-sandbox/scripts/create.sh" \
 ```
 
 這會：
-- 建立 namespace `dev-sandbox-${SLUG}`（managed-label 前綴為 plugin native 的 `dev-sandbox.io`，用 `/woowprd:k8s-dev-sandbox list/status/extend` 管理）
+- 建立 namespace `dev-sandbox-${SLUG}`（managed-label 前綴為 plugin native 的 `dev-sandbox.io`，用 `/woow-dev:k8s-dev-sandbox list/status/extend` 管理）
 - 以 STG 模式部署 Odoo（addons 路徑：`/opt/bitnami/odoo/custom-addons/`）
 - 套用 NetworkPolicy 和 ResourceQuota
 - stg 平台特化（networkPolicy / storageClass / JCR registry / agent-runtime secret 從 operator 撈）走 repo 的 `.sandbox/pre-install.sh`；operator/ECPay/AI/journal seed 走 `.sandbox/post-create.sh`
 
-> **前置**：需安裝 woowprd plugin（或設 `WOOWPRD_PLUGIN_ROOT`）。`JCR_USER`/`JCR_PASS`、`AGENT_RUNTIME_*`、`PAAS_OPERATOR_NAMESPACE` 等 env 由 deploy-stg 環境繼承（或由 onboard profile 經 create.sh 載入），經 plugin create.sh 傳入 `.sandbox/` hook。
+> **前置**：需安裝 woow-dev plugin（或設 `WOOWPRD_PLUGIN_ROOT`）。`JCR_USER`/`JCR_PASS`、`AGENT_RUNTIME_*`、`PAAS_OPERATOR_NAMESPACE` 等 env 由 deploy-stg 環境繼承（或由 onboard profile 經 create.sh 載入），經 plugin create.sh 傳入 `.sandbox/` hook。
 
 ### Step 7: Odoo 系統參數（已宣告式化，自動）
 

@@ -43,4 +43,4 @@ planner 寫 plan 時對「哪個 chart 在哪個 repo」是按假設寫的；pla
 
 ## 補記（2026-07-06 自 CLAUDE.md 索引化搬運）
 
-後續演變：本案落點 `charts/odoo-dev-sandbox` 於 2026-06 已隨 **woowprd plugin** 移出（in-repo 副本移除）；現在動 dev-sandbox chart 一律改 plugin 的 `skills/k8s-dev-sandbox/charts/`。epic Phase E-G 續動 charts/CD 跨 repo 時本 pitfall 仍適用——按「修改誰的 deployment」定位 chart，非按 feature 名。
+後續演變：本案落點 `charts/odoo-dev-sandbox` 於 2026-06 已隨 **woow-dev plugin** 移出（in-repo 副本移除）；現在動 dev-sandbox chart 一律改 plugin 的 `skills/k8s-dev-sandbox/charts/`。epic Phase E-G 續動 charts/CD 跨 repo 時本 pitfall 仍適用——按「修改誰的 deployment」定位 chart，非按 feature 名。

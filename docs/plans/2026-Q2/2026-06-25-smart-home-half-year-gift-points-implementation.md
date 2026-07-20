@@ -90,7 +90,7 @@ def api_redeem_code(self, code, **kw):
 
 ## Phase 5 — sandbox 端到端（補 happy-path）
 
-走 `/woowprd:k8s-dev-sandbox`，在 sandbox（非 stg）：
+走 `/woow-dev:k8s-dev-sandbox`，在 sandbox（非 stg）：
 1. 原生精靈產 gift_card → `/woow` 兌換 → 確認點數入 `loyalty.card.points`（錢包）、gift card `points=0`。
 2. 建 Smart Home → 7 天 trial 結束 → 觸發/等 `_cron_wallet_charge` → 確認**成功扣點**（`wallet_transaction` `state=done`、`balance_after` 下降、`sh_date_of_next_payment` 推進）。**← stg live-verify 沒觀察到的那一步。**
 3. 點數扣光 → 連續失敗累計達 6 → `cancel` → `_do_suspend` 停服。

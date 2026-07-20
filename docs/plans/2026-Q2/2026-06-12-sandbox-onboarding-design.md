@@ -18,6 +18,8 @@ related:
 
 # k8s-dev-sandbox Onboarding — 三層設定模型與 onboard 子命令 — 設計
 
+> **名稱異動註記（2026-07-20）**：本文所述 `woowprd` plugin 其後拆分更名——`k8s-dev-sandbox` 現屬 `woow-dev` plugin（marketplace `woowprd-local`，源 `~/.claude/plugins-local/woowprd`），invocation 改為 `/woow-dev:k8s-dev-sandbox`。本文為歷史紀錄，內文保留當時名稱。
+
 ## 背景與目標
 
 [plugin port 設計](2026-06-11-k8s-sandbox-plugin-port-design.md)已把 `/woowprd:k8s-dev-sandbox`

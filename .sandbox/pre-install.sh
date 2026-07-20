@@ -2,7 +2,7 @@
 #
 # woow_paas_platform — sandbox pre-install hook (install-time helm values).
 #
-# 由 woowprd plugin 的通用 create.sh 在 `helm install` 之前執行，傳入：
+# 由 woow-dev plugin 的通用 create.sh 在 `helm install` 之前執行，傳入：
 #   EXTRA_VALUES_FILE  要把追加 helm values 寫進的 YAML 檔（create.sh 會 -f 它）
 #   REPO_ROOT / NAMESPACE / SLUG / MODE / DB_NAME / KUBE_CONTEXT / PRIMARY_MODULE
 #

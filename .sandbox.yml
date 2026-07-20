@@ -1,4 +1,4 @@
-# woow_paas_platform sandbox 設定（woowprd plugin /woowprd:k8s-dev-sandbox 讀取）
+# woow_paas_platform sandbox 設定（woow-dev plugin /woow-dev:k8s-dev-sandbox 讀取）
 #
 # 此 repo 是樣態 (a)：src/ 放單一 addon（src/__manifest__.py）。
 # 平台特化 seed 由 .sandbox/ 下兩個 opt-in hook 提供（通用 create.sh 主線零 woow 分支）：
