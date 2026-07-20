@@ -2,7 +2,7 @@
 #
 # woow_paas_platform — sandbox post-create hook (post-install seed).
 #
-# 由 woowprd plugin 的通用 create.sh 在「module install 完成、odoo 仍 --stop-after-init
+# 由 woow-dev plugin 的通用 create.sh 在「module install 完成、odoo 仍 --stop-after-init
 # 停著、最終 restart 之前」執行，傳入：
 #   NAMESPACE / DB_NAME / PG_STATEFULSET / MODE / OPERATOR_NS / SLUG / KUBE_CONTEXT
 #   PRIMARY_MODULE / INSTALL_MODULES / ODOO_DEPLOY / NGINX_SVC / REPO_ROOT / PLUGIN_SKILL_ROOT

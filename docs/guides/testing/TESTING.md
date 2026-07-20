@@ -79,7 +79,7 @@ If using the K8s dev sandbox:
 
 ```bash
 # 沙盒內跑模組測試（推薦）
-/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
+/woow-dev:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
 
 # 或手動在 Odoo pod 內執行（NS=dev-sandbox-<slug>、DB=woow_<branch>）
 NS=dev-sandbox-<slug>; ODOO=$(kubectl get deploy -n $NS -o name | grep odoo | head -1)
@@ -186,9 +186,9 @@ OK
 
 ### Sandbox Test Issues
 
-1. **Pod not running**: `/woowprd:k8s-dev-sandbox up --context docker-desktop`
+1. **Pod not running**: `/woow-dev:k8s-dev-sandbox up --context docker-desktop`
 2. **Module not installed**: `up` 時 create.sh 會驗 `ir_module_module.state='installed'` 並 fail-loud；若缺第三方相依，檢查 `.sandbox.yml` 的 `extra_addons`（`${PAAS_CI_ADDONS_PATH}`）
-3. **看日誌**: `/woowprd:k8s-dev-sandbox logs <sandbox-name> --service odoo`
+3. **看日誌**: `/woow-dev:k8s-dev-sandbox logs <sandbox-name> --service odoo`
 
 ## Continuous Integration
 

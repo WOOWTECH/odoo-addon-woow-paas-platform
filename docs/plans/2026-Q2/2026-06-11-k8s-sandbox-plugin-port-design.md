@@ -18,6 +18,8 @@ related:
 
 # k8s-dev-sandbox Skill 移植成 woowprd Plugin 通用 Skill — 設計
 
+> **名稱異動註記（2026-07-20）**：本文所述 `woowprd` plugin 其後拆分更名——`k8s-dev-sandbox` 現屬 `woow-dev` plugin（marketplace `woowprd-local`，源 `~/.claude/plugins-local/woowprd`），invocation 改為 `/woow-dev:k8s-dev-sandbox`。本文為歷史紀錄，內文保留當時名稱。
+
 ## 背景與目標
 
 `/k8s-dev-sandbox` 目前是 **in-repo skill**（`.claude/skills/k8s-dev-sandbox/`），只服務 `woow_paas_platform` 單一 repo：為當前 branch 開一個隔離 namespace 的 Odoo 沙盒、裝模組、seed 憑證、跑 e2e。

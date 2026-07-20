@@ -208,7 +208,7 @@ CI 會執行 `build-cloud-image.yml`，將 `addon-catalog.json` COPY 到 image �
 
 #### Step 6：部署新 Image
 
-使用新 build 的 image 部署到 K8s 環境（參考 `/woow:deploy-stg` 或 `/woowprd:k8s-dev-sandbox`）。
+使用新 build 的 image 部署到 K8s 環境（參考 `/woow:deploy-stg` 或 `/woow-dev:k8s-dev-sandbox`）。
 
 #### Step 7：在 Odoo 後台同步
 

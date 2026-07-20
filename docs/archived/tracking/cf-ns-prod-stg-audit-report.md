@@ -14,6 +14,8 @@ archived-reason: "一次性 CF 可行性/稽核報告；F-ENV 後續在 tracking
 
 # prod / stg 資源辨識性與 Cloudflare 孤兒清理調查報告
 
+> **名稱異動註記（2026-07-20）**：本文所述 `woowprd` plugin 其後拆分更名——`k8s-dev-sandbox` 現屬 `woow-dev` plugin（marketplace `woowprd-local`，源 `~/.claude/plugins-local/woowprd`），invocation 改為 `/woow-dev:k8s-dev-sandbox`。本文為歷史紀錄，內文保留當時名稱。
+
 > 調查性質:**唯讀(不動 code)**。範圍:同一 `woow-k3s` cluster 上 prod / stg 共存時,所有產生物(K8s namespace + Cloudflare API 建出的 tunnel / DNS / Access)是否可區分環境、stg 刪除後孤兒能否找回。
 > 方法:6 面向平行調查 + 24 條關鍵結論 adversarial 驗證 + 主線親自核對 `cloudflare.py` / `naming.py` / `config.py` / `helm.py` / pitfall doc。
 

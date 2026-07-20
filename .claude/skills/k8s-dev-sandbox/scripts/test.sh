@@ -118,7 +118,7 @@ fi
 # --- 檢查 namespace 是否存在 ---
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo -e "${RED}Namespace '$NAMESPACE' does not exist. Is the sandbox running?${NC}" >&2
-    echo -e "${YELLOW}Create one with: /woowprd:k8s-dev-sandbox create --context <ctx>${NC}" >&2
+    echo -e "${YELLOW}Create one with: /woow-dev:k8s-dev-sandbox create --context <ctx>${NC}" >&2
     exit 2
 fi
 

@@ -447,6 +447,6 @@ Smart Home，可多選 SA。SA 同樣是「取 Cloudflare tunnel token → 跑 c
 ## 附錄 A：在環境中建測試資料（可選）
 
 E2E 驗證 / 開發時若需要可串接的 workspace + 實例 + 訂閱，請走
-`/woowprd:k8s-dev-sandbox` 沙盒並用 repo 自帶 seed hook，或參考
+`/woow-dev:k8s-dev-sandbox` 沙盒並用 repo 自帶 seed hook，或參考
 [`woowtech-paas-api-specification.md`](../../archived/reference/woowtech-paas-api-specification.md)（歷史設計稿） 的對應端點
 手動建立。本文件只描述 API contract，不固定 seed 腳本（易腐爛）。

@@ -318,7 +318,7 @@ kubectl rollout restart deployment/paas-operator -n paas-system
 ```bash
 # Check browser console for errors
 # Check Odoo logs
-/woowprd:k8s-dev-sandbox logs <sandbox-name> --service odoo | grep -i "cloud"
+/woow-dev:k8s-dev-sandbox logs <sandbox-name> --service odoo | grep -i "cloud"
 
 # Test PaaS Operator API directly
 kubectl run curl-test --rm -it --restart=Never --image=curlimages/curl -- \
@@ -354,7 +354,7 @@ kubectl get pods -n paas-ws-{workspace_id}
 helm status <release-name> -n paas-ws-{workspace_id}
 
 # Check Odoo logs for status update errors
-/woowprd:k8s-dev-sandbox logs <sandbox-name> --service odoo | grep "status"
+/woow-dev:k8s-dev-sandbox logs <sandbox-name> --service odoo | grep "status"
 ```
 
 **Common Causes**:

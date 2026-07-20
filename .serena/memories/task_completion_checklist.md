@@ -4,7 +4,7 @@
 
 1. **Verify changes compile/load**: Module should load without errors
 2. **Run tests if applicable**:
-   - Odoo: `/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform`（或 `./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init`）
+   - Odoo: `/woow-dev:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform`（或 `./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init`）
    - PaaS Operator: `cd extra/paas-operator && pytest tests/ -v`
 3. **Check security**: Update `src/security/ir.model.access.csv` if new models added
 4. **Update manifest**: Add new data/views files to `src/__manifest__.py`

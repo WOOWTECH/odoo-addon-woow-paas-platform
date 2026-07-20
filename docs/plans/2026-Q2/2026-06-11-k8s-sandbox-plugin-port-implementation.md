@@ -1,5 +1,7 @@
 # k8s-dev-sandbox 移植 woowprd Plugin Implementation Plan
 
+> **名稱異動註記（2026-07-20）**：本文所述 `woowprd` plugin 其後拆分更名——`k8s-dev-sandbox` 現屬 `woow-dev` plugin（marketplace `woowprd-local`，源 `~/.claude/plugins-local/woowprd`），invocation 改為 `/woow-dev:k8s-dev-sandbox`。本文為歷史紀錄，內文保留當時名稱。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推薦）或 superpowers:executing-plans 逐 task 執行。步驟用 checkbox（`- [ ]`）追蹤。
 
 **Goal:** 把 in-repo 的 `/k8s-dev-sandbox` skill 移植成 `woowprd` plugin 內的通用 `/woowprd:k8s-dev-sandbox`，讓任意 Odoo addon repo（src 單一 / repo 根即 addon / 多 addon 子目錄三樣態）都能開 K8s 沙盒跑 e2e，並把 woow 平台特化 seed 剝離成 opt-in hook。

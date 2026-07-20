@@ -24,7 +24,7 @@ Before you begin, ensure you have the following installed:
 - **Helm 3.13+** - dev sandbox 用 Helm 部署
 - **Node.js 18+** - For frontend development (OWL components)
 - **Git** - Version control
-- **`woowprd` plugin** - 提供 `/woowprd:k8s-dev-sandbox`（本機開發沙盒）
+- **`woow-dev` plugin** - 提供 `/woow-dev:k8s-dev-sandbox`（本機開發沙盒）
 
 ### Optional (for full stack development)
 - **K3s/K3d** - Local Kubernetes cluster
@@ -103,20 +103,20 @@ Access:
 
 ### 3. Set Up Odoo（K8s Dev Sandbox）
 
-本機開發走 `woowprd` plugin 的 K8s Dev Sandbox（取代舊 docker-compose 流程；詳見 [CLAUDE.md](../../CLAUDE.md) §K8s Dev Sandbox）。
+本機開發走 `woow-dev` plugin 的 K8s Dev Sandbox（取代舊 docker-compose 流程；詳見 [CLAUDE.md](../../CLAUDE.md) §K8s Dev Sandbox）。
 
 ```bash
 # Return to project root
 cd ../..
 
 # 一次性 onboarding（記錄執行期 env；之後 create/up 可不帶 --context）
-/woowprd:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" --context docker-desktop
+/woow-dev:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" --context docker-desktop
 
 # 建立 / 啟動當前 branch 的沙盒
-/woowprd:k8s-dev-sandbox up --context docker-desktop
+/woow-dev:k8s-dev-sandbox up --context docker-desktop
 
 # 查看日誌
-/woowprd:k8s-dev-sandbox logs <sandbox-name> --service odoo --follow
+/woow-dev:k8s-dev-sandbox logs <sandbox-name> --service odoo --follow
 ```
 
 Access Odoo（`<slug>` 見 `up` / `list` 輸出，woow repo 為 `woow_<branch>` DB）:
@@ -179,7 +179,7 @@ K8s Dev Sandbox 的 `post-create.sh` hook 會**自動探索 in-cluster 的 PaaS 
 
 ```bash
 # 在沙盒內跑模組測試（推薦）
-/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
+/woow-dev:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
 ```
 
 完整變體（pod 內手動執行、指定測試檔、verbose、integration、troubleshooting）**權威見 [`testing/TESTING.md`](testing/TESTING.md)**，此處不重複維護。
@@ -233,7 +233,7 @@ local 模式以 hostPath 即時掛載 `src/`，故檔案編輯立即反映在 po
 4. **Test changes**: http://localhost:8080/woow（先 port-forward）
 5. **Run tests**:
    ```bash
-   /woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
+   /woow-dev:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
    ```
 
 ### Making Changes to PaaS Operator

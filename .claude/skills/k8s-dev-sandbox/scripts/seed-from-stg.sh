@@ -53,7 +53,7 @@ echo ""
 
 # --- 確認 sandbox 已建立 ---
 if ! kubectl --context woow-k3s get ns "$TARGET_NAMESPACE" >/dev/null 2>&1; then
-    echo -e "${RED}Target namespace ${TARGET_NAMESPACE} not found. Create it via /woowprd:k8s-dev-sandbox create first.${NC}" >&2
+    echo -e "${RED}Target namespace ${TARGET_NAMESPACE} not found. Create it via /woow-dev:k8s-dev-sandbox create first.${NC}" >&2
     exit 1
 fi
 

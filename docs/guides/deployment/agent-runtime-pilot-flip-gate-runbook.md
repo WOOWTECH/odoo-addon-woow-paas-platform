@@ -100,7 +100,7 @@ pilot cluster 的 operator 須：(a) image 版本 ≥ 簽 `token_use`（Phase C+
 - [ ] 建 / 更新該 K8s Secret，補上 5 個 key（auth/webhook 兩端同值；namespace 一旦設定**永不輪替** — 輪替 → 同 project 算出不同 hash → `paas-ws-pa-{hash}` 漂移 → 既有 pod 變孤兒）
 - [ ] 部署 / 升級 odoo-dev-sandbox（用含 #60 的 chart）：
   ```bash
-  /woowprd:k8s-dev-sandbox create --context <ctx>    # 新建
+  /woow-dev:k8s-dev-sandbox create --context <ctx>    # 新建
   # 或既有 release：helm upgrade <release> skills/k8s-dev-sandbox/charts/ --kube-context <ctx> ...
   ```
 - [ ] **secret 建好後**才 restart / redeploy Odoo pod（讓進程啟動讀到 env）
@@ -178,7 +178,7 @@ flip 後 pilot project 第一次 chat invoke 觸發：
 - [ ] 量測指令範例：
   ```bash
   kubectl --context <ctx> top pod -n <odoo-ns>                                                          # worker util
-  /woowprd:k8s-dev-sandbox logs <sandbox> --service odoo | grep -iE "SSE-WS bridge failed|spawn"   # error / cold start 抽樣
+  /woow-dev:k8s-dev-sandbox logs <sandbox> --service odoo | grep -iE "SSE-WS bridge failed|spawn"   # error / cold start 抽樣
   ```
 
 ↩️ **rollback**：SLO 持續未達 → 一鍵 flip off（Layer 1），回報暫停 advance。

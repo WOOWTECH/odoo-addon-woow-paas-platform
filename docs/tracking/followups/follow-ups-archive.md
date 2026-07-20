@@ -1,5 +1,7 @@
 # Follow-ups Archive — 已收官條目與歷史 State
 
+> **名稱異動註記（2026-07-20）**：本文所述 `woowprd` plugin 其後拆分更名——`k8s-dev-sandbox` 現屬 `woow-dev` plugin（marketplace `woowprd-local`，源 `~/.claude/plugins-local/woowprd`），invocation 改為 `/woow-dev:k8s-dev-sandbox`。本文為歷史紀錄，內文保留當時名稱。
+
 > [`follow-ups.md`](follow-ups.md) 的冷儲存半：**已 RESOLVED / CLOSED / 撤案** 的 F 條目全文＋歷史 State 敘事，輪替至此以維持主檔輕量（CLAUDE.md 每 session 指向主檔）。Index 主列仍在主檔 `## Index`（不刪除、不重編號）。本檔按輪替批次 append。
 
 ## 輪替批次 2026-07-19（首批）

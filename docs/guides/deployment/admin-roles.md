@@ -108,7 +108,7 @@ Groups: ['Portal']
 + ACL 行為，避免上游升級時 silent break。執行：
 
 ```bash
-/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
+/woow-dev:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
 # 或手動在 Odoo pod 內執行
 NS=dev-sandbox-<slug>; ODOO=$(kubectl get deploy -n $NS -o name | grep odoo | head -1)
 kubectl exec -n $NS $ODOO -- odoo --test-enable --test-tags woow_paas_platform \

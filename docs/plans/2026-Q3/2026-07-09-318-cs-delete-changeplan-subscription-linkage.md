@@ -52,7 +52,7 @@ promoted-at: 2026-07-19
 - `src/tests/__init__.py` — 註冊兩個新 test 檔。
 - `src/__manifest__.py` — 版號 bump。
 
-**測試執行方式（Global）：** 本機 arm64 有兩道牆，優先用 `/woowprd:k8s-dev-sandbox`（`--context docker-desktop`）在沙盒內 `-u woow_paas_platform --test-tags /woow_paas_platform:<Class>` 實跑；沙盒起不來則把測試寫齊，回報註明未實跑原因。plan 內每個 `Run:` 指令為沙盒內語意，示意如：
+**測試執行方式（Global）：** 本機 arm64 有兩道牆，優先用 `/woow-dev:k8s-dev-sandbox`（`--context docker-desktop`）在沙盒內 `-u woow_paas_platform --test-tags /woow_paas_platform:<Class>` 實跑；沙盒起不來則把測試寫齊，回報註明未實跑原因。plan 內每個 `Run:` 指令為沙盒內語意，示意如：
 `./odoo-bin -c odoo.conf -u woow_paas_platform --test-enable --test-tags /woow_paas_platform:TestRefundWalletPoints --stop-after-init`
 
 ---

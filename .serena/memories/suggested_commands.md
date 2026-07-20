@@ -21,18 +21,18 @@
 
 ### Onboard (one-time) + start sandbox
 ```bash
-/woowprd:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" --context docker-desktop
-/woowprd:k8s-dev-sandbox up --context docker-desktop
+/woow-dev:k8s-dev-sandbox onboard --repo "$(git rev-parse --show-toplevel)" --context docker-desktop
+/woow-dev:k8s-dev-sandbox up --context docker-desktop
 ```
 
 ### Run module tests in sandbox
 ```bash
-/woowprd:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
+/woow-dev:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
 ```
 
 ### Destroy sandbox
 ```bash
-/woowprd:k8s-dev-sandbox destroy <sandbox-name> --context docker-desktop
+/woow-dev:k8s-dev-sandbox destroy <sandbox-name> --context docker-desktop
 ```
 
 ## PaaS Operator Development
