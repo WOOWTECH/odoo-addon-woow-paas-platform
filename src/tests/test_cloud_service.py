@@ -743,3 +743,35 @@ class TestInjectStorageClass(TransactionCase):
         for slug in ('mcp-odoo', 'mcp-n8n'):
             out = CloudService._inject_storage_class({}, slug, 'sc-x')
             self.assertEqual(out['persistence']['storageClass'], 'sc-x')
+
+
+class TestInjectAllowedOrigins(TransactionCase):
+    """_inject_allowed_origins pins the service's own origin ONLY for charts that
+    gate on the browser Origin header (open-design); no-op for other slugs. The
+    open-design daemon 403s a public tenant Origin unless whitelisted verbatim,
+    and the chart never learns the tenant host (Cloudflare tunnel, not ingress) —
+    so the platform supplies it at deploy time. See #380."""
+
+    def test_inject_open_design_sets_config_allowed_origins(self):
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_allowed_origins(
+            {}, 'open-design', 'https://paas-cs-abc-def.woowtech.io')
+        self.assertEqual(
+            out['config']['allowedOrigins'],
+            'https://paas-cs-abc-def.woowtech.io')
+
+    def test_inject_noop_for_other_slug(self):
+        """Unknown slug (n8n / mcp-*) must NOT gain a config.allowedOrigins key —
+        that value path is open-design-specific."""
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_allowed_origins(
+            {'existing': 1}, 'n8n', 'https://x.woowtech.io')
+        self.assertEqual(out, {'existing': 1})
+
+    def test_inject_open_design_preserves_other_config_keys(self):
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_allowed_origins(
+            {'config': {'bindHost': '127.0.0.1'}},
+            'open-design', 'https://x.woowtech.io')
+        self.assertEqual(out['config']['bindHost'], '127.0.0.1')
+        self.assertEqual(out['config']['allowedOrigins'], 'https://x.woowtech.io')
