@@ -65,6 +65,13 @@
                    eval="[(6, 0, [ref('plan_mcp_opendesign_monthly'), ref('plan_mcp_opendesign_yearly')])]"/>
         </record>
 
+        <!-- #380：Open Design 完整應用 template ↔ 兩 base plan（4500/36000）。變體 M2M
+             由 subscription_template_links_variants.xml 以 (4,) append（noupdate=0 鐵律）。 -->
+        <record id="cloud_app_opendesign" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_opendesign_monthly'), ref('plan_opendesign_yearly')])]"/>
+        </record>
+
         <!-- #341（Wave A）撞車收斂：HA PaaS plan（plan_ha_paas_monthly）刻意 orphan——
              不掛任何 template M2M（Wave A test_orphan_no_template_links 斷言 M2M=0，且
              storefront_hidden 已在 plan 層擋前台）。provision 端點直接把 plan ref 傳給
