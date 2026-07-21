@@ -580,6 +580,21 @@ class CloudService(models.Model):
                 merged_values, registry_secret,
             )
 
+        # Inject the service's own public origin for charts that gate on the
+        # browser Origin header (open-design daemon 403s a public Origin unless
+        # whitelisted verbatim; the chart never learns the tenant host — the
+        # platform exposes services via a Cloudflare tunnel, not the chart's
+        # ingress). No-op for other templates. See #380 + woow-paas-charts
+        # open-design 0.1.1.
+        if self.subdomain:
+            paas_domain = self.env['ir.config_parameter'].sudo().get_param(
+                'woow_paas_platform.paas_domain', 'woowtech.io',
+            )
+            merged_values = self._inject_allowed_origins(
+                merged_values, template.slug,
+                f"https://{self.subdomain}.{paas_domain}",
+            )
+
         # Inject Odoo addon selection (initContainer + addons_path)
         if self.odoo_addon_ids and template.slug == 'odoo':
             image_vals = merged_values.get('image', {})
@@ -851,6 +866,41 @@ class CloudService(models.Model):
         if secret_name not in existing:
             existing.append(secret_name)
         values['global']['imagePullSecrets'] = existing
+        return values
+
+    @staticmethod
+    def _inject_allowed_origins(values, template_slug, origin):
+        """Inject the service's own public origin into charts that gate on the
+        browser Origin header.
+
+        The open-design daemon rejects a PUBLIC tenant Origin unless it is
+        whitelisted verbatim (its same-origin fallback only trusts
+        loopback/private-LAN hosts), and a bare "*" CRASHES it — so the chart
+        cannot self-default this (it never learns the tenant host: the platform
+        exposes services via a Cloudflare tunnel, not the chart's ingress). The
+        platform, which alone knows the host, supplies it here. No-op for charts
+        without such a value path. See woow-paas-charts open-design 0.1.1 +
+        issue #380.
+
+        Args:
+            values: Helm values dict (modified in-place and returned)
+            template_slug: Template identifier (e.g., 'open-design')
+            origin: The service's own origin, e.g. "https://<sub>.<domain>"
+
+        Returns:
+            Modified values dict
+        """
+        path_map = {
+            'open-design': [('config', 'allowedOrigins')],
+        }
+        paths = path_map.get(template_slug)
+        if not paths:
+            return values
+        for path in paths:
+            d = values
+            for key in path[:-1]:
+                d = d.setdefault(key, {})
+            d[path[-1]] = origin
         return values
 
     @staticmethod
