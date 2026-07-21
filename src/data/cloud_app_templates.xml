@@ -648,9 +648,16 @@
             <field name="default_port">7457</field>
             <field name="ingress_enabled" eval="True"/>
 
-            <!-- Resource Requirements（8Gi data + 2Gi home = 10Gi） -->
+            <!-- Resource Requirements。min_storage_gb=10＝8Gi data + 2Gi home。
+                 min_ram_gb 驅動 workspace ns quota（cloud_service._compute_ns_quota：
+                 sum(存活 service 的 allocated_ram_gb) × 3；本 template 的 plan cs_ram_gb=0
+                 故 allocated_ram_gb 走 fallback 取此值）。3× headroom 必須蓋得住本服務全
+                 容器 limits.memory：daemon 8Gi（見上 helm_default_values.resources）+ authproxy
+                 sidecar 128Mi + console 512Mi ≈ 8.63Gi → 需 min_ram_gb ≥ 2.88，取 3.0（3×3=9Gi）。
+                 曾為 2.0 → 只給 6Gi 額度 → daemon 8Gi pod FailedCreate、服務永遠連不上（CF 502，
+                 #380 端到端回歸）。根本解（sidecar 記憶體入 quota / chart daemon limit 收斂）另議。 -->
             <field name="min_vcpu">1</field>
-            <field name="min_ram_gb">2.0</field>
+            <field name="min_ram_gb">3.0</field>
             <field name="min_storage_gb">10</field>
 
             <!-- MCP 能力不在本 template（本體是完整應用，非 MCP server）；MCP 生態由
