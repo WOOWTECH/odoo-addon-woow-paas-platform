@@ -126,11 +126,28 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertNotIn('odApiToken', raw)
 
     def test_lockstep_min_specs(self):
-        """min_* 與 chart 一致：vcpu1／ram2.0／storage10（8Gi data + 2Gi home）。"""
+        """min_vcpu／min_storage 與 chart 一致（vcpu1／storage10＝8Gi data + 2Gi home）。
+        min_ram_gb 例外：不 lockstep chart requests(2Gi)，改為 quota-sized＝3.0——讓
+        cloud_service._compute_ns_quota 的 3× headroom 蓋得住 chart daemon limits.memory(8Gi)
+        ＋sidecar（見 test_min_ram_covers_daemon_quota；#380 端到端回歸）。"""
         tpl = self._tpl()
         self.assertEqual(tpl.min_vcpu, 1)
-        self.assertEqual(tpl.min_ram_gb, 2.0)
+        self.assertEqual(tpl.min_ram_gb, 3.0)
         self.assertEqual(tpl.min_storage_gb, 10)
+
+    def test_min_ram_covers_daemon_quota(self):
+        """回歸守線（#380）：workspace ns quota = sum(存活 service allocated_ram_gb) × 3
+        （cloud_service._compute_ns_quota）；本 template 的 plan cs_ram_gb=0 → allocated_ram_gb
+        走 fallback 取 min_ram_gb。故 min_ram_gb × 3 必須 ≥ daemon limits.memory，否則 daemon
+        pod FailedCreate（exceeded quota）→ service endpoints 空 → 對外 CF 502 永遠連不上。"""
+        tpl = self._tpl()
+        limits_mem = self._values()['resources']['limits']['memory']
+        self.assertTrue(limits_mem.endswith('Gi'), limits_mem)
+        daemon_gi = float(limits_mem[:-2])
+        self.assertGreaterEqual(
+            tpl.min_ram_gb * 3, daemon_gi,
+            'min_ram_gb×3（workspace quota headroom）必須 ≥ daemon limits.memory %s；'
+            '否則 daemon pod 被 ns quota 擋下、服務連不上' % limits_mem)
 
     def test_anthropic_key_optional_spec(self):
         """helm_value_specs：ANTHROPIC_API_KEY 為選填（key 對齊 values.yaml auth.anthropicApiKey）;
