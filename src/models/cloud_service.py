@@ -595,6 +595,19 @@ class CloudService(models.Model):
                 f"https://{self.subdomain}.{paas_domain}",
             )
 
+        # Inject the kube-apiserver egress allowlist for charts whose pods run
+        # kubectl from under a tenant NetworkPolicy (open-design console). The
+        # chart defaults to the kubernetes Service ClusterIP only, which is
+        # insufficient where the CNI matches egress post-DNAT — the real
+        # control-plane node IPs are cluster-specific, so ops supplies them via
+        # config parameter and the platform injects them here. No-op for other
+        # templates. See #404.
+        apiserver_cidrs = self._get_apiserver_cidrs()
+        if apiserver_cidrs:
+            merged_values = self._inject_apiserver_cidrs(
+                merged_values, template.slug, apiserver_cidrs,
+            )
+
         # Inject Odoo addon selection (initContainer + addons_path)
         if self.odoo_addon_ids and template.slug == 'odoo':
             image_vals = merged_values.get('image', {})
@@ -901,6 +914,77 @@ class CloudService(models.Model):
             for key in path[:-1]:
                 d = d.setdefault(key, {})
             d[path[-1]] = origin
+        return values
+
+    @staticmethod
+    def _parse_cidr_list(raw):
+        """把逗號分隔的 CIDR 字串 parse 成 list（去空白、濾空項）。
+
+        ir.config_parameter 只能存字串，但 chart 的 apiServerCidrs 是 CIDR
+        字串陣列，故需要這層轉換。
+
+        Args:
+            raw: 逗號分隔字串，例如 "10.43.0.1/32, 192.168.10.21/32"
+
+        Returns:
+            CIDR 字串 list（輸入為空 → 空 list）
+        """
+        if not raw:
+            return []
+        return [c.strip() for c in raw.split(',') if c.strip()]
+
+    def _get_apiserver_cidrs(self):
+        """讀取 console → kube-apiserver 的 egress 白名單（cluster-specific）。
+
+        預設 ``10.43.0.1/32`` 與 chart 預設一致（k3s 的 kubernetes Service
+        ClusterIP），保持 cluster-agnostic。**woow-k3s 這類 CNI 在 kube-proxy
+        DNAT «之後» 比對 egress 的叢集**，連 ClusterIP 會被 DNAT 成 apiserver
+        的真實 endpoint（control-plane node IP），該 IP 不在白名單就被 deny —
+        這些 node /32 屬 cluster-specific 值，由 ops 在各環境以 config
+        parameter 設定，不寫死進 code / git seed。見 #404。
+
+        Returns:
+            CIDR 字串 list
+        """
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.apiserver_cidrs', '10.43.0.1/32',
+        )
+        return self._parse_cidr_list(raw)
+
+    @staticmethod
+    def _inject_apiserver_cidrs(values, template_slug, cidrs):
+        """Inject the kube-apiserver egress allowlist into charts whose pods must
+        reach the apiserver from under a tenant NetworkPolicy.
+
+        The open-design console runs ``kubectl`` (connect.sh) to locate and exec
+        into the daemon pod. Its NP egress opens ONLY the CIDRs listed in
+        ``networkPolicy.apiServerCidrs``; the chart defaults to the kubernetes
+        Service ClusterIP alone, which is silently insufficient on clusters whose
+        CNI matches egress POST-DNAT (the packet's real destination becomes a
+        control-plane node IP). Those node IPs are cluster-specific, so the chart
+        cannot self-default them — the platform supplies them here. No-op for
+        charts without such a value path. See issue #404 + woow-paas-charts
+        open-design 0.1.3 (``values.yaml`` apiServerCidrs).
+
+        Args:
+            values: Helm values dict (modified in-place and returned)
+            template_slug: Template identifier (e.g., 'open-design')
+            cidrs: List of CIDR strings, e.g. ['10.43.0.1/32', '192.168.10.21/32']
+
+        Returns:
+            Modified values dict
+        """
+        path_map = {
+            'open-design': [('networkPolicy', 'apiServerCidrs')],
+        }
+        paths = path_map.get(template_slug)
+        if not paths or not cidrs:
+            return values
+        for path in paths:
+            d = values
+            for key in path[:-1]:
+                d = d.setdefault(key, {})
+            d[path[-1]] = list(cidrs)
         return values
 
     @staticmethod
