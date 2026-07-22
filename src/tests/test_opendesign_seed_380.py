@@ -53,14 +53,15 @@ class TestOpendesignTemplateSeed(TransactionCase):
 
     def test_chart_oci(self):
         """chart＝woow-paas-charts 發佈的獨立 open-design chart（非共用 mcp-server）。
-        0.1.2＝在 0.1.1（daemon origin 崩 + authproxy OOM，charts#48）之上再加
-        console web terminal 對外入口 /console（gap #49，charts#50）。"""
+        0.1.3＝在 0.1.2（console 對外入口 /console，charts#50）之上修 console
+        entrypoint 的 os.waitpid(-1) 誤殺孤兒孫程序——原本每關一次網頁終端就
+        整個容器重啟、/console 空窗 ≥60s（charts#52，PR charts#53）。"""
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design')
-        self.assertEqual(tpl.helm_chart_version, '0.1.2')
+        self.assertEqual(tpl.helm_chart_version, '0.1.3')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""
