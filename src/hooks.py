@@ -134,6 +134,7 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.cleanup_after_months',
     'woow_paas_platform.storage_class_name',
     'woow_paas_platform.registry_secret_name',
+    'woow_paas_platform.apiserver_cidrs',
     'woow_paas_platform.topup_payment_enabled',
     'woow_paas_platform.portal_project_settings_editable',
     'woow_paas_platform.show_projects',

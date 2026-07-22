@@ -145,8 +145,28 @@ chart 或 git seed，應由 platform 在部署時算好注入 `networkPolicy.api
 `kubectl -n default get endpoints kubernetes` → `192.168.10.21/22/23:6443`（把這三個 `/32` 加進去後，
 ClusterIP 與 node IP 兩者同時變通，即 post-DNAT 的鐵證）。
 
-**建議修法**：比照 `cloud_service._inject_allowed_origins` 新增一個 slug-scoped injector，值放
-`ir.config_parameter`（如 `woow_paas_platform.apiserver_cidrs`），部署時注入。**尚未實作**。
+**已修復（#404，平台 18.0.1.0.75）**：比照 `_inject_allowed_origins` 新增 slug-scoped injector
+`cloud_service._inject_apiserver_cidrs`（`src/models/cloud_service.py`），部署時把白名單寫進
+`networkPolicy.apiServerCidrs`（unknown slug 一律 no-op）。值來源是 `ir.config_parameter`
+**`woow_paas_platform.apiserver_cidrs`**：逗號分隔的 CIDR 字串，由 `_get_apiserver_cidrs()` parse 成
+list。code 內預設為 `10.43.0.1/32`（與 chart 預設一致、cluster-agnostic）。
+
+**ops 設定方式**（cluster-specific 值不寫死進 code / git seed，各環境自行設定）：
+
+```
+Settings → Technical → Parameters → System Parameters
+key:   woow_paas_platform.apiserver_cidrs
+value: 10.43.0.1/32,192.168.10.21/32,192.168.10.22/32,192.168.10.23/32   # woow-k3s
+```
+
+node IP 取得：`kubectl -n default get endpoints kubernetes`。未設定時退回 `10.43.0.1/32` 單值，等同
+chart 預設 —— 在 post-DNAT 叢集上 console 仍會壞，故 woow-k3s 的 stg / prod **必須**設定此參數。
+
+**生效範圍＝install-time**：injector 家族（storageClass / allowedOrigins / apiServerCidrs）都只在
+`cloud_service._execute_deploy()` 跑，`action_redeploy()` 是把 `svc.helm_values` 原樣重送 +
+`reuse_values=True`，**不重跑 injector**。所以：設定參數後**新建**的服務自動帶 NP 洞；**本 fix 之前已存在
+的 release** 不會因為 redeploy 就補上，需把 `networkPolicy.apiServerCidrs` 顯式寫進 `svc.helm_values`
+再 redeploy（同 Gap 2 的手法）。
 
 ### Gap 2：`console.externalPath` 的 reuse_values 陷阱（升級路徑）
 
@@ -168,6 +188,7 @@ RBAC 裡的 `pods/log: get` 與 `deployments: patch` 就是為這個目前到不
 | --- | --- |
 | seed template（chart 版本 pin、helm_default_values）| `src/data/cloud_app_templates.xml`（`cloud_app_opendesign`）|
 | 部署時注入公開 Origin 白名單 | `cloud_service._inject_allowed_origins`（#399，比照 `_inject_storage_class`）|
+| 部署時注入 apiserver egress 白名單 | `cloud_service._inject_apiserver_cidrs`（#404；值＝`ir.config_parameter` `woow_paas_platform.apiserver_cidrs`，見 Gap 1）|
 | workspace ns quota（多容器記憶體帳）| `cloud_service._compute_ns_quota`；`min_ram_gb` 需蓋過 daemon limits（#398）|
 | in-place 升級（保 PVC）| `cloud_service.action_redeploy()`（`reuse_values=True`，見 Gap 2）|
 

@@ -775,3 +775,79 @@ class TestInjectAllowedOrigins(TransactionCase):
             'open-design', 'https://x.woowtech.io')
         self.assertEqual(out['config']['bindHost'], '127.0.0.1')
         self.assertEqual(out['config']['allowedOrigins'], 'https://x.woowtech.io')
+
+
+class TestInjectApiServerCidrs(TransactionCase):
+    """_inject_apiserver_cidrs opens the console → kube-apiserver egress hole ONLY
+    for charts that run kubectl under a tenant NetworkPolicy (open-design); no-op
+    for other slugs. The chart defaults to the kubernetes Service ClusterIP alone,
+    which a post-DNAT CNI (woow-k3s) silently blocks — the control-plane node IPs
+    are cluster-specific, so ops sets them as a config parameter and the platform
+    injects them at deploy time. See #404."""
+
+    def test_inject_open_design_sets_network_policy_cidrs(self):
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_apiserver_cidrs(
+            {}, 'open-design', ['10.43.0.1/32'])
+        self.assertEqual(out['networkPolicy']['apiServerCidrs'], ['10.43.0.1/32'])
+
+    def test_inject_multiple_cidrs_kept_as_list(self):
+        """post-DNAT 叢集要同時開 ClusterIP 與三顆 control-plane node /32 —
+        chart 端是 list，注入必須保持多值、順序不變。"""
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        cidrs = [
+            '10.43.0.1/32',
+            '192.168.10.21/32',
+            '192.168.10.22/32',
+            '192.168.10.23/32',
+        ]
+        out = CloudService._inject_apiserver_cidrs({}, 'open-design', cidrs)
+        self.assertEqual(out['networkPolicy']['apiServerCidrs'], cidrs)
+
+    def test_inject_noop_for_other_slug(self):
+        """Unknown slug (n8n / mcp-*) must NOT gain a networkPolicy key — that
+        value path is open-design-specific."""
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_apiserver_cidrs(
+            {'existing': 1}, 'n8n', ['10.43.0.1/32'])
+        self.assertEqual(out, {'existing': 1})
+
+    def test_inject_noop_for_empty_cidrs(self):
+        """空清單 → 不寫入，讓 chart 自己的預設留著（chart 語意：空 = console
+        完全沒有 apiserver egress，等於把 kubectl 鎖死）。"""
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_apiserver_cidrs({}, 'open-design', [])
+        self.assertEqual(out, {})
+
+    def test_inject_preserves_other_network_policy_keys(self):
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_apiserver_cidrs(
+            {'networkPolicy': {'enabled': True}},
+            'open-design', ['10.43.0.1/32'])
+        self.assertTrue(out['networkPolicy']['enabled'])
+        self.assertEqual(out['networkPolicy']['apiServerCidrs'], ['10.43.0.1/32'])
+
+    def test_parse_cidr_list_strips_and_filters(self):
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        self.assertEqual(
+            CloudService._parse_cidr_list(' 10.43.0.1/32 , 192.168.10.21/32 ,, '),
+            ['10.43.0.1/32', '192.168.10.21/32'])
+        self.assertEqual(CloudService._parse_cidr_list(''), [])
+        self.assertEqual(CloudService._parse_cidr_list(False), [])
+
+    def test_get_apiserver_cidrs_default_is_cluster_agnostic(self):
+        """未設定 config parameter 時取 chart 一致的預設（k3s kubernetes Service
+        ClusterIP）；cluster-specific 的 node /32 由 ops 自行設定，不進 code。"""
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.apiserver_cidrs', False)
+        self.assertEqual(CloudService._get_apiserver_cidrs(), ['10.43.0.1/32'])
+
+    def test_get_apiserver_cidrs_reads_config_parameter(self):
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.apiserver_cidrs',
+            '10.43.0.1/32,192.168.10.21/32,192.168.10.22/32')
+        self.assertEqual(
+            CloudService._get_apiserver_cidrs(),
+            ['10.43.0.1/32', '192.168.10.21/32', '192.168.10.22/32'])
