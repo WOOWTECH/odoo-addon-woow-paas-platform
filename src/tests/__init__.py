@@ -230,3 +230,5 @@ from . import test_plan_group_keys_368
 from . import test_mcp_3type_seed_375
 # feat: #380 Open Design 完整應用（daemon+console）上架 seed（template/base plan/link/變體）
 from . import test_opendesign_seed_380
+# feat: HA PaaS 切 woowtech-ha image ＋ chart 0.2.0（chart↔image 原子綁定守線）
+from . import test_ha_paas_seed_woowtech_image

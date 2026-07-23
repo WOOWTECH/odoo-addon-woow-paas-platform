@@ -12,14 +12,15 @@ class TestHAPaaSSeed(TransactionCase):
     """HA PaaS 0 元 plan／product／隱藏 template seed 存在性與屬性。"""
 
     def test_ha_paas_template_hidden_and_deployable(self):
-        # 工作項5 stopgap 落地：template 仍 is_hidden（前台不現形），但已 is_active=True
-        # ＋ pin 到 OCI chart（非 TBD 佔位）→ 可由 provision 端點部署。
+        # template 仍 is_hidden（前台不現形），但已 is_active=True ＋ pin 到 OCI chart
+        # （非 TBD 佔位）→ 可由 provision 端點部署。chart 版本↔image 的原子綁定另由
+        # test_ha_paas_seed_woowtech_image.py 守（此處僅守現行 pin 值）。
         tpl = self.env.ref('woow_paas_platform.cloud_app_ha_paas')
         self.assertTrue(tpl.is_hidden, 'HA PaaS template 必須隱藏')
-        self.assertTrue(tpl.is_active, '工作項5 落地後 template 可 deployable')
+        self.assertTrue(tpl.is_active, 'template 可 deployable')
         self.assertFalse((tpl.helm_chart_name or '').startswith('TBD'),
                          'helm_chart_name 應 pin 到 OCI、非 TBD 佔位')
-        self.assertEqual(tpl.helm_chart_version, '0.1.0')
+        self.assertEqual(tpl.helm_chart_version, '0.2.1')
 
     def test_ha_paas_plan_zero_price_cloud_service(self):
         plan = self.env.ref('woow_paas_platform.plan_ha_paas_monthly')

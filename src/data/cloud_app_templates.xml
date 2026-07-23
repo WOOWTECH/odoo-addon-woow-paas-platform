@@ -551,13 +551,29 @@
             <field name="is_active" eval="True" />
         </record>
 
-        <!-- HA PaaS（免費雲端 Home Assistant，#336）。工作項5 stopgap 落地：pin 到
-             woow-paas-charts 已發佈的 HA chart OCI（0.1.0，helm pull 實測可 pull）＋
-             HA 官方 image，翻 is_active=True 即 deployable。is_hidden=True：不出現在
+        <!-- HA PaaS（免費雲端 Home Assistant，#336）。is_hidden=True：不出現在
              /woow 前台任何清單，僅由 /api/ha-paas/provision 端點自動開通。
              migration：本 xmlid 首建即在 noupdate=0 塊（commit ed6287f4 晚於 noupdate=0
              收斂 d1cb2e32，git 實證），故既有 DB ir.model.data.noupdate=False，-u 直接
-             重套下列欄位、無需 migration；healer 另清任何殘留 sticky flag。 -->
+             重套下列欄位、無需 migration；healer 另清任何殘留 sticky flag。
+
+             ⚠ 原子變更鐵律（chart NOTES.txt「OPERATOR COUPLING」）：本次自
+             stopgap（chart 0.1.0 ＋ HA 官方 image ghcr.io/home-assistant/home-assistant）
+             切到 chart 0.2.x ＋ woowtech-ha image。**helm_chart_version 與
+             helm_default_values.image.* 必須同一次變更一起動**，任一半落單都會壞：
+               - 只升 chart 不換 image → 官方 image 沒有烤入的 /config → 0.2.x always-on
+                 的 seed-config initContainer 複製來源為空、sentinel 必中 → 所有全新開通
+                 卡 Init:Error。
+               - 只換 image 不升 chart → 0.1.x 把空 PVC 掛在 /config 會遮蔽 image 內建的
+                 9 個 custom_components → 開出來是空殼 HA。
+             守線測試＝src/tests/test_ha_paas_seed_woowtech_image.py（版本↔image 綁定）。
+
+             ⚠ 為何是 0.2.1 而非 0.2.0：0.2.0 的 seed-config initContainer 用
+             `cp -rn /config/. /seed-target/` 單一指令複製烤入種子，而 woowtech-ha image
+             內的 busybox 是 v1.37.0——該寫法在目的目錄已存在時 exit 0 但**複製 0 個檔**
+             （-n 把既存的目的目錄本身當成不可覆蓋的目標，整個遞迴被靜默跳過），sentinel
+             隨即 FATAL → 每一個全新開通都卡 Init:Error。2026-07-23 於 stg 真叢集實測確認
+             （woow-paas-charts 0.2.1 改為逐檔 cp -rn 迴圈修正）。**0.2.0 不可用，勿回退。** -->
         <record id="cloud_app_ha_paas" model="woow_paas_platform.cloud_app_template">
             <field name="name">HA PaaS</field>
             <field name="slug">ha-paas</field>
@@ -569,12 +585,28 @@
                  helm_chart_name 帶完整 oci://。chart 由 woow-paas-charts repo 發佈。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant</field>
-            <field name="helm_chart_version">0.1.0</field>
-            <!-- HA 官方 image + /config PVC 5Gi；haProxy.trustedProxies=woow-k3s Pod
-                 CIDR（4 node podCIDR 皆 10.42.X.0/24 → cluster 10.42.0.0/16），讓 HA
-                 信任反向代理的 X-Forwarded-For、避免 "400 Bad Request from a reverse
-                 proxy" 阻擋。 -->
-            <field name="helm_default_values">{"image":{"repository":"ghcr.io/home-assistant/home-assistant","tag":"2026.7.2"},"persistence":{"mountPath":"/config","size":"5Gi"},"service":{"port":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"trustedProxies":["10.42.0.0/16"]},"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}}</field>
+            <field name="helm_chart_version">0.2.1</field>
+            <!-- woowtech-ha image（HA core 2026.7.2、整合集 ~999→~125、seed 檔烤入
+                 /config：無 http/無 default_config 的 configuration.yaml ＋ 9 個
+                 custom_components）＋ /config PVC 5Gi。
+                 image.tag 雙釘 tag@sha256（對齊 open-design／三型 MCP 慣例；chart
+                 templates 以 "{repository}:{tag}" 拼接，tag+digest 為合法 docker
+                 reference）。**必釘**：chart 刻意移除 `default .Chart.AppVersion`
+                 fallback（appVersion 2026.7.2 追的是 HA core，woowtech registry 永遠
+                 不會有此 tag），留空會 render 失敗而非靜默產生拉不到的 image。
+                 haProxy.trustedProxies＝woow-k3s 實際 Pod CIDR（4 node podCIDR 實查皆
+                 10.42.X.0/24 → cluster 10.42.0.0/16），讓 HA 信任反向代理的
+                 X-Forwarded-For、避免 "400 Bad Request from a reverse proxy" 阻擋。
+                 ⚠ seed 的 http 區塊是 append-if-absent＝**首次 provision 限定**，之後
+                 helm upgrade 不會重跑；設錯或設空會讓 HA 在 tunnel 後永久回 400。
+                 seedConfiguration／useXForwardedFor 明寫（不吃 chart 預設）＝防 chart
+                 端預設漂移把反代閘關掉。
+                 刻意不覆寫的鍵：imagePullSecrets（chart 預設已是 paas-registry，且
+                 operator releases.py setdefault 另有一層）、nodeSelector（chart 預設
+                 kubernetes.io/arch=amd64；image 僅 amd64，排到 arm64 會 exec format
+                 error CrashLoop，且 helm deep-merge 用 {} 蓋不掉、清除得寫 null）、
+                 persistence.storageClass（平台 _inject_storage_class 注入）。 -->
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha","tag":"20260722.2329@sha256:73a9faf98d3037bf48560e670f811141bdc1125cb2ea63aa05e4efe21e7cb9c4"},"persistence":{"mountPath":"/config","size":"5Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"]},"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}}</field>
             <field name="default_port">8123</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
