@@ -174,6 +174,20 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 # - (空)         → CI 尚未開始，繼續等待
 ```
 
+> ⚠️ **tag-push 觸發的 run 可能完全不出現在 runs / tasks API**（2026-07-23 實證兩次：
+> 輪詢 14 次皆空，build 實際已在 2 分鐘內完成並 push image）。**API 查無 ≠ 未觸發，
+> 嚴禁據此重推 tag**（會 triple build，2026-07-20 前科）。輪詢多次皆空時改看 ground truth：
+>
+> ```bash
+> # runner 實跑什麼＋是否 Job succeeded（決定性信號）
+> kubectl --context woow-k3s -n gitea logs act-runner-runner-0 -c runner --tail=20
+> # 或 grep image push 實證
+> kubectl --context woow-k3s -n gitea logs act-runner-runner-0 -c runner --tail=400 | grep "paas-odoo-stg:${DOCKER_TAG}"
+> ```
+>
+> 另注意：runner 全叢集僅 1 個 slot，若有 prod build 卡 approval gate 會佔住 runner
+> 讓 stg build 長時間 queued（paas-odoo-ci#30）——同樣別重推，先看 runner log 在忙什麼。
+
 ### Step 6: 部署到 Sandbox（委派 woow-dev plugin）
 
 deploy-stg **不再自帶 create.sh**，改委派給 woow-dev plugin 的 `/woow-dev:k8s-dev-sandbox`（同一套引擎，避免重複程式）。`deploy-stg.sh` 內建 resolver 依序定位 plugin 的 `create.sh`：`$WOOWPRD_PLUGIN_ROOT`（env 覆寫）→ `plugins-local/woowprd` → marketplace cache（`cache/*/woow-dev/*`，相容舊名 `woowprd`；多版本取最新）→ cache 根遞迴 fallback（不綁 plugin 名）；全部落空才 fail-loud。
