@@ -666,10 +666,21 @@
                  值。daemon 與 console image 皆雙釘 tag@sha256（支線 B 交付、paas-ci 交叉確認）。
                  authProxy.enabled=true＋basicAuth＝C 案租戶邊界（明寫防 chart 預設漂移把閘關掉）。
                  admin_password（config.sensitive）由 #357 has_admin_gui 注入、OD_API_TOKEN 由
-                 chart 自產，兩者皆不在此 git values（sensitive）。 -->
+                 chart 自產，兩者皆不在此 git values（sensitive）。
+                 chart 0.1.4（charts#57，Refs #407）新增 seed-home initContainer：od-home
+                 PVC 掛上 /home/opendesign 會蓋掉 image 內建的 home，kubelet 不會把
+                 /etc/skel 重播進新磁碟 → 全新 instance 連預設 ~/.bashrc 都沒有；而 console
+                 網頁終端是 kubectl exec 的 interactive non login shell（只讀
+                 /etc/bash.bashrc + ~/.bashrc），~/.bashrc 是租戶 shell 客製的唯一有效落點。
+                 0.1.4 於每次 pod 啟動逐檔檢查、「缺才補」（[ ! -e "$dst" ] 守衛，租戶改過的
+                 檔永不覆蓋；無 cp -f／cp -r／rm）補上 .bashrc／.profile／.bash_logout，
+                 且 fail soft（磁碟不可寫只印 WARN、exit 0，不讓 instance CrashLoop）。
+                 語意有別於 home assistant 0.2.x 的首裝限定 seed：本項每次啟動都補。
+                 homeSeed 預設 enabled=true、image 留空即沿用 daemon image、resources 已含
+                 requests+limits（paas ws ResourceQuota 要求），故本 seed 不需覆寫任何鍵。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
-            <field name="helm_chart_version">0.1.3</field>
+            <field name="helm_chart_version">0.1.4</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20260720.2255@sha256:ccfa52c4ae87be10c09b0f27813c3cd086658697a285a41c63c7f71d9e7db87a"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",

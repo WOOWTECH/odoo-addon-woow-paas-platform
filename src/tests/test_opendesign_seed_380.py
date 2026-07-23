@@ -53,15 +53,18 @@ class TestOpendesignTemplateSeed(TransactionCase):
 
     def test_chart_oci(self):
         """chart＝woow-paas-charts 發佈的獨立 open-design chart（非共用 mcp-server）。
-        0.1.3＝在 0.1.2（console 對外入口 /console，charts#50）之上修 console
-        entrypoint 的 os.waitpid(-1) 誤殺孤兒孫程序——原本每關一次網頁終端就
-        整個容器重啟、/console 空窗 ≥60s（charts#52，PR charts#53）。"""
+        0.1.4＝在 0.1.3（console entrypoint 不再誤殺孤兒孫程序，charts#53）之上
+        新增 seed-home initContainer：od-home PVC 蓋掉 image 內建 home、kubelet
+        不重播 /etc/skel，故全新 instance 沒有 ~/.bashrc（console 的 web terminal
+        是 interactive non-login shell，~/.bashrc 是唯一有效客製落點）。0.1.4 每次
+        pod 啟動逐檔「缺才補」預設 dotfiles、永不覆蓋租戶改過的檔（charts#57，
+        Refs #407）。homeSeed 預設 enabled 且沿用 daemon image，seed 無需覆寫。"""
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design')
-        self.assertEqual(tpl.helm_chart_version, '0.1.3')
+        self.assertEqual(tpl.helm_chart_version, '0.1.4')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""
