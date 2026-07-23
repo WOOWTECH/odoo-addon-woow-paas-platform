@@ -114,6 +114,28 @@ class TestHAPaaSProvisionEndpoint(HttpCase):
                 [('provision_partner_id', '=', self.user.partner_id.id)]), 1,
             'deployable seed 的 provision 應建立 cloud_service')
 
+    def test_provision_writes_template_helm_values(self):
+        """回歸（2026-07-23 stg 平台全路徑 e2e FAIL）：provision 建的 service 必帶
+        template 的 helm_default_values。
+
+        先前 _create_ha_paas_service 從不寫 helm_values → _execute_deploy 從 {}
+        起手、只剩平台注入值 → chart 0.2.x 的 fail-loud 佔位 tag（00000000.0000）
+        被拉去部署、全新開通卡 Init:ErrImagePull。0.1.x 沒炸只是 chart 預設恰好
+        自足的僥倖（07-13 的 provision PASS 實際跑在 chart 預設、非平台 pin 上）。
+        """
+        self._post('/api/ha-paas/provision')
+        svc = self.env['woow_paas_platform.cloud_service'].search(
+            [('provision_partner_id', '=', self.user.partner_id.id)], limit=1)
+        tpl = self.env.ref('woow_paas_platform.cloud_app_ha_paas')
+        self.assertTrue(svc.helm_values,
+                        'provision 建的 service 不得留空 helm_values')
+        got = json.loads(svc.helm_values)
+        self.assertEqual(got, json.loads(tpl.helm_default_values),
+                         'helm_values 應等於 template.helm_default_values')
+        # 最要命的那顆釘：image tag@digest 必須在，否則部署走 chart 佔位 tag
+        self.assertIn('@sha256:', got.get('image', {}).get('tag', ''),
+                      'image tag@digest pin 必須傳進 helm_values')
+
     def test_provision_blocked_when_template_not_deployable(self):
         # 顯式停用 template（模擬 image 未備／維運停機）→ 不 deployable → 503 且不留 service
         self.env.ref('woow_paas_platform.cloud_app_ha_paas').write(
