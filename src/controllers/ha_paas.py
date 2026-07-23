@@ -237,7 +237,8 @@ class HAPaaSController(Controller):
     def _create_ha_paas_service(self, user, partner, tpl):
         """建 hidden workspace + cloud_service（pending）+ 0 元 subscription，觸發
         deploy cron。比照 paas.py:_create_service（含 ingress expose_config，否則
-        ha_url 死鏈），精簡為 HA PaaS 專用、無 user helm values。
+        ha_url 死鏈），精簡為 HA PaaS 專用——無 **user** helm values，但 template 的
+        helm_default_values 必須寫入（見下）。
 
         ⚠️ 對 plan Task 6 Step 4 的落地偏離：plan 寫 ``.sudo().with_user(user)``，
         但 with_user 會清 su → 實際以 bare token-user 執行，該 user 無 base.group_user
@@ -269,6 +270,15 @@ class HAPaaSController(Controller):
             'helm_release_name': 'svc-%s' % reference_id[:8],
             'helm_namespace': make_namespace(ws.slug, prefix=ns_prefix),
             'helm_chart_version': tpl.helm_chart_version,
+            # ⚠ helm_values 必須寫入 template 的 helm_default_values（比照 marketplace
+            # _create_service 的 merged_values；HA 無 user values → template 值即全部）。
+            # 漏寫的話 _execute_deploy 從 {} 起手、只剩平台注入值（imagePullSecrets／
+            # storageClass）→ seed 釘的 image tag@digest／haProxy／resources 全程不進
+            # helm → chart 0.2.x 的 fail-loud 佔位 tag（00000000.0000）被拉去部署，
+            # 全新開通卡 Init:ErrImagePull（2026-07-23 stg 平台全路徑 e2e 實證）。
+            # 0.1.x 年代沒炸只是 chart 預設恰好自足可部署的僥倖。loads→dumps 兼作
+            # JSON 正規化驗證（seed 壞 JSON 在 create 當下 fail-loud，不留到部署期）。
+            'helm_values': json.dumps(json.loads(tpl.helm_default_values or '{}')),
             'deploy_params': json.dumps(deploy_params) if deploy_params else False,
             'provision_partner_id': partner.id})
         svc._create_and_confirm_subscription(
