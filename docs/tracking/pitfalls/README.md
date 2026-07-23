@@ -8,7 +8,7 @@
 2. **評估機械化**（`/retro` skill 的分流，按強度優先）：可 grep/parse 判定 → `scripts/audit/repo-lint.py` 加 check；綁特定路徑 → `.claude/hooks/pattern-guard-map.json` append；皆不可 → 狀態欄留 `—`。
 3. 教訓已被 code guard / gate 取代時，更新狀態欄並讓 doc 記錄 guard 位置（file:line）。
 
-## 索引（33 條）
+## 索引（34 條）
 
 | pitfall | 一行症狀 | 機械化狀態 |
 | --- | --- | --- |
@@ -36,6 +36,7 @@
 | [orm-test-green-endpoint-leak-blindness](orm-test-green-endpoint-leak-blindness.md) | backend ORM test 全綠遮蔽 controller layer sudo bypass；ORM 綠 ≠ endpoint secure | repo-lint gate（controller-sudo）+ pattern-guard |
 | [owl-template-crash-class-syntax](owl-template-crash-class-syntax.md) | OWL template 語法錯誤（component `t-att-`、`.enter` modifier）過三層測試、runtime 全站白屏 | repo-lint gate（owl-template） |
 | [plan-vs-odoo-schema-mismatch](plan-vs-odoo-schema-mismatch.md) | plan 引用不存在的 Odoo 欄位——impl 前對 schema | — |
+| [provision-e2e-green-on-chart-defaults](provision-e2e-green-on-chart-defaults.md) | provision e2e 綠但 release user-supplied values 空——驗證跑在 chart 預設上、平台 pin 傳導鏈從未被驗（07-13 假 PASS；0.2.x fail-loud 佔位 tag 逼現形） | 回歸測試（`test_provision_writes_template_helm_values`）；class 級驗法＝e2e 斷言 helm get values 非空且含平台獨有值 |
 | [reaped-since-single-path-stamp-gc-immunity](reaped-since-single-path-stamp-gc-immunity.md) | 下游 gate 欄位只在單一路徑 stamp → 他路徑到達 gating state 者永久免疫 GC | code guard（`src/models/agent_session.py:186-207`） |
 | [sandbox-module-test-false-green](sandbox-module-test-false-green.md) | K8s dev sandbox `test.sh` 0 tests 也報「✅ All tests passed」（false green） | — |
 | [seed-noupdate-sticky-template-links](seed-noupdate-sticky-template-links.md) | seed `noupdate="1"` 寫進 ir.model.data 變 sticky → 其他 data 檔對同 record 的 `-u` 更新被靜默 skip；fresh install 綠 ≠ 升級路徑綠 | repo-lint gate（data-noupdate）+ pattern-guard |
