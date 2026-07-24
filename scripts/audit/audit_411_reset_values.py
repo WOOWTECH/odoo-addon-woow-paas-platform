@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """#411 前置盤點：stored release values vs 平台可重算 values 差異盤點。
 
-**第一階段：收集端 ＋ 報告骨架**（本檔）。比對引擎（可重算 values）留 stub，
-待 W2 `dev-411-pipeline` 全量組裝 helper 接上（第二階段，經 odoo shell dry-run）。
+**兩階段**：第一階段收集端 stored values（helm get values）＋ 報告骨架；第二階段接上
+比對引擎 —— 讀 `dump_computed_values.py` 在 stg odoo pod 產出的「平台可重算 values」
+（單一真相源＝`CloudService._assemble_deploy_values`，#419），逐鍵三分類差異。
 
 背景
 ----
@@ -24,8 +25,10 @@ values 裡沒有」的鍵並 backfill，否則翻語意當下升級行為會突�
 
 比對引擎單一真相源
 ------------------
-`compute_platform_values()` 是 **stub**。可重算 values 的唯一真相源＝W2 helper；第一階段
-**禁止自寫 template defaults merge 邏輯**（會產生假 diff）。
+`compute_platform_values()` 讀取 `--computed-json`（`dump_computed_values.py` 在 stg odoo
+pod 經 `_assemble_deploy_values()` 產出）。**唯一真相源＝該 helper**，本腳本不自寫 template
+defaults merge（自寫會產生假 diff）。未給 `--computed-json` 時退回第一階段行為（只收集、
+diff 標 pending）。
 
 helm 版本註記
 ------------
@@ -35,12 +38,13 @@ sentinel top-level key `USER-SUPPLIED VALUES`（helm 3 無），本腳本會剝�
 
 用法
 ----
-    # 第一階段真連 stg 收集（唯讀）
+    # 第二階段（W4）：先在 stg pod 產 computed dump（見 dump_computed_values.py），再比對
     python3 scripts/audit/audit_411_reset_values.py --env stg --context woow-k3s \\
+        --computed-json computed.json \\
         --report docs/tracking/reports/411-reset-values-audit.md
 
-    # prod（目前可能 0 租戶 ns）／兩者
-    python3 scripts/audit/audit_411_reset_values.py --env both
+    # 只收集不比對（第一階段行為；不給 --computed-json）
+    python3 scripts/audit/audit_411_reset_values.py --env stg --context woow-k3s
 """
 from __future__ import annotations
 
@@ -172,32 +176,119 @@ def sanitize(node: Any, path: tuple[str, ...] = ()) -> Any:
     return node
 
 
-def compute_platform_values(env: str, ns: str, release: str, chart: str) -> dict:
-    """【STUB — 第二階段接上】平台側「可重算 values」全量組裝（template defaults + 平台注入）。
+# ---------------------------------------------------------------------------
+#  第二階段：比對引擎（讀 helper 產出的 computed values，逐鍵三分類）
+# ---------------------------------------------------------------------------
 
-    單一真相源＝W2 `dev-411-pipeline` 的 helper（經 odoo shell dry-run 呼叫）。
-    第一階段**禁止自寫 template defaults merge 邏輯**——自寫會與 helper 產生假 diff。
-    第二階段：在此呼叫 helper（例如 odoo shell 執行組裝並回 JSON），回傳可重算 values dict。
+def _flatten(node: Any, path: tuple = ()) -> dict:
+    """攤平 nested dict 成 {path_tuple: leaf_value}。list 當 leaf（整體比對）。
+
+    路徑用 tuple 而非 dot-join —— 鍵名含點（如 `kubernetes.io/arch`）dot-join 會假陽性。
     """
-    raise NotImplementedError(
-        "可重算 values 引擎待接 W2 dev-411-pipeline helper（第二階段）"
+    out: dict = {}
+    if isinstance(node, dict):
+        for key, value in node.items():
+            out.update(_flatten(value, path + (key,)))
+    else:
+        out[path] = node  # scalar 或 list 視為 leaf
+    return out
+
+
+def _is_injector_path(path: tuple) -> bool:
+    """injector 類鍵：平台管線每次重算會注入，reset 後自癒、不需人工 backfill。"""
+    if not path:
+        return False
+    if path[-1] == "storageClass":                   # storage_class injector（可 nested）
+        return True
+    if "imagePullSecrets" in path:                   # image_pull_secrets injector
+        return True
+    if path == ("config", "allowedOrigins"):         # allowed_origins injector（#399）
+        return True
+    if path == ("networkPolicy", "apiServerCidrs"):  # apiserver_cidrs injector（#404）
+        return True
+    return False
+
+
+def _is_config_sensitive(path: tuple) -> bool:
+    """path 落在 config.sensitive 子樹 —— 由 sensitive_values 管線另帶（reset 路徑帶新密碼、
+    不在 _assemble_deploy_values 的 computed 內），視同自癒、不列 backfill/裁決。"""
+    return any(path[i:i + 2] == ("config", "sensitive") for i in range(len(path) - 1))
+
+
+def _path_is_secret(path: tuple) -> bool:
+    """path 是否落在敏感子樹（供 diff 明細遮罩，沿用第一階段遮罩語意）。"""
+    for i in range(len(path) - 1):
+        if path[i:i + 2] == ("config", "sensitive"):
+            return True
+    return any(
+        k == "secret" or _SECRET_KEY_HEURISTIC_RE.search(str(k)) for k in path
     )
 
 
-def classify_diff(stored: dict, recomputed: Optional[dict]) -> str:
-    """【框架 STUB】stored vs recomputed 差異分類：
+def _mask_leaf(path: tuple, value: Any, present: bool) -> Any:
+    """diff 明細 leaf 值遮罩：不存在 → None；secret path → ***；否則原值。"""
+    if not present:
+        return None
+    if _path_is_secret(path):
+        return "***"
+    return value
 
-      (a) injector 類會自癒 —— install-time injector 寫入的鍵（如 networkPolicy.apiServerCidrs
-          #404、config.allowedOrigins #399），翻語意後平台會重新注入，缺了也會自癒。
-      (b) 平台該管卻漏寫 → backfill 清單 —— 平台會算出、stored 缺，且非 injector 自癒。
-      (c) out-of-band 無法解釋 → 待 Eugene 裁決 —— stored 有、平台算不出（人手改過或殘留）。
 
-    第一階段 recomputed 為 stub（None），一律回 'pending-phase2'。
+def compute_platform_values(
+    computed_lookup: dict, ns: str, release: str
+) -> Optional[dict]:
+    """從 dump（--computed-json）取該 release 的平台可重算 values。
+
+    單一真相源＝`CloudService._assemble_deploy_values()`（#419），由 dump_computed_values.py
+    在 stg odoo pod 產出。本腳本**不自寫** template defaults merge。找不到對應 release
+    （dump 未涵蓋、或該 service 組裝失敗）回 None → 該 release diff 標 pending。
     """
-    if recomputed is None:
-        return "pending-phase2"
-    # 第二階段實作：逐鍵比對 stored/recomputed，套 injector 白名單分 (a)/(b)/(c)。
-    raise NotImplementedError("classify_diff 實作待第二階段")
+    return computed_lookup.get((ns, release))
+
+
+def classify_diff(stored: dict, computed: Optional[dict]) -> Optional[dict]:
+    """逐 leaf path 比對 stored（helm stored）vs computed（平台重算），三分類。
+
+      (a) injector 類（任何差異）：管線每次重算會自癒，無須動作。
+      (b) stored 有、computed 無、非 injector：**backfill** —— reset 後會從 manifest 消失，
+          須顯式補進 svc.helm_values。
+      (c) 同鍵不同值、非 injector：**逐筆裁決** —— 例 image tag pin（stored 釘舊 tag、
+          computed 是 template 新 tag，reset 後會被覆蓋）。
+      (info) computed 有、stored 無：reset 後自然補上（預期效果，非問題）。
+      同鍵同值不列。
+
+    computed 為 None（dump 未涵蓋該 release）→ 回 None（標 pending）。
+    回 {'counts': {a,b,c,info}, 'items': [{path, category, stored, computed}...]}；
+    items 的 leaf 值已遮罩。
+    """
+    if computed is None:
+        return None
+    s = _flatten(stored)
+    c = _flatten(computed)
+    items: list[dict] = []
+    for path in sorted(set(s) | set(c)):
+        in_s, in_c = path in s, path in c
+        sv, cv = s.get(path), c.get(path)
+        # injector 類、或 config.sensitive（sensitive_values 另帶）→ 自癒，不列 backfill/裁決。
+        self_healing = _is_injector_path(path) or _is_config_sensitive(path)
+        if in_s and in_c:
+            if sv == cv:
+                continue  # match，不列
+            cat = "a" if self_healing else "c"
+        elif in_s:  # stored-only
+            cat = "a" if self_healing else "b"
+        else:       # computed-only
+            cat = "info"
+        items.append({
+            "path": list(path),
+            "category": cat,
+            "stored": _mask_leaf(path, sv, in_s),
+            "computed": _mask_leaf(path, cv, in_c),
+        })
+    counts = {cat: 0 for cat in ("a", "b", "c", "info")}
+    for it in items:
+        counts[it["category"]] += 1
+    return {"counts": counts, "items": items}
 
 
 def _helm_version() -> str:
@@ -222,10 +313,7 @@ def render_report(records: list[dict], meta: dict) -> str:
         f"> helm：`{meta['helm_version']}` 讀取（release 由 operator helm 3.13.3 部署，"
         f"`get values`/`list` 唯讀相容；已剝除 helm 4 `USER-SUPPLIED VALUES` sentinel）"
     )
-    lines.append(
-        "> 狀態：**第一階段＝收集端＋骨架**。`recomputed` 側與 diff 分類待第二階段接 "
-        "W2 `dev-411-pipeline` helper。"
-    )
+    lines.append(f"> 狀態：{meta['diff_status']}")
     lines.append(
         "> 鐵律：唯讀 `get`/`list`；raw values（含明文 secret）不進 git（落點見文末）；"
         "本報告 stored values 已遮罩（對齊 operator `_sanitize_release_values` ＋ 鍵名 heuristic）。"
@@ -270,31 +358,80 @@ def render_report(records: list[dict], meta: dict) -> str:
         lines.append(_json_block(r["masked_stored"]))
         lines.append("")
 
-    # 分類框架
-    lines.append("## 差異分類框架（diff 待第二階段填）")
+    # 差異分類定義
+    lines.append("## 差異分類")
     lines.append("")
     lines.append(
-        "- **(a) injector 類會自癒**：install-time injector 寫入的鍵，翻語意後平台重新注入、"
-        "缺了自癒。實例：`networkPolicy.apiServerCidrs`（#404）、`config.allowedOrigins`（#399）。"
+        "- **(a) injector 類會自癒**：storageClass / imagePullSecrets / config.allowedOrigins"
+        "（#399）/ networkPolicy.apiServerCidrs（#404）等平台管線每次重算的鍵，reset 後自動補回，無須動作。"
     )
     lines.append(
-        "- **(b) 平台該管卻漏寫 → backfill**：平台會算出、stored 缺、非 injector 自癒。"
-        "翻 reset 語意前須顯式 backfill 進 stored values。"
+        "- **(b) backfill**：stored 有、平台 computed 無、且非 injector —— reset 後會從 rendered "
+        "manifest 消失，翻語意前須顯式補進 svc.helm_values。"
     )
     lines.append(
-        "- **(c) out-of-band 無法解釋 → 待 Eugene 裁決**：stored 有、平台算不出（人手改過或殘留）。"
+        "- **(c) 逐筆裁決**：同鍵不同值、非 injector（例 image tag pin：stored 釘舊 tag、computed "
+        "是 template 新 tag，reset 後被覆蓋）。**prod 翻 flag 前 (c) 必須清零。**"
+    )
+    lines.append(
+        "- (info) computed 有、stored 無：reset 後自然補上（預期效果，非問題，不列明細）。"
     )
     lines.append("")
 
-    # 比對引擎 stub
-    lines.append("## 比對引擎（stub）")
-    lines.append("")
-    lines.append(
-        "`compute_platform_values()` 為 stub，待接 W2 `dev-411-pipeline` 全量組裝 helper"
-        "（經 odoo shell dry-run）。**禁止自寫 template defaults merge**——單一真相源＝該 helper，"
-        "自寫會產生假 diff。第二階段接上後 `classify_diff()` 才輸出 (a)/(b)/(c)。"
-    )
-    lines.append("")
+    diffed = [r for r in ok if r.get("diff")]
+    if not diffed:
+        lines.append(
+            "> 本次未提供 `--computed-json`（或 dump 未涵蓋任何 release）—— diff 標 pending。"
+            "W4 部署含 #419 的 stg 後，跑 `dump_computed_values.py` 產 computed dump 再比對。"
+        )
+        lines.append("")
+    else:
+        def _fmt(v: Any) -> str:
+            return "`" + json.dumps(v, ensure_ascii=False) + "`"
+
+        # (b) backfill 清單彙總
+        lines.append("### (b) backfill 清單")
+        lines.append("")
+        b_rows = [(r, it) for r in diffed for it in r["diff"]["items"] if it["category"] == "b"]
+        if b_rows:
+            lines.append("| namespace | release | path | stored 值 |")
+            lines.append("| --- | --- | --- | --- |")
+            for r, it in b_rows:
+                lines.append(
+                    f"| `{r['ns']}` | `{r['release']}` | {_fmt(it['path'])} | {_fmt(it['stored'])} |"
+                )
+        else:
+            lines.append("_（無）_")
+        lines.append("")
+
+        # (c) 待裁決清單彙總
+        lines.append("### (c) 待裁決清單（prod 翻 flag 前須清零）")
+        lines.append("")
+        c_rows = [(r, it) for r in diffed for it in r["diff"]["items"] if it["category"] == "c"]
+        if c_rows:
+            lines.append("| namespace | release | path | stored | computed |")
+            lines.append("| --- | --- | --- | --- | --- |")
+            for r, it in c_rows:
+                lines.append(
+                    f"| `{r['ns']}` | `{r['release']}` | {_fmt(it['path'])} | "
+                    f"{_fmt(it['stored'])} | {_fmt(it['computed'])} |"
+                )
+        else:
+            lines.append("_（無）_")
+        lines.append("")
+
+        # per-release 分類明細
+        lines.append("### Per-release 分類明細")
+        lines.append("")
+        for r in diffed:
+            cc = r["diff"]["counts"]
+            lines.append(
+                f"#### {r['env']} / `{r['ns']}` / `{r['release']}` "
+                f"— a:{cc['a']} b:{cc['b']} c:{cc['c']} info:{cc['info']}"
+            )
+            lines.append("")
+            lines.append(_json_block(r["diff"]["items"]))
+            lines.append("")
 
     # 鐵律與 raw dump 落點
     lines.append("## 鐵律與 raw dump 落點")
@@ -328,6 +465,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=None,
         help="raw values（未遮罩）落點；預設系統 tmp（repo 外，勿進 git）",
     )
+    parser.add_argument(
+        "--computed-json",
+        default=None,
+        help="dump_computed_values.py 產出的平台可重算 values JSON（第二階段比對；未給則只收集）",
+    )
     args = parser.parse_args(argv)
 
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S %z")
@@ -335,6 +477,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         tempfile.mkdtemp(prefix="audit-411-raw-")
     )
     raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # 第二階段：載入平台可重算 values dump（--computed-json）→ lookup {(ns, release): values}
+    computed_lookup: dict = {}
+    if args.computed_json:
+        try:
+            dump = json.loads(Path(args.computed_json).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"[fatal] --computed-json 讀取失敗: {exc}")
+        for entry in dump:
+            if "computed_values" in entry:
+                computed_lookup[(entry["namespace"], entry["release"])] = entry["computed_values"]
+        print(
+            f"[info] computed dump：{len(computed_lookup)} release 有可重算 values",
+            file=sys.stderr,
+        )
 
     targets = list_target_namespaces(args.context, args.env)
     print(f"[info] 目標 ns：{len(targets)}（env={args.env}）", file=sys.stderr)
@@ -360,11 +517,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
 
             masked = sanitize(stored)
-            try:
-                recomputed = compute_platform_values(env_tag, ns, name, rel.get("chart", "?"))
-            except NotImplementedError:
-                recomputed = None  # 第一階段 stub
-            classification = classify_diff(masked, recomputed)
+            # 比對用真值 stored（classify_diff 內部 _mask_leaf 遮罩 items 值）
+            computed = compute_platform_values(computed_lookup, ns, name)
+            diff = classify_diff(stored if isinstance(stored, dict) else {}, computed)
+            if diff is None:
+                classification = "pending"
+            else:
+                cc = diff["counts"]
+                classification = f"a:{cc['a']} b:{cc['b']} c:{cc['c']} info:{cc['info']}"
 
             records.append(
                 {
@@ -377,10 +537,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "stored_key_count": len(stored) if isinstance(stored, dict) else 0,
                     "masked_stored": masked,
                     "classification": classification,
+                    "diff": diff,
                 }
             )
-            print(f"[ok] {ns}/{name} chart={rel.get('chart')}", file=sys.stderr)
+            print(f"[ok] {ns}/{name} chart={rel.get('chart')} diff={classification}", file=sys.stderr)
 
+    diffed_n = sum(1 for r in records if r.get("diff"))
     meta = {
         "context": args.context,
         "env": args.env,
@@ -388,6 +550,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         "helm_version": _helm_version(),
         "raw_dir": str(raw_dir),
         "ns_count": len(targets),
+        "diff_status": (
+            f"已接 helper 比對：{diffed_n} release 有 computed dump（逐鍵三分類）"
+            if args.computed_json else
+            "未提供 --computed-json，diff 標 pending（W4 部署含 #419 的 stg 後補跑）"
+        ),
     }
     report = render_report(records, meta)
     report_path = Path(args.report)
