@@ -655,7 +655,8 @@
                 Claude 登入（登入態與 opencode 設定存 od-home PVC、跨 Pod 重啟保留），亦可於
                 部署時自帶 ANTHROPIC_API_KEY。與 Open Design MCP（mcp-opendesign）形成生態
                 閉環：MCP 的必填欄 od_api_base 可指向本服務於同一 workspace 的內部位址
-                （release 命名，例 http://svc-xxxxxxxx:7457；需帶 basic-auth 憑證）。</field>
+                （release 命名，例 http://svc-xxxxxxxx:7457；需帶 basic-auth 憑證）。
+                刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料（含 Claude 登入態）；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["design", "ai", "opendesign", "claude-code", "opencode"]</field>
 
