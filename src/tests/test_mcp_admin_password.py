@@ -110,6 +110,9 @@ class TestMcpAdminPassword(TransactionCase):
         ], limit=1)
         self.assertEqual(secret.admin_password, new_password)
         payload = client.reset_release_config.call_args.kwargs['values']
+        # #411：reset admin password 改走 _assemble_deploy_values 全量組裝管線 —— 送出的
+        # values 除保留 GUI 擁有的 connection/tools 外，一併重組平台 injector（storage_class
+        # / image_pull_secrets），避免 reset_values 語意下這些注入值從 rendered manifest 消失。
         self.assertEqual(
             payload,
             {
@@ -119,6 +122,8 @@ class TestMcpAdminPassword(TransactionCase):
                         'tools': {'enabled': ['search']},
                     },
                 },
+                'global': {'imagePullSecrets': ['paas-registry']},
+                'persistence': {'storageClass': 'longhorn-delete'},
             },
         )
         self.assertEqual(
