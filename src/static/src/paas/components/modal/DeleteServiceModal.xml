@@ -18,8 +18,10 @@
                         <WoowIcon name="'warning'" size="48"/>
                         <p>Are you sure you want to delete <strong t-esc="props.service.name"/>?</p>
                         <p class="o_woow_delete_hint">
-                            This action cannot be undone. All data associated with this service
-                            will be permanently removed, including configurations and deployment history.
+                            此動作無法復原，服務與其部署設定將被移除。
+                        </p>
+                        <p class="o_woow_delete_hint">
+                            刪除後若重新建立，將是全新的 release 與全新磁碟，不會沿用原服務資料；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。
                         </p>
                     </div>
 
