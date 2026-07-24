@@ -53,3 +53,8 @@ docs/meeting
 
 # docs 內 explain-by-html 衍生產物不入版控（.md 源檔才是文件本體）
 docs/**/*.html
+
+# #411 盤點 raw values dump（含明文 secret）—— 防呆：預設落點在 repo 外 tmp，
+# 此條攔截誤把 --raw-dir 指到 repo 內的情況（audit_411_reset_values.py）
+audit-411-raw*/
+
