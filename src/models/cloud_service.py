@@ -304,11 +304,14 @@ class CloudService(models.Model):
                 release_exists = False
 
         if release_exists:
-            # Upgrade in-place — preserves PVCs and data
+            # Upgrade in-place — preserves PVCs and data.
+            # #411: 走全量 values 組裝 helper（與 fresh install 同一條管線）＋
+            # reset_values 語意（chart values.yaml 為 base，全量 values 疊上）。
+            # 既存 release 升級不再以 reuse_values 沿用舊 coalesced values，
+            # chart 升版新增的預設能自然補位。見 docs/decisions/patterns/
+            # helm-reset-values-unified-pipeline.md。
             template = self.template_id
-            values = self._strip_mcp_sensitive_values(
-                json.loads(self.helm_values) if self.helm_values else None
-            )
+            values = self._assemble_deploy_values()['values']
             sensitive_values = self._build_mcp_sensitive_values()
             try:
                 release_info = client.upgrade_release(
@@ -318,7 +321,7 @@ class CloudService(models.Model):
                     version=template.helm_chart_version,
                     values=values,
                     sensitive_values=sensitive_values or None,
-                    reuse_values=True,
+                    reset_values=True,
                 )
             except PaaSOperatorError as e:
                 raise UserError(
@@ -446,9 +449,11 @@ class CloudService(models.Model):
 
         # C20: the single generation point — never inline token_urlsafe here.
         new_password = self._generate_admin_password()
-        values = self._strip_mcp_sensitive_values(
-            json.loads(self.helm_values) if self.helm_values else {}
-        )
+        # #411: values 走全量組裝 helper（與 deploy/redeploy/reconfigure 同一條
+        # 管線）。此路徑帶 template.helm_chart_version，reset password 會夾帶
+        # chart 升版；改 reset_values 語意讓 chart 新增預設補位，不再以
+        # --reuse-values 沿用舊 coalesced values（同一 bug class，見 #411）。
+        values = self._assemble_deploy_values()['values']
         operator_sensitive_values = self._build_mcp_sensitive_values(new_password)
 
         client = get_paas_operator_client(self.env)
@@ -463,7 +468,7 @@ class CloudService(models.Model):
                 version=self.template_id.helm_chart_version,
                 values=values,
                 sensitive_values=operator_sensitive_values or None,
-                reuse_values=True,
+                reset_values=True,
             )
         except PaaSOperatorTimeoutError as e:
             # #357 C11: our 120s client budget is not the operator's. reset-config
@@ -558,76 +563,18 @@ class CloudService(models.Model):
         template = self.template_id
         helm_namespace = self.helm_namespace
         helm_release_name = self.helm_release_name
-        merged_values = self._strip_mcp_sensitive_values(
-            json.loads(self.helm_values) if self.helm_values else {}
-        )
 
-        # Inject StorageClass for PVC lifecycle management
-        storage_class = self.env['ir.config_parameter'].sudo().get_param(
-            'woow_paas_platform.storage_class_name', 'longhorn-delete'
-        )
-        if storage_class:
-            merged_values = self._inject_storage_class(
-                merged_values, template.slug, storage_class,
-            )
+        # #411: values 組裝走單一真相源 helper（與 redeploy / reconfigure /
+        # reset admin password 共用同一條全量管線）。expose_config 亦由 helper
+        # 重算，取代 create 時存在 deploy_params 的等價值（收斂雙寫）。
+        assembled = self._assemble_deploy_values()
+        merged_values = assembled['values']
+        expose_config = assembled['expose_config']
 
-        # Inject imagePullSecrets for private registry access
-        registry_secret = self.env['ir.config_parameter'].sudo().get_param(
-            'woow_paas_platform.registry_secret_name', 'paas-registry'
-        )
-        if registry_secret:
-            merged_values = self._inject_image_pull_secrets(
-                merged_values, registry_secret,
-            )
-
-        # Inject the service's own public origin for charts that gate on the
-        # browser Origin header (open-design daemon 403s a public Origin unless
-        # whitelisted verbatim; the chart never learns the tenant host — the
-        # platform exposes services via a Cloudflare tunnel, not the chart's
-        # ingress). No-op for other templates. See #380 + woow-paas-charts
-        # open-design 0.1.1.
-        if self.subdomain:
-            paas_domain = self.env['ir.config_parameter'].sudo().get_param(
-                'woow_paas_platform.paas_domain', 'woowtech.io',
-            )
-            merged_values = self._inject_allowed_origins(
-                merged_values, template.slug,
-                f"https://{self.subdomain}.{paas_domain}",
-            )
-
-        # Inject the kube-apiserver egress allowlist for charts whose pods run
-        # kubectl from under a tenant NetworkPolicy (open-design console). The
-        # chart defaults to the kubernetes Service ClusterIP only, which is
-        # insufficient where the CNI matches egress post-DNAT — the real
-        # control-plane node IPs are cluster-specific, so ops supplies them via
-        # config parameter and the platform injects them here. No-op for other
-        # templates. See #404.
-        apiserver_cidrs = self._get_apiserver_cidrs()
-        if apiserver_cidrs:
-            merged_values = self._inject_apiserver_cidrs(
-                merged_values, template.slug, apiserver_cidrs,
-            )
-
-        # Inject Odoo addon selection (initContainer + addons_path)
-        if self.odoo_addon_ids and template.slug == 'odoo':
-            image_vals = merged_values.get('image', {})
-            registry = image_vals.get('registry', 'docker.io')
-            repo = image_vals.get('repository', '')
-            tag = image_vals.get('tag', 'latest')
-            image_ref = f"{registry}/{repo}:{tag}"
-            addon_values = self._build_odoo_addon_helm_values(image_ref)
-            # Deep-merge addon values into merged_values
-            for key, val in addon_values.items():
-                if key in merged_values and isinstance(merged_values[key], dict) and isinstance(val, dict):
-                    merged_values[key].update(val)
-                else:
-                    merged_values[key] = val
-
+        # sensitive_values 與 mcp_api_key 屬本 install 路徑專屬（非部署 values），
+        # 另外組。mcp_api_key 首裝 patch sidecar 用，仍自 deploy_params 取。
         sensitive_values = self._build_mcp_sensitive_values()
-
-        # Recover deploy params stored at creation time
         params = json.loads(self.deploy_params) if self.deploy_params else {}
-        expose_config = params.get('expose_config')
         mcp_api_key = params.get('mcp_api_key')
 
         try:
@@ -707,6 +654,124 @@ class CloudService(models.Model):
                 'state': 'error',
                 'error_message': f'Deployment failed: {e.detail or e.message}',
             })
+
+    # ------------------------------------------------------------------ #
+    #  #411 — 全量 values 組裝（單一真相源）                              #
+    # ------------------------------------------------------------------ #
+
+    def _assemble_deploy_values(self):
+        """組裝部署用的全量「非敏感」helm values ＋ expose_config（單一真相源）。
+
+        Fresh install 與既存 release 升級**共用這一條**組裝管線，讓 helm 在
+        ``reset_values`` 語意下（chart 自身 values.yaml 為 base）每次都把平台
+        管理的所有值補齊 —— chart 升版新增的預設能自然 coalesce 生效，終結
+        ``reuse_values`` bug class（既存 release 升級路徑靜默漏掉 chart 新預設；
+        見 #411 / #413 與 docs/decisions/patterns/helm-reset-values-unified-pipeline.md）。
+
+        組裝順序（後者疊在前者上）：
+
+        1. ``svc.helm_values`` —— template 預設（``template.helm_default_values``）
+           ＋ user config ＋ MCP api key ＋ plan overlay，於 service create 時已
+           merge 定案（controllers/paas.py ``_deploy_service``）。此處先剝掉
+           ``config.sensitive`` 子樹（``_strip_mcp_sensitive_values``）。
+        2. storage_class injector（PVC 生命週期）
+        3. image_pull_secrets injector（私有 registry）
+        4. allowed_origins injector（open-design 瀏覽器 Origin 白名單，#380）
+        5. apiserver_cidrs injector（open-design console egress，#404）
+        6. odoo addon selection（initContainer + addons_path）
+
+        **純唯讀、不寫 DB、不呼叫 operator** —— 盤點腳本可安全 dry-run 呼叫，
+        取 ``['values']`` 去比對 ``helm get values <rel>``（stored、非敏感）。
+        ``sensitive_values``（admin_password）不在此組：它是敏感值、且 stored
+        release values 本就不含它，由各呼叫點自組（reset 路徑帶新密碼）。
+
+        Returns:
+            dict: {
+                'values': 全量非敏感 helm values（dict）,
+                'expose_config': ingress expose dict 或 None（Cloudflare tunnel；
+                                僅 fresh install 用，upgrade endpoint 無 expose
+                                參數，升級路徑忽略此鍵）,
+            }
+        """
+        self.ensure_one()
+        template = self.template_id
+        values = self._strip_mcp_sensitive_values(
+            json.loads(self.helm_values) if self.helm_values else {}
+        ) or {}
+
+        # Inject StorageClass for PVC lifecycle management
+        storage_class = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.storage_class_name', 'longhorn-delete'
+        )
+        if storage_class:
+            values = self._inject_storage_class(
+                values, template.slug, storage_class,
+            )
+
+        # Inject imagePullSecrets for private registry access
+        registry_secret = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.registry_secret_name', 'paas-registry'
+        )
+        if registry_secret:
+            values = self._inject_image_pull_secrets(
+                values, registry_secret,
+            )
+
+        # Inject the service's own public origin for charts that gate on the
+        # browser Origin header (open-design daemon 403s a public Origin unless
+        # whitelisted verbatim; the chart never learns the tenant host — the
+        # platform exposes services via a Cloudflare tunnel, not the chart's
+        # ingress). No-op for other templates. See #380.
+        if self.subdomain:
+            paas_domain = self.env['ir.config_parameter'].sudo().get_param(
+                'woow_paas_platform.paas_domain', 'woowtech.io',
+            )
+            values = self._inject_allowed_origins(
+                values, template.slug,
+                f"https://{self.subdomain}.{paas_domain}",
+            )
+
+        # Inject the kube-apiserver egress allowlist for charts whose pods run
+        # kubectl from under a tenant NetworkPolicy (open-design console).
+        # No-op for other templates. See #404.
+        apiserver_cidrs = self._get_apiserver_cidrs()
+        if apiserver_cidrs:
+            values = self._inject_apiserver_cidrs(
+                values, template.slug, apiserver_cidrs,
+            )
+
+        # Inject Odoo addon selection (initContainer + addons_path)
+        if self.odoo_addon_ids and template.slug == 'odoo':
+            image_vals = values.get('image', {})
+            registry = image_vals.get('registry', 'docker.io')
+            repo = image_vals.get('repository', '')
+            tag = image_vals.get('tag', 'latest')
+            image_ref = f"{registry}/{repo}:{tag}"
+            addon_values = self._build_odoo_addon_helm_values(image_ref)
+            # Deep-merge addon values into the assembled values
+            for key, val in addon_values.items():
+                if key in values and isinstance(values[key], dict) and isinstance(val, dict):
+                    values[key].update(val)
+                else:
+                    values[key] = val
+
+        return {
+            'values': values,
+            'expose_config': self._build_expose_config(),
+        }
+
+    def _build_expose_config(self):
+        """Cloudflare tunnel ingress expose 設定（fresh install 用）。
+
+        Template 開 ingress 且 service 有 subdomain 才 expose；與 service create
+        時 (controllers/paas.py ``_deploy_service``) 及 action_redeploy fresh 分支
+        的算法一致，收斂為單一真相源。upgrade endpoint 無 expose 參數 —— ingress
+        於首裝建立後升級不重設（Cloudflare tunnel 已在），故升級路徑不用此值。
+        """
+        self.ensure_one()
+        if self.template_id.ingress_enabled and self.subdomain:
+            return {'enabled': True, 'subdomain': self.subdomain}
+        return None
 
     def _build_odoo_addon_helm_values(self, image_ref):
         """Build Helm values for Odoo addon selection via initContainer.

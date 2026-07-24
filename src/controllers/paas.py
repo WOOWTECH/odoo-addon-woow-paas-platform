@@ -2525,12 +2525,21 @@ class PaasController(HiddenChainMixin, Controller):
             # Capture values for the background thread (no ORM access).
             db_name = request.env.cr.dbname
             service_id = service.id
+            # #411: 送 operator 的 values 必須是「全量組裝」結果（含 4 injectors
+            # ＋ odoo addon），因為改走 reset_values 語意後不再靠 --reuse-values
+            # 保留首裝注入的 injector 值（storage_class / image_pull_secrets /
+            # allowed_origins / apiserver_cidrs）——若只送 merged_values，reset 後
+            # 這些會全部從 rendered manifest 消失。組裝必須在**主執行緒**先算好
+            # （背景執行緒無 ORM，不能碰 service / env / ir.config_parameter）：
+            # svc.helm_values 已於上方 write 更新，helper 讀到的即最新 user config。
+            assembled_values = service._assemble_deploy_values()['values']
             upgrade_kwargs = dict(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
                 chart=service.template_id.helm_chart_name,
-                values=merged_values,
+                values=assembled_values,
                 version=version,
+                reset_values=True,
             )
             operator_url = client.base_url
             operator_api_key = client._session.headers.get('X-API-Key', '')

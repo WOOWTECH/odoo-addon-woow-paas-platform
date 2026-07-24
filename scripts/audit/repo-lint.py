@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+四個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -13,6 +13,9 @@
 3. data-noupdate     src/data/*.xml 新增 noupdate="1" 的檔案要對 baseline；
                      noupdate 是 sticky 的，fresh install 綠 ≠ 升級路徑綠。
                      依據 docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md
+4. reuse-values      src/**/*.py 出現 reuse_values=True 即 fail；helm --reuse-values 讓
+                     chart 升版新增預設永不生效（既存 release 升級靜默漏，#411 Gap 2）。
+                     依據 docs/decisions/patterns/helm-reset-values-unified-pipeline.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -22,6 +25,7 @@
 hook 模式輸出 {"decision":"block","reason":...} 讓 model 立即自我修正；CLI 模式違規 exit 1。
 Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 """
+import ast
 import glob
 import json
 import os
@@ -37,6 +41,7 @@ NOUPDATE_BASELINE = os.path.join(BASELINE_DIR, "data-noupdate.txt")
 SUDO_DOC = "docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md"
 OWL_DOC = "docs/tracking/pitfalls/owl-template-crash-class-syntax.md"
 NOUPDATE_DOC = "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md"
+REUSE_VALUES_DOC = "docs/decisions/patterns/helm-reset-values-unified-pipeline.md"
 
 OWL_ALLOWED_MODIFIERS = {"stop", "prevent", "self", "capture", "synthetic"}
 
@@ -161,18 +166,78 @@ def current_noupdate_files(root):
     return files
 
 
+def _reuse_values_true_lines(src):
+    """回傳出現 reuse_values=True 的行號 list（AST 判定，避開字串/註解/docstring）。
+
+    兩種形態都抓：
+      1. 呼叫點 keyword arg：``foo(..., reuse_values=True)``
+      2. 函式 signature default：``def f(..., reuse_values=True)``（client default 亦屬修復對象）
+
+    用 AST 而非 regex——test 的 assert 訊息字串 '不得再傳 reuse_values=True' 這種
+    描述文字會被 regex 誤報，AST 只認真正的 keyword/arg 節點。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []  # 不 parse 的檔略過（fail-open，對齊本工具哲學）
+    lines = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if (kw.arg == "reuse_values"
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value is True):
+                    lines.append(kw.value.lineno)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            a = node.args
+            pairs = list(zip(a.args[len(a.args) - len(a.defaults):], a.defaults))
+            pairs += list(zip(a.kwonlyargs, a.kw_defaults))
+            for arg, default in pairs:
+                if (default is not None and arg.arg == "reuse_values"
+                        and isinstance(default, ast.Constant) and default.value is True):
+                    lines.append(arg.lineno)
+    return sorted(set(lines))
+
+
+def check_reuse_values(root, only_file=None):
+    """平台 code（src/**/*.py）出現 reuse_values=True 即 fail。
+
+    #411：helm --reuse-values 讓 render 用舊 release 的 coalesced values 當 base，
+    chart 升版新增的預設值永不生效（既存 release 升級靜默漏 chart 新預設，Gap 2
+    bug class）。平台既存 release 升級一律走全量 values 組裝 ＋ reset_values=True。
+    依據 docs/decisions/patterns/helm-reset-values-unified-pipeline.md
+    """
+    violations = []
+    files = [only_file] if only_file else sorted(
+        glob.glob(os.path.join(root, "src/**/*.py"), recursive=True))
+    for fp in files:
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        for line_no in _reuse_values_true_lines(src):
+            violations.append(
+                "%s:%d：出現 reuse_values=True。#411：helm --reuse-values 讓 chart 升版新增"
+                "預設永不生效（既存 release 升級靜默漏 chart 新預設，Gap 2 bug class）。平台既存"
+                " release 升級一律走全量 values 組裝 ＋ reset_values=True（見 %s）。"
+                % (rel, line_no, REUSE_VALUES_DOC))
+    return violations
+
+
 # ---------------------------------------------------------------- modes
 
 def run_all(root):
     violations = (check_controller_sudo(root)
                   + check_owl_template(root)
-                  + check_data_noupdate(root))
+                  + check_data_noupdate(root)
+                  + check_reuse_values(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
             print("  ✗ " + v)
         return 1
-    print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate）")
+    print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / reuse-values）")
     return 0
 
 
@@ -209,6 +274,9 @@ def run_hook():
         abs_path = os.path.abspath(file_path)
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
+            violations += check_reuse_values(root, only_file=abs_path)
+        elif re.match(r"^src/.*\.py$", rel):
+            violations = check_reuse_values(root, only_file=abs_path)
         elif re.match(r"^src/static/src/.*\.xml$", rel):
             violations = check_owl_template(root, only_file=abs_path)
         elif re.match(r"^src/data/.*\.xml$", rel):

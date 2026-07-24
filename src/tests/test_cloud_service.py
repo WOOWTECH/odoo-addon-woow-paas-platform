@@ -851,3 +851,148 @@ class TestInjectApiServerCidrs(TransactionCase):
         self.assertEqual(
             CloudService._get_apiserver_cidrs(),
             ['10.43.0.1/32', '192.168.10.21/32', '192.168.10.22/32'])
+
+
+class TestAssembleDeployValues411(TransactionCase):
+    """#411：全量 values 組裝 helper 與三呼叫點 reset_values 語意。
+
+    契約（docs/decisions/patterns/helm-reset-values-unified-pipeline.md）：
+    fresh install 與既存 release 升級走同一條 ``_assemble_deploy_values`` 管線，
+    helm 改 reset_values 語意，讓 chart 升版新增預設自然補位 —— 終結 reuse_values
+    bug class（既存 release 升級靜默漏 chart 新預設）。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.Service = self.env['woow_paas_platform.cloud_service']
+        self.Template = self.env['woow_paas_platform.cloud_app_template']
+        self.Workspace = self.env['woow_paas_platform.workspace']
+        self.workspace = self.Workspace.create({'name': '411 WS'})
+        # open-design template：一次涵蓋全部 4 個 injector（storage_class /
+        # image_pull_secrets 對所有 slug 生效；allowed_origins / apiserver_cidrs
+        # 只對 open-design slug 有 value-path）。
+        self.od_template = self.Template.create({
+            'name': 'Open Design 411',
+            'slug': 'open-design',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'open-design',
+            'helm_chart_version': '0.1.1',
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+            'ingress_enabled': True,
+        })
+        self.od_service = self.Service.create({
+            'name': 'OD Service',
+            'workspace_id': self.workspace.id,
+            'template_id': self.od_template.id,
+            'subdomain': 'sub',
+            'helm_release_name': 'svc-od',
+            'helm_namespace': 'paas-ws-ododod',
+            # base = template 預設 + user config（create 時已 merge 定案）
+            'helm_values': json.dumps({
+                'config': {'existingUserKey': 'keep'},
+                'replicaCount': 3,
+            }),
+        })
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.apiserver_cidrs', '10.43.0.1/32,192.168.10.21/32')
+
+    # ---- helper 組裝優先序 --------------------------------------------
+
+    def test_assemble_layers_all_injectors_over_user_config(self):
+        """全量組裝：base（user config）保留，4 injector 疊在上、彼此不互相覆蓋。"""
+        out = self.od_service._assemble_deploy_values()
+        values = out['values']
+        # 1. base user config 原封保留
+        self.assertEqual(values['replicaCount'], 3)
+        self.assertEqual(
+            values['config']['existingUserKey'], 'keep',
+            'injector 不得覆蓋 user config 既有的非同 path 鍵')
+        # 2. storage_class injector（預設 path persistence.storageClass）
+        self.assertEqual(values['persistence']['storageClass'], 'longhorn-delete')
+        # 3. image_pull_secrets injector（global.imagePullSecrets）
+        self.assertIn('paas-registry', values['global']['imagePullSecrets'])
+        # 4. allowed_origins injector（open-design → config.allowedOrigins），
+        #    與 base 的 config.existingUserKey 共存於同一 config 子樹
+        self.assertEqual(
+            values['config']['allowedOrigins'], 'https://sub.woowtech.io')
+        self.assertEqual(values['config']['existingUserKey'], 'keep')
+        # 5. apiserver_cidrs injector（open-design → networkPolicy.apiServerCidrs）
+        self.assertEqual(
+            values['networkPolicy']['apiServerCidrs'],
+            ['10.43.0.1/32', '192.168.10.21/32'])
+
+    def test_assemble_is_readonly_and_idempotent(self):
+        """helper 純函數：不改 svc.helm_values，重複呼叫結果一致（盤點可 dry-run）。"""
+        before = json.loads(self.od_service.helm_values)
+        first = self.od_service._assemble_deploy_values()['values']
+        after = json.loads(self.od_service.helm_values)
+        self.assertEqual(before, after, 'helper 不得寫回 svc.helm_values')
+        second = self.od_service._assemble_deploy_values()['values']
+        self.assertEqual(first, second, 'injector 疊加必須冪等')
+
+    def test_assemble_expose_config_gated_on_ingress_and_subdomain(self):
+        """expose_config：ingress 開且有 subdomain 才 expose，否則 None。"""
+        self.assertEqual(
+            self.od_service._assemble_deploy_values()['expose_config'],
+            {'enabled': True, 'subdomain': 'sub'})
+        # 關掉 ingress → None
+        self.od_template.ingress_enabled = False
+        self.assertIsNone(
+            self.od_service._assemble_deploy_values()['expose_config'])
+
+    # ---- 呼叫點傳 reset_values --------------------------------------
+
+    def test_redeploy_passes_reset_values_true(self):
+        """action_redeploy 既存 release 升級路徑：upgrade_release(reset_values=True)。"""
+        mock_client = MagicMock()
+        mock_client.get_release.return_value = {'name': 'svc-od', 'revision': 1}
+        mock_client.upgrade_release.return_value = {'revision': 2}
+        with patch(
+            'odoo.addons.woow_paas_platform.services.paas_operator'
+            '.get_paas_operator_client',
+            return_value=mock_client,
+        ):
+            self.od_service.action_redeploy()
+        kwargs = mock_client.upgrade_release.call_args.kwargs
+        self.assertTrue(
+            kwargs.get('reset_values'),
+            'redeploy 升級路徑必須傳 reset_values=True')
+        self.assertNotEqual(
+            kwargs.get('reuse_values'), True,
+            '不得再傳危險的 reuse_values=True')
+        # 全量組裝確實流到 operator（injector 有到）
+        self.assertEqual(
+            kwargs['values']['persistence']['storageClass'], 'longhorn-delete')
+
+    def test_reset_admin_password_passes_reset_values_true(self):
+        """_reset_admin_password：reset_release_config(reset_values=True)。"""
+        mcp_template = self.Template.create({
+            'name': 'MCP 411', 'slug': 'mcp-odoo', 'category': 'mcp',
+            'helm_repo_url': 'https://charts.example.com',
+            'helm_chart_name': 'mcp-server', 'helm_chart_version': '1.0.0',
+            'mcp_enabled': False, 'has_admin_gui': True,
+        })
+        service = self.Service.with_context(
+            mcp_admin_password='seed-pw',
+        ).create({
+            'name': 'MCP Svc 411',
+            'workspace_id': self.workspace.id,
+            'template_id': mcp_template.id,
+            'helm_release_name': 'svc-mcp',
+            'helm_namespace': 'paas-ws-mcpmcp',
+            'helm_values': json.dumps({'config': {'nonSensitive': {}}}),
+        })
+        service.write({'state': 'running'})
+        mock_client = MagicMock()
+        mock_client.reset_release_config.return_value = {'helm_revision': 2}
+        with patch(
+            'odoo.addons.woow_paas_platform.services.paas_operator'
+            '.get_paas_operator_client',
+            return_value=mock_client,
+        ):
+            service._reset_admin_password()
+        kwargs = mock_client.reset_release_config.call_args.kwargs
+        self.assertTrue(
+            kwargs.get('reset_values'),
+            'reset admin password 路徑必須傳 reset_values=True')
+        self.assertNotEqual(kwargs.get('reuse_values'), True)
