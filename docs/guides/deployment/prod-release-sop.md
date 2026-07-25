@@ -3,7 +3,7 @@ title: 發佈到 Production 的標準作業流程（SOP）
 category: guides
 status: active
 created: 2026-06-14
-updated: 2026-06-25
+updated: 2026-07-25
 tags: [paas, release, production, fleet, gitops, helm, ci-cd, sop]
 related:
   - docs/guides/deployment/agent-runtime-image-upgrade-sop.md
@@ -30,6 +30,8 @@ related:
 > **2026-06-24 更新**：naming env-token **L1-L3**（PR #214）已上 **stg** 並 live 驗證（operator chart `0.1.16` / image `20260624.1022`、`PAAS_ENV=stg`、ns label `paas.woowtech.io/env=stg`、Odoo SA `canonical_name=paas-stg-sa-`；當時 prod 未動仍 `0.1.8` / `20260525.0054`——已於隔日 promote，見下）。**§6 新增「兩端 env 一致」檢查（F-ENV-1b）**：promote operator/addon 到 prod 時，operator `PAAS_ENV`（Fleet `config.paasEnv`）與 Odoo `deploy_env` config_parameter **必須同為 `prod`**，否則 split-env（ns label 與 CF 命名對 env 各說各話）。§5.2.1 gate 同步加 `paasEnv: "prod"` 檢查。
 >
 > **2026-06-25 更新**：① **prod operator 已 promote 到 `0.1.16` / image `20260624.1022`（digest `9b937dbb…6b16`，helm rev 42，2026-06-25 06:03 UTC，paas-cd PR #27）** —— 不只追上、且已與 stg **同版**（stg 亦 `0.1.16` / `20260624.1022`，rev 65）。§2 矩陣與 §5.2.1 worked example 的「prod 仍 0.1.8」前提已**過時**（promote 在他處完成）。② **§10.1 issue #18（Fleet `paas-operator-registry` drift）已解決**（亦即 follow-ups **F-ENV-6**）：live secret 上殘留的 `registry-server`/`registry-username` 兩個 key 經 paas-charts 複核確認**零 consumer**（chart 自 0.1.6 起就單 key 模型、server/username 一直走 plaintext deployment env），移除後 bundle 收斂 `ready:1`、GitRepo `5/5`。原 pitfall/F-ENV-6 的「split-values 非 deep-merge 吃掉 server」框架為**誤診**，已於對應 pitfall doc 更正。
+>
+> **2026-07-25 更新（§5.1 大改）**：prod odoo `.75→.78` rollout 後複驗，發現 §5.1 步驟表與實際做法嚴重脫節，本次補齊四件事：① **S1 陷阱**——`paas-odoo/values-prod.yaml` 同時有 `image.tag` 與 `image.digest`，Bitnami common 以 `repository@digest` 渲染、**digest 優先於 tag**，**只改 tag 是 no-op 且會偽裝成發版成功**（§5.1 步驟 5 修正，§8 rollback 同步修正）；② **CD 兩段式 module upgrade 正式入表**——Bitnami chart `ODOO_SKIP_MODULES_UPDATE` 預設 `yes`，換 image 後 boot **不會**跑 `-u`、`noupdate=0` 的 seed XML 不會 reload，故**有 seed 變更的發版必須跑 `-u`**：PR-A（`"no"`）→ 驗證 → PR-B（`"yes"`）；③ **`-u` 曝險窗上限 = 驗證通過後 ≤30 分鐘**，加上收官三重確認；④ **發版前 DB snapshot 正式入表**（步驟 5，排在 promote 之前）—— prod DB 無離線備份（`backups.longhorn.io` 空、backuptarget 未設），snapshot 是**唯一**還原錨點，且**必須驗 `readyToUse=true`**（曾有 `markRemoved=true` 的假錨點），**由人類操作者親跑**。新增 §5.1.1 / §5.1.2 / §5.1.3。
 
 ---
 
@@ -157,7 +159,7 @@ grep -rnE 'version:|tag:' /tmp/paas-app-bundle-cd/*/fleet.yaml /tmp/paas-app-bun
 1. **CI ≠ 上線**。CI 綠燈只代表 image / chart 已 build 並 push 到 registry。上 prod 是另一個獨立動作。
 2. **唯一上 prod 的動作 = 改 `paas-app-bundle-cd` 的 pin 值 + merge `main`**。Fleet 監控此 repo（GitRepo `paas-app-bundle` in `fleet-local`），偵測到 `main` 變更後 ~30–60s 自動 `helm upgrade`。**沒有手動 Rancher UI 步驟**（若有舊文件/舊認知說要去 Rancher 點 upgrade，那是過時的）。
 3. **pin 在兩個地方，分清楚**：
-   - **image tag** → `<component>/values-<env>.yaml` 的 `image.tag`
+   - **image tag** → `<component>/values-<env>.yaml` 的 `image.tag`。⚠️ **`paas-odoo` 另有 `image.digest`：Bitnami common 以 `repository@digest` 渲染、digest 優先於 tag → 兩者必須同改，只改 tag 是 no-op**（§5.1 S1 陷阱）
    - **chart version** → `<component>/fleet.yaml` 的 `helm.version` 行（operator 與 odoo OCI **同一 shape**；odoo 的 `helm.chart` 只指向 OCI 來源 `oci://…/odoo`，版本仍在獨立的 `version:` 行，**不是內嵌在 chart 字串裡**）
 4. **改 image 與改 chart 是兩件事**。只改 image tag（values）不動 chart；但若新版需要 chart 把新設定 passthrough 成 env，**values-only 無效，必須先 bump chart**（見 §9 坑 #5）。
 5. **prod image tag 可變** → 驗證一律比對 **pod imageID（digest）**，不是看 tag 字串。
@@ -173,24 +175,137 @@ grep -rnE 'version:|tag:' /tmp/paas-app-bundle-cd/*/fleet.yaml /tmp/paas-app-bun
 
 **何時**：本 addon（`src/`）改動要上 prod。
 
+> **🔴 S1 陷阱：`image.tag` 與 `image.digest` 必須「兩者同改」**
+>
+> `paas-odoo/values-prod.yaml` 的 `image` 區塊**同時有 `tag` 與 `digest`**，Bitnami common 以 **`repository@digest`** 渲染 —— **digest 優先於 tag**（prod Deployment 的實際 image 字串**完全沒有 tag 段**）。
+>
+> **只改 `tag`、沒改 `digest` = no-op，而且會偽裝成發版成功**：PR merged ✅、Fleet reconcile 綠 ✅、bundle ready ✅、站點 200 ✅ —— 但 pod 跑的還是舊 image，版本根本沒換，而所有訊號都在說「上線成功」。
+>
+> → 下表**步驟 6 必須 `image.tag` ＋ `image.digest` 兩者同改**，diff 裡要同時看到 `tag:` 與 `digest:` 兩行；**rollback（§8）同理**。
+
+> **⚙️ module upgrade 走 CD 兩段式（有 seed 變更時必跑）**
+>
+> prod odoo 是 **Bitnami chart**，`ODOO_SKIP_MODULES_UPDATE` 預設 **`yes`** → **換 image 後 boot 不會自動跑 `-u`** → **`noupdate=0` 的 seed XML data 不會 reload**（新 template、chart pin、方案價格等 seed 變更**全部不生效**：image 換了、版號跳了，功能卻像沒改）。
+>
+> → **有 seed 變更的發版必須跑 `-u`**，程序是兩張 PR：
+> **PR-A（promote）**：換 `image.tag` ＋ `image.digest`，並設 `ODOO_SKIP_MODULES_UPDATE="no"`（boot 自動跑 `-u`）
+> → **驗證** → **PR-B（收官）**：切回 `"yes"`。
+>
+> 兩張 PR 之間是**曝險窗，有硬性時限**，見 §5.1.2。
+
 ```
 步驟                                                      驗證
 ────────────────────────────────────────────────────── ──────────────────────────────
 1. 本 repo bump src/__manifest__.py version              grep version src/__manifest__.py
-   （格式 18.0.{major}.{minor}.{patch}，目前 18.0.1.0.40）
+   （格式 18.0.{major}.{minor}.{patch}；現行 prod 版號
+     見 §2 版本矩陣——勿在本表硬編，會腐化）
 2. commit "release: 18.0.1.0.XX" → push
 3. git tag v18.0.1.0.XX && git push origin v18.0.1.0.XX  （= /woow:deploy 自動化此段）
    → 觸發 trigger-odoo-build.yml → dispatch paas-odoo-ci
-4. 等 paas-odoo-ci build 完成，取得 image tag            CI log 的 image_tag=YYYYMMDD.HHMM
-   （= UTC date，非 addon 版號）                          或 tea 查 paas-odoo-ci actions
-5. 在 paas-app-bundle-cd 開 branch，改                     git -C cd diff
-   paas-odoo/values-prod.yaml 的 image.tag = 新 tag
-6. tea PR（zh-tw）→ merge main                            tea pr list
-7. 等 Fleet reconcile（~30–60s）                          見 §7
-8. 驗證 prod pod 跑新 digest                              見 §7「pod digest」
+4. 等 paas-odoo-ci build 完成，取得 image tag 與 digest  CI log 的 image_tag=YYYYMMDD.HHMM
+   （tag = UTC date，非 addon 版號）                     ＋該 tag 的 sha256 digest
+5.〔人類操作者親跑〕建發版前 DB snapshot：pg + data      兩顆皆 readyToUse=true
+   兩顆 PVC 都要，命名                                   且 markRemoved=false
+   paas-odoo-{pg,data}-pre{版號}-{YYYYMMDD}              （只看 list 有東西會誤判）
+   未確認 readyToUse 前不得進步驟 6 —— 見 §5.1.1
+6. PR-A（promote）：paas-app-bundle-cd 開 branch，改     git -C cd diff 必須同時出現
+   paas-odoo/values-prod.yaml 的                         tag: 與 digest: 兩行
+   image.tag ＋ image.digest（兩者同改、缺一 = no-op；
+   digest 優先於 tag，見上方 S1 陷阱）
+   本次含 seed（noupdate=0）變更 → 同一張 PR 一併設
+   ODOO_SKIP_MODULES_UPDATE="no"（boot 自動跑 -u）
+7. tea PR（zh-tw）→ merge main                           tea pr list
+8. 等 Fleet reconcile（~30–60s）                         見 §7
+9. 驗證 prod pod 跑新 digest                             見 §7「pod digest」
+   有跑 -u 時另看 boot log 的 module update 段           log 無 ERROR / CRITICAL
+10. 站點 smoke：/woow /odoo /my                          見 §7 (6)；fail → §8 rollback
+11. PR-B（收官）：ODOO_SKIP_MODULES_UPDATE 改回 "yes"    驗證通過後 30 分鐘內 merge
+    → merge main → 等 Fleet reconcile                    （曝險窗規則見 §5.1.2）
+12. 三重確認 SKIP 已回 "yes"                             見 §5.1.3 收官三重確認
+    （deployment spec / pod env / Fleet 無 drift）
 ```
 
+> **無 seed 變更的發版**（純 Python / OWL 邏輯改動，沒動 `noupdate=0` 的 XML data）可略過 `ODOO_SKIP_MODULES_UPDATE` 的來回，步驟 6 不設 `"no"`、步驟 11/12 免做 —— 但**判斷「有沒有 seed 變更」要看 diff，不是憑印象**；不確定就當作有，走完整兩段式。
+
 > **odoo chart（Bitnami `28.2.10`）** 平常不動；只有要升 Odoo 框架本身時才改 `paas-odoo/fleet.yaml` 的 `helm.version`（**高風險**：schema / addon 相容性，須先 stg / sandbox 驗證穩定，**勿與 image bump 同 PR**）。
+
+#### 5.1.1 🔴 發版前 DB snapshot（步驟 5；人類操作者親跑）
+
+**為什麼是「正式步驟」而不是「保險」**：本 SOP 把 `-u` 正式入表後，**PR-A 一 merge 就會跑 schema migration**，而 **§8 rollback 只能退 image、退不了 schema**（image 換回舊版，DB 裡已經改掉的 schema / seed data 不會跟著回去）。沒有 DB 錨點的話，promote 就是一道**單向門**。
+
+更關鍵的是：**prod DB 沒有離線備份**。2026-07-25 實查 —— `backups.longhorn.io` **無任何資源**、backuptarget **未設定**。也就是說 **snapshot 是唯一的還原錨點**，不是多一層保險。
+
+**兩顆都要建**（只做 pg 會漏掉附件 / filestore，還原時湊不成一致狀態）：
+
+| 對象 PVC | snapshot 名（本次實例） | 本次大小 |
+|---------|----------------------|---------|
+| PostgreSQL 資料　`pvc-9aa6ed19-5798-40b5-8689-7a7ab910a67d` | `paas-odoo-pg-pre78-20260725` | 200 MB |
+| Odoo filestore data | `paas-odoo-data-pre78-20260725` | 13 MB |
+
+**命名慣例**：`paas-odoo-{pg,data}-pre{目標版號}-{YYYYMMDD}`（例：2026-07-25 升 `.78` → `paas-odoo-pg-pre78-20260725`）。讓「這顆對應哪一次發版」自解釋 —— 事故當下沒有時間猜哪顆能用。
+
+> **🔴 建完必須驗 `readyToUse=true` 才算數 ——「有一顆 snapshot」≠「有還原點」。**
+>
+> 血淚實例（2026-07-25）：`.78` 發版前查到「最新那顆」snapshot `paas-odoo-pg-pre75-20260723-1334`，實際是 **`markRemoved=true` / `readyToUse=false` ＝不可用**。當時真正可用的最新錨點是 07-20 的 `pre73`，schema 已經早於現行 prod。**只看 list 有沒有東西就會誤判成「有備份」**，必須逐顆讀 `readyToUse` / `markRemoved`。
+
+```bash
+# 參考查法（Longhorn 原生 snapshot CR；CR 實際位置以現場為準）
+kubectl --context woow-k3s -n longhorn-system get snapshots.longhorn.io \
+  -o custom-columns='NAME:.metadata.name,VOLUME:.spec.volume,READY:.status.readyToUse,REMOVED:.status.markRemoved' \
+  | grep pre78     # ← 換成本次的 pre{版號}
+#   兩顆都必須 READY=true 且 REMOVED=false
+#   任一不符 = 本次發版沒有還原錨點 → STOP，不得進步驟 6
+```
+
+> **由人類操作者親跑，agent 不代勞。** prod DB 零離線備份，建 snapshot 屬不可逆風險操作，與 CI 的 `/approve` 人工核可、CD PR merge **同級**。
+> agent 的職責僅止於：**確認兩顆 snapshot 都 `readyToUse=true` / `markRemoved=false` 之後**才可繼續步驟 6；沒確認到就 STOP、回報，不要自行往下走。
+> （另一個結構性理由：Longhorn snapshot CR 不在本 repo kubectl 可操作的 7 個 namespace 內 —— 見 `CLAUDE.md`「共用叢集鐵律」，非平台 namespace 只可唯讀盤點、嚴禁寫入。）
+
+#### 5.1.2 ⏱ `-u` 曝險窗（PR-A → PR-B 之間）：上限 30 分鐘
+
+PR-A merge 後、PR-B merge 前，`ODOO_SKIP_MODULES_UPDATE="no"` 是 prod 的**宣告態**。這段期間 **任何 pod 重啟都會再跑一次 module update** —— OOM kill、節點驅逐 / 維護、probe 失敗重啟、手動 `rollout restart`、其它 PR 觸發的 Fleet upgrade，全部算數。也就是：**一次非預期、沒有人在旁邊看的第二次 `-u`**，migration 期間 worker 被佔住、服務降級或不可用，而且發生時間完全不受控。
+
+> **規則：驗證通過後 ≤ 30 分鐘內 merge PR-B。**
+> 這是**可稽核的硬上限**，不是「盡快」—— 超過 30 分鐘即視為破線，停下手邊其它事先把 PR-B 收掉，**不得放著過夜或跨班**。
+
+實測基準（用 helm revision 時戳量，`helm -n paas-system history paas-odoo`）：
+
+| 日期 | 曝險窗 | 佐證 | 判定 |
+|------|-------|------|------|
+| 2026-07-25 | **11 分鐘** | paas-odoo helm `rev57 09:07:21Z`（PR-A）→ `rev58 09:18:43Z`（PR-B） | ✅ 合格，即本上限的參考做法 |
+| 2026-07-23 | **約 61 分鐘** | 同一量法 | ⚠️ 超標 —— 這次超標即為訂定本規則的動機 |
+
+> 若 30 分鐘內驗證還沒做完（migration 特別久、或撞到需要調查的異常），**不要靠拖長窗口等它好**：先 merge PR-B 把宣告態收回 `"yes"`，再繼續查。收回 `"yes"` **不會**回退已經跑完的 migration，只是讓下一次 boot 不再自動 `-u`；真要退版走 §8。
+
+#### 5.1.3 收官三重確認：`ODOO_SKIP_MODULES_UPDATE` 已回 `"yes"`
+
+PR-B merge + Fleet reconcile 後**必做，三條缺一不可**。三條各證一件**不同**的事：
+
+| # | 查什麼 | 證明什麼 |
+|---|-------|---------|
+| ① | deployment spec 的 env | **宣告態已生效到 workload** |
+| ② | running pod 的實際 env | **現役 pod 真的吃到**（spec 對但 pod 還沒滾 → 這裡會不一致） |
+| ③ | Fleet BundleDeployment `nonModified=true` | ①② 是 **git 宣告態**、不是手改 live 湊出來的漂移 |
+
+```bash
+CTX=woow-k3s
+
+# ① deployment spec（宣告態）
+kubectl --context $CTX -n paas-system get deploy paas-odoo \
+  -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ODOO_SKIP_MODULES_UPDATE")]}{.name}={.value}{"\n"}{end}'
+#   期望：ODOO_SKIP_MODULES_UPDATE=yes
+
+# ② running pod 的實際 env（現役 pod 真的吃到）
+kubectl --context $CTX -n paas-system exec deploy/paas-odoo -- printenv ODOO_SKIP_MODULES_UPDATE
+#   期望：yes
+
+# ③ Fleet BundleDeployment 無 drift（證明 ①② 來自 git 宣告態）
+kubectl --context $CTX get bundledeployment -A \
+  -o custom-columns='NAME:.metadata.name,NONMODIFIED:.status.nonModified,READY:.status.ready' | grep paas-odoo
+#   期望：NONMODIFIED=true（false = live 與 git 有 drift，須排查，不得視為收官完成）
+```
+
+**為什麼三條都要**：只驗 ① 會漏「pod 還沒滾、現役 pod 仍帶 `"no"`」；只驗 ①② 會漏「有人 `kubectl set env` 手改 live 湊出來的假綠」—— 那種狀態下一次 Fleet reconcile 會把它打回 `"no"`，曝險窗其實從沒關上。三條全過才算收官。
 
 ### 5.2 paas-operator 上 prod
 
@@ -394,13 +509,17 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 
 1. **查出前一版 pin**（values 檔的 git 歷史就是版本台帳）：
    ```bash
-   git -C /tmp/paas-app-bundle-cd log -p -2 -- paas-operator/values-prod.yaml | grep -E '^[+-] *tag:'
+   CD=/tmp/paas-app-bundle-cd; COMPONENT=paas-odoo    # 或 paas-operator / cloudflare
+   git -C $CD log -p -2 -- $COMPONENT/values-prod.yaml | grep -E '^[+-] *(tag|digest):'
    # 或讀 values 檔內保留的「取代 …（sha256:…）」註解，取上一版 tag + digest
    ```
 2. 在 paas-app-bundle-cd 把 `image.tag`（和/或 `fleet.yaml` chart version）改回前一版（**用前一版的 digest 反查確認 tag** 以防 mutable tag 漂移）。
+   > 🔴 **`paas-odoo` 的 values 同時有 `image.tag` 與 `image.digest`，digest 優先於 tag（§5.1 S1 陷阱）→ rollback 必須 `tag` ＋ `digest` 兩者同改。** 只把 tag 改回舊值 = **rollback 根本沒發生**，但 PR merged / Fleet 綠 / bundle ready 會讓它看起來成功 —— 事故當下最不需要的就是這種假訊號。
 3. merge `main` → Fleet 自動 `helm upgrade` 回退。
 4. 緊急時（等不及 PR 流程）可 `git revert` 觸發 commit 後直接 merge。
 5. 驗證 pod digest 已回到舊版（§7）。
+
+> **🔴 image 退版 ≠ DB 退版。** 上述步驟只把 image pin 改回舊版，**不會回退已經跑完的 `-u` migration**（schema 與 `noupdate=0` seed data 已經改掉了）。**DB / schema 層的還原走 §5.1.1 的發版前 snapshot** —— 那是 prod 唯一的還原錨點（prod DB 無離線備份）。若該次發版**沒有** `readyToUse=true` 的 snapshot，就**沒有 DB 退路**，只能往前修；這正是 §5.1.1 把 snapshot 列為 promote 前必要步驟的原因。
 
 > agent-runtime 的「換版」不適用一般 rollback（既存 pod 凍結 tag，須 DELETE reap），見 §5.3 連結。
 
@@ -459,16 +578,26 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 [ ] 2.（若改 chart）確認 chart 已在 Gitea Helm registry，且 Chart.yaml#version 已 bump
 [ ] 2.5 無回歸超集 gate（§9 坑 #11）：新 image/chart 是 prod 現役的「超集」
        （`git merge-base --is-ancestor <現役來源 commit> <新來源 commit>`；版號單調不退；chart 模板 wiring 未砍）
+[ ] 2.6（paas-odoo）發版前 DB snapshot —— 【人類操作者親跑，agent 不代勞】
+       建 paas-odoo-{pg,data}-pre{版號}-{YYYYMMDD} 兩顆（PostgreSQL + filestore data）
+       agent 職責僅止於：確認兩顆 readyToUse=true 且 markRemoved=false 才可繼續；
+       未確認 = STOP，不得進 step 3（prod DB 無離線備份，snapshot 是唯一還原錨點，§5.1.1）
 [ ] 3. clone/pull paas-app-bundle-cd，改對應 <component>/values-<env>.yaml image.tag
        （和/或 fleet.yaml version）；保留 §6 prod 專屬欄位
+       paas-odoo：image.tag 與 image.digest 必須「同改」（digest 優先，只改 tag = no-op，§5.1）
+       paas-odoo 且本次有 seed（noupdate=0）變更：同 PR 設 ODOO_SKIP_MODULES_UPDATE="no"（PR-A）
 [ ] 4. 自我核對 diff：只動 pin 值，未誤改 namespace/tunnel/prefix/replica
 [ ] 5. tea PR（zh-tw 描述）→ 等審核 → merge main
 [ ] 6. 等 Fleet reconcile：kubectl -n fleet-local get gitrepo paas-app-bundle
        → COMMIT == CD main HEAD 且 STATUS 空
 [ ] 7. 閉環驗證：pod imageID(digest) == 預期新版；deploy readyReplicas 滿
 [ ] 8. 站點 smoke：/woow /odoo /my 回 HTTP 2xx/3xx（4xx/5xx/000 重試 ≤3 次仍失敗 → 立即 §8 rollback）
+[ ] 8.5（paas-odoo 且本次跑了 -u）驗證通過後「≤30 分鐘內」merge PR-B 把
+       ODOO_SKIP_MODULES_UPDATE 收回 "yes"（曝險窗，§5.1.2），再過 §5.1.3 收官三重確認：
+       deployment spec / running pod env / Fleet BundleDeployment nonModified=true
 [ ] 9.（agent-runtime 換版）另走 §5.3 連結的 reap SOP，勿用一般 rollback/restart
-[ ] 10. 任一步失敗 → §8 rollback（改回前一版 digest 對應 tag → merge）
+[ ] 10. 任一步失敗 → §8 rollback（改回前一版 digest 對應 tag + digest → merge）
+        已跑過 -u 者：image 退版「不會」回退 schema，DB 層還原走 §5.1.1 的 pre-release snapshot
 ```
 
 ---
