@@ -691,7 +691,17 @@
             <field name="sa_max_emails_per_policy">20</field>
         </record>
 
-        <!-- MCP Server: Hermes Plans (T1-T3, 月 1500/4500/6000) -->
+        <!-- MCP Server: Hermes Plans (T1-T3, 月 1500/4500/6000)
+
+             可見性沿革：#336 Wave A（A5）依 2026-07-10 定價會議「第一階段不含
+             Hermes」把 6 筆全設 storefront_hidden=True 封存；2026-07-25 改判
+             「MCP 可連接外部服務、功能上已可販售」→ #431 解封，本區塊移除
+             storefront_hidden（預設 False）。既有 DB 因本檔 noupdate="1" 不會被
+             回填，一律靠 src/migrations/18.0.1.0.79/post-migrate.py force-write。
+
+             cs_* 三階規格（#431）：同價位對齊 n8n，月繳／年繳同 tier 一致；
+             cs_odoo_workers 一律 0（非 Odoo 服務）。留 0 會 fallback
+             template.min_*（1c/1G/5Gi）→ 三階同規格不同價。 -->
         <record id="plan_mcp_hermes_monthly" model="sh.subscription.plan">
             <field name="name">Hermes MCP Server T1（1–3 人）Monthly</field>
             <field name="sh_duration">1</field>
@@ -708,7 +718,10 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="storefront_hidden" eval="True"/>
+            <field name="cs_vcpu">1</field>
+            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_storage_gb">20</field>
+            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_yearly" model="sh.subscription.plan">
@@ -727,7 +740,10 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="storefront_hidden" eval="True"/>
+            <field name="cs_vcpu">1</field>
+            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_storage_gb">20</field>
+            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_t2_monthly" model="sh.subscription.plan">
@@ -746,7 +762,10 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="storefront_hidden" eval="True"/>
+            <field name="cs_vcpu">2</field>
+            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_storage_gb">30</field>
+            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_t2_yearly" model="sh.subscription.plan">
@@ -765,7 +784,10 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="storefront_hidden" eval="True"/>
+            <field name="cs_vcpu">2</field>
+            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_storage_gb">30</field>
+            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_t3_monthly" model="sh.subscription.plan">
@@ -784,7 +806,10 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="storefront_hidden" eval="True"/>
+            <field name="cs_vcpu">2</field>
+            <field name="cs_ram_gb">4.0</field>
+            <field name="cs_storage_gb">40</field>
+            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_t3_yearly" model="sh.subscription.plan">
@@ -803,7 +828,10 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="storefront_hidden" eval="True"/>
+            <field name="cs_vcpu">2</field>
+            <field name="cs_ram_gb">4.0</field>
+            <field name="cs_storage_gb">40</field>
+            <field name="cs_odoo_workers">0</field>
         </record>
 
         <!-- MCP Server: Odoo Plans（統一單階 3000；改價 only、名稱不動） -->
