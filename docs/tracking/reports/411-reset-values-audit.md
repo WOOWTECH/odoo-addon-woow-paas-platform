@@ -1,8 +1,8 @@
-# #411 Reset Values Backfill 盤點 ＋ W4 stg 完整驗證報告
+# #411 Reset Values Backfill 盤點 ＋ W4 stg 完整驗證 ＋ W5 prod 收斂報告
 
 > 生成：`scripts/audit/audit_411_reset_values.py`｜context=`woow-k3s`｜env=`stg`｜生成時間 `2026-07-24 23:47:15 +0800`
 > helm：`v4.2.3+g43e8b7f` 讀取（release 由 operator helm 3.13.3 部署，`get values`/`list` 唯讀相容；已剝除 helm 4 `USER-SUPPLIED VALUES` sentinel）
-> 狀態：**完成** —— 前置盤點（8 release 逐鍵三分類）＋ W4 stg 完整驗證（Phase 1-6：build／DB 升級／deploy／盤點／backfill／e2e 雙向）＋ (c) n8n canonical 查證 ＋ agent-runtime out-of-scope 定性。
+> 狀態：**完成（含 prod 收官）** —— 前置盤點（8 release 逐鍵三分類）＋ W4 stg 完整驗證（Phase 1-6：build／DB 升級／deploy／盤點／backfill／e2e 雙向）＋ (c) n8n canonical 查證 ＋ agent-runtime out-of-scope 定性 ＋ **W5 prod 收斂**（2026-07-25 隨 prod `18.0.1.0.78` rollout；pre／post prod CS 皆 0 → 三分類全空集合，全收斂；見文末 W5 段）。
 > 鐵律：唯讀 `get`/`list`；raw values（含明文 secret）不進 git（落點見文末）；本報告 stored values 已遮罩（對齊 operator `_sanitize_release_values` ＋ 鍵名 heuristic）。
 
 ## 摘要
@@ -1052,3 +1052,58 @@ release `svc-e35e3ee4` helm 升級到 `mcp-server-0.1.5 rev=2 deployed`；`seedR
 
 ### 觀察（非 W4 操作導致）
 Phase 4→B2 間隔數小時內，3 個 MCP 測試殘留服務（`svc-1b606411`/`svc-2d5a0ca0`/`svc-9d7dfc1d`，template 關聯異常的孤立 release）被外部清理（CS record + helm release 皆消失，audit 對象 8→5）。W4 操作範圍明確不含它們（僅碰 svc 43 backfill / mcp-k8s template version / 拋棄式 CS 57）；其 Phase 4 分類本為 `a:2/b:0/c:0`，消失不影響 (b)/(c) 結論。
+
+---
+
+## W5 prod 收斂（2026-07-25，隨 prod `18.0.1.0.78` rollout 完成）
+
+> 本節為**人工補記**（非 `audit_411_reset_values.py` 產出）：W5 prod 收斂由**外部專責發版團隊**隨 2026-07-25 的 prod `.78` rollout 執行，事後回填本報告，使其成為 #411 的完整紀錄（W1–W5）。
+
+### W5-pre — build 前 gate
+
+prod DB 查詢：
+
+```sql
+select count(*) from woow_paas_platform_cloud_service;  -- → 0
+```
+
+**prod CloudService = 0（空集合）** → 上方「(b) backfill 清單」與「(c) 待裁決清單（prod 翻 flag 前須清零）」在 prod **皆無對象**，gate 條件直接滿足、**gate 通過**，無須任何 backfill 或逐筆裁決。
+
+**三重佐證（空集合是真實狀態，非漏盤）**：
+
+| # | 佐證 | 對 reset 語意的意義 |
+| --- | --- | --- |
+| 1 | prod 無任何 `paas-ws-*` namespace／`svc-*` helm release | 沒有租戶 release 可被 reset 語意影響 |
+| 2 | 裸 ns 的 mcp-admin 型工作負載（`hermes-mcp-admin`、`kasim-odoo`、`lyucijyun-odoo`）**皆非 helm release、非 CloudService**，由 `kubectl apply` 直接管理 | 不在 helm upgrade 路徑上，reset 語意碰不到 |
+| 3 | `paas-odoo`／`paas-operator`／`cloudflare-tunnel` 皆 Fleet/GitOps 管理，**非 CS** | 不走 `_assemble_deploy_values()` 管線 |
+
+### rollout 事實（外部專責發版團隊執行）
+
+| 項目 | 值 |
+| --- | --- |
+| 版號 | prod odoo `18.0.1.0.75` → `18.0.1.0.78` |
+| image tag | `20260725.0839` |
+| image digest | `sha256:ea709d12933471ecddfa247e7b474eea6dcb0d53d6b9f6fd0f7c3b0c7f6ccadc` |
+| CD PR #61 | image tag ＋ digest **同改**、`ODOO_SKIP_MODULES_UPDATE=no`（跑 `-u`）→ main `88b62c7a` |
+| CD PR #62 | `ODOO_SKIP_MODULES_UPDATE` 切回 `yes` → main `392737e9` |
+| `-u` 執行 | 耗時 **94 秒**、migration error **0** |
+| DB 版號 | `ir_module_module.latest_version = 18.0.1.0.78`、`state=installed` |
+
+### W5-post — rollout 後複驗
+
+rollout 後複查 prod CloudService **仍 = 0** → **(a)/(b)/(c) 三分類全空集合**，#411 在 prod **全收斂**。
+
+### 結論
+
+- #411 的 reset-values 統一管線（`_assemble_deploy_values()` 全量 values）**自此在 prod 生效**。
+- 因 prod 零租戶 CS，本次上線**無任何既存 release 被 redeploy**，即時風險為零。
+- 日後 prod 新建／redeploy 的 CS 一律走新管線（**預期行為**）。
+
+### 踩坑留檔 — `audit_411_reset_values.py` 預設 `--report` 會靜默覆寫本報告
+
+| 項 | 內容 |
+| --- | --- |
+| 症狀 | 不帶 `--report` 時，預設輸出路徑就是本報告（#429 前：`scripts/audit/audit_411_reset_values.py:460` 的 `default=`）。對**空集合環境**（prod、0 CS）跑一次，已 commit 的完整報告就被**靜默覆寫成空骨架** —— exit 0、無任何警告 |
+| 盲點 | docstring 的「唯讀鐵律」只涵蓋**叢集側**（`kubectl get/list`、`helm get values` 零寫入），**不含 repo 檔案寫入**；`--raw-dir` 早有「預設系統 tmp、repo 外」保護，`--report` 當時沒有 |
+| 修正 | 已由 [PR #429](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/pulls/429) 機械化修掉（預設輸出改系統 tmp、預設檔名帶 env） |
+| 過渡期規避 | **#429 合併前跑此腳本，務必顯式帶 `--report <暫存路徑>`**（例：`--report /tmp/411-audit-scratch.md`） |
