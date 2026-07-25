@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""#411 audit classifier 純邏輯測試（fixture，不需 odoo 環境）。
+"""#411 audit 純邏輯測試（fixture，不需 odoo 環境、不連叢集）。
 
-覆蓋 audit_411_reset_values.py 的比對引擎：_flatten / _is_injector_path /
-_is_config_sensitive / classify_diff / compute_platform_values。
+覆蓋 audit_411_reset_values.py 的：
+- 比對引擎：_flatten / _is_injector_path / _is_config_sensitive / classify_diff /
+  compute_platform_values
+- 報告落點守線：default_report_path / read_report_env / guard_report_target
 
 跑法：
     python3 scripts/audit/test_audit_411_classifier.py
@@ -10,6 +12,7 @@ _is_config_sensitive / classify_diff / compute_platform_values。
 """
 import importlib.util
 import pathlib
+import tempfile
 import unittest
 
 # 從同目錄檔案載入受測模組（檔名底線合法，但用 importlib 免依賴 sys.path）。
@@ -187,6 +190,87 @@ class TestRenderReportIntegration(unittest.TestCase):
         out = audit.render_report([record], self._meta())
         self.assertIn("diff 標 pending", out)
         self.assertIn("鐵律與 raw dump 落點", out)
+
+
+class TestReportTarget(unittest.TestCase):
+    """報告落點守線（本腳本會**無條件覆寫** --report 指到的檔案）。
+
+    舊版 `--report` 預設值直接指向 repo 內已 commit 的報告，對空集合環境（prod 零 CS）
+    跑一次就把完整報告靜默蓋成空骨架、exit 0 無警告。修法＝預設落 tmp（repo 外）、
+    檔名帶 env、既有報告 env 標記不符時 fail-loud。
+    """
+
+    def _meta(self, env):
+        return {
+            "context": "woow-k3s", "env": env,
+            "generated_at": "2026-01-01 00:00:00 +0800",
+            "helm_version": "v4.2.3", "raw_dir": "/tmp/x",
+            "ns_count": 0, "diff_status": "test",
+        }
+
+    def _existing_report(self, tmpdir, env):
+        """在 tmpdir 產一份「該 env 的既有報告」（走真 render_report，格式與實跑一致）。"""
+        path = pathlib.Path(tmpdir) / "existing.md"
+        path.write_text(audit.render_report([], self._meta(env)), encoding="utf-8")
+        return path
+
+    # --- 預設落點 ---
+    def test_default_report_outside_repo(self):
+        # 預設落點不得在 repo 內（否則不給 --report 就會覆寫已 commit 的報告）
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        for env in ("prod", "stg", "both"):
+            path = audit.default_report_path(env)
+            self.assertFalse(
+                str(path).startswith(str(repo_root)), f"env={env} 預設落點在 repo 內：{path}"
+            )
+
+    def test_default_report_name_carries_env(self):
+        # 檔名帶 env → prod / stg / both 三份預設報告天然不互踩
+        names = {env: audit.default_report_path(env).name for env in ("prod", "stg", "both")}
+        self.assertEqual(len(set(names.values())), 3, names)
+        for env, name in names.items():
+            self.assertIn(env, name)
+            self.assertTrue(name.endswith(".md"), name)
+
+    # --- env 標記解析 ---
+    def test_read_report_env_roundtrip(self):
+        # render_report 寫的 header marker 必須被 read_report_env 讀回（格式漂移即紅）
+        self.assertEqual(audit.read_report_env(audit.render_report([], self._meta("stg"))), "stg")
+        self.assertEqual(audit.read_report_env(audit.render_report([], self._meta("both"))), "both")
+
+    def test_read_report_env_none_when_absent(self):
+        self.assertIsNone(audit.read_report_env("# 手寫文件\n\n沒有 env 標記。\n"))
+
+    # --- 覆寫守線 ---
+    def test_guard_blocks_env_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._existing_report(tmp, "stg")
+            with self.assertRaises(SystemExit) as ctx:
+                audit.guard_report_target(path, "prod", force=False)
+            self.assertIn("--force", str(ctx.exception))
+            # 守線只擋、不動檔（fail 前後內容不變）
+            self.assertEqual(audit.read_report_env(path.read_text(encoding="utf-8")), "stg")
+
+    def test_guard_allows_same_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._existing_report(tmp, "stg")
+            audit.guard_report_target(path, "stg", force=False)  # 不 raise
+
+    def test_guard_allows_with_force(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._existing_report(tmp, "stg")
+            audit.guard_report_target(path, "prod", force=True)  # 顯式覆寫放行
+
+    def test_guard_allows_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit.guard_report_target(pathlib.Path(tmp) / "nope.md", "prod", force=False)
+
+    def test_guard_allows_when_no_marker(self):
+        # 抓不到 marker（手寫檔／格式外）→ 放行不誤擋，只在有明確衝突時 fail-loud
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "hand-written.md"
+            path.write_text("# 手寫報告\n", encoding="utf-8")
+            audit.guard_report_target(path, "prod", force=False)
 
 
 if __name__ == "__main__":
