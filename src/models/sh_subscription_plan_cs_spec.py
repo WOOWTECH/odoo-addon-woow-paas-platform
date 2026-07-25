@@ -53,7 +53,37 @@ class ShSubscriptionPlanCsSpec(models.Model):
         時跳過不炸。與 XML fresh 軌（subscription_products.xml）為同源兩份手寫，
         test_xml_and_migration_tracks_identical 守其一致。
         """
-        for xmlid, (vcpu, ram, storage, workers) in self._CS_SPEC_332.items():
+        self._woow_write_cs_spec(self._CS_SPEC_332)
+
+    # #431：Hermes 重新上架時補的三階規格（同價位對齊 n8n；月繳／年繳同 tier
+    # 一致；cs_odoo_workers 恆 0——非 Odoo 服務）。留 0 會 fallback
+    # template.min_*（1c/1G/5Gi）→ 三階同規格不同價，正是 #431 要解的病灶。
+    _CS_SPEC_HERMES_431 = {
+        'plan_mcp_hermes_monthly': (1, 2.0, 20, 0),
+        'plan_mcp_hermes_yearly': (1, 2.0, 20, 0),
+        'plan_mcp_hermes_t2_monthly': (2, 2.0, 30, 0),
+        'plan_mcp_hermes_t2_yearly': (2, 2.0, 30, 0),
+        'plan_mcp_hermes_t3_monthly': (2, 4.0, 40, 0),
+        'plan_mcp_hermes_t3_yearly': (2, 4.0, 40, 0),
+    }
+
+    def _woow_migrate_hermes_cs_spec_431(self):
+        """#431 升級軌：Hermes 6 筆 backfill cs_*（xmlid 定位、冪等）。
+
+        seed 軌（subscription_products.xml）是 noupdate=1，既有 DB 只能靠本
+        method force-write。與 seed 為同源兩份手寫，
+        test_hermes_seed_cs_specs／test_migration_79_force_writes_from_78_state
+        兩側各自釘住同一組值。
+        """
+        self._woow_write_cs_spec(self._CS_SPEC_HERMES_431)
+
+    def _woow_write_cs_spec(self, spec_by_xmlid):
+        """共用 force-write：{xmlid: (vcpu, ram, storage, workers)}。
+
+        一律 env.ref() xmlid 定位（R8 鐵律）；xmlid 不存在（fresh DB 未載 seed）
+        時跳過不炸。
+        """
+        for xmlid, (vcpu, ram, storage, workers) in spec_by_xmlid.items():
             plan = self.env.ref(f'woow_paas_platform.{xmlid}',
                                 raise_if_not_found=False)
             if plan:
