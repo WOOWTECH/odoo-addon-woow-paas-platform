@@ -171,19 +171,39 @@ class ShSubscriptionPlanVisibility(models.Model):
                 specs.append({'icon': 'lock', 'label': 'MCP 加密連線'})
         return specs
 
+    # #336 A5（hide，18.0.1.0.54）與 #431（unhide，18.0.1.0.79）共用的定位清單。
+    _HERMES_PLAN_XMLIDS = [
+        'plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly',
+        'plan_mcp_hermes_t2_monthly', 'plan_mcp_hermes_t2_yearly',
+        'plan_mcp_hermes_t3_monthly', 'plan_mcp_hermes_t3_yearly',
+    ]
+
     def _woow_migrate_hide_hermes_336(self):
         """A5 封存 Hermes：升級軌 force-write（noupdate XML 不會回填既有 record）。
 
         一律 env.ref() xmlid 定位（R8 鐵律）；xmlid 不存在（fresh DB 未載 seed）
         時跳過不炸。冪等。
+
+        ⚠️ 不可刪除：18.0.1.0.54/post-migrate.py 仍在呼叫本 method，「從 .53 以前
+        升上來」的 DB 會依序跑 .54（hide）→ .79（unhide），終態為 #431 的可見。
+        #431 解封請走 _woow_migrate_unhide_hermes_431()，不要改本 method 的語意。
         """
-        xmlids = [
-            'plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly',
-            'plan_mcp_hermes_t2_monthly', 'plan_mcp_hermes_t2_yearly',
-            'plan_mcp_hermes_t3_monthly', 'plan_mcp_hermes_t3_yearly',
-        ]
-        for xmlid in xmlids:
+        for xmlid in self._HERMES_PLAN_XMLIDS:
             plan = self.env.ref(f'woow_paas_platform.{xmlid}',
                                 raise_if_not_found=False)
             if plan:
                 plan.storefront_hidden = True
+
+    def _woow_migrate_unhide_hermes_431(self):
+        """#431 解封 Hermes：升級軌 force-write（seed 軌只對 fresh DB 生效）。
+
+        subscription_products.xml 是 noupdate=1，既有 DB（stg／prod）不會被 seed
+        的 storefront_hidden 移除回填，只能由本 method 翻正。與
+        _woow_migrate_hide_hermes_336() 是相反方向的兩個 method，各自對應自己的
+        migration 版本，互不覆寫。冪等；xmlid 不存在時跳過不炸。
+        """
+        for xmlid in self._HERMES_PLAN_XMLIDS:
+            plan = self.env.ref(f'woow_paas_platform.{xmlid}',
+                                raise_if_not_found=False)
+            if plan:
+                plan.storefront_hidden = False
