@@ -17,7 +17,13 @@ values 裡沒有」的鍵並 backfill，否則翻語意當下升級行為會突�
 
 鐵律（CLAUDE.md）
 ----------------
-- **唯讀**：只 `kubectl get/list` 與 `helm list/get values`，零寫入。
+- **唯讀僅指叢集側**：對叢集只 `kubectl get/list` 與 `helm list/get values`，零寫入。
+  **本機檔案不是唯讀** —— `--report` 指到的路徑會被**無條件覆寫**（不 append、不備份、
+  不比對），`--raw-dir` 同理。曾因 `--report` 預設值直指 repo 內已 commit 的報告，對空
+  集合環境（prod 零 CloudService）跑一次就把完整報告靜默蓋成空骨架，exit 0 無警告。
+  故本腳本現在：預設報告落**系統 tmp**（`411-reset-values-audit-{env}.md`、repo 外），
+  **要寫進 git 必須顯式給 `--report`**；且 `--report` 指到的既有報告若 env 標記與本次
+  `--env` 不同，fail-loud 要求 `--force`（見 `docs/tracking/pitfalls/`）。
 - **namespace 白名單**：只 iterate 租戶 ns —— `paas-ws-*`（prod）/ `paas-ws-stg-*`（stg）。
   system/cloudflare ns 不在盤點對象。跨 ns 的 `get ns` 僅供歸屬分流（唯讀 metadata）。
 - **secret 不外洩**：raw values（含明文 secret）只寫 `--raw-dir`（預設系統 tmp、repo 外），
@@ -39,11 +45,13 @@ sentinel top-level key `USER-SUPPLIED VALUES`（helm 3 無），本腳本會剝�
 用法
 ----
     # 第二階段（W4）：先在 stg pod 產 computed dump（見 dump_computed_values.py），再比對
+    # `--report` 顯式指 repo 路徑＝**這份 repo 報告會被整份覆寫**，確認要更新它才給
     python3 scripts/audit/audit_411_reset_values.py --env stg --context woow-k3s \\
         --computed-json computed.json \\
         --report docs/tracking/reports/411-reset-values-audit.md
 
     # 只收集不比對（第一階段行為；不給 --computed-json）
+    # 不給 --report → 報告落系統 tmp 的 411-reset-values-audit-stg.md，repo 完全不動
     python3 scripts/audit/audit_411_reset_values.py --env stg --context woow-k3s
 """
 from __future__ import annotations
@@ -449,6 +457,55 @@ def render_report(records: list[dict], meta: dict) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+#  報告落點守線（報告是無條件覆寫 —— 見模組 docstring 鐵律段）
+# ---------------------------------------------------------------------------
+
+# render_report header 寫出的 env 標記；覆寫守線據此判斷是否跨環境誤蓋。
+_REPORT_ENV_MARKER_RE = re.compile(r"｜env=`([^`]+)`")
+
+
+def default_report_path(env: str) -> Path:
+    """預設報告落點＝系統 tmp、檔名帶 env（與 --raw-dir 落點語意一致，皆 repo 外）。
+
+    刻意不預設寫進 repo：報告一律無條件覆寫，預設指向 repo 內已 commit 的報告時，
+    一次空集合環境的盤點就會把完整報告靜默洗成空骨架。要進 git 請顯式
+    `--report docs/tracking/reports/...`。檔名帶 env 讓 prod / stg 兩份預設報告不互踩。
+    """
+    return Path(tempfile.gettempdir()) / f"411-reset-values-audit-{env}.md"
+
+
+def read_report_env(text: str) -> Optional[str]:
+    """從既有報告內容抓 env 標記；抓不到回 None（手寫檔／格式外，守線放行不誤擋）。"""
+    match = _REPORT_ENV_MARKER_RE.search(text)
+    return match.group(1) if match else None
+
+
+def guard_report_target(report_path: Path, env: str, force: bool) -> None:
+    """跨環境覆寫守線：既有報告的 env 標記 != 本次 `--env` → fail-loud（需 `--force`）。
+
+    只在**明確偵測到**跨環境覆寫時擋；檔案不存在、讀不到、或無 env 標記一律放行。
+    須在收集開始前呼叫（跑完幾十分鐘才發現衝突就來不及了）。
+    """
+    try:
+        existing = report_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return  # 不存在／讀不到 → 無從判斷，放行
+    prev_env = read_report_env(existing)
+    if prev_env is None or prev_env == env:
+        return
+    if force:
+        print(
+            f"[warn] --force：覆寫 env=`{prev_env}` 的既有報告（本次 env=`{env}`）：{report_path}",
+            file=sys.stderr,
+        )
+        return
+    raise SystemExit(
+        f"[fatal] {report_path} 是 env=`{prev_env}` 的既有報告，本次 --env={env}"
+        " —— 覆寫會洗掉另一環境的內容。確認要覆寫請加 --force，或改指其他 --report 路徑。"
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="#411 reset-values backfill 盤點（第一階段：收集＋骨架）")
     parser.add_argument("--context", default=DEFAULT_CONTEXT, help="kube context（預設 woow-k3s）")
@@ -457,8 +514,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument(
         "--report",
-        default="docs/tracking/reports/411-reset-values-audit.md",
-        help="markdown 報告輸出路徑（遮罩後、可進 git）",
+        default=None,
+        help=(
+            "markdown 報告輸出路徑（遮罩後）。**該路徑會被無條件覆寫**；未給則落系統 tmp "
+            "的 411-reset-values-audit-{env}.md（repo 外）。要寫進 git 必須顯式指定。"
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="允許覆寫 env 標記與本次 --env 不同的既有報告（預設 fail-loud 擋下）",
     )
     parser.add_argument(
         "--raw-dir",
@@ -471,6 +536,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="dump_computed_values.py 產出的平台可重算 values JSON（第二階段比對；未給則只收集）",
     )
     args = parser.parse_args(argv)
+
+    # 報告落點先定案並過守線 —— fail fast：跑完整輪盤點才發現覆寫衝突就來不及了。
+    report_path = Path(args.report) if args.report else default_report_path(args.env)
+    guard_report_target(report_path, args.env, args.force)
 
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S %z")
     raw_dir = Path(args.raw_dir) if args.raw_dir else Path(
@@ -557,11 +626,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     }
     report = render_report(records, meta)
-    report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report, encoding="utf-8")
 
     print(f"[done] 報告：{report_path}", file=sys.stderr)
+    if not args.report:
+        print(
+            "[note] 未給 --report → 報告落系統 tmp（repo 未被觸碰）；"
+            "要更新 repo 內報告請顯式 --report <路徑>（該檔會被整份覆寫）",
+            file=sys.stderr,
+        )
     print(f"[done] raw dump（不進 git）：{raw_dir}", file=sys.stderr)
     return 0
 
