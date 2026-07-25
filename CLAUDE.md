@@ -443,3 +443,13 @@ ccpm 或 superpowers 的長期價值產出，透過 `/docs:promote` 升級到 `d
 - **superpowers** 是輔助工具集（owns `docs/superpowers/` 工具自管理區）
 - **SuperClaude** 是 ad hoc command 庫（產出多在 `claudedocs/` git-ignored，唯 `/sc:brainstorm` 透過 `/brainstorm-sc-to-ccpm` 接 ccpm）
 - **superpowers `brainstorming`** 與 **`/sc:brainstorm`** 功能重疊：本 repo 統一走 `/brainstorm-sc-to-ccpm`（SuperClaude 路徑，與 ccpm schema 對齊較好）
+
+## Agent skills
+
+### Issue tracker
+
+Issues 在 Gitea（git-prod.woowtech.io / odoo-addons/woow_paas_platform），一律用 `tea` CLI 操作；`gh-origin` 僅為 mirror。見 `docs/agents/issue-tracker.md`。
+
+### Domain docs
+
+單一 context：根目錄 `CONTEXT.md`＝純 glossary；ADR 級決策寫 `docs/decisions/`（不用 `docs/adr/`）。見 `docs/agents/domain.md`。
