@@ -57,7 +57,8 @@
       "docs": [
         "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md — noupdate=1 sticky → 其他 data 檔對同 record 的更新被靜默 skip",
         "docs/decisions/patterns/invariant-recompute-on-orm-write-hook.md — data XML 是 ORM 寫入的第二入口，會 drift cross-record invariant",
-        "docs/decisions/patterns/template-vs-plan-property-boundary.md — 新商品變體猶豫開新 CloudAppTemplate 還是同 template 加 plan 時"
+        "docs/decisions/patterns/template-vs-plan-property-boundary.md — 新商品變體猶豫開新 CloudAppTemplate 還是同 template 加 plan 時",
+        "docs/decisions/patterns/seed-topology-invariants.md — seed 拓撲計數非 monotonic：test 別硬編 base/tier/product 數，`>=` 守衛會裝反、`> 0` 等於刪 test；改集合等值/零丟棄/結構關係。改 subscription_*.xml 會被 repo-lint check_seed_topology 攔（附待檢清單）"
       ]
     },
     {
@@ -114,9 +115,10 @@
       "pattern": "^src/tests/.*\\.py$",
       "why": "multi-phase 測試與 credential/mock 紀律：schema 快照斷言、fixture forward-coupling、mock namespace 各有假綠/誤紅陷阱",
       "docs": [
-        "docs/decisions/patterns/phase-versioned-test-assertion.md — phase test 硬編 schema 快照值（== version/欄位 count）會撞後續 phase 演進，改 monotonic >= /存在性斷言",
+        "docs/decisions/patterns/phase-versioned-test-assertion.md — phase test 硬編 schema 快照值（== version/欄位 count）會撞後續 phase 演進，改 monotonic >= /存在性斷言（**前提：被守的量 monotonic**；會下降的量見本 class 的 seed-topology-invariants）",
         "docs/decisions/patterns/credential-claim-test-fixture-coupling.md — 硬化共用 credential 路徑時所有自建 fixture forward-coupled 須 lock-step 補",
-        "docs/decisions/patterns/unittest-mock-dual-namespace-patch.md — patch 被多 module 以不同 import 形式共用的 helper 時，N 個 namespace 要 N 個 target"
+        "docs/decisions/patterns/unittest-mock-dual-namespace-patch.md — patch 被多 module 以不同 import 形式共用的 helper 時，N 個 namespace 要 N 個 target",
+        "docs/decisions/patterns/seed-topology-invariants.md — 被守的量會下降時（seed 拓撲計數、集合大小）不可用 monotonic `>=`：守衛會對「集合被靜默縮小」裝反；改集合等值/零丟棄/結構關係（#433）"
       ]
     }
   ]
