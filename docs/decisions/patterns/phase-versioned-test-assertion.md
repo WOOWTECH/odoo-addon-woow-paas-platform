@@ -12,7 +12,13 @@
 
 → 三者成立時，這個 test 是**未爆彈**：它今天綠，但下一個動同塊 schema 的 phase 一定讓它紅，且紅得 confusing（test 名說「Phase A migration」，卻因「Phase C 合法 bump 版號」而紅 — **test-vs-test red**，root cause 與 test 名八竿子打不著）。
 
-**不適用**：真的要鎖死「就是這個值、不准變」的 invariant（如 frozen cross-repo contract 的 envelope schema count、一個故意凍結的 wire format）— 那種要的就是精確值，且應有獨立的「凍結」語意（見 [[constraint-input-trust-expansion]] 之外的 frozen-contract 守法）。判準：**問「下個 phase 合法演進這塊 schema 時，這個 test 該紅嗎？」** 該紅 → 鎖精確值；不該紅 → 用本 pattern。
+**不適用（一）——被守的量會下降**：本 pattern 的 `>=` 修法**預設被守的量是 monotonic**
+（manifest version 只增不減）。若那個量會下降（seed 拓撲計數、集合大小、可見 record 數），
+`>=` 會**把守衛裝反**——它對「集合被靜默縮小」最寬容，而縮小正是那裡的主要威脅。
+→ 改走 [[seed-topology-invariants]]（集合等值 / 零丟棄 / 結構關係）。
+判準加一問：**「這個量會不會下降？下降時該紅嗎？」**
+
+**不適用（二）**：真的要鎖死「就是這個值、不准變」的 invariant（如 frozen cross-repo contract 的 envelope schema count、一個故意凍結的 wire format）— 那種要的就是精確值，且應有獨立的「凍結」語意（見 [[constraint-input-trust-expansion]] 之外的 frozen-contract 守法）。判準：**問「下個 phase 合法演進這塊 schema 時，這個 test 該紅嗎？」** 該紅 → 鎖精確值；不該紅 → 用本 pattern。
 
 ## What it looks like
 
@@ -90,6 +96,8 @@ self.assertGreaterEqual(
 ## See also
 
 - 落地 case：`docs/archived/tracking/agent-runtime-pod-phase-c-wiring-2026-05-24.md` §5（M.9 第二次撞牆敘事）；impl commit `d3aa60e`（`src/tests/test_agent_pod_phase_a_migration.py` M.9 改寫）。
+- [[seed-topology-invariants]] — **同根不同解**：那條處理「被守的量非 monotonic」的情形
+  （seed 拓撲會下降），該用集合等值 / 零丟棄 / 結構關係而非 `>=`。抄修法前先確認量的方向性。
 - [[tag-scoped-test-misses-full-u-failures]] — 另一個「test 守法不對 → 漏抓 / 誤報」的 pitfall（驗證**範圍**錯 vs 本 pattern 的斷言**內容**太緊）；兩者同屬「test 本身的工程品質」family。
 - [[plan-vs-odoo-schema-mismatch]] — 互補：該 pitfall 是「plan 引用不存在的 schema 值（phantom）」，本 pattern 是「test 鎖死存在但會演進的 schema 值」；都根於「把某一刻的 schema 當永久事實」。
 - `docs/plans/2026-Q2/agent-runtime-pod-plan.md` §Phase A Task 19（M.9 的 original intent — manifest bump 啟動 migration）。

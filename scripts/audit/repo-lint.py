@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-四個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+五個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -16,6 +16,10 @@
 4. reuse-values      src/**/*.py 出現 reuse_values=True 即 fail；helm --reuse-values 讓
                      chart 升版新增預設永不生效（既存 release 升級靜默漏，#411 Gap 2）。
                      依據 docs/decisions/patterns/helm-reset-values-unified-pipeline.md
+5. seed-topology     純靜態 parse src/data/subscription_{products,template_links}*.xml，
+                     算六個拓撲數對 baseline。改 seed 當下就被擋、附「持有計數的位置」
+                     清單，取代「三週後 CI 才紅、紅在無關的 test 名下」（#433）。
+                     依據 docs/decisions/patterns/seed-topology-invariants.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -37,13 +41,33 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASELINE_DIR = os.path.join(SCRIPT_DIR, "baselines")
 SUDO_BASELINE = os.path.join(BASELINE_DIR, "controller-sudo.txt")
 NOUPDATE_BASELINE = os.path.join(BASELINE_DIR, "data-noupdate.txt")
+SEED_TOPOLOGY_BASELINE = os.path.join(BASELINE_DIR, "seed-topology.txt")
 
 SUDO_DOC = "docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md"
 OWL_DOC = "docs/tracking/pitfalls/owl-template-crash-class-syntax.md"
 NOUPDATE_DOC = "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md"
 REUSE_VALUES_DOC = "docs/decisions/patterns/helm-reset-values-unified-pipeline.md"
+SEED_TOPOLOGY_DOC = "docs/decisions/patterns/seed-topology-invariants.md"
 
 OWL_ALLOWED_MODIFIERS = {"stop", "prevent", "self", "capture", "synthetic"}
+
+# seed 拓撲數字一變，這些位置就要一起被檢視。刻意記「檔案＋具名位置」而非行號
+# ——行號會隨無關的編輯腐化，符號名不會。
+SEED_TOPOLOGY_DEPENDENTS = (
+    "src/tests/test_plan_group_keys_368.py：_seeded_link_refs() 對 links.xml 做集合"
+    "等值（拓撲成長不必改），但若這次是「刻意隱藏已掛 template 的 base」，"
+    "必須顯式加進同檔的 _INTENTIONALLY_HIDDEN 並在 PR 說明理由。",
+    "src/tests/test_subscription_tax_clear_366.py："
+    "TestSeedProductCorpusIntact._MIN_SEEDED_PRODUCTS（backstop 下界，seed 成長時調高）。",
+    "src/tests/test_plan_variants_generated.py：GENERATED 檔，不要手改——"
+    "要改請改 scripts/seed/generate_plan_variants.py 的 _TESTS_TEMPLATE 後重跑 generator。",
+    "scripts/seed/test_generate_plan_variants.py："
+    "TestClassify.test_counts_per_family 的 family 分佈（每 family 幾個變體）。",
+    "docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md："
+    "變體的單一事實源，改價／增減變體從這裡開始。",
+)
+
+_CYCLE_SUFFIX_RE = re.compile(r"_(monthly|yearly)$")
 
 
 def repo_root():
@@ -225,19 +249,116 @@ def check_reuse_values(root, only_file=None):
     return violations
 
 
+def _field_value(field):
+    """讀 <field> 的值：eval 屬性優先，否則 text。"""
+    if field.get("eval") is not None:
+        return field.get("eval").strip()
+    return (field.text or "").strip()
+
+
+def _record_fields(record):
+    return {f.get("name"): _field_value(f) for f in record.findall("field")}
+
+
+def _is_true(value):
+    return value in ("True", "1")
+
+
+def seed_topology_counts(root):
+    """純靜態 parse seed XML，回六個拓撲數（絕不碰 DB）。
+
+    base / 變體的區分用語意（ac_max_access_seats > 0 ＝席數變體）而非檔名，
+    這樣把變體寫進錯的檔也會被算出來。
+    """
+    data_dir = os.path.join(root, "src/data")
+    plan_files = sorted(glob.glob(os.path.join(data_dir, "subscription_products*.xml")))
+    link_files = sorted(glob.glob(os.path.join(data_dir, "subscription_template_links*.xml")))
+
+    base_plans, variant_plans, sub_products = 0, 0, 0
+    hidden_plan_xmlids = set()
+    for fp in plan_files:
+        for rec in ET.parse(fp).getroot().findall(".//record"):
+            model, xmlid = rec.get("model"), rec.get("id")
+            fields = _record_fields(rec)
+            if model == "sh.subscription.plan":
+                seats = fields.get("ac_max_access_seats") or "0"
+                if seats.isdigit() and int(seats) > 0:
+                    variant_plans += 1
+                else:
+                    base_plans += 1
+                if _is_true(fields.get("storefront_hidden")):
+                    hidden_plan_xmlids.add(xmlid)
+            elif model == "product.product" and _is_true(fields.get("sh_product_subscribe")):
+                sub_products += 1
+
+    # links.xml（不含 *_variants）＝ base 掛 template 的權威來源：<data noupdate="0">
+    # ＋全部 (6, 0, [...]) 全量 reset ⇒ DB 鏡射檔案。變體用 (4,) append，不入 base 拓撲。
+    refs = set()
+    for fp in link_files:
+        if fp.endswith("_variants.xml"):
+            continue
+        for rec in ET.parse(fp).getroot().findall(".//record"):
+            for field in rec.findall("field"):
+                if field.get("name") == "subscription_plan_ids":
+                    refs |= set(re.findall(r"ref\('([^']+)'\)", field.get("eval") or ""))
+
+    visible = refs - hidden_plan_xmlids
+    return {
+        "base_plans": base_plans,
+        "variant_plans": variant_plans,
+        "subscription_products": sub_products,
+        "linked_bases": len(refs),
+        "visible_linked_bases": len(visible),
+        "tiers": len({_CYCLE_SUFFIX_RE.sub("", ref) for ref in refs}),
+    }
+
+
+def check_seed_topology(root, only_file=None):
+    """seed 拓撲六數對 baseline；一變就 fail，並附「該一起檢視的位置」清單。
+
+    #433：成因不是「有人寫了硬編值」，而是「改 seed 時 bump 了 3 個持有計數的
+    檔案、漏掉 2 個，因為沒有共用清單」。這條 gate 把「三週後 CI 才紅、且紅在
+    無關的 test 名下」提前成「改 seed 當下就被擋、附帶待檢清單」。
+    """
+    baseline = read_baseline_pairs(SEED_TOPOLOGY_BASELINE)
+    if not baseline:
+        return []  # 尚未建立 baseline → 不擋（fail-open，對齊本工具哲學）
+    try:
+        counts = seed_topology_counts(root)
+    except (ET.ParseError, OSError):
+        return []  # seed XML 壞掉自有 data-noupdate / Odoo 載入會炸，這裡不重複報
+    drifted = [(key, baseline.get(key), value)
+               for key, value in sorted(counts.items())
+               if baseline.get(key) != str(value)]
+    if not drifted:
+        return []
+    detail = "、".join(
+        "%s %s→%d" % (key, old if old is not None else "(未收錄)", new)
+        for key, old, new in drifted)
+    return [
+        "seed 拓撲已變動（%s）。這代表 src/data/subscription_*.xml 的 seed 拓撲被改了；"
+        "請逐一檢視下列持有相關計數／集合斷言的位置，確認都已同步，再跑 "
+        "scripts/audit/repo-lint.py --update-baseline 收錄新拓撲（見 %s）：\n"
+        % (detail, SEED_TOPOLOGY_DOC)
+        + "\n".join("      - " + dep for dep in SEED_TOPOLOGY_DEPENDENTS)
+    ]
+
+
 # ---------------------------------------------------------------- modes
 
 def run_all(root):
     violations = (check_controller_sudo(root)
                   + check_owl_template(root)
                   + check_data_noupdate(root)
-                  + check_reuse_values(root))
+                  + check_reuse_values(root)
+                  + check_seed_topology(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
             print("  ✗ " + v)
         return 1
-    print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / reuse-values）")
+    print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
+          "reuse-values / seed-topology）")
     return 0
 
 
@@ -255,9 +376,19 @@ def update_baseline(root):
         f.write("# 新增前必讀 %s\n" % NOUPDATE_DOC)
         for rel in files:
             f.write("1\t%s\n" % rel)
-    print("baseline 已更新：%s（%d 檔）、%s（%d 檔）"
+    topology = seed_topology_counts(root)
+    with open(SEED_TOPOLOGY_BASELINE, "w", encoding="utf-8") as f:
+        f.write("# seed 拓撲計數（repo-lint.py --update-baseline 產生）\n")
+        f.write("# 純靜態 parse src/data/subscription_{products,template_links}*.xml，"
+                "與 DB 無關。\n")
+        f.write("# 這裡的數字變動時，check_seed_topology 會列出所有該一起檢視的位置。"
+                "調整前必讀 %s\n" % SEED_TOPOLOGY_DOC)
+        for key, value in sorted(topology.items()):
+            f.write("%d\t%s\n" % (value, key))
+    print("baseline 已更新：%s（%d 檔）、%s（%d 檔）、%s（%d 個計數）"
           % (os.path.relpath(SUDO_BASELINE), len(counts),
-             os.path.relpath(NOUPDATE_BASELINE), len(files)))
+             os.path.relpath(NOUPDATE_BASELINE), len(files),
+             os.path.relpath(SEED_TOPOLOGY_BASELINE), len(topology)))
     return 0
 
 
@@ -281,6 +412,8 @@ def run_hook():
             violations = check_owl_template(root, only_file=abs_path)
         elif re.match(r"^src/data/.*\.xml$", rel):
             violations = check_data_noupdate(root, only_file=abs_path)
+            if re.match(r"^src/data/subscription_(products|template_links).*\.xml$", rel):
+                violations += check_seed_topology(root)
         else:
             return 0
         if violations:
