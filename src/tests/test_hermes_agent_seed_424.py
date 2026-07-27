@@ -28,6 +28,7 @@ import json
 
 from odoo.tests.common import TransactionCase, tagged
 
+PLATFORM_REGISTRY = 'jcr-prod.woowtech.io/'
 HERMES_AGENT_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent'
 HERMES_WEBUI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui'
 WEBUI_PENDING_TAG = 'PENDING_PHASE_A_WEBUI_DIGEST'
@@ -39,9 +40,11 @@ _PENDING_IMAGE_KEYS = {
 }
 
 # chart 的 auth-proxy sidecar（nginx-unprivileged）resources 不在 seed values 內
-# ——它是 chart 契約值。此常數是 charts/open-design values.yaml 的 limits.memory
-# (128Mi)，hermes-agent chart 由該骨架派生。Phase A 若改動 sidecar limits，本常數
-# 必須同步（否則 quota 斷言會低估）。
+# ——它是 chart 契約值。此常數＝charts/hermes-agent values.yaml 的
+# `authProxy.resources.limits.memory`（128Mi，已逐字核對）。chart 若改動 sidecar
+# limits，本常數必須同步，否則 quota 斷言會低估。
+# （同區塊的 initResources limits 64Mi 刻意不計入：K8s 對 pod 取
+#  max(sum(容器), max(initContainer))，64Mi 遠低於容器合計、不影響 quota。）
 AUTH_PROXY_LIMIT_GI = 128 / 1024.0
 
 
@@ -122,11 +125,59 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             '單一閘 basic-auth 憑證＝#357 admin_password 供給鏈，須開 has_admin_gui')
 
     def test_auth_proxy_gate_explicit(self):
-        """authProxy 三鍵明寫（防 chart 預設漂移把租戶邊界的閘關掉）。"""
+        """authProxy 閘明寫（防 chart 預設漂移把租戶邊界關掉）。
+
+        ⚠ 形狀是**扁平布林** `basicAuth: true` ＋ 獨立的 `basicAuthUsername`，
+        不是 open-design 那種巢狀 `{enabled, username}`——已對 charts/hermes-agent
+        的 values.yaml 逐字核對。寫成巢狀會在 helm render 期炸（`.enabled` 取不到
+        bool 的欄位），屬 fail-loud，但一樣要等到部署才發現。
+        """
         ap = self._values()['authProxy']
         self.assertTrue(ap['enabled'], '關掉 auth-proxy＝服務裸奔對外')
-        self.assertTrue(ap['basicAuth']['enabled'])
-        self.assertEqual(ap['basicAuth']['username'], 'admin')
+        self.assertIs(
+            ap['basicAuth'], True,
+            'authProxy.basicAuth 是扁平布林（chart 契約），不是巢狀物件')
+        self.assertEqual(ap['basicAuthUsername'], 'admin')
+
+    def test_auth_proxy_worker_processes_pinned(self):
+        """nginx worker 數必須釘死（chart values.yaml 的 ★ 註解）。
+
+        基底 image 預設 `worker_processes auto`＝每個 **host** CPU 一個 worker、
+        且不看 cgroup：排到 256 vCPU 的 node 就 fork 256 個 worker 撐爆 128Mi
+        limit → OOMKilled(137) CrashLoop。chart 預設已是 2，seed 重申防漂移。
+        """
+        self.assertEqual(self._values()['authProxy']['workerProcesses'], 2)
+
+    def test_dashboard_gates_explicit(self):
+        """dashboard 的兩個「設錯就靜默失去防護／靜默不對外」鍵明寫。
+
+        - bindHost 非 loopback ⇒ 上游 fail-closed auth gate **保持啟用**（改成
+          127.0.0.1 就只剩 nginx 一層）。
+        - externalPath 空字串 ⇒ dashboard 根本不對外路由，但平台照樣把
+          dashboardPublicUrl 當 OAuth redirect_uri 發出去 → 靜默死鏈。
+        """
+        dashboard = self._values()['dashboard']
+        self.assertEqual(
+            dashboard['bindHost'], '0.0.0.0',
+            'loopback 綁定會關掉 dashboard 自身的 fail-closed 登入閘')
+        self.assertTrue(dashboard['externalPath'], 'externalPath 為空＝dashboard 不對外')
+        self.assertEqual(dashboard['username'], 'admin')
+
+    def test_dashboard_external_path_matches_injector(self):
+        """跨層 lock-step：seed 的 dashboard.externalPath ＝平台注入 URL 的尾綴。
+
+        chart 用 externalPath 決定 auth-proxy 把 /dashboard/ 轉去哪、以及 ttyd 式的
+        資產前綴；平台則把 `{public}/dashboard` 當 OAuth redirect_uri 的權威值送進
+        `config.dashboardPublicUrl`。兩者任一單獨改動 → 授權回呼打到不存在的路徑，
+        而且**兩邊各自看起來都正常**。這條把它們綁死。
+        """
+        external_path = self._values()['dashboard']['externalPath']
+        injected = self.env['woow_paas_platform.cloud_service']._inject_dashboard_public_url(
+            {}, 'hermes-agent', 'https://svc-abc.woowtech.io',
+        )['config']['dashboardPublicUrl']
+        self.assertEqual(
+            injected, 'https://svc-abc.woowtech.io' + external_path,
+            '平台注入的 dashboardPublicUrl 尾綴與 seed 的 dashboard.externalPath 不一致')
 
     def test_no_sensitive_values_in_git(self):
         """admin_password／LLM key 不得出現在 git 的 helm_default_values。"""
@@ -206,16 +257,21 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertNotEqual(image['tag'], 'latest', 'console 不得留 latest')
         self.assertIn('@sha256:', image['tag'], 'console image 必須雙釘 tag@sha256')
 
-    def test_every_seeded_image_is_digest_pinned(self):
-        """掃過 seed values 內**每一個** image 座標，一律要求雙釘 tag@sha256。
+    def test_every_seeded_image_is_pinned(self):
+        """掃過 seed values 內**每一個** image 座標，依 registry 分類要求釘法。
 
-        逐一列舉的測試只守得住「今天有的那幾顆」；chart 日後多長一個容器（sidecar、
-        initContainer image…）而 seed 跟著加一個 image 區塊時，逐一列舉不會紅。這條
-        是零丟棄式守衛：新增的 image 只要沒釘 digest 就當場失敗。
+        逐一列舉的測試只守得住「今天有的那幾顆」；chart 日後多長一個容器而 seed 跟著
+        加一個 image 區塊時，逐一列舉不會紅。這條是零丟棄式守衛。
+
+        兩級釘法（依 chart values.yaml 的分類註解）：
+
+        - **平台產品 image**（jcr-prod）：一律雙釘 ``tag@sha256``。
+        - **基礎設施 sidecar**（非 jcr-prod，如 nginx-unprivileged）：比照 open-design
+          只釘 tag，但仍不得為空或 ``latest``。
 
         `_PENDING_IMAGE_KEYS` 是**顯式可 review 的例外清單**（而非讓斷言默默放寬）：
-        目前只有 webui 一顆待 Phase A 鏡像，它的紅由
-        ``test_webui_image_pinned_digest`` 專門承擔，避免同一個成因重複兩條紅。
+        目前只有 webui 一顆待鏡像，它的紅由 ``test_webui_image_pinned_digest``
+        專門承擔，避免同一個成因重複兩條紅。
         """
         found = []
 
@@ -239,12 +295,15 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         for path, image in found:
             if path in _PENDING_IMAGE_KEYS:
                 continue
+            label = '.'.join(path)
             tag = image.get('tag') or ''
-            self.assertIn(
-                '@sha256:', tag,
-                '%s 未雙釘 tag@sha256（新增 image 一律必釘；若確為待補，'
-                '加進 _PENDING_IMAGE_KEYS 並補一條專屬 fail-loud 測試）'
-                % '.'.join(path))
+            self.assertTrue(tag, '%s 的 tag 為空（chart 會 render 失敗）' % label)
+            self.assertNotEqual(tag, 'latest', '%s 不得用可變的 latest' % label)
+            if image['repository'].startswith(PLATFORM_REGISTRY):
+                self.assertIn(
+                    '@sha256:', tag,
+                    '%s 是平台產品 image，必須雙釘 tag@sha256（若確為待補，'
+                    '加進 _PENDING_IMAGE_KEYS 並補一條專屬 fail-loud 測試）' % label)
 
     # ── expose 契約（錯了就路由到別的 Service）───────────────────────────────
     def test_main_service_naming_and_port(self):

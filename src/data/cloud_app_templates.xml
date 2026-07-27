@@ -743,6 +743,11 @@
              - console＝直接重用 open-design 的 baked console image（ttyd+kubectl+flask，
                app code 由 chart ConfigMap 熱注入、內容與應用無關），與 cloud_app_opendesign
                同一 tag@digest。
+             - authProxy＝**基礎設施 sidecar，非平台產品 image**（nginx-unprivileged），
+               依 chart 註解要求由 seed 重申防漂移，比照 open-design 只釘 tag（`1.27-alpine`）
+               不釘 digest。守線測試據此以 registry 分類：jcr-prod 的產品 image 一律要求
+               雙釘 tag@sha256，非 jcr-prod 的基礎設施 image 只要求非空且非 latest。
+               （要不要把它也升級成 digest 雙釘＝跨 repo 政策題，待裁決，不在本 PR 自作主張。）
 
              auth（單一閘，Eugene 2026-07-27 拍板 Q3；形狀依契約 v1.1 修訂）：平台生成
              **一組** admin_password 餵四個入口，故 has_admin_gui=True 複用 #357 供給鏈
@@ -754,8 +759,23 @@
                  auth provider 直接拒啟動），且上游已移除 HERMES_DASHBOARD_INSECURE。
                  chart 另須自產**穩定 session secret**（lookup 持久化），否則 pod 一重啟
                  全員登出。以上皆 chart 契約，seed 無對應鍵。
-             `authProxy.basicAuth` 明寫＝守住「外閘不得被 chart 預設漂移關掉」，與上面
-             per-location 的 dashboard 例外不衝突。
+             seed 明寫的 auth 相關鍵（皆為「設錯就靜默失去防護」型，故重申防 chart
+             預設漂移；鍵名與形狀已對 charts/hermes-agent/values.yaml 逐一核對）：
+               - `authProxy.enabled` / `basicAuth`（**扁平布林**，不是巢狀物件）/
+                 `basicAuthUsername`：webui 路由的外閘
+               - `authProxy.workerProcesses: 2`：nginx 基底 image 預設
+                 `worker_processes auto`＝每個 **host** CPU 一個 worker 且不看 cgroup，
+                 排到 256 vCPU node 會 fork 256 個 worker 撐爆 128Mi limit →
+                 OOMKilled(137) CrashLoop
+               - `dashboard.bindHost: "0.0.0.0"`：**非 loopback 才會讓上游的 fail-closed
+                 auth gate 保持啟用**（改 127.0.0.1 等於把 dashboard 自身登入關掉、只剩
+                 nginx 一層）。pod IP 在租戶 NetworkPolicy 下本來就出不了 namespace。
+               - `dashboard.externalPath: "/dashboard"`：**必須與平台注入的
+                 `config.dashboardPublicUrl` 尾綴一字不差**（空字串＝dashboard 根本不對外
+                 路由，但平台照樣把 URL 當 OAuth redirect_uri 發出去 → 靜默死鏈）。
+                 跨層 lock-step 由 test_dashboard_external_path_matches_injector 守。
+               - `dashboard.username`：與 `authProxy.basicAuthUsername` 同為 admin
+                 （單一憑證的帳號面）
 
              LLM key（拍板 Q2）：租戶自帶，走 helm_value_specs optional password 欄位
              （auth.minimaxApiKey／auth.openrouterApiKey → chart Secret → env）。Elmo 把
@@ -809,7 +829,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent</field>
             <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "PENDING_PHASE_A_WEBUI_DIGEST"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "externalPath": "/dashboard", "username": "admin"}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "PENDING_PHASE_A_WEBUI_DIGEST"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
