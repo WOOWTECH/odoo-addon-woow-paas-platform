@@ -35,9 +35,9 @@ WEBUI_PENDING_TAG = 'PENDING_PHASE_A_WEBUI_DIGEST'
 
 # 尚未釘 digest 的 image 座標白名單（顯式、可 review）。每一筆都必須另有一條專屬的
 # fail-loud 測試扛紅；補釘後從這裡移除。**只允許暫時性項目**，不是長期豁免清單。
-_PENDING_IMAGE_KEYS = {
-    ('webui', 'image'),   # 等上游 hermes-webui 鏡像進 jcr-prod（CI mirror workflow）
-}
+# 留下死條目（該 image 已補釘卻還列在這）＝那顆 image 從此永久跳過全域掃描守衛，
+# 所以 test_every_seeded_image_is_pinned 末尾會反過來斷言本集合無死條目。
+_PENDING_IMAGE_KEYS = set()
 
 # chart 的 auth-proxy sidecar（nginx-unprivileged）resources 不在 seed values 內
 # ——它是 chart 契約值。此常數＝charts/hermes-agent values.yaml 的
@@ -227,11 +227,15 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(len(digest), len('sha256:') + 64, digest)
 
     def test_webui_image_pinned_digest(self):
-        """webui image 必須雙釘 tag@sha256。
+        """webui image 必須雙釘 tag@sha256（鏡像進 jcr-prod 後已補釘）。
 
-        ⚠ **Phase A 交付前本測試刻意恆紅**：上游 ghcr.io/nesquena/hermes-webui:latest
-        要先鏡像進 jcr-prod（平台鐵律零 :latest／全雙釘），Phase A 回報 tag@digest 後
-        補釘本 seed 即轉綠。留 PENDING 佔位部署出去＝Init:ErrImagePull。
+        歷史：本條在鏡像交付前**刻意恆紅、不 skip** —— 留 PENDING 佔位部署出去就是
+        Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
+        WEBUI_PENDING_TAG 斷言留著，防止有人回退成佔位。
+
+        釘的是 multi-arch OCI index 底下的 **amd64 子 manifest** digest，與
+        open-design-console 現行 seed 同款（agent image 本身即單一 amd64 manifest，
+        整個 pod 本來就 amd64-only）。
         """
         image = self._values()['webui']['image']
         self.assertEqual(image['repository'], HERMES_WEBUI_IMAGE)
@@ -295,6 +299,18 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         walk({k: v for k, v in values.items() if k != 'image'}, ())
 
         self.assertTrue(found, '前置：seed 應解析出 image 座標（防走訪器壞掉變空集合）')
+        # 白名單自清：條目一旦補釘就必須從 _PENDING_IMAGE_KEYS 移除，否則那顆 image
+        # 從此永久跳過本掃描（守衛被自己的例外清單掏空，而且沒有任何測試會紅）。
+        stale = {
+            '.'.join(p) for p, img in found
+            if p in _PENDING_IMAGE_KEYS and '@sha256:' in (img.get('tag') or '')
+        }
+        self.assertFalse(
+            stale,
+            '%s 已補釘卻仍留在 _PENDING_IMAGE_KEYS（死條目會讓它永久跳過掃描）' % stale)
+        unknown = _PENDING_IMAGE_KEYS - {p for p, _ in found}
+        self.assertFalse(
+            unknown, '_PENDING_IMAGE_KEYS 指向 seed 裡不存在的路徑：%s' % unknown)
         for path, image in found:
             if path in _PENDING_IMAGE_KEYS:
                 continue

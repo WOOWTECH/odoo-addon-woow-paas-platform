@@ -737,9 +737,18 @@
                compose 的 postStart runtime 突變已 build-time 內建，chart 不做 lifecycle
                hook。
              - webui＝上游 ghcr.io/nesquena/hermes-webui 鏡像進 jcr-prod（平台鐵律零
-               :latest／全雙釘），鏡像走 CI 通用 mirror workflow。**tag 目前為 PENDING
-               佔位**，tag@digest 到手後補釘；守線＝test_hermes_agent_seed_424
-               .test_webui_image_pinned_digest（補釘前刻意恆紅，不 skip）。
+               :latest／全雙釘），鏡像走 CI mirror workflow（run #1203）。已補釘
+               20260727.2228@sha256:98d48222…（digest 向 registry 直驗，非轉抄）。
+               ⚠ 該 tag 是 **multi-arch OCI index**（amd64／arm64／2 個 attestation），
+               此處釘的是 **amd64 子 manifest** 的 digest、不是 index digest
+               （index＝sha256:b42e3ea3…）——與 open-design-console 現行 seed 同款
+               （那筆釘的 2b91c4ad… 同樣是 amd64 子 manifest，index 是 bb802e63…），
+               且 agent image 本身就是單一 amd64 manifest，全 pod 本來就 amd64-only。
+               排到 arm64 node 會 ImagePullBackOff「no matching manifest」——大聲失敗、
+               非靜默。chart 的 nodeSelector 是 {}（不像 HA chart 釘 arch=amd64），但
+               2026-07-28 實查 woow-k3s 四個 node 全為 amd64 → **prod/stg 無此風險**；
+               有風險的是 Apple Silicon 的本機 docker-desktop（arm64），故本 template
+               的 e2e 應在 stg/woow-k3s 跑，不要用本機沙盒。
              - console＝直接重用 open-design 的 baked console image（ttyd+kubectl+flask，
                app code 由 chart ConfigMap 熱注入、內容與應用無關），與 cloud_app_opendesign
                同一 tag@digest。
@@ -829,7 +838,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent</field>
             <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "externalPath": "/dashboard", "username": "admin"}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "PENDING_PHASE_A_WEBUI_DIGEST"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "externalPath": "/dashboard", "username": "admin"}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "20260727.2228@sha256:98d48222bab03b385e6417875c0605d32c88a98b62e68e80c87fdc156b4c3f5f"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
