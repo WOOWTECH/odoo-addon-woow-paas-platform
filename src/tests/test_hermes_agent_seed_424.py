@@ -9,7 +9,10 @@
   ``test_webui_image_pinned_digest`` **刻意恆紅**（不 skip、不放行）——PENDING 佔位
   被部署出去就是 Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
 - **quota 蓋不住全容器 limits**：#380 血訓，min_ram_gb×3 不足 → pod FailedCreate
-  → 對外永遠 CF 502。這裡用**結構關係**斷言（由 seed values 現算），不硬編數字。
+  → 對外永遠 CF 502。這裡用**結構關係**斷言（由 seed values 現算），不硬編數字：
+  一條擋太小、一條擋太大（＝把契約 v1.1 §8.8 的「÷3 上取」規則機械化）。無 DB
+  拓撲下 limits 合計 8.625Gi（agent 6 + webui 2 + console 0.5 + authProxy 0.125）
+  → min_ram_gb=3.0，headroom 只剩 0.375Gi，**加任何容器都會撞紅**（刻意）。
 - **DB 開關 lock-step**：Step 0 若翻案要開內建 pg/redis，storageClass path_map ／
   min_ram_gb ／ min_storage_gb 三處必須同 PR 一起動，否則 PVC 拿不到 StorageClass
   或 quota 不足。三條 lock-step 測試把它們綁死。
@@ -28,6 +31,12 @@ from odoo.tests.common import TransactionCase, tagged
 HERMES_AGENT_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent'
 HERMES_WEBUI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui'
 WEBUI_PENDING_TAG = 'PENDING_PHASE_A_WEBUI_DIGEST'
+
+# 尚未釘 digest 的 image 座標白名單（顯式、可 review）。每一筆都必須另有一條專屬的
+# fail-loud 測試扛紅；補釘後從這裡移除。**只允許暫時性項目**，不是長期豁免清單。
+_PENDING_IMAGE_KEYS = {
+    ('webui', 'image'),   # 等上游 hermes-webui 鏡像進 jcr-prod（CI mirror workflow）
+}
 
 # chart 的 auth-proxy sidecar（nginx-unprivileged）resources 不在 seed values 內
 # ——它是 chart 契約值。此常數是 charts/open-design values.yaml 的 limits.memory
@@ -186,12 +195,56 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         ConfigMap 熱注入），刻意不 build 第二顆。兩筆 seed 釘同一 digest 是結構
         invariant：任一邊單獨升版就代表有人忘了另一邊。
         """
+        image = self._values()['console']['image']
         od = json.loads(
             self.env.ref('woow_paas_platform.cloud_app_opendesign')
             .helm_default_values)
         self.assertEqual(
-            self._values()['console']['image'], od['console']['image'],
+            image, od['console']['image'],
             'console image 應與 cloud_app_opendesign 完全一致（含 tag@digest）')
+        # 契約 v1.1 §8.8：三個 image tag 一律 fail-loud 必釘（不因「沿用別人的值」豁免）
+        self.assertNotEqual(image['tag'], 'latest', 'console 不得留 latest')
+        self.assertIn('@sha256:', image['tag'], 'console image 必須雙釘 tag@sha256')
+
+    def test_every_seeded_image_is_digest_pinned(self):
+        """掃過 seed values 內**每一個** image 座標，一律要求雙釘 tag@sha256。
+
+        逐一列舉的測試只守得住「今天有的那幾顆」；chart 日後多長一個容器（sidecar、
+        initContainer image…）而 seed 跟著加一個 image 區塊時，逐一列舉不會紅。這條
+        是零丟棄式守衛：新增的 image 只要沒釘 digest 就當場失敗。
+
+        `_PENDING_IMAGE_KEYS` 是**顯式可 review 的例外清單**（而非讓斷言默默放寬）：
+        目前只有 webui 一顆待 Phase A 鏡像，它的紅由
+        ``test_webui_image_pinned_digest`` 專門承擔，避免同一個成因重複兩條紅。
+        """
+        found = []
+
+        def walk(node, path):
+            if not isinstance(node, dict):
+                return
+            for key, val in node.items():
+                sub = path + (key,)
+                if key == 'image' and isinstance(val, dict) and 'repository' in val:
+                    found.append((sub, val))
+                else:
+                    walk(val, sub)
+
+        values = self._values()
+        # 頂層 image 沒有 'image' 這層 key，單獨收
+        if 'repository' in values.get('image', {}):
+            found.append((('image',), values['image']))
+        walk({k: v for k, v in values.items() if k != 'image'}, ())
+
+        self.assertTrue(found, '前置：seed 應解析出 image 座標（防走訪器壞掉變空集合）')
+        for path, image in found:
+            if path in _PENDING_IMAGE_KEYS:
+                continue
+            tag = image.get('tag') or ''
+            self.assertIn(
+                '@sha256:', tag,
+                '%s 未雙釘 tag@sha256（新增 image 一律必釘；若確為待補，'
+                '加進 _PENDING_IMAGE_KEYS 並補一條專屬 fail-loud 測試）'
+                % '.'.join(path))
 
     # ── expose 契約（錯了就路由到別的 Service）───────────────────────────────
     def test_main_service_naming_and_port(self):
@@ -253,21 +306,45 @@ class TestHermesAgentTemplateSeed(TransactionCase):
                 total += _gi(limits['memory'])
         return total
 
+    @staticmethod
+    def _quota_gi(min_ram_gb):
+        """複製 cloud_service._compute_ns_quota 的記憶體算式（**int 是截斷**）。"""
+        return max(int(min_ram_gb * 3), 8)
+
     def test_min_ram_covers_all_container_limits(self):
         """結構關係守線：workspace ns quota 必須蓋得住全容器 limits.memory 總和。
 
         quota = max(int(sum(存活 service allocated_ram_gb) × 3), 8) Gi
-        （cloud_service._compute_ns_quota；**int 是截斷不是四捨五入**）。本 template
-        無 plan → allocated_ram_gb 走 min_ram_gb fallback。不足 → pod
-        FailedCreate(exceeded quota) → 服務對外永遠 CF 502（#380 端到端回歸）。
+        （cloud_service._compute_ns_quota）。本 template 無 plan → allocated_ram_gb
+        走 min_ram_gb fallback。不足 → pod FailedCreate(exceeded quota) → 服務對外
+        永遠 CF 502（#380 端到端回歸）。
         """
         tpl = self._tpl()
-        quota_gi = max(int(tpl.min_ram_gb * 3), 8)
+        quota_gi = self._quota_gi(tpl.min_ram_gb)
         needed_gi = self._seed_container_limits_gi()
         self.assertGreaterEqual(
             quota_gi, needed_gi,
             'min_ram_gb=%s → ns quota %sGi，蓋不住全容器 limits.memory 合計 %.3fGi'
             % (tpl.min_ram_gb, quota_gi, needed_gi))
+
+    def test_min_ram_is_the_minimal_sufficient_step(self):
+        """min_ram_gb ＝滿足上一條的**最小** 0.5 級距值（契約 v1.1 §8.8「÷3 上取」）。
+
+        上一條只擋「太小」，這條擋「太大」：quota 是 workspace 級的資源天花板，
+        灌水等於把同 workspace 其他服務的保護一起放鬆。兩條合起來把 §8.8 的定值
+        規則完全機械化——limits 一改，期望值自動跟著算，不用回頭改數字。
+
+        真要留額外 headroom 時就改這條並在訊息裡寫明理由，讓它成為一個**看得見的
+        決定**，而不是一個沒人知道為什麼的浮動數字。
+        """
+        needed_gi = self._seed_container_limits_gi()
+        minimal = 0.5
+        while self._quota_gi(minimal) < needed_gi:
+            minimal += 0.5
+        self.assertEqual(
+            self._tpl().min_ram_gb, minimal,
+            '全容器 limits.memory 合計 %.3fGi → 最小夠用的 min_ram_gb 是 %s'
+            % (needed_gi, minimal))
 
     def test_resources_present_on_every_seeded_container(self):
         """每個 seed 覆寫的容器都要 requests+limits 齊備（paas-ws quota 缺一即 FailedCreate）。"""

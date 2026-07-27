@@ -737,48 +737,67 @@
                compose 的 postStart runtime 突變已 build-time 內建，chart 不做 lifecycle
                hook。
              - webui＝上游 ghcr.io/nesquena/hermes-webui 鏡像進 jcr-prod（平台鐵律零
-               :latest／全雙釘）。**tag 目前為 PENDING 佔位**，等 Phase A（woow-paas-charts）
-               回報鏡像 tag@digest 後補釘；守線＝test_hermes_agent_seed_424
+               :latest／全雙釘），鏡像走 CI 通用 mirror workflow。**tag 目前為 PENDING
+               佔位**，tag@digest 到手後補釘；守線＝test_hermes_agent_seed_424
                .test_webui_image_pinned_digest（補釘前刻意恆紅，不 skip）。
              - console＝直接重用 open-design 的 baked console image（ttyd+kubectl+flask，
                app code 由 chart ConfigMap 熱注入、內容與應用無關），與 cloud_app_opendesign
                同一 tag@digest。
 
-             auth（單一閘，Eugene 2026-07-27 拍板 Q3）：平台生成**一組** admin_password
-             同時餵 webui／dashboard／ttyd／authProxy basic-auth，故 has_admin_gui=True
-             複用 #357 供給鏈（config.sensitive.admin_password；不入 git values）。Elmo
-             原本三組獨立密碼不沿用。
+             auth（單一閘，Eugene 2026-07-27 拍板 Q3；形狀依契約 v1.1 修訂）：平台生成
+             **一組** admin_password 餵四個入口，故 has_admin_gui=True 複用 #357 供給鏈
+             （config.sensitive.admin_password；不入 git values）。Elmo 原本三組獨立密碼
+             不沿用。⚠ 四個入口的**認證形狀不同**（v1.1 §8.3 實測）：
+               - `/`（webui）／`/console/`（ttyd）→ nginx basic-auth
+               - `/dashboard/` → 上游**表單登入**，nginx 對此 location **關 basic-auth**
+                 （否則雙重登入形狀疊加）；dashboard 非 loopback 綁定時 fail-closed（無
+                 auth provider 直接拒啟動），且上游已移除 HERMES_DASHBOARD_INSECURE。
+                 chart 另須自產**穩定 session secret**（lookup 持久化），否則 pod 一重啟
+                 全員登出。以上皆 chart 契約，seed 無對應鍵。
+             `authProxy.basicAuth` 明寫＝守住「外閘不得被 chart 預設漂移關掉」，與上面
+             per-location 的 dashboard 例外不衝突。
 
              LLM key（拍板 Q2）：租戶自帶，走 helm_value_specs optional password 欄位
              （auth.minimaxApiKey／auth.openrouterApiKey → chart Secret → env）。Elmo 把
              key echo 進共享 PVC 的 .env(644) 讓 terminal exec 可讀，**不沿用**。
 
-             dashboard 對外形態（拍板 Q1）：subpath 優先，走
-             https://{subdomain}.{paas_domain}/dashboard（＝MCP OAuth callback 前提）。
-             該 URL 是 per-service 值、放不進 template seed，由平台
-             `CloudService._inject_dashboard_public_url` 每次部署注入。
+             dashboard 對外形態（拍板 Q1，v1.1 §8.2 實測確認上游原生支援 subpath：
+             X-Forwarded-Prefix 會重建 302 Location／OAuth redirect_uri／cookie Path／
+             SPA 資產）：走 https://{subdomain}.{paas_domain}/dashboard。該 URL 是
+             per-service 值、放不進 template seed，由平台
+             `CloudService._inject_dashboard_public_url` 每次部署注入；⚠ 注入值**必須已含
+             /dashboard 前綴**——上游拿它當 OAuth redirect_uri 的權威來源，少了前綴回呼
+             就打到 webui（v1.1 §8.8）。
 
              刻意不寫進本 seed 的鍵（寫了會蓋掉平台注入或 chart 契約）：
              - persistence.*.storageClass／imagePullSecrets：平台 injector 注入
              - config.dashboardPublicUrl：平台 per-service injector 注入
              - config.sensitive.admin_password：#357 sensitive 供給鏈
              - networkPolicy.apiServerCidrs：平台 injector 注入（#404，cluster-specific）
-             - networkPolicy 其餘鍵／probe／securityContext／updateStrategy：chart 契約，
-               由 chart 預設＋chart tests 承擔
-             postgresql/redis：Elmo manifest 中 agent/webui 容器**零 DB env**，Phase A
-             Step 0 探測結論＝不需要，故明寫 enabled=false 防 chart 預設漂移把 DB 開起來
-             （白付 quota）。若 Step 0 翻案要開，min_ram_gb／min_storage_gb 與
-             `_inject_storage_class` 的 hermes-agent path 必須同 PR 一起動——lock-step 由
-             test_hermes_agent_seed_424 的 test_db_disabled_lockstep_* 兩條守。 -->
+             - networkPolicy 其餘鍵／probe／updateStrategy：chart 契約，由 chart 預設＋
+               chart tests 承擔
+             - securityContext：**image 必須 root 起**（s6-overlay 內部自行降權到
+               uid=10000；非 root 直接 exit 1，v1.1 §8.4），故連 runAsUser／
+               runAsNonRoot／readOnlyRootFilesystem 都不設——寫了就 CrashLoop
+             - API_SERVER_KEY：chart 自產 64 字元（v1.1 §8.6；上游 <16 字元會**靜默**
+               不登記 api_server platform、健康探針拿不到信號），不入 seed
+             postgresql/redis：**定案不需要**（v1.1 §8.1 實跑衍生 image 證實 hermes_cli
+             零 postgres/redis import、狀態存 $HERMES_HOME sqlite；Elmo 那兩顆是空掛）。
+             明寫 enabled=false 防 chart 預設漂移把 DB 開起來白付 quota，鍵保留可開。
+             若日後要開，min_ram_gb／min_storage_gb 與 `_inject_storage_class` 的
+             hermes-agent path 必須同 PR 一起動——lock-step 由 test_hermes_agent_seed_424
+             的 test_db_disabled_lockstep_* 兩條守。
+             golden config seed：**風險已解除**（v1.1 §8.5——image 首啟自動生成完整
+             config.yaml＋dotfiles），不需要 seed-if-absent initContainer，seed 亦無對應鍵。 -->
         <record id="cloud_app_hermes_agent" model="woow_paas_platform.cloud_app_template">
             <field name="name">Hermes Agent</field>
             <field name="slug">hermes-agent</field>
-            <field name="description">Hermes AI Agent 完整應用（gateway + Web UI + dashboard），basic-auth 憑證登入</field>
+            <field name="description">Hermes AI Agent 完整應用（gateway + Web UI + dashboard），單一憑證登入</field>
             <field name="full_description">Hermes Agent 雲端完整應用：agent gateway、Web UI
                 與 dashboard 同一實例，並附 console（ttyd 網頁終端）可直接進入 agent 容器操作。
-                存取以 HTTP basic-auth 憑證登入（帳號 admin、密碼由平台建立服務時產生並一次性
-                顯示、可重置），單一憑證同時罩住 Web UI、dashboard 與 console。dashboard 以
-                /dashboard 子路徑對外，供 MCP OAuth 授權流程回呼使用。LLM 供應商金鑰
+                Web UI 與 console 以 HTTP basic-auth 憑證登入，dashboard 走它自己的表單登入，
+                三者共用同一組憑證（帳號 admin、密碼由平台建立服務時產生並一次性顯示、可重置）。
+                dashboard 以 /dashboard 子路徑對外，供 MCP OAuth 授權流程回呼使用。LLM 供應商金鑰
                 （MiniMax／OpenRouter）由租戶自行填入，存於 Kubernetes Secret、不落磁碟。
                 刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
             <field name="category">ai_llm</field>
@@ -806,15 +825,16 @@
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
 
-            <!-- Resource Requirements。min_ram_gb 驅動 workspace ns quota
+            <!-- Resource Requirements（v1.1 §8.8 定值）。min_ram_gb 驅動 workspace ns quota
                  （cloud_service._compute_ns_quota：sum(存活 service allocated_ram_gb)×3，
                  本 template 無 plan → allocated_ram_gb 走 min_ram_gb fallback）。3× headroom
                  必須蓋得住**全容器** limits.memory 總和：agent 6Gi + webui 2Gi + console
-                 512Mi + authProxy sidecar 128Mi ≈ 8.63Gi → min_ram_gb ≥ 2.88。取 3.5
-                 （3×3.5=10Gi）而非壓線的 3.0（9Gi，僅 0.37Gi headroom）：一則留 sidecar
-                 增減的餘裕，二則 Step 0 若翻案要開 DB（+pg 512Mi +redis 300Mi ≈ 9.44Gi）
-                 不必再動本欄。#380 血訓＝quota 不足 → pod FailedCreate(exceeded quota) →
-                 服務對外永遠 CF 502。守線＝test_min_ram_covers_all_container_limits。
+                 512Mi + authProxy sidecar 128Mi ＝ 8.625Gi（CPU 合計 3.4，由 quota 的
+                 8 vCPU floor 蓋住）→ min_ram_gb = 3.0（÷3 上取；無 DB 拓撲）。
+                 ⚠ headroom 只剩 0.375Gi（9Gi − 8.625Gi）：**任何一邊加容器或調高 limits
+                 都必須同時重算本欄**——守線＝test_min_ram_covers_all_container_limits
+                 （由 seed values 現算、不硬編，加了就紅）。#380 血訓＝quota 不足 → pod
+                 FailedCreate(exceeded quota) → 服務對外永遠 CF 502。
                  min_storage_gb 5＝單顆 data PVC（agent /opt/data ＋ webui ~/.hermes 共用
                  同一顆 RWO，沿用 Elmo 原架構）。
                  ⚠ **未來若替本 template 寫專用 provision 端點**（如 HA PaaS 的
@@ -825,7 +845,7 @@
                  limits → pod FailedCreate。ha_paas.py 的 provision 沒帶是因為 HA 只
                  吃 1Gi、floor 蓋得住，勿照抄。 -->
             <field name="min_vcpu">1</field>
-            <field name="min_ram_gb">3.5</field>
+            <field name="min_ram_gb">3.0</field>
             <field name="min_storage_gb">5</field>
 
             <!-- MCP 能力不在本 template：本體是完整應用，其 MCP 是「agent 去接外部 MCP

@@ -1011,9 +1011,16 @@ class CloudService(models.Model):
         這個值（平台以 Cloudflare tunnel 對外，不走 chart 的 ingress），與
         ``_inject_allowed_origins``（#380）同一 family，由唯一知道 host 的平台補上。
 
-        對外形態＝subpath（Eugene 2026-07-27 拍板 Q1）：
-        ``https://{subdomain}.{paas_domain}/dashboard``，由 chart 的 auth-proxy
-        sidecar 轉給 127.0.0.1:9119。無此 value path 的 chart 一律 no-op。
+        對外形態＝subpath（Eugene 2026-07-27 拍板 Q1；上游原生支援已實測確認——
+        ``X-Forwarded-Prefix`` 會一併重建 302 Location／OAuth ``redirect_uri``／
+        cookie Path／SPA 資產路徑）：``https://{subdomain}.{paas_domain}/dashboard``，
+        由 chart 的 auth-proxy sidecar 轉給 127.0.0.1:9119。
+
+        ⚠ 注入值**必須已含 ``/dashboard`` 前綴**：上游直接拿這個值當 OAuth
+        ``redirect_uri`` 的權威來源，只給根位址的話回呼會打到 webui（``/``）而不是
+        dashboard，授權流程靜默失敗。
+
+        無此 value path 的 chart 一律 no-op。
 
         Args:
             values: Helm values dict（就地修改並回傳）
