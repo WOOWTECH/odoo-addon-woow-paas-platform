@@ -43,8 +43,11 @@ _PENDING_IMAGE_KEYS = {
 # ——它是 chart 契約值。此常數＝charts/hermes-agent values.yaml 的
 # `authProxy.resources.limits.memory`（128Mi，已逐字核對）。chart 若改動 sidecar
 # limits，本常數必須同步，否則 quota 斷言會低估。
-# （同區塊的 initResources limits 64Mi 刻意不計入：K8s 對 pod 取
-#  max(sum(容器), max(initContainer))，64Mi 遠低於容器合計、不影響 quota。）
+# （同區塊的 initResources 刻意不計入總量：pod 的有效值取
+#  max(sum(一般容器), max(initContainer))，init 的 64Mi limits 遠低於容器合計，
+#  不影響 quota 額度。⚠ 但「不疊加總量」≠「可以不寫」——namespace 對某資源設了
+#  ResourceQuota 時，**含 initContainer 在內每個容器都必須宣告該資源**，缺一即
+#  pod 直接被拒（FailedCreate，是宣告問題不是額度問題）。chart 兩邊都有寫。）
 AUTH_PROXY_LIMIT_GI = 128 / 1024.0
 
 
