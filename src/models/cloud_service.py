@@ -677,8 +677,9 @@ class CloudService(models.Model):
         2. storage_class injector（PVC 生命週期）
         3. image_pull_secrets injector（私有 registry）
         4. allowed_origins injector（open-design 瀏覽器 Origin 白名單，#380）
-        5. apiserver_cidrs injector（open-design console egress，#404）
-        6. odoo addon selection（initContainer + addons_path）
+        5. dashboard_public_url injector（hermes-agent MCP OAuth 回呼，#424①）
+        6. apiserver_cidrs injector（open-design／hermes-agent console egress，#404）
+        7. odoo addon selection（initContainer + addons_path）
 
         **純唯讀、不寫 DB、不呼叫 operator** —— 盤點腳本可安全 dry-run 呼叫，
         取 ``['values']`` 去比對 ``helm get values <rel>``（stored、非敏感）。
@@ -726,9 +727,16 @@ class CloudService(models.Model):
             paas_domain = self.env['ir.config_parameter'].sudo().get_param(
                 'woow_paas_platform.paas_domain', 'woowtech.io',
             )
+            public_base_url = f"https://{self.subdomain}.{paas_domain}"
             values = self._inject_allowed_origins(
-                values, template.slug,
-                f"https://{self.subdomain}.{paas_domain}",
+                values, template.slug, public_base_url,
+            )
+            # Inject the service's own public URL for charts whose app must hand
+            # that URL to a third party (hermes-agent dashboard is the OAuth
+            # redirect_uri target for external MCP servers). No-op elsewhere.
+            # See #424①.
+            values = self._inject_dashboard_public_url(
+                values, template.slug, public_base_url,
             )
 
         # Inject the kube-apiserver egress allowlist for charts whose pods run
@@ -913,6 +921,18 @@ class CloudService(models.Model):
             'mcp-n8n': [
                 ('persistence', 'storageClass'),
             ],
+            # #424①: hermes-agent（open-design 派生 chart）走扁平
+            # persistence.storageClass —— 契約明訂這是平台注入點，per-PVC 的
+            # persistence.data.storageClass 留空時由 chart 繼承扁平鍵（與 open-design
+            # 同款）。與 mcp-* 同理列出顯式 entry：記錄意圖並防 default 漂移。
+            # 若 Phase A Step 0 翻案要開內建 DB，這裡必須同 PR 補
+            # ('postgresql', 'persistence', 'storageClass') /
+            # ('redis', 'persistence', 'storageClass') —— 那兩顆 PVC 不在扁平鍵的
+            # 繼承鏈上。lock-step 由 src/tests/test_hermes_agent_seed_424.py 的
+            # test_db_disabled_lockstep_storage_class 守。
+            'hermes-agent': [
+                ('persistence', 'storageClass'),
+            ],
         }
 
         paths = path_map.get(template_slug, [('persistence', 'storageClass')])
@@ -982,6 +1002,44 @@ class CloudService(models.Model):
         return values
 
     @staticmethod
+    def _inject_dashboard_public_url(values, template_slug, base_url):
+        """把服務自身的對外 URL 注入需要「知道自己公開位址」的 chart。
+
+        #424①：hermes-agent 的 dashboard（容器內 :9119）是 MCP OAuth 授權流程的
+        回呼入口——agent 要把 ``redirect_uri`` 交給外部 MCP server，該 URL 必須是
+        **租戶從瀏覽器看得到的公開位址**，不是 pod 內的 loopback。chart 自己學不到
+        這個值（平台以 Cloudflare tunnel 對外，不走 chart 的 ingress），與
+        ``_inject_allowed_origins``（#380）同一 family，由唯一知道 host 的平台補上。
+
+        對外形態＝subpath（Eugene 2026-07-27 拍板 Q1）：
+        ``https://{subdomain}.{paas_domain}/dashboard``，由 chart 的 auth-proxy
+        sidecar 轉給 127.0.0.1:9119。無此 value path 的 chart 一律 no-op。
+
+        Args:
+            values: Helm values dict（就地修改並回傳）
+            template_slug: Template identifier（例 'hermes-agent'）
+            base_url: 服務自身對外根位址，例 "https://<sub>.<domain>"
+
+        Returns:
+            Modified values dict
+        """
+        # slug → (value paths, 該 chart 的對外子路徑)
+        path_map = {
+            'hermes-agent': ([('config', 'dashboardPublicUrl')], '/dashboard'),
+        }
+        entry = path_map.get(template_slug)
+        if not entry or not base_url:
+            return values
+        paths, subpath = entry
+        public_url = '%s%s' % (base_url.rstrip('/'), subpath)
+        for path in paths:
+            d = values
+            for key in path[:-1]:
+                d = d.setdefault(key, {})
+            d[path[-1]] = public_url
+        return values
+
+    @staticmethod
     def _parse_cidr_list(raw):
         """把逗號分隔的 CIDR 字串 parse 成 list（去空白、濾空項）。
 
@@ -1041,6 +1099,10 @@ class CloudService(models.Model):
         """
         path_map = {
             'open-design': [('networkPolicy', 'apiServerCidrs')],
+            # #424①: hermes-agent 的 console 與 open-design 同構（同一顆 baked
+            # console image、同一支 connect.sh kubectl exec 進 daemon 容器），故
+            # 同樣需要 apiserver egress 白名單，鍵名亦沿用（chart 由 open-design 派生）。
+            'hermes-agent': [('networkPolicy', 'apiServerCidrs')],
         }
         paths = path_map.get(template_slug)
         if not paths or not cidrs:

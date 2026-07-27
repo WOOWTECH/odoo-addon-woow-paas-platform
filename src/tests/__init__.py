@@ -232,3 +232,5 @@ from . import test_mcp_3type_seed_375
 from . import test_opendesign_seed_380
 # feat: HA PaaS 切 woowtech-ha image ＋ chart 0.2.0（chart↔image 原子綁定守線）
 from . import test_ha_paas_seed_woowtech_image
+# feat: #424① Hermes Agent 完整應用上架 seed ＋ dashboardPublicUrl/apiServerCidrs 注入接線
+from . import test_hermes_agent_seed_424

@@ -716,6 +716,133 @@
             <field name="is_active" eval="True"/>
         </record>
 
+        <!-- Hermes Agent 完整應用（#424 ①）：Elmo compose 部署（Woow_hermes_agent_docker_compose_all）
+             搬進平台的 CS 化版本。金樣板＝#380 OpenDesign 上架 SOP，chart 骨架亦由
+             charts/open-design 派生（daemon 多容器＋auth-proxy sidecar＋ttyd console）。
+
+             ⚠ 與既有 cloud_app_mcp_hermes（slug mcp-hermes、chart mcp-server、image
+             hermes-mcp-admin）是**不同產品**：那是 Hermes 的 MCP server，本筆是 Hermes
+             Agent 完整應用（gateway + webui + dashboard）。xmlid／slug／顯示名刻意區隔，
+             勿 reuse、勿互抄 helm values。
+
+             ⚠ **本輪不可購買上架**：定價未拍板（#424 只涵蓋「上架」，不含商品化），故
+             is_hidden=True ＋ 不掛任何 subscription plan（HA PaaS 先例）。hidden 會被
+             generic create 擋（controllers/paas.py `_create_service`），本輪部署路徑＝
+             odoo shell 直建（E2E）。定價拍板後比照 #431 模式解封（翻 is_hidden=False
+             ＋掛 plan），本檔 noupdate=0、-u 自動套用、無需 migration。
+
+             image：
+             - agent＝#424 ② 交付的衍生 image（Elmo 的 MCP OAuth 熱修已轉 build-time
+               patch；paas-odoo-ci PR #33 → CI run 1190），雙釘 tag@sha256。上游 Elmo
+               compose 的 postStart runtime 突變已 build-time 內建，chart 不做 lifecycle
+               hook。
+             - webui＝上游 ghcr.io/nesquena/hermes-webui 鏡像進 jcr-prod（平台鐵律零
+               :latest／全雙釘）。**tag 目前為 PENDING 佔位**，等 Phase A（woow-paas-charts）
+               回報鏡像 tag@digest 後補釘；守線＝test_hermes_agent_seed_424
+               .test_webui_image_pinned_digest（補釘前刻意恆紅，不 skip）。
+             - console＝直接重用 open-design 的 baked console image（ttyd+kubectl+flask，
+               app code 由 chart ConfigMap 熱注入、內容與應用無關），與 cloud_app_opendesign
+               同一 tag@digest。
+
+             auth（單一閘，Eugene 2026-07-27 拍板 Q3）：平台生成**一組** admin_password
+             同時餵 webui／dashboard／ttyd／authProxy basic-auth，故 has_admin_gui=True
+             複用 #357 供給鏈（config.sensitive.admin_password；不入 git values）。Elmo
+             原本三組獨立密碼不沿用。
+
+             LLM key（拍板 Q2）：租戶自帶，走 helm_value_specs optional password 欄位
+             （auth.minimaxApiKey／auth.openrouterApiKey → chart Secret → env）。Elmo 把
+             key echo 進共享 PVC 的 .env(644) 讓 terminal exec 可讀，**不沿用**。
+
+             dashboard 對外形態（拍板 Q1）：subpath 優先，走
+             https://{subdomain}.{paas_domain}/dashboard（＝MCP OAuth callback 前提）。
+             該 URL 是 per-service 值、放不進 template seed，由平台
+             `CloudService._inject_dashboard_public_url` 每次部署注入。
+
+             刻意不寫進本 seed 的鍵（寫了會蓋掉平台注入或 chart 契約）：
+             - persistence.*.storageClass／imagePullSecrets：平台 injector 注入
+             - config.dashboardPublicUrl：平台 per-service injector 注入
+             - config.sensitive.admin_password：#357 sensitive 供給鏈
+             - networkPolicy.apiServerCidrs：平台 injector 注入（#404，cluster-specific）
+             - networkPolicy 其餘鍵／probe／securityContext／updateStrategy：chart 契約，
+               由 chart 預設＋chart tests 承擔
+             postgresql/redis：Elmo manifest 中 agent/webui 容器**零 DB env**，Phase A
+             Step 0 探測結論＝不需要，故明寫 enabled=false 防 chart 預設漂移把 DB 開起來
+             （白付 quota）。若 Step 0 翻案要開，min_ram_gb／min_storage_gb 與
+             `_inject_storage_class` 的 hermes-agent path 必須同 PR 一起動——lock-step 由
+             test_hermes_agent_seed_424 的 test_db_disabled_lockstep_* 兩條守。 -->
+        <record id="cloud_app_hermes_agent" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Hermes Agent</field>
+            <field name="slug">hermes-agent</field>
+            <field name="description">Hermes AI Agent 完整應用（gateway + Web UI + dashboard），basic-auth 憑證登入</field>
+            <field name="full_description">Hermes Agent 雲端完整應用：agent gateway、Web UI
+                與 dashboard 同一實例，並附 console（ttyd 網頁終端）可直接進入 agent 容器操作。
+                存取以 HTTP basic-auth 憑證登入（帳號 admin、密碼由平台建立服務時產生並一次性
+                顯示、可重置），單一憑證同時罩住 Web UI、dashboard 與 console。dashboard 以
+                /dashboard 子路徑對外，供 MCP OAuth 授權流程回呼使用。LLM 供應商金鑰
+                （MiniMax／OpenRouter）由租戶自行填入，存於 Kubernetes Secret、不落磁碟。
+                刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
+            <field name="category">ai_llm</field>
+            <field name="tags">["hermes", "agent", "ai", "llm", "mcp"]</field>
+
+            <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈，Phase A）。
+                 helm_default_values 鍵名對齊 charts/hermes-agent/values.yaml 的 A/B values
+                 契約 v1；只放平台 pin/覆寫值。 -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "PENDING_PHASE_A_WEBUI_DIGEST"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [
+                {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
+                "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
+                {"key": "auth.openrouterApiKey", "label": "OpenRouter API Key", "type": "password",
+                "description": "自帶 OpenRouter API Key（選填）；供 agent 的 model routes 使用，同樣只存於 Secret"}
+                ]}</field>
+
+            <!-- Service Configuration。default_port 8080＝auth-proxy sidecar 唯一對外埠
+                 （agent gateway 8642／dashboard 9119／webui 8787 全綁 pod 內，由 proxy 分流）。
+                 operator 的 Cloudflare expose 取「名稱排序第一個非 headless Service」＋
+                 http-like port 猜測清單，故主 Service 必須是裸 release fullname ＋ 8080
+                 （service.name 明寫空字串＝chart fullname；契約 invariant 1）。 -->
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True"/>
+
+            <!-- Resource Requirements。min_ram_gb 驅動 workspace ns quota
+                 （cloud_service._compute_ns_quota：sum(存活 service allocated_ram_gb)×3，
+                 本 template 無 plan → allocated_ram_gb 走 min_ram_gb fallback）。3× headroom
+                 必須蓋得住**全容器** limits.memory 總和：agent 6Gi + webui 2Gi + console
+                 512Mi + authProxy sidecar 128Mi ≈ 8.63Gi → min_ram_gb ≥ 2.88。取 3.5
+                 （3×3.5=10Gi）而非壓線的 3.0（9Gi，僅 0.37Gi headroom）：一則留 sidecar
+                 增減的餘裕，二則 Step 0 若翻案要開 DB（+pg 512Mi +redis 300Mi ≈ 9.44Gi）
+                 不必再動本欄。#380 血訓＝quota 不足 → pod FailedCreate(exceeded quota) →
+                 服務對外永遠 CF 502。守線＝test_min_ram_covers_all_container_limits。
+                 min_storage_gb 5＝單顆 data PVC（agent /opt/data ＋ webui ~/.hermes 共用
+                 同一顆 RWO，沿用 Elmo 原架構）。
+                 ⚠ **未來若替本 template 寫專用 provision 端點**（如 HA PaaS 的
+                 /api/ha-paas/provision），建 cloud_service 時務必比照 marketplace
+                 路徑（controllers/paas.py `_create_service`）帶上 allocated_vcpu／
+                 allocated_ram_gb／allocated_storage_gb（`_allocated_vals_from`）——
+                 這三欄無預設值，漏帶則 quota 落到 floor 8Gi < 本服務 8.63Gi 全容器
+                 limits → pod FailedCreate。ha_paas.py 的 provision 沒帶是因為 HA 只
+                 吃 1Gi、floor 蓋得住，勿照抄。 -->
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">3.5</field>
+            <field name="min_storage_gb">5</field>
+
+            <!-- MCP 能力不在本 template：本體是完整應用，其 MCP 是「agent 去接外部 MCP
+                 server」（OAuth patch 的主題），不是「對外提供 MCP endpoint」。平台的
+                 MCP 生態由 cloud_app_mcp_* 系列承擔。 -->
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="post_deploy_init_type">none</field>
+
+            <!-- 每帳號限一：本輪僅供內部試用／單一實例驗證，且 agent limits 6Gi 是平台
+                 最重的單一容器，避免同帳號開多台把 workspace quota 吃乾。 -->
+            <field name="max_per_partner" eval="1"/>
+
+            <field name="is_active" eval="True"/>
+            <field name="is_hidden" eval="True"/>
+        </record>
+
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
              helm_value_specs above is silently skipped on -u. <function> runs on every
