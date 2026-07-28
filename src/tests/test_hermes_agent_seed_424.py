@@ -1,0 +1,602 @@
+# -*- coding: utf-8 -*-
+"""#424①：Hermes Agent 完整應用上架 seed ＋ 平台注入接線的守線斷言。
+
+鏡射 test_opendesign_seed_380.py（金樣板 SOP）＋ test_ha_paas_seed_woowtech_image.py
+（hidden template ＋ 原子綁定）兩者的結構。本檔守的是「錯了就靜默壞掉」的點：
+
+- **webui image 尚未鏡像**：Phase A（woow-paas-charts）負責把上游
+  ghcr.io/nesquena/hermes-webui 鏡像進 jcr-prod 並回報 tag@digest。補釘前
+  ``test_webui_image_pinned_digest`` **刻意恆紅**（不 skip、不放行）——PENDING 佔位
+  被部署出去就是 Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
+- **quota 蓋不住全容器 limits**：#380 血訓，min_ram_gb×3 不足 → pod FailedCreate
+  → 對外永遠 CF 502。這裡用**結構關係**斷言（由 seed values 現算），不硬編數字：
+  一條擋太小、一條擋太大（＝把契約 v1.1 §8.8 的「÷3 上取」規則機械化）。無 DB
+  拓撲下 limits 合計 8.625Gi（agent 6 + webui 2 + console 0.5 + authProxy 0.125）
+  → min_ram_gb=3.0，headroom 只剩 0.375Gi，**加任何容器都會撞紅**（刻意）。
+- **DB 開關 lock-step**：Step 0 若翻案要開內建 pg/redis，storageClass path_map ／
+  min_ram_gb ／ min_storage_gb 三處必須同 PR 一起動，否則 PVC 拿不到 StorageClass
+  或 quota 不足。三條 lock-step 測試把它們綁死。
+- **主 Service 命名**：operator 的 Cloudflare expose 取「名稱排序第一個非 headless
+  Service」＋http-like port 猜測，主 Service 必須是裸 release fullname ＋ 8080。
+- **平台注入鍵不得被 seed 蓋掉**：storageClass／imagePullSecrets／apiServerCidrs／
+  dashboardPublicUrl／config.sensitive 全由平台每次部署重算注入（#411 reset 語意）。
+
+平台側新接線（本 PR）另有兩條端到端斷言：``_inject_dashboard_public_url``
+（MCP OAuth 回呼前提）與 ``_assemble_deploy_values`` 對 hermes-agent 的全量輸出。
+"""
+import json
+
+from odoo.tests.common import TransactionCase, tagged
+
+PLATFORM_REGISTRY = 'jcr-prod.woowtech.io/'
+HERMES_AGENT_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent'
+HERMES_WEBUI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui'
+WEBUI_PENDING_TAG = 'PENDING_PHASE_A_WEBUI_DIGEST'
+
+# 尚未釘 digest 的 image 座標白名單（顯式、可 review）。每一筆都必須另有一條專屬的
+# fail-loud 測試扛紅；補釘後從這裡移除。**只允許暫時性項目**，不是長期豁免清單。
+# 留下死條目（該 image 已補釘卻還列在這）＝那顆 image 從此永久跳過全域掃描守衛，
+# 所以 test_every_seeded_image_is_pinned 末尾會反過來斷言本集合無死條目。
+_PENDING_IMAGE_KEYS = set()
+
+# chart 的 auth-proxy sidecar（nginx-unprivileged）resources 不在 seed values 內
+# ——它是 chart 契約值。此常數＝charts/hermes-agent values.yaml 的
+# `authProxy.resources.limits.memory`（128Mi，已逐字核對）。chart 若改動 sidecar
+# limits，本常數必須同步，否則 quota 斷言會低估。
+# （同區塊的 initResources 刻意不計入總量：pod 的有效值取
+#  max(sum(一般容器), max(initContainer))，init 的 64Mi limits 遠低於容器合計，
+#  不影響 quota 額度。⚠ 但「不疊加總量」≠「可以不寫」——namespace 對某資源設了
+#  ResourceQuota 時，**含 initContainer 在內每個容器都必須宣告該資源**，缺一即
+#  pod 直接被拒（FailedCreate，是宣告問題不是額度問題）。chart 兩邊都有寫。）
+AUTH_PROXY_LIMIT_GI = 128 / 1024.0
+
+
+def _gi(quantity):
+    """把 K8s 記憶體 quantity（'6Gi' / '512Mi'）換算成 float GiB。"""
+    if quantity.endswith('Gi'):
+        return float(quantity[:-2])
+    if quantity.endswith('Mi'):
+        return float(quantity[:-2]) / 1024.0
+    raise AssertionError('未預期的記憶體單位（只支援 Gi/Mi）：%s' % quantity)
+
+
+@tagged('post_install', '-at_install')
+class TestHermesAgentTemplateSeed(TransactionCase):
+
+    def _tpl(self):
+        return self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
+
+    def _values(self):
+        return json.loads(self._tpl().helm_default_values)
+
+    # ── 上架形態（不可購買）─────────────────────────────────────────────────
+    def test_marketplace_fields(self):
+        """name/slug/category、對外埠 8080（auth-proxy）、ingress 開。"""
+        tpl = self._tpl()
+        self.assertEqual(tpl.name, 'Hermes Agent')
+        self.assertEqual(tpl.slug, 'hermes-agent')
+        self.assertEqual(tpl.category, 'ai_llm')
+        self.assertEqual(tpl.default_port, 8080)
+        self.assertTrue(tpl.ingress_enabled)
+
+    def test_hidden_but_deployable(self):
+        """本輪不可購買：is_hidden=True（擋 generic create）＋ is_active=True（可部署）。
+
+        定價未拍板，故只上架不販售；解封比照 #431 模式（翻 is_hidden ＋掛 plan）。
+        """
+        tpl = self._tpl()
+        self.assertTrue(
+            tpl.is_hidden,
+            '定價未拍板前必須隱藏——hidden 是 generic create 的唯一擋線'
+            '（controllers/paas.py _create_service）')
+        self.assertTrue(tpl.is_active, 'template 仍須可部署（shell / 未來 provision 路徑）')
+
+    def test_no_subscription_plans(self):
+        """不掛任何 plan（本輪零定價變更 → seed 拓撲 gate 不觸發）。"""
+        self.assertFalse(
+            self._tpl().sudo().subscription_plan_ids,
+            '定價未拍板：不得掛 subscription plan')
+
+    def test_max_per_partner_one(self):
+        """每帳號限一（agent limits 6Gi 是平台最重單容器，防同帳號吃乾 ws quota）。"""
+        self.assertEqual(self._tpl().max_per_partner, 1)
+
+    def test_distinct_from_mcp_hermes(self):
+        """與既有 cloud_app_mcp_hermes 是不同產品：slug／chart／image 全不同。
+
+        撞名是本次最容易犯的錯（#424 brief 風險 10）：那筆是 Hermes 的 MCP server
+        （chart mcp-server、image hermes-mcp-admin），本筆是 Hermes Agent 完整應用。
+        """
+        mcp = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
+        tpl = self._tpl()
+        self.assertNotEqual(tpl.id, mcp.id)
+        self.assertNotEqual(tpl.slug, mcp.slug)
+        self.assertNotEqual(tpl.helm_chart_name, mcp.helm_chart_name)
+        self.assertNotEqual(
+            self._values()['image']['repository'],
+            json.loads(mcp.helm_default_values)['image']['repository'])
+
+    def test_not_mcp_server(self):
+        """完整應用非 MCP server：mcp_enabled=False（其 MCP 是「去接外部 MCP」）。"""
+        self.assertFalse(self._tpl().mcp_enabled)
+
+    # ── auth 單一閘（拍板 Q3）───────────────────────────────────────────────
+    def test_has_admin_gui_single_gate(self):
+        """has_admin_gui=True：平台生成一組 admin_password 餵 webui/dashboard/ttyd/proxy。"""
+        self.assertTrue(
+            self._tpl().has_admin_gui,
+            '單一閘 basic-auth 憑證＝#357 admin_password 供給鏈，須開 has_admin_gui')
+
+    def test_auth_proxy_gate_explicit(self):
+        """authProxy 閘明寫（防 chart 預設漂移把租戶邊界關掉）。
+
+        ⚠ 形狀是**扁平布林** `basicAuth: true` ＋ 獨立的 `basicAuthUsername`，
+        不是 open-design 那種巢狀 `{enabled, username}`——已對 charts/hermes-agent
+        的 values.yaml 逐字核對。寫成巢狀會在 helm render 期炸（`.enabled` 取不到
+        bool 的欄位），屬 fail-loud，但一樣要等到部署才發現。
+        """
+        ap = self._values()['authProxy']
+        self.assertTrue(ap['enabled'], '關掉 auth-proxy＝服務裸奔對外')
+        self.assertIs(
+            ap['basicAuth'], True,
+            'authProxy.basicAuth 是扁平布林（chart 契約），不是巢狀物件')
+        self.assertEqual(ap['basicAuthUsername'], 'admin')
+
+    def test_auth_proxy_worker_processes_pinned(self):
+        """nginx worker 數必須釘死（chart values.yaml 的 ★ 註解）。
+
+        基底 image 預設 `worker_processes auto`＝每個 **host** CPU 一個 worker、
+        且不看 cgroup：排到 256 vCPU 的 node 就 fork 256 個 worker 撐爆 128Mi
+        limit → OOMKilled(137) CrashLoop。chart 預設已是 2，seed 重申防漂移。
+        """
+        self.assertEqual(self._values()['authProxy']['workerProcesses'], 2)
+
+    def test_dashboard_gates_explicit(self):
+        """dashboard 的兩個「設錯就靜默失去防護／靜默不對外」鍵明寫。
+
+        - bindHost 非 loopback ⇒ 上游 fail-closed auth gate **保持啟用**（改成
+          127.0.0.1 就只剩 nginx 一層）。
+        - externalPath 空字串 ⇒ dashboard 根本不對外路由，但平台照樣把
+          dashboardPublicUrl 當 OAuth redirect_uri 發出去 → 靜默死鏈。
+        """
+        dashboard = self._values()['dashboard']
+        self.assertEqual(
+            dashboard['bindHost'], '0.0.0.0',
+            'loopback 綁定會關掉 dashboard 自身的 fail-closed 登入閘')
+        self.assertTrue(dashboard['externalPath'], 'externalPath 為空＝dashboard 不對外')
+        self.assertEqual(dashboard['username'], 'admin')
+
+    def test_dashboard_external_path_matches_injector(self):
+        """跨層 lock-step：seed 的 dashboard.externalPath ＝平台注入 URL 的尾綴。
+
+        chart 用 externalPath 決定 auth-proxy 把 /dashboard/ 轉去哪、以及 ttyd 式的
+        資產前綴；平台則把 `{public}/dashboard` 當 OAuth redirect_uri 的權威值送進
+        `config.dashboardPublicUrl`。兩者任一單獨改動 → 授權回呼打到不存在的路徑，
+        而且**兩邊各自看起來都正常**。這條把它們綁死。
+        """
+        external_path = self._values()['dashboard']['externalPath']
+        injected = self.env['woow_paas_platform.cloud_service']._inject_dashboard_public_url(
+            {}, 'hermes-agent', 'https://svc-abc.woowtech.io',
+        )['config']['dashboardPublicUrl']
+        self.assertEqual(
+            injected, 'https://svc-abc.woowtech.io' + external_path,
+            '平台注入的 dashboardPublicUrl 尾綴與 seed 的 dashboard.externalPath 不一致')
+
+    def test_no_sensitive_values_in_git(self):
+        """admin_password／LLM key 不得出現在 git 的 helm_default_values。"""
+        raw = self._tpl().helm_default_values
+        self.assertNotIn('admin_password', raw)
+        self.assertNotIn('minimax', raw.lower())
+        self.assertNotIn('openrouter', raw.lower())
+
+    def test_llm_keys_are_optional_specs(self):
+        """LLM key 走 helm_value_specs optional password（拍板 Q2：租戶自帶）。"""
+        specs = json.loads(self._tpl().helm_value_specs)
+        self.assertEqual(specs['required'], [], '本輪無必填欄（key 皆選填）')
+        by_key = {o['key']: o for o in specs['optional']}
+        self.assertIn('auth.minimaxApiKey', by_key)
+        self.assertIn('auth.openrouterApiKey', by_key)
+        for key, spec in by_key.items():
+            self.assertEqual(
+                spec['type'], 'password',
+                '%s 是憑證，type 必須 password（前端遮蔽 + 不回顯）' % key)
+
+    # ── chart / image pin ───────────────────────────────────────────────────
+    def test_chart_oci_pin(self):
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.1.0。"""
+        tpl = self._tpl()
+        self.assertEqual(tpl.helm_repo_url or '', '')
+        self.assertEqual(
+            tpl.helm_chart_name,
+            'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
+        self.assertEqual(tpl.helm_chart_version, '0.1.0')
+
+    def test_agent_image_pinned_digest(self):
+        """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
+
+        用上游原版 image 會沒有 OAuth patch → MCP 授權跳窗流程壞掉（#424② 全部白做）。
+        """
+        image = self._values()['image']
+        self.assertEqual(image['repository'], HERMES_AGENT_IMAGE)
+        tag = image['tag']
+        self.assertNotEqual(tag, 'latest', '不得留 latest 可變 tag')
+        self.assertIn('@sha256:', tag, 'image 必須雙釘 tag@sha256')
+        build_tag, digest = tag.split('@', 1)
+        self.assertRegex(
+            build_tag, r'^\d{8}\.\d{4}$', 'build tag 應為 UTC 時間戳 YYYYMMDD.HHMM')
+        self.assertEqual(len(digest), len('sha256:') + 64, digest)
+
+    def test_webui_image_pinned_digest(self):
+        """webui image 必須雙釘 tag@sha256（鏡像進 jcr-prod 後已補釘）。
+
+        歷史：本條在鏡像交付前**刻意恆紅、不 skip** —— 留 PENDING 佔位部署出去就是
+        Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
+        WEBUI_PENDING_TAG 斷言留著，防止有人回退成佔位。
+
+        釘的是 multi-arch OCI index 底下的 **amd64 子 manifest** digest，與
+        open-design-console 現行 seed 同款（agent image 本身即單一 amd64 manifest，
+        整個 pod 本來就 amd64-only）。
+        """
+        image = self._values()['webui']['image']
+        self.assertEqual(image['repository'], HERMES_WEBUI_IMAGE)
+        tag = image['tag']
+        self.assertNotEqual(
+            tag, WEBUI_PENDING_TAG,
+            'Phase A 的 webui 鏡像 tag@digest 尚未補釘（PR 合併前必補真值）')
+        self.assertNotEqual(tag, 'latest', '不得留 latest 可變 tag')
+        self.assertIn('@sha256:', tag, 'webui image 必須雙釘 tag@sha256')
+
+    def test_console_image_shared_with_opendesign(self):
+        """console 直接重用 open-design 的 baked image，且與該 seed **同一 tag@digest**。
+
+        console image 的內容與應用無關（ttyd + kubectl + flask，app code 由 chart
+        ConfigMap 熱注入），刻意不 build 第二顆。兩筆 seed 釘同一 digest 是結構
+        invariant：任一邊單獨升版就代表有人忘了另一邊。
+        """
+        image = self._values()['console']['image']
+        od = json.loads(
+            self.env.ref('woow_paas_platform.cloud_app_opendesign')
+            .helm_default_values)
+        self.assertEqual(
+            image, od['console']['image'],
+            'console image 應與 cloud_app_opendesign 完全一致（含 tag@digest）')
+        # 契約 v1.1 §8.8：三個 image tag 一律 fail-loud 必釘（不因「沿用別人的值」豁免）
+        self.assertNotEqual(image['tag'], 'latest', 'console 不得留 latest')
+        self.assertIn('@sha256:', image['tag'], 'console image 必須雙釘 tag@sha256')
+
+    def test_every_seeded_image_is_pinned(self):
+        """掃過 seed values 內**每一個** image 座標，依 registry 分類要求釘法。
+
+        逐一列舉的測試只守得住「今天有的那幾顆」；chart 日後多長一個容器而 seed 跟著
+        加一個 image 區塊時，逐一列舉不會紅。這條是零丟棄式守衛。
+
+        兩級釘法（依 chart values.yaml 的分類註解）：
+
+        - **平台產品 image**（jcr-prod）：一律雙釘 ``tag@sha256``。
+        - **基礎設施 sidecar**（非 jcr-prod，如 nginx-unprivileged）：比照 open-design
+          只釘 tag，但仍不得為空或 ``latest``。
+
+        `_PENDING_IMAGE_KEYS` 是**顯式可 review 的例外清單**（而非讓斷言默默放寬）：
+        目前只有 webui 一顆待鏡像，它的紅由 ``test_webui_image_pinned_digest``
+        專門承擔，避免同一個成因重複兩條紅。
+        """
+        found = []
+
+        def walk(node, path):
+            if not isinstance(node, dict):
+                return
+            for key, val in node.items():
+                sub = path + (key,)
+                if key == 'image' and isinstance(val, dict) and 'repository' in val:
+                    found.append((sub, val))
+                else:
+                    walk(val, sub)
+
+        values = self._values()
+        # 頂層 image 沒有 'image' 這層 key，單獨收
+        if 'repository' in values.get('image', {}):
+            found.append((('image',), values['image']))
+        walk({k: v for k, v in values.items() if k != 'image'}, ())
+
+        self.assertTrue(found, '前置：seed 應解析出 image 座標（防走訪器壞掉變空集合）')
+        # 白名單自清：條目一旦補釘就必須從 _PENDING_IMAGE_KEYS 移除，否則那顆 image
+        # 從此永久跳過本掃描（守衛被自己的例外清單掏空，而且沒有任何測試會紅）。
+        stale = {
+            '.'.join(p) for p, img in found
+            if p in _PENDING_IMAGE_KEYS and '@sha256:' in (img.get('tag') or '')
+        }
+        self.assertFalse(
+            stale,
+            '%s 已補釘卻仍留在 _PENDING_IMAGE_KEYS（死條目會讓它永久跳過掃描）' % stale)
+        unknown = _PENDING_IMAGE_KEYS - {p for p, _ in found}
+        self.assertFalse(
+            unknown, '_PENDING_IMAGE_KEYS 指向 seed 裡不存在的路徑：%s' % unknown)
+        for path, image in found:
+            if path in _PENDING_IMAGE_KEYS:
+                continue
+            label = '.'.join(path)
+            tag = image.get('tag') or ''
+            self.assertTrue(tag, '%s 的 tag 為空（chart 會 render 失敗）' % label)
+            self.assertNotEqual(tag, 'latest', '%s 不得用可變的 latest' % label)
+            if image['repository'].startswith(PLATFORM_REGISTRY):
+                self.assertIn(
+                    '@sha256:', tag,
+                    '%s 是平台產品 image，必須雙釘 tag@sha256（若確為待補，'
+                    '加進 _PENDING_IMAGE_KEYS 並補一條專屬 fail-loud 測試）' % label)
+
+    # ── expose 契約（錯了就路由到別的 Service）───────────────────────────────
+    def test_main_service_naming_and_port(self):
+        """主 Service＝裸 release fullname ＋ 8080（operator expose 偵測的命中條件）。
+
+        operator 取「名稱排序第一個非 headless Service」＋http-like port 猜測清單；
+        service.name 明寫空字串＝chart fullname（svc-{ref8}），排在 -console 等後綴
+        Service 之前。填了固定名還會在同 ns 開兩台時撞名。
+        """
+        service = self._values()['service']
+        self.assertEqual(service['port'], 8080)
+        self.assertEqual(service['port'], self._tpl().default_port)
+        self.assertEqual(
+            service['name'], '',
+            'service.name 必須留空＝release fullname，否則 expose 可能挑錯 Service')
+
+    def test_console_subpath(self):
+        """console 掛 /console 子路徑（與 open-design 同款，ttyd -b /console）。"""
+        console = self._values()['console']
+        self.assertTrue(console['enabled'])
+        self.assertEqual(console['externalPath'], '/console')
+
+    # ── 平台注入鍵不得被 seed 蓋掉 ──────────────────────────────────────────
+    def test_platform_injected_keys_absent(self):
+        """平台每次部署重算注入的鍵，seed 一律不得出現（#411 reset 語意）。
+
+        - persistence.storageClass：_inject_storage_class
+        - imagePullSecrets / global.imagePullSecrets：_inject_image_pull_secrets
+          ＋ operator setdefault
+        - networkPolicy.apiServerCidrs：_inject_apiserver_cidrs（cluster-specific）
+        - config.dashboardPublicUrl：_inject_dashboard_public_url（per-service）
+        - config.sensitive：#357 sensitive 供給鏈（絕不入 git）
+        """
+        values = self._values()
+        self.assertNotIn('storageClass', values['persistence'])
+        self.assertNotIn('storageClass', values['persistence']['data'])
+        self.assertNotIn('imagePullSecrets', values)
+        self.assertNotIn('global', values)
+        self.assertNotIn('networkPolicy', values)
+        self.assertNotIn('config', values)
+
+    # ── quota / 規格（#380 血訓）────────────────────────────────────────────
+    def _seed_container_limits_gi(self):
+        """由 seed values 現算「本服務全容器 limits.memory」總和（GiB）。
+
+        涵蓋 agent／webui（daemon pod）＋ console（獨立 Deployment，同 ns 同 quota）
+        ＋ auth-proxy sidecar（chart 契約值，見 AUTH_PROXY_LIMIT_GI）；DB 開啟時
+        另計 pg／redis。刻意用「現算」而非硬編：resources 一改，斷言自動跟上。
+        """
+        values = self._values()
+        total = AUTH_PROXY_LIMIT_GI
+        for path in (('agent',), ('webui',), ('console',),
+                     ('postgresql',), ('redis',)):
+            node = values.get(path[0]) or {}
+            if not node or node.get('enabled') is False:
+                continue
+            limits = (node.get('resources') or {}).get('limits') or {}
+            if limits.get('memory'):
+                total += _gi(limits['memory'])
+        return total
+
+    @staticmethod
+    def _quota_gi(min_ram_gb):
+        """複製 cloud_service._compute_ns_quota 的記憶體算式（**int 是截斷**）。"""
+        return max(int(min_ram_gb * 3), 8)
+
+    def test_min_ram_covers_all_container_limits(self):
+        """結構關係守線：workspace ns quota 必須蓋得住全容器 limits.memory 總和。
+
+        quota = max(int(sum(存活 service allocated_ram_gb) × 3), 8) Gi
+        （cloud_service._compute_ns_quota）。本 template 無 plan → allocated_ram_gb
+        走 min_ram_gb fallback。不足 → pod FailedCreate(exceeded quota) → 服務對外
+        永遠 CF 502（#380 端到端回歸）。
+        """
+        tpl = self._tpl()
+        quota_gi = self._quota_gi(tpl.min_ram_gb)
+        needed_gi = self._seed_container_limits_gi()
+        self.assertGreaterEqual(
+            quota_gi, needed_gi,
+            'min_ram_gb=%s → ns quota %sGi，蓋不住全容器 limits.memory 合計 %.3fGi'
+            % (tpl.min_ram_gb, quota_gi, needed_gi))
+
+    def test_min_ram_is_the_minimal_sufficient_step(self):
+        """min_ram_gb ＝滿足上一條的**最小** 0.5 級距值（契約 v1.1 §8.8「÷3 上取」）。
+
+        上一條只擋「太小」，這條擋「太大」：quota 是 workspace 級的資源天花板，
+        灌水等於把同 workspace 其他服務的保護一起放鬆。兩條合起來把 §8.8 的定值
+        規則完全機械化——limits 一改，期望值自動跟著算，不用回頭改數字。
+
+        真要留額外 headroom 時就改這條並在訊息裡寫明理由，讓它成為一個**看得見的
+        決定**，而不是一個沒人知道為什麼的浮動數字。
+        """
+        needed_gi = self._seed_container_limits_gi()
+        minimal = 0.5
+        while self._quota_gi(minimal) < needed_gi:
+            minimal += 0.5
+        self.assertEqual(
+            self._tpl().min_ram_gb, minimal,
+            '全容器 limits.memory 合計 %.3fGi → 最小夠用的 min_ram_gb 是 %s'
+            % (needed_gi, minimal))
+
+    def test_resources_present_on_every_seeded_container(self):
+        """每個 seed 覆寫的容器都要 requests+limits 齊備（paas-ws quota 缺一即 FailedCreate）。"""
+        values = self._values()
+        for key in ('agent', 'webui', 'console'):
+            resources = values[key].get('resources')
+            self.assertTrue(resources, '%s 缺 resources' % key)
+            for side in ('requests', 'limits'):
+                self.assertIn(side, resources, '%s.resources 缺 %s' % (key, side))
+                for dim in ('cpu', 'memory'):
+                    self.assertIn(
+                        dim, resources[side],
+                        '%s.resources.%s 缺 %s' % (key, side, dim))
+
+    def test_single_data_pvc(self):
+        """單顆 5Gi data PVC（agent /opt/data ＋ webui ~/.hermes 共用同一顆 RWO）。"""
+        data = self._values()['persistence']['data']
+        self.assertEqual(data['size'], '5Gi')
+        self.assertEqual(
+            self._tpl().min_storage_gb, 5,
+            'min_storage_gb 須與 seed 的 PVC 總量一致')
+
+    # ── Step 0 分岔 lock-step（翻案時強制三處同動）──────────────────────────
+    def _db_enabled(self):
+        values = self._values()
+        return {
+            'postgresql': bool(values.get('postgresql', {}).get('enabled')),
+            'redis': bool(values.get('redis', {}).get('enabled')),
+        }
+
+    def test_db_disabled_lockstep_storage_class(self):
+        """DB 開關 ⟺ _inject_storage_class 的 hermes-agent path 必須同動。
+
+        內建 pg/redis 的 PVC **不在**扁平 persistence.storageClass 的繼承鏈上；
+        開了 DB 卻沒補 path，PVC 拿不到平台 StorageClass → Pending 永不 Bound。
+        """
+        paths = self.env['woow_paas_platform.cloud_service']._inject_storage_class(
+            {}, 'hermes-agent', 'longhorn-delete')
+        enabled = self._db_enabled()
+        self.assertEqual(
+            'postgresql' in paths, enabled['postgresql'],
+            'postgresql.enabled 與 storageClass path_map 不同步'
+            '（見 cloud_service._inject_storage_class 的 hermes-agent entry）')
+        self.assertEqual(
+            'redis' in paths, enabled['redis'],
+            'redis.enabled 與 storageClass path_map 不同步')
+
+    def test_db_disabled_lockstep_storage_size(self):
+        """DB 開關 ⟺ min_storage_gb 必須含 DB PVC（否則 quota storage 低估）。"""
+        values = self._values()
+        expected = _gi(values['persistence']['data']['size'])
+        for key in ('postgresql', 'redis'):
+            node = values.get(key) or {}
+            if node.get('enabled'):
+                expected += _gi(node['persistence']['size'])
+        self.assertEqual(
+            float(self._tpl().min_storage_gb), expected,
+            'min_storage_gb 應等於 seed 所有 PVC 容量總和')
+
+    def test_description_mentions_gate_and_dashboard(self):
+        """description／full_description 說明 basic-auth 單一閘與 /dashboard 對外形態。"""
+        tpl = self._tpl()
+        text = (tpl.description or '') + (tpl.full_description or '')
+        self.assertIn('basic-auth', text)
+        self.assertIn('admin', text)
+        self.assertIn('/dashboard', text)
+        self.assertIn('console', text)
+
+
+@tagged('post_install', '-at_install')
+class TestHermesAgentValueInjection(TransactionCase):
+    """平台側新接線：dashboardPublicUrl injector ＋ 全量 values 組裝端到端。"""
+
+    def setUp(self):
+        super().setUp()
+        self.CloudService = self.env['woow_paas_platform.cloud_service']
+        self.tpl = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
+
+    # ── injector 單元 ───────────────────────────────────────────────────────
+    def test_inject_dashboard_public_url(self):
+        """hermes-agent：注入 config.dashboardPublicUrl＝公開根位址 + /dashboard。"""
+        values = self.CloudService._inject_dashboard_public_url(
+            {}, 'hermes-agent', 'https://svc-abc.woowtech.io')
+        self.assertEqual(
+            values['config']['dashboardPublicUrl'],
+            'https://svc-abc.woowtech.io/dashboard')
+
+    def test_inject_dashboard_public_url_strips_trailing_slash(self):
+        """根位址帶尾斜線也不能產出 //dashboard（OAuth redirect_uri 逐字比對會 mismatch）。"""
+        values = self.CloudService._inject_dashboard_public_url(
+            {}, 'hermes-agent', 'https://svc-abc.woowtech.io/')
+        self.assertEqual(
+            values['config']['dashboardPublicUrl'],
+            'https://svc-abc.woowtech.io/dashboard')
+
+    def test_inject_dashboard_public_url_noop_for_other_templates(self):
+        """其他 template 一律 no-op（不得把不認識的鍵塞進別人的 values）。"""
+        for slug in ('open-design', 'n8n', 'mcp-hermes'):
+            self.assertEqual(
+                self.CloudService._inject_dashboard_public_url(
+                    {}, slug, 'https://x.woowtech.io'),
+                {}, slug)
+
+    def test_inject_apiserver_cidrs_covers_hermes_agent(self):
+        """console 同構需求：hermes-agent 也要進 apiServerCidrs 白名單（#404）。"""
+        values = self.CloudService._inject_apiserver_cidrs(
+            {}, 'hermes-agent', ['10.43.0.1/32'])
+        self.assertEqual(
+            values['networkPolicy']['apiServerCidrs'], ['10.43.0.1/32'])
+
+    def test_inject_storage_class_flat_key(self):
+        """hermes-agent 走扁平 persistence.storageClass（per-PVC 鍵由 chart 繼承）。"""
+        values = self.CloudService._inject_storage_class(
+            {}, 'hermes-agent', 'longhorn-delete')
+        self.assertEqual(values['persistence']['storageClass'], 'longhorn-delete')
+
+    # ── 全量組裝端到端 ──────────────────────────────────────────────────────
+    def _make_service(self):
+        ws = self.env['woow_paas_platform.workspace'].create({
+            'name': 'Hermes WS 424',
+            'owner_id': self.env.ref('base.user_admin').id,
+        })
+        return self.CloudService.create({
+            'workspace_id': ws.id,
+            'template_id': self.tpl.id,
+            'name': 'hermes-agent',
+            'reference_id': 'test-hermes-ref-424',
+            'state': 'pending',
+            'subdomain': 'hermes-test-424',
+            # ⚠ 鐵訓（HA PaaS 2026-07-23 stg 實證）：helm_values 必須手工鏡射
+            # template.helm_default_values——漏寫則 image pin 全丟、部署拉佔位 tag。
+            'helm_values': self.tpl.helm_default_values,
+        })
+
+    def test_assemble_deploy_values_full_contract(self):
+        """_assemble_deploy_values 對 hermes-agent 應同時補齊四類平台值。
+
+        #411 reset 語意下，helm render base 是 chart 自己的 values.yaml，平台管理
+        的值**每次都必須重新組齊**——少一個就是該功能靜默消失（apiServerCidrs 缺
+        ＝console 連不到 apiserver；dashboardPublicUrl 缺＝MCP OAuth 回呼死鏈）。
+        """
+        svc = self._make_service()
+        assembled = svc._assemble_deploy_values()
+        values = assembled['values']
+        # 1) template pin 值仍在（未被注入流程洗掉）
+        self.assertEqual(values['image']['repository'], HERMES_AGENT_IMAGE)
+        self.assertEqual(values['service']['port'], 8080)
+        # 2) 四類平台注入
+        self.assertTrue(values['persistence']['storageClass'])
+        self.assertTrue(values['global']['imagePullSecrets'])
+        self.assertTrue(values['networkPolicy']['apiServerCidrs'])
+        paas_domain = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io')
+        self.assertEqual(
+            values['config']['dashboardPublicUrl'],
+            'https://hermes-test-424.%s/dashboard' % paas_domain)
+        # 3) ingress expose（template.ingress_enabled ＋ subdomain）
+        self.assertEqual(
+            assembled['expose_config'],
+            {'enabled': True, 'subdomain': 'hermes-test-424'})
+
+    def test_assemble_deploy_values_excludes_sensitive(self):
+        """組裝結果不得含 config.sensitive（敏感值另走 sensitive_values 通道）。"""
+        svc = self._make_service()
+        svc.helm_values = json.dumps(dict(
+            json.loads(self.tpl.helm_default_values),
+            config={'sensitive': {'admin_password': 'should-be-stripped'}}))
+        values = svc._assemble_deploy_values()['values']
+        self.assertNotIn('sensitive', values.get('config', {}))
+        self.assertNotIn('should-be-stripped', json.dumps(values))
+
+    def test_admin_password_secret_minted_on_create(self):
+        """has_admin_gui=True → create 時自動鑄一組 admin_password（#357 供給鏈）。"""
+        svc = self._make_service()
+        secret = svc._get_secret_record()
+        self.assertTrue(secret, 'has_admin_gui template 建立時應自動產生密碼 secret')
+        self.assertTrue(secret.admin_password)
