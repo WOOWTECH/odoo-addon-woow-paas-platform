@@ -182,6 +182,38 @@ class CloudAppTemplate(models.Model):
              'mcp_enabled=False 但 has_admin_gui=True。',
     )
 
+    # #449 密碼載體：**只影響 reset 路徑，不影響供給路徑**。
+    # 供給側（建立服務時把 admin_password 經 sensitive_values 送進 chart）兩種載體
+    # 完全相同——都是 config.sensitive.admin_password，由 has_admin_gui 這條供給鏈
+    # 統一負責（_build_mcp_sensitive_values）。差別只在「密碼在 pod 裡活在哪」：
+    #
+    #   config_json（mcp-server 家族）：chart 的 seed-config 一次性把 Secret 落成
+    #     PVC 上的 /data/config.json，之後應用只讀該檔。改 Secret 不改檔＝不改密碼，
+    #     所以 reset 必須外科式 read-modify-write 那個檔（保留租戶自填的
+    #     connection/tools/token_history），operator 走 #357 補償 saga。
+    #   helm_secret（hermes-agent / open-design）：chart Secret 就是權威來源，pod 以
+    #     env／initContainer（nginx htpasswd）在**啟動時**讀取，PVC 裡根本沒有
+    #     config.json。對它做 exec patch 必炸＝#449 的 500（patch 失敗→備份沒建成
+    #     →rollback 也失敗）。reset 走純 helm upgrade ＋ rollout restart。
+    #
+    # 選錯的後果是不對稱的：helm_secret 誤標成 config_json＝reset 必 500（#449 現況）；
+    # config_json 誤標成 helm_secret＝helm upgrade 成功但 config.json 沒動、密碼靜默
+    # 不生效（更糟，因為它假裝成功）。新 template 上架時以「chart 有沒有把 Secret
+    # 落成 PVC 上的設定檔」判定，不要照 slug 猜。
+    admin_password_carrier = fields.Selection(
+        selection=[
+            ('config_json', 'config.json（PVC 內設定檔，mcp-server 家族）'),
+            ('helm_secret', 'Helm Secret（chart 管理，hermes-agent／open-design）'),
+        ],
+        string='密碼載體',
+        default='config_json',
+        required=True,
+        help='admin_password 在 pod 內的權威來源，決定 reset 走哪條 operator 路徑：'
+             'config.json＝外科式 read-modify-write PVC 上的設定檔（保留租戶自填的 '
+             'connection/tools）；Helm Secret＝純 helm upgrade ＋ rollout restart。'
+             '僅 has_admin_gui=True 的 template 有意義。',
+    )
+
     # Post-Deploy Initialization
     post_deploy_init_type = fields.Selection(
         selection=[

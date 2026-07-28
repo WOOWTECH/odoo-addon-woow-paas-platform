@@ -110,20 +110,62 @@ vs 平台 dry-run 全量 values（呼叫**同一** `_assemble_deploy_values()`�
 **prod 翻 flag 前 (c) 必須清零。** 機械比對時路徑用 tuple 而非 dot-join
 （`kubernetes.io/arch` 這種含點鍵名 dot-join 會假陽性）。
 
-## reset-config 路徑的 operator 缺口
+## reset-config 路徑的 operator 缺口（#449 已接通）
 
-`_reset_admin_password` 走 reset-config endpoint。實查發現 operator 端
+`_reset_admin_password` 走 reset-config endpoint。原本 operator 端
 `ReleaseResetConfigRequest`（`extra/paas-operator/src/models/schemas.py`）**未定義
 `reset_values` field**，reset-config handler 只把 `reuse_values` 轉給
-`helm_service.upgrade()`。而 upgrade endpoint 的 `ReleaseUpgradeRequest` 有完整
+`helm_service.upgrade()`；而 upgrade endpoint 的 `ReleaseUpgradeRequest` 早有完整
 `reset_values` plumbing。
 
-因此 reset-config 路徑要走**顯式** `--reset-values`，需 operator 補 1 個 field +
-接 1 行（A 案接通，不改任何 helm 邏輯）。**接通前的行為**：client 傳 `reset_values=True`
-被 pydantic 忽略，但 `reuse_values=False` 生效 → operator 端 `helm upgrade` 走
-**無-flag 預設**（chart `values.yaml` 為 base ≈ reset），已足以終結 reuse bug；
-operator 接通後即升級為顯式 `--reset-values`。client payload 兩情況相同，已由
+**#449 已補上該 field 並接進 handler**（A 案接通，不改任何 helm 邏輯），reset-config
+現在走**顯式** `--reset-values`。**接通前的行為**（仍是舊 operator 部署的實況）：
+client 傳 `reset_values=True` 被 pydantic 忽略，但 `reuse_values=False` 生效 →
+operator 端 `helm upgrade` 走**無-flag 預設**（chart `values.yaml` 為 base ≈ reset），
+已足以終結 reuse bug。helm 3 的無-flag 預設與 `--reset-values` 語意相同，故接通對既有
+呼叫端是行為中性的向後相容改動。client payload 兩情況相同，已由
 `test_reset_release_config_carries_reset_values` 鎖住契約。
+
+## 密碼載體分流（#449）：全量 values 管線的另一半
+
+同一條 reset 路徑另有一個與 values 無關、但同樣「對 mcp-server 成立、對別的 chart
+不成立」的寫死假設：operator 直接 `kubectl exec` 進 pod patch `/data/config.json`。
+hermes-agent（PVC 掛 `/opt/data`）與 open-design（`/app/.od`）根本沒有那個檔，密碼由
+chart 自己的 Secret 承載 → patch 炸 → 備份未建成 → 補償 `os.replace` 也炸 → 每次 reset
+必 500（fail-safe 有效不鎖死，但唯一憑證換不掉）。
+
+拍板「1+3 合體」：**平台 template 帶策略、operator 依策略分流**（chart annotation 契約
+因需動 woow-paas-charts 全部 chart 並逐一升版而不採）。
+
+| 載體 | 誰 | operator 行為 |
+| --- | --- | --- |
+| `config_json`（預設） | mcp-server 家族六筆 template | 既有 #357 補償 saga（helm upgrade → exec patch → rollout → 刪備份）|
+| `helm_secret` | hermes-agent、open-design | helm upgrade（atomic、全量 values＋sensitive_values）→ **全部**同 instance label 的 Deployment rollout restart → 等 ready；不碰 config.json |
+
+三個必記的實作前提（都在 chart 側查證過，不是推論）：
+
+1. **供給面兩者相同**：`sensitive_values` 一律是 `config.sensitive.admin_password`
+   （`_build_mcp_sensitive_values`），兩個 chart 的 `secret.yaml` 都吃這個鍵。載體只
+   影響 reset，不影響建立服務時的注入。
+2. **helm upgrade 之後一定要 rollout restart**：兩個 chart 的 Deployment 只有
+   `checksum/config`／`checksum/authproxy-config`，**沒有 `checksum/secret`**。改
+   Secret 不改 pod template ⇒ helm 不滾 pod，而密碼是啟動期消費的（nginx htpasswd 由
+   initContainer 從 Secret 算、webui/dashboard 走 env）。少了 restart 會「upgrade 成功
+   但密碼靜默不生效」——比 500 更糟。
+3. **必須是複數 Deployment**：兩個 chart 都渲染 daemon + console 兩顆 Deployment 共用
+   同一個 `app.kubernetes.io/instance`，單數版 `get_deployment_name` 撞多筆會 raise
+   `Ambiguous selector` → 500。故新增 `get_deployment_names`（複數），單數版維持
+   fail-loud 契約不放寬。
+
+**發版順序**：`admin_password_carrier` 在 operator 端預設 `config_json`（＝既有行為），
+舊平台不帶本欄即照舊 → **operator 先發版、平台後發版**永遠安全。反向（新平台 + 舊
+operator）不會更糟：舊 operator 忽略該欄、hermes-agent reset 仍 500，與修復前同。
+
+**選錯載體的後果不對稱**：`helm_secret` 誤標 `config_json` ＝ reset 必 500（大聲）；
+`config_json` 誤標 `helm_secret` ＝ helm upgrade 成功但 config.json 沒動、密碼靜默不
+生效（假裝成功）。新 template 上架的判準是「**chart 有沒有把 Secret 落成 PVC 上的設定
+檔**」，不要照 slug 或 chart 名猜。守線＝`TestAdminPasswordCarrierSeed` 的
+chart↔載體結構不變式（mcp-server chart ⟺ config_json）。
 
 ## Consequences
 

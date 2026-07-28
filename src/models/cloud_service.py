@@ -469,6 +469,13 @@ class CloudService(models.Model):
                 values=values,
                 sensitive_values=operator_sensitive_values or None,
                 reset_values=True,
+                # #449：告訴 operator 這個 chart 把密碼放在哪。**供給面兩者相同**
+                # （都是 config.sensitive.admin_password，上一行的 sensitive_values
+                # 不因載體而異）；差別只在 operator 要不要 exec patch
+                # /data/config.json。hermes-agent / open-design 沒有那個檔，走預設
+                # 值必 500（#449）。判別器＝template 欄位，不得在此自建 slug／chart
+                # allowlist——與 has_admin_gui 同一紀律（#357 C01）。
+                admin_password_carrier=self.template_id.admin_password_carrier,
             )
         except PaaSOperatorTimeoutError as e:
             # #357 C11: our 120s client budget is not the operator's. reset-config
