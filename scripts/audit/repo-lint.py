@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-五個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+六個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -20,6 +20,10 @@
                      算六個拓撲數對 baseline。改 seed 當下就被擋、附「持有計數的位置」
                      清單，取代「三週後 CI 才紅、紅在無關的 test 名下」（#433）。
                      依據 docs/decisions/patterns/seed-topology-invariants.md
+6. test-env-restore  src/tests/**/*.py 出現 addCleanup(os.environ.pop, ...) 即 fail；
+                     那是無條件刪除而非還原原值，會洗掉外部注入的 env，害字母序在後
+                     的測試 fail-closed raise（單獨跑綠／全套跑紅，#436）。
+                     正解 patch.dict(os.environ, {...})（start/stop 或 context manager）。
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -249,6 +253,74 @@ def check_reuse_values(root, only_file=None):
     return violations
 
 
+def _is_os_environ(node):
+    """node 是 ``os.environ`` 或 ``environ``（from os import environ）嗎？"""
+    if isinstance(node, ast.Attribute):
+        return node.attr == "environ" and isinstance(node.value, ast.Name) \
+            and node.value.id == "os"
+    return isinstance(node, ast.Name) and node.id == "environ"
+
+
+def _env_unconditional_cleanup_lines(src):
+    """回傳「把 os.environ 的刪除方法直接當 cleanup callable 傳」的行號。
+
+    只認**直接參照**（``addCleanup(os.environ.pop, KEY, None)``）。repo 既有的
+    ``_set_env`` / ``_env_guard`` 是 lambda / 內層函式先存 prev 再條件還原 ——
+    語意正確，不在此列，故誤報空間趨近零。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []  # 語法壞掉自有 Odoo 載入會炸，這裡不重複報
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr not in ("addCleanup", "addClassCleanup"):
+            continue
+        first = node.args[0]
+        if (isinstance(first, ast.Attribute)
+                and first.attr in ("pop", "__delitem__", "clear")
+                and _is_os_environ(first.value)):
+            bad.append(node.lineno)
+    return sorted(bad)
+
+
+def check_test_env_restore(root, only_file=None):
+    """src/tests/**/*.py 不得用 ``addCleanup(os.environ.pop, ...)`` 還原 env。
+
+    #436：這個形狀是**無條件刪除**，不是「還原原值」。測試跑完把**外部注入**的
+    env（K8s Secret 注入的 AGENT_RUNTIME_NAMESPACE_SECRET）整個刪掉，字母序在後的
+    測試讀不到就 fail-closed raise —— 單獨跑全綠、只有全套跑才紅，而且紅在無辜的
+    test 名下（典型假綠家族：綠不代表對，是順序剛好）。
+    """
+    violations = []
+    files = [only_file] if only_file else sorted(
+        glob.glob(os.path.join(root, "src/tests/**/*.py"), recursive=True))
+    for fp in files:
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        for line_no in _env_unconditional_cleanup_lines(src):
+            violations.append(
+                "%s:%d：addCleanup(os.environ.pop, ...) 是**無條件刪除**而非還原原值，"
+                "會把外部注入的 env 洗掉，害字母序在後的測試 fail-closed raise（#436，"
+                "單獨跑綠／全套跑紅、且紅在無辜的 test 名下）。改用 patch.dict —— "
+                "原本沒有就刪、原本有就還原：\n"
+                "          patcher = patch.dict(os.environ, {KEY: VALUE})\n"
+                "          patcher.start()\n"
+                "          self.addCleanup(patcher.stop)\n"
+                "        （test method 內可直接用 with patch.dict(...) context manager；"
+                "需要條件式還原的多變數情境見 test_agent_pod_phase_d_hardening.py 的 "
+                "_env_guard。）" % (rel, line_no))
+    return violations
+
+
 def _field_value(field):
     """讀 <field> 的值：eval 屬性優先，否則 text。"""
     if field.get("eval") is not None:
@@ -351,14 +423,15 @@ def run_all(root):
                   + check_owl_template(root)
                   + check_data_noupdate(root)
                   + check_reuse_values(root)
-                  + check_seed_topology(root))
+                  + check_seed_topology(root)
+                  + check_test_env_restore(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
             print("  ✗ " + v)
         return 1
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
-          "reuse-values / seed-topology）")
+          "reuse-values / seed-topology / test-env-restore）")
     return 0
 
 
@@ -408,6 +481,8 @@ def run_hook():
             violations += check_reuse_values(root, only_file=abs_path)
         elif re.match(r"^src/.*\.py$", rel):
             violations = check_reuse_values(root, only_file=abs_path)
+            if rel.startswith("src/tests/"):
+                violations += check_test_env_restore(root, only_file=abs_path)
         elif re.match(r"^src/static/src/.*\.xml$", rel):
             violations = check_owl_template(root, only_file=abs_path)
         elif re.match(r"^src/data/.*\.xml$", rel):
