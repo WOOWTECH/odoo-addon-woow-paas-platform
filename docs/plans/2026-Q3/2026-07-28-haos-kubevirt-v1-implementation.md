@@ -63,17 +63,22 @@ W1 PoC（dev-sandbox-423-poc）   │  W2 golden image（woow-paas-ci）
 W3a charts/haos ◀───────────────┘（image pin）
 W3b charts/paas-operator RBAC（可先合，不依賴 W1）
  ▼
-W4 operator（本 repo extra/paas-operator/）
+W4 operator code（本 repo extra/paas-operator/）
 W4b pvc-cleanup cronjob 擴充（charts repo；依賴 W1-R7）
  ▼
-W5a 平台側程式（欄位／poll 分支／values／注入／測試）
+W4.6 🔴 部署 operator 到 stg（build → CD repo values-stg.yaml pin → 驗 pod digest）
+ │    ← 缺這步 W6 必假失敗：stg 接的是 paas-stg-system 的「共用」operator，
+ │      不會自動跑 W4 的新 code（.sandbox/post-create.sh:32-44 只做探索）
+ ▼
+W5a 平台側程式（欄位／poll 分支 model+controller／values／注入／測試）
  ▼
 W5b seed（template + plan + M2M + repo-lint baseline）  ← Q5 拍板為前置閘門
  ▼
-W6 stg e2e
+W6 stg e2e（W6.0 先驗 operator digest 再開跑）
 ```
 
 **可併行**：W2 ∥ W1；W3b ∥ 任何階段（純加法 RBAC，建議最早合以免 W4 開發撞 Forbidden）。
+**不可省的串行點**：W4.6 卡在 W4 與 W6 之間——W5a/W5b 可以先寫先合，但 **W6 開跑前 W4.6 必須完成**。
 
 ### 2.1 PR 切分總表
 
@@ -87,9 +92,10 @@ W6 stg e2e
 | **PR-W3b** | `woow-paas-charts` | `charts/paas-operator` ClusterRole 補 kubevirt.io / cdi.kubevirt.io | — | ✅ **建議最早合** |
 | **PR-W4** | 本 repo | operator：`get_vmis` / `get_datavolumes` / status 擴充 / `scale_release` VM 分支 / `label_datavolumes` | W3a | ✅ |
 | **PR-W4b** | `woow-paas-charts` | pvc-cleanup cronjob 擴充（刪 DataVolume 而非 PVC） | W1-R7 | ✅ |
-| **PR-W5a** | 本 repo | `workload_type` 欄位、poll VM 分支（含 fail-open 回歸測試）、values `runStrategy` 同源、`_inject_storage_class` | W4 | ✅ |
-| **PR-W5b** | 本 repo | CloudAppTemplate seed ＋ plan seed ＋ M2M link ＋ `repo-lint --update-baseline` | W5a ＋ **Q5 拍板** | ✅ |
-| — | — | **W6** 無 PR：stg e2e 報告留言到 #423 | W5b | — |
+| **PR-W4.6** | `paas-app-bundle-cd` | stg pin：`paas-operator-stg/values-stg.yaml` → 新 operator tag | PR-W4 merge ＋ CI build | ✅ **W6 的硬前置** |
+| **PR-W5a** | 本 repo | `workload_type` 欄位、**model ＋ controller 兩層** poll VM 分支（含 fail-open 回歸測試）、values `runStrategy` 同源、`_inject_storage_class` | W4 | ✅ |
+| **PR-W5b** | 本 repo | CloudAppTemplate seed ＋ plan seed ＋ M2M link ＋ seed 測試 ＋ `repo-lint --update-baseline` | W5a ＋ **Q5 拍板** | ✅ |
+| — | — | **W6** 無 PR：stg e2e 報告留言到 #423 | W5b ＋ **PR-W4.6** | — |
 
 ---
 
@@ -106,6 +112,9 @@ W6 stg e2e
   - 落 namespace：`kubevirt`
 - [ ] **安裝 CDI v1.64**（同樣是 operator YAML + CR）
   - `cdi-operator.yaml` + `cdi-cr.yaml`；落 namespace：`cdi`
+  - 🔴 **不得啟用 DataVolume GC**：CDI CR 的 `spec.config.dataVolumeTTLSeconds` **必須留空（不設）**
+    - **理由**：啟用後 DataVolume 會在 import 成功時被自動刪除、PVC 的 ownerReference 被移除。平台的整條 delete 保護鏈（chart 的 `helm.sh/resource-policy: keep` 標在 DataVolume 上、operator 的 `label_datavolumes` orphan 標記、cleanup cron 刪 DataVolume）都以「DataVolume 持續存在」為前提，**啟用 GC 會讓這條鏈靜默踩空**（不報錯、但保護不生效）。
+    - 若日後有人要開，須先回頭改 design §4.3 的整套刪除語意。
 - [ ] **確認 apiserver `--allow-privileged=true`**（virt-handler 是 privileged DaemonSet）
 - [ ] **確認 containerd runtime**（k3s 內建，預期無事）
 
@@ -136,6 +145,10 @@ kubectl --context woow-k3s get ds -n kubevirt virt-handler -o jsonpath='{.status
 # 4. CDI CR 就緒
 kubectl --context woow-k3s get cdi -o jsonpath='{.items[0].status.phase}'
 #    → Deployed
+
+# 5. DataVolume GC 未啟用（平台 delete 保護鏈的前提）
+kubectl --context woow-k3s get cdi -o jsonpath='{.items[0].spec.config.dataVolumeTTLSeconds}'
+#    → 空（未設）
 ```
 
 ### W0.4 中止／回滾條件
@@ -158,20 +171,58 @@ kubectl --context woow-k3s get cdi -o jsonpath='{.items[0].status.phase}'
 |---|---|---|
 | KubeVirt CRD / virt-operator / virt-api / virt-controller / **virt-handler DaemonSet** | `kubevirt` ns ＋ 叢集級 CRD | **叢集運維（W0）** |
 | CDI operator / apiserver / uploadproxy | `cdi` ns | **叢集運維（W0）** |
-| **被測的 VM / DataVolume / Service / NetworkPolicy / ResourceQuota / LimitRange** | `dev-sandbox-423-poc` ns | **本 repo（W1）** |
+| **被測的 VM / DataVolume / Service / NetworkPolicy / ResourceQuota / LimitRange** | `dev-sandbox-423-poc*` 三顆 ns | **本 repo（W1）** |
 
 **KubeVirt 不可能「只裝在一個 namespace」**——它有叢集級 CRD 與每節點 DaemonSet。所以 W1 只在自己的 sandbox ns 內建 workload，**絕不碰 `kubevirt` / `cdi` ns**。
 
-### W1.1 前置：建立與 CS ns 同構的 quota 環境
+**W1 用到的三顆 ns**（全部落在 CLAUDE.md 白名單的 `dev-sandbox-*`）：
 
-沒有這步就複現不出 R5 的 quota 洞（dev sandbox 預設不建 ResourceQuota／LimitRange）。
+| ns | 用途 |
+|---|---|
+| `dev-sandbox-423-poc` | 主 PoC：VM / DataVolume / Service / quota / NP |
+| `dev-sandbox-423-poc-cf` | **R6 專用**：扮演 cloudflared connector ns（見 W1.4 的理由） |
+| `dev-sandbox-423-poc-other` | **R6 專用**：扮演「第三方 ns」，驗反面應被擋 |
 
-- [ ] 建 ns：`kubectl --context woow-k3s create ns dev-sandbox-423-poc`
-- [ ] 套用**與 CS ns 同構**的 LimitRange（複製 `extra/paas-operator/src/services/helm.py:1047-1059` 的形狀）
+- [ ] **工具前置**：下載 **virtctl v1.8.0**（⚠ **必須與 server 版本完全一致**，否則行為異常——#423 Elmo 材料的實測教訓）
+  ```bash
+  kubectl --context woow-k3s get kubevirt -n kubevirt -o jsonpath='{.items[0].status.observedKubeVirtVersion}'   # 先確認 server 版本
+  # 依該版本下載對應的 virtctl，放進 PATH
+  virtctl version   # → client 與 server 版本一致
+  ```
+
+### W1.1 前置：建立與 CS ns 同構的 quota ＋ registry 環境
+
+沒有這步就複現不出 R5 的 quota 洞（dev sandbox 預設不建 ResourceQuota／LimitRange），也拉不動私有 registry 的 image。
+
+- [ ] 建三顆 ns：
+  ```bash
+  for n in dev-sandbox-423-poc dev-sandbox-423-poc-cf dev-sandbox-423-poc-other; do
+    kubectl --context woow-k3s create ns "$n"
+  done
+  ```
+- [ ] 套用**與 CS ns 同構**的 LimitRange 到 `dev-sandbox-423-poc`（複製 `extra/paas-operator/src/services/helm.py:1047-1059` 的形狀）
   - `default` / `defaultRequest` 皆 `cpu: 500m` / `memory: 512Mi`，`type: Container`，**不設 `max`**
 - [ ] 套用**與 CS ns 同構**的 ResourceQuota（複製 `helm.py:1061-1087` 的 6-key hard）
   - 值取「單台 HAOS」的預期 quota：`requests/limits.cpu: 9`、`requests/limits.memory: 18Gi`、`persistentvolumeclaims: 10`、`requests.storage: 192Gi`
   - （＝design §6.3 的 `min_*` × 3；用設計推算值起跑，R5 若推翻再回填）
+- [ ] 🔴 **建 `paas-registry` dockerconfigjson secret**（**W1.6 R8 的硬前置**）
+  - 正式 CS ns 由 operator 的 `create_namespace` 順手建（`helm.py:1028` 呼叫 `ensure_registry_secret`），**PoC ns 沒有人建** → OCI registry source 會直接 ImagePullBackOff／import 失敗
+  ```bash
+  # 從既有 CS ns 複製一份（或用 jcr-prod 憑證重建）
+  kubectl --context woow-k3s get secret paas-registry -n <既有 paas-ws-stg-* ns> -o json \
+    | python3 -c "import sys,json;d=json.load(sys.stdin);d['metadata']={'name':'paas-registry','namespace':'dev-sandbox-423-poc'};print(json.dumps(d))" \
+    | kubectl --context woow-k3s apply -f -
+  # 驗證
+  kubectl --context woow-k3s get secret paas-registry -n dev-sandbox-423-poc \
+    -o jsonpath='{.type}'   # → kubernetes.io/dockerconfigjson
+  ```
+- [ ] 🔴 **確認 CDI 的 DataVolume GC 未啟用**（**R7 的硬前置**）
+  ```bash
+  kubectl --context woow-k3s get cdi -o jsonpath='{.items[0].spec.config.dataVolumeTTLSeconds}'
+  # → 必須為空（未設）
+  ```
+  - **為什麼**：若 CDI 啟用 DataVolume GC，DataVolume 會在 import 成功後被自動刪除、PVC 的 ownerReference 被移除。此時 R7 的三條路徑全部量到「假的」結果，而 W4.4／W4b 整條以 DataVolume 為標的的 delete 鏈會**靜默踩空**（標記標的不存在、清理找不到東西）。
+  - 若已啟用 → **停止 W1.5**，回報並與叢集運維協調關閉（見 W0.1）
 - [ ] 套用 chart 端與 operator baseline 的 NetworkPolicy 等價物（R6 用，見 W1.4）
 
 ### W1.2 PoC 用的 image 來源（刻意的臨時手段）
@@ -199,55 +250,75 @@ W1 與 W2 併行，W2 的 OCI image 可能還沒好。切法：
     -l kubevirt.io/domain=<vm-name> -o json \
     | python3 -c "import sys,json;p=json.load(sys.stdin)['items'][0];[print(c['name'],c.get('resources')) for c in p['spec']['containers']]"
   ```
-- [ ] **步驟 4**：讀 KubeVirt 的 memory overhead annotation
+- [ ] **步驟 4**：推算 KubeVirt memory overhead
+  - ⚠ **不要**去找 annotation：KubeVirt 並不保證把 overhead 寫成 pod annotation（原 plan 此處前提有誤）。
+  - 改用**相減法**：`overhead = compute 容器的實際 requests.memory − guest 宣告的 4Gi`
   ```bash
   kubectl --context woow-k3s get pod -n dev-sandbox-423-poc \
-    -l kubevirt.io/domain=<vm-name> -o jsonpath='{.items[0].metadata.annotations}'
+    -l kubevirt.io/domain=<vm-name> -o json \
+    | python3 -c "import sys,json;p=json.load(sys.stdin)['items'][0];c=[x for x in p['spec']['containers'] if x['name']=='compute'][0];print('compute requests:',c['resources'].get('requests'))"
   ```
 - [ ] **步驟 5**：讀 ns quota 實際消耗
   ```bash
   kubectl --context woow-k3s get resourcequota -n dev-sandbox-423-poc -o yaml
   ```
+- [ ] **步驟 6（負面測試，證實「洞 1」的機轉）**：另建一台**刻意省略 `domain.resources.limits`** 的 VM
+  - 預期：LimitRange 補上 `limit: 512Mi` < request（guest 4Gi）→ **admission 拒收**，pod 建不起來
+  - 觀察錯誤訊息（`kubectl describe vmi` / `kubectl get events`）
+  - **目的**：證明 design §6.2 洞 1 的機轉真實存在，而不是只驗 happy path 就宣稱「chart 設 limits 解決了問題」——若這台**竟然建得起來**，代表洞 1 的成因判斷有誤，chart 的 `limits == requests` 就不是必要條件（要回頭修 design §6.2 的論述）
+  - 測完立刻刪除，避免佔用 quota 影響步驟 1–5
 
 **判定標準**
 
 | 觀察 | 判定 | 動作 |
 |---|---|---|
-| 容器數 = 3 且 Σrequests.memory ≈ 5.3 GiB、Σlimits.cpu ≈ 3.0 | 設計推算成立 | `min_*` 維持 3 / 6.0 / 64 |
+| 容器數 = 3 且 **Σrequests.memory ∈ [5.0, 6.0] GiB**、**Σlimits.cpu ∈ [2.5, 3.5]** | 設計推算成立（容差內） | `min_*` 維持 3 / 6.0 / 64 |
 | 容器數 ≠ 3（例如 DataVolume 路徑只有 2 個：`compute` + `guest-console-log`） | 推算需修正 | **回寫 design §6.3**（`min_*` 下調），同步 W5b seed 值與 W1.1 的 quota |
-| Σ 值高於推算 | 額度不足風險 | **回寫 design §6.3**（`min_*` 上調），本 wave 內重跑驗證 |
-| VM 建不起來且錯誤是 `must specify limits.*` 或 `exceeded quota` | 洞 1 在「chart 有設 limits」下仍存在 | 🔴 **回寫 design §6.2**，可能須改動 LimitRange 策略 → 升級為設計級問題，回 design review |
+| Σrequests.memory > 6.0 GiB 或 Σlimits.cpu > 3.5 | 額度不足風險 | **回寫 design §6.3**（`min_*` 上調），本 wave 內重跑驗證 |
+| Σrequests.memory < 5.0 GiB | 估過寬（無安全風險，但 quota 浪費） | 可選擇下調；記錄實值即可 |
+| 步驟 6 的無 limits VM **竟然建得起來** | 洞 1 的成因判斷有誤 | **回寫 design §6.2**（`limits == requests` 從「必要」降為「建議」） |
+| 步驟 1–5 的**有 limits** VM 建不起來且錯誤是 `must specify limits.*` 或 `exceeded quota` | 洞 1 在「chart 有設 limits」下仍存在 | 🔴 **回寫 design §6.2**，可能須改動 LimitRange 策略 → 升級為設計級問題，回 design review |
 
-**回寫落點**：design §6.3 表格、§8.2「RAM（pod requests）」「CPU（limits 帳面）」兩列。
+**回寫落點**：design §6.2（洞 1 機轉）、§6.3 表格、§8.2「RAM（pod requests）」「CPU（limits 帳面）」兩列。
 
 ### W1.4 R6 — NetworkPolicy 對 virt-launcher 的實際行為 🔴 高阻塞
 
 **要回答什麼**：design §3.6 判定「virt-launcher 是普通 pod，NP 零改動」是**架構推論**，未在真 KubeVirt 上驗過。若 default-deny egress 擋掉 virt-launcher 需要的東西，VM 會起不來。
 
-- [ ] **步驟 1**：套用 operator baseline NP 四條的等價物（形狀複製 `helm.py:1089-1151`，`podSelector: {}`）
+#### ⚠ 為何需要兩顆額外的 ns（不能「幫測試 ns 標上 cloudflared label」）
+
+operator baseline 的 `allow-cloudflared` 用的是 `namespaceSelector.matchLabels.kubernetes.io/metadata.name: <cf_ns>`（`helm.py:1135-1142`）。**`kubernetes.io/metadata.name` 自 k8s 1.22 起由 apiserver 強制寫入且等於 namespace 自身名稱，不可改**——所以「把某顆 ns 標上 cloudflared 的 label」照字面不可能做到。
+
+正確做法：**PoC 的等價 NP 把 `cf_ns` 值填成我們自己的 `dev-sandbox-423-poc-cf`**，讓那顆 ns 天然帶有相符的 `metadata.name`，由它扮演 connector。反面測試則從 `dev-sandbox-423-poc-other` 發起。
+
+> ⚠ **共用叢集鐵律**：測試 pod **只准**落在 `dev-sandbox-423-poc` / `-cf` / `-other` 這三顆 ns。**不得**借用任何既有 ns（客戶 ns、`paas-*`、`paas-cloudflare-system`）當「第三方來源」。
+
+- [ ] **步驟 1**：VM 先維持 `runStrategy: Halted`（**順序很重要**：先確保 NP 在 VMI 首次啟動前就位，才測得到「NP 是否阻擋啟動」；VM 已在跑才套 NP 會漏掉啟動期的失效）
+- [ ] **步驟 2**：套用 operator baseline NP 四條的等價物（形狀複製 `helm.py:1089-1151`，`podSelector: {}`），**`cf_ns` 值填 `dev-sandbox-423-poc-cf`**
   - `default-deny-ingress` / `allow-same-ns` / `allow-cloudflared` / `allow-mcp-reach`
-- [ ] **步驟 2**：套用 chart NP（design §3.6：default-deny Ingress+Egress ＋ allow DNS ＋ `allowAllEgress: true`）
-- [ ] **步驟 3**：把 VM 從 `Halted` 切到 `Always`，觀察能否進入 `Running`
+- [ ] **步驟 3**：套用 chart NP（design §3.6：default-deny Ingress+Egress ＋ allow DNS ＋ `allowAllEgress: true`）
+- [ ] **步驟 4**：**現在**才把 VM 切到 `Always`，觀察能否進入 `Running`
   ```bash
   kubectl --context woow-k3s patch vm <vm> -n dev-sandbox-423-poc --type=merge -p '{"spec":{"runStrategy":"Always"}}'
   kubectl --context woow-k3s get vmi <vm> -n dev-sandbox-423-poc -w
   ```
-- [ ] **步驟 4**：guest 內測對外（`virtctl console` 進 guest）
+- [ ] **步驟 5**：guest 內測對外（`virtctl console` 進 guest）
   - `curl -I https://version.home-assistant.io/stable.json`（HAOS 的更新檢查端點）
-- [ ] **步驟 5**：建 Service，從**標了 cloudflared ns label 的來源**打 `http://<svc>:8123`
-- [ ] **步驟 6（反面測試）**：從**未標 label 的第三方 ns** 打 8123 → **應被擋**
+- [ ] **步驟 6（正面）**：建 Service，從 **`dev-sandbox-423-poc-cf`** 的 long-lived pod 打 `http://<svc>.dev-sandbox-423-poc.svc.cluster.local:8123` → **應通**
+- [ ] **步驟 7（反面）**：從 **`dev-sandbox-423-poc-other`** 的 long-lived pod 打同一位址 → **應被擋**
 
-> ⚠ **測試方法紀律**（`reference_woow_k3s_netpol_fresh_pod_race`）：woow-k3s 的 NP 對新建 pod 有**啟動編程空窗**。臨時 pod 打完就走會系統性誤判「全毀」。測試端**必須用 long-lived pod、`sleep 20–30s` 後才發第一個請求**。
+> ⚠ **測試方法紀律**（`reference_woow_k3s_netpol_fresh_pod_race`）：woow-k3s 的 NP 對新建 pod 有**啟動編程空窗**。臨時 pod 打完就走會系統性誤判「全毀」。步驟 6/7 的測試端**必須是 long-lived pod（`sleep 3600`），且進去後先 `sleep 20–30s` 才發第一個請求**。
 > ⚠ **TCP 探測紀律**（`reference_dash_devtcp_false_negative`）：不要用 `sh` 的 `/dev/tcp`（dash 下靜默假失敗）。用 `curl` 或 python socket。
 
 **判定標準**
 
 | 觀察 | 判定 |
 |---|---|
-| 步驟 3 進 Running ＋ 步驟 4 通 ＋ 步驟 5 通 ＋ 步驟 6 被擋 | ✅ PASS，design §3.6 成立、零改動 |
-| 步驟 3 卡住（VMI 進不了 Running） | 🔴 virt-launcher 需要額外 egress → **回寫 design §3.6**，chart NP 須加 allow（先用 `kubectl describe vmi` + virt-handler log 定位缺哪條） |
-| 步驟 4 不通但 3 通 | guest 對外被擋 → 檢查 `allowAllEgress` 是否生效、DNS 規則是否足夠 → **回寫 design §3.6** |
-| 步驟 6 沒被擋 | 🔴 隔離破口 → **回寫 design §3.6**，這是 security 級問題，須在 W3a 前解 |
+| 步驟 4 進 Running ＋ 5 通 ＋ 6 通 ＋ 7 被擋 | ✅ PASS，design §3.6 成立、零改動 |
+| 步驟 4 卡住（VMI 進不了 Running） | 🔴 virt-launcher 需要額外 egress → **回寫 design §3.6**，chart NP 須加 allow（先用 `kubectl describe vmi` + virt-handler log 定位缺哪條） |
+| 步驟 5 不通但 4 通 | guest 對外被擋 → 檢查 `allowAllEgress` 是否生效、DNS 規則是否足夠 → **回寫 design §3.6** |
+| 步驟 6 不通 | tunnel 路徑被自家 NP 擋 → **回寫 design §3.6** |
+| 步驟 7 **沒**被擋 | 🔴 隔離破口 → **回寫 design §3.6**，這是 security 級問題，須在 W3a 前解 |
 
 **回寫落點**：design §3.6 全節；若需新增 egress 規則，同步 W3a 的 `network-policy.yaml` 任務清單。
 
@@ -257,11 +328,26 @@ W1 與 W2 併行，W2 的 OCI image 可能還沒好。切法：
 
 > **用隔離 fixture**（另建一顆 VM/DV，**不要用 R5/R6 那台**），形制對齊 #281 的 PVC orphan-label e2e recipe：測的是「平台的刪除行為不碰不該碰的東西」，污染會讓結論不可信。
 
-- [ ] **前置**：以 `helm install` 方式（而非裸 `kubectl apply`）安裝一份最小 chart，DataVolume 帶 `helm.sh/resource-policy: keep`。這樣才驗得到 helm 的 stored-manifest 行為（`reference_helm_resource_policy_stored_manifest`：helm 讀 stored manifest、不讀 live 物件）。
+- [ ] **前置 1**：確認 W1.1 的「CDI DataVolume GC 未啟用」檢查已通過。**GC 開著的話這一節量到的全是假結果**（DataVolume 會在 import 完成時自己消失）。
+- [ ] **前置 2**：以 `helm install` 方式（而非裸 `kubectl apply`）安裝一份最小 chart，DataVolume 帶 `helm.sh/resource-policy: keep`。這樣才驗得到 helm 的 stored-manifest 行為（`reference_helm_resource_policy_stored_manifest`：helm 讀 stored manifest、不讀 live 物件）。
+  ```bash
+  helm install <release> <chart> -n dev-sandbox-423-poc --kube-context woow-k3s
+  ```
+
+- [ ] **R11（必須在路徑 C 之前做完）** — CDI 有沒有把 DataVolume 的 labels 複製到它建的 PVC
+  - ⚠ **順序理由**：路徑 C 會刪掉 DataVolume 並 cascade 帶走 PVC，屆時就沒有東西可讀。R11 的觀察必須在 A/B/C 之前（或至少 C 之前）完成。
+  ```bash
+  kubectl --context woow-k3s get pvc <pvc> -n dev-sandbox-423-poc -o jsonpath='{.metadata.labels}'
+  kubectl --context woow-k3s get pvc <pvc> -n dev-sandbox-423-poc -o jsonpath='{.metadata.ownerReferences}'
+  ```
+  | 觀察 | 判定 | 動作 |
+  |---|---|---|
+  | PVC 帶 `app.kubernetes.io/instance` | `delete_release` 的 `list_pvcs(label_selector=…)`（`releases.py:246-248`）撈得到 | W4 的 orphan 標記可沿用現行選擇器 |
+  | PVC 不帶該 label | 🔴 orphan 標記會漏 | **W4 的 `label_datavolumes` 必須以 DataVolume 為標的**，且 orphan 撈取邏輯要改；**回寫 design §4.3 失效點 3** |
 
 - [ ] **路徑 A — `helm uninstall`**
   ```bash
-  helm uninstall <release> -n dev-sandbox-423-poc
+  helm uninstall <release> -n dev-sandbox-423-poc --kube-context woow-k3s
   kubectl --context woow-k3s get dv,pvc -n dev-sandbox-423-poc
   ```
   | 觀察 | 判定 | 動作 |
@@ -287,22 +373,17 @@ W1 與 W2 併行，W2 的 OCI image 可能還沒好。切法：
   ```
   預期：PVC 隨 ownerReference cascade 消失 → 確認「刪 DV」是正確的清理動作。
 
-- [ ] **R11 附帶（同一 fixture 一起量）** — CDI 有沒有把 DataVolume 的 labels 複製到它建的 PVC
-  ```bash
-  kubectl --context woow-k3s get pvc <pvc> -n dev-sandbox-423-poc -o jsonpath='{.metadata.labels}'
-  kubectl --context woow-k3s get pvc <pvc> -n dev-sandbox-423-poc -o jsonpath='{.metadata.ownerReferences}'
-  ```
-  | 觀察 | 判定 | 動作 |
-  |---|---|---|
-  | PVC 帶 `app.kubernetes.io/instance` | `delete_release` 的 `list_pvcs(label_selector=…)`（`releases.py:246-248`）撈得到 | W4 的 orphan 標記可沿用現行選擇器 |
-  | PVC 不帶該 label | 🔴 orphan 標記會漏 | **W4 的 `label_datavolumes` 必須以 DataVolume 為標的**，且 orphan 撈取邏輯要改；**回寫 design §4.3 失效點 3** |
-
 **回寫落點**：design §4.3 全節、§9 的 R7/R11 兩列。
 
 ### W1.6 R8 — 開通耗時分段（決定 Q2 是否重議）
 
 **依賴 W2 的 OCI image**（用 http source 量的數字對這題無意義）。
 
+- [ ] 🔴 **前置：驗 `paas-registry` secret 存在**（W1.1 已建；沒有它 OCI import 必定失敗，而錯誤訊息會指向 image 而非 secret，容易誤判成 W2 的 image 有問題）
+  ```bash
+  kubectl --context woow-k3s get secret paas-registry -n dev-sandbox-423-poc -o jsonpath='{.type}'
+  # → kubernetes.io/dockerconfigjson；DataVolume 的 source.registry.secretRef 要指向它
+  ```
 - [ ] 從 `kubectl apply` 起計時，記四個時間點：
   1. DataVolume `Pending → ImportInProgress`（開始拉 image）
   2. DataVolume `Succeeded`（import 完成）—— 同時記錄 `status.progress` 的變化曲線
@@ -316,13 +397,15 @@ W1 與 W2 併行，W2 的 OCI image 可能還沒好。切法：
 
 **判定標準**
 
+> ⚠ **本表只產出「事實 + 是否送 Eugene 重議」，不替 Q2 定結論。** Q2（golden PVC clone 做不做）是 Eugene 已拍板的題（v1 不做），只有 Eugene 能改。PoC 的職責是把數字與影響講清楚，然後把決定權交回去。
+
 | 總耗時（步驟 1 → 4） | 判定 | 動作 |
 |---|---|---|
-| **< 15 分鐘** | 可接受 | Q2 維持「v1 不做 golden PVC clone」 |
-| **15–30 分鐘** | 邊際 | 記錄數字，Q2 交 Eugene 定；v1 仍可上，UI 進度條（design §7.4）成為必要而非加分 |
-| **> 30 分鐘** | 不可接受 | 🔴 **觸發 Q2 重議**，golden PVC clone 升級為 v1 必做 → 回寫 design §5.4 |
+| **< 15 分鐘** | 在預期內 | Q2 維持原拍板（不做），**不需重議** |
+| **15–30 分鐘** | 邊際 | 記錄數字並**提交 Eugene 決定是否重議 Q2**；v1 仍可上，但 UI 進度條（design §7.4）從加分變成必要 |
+| **> 30 分鐘** | 顯著劣於預期 | 🔴 **必須提交 Eugene 重議 Q2**（附耗時分段、租戶等待體感、golden PVC clone 的成本估算）；Eugene 決定前 W3a 的 DataVolume source 設計暫緩定案 |
 
-**回寫落點**：design §5.4 的判定門檻、§7.4 的進度可視需求、§9 的 R8 列。
+**回寫落點**：design §5.4（記錄實測耗時；是否改結論待 Eugene）、§7.4 的進度可視需求、§9 的 R8 列。
 
 ### W1.7 R9 — qemu-guest-agent（低阻塞）
 
@@ -361,7 +444,12 @@ R5 的 VM 本來就是 64 GiB，import 過程順帶記錄：Longhorn volume 建�
 - [ ] 產出 PoC 報告，留言到 #423：逐項列 R5/R6/R7/R8/R9/R11（＋R1/R2/R3 若已跑）的**實際輸出**與判定
   - **紀律**：報告必須沿用 design §0 的三級標註（實測／設計論述／實查），不可把推論寫成實測
   - 明確標註「PoC 用 http source 是臨時手段，非 v1 設計」
-- [ ] **清理**：`kubectl --context woow-k3s delete ns dev-sandbox-423-poc`
+- [ ] **清理**：刪除三顆 PoC ns
+  ```bash
+  for n in dev-sandbox-423-poc dev-sandbox-423-poc-cf dev-sandbox-423-poc-other; do
+    kubectl --context woow-k3s delete ns "$n"
+  done
+  ```
   - ⚠ **Longhorn Retain 陷阱**（#319 殘留來源）：若 PoC 用到 `longhorn` SC（reclaimPolicy=Retain），**先把 PV patch 成 `Delete` 再刪 PVC**，讓 CSI 連後端 volume 一起回收。用 `longhorn-delete`（平台預設）則無此問題。
   - 刪除後**同命令複驗**：`kubectl --context woow-k3s get ns | grep 423-poc` 應無輸出；`kubectl get pv | grep Released` 確認無新增殘留
 - [ ] （條件式）開 **PR-W1b** 回寫 design 檔被推翻的章節
@@ -371,8 +459,8 @@ R5 的 VM 本來就是 64 GiB，import 過程順帶記錄：Longhorn volume 建�
 ```bash
 # PoC 報告已留言
 tea issues 423 --repo odoo-addons/woow_paas_platform --comments | grep -c "W1 PoC"   # ≥ 1
-# 環境已清理
-kubectl --context woow-k3s get ns dev-sandbox-423-poc   # → NotFound
+# 三顆 ns 都已清理
+kubectl --context woow-k3s get ns | grep -c 423-poc    # → 0
 ```
 
 ### W1 中止條件
@@ -418,7 +506,15 @@ docker manifest inspect jcr-prod.woowtech.io/woow-paas-docker-local/haos:<tag>
 
 **依賴**：無。**理由**：純加法、不影響現有行為；早合可避免 W4 開發時撞 Forbidden（#315 原樣重演）。
 
-- [ ] 在 `charts/paas-operator/templates/clusterrole.yaml`（現 94 行，實查**無**任何 kubevirt/cdi apiGroup）新增：
+> ✅ **先合的安全性已確認**：K8s RBAC 對「尚未註冊的 apiGroup」是純字串比對、惰性生效——W3b 可以在 W0 裝好 KubeVirt **之前**就合入，規則會在 CRD 註冊後自動開始生效，不會讓 ClusterRole 變成無效物件。
+
+- [ ] **開工第一步**：`cd woow-paas-charts && git pull`，**就地複驗本節引用的行號**（本 plan 撰寫時未在 charts repo 內逐行複驗，行號可能已漂移）
+  ```bash
+  wc -l charts/paas-operator/templates/clusterrole.yaml       # 撰寫時為 94
+  grep -n "apiGroups" charts/paas-operator/templates/clusterrole.yaml
+  grep -c "kubevirt.io" charts/paas-operator/templates/clusterrole.yaml   # 撰寫時為 0
+  ```
+- [ ] 在 `charts/paas-operator/templates/clusterrole.yaml`（撰寫時 94 行，實查**無**任何 kubevirt/cdi apiGroup）新增：
   ```yaml
   - apiGroups: ["kubevirt.io"]
     resources: ["virtualmachines", "virtualmachineinstances"]
@@ -474,6 +570,10 @@ cd woow-paas-charts
 helm lint charts/haos
 for t in charts/haos/tests/*.sh; do bash "$t" || exit 1; done   # → 全 PASS
 helm template t charts/haos --set image.tag="" 2>&1 | grep -q "required"   # → 空 tag 必失敗
+
+# chart 真的發佈到 OCI 且可被 operator 拉到（W4/W6 的前提）
+helm pull oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos --version 0.1.0
+# → 成功下載；失敗代表 chart 沒推上去或版本號對不上，W4 之後都會撞
 ```
 
 ### W3 中止／回滾條件
@@ -522,7 +622,11 @@ helm template t charts/haos --set image.tag="" 2>&1 | grep -q "required"   # →
 - [ ] 標記依據 **W1-R11 的結論**：
   - PVC 有繼承 label → 沿用現行 `app.kubernetes.io/instance` 選擇器
   - PVC 沒繼承 → orphan 撈取改以 DataVolume 為準
-- [ ] （條件式，依 W1-R7 路徑 B）**PR-W4b**：`charts/paas-operator/templates/pvc-cleanup-cronjob.yaml:72` 的 `kubectl delete pvc` 改為「對帶 orphan label 且過期的 DataVolume 執行 `delete datavolume`」
+- [ ] （條件式，依 W1-R7 路徑 B）**PR-W4b**：`charts/paas-operator/templates/pvc-cleanup-cronjob.yaml` 的 `kubectl delete pvc`（撰寫時在 `:72`）改為「對帶 orphan label 且過期的 DataVolume 執行 `delete datavolume`」
+  - [ ] **開工第一步**：`cd woow-paas-charts && git pull`，**就地複驗行號**（本 plan 未在 charts repo 內逐行複驗）
+    ```bash
+    grep -n "delete pvc" charts/paas-operator/templates/pvc-cleanup-cronjob.yaml   # 撰寫時為 72
+    ```
   - ⚠ **不可**對 DV-owned 的 PVC 直接 `delete pvc`（會被 CDI 重建並重跑一次完整 import）
   - ⚠ 該 cronjob 的 image 必須有 shell（`reference_distroless_kubectl_no_shell_cronjob`：官方 kubectl image 無 shell → `/bin/sh` 的 cronjob exit 127 CrashLoop）
 
@@ -538,18 +642,62 @@ helm template t charts/haos --set image.tag="" 2>&1 | grep -q "required"   # →
     ```
   - ⚠ 若本機 k8s 沒裝 KubeVirt，VM 相關的整合測試會 skip → **必須在有 KubeVirt 的 context 跑一次**（W0 完成後的 woow-k3s，用 `dev-sandbox-*` ns）
 
+### W4.6 🔴 把新 operator 部署到 stg（**W6 的硬前置，不可省**）
+
+**為什麼這一節必須存在**：stg e2e 沙盒**不會**自帶 operator——`.sandbox/post-create.sh:32-44` 是去 `$OPERATOR_NS`（stg ＝ `paas-stg-system`）**探索既有的共用 operator**，把它的 URL 與 api-key 寫進沙盒設定。也就是說 **W6 接的是共用 operator，不會自動跑 W4 的新 code**。
+
+照字面直接跑到 W6 會出現兩個「症狀不指向根因」的失效：
+
+| 症狀 | 真因 |
+|---|---|
+| W6.1 永遠卡在 `deploying` | 舊 operator 的 status 回應不含 `vmis` → W5a 的 fail-closed 正確地拒絕翻 running |
+| W6.3 suspend 把服務打成 `error` | 舊 `scale_release` 撞 `releases.py:477-481` 的 404 → `_do_suspend` 寫 error（`cloud_service.py:1437`）——**正是 W4.3 要修的那個失效在 stg 原樣重演** |
+
+- [ ] **W4.6.1** 建置 operator image：`/woow:build-operator`（產 `operator-v{YYYYMMDD.HHMM}` tag → CI `build-paas-operator.yml` 建置並推送）
+- [ ] **W4.6.2** 等 CI 完成，並**從 registry 直驗 image digest**
+  - ⚠ 教訓（`project_prod_rollout_20260708`）：digest 必自驗，不可從 CI log 抄
+  - ⚠ 查 CI 狀態用 Gitea API `/actions/runs?`，**不要用 `tea runs list`**（只列 completed，in-progress/queued 會靜默漏列）
+- [ ] **W4.6.3** 開 PR 更新 **CD repo** `paas-app-bundle-cd` 的 stg pin
+  - 檔案：`paas-app-bundle-cd/paas-operator-stg/values-stg.yaml` → `tag: "{VERSION}"`
+  - ⚠ **本階段只動 stg，不動 `paas-operator/values-prod.yaml`**（prod 隨正式發版走，且 prod 有 digest pin 優先於 tag 的既有陷阱）
+  - commit + push → Fleet 自動同步
+- [ ] **W4.6.4** 驗證 stg 真的跑在新 image 上（**認 pod digest，不認 values 檔字面**）
+  ```bash
+  kubectl --context woow-k3s get pod -n paas-stg-system -l app.kubernetes.io/name=paas-operator \
+    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
+  # → 與 W4.6.2 自驗的 digest 相同
+  ```
+- [ ] **W4.6.5** 驗證新 API 真的生效（契約層，不只看 pod 起來）
+  ```bash
+  # 從叢集內打 status API，帶 include_vm
+  curl -sS -H "X-API-Key: <key>" \
+    "http://paas-operator.paas-stg-system.svc.cluster.local/releases/<ns>/<release>/status?include_vm=true" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin);print('vmis' in d, 'datavolumes' in d)"
+  # → True True
+  ```
+
+> ⚠ **共用 operator 的影響面**：`paas-stg-system` 的 operator 服務所有 stg 租戶。W4 的改動是加法（既有路徑零改動、新欄位預設關閉），但升級仍會短暫重啟該 Deployment → 挑離峰、升級後跑一次既有 stg 服務的 status 抽驗確認無回歸。
+
 ### W4 驗收信號
 
 ```bash
+# 1. 單元 + 整合測試
 cd extra/paas-operator
 .venv/bin/pytest tests/ -v                          # → 全綠
 HELM_BINARY=$(which helm) .venv/bin/pytest -m integration tests/integration/ -v   # → 全綠（含新增的 VM 契約測試）
+
+# 2. stg 已跑在新 image（W4.6.4）
+kubectl --context woow-k3s get pod -n paas-stg-system -l app.kubernetes.io/name=paas-operator \
+  -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'   # → 與自驗 digest 相同
+
+# 3. 新 API 契約生效（W4.6.5）→ vmis / datavolumes 欄位存在
 ```
 
 ### W4 中止／回滾條件
 
 - 改動全是加法（新方法 ＋ 既有方法加分支），既有路徑零改動 → 回滾 ＝ revert PR ＋ 重建 operator image（`/woow:build-operator`）
-- ⚠ operator image 重建後需重新部署；stg 走 `values-stg.yaml` pin，prod 走 Fleet
+- **stg 部署回滾**：把 `paas-app-bundle-cd/paas-operator-stg/values-stg.yaml` 的 tag 改回前一版 → Fleet 同步；**回滾後同樣要以 pod digest 複驗**（只改 values 字面不等於生效）
+- ⚠ prod 不在本 wave 範圍；prod 的 operator 升級隨正式發版流程走
 
 ---
 
@@ -567,10 +715,24 @@ HELM_BINARY=$(which helm) .venv/bin/pytest -m integration tests/integration/ -v 
   ```
   - 既有 template 全部落在預設 `container` → 零行為改變
   - ⚠ `required=True` ＋ 既有資料：Odoo 對既有 row 會套 default，不需 migration（但要在 PR 說明並以測試釘住）
-- [ ] **W5a.2** `src/models/cloud_service.py` — `_poll_service_status`（:1219-1303）新增 VM 分支
-  - `template.workload_type == 'vm'`：呼叫 status 時帶 `include_vm=true`；ready ⟺ **至少一個 VMI** 且 `phase == 'Running'` 且 `Ready` condition == True
+- [ ] **W5a.2** 🔴 **就緒判定的 VM 分支必須同時覆蓋 model 層與 controller 層（兩份複製品）**
+
+  **這條 fail-open 在 repo 裡有兩份**，只修 model 層會留下一半的破口：
+
+  | 層 | 位置 | fail-open 實碼 | 誰在跑 |
+  |---|---|---|---|
+  | model（cron） | `src/models/cloud_service.py:1218-1303` | `:1261` `) if active_pods else (not pods)` | `_poll_transitional_services` cron |
+  | **controller（前台）** | `src/controllers/paas.py:2694` `_update_service_status` | **`:2742-2749` 同型複製** | `:2417`（服務詳情每次 poll）、`:2172`（workspace 服務清單） |
+
+  只修 `_poll_and_update_status` 的話，**租戶只要打開前台服務詳情頁，controller 就會把還在 import 的 VM 標成 `running`** —— cron 修好的東西被前台查詢覆寫回去。
+
+  - [ ] **建議做法（優先）：重構消滅雙寫** —— 讓 `paas.py:2694` 的 `_update_service_status` 委派到 model 的 `_poll_and_update_status`，controller 只保留它自己需要的回傳/序列化部分
+    - 收益：VM 分支只寫一次；日後任何就緒判定的修改自動同步兩條路徑
+    - 風險控制：委派前先用 characterization test 把 controller 現行輸出釘住（見測試表 #7–#8），確保重構前後行為一致
+  - [ ] **退路（若重構風險過高）**：兩處各自加 VM 分支，並在兩處互相加註解交叉指向（`# 同型邏輯另一份在 …，改這裡要同步改那裡`）
+  - **VM 分支的語意（兩層一致）**：`template.workload_type == 'vm'` → 呼叫 status 時帶 `include_vm=true`；ready ⟺ **至少一個 VMI** 且 `phase == 'Running'` 且 `Ready` condition == True
   - **fail-closed**：`vmis` 為空 → **不翻 running**，維持 `deploying`
-  - `container` 分支**一行不動**（見下方「為何不順手修既有 fail-open」）
+  - `container` 分支**兩層都一行不動**（見下方「為何不順手修既有 fail-open」）
 - [ ] **W5a.3** `src/services/paas_operator.py` — `get_status`（:705）支援 `include_vm` 參數
 - [ ] **W5a.4** values 組裝：`state == 'suspended'` → `vm.runStrategy = 'Halted'`；否則 `'Always'`
   - 落點在 `cloud_service.py` 的 helm values 組裝路徑（`_inject_storage_class` 等注入器所在的同一段，:703-741）
@@ -584,30 +746,37 @@ HELM_BINARY=$(which helm) .venv/bin/pytest -m integration tests/integration/ -v 
 
 #### ⚠ 為何不順手修既有 container 分支的 fail-open
 
-design 抓到 `cloud_service.py:1261` 的 `all_ready = all(...) if active_pods else (not pods)` 在 `pods` 為空時回 True。**v1 只在 VM 分支堵，不改 container 分支**：
+design 抓到的 `all_ready = all(...) if active_pods else (not pods)`（model `:1261`／controller `:2749`）在 `pods` 為空時回 True。**v1 只在 VM 分支堵，兩層的 container 分支都不改**：
 
 - 既有容器型服務有一個合法的短暫狀態是「helm release 已 deployed 但 pod 還沒被 controller 建出來」，此時 `pods` 為空。改成 fail-closed 會讓這些服務停在 `deploying` 直到下一輪 poll —— 影響面是**所有現存租戶服務**，風險大於收益。
-- v1 的做法：**用 characterization test 把現行 container 行為釘住**（確保 VM 分支的改動沒有波及），並在 `docs/tracking/followups/follow-ups.md` 記一筆「container 分支 fail-open 待評估」。
+- v1 的做法：**用 characterization test 把現行 container 行為釘住**（兩層都要，確保 VM 分支與 M4 的重構都沒有波及），並在 `docs/tracking/followups/follow-ups.md` 記一筆「container 分支 fail-open 待評估（model `:1261` ＋ controller `:2749` 兩處）」。
+- ⚠ 若採 M4 的重構路線（controller 委派 model），這個「不改」的承諾**更需要**測試守住——重構本身就會改變 controller 的執行路徑。
 
 ### W5a 測試策略
 
-| 測試檔 | 涵蓋 |
-|---|---|
-| `src/tests/test_haos_workload_type.py` | ① `workload_type` 預設 `container`；② 既有 template（n8n/odoo/ha-paas/opendesign…）全部是 `container`（**零行為改變的證明**）；③ `required=True` 生效；④ **`state` Selection 仍是 8 態**（Q4 拍板「不預留 `stopped`」的守線） |
-| `src/tests/test_cloud_service_poll_vm_branch.py` | **核心回歸測試**（見下表） |
-| `src/tests/test_haos_seed_423.py` | W5b 的 seed 契約（形制對齊 `test_opendesign_seed_380.py` / `test_mcp_3type_seed_375.py`） |
-| `src/tests/test_haos_suspend_resume_runstrategy.py` | suspend/resume ＋ values `runStrategy` 同源 |
+| 測試檔 | 涵蓋 | 所屬 PR |
+|---|---|---|
+| `src/tests/test_haos_workload_type.py` | ① `workload_type` 預設 `container`；② 既有 template（n8n/odoo/ha-paas/opendesign…）全部是 `container`（**零行為改變的證明**）；③ `required=True` 生效；④ **`state` Selection 仍是 8 態**（Q4 拍板「不預留 `stopped`」的守線） | W5a |
+| `src/tests/test_cloud_service_poll_vm_branch.py` | **核心回歸測試**，**model ＋ controller 兩層**（見下表） | W5a |
+| `src/tests/test_haos_suspend_resume_runstrategy.py` | suspend/resume ＋ values `runStrategy` 同源 | W5a |
+| `src/tests/test_haos_seed_423.py` | seed 契約（形制對齊 `test_opendesign_seed_380.py` / `test_mcp_3type_seed_375.py`） | **W5b**（seed 是 Q5 閘住的 W5b 產物，不能放在 W5a——W5a 合入時 seed 還不存在，測試會直接紅） |
 
 **`test_cloud_service_poll_vm_branch.py` 的必測案例**（mock operator client 回應）：
 
-| # | 情境 | 期望 | 防的是 |
-|---|---|---|---|
-| 1 | `workload_type='vm'`，回 `pods: []` ＋ `vmis: []` | state **維持 `deploying`**（**不得**翻 running） | 🔴 **design 抓到的 fail-open 回歸測試** |
-| 2 | `workload_type='vm'`，`vmis=[{phase:Running, Ready:True}]` | 翻 `running` | 正常路徑 |
-| 3 | `workload_type='vm'`，`vmis=[{phase:Running, Ready:False}]` | 維持 `deploying` | guest 還沒就緒就標 running |
-| 4 | `workload_type='vm'`，`vmis=[{phase:Pending}]` | 維持 `deploying` | 同上 |
-| 5 | `workload_type='container'`，回 `pods: []` | **維持現行行為**（characterization） | VM 改動波及既有服務 |
-| 6 | `workload_type='container'`，正常 pod ready | 翻 `running` | 同上 |
+| # | 層 | 情境 | 期望 | 防的是 |
+|---|---|---|---|---|
+| 1 | model | `workload_type='vm'`，回 `pods: []` ＋ `vmis: []` | state **維持 `deploying`**（**不得**翻 running） | 🔴 **design 抓到的 fail-open 回歸測試** |
+| 2 | model | `workload_type='vm'`，`vmis=[{phase:Running, Ready:True}]` | 翻 `running` | 正常路徑 |
+| 3 | model | `workload_type='vm'`，`vmis=[{phase:Running, Ready:False}]` | 維持 `deploying` | guest 還沒就緒就標 running |
+| 4 | model | `workload_type='vm'`，`vmis=[{phase:Pending}]` | 維持 `deploying` | 同上 |
+| 5 | model | `workload_type='container'`，回 `pods: []` | **維持現行行為**（characterization） | VM 改動波及既有服務 |
+| 6 | model | `workload_type='container'`，正常 pod ready | 翻 `running` | 同上 |
+| **7** | **controller** | 走 `paas.py:2417`（服務詳情）路徑，`workload_type='vm'` ＋ `vmis: []` | **維持 `deploying`** | 🔴 **M4：只修 model 層時，前台一 poll 就把 import 中的 VM 標 running** |
+| **8** | **controller** | 走 `paas.py:2172`（workspace 服務清單）路徑，同上 | **維持 `deploying`** | 同上（第二個呼叫點） |
+| **9** | **controller** | `workload_type='container'`，回 `pods: []` | **維持現行行為**（characterization） | M4 若採重構路線，守住 container 行為不變 |
+| **10** | **controller** | `workload_type='vm'`，`vmis=[{phase:Running, Ready:True}]` | 翻 `running` | 兩層語意一致 |
+
+> #7–#10 是 M4 的守線。若採「controller 委派 model」的重構路線，這四條同時是重構的驗收測試。
 
 **`test_haos_suspend_resume_runstrategy.py` 的必測案例**：
 
@@ -626,6 +795,10 @@ design 抓到 `cloud_service.py:1261` 的 `all_ready = all(...) if active_pods e
 
 **前置閘門**：🔴 **Q5（定價／限量）必須先拍板**——plan 的價格與是否限量直接決定 seed 內容。
 
+- [ ] **W5b.0** 新增 `src/tests/test_haos_seed_423.py`（seed 契約測試，與本 PR 的 seed 同進同出）
+  - template 存在、`slug`、`workload_type == 'vm'`、chart pin（name ＋ version）、`image.tag` 為 `tag@sha256:` 雙釘格式、`default_port == 8123`
+  - `min_vcpu` / `min_ram_gb` / `min_storage_gb` ＝ W1-R5 回填值
+  - plan ↔ template M2M link 存在
 - [ ] **W5b.1** `src/data/cloud_app_templates.xml` 新增 `cloud_app_haos`
   - `slug: haos`、`category: container`（或視前台分類決定）、`workload_type: vm`
   - `helm_chart_name: oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos`、`helm_chart_version: 0.1.0`
@@ -665,8 +838,16 @@ grep '"version"' src/__manifest__.py    # → 18.0.1.0.81
 
 ## W6 — stg e2e
 
-**依賴**：W5b merge ＋ 發版到 stg。
+**依賴**：W5b merge ＋ 發版到 stg ＋ 🔴 **W4.6 已完成（`paas-stg-system` 的共用 operator 已跑在含 VM 支援的新 image 上）**。
 **環境**：`/woow:deploy-stg` 建的 stg 沙盒（`dev-sandbox-{slug}`）。
+
+- [ ] **W6.0 前置檢查（跑任何 e2e 之前先做）**：確認沙盒接到的 operator 有 VM 能力
+  ```bash
+  # 沙盒的 operator URL 來自 .sandbox/post-create.sh:32-44 的探索結果（指向 paas-stg-system 的共用 operator）
+  kubectl --context woow-k3s get pod -n paas-stg-system -l app.kubernetes.io/name=paas-operator \
+    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
+  ```
+  - 若不是 W4.6 的 digest → **停止 W6**，回去完成 W4.6。否則 W6.1 會永遠卡 `deploying`、W6.3 會把服務打成 `error`，而症狀都不指向真因。
 
 - [ ] **W6.1 開通**：從 `/woow` 前台下單一台 HAOS → 觀察 state 走 `pending → deploying → running`
   - 記錄各段耗時，與 W1-R8 的 PoC 數字比對
@@ -737,7 +918,40 @@ kubectl --context woow-k3s get pvc -n <ws-ns> -l paas.woowtech.io/orphaned-at   
 | # | 題 | 何時要答 | 擋住什麼 |
 |---|---|---|---|
 | **Q5** | 定價與是否限量（成本模型：128 GiB/租戶、天花板 15–18 台、CF 無 per-tenant 成本、golden image 無儲存折扣） | **W5b 開始前** | 只擋 W5b（seed 的價格）；W0–W5a 不受影響 |
-| **Q2 重議** | 若 W1-R8 量出 > 30 分鐘，golden PVC clone 是否升為 v1 必做 | W1 結束時 | W3a 的 DataVolume source 設計 |
+| **Q2 重議（條件式）** | 若 W1-R8 量出 ≥ 15 分鐘，PoC 提交數字**由 Eugene 決定**是否重議「golden PVC clone v1 不做」 | W1 結束時 | 僅在 Eugene 決定重議時才擋 W3a 的 DataVolume source 定案 |
+
+---
+
+## 6. 修訂記錄
+
+### 2026-07-28 — PR #447 深審（4 維度平行對抗審查）findings 修訂
+
+零 FAIL、零 blocker；骨架全部成立。以下 4 MAJOR ＋ 9 MINOR 已逐條修訂：
+
+| # | Finding | 修訂落點 |
+|---|---|---|
+| **M1** | W4→W6 缺 operator 部署到 stg 的環節（stg 接 `paas-stg-system` 的共用 operator，不會自動跑新 code） | 新增 **W4.6**（build → CD repo pin → 驗 pod digest → 驗 API 契約）；W3a 驗收加 `helm pull`；W6 新增 **W6.0 前置檢查**；依賴圖與 PR 總表同步 |
+| **M2** | R6 步驟「標 cloudflared ns label」照字面不可執行（`kubernetes.io/metadata.name` 由 apiserver 強制、不可改） | W1.4 改**雙 PoC ns 方案**（`-cf` / `-other`）＋明寫共用叢集鐵律；W1.0 補三顆 ns 表 |
+| **M3** | R8 的 OCI import 缺 `paas-registry` secret 前置（正式 ns 由 `helm.py:1028` 順手建，PoC ns 沒人建） | W1.1 補建 secret 步驟；W1.6 補前置驗證 |
+| **M4** | fail-open 在 controller 層有第二份複製品（`paas.py:2742-2749`，呼叫點 `:2417`／`:2172`） | W5a.2 改寫為**兩層覆蓋**，優先建議重構為 controller 委派 model（消滅雙寫）；測試表新增 #7–#10 controller 案例 |
+| m1 | R8 判定表預先替 Q2 定了結論 | 改為「產出事實 ＋ 是否送 Eugene 重議」，與 §5 一致 |
+| m2 | `test_haos_seed_423.py` 誤列在 W5a 測試表 | 移到 **W5b.0**（seed 是 Q5 閘住的 W5b 產物） |
+| m3 | 缺 CDI DataVolume GC 檢查 | W0.1 委託單註明「**不得啟用**」＋ W0.3 加第 5 條驗收；W1.1／W1.5 加前置檢查 |
+| m4 | R5 只驗 happy path | 新增**步驟 6 負面測試**（省略 limits 的 VM 應被 admission 拒收） |
+| m5 | R5「讀 memory overhead annotation」前提可疑 | 改為**相減法**推算（compute 實際 request − 4Gi） |
+| m6 | R6 缺順序、R11 缺時序 | R6 明寫「先 Halted → 套 NP → 再 Always」；R11 移到**路徑 C 之前** |
+| m7 | helm 命令缺 context、缺 virtctl 前置 | W1.5 helm 命令補 `--kube-context woow-k3s`；W1.0 補下載 virtctl（與 server 版本一致） |
+| m8 | R5 判定門檻無容差 | 改為區間（記憶體 5.0–6.0 GiB、CPU 2.5–3.5） |
+| **m9** | **方法名勘誤**：`_poll_service_status` 不存在 | 全文修正為 **`_poll_and_update_status`**（`cloud_service.py:1218`），行號 `1219-1303` → `1218-1303` |
+
+#### ⚠ Design 檔勘誤（本次順帶發現，待回寫）
+
+`docs/plans/2026-Q3/2026-07-27-haos-kubevirt-v1-design.md` 有兩處同源錯誤，**本 plan 已修正，design 檔待回寫**（併入 PR-W1b，或另開小 PR）：
+
+1. §4.1 表格與附錄 A 的 `_poll_service_status` → 實名 **`_poll_and_update_status`**
+2. 同兩處的 `src/models/cloud_service.py:1219-1303` → **`:1218-1303`**（`def` 在 1218）
+
+另外 design §4.1「兩個問題」一節只點出 model 層的 fail-open，**遺漏 controller 層的同型複製品**（`paas.py:2742-2749`）——這是 M4 的來源，同樣待回寫。
 
 ---
 
@@ -750,7 +964,13 @@ kubectl --context woow-k3s get pvc -n <ws-ns> -l paas.woowtech.io/orphaned-at   
 | `src/models/cloud_app_template.py:122-126` | `min_storage_gb`（`workload_type` 接在其後） |
 | `src/models/cloud_service.py:703-741` | helm values 注入段（W5a.4 的 `runStrategy` 落點） |
 | `src/models/cloud_service.py:874-926` | `_inject_storage_class`（:918 預設 fallback、:904-915 顯式 entry 慣例） |
-| `src/models/cloud_service.py:1219-1303` | `_poll_service_status`（:1261 是 fail-open） |
+| `src/models/cloud_service.py:1218-1303` | `_poll_and_update_status`（:1261 是 model 層 fail-open） |
+| `src/controllers/paas.py:2694` | `_update_service_status`（**model 層邏輯的第二份複製品**；:2742-2749 是 controller 層 fail-open） |
+| `src/controllers/paas.py:2172` / `:2417` | 上者的兩個呼叫點（workspace 服務清單／服務詳情 poll） |
+| `.sandbox/post-create.sh:32-44` | stg 沙盒**探索**共用 operator（不自建）——W4.6 存在的理由 |
+| `.claude/skills/build-operator/SKILL.md` | operator build 與 stg pin 流程（`paas-app-bundle-cd/paas-operator-stg/values-stg.yaml`） |
+| `extra/paas-operator/src/services/helm.py:1028` | `create_namespace` 呼叫 `ensure_registry_secret`（PoC ns 沒有這一步 → M3） |
+| `extra/paas-operator/src/services/helm.py:1135-1142` | baseline `allow-cloudflared` 用 `kubernetes.io/metadata.name`（不可偽造 → M2 的雙 ns 方案） |
 | `src/models/cloud_service.py:1409-1484` | `_do_suspend` / `_do_resume`（:1437 失敗寫 error） |
 | `src/services/paas_operator.py:705` | `get_status`（W5a.3 加 `include_vm`） |
 | `src/data/cloud_app_templates.xml:554-576` | chart↔image 原子變更鐵律的既有寫法範本 |
