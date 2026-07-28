@@ -19,8 +19,10 @@ class TestColdStartClientTimeout(TransactionCase):
         ICP = self.env['ir.config_parameter'].sudo()
         ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
         ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         import importlib
         self.mod = importlib.import_module(_CLIENT_MOD)
         self.client = self.mod.get_agent_runtime_client(self.env)
@@ -66,8 +68,10 @@ class TestSpawnRetry(TransactionCase):
         ICP = self.env['ir.config_parameter'].sudo()
         ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
         ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         import importlib
         self.mod = importlib.import_module(_CLIENT_MOD)
         self.client = self.mod.get_agent_runtime_client(self.env)

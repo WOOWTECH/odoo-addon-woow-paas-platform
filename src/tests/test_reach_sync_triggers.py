@@ -30,8 +30,10 @@ class TestReachSyncTriggers(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         sfx = uuid.uuid4().hex[:8]
         self.ws_a = self.env['woow_paas_platform.workspace'].sudo().create(
             {'name': f'A {sfx}'})

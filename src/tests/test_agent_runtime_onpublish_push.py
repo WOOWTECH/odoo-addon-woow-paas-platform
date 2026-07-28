@@ -43,8 +43,10 @@ class TestInvalidateSkillsClient(TransactionCase):
 class TestPushCoordination(TransactionCase):
     def setUp(self):
         super().setUp()
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         ICP = self.env['ir.config_parameter'].sudo()
         ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
         ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')
@@ -117,8 +119,10 @@ class TestPushCoordination(TransactionCase):
 class TestSkillPublishTriggersPush(TransactionCase):
     def setUp(self):
         super().setUp()
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         ICP = self.env['ir.config_parameter'].sudo()
         ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
         ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')
@@ -152,8 +156,10 @@ class TestSkillPublishTriggersPush(TransactionCase):
 class TestMcpChangeTriggersPush(TransactionCase):
     def setUp(self):
         super().setUp()
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         ICP = self.env['ir.config_parameter'].sudo()
         ICP.set_param('woow_paas_platform.operator_url', 'http://operator.test:8000')
         ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')

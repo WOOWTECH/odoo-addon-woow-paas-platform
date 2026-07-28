@@ -63,6 +63,7 @@ Boundary:
 import os
 import re
 import uuid
+from unittest.mock import patch
 
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase, tagged
@@ -226,8 +227,10 @@ class TestPhaseAAgentSessionModel(TransactionCase):
         self.suffix = uuid.uuid4().hex[:8]
         # Forward-compat with the F-PC-3 fail-closed fix: creating an
         # agent_session now requires the injected namespace secret env.
-        os.environ['AGENT_RUNTIME_NAMESPACE_SECRET'] = 'phase-a-test-ns-secret'
-        self.addCleanup(os.environ.pop, 'AGENT_RUNTIME_NAMESPACE_SECRET', None)
+        patcher = patch.dict(
+            os.environ, {'AGENT_RUNTIME_NAMESPACE_SECRET': 'phase-a-test-ns-secret'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_agent_session_required_fields(self):
         """N.4: agent_session declares required field shape."""

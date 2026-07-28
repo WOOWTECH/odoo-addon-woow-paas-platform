@@ -31,8 +31,10 @@ class TestTeardownRuntime(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.Session = self.env['woow_paas_platform.agent_session'].sudo()
         self.project = self.env['project.project'].sudo().create({'name': 'T'})
         self.session = self.Session.create({'project_id': self.project.id})
@@ -70,8 +72,10 @@ class TestProjectUnlinkTeardown(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.Session = self.env['woow_paas_platform.agent_session'].sudo()
         self.project = self.env['project.project'].sudo().create({'name': 'P'})
         self.session = self.Session.create({'project_id': self.project.id})

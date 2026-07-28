@@ -20,8 +20,10 @@ _CLIENT_PATH = (
 class TestGcReaped(TransactionCase):
     def setUp(self):
         super().setUp()
-        os.environ[_ENV_NAMESPACE_SECRET] = 'unit-test-secret-0123456789'
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: 'unit-test-secret-0123456789'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.Session = self.env['woow_paas_platform.agent_session'].sudo()
         self.ICP = self.env['ir.config_parameter'].sudo()
         self.ICP.set_param('woow_paas_platform.agent_gc_seconds', '2592000')

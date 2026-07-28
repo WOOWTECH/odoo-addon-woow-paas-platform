@@ -102,8 +102,10 @@ class TestPhaseCAgentRuntimeClient(TransactionCase):
         ICP.set_param('woow_paas_platform.operator_api_key', 'test-api-key')
         # spawn_or_attach resolves the project hash by creating an agent_session,
         # which now requires the namespace secret env (F-PC-3 fail-closed).
-        os.environ[_ENV_NAMESPACE_SECRET] = _NAMESPACE_SECRET
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: _NAMESPACE_SECRET})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _import_client(self):
         """Import the (not-yet-created) client module.
@@ -485,8 +487,10 @@ class TestPhaseCDriftCron(TransactionCase):
 
         # Forward-compat with the F-PC-3 fail-closed fix: creating an
         # agent_session now requires the injected namespace secret env.
-        os.environ[_ENV_NAMESPACE_SECRET] = _NAMESPACE_SECRET
-        self.addCleanup(os.environ.pop, _ENV_NAMESPACE_SECRET, None)
+        patcher = patch.dict(
+            os.environ, {_ENV_NAMESPACE_SECRET: _NAMESPACE_SECRET})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         project = self.env['project.project'].sudo().create(
             {'name': f'cr2-{uuid.uuid4().hex[:6]}'})
