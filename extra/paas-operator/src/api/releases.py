@@ -33,6 +33,27 @@ k8s_service = KubernetesService()
 cloudflare_service = CloudflareService()
 
 
+def _ensure_image_pull_secrets(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """回傳補上預設 ``imagePullSecrets`` 的 values 淺複本（單一實作，install/upgrade 共用）。
+
+    私有 image chart（如 mcp-server 拉 jcr-prod 的 hermes-mcp-admin）需要
+    imagePullSecrets 讓 kubelet 通過認證；secret 本體由 ensure_registry_secret
+    先佈建進 namespace。與 agent_runtimes.py（F-PILOT-4）同一 family——
+    install 路徑在 a0e7c25a 補上，但 upgrade 路徑漏了：#411 之後 upgrade 走
+    全量 reset values，私有 image 的 cloud service 任一次 redeploy /
+    reconfigure / reset-password 都會掉 pull secret → ImagePullBackOff 401
+    （#448）。抽成共用 helper 讓兩邊永不再漂移。
+
+    用 setdefault：template 的 helm_default_values 可自行覆寫；public-image
+    chart（bitnami n8n/odoo）不消費 top-level imagePullSecrets、多帶無害。
+    """
+    merged = dict(values or {})
+    merged.setdefault(
+        "imagePullSecrets", [{"name": settings.registry_secret_name}]
+    )
+    return merged
+
+
 @router.post(
     "",
     response_model=ReleaseInfo,
@@ -52,17 +73,8 @@ async def create_release(request: ReleaseCreateRequest):
         HTTPException: If installation fails
     """
     try:
-        # Private-image charts (e.g. mcp-server pulling hermes-mcp-admin from
-        # jcr-prod) need imagePullSecrets so the kubelet can authenticate; the
-        # secret is provisioned into the ns by ensure_registry_secret. Mirrors
-        # agent_runtimes.py (F-PILOT-4) — the cloud-service install path was the
-        # missing half (same gap family as orm-vs-endpoint "half-applied" fixes).
-        # setdefault lets a template's helm_default_values override; public-image
-        # charts (bitnami n8n/odoo) ignore an unused top-level imagePullSecrets.
-        values = dict(request.values or {})
-        values.setdefault(
-            "imagePullSecrets", [{"name": settings.registry_secret_name}]
-        )
+        # 注入預設 imagePullSecrets（理由見 _ensure_image_pull_secrets docstring）。
+        values = _ensure_image_pull_secrets(request.values)
         release = helm_service.install(
             namespace=request.namespace,
             name=request.name,
@@ -167,11 +179,14 @@ def upgrade_release(
         HTTPException: If upgrade fails
     """
     try:
+        # #448：upgrade 也必須注入預設 imagePullSecrets。#411 之後 upgrade 走
+        # 全量 reset values，沒有這行時私有 image 的 CS 任一次 redeploy /
+        # reconfigure 都會掉 pull secret → ImagePullBackOff 401。
         release = helm_service.upgrade(
             namespace=namespace,
             name=name,
             chart=request.chart,
-            values=request.values,
+            values=_ensure_image_pull_secrets(request.values),
             sensitive_values=request.sensitive_values,
             version=request.version,
             reset_values=request.reset_values,

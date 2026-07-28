@@ -260,6 +260,66 @@ class TestReleaseEndpoints:
         }
 
     @patch("src.api.releases.helm_service")
+    def test_upgrade_release_injects_image_pull_secret(self, mock_helm, client):
+        """#448：upgrade 也必須注入預設 imagePullSecrets。
+
+        install 在 a0e7c25a 已補注入，但 upgrade 漏了同樣的 setdefault；
+        #411 之後 upgrade 走全量 reset values，私有 image 的 CS 任一次
+        redeploy / reconfigure / reset-password 都會掉 pull secret →
+        ImagePullBackOff 401（stg 實證）。"""
+        mock_helm.upgrade.return_value = ReleaseInfo(
+            name="mcp-x",
+            namespace="paas-ws-test",
+            revision=2,
+            status=ReleaseStatus.DEPLOYED,
+            chart="mcp-server",
+            app_version="1.0.0",
+            updated="2024-01-02T00:00:00Z",
+        )
+
+        response = client.patch(
+            "/api/releases/paas-ws-test/mcp-x",
+            json={
+                "chart": "oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server",
+                "values": {"replicas": 2},
+                "reset_values": True,
+                "reuse_values": False,
+            },
+        )
+
+        assert response.status_code == 200
+        injected = mock_helm.upgrade.call_args.kwargs["values"]
+        assert injected.get("imagePullSecrets") == [{"name": "paas-registry"}]
+        # 呼叫端原有 values 不能被吃掉
+        assert injected.get("replicas") == 2
+
+    @patch("src.api.releases.helm_service")
+    def test_upgrade_release_preserves_caller_image_pull_secrets(
+        self, mock_helm, client
+    ):
+        """#448：呼叫端已明帶 imagePullSecrets 時不可覆蓋（setdefault 語意）。"""
+        mock_helm.upgrade.return_value = ReleaseInfo(
+            name="mcp-x",
+            namespace="paas-ws-test",
+            revision=2,
+            status=ReleaseStatus.DEPLOYED,
+            chart="mcp-server",
+            app_version="1.0.0",
+            updated="2024-01-02T00:00:00Z",
+        )
+
+        client.patch(
+            "/api/releases/paas-ws-test/mcp-x",
+            json={
+                "chart": "oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server",
+                "values": {"imagePullSecrets": [{"name": "tenant-custom"}]},
+            },
+        )
+
+        injected = mock_helm.upgrade.call_args.kwargs["values"]
+        assert injected.get("imagePullSecrets") == [{"name": "tenant-custom"}]
+
+    @patch("src.api.releases.helm_service")
     def test_delete_release(self, mock_helm, client):
         """Test delete release endpoint."""
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
