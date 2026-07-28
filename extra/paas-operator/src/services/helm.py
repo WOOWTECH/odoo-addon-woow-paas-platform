@@ -11,11 +11,13 @@ from typing import Any, Dict, List, Optional
 
 from src.config import settings
 from src.models.schemas import (
+    DataVolumeInfo,
     PodInfo,
     PodPhase,
     ReleaseInfo,
     ReleaseRevision,
     ReleaseStatus,
+    VmiInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -823,6 +825,8 @@ class KubernetesService:
 
     def __init__(self):
         self.kubectl_bin = "kubectl"
+        # MINOR-4: per-process CDI-CRD probe cache (see has_datavolume_crd).
+        self._has_dv_crd: Optional[bool] = None
 
     def _run_command(
         self,
@@ -1488,6 +1492,263 @@ class KubernetesService:
 
         self._run_command(args)
 
+    # ================= KubeVirt / CDI (#423 W4.1 + W4.3) ==================
+    # VM-type CloudServices (HAOS) are delivered as VirtualMachine +
+    # DataVolume CRs inside the same Helm chart as everything else, so the
+    # delivery/expose/isolation layers are untouched. Three things DO differ
+    # and live here (design §4):
+    #   1. readiness  — virt-launcher pod Running != guest booted  -> get_vmis
+    #   2. start/stop — VMs have no replicas                       -> patch_vm_run_strategy
+    #   3. delete     — CDI DataVolume owns the PVC                -> label_datavolumes
+    #
+    # ⚠ These methods deliberately let KubectlException propagate when the
+    # CRDs are absent. Returning [] would make "this cluster has no KubeVirt"
+    # indistinguishable from "this release has no VM", and the platform's
+    # readiness gate is fail-CLOSED on exactly that distinction: an empty
+    # vmis list means "not ready yet", so a swallowed error would park every
+    # VM service in `deploying` forever with no clue why.
+
+    def has_datavolume_crd(self) -> bool:
+        """Is CDI installed on this cluster?  (cached per process — MINOR-4)
+
+        Gates the teardown-path DataVolume lookup. Without it EVERY
+        container-service delete pays an extra synchronous kubectl (inside an
+        async handler, up to a 30s timeout) and, on a cluster with no CDI,
+        logs a failure every single time. That routine noise is the problem:
+        the same log line is the ONLY signal that a real VM disk was left
+        unreclaimable on a VM-capable cluster, so making it constant blunts
+        the alarm.
+
+        Cached because CRD registration does not change within a process
+        lifetime in any way the operator needs to react to; a restart
+        re-probes. Failure to probe returns True (do the lookup) — better a
+        redundant call than a skipped orphan stamp.
+        """
+        if self._has_dv_crd is None:
+            try:
+                self._run_command(
+                    ["get", "crd", "datavolumes.cdi.kubevirt.io", "-o", "name"]
+                )
+                self._has_dv_crd = True
+            except KubectlException as e:
+                # Only a definitive "not found" means absent. Forbidden or a
+                # timeout leaves us unsure → assume present and let the real
+                # call report properly.
+                self._has_dv_crd = not (
+                    "notfound" in (e.stderr or "").lower().replace(" ", "")
+                    or "not found" in (e.stderr or "").lower()
+                )
+        return self._has_dv_crd
+
+    @staticmethod
+    def is_crd_absent_error(exc: "KubectlException") -> bool:
+        """True only when kubectl failed because the resource type is unknown.
+
+        A ``KubectlException`` is raised for EVERY kubectl failure —
+        RBAC Forbidden, a 30s timeout, a missing binary — so callers that
+        want to treat "this cluster has no KubeVirt" as a benign, expected
+        condition MUST narrow to this. Treating the whole exception class as
+        "no CRD" turns a Forbidden into "no VM workload", which is how a
+        VM-type service silently fails to suspend.
+
+        ⚠ This is a stderr string match because kubectl gives no machine
+        readable discriminator for it. It is deliberately narrow: anything
+        unrecognised is NOT a CRD-absent error, so the caller re-raises.
+        Cross-checked by an integration test that asserts a known built-in
+        type never matches while an unknown type always does.
+        """
+        stderr = (exc.stderr or "").lower()
+        return (
+            "the server doesn't have a resource type" in stderr
+            or "could not find the requested resource" in stderr
+            # kubectl >= 1.29 wording for an unknown type in an explain/get
+            or "doesn't have a resource type" in stderr
+        )
+
+    def get_vmis(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[VmiInfo]:
+        """Get KubeVirt VirtualMachineInstances in a namespace.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Optional label selector
+
+        Returns:
+            List of VMI information
+
+        Raises:
+            KubectlException: If the CRD is absent or the command fails —
+                see the fail-loud note above; do NOT convert this to [].
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get",
+            "virtualmachineinstances",
+            "--namespace",
+            namespace,
+            "--output",
+            "json",
+        ]
+
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
+        vmis_data = json.loads(result.stdout)
+
+        vmis = []
+        for vmi in vmis_data.get("items", []):
+            metadata = vmi.get("metadata", {})
+            status = vmi.get("status", {})
+
+            conditions = {
+                c.get("type"): c.get("status")
+                for c in status.get("conditions", []) or []
+            }
+
+            vmis.append(
+                VmiInfo(
+                    name=metadata.get("name", ""),
+                    phase=status.get("phase", "Unknown"),
+                    # Ready is a separate condition from phase — see VmiInfo.
+                    ready=conditions.get("Ready") == "True",
+                    node_name=status.get("nodeName"),
+                    agent_connected=conditions.get("AgentConnected") == "True",
+                )
+            )
+
+        return vmis
+
+    def get_datavolumes(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[DataVolumeInfo]:
+        """Get CDI DataVolumes in a namespace.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Optional label selector
+
+        Returns:
+            List of DataVolume information (phase + import progress)
+
+        Raises:
+            KubectlException: If the CRD is absent or the command fails.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get",
+            "datavolumes",
+            "--namespace",
+            namespace,
+            "--output",
+            "json",
+        ]
+
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
+        dvs_data = json.loads(result.stdout)
+
+        return [
+            DataVolumeInfo(
+                name=dv.get("metadata", {}).get("name", ""),
+                phase=dv.get("status", {}).get("phase", "Unknown"),
+                progress=dv.get("status", {}).get("progress"),
+            )
+            for dv in dvs_data.get("items", [])
+        ]
+
+    def get_virtualmachines(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get KubeVirt VirtualMachines (the CR, not the running instance).
+
+        Shape mirrors ``get_deployments`` / ``get_statefulsets`` so the scale
+        endpoint can treat all three workload kinds uniformly.
+
+        Raises:
+            KubectlException: If the CRD is absent or the command fails.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get",
+            "virtualmachines",
+            "--namespace",
+            namespace,
+            "--output",
+            "json",
+        ]
+
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
+        vms_data = json.loads(result.stdout)
+
+        return [
+            {
+                "name": vm.get("metadata", {}).get("name", ""),
+                "namespace": namespace,
+                "run_strategy": vm.get("spec", {}).get("runStrategy"),
+            }
+            for vm in vms_data.get("items", [])
+        ]
+
+    def patch_vm_run_strategy(
+        self, namespace: str, vm_name: str, run_strategy: str
+    ) -> None:
+        """Set a VirtualMachine's runStrategy (the VM analogue of scaling).
+
+        ``Halted`` stops the guest but keeps the VM definition and its disk;
+        ``Always`` starts it back up. This is the VM-shaped mapping of the
+        subscription suspend/resume path — a VM has no ``replicas`` to scale.
+
+        ⚠ Surgical patch, NOT ``helm upgrade``: suspend/resume sits on the
+        billing path and re-rendering the chart would also re-evaluate the
+        DataVolume. The chart therefore ALSO exposes ``vm.runStrategy`` as a
+        value, and the Odoo side feeds the current suspend state into it, so
+        a later ``helm upgrade`` cannot silently wake a suspended (unpaid)
+        VM back up. Both paths must stay in sync — see design §4.2.
+
+        Args:
+            namespace: Namespace name
+            vm_name: VirtualMachine name
+            run_strategy: ``Halted`` or ``Always``
+
+        Raises:
+            ValueError: If run_strategy is not one of the accepted values.
+            KubectlException: If the patch fails.
+        """
+        validate_namespace(namespace)
+
+        # Allow-list rather than pass-through: this value lands in a JSON
+        # patch built by string interpolation, and KubeVirt silently ignores
+        # an unknown runStrategy (leaving the VM in its previous state while
+        # the API reports success).
+        if run_strategy not in ("Halted", "Always"):
+            raise ValueError(
+                f"Unsupported runStrategy {run_strategy!r} "
+                "(expected 'Halted' or 'Always')"
+            )
+
+        patch = json.dumps({"spec": {"runStrategy": run_strategy}})
+
+        self._run_command([
+            "patch",
+            "virtualmachine",
+            vm_name,
+            "--namespace",
+            namespace,
+            "--type=merge",
+            "--patch",
+            patch,
+        ])
+
     def apply_manifest(self, manifest: dict) -> Dict[str, Any]:
         """Apply a Kubernetes manifest via kubectl apply.
 
@@ -1672,6 +1933,87 @@ class KubernetesService:
                 ] + label_args)
             except KubectlException as e:
                 logger.warning(f"Failed to label PVC {pvc_name}: {e.stderr}")
+
+    def list_datavolumes(
+        self, namespace: str, label_selector: Optional[str] = None
+    ) -> List[str]:
+        """List DataVolume names, optionally scoped by a label selector.
+
+        Same per-release scoping rule as ``list_pvcs`` (#281): a workspace ns
+        is shared, so teardown must only ever touch the deleted release's own
+        objects.
+
+        Raises:
+            KubectlException: If the CDI CRD is absent or the command fails.
+                Callers in the teardown path treat this as best-effort (a
+                container-only cluster legitimately has no CDI) — but they
+                must log it, not silently continue.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "datavolumes",
+            "--namespace", namespace,
+            "-o", "jsonpath={.items[*].metadata.name}",
+        ]
+        if label_selector:
+            args.extend(["--selector", label_selector])
+
+        result = self._run_command(args)
+
+        output = result.stdout.strip()
+        if not output:
+            return []
+        return output.split()
+
+    def label_datavolumes(
+        self, namespace: str, dv_names: List[str], labels: Dict[str, str]
+    ) -> List[str]:
+        """Add labels to DataVolumes — the VM-shaped counterpart of ``label_pvcs``.
+
+        WHY this exists (design §4.3, proven by the W1 PoC):
+        a CDI DataVolume OWNS the PVC it provisions. Labeling only the PVC is
+        not enough for teardown, because the deferred cleanup cron must delete
+        the **DataVolume** — deleting the PVC alone makes CDI recreate it and
+        re-run the entire multi-GiB import (measured in the PoC, #423).
+
+        Args:
+            namespace: Namespace name
+            dv_names: List of DataVolume names to label
+            labels: Dict of label key-value pairs
+
+        Returns:
+            The names that were ACTUALLY labelled. Callers must log this list
+            rather than the input: an unlabelled DataVolume survives forever
+            (the chart marks it resource-policy: keep) and is never picked up
+            by the cleanup cron — a silent multi-GiB storage leak, the same
+            family as #208. Reporting the requested count would hide it.
+        """
+        validate_namespace(namespace)
+
+        # Same up-front validation as label_pvcs: one bad value would drop the
+        # whole atomic batch silently (operator #208).
+        for k, v in labels.items():
+            validate_label_value(k, v)
+
+        label_args = [f"{k}={v}" for k, v in labels.items()]
+
+        labelled: List[str] = []
+        for dv_name in dv_names:
+            try:
+                self._run_command([
+                    "label", "datavolume", dv_name,
+                    "--namespace", namespace,
+                    "--overwrite",
+                ] + label_args)
+                labelled.append(dv_name)
+            except KubectlException as e:
+                # error, not warning: a miss here leaks storage silently.
+                logger.error(
+                    f"Failed to label DataVolume {namespace}/{dv_name} — it will "
+                    f"survive teardown and never be reclaimed: {e.stderr}"
+                )
+        return labelled
 
     def get_namespace_labels(self, namespace: str) -> Dict[str, str]:
         """Return the namespace's current labels ({} if it carries none)."""

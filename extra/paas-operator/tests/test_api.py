@@ -14,6 +14,7 @@ from src.models.schemas import (
     ReleaseRevision,
     ReleaseStatus,
 )
+from src.services.helm import KubectlException
 
 
 @pytest.fixture
@@ -319,10 +320,18 @@ class TestReleaseEndpoints:
         injected = mock_helm.upgrade.call_args.kwargs["values"]
         assert injected.get("imagePullSecrets") == [{"name": "tenant-custom"}]
 
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
     @patch("src.api.releases.helm_service")
-    def test_delete_release(self, mock_helm, client):
+    def test_delete_release(self, mock_helm, mock_k8s, mock_cf, client):
         """Test delete release endpoint."""
+        # MINOR-7 (hermetic): without these patches the teardown path shells
+        # out to a REAL kubectl (and cloudflare) from a unit test.
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+        mock_k8s.list_pvcs.return_value = []
+        mock_k8s.has_datavolume_crd.return_value = True
+        mock_k8s.list_datavolumes.return_value = []
+        mock_cf.delete_route = AsyncMock(return_value=True)
 
         response = client.delete("/api/releases/paas-ws-test/test-release")
 
@@ -349,6 +358,10 @@ class TestReleaseEndpoints:
         k8s_label_value = re.compile(r"^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$")
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
         mock_k8s.list_pvcs.return_value = ["data-test-release-postgresql-0"]
+        # #423 W4.4: stub the new DataVolume lookup — an unstubbed MagicMock
+        # returns a truthy Mock and drags this test into the VM branch.
+        mock_k8s.has_datavolume_crd.return_value = True
+        mock_k8s.list_datavolumes.return_value = []
         mock_cf.delete_route = AsyncMock(return_value=True)
 
         response = client.delete(
@@ -388,6 +401,8 @@ class TestReleaseEndpoints:
         """
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
         mock_k8s.list_pvcs.return_value = ["svc-deadbeef-mcp-server-data"]
+        mock_k8s.has_datavolume_crd.return_value = True
+        mock_k8s.list_datavolumes.return_value = []
         mock_cf.delete_route = AsyncMock(return_value=True)
 
         response = client.delete(
@@ -404,6 +419,68 @@ class TestReleaseEndpoints:
             "list_pvcs must be scoped to the deleted release's own PVCs via the "
             f"instance selector (data-loss #281), got {selector!r}"
         )
+
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
+    @patch("src.api.releases.helm_service")
+    def test_delete_release_also_orphan_labels_datavolumes(
+        self, mock_helm, mock_k8s, mock_cf, client
+    ):
+        """#423 W4.4: VM releases keep their disk in a CDI DataVolume.
+
+        The chart stamps the DataVolume helm.sh/resource-policy: keep, so
+        `helm uninstall` leaves it behind — it therefore needs the same
+        orphan stamp as a PVC. And the cleanup cron must reclaim it via the
+        DataVolume: deleting the DV-owned PVC alone makes CDI recreate it and
+        re-run the whole import (measured in the W1 PoC, #423).
+        """
+        mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+        mock_k8s.list_pvcs.return_value = ["svc-haos-root"]
+        mock_k8s.list_datavolumes.return_value = ["svc-haos-root"]
+        mock_cf.delete_route = AsyncMock(return_value=True)
+
+        response = client.delete(
+            "/api/releases/paas-ws-test/svc-haos?subdomain=paas-cs-test"
+        )
+        assert response.status_code == 200
+
+        mock_k8s.label_datavolumes.assert_called_once()
+        ns, names, labels = mock_k8s.label_datavolumes.call_args[0]
+        assert ns == "paas-ws-test"
+        assert names == ["svc-haos-root"]
+        assert labels["paas.woowtech.io/orphaned-at"].isdigit()
+
+        # Same #281 scoping rule as PVCs — a workspace ns is shared.
+        call = mock_k8s.list_datavolumes.call_args
+        selector = call.kwargs.get("label_selector")
+        if selector is None and len(call.args) > 1:
+            selector = call.args[1]
+        assert selector == "app.kubernetes.io/instance=svc-haos"
+
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
+    @patch("src.api.releases.helm_service")
+    def test_delete_release_survives_missing_cdi_crd(
+        self, mock_helm, mock_k8s, mock_cf, client
+    ):
+        """Container-only clusters have no CDI — that must not break teardown,
+        and must not stop the PVC half from being labeled."""
+        mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+        mock_k8s.list_pvcs.return_value = ["svc-abc-data"]
+        mock_k8s.list_datavolumes.side_effect = KubectlException(
+            message="no CRD",
+            command="kubectl get datavolumes",
+            stderr='the server doesn\'t have a resource type "datavolumes"',
+        )
+        mock_cf.delete_route = AsyncMock(return_value=True)
+
+        response = client.delete(
+            "/api/releases/paas-ws-test/svc-abc?subdomain=paas-cs-test"
+        )
+
+        assert response.status_code == 200
+        mock_k8s.label_pvcs.assert_called_once()
+        mock_k8s.label_datavolumes.assert_not_called()
 
     @patch("src.api.releases.cloudflare_service.delete_route", new_callable=AsyncMock)
     @patch("src.api.releases.k8s_service")
@@ -425,6 +502,8 @@ class TestReleaseEndpoints:
 
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
         mock_k8s.list_pvcs.return_value = []
+        mock_k8s.has_datavolume_crd.return_value = True
+        mock_k8s.list_datavolumes.return_value = []
 
         ns, name, caller_subdomain = "paas-ws-test", "svc-deadbeef", "paas-cs-abc-def"
         response = client.delete(

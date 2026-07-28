@@ -124,12 +124,21 @@ class TestScaleMixed:
 class TestScaleErrors:
 
     def test_404_when_no_workloads(self, app_client, test_namespace):
+        """No workload of ANY kind → 404.
+
+        #423 W4.3 doubles as a real-cluster check of the VirtualMachine
+        branch's CRD handling: docker-desktop has no KubeVirt, so
+        ``get_virtualmachines`` raises inside the endpoint. The 404 below
+        only appears if that KubectlException is caught and folded into
+        "no workloads" — if it escaped, this would be a 500. That is the
+        exact contract drift a mocked test cannot catch.
+        """
         r = app_client.post(
             f"/api/releases/{test_namespace}/nonexistent-rel/scale",
             params={"replicas": 0},
         )
-        assert r.status_code == 404
-        assert "No deployments or statefulsets" in r.json()["detail"]
+        assert r.status_code == 404, r.text
+        assert "No deployments, statefulsets or virtualmachines" in r.json()["detail"]
 
     def test_replicas_in_body_is_ignored_so_query_is_authoritative(
         self, app_client, deployment_release,

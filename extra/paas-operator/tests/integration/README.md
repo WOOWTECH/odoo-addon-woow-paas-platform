@@ -117,6 +117,34 @@ Each test gets its own namespace (`paas-ws-test-op-{uuid8}`) created and torn
 down by the `test_namespace` fixture. Failed cleanup never bleeds across
 tests because namespaces are always uniquely named.
 
+### ⚠ 在 woow-k3s 上跑會留下 Released PV 孤兒（docker-desktop 不會）
+
+刪 namespace **不會**回收 PV。woow-k3s 的預設 StorageClass 是 `longhorn`，
+其 `reclaimPolicy` 是 **`Retain`**——所以測試建的每顆 PVC 在 ns 消失後都會
+留下一顆 `Released` PV ＋ 一顆 Longhorn volume。這正是 #319 那批孤兒的來源。
+
+docker-desktop 上看不到這個問題（預設 SC 是 Delete 政策），所以**只在跨叢集
+驗證時才會踩到**。
+
+跑完務必收尾（先 patch 成 `Delete` 再刪，讓 CSI 連後端 volume 一起回收；
+直接刪 PV 只會移掉 k8s 物件、Longhorn volume 仍在）：
+
+```bash
+# 列出本次測試留下的（只認 paas-ws-test-op-* 的 claimRef，不要誤傷他人）
+kubectl get pv -o json | python3 -c "
+import sys,json
+for p in json.load(sys.stdin)['items']:
+    ns=(p['spec'].get('claimRef') or {}).get('namespace','')
+    if ns.startswith('paas-ws-test-op-'):
+        print(p['metadata']['name'])"
+
+# 逐顆 patch 成 Delete —— PV controller 隨即自動回收（之後 delete 會 NotFound，正常）
+kubectl patch pv <name> -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'
+```
+
+驗收：`kubectl get volumes.longhorn.io -n longhorn-system | wc -l` 應回到跑測試前的數字。
+（2026-07-29 #423 W4 實測：一次全套跑完留下 8 顆，patch 後全數自動回收、Longhorn volume 數回到基線。）
+
 ## Known gap: Cloudflare-backed endpoints have no integration coverage
 
 The Security Access tunnel/route endpoints
