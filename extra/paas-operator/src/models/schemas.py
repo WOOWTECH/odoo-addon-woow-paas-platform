@@ -1,7 +1,7 @@
 """Pydantic schemas for API requests and responses."""
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -101,16 +101,23 @@ class ReleaseRollbackRequest(BaseModel):
 
 
 class ReleaseResetConfigRequest(BaseModel):
-    """#357：外科式 reset admin_password（read-modify-write config.json + 重啟）。
+    """#357：reset admin_password。載體由 ``admin_password_carrier`` 分流（#449）。
 
-    只替換 ``/data/config.json`` 的 ``admin_password`` leaf，保留租戶 GUI 自填的
+    **config_json 路（預設，mcp-server 家族）**：外科式 read-modify-write
+    ``/data/config.json``，只替換 ``admin_password`` leaf，保留租戶 GUI 自填的
     connection / tools / mcp_server.env / token_history。比「砍整份 + re-seed」
     少一次完整 PVC 重置；敏感值走 ``sensitive_values``，不落持久化 values；
     main container 不掛 Secret、僅 seed-config 一次性讀取 → 應用永遠讀 config.json。
 
+    **helm_secret 路（hermes-agent / open-design）**：密碼的權威載體是 chart 自己
+    的 Secret，pod 以 env / initContainer 讀取，**沒有** ``/data/config.json``。
+    走純 helm upgrade + 全部 Deployment rollout restart，不做 config.json exec
+    patch —— 對這些 chart 做 exec patch 必定失敗（#449：patch 炸 → 備份未建成 →
+    rollback 也炸 → 500，密碼永遠輪替不了）。
+
     任一子步失敗 → operator 報 5xx、不做半套。chart values 經 --values tmp file
-    不印明文，cmdline secret value 走既有 _redact_cmd 遮罩；reset_config.py
-    的密碼只進 pod stdin、不寫檔、不 log。
+    不印明文，cmdline secret value 走既有 _redact_cmd 遮罩；config_json 路的
+    密碼只進 pod stdin、不寫檔、不 log。
     """
 
     values: Optional[Dict[str, Any]] = Field(
@@ -124,7 +131,25 @@ class ReleaseResetConfigRequest(BaseModel):
     )
     chart: Optional[str] = Field(None, description="Chart reference（如需升版）")
     version: Optional[str] = Field(None, description="Chart version（如需升版）")
+    # #411 A 案接通（#449 一併補上）：接通前 client 傳的 reset_values 被 pydantic
+    # 靜默忽略，只靠 reuse_values=False 讓 helm 走「無-flag 預設」（chart
+    # values.yaml 為 base ≈ reset）。接通後升級為顯式 --reset-values；兩者對
+    # helm 的實際語意相同（helm 3 的 default == ResetValues），故對既有呼叫端
+    # 是行為中性的向後相容改動。
+    reset_values: bool = Field(
+        default=False, description="Reset values to chart defaults（顯式 --reset-values）"
+    )
     reuse_values: bool = Field(default=True, description="複用最近 release values")
+    # #449：密碼載體策略。**預設 config_json ＝ 既有行為**，這是「operator 先發版、
+    # 平台後發版」順序安全的支點：舊平台不帶本欄 → 走原 saga，零行為變化。
+    admin_password_carrier: Literal["config_json", "helm_secret"] = Field(
+        default="config_json",
+        description=(
+            "密碼載體：config_json＝PVC 內 /data/config.json（mcp-server 家族，"
+            "既有 saga）；helm_secret＝chart Secret（hermes-agent / open-design，"
+            "純 helm upgrade + rollout restart）。未帶＝config_json。"
+        ),
+    )
 
 
 class NamespaceCreateRequest(BaseModel):

@@ -532,17 +532,28 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
 @router.post(
     "/{namespace}/{name}/reset-config",
     response_model=Dict[str, Any],
-    summary="#357：外科式 reset admin_password（read-modify-write config.json + 重啟）",
+    summary="#357/#449：reset admin_password（依 admin_password_carrier 分流）",
 )
 def reset_release_config(
     namespace: str,
     name: str,
     request: ReleaseResetConfigRequest,
 ):
-    """Reset the GUI password without replacing tenant-owned config.json.
+    """Reset the admin password, by whichever mechanism the chart actually uses.
 
-    Helm's Secret and the PVC-backed config file cannot be updated in one
-    transaction.  This endpoint therefore uses a compensating saga:
+    #449: this handler used to assume every chart keeps its password in
+    ``/data/config.json``. That is only true of the mcp-server family; charts
+    that carry the password in their own Secret (hermes-agent, open-design)
+    have no such file, so the exec patch failed, its backup was never created,
+    the compensating ``os.replace`` failed too, and every rotation ended in a
+    500. ``request.admin_password_carrier`` now selects the path:
+
+    ``helm_secret`` — Helm's Secret *is* the credential store. Upgrade it and
+    restart the workloads that read it; see ``_reset_via_helm_secret``.
+
+    ``config_json`` (default, and what an older platform sends) — Helm's Secret
+    and the PVC-backed config file cannot be updated in one transaction, so a
+    compensating saga is used:
 
     1. Atomically upgrade the Helm Secret and wait for success.
     2. Read-modify-write only ``admin_password`` in config.json, retaining a
@@ -574,15 +585,22 @@ def reset_release_config(
             detail="sensitive_values.config.sensitive.admin_password is required",
         )
 
+    if request.admin_password_carrier == "helm_secret":
+        return _reset_via_helm_secret(namespace, name, request)
+
     try:
         previous_revision = helm_service.get(namespace, name).revision
         release = helm_service.upgrade(
             namespace=namespace,
             name=name,
             chart=request.chart,
-            values=request.values,
+            # #448/#449：reset 也走全量 reset values，沒有這行時私有 image 的 CS
+            # 每次 reset password 都會掉 pull secret → ImagePullBackOff 401。
+            # 之前只因呼叫端沿用 reuse_values 預設才沒踩到（#449 comment）。
+            values=_ensure_image_pull_secrets(request.values),
             sensitive_values=request.sensitive_values,
             version=request.version,
+            reset_values=request.reset_values,
             reuse_values=request.reuse_values,
             atomic=True,
         )
@@ -691,8 +709,151 @@ def reset_release_config(
         "config_json_patched": True,
         "helm_upgraded": True,
         "rollout_restart_issued": True,
+        "admin_password_carrier": "config_json",
         "note": "preserve connection/tools — read-modify-write only admin_password",
     }
+
+
+def _reset_via_helm_secret(
+    namespace: str,
+    name: str,
+    request: ReleaseResetConfigRequest,
+) -> Dict[str, Any]:
+    """#449：密碼載體＝chart Secret 的 reset 路（hermes-agent / open-design）。
+
+    這條路**刻意不碰 config.json**：這些 chart 的 PVC 裡沒有那個檔（hermes-agent
+    掛 ``/opt/data``、open-design 掛 ``/app/.od``），對它 exec patch 必炸。
+
+    為什麼 helm upgrade 之後還一定要 rollout restart：兩個 chart 的 Deployment
+    都**沒有** ``checksum/secret`` annotation（實查 charts/hermes-agent 與
+    charts/open-design 的 deployment.yaml：只有 checksum/config 與
+    checksum/authproxy-config）。改 Secret 不改 pod template ⇒ helm 不會滾動 pod，
+    而密碼是**啟動期**被消費的（nginx basic-auth 的 htpasswd 由 initContainer 從
+    Secret 算出、webui/dashboard 走 env）。少了 restart，upgrade 會「成功」但新密碼
+    永遠不生效 —— 比 500 更糟的靜默失敗。
+
+    為什麼是**全部** Deployment 而非一個：兩個 chart 都渲染 daemon + console 兩顆
+    Deployment 共用同一個 ``app.kubernetes.io/instance`` label，單數版
+    ``get_deployment_name`` 撞多筆會 raise「Ambiguous selector」→ 500（#449 brief
+    的原始預測）。這裡用複數版一次收全，未來 chart 再長出第三顆也自動涵蓋。
+
+    失敗補償與 config_json 路同形：先 helm rollback 回前一個 revision，再把
+    Deployment 重新滾一次，讓**舊密碼**確實回到 pod。
+    """
+    label_selector = f"app.kubernetes.io/instance={name}"
+
+    try:
+        previous_revision = helm_service.get(namespace, name).revision
+        release = helm_service.upgrade(
+            namespace=namespace,
+            name=name,
+            chart=request.chart,
+            # #448：全量 reset values 會抹掉 install 時注入的 pull secret，兩條
+            # reset 路都必須自己補回來。
+            values=_ensure_image_pull_secrets(request.values),
+            sensitive_values=request.sensitive_values,
+            version=request.version,
+            reset_values=request.reset_values,
+            reuse_values=request.reuse_values,
+            atomic=True,
+        )
+    except (ValueError, HelmException) as e:
+        logger.error(
+            "reset-config (helm_secret) Helm upgrade failed for %s/%s: %s",
+            namespace, name, e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="reset-config: failed to update the chart Secret",
+        )
+
+    try:
+        deployment_names = k8s_service.get_deployment_names(
+            namespace=namespace,
+            label_selector=label_selector,
+        )
+        # 先全部下 restart 再逐一等待：兩顆 Deployment 的 rollout 因此並行推進，
+        # 總耗時 ≈ max 而非 sum —— 平台 client 只有 120s 預算，逐顆序列等待很容易
+        # 超時（超時 ⇒ 平台不存新密碼、租戶得重按，見 cloud_service C11 註解）。
+        for deployment_name in deployment_names:
+            k8s_service.rollout_restart_deployment(
+                namespace=namespace,
+                deployment_name=deployment_name,
+            )
+        for deployment_name in deployment_names:
+            k8s_service.rollout_status_deployment(
+                namespace=namespace,
+                deployment_name=deployment_name,
+            )
+    except KubectlException as e:
+        recovery_failed = _rollback_helm_secret_reset(
+            namespace, name, previous_revision, label_selector,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "reset-config: rollout failed; previous password restored"
+                if not recovery_failed else
+                "reset-config: rollout failed and recovery failed; operator intervention required"
+            ),
+        ) from e
+
+    return {
+        "action": "reset-config",
+        "namespace": namespace,
+        "release": name,
+        "helm_revision": release.revision,
+        "config_json_patched": False,
+        "helm_upgraded": True,
+        "rollout_restart_issued": True,
+        "admin_password_carrier": "helm_secret",
+        "restarted_deployments": deployment_names,
+        "note": "password lives in the chart Secret — no config.json patch",
+    }
+
+
+def _rollback_helm_secret_reset(
+    namespace: str,
+    name: str,
+    previous_revision: int,
+    label_selector: str,
+) -> bool:
+    """Compensate a helm_secret reset failure. Returns True when recovery failed.
+
+    Rolling Helm back restores the *old* password in the Secret, but a pod that
+    already restarted is running the new one — so the workloads must be rolled
+    again for the rollback to actually reach them.
+    """
+    recovery_failed = False
+    try:
+        helm_service.rollback(namespace, name, previous_revision)
+    except HelmException as e:
+        logger.error(
+            "reset-config (helm_secret) Helm rollback failed for %s/%s: %s",
+            namespace, name, e,
+        )
+        recovery_failed = True
+
+    if recovery_failed:
+        # Secret 還停在新密碼；再滾 pod 只會把「沒人持有的密碼」推上線，更糟。
+        return recovery_failed
+
+    try:
+        deployment_names = k8s_service.get_deployment_names(
+            namespace=namespace,
+            label_selector=label_selector,
+        )
+        for deployment_name in deployment_names:
+            k8s_service.rollout_restart_deployment(namespace, deployment_name)
+        for deployment_name in deployment_names:
+            k8s_service.rollout_status_deployment(namespace, deployment_name)
+    except KubectlException as e:
+        logger.error(
+            "reset-config (helm_secret) rollback rollout failed for %s/%s: %s",
+            namespace, name, e,
+        )
+        recovery_failed = True
+    return recovery_failed
 
 
 def _rollback_reset(
