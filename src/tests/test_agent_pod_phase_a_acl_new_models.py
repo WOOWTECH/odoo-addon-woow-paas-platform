@@ -112,6 +112,7 @@ Fixture / env assumptions:
 """
 import os
 import uuid
+from unittest.mock import patch
 
 from odoo.exceptions import AccessError, ValidationError
 from odoo.tests.common import TransactionCase, tagged
@@ -447,8 +448,10 @@ class TestPhaseAAclAgentSession(_NewModelAclFixture):
         super().setUp()
         # Forward-compat with the F-PC-3 fail-closed fix: creating an
         # agent_session now requires the injected namespace secret env.
-        os.environ['AGENT_RUNTIME_NAMESPACE_SECRET'] = 'phase-a-test-ns-secret'
-        self.addCleanup(os.environ.pop, 'AGENT_RUNTIME_NAMESPACE_SECRET', None)
+        patcher = patch.dict(
+            os.environ, {'AGENT_RUNTIME_NAMESPACE_SECRET': 'phase-a-test-ns-secret'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         # Two sessions — one per project.
         self.session_p1 = self.AgentSession.sudo().create({
             'project_id': self.project_p1.id,
