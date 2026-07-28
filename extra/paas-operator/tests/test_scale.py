@@ -208,9 +208,7 @@ class TestScaleRelease:
     def test_missing_kubevirt_crd_still_404s(self, mock_k8s, client):
         """No CRD → genuinely no VM workload → the honest answer is 404.
 
-        (Unlike the readiness path, a KubectlException here is expected on
-        container-only clusters, so it is logged and folded into the 404
-        rather than raised as a 500.)
+        This is the ONLY KubectlException that may be folded into the 404.
         """
         mock_k8s.get_deployments.return_value = []
         mock_k8s.get_statefulsets.return_value = []
@@ -226,6 +224,58 @@ class TestScaleRelease:
         )
 
         assert response.status_code == 404
+
+    @patch("src.api.releases.k8s_service")
+    def test_rbac_forbidden_is_500_not_404(self, mock_k8s, client):
+        """🔴 MAJOR-1 regression: Forbidden must NOT look like 'no workloads'.
+
+        Live risk at the time of writing: KubeVirt CRDs are installed on
+        woow-k3s but the operator ClusterRole has no kubevirt.io apiGroup
+        yet (chart 0.1.19 stuck in the CI queue). With a blanket
+        `except KubectlException` this returned 404, the Odoo caller wrote
+        state=error, and the VM was never Halted — an unpaid tenant keeps
+        running. A 500 is loud, diagnosable, and leaves the subscription
+        machinery able to retry.
+        """
+        mock_k8s.get_deployments.return_value = []
+        mock_k8s.get_statefulsets.return_value = []
+        mock_k8s.get_virtualmachines.side_effect = KubectlException(
+            message="forbidden",
+            command="kubectl get virtualmachines",
+            stderr=(
+                'Error from server (Forbidden): virtualmachines.kubevirt.io is '
+                'forbidden: User "system:serviceaccount:paas-system:paas-operator" '
+                'cannot list resource "virtualmachines"'
+            ),
+        )
+
+        response = client.post(
+            "/api/releases/paas-ws-test/svc-haos/scale",
+            params={"replicas": 0},
+        )
+
+        assert response.status_code == 500, (
+            "an RBAC Forbidden must surface as 500, never be folded into the "
+            "'no workloads' 404 — see MAJOR-1"
+        )
+
+    @patch("src.api.releases.k8s_service")
+    def test_timeout_is_500_not_404(self, mock_k8s, client):
+        """Same rule for a kubectl timeout — only missing-CRD gets the 404."""
+        mock_k8s.get_deployments.return_value = []
+        mock_k8s.get_statefulsets.return_value = []
+        mock_k8s.get_virtualmachines.side_effect = KubectlException(
+            message="timeout",
+            command="kubectl get virtualmachines",
+            stderr="kubectl command timed out after 30s",
+        )
+
+        response = client.post(
+            "/api/releases/paas-ws-test/svc-haos/scale",
+            params={"replicas": 0},
+        )
+
+        assert response.status_code == 500
 
     @patch("src.api.releases.k8s_service")
     def test_scale_kubectl_failure(self, mock_k8s, client):

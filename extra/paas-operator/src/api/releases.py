@@ -25,6 +25,14 @@ from src.services.cloudflare import CloudflareException, CloudflareService
 from src.services.helm import HelmException, HelmService, KubectlException, KubernetesService
 from src.services.helm import _sanitize_release_values
 
+
+class _NoCdiInstalled(Exception):
+    """Sentinel: this cluster has no CDI, so there is nothing to orphan-label.
+
+    Not an error condition — keeps the teardown flow linear without an extra
+    nesting level (MINOR-4).
+    """
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/releases", tags=["releases"])
 
@@ -282,6 +290,12 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
         # Separate try block: a DataVolume failure must not mask the PVC
         # labeling above, and vice versa.
         try:
+            # MINOR-4: gate on a cached CRD probe so a container-only cluster
+            # does not pay an extra synchronous kubectl on EVERY delete — and,
+            # more importantly, so the failure log below stays rare enough to
+            # mean something when it does fire.
+            if not k8s_service.has_datavolume_crd():
+                raise _NoCdiInstalled()
             remaining_dvs = k8s_service.list_datavolumes(
                 namespace, label_selector=f"app.kubernetes.io/instance={name}"
             )
@@ -289,15 +303,46 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
                 labels = build_orphan_pvc_labels(
                     name, settings.pvc_grace_period_days
                 )
-                k8s_service.label_datavolumes(namespace, remaining_dvs, labels)
-                logger.info(
-                    f"Labeled {len(remaining_dvs)} orphaned DataVolumes in "
-                    f"{namespace}: {remaining_dvs}"
+                labelled = k8s_service.label_datavolumes(
+                    namespace, remaining_dvs, labels
+                )
+                # Report what actually succeeded — a DataVolume that missed
+                # its stamp is kept forever by the chart's resource-policy and
+                # is invisible to the cleanup cron (silent storage leak).
+                if len(labelled) != len(remaining_dvs):
+                    missed = sorted(set(remaining_dvs) - set(labelled))
+                    logger.error(
+                        f"Orphan-labelled only {len(labelled)}/{len(remaining_dvs)} "
+                        f"DataVolumes in {namespace}; UNRECLAIMABLE: {missed}"
+                    )
+                else:
+                    logger.info(
+                        f"Labeled {len(labelled)} orphaned DataVolumes in "
+                        f"{namespace}: {labelled}"
+                    )
+        except _NoCdiInstalled:
+            logger.debug(
+                f"No CDI CRD in this cluster; skipping DataVolume "
+                f"orphan-labeling for {namespace}/{name}"
+            )
+        except KubectlException as e:
+            # A cluster with no CDI is an expected, uninteresting case — but
+            # anything else (Forbidden, timeout) on a VM-capable cluster is
+            # the ONLY signal that a tenant's disk was left unreclaimable, so
+            # it must not be buried at the same level as routine noise.
+            if KubernetesService.is_crd_absent_error(e):
+                logger.debug(
+                    f"No CDI CRD in this cluster; skipping DataVolume "
+                    f"orphan-labeling for {namespace}/{name}"
+                )
+            else:
+                logger.error(
+                    f"Failed to list DataVolumes for orphan-labeling in "
+                    f"{namespace}/{name} — any VM disk here will NOT be "
+                    f"reclaimed: {e.stderr}"
                 )
         except Exception as e:
-            # Expected on clusters without CDI — best-effort, but logged so a
-            # genuine failure on a VM-capable cluster is visible.
-            logger.warning(
+            logger.error(
                 f"Failed to label orphaned DataVolumes in {namespace}: {e}"
             )
 
@@ -480,34 +525,48 @@ def get_release_status(
 
         # #423 W4.2: VM-type workloads. A virt-launcher pod being Running does
         # NOT mean the guest booted, so the platform's readiness gate reads the
-        # VMI instead. The error is surfaced (never swallowed) because the Odoo
+        # VMI instead. Errors are surfaced (never swallowed) because the Odoo
         # side is fail-CLOSED on an empty vmis list: it keeps the service in
-        # `deploying`, and without this field a broken lookup would be
+        # `deploying`, and without these fields a broken lookup would be
         # indistinguishable from "still importing".
-        vmis = []
-        datavolumes = []
-        vm_retrieval_error = None
+        #
+        # None (not []) while include_vm is false, so "not queried" and
+        # "queried, none found" stay distinguishable — a caller that forgets
+        # the flag gets a diagnosable None instead of a silently-stuck service.
+        vmis = None
+        datavolumes = None
+        vmi_retrieval_error = None
+        datavolume_retrieval_error = None
         if include_vm:
+            # Separate try blocks per resource kind: a DataVolume failure must
+            # not discard an already-known VMI readiness answer (and vice
+            # versa). Readiness depends only on the VMI half.
             try:
                 vmis = k8s_service.get_vmis(
                     namespace=namespace, label_selector=selector,
                 )
+            except Exception as e:
+                logger.error(f"Failed to get VMIs for {namespace}/{name}: {e}")
+                vmi_retrieval_error = str(e)
+            try:
                 datavolumes = k8s_service.get_datavolumes(
                     namespace=namespace, label_selector=selector,
                 )
             except Exception as e:
                 logger.error(
-                    f"Failed to get VMI/DataVolume for {namespace}/{name}: {e}"
+                    f"Failed to get DataVolumes for {namespace}/{name}: {e}"
                 )
-                vm_retrieval_error = str(e)
+                datavolume_retrieval_error = str(e)
 
         return ReleaseStatusResponse(
             release=release,
             pods=pods,
             pod_retrieval_error=pod_retrieval_error,
+            vm_included=include_vm,
             vmis=vmis,
             datavolumes=datavolumes,
-            vm_retrieval_error=vm_retrieval_error,
+            vmi_retrieval_error=vmi_retrieval_error,
+            datavolume_retrieval_error=datavolume_retrieval_error,
         )
 
     except ValueError as e:
@@ -575,11 +634,33 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
                     label_selector=selector,
                 )
             except KubectlException as e:
-                # No KubeVirt CRD on this cluster → genuinely no VM workload.
-                # Fall through to the 404 below, which is the honest answer,
-                # but log so a real failure is not mistaken for "no VMs".
+                # ⚠ Narrow to "the CRD does not exist". Everything else —
+                # RBAC Forbidden, a 30s timeout, a missing kubectl — must
+                # NOT be folded into "no VM workload".
+                #
+                # This is not hypothetical: KubeVirt CRDs are already
+                # installed on woow-k3s while the operator ClusterRole has
+                # not yet been republished with the kubevirt.io apiGroup
+                # (chart 0.1.19 still in the CI queue). With a blanket
+                # catch, the very first VM suspend would go
+                #   Forbidden → 404 → _do_suspend writes state=error
+                # leaving an unpaid VM running — precisely the failure this
+                # branch exists to fix, re-created one layer up.
+                #
+                # Note the deliberate asymmetry with the container path
+                # above: get_deployments/get_statefulsets do not catch at
+                # all, so their failures surface as 500. VM lookups get one
+                # narrow exemption and nothing more.
+                if not KubernetesService.is_crd_absent_error(e):
+                    logger.error(
+                        f"VirtualMachine lookup failed for {namespace}/{name} "
+                        f"(not a missing-CRD error — refusing to report "
+                        f"'no workloads'): {e.stderr}"
+                    )
+                    raise
                 logger.info(
-                    f"VirtualMachine lookup skipped for {namespace}/{name}: {e.stderr}"
+                    f"No KubeVirt CRD in this cluster; skipping VirtualMachine "
+                    f"lookup for {namespace}/{name}"
                 )
 
         if not deployments and not statefulsets and not virtualmachines:

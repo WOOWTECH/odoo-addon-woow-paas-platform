@@ -320,10 +320,18 @@ class TestReleaseEndpoints:
         injected = mock_helm.upgrade.call_args.kwargs["values"]
         assert injected.get("imagePullSecrets") == [{"name": "tenant-custom"}]
 
+    @patch("src.api.releases.cloudflare_service")
+    @patch("src.api.releases.k8s_service")
     @patch("src.api.releases.helm_service")
-    def test_delete_release(self, mock_helm, client):
+    def test_delete_release(self, mock_helm, mock_k8s, mock_cf, client):
         """Test delete release endpoint."""
+        # MINOR-7 (hermetic): without these patches the teardown path shells
+        # out to a REAL kubectl (and cloudflare) from a unit test.
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+        mock_k8s.list_pvcs.return_value = []
+        mock_k8s.has_datavolume_crd.return_value = True
+        mock_k8s.list_datavolumes.return_value = []
+        mock_cf.delete_route = AsyncMock(return_value=True)
 
         response = client.delete("/api/releases/paas-ws-test/test-release")
 
@@ -350,6 +358,10 @@ class TestReleaseEndpoints:
         k8s_label_value = re.compile(r"^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$")
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
         mock_k8s.list_pvcs.return_value = ["data-test-release-postgresql-0"]
+        # #423 W4.4: stub the new DataVolume lookup — an unstubbed MagicMock
+        # returns a truthy Mock and drags this test into the VM branch.
+        mock_k8s.has_datavolume_crd.return_value = True
+        mock_k8s.list_datavolumes.return_value = []
         mock_cf.delete_route = AsyncMock(return_value=True)
 
         response = client.delete(
@@ -389,6 +401,8 @@ class TestReleaseEndpoints:
         """
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
         mock_k8s.list_pvcs.return_value = ["svc-deadbeef-mcp-server-data"]
+        mock_k8s.has_datavolume_crd.return_value = True
+        mock_k8s.list_datavolumes.return_value = []
         mock_cf.delete_route = AsyncMock(return_value=True)
 
         response = client.delete(
@@ -488,6 +502,8 @@ class TestReleaseEndpoints:
 
         mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
         mock_k8s.list_pvcs.return_value = []
+        mock_k8s.has_datavolume_crd.return_value = True
+        mock_k8s.list_datavolumes.return_value = []
 
         ns, name, caller_subdomain = "paas-ws-test", "svc-deadbeef", "paas-cs-abc-def"
         response = client.delete(

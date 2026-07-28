@@ -825,6 +825,8 @@ class KubernetesService:
 
     def __init__(self):
         self.kubectl_bin = "kubectl"
+        # MINOR-4: per-process CDI-CRD probe cache (see has_datavolume_crd).
+        self._has_dv_crd: Optional[bool] = None
 
     def _run_command(
         self,
@@ -1506,6 +1508,63 @@ class KubernetesService:
     # vmis list means "not ready yet", so a swallowed error would park every
     # VM service in `deploying` forever with no clue why.
 
+    def has_datavolume_crd(self) -> bool:
+        """Is CDI installed on this cluster?  (cached per process — MINOR-4)
+
+        Gates the teardown-path DataVolume lookup. Without it EVERY
+        container-service delete pays an extra synchronous kubectl (inside an
+        async handler, up to a 30s timeout) and, on a cluster with no CDI,
+        logs a failure every single time. That routine noise is the problem:
+        the same log line is the ONLY signal that a real VM disk was left
+        unreclaimable on a VM-capable cluster, so making it constant blunts
+        the alarm.
+
+        Cached because CRD registration does not change within a process
+        lifetime in any way the operator needs to react to; a restart
+        re-probes. Failure to probe returns True (do the lookup) — better a
+        redundant call than a skipped orphan stamp.
+        """
+        if self._has_dv_crd is None:
+            try:
+                self._run_command(
+                    ["get", "crd", "datavolumes.cdi.kubevirt.io", "-o", "name"]
+                )
+                self._has_dv_crd = True
+            except KubectlException as e:
+                # Only a definitive "not found" means absent. Forbidden or a
+                # timeout leaves us unsure → assume present and let the real
+                # call report properly.
+                self._has_dv_crd = not (
+                    "notfound" in (e.stderr or "").lower().replace(" ", "")
+                    or "not found" in (e.stderr or "").lower()
+                )
+        return self._has_dv_crd
+
+    @staticmethod
+    def is_crd_absent_error(exc: "KubectlException") -> bool:
+        """True only when kubectl failed because the resource type is unknown.
+
+        A ``KubectlException`` is raised for EVERY kubectl failure —
+        RBAC Forbidden, a 30s timeout, a missing binary — so callers that
+        want to treat "this cluster has no KubeVirt" as a benign, expected
+        condition MUST narrow to this. Treating the whole exception class as
+        "no CRD" turns a Forbidden into "no VM workload", which is how a
+        VM-type service silently fails to suspend.
+
+        ⚠ This is a stderr string match because kubectl gives no machine
+        readable discriminator for it. It is deliberately narrow: anything
+        unrecognised is NOT a CRD-absent error, so the caller re-raises.
+        Cross-checked by an integration test that asserts a known built-in
+        type never matches while an unknown type always does.
+        """
+        stderr = (exc.stderr or "").lower()
+        return (
+            "the server doesn't have a resource type" in stderr
+            or "could not find the requested resource" in stderr
+            # kubectl >= 1.29 wording for an unknown type in an explain/get
+            or "doesn't have a resource type" in stderr
+        )
+
     def get_vmis(
         self, namespace: str, label_selector: Optional[str] = None
     ) -> List[VmiInfo]:
@@ -1909,7 +1968,7 @@ class KubernetesService:
 
     def label_datavolumes(
         self, namespace: str, dv_names: List[str], labels: Dict[str, str]
-    ) -> None:
+    ) -> List[str]:
         """Add labels to DataVolumes — the VM-shaped counterpart of ``label_pvcs``.
 
         WHY this exists (design §4.3, proven by the W1 PoC):
@@ -1922,6 +1981,13 @@ class KubernetesService:
             namespace: Namespace name
             dv_names: List of DataVolume names to label
             labels: Dict of label key-value pairs
+
+        Returns:
+            The names that were ACTUALLY labelled. Callers must log this list
+            rather than the input: an unlabelled DataVolume survives forever
+            (the chart marks it resource-policy: keep) and is never picked up
+            by the cleanup cron — a silent multi-GiB storage leak, the same
+            family as #208. Reporting the requested count would hide it.
         """
         validate_namespace(namespace)
 
@@ -1932,6 +1998,7 @@ class KubernetesService:
 
         label_args = [f"{k}={v}" for k, v in labels.items()]
 
+        labelled: List[str] = []
         for dv_name in dv_names:
             try:
                 self._run_command([
@@ -1939,8 +2006,14 @@ class KubernetesService:
                     "--namespace", namespace,
                     "--overwrite",
                 ] + label_args)
+                labelled.append(dv_name)
             except KubectlException as e:
-                logger.warning(f"Failed to label DataVolume {dv_name}: {e.stderr}")
+                # error, not warning: a miss here leaks storage silently.
+                logger.error(
+                    f"Failed to label DataVolume {namespace}/{dv_name} — it will "
+                    f"survive teardown and never be reclaimed: {e.stderr}"
+                )
+        return labelled
 
     def get_namespace_labels(self, namespace: str) -> Dict[str, str]:
         """Return the namespace's current labels ({} if it carries none)."""

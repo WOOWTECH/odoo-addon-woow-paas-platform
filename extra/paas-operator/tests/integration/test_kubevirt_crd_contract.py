@@ -16,6 +16,7 @@ has no KubeVirt, so they skip there; run them on a cluster that does (the
 #423 W0 install put KubeVirt v1.8.0 + CDI v1.64.0 on woow-k3s) using a
 ``dev-sandbox-*`` namespace.
 """
+import os
 import subprocess
 
 import pytest
@@ -29,24 +30,60 @@ from src.services.helm import KubectlException, KubernetesService
 pytestmark = pytest.mark.integration
 
 
+_CRD_CACHE: dict = {}
+
+
 def _has_crd(name: str) -> bool:
+    """Is this CRD registered?  (lazy + cached — MINOR-7)
+
+    Deliberately NOT evaluated at import time: this module is imported by
+    every ``pytest`` run, including the hermetic unit suite, and an
+    import-time probe would fire real API calls from unit tests.
+
+    ⚠ MINOR-6: a Forbidden or a timeout is NOT "no CRD". Treating it as one
+    would silently skip the very tests that prove the RBAC works. Those are
+    reported as an explicit error state instead, and ``REQUIRE_KUBEVIRT=1``
+    turns any skip into a failure for W4.6-style acceptance runs.
+    """
+    if name in _CRD_CACHE:
+        return _CRD_CACHE[name]
     try:
-        return subprocess.run(
+        proc = subprocess.run(
             ["kubectl", "get", "crd", name],
-            capture_output=True, timeout=10,
-        ).returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode == 0:
+            result = True
+        elif "notfound" in (proc.stderr or "").lower().replace(" ", "") \
+                or "not found" in (proc.stderr or "").lower():
+            result = False
+        else:
+            # Forbidden / connection error → we genuinely do not know.
+            # Surface it rather than pretending the CRD is absent.
+            raise RuntimeError(
+                f"cannot determine whether CRD {name} exists "
+                f"(rc={proc.returncode}): {proc.stderr.strip()}"
+            )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"cannot probe CRD {name}: {e}") from e
+    _CRD_CACHE[name] = result
+    return result
 
 
-requires_kubevirt = pytest.mark.skipif(
-    not _has_crd("virtualmachineinstances.kubevirt.io"),
-    reason="cluster has no KubeVirt CRDs (expected on docker-desktop)",
-)
-requires_cdi = pytest.mark.skipif(
-    not _has_crd("datavolumes.cdi.kubevirt.io"),
-    reason="cluster has no CDI CRDs (expected on docker-desktop)",
-)
+def _require_kubevirt_env() -> bool:
+    return os.environ.get("REQUIRE_KUBEVIRT") == "1"
+
+
+def _skip_or_fail(crd: str, what: str):
+    """skip normally; FAIL when REQUIRE_KUBEVIRT=1 (acceptance mode)."""
+    if _has_crd(crd):
+        return
+    if _require_kubevirt_env():
+        pytest.fail(
+            f"REQUIRE_KUBEVIRT=1 but this cluster has no {what} CRD ({crd}) — "
+            f"the VM happy-path coverage did NOT run"
+        )
+    pytest.skip(f"cluster has no {what} CRDs (expected on docker-desktop)")
 
 
 def _write_probe_chart(chart_dir) -> str:
@@ -124,9 +161,13 @@ class TestFailLoudWithoutCrds:
         r = app_client.get(f"/api/releases/{test_namespace}/{release}/status")
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["vmis"] == []
-        assert body["datavolumes"] == []
-        assert body["vm_retrieval_error"] is None
+        assert body["vm_included"] is False
+        # None, not [] — "not queried" must stay distinguishable from
+        # "queried, none found", or a caller that forgets the flag gets a
+        # silently-stuck service instead of a diagnosable answer.
+        assert body["vmis"] is None
+        assert body["datavolumes"] is None
+        assert body["vmi_retrieval_error"] is None
 
         # --- opt-in: VM fields present, error surfaced not swallowed -------
         r = app_client.get(
@@ -135,12 +176,14 @@ class TestFailLoudWithoutCrds:
         )
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["vmis"] == []
+        assert body["vm_included"] is True
         if _has_crd("virtualmachineinstances.kubevirt.io"):
-            assert body["vm_retrieval_error"] is None
+            assert body["vmis"] == []
+            assert body["vmi_retrieval_error"] is None
         else:
-            assert body["vm_retrieval_error"] is not None, (
-                "a missing KubeVirt CRD must surface as vm_retrieval_error — "
+            assert body["vmis"] is None
+            assert body["vmi_retrieval_error"] is not None, (
+                "a missing KubeVirt CRD must surface as vmi_retrieval_error — "
                 "otherwise an empty vmis list is indistinguishable from "
                 "'still importing' and the fail-closed readiness gate never "
                 "releases the service"
@@ -148,12 +191,70 @@ class TestFailLoudWithoutCrds:
         # The pod half is independent and must still be reported.
         assert body["pod_retrieval_error"] is None
 
+    def test_crd_probe_is_not_fooled_by_a_typo(self, k8s, test_namespace):
+        """🔴 MAJOR-2: prove the six new resource names are REAL.
 
-@requires_kubevirt
+        A CRD-less cluster cannot distinguish "resource type not installed"
+        from "resource type misspelled" — kubectl returns the same error for
+        ``virtualmachineinstancez`` as for a genuinely absent CRD. So the
+        fail-loud tests above, on their own, would pass just as happily if
+        every resource name in the implementation were a typo.
+
+        This test closes that hole from both ends:
+
+        * a KNOWN-GOOD built-in type must always succeed → proves the probe
+          itself works and the namespace/kubeconfig are sane (so a blanket
+          "everything errors" environment cannot fake a pass);
+        * each name the implementation actually uses must behave EXACTLY as
+          ``_has_crd`` predicts — succeed where the CRD is registered, raise
+          where it is not. A typo fails the first branch on a KubeVirt
+          cluster, which is where this now really runs.
+        """
+        # Known-good control: if this fails, nothing below means anything.
+        assert isinstance(k8s.get_pods(test_namespace), list)
+
+        checks = [
+            ("virtualmachineinstances.kubevirt.io", k8s.get_vmis),
+            ("virtualmachines.kubevirt.io", k8s.get_virtualmachines),
+            ("datavolumes.cdi.kubevirt.io", k8s.get_datavolumes),
+            ("datavolumes.cdi.kubevirt.io", k8s.list_datavolumes),
+        ]
+        for crd, fn in checks:
+            registered = _has_crd(crd)
+            if registered:
+                assert isinstance(fn(test_namespace), list), (
+                    f"{fn.__name__} must succeed against a registered {crd} — "
+                    f"a failure here means the resource name or verb is wrong"
+                )
+            else:
+                with pytest.raises(KubectlException):
+                    fn(test_namespace)
+
+    def test_is_crd_absent_error_rejects_a_real_forbidden_shape(self):
+        """The MAJOR-1 discriminator must not classify Forbidden as 'no CRD'.
+
+        Kept here (not only in the unit suite) because the string it matches
+        comes from kubectl itself — if kubectl ever changes its wording, the
+        unit test keeps passing against its own fixture while production
+        silently starts folding Forbidden into 404 again.
+        """
+        forbidden = KubectlException(
+            message="forbidden", command="kubectl get virtualmachines",
+            stderr=(
+                'Error from server (Forbidden): virtualmachines.kubevirt.io is '
+                'forbidden: User "system:serviceaccount:paas-system:'
+                'paas-operator" cannot list resource "virtualmachines" in API '
+                'group "kubevirt.io"'
+            ),
+        )
+        assert KubernetesService.is_crd_absent_error(forbidden) is False
+
+
 class TestVirtualMachineLifecycle:
     """Happy paths against real KubeVirt objects (skipped on docker-desktop)."""
 
     def test_patch_run_strategy_round_trip(self, k8s, test_namespace):
+        _skip_or_fail("virtualmachines.kubevirt.io", "KubeVirt")
         """Halted → Always → Halted against a real VM object.
 
         Uses a VM that is never started (runStrategy Halted from birth, no
@@ -208,11 +309,11 @@ class TestVirtualMachineLifecycle:
             )
 
 
-@requires_cdi
 class TestDataVolumeOrphanLabeling:
     """DataVolume orphan-stamp path against real CDI objects."""
 
     def test_list_and_label_datavolumes(self, k8s, test_namespace):
+        _skip_or_fail("datavolumes.cdi.kubevirt.io", "CDI")
         dv_name = "itest-dv"
         manifest = {
             "apiVersion": "cdi.kubevirt.io/v1beta1",

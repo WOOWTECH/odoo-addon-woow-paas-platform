@@ -302,23 +302,50 @@ class ReleaseStatusResponse(BaseModel):
         None, description="Error message if pod retrieval failed"
     )
     # ---- #423 W4.2: VM-type workloads (opt-in via ?include_vm=true) --------
-    # Default [] (not None) so existing clients that ignore these fields see
-    # no behaviour change, and VM-aware clients can treat "empty" uniformly
-    # regardless of whether they asked for it.
-    vmis: List[VmiInfo] = Field(
-        default_factory=list,
-        description="KubeVirt VMIs for this release (only populated when include_vm=true)",
+    # ``None`` means NOT QUERIED; ``[]`` means queried and genuinely empty.
+    # The distinction is load-bearing: the platform is fail-CLOSED on VM
+    # readiness, so a caller that forgets ``include_vm=true`` would otherwise
+    # see the same empty list as "still importing" and park the service in
+    # `deploying` forever. With None, that bug is diagnosable (and
+    # ``vm_included`` below makes it assertable).
+    vm_included: bool = Field(
+        default=False,
+        description=(
+            "Echo of the include_vm request flag. False means the VM fields "
+            "were never queried — do NOT interpret their emptiness as 'no VM'."
+        ),
     )
-    datavolumes: List[DataVolumeInfo] = Field(
-        default_factory=list,
-        description="CDI DataVolumes for this release (only populated when include_vm=true)",
+    vmis: Optional[List[VmiInfo]] = Field(
+        default=None,
+        description=(
+            "KubeVirt VMIs for this release. None = not queried "
+            "(include_vm was false); [] = queried, none exist."
+        ),
     )
-    vm_retrieval_error: Optional[str] = Field(
+    datavolumes: Optional[List[DataVolumeInfo]] = Field(
+        default=None,
+        description=(
+            "CDI DataVolumes for this release. None = not queried; "
+            "[] = queried, none exist."
+        ),
+    )
+    # Split per resource kind (MINOR-1): a DataVolume hiccup must not make an
+    # explicitly-Ready VMI look untrustworthy. W5a can then be fail-closed on
+    # vmi_retrieval_error alone while treating a DataVolume error as "progress
+    # bar unavailable" rather than "readiness unknown".
+    vmi_retrieval_error: Optional[str] = Field(
         None,
         description=(
-            "Error message if VMI/DataVolume retrieval failed. Mirrors "
-            "pod_retrieval_error: the caller MUST NOT read empty vmis as "
-            "'no VM' while this is set — see the fail-closed rule in design §4.1."
+            "Error message if VMI retrieval failed. Mirrors pod_retrieval_error: "
+            "the caller MUST NOT read an empty vmis list as 'no VM' while this "
+            "is set — see the fail-closed rule in design §4.1."
+        ),
+    )
+    datavolume_retrieval_error: Optional[str] = Field(
+        None,
+        description=(
+            "Error message if DataVolume retrieval failed. Non-fatal for "
+            "readiness — it only costs the import progress indicator."
         ),
     )
 

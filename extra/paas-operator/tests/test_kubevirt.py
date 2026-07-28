@@ -181,6 +181,133 @@ class TestGetDataVolumes:
         with pytest.raises(KubectlException):
             k8s.get_datavolumes("paas-ws-test")
 
+    @patch("src.services.helm.subprocess.run")
+    def test_passes_label_selector(self, mock_run, k8s):
+        mock_run.return_value = _completed(json.dumps({"items": []}))
+
+        k8s.get_datavolumes(
+            "paas-ws-test", label_selector="app.kubernetes.io/instance=svc-abc",
+        )
+
+        args = mock_run.call_args[0][0]
+        assert "--selector" in args
+        assert "app.kubernetes.io/instance=svc-abc" in args
+        assert "datavolumes" in args
+
+    def test_rejects_out_of_prefix_namespace(self, k8s):
+        with pytest.raises(ValueError):
+            k8s.get_datavolumes("kube-system")
+
+
+class TestGetVirtualMachines:
+    """BLOCKER-1: this getter had ZERO executed lines before these tests.
+
+    It is the core of the scale_release VM branch — suspend/resume decides
+    "is this a VM release?" entirely from its return value — so it was the
+    single least-tested, most load-bearing function in the change.
+    """
+
+    @patch("src.services.helm.subprocess.run")
+    def test_parses_name_namespace_and_run_strategy(self, mock_run, k8s):
+        mock_run.return_value = _completed(json.dumps({
+            "items": [{
+                "metadata": {"name": "svc-haos"},
+                "spec": {"runStrategy": "Always"},
+            }]
+        }))
+
+        vms = k8s.get_virtualmachines("paas-ws-test")
+
+        assert len(vms) == 1
+        assert vms[0]["name"] == "svc-haos"
+        assert vms[0]["namespace"] == "paas-ws-test"
+        assert vms[0]["run_strategy"] == "Always"
+
+    @patch("src.services.helm.subprocess.run")
+    def test_run_strategy_absent_is_none_not_crash(self, mock_run, k8s):
+        """A VM using the legacy spec.running field has no runStrategy."""
+        mock_run.return_value = _completed(json.dumps({
+            "items": [{"metadata": {"name": "svc-haos"}, "spec": {"running": False}}]
+        }))
+
+        assert k8s.get_virtualmachines("paas-ws-test")[0]["run_strategy"] is None
+
+    @patch("src.services.helm.subprocess.run")
+    def test_multiple_vms(self, mock_run, k8s):
+        mock_run.return_value = _completed(json.dumps({
+            "items": [
+                {"metadata": {"name": "vm-a"}, "spec": {"runStrategy": "Halted"}},
+                {"metadata": {"name": "vm-b"}, "spec": {"runStrategy": "Always"}},
+            ]
+        }))
+
+        vms = k8s.get_virtualmachines("paas-ws-test")
+
+        assert [v["name"] for v in vms] == ["vm-a", "vm-b"]
+        assert [v["run_strategy"] for v in vms] == ["Halted", "Always"]
+
+    @patch("src.services.helm.subprocess.run")
+    def test_empty_list_when_no_vms(self, mock_run, k8s):
+        mock_run.return_value = _completed(json.dumps({"items": []}))
+
+        assert k8s.get_virtualmachines("paas-ws-test") == []
+
+    @patch("src.services.helm.subprocess.run")
+    def test_passes_label_selector(self, mock_run, k8s):
+        mock_run.return_value = _completed(json.dumps({"items": []}))
+
+        k8s.get_virtualmachines(
+            "paas-ws-test", label_selector="app.kubernetes.io/instance=svc-abc",
+        )
+
+        args = mock_run.call_args[0][0]
+        assert "--selector" in args
+        assert "app.kubernetes.io/instance=svc-abc" in args
+        assert "virtualmachines" in args
+
+    @patch("src.services.helm.subprocess.run")
+    def test_missing_crd_raises(self, mock_run, k8s):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="",
+            stderr='error: the server doesn\'t have a resource type "virtualmachines"',
+        )
+
+        with pytest.raises(KubectlException):
+            k8s.get_virtualmachines("paas-ws-test")
+
+    def test_rejects_out_of_prefix_namespace(self, k8s):
+        with pytest.raises(ValueError):
+            k8s.get_virtualmachines("kube-system")
+
+
+class TestIsCrdAbsentError:
+    """MAJOR-1: the discriminator that keeps Forbidden out of the 404 path."""
+
+    @pytest.mark.parametrize("stderr", [
+        'error: the server doesn\'t have a resource type "virtualmachines"',
+        "error: the server could not find the requested resource",
+        'the server doesn\'t have a resource type "datavolumes"',
+    ])
+    def test_recognises_crd_absent(self, stderr):
+        exc = KubectlException(message="m", command="c", stderr=stderr)
+        assert KubernetesService.is_crd_absent_error(exc) is True
+
+    @pytest.mark.parametrize("stderr", [
+        'Error from server (Forbidden): virtualmachines.kubevirt.io is '
+        'forbidden: User "system:serviceaccount:paas-system:paas-operator" '
+        'cannot list resource "virtualmachines"',
+        "Unable to connect to the server: dial tcp: i/o timeout",
+        "kubectl command timed out after 30s",
+        "",
+    ])
+    def test_everything_else_is_not_crd_absent(self, stderr):
+        """🔴 Forbidden is the live risk: KubeVirt CRDs are already installed
+        on woow-k3s while the operator ClusterRole still lacks the
+        kubevirt.io apiGroup. Misclassifying this as 'no CRD' is exactly how
+        an unpaid VM keeps running."""
+        exc = KubectlException(message="m", command="c", stderr=stderr)
+        assert KubernetesService.is_crd_absent_error(exc) is False
+
 
 # ===================== W4.3  patch_vm_run_strategy =====================
 
@@ -279,6 +406,60 @@ class TestLabelDataVolumes:
         assert k8s.list_datavolumes("paas-ws-test") == []
 
 
+class TestHasDataVolumeCrd:
+    """MINOR-4: gate the teardown lookup so its failure log stays meaningful."""
+
+    @patch("src.services.helm.subprocess.run")
+    def test_true_when_crd_present_and_cached(self, mock_run, k8s):
+        mock_run.return_value = _completed("customresourcedefinition.../datavolumes\n")
+
+        assert k8s.has_datavolume_crd() is True
+        assert k8s.has_datavolume_crd() is True
+        # Cached — CRD registration does not change within a process lifetime.
+        assert mock_run.call_count == 1
+
+    @patch("src.services.helm.subprocess.run")
+    def test_false_only_on_definitive_not_found(self, mock_run, k8s):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="",
+            stderr='Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "datavolumes.cdi.kubevirt.io" not found',
+        )
+
+        assert k8s.has_datavolume_crd() is False
+
+    @patch("src.services.helm.subprocess.run")
+    def test_forbidden_assumes_present(self, mock_run, k8s):
+        """Unsure → do the lookup anyway.
+
+        A skipped orphan stamp leaks a tenant's disk forever; a redundant
+        kubectl costs milliseconds. The asymmetry decides the default.
+        """
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="",
+            stderr="Error from server (Forbidden): ...",
+        )
+
+        assert k8s.has_datavolume_crd() is True
+
+    @patch("src.api.releases.k8s_service")
+    @patch("src.api.releases.helm_service")
+    @patch("src.api.releases.cloudflare_service")
+    def test_delete_skips_datavolume_lookup_without_cdi(
+        self, mock_cf, mock_helm, mock_k8s, client
+    ):
+        from unittest.mock import AsyncMock
+
+        mock_helm.uninstall.return_value = {"message": "Release uninstalled"}
+        mock_k8s.list_pvcs.return_value = []
+        mock_k8s.has_datavolume_crd.return_value = False
+        mock_cf.delete_route = AsyncMock(return_value=True)
+
+        response = client.delete("/api/releases/paas-ws-test/svc-abc")
+
+        assert response.status_code == 200
+        mock_k8s.list_datavolumes.assert_not_called()
+
+
 # ===================== W4.2  status API include_vm =====================
 
 
@@ -295,9 +476,12 @@ class TestReleaseStatusIncludeVm:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["vmis"] == []
-        assert body["datavolumes"] == []
-        assert body["vm_retrieval_error"] is None
+        # None (not []) = "not queried" — MINOR-2: keeps a forgotten
+        # include_vm flag diagnosable instead of silently fail-closed.
+        assert body["vm_included"] is False
+        assert body["vmis"] is None
+        assert body["datavolumes"] is None
+        assert body["vmi_retrieval_error"] is None
         mock_k8s.get_vmis.assert_not_called()
         mock_k8s.get_datavolumes.assert_not_called()
 
@@ -321,6 +505,7 @@ class TestReleaseStatusIncludeVm:
 
         assert response.status_code == 200
         body = response.json()
+        assert body["vm_included"] is True
         assert body["vmis"][0]["ready"] is True
         assert body["datavolumes"][0]["progress"] == "100.0%"
         # Scoped to this release only — a workspace ns is shared (#281).
@@ -352,8 +537,8 @@ class TestReleaseStatusIncludeVm:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["vmis"] == []
-        assert body["vm_retrieval_error"] is not None
+        assert body["vmis"] is None
+        assert body["vmi_retrieval_error"] is not None
         # The pod half must still be reported — the two lookups are independent.
         assert body["pod_retrieval_error"] is None
 
