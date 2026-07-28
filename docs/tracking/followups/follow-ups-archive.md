@@ -251,3 +251,21 @@
 - **何時**：#324 merge 後獨立處理。
 - **已修**（2026-07-10）：`fix/327-refund-window`（Closes #327）— `_prorata_unused_refund` 視窗改以 `sh_date_of_next_payment` 反推 `[next_payment − cycle_delta, next_payment)`，不碰 `sh_end_date`（上游 auto-expire 交互零影響）；三退點呼叫者（CS/SH/SA 刪除 + 4 換 plan 入口）經 SSOT 自動受惠。plan：`docs/plans/2026-Q3/2026-07-10-327-refund-window-next-payment.md`。
 
+
+
+## F-449-1 — hermes-agent／open-design 密碼重設的 stg 真機 E2E ✅ RESOLVED (2026-07-29)
+
+- **Severity**: medium（功能正確性；修的是「每次 reset 必 500」的租戶可見缺陷，但真機未驗）
+- **Origin**: #449 密碼載體分流 PR #455（2026-07-28，`fix/449-reset-password-strategy`）
+- **Location**: `extra/paas-operator/src/api/releases.py`（`_reset_via_helm_secret`）＋ `extra/paas-operator/tests/integration/test_reset_config_carrier.py`
+- **問題**：本 PR 的驗收範圍是「程式碼＋單元＋integration tests」（派工明訂）。integration 已是真 helm + 真 kubectl，但用的是**本地合成的最小 chart**（兩顆 Deployment ＋ chart 自管 Secret ＋刻意省略 `checksum/secret`），不是真 chart／真 image。因此下列都還沒有真機證據：
+  - 真 chart 的 `authproxy-init` initContainer 重算 htpasswd 後，nginx basic-auth 是否確實換成新密碼
+  - dashboard 的**表單登入**（與 basic-auth 形狀不同的第二個入口）與 webui 是否同步吃到新值
+  - Recreate 策略 + 共用 RWO PVC 下，daemon／console 兩顆並行滾動的實際耗時是否撐得住平台 120s client 預算（超時 ⇒ 平台不存新密碼、租戶得重按，見 `cloud_service.py` C11 註解）
+  - open-design 的重設在本 PR 之前同樣是壞的（同根因），現在一併修好但**從無 stg 實測紀錄可對照**
+- **建議落點**：operator image 發版到 stg 後，對 hermes-agent 與 open-design 各建一台 CS，按下 Reset，驗四入口（webui／console／dashboard／API）皆換成新密碼、舊密碼失效、pod 未 CrashLoop、operator log 無 rollback 痕跡；順帶記錄兩顆 Deployment 滾完的實際牆鐘時間。
+- **何時**：operator image 發版後（與 F-449-2 的發版順序綁在一起）
+- **對誰**：platform / 發版執行者。Refs #449 #424
+- **✅ 已完成（2026-07-29）**：報告 [`../test-reports/449-password-carrier-stg-e2e-2026-07-29.md`](../test-reports/449-password-carrier-stg-e2e-2026-07-29.md)。stg operator `acefe08` ＋ 平台 `paas-odoo-stg:20260728.1632`（develop `acefe088`）。四個待證項全部有真機結論：htpasswd 重算 ✅、dashboard 表單登入與 webui API 同步換新 ✅、open-design 三入口換新 ✅；**兩顆並行滾動的牆鐘 = hermes 49.9s／open-design 76.7s（image cache 命中時）**，operator log `rollback` 計數 0、pod RESTARTS 0。`_set_admin_password_secret` 的 create（svc60，DB 原無列）與 write（svc50）兩分支都覆蓋到。
+- **⚠️ 衍生兩條新 follow-up**：兩台服務**第一次 reset 都逾時**（120.6s／121.0s），差別只在 image 是否已 cache 在該節點（cache miss 時光 pull 954MB image 就 70s，加 RWO PVC detach/attach 19–26s）→ **F-449-3**；以及前台 Reset 按鈕因 slug 白名單未同步、**租戶按不到這個修好的功能** → **F-449-4**。失敗路徑經實測完全 fail-safe（Secret 回退、DB 不存、四入口舊密碼仍通、重按確實收斂）。
+

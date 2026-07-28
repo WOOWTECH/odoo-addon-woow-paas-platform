@@ -37,8 +37,9 @@
 | skill bundle 上傳缺結構驗證（2026-06-06 PR #153 stg 驗證） | F-SBC-1 | **F-SBC-1**（medium/data-integrity，gitea **#154**）`skill_upload_wizard.action_upload` 只做 size cap + sha256（「Odoo never parses the bundle」by design）→ 不合 runtime 契約的 bundle 照收，直到 pod 內**首次 invoke** 才 tool_error（錯誤浮現點離上傳極遠難歸因）。stg seed `test-echo 0.1.0` 三重違規實證：tar 包 wrapper dir（SKILL.md 不在 root）+ 夾帶 macOS `._SKILL.md`（打包未設 `COPYFILE_DISABLE=1`）+ frontmatter 缺必填 `name` + 無 script——**stg 上 skill 在 2026-06-06 前從未成功執行過**；hello-world 0.1.0 同家族（entrypoint mismatch，`hello-world-skill-entrypoint-mismatch`）。修法：① wizard 上傳時 parse tar fail-fast（root SKILL.md + frontmatter name/description 必填；entrypoint 檔存在 / AppleDouble 為 warning 級）——契約 SSOT 在 paas-agent-runtime `runtime/skills/{cache,loader}.py`，驗證規則演進需 lock-step ② stg 資料修復：重傳合規 system-scope bundle（合規參考件 = project 27 'PR153-skill-verify' 的 user-scope `test-echo 0.1.2`，stg 首個全鏈路通過的 skill）。owner paas-platform（wizard）+ stg data。**[2026-06-07 已修 — PR #157 + stg 資料修復完成]** ① wizard 結構驗證（fail-fast）已實作，**真 Odoo sandbox `TestSkillUploadWizard` 28 測試全綠**（PR **#157**，含對抗式 review 三鏡頭抓到的 3 must-fix：`getmembers()` eager 物化 DoS → streaming 先擋後讀〔200k-member 炸彈 89x 快/63x 省記憶體〕、special-file〔FIFO/device〕false-negative 硬擋、stdlib 扁平解析 → `yaml.safe_load` 精確鏡像 runtime〔tab 縮排/未閉合引號等 pod 端會炸的文法錯上傳當下即擋〕；`__manifest__.py` 宣告 `external_dependencies: yaml`）。② stg 資料修復（odoo shell 換 attachment，Eugene 授權）：違規 `test-echo 0.1.0` 的 **system(skill id=4，0 binding)** + **user(id=7，綁 odd2 template)** 兩筆 bundle 已替換成合規 bundle（sha `fe2bf1ed`、validator CLEAN、重新匯出確認）。**三項精確化發現**（validator 實測）：(a) **hello-world 0.1.0 (system id=1) 結構其實合規**（SKILL.md root + 完整 frontmatter + scripts/main.py），其 entrypoint mismatch 屬 runtime `paas-agent-runtime#14`、非 bundle 結構違規 → **不需資料修復**（上方「hello-world 0.1.0 同家族」敘述據此更正）；(b) system test-echo (id=4) 違規但 0 binding〔孤兒〕；(c) 真正被綁定使用的違規是 user test-echo (id=7, odd2 template)。**pod 端到端執行驗證（fetch→extract→subprocess exit 0）待 F-SKT-1 #155 stopgap 部署 stg 後**——當前所有 stg agent pod 活超 1h、token 全過期（正是 #155 現象），自簽 token serve 驗證受 classifier 安全邊界擋下，完整串流走 #155 部署後 verify session（「單層修復不可觀測」紀律）。 |
 | #368 選擇器重設計 | F-368-1 | ChangePlanModal「下週期生效」提示待 #342 落地後移除（low/UX-honesty；隨 #342 change-plan 生效 re-apply 一起清）|
 | #424① Hermes Agent 上架 | F-424-1 | 基礎設施 sidecar image（`authProxy.image` 的 nginx-unprivileged）只釘浮動 tag 未釘 digest —— 是否把非 jcr-prod image 也納入「全雙釘」鐵律屬跨 repo 政策題（low；本輪照 chart 現況，與 open-design 先例一致）|
-| #449 密碼載體分流 | F-449-1 | hermes-agent／open-design 密碼重設的 **stg 真機 E2E 未做**（medium；PR #455 驗收＝程式碼＋單元＋integration，真機待 operator image 發版後執行）|
-| #449 密碼載體分流 | F-449-2 | **發版順序硬約束＝operator 先發、平台後發**（medium；PR #455 橫跨兩條發版線，發版單須按目錄分流）|
+| #449 密碼載體分流 | F-449-2 | **發版順序硬約束＝operator 先發、平台後發**（medium；PR #455 橫跨兩條發版線，發版單須按目錄分流。stg 已按此順序完成，prod 待辦）|
+| #449 密碼載體分流 | F-449-3 | reset 的 **120s 預算對 Recreate＋RWO PVC＋大 image 是邊際的**（medium；stg 實測兩台第一次都逾時、第二次都成功，差別只在 image cache）|
+| #449 密碼載體分流 | F-449-4 | 🔴 **前台 Reset 按鈕的 slug 白名單未同步 `has_admin_gui`**（high；`has_admin_gui=True` 的 8 個 template 有 5 個按不到按鈕，含 #449 剛修好的兩個＝修復對租戶不可達）|
 
 ## Index
 
@@ -121,7 +122,9 @@
 | F-SDS-1 | high | reviewer/security (PR #96 stg-deploy 複查) | — | sibling model `mcp_server` 缺 scope-flip `write()` guard — 非 admin `base.group_user` 可 raw ORM `write({'scope':'system','project_id':False})` 把自己 user-scope server flip 成平台公開（跨租戶載入），ir.rule 用 pre-write 狀態判定擋不住；endpoint 因 writable-field allowlist（`paas.py:1393`）+ create 硬編 scope='user' 安全。skeptic `refuted:false` 高信心。連帶查 `mcp_tool` 是否能 re-point 到 system-scope server | ✅ **RESOLVED**（PR #99 → develop）— `mcp_server.write()`（`mcp_server.py:134`）+ `mcp_tool.write()`（re-point guard，連帶查兌現）鏡像 `skill.py:150-167`；`test_mcp_scope_flip_guard.py` 13 test（ORM `with_user()` 負向 full-flip + 單欄位變體 + no-op 放行 + admin/sudo boundary + mcp_tool re-point〔system + 跨租戶 user 注入〕+ HttpCase endpoint allowlist 對等）**紅綠驗證**（RED：4 安全測試 `AccessError not raised`→GREEN 13/13）；完整套件 **782 test 收集、零 mcp/skill 回歸**。**完整性**：grep 確認 skill+mcp_server 為僅有的 2 個 `scope`(system/user)+`project_id` sibling，皆已 guard。pattern [[scope-flip-write-guard-not-ir-rule]] 的 sibling 兌現 |
 | F-SDS-2 | low | reviewer (PR #96 stg-deploy finding #1) | — | `src/__init__.py:4` 無條件 `from . import tests` → production 每次啟動 import `tests/__init__.py`（83 modules + odoo.tests.common），stg 報告抓到非阻斷啟動 ERROR/告警。Odoo 18 test loader 自己 import `tests` package（`_get_tests_modules`），core addon（web/project/mail）根 `__init__.py` 皆 0 個 test import，移除不影響 `--test-enable` 收集（已驗證 83 modules 仍 discover）| ✅ **RESOLVED**（PR #99 → develop）— 刪 `src/__init__.py:4`（未動 `src/tests/__init__.py`）；docker-desktop sandbox 完整套件 `-u woow_paas_platform --test-enable` 實測 **782 test 仍全數收集**、模組正常載入 |
 | F-SKU-1 | low | manual stg 探索 (2026-05-31) | — | Skills list view（`action_skill` / `/odoo/action-542`）skill 上傳入口在空狀態觸不到：`create="false"`（`skill_views.xml:8`）無 New 鈕 + upload wizard 走 `binding_view_types="list,form"` contextual action，Odoo 18 只掛進「選取記錄後」的 ⚙ Actions 選單（breadcrumb 齒輪僅 Export All）→ 列表為空時無法上傳第一個 skill（只能 agent-runtime API），nocontent help「No skills yet」誤導。stg playwright-cli 實測確認。| ✅ **RESOLVED**（PR #103 → develop，branch `fix/F-SKU-1`）— `view_skill_list` 加 `<header>` + `display="always"` 的「Upload Skill」按鈕（`type="object"` → `Skill.action_open_upload_wizard()` 回傳 wizard `act_window` dict）+ 改寫 nocontent help；`type="object"` 對齊 repo 既有 working precedent（`cloud_odoo_addon_views.xml:58-59`）避 list arch 同檔 action xmlid forward-ref 風險；regression test 補於 `test_skill_admin_views.py`（display='always' 存在性 + 方法 modal action）；靜態 + 4 面向對抗式 review 全 pass + **runtime 驗證通過**（docker-desktop sandbox 真 Odoo 18，`TestSkillAdminViews` 4 test 0 failed/0 error；全套件其餘 12 fail/error 為無關子系統環境敏感 baseline，正交）。issue **#102** |
-| F-449-1 | medium | #449 密碼載體分流 PR #455 (2026-07-28) | — | hermes-agent 與 open-design 的密碼重設**只驗到 integration 層**（真 helm + 真 kubectl，但用的是本地合成的最小 chart，不是真 chart／真 image）。真 chart 的 initContainer htpasswd 重算、dashboard 表單登入與 webui basic-auth 是否都吃到新密碼、以及 Recreate + RWO 下兩顆 Deployment 並行滾動的實際耗時是否撐得住平台 120s client 預算，都還沒有真機證據。| open — 待 operator image 發版後在 stg 跑：對 hermes-agent 與 open-design 各建一台 CS，按 reset，驗四入口（webui／console／dashboard／API）皆換成新密碼、舊密碼失效、pod 未 CrashLoop。Refs #449 #424 |
+| F-449-1 | medium | #449 密碼載體分流 PR #455 (2026-07-28) | — | hermes-agent 與 open-design 的密碼重設**只驗到 integration 層**（真 helm + 真 kubectl，但用的是本地合成的最小 chart，不是真 chart／真 image）。| **✅ RESOLVED (2026-07-29)** — stg 真機 E2E 完成，核心驗收 PASS（四入口／三入口皆換新、舊密碼全 401、rollback 痕跡 0、RESTARTS 0）。報告 [`../test-reports/449-password-carrier-stg-e2e-2026-07-29.md`](../test-reports/449-password-carrier-stg-e2e-2026-07-29.md)；全文移至 archive。衍生 F-449-3 / F-449-4。Refs #449 #424 |
+| F-449-3 | medium | #449 stg E2E (2026-07-29) | — | reset 的 **120s client 預算對 `Recreate` ＋ RWO PVC ＋ 大 image 的 chart 是邊際的**。stg 實測：hermes-agent 與 open-design **第一次 reset 都逾時**（120.6s／121.0s），第二次都成功（49.9s／76.7s），唯一差別是 image 有沒有 cache 在被排到的節點上——cache miss 時光 pull `hermes-agent` 954MB 就要 **1m9.963s**，加 RWO PVC detach/attach 19s（open-design 兩顆 PVC 序列 26s）。落到哪個節點由排程器決定，租戶按 Reset 時無從預期 ⇒ **逾時是機率事件**。失敗路徑 fail-safe（Secret 回退、DB 不存、舊密碼仍可登入、重按會收斂），但每次冷 cache 都要租戶按兩次。| open — 建議把 operator 的 rollout 等待與平台 client 預算解耦（reset 改非同步 + 狀態輪詢），或至少讓平台預算 > operator 最壞路徑（`helm upgrade` 300s + 2×`rollout_status` 120s）。Refs #449 |
+| F-449-4 | **high** | #449 stg E2E (2026-07-29) | — | 🔴 **前台 Reset 按鈕的判準與後端不一致，#449 的修復對租戶不可達**。前端 `ServiceDetailPage.js:174` `isMcpAdminService` 用硬編碼 slug 白名單 `["mcp-odoo","mcp-odoo-manage","mcp-n8n"]`；後端 `controllers/paas.py:1293` 用 `template.has_admin_gui`，且該處有 **#357 C01** 註解明文說明為何不能用 slug allowlist（「兩端不一致＝密碼永不生效的根因」）——controller 已遷移、**前端沒跟上**。stg live DB 實查：`has_admin_gui=True` 共 8 筆，**5 筆按不到按鈕**（`mcp-k8s`／`mcp-vk`／`mcp-opendesign` 自 #375 上架起就漏、`open-design`／`hermes-agent` 為 #449 剛修好的）。缺口**早於 #449**。修法非改一行 if：live payload 實證 `template` 物件只有 `id/name/slug/category/helm_value_specs`，`has_admin_gui` 從未進前端。| open — 需雙邊改：template payload 補 `has_admin_gui` ＋ 前端 gate 改讀該欄（並比照 #357 C01 加守線，避免再長出第三個判準）。優先度高於 F-449-3——修復不可達等於沒修。Refs #449 #375 #357 |
 | F-449-2 | medium | #449 密碼載體分流 PR #455 (2026-07-28) | — | **發版順序是硬約束，不是建議**：PR #455 橫跨兩條發版線（`extra/paas-operator/**` → operator image、`src/**` → paas-odoo image），必須 **operator 先發、平台後發**。operator 端 `admin_password_carrier` 預設 `config_json`＝既有行為，舊平台不帶該欄照舊跑（安全）；反向（新平台 + 舊 operator）舊 operator 會忽略該欄、hermes-agent reset 仍 500——不比修復前更糟，但也沒修好，且外觀上「PR 已 merge 卻沒修好」極易被誤判成回歸。| open — 發版單按目錄分流並記錄兩次發版的先後；平台側發版前先確認 prod/stg operator image 已含本 PR 的 commit（`5221aae4`）。Refs #449 #448 |
 | F-424-1 | low | #424① seed 對 chart 逐鍵核對 (2026-07-28) | — | 基礎設施 sidecar image 只釘 tag、未釘 digest：`cloud_app_hermes_agent` 的 `authProxy.image` 依 chart 要求重申為 `nginxinc/nginx-unprivileged:1.27-alpine`，而 `1.27-alpine` 是會隨 patch 版移動的浮動 tag（open-design 同款）。平台「零 `:latest`／全雙釘」鐵律目前只實質涵蓋 jcr-prod 產品 image；要不要把非 jcr-prod 的基礎設施 image 也升級成 digest 雙釘＝**跨 repo 政策題**（charts + 各 seed 需 lock-step，且 digest 釘死後 registry 鏡像端 rehost 會拉不到）。守線現況：`test_every_seeded_image_is_pinned` 已依 registry 分兩級（產品 image 必 `tag@sha256`；基礎設施 image 非空且非 `latest`），政策若升級，改該分級即可一次收斂。| open — 本輪照 chart 現況（leader 2026-07-28 裁決，與 open-design 先例一致，不 block #424①）。Refs #424 |
 
@@ -1591,20 +1594,6 @@ addons_path 缺第三方相依（ai_base_gt 等在 `paas-odoo-ci/addons`）而�
 - **建議落點**：#342 方案 A（change plan 觸發生效 re-apply）落地後，移除該 notice（xml `o_woow_change_plan__notice` div ＋ scss `&__notice` block ＋ xml 內 `TODO(Refs #342)` 註解）——屆時改方案即時生效，「下週期生效」提示反成誤導。
 - **何時**：#342 落地後
 
-## F-449-1 — hermes-agent／open-design 密碼重設的 stg 真機 E2E 待補（隨 operator image 發版）
-
-- **Severity**: medium（功能正確性；修的是「每次 reset 必 500」的租戶可見缺陷，但真機未驗）
-- **Origin**: #449 密碼載體分流 PR #455（2026-07-28，`fix/449-reset-password-strategy`）
-- **Location**: `extra/paas-operator/src/api/releases.py`（`_reset_via_helm_secret`）＋ `extra/paas-operator/tests/integration/test_reset_config_carrier.py`
-- **問題**：本 PR 的驗收範圍是「程式碼＋單元＋integration tests」（派工明訂）。integration 已是真 helm + 真 kubectl，但用的是**本地合成的最小 chart**（兩顆 Deployment ＋ chart 自管 Secret ＋刻意省略 `checksum/secret`），不是真 chart／真 image。因此下列都還沒有真機證據：
-  - 真 chart 的 `authproxy-init` initContainer 重算 htpasswd 後，nginx basic-auth 是否確實換成新密碼
-  - dashboard 的**表單登入**（與 basic-auth 形狀不同的第二個入口）與 webui 是否同步吃到新值
-  - Recreate 策略 + 共用 RWO PVC 下，daemon／console 兩顆並行滾動的實際耗時是否撐得住平台 120s client 預算（超時 ⇒ 平台不存新密碼、租戶得重按，見 `cloud_service.py` C11 註解）
-  - open-design 的重設在本 PR 之前同樣是壞的（同根因），現在一併修好但**從無 stg 實測紀錄可對照**
-- **建議落點**：operator image 發版到 stg 後，對 hermes-agent 與 open-design 各建一台 CS，按下 Reset，驗四入口（webui／console／dashboard／API）皆換成新密碼、舊密碼失效、pod 未 CrashLoop、operator log 無 rollback 痕跡；順帶記錄兩顆 Deployment 滾完的實際牆鐘時間。
-- **何時**：operator image 發版後（與 F-449-2 的發版順序綁在一起）
-- **對誰**：platform / 發版執行者。Refs #449 #424
-
 ## F-449-2 — #449 發版順序硬約束：operator 先發、平台後發（橫跨兩條發版線）
 
 - **Severity**: medium（發版流程；順序錯不會壞掉，但會「看起來沒修好」而被誤判成回歸）
@@ -1617,3 +1606,52 @@ addons_path 缺第三方相依（ai_base_gt 等在 `paas-odoo-ci/addons`）而�
 - **建議落點**：發版單把本 PR 拆成兩列（operator image 一列、paas-odoo image 一列）並標註先後；平台側發版前先實查 prod／stg 的 operator image 是否已含 commit `5221aae4`（不要只看 issue／PR 狀態）。
 - **何時**：下次 operator bump 與其後的平台發版
 - **對誰**：platform / 發版執行者。兩條發版線的入口分別是 `.claude/commands/woow/deploy.md`（paas-odoo image，讀 `src/__manifest__.py` 版號打 `v{version}` tag）與 `.claude/skills/build-operator/SKILL.md`（operator image，`operator-v*` tag → workflow_dispatch）。Refs #449 #448
+- **stg 已按此順序完成（2026-07-29）**：operator `acefe08`（Fleet pin `paas-app-bundle-cd@main` → `paas-operator-stg/values-stg.yaml`）先上，平台 `paas-odoo-stg:20260728.1632` 後上，順序正確、E2E 通過（見 F-449-1 archive 與 [`../test-reports/449-password-carrier-stg-e2e-2026-07-29.md`](../test-reports/449-password-carrier-stg-e2e-2026-07-29.md)）。**prod 兩線都還沒發**（`values-prod.yaml` 仍 `8c11a77`），同一順序約束原封不動適用。
+
+## F-449-3 — reset 的 120s client 預算對 Recreate ＋ RWO PVC ＋ 大 image 是邊際的
+
+- **Severity**: medium（UX；失敗 fail-safe，但租戶要按兩次）
+- **Origin**: #449 stg 真機 E2E（2026-07-29）
+- **Location**: `src/services/paas_operator.py`（`HELM_OPERATION_TIMEOUT = 120`）＋ `extra/paas-operator/src/services/helm.py`（`rollout_status_deployment` 預設 `timeout_seconds=120`）
+- **實測數據**（stg，同一組服務各按兩次）：
+
+  | | hermes-agent (svc60) | open-design (svc50) |
+  | --- | --- | --- |
+  | 第一次（image cache miss） | **120.6s 逾時** | **121.0s 逾時** |
+  | 第二次（cache hit） | 49.9s ✅ | 76.7s ✅ |
+  | 逾時的時間去向 | PVC detach→attach **19s**、pull `hermes-agent` 954MB **1m9.963s** | 兩顆 PVC 序列 attach **26s**、pull image 未完成 |
+
+- **問題**：`Recreate` ＋ RWO PVC 讓每次 reset 都要走完整的「殺 pod → detach → 重新排程 → attach → 可能跨節點 pull → 啟動」。**落到哪個節點由排程器決定**，租戶按 Reset 時無從預期，所以逾時是機率事件而非確定性失敗——合成 chart 的 integration test（小 image、無 PVC、同節點）永遠測不出來。
+- **不是資料損毀**：補償經實測完全 fail-safe——`helm rollback` 還原 Secret 舊值、平台依 C11 刻意不存新密碼、四入口舊密碼仍可登入、文案正確引導重按，而且**重按確實會收斂**（冪等設計成立）。
+- **建議落點**：擇一或並用 ——（a）reset 改非同步（operator 立即回 accepted、平台輪詢狀態），（b）讓平台 client 預算大於 operator 最壞路徑（`helm upgrade --atomic` 300s ＋ 2×`rollout_status` 120s），（c）縮小 image 或預熱 cache。**不建議只把 120s 調大**——那只是把機率往後推，沒有解掉「兩個獨立 120s 預算彼此不知道對方」的結構問題。
+- **對誰**：platform / operator。Refs #449
+
+## F-449-4 — 🔴 前台 Reset 按鈕的 slug 白名單未同步 `has_admin_gui`，#449 的修復對租戶不可達
+
+- **Severity**: **high**（產品可達性；後端修好但使用者按不到）
+- **Origin**: #449 stg 真機 E2E（2026-07-29）
+- **Location**: `src/static/src/paas/pages/service/ServiceDetailPage.js:174`（`isMcpAdminService`）＋ `ServiceDetailPage.xml:92`（`t-if`）；對照 `src/controllers/paas.py:1293`
+- **問題**：兩端判準不一致 ——
+
+  ```js
+  // 前端（唯一的 Reset 按鈕渲染條件）
+  get isMcpAdminService() {
+      return ["mcp-odoo", "mcp-odoo-manage", "mcp-n8n"].includes(this.service?.template?.slug);
+  }
+  ```
+
+  後端 gate 是 `template.has_admin_gui`，而且那行上方就有 **#357 C01** 註解明文說明為什麼**不能**用 slug allowlist（「原本這裡是 slug allowlist、model 端卻判 mcp_enabled → 兩端不一致…＝密碼永不生效的根因」）。controller 側當初已依該紀律遷移，**前端側沒有跟上**。PR #455 的 model 註解也重申同一條紀律，前端正是它警告的形狀。
+
+- **缺口量化**（stg live DB，`has_admin_gui = true` 全集 8 筆，**5 筆按不到**）：
+
+  | template | chart | 前台按鈕 |
+  | --- | --- | --- |
+  | `mcp-odoo` (6) / `mcp-n8n` (7) / `mcp-odoo-manage` (40) | mcp-server | ✅ |
+  | `mcp-k8s` (42) / `mcp-vk` (43) / `mcp-opendesign` (44) | mcp-server | ❌ 自 #375 上架起就漏 |
+  | `open-design` (45) / `hermes-agent` (46) | open-design / hermes-agent | ❌ #449 剛修好的兩個 |
+
+  缺口**早於 #449**：三型 MCP 走既有 config_json 路、後端 reset 一直是好的，只是上架時沒同步前端白名單。#449 只是讓它變得更顯眼。
+
+- **修法不是改一行 if**：live payload 實證（`POST /api/workspaces/1/services/60`）回傳的 `template` 物件只有 `id / name / slug / category / helm_value_specs`，**沒有 `has_admin_gui`**；全 repo grep 確認該欄位從未出現在 `src/static/`。需雙邊改：payload 補欄位 ＋ 前端 gate 改讀該欄，並比照 #357 C01 加守線避免再長出第三個判準。
+- **驗證方式**：`resetAdminPassword` 在前端只有**一個**呼叫入口（`ServiceDetailPage.xml:95`，由 `:92` 的 `t-if` 控制），已 grep 全 `src/static/src/paas/` 確認無其他路徑。
+- **對誰**：platform frontend + backend。Refs #449 #375 #357
