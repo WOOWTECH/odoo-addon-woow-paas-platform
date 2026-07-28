@@ -234,3 +234,5 @@ from . import test_opendesign_seed_380
 from . import test_ha_paas_seed_woowtech_image
 # feat: #424① Hermes Agent 完整應用上架 seed ＋ dashboardPublicUrl/apiServerCidrs 注入接線
 from . import test_hermes_agent_seed_424
+# fix: #449 admin_password 載體策略（config_json / helm_secret）seed 標記與策略傳遞
+from . import test_admin_password_carrier_449

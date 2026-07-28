@@ -424,26 +424,34 @@ class PaaSOperatorClient:
         version: Optional[str] = None,
         reset_values: bool = False,
         reuse_values: bool = False,
+        admin_password_carrier: str = 'config_json',
     ) -> Dict[str, Any]:
-        """#357 外科式 reset admin_password（read-modify-write config.json + 重啟）。
+        """#357/#449 reset admin_password；載體決定 operator 走哪條路。
 
-        Operator 端點內部 read-modify-write ``/data/config.json`` 只替換
-        ``admin_password`` leaf（保留 connection/tools/mcp_server.env/token_history），
-        helm upgrade 對齊 Secret，rollout_restart_deployment 讓 ConfigStore
-        cache 從新檔讀。比「砍整份 + re-seed」少一次完整 PVC 重置。
+        ``admin_password_carrier``（來自 ``template.admin_password_carrier``）：
+
+        - ``config_json``（mcp-server 家族）：operator read-modify-write
+          ``/data/config.json`` 只替換 ``admin_password`` leaf（保留
+          connection/tools/mcp_server.env/token_history），helm upgrade 對齊
+          Secret，rollout restart 讓 ConfigStore cache 從新檔讀。比「砍整份 +
+          re-seed」少一次完整 PVC 重置。
+        - ``helm_secret``（hermes-agent / open-design）：chart Secret 即權威來源、
+          PVC 內沒有 config.json；operator 走純 helm upgrade ＋ **全部** 同 instance
+          label 的 Deployment rollout restart（那些 chart 的 Deployment 沒有
+          checksum/secret annotation，不重啟＝新密碼靜默不生效）。#449 之前這條路
+          被當成 config_json 處理，對不存在的檔 exec patch → 必 500。
 
         #411: ``reuse_values`` 預設由 True 翻成 False。reset password 路徑帶
         ``template.helm_chart_version``，會夾帶 chart 升版 —— --reuse-values 同
         樣讓 chart 新預設漏掉（與 ``upgrade_release`` 同一 bug class）。平台呼叫端
         傳全量 values ＋ ``reset_values=True``。
 
-        ⚠️ operator 端 ``ReleaseResetConfigRequest`` 目前**未定義** reset_values
-        field（reset-config endpoint 只轉 reuse_values → helm_service.upgrade）。
-        該 field 接通前，``reset_values`` 送過去會被 pydantic 忽略，實際靠
-        ``reuse_values=False`` 讓 operator 端 ``helm upgrade`` 走**無-flag 預設**
-        （chart values.yaml 為 base ≈ reset），已足以終結 reuse bug；operator
-        接通 reset_values 後即升級為顯式 ``--reset-values``。見 decision doc
-        §reset-config 路徑。
+        ``reset_values`` 已於 #449 在 operator 端接通（``ReleaseResetConfigRequest``
+        有此 field，handler 轉給 ``helm_service.upgrade``），送過去會渲染成顯式
+        ``--reset-values``。接通前它被 pydantic 忽略、實際靠 ``reuse_values=False``
+        讓 helm 走「無-flag 預設」（chart values.yaml 為 base ≈ reset）；兩者對
+        helm 3 的語意相同，故對 operator 舊版部署仍向後相容。見 decision doc
+        ``docs/decisions/patterns/helm-reset-values-unified-pipeline.md``。
 
         Args:
             namespace: helm release namespace
@@ -452,12 +460,15 @@ class PaaSOperatorClient:
             sensitive_values: 新敏感值（須含 config.sensitive.admin_password）
             chart: chart ref（如需升版；通常省略）
             version: chart version（如需升版）
-            reset_values: reset 到 chart 預設（平台 reset 路徑用 True；
-                operator 接通後生效，見上方 ⚠️）
+            reset_values: reset 到 chart 預設（平台 reset 路徑用 True）
             reuse_values: 複用既有 release values（危險預設已翻 False）
+            admin_password_carrier: ``config_json`` | ``helm_secret``。舊 operator
+                不認得本欄會靜默忽略（＝退回 config_json 既有行為），故
+                **operator 必須先發版、平台後發版**。
 
         Returns:
-            Operator 回應 dict（含 helm_revision、config_json_patched、helm_upgraded）
+            Operator 回應 dict（含 helm_revision、config_json_patched、helm_upgraded、
+            admin_password_carrier；helm_secret 路另含 restarted_deployments）
 
         Raises:
             PaaSOperatorError: 任一子步失敗
@@ -465,6 +476,7 @@ class PaaSOperatorClient:
         data: Dict[str, Any] = {
             'reset_values': reset_values,
             'reuse_values': reuse_values,
+            'admin_password_carrier': admin_password_carrier,
         }
         if values:
             data['values'] = values

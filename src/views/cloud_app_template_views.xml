@@ -66,6 +66,10 @@
                                  故不放進下方 invisible="not mcp_enabled" 區塊。 -->
                             <group string="Admin GUI（平台供給 admin_password）">
                                 <field name="has_admin_gui"/>
+                                <!-- #449：載體只在有 admin GUI 時才有意義（決定
+                                     reset 走 config.json saga 還是 helm Secret 路）。 -->
+                                <field name="admin_password_carrier"
+                                       invisible="not has_admin_gui"/>
                             </group>
                             <group invisible="not mcp_enabled">
                                 <group string="Sidecar Image">

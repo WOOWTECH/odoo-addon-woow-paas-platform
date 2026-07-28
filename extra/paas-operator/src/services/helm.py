@@ -1784,26 +1784,29 @@ class KubernetesService:
             )
         return pod_name
 
-    def get_deployment_name(self, namespace: str, label_selector: str) -> str:
-        """Resolve a Deployment name from a label selector.
+    def get_deployment_names(
+        self, namespace: str, label_selector: str
+    ) -> List[str]:
+        """Resolve **every** Deployment name matching a label selector.
 
-        A Helm release name is NOT its Deployment name: the chart fullname
-        renders ``{release}-{chart}``. Callers must discover the real name via
-        the ``app.kubernetes.io/instance`` label rather than assume they match.
+        #449: multi-Deployment charts are the norm, not the exception —
+        ``hermes-agent`` and ``open-design`` both render a daemon Deployment
+        plus a console Deployment sharing one ``app.kubernetes.io/instance``
+        label. A password rotation carried by the chart Secret has to restart
+        all of them, so the singular ``get_deployment_name`` (which fails loudly
+        on >1) cannot be the primitive here.
 
         Args:
             namespace: Namespace name
             label_selector: Label selector (e.g. 'app.kubernetes.io/instance=svc-abc')
 
         Returns:
-            Deployment name
+            Deployment names, in the order the API server returned them.
 
         Raises:
-            KubectlException: If no Deployment matches, or if more than one does.
-                An ambiguous selector fails loudly instead of restarting an
-                arbitrary workload — unlike ``get_pod_name``, which takes
-                ``.items[0]`` because a release's pods are interchangeable
-                replicas.
+            KubectlException: If no Deployment matches. Zero matches stays loud:
+                silently restarting nothing would report a rotation that never
+                reached a pod.
         """
         validate_namespace(namespace)
 
@@ -1822,13 +1825,43 @@ class KubernetesService:
                 command=" ".join(args),
                 stderr="",
             )
+        return names
+
+    def get_deployment_name(self, namespace: str, label_selector: str) -> str:
+        """Resolve **exactly one** Deployment name from a label selector.
+
+        A Helm release name is NOT its Deployment name: the chart fullname
+        renders ``{release}-{chart}``. Callers must discover the real name via
+        the ``app.kubernetes.io/instance`` label rather than assume they match.
+
+        Args:
+            namespace: Namespace name
+            label_selector: Label selector (e.g. 'app.kubernetes.io/instance=svc-abc')
+
+        Returns:
+            Deployment name
+
+        Raises:
+            KubectlException: If no Deployment matches, or if more than one does.
+                An ambiguous selector fails loudly instead of restarting an
+                arbitrary workload — unlike ``get_pod_name``, which takes
+                ``.items[0]`` because a release's pods are interchangeable
+                replicas. Callers that legitimately span several Deployments
+                (#449 helm_secret reset) must use ``get_deployment_names``
+                instead of loosening this contract.
+        """
+        names = self.get_deployment_names(namespace, label_selector)
         if len(names) > 1:
             raise KubectlException(
                 message=(
                     f"Ambiguous selector '{label_selector}': expected exactly one "
                     f"deployment, found {len(names)} ({', '.join(names)})"
                 ),
-                command=" ".join(args),
+                command=(
+                    f"get deployments --namespace {namespace} "
+                    f"--selector {label_selector} "
+                    "--output jsonpath={.items[*].metadata.name}"
+                ),
                 stderr="",
             )
         return names[0]
