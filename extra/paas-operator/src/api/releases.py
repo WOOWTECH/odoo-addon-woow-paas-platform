@@ -273,6 +273,34 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
         except Exception as e:
             logger.warning(f"Failed to label orphaned PVCs in {namespace}: {e}")
 
+        # #423 W4.4: VM-type releases keep their disk in a CDI DataVolume that
+        # OWNS the PVC. The chart marks the DataVolume helm.sh/resource-policy:
+        # keep, so `helm uninstall` leaves it behind (verified in the W1 PoC) —
+        # meaning it needs the same orphan stamp as the PVC, and the cleanup
+        # cron must delete THE DATAVOLUME. Deleting the PVC alone makes CDI
+        # recreate it and re-run the whole import (also measured in the PoC).
+        # Separate try block: a DataVolume failure must not mask the PVC
+        # labeling above, and vice versa.
+        try:
+            remaining_dvs = k8s_service.list_datavolumes(
+                namespace, label_selector=f"app.kubernetes.io/instance={name}"
+            )
+            if remaining_dvs:
+                labels = build_orphan_pvc_labels(
+                    name, settings.pvc_grace_period_days
+                )
+                k8s_service.label_datavolumes(namespace, remaining_dvs, labels)
+                logger.info(
+                    f"Labeled {len(remaining_dvs)} orphaned DataVolumes in "
+                    f"{namespace}: {remaining_dvs}"
+                )
+        except Exception as e:
+            # Expected on clusters without CDI — best-effort, but logged so a
+            # genuine failure on a VM-capable cluster is visible.
+            logger.warning(
+                f"Failed to label orphaned DataVolumes in {namespace}: {e}"
+            )
+
         # Delete Cloudflare Tunnel route if exists
         try:
             # Use provided subdomain or fall back to auto-generated
@@ -407,12 +435,24 @@ def get_release_revisions(namespace: str, name: str):
     response_model=ReleaseStatusResponse,
     summary="Get release and pod status",
 )
-def get_release_status(namespace: str, name: str):
+def get_release_status(
+    namespace: str,
+    name: str,
+    include_vm: bool = Query(
+        default=False,
+        description=(
+            "#423 W4.2: also return KubeVirt VMIs and CDI DataVolumes for this "
+            "release. Defaults to false so existing callers are unaffected and "
+            "container-only clusters never pay for the extra CR lookups."
+        ),
+    ),
+):
     """Get detailed status including pod information.
 
     Args:
         namespace: Release namespace
         name: Release name
+        include_vm: Include VMI/DataVolume status (VM-type workloads)
 
     Returns:
         Release and pod status information
@@ -424,22 +464,50 @@ def get_release_status(namespace: str, name: str):
         # Get release info
         release = helm_service.get(namespace, name)
 
+        selector = f"app.kubernetes.io/instance={name}"
+
         # Get pods in namespace (filter by app.kubernetes.io/instance label)
         pods = []
         pod_retrieval_error = None
         try:
             pods = k8s_service.get_pods(
                 namespace=namespace,
-                label_selector=f"app.kubernetes.io/instance={name}",
+                label_selector=selector,
             )
         except Exception as e:
             logger.error(f"Failed to get pods for {namespace}/{name}: {e}")
             pod_retrieval_error = str(e)
 
+        # #423 W4.2: VM-type workloads. A virt-launcher pod being Running does
+        # NOT mean the guest booted, so the platform's readiness gate reads the
+        # VMI instead. The error is surfaced (never swallowed) because the Odoo
+        # side is fail-CLOSED on an empty vmis list: it keeps the service in
+        # `deploying`, and without this field a broken lookup would be
+        # indistinguishable from "still importing".
+        vmis = []
+        datavolumes = []
+        vm_retrieval_error = None
+        if include_vm:
+            try:
+                vmis = k8s_service.get_vmis(
+                    namespace=namespace, label_selector=selector,
+                )
+                datavolumes = k8s_service.get_datavolumes(
+                    namespace=namespace, label_selector=selector,
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to get VMI/DataVolume for {namespace}/{name}: {e}"
+                )
+                vm_retrieval_error = str(e)
+
         return ReleaseStatusResponse(
             release=release,
             pods=pods,
             pod_retrieval_error=pod_retrieval_error,
+            vmis=vmis,
+            datavolumes=datavolumes,
+            vm_retrieval_error=vm_retrieval_error,
         )
 
     except ValueError as e:
@@ -461,11 +529,18 @@ def get_release_status(namespace: str, name: str):
     summary="Scale a release's deployments",
 )
 def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge=0, le=10)):
-    """Scale all workloads (Deployments + StatefulSets) in a Helm release.
+    """Scale all workloads (Deployments + StatefulSets + VirtualMachines).
 
     Used for subscription suspend (replicas=0) and resume (replicas=1).
     Bitnami charts deploy their primary workload as a StatefulSet so we
-    cover both kinds; releases that have neither are a 404.
+    cover both kinds; releases that have none of the three are a 404.
+
+    #423 W4.3 — VM-type releases (HAOS) have NO replicas to scale. Without
+    the VirtualMachine branch below, suspending such a service hit the 404
+    here, the Odoo caller caught the exception and wrote the service to
+    `error` — i.e. every unpaid HAOS tenant would land in a bogus error
+    state instead of being suspended. VMs map to `runStrategy` instead:
+    Halted (stop the guest, keep the definition + disk) / Always.
 
     Args:
         namespace: Release namespace
@@ -489,10 +564,31 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
             label_selector=selector,
         )
 
+        # Only look for VMs when there is no container workload. Keeps the
+        # existing (overwhelmingly common) path at exactly the same cost and
+        # avoids a CRD lookup on clusters without KubeVirt.
+        virtualmachines = []
         if not deployments and not statefulsets:
+            try:
+                virtualmachines = k8s_service.get_virtualmachines(
+                    namespace=namespace,
+                    label_selector=selector,
+                )
+            except KubectlException as e:
+                # No KubeVirt CRD on this cluster → genuinely no VM workload.
+                # Fall through to the 404 below, which is the honest answer,
+                # but log so a real failure is not mistaken for "no VMs".
+                logger.info(
+                    f"VirtualMachine lookup skipped for {namespace}/{name}: {e.stderr}"
+                )
+
+        if not deployments and not statefulsets and not virtualmachines:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No deployments or statefulsets found for release {name} in namespace {namespace}",
+                detail=(
+                    f"No deployments, statefulsets or virtualmachines found for "
+                    f"release {name} in namespace {namespace}"
+                ),
             )
 
         scaled_deps = []
@@ -509,11 +605,25 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
             scaled_sts.append(sts_name)
             logger.info(f"Scaled statefulset {sts_name} in {namespace} to {replicas} replicas")
 
-        total = len(scaled_deps) + len(scaled_sts)
+        # replicas==0 is the suspend signal; anything >=1 is resume. A VM has
+        # no notion of "2 replicas", so every non-zero value maps to Always.
+        run_strategy = "Halted" if replicas == 0 else "Always"
+        scaled_vms = []
+        for vm in virtualmachines:
+            vm_name = vm["name"]
+            k8s_service.patch_vm_run_strategy(namespace, vm_name, run_strategy)
+            scaled_vms.append(vm_name)
+            logger.info(
+                f"Set runStrategy={run_strategy} on VM {vm_name} in {namespace} "
+                f"(replicas={replicas})"
+            )
+
+        total = len(scaled_deps) + len(scaled_sts) + len(scaled_vms)
         return {
             "message": f"Scaled {total} workload(s) to {replicas} replicas",
             "deployments": ", ".join(scaled_deps),
             "statefulsets": ", ".join(scaled_sts),
+            "virtualmachines": ", ".join(scaled_vms),
         }
 
     except ValueError as e:

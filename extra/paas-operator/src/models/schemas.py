@@ -225,6 +225,40 @@ class PodInfo(BaseModel):
     age: str
 
 
+class VmiInfo(BaseModel):
+    """KubeVirt VirtualMachineInstance status (#423 W4.1).
+
+    ``ready`` is the VMI's ``Ready`` condition, NOT ``phase == Running``:
+    a VMI reaches Running as soon as QEMU starts, while Ready additionally
+    reflects that the virt-launcher probes are satisfied. The platform's
+    readiness gate (Odoo ``workload_type == 'vm'`` branch) requires BOTH —
+    see design §4.1.
+    """
+
+    name: str
+    phase: str  # Pending / Scheduling / Scheduled / Running / Succeeded / Failed
+    ready: bool
+    node_name: Optional[str] = None
+    # HAOS 18.1 ships qemu-guest-agent (W1 PoC R9). Not load-bearing for v1
+    # readiness, but surfacing it lets the platform tell "QEMU up" from
+    # "guest OS up" without another API round-trip.
+    agent_connected: bool = False
+
+
+class DataVolumeInfo(BaseModel):
+    """CDI DataVolume status (#423 W4.1).
+
+    ``progress`` is CDI's own import percentage string (e.g. ``"42.31%"``)
+    or ``"N/A"`` before the importer starts. Surfaced so the UI can show a
+    real progress bar during the long first-provision import instead of an
+    opaque ``deploying`` (design §7.4).
+    """
+
+    name: str
+    phase: str  # Pending / ImportScheduled / ImportInProgress / Succeeded / Failed
+    progress: Optional[str] = None
+
+
 class ReleaseRevision(BaseModel):
     """Helm release revision information."""
 
@@ -266,6 +300,26 @@ class ReleaseStatusResponse(BaseModel):
     pods: List[PodInfo]
     pod_retrieval_error: Optional[str] = Field(
         None, description="Error message if pod retrieval failed"
+    )
+    # ---- #423 W4.2: VM-type workloads (opt-in via ?include_vm=true) --------
+    # Default [] (not None) so existing clients that ignore these fields see
+    # no behaviour change, and VM-aware clients can treat "empty" uniformly
+    # regardless of whether they asked for it.
+    vmis: List[VmiInfo] = Field(
+        default_factory=list,
+        description="KubeVirt VMIs for this release (only populated when include_vm=true)",
+    )
+    datavolumes: List[DataVolumeInfo] = Field(
+        default_factory=list,
+        description="CDI DataVolumes for this release (only populated when include_vm=true)",
+    )
+    vm_retrieval_error: Optional[str] = Field(
+        None,
+        description=(
+            "Error message if VMI/DataVolume retrieval failed. Mirrors "
+            "pod_retrieval_error: the caller MUST NOT read empty vmis as "
+            "'no VM' while this is set — see the fail-closed rule in design §4.1."
+        ),
     )
 
 
