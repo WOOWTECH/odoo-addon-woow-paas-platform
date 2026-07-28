@@ -1,9 +1,9 @@
 ---
 title: "HAOS × KubeVirt Cloud Service v1 設計案（#423）"
 category: plans
-status: draft
+status: active
 created: 2026-07-27
-updated: 2026-07-27
+updated: 2026-07-28
 related:
   - docs/decisions/patterns/README.md
   - docs/plans/2026-Q3/2026-07-12-336-ha-paas-provision.md
@@ -42,7 +42,7 @@ related:
 | Elmo 版本組合 | KubeVirt **v1.8.0** + CDI **v1.64.0** + virtctl 1.8.0，跑在 K3s v1.34.3/1.34.5 | 同上 |
 | UEFI 為開機硬需求 | 缺 `firmware.bootloader.efi.secureBoot: false` 會卡在 `Booting from Hard Disk...` | 同上；HAOS 官方文件亦明載 |
 | 網路組態 | `masquerade` + `pod: {}`（不需 Multus） | 同上 |
-| Service selector | `kubevirt.io/domain: <vm-name>`（KubeVirt 自動加在 virt-launcher Pod 上） | 同上 |
+| Service selector | ~~`kubevirt.io/domain`~~ → **`vm.kubevirt.io/name`** | 原記載來自 Elmo 材料；**2026-07-28 W1 PoC 在 KubeVirt v1.8.0 實測推翻**（D2，見 §3.5） |
 | MQTT/ngrok 測試 | 基本 pub/sub/QoS/retained 通過；**10KB payload 失敗未 debug**、**LWT 未驗到** | #423，process `aab03578` |
 
 ### 0.2 明確標為設計論述／二手（**不可**當已驗）
@@ -74,7 +74,7 @@ related:
 ### In
 
 1. KubeVirt 開通 stock HAOS VM（官方 qcow2、UEFI、masquerade、**2C / 4Gi / 64Gi** 起點規格）
-2. CF tunnel 曝露 **8123**（沿用現行 `paas-cloudflare-system` 模式；Service selector 用 `kubevirt.io/domain`）
+2. CF tunnel 曝露 **8123**（沿用現行 `paas-cloudflare-system` 模式；Service selector 用 **`vm.kubevirt.io/name`**——D2 實證改，原為 `kubevirt.io/domain`）
 3. 租戶自行走 HAOS 原生 onboarding（含自裝 add-on；**平台不進 guest**）
 4. Golden image 策略（CDI 供給，避免每租戶外網下載＋展開）
 5. 三個差異點的平台改動：**VMI 就緒判定**、**runStrategy 啟停映射**、**VM 型 quota/LimitRange 建模**
@@ -116,7 +116,7 @@ related:
 | Repo / 單位 | 交付物 | 備註 |
 |---|---|---|
 | **woow-paas-charts** | ① `charts/haos`（新 chart v0.1.0）：DataVolume + VirtualMachine + Service + NetworkPolicy<br>② `charts/haos/tests/*.sh` render 契約測試（對齊 `charts/home-assistant/tests/` 四支既有測試的形制）<br>③ `charts/paas-operator/templates/clusterrole.yaml` 補 KubeVirt/CDI apiGroups | operator 自己的 chart 也住這個 repo，故 RBAC 改動落此 |
-| **woow_paas_platform**（本 repo） | ① `src/data/cloud_app_templates.xml` 新 CloudAppTemplate（slug `haos`）<br>② `src/models/cloud_app_template.py` 新增 `workload_type` 欄位<br>③ `extra/paas-operator/` 三差異點 + delete 語意<br>④ `src/models/cloud_service.py` `_poll_service_status` VM 分支、`_do_suspend`/`_do_resume` 相容、`_inject_storage_class` path_map<br>⑤ `src/data/subscription_products.xml` plan seed ＋ `subscription_template_links*.xml` M2M | seed 改動會動 `check_seed_topology` baseline（`scripts/audit/repo-lint.py:316`），需同步 `--update-baseline` |
+| **woow_paas_platform**（本 repo） | ① `src/data/cloud_app_templates.xml` 新 CloudAppTemplate（slug `haos`）<br>② `src/models/cloud_app_template.py` 新增 `workload_type` 欄位<br>③ `extra/paas-operator/` 三差異點 + delete 語意<br>④ `src/models/cloud_service.py` `_poll_and_update_status` VM 分支、`_do_suspend`/`_do_resume` 相容、`_inject_storage_class` path_map<br>⑤ `src/data/subscription_products.xml` plan seed ＋ `subscription_template_links*.xml` M2M | seed 改動會動 `check_seed_topology` baseline（`scripts/audit/repo-lint.py:316`），需同步 `--update-baseline` |
 | **woow-paas-ci** | HAOS 官方 qcow2 → OCI containerDisk image，推 `jcr-prod.woowtech.io/woow-paas-docker-local/haos` | 與 `Dockerfile.open-design` 同 repo 慣例 |
 | **叢集運維**（`woow-machines-operator`） | KubeVirt v1.8 + CDI v1.64 安裝（官方 operator YAML，無 Helm chart）；apiserver `--allow-privileged=true`；雙 default SC 收斂 | **v1 的硬前置**，本 repo 不碰（CLAUDE.md 共用叢集鐵律） |
 
@@ -138,13 +138,13 @@ charts/haos/
 │   ├── _helpers.tpl
 │   ├── datavolume.yaml   # CDI DataVolume（golden image → 租戶 disk）
 │   ├── virtualmachine.yaml
-│   ├── service.yaml      # ClusterIP:8123，selector kubevirt.io/domain
+│   ├── service.yaml      # ClusterIP:8123，selector vm.kubevirt.io/name（D2）
 │   ├── network-policy.yaml
 │   └── NOTES.txt
 └── tests/
     ├── test-vm-firmware.sh        # secureBoot=false / UEFI 必存在
     ├── test-masquerade-ports.sh   # ports 顯式列且僅 8123
-    ├── test-service-selector.sh   # selector = kubevirt.io/domain
+    ├── test-service-selector.sh   # selector = vm.kubevirt.io/name（D2）
     ├── test-dv-keep-annotation.sh # DataVolume 帶 resource-policy: keep
     └── test-labels-passthrough.sh # VMI template labels 含 app.kubernetes.io/instance
 ```
@@ -228,7 +228,7 @@ spec:
 | `firmware.bootloader.efi.secureBoot: false` | 固定 | HAOS 官方要求 UEFI 且須 **non-secureboot OVMF**；KubeVirt 原生支援、無 workaround（#423 §3.2）。實測缺此會卡 `Booting from Hard Disk...` |
 | `masquerade` + `pod: {}` | 固定 | Elmo 實測 manifest；不需 Multus。bridge 模式不支援 live migration（v1 不做，但 masquerade 也不擋未來） |
 | `ports:` 顯式列 8123 | 固定 | masquerade 未列 ports 時**全部轉發**。v1 只開 HA UI；MQTT 是另案，不能因為「反正之後要用」就先開 |
-| `resources.limits == requests` | 固定 | KubeVirt 對 VM 的建議做法（Guaranteed QoS）；同時消除 §6 洞 1 的 LimitRange admission 拒收 |
+| `resources.limits == requests` | 固定 | KubeVirt 對 VM 的建議做法（Guaranteed QoS）；**D3 改理由**：不是為了避開 LimitRange admission 拒收（該洞實測不成立），而是**避免 KubeVirt 把 memory limit 自動放大成 request 的 2 倍、吃掉兩倍 quota**（§6.2） |
 | `cpu.cores: 2` / `memory: 4Gi` | values | 拍板起點規格；與 Elmo 實測規格一致 |
 | `runStrategy` 由 values 驅動 | values | §4.2 的 suspend/upgrade 打架防護 |
 
@@ -254,7 +254,7 @@ spec:
   storage:
     accessModes:
       - ReadWriteOnce                 # v1 不做 live migration → RWO 路徑最短
-    volumeMode: Block                 # 見下方理由
+    volumeMode: Filesystem            # ⚠ D1（2026-07-28 W1 PoC 實證改）：原設計為 Block，見下方理由
     storageClassName: {{ .Values.persistence.storageClass | quote }}   # ⚠ 必須顯式，見下
     resources:
       requests:
@@ -268,10 +268,24 @@ spec:
    chart 的 values 鍵名刻意取 **`persistence.storageClass`**，因為平台的 `_inject_storage_class` 預設 fallback 路徑正是 `('persistence', 'storageClass')`（`src/models/cloud_service.py:918`）→ **零 operator 改動即可吃到注入值**（預設 `longhorn-delete`，`src/models/cloud_service.py:703-704`）。
    仍建議在 `path_map` 補一條顯式 `'haos': [('persistence','storageClass')]`——這是既有慣例（三型 MCP 的註解寫明「Explicit entries … to document intent and guard against default drift」，`src/models/cloud_service.py:904-915`）。
 
-2. **`volumeMode: Block`（非 Filesystem）**
-   VM disk 走 block device 少一層 host filesystem，效能優於 filesystem 模式 PVC；且這是未來要做 live migration 時 Longhorn `migratable: "true"` RWX 的必要前提（#423 §3.3 第 3 點）。v1 用 **RWO + Block**：路徑最短、不需新 StorageClass、不觸碰叢集級設定。
+2. **`volumeMode: Filesystem`（D1，2026-07-28 W1 PoC 實證改；原設計為 `Block`）**
+
+   > ~~原文：VM disk 走 block device 少一層 host filesystem，效能優於 filesystem 模式 PVC；且這是未來要做 live migration 時 Longhorn `migratable: "true"` RWX 的必要前提（#423 §3.3 第 3 點）。v1 用 RWO + Block：路徑最短、不需新 StorageClass、不觸碰叢集級設定。~~
+
+   **`volumeMode: Block` 在本叢集不可用**（W1 PoC 實證，#423）：CDI importer pod 以 `runAsUser: 107` / `runAsNonRoot: true` / `capabilities.drop: [ALL]` 執行，pod 層 securityContext 無 `fsGroup`；而 `fsGroup` 對 raw block volume 不適用 → device node 為 root 所有，UID 107 開不了：
+
+   ```
+   E0728 14:09:08 importer.go:137] exit status 1,
+   blockdev: cannot open /dev/cdi-block-volume: Permission denied
+   ```
+
+   **受控 A/B**（唯一變因＝`volumeMode`，同 StorageClass／同 source／同大小／同 ns／同 quota）：`Block` → importer CrashLoop；**`Filesystem` → `Succeeded`**。已排除 ResourceQuota／LimitRange 為干擾變因（全程無 `exceeded quota` / `must specify limits` 事件；CDI importer 自帶 resources 750m/600M，LimitRange 預設沒有機會套用）。
+
+   **改 Filesystem 對 v1 零損失**：Block 的兩個原始理由在 v1 都不兌現——效能差異未實測，而 live migration 已由 Q7 拍板排除在 v1 之外。若日後要做 live migration，需回頭解 CDI 的 block 權限問題（屬叢集級設定，非本 repo scope）。
 
 3. **`source.registry`（非 `http`）** — 見 §5。
+
+4. **⚠ `min_storage_gb` 必須容納 CDI import 的三 PVC 峰值** —— 見 §6.3 的 D6，這條直接決定 chart 能不能裝起來。
 
 ### 3.5 Service
 
@@ -284,10 +298,21 @@ spec:
       targetPort: {{ .Values.service.targetPort }}
       protocol: TCP
   selector:
-    kubevirt.io/domain: {{ include "haos.fullname" . }}
+    vm.kubevirt.io/name: {{ include "haos.fullname" . }}   # D1/D2：非 kubevirt.io/domain
 ```
 
-- selector 用 **`kubevirt.io/domain`**（KubeVirt 自動打在 virt-launcher Pod 上，實測），**不是** chart 的 `selectorLabels`。理由：這是 KubeVirt 官方的 Service 對接慣例，且它保證只選到「當前這台 VM 的 launcher」，VM 重啟換 pod 時仍正確。
+- selector 用 **`vm.kubevirt.io/name`**（D2，2026-07-28 W1 PoC 實證改；原設計為 `kubevirt.io/domain`），**不是** chart 的 `selectorLabels`。理由不變：這保證只選到「當前這台 VM 的 launcher」，VM 重啟換 pod 時仍正確。
+
+  > ~~原文：selector 用 `kubevirt.io/domain`（KubeVirt 自動打在 virt-launcher Pod 上，實測）……這是 KubeVirt 官方的 Service 對接慣例。~~
+  >
+  > **該依據（#423 的 Elmo 材料）在 KubeVirt v1.8.0 上不成立**：`kubevirt.io/domain` **不是** KubeVirt 自動加的 label。virt-launcher pod 的實際 label 集（W1 PoC 實查）為 `kubevirt.io=virt-launcher`、`kubevirt.io/created-by`、`kubevirt.io/nodeName`、**`vm.kubevirt.io/name`**、`vmi.kubevirt.io/id`，外加 chart 自己 pass-through 的 `app.kubernetes.io/*`。
+  >
+  > **兩個 Service 的 endpoints 對照（決定性）**：
+  > ```
+  > svc-domain (selector kubevirt.io/domain=haos-poc)  endpoints=            ← 空，selector 無效
+  > svc-vmname (selector vm.kubevirt.io/name=haos-poc) endpoints=10.42.0.44  ← 有效
+  > ```
+  > 替代方案是由 chart 自己在 VMI template labels 顯式加 `kubevirt.io/domain`，但那就失去「用 KubeVirt 原生 label」的好處，且多一個要維護的約定 → 採 `vm.kubevirt.io/name`。
 - `targetPort` 用數字而非具名 port：virt-launcher 的 container port 不由 chart 定義，具名 port 對不上。
 - Service 名沿用 release fullname（`svc-{ref[:8]}`）—— CS 共用 workspace namespace，固定名開兩台會撞（`cloud_app_templates.xml` 對 ha-paas/open-design 的既有註解已載明此坑）。
 - CF tunnel 端零改動：`generate_service_url()` 產出的 `http://{svc}.{ns}.svc.cluster.local:{port}`（`extra/paas-operator/src/services/cloudflare.py:818-834`）原封可用。
@@ -304,11 +329,12 @@ spec:
 #    egress  — DNS(kube-system:53) ＋ allowAllEgress 預設 true
 ```
 
-- **podSelector 用 chart 的 `selectorLabels`**（不是 `kubevirt.io/domain`）：這要求 §3.3 的 VMI template labels 確實帶上 chart labels——與 §4.1 問題 B 的修法是同一件事，一石二鳥。
+- **podSelector 用 chart 的 `selectorLabels`**（不是 Service 用的 `vm.kubevirt.io/name`）：這要求 §3.3 的 VMI template labels 確實帶上 chart labels——與 §4.1 問題 B 的修法是同一件事，一石二鳥。
 - `allowAllEgress: true` 為預設：HAOS 要對外（整合、更新檢查、HA Cloud）。
 - 與 operator baseline NP 的關係：`_apply_baseline_netpol()`（`extra/paas-operator/src/services/helm.py:1089`）四條 ns-wide 規則照常生效（virt-launcher 是普通 pod）。chart 端不重複發 ingress allow，避免兩層打架——這正是 home-assistant chart 的既有決定。
 
-> ⚠ **未驗**：default-deny egress 下 virt-launcher 能否正常啟動（libvirt/virt-handler 走 hostPath socket 而非 pod network，理論上不受影響，但**未實測**）。列 §9 R6。
+> ~~⚠ **未驗**：default-deny egress 下 virt-launcher 能否正常啟動……列 §9 R6。~~
+> ✅ **已於 2026-07-28 W1 PoC 實測，本節全部成立、零改動**（#423）：NP 在 VMI 首次啟動前就位的情況下，VMI 照常 `Running` + `Ready=True`；egress A/B 決定性（移除 `allowAllEgress` → TCP 443 被擋，還原 → 連通、`curl -k` HTTP 200）；tunnel 側 ns → :8123 得 HTTP 200；第三方 ns → 被擋（`curl exit=7`，且同一顆 pod 對外網得 200，排除假陽性）。
 
 ---
 
@@ -323,16 +349,28 @@ spec:
 | operator API | `extra/paas-operator/src/api/releases.py:390-440` | `GET /releases/{ns}/{name}/status` 回 `{release, pods}` |
 | operator k8s | `extra/paas-operator/src/api/releases.py:416-419` | `k8s_service.get_pods(ns, label_selector="app.kubernetes.io/instance={name}")` |
 | k8s service | `extra/paas-operator/src/services/helm.py:882` | `kubectl get pods -o json` → `PodInfo(phase, ready="n/m", …)` |
-| Odoo poll | `src/models/cloud_service.py:1219-1303` | `_poll_service_status`：`release_status=='deployed'` 且所有 Running pod ready → 翻 `running` |
+| Odoo poll（cron） | `src/models/cloud_service.py:1218-1303` | `_poll_and_update_status`：`release_status=='deployed'` 且所有 Running pod ready → 翻 `running` |
+| **Odoo poll（前台 controller）** | **`src/controllers/paas.py:2694`** | **`_update_service_status`——model 層邏輯的第二份複製品**；呼叫點 `:2417`（服務詳情每次 poll）、`:2172`（workspace 服務清單） |
 
 **兩個問題：**
 
 - **問題 A（已知）**：virt-launcher pod Running ≠ guest 開機完成。pod 一起來就翻 `running`，但 HAOS 還在 import／開機。
-- **問題 B（本檔新發現，更嚴重）**：`src/models/cloud_service.py:1261` 的判定是
+- **問題 B（本檔新發現，更嚴重）**：判定是
   ```python
   all_ready = all(...) if active_pods else (not pods)
   ```
-  **`pods` 為空列表時 `not pods` 為 True → 立刻翻 `running`**。若 chart 沒把 `app.kubernetes.io/instance` 傳進 VMI template labels，operator 撈到零顆 pod → 服務在 34Gi 還沒 import 完時就被標成「執行中」。這是 fail-open，必須雙層堵。
+  **`pods` 為空列表時 `not pods` 為 True → 立刻翻 `running`**。若 chart 沒把 `app.kubernetes.io/instance` 傳進 VMI template labels，operator 撈到零顆 pod → 服務在 image 還沒 import 完時就被標成「執行中」。這是 fail-open，必須雙層堵。
+
+  > ⚠ **勘誤（2026-07-28 補）：這條 fail-open 在 repo 裡有兩份，本檔初版只點出 model 層。**
+  >
+  > | 層 | 位置 | 誰在跑 |
+  > |---|---|---|
+  > | model（cron） | `src/models/cloud_service.py:1261` | `_poll_and_update_status` |
+  > | **controller（前台）** | **`src/controllers/paas.py:2742-2749`** | `_update_service_status`，呼叫點 `:2417`／`:2172` |
+  >
+  > 只修 model 層的話，**租戶只要打開前台服務詳情頁，controller 就會把還在 import 的 VM 標成 `running`**——cron 修好的東西被前台查詢覆寫回去。implementation plan 的 W5a.2 已據此改為兩層覆蓋（優先建議重構為 controller 委派 model 以消滅雙寫）。
+
+  ✅ **陷阱本身已在 W1 PoC 實證可規避**（2026-07-28，#423）：VM `spec.template.metadata.labels` 設的 `app.kubernetes.io/instance` **確實** pass-through 到 virt-launcher pod（`kubectl get pod -l app.kubernetes.io/instance=haos-poc` 撈得到），故「chart 帶 label」這一層堵法有效；operator 側的 fail-closed 是第二層。
 
 **設計：**
 
@@ -361,7 +399,7 @@ spec:
 
 3. **status API 擴充**：`GET /releases/{ns}/{name}/status?include_vm=true` → 回應多兩個欄位 `vmis: []`、`datavolumes: []`。預設 `false`、既有呼叫端零影響（向後相容）。
 
-4. **Odoo poll 分支**（`src/models/cloud_service.py:_poll_service_status`）
+4. **Odoo poll 分支**（`src/models/cloud_service.py:_poll_and_update_status`）
    ```
    workload_type == 'vm':
        ready ⟺ 至少一個 VMI 且 該 VMI status.phase == 'Running'
@@ -371,7 +409,14 @@ spec:
        維持現行 pod-ready 判定，一行不動
    ```
 
-5. **就緒語意的誠實邊界**：VMI `Ready` 代表 **QEMU 跑起來了**，不代表 guest 內 HA 的 8123 已服務。v1 明確定義「就緒 ＝ VMI Ready」，前端補一句文案（「VM 已啟動，HAOS 首次開機約需數分鐘」）。要更準需 `qemu-guest-agent`，而 HAOS 是否內建**未知**（§9 R9）——但那也已經逼近 v1 out-of-scope 的「平台進 guest」邊界，v1 不做。
+5. **就緒語意的誠實邊界**：VMI `Ready` 代表 **QEMU 跑起來了**，不代表 guest 內 HA 的 8123 已服務。v1 明確定義「就緒 ＝ VMI Ready」，前端補一句文案（「VM 已啟動，HAOS 首次開機約需數分鐘」）。
+   **D8（2026-07-28 W1 PoC 實證）**：~~要更準需 `qemu-guest-agent`，而 HAOS 是否內建**未知**~~ → **HAOS 18.1 內建 qemu-guest-agent 且正常回報**：
+   ```
+   AgentConnected=True
+   guestOSInfo: {"id":"haos","kernelRelease":"6.18.37-haos",
+                 "prettyName":"Home Assistant OS 18.1","versionId":"18.1"}
+   ```
+   **v1 行為不變**（就緒仍＝VMI Ready，讀 guest 狀態逼近 out-of-scope 的「平台進 guest」邊界）；但 v1.1 若要做 guest 層就緒判定，**機制已確認可用**，不需要另外裝東西進 guest。
 
 ### 4.2 啟停：scale-to-0 → runStrategy patch
 
@@ -424,7 +469,11 @@ spec:
 
 1. **DataVolume 不是 PVC** → post-renderer 不會標它 → `helm uninstall` **直接刪掉 DataVolume → cascade 刪掉它 own 的 PVC → 租戶資料當場全滅**。這比 #317 的情境更嚴重（#317 至少 PVC 還在 release manifest 裡有機會被標）。
 2. **cleanup cron 直接 `delete pvc`** → CDI 的 DataVolume controller 是該 PVC 的 owner，PVC 被刪會**被重建**（並重新 import 整顆 image）。清理不但沒清掉，還憑空跑一次 import。
-3. **orphan 標記撈不到**：`list_pvcs(label_selector="app.kubernetes.io/instance={name}")` 依賴 CDI 是否把 DataVolume 的 labels 複製到它建的 PVC 上——**未實證**。
+3. ~~**orphan 標記撈不到**：`list_pvcs(label_selector="app.kubernetes.io/instance={name}")` 依賴 CDI 是否把 DataVolume 的 labels 複製到它建的 PVC 上——**未實證**。~~
+   → **D9：已實證，CDI 有複製**（2026-07-28 W1 PoC，#423）。`kubectl get pvc -l app.kubernetes.io/instance=r7fix` 撈得到 target PVC，**現行選擇器可沿用**。但實測帶出三個必須知道的細節：
+   - **ownership 是兩層**：DataVolume → target PVC → prime PVC（prime 的 owner 是 target PVC，**不是** DataVolume）。
+   - **CDI 覆寫 `app.kubernetes.io/managed-by` 為 `cdi-controller`**（helm 原本會設 `Helm`）→ 任何依賴 `managed-by=Helm` 判斷歸屬的邏輯，對 CDI 產的 PVC 不成立。
+   - **import 期間 prime PVC 也帶 instance label** → 若刪除發生在 import 中途，`list_pvcs` 會多撈到 transient 的 prime PVC（import 成功後 CDI 自行回收）。
 
 **設計：**
 
@@ -497,7 +546,7 @@ Elmo 的做法（實測）：**每台 VM 各自從 GitHub 下載 ~300MB 再展�
 
 `registry` source 與 PVC clone 都是「每租戶一份完整 64 GiB volume」。省的是**外網頻寬與開通時間**，**不是容量**。拍板 in-list 寫的「避免每租戶外網下載＋34Gi 展開」正是這個意思，不要在定價時誤算成儲存折扣。
 
-真正能省儲存的路徑是 **Longhorn Backing Image**（多顆 volume 共用同一唯讀底層映像、只存差異），理論上能把每租戶 128 GiB 降到「差異量 × 副本數」。但本團隊**未評估、未驗證**該機制與 KubeVirt block volume 的相容性 → 列 §9 R10（v1.1）。
+真正能省儲存的路徑是 **Longhorn Backing Image**（多顆 volume 共用同一唯讀底層映像、只存差異），理論上能把每租戶 128 GiB 降到「差異量 × 副本數」。但本團隊**未評估、未驗證**該機制與 KubeVirt volume（D1 後為 `Filesystem` 模式）的相容性 → 列 §9 R10（v1.1）。
 
 ### 5.6 開放問題：HAOS OS 版本
 
@@ -516,35 +565,88 @@ Elmo 的做法（實測）：**每台 VM 各自從 GitHub 下載 ~300MB 再展�
 | quota 計算 | `src/models/cloud_service.py:1486-1506` | workspace 內非 `deleting` 服務的 `allocated_*` 加總 **× 3**，下限 8 vCPU / 8Gi / 100Gi |
 | 資源來源 | `src/models/cloud_service.py:1740-1742` | `plan.cs_* or template.min_*` |
 
-### 6.2 兩個洞（#423 §3.5）與解法
+### 6.2 ~~兩個洞~~ → 真正的洞是第三個（D3 / D4 / D6，2026-07-28 W1 PoC 實證改寫）
 
-**洞 1 🔴（會讓 VM 直接建不起來）**
-virt-launcher pod 是多容器，而 **KubeVirt 只在 `compute` 容器上設 resources**。若 compute 只設 request（4Gi）而無 limit，LimitRange 會補上 `limit: 512Mi` → **limit < request → admission 拒收**。
+> **本節原本列的兩個洞（來自 #423 §3.5 的設計論述）W1 PoC 實測後皆不成立**，但同一個位置有一個**更嚴重、原本沒想到**的洞。以下逐條說明。
 
-**解**：chart 在 `domain.resources` 顯式設 `limits == requests`（§3.3）。KubeVirt 對 VM 本來就建議 Guaranteed QoS，所以這不是 workaround 而是正解。
+**virt-launcher 的實際容器組成（W1 PoC 實查，#423）** —— 這是下面三條的共同前提：
 
-**洞 2 ⚠（額度被憑空吃掉 ＝ #380 教訓原樣重演）**
-compute 以外的容器（`guest-console-log`，以及若走 containerDisk 還有 `container-disk`）沒有 resources → 各被 LimitRange 補 **500m / 512Mi**，**憑空吃掉 quota 額度**。#380 的教訓就是「sidecar 記憶體不入帳」，這裡是同一個形狀。
+```
+containers    : compute                  ← 唯一的 main container
+initContainers: guest-console-log
 
-**解**：`min_*` 欄位填 **virt-launcher pod 的實際總量**，不是 guest 規格。
+  [init] guest-console-log   req cpu=15m  mem=60M         | lim cpu=15m  mem=60M
+  [main] compute             req cpu=2    mem=4697620481  | lim cpu=2    mem=4697620481
+```
 
-### 6.3 min_* 建模（v1 取值）
+**DataVolume（PVC-backed）路徑下沒有 `container-disk` 容器**，而且 **KubeVirt 對兩個容器都顯式設了 resources**。
 
-以「compute（4Gi/2core，limits==requests）＋ KubeVirt memory overhead ＋ 2 個無 resources 的容器各補 500m/512Mi」估：
+---
 
-| 欄位 | v1 取值 | 推算 |
-|---|---|---|
-| `min_vcpu` | **3** | compute limits 2 core ＋ 2 × 500m ＝ 3.0 |
-| `min_ram_gb` | **6.0** | guest 4Gi ＋ KubeVirt overhead（數百 Mi）＋ 2 × 512Mi ≈ 5.3Gi → 保守進位 6 |
-| `min_storage_gb` | **64** | DataVolume 宣告值 |
+**~~洞 1 🔴（會讓 VM 直接建不起來）~~ → D3：不成立**
 
-> ⚠ 這是**設計推算**，不是實測。容器數（2 或 3）與 KubeVirt overhead 的實際值必須在 PoC 量出來後回填（§9 R5）。取保守值（3 vCPU / 6 GiB）的理由：估太少會撞 quota 拒收（症狀是開通失敗），估太多只是 quota 上限寬鬆（無實體成本）——**不對稱，所以往寬估**。
+> ~~原文：virt-launcher pod 是多容器，而 KubeVirt 只在 `compute` 容器上設 resources。若 compute 只設 request（4Gi）而無 limit，LimitRange 會補上 `limit: 512Mi` → limit < request → admission 拒收。~~
 
-**推導出的 workspace quota**（×3，`cloud_service.py:1503-1505`）：單台 HAOS ⇒ 9 vCPU / 18Gi / 192Gi。三個下限（8/8Gi/100Gi）都被超過，故 floor 不生效。開第二台時 quota 自動重算（存活集加總），不會撞牆。`persistentvolumeclaims: 10` 硬上限對「每台 1 顆 PVC」也綽綽有餘。
+**負面測試推翻**（刻意省略 `domain.resources.limits` 的 VM）：
+```
+haos-nolimits  Running  10.42.3.48  ubuntuserver-31zix  True
+compute limits: memory 9185525762 (8.55 GiB)   ← KubeVirt 自動設，＝ request 的 2 倍
+```
+VM **照常 Running**，LimitRange 沒有補 512Mi、沒有 admission 拒收——因為 KubeVirt 一律自己填 limits，LimitRange 的 `default` 根本沒有機會套用。
+
+**但 chart 顯式設 `limits == requests` 仍然必要——理由要換**：不是「避免 admission 拒收」，而是**避免 KubeVirt 把 memory limit 自動放大成 request 的 2 倍（4.28 → 8.55 GiB），憑空吃掉兩倍 quota**。
+
+**~~洞 2 ⚠（額度被憑空吃掉 ＝ #380 教訓原樣重演）~~ → D4：不成立**
+
+> ~~原文：compute 以外的容器（`guest-console-log`，以及若走 containerDisk 還有 `container-disk`）沒有 resources → 各被 LimitRange 補 500m / 512Mi，憑空吃掉 quota 額度。~~
+
+KubeVirt 對 **initContainer 也設了 resources**（15m / 60M），LimitRange 預設值同樣沒有機會套用。**#380 的「sidecar 不入帳」教訓在 KubeVirt 上不重演。**
+
+---
+
+**🔴 洞 3（D6，真正會擋住開通的那個）：CDI import 的三 PVC 峰值撞 `requests.storage` quota**
+
+CDI v1.64 走 **volume populator** 流程，import 期間 namespace 內**同時存在三顆 PVC**：
+
+| PVC | 大小（實測） |
+|---|---|
+| target（`haos-poc-root`） | 67.8 GiB |
+| `prime-<uuid>` | 67.8 GiB |
+| `prime-<uuid>-scratch` | 67.8 GiB |
+| **import 峰值** | **203.5 GiB**（實測 quota `used` 峰值，非推算） |
+
+註：宣告 64 Gi，CDI 的 `WebhookPvcRendering` 渲染成 **67.8 GiB**（加 filesystem overhead）。
+
+原 `min_storage_gb = 64` → quota `64 × 3 = 192 GiB` → **短少 11.5 GiB**，scratch PVC 被拒：
+
+```
+ErrExceededQuota  persistentvolumeclaims "prime-...-scratch" is forbidden:
+exceeded quota: requested: requests.storage=72843526144,
+used: requests.storage=147961623349, limited: requests.storage=192Gi
+```
+
+**症狀不指向根因**：DataVolume 只顯示 `Pending` / `ImportInProgress` 不再前進，要挖到 events 才看得到 quota 拒收。把 quota 調到 216 GiB（＝`min_storage_gb=72`）後 import 立刻推進到 `Succeeded`。
+
+**這是「填峰值不是填穩態」教訓的第二次出現**：`min_ram_gb` 要填 virt-launcher pod 總量而非 guest RAM；`min_storage_gb` 同理要填 **import 峰值**而非 disk 大小。
+
+### 6.3 min_* 建模（v1 取值；D5 / D6 已回填 W1 PoC 實測值）
+
+| 欄位 | ~~原設計推算~~ | **v1 取值** | 依據（2026-07-28 W1 PoC 實證，#423） |
+|---|---|---|---|
+| `min_vcpu` | ~~3~~ | **3**（維持） | 實測 Σlimits.cpu = **2.015**；`min_vcpu` 是 Integer，取 3 留餘裕 |
+| `min_ram_gb` | ~~6.0~~ | **5.0** | 實測 Σrequests.memory = **4.431 GiB**（原推算 5.3 偏高）；KubeVirt overhead 實測 **384 MiB**（相減法：compute 4.375 GiB − guest 4 GiB）。取 5.0 留 ~13% 餘裕 |
+| `min_storage_gb` | ~~64~~ | 🔴 **72** | import 峰值 **203.5 GiB** > `64×3=192`；`72×3=216 GiB` 實測放行（餘裕 +12.5 GiB）。68 僅餘 +0.5 GiB，太緊 |
+
+> ~~⚠ 這是設計推算，不是實測。容器數（2 或 3）與 KubeVirt overhead 的實際值必須在 PoC 量出來後回填（§9 R5）。~~
+> ✅ **已於 2026-07-28 W1 PoC 實測回填**。「估太少會撞 quota（開通失敗）、估太多只是 quota 上限寬鬆（無實體成本）—— 不對稱，往寬估」的原則不變，仍是上表取值高於實測值的理由。
+
+**推導出的 workspace quota**（×3，`cloud_service.py:1503-1505`）：單台 HAOS ⇒ **9 vCPU / 15Gi / 216Gi**。三個下限（8/8Gi/100Gi）都被超過，故 floor 不生效。開第二台時 quota 自動重算（存活集加總），不會撞牆。
+
+⚠ **`persistentvolumeclaims: 10` 的硬上限要重新算**：不是「每台 1 顆 PVC」——import 期間每台會短暫佔 **3 顆**（target + prime + scratch）。同一 workspace 若同時開通 3 台以上 HAOS，會撞 PVC 數量上限。v1 的 `max_per_partner` 若不限制，此處需留意（穩態仍是每台 1 顆，prime/scratch 在 import 成功後由 CDI 回收）。
 
 ### 6.4 不動 LimitRange 的理由（與一條守線）
 
-- 現行 LimitRange **只有 `default`/`defaultRequest`、沒有 `max`** → 4Gi 的 limits 可以通過。**v1 不需要改 LimitRange。**
+- 現行 LimitRange **只有 `default`/`defaultRequest`、沒有 `max`** → 4Gi 的 limits 可以通過。**v1 不需要改 LimitRange。**（D3/D4 實測補強：KubeVirt 對 virt-launcher 的每個容器都自設 resources，LimitRange 的 `default` 對 VM 型 workload 根本不會生效——所以「不動 LimitRange」不只是可以，而是**動了也沒用**。）
 - ns 是 workspace 共用的（一個 `paas-ws-*` 內可能同時有容器型與 VM 型服務），所以 **per-template LimitRange 不可行**——這也是為什麼解法要落在 `min_*` 建模而不是 LimitRange。
 - **守線（寫進 chart NOTES 與 pattern doc）**：日後若有人要在 CS ns LimitRange 加 `max`（例如為了防止租戶亂開大容器），**必須同時考慮 VM 型 workload**，否則會一次打死所有 HAOS 服務。這是可機械化的檢查點，適合進 `scripts/audit/repo-lint.py`。
 
@@ -579,12 +681,12 @@ KubeVirt 預設 `cpuAllocationRatio: 10` → 2 vCPU 的 guest 只 request 200m�
 1. `state` Selection 加 `('stopped', 'Stopped')`（`cloud_service.py:113`）
 2. 前端 state badge / 篩選
 3. `_compute_ns_quota` 的 domain（`cloud_service.py:1495-1498`）—— **不改**：關機的 VM 仍佔 PVC，而 quota 是「保留額度」不是「實際用量」，關機不該降 quota。這是設計上正確的行為，要在 doc 裡說明以免日後被當成 bug「修掉」。
-4. `_poll_service_status` 的 transitional 清單 —— `stopped` 不加入（與 `suspended` 同理）
+4. `_poll_and_update_status` 的 transitional 清單 —— `stopped` 不加入（與 `suspended` 同理）
 5. 計費：關機是否折價 ＝ 產品決策，不是技術問題
 
 ### 7.4 開通期的長尾與進度可視
 
-首次開通要 import 一整顆 image 到 64 GiB block volume，耗時**未知**（§9 R8）。現行 poll cron 沒有 timeout，服務可能長期停在 `deploying` 而看不出是「正在跑」還是「卡住」。
+首次開通要 import 一整顆 image 到 64 GiB **filesystem** volume（D1），耗時**未知**（§9 R8，待 W2 的 OCI image 才量得準）。現行 poll cron 沒有 timeout，服務可能長期停在 `deploying` 而看不出是「正在跑」還是「卡住」。
 
 **設計**：§4.1 已規劃 operator 讀 DataVolume 的 `status.progress`（CDI 原生提供百分比），Odoo 端把它顯示在服務卡片上。這不需要新 state，只是 `deploying` 的附屬資訊。
 
@@ -600,41 +702,63 @@ KubeVirt 預設 `cpuAllocationRatio: 10` → 2 vCPU 的 guest 只 request 200m�
 
 > **定價應採 128 GiB/租戶**（64 × 2）。若日後為了可用性改成 3 副本，則為 192 GiB——這是一個明確的成本槓桿，值得在定價時當作可調參數。
 
-### 8.2 每租戶佔用
+### 8.2 每租戶佔用（D7，2026-07-28 W1 PoC 實證改寫）
+
+> 🔴 **本節原本把「宣告容量」當成「實體佔用」，實測推翻。Longhorn 是 thin-provisioned。**
 
 | 資源 | 每台 HAOS VM | 依據 |
 |---|---|---|
-| PVC 宣告容量 | **64 GiB** | Elmo 實測 manifest；v1 拍板 |
-| **Longhorn 實體佔用** | **128 GiB** | 64 × 2 副本（本檔實查 `longhorn-delete`） |
-| RAM（pod requests） | ~5.3 GiB | 設計推算（§6.3），容器數待實測 |
-| CPU（limits 帳面） | ~3 vCPU | 設計推算；實際 request 因 `cpuAllocationRatio: 10` 更低 |
-| pod 格數 | **1**（virt-launcher） | KubeVirt 架構 |
+| PVC 宣告容量 | **64 GiB**（CDI 渲染後 **67.8 GiB**） | v1 拍板；`WebhookPvcRendering` 加 filesystem overhead（W1 PoC 實測） |
+| **Longhorn 排程額度佔用** | **135.6 GiB** | 67.8 × 2 副本——**Longhorn 以宣告值計排程**，這才是密度的硬約束 |
+| **Longhorn 實體佔用（初期）** | **~8.7 GiB** | `actualSize` 實測 **4.4 GiB** × 2 副本；**thin-provisioned，隨租戶使用成長** |
+| ~~Longhorn 實體佔用~~ | ~~128 GiB~~ | ~~64 × 2 副本~~ → **這是上限，不是起點** |
+| **import 峰值（transient）** | **203.5 GiB** ＋ 3 顆 PVC | target + prime + scratch（§6.2 洞 3） |
+| RAM（pod requests） | **4.431 GiB** | W1 PoC 實測（原推算 5.3） |
+| CPU（limits 帳面） | **2.015 vCPU** | W1 PoC 實測（原推算 3）；實際 request 因 `cpuAllocationRatio: 10` 更低 |
+| pod 格數 | **1**（virt-launcher） | KubeVirt 架構（實測確認：1 main `compute` + 1 initContainer） |
 
-### 8.3 叢集密度上限（本檔實查數字推算）
+### 8.3 叢集密度上限（D7 改寫：瓶頸機制與原推論不同）
 
-| 維度 | 現有容量 | 目前已用 | 每台 HAOS | **可再開台數** |
-|---|---|---|---|---|
-| **Longhorn 儲存** | 2752 GiB（4 × 688） | 已用 410 GiB（可用 **2342 GiB**） | 128 GiB | **≈ 18 台** |
-| RAM | ~500 GiB（4 × 125） | — | 5.3 GiB | ≈ 94 台 |
-| pod 額度 | 800（4 × 200） | 280 | 1 | ≈ 520 台 |
-| vCPU | 1024（4 × 256） | requests 17–29% | 3（帳面） | > 200 台 |
+**Longhorn 設定實查（2026-07-28，唯讀）**：
+```
+storage-over-provisioning-percentage = 200
+storage-minimal-available-percentage = 25
+總容量 2752 GiB | 實際可用 2327 GiB | 已排程(宣告) 3223 GiB
+```
 
-**結論：儲存是唯一瓶頸，而且瓶頸很近。** 實務上 Longhorn 還需保留 rebuild／snapshot 空間，安全水位下**約 15 台**。
+| 維度 | 現有容量 | 每台 HAOS | **可再開台數** |
+|---|---|---|---|
+| **Longhorn 排程額度** | 上限 2752 × 200% ＝ **5504 GiB**；已排程 3223 GiB → 剩 **2281 GiB** | 135.6 GiB（宣告×2 副本） | **≈ 16 台** |
+| Longhorn 實體 | 可用 2327 GiB | ~8.7 GiB（初期）／128 GiB（滿載上限） | 初期遠大於 16；滿載時 ≈18 |
+| RAM | ~500 GiB（4 × 125） | 4.431 GiB | ≈ 112 台 |
+| pod 額度 | 800（4 × 200） | 1 | ≈ 520 台 |
+| vCPU | 1024（4 × 256） | 2.015（帳面） | > 400 台 |
 
-這與 #423 Elmo 材料一節的結論一致（「RAM 遠遠不是瓶頸，儲存才是」），但本檔給出的是**現在這座叢集的實際可用量**而非比例論述。
+**結論數字與原推論相近（16 vs 18 台），但機制不同——而機制決定槓桿在哪：**
 
-### 8.4 給定價的輸入數字
+| | 原推論 | **實測** |
+|---|---|---|
+| 瓶頸 | 實體磁碟被 128 GiB/租戶 佔滿 | **Longhorn 排程額度**（以宣告值計）撞 over-provisioning 上限 |
+| 槓桿 | 只能加磁碟 | 加磁碟 **或** 調 `storage-over-provisioning-percentage`（有超賣風險，屬叢集級設定，須與叢集運維協調） |
+
+> ⚠ 超賣的真實風險：thin-provisioned 之下，若多數租戶把 64 GiB 用滿，實體會先於排程額度耗盡。`storage-minimal-available-percentage = 25` 是 Longhorn 的保護閥，但監控租戶實際用量成長是營運必要項。
+
+### 8.4 給定價的輸入數字（D5 / D6 / D7 已更新）
 
 | 項目 | 數字 | 用途 |
 |---|---|---|
-| 每租戶硬成本錨點 | 128 GiB Longhorn 實體 ＋ 4 GiB RAM ＋ 2 vCPU（超賣） | 單位成本計算 |
-| 不擴容的容量天花板 | **≈ 15–18 台** | **銷售節奏的硬約束**——超過必須先擴儲存 |
-| 擴容單位 | 每加一顆 688 GiB 磁碟 ≈ +5 台 | 擴容 ROI |
-| 副本數槓桿 | 2 副本 128 GiB → 3 副本 192 GiB（成本 +50%，換可用性） | 可調參數 |
+| 每租戶**排程額度**成本錨點 | **135.6 GiB**（宣告 67.8 × 2 副本）＋ 4.431 GiB RAM ＋ 2.015 vCPU（超賣） | 單位成本計算（**這是硬約束**） |
+| 每租戶**實體**成本（初期） | **~8.7 GiB**，隨使用成長、上限 ~135.6 GiB | 真實硬體成本；初期遠低於排程額度 |
+| 不擴容的容量天花板 | **≈ 16 台**（排程額度計） | **銷售節奏的硬約束** |
+| 擴容單位 | 每加一顆 688 GiB 磁碟 ≈ **+10 台**（688 × 200% ÷ 135.6） | 擴容 ROI |
+| 副本數槓桿 | 2 副本 → 3 副本＝排程額度 +50% | 可調參數（Q7 已拍板維持 2） |
+| over-provisioning 槓桿 | 200% → 300% 可多開 ~20 台，但放大超賣風險 | 叢集級設定，須與叢集運維協調 |
+| `min_storage_gb` = 72 的含意 | quota 216 GiB/台，是為了容納 **import 峰值 203.5 GiB**、非穩態需求 | 別誤把 72 GiB 當成賣給租戶的磁碟大小（那是 **64 GiB**） |
 | golden image 的省 | 省外網頻寬與開通時間，**不省容量**（§5.5） | 避免誤算折扣 |
-| 對照組：容器版 HA | PVC 5 GiB（`cloud_app_ha_paas` seed）→ 實體 10 GiB | **HAOS 的儲存成本是容器版的 ~13 倍**，定價必須拉開級距 |
+| 對照組：容器版 HA | PVC 5 GiB（`cloud_app_ha_paas` seed） | HAOS 的**排程額度**成本是容器版的 ~13 倍，定價必須拉開級距 |
 
-> 最後一列是本檔認為最重要的定價訊號：現行 HA PaaS 是 0 元、5 GiB；HAOS VM 是 64 GiB × 2 副本。兩者不能用相近價位並列販售。
+> 最重要的定價訊號不變：現行 HA PaaS 是 0 元、5 GiB；HAOS VM 是 64 GiB。兩者不能用相近價位並列販售。
+> **新增訊號**：實體成本初期只有 ~8.7 GiB/租戶，**毛利在早期遠優於排程額度所暗示的**——但天花板（16 台）仍由排程額度決定，不因 thin provisioning 而放寬。
 
 ---
 
@@ -644,15 +768,15 @@ KubeVirt 預設 `cpuAllocationRatio: 10` → 2 vCPU 的 guest 只 request 200m�
 |---|---|---|---|---|
 | **R1** | VM 層 IO 開銷 | 容器直寫 PVC 已實測（284 commits/s、p99 < 5 ms，2026-07-26）＝**上界**。VM 多一層 virtio-blk ＋ qcow2→raw，開銷「約數十 %」為**設計推論、未實測** | PoC 裝好 KubeVirt 後，在 VM 內跑**同一組** SQLite/fsync 測試比對 | 中（上界已合格，實測是為了定 SLA） |
 | **R2** | 多租戶競爭 | 未測（實測為單租戶、無競爭） | 2–3 台 HAOS 同時跑 recorder 壓測 | 中 |
-| **R3** | 64 GiB 大 volume 行為 | 未測（實測用 5 GiB） | 建 64 GiB Block volume，量首次 import 與穩態 | 中 |
+| **R3** | 64 GiB 大 volume 行為 | ✅ **已答（2026-07-28 W1 PoC）**：replica=2 ✓、`actualSize` **4.4 GiB**（thin-provisioned）→ 改寫 §8.2/§8.3 | — | 已解 |
 | **R4** | recorder 定期 purge（重 IO 批次） | 未模擬 | 長時間 soak | 低 |
-| **R5** | virt-launcher 容器數與 KubeVirt overhead 實值 | 設計取保守 3 容器；DataVolume 路徑可能只有 2 | `kubectl get pod -o jsonpath='{.spec.containers[*].name}'` ＋ 讀實際 requests | **高**（直接決定 §6.3 的 `min_*`） |
-| **R6** | NetworkPolicy 對 virt-launcher | #423 判定「零改動」＝**架構推論** | PoC 在 default-deny 下驗 VM 能啟動、能對外、tunnel 能進來 | **高** |
-| **R7** | DataVolume 刪除語意 | 全為設計論述（§4.3） | 隔離 fixture 實測三條路徑：`helm uninstall` / 直接刪 PVC / 刪 DV；形制對齊 #281 的 PVC orphan-label e2e | **高**（錯了會刪掉租戶資料） |
-| **R8** | 首次開通耗時（拉 image → import → VMI Ready → 8123 可用） | 未測 | PoC 分段計時 | **高**（決定 §5.4 要不要做 golden PVC clone） |
-| **R9** | HAOS 是否內建 `qemu-guest-agent` | 未知 | PoC 檢查 | 低（v1 就緒判定不依賴它） |
+| **R5** | virt-launcher 容器數與 KubeVirt overhead 實值 | ✅ **已答**：**1 main（`compute`）+ 1 initContainer（`guest-console-log`）**、overhead **384 MiB**、Σreq.mem **4.431 GiB**、Σlim.cpu **2.015** → D3/D4/D5 | — | 已解 |
+| **R6** | NetworkPolicy 對 virt-launcher | ✅ **已答：四項全 PASS，§3.6 零改動** | — | 已解 |
+| **R7** | DataVolume 刪除語意 | ✅ **已答**：路徑 A **PASS**（helm 回報 kept、對照組 ConfigMap 被刪）；路徑 B **證實預測**（刪 PVC → CDI 重建並重跑完整 import）→ W4b 必做；路徑 C cascade 正確 | — | 已解（非資料滅失級） |
+| **R8** | 首次開通耗時（拉 image → import → VMI Ready → 8123 可用） | ⏭ **待 W2**：必須用 OCI golden image 量，http source 的數字對 Q2 判定無意義 | W2 交付後 PoC 分段計時 | **高**（決定 §5.4 要不要做 golden PVC clone） |
+| **R9** | HAOS 是否內建 `qemu-guest-agent` | ✅ **已答：內建**（`AgentConnected=True` ＋ 完整 `guestOSInfo`）→ D8；v1 行為不變 | — | 已解 |
 | **R10** | Longhorn Backing Image 能否省儲存 | 未評估 | v1.1 專案 | 低（v1 不依賴） |
-| **R11** | CDI 是否把 DataVolume labels 複製到它建的 PVC | 未知 → 影響 orphan 標記能否撈到（§4.3 失效點 3） | PoC 檢查 PVC labels | 中 |
+| **R11** | CDI 是否把 DataVolume labels 複製到它建的 PVC | ✅ **已答：有複製**，現行選擇器可沿用 → D9（附 two-level ownership／`managed-by` 被覆寫／prime PVC transient 三細節） | — | 已解 |
 | **R12** | KubeVirt 版本綁 k8s 版本 | v1.8 支援 k8s 1.34/1.35；叢集為 1.34.5 ✓ | 叢集升 k8s 前必須先確認對應 KubeVirt 版本 | 長期治理 |
 
 ---
@@ -674,11 +798,11 @@ KubeVirt 預設 `cpuAllocationRatio: 10` → 2 vCPU 的 guest 只 request 200m�
 
 | # | 問題 | 選項 / 本檔傾向 |
 |---|---|---|
-| **Q1** | 釘哪一版 HAOS OS？ | #423 已釐清「2026.7.2」是 HA Core 版號；Elmo 用 17.1、官方頁當時 18.1。**傾向：取拍板當下的官方 stable，版本編進 image tag 與 chart `appVersion`** |
+| ~~**Q1**~~ | ~~釘哪一版 HAOS OS？~~ | ✅ **已定案（D11，2026-07-28 W1 PoC 實查 GitHub API）**：當前 stable ＝ **18.1**；qcow2 資產實名 **`haos_ova-18.1.qcow2.xz`（535 MB）**——注意 `generic-x86-64` 變體**沒有** qcow2、只有 `.img.xz`；且 535 MB 與 #423 材料寫的 ~300 MB 不符（那是 17.1 的數字）。W2 據此開工 |
 | **Q2** | golden PVC clone（§5.4）v1 要不要做？ | **傾向：不做**，等 R8 開通耗時實測結果再定 |
 | **Q3** | VM 型判定用 `workload_type` 顯式欄位，還是 operator 自動嗅探？ | **傾向：顯式欄位**（§4.1 已論述） |
 | **Q4** | `stopped` state v1 要不要預留？ | **傾向：不預留**（§7.2 方案 C），v1.1 再加 |
-| **Q5** | 定價：128 GiB/租戶、容量天花板 ≈15–18 台，怎麼轉嫁？是否先限量開放？ | 產品決策；本檔只提供數字（§8.4） |
+| **Q5** | 定價：**排程額度 135.6 GiB/租戶、實體初期 ~8.7 GiB（thin）、天花板 ≈16 台**，怎麼轉嫁？是否先限量開放？ | 產品決策；本檔只提供數字（§8.4，D5/D6/D7 已更新） |
 | **Q6** | chart 名 `haos` 是否確定（vs `home-assistant-os`）？ | **傾向 `haos`**：短、與既有容器版 `home-assistant` 明確區隔 |
 | **Q7** | 副本數維持 2 還是為 VM 型 workload 上調到 3？ | 成本 +50% 換可用性；**傾向維持 2**（Longhorn 2 副本 ＋ HAOS 自帶 Supervisor backup 已是兩層） |
 
@@ -700,6 +824,34 @@ KubeVirt 預設 `cpuAllocationRatio: 10` → 2 vCPU 的 guest 只 request 200m�
 
 ---
 
+## 13. 修訂記錄
+
+### 2026-07-28 — W1 PoC 實證回寫（D1–D9，leader 於 #423 核准）
+
+W1 PoC 在 woow-k3s（KubeVirt v1.8.0 + CDI v1.64.0）實測 R5/R6/R7/R9/R11（R8 待 W2），推翻本檔數處**設計論述**。裁決理由：**實證等級高於設計論述，照實證改。**
+
+| D# | 落點 | 原設計 | 改為 | 證據 |
+|---|---|---|---|---|
+| **D1** | §3.4 第 2 點（＋§7.4、§5.5 措辭） | `volumeMode: Block` | **`Filesystem`** | 受控 A/B（唯一變因 `volumeMode`）：Block → importer `Permission denied` CrashLoop；Filesystem → `Succeeded` |
+| **D2** | §0.1 表、§1 In-2、§3.1 檔案佈局、**§3.5**、§3.6 | Service selector `kubevirt.io/domain` | **`vm.kubevirt.io/name`** | 兩個 Service 的 endpoints 對照：`svc-domain` 空、`svc-vmname` 得 `10.42.0.44` |
+| **D3** | §6.2 洞 1（＋§3.3 表的理由欄） | 「LimitRange 補 512Mi limit → admission 拒收」 | **不成立**；`limits==requests` 改為「避免 KubeVirt 自動把 limit 放大成 request 的 2 倍」 | 負面測試：無 limits 的 VM 照常 Running，limit 被設成 8.55 GiB |
+| **D4** | §6.2 洞 2（＋§6.4） | 「其他容器被補 500m/512Mi 憑空吃 quota」 | **不成立**（KubeVirt 對所有容器含 initContainer 自設 resources） | 容器 resources 實查 |
+| **D5** | §6.3、§8.2 | `min_ram_gb 6.0` | **5.0** | Σrequests.memory 實測 **4.431 GiB**；overhead **384 MiB** |
+| **D6** | §6.2 新增洞 3、§6.3、§8.4 | `min_storage_gb 64` | 🔴 **72** | import 三 PVC 峰值 **203.5 GiB** > `64×3=192`；`ErrExceededQuota` 原始輸出；216 GiB 實測放行 |
+| **D7** | §8.2、§8.3、§8.4 | 「128 GiB 實體/租戶 → ≈18 台，實體撞牆」 | **thin-provisioned**：實體初期 ~8.7 GiB；瓶頸是 **Longhorn 排程額度** → **≈16 台** | `actualSize` 實測 4.4 GiB；over-provisioning 200%、已排程 3223/5504 GiB |
+| **D8** | §4.1 第 5 點、§9 R9 | qemu-guest-agent「未知」 | **內建且可用**（v1 行為不變） | `AgentConnected=True` ＋ 完整 `guestOSInfo` |
+| **D9** | §4.3 失效點 3、§9 R11 | 「CDI 是否複製 label 未知」 | **有複製**，現行選擇器可沿用；補 two-level ownership／`managed-by` 被覆寫／prime PVC transient | PVC labels 與 ownerReferences 實查 |
+
+**不需改（設計成立、已由 PoC 正面確認）**：§3.6 NetworkPolicy（R6 四項全 PASS）、§4.3 路徑 A 的 chart-owned keep 機制（R7）、§3.3 的 label pass-through。
+
+### 2026-07-28 — 併同收的本檔勘誤
+
+1. **方法名**：`_poll_service_status` 全檔修正為 **`_poll_and_update_status`**（實名，`src/models/cloud_service.py:1218`）。
+2. **行號**：`cloud_service.py:1219-1303` → **`:1218-1303`**（`def` 在 1218）。
+3. **§4.1 問題 B 遺漏 controller 層**：本檔初版只點出 model 層的 fail-open，實際上 `src/controllers/paas.py:2742-2749` 有同型複製品（呼叫點 `:2417`／`:2172`）。已於 §4.1 補上；implementation plan 的 W5a.2 據此改為兩層覆蓋。
+
+---
+
 ## 附錄 A：本檔引用的程式碼位置
 
 | 位置 | 內容 |
@@ -708,7 +860,9 @@ KubeVirt 預設 `cpuAllocationRatio: 10` → 2 vCPU 的 guest 只 request 200m�
 | `src/models/cloud_service.py:703-704` | 預設 StorageClass ＝ `longhorn-delete` |
 | `src/models/cloud_service.py:874-926` | `_inject_storage_class`（預設 fallback `('persistence','storageClass')` 在 :918） |
 | `src/models/cloud_service.py:1198` | poll cron 的 transitional state 清單 |
-| `src/models/cloud_service.py:1219-1303` | `_poll_service_status`（:1256-1261 是 ready 判定，含問題 B 的 `not pods`） |
+| `src/models/cloud_service.py:1218-1303` | `_poll_and_update_status`（:1256-1261 是 ready 判定，含問題 B 的 `not pods`） |
+| `src/controllers/paas.py:2694` | `_update_service_status`——model 層邏輯的**第二份複製品**；:2742-2749 是 controller 層同型 fail-open |
+| `src/controllers/paas.py:2172` / `:2417` | 上者的兩個呼叫點（workspace 服務清單／服務詳情 poll） |
 | `src/models/cloud_service.py:1409-1444` | `_do_suspend`（:1425 呼叫 `scale_release`；:1437 失敗寫 error） |
 | `src/models/cloud_service.py:1446-1484` | `_do_resume` |
 | `src/models/cloud_service.py:1486-1506` | `_compute_ns_quota`（×3、floor 8/8Gi/100Gi） |

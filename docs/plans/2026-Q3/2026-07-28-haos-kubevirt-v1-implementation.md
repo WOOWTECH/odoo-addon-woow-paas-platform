@@ -1,7 +1,7 @@
 ---
 title: "HAOS × KubeVirt Cloud Service v1 實作 Plan（#423）"
 category: plans
-status: draft
+status: active
 created: 2026-07-28
 updated: 2026-07-28
 related:
@@ -27,7 +27,7 @@ PR #445 第二則留言（Eugene，2026-07-28，經 grilling 檢驗後確認）�
 
 | # | 題 | 定案 | 對本 plan 的影響 |
 |---|---|---|---|
-| **Q1** | HAOS OS 版本 | **實作當下官方 stable**，版本編進 image tag 與 chart `appVersion` | W2 的第一個動作＝查當下 stable 並記錄；W3 的 `appVersion` 隨之 |
+| **Q1** | HAOS OS 版本 | **實作當下官方 stable**，版本編進 image tag 與 chart `appVersion`<br>✅ **D11 已定案：18.1** | W2.1 已完成（見 W2）；W3a 的 `appVersion` ＝ `18.1` |
 | **Q2** | golden PVC clone | **v1 不做**，等 R8 開通耗時實測後再議 | W1-R8 的判定門檻直接對應這題；W2 只做 registry source |
 | **Q3** | VM 型判定 | **`workload_type` 顯式欄位**（不嗅探；fail-loud 慣例） | W5a 新增欄位；W4 的 status API 以 query param 收 |
 | **Q4** | `stopped` state | **v1 不預留**（design §7.2 方案 C）；欠費停權沿既有 `suspended` 路徑映射 `runStrategy` Halted/Always | W5a 不動 `state` Selection；W5a 測試須釘住「不新增 state」 |
@@ -159,7 +159,12 @@ kubectl --context woow-k3s get cdi -o jsonpath='{.items[0].spec.config.dataVolum
 
 ---
 
-## W1 — PoC（重中之重）
+## W1 — PoC（重中之重）✅ **已於 2026-07-28 執行完成**
+
+> **執行結果**：R5 / R6 / R7 / R9 / R11 **全部有答案**，報告見 [#423](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/423)（2026-07-28 22:38 留言）；產出 D1–D11 待回寫清單，leader 已核准全數回寫。
+> **R8 未執行**——依 W1.2 的循環解法，必須等 W2 的 OCI golden image；用 `http` source 量的數字對 Q2 判定無意義。
+> **R1 / R2 未執行**——依 W1.9 約定需 Eugene 事前同意（Longhorn 與 prod 共用）。
+> 以下步驟保留原文，供 W2 之後補測 R8、或日後需要重跑時直接沿用；命令中的 selector 等處已依實測修正。
 
 **負責**：本 repo。**環境**：`dev-sandbox-423-poc` namespace（CLAUDE.md 白名單內）。
 **依賴**：W0 完成。
@@ -203,8 +208,9 @@ kubectl --context woow-k3s get cdi -o jsonpath='{.items[0].spec.config.dataVolum
 - [ ] 套用**與 CS ns 同構**的 LimitRange 到 `dev-sandbox-423-poc`（複製 `extra/paas-operator/src/services/helm.py:1047-1059` 的形狀）
   - `default` / `defaultRequest` 皆 `cpu: 500m` / `memory: 512Mi`，`type: Container`，**不設 `max`**
 - [ ] 套用**與 CS ns 同構**的 ResourceQuota（複製 `helm.py:1061-1087` 的 6-key hard）
-  - 值取「單台 HAOS」的預期 quota：`requests/limits.cpu: 9`、`requests/limits.memory: 18Gi`、`persistentvolumeclaims: 10`、`requests.storage: 192Gi`
-  - （＝design §6.3 的 `min_*` × 3；用設計推算值起跑，R5 若推翻再回填）
+  - 值取「單台 HAOS」的預期 quota：`requests/limits.cpu: 9`、`requests/limits.memory: 15Gi`、`persistentvolumeclaims: 10`、🔴 **`requests.storage: 216Gi`**
+  - （＝design §6.3 的 `min_*` × 3，**已回填 2026-07-28 W1 PoC 實測值** `3 / 5.0 / 72`）
+  - ⚠ **`requests.storage` 用 192Gi 會讓 import 永久卡住**——CDI 的 target+prime+scratch 三 PVC 峰值實測 203.5 GiB（design §6.2 洞 3）
 - [ ] 🔴 **建 `paas-registry` dockerconfigjson secret**（**W1.6 R8 的硬前置**）
   - 正式 CS ns 由 operator 的 `create_namespace` 順手建（`helm.py:1028` 呼叫 `ensure_registry_secret`），**PoC ns 沒有人建** → OCI registry source 會直接 ImagePullBackOff／import 失敗
   ```bash
@@ -230,6 +236,20 @@ kubectl --context woow-k3s get cdi -o jsonpath='{.items[0].spec.config.dataVolum
 W1 與 W2 併行，W2 的 OCI image 可能還沒好。切法：
 
 - **R5 / R6 / R7 / R9 / R11**：**可以用 CDI `http` source** 直接抓 HAOS 官方 `.qcow2.xz` URL。這些項目驗的是「VM 起來之後的行為」，與 image 從哪來無關。
+
+  > **D10（2026-07-28 W1 PoC 實證補記）：CDI v1.64 走 volume populator，import 期間 namespace 內同時存在三顆 PVC。**
+  >
+  > | PVC | 說明 |
+  > |---|---|
+  > | target（`<dv-name>`） | DataVolume 的目標 PVC，import 完成前是 `Pending` |
+  > | `prime-<uuid>` | populator 的中介 PVC，實際承接寫入 |
+  > | `prime-<uuid>-scratch` | **解壓／格式轉換用的暫存空間**；`.qcow2.xz` 這種壓縮來源必用 |
+  >
+  > 三顆都計入 ns 的 `requests.storage` quota → **峰值 ≈ 宣告值 × 3**（實測 203.5 GiB）。這是 design §6.2 洞 3 的來源，也是 `min_storage_gb` 要從 64 提到 72 的原因。
+  >
+  > 另兩個 populator 的觀察（影響 W4 的 orphan 標記邏輯）：
+  > - **prime PVC 的 owner 是 target PVC**（不是 DataVolume）——ownership 是兩層。
+  > - **import 成功後 CDI 會自行回收 prime／scratch PVC**（穩態每台只剩 1 顆）；但若刪除發生在 import 中途，`list_pvcs` 會多撈到它們。
   - ⚠ **這是 PoC 專用的臨時手段，不是 v1 設計**（v1 是 registry source，見 design §5.3）。PoC 報告必須註明，避免日後被當成設計依據。
 - **R8（開通耗時）**：**必須等 W2 的 OCI image**——來源不同、耗時不同，用 http source 量出來的數字對 Q2 的判定沒有意義。
 
@@ -241,13 +261,13 @@ W1 與 W2 併行，W2 的 OCI image 可能還沒好。切法：
 - [ ] **步驟 2**：列容器名單
   ```bash
   kubectl --context woow-k3s get pod -n dev-sandbox-423-poc \
-    -l kubevirt.io/domain=<vm-name> \
+    -l vm.kubevirt.io/name=<vm-name>   # D2：kubevirt.io/domain 選不到 \
     -o jsonpath='{.items[0].spec.containers[*].name}'
   ```
 - [ ] **步驟 3**：列每個容器的**實際生效** resources（含 LimitRange 補上的）
   ```bash
   kubectl --context woow-k3s get pod -n dev-sandbox-423-poc \
-    -l kubevirt.io/domain=<vm-name> -o json \
+    -l vm.kubevirt.io/name=<vm-name>   # D2：kubevirt.io/domain 選不到 -o json \
     | python3 -c "import sys,json;p=json.load(sys.stdin)['items'][0];[print(c['name'],c.get('resources')) for c in p['spec']['containers']]"
   ```
 - [ ] **步驟 4**：推算 KubeVirt memory overhead
@@ -255,7 +275,7 @@ W1 與 W2 併行，W2 的 OCI image 可能還沒好。切法：
   - 改用**相減法**：`overhead = compute 容器的實際 requests.memory − guest 宣告的 4Gi`
   ```bash
   kubectl --context woow-k3s get pod -n dev-sandbox-423-poc \
-    -l kubevirt.io/domain=<vm-name> -o json \
+    -l vm.kubevirt.io/name=<vm-name>   # D2：kubevirt.io/domain 選不到 -o json \
     | python3 -c "import sys,json;p=json.load(sys.stdin)['items'][0];c=[x for x in p['spec']['containers'] if x['name']=='compute'][0];print('compute requests:',c['resources'].get('requests'))"
   ```
 - [ ] **步驟 5**：讀 ns quota 實際消耗
@@ -476,7 +496,17 @@ kubectl --context woow-k3s get ns | grep -c 423-poc    # → 0
 **負責**：`woow-paas-ci` repo。**可與 W1 併行。**
 **依賴**：無（Q1 已拍板＝實作當下官方 stable）。
 
-- [ ] **W2.1**：查 HAOS 官方**當下 stable** 版本並記錄（Q1 拍板值；注意 #423 §3.2 的教訓——「2026.7.2」是 **HA Core** 版號，不是 HAOS OS 版號，兩者別搞混）
+- [x] **W2.1** ✅ **已完成（D11，2026-07-28 W1 PoC 實查 GitHub API）**——結果如下，W2.2 直接用，不需重查：
+
+  | 項 | 值 |
+  |---|---|
+  | HAOS 當前 stable | **18.1** |
+  | qcow2 資產實名 | **`haos_ova-18.1.qcow2.xz`** |
+  | 大小 | **535 MB**（≠ #423 材料寫的 ~300 MB——那是 17.1 的數字） |
+  | 下載 URL | `https://github.com/home-assistant/operating-system/releases/download/18.1/haos_ova-18.1.qcow2.xz` |
+
+  ⚠ **`generic-x86-64` 變體沒有 qcow2**（只有 `.img.xz` 與 `.raucb`）——要 qcow2 必須取 **`haos_ova-*`** 這個 VM 用變體。
+  （#423 §3.2 的原教訓仍成立：「2026.7.2」是 **HA Core** 版號、不是 HAOS OS 版號，兩者別搞混。）
 - [ ] **W2.2**：新增 build workflow —— 下載該版本 `.qcow2.xz` → 打包成 **OCI containerDisk** → 推 `jcr-prod.woowtech.io/woow-paas-docker-local/haos`
   - tag 規則：`{haos-os-version}-{UTC 時間戳}`（例 `18.1-20260801.0930`），對齊平台既有 timestamp tag 慣例
   - v1 內容 ＝ **stock HAOS qcow2 原樣重新封裝**，不改內容（rebrand 是 out-of-scope）
@@ -539,7 +569,7 @@ helm template t charts/paas-operator | yq 'select(.kind=="ClusterRole") | .rules
   - `name: haos`（Q6 拍板）、`version: 0.1.0`、`appVersion: <HAOS OS 版本>`（Q1）
   - `Chart.yaml` description 沿用 `charts/home-assistant/Chart.yaml` 的形制：寫明 OPERATOR COUPLING（chart pin 與 `helm_default_values.image.*` 必須同一次變更一起動）
 - [ ] **W3a.2** `templates/datavolume.yaml`（design §3.4）
-  - `source.registry`（Q2：不做 PVC clone）、`accessModes: [ReadWriteOnce]`、`volumeMode: Block`
+  - `source.registry`（Q2：不做 PVC clone）、`accessModes: [ReadWriteOnce]`、🔴 **`volumeMode: Filesystem`（D1，非 `Block`——Block 在本叢集會讓 CDI importer `Permission denied`，見 design §3.4）**
   - **`storageClassName` 顯式**（values 鍵名固定 `persistence.storageClass`，才能吃到平台 `_inject_storage_class` 的預設 fallback）
   - **`helm.sh/resource-policy: keep` annotation**（W1-R7 路徑 A 驗證過的機制）
   - labels 含 `app.kubernetes.io/instance`（R11 相關）
@@ -549,7 +579,7 @@ helm template t charts/paas-operator | yq 'select(.kind=="ClusterRole") | .rules
   - `domain.resources` 顯式設 `limits == requests`，值取 W1-R5 回填後的規格
   - `masquerade` ＋ **ports 顯式只列 8123**
   - **`spec.template.metadata.labels` 必須含 chart selectorLabels**（含 `app.kubernetes.io/instance`）—— 同時解決 fail-open 與 NP podSelector 兩件事
-- [ ] **W3a.4** `templates/service.yaml`：selector `kubevirt.io/domain`、`targetPort` 用數字、名稱沿用 release fullname
+- [ ] **W3a.4** `templates/service.yaml`：selector 🔴 **`vm.kubevirt.io/name`（D2，非 `kubevirt.io/domain`——後者在 KubeVirt v1.8.0 不是自動 label，selector 會選不到任何 pod）**、`targetPort` 用數字、名稱沿用 release fullname
 - [ ] **W3a.5** `templates/network-policy.yaml`：對齊 `charts/home-assistant` 形制；`ingressNamespaces` 空則不發 ingress allow；`allowAllEgress: true` 預設；**加上 W1-R6 實測後發現需要的額外規則**
 - [ ] **W3a.6** 5 支 render 契約測試（形制對齊 `charts/home-assistant/tests/*.sh`：`helm template` + `yq` + `fail()`）
 
@@ -557,7 +587,7 @@ helm template t charts/paas-operator | yq 'select(.kind=="ClusterRole") | .rules
 |---|---|
 | `test-vm-firmware.sh` | `firmware.bootloader.efi.secureBoot == false` 必存在（缺則 HAOS 開不了機） |
 | `test-masquerade-ports.sh` | `interfaces[0].ports` 長度 == 1 且 port == 8123（**防有人為了 MQTT 偷開全埠**） |
-| `test-service-selector.sh` | Service selector == `kubevirt.io/domain: <fullname>` |
+| `test-service-selector.sh` | Service selector == **`vm.kubevirt.io/name: <fullname>`**（D2）；並**斷言不是** `kubevirt.io/domain`（防回退） |
 | `test-dv-keep-annotation.sh` | DataVolume 帶 `helm.sh/resource-policy: keep`（**防資料滅失**） |
 | `test-labels-passthrough.sh` | VM 的 `spec.template.metadata.labels` 含 `app.kubernetes.io/instance`（**防 fail-open 復發**） |
 
@@ -797,13 +827,14 @@ design 抓到的 `all_ready = all(...) if active_pods else (not pods)`（model `
 
 - [ ] **W5b.0** 新增 `src/tests/test_haos_seed_423.py`（seed 契約測試，與本 PR 的 seed 同進同出）
   - template 存在、`slug`、`workload_type == 'vm'`、chart pin（name ＋ version）、`image.tag` 為 `tag@sha256:` 雙釘格式、`default_port == 8123`
-  - `min_vcpu` / `min_ram_gb` / `min_storage_gb` ＝ W1-R5 回填值
+  - 🔴 **`min_vcpu=3` / `min_ram_gb=5.0` / `min_storage_gb=72`**（D5/D6 實測回填值，非原設計的 3 / 6.0 / 64）
   - plan ↔ template M2M link 存在
 - [ ] **W5b.1** `src/data/cloud_app_templates.xml` 新增 `cloud_app_haos`
   - `slug: haos`、`category: container`（或視前台分類決定）、`workload_type: vm`
   - `helm_chart_name: oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos`、`helm_chart_version: 0.1.0`
   - `helm_default_values`：`image.tag` 用 **`tag@sha256:` 雙釘**（W2.4 的值）、`persistence.size: 64Gi`、`vm.cores` / `vm.memory`、`service.port/targetPort: 8123`、`ingress.enabled: false`
-  - `default_port: 8123`、`min_vcpu` / `min_ram_gb` / `min_storage_gb` ＝ **W1-R5 回填值**
+  - `default_port: 8123`、🔴 **`min_vcpu: 3` / `min_ram_gb: 5.0` / `min_storage_gb: 72`**（D5/D6）
+  - ⚠ `min_storage_gb=72` **不是賣給租戶的磁碟大小**（那是 64 GiB）——72 是為了讓 `×3` 的 quota（216 GiB）容納 **CDI import 的三 PVC 峰值 203.5 GiB**；seed 註解必須寫明這一點，否則日後有人「看到 64 就改回去」會讓所有開通卡死
   - 註解須寫明 **chart↔image 原子變更鐵律**（沿用 `cloud_app_ha_paas`（:554-576）的既有寫法）
 - [ ] **W5b.2** `src/data/subscription_products.xml` 新增 plan ＋ product（價格待 Q5）
 - [ ] **W5b.3** `src/data/subscription_template_links.xml` 新增 M2M link（形制：`eval="[(6, 0, [ref('plan_haos_monthly'), …])]"`）
@@ -884,22 +915,26 @@ kubectl --context woow-k3s get pvc -n <ws-ns> -l paas.woowtech.io/orphaned-at   
 
 ## 3. 風險映射（design §9 的 12 項 → 哪個 wave 回答）
 
-| # | 風險 | 阻塞性 | 回答的 wave | 若答案推翻設計，回寫哪一節 |
-|---|---|---|---|---|
-| **R1** | VM 層 IO 開銷 | 中 | **W1.9**（⚠ 需 Eugene 同意） | design §9 R1（SLA 論述，不阻塞上線） |
-| **R2** | 多租戶競爭 | 中 | **W1.9**（⚠ 需同意） | design §9 R2 |
-| **R3** | 64 GiB 大 volume 行為 | 中 | **W1.8**（順帶量） | design §8.2 |
-| **R4** | recorder 定期 purge | 低 | **W6.7 後的上線觀察期**（v1 不做） | — |
-| **R5** | virt-launcher 容器數與 overhead | 🔴 高 | **W1.3** | design §6.3、§8.2 → 同步 W5b seed 值 |
-| **R6** | NetworkPolicy 對 virt-launcher | 🔴 高 | **W1.4** | design §3.6 → 同步 W3a.5 |
-| **R7** | DataVolume 刪除語意 | 🔴 高 | **W1.5** | design §4.3 → 阻塞 W3a／決定 W4b 範圍 |
-| **R8** | 首次開通耗時 | 🔴 高 | **W1.6**（需 W2 的 image） | design §5.4（觸發 Q2 重議）、§7.4 |
-| **R9** | HAOS 是否內建 qemu-guest-agent | 低 | **W1.7** | design §4.1 第 5 點（補註） |
-| **R10** | Longhorn Backing Image 省儲存 | 低 | **v1 不做**（v1.1 專案） | — |
-| **R11** | CDI 是否複製 DV labels 到 PVC | 中 | **W1.5**（附帶） | design §4.3 失效點 3 → 決定 W4.4 的標記標的 |
-| **R12** | KubeVirt 版本綁 k8s 版本 | 長期治理 | **W0**（安裝時確認）＋長期 | 叢集升 k8s 的 SOP |
+狀態欄已於 **2026-07-28 W1 PoC 執行後更新**。
 
-**四項高阻塞全部集中在 W1** —— 這是把 W1 定為「重中之重」的原因：W1 沒跑完，W3a 的 chart 就是在猜。
+| # | 風險 | 阻塞性 | 回答的 wave | **狀態 / 結果** |
+|---|---|---|---|---|
+| **R1** | VM 層 IO 開銷 | 中 | **W1.9**（⚠ 需 Eugene 同意） | ⏭ **未執行**，待同意後排程 |
+| **R2** | 多租戶競爭 | 中 | **W1.9**（⚠ 需同意） | ⏭ **未執行**，同上 |
+| **R3** | 64 GiB 大 volume 行為 | 中 | **W1.8**（順帶量） | ✅ **已答 → D7**：replica=2 ✓、`actualSize` 4.4 GiB（thin）→ 改寫 design §8.2/§8.3 |
+| **R4** | recorder 定期 purge | 低 | **W6.7 後的上線觀察期**（v1 不做） | — |
+| **R5** | virt-launcher 容器數與 overhead | 🔴 高 | **W1.3** | ✅ **已答 → D3/D4/D5**：1 main + 1 init、overhead 384 MiB、Σreq.mem 4.431 GiB |
+| **R6** | NetworkPolicy 對 virt-launcher | 🔴 高 | **W1.4** | ✅ **已答：四項全 PASS**，design §3.6 零改動 |
+| **R7** | DataVolume 刪除語意 | 🔴 高 | **W1.5** | ✅ **已答：路徑 A PASS（非資料滅失級，W3a 解除阻塞）**；路徑 B 證實 → **W4b 必做** |
+| **R8** | 首次開通耗時 | 🔴 高 | **W1.6**（需 W2 的 image） | ⏭ **待 W2**（唯一未答的高阻塞項） |
+| **R9** | HAOS 是否內建 qemu-guest-agent | 低 | **W1.7** | ✅ **已答 → D8：內建**（`AgentConnected=True`） |
+| **R10** | Longhorn Backing Image 省儲存 | 低 | **v1 不做**（v1.1 專案） | — |
+| **R11** | CDI 是否複製 DV labels 到 PVC | 中 | **W1.5**（附帶） | ✅ **已答 → D9：有複製**，現行選擇器可沿用 |
+| **R12** | KubeVirt 版本綁 k8s 版本 | 長期治理 | **W0**（安裝時確認）＋長期 | ✅ W0 已確認（KubeVirt v1.8.0 / k8s v1.34.5） |
+| **新 B1** | `volumeMode: Block` 可用性 | 🔴 高 | **W1（未預期）** | 🔴 **Block 不可用 → D1 改 Filesystem** |
+| **新 B2** | CDI import 三 PVC 峰值撞 quota | 🔴 高 | **W1（未預期）** | 🔴 **`min_storage_gb` 64 會讓開通永久卡住 → D6 改 72** |
+
+**四項原定高阻塞已答三項（R5/R6/R7），R8 待 W2。** 但 W1 另外撞出兩個 plan 未預期的阻斷點（B1/B2），其中 B2 會讓真實 CS namespace 的開通永久卡住且症狀不指向根因——**這正是「W1 沒跑完，W3a 的 chart 就是在猜」的最好證明**。
 
 ---
 
@@ -924,7 +959,24 @@ kubectl --context woow-k3s get pvc -n <ws-ns> -l paas.woowtech.io/orphaned-at   
 
 ## 6. 修訂記錄
 
-### 2026-07-28 — PR #447 深審（4 維度平行對抗審查）findings 修訂
+### 2026-07-28（二）— W1 PoC 實證回寫（D1–D11，leader 於 #423 核准）
+
+W1 已執行完成（R5/R6/R7/R9/R11；R8 待 W2）。PoC 推翻 design 數處設計論述，並撞出兩個本 plan 未預期的阻斷點。本檔受影響處同步如下：
+
+| D# | 本檔落點 | 內容 |
+|---|---|---|
+| **D1** | **W3a.2** | chart DataVolume 規格 `volumeMode: Block` → **`Filesystem`** |
+| **D2** | **W3a.4**、**W3a.6 測試表**、**W1.3 步驟 2–4 命令** | Service selector `kubevirt.io/domain` → **`vm.kubevirt.io/name`**；chart test 加「斷言不是 `kubevirt.io/domain`」防回退；PoC 命令的 `-l` selector 同步 |
+| **D5 / D6** | **W1.1**、**W5b.0**、**W5b.1** | `min_*` 回填實測值 **3 / 5.0 / 72**；W1.1 的 quota 由 `18Gi / 192Gi` 改為 **`15Gi / 216Gi`**；W5b.1 加註「72 不是賣給租戶的磁碟大小」 |
+| **D10** | **W1.2** | 補記 CDI v1.64 的 **volume populator 三 PVC 流程**（target／prime／scratch）與兩個 ownership 觀察 |
+| **D11** | **§0 Q1 表**、**W2.1** | Q1 定案：HAOS **18.1**、資產實名 **`haos_ova-18.1.qcow2.xz`（535 MB）**；W2.1 標記已完成、附完整 URL 與「`generic-x86-64` 沒有 qcow2」的坑 |
+| D3／D4／D7／D8／D9 | 僅落 design 檔 | 本檔無對應任務需改（詳見 design §13 修訂記錄） |
+| — | **W1 章標題**、**§3 風險映射表** | W1 標記已執行完成、附執行結果；風險表補「狀態/結果」欄與 B1／B2 兩列 |
+
+**解鎖**：D1 + D2 落檔後 **W3a chart 解除阻塞、可開工**；D11 落檔後 **W2 可開工**。
+**仍待**：R8（待 W2 的 OCI image）、R1/R2（待 Eugene 同意）、Q5 定價（閘 W5b）。
+
+### 2026-07-28（一）— PR #447 深審（4 維度平行對抗審查）findings 修訂
 
 零 FAIL、零 blocker；骨架全部成立。以下 4 MAJOR ＋ 9 MINOR 已逐條修訂：
 
@@ -944,14 +996,14 @@ kubectl --context woow-k3s get pvc -n <ws-ns> -l paas.woowtech.io/orphaned-at   
 | m8 | R5 判定門檻無容差 | 改為區間（記憶體 5.0–6.0 GiB、CPU 2.5–3.5） |
 | **m9** | **方法名勘誤**：`_poll_service_status` 不存在 | 全文修正為 **`_poll_and_update_status`**（`cloud_service.py:1218`），行號 `1219-1303` → `1218-1303` |
 
-#### ⚠ Design 檔勘誤（本次順帶發現，待回寫）
+#### ⚠ Design 檔勘誤（本次順帶發現）—— ✅ **已於 2026-07-28 D1–D11 回寫 PR 一併收掉**
 
-`docs/plans/2026-Q3/2026-07-27-haos-kubevirt-v1-design.md` 有兩處同源錯誤，**本 plan 已修正，design 檔待回寫**（併入 PR-W1b，或另開小 PR）：
+`docs/plans/2026-Q3/2026-07-27-haos-kubevirt-v1-design.md` 有兩處同源錯誤，**本 plan 當時已修正，design 檔已於本次回寫 PR 收掉**：
 
 1. §4.1 表格與附錄 A 的 `_poll_service_status` → 實名 **`_poll_and_update_status`**
 2. 同兩處的 `src/models/cloud_service.py:1219-1303` → **`:1218-1303`**（`def` 在 1218）
 
-另外 design §4.1「兩個問題」一節只點出 model 層的 fail-open，**遺漏 controller 層的同型複製品**（`paas.py:2742-2749`）——這是 M4 的來源，同樣待回寫。
+另外 design §4.1「兩個問題」一節只點出 model 層的 fail-open，**遺漏 controller 層的同型複製品**（`paas.py:2742-2749`）——這是 M4 的來源，**已於本次回寫 PR 補進 design §4.1 與附錄 A**。
 
 ---
 
