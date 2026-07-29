@@ -1,7 +1,7 @@
 name: repo-lint
 on:
   pull_request:
-    paths: ["src/**"]
+    paths: ["src/**", "scripts/audit/**"]
 jobs:
   repo-lint:
     runs-on: ubuntu-latest

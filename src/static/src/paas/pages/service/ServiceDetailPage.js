@@ -171,10 +171,21 @@ export class ServiceDetailPage extends Component {
         return this.service?.template?.slug === 'odoo';
     }
 
-    get isMcpAdminService() {
-        return ["mcp-odoo", "mcp-odoo-manage", "mcp-n8n"].includes(
-            this.service?.template?.slug
-        );
+    /**
+     * Reset 密碼按鈕的顯示判準。
+     *
+     * 讀模板的 has_admin_gui 欄位——與後端 reset endpoint 的授權判準
+     * （controllers/paas.py 的 `service.template_id.has_admin_gui`，#357 C01）
+     * 收斂到同一個欄位。原本這裡是硬編碼的三筆 slug 白名單
+     * （mcp-odoo／mcp-odoo-manage／mcp-n8n），與後端不一致：8 個
+     * has_admin_gui=True 的模板有 5 個後端放行、前端卻按不到按鈕，修復對租戶
+     * 不可達（#460 / F-449-4）。**不得再退回 slug 判準**。
+     *
+     * 缺欄位（舊快取、尚未更新的 payload）一律視同 False——fail-closed：寧可
+     * 不顯示，也不要長出一顆按了必然失敗的按鈕。
+     */
+    get hasAdminGui() {
+        return this.service?.template?.has_admin_gui === true;
     }
 
     get isResetAdminPasswordLoading() {

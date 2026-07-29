@@ -89,7 +89,7 @@
                             Skip Trial
                         </WoowButton>
                         <WoowButton
-                            t-if="isMcpAdminService"
+                            t-if="hasAdminGui"
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="resetAdminPassword"
