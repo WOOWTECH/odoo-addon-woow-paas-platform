@@ -40,6 +40,7 @@
 | #449 密碼載體分流 | F-449-2 | **發版順序硬約束＝operator 先發、平台後發**（medium；PR #455 橫跨兩條發版線，發版單須按目錄分流。stg 已按此順序完成，prod 待辦）|
 | #449 密碼載體分流 | F-449-3 | reset 的 **120s 預算對 Recreate＋RWO PVC＋大 image 是邊際的**（medium；stg 實測兩台第一次都逾時、第二次都成功，差別只在 image cache）|
 | #449 密碼載體分流 | F-449-4 | 🔴 **前台 Reset 按鈕的 slug 白名單未同步 `has_admin_gui`**（high；`has_admin_gui=True` 的 8 個 template 有 5 個按不到按鈕，含 #449 剛修好的兩個＝修復對租戶不可達）|
+| #423 HAOS×KubeVirt | F-423-1 | 就緒判定 container 分支的 fail-open 待評估（medium；v1 刻意不修，已用 characterization test 釘住現行行為）|
 
 ## Index
 
@@ -125,6 +126,7 @@
 | F-449-1 | medium | #449 密碼載體分流 PR #455 (2026-07-28) | — | hermes-agent 與 open-design 的密碼重設**只驗到 integration 層**（真 helm + 真 kubectl，但用的是本地合成的最小 chart，不是真 chart／真 image）。| **✅ RESOLVED (2026-07-29)** — stg 真機 E2E 完成，核心驗收 PASS（四入口／三入口皆換新、舊密碼全 401、rollback 痕跡 0、RESTARTS 0）。報告 [`../test-reports/449-password-carrier-stg-e2e-2026-07-29.md`](../test-reports/449-password-carrier-stg-e2e-2026-07-29.md)；全文移至 archive。衍生 F-449-3 / F-449-4。Refs #449 #424 |
 | F-449-3 | medium | #449 stg E2E (2026-07-29) | — | reset 的 **120s client 預算對 `Recreate` ＋ RWO PVC ＋ 大 image 的 chart 是邊際的**。stg 實測：hermes-agent 與 open-design **第一次 reset 都逾時**（120.6s／121.0s），第二次都成功（49.9s／76.7s），唯一差別是 image 有沒有 cache 在被排到的節點上——cache miss 時光 pull `hermes-agent` 954MB 就要 **1m9.963s**，加 RWO PVC detach/attach 19s（open-design 兩顆 PVC 序列 26s）。落到哪個節點由排程器決定，租戶按 Reset 時無從預期 ⇒ **逾時是機率事件**。失敗路徑 fail-safe（Secret 回退、DB 不存、舊密碼仍可登入、重按會收斂），但每次冷 cache 都要租戶按兩次。| open — 建議把 operator 的 rollout 等待與平台 client 預算解耦（reset 改非同步 + 狀態輪詢），或至少讓平台預算 > operator 最壞路徑（`helm upgrade` 300s + 2×`rollout_status` 120s）。Refs #449 |
 | F-449-4 | **high** | #449 stg E2E (2026-07-29) | — | 🔴 **前台 Reset 按鈕的判準與後端不一致，#449 的修復對租戶不可達**。前端 `ServiceDetailPage.js:174` `isMcpAdminService` 用硬編碼 slug 白名單 `["mcp-odoo","mcp-odoo-manage","mcp-n8n"]`；後端 `controllers/paas.py:1293` 用 `template.has_admin_gui`，且該處有 **#357 C01** 註解明文說明為何不能用 slug allowlist（「兩端不一致＝密碼永不生效的根因」）——controller 已遷移、**前端沒跟上**。stg live DB 實查：`has_admin_gui=True` 共 8 筆，**5 筆按不到按鈕**（`mcp-k8s`／`mcp-vk`／`mcp-opendesign` 自 #375 上架起就漏、`open-design`／`hermes-agent` 為 #449 剛修好的）。缺口**早於 #449**。修法非改一行 if：live payload 實證 `template` 物件只有 `id/name/slug/category/helm_value_specs`，`has_admin_gui` 從未進前端。| open — 需雙邊改：template payload 補 `has_admin_gui` ＋ 前端 gate 改讀該欄（並比照 #357 C01 加守線，避免再長出第三個判準）。優先度高於 F-449-3——修復不可達等於沒修。Refs #449 #375 #357 |
+| F-423-1 | medium | #423 W5a design review (2026-07-29) | — | 就緒判定的 `all_ready = all(...) if active_pods else (not pods)` 在 `pods` 為空時回 True（fail-open）。VM 分支已於 W5a 改為 fail-closed，但 **container 分支兩層都刻意不動**：容器型服務有一個合法短暫狀態是「helm release 已 deployed 但 pod 還沒被 controller 建出來」，改 fail-closed 會讓**所有現存租戶服務**多卡一輪 poll，風險大於收益（design §4.1 已定案）。W5a 已把判定收斂為單一事實源 `CloudService._is_container_ready`（原本 model／controller 各一份複製品），故日後若要修只需改一處。| open — 待評估。要修的話建議先量測「release deployed 但 pods 為空」的實際發生頻率與持續時間，再決定是改 fail-closed 還是加寬限期。守線測試已存在（`test_cloud_service_poll_vm_branch.py` 的 characterization 案例），改動時會直接紅。Refs #423 |
 | F-449-2 | medium | #449 密碼載體分流 PR #455 (2026-07-28) | — | **發版順序是硬約束，不是建議**：PR #455 橫跨兩條發版線（`extra/paas-operator/**` → operator image、`src/**` → paas-odoo image），必須 **operator 先發、平台後發**。operator 端 `admin_password_carrier` 預設 `config_json`＝既有行為，舊平台不帶該欄照舊跑（安全）；反向（新平台 + 舊 operator）舊 operator 會忽略該欄、hermes-agent reset 仍 500——不比修復前更糟，但也沒修好，且外觀上「PR 已 merge 卻沒修好」極易被誤判成回歸。| open — 發版單按目錄分流並記錄兩次發版的先後；平台側發版前先確認 prod/stg operator image 已含本 PR 的 commit（`5221aae4`）。Refs #449 #448 |
 | F-424-1 | low | #424① seed 對 chart 逐鍵核對 (2026-07-28) | — | 基礎設施 sidecar image 只釘 tag、未釘 digest：`cloud_app_hermes_agent` 的 `authProxy.image` 依 chart 要求重申為 `nginxinc/nginx-unprivileged:1.27-alpine`，而 `1.27-alpine` 是會隨 patch 版移動的浮動 tag（open-design 同款）。平台「零 `:latest`／全雙釘」鐵律目前只實質涵蓋 jcr-prod 產品 image；要不要把非 jcr-prod 的基礎設施 image 也升級成 digest 雙釘＝**跨 repo 政策題**（charts + 各 seed 需 lock-step，且 digest 釘死後 registry 鏡像端 rehost 會拉不到）。守線現況：`test_every_seeded_image_is_pinned` 已依 registry 分兩級（產品 image 必 `tag@sha256`；基礎設施 image 非空且非 `latest`），政策若升級，改該分級即可一次收斂。| open — 本輪照 chart 現況（leader 2026-07-28 裁決，與 open-design 先例一致，不 block #424①）。Refs #424 |
 
@@ -1655,3 +1657,13 @@ addons_path 缺第三方相依（ai_base_gt 等在 `paas-odoo-ci/addons`）而�
 - **修法不是改一行 if**：live payload 實證（`POST /api/workspaces/1/services/60`）回傳的 `template` 物件只有 `id / name / slug / category / helm_value_specs`，**沒有 `has_admin_gui`**；全 repo grep 確認該欄位從未出現在 `src/static/`。需雙邊改：payload 補欄位 ＋ 前端 gate 改讀該欄，並比照 #357 C01 加守線避免再長出第三個判準。
 - **驗證方式**：`resetAdminPassword` 在前端只有**一個**呼叫入口（`ServiceDetailPage.xml:95`，由 `:92` 的 `t-if` 控制），已 grep 全 `src/static/src/paas/` 確認無其他路徑。
 - **對誰**：platform frontend + backend。Refs #449 #375 #357
+
+## F-423-1 — 就緒判定 container 分支的 fail-open 待評估（v1 刻意不修）
+
+- **原文**：`all_ready = all(...) if active_pods else (not pods)` —— `pods` 為空列表時回 `True`。
+- **為何 v1 不修**：容器型服務有一個**合法**的短暫狀態是「helm release 已 `deployed` 但 pod 還沒被 controller 建出來」，此時 `pods` 為空。改成 fail-closed 會讓這些服務停在 `deploying` 直到下一輪 poll——影響面是**所有現存租戶服務**，風險大於收益。design §4.1 已就此定案。
+- **VM 分支已修**：VM 型改讀 VMI 且 fail-closed（`CloudService._is_vm_ready`），因為那裡的「pod 還沒建出來」等於「磁碟還在 import」，誤判成本高得多。
+- **W5a 的結構改善**：原本 model（`cloud_service.py`）與 controller（`controllers/paas.py`）**各有一份完全同型的複製品**，只修一邊會被另一邊覆寫。W5a 已收斂為單一事實源 `CloudService._is_release_ready` / `_is_container_ready`，**日後若要修只需改一處**。
+- **動手建議**：先量測「release deployed 但 pods 為空」在 prod 的實際發生頻率與持續時間，再決定是改 fail-closed、還是加一個寬限期（例如連續 N 輪為空才算就緒）。
+- **守線已存在**：`src/tests/test_cloud_service_poll_vm_branch.py` 的 characterization 案例釘住現行行為，任何改動會直接讓測試紅——這是刻意的，改的人必須顯式面對這個決定。
+- **對誰**：platform backend。Refs #423

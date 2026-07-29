@@ -714,22 +714,38 @@ class PaaSOperatorClient:
 
 
 
-    def get_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
+    def get_status(
+        self,
+        namespace: str,
+        release_name: str,
+        include_vm: bool = False,
+    ) -> Dict[str, Any]:
         """Get detailed status of a release including pod information.
 
         Args:
             namespace: Release namespace
             release_name: Release name
+            include_vm: 也取回 KubeVirt VMI 與 CDI DataVolume 狀態（#423 W5a）。
+
+                ⚠ VM 型服務**必須**帶 True。operator 在 include_vm=False 時
+                回 ``vmis: None``（＝未查詢，與「查了但沒有」的 ``[]`` 不同），
+                而平台對 VM 的就緒判定是 fail-closed —— 漏帶這個旗標會讓
+                VM 服務永遠停在 ``deploying``。回應的 ``vm_included`` 欄位
+                是 operator 對本旗標的 echo，可用來斷言確實有帶到。
 
         Returns:
-            Release and pod status
+            Release and pod status（``include_vm=True`` 時另含 ``vm_included`` /
+            ``vmis`` / ``datavolumes`` / ``vmi_retrieval_error`` /
+            ``datavolume_retrieval_error``）
 
         Raises:
             PaaSOperatorError: If status retrieval fails
         """
+        params = {'include_vm': 'true'} if include_vm else None
         return self._request(
             'GET',
             f'/api/releases/{namespace}/{release_name}/status',
+            params=params,
         )
 
 

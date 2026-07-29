@@ -39,7 +39,8 @@ PR #445 第二則留言（Eugene，2026-07-28，經 grilling 檢驗後確認）�
 
 ## 1. Global Constraints
 
-- **版號 bump**：`src/__manifest__.py` 現值 **`18.0.1.0.79`**。W5a → `.80`，W5b → `.81`（每個動 `src/` 的 PR bump 一次，沿既有慣例）。W4 只動 `extra/paas-operator/` 不需 bump。
+- **版號 bump**：plan 撰寫時 `src/__manifest__.py` 為 `18.0.1.0.79`，原規劃 W5a → `.80`、W5b → `.81`。
+  ⚠ **實際已漂移（2026-07-29 更正）**：`#424①` 先落地把 develop 推到 `.80`，故 **W5a 實取 `.81`**（PR #466），**W5b 順延為 `.82`**。每個動 `src/` 的 PR bump 一次，沿既有慣例；W4 只動 `extra/paas-operator/` 不需 bump。
 - **縮排**：Python 4 space、XML/YAML/OWL 2 space。
 - **Odoo 測試**：`./odoo-bin -c odoo.conf --test-enable --test-tags /woow_paas_platform --stop-after-init`，或沙盒內 `/woow-dev:k8s-dev-sandbox test`。
 - **operator 測試**：`cd extra/paas-operator && .venv/bin/pytest tests/ -v`（**必須用 repo 內 `.venv`（3.11）**，系統 python 3.9 在 collection 期就會炸 PEP604）。整合測試 `HELM_BINARY=$(which helm) .venv/bin/pytest -m integration tests/integration/ -v`。
@@ -733,7 +734,7 @@ kubectl --context woow-k3s get pod -n paas-stg-system -l app.kubernetes.io/name=
 
 ## W5 — 平台側（本 repo `src/`）
 
-### W5a — 程式（PR-W5a，版號 → `.80`）
+### W5a — 程式（PR-W5a，版號 → **`.81`**；原規劃 `.80`，因 #424① 先落地而順延）
 
 - [ ] **W5a.1** `src/models/cloud_app_template.py` 新增欄位（接在既有 `min_storage_gb`（:122-126）之後）
   ```python
@@ -821,7 +822,7 @@ design 抓到的 `all_ready = all(...) if active_pods else (not pods)`（model `
 
 > ⚠ **ACL 測試陷阱**（`reference_odoo_sudo_getter_cache_priming_test`）：若要測 `workload_type` 的讀取權限，**不要**透過 `to_dict()` 驗（cache priming 會假綠）。要重設 group、`invalidate_all()`、直呼 getter。
 
-### W5b — Seed（PR-W5b，版號 → `.81`）
+### W5b — Seed（PR-W5b，版號 → **`.82`**；原規劃 `.81`，隨 W5a 順延）
 
 **前置閘門**：🔴 **Q5（定價／限量）必須先拍板**——plan 的價格與是否限量直接決定 seed 內容。
 
@@ -856,7 +857,7 @@ design 抓到的 `all_ready = all(...) if active_pods else (not pods)`（model `
 # 2. repo-lint 全過
 python3 scripts/audit/repo-lint.py
 # 3. 版號已 bump
-grep '"version"' src/__manifest__.py    # → 18.0.1.0.81
+grep '"version"' src/__manifest__.py    # → 18.0.1.0.82（W5b 後）
 ```
 
 ### W5 中止／回滾條件
@@ -1012,7 +1013,7 @@ W1 已執行完成（R5/R6/R7/R9/R11；R8 待 W2）。PoC 推翻 design 數處�
 | 位置 | 用於 |
 |---|---|
 | `docs/plans/2026-Q3/2026-07-27-haos-kubevirt-v1-design.md` | 設計母本（§3 chart／§4 operator／§6 quota／§9 風險／§12 wave 骨架） |
-| `src/__manifest__.py:3` | 版號 `18.0.1.0.79` → W5a `.80`／W5b `.81` |
+| `src/__manifest__.py:3` | 版號：plan 撰寫時 `.79`；實際 W5a `.81`／W5b `.82`（#424① 先落地致順延） |
 | `src/models/cloud_app_template.py:122-126` | `min_storage_gb`（`workload_type` 接在其後） |
 | `src/models/cloud_service.py:703-741` | helm values 注入段（W5a.4 的 `runStrategy` 落點） |
 | `src/models/cloud_service.py:874-926` | `_inject_storage_class`（:918 預設 fallback、:904-915 顯式 entry 慣例） |
