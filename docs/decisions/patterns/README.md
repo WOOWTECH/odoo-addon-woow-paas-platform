@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 29 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 30 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -58,6 +58,12 @@
 | [[credential-claim-test-fixture-coupling]] | 硬化共用 credential 路徑（token 加 required claim / secret optional→required fail-closed）→ 所有自建該 credential 的 test fixture 都 forward-coupled，須 lock-step 補，否則紅（好：暴露）或假綠（壞：繞過 gate） |
 | [[unittest-mock-dual-namespace-patch]] | 用 `unittest.mock.patch` 攔一個被多 module 共用的 helper（client factory / `requests.post` / `uuid4`），且各 module 用不同 import 形式（頂部 `from m import name` vs function-local import）→ `patch` 是 rebind namespace attribute 非改寫 function，一個 symbol 經 N 個 namespace 使用就要 N 個 patch target；少打一個讓那條路徑 fall through 真 client（false confidence 或 BlockedRequest 紅）；fix 半套 mock 是「補上缺的」非「搬去別處」 |
 
+### 前端能力呈現（改 /woow 前端 gate 或 service payload 前）
+
+| pattern | 何時觸發 / 必看 |
+|---|---|
+| [[capability-gate-single-source-field]] | 某能力「誰有／誰沒有」同時被後端授權與前端 UI 判斷（Reset 密碼按鈕、專屬分頁 / 操作入口）→ 判準必須是後端 model 欄位經 payload 鏡射，前端**不得**用 `slug ∈ 名單` 自己算一份（漂移方向必然是「後端放行、前端按不到」＝修復不可達，#357 C01 → #460 的 8 選 5）；新模板上架時有人問「要不要也加進前端名單」就是味道。前端 fail-closed（缺欄位視同 False）；repo-lint capability-gate 兩條規則（禁壞形態 + 鎖 `t-if` 鏈追得到 `has_admin_gui`）機械強制；單值 identity（`slug === 'odoo'`）與列表 `filter` 不在 scope |
+
 ### Agent / hand-off 紀律（maestri 多 phase agent pod 工作流）
 
 | pattern | 何時觸發 / 必看 |
@@ -68,6 +74,7 @@
 ## 完整檔案清單（供瀏覽 / link check）
 
 - [attachment-row-level-acl-and-anchor-stamping](attachment-row-level-acl-and-anchor-stamping.md)
+- [capability-gate-single-source-field](capability-gate-single-source-field.md)
 - [cloud-service-unlink-override-cleanup](cloud-service-unlink-override-cleanup.md)
 - [constraint-input-trust-expansion](constraint-input-trust-expansion.md)
 - [credential-claim-test-fixture-coupling](credential-claim-test-fixture-coupling.md)
