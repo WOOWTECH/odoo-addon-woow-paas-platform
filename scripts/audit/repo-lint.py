@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-六個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+七個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -24,6 +24,12 @@
                      那是無條件刪除而非還原原值，會洗掉外部注入的 env，害字母序在後
                      的測試 fail-closed raise（單獨跑綠／全套跑紅，#436）。
                      正解 patch.dict(os.environ, {...})（start/stop 或 context manager）。
+7. capability-gate   前端能力 gate 的雙向守線（#460 S2）：
+                     (a) src/static/src/**/*.{js,xml} 不得用 slug 做集合成員判斷
+                         （X.includes(t.slug) / SLUGS.indexOf(x)）——那是自建第二判準；
+                     (b) Reset 密碼按鈕的 t-if 鏈必須追得到 has_admin_gui，
+                         不論 getter 叫什麼名字（鎖「唯一的對形態」，擋任何第三判準）。
+                     依據 docs/decisions/patterns/capability-gate-single-source-field.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -52,8 +58,20 @@ OWL_DOC = "docs/tracking/pitfalls/owl-template-crash-class-syntax.md"
 NOUPDATE_DOC = "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md"
 REUSE_VALUES_DOC = "docs/decisions/patterns/helm-reset-values-unified-pipeline.md"
 SEED_TOPOLOGY_DOC = "docs/decisions/patterns/seed-topology-invariants.md"
+CAPABILITY_GATE_DOC = "docs/decisions/patterns/capability-gate-single-source-field.md"
 
 OWL_ALLOWED_MODIFIERS = {"stop", "prevent", "self", "capture", "synthetic"}
+
+# 前端能力 gate 的唯一判準欄位（後端 payload 直接鏡射 template 欄位，#460 S1）。
+ADMIN_GUI_FIELD = "has_admin_gui"
+# 「哪顆按鈕」的 XML 端錨點：handler 名比 t-if 的 getter 名穩定（getter 可以更名，
+# 但按鈕綁的 action 更名就是改功能本身）。
+ADMIN_GUI_BUTTON_HANDLER = "resetAdminPassword"
+# t-if 表達式裡不算 component member 的字（OWL 運算子 / literal / 內建 namespace）。
+OWL_EXPR_NON_MEMBERS = {
+    "and", "or", "not", "in", "true", "false", "null", "undefined",
+    "props", "state", "this", "new", "typeof", "env",
+}
 
 # seed 拓撲數字一變，這些位置就要一起被檢視。刻意記「檔案＋具名位置」而非行號
 # ——行號會隨無關的編輯腐化，符號名不會。
@@ -416,6 +434,234 @@ def check_seed_topology(root, only_file=None):
     ]
 
 
+def _strip_js_noise(src):
+    """把 JS 的註解與字串字面值換成等長空白（行號／offset 全部保留）。
+
+    形態 regex 只該看真正的程式碼：ServiceDetailPage 的 getter docstring 本身就在
+    講「原本這裡是硬編碼的三筆 slug 白名單」，不剝除就會自我誤報。
+    regex literal（``/["']/g``）有機會被誤當字串起點而多剝一段——那只會少報不會
+    誤報，對齊本工具 fail-open 的哲學。
+    """
+    out = list(src)
+    i, n, state = 0, len(src), None
+    while i < n:
+        ch = src[i]
+        if state is None:
+            if ch == "/" and i + 1 < n and src[i + 1] in "/*":
+                state = "line" if src[i + 1] == "/" else "block"
+                out[i] = out[i + 1] = " "
+                i += 2
+                continue
+            if ch in "'\"`":
+                state, out[i] = ch, " "
+                i += 1
+                continue
+            i += 1
+            continue
+        if state == "line":
+            if ch == "\n":
+                state = None
+            else:
+                out[i] = " "
+            i += 1
+            continue
+        if state == "block":
+            if ch == "*" and i + 1 < n and src[i + 1] == "/":
+                out[i] = out[i + 1] = " "
+                state = None
+                i += 2
+                continue
+            if ch != "\n":
+                out[i] = " "
+            i += 1
+            continue
+        # 字串字面值內
+        if ch == "\\":
+            out[i] = " "
+            if i + 1 < n and src[i + 1] != "\n":
+                out[i + 1] = " "
+            i += 2
+            continue
+        if ch == state:
+            state, out[i] = None, " "
+        elif ch != "\n":
+            out[i] = " "
+        i += 1
+    return "".join(out)
+
+
+def _strip_xml_comments(src):
+    """XML 註解換等長空白（同理：註解裡引述壞形態不該被當違規）。"""
+    return re.sub(r"<!--.*?-->",
+                  lambda m: re.sub(r"[^\n]", " ", m.group(0)), src, flags=re.DOTALL)
+
+
+def _balanced_close(text, open_idx):
+    """回 text[open_idx] 的括號（``(`` 或 ``{``）對應的閉合 index；找不到回 None。"""
+    open_ch = text[open_idx]
+    close_ch = {"(": ")", "{": "}"}[open_ch]
+    depth = 0
+    for j in range(open_idx, len(text)):
+        if text[j] == open_ch:
+            depth += 1
+        elif text[j] == close_ch:
+            depth -= 1
+            if depth == 0:
+                return j
+    return None
+
+
+_MEMBERSHIP_CALL_RE = re.compile(r"\.\s*(?:includes|indexOf)\s*\(")
+_SLUG_WORD_RE = re.compile(r"\bslug\b")
+_SLUG_RECEIVER_RE = re.compile(
+    r"\b[\w$]*slugs?\s*\.\s*(?:includes|indexOf)\s*\(", re.IGNORECASE)
+
+
+def _slug_membership_hits(text):
+    """回 [(行號, 片段)]：以 slug 做「集合成員判斷」的兩種形態。
+
+    1. **判準是 slug**：``X.includes(t.slug)`` / ``X.indexOf(slug) !== -1``
+       ——不管集合是陣列 literal 還是抽出去的常數，都抓得到。
+    2. **集合叫 slug**：``MCP_SLUGS.includes(x)`` / ``slug.includes('mcp-')``
+       ——擋「先把 slug 存成區域變數再比」與 prefix 猜能力這兩種繞法。
+
+    刻意**不**抓 ``filter`` / ``find`` / ``map``：那是列表操作（marketplace 篩選、
+    排序）不是布林判準，抓了會誤殺合法用途。單值 identity 比較
+    （``template.slug === 'odoo'``，如 isOdooService）同樣不在形態內。
+    """
+    hits = {}
+    for m in _MEMBERSHIP_CALL_RE.finditer(text):
+        open_idx = m.end() - 1
+        close_idx = _balanced_close(text, open_idx)
+        arg = text[open_idx + 1:close_idx] if close_idx else text[open_idx + 1:open_idx + 120]
+        if _SLUG_WORD_RE.search(arg):
+            hits[m.start()] = text[m.start():(close_idx + 1) if close_idx else m.end()]
+    for m in _SLUG_RECEIVER_RE.finditer(text):
+        hits.setdefault(m.start(), m.group(0))
+    result = []
+    for pos, snippet in sorted(hits.items()):
+        flat = " ".join(snippet.split())
+        result.append((text[:pos].count("\n") + 1,
+                       flat[:70] + "…" if len(flat) > 70 else flat))
+    return result
+
+
+def check_slug_capability_gate(root, only_file=None):
+    """前端（src/static/src/**/*.{js,xml}）不得用 slug 集合成員判斷決定能力。
+
+    #460：Reset 密碼按鈕的顯示判準是硬編碼三筆 slug 白名單，後端授權判準卻是
+    ``template.has_admin_gui``（#357 C01）——兩端必然漂移：8 個 has_admin_gui=True
+    的模板有 5 個後端放行、前端按不到按鈕，**修復對租戶不可達等於沒修**。能力一律
+    由後端欄位表達（payload 鏡射 model 欄位），前端不維護自己的名單。
+    依據 docs/decisions/patterns/capability-gate-single-source-field.md
+    """
+    violations = []
+    if only_file:
+        files = [only_file]
+    else:
+        files = sorted(
+            glob.glob(os.path.join(root, "src/static/src/**/*.js"), recursive=True)
+            + glob.glob(os.path.join(root, "src/static/src/**/*.xml"), recursive=True))
+    for fp in files:
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        text = _strip_xml_comments(src) if fp.endswith(".xml") else _strip_js_noise(src)
+        for line_no, snippet in _slug_membership_hits(text):
+            violations.append(
+                "%s:%d：用 slug 做集合成員判斷（%s）。前端能力 gate 不得自建 slug 名單"
+                "——能力由後端欄位表達（service payload 的 template.%s，#460 S1）。slug "
+                "名單是第二判準，與後端授權判準（#357 C01）必然漂移：8 個 %s=True 的模板"
+                "曾有 5 個後端放行、前端按不到，修復對租戶不可達。缺欄位就補後端 payload，"
+                "不要在前端補名單。（單值 identity 比較如 template.slug === 'odoo' 不在本"
+                "規則內；若這裡確實不是能力判準，請在 PR 說明並調整本規則 scope，見 %s）"
+                % (rel, line_no, snippet, ADMIN_GUI_FIELD, ADMIN_GUI_FIELD,
+                   CAPABILITY_GATE_DOC))
+    return violations
+
+
+def _js_member_bodies(stripped, name):
+    """回 class member ``get name() {...}`` / ``name() {...}`` 的 body 列表。"""
+    bodies = []
+    for m in re.finditer(r"(?:get\s+)?\b%s\s*\(\s*\)\s*\{" % re.escape(name), stripped):
+        open_idx = m.end() - 1
+        close_idx = _balanced_close(stripped, open_idx)
+        bodies.append(stripped[open_idx:close_idx + 1] if close_idx else stripped[open_idx:])
+    return bodies
+
+
+def _gate_js_sources(xml_path):
+    """XML 對應的 component JS（同名優先，否則同目錄全部）——已剝註解／字串。"""
+    same = os.path.splitext(xml_path)[0] + ".js"
+    paths = [same] if os.path.exists(same) else sorted(
+        glob.glob(os.path.join(os.path.dirname(xml_path), "*.js")))
+    sources = []
+    for p in paths:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            sources.append(_strip_js_noise(f.read()))
+    return sources
+
+
+def _gate_reaches_admin_gui(exprs, js_sources):
+    """t-if 表達式（含祖先鏈）是否直接或經 getter 追到 has_admin_gui。"""
+    for expr in exprs:
+        if ADMIN_GUI_FIELD in expr:
+            return True
+        for name in set(re.findall(r"[A-Za-z_$][\w$]*", expr)) - OWL_EXPR_NON_MEMBERS:
+            for src in js_sources:
+                if any(ADMIN_GUI_FIELD in body for body in _js_member_bodies(src, name)):
+                    return True
+    return False
+
+
+def check_admin_gui_gate_anchor(root):
+    """Reset 密碼按鈕的顯示 gate 必須（直接或經 getter）追得到 has_admin_gui。
+
+    check_slug_capability_gate 擋的是「已知的壞形態」；這條反過來鎖「唯一的對形態」
+    ——不論 getter 叫什麼名字、判準寫成哪種樣子，只要按鈕的 t-if 鏈追不到
+    has_admin_gui 就 fail。第三個判準（category / mcp_enabled / 任何新名單）因此在
+    review 之前就被機器攔下（#460 S2）。
+
+    Fail-open：找不到按鈕（功能下架 / handler 更名）不擋——形態守線由上一條負責。
+    """
+    violations = []
+    handler_re = re.compile(r"\b%s\b" % re.escape(ADMIN_GUI_BUTTON_HANDLER))
+    for fp in sorted(glob.glob(os.path.join(root, "src/static/src/**/*.xml"), recursive=True)):
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        try:
+            tree = ET.parse(fp)
+        except ET.ParseError:
+            continue  # XML 壞掉由 check_owl_template 報，這裡不重複
+        buttons = [elem for elem in tree.iter()
+                   if any(handler_re.search(v or "") for v in elem.attrib.values())]
+        if not buttons:
+            continue
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            line_no = next((i for i, line in enumerate(f, 1)
+                            if handler_re.search(line)), 1)
+        parents = {child: parent for parent in tree.iter() for child in parent}
+        js_sources = _gate_js_sources(fp)
+        for elem in buttons:
+            exprs, node = [], elem
+            while node is not None:  # 自身 → 祖先鏈（gate 可能掛在外層 wrapper）
+                exprs += [node.get(attr) for attr in ("t-if", "t-elif") if node.get(attr)]
+                node = parents.get(node)
+            if _gate_reaches_admin_gui(exprs, js_sources):
+                continue
+            violations.append(
+                "%s:%d：Reset 密碼按鈕（%s）的顯示 gate 追不到 %s（t-if 鏈：%s）。按鈕的 "
+                "t-if（含祖先）必須直接引用該欄位，或引用一個 body 讀該欄位的 getter"
+                "——那是與後端 reset 授權判準（controllers/paas.py 的 "
+                "service.template_id.%s，#357 C01）唯一收斂的判準。前端一旦長出第二判準"
+                "（slug 名單、category、mcp_enabled…），就會回到 #460：後端放行、租戶"
+                "按不到，修復不可達（見 %s）。"
+                % (rel, line_no, ADMIN_GUI_BUTTON_HANDLER, ADMIN_GUI_FIELD,
+                   "／".join(exprs) or "(無 t-if)", ADMIN_GUI_FIELD, CAPABILITY_GATE_DOC))
+    return violations
+
+
 # ---------------------------------------------------------------- modes
 
 def run_all(root):
@@ -424,14 +670,16 @@ def run_all(root):
                   + check_data_noupdate(root)
                   + check_reuse_values(root)
                   + check_seed_topology(root)
-                  + check_test_env_restore(root))
+                  + check_test_env_restore(root)
+                  + check_slug_capability_gate(root)
+                  + check_admin_gui_gate_anchor(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
             print("  ✗ " + v)
         return 1
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
-          "reuse-values / seed-topology / test-env-restore）")
+          "reuse-values / seed-topology / test-env-restore / capability-gate）")
     return 0
 
 
@@ -485,6 +733,12 @@ def run_hook():
                 violations += check_test_env_restore(root, only_file=abs_path)
         elif re.match(r"^src/static/src/.*\.xml$", rel):
             violations = check_owl_template(root, only_file=abs_path)
+            violations += check_slug_capability_gate(root, only_file=abs_path)
+            violations += check_admin_gui_gate_anchor(root)
+        elif re.match(r"^src/static/src/.*\.js$", rel):
+            # anchor 走全域：改 JS（getter 被刪／改名／改判準）壞掉的是 XML 那顆按鈕。
+            violations = check_slug_capability_gate(root, only_file=abs_path)
+            violations += check_admin_gui_gate_anchor(root)
         elif re.match(r"^src/data/.*\.xml$", rel):
             violations = check_data_noupdate(root, only_file=abs_path)
             if re.match(r"^src/data/subscription_(products|template_links).*\.xml$", rel):
