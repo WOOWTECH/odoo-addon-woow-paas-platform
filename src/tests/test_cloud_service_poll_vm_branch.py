@@ -217,8 +217,8 @@ class TestIncludeVmFlagIsSent(_Base):
     """漏帶 include_vm 會讓 VM 服務永遠卡 deploying —— 用旗標本身寫斷言。"""
 
     def test_needs_vm_status_true_only_for_vm(self):
-        self.assertTrue(self._make_service('vm').needs_vm_status())
-        self.assertFalse(self._make_service('container').needs_vm_status())
+        self.assertTrue(self._make_service('vm')._needs_vm_status())
+        self.assertFalse(self._make_service('container')._needs_vm_status())
 
     def test_model_poll_passes_include_vm_for_vm_service(self):
         svc = self._make_service('vm')

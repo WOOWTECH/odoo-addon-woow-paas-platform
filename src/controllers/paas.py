@@ -1254,6 +1254,18 @@ class PaasController(HiddenChainMixin, Controller):
                 or service.template_id.is_hidden):
             return {'success': False, 'error': 'Service not found'}
 
+        # #423 W5a MAJOR-1：補上訂閱閘。
+        #
+        # 同檔 api_workspace_service 的 update / delete 兩個分支都有這道檢查，
+        # 只有 rollback 漏了（既有缺陷）。而 `suspended` 的成因正是訂閱
+        # expire / cancel——沒有這道閘，欠費租戶自己就打得到這支 API。
+        # 與上方 _rollback_service 的狀態閘是兩層獨立防護：一層擋權限，
+        # 一層擋狀態。
+        try:
+            service._check_operation_allowed(operation='write')
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
         return self._rollback_service(service, revision)
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/reset-admin-password", auth="user", methods=["POST"], type="json")
@@ -2638,7 +2650,17 @@ class PaasController(HiddenChainMixin, Controller):
 
     def _rollback_service(self, service: Any, revision: int | None) -> dict[str, Any]:
         """Rollback service to a previous revision."""
-        if service.state in ['pending', 'deleting']:
+        # #423 W5a MAJOR-1：suspended 必須擋下。
+        #
+        # 語意上：停權中的服務本來就不該允許改版本。
+        # 技術上更關鍵：rollback 直呼 client.rollback_release()，**全程不經
+        # _assemble_deploy_values**，所以 W5a.4 的 runStrategy 同源守衛對這條
+        # 路徑完全不生效。而 helm rollback 重放的是 **stored manifest**
+        # （其中 runStrategy: Always），停權卻是 operator 外科式
+        # `kubectl patch vm` 改 **live 物件**——兩者本就不同步（同
+        # reference_helm_resource_policy_stored_manifest 的既有教訓）。
+        # 結果就是欠費停權的 VM 被喚醒並繼續計費。
+        if service.state in ['pending', 'deleting', 'suspended']:
             return {'success': False, 'error': f'Cannot rollback service in {service.state} state'}
 
         client = get_paas_operator_client(request.env)
@@ -2713,7 +2735,7 @@ class PaasController(HiddenChainMixin, Controller):
                 # #423 W5a：VM 型必須帶 include_vm。operator 未查詢時回
                 # vmis: None，而 VM 的就緒判定是 fail-closed → 漏帶會讓服務
                 # 永遠停在 deploying。
-                include_vm=service.needs_vm_status(),
+                include_vm=service._needs_vm_status(),
             )
 
             release = status.get('release', {})
@@ -2750,9 +2772,7 @@ class PaasController(HiddenChainMixin, Controller):
             if release_status == 'deployed':
                 all_ready, detail = service._is_release_ready(status)
                 if not all_ready:
-                    _logger.debug(
-                        "Service %s not ready yet: %s", service_id, detail,
-                    )
+                    service._log_not_ready(detail)
 
                 if all_ready:
                     template = service.template_id

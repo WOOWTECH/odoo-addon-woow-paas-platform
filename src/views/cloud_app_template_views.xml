@@ -35,6 +35,13 @@
                                     <field name="helm_chart_version"/>
                                 </group>
                                 <group string="Resources">
+                                    <!-- #423 W5a：workload_type 決定就緒判定
+                                         （VMI vs pod）與啟停（runStrategy vs
+                                         replicas）走哪條路。設錯不會報錯，只
+                                         會讓服務靜默卡在 deploying，故必須有
+                                         UI 修復入口（比照 #449 的
+                                         admin_password_carrier 先例）。 -->
+                                    <field name="workload_type"/>
                                     <field name="min_vcpu"/>
                                     <field name="min_ram_gb"/>
                                     <field name="min_storage_gb"/>
