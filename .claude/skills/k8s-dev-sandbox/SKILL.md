@@ -20,7 +20,7 @@ usage: |
 > **本 in-repo 版僅保留 woow 專屬、未進通用 plugin 的工具**（綁 `woow_paas_platform` model / stg 環境）：
 > - `test` — 沙盒內跑模組測試（`scripts/test.sh`）
 > - `extend` — 延長 TTL（`scripts/extend.sh`；供 `test --keep-on-fail`）
-> - 內部 helper：`scripts/e2e-seed.sh`（tests/e2e/skill 的 skill fixture seeder）、`scripts/seed-from-stg.sh`（從 stg clone DB + filestore）
+> - 內部 helper：`scripts/e2e-seed.sh`（tests/e2e/skill 的 skill fixture seeder）、`scripts/e2e-seed-reset-button.sh`（tests/e2e/service-reset-button 的 CloudService fixture seeder）、`scripts/seed-from-stg.sh`（從 stg clone DB + filestore）
 > 設計與實作：`docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
 
 ## 子命令參考（in-repo 保留部分）
@@ -52,6 +52,7 @@ cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/extend.sh <name
 ## 內部 helper（非直接子命令）
 
 - `scripts/e2e-seed.sh <slug> [--reset|--purge]` — 把 e2e skill fixture seed 進「已存在」的沙盒（沙盒須先用 `/woow-dev:k8s-dev-sandbox create` 建好）。由 `test.sh` 與 `tests/e2e/skill` 使用。
+- `scripts/e2e-seed-reset-button.sh <slug> [--manifest <path>|--purge]` — 把 Reset 按鈕可見性 e2e 的 fixture（1 workspace ＋ 4 個代表模板的 `state=running` CloudService）seed 進已存在的沙盒，並輸出 fixture manifest JSON 給 spec 讀。由 `tests/e2e/service-reset-button` 使用（#464）。
 - `scripts/seed-from-stg.sh` — 從 stg 環境 clone DB + filestore 到本地沙盒（woow-k3s 專屬）。
 
 ## 重要提醒
