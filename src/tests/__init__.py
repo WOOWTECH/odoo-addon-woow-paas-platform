@@ -236,3 +236,5 @@ from . import test_ha_paas_seed_woowtech_image
 from . import test_hermes_agent_seed_424
 # fix: #449 admin_password 載體策略（config_json / helm_secret）seed 標記與策略傳遞
 from . import test_admin_password_carrier_449
+# fix: #462（#460 S1）service payload 帶 template.has_admin_gui（前端 Reset gate 唯一入口）
+from . import test_service_payload_has_admin_gui_462

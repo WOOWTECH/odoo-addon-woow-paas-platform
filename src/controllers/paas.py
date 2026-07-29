@@ -3032,6 +3032,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'name': service.template_id.name,
                 'slug': service.template_id.slug or '',
                 'category': service.template_id.category,
+                # #460 S1：前端 Reset 密碼按鈕的顯示判準（ServiceDetailPage 的
+                # hasAdminGui getter）唯一的資料入口。**直接鏡射模板欄位、不做任何
+                # 推導**——與 reset endpoint 的授權判準（:1293 的
+                # service.template_id.has_admin_gui，#357 C01）收斂到同一欄位。
+                # 前端原本自建 slug 白名單，與這裡不一致 → 後端放行、按鈕卻不出現。
+                'has_admin_gui': bool(service.template_id.has_admin_gui),
                 'helm_value_specs': self._parse_helm_value_specs(service.template_id),
             },
             'helm_revision': service.helm_revision,
