@@ -236,3 +236,9 @@ from . import test_ha_paas_seed_woowtech_image
 from . import test_hermes_agent_seed_424
 # fix: #449 admin_password 載體策略（config_json / helm_secret）seed 標記與策略傳遞
 from . import test_admin_password_carrier_449
+# feat: #423 W5a HAOS×KubeVirt 平台側——workload_type 欄位 ＋ stopped state 守線
+from . import test_haos_workload_type
+# feat: #423 W5a 就緒判定 VM 分支 fail-closed（model ＋ controller 兩層守線）
+from . import test_cloud_service_poll_vm_branch
+# feat: #423 W5a suspend/resume 映射 runStrategy（防 helm upgrade 喚醒停權 VM）
+from . import test_haos_suspend_resume_runstrategy

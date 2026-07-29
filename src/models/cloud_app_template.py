@@ -125,6 +125,28 @@ class CloudAppTemplate(models.Model):
         help='Minimum storage in GB required',
     )
 
+    # Workload 型態（#423 W5a）——決定就緒判定與啟停走哪條路。
+    #
+    # 為何是顯式欄位而不是從 chart 嗅探（Q3 拍板）：嗅探要嘛多打一次 API、
+    # 要嘛把「叢集沒裝 KubeVirt」與「這個服務不是 VM」混為一談。平台對 VM 的
+    # 就緒判定是 fail-closed，那個混淆會讓服務靜默卡在 deploying。顯式旗標
+    # 讓失效可判讀（fail-loud 慣例）。
+    #
+    # 既有 template 全部落在預設 'container' → 零行為改變；required=True 對
+    # 既有 row 由 Odoo 套 default，不需 migration（守線見
+    # src/tests/test_haos_workload_type.py）。
+    workload_type = fields.Selection(
+        selection=[
+            ('container', 'Container'),
+            ('vm', 'Virtual Machine'),
+        ],
+        string='Workload Type',
+        default='container',
+        required=True,
+        help='VM 型 workload 的就緒／啟停判定與容器型不同（見 #423 v1 設計）：'
+             '就緒讀 VMI phase 而非 pod，啟停走 runStrategy 而非 replicas。',
+    )
+
     # MCP Sidecar Configuration
     mcp_enabled = fields.Boolean(
         string='Enable MCP Sidecar',

@@ -2710,10 +2710,13 @@ class PaasController(HiddenChainMixin, Controller):
             status = client.get_status(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
+                # #423 W5a：VM 型必須帶 include_vm。operator 未查詢時回
+                # vmis: None，而 VM 的就緒判定是 fail-closed → 漏帶會讓服務
+                # 永遠停在 deploying。
+                include_vm=service.needs_vm_status(),
             )
 
             release = status.get('release', {})
-            pods = status.get('pods', [])
 
             release_status = release.get('status', '')
             helm_revision = release.get('revision', service.helm_revision)
@@ -2734,19 +2737,22 @@ class PaasController(HiddenChainMixin, Controller):
                 )
                 return
 
-            # Determine new state based on release status and pod status
+            # Determine new state based on release status.
+            #
+            # #423 W5a：就緒判定已收斂為單一事實源
+            # ``CloudService._is_release_ready``（model 層），container 與 VM
+            # 兩種 workload 的分支都在那裡。這裡曾有一份與 model 完全同型的
+            # 複製品，導致「只修 model 層」時前台一 poll 就把還在 import 的
+            # VM 標成 running。**不要把判定邏輯搬回來。**
+            # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
+            service._store_import_progress(status)
+
             if release_status == 'deployed':
-                # Filter to Running-phase pods only — after helm upgrade,
-                # old pods may be Terminating (phase=Succeeded/Failed) and
-                # would cause the readiness check to fail permanently.
-                active_pods = [
-                    p for p in pods if p.get('phase') == 'Running'
-                ]
-                all_ready = all(
-                    '/' in pod.get('ready', '0/0')
-                    and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
-                    for pod in active_pods
-                ) if active_pods else (not pods)
+                all_ready, detail = service._is_release_ready(status)
+                if not all_ready:
+                    _logger.debug(
+                        "Service %s not ready yet: %s", service_id, detail,
+                    )
 
                 if all_ready:
                     template = service.template_id
@@ -3026,6 +3032,9 @@ class PaasController(HiddenChainMixin, Controller):
             'subdomain': service.subdomain or '',
             'custom_domain': service.custom_domain or '',
             'error_message': service.error_message or '',
+            # #423 W5a：VM 首次開通的磁碟 import 進度（容器型恆為空）。
+            # 純顯示用，不參與狀態機。
+            'import_progress': service.import_progress or '',
             'has_project': bool(service.project_ids),
             'template': {
                 'id': service.template_id.id,
