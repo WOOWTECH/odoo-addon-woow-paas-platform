@@ -32,7 +32,8 @@ pip install -r requirements.txt
 HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
 ```
 
-26 tests. The `app_client` fixture sets a real
+39 tests（其中 2 個 KubeVirt CRD 契約測試在沒有 CDI 的叢集會自我 skip，例如
+docker-desktop）。The `app_client` fixture sets a real
 `API_KEY` (default `integration-test-key`) + `NAMESPACE_PREFIX="paas-ws-test-op-"`
 automatically and sends the matching `X-API-Key` header — no need to export.
 (Since F-PC-4 the operator fails closed with 503 on an unset key, so the suite

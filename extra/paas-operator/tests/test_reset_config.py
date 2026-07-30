@@ -125,6 +125,21 @@ class TestResetConfigEndpoint:
         )
         assert mock_exec.call_count == 2  # patch + backup cleanup
 
+    @patch("src.api.releases.k8s_service.get_deployment_name", return_value="svc-abc-mcp-server")
+    @patch("src.api.releases.k8s_service.exec_in_pod")
+    @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
+    @patch("src.api.releases.k8s_service.rollout_status_deployment")
+    @patch("src.api.releases.k8s_service.rollout_restart_deployment")
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
+    def test_converges_default_sa(
+        self, mock_get_release, mock_upgrade, mock_restart, mock_status,
+        mock_pod, mock_exec, mock_deployment, sa_pull_secret_convergence,
+    ):
+        """#423：reset 與 install/upgrade 共用同一個 helper，SA 收斂一樣要生效。"""
+        reset_release_config("paas-ws-test", "svc-abc", _request())
+        sa_pull_secret_convergence.assert_called_once_with("paas-ws-test")
+
     def test_rejects_missing_password(self):
         with pytest.raises(HTTPException) as error:
             reset_release_config(
@@ -262,6 +277,19 @@ class TestResetConfigHelmSecretCarrier:
         assert sent["imagePullSecrets"] == [{"name": settings.registry_secret_name}]
         # 呼叫端原本的 values 不可被吃掉。
         assert sent["config"] == _helm_secret_request().values["config"]
+
+    @patch("src.api.releases.k8s_service.rollout_status_deployment")
+    @patch("src.api.releases.k8s_service.rollout_restart_deployment")
+    @patch("src.api.releases.k8s_service.get_deployment_names", return_value=["d1"])
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
+    def test_converges_default_sa(
+        self, mock_get, mock_upgrade, mock_names, mock_restart, mock_status,
+        sa_pull_secret_convergence,
+    ):
+        """#423：helm_secret 這條 reset 路同樣要收斂 ns default SA。"""
+        reset_release_config("paas-ws-test", "svc-abc", _helm_secret_request())
+        sa_pull_secret_convergence.assert_called_once_with("paas-ws-test")
 
     @patch("src.api.releases.k8s_service.rollout_status_deployment")
     @patch("src.api.releases.k8s_service.rollout_restart_deployment")

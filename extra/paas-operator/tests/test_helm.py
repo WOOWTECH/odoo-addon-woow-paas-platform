@@ -9,6 +9,7 @@ import pytest
 from src.services.helm import (
     HelmException,
     HelmService,
+    KubectlException,
     KubernetesService,
     build_managed_ns_labels,
     validate_namespace,
@@ -661,7 +662,9 @@ class TestKubernetesService:
     @patch("subprocess.run")
     def test_create_namespace(self, mock_run, k8s_service):
         """Test create namespace with quota."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        # stdout="{}"：#423 的 default-SA 收斂會 `get serviceaccount -o json`，
+        # 需要合法 JSON 才解析得動。
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
 
         result = k8s_service.create_namespace(
             name="paas-ws-new",
@@ -671,8 +674,9 @@ class TestKubernetesService:
         )
 
         assert "created" in result["message"]
-        # #278 A2：現在做三次 apply（namespace + quota + limitrange）
-        assert mock_run.call_count == 3
+        # #278 A2：三次 apply（namespace + quota + limitrange）
+        # #423：再加 default SA 的 get + patch（registry 未設定 → 不含 secret apply）
+        assert mock_run.call_count == 5
 
     def test_create_namespace_invalid_prefix(self, k8s_service):
         """Test create namespace with invalid prefix."""
@@ -1029,7 +1033,9 @@ class TestManagedNsLabels:
     @patch("subprocess.run")
     def test_create_namespace_stamps_env_label_in_manifest(self, mock_run, monkeypatch):
         """PAAS_ENV=stg → ns manifest 真帶 {paas-managed, env=stg}（捕 manifest，擋 mutation）。"""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        # stdout="{}"：#423 default-SA 收斂會 get -o json，需合法 JSON；ns-label
+        # 捕捉只認 kind==Namespace，不受影響。
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
         monkeypatch.setattr("src.config.settings.paas_env", "stg")
         captured = self._capture_ns_labels(monkeypatch)
         KubernetesService().create_namespace(
@@ -1040,7 +1046,9 @@ class TestManagedNsLabels:
     @patch("subprocess.run")
     def test_create_namespace_omits_env_label_in_manifest_when_empty(self, mock_run, monkeypatch):
         """PAAS_ENV 空 → ns manifest 只帶 paas-managed（不貼空 env value）。"""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        # stdout="{}"：#423 default-SA 收斂會 get -o json，需合法 JSON；ns-label
+        # 捕捉只認 kind==Namespace，不受影響。
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
         monkeypatch.setattr("src.config.settings.paas_env", "")
         captured = self._capture_ns_labels(monkeypatch)
         KubernetesService().create_namespace(
@@ -1210,3 +1218,204 @@ class TestReconcileNsReachLabels:
     def test_get_namespace_labels_empty_when_none(self, mock_run):
         mock_run.return_value = Mock(returncode=0, stderr="", stdout=json.dumps({"metadata": {}}))
         assert KubernetesService().get_namespace_labels("paas-ws-x") == {}
+
+
+class TestDefaultSaImagePullSecret:
+    """#423：租戶 ns 的 default ServiceAccount 必須帶 registry pull secret。
+
+    為什麼不是靠 chart values 就好：VM 型 cloud service 的 golden image 由 CDI
+    importer pod 匯入，那顆 pod 由 CDI controller 生成、不屬於任何 chart 的
+    podSpec，`_ensure_image_pull_secrets` 注入 values 的那一層完全碰不到它。它跑在
+    ns 的 default SA 上，只能靠 ServiceAccount admission 併入 —— default SA 是空的
+    就永久卡在 ImportScheduled。
+
+    合併語意是本組的重點：JSON merge patch 對 array 是**整份覆寫**，所以實作必須
+    先讀既有清單再 append 送出，否則會靜默洗掉租戶／其他機制放進去的 pull secret。
+    """
+
+    _SECRET = "paas-registry"
+
+    @staticmethod
+    def _svc_with_sa(sa_body, patch_result=None):
+        """回傳 (service, calls)：`_run_command` 被換掉，calls 收所有 kubectl argv。
+
+        直接換 `_run_command` 而非 subprocess.run，讓「get 回什麼」與「patch 收到
+        什麼」在同一組 argv 裡看得一清二楚。
+        """
+        svc = KubernetesService()
+        calls = []
+
+        def fake(args, *a, **k):
+            calls.append(args)
+            if args[0] == "get":
+                return Mock(returncode=0, stderr="", stdout=json.dumps(sa_body))
+            return patch_result or Mock(returncode=0, stderr="", stdout="{}")
+
+        svc._run_command = fake
+        return svc, calls
+
+    @staticmethod
+    def _patched_secrets(calls):
+        """從 kubectl patch argv 取出送出去的 imagePullSecrets 清單。"""
+        patch_calls = [c for c in calls if c[0] == "patch"]
+        assert len(patch_calls) == 1, f"expected exactly one patch, got {patch_calls}"
+        payload = json.loads(patch_calls[0][patch_calls[0].index("--patch") + 1])
+        return payload["imagePullSecrets"]
+
+    def test_patches_empty_sa(self):
+        """SA 完全沒有 imagePullSecrets → 補上唯一一筆。"""
+        svc, calls = self._svc_with_sa({"metadata": {"name": "default"}})
+        assert svc.ensure_default_sa_image_pull_secret("paas-ws-abc") is True
+        assert self._patched_secrets(calls) == [{"name": self._SECRET}]
+
+    def test_patches_sa_with_null_field(self):
+        """`imagePullSecrets: null`（欄位在但空）不得讓實作炸在 None 上。"""
+        svc, calls = self._svc_with_sa({"imagePullSecrets": None})
+        assert svc.ensure_default_sa_image_pull_secret("paas-ws-abc") is True
+        assert self._patched_secrets(calls) == [{"name": self._SECRET}]
+
+    def test_preserves_existing_entries(self):
+        """已有別的 pull secret → 保留並 append，不覆蓋（merge patch 整份送出）。
+
+        這條是本功能最容易寫錯的地方：只送 `[{"name": "paas-registry"}]` 會讓
+        kubectl 用整份覆寫語意把 tenant-custom 洗掉，而且測試若只斷言「有沒有
+        paas-registry」完全看不出來。
+        """
+        svc, calls = self._svc_with_sa(
+            {"imagePullSecrets": [{"name": "tenant-custom"}]}
+        )
+        assert svc.ensure_default_sa_image_pull_secret("paas-ws-abc") is True
+        assert self._patched_secrets(calls) == [
+            {"name": "tenant-custom"},
+            {"name": self._SECRET},
+        ]
+
+    def test_idempotent_when_already_present(self):
+        """已含目標 secret → 完全不發 patch（回 False）。"""
+        svc, calls = self._svc_with_sa(
+            {"imagePullSecrets": [{"name": self._SECRET}]}
+        )
+        assert svc.ensure_default_sa_image_pull_secret("paas-ws-abc") is False
+        assert [c for c in calls if c[0] == "patch"] == []
+
+    def test_idempotent_when_present_among_others(self):
+        """目標 secret 夾在其他項目之間也算已具備，不重複 append。"""
+        svc, calls = self._svc_with_sa({"imagePullSecrets": [
+            {"name": "tenant-custom"}, {"name": self._SECRET}, {"name": "other"},
+        ]})
+        assert svc.ensure_default_sa_image_pull_secret("paas-ws-abc") is False
+        assert [c for c in calls if c[0] == "patch"] == []
+
+    def test_patch_targets_default_sa_with_merge_type(self):
+        """argv 契約：patch 的是該 ns 的 serviceaccount/default，且 --type merge。"""
+        svc, calls = self._svc_with_sa({})
+        svc.ensure_default_sa_image_pull_secret("paas-ws-abc")
+        argv = [c for c in calls if c[0] == "patch"][0]
+        assert argv[:3] == ["patch", "serviceaccount", "default"]
+        assert argv[argv.index("--namespace") + 1] == "paas-ws-abc"
+        assert argv[argv.index("--type") + 1] == "merge"
+
+    def test_tolerates_absent_sa_after_retries(self):
+        """ns 剛建、SA 還沒被 controller 補上 → 重試耗盡後容忍（False，不 raise）。
+
+        不 raise 是刻意的：SA 出現後任何一次 install / upgrade / reset 都會再收斂，
+        沒必要為了這個空窗把整個 ns 建立弄失敗。
+        """
+        from src.services.helm import _SA_LOOKUP_ATTEMPTS
+
+        svc = KubernetesService()
+        calls = []
+
+        def always_missing(args, *a, **k):
+            calls.append(args)
+            raise KubectlException(
+                message="kubectl command failed with code 1",
+                command="kubectl get serviceaccount default",
+                stderr='Error from server (NotFound): serviceaccounts "default" not found',
+            )
+
+        svc._run_command = always_missing
+        with patch("src.services.helm.time.sleep") as mock_sleep:
+            assert svc.ensure_default_sa_image_pull_secret("paas-ws-abc") is False
+        assert len(calls) == _SA_LOOKUP_ATTEMPTS, "NotFound 要重試滿設定次數"
+        assert [c for c in calls if c[0] == "patch"] == []
+        assert mock_sleep.call_count == _SA_LOOKUP_ATTEMPTS - 1, "最後一次不必再等"
+
+    def test_recovers_when_sa_appears_on_retry(self):
+        """race 復原：第一次 NotFound、第二次拿到 SA → 照樣補上。"""
+        svc = KubernetesService()
+        calls = []
+
+        def missing_once(args, *a, **k):
+            calls.append(args)
+            if args[0] == "get" and len([c for c in calls if c[0] == "get"]) == 1:
+                raise KubectlException(
+                    message="not found",
+                    command="kubectl get serviceaccount default",
+                    stderr='Error from server (NotFound): serviceaccounts "default" not found',
+                )
+            if args[0] == "get":
+                return Mock(returncode=0, stderr="", stdout="{}")
+            return Mock(returncode=0, stderr="", stdout="{}")
+
+        svc._run_command = missing_once
+        with patch("src.services.helm.time.sleep"):
+            assert svc.ensure_default_sa_image_pull_secret("paas-ws-abc") is True
+        assert [c for c in calls if c[0] == "patch"], "SA 出現後必須真的 patch"
+
+    def test_reraises_non_notfound_kubectl_error(self):
+        """RBAC Forbidden 之類**不是** NotFound → 直接拋，不得偽裝成 race 靜默重試。
+
+        把整個 KubectlException 當「等一下就好」，會讓權限設定錯誤表現成 VM 開通
+        神秘卡住，而不是一個看得見的錯誤。
+        """
+        svc = KubernetesService()
+        calls = []
+
+        def forbidden(args, *a, **k):
+            calls.append(args)
+            raise KubectlException(
+                message="kubectl command failed with code 1",
+                command="kubectl get serviceaccount default",
+                stderr=(
+                    'Error from server (Forbidden): serviceaccounts "default" is '
+                    'forbidden: User "system:serviceaccount:paas-system:paas-operator" '
+                    "cannot get resource"
+                ),
+            )
+
+        svc._run_command = forbidden
+        with patch("src.services.helm.time.sleep") as mock_sleep:
+            with pytest.raises(KubectlException):
+                svc.ensure_default_sa_image_pull_secret("paas-ws-abc")
+        assert len(calls) == 1, "非 NotFound 不重試"
+        mock_sleep.assert_not_called()
+
+    def test_rejects_foreign_namespace(self):
+        """mutate 方法的前綴守衛：非 paas ns 直接 raise，且一次 kubectl 都不發。"""
+        svc, calls = self._svc_with_sa({})
+        with pytest.raises(ValueError):
+            svc.ensure_default_sa_image_pull_secret("kube-system")
+        assert calls == []
+
+    def test_is_not_found_error_narrows_to_notfound(self):
+        """判別式本身：只認 NotFound，Forbidden / timeout 一律 False。"""
+        def _exc(stderr):
+            return KubectlException(message="m", command="c", stderr=stderr)
+
+        assert KubernetesService.is_not_found_error(
+            _exc('Error from server (NotFound): serviceaccounts "default" not found'))
+        assert not KubernetesService.is_not_found_error(
+            _exc('Error from server (Forbidden): cannot get resource'))
+        assert not KubernetesService.is_not_found_error(
+            _exc("kubectl command timed out after 30s"))
+        assert not KubernetesService.is_not_found_error(_exc(""))
+
+    @patch("subprocess.run")
+    def test_create_namespace_converges_default_sa(self, mock_run):
+        """ns 準備階段接線：create_namespace 對剛建的 ns 收斂 default SA。"""
+        mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
+        k = KubernetesService()
+        k.ensure_default_sa_image_pull_secret = MagicMock()
+        k.create_namespace("paas-ws-abc", "8", "8Gi", "100Gi")
+        k.ensure_default_sa_image_pull_secret.assert_called_once_with("paas-ws-abc")
