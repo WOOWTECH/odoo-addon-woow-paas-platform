@@ -32,8 +32,12 @@ pip install -r requirements.txt
 HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
 ```
 
-39 tests（其中 2 個 KubeVirt CRD 契約測試在沒有 CDI 的叢集會自我 skip，例如
-docker-desktop）。The `app_client` fixture sets a real
+41 tests（其中 2 個 KubeVirt CRD 契約測試在沒有 CDI 的叢集會自我 skip，例如
+docker-desktop）。#461 新增兩支：`test_helm_secret_reset_returns_before_pods_are_ready`
+量「reset 不等 rollout」的牆鐘；`test_atomic_failure_rolls_secret_back_within_hard_cap`
+強制一次 `--atomic` 失敗，驗 rollback 真的跑完而非被 subprocess 上限腰斬——這兩件事
+只能在真叢集量到，mock 掉 kubectl 之後「有沒有等」只剩「有沒有呼叫某方法」。
+The `app_client` fixture sets a real
 `API_KEY` (default `integration-test-key`) + `NAMESPACE_PREFIX="paas-ws-test-op-"`
 automatically and sends the matching `X-API-Key` header — no need to export.
 (Since F-PC-4 the operator fails closed with 503 on an unset key, so the suite

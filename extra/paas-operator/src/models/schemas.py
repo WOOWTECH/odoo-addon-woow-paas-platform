@@ -118,6 +118,14 @@ class ReleaseResetConfigRequest(BaseModel):
     任一子步失敗 → operator 報 5xx、不做半套。chart values 經 --values tmp file
     不印明文，cmdline secret value 走既有 _redact_cmd 遮罩；config_json 路的
     密碼只進 pod stdin、不寫檔、不 log。
+
+    **#461：request 欄位刻意沒有變化，但回應語意變了。** 兩條路都只「下達」
+    rollout restart、**不等它完成**（回應新增 ``rollout_awaited: false``）：提交點
+    是 helm upgrade（config_json 路再加 config.json 寫入），此後新密碼即權威值、
+    不再自動回退，所以等 pod 只是把呼叫端預算綁在 image pull／RWO PVC 上（機率性
+    逾時，#461）。**沒有新增 wait 旋鈕**——保留「等」的分支就得同時保留兩套補償
+    語意，而「不等 ⇒ 不需要補償 rollout」正是本次收斂的支點。舊平台不讀新欄位，
+    只會感受到 200 來得更快 ⇒ 照既有邏輯落庫並 stamp ``upgrading`` ⇒ 安全。
     """
 
     values: Optional[Dict[str, Any]] = Field(

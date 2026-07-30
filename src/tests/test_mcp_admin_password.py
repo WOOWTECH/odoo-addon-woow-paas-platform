@@ -236,6 +236,99 @@ class TestMcpAdminPassword(TransactionCase):
         self.assertNotIn('must be running', message)
 
     # ------------------------------------------------------------------
+    # #461 C11′：提交點左移（operator 不再等 rollout）後的成功語意與預算
+    # ------------------------------------------------------------------
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_success_stores_password_and_stamps_upgrading(self, get_client):
+        """C11′ 成功路徑：2xx ⇒ 落庫 ＋ stamp upgrading（收斂交給輪詢）。
+
+        改成非同步後，200 的語意是「新密碼已是叢集權威值、且不再自動回退」，
+        **不是**「pod 已經吃到它」。所以成功時該做的正好兩件事：把密碼落庫（因為
+        它已經是真相），以及把 state stamp 成 upgrading 讓既有的 cron（1 分鐘）與
+        前端（5 秒）輪詢去收斂——這條把那兩件事釘在一起，避免日後有人「順手」把
+        stamp 拿掉（那會讓服務停在 running、UI 不輪詢、租戶以為已經好了）。
+        """
+        client = MagicMock()
+        client.reset_release_config.return_value = {
+            'helm_revision': 8,
+            'rollout_awaited': False,   # operator 只下達 restart，不等 pod
+        }
+        get_client.return_value = client
+
+        new_password = self.service._reset_admin_password()
+
+        self.assertEqual(self._secret_of(self.service).admin_password, new_password)
+        self.assertEqual(
+            self.service.state, 'upgrading',
+            'C11′：成功必須 stamp upgrading —— 那是「rollout 還在跑」的唯一訊號，'
+            '也是前端 5s 輪詢與動作鈕互鎖的觸發條件',
+        )
+        self.assertFalse(self.service.error_message)
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_reset_uses_its_own_timeout_budget_not_the_generic_helm_one(self, get_client):
+        """#461：reset 走專屬預算 RESET_CONFIG_TIMEOUT，不是共用的 120s。
+
+        這是預算階梯的中間層。用真的 client（只 mock 掉 HTTP session）來驗，
+        因為要證明的是「送出請求時真的帶了那個 timeout」，而不是「常數存在」。
+        跨層的不等式（前端 > 平台 > operator 硬上限）由 repo-lint 的
+        check_reset_budget_ladder 驗——它讀得到另外兩個 repo 位置的常數，這裡讀不到。
+        """
+        from odoo.addons.woow_paas_platform.services import paas_operator
+
+        real_client = paas_operator.PaaSOperatorClient(
+            base_url='http://operator.test', api_key='k',
+        )
+        with patch.object(real_client._session, 'request') as request:
+            request.return_value = MagicMock(
+                status_code=200, json=lambda: {'rollout_awaited': False},
+            )
+            real_client.reset_release_config(
+                namespace='paas-ws-test', release_name='svc-abc',
+                sensitive_values={'config': {'sensitive': {'admin_password': 'p'}}},
+            )
+
+        self.assertEqual(
+            request.call_args.kwargs['timeout'], paas_operator.RESET_CONFIG_TIMEOUT,
+        )
+        self.assertNotEqual(
+            paas_operator.RESET_CONFIG_TIMEOUT, paas_operator.HELM_OPERATION_TIMEOUT,
+            'reset 借用共用 HELM_OPERATION_TIMEOUT 就是 #461 的原始形狀：'
+            '那個 120s 與 operator 真正的上限無關',
+        )
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_chart_version_drift_is_logged(self, get_client):
+        """版號漂移要留線索：這種 reset 夾帶 chart 升版，逾時失敗後**重按不會收斂**。
+
+        （每次都夾帶同一次升版、每次都在 helm --timeout 逾時；正解是先 redeploy。
+        租戶側引導是 F-461-2，本 PR 只保證維運判讀得出來。）
+        """
+        client = MagicMock()
+        client.reset_release_config.return_value = {'rollout_awaited': False}
+        get_client.return_value = client
+        # 已部署 0.1.4，template 已升到 0.1.5 ⇒ 這次 reset 會夾帶升版。
+        self.service.helm_chart_version = '0.1.4'
+
+        with self.assertLogs(
+            'odoo.addons.woow_paas_platform.models.cloud_service', level='INFO',
+        ) as logs:
+            self.service._reset_admin_password()
+
+        self.assertTrue(
+            any('carries a chart upgrade 0.1.4 -> 0.1.5' in line for line in logs.output),
+            'chart 版號漂移沒有留下 log ⇒ 逾時時無法分辨「基礎設施慢」與'
+            '「這次 reset 其實在升版」',
+        )
+
+    # ------------------------------------------------------------------
     # #357 C01/C03：admin_password 供給鏈（create → secret → helm sensitive）
     # ------------------------------------------------------------------
 

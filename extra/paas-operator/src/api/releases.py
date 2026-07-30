@@ -22,8 +22,54 @@ from src.models.schemas import (
     SidecarPatchResponse,
 )
 from src.services.cloudflare import CloudflareException, CloudflareService
-from src.services.helm import HelmException, HelmService, KubectlException, KubernetesService
+from src.services.helm import (
+    HELM_CLI_OVERHEAD_SECONDS,
+    HelmException,
+    HelmService,
+    KubectlException,
+    KubernetesService,
+)
 from src.services.helm import _sanitize_release_values
+
+
+# ── #461：reset-config 的時間預算（階梯的最內層，＝單一權威）───────────────
+#
+# 為什麼需要一組專屬常數：reset 的三層預算（前端 90s ／ 平台 client 75s ／
+# 這裡）原本彼此不知道對方，operator 最壞路徑 ≈560s 卻由 120s 的平台 client
+# 等待，冷 image cache 時必逾時（#461／F-449-3，#459 stg 實測兩台第一次都輸）。
+# 修法不是把數字改大，而是宣告一條可機械檢查的階梯：
+#
+#     前端 90_000ms > 平台 RESET_CONFIG_TIMEOUT(75s) > RESET_HARD_CAP_SECONDS
+#
+# 由 scripts/audit/repo-lint.py 的 check_reset_budget_ladder 跨三層驗算。
+# 改任何一個數字都必須讓那道 gate 仍然綠——散文註解攔不住這件事，它已經被
+# 攔失敗過一次了。
+RESET_HELM_TIMEOUT_SECONDS = 15
+# ⚠️ 為什麼是 2n 而不是 n：helm 的 `--timeout` 是 **per-operation**，而
+# `--atomic` 失敗時 helm 會自己再跑一次「帶 wait 的 rollback」＝第二個
+# operation，再吃一次完整的 timeout。subprocess 上限只給 n+slack 會在
+# rollback **進行中** SIGKILL helm ⇒ release 卡 pending-*、Secret 狀態不明
+# ⇒ 打破「2xx 之前的失敗保證叢集仍是舊密碼」這個 C11′ 前提。
+#
+# 這不是新風險：改動前 upgrade() 根本不傳 `--timeout`（helm 用預設 5m）而
+# subprocess 上限是 settings.helm_timeout=300s ⇒ 2×300 > 300，**今天的 atomic
+# 失敗路徑本來就在 rollback 開始前就被 kill**。本常數順手修掉該既有缺陷。
+RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS = (
+    2 * RESET_HELM_TIMEOUT_SECONDS + HELM_CLI_OVERHEAD_SECONDS
+)
+# config.json 的 read-modify-write：內嵌 python 腳本，實際執行 <1s。
+RESET_EXEC_TIMEOUT_SECONDS = 12
+# 備份清理：best-effort（失敗只 warning），且 pod 正在被 Recreate 取代。
+RESET_CLEANUP_EXEC_TIMEOUT_SECONDS = 5
+# Deployment 探索 ＋ rollout restart 下達（各 ~1s 的 kubectl 呼叫）。
+RESET_KUBECTL_SLACK_SECONDS = 3
+# operator 對 reset-config 的**硬上限**：外層預算必須大於它。
+RESET_HARD_CAP_SECONDS = (
+    RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS
+    + RESET_EXEC_TIMEOUT_SECONDS
+    + RESET_CLEANUP_EXEC_TIMEOUT_SECONDS
+    + RESET_KUBECTL_SLACK_SECONDS
+)
 
 
 class _NoCdiInstalled(Exception):
@@ -768,12 +814,23 @@ def reset_release_config(
     1. Atomically upgrade the Helm Secret and wait for success.
     2. Read-modify-write only ``admin_password`` in config.json, retaining a
        same-volume backup of the complete original file.
-    3. Restart and wait for the deployment, then remove that backup.
+    3. Trigger the workload restart, then remove that backup.
 
     A failure after step 1 rolls Helm back to the prior revision.  A failure
     after step 2 additionally restores the original config file and rolls the
     workload back.  The password enters the container via exec stdin only, not
     process argv, logs, or a temporary file.
+
+    #461: this handler **no longer waits for the rollout to finish**. The commit
+    point is the Helm upgrade (and, here, the config.json write): once those
+    succeed the new password is the authoritative one and nothing rolls it back,
+    so waiting for pods only made the caller's budget depend on image pull and
+    RWO PVC re-attach times — a probabilistic timeout the tenant hit on every
+    cold image cache (#459 measured 120.6s / 121.0s failures against a 120s
+    client budget, both succeeding on the second press). Rollout convergence is
+    the platform state machine's job (``upgrading`` → cron/UI poll → ``running``),
+    exactly like the deploy / reconfigure paths. Everything still synchronous is
+    still compensated; nothing asynchronous needs compensation.
     """
     _validate_namespace_or_raise(namespace)
 
@@ -813,6 +870,11 @@ def reset_release_config(
             reset_values=request.reset_values,
             reuse_values=request.reuse_values,
             atomic=True,
+            # #461: bound BOTH — the per-operation wait and the subprocess. The
+            # subprocess ceiling covers `2n + overhead` so an atomic failure gets
+            # to finish its rollback instead of being SIGKILLed halfway.
+            timeout_seconds=RESET_HELM_TIMEOUT_SECONDS,
+            subprocess_timeout_seconds=RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
         )
     except (ValueError, HelmException) as e:
         logger.error("reset-config Helm upgrade failed for %s/%s: %s", namespace, name, e)
@@ -825,9 +887,18 @@ def reset_release_config(
     # The chart's main image carries python3 for seed-config.py.  Deliberately
     # fail if config.json is absent: replacing it with a generated skeleton
     # would destroy GUI-owned connection/tools state.
+    #
+    # #461: the leading glob sweep bounds backup accumulation. The cleanup exec at
+    # the end of this handler is best-effort, and now that we no longer wait for the
+    # rollout it fires while the old pod is already Terminating — so it will often
+    # fail and leave one `.config.json.reset-backup-*` behind (a file containing the
+    # PREVIOUS plaintext password). Clearing leftovers here caps that at one per
+    # release instead of one per reset, while keeping the backup available for the
+    # patch-failure compensation below (which is its only consumer).
     script = (
-        "import json, os, sys, tempfile;"
+        "import glob, json, os, sys, tempfile;"
         "p='/data/config.json';b=sys.argv[1];"
+        "[os.unlink(f) for f in glob.glob('/data/.config.json.reset-backup-*')];"
         "original=open(p,'rb').read();"
         "payload=json.load(sys.stdin);"
         "d=json.loads(original);"
@@ -849,7 +920,7 @@ def reset_release_config(
             pod_name=pod_name,
             container="",
             command=["python3", "-c", script, backup_name],
-            timeout=30,
+            timeout=RESET_EXEC_TIMEOUT_SECONDS,
             input_data=json.dumps({"admin_password": new_password}),
         )
     except KubectlException as e:
@@ -876,11 +947,10 @@ def reset_release_config(
             namespace=namespace,
             label_selector=f"app.kubernetes.io/instance={name}",
         )
+        # #461: issue the restart, do NOT wait for it. Failing to *issue* it is
+        # still compensated (below) because it is still synchronous; the rollout
+        # itself is the platform state machine's business from here on.
         k8s_service.rollout_restart_deployment(
-            namespace=namespace,
-            deployment_name=deployment_name,
-        )
-        k8s_service.rollout_status_deployment(
             namespace=namespace,
             deployment_name=deployment_name,
         )
@@ -906,9 +976,12 @@ def reset_release_config(
             ),
             container="",
             command=["python3", "-c", "import os,sys;os.unlink(sys.argv[1])", backup_name],
-            timeout=30,
+            timeout=RESET_CLEANUP_EXEC_TIMEOUT_SECONDS,
         )
     except KubectlException as e:
+        # #461: expected to fail more often now — the restart above is already
+        # tearing this pod down (Recreate). The patch script's leading glob sweep
+        # is the backstop, so a leftover is bounded to one per release.
         logger.warning("reset-config backup cleanup failed for %s/%s: %s", namespace, name, e)
 
     return {
@@ -919,6 +992,8 @@ def reset_release_config(
         "config_json_patched": True,
         "helm_upgraded": True,
         "rollout_restart_issued": True,
+        # #461: explicit so a caller can tell "restart issued" from "pods ready".
+        "rollout_awaited": False,
         "admin_password_carrier": "config_json",
         "note": "preserve connection/tools — read-modify-write only admin_password",
     }
@@ -949,6 +1024,13 @@ def _reset_via_helm_secret(
 
     失敗補償與 config_json 路同形：先 helm rollback 回前一個 revision，再把
     Deployment 重新滾一次，讓**舊密碼**確實回到 pod。
+
+    #461：**restart 只下達、不等它跑完**。提交點是 helm upgrade——Secret 一換完，
+    新密碼就是權威值且不再自動回退；繼續等 pod 只是把呼叫端的預算綁在 image pull
+    與 RWO PVC re-attach 上（#459 實測 hermes 冷 cache 光 pull 954MB 就 70s、
+    PVC detach→attach 19s），那是機率性逾時而非確定性失敗。rollout 的收斂交給
+    平台狀態機（``upgrading`` → cron／前端輪詢 → ``running``），與 deploy／
+    reconfigure 同形。
     """
     label_selector = f"app.kubernetes.io/instance={name}"
 
@@ -966,6 +1048,10 @@ def _reset_via_helm_secret(
             reset_values=request.reset_values,
             reuse_values=request.reuse_values,
             atomic=True,
+            # #461：見 config_json 路的同一段註解——subprocess 上限必須蓋住
+            # `2n + overhead`，否則 atomic 失敗時的自動 rollback 會被腰斬。
+            timeout_seconds=RESET_HELM_TIMEOUT_SECONDS,
+            subprocess_timeout_seconds=RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
         )
     except (ValueError, HelmException) as e:
         logger.error(
@@ -982,16 +1068,12 @@ def _reset_via_helm_secret(
             namespace=namespace,
             label_selector=label_selector,
         )
-        # 先全部下 restart 再逐一等待：兩顆 Deployment 的 rollout 因此並行推進，
-        # 總耗時 ≈ max 而非 sum —— 平台 client 只有 120s 預算，逐顆序列等待很容易
-        # 超時（超時 ⇒ 平台不存新密碼、租戶得重按，見 cloud_service C11 註解）。
+        # #461：全部下 restart 後**直接回**，不再逐一等 rollout。原本的「先全部下、
+        # 再逐一等」是為了讓兩顆並行推進（總耗時 ≈max 而非 sum）以塞進 120s 預算；
+        # 現在等待整段移出 request，那個最佳化不再需要——但**下達順序仍保留全部下完
+        # 才 return**，因為任何一顆漏下就等於那個入口還吃舊密碼（#449 的靜默失敗）。
         for deployment_name in deployment_names:
             k8s_service.rollout_restart_deployment(
-                namespace=namespace,
-                deployment_name=deployment_name,
-            )
-        for deployment_name in deployment_names:
-            k8s_service.rollout_status_deployment(
                 namespace=namespace,
                 deployment_name=deployment_name,
             )
@@ -1016,6 +1098,8 @@ def _reset_via_helm_secret(
         "config_json_patched": False,
         "helm_upgraded": True,
         "rollout_restart_issued": True,
+        # #461: explicit so a caller can tell "restart issued" from "pods ready".
+        "rollout_awaited": False,
         "admin_password_carrier": "helm_secret",
         "restarted_deployments": deployment_names,
         "note": "password lives in the chart Secret — no config.json patch",
@@ -1033,6 +1117,13 @@ def _rollback_helm_secret_reset(
     Rolling Helm back restores the *old* password in the Secret, but a pod that
     already restarted is running the new one — so the workloads must be rolled
     again for the rollback to actually reach them.
+
+    #461: the re-roll is **issued, not awaited**. Waiting here would make a failing
+    reset take up to 2×130s to answer — the compensation path would blow the very
+    budget ceiling this change exists to establish, and the wait proves nothing the
+    caller can act on (helm has already restored the Secret; the pods converge on
+    it whenever they come up). ``recovery_failed`` therefore reflects "did the
+    rollback and the re-roll get issued", not "are the pods ready".
     """
     recovery_failed = False
     try:
@@ -1055,8 +1146,6 @@ def _rollback_helm_secret_reset(
         )
         for deployment_name in deployment_names:
             k8s_service.rollout_restart_deployment(namespace, deployment_name)
-        for deployment_name in deployment_names:
-            k8s_service.rollout_status_deployment(namespace, deployment_name)
     except KubectlException as e:
         logger.error(
             "reset-config (helm_secret) rollback rollout failed for %s/%s: %s",
@@ -1073,7 +1162,11 @@ def _rollback_reset(
     backup_name: str,
     config_patched: bool,
 ) -> bool:
-    """Compensate a reset failure without reading an old password value."""
+    """Compensate a reset failure without reading an old password value.
+
+    #461: like ``_rollback_helm_secret_reset``, the re-roll is issued but not
+    awaited — a failing reset must still answer within the budget ceiling.
+    """
     recovery_failed = False
     if config_patched:
         try:
@@ -1090,7 +1183,7 @@ def _rollback_reset(
                     "import os,sys;p,b=sys.argv[1:];os.replace(b,p)",
                     "/data/config.json", backup_name,
                 ],
-                timeout=30,
+                timeout=RESET_EXEC_TIMEOUT_SECONDS,
             )
         except KubectlException as e:
             logger.error("reset-config config rollback failed for %s/%s: %s", namespace, name, e)
@@ -1107,7 +1200,6 @@ def _rollback_reset(
                 label_selector=f"app.kubernetes.io/instance={name}",
             )
             k8s_service.rollout_restart_deployment(namespace, deployment_name)
-            k8s_service.rollout_status_deployment(namespace, deployment_name)
         except KubectlException as e:
             logger.error("reset-config rollback rollout failed for %s/%s: %s", namespace, name, e)
             recovery_failed = True
