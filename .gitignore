@@ -3,6 +3,8 @@ __pycache__/
 .idea
 .playwright-mcp
 .playwright-cli/
+# playwright test runner 產物（tests/e2e/**/test-results/）
+test-results/
 .claude/skills/ecpay/
 .claude/scheduled_tasks.lock
 odoo_env
