@@ -3,6 +3,14 @@
 - TestHAPaaSSeed：0 元 plan／product／隱藏 template seed 存在性與屬性。
 - TestHiddenChainFiltering：hidden template 的 service／訂閱／發票不出現在前台
   任何清單（marketplace／workspace／dashboard／billing）。
+- TestHiddenChainSsotIsConcealInstances：#471 拆語意後，鏈的 SSOT 是
+  ``conceal_instances`` 而非 ``is_hidden`` —— hidden-only template（僅未上架）的
+  既有實例不得被這條鏈吃掉。
+
+⚠️ #471（2026-07-30 拍板）：`is_hidden` 只保留**曝光層**語意（marketplace／template
+詳情／plans／generic create）；**既有實例**的隱藏與操作端點阻擋改由
+`conceal_instances` 承載。本檔的 HA PaaS 斷言全部是「兩層都關」的 case，行為與
+#336 完全相同；兩語意各自的行為矩陣見 test_conceal_instances_split_471.py。
 """
 from odoo import fields
 from odoo.tests.common import HttpCase, TransactionCase, tagged
@@ -17,6 +25,10 @@ class TestHAPaaSSeed(TransactionCase):
         # test_ha_paas_seed_woowtech_image.py 守（此處僅守現行 pin 值）。
         tpl = self.env.ref('woow_paas_platform.cloud_app_ha_paas')
         self.assertTrue(tpl.is_hidden, 'HA PaaS template 必須隱藏')
+        # #471：既有實例的隱藏鏈與操作端點阻擋改由 conceal_instances 承載。HA PaaS
+        # 是「兩層都關」的 case——租戶入口是 App 不是 /woow，故本鏈行為不變。
+        self.assertTrue(tpl.conceal_instances,
+                        'HA PaaS 既有實例必須全鏈隱藏（本檔所有斷言的前提）')
         self.assertTrue(tpl.is_active, 'template 可 deployable')
         self.assertFalse((tpl.helm_chart_name or '').startswith('TBD'),
                          'helm_chart_name 應 pin 到 OCI、非 TBD 佔位')
@@ -42,6 +54,54 @@ class TestHAPaaSSeed(TransactionCase):
     def test_existing_templates_default_visible(self):
         n8n = self.env.ref('woow_paas_platform.cloud_app_n8n')
         self.assertFalse(n8n.is_hidden)
+        self.assertFalse(n8n.conceal_instances)
+
+
+class TestHiddenChainSsotIsConcealInstances(TransactionCase):
+    """#471：呈現鏈四個 helper 的 SSOT 是 ``conceal_instances``，不是 ``is_hidden``。
+
+    直接對 mixin helper 斷言，而非繞一圈打端點——四個 helper（template／service／
+    subscription／workspace）全部由 ``_hidden_template_ids`` 推導（DRY，見
+    docs/decisions/patterns/hidden-template-presentation-chain.md），鎖住這一個推導
+    根就鎖住整條鏈。若判準退回 ``is_hidden``，hermes-agent 這類「僅未上架」的
+    template 其既有服務會連 workspace 清單／dashboard 計數／billing 歷史一起消失
+    —— 那正是 #471 的症狀。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from odoo.addons.woow_paas_platform.controllers.ha_paas import HiddenChainMixin
+        self.mixin = HiddenChainMixin()
+        self.ha = self.env.ref('woow_paas_platform.cloud_app_ha_paas')
+        self.hermes = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
+
+    def test_conceal_template_in_chain(self):
+        self.assertIn(self.ha.id, self.mixin._hidden_template_ids(self.env),
+                      'conceal template 必須進呈現鏈過濾集')
+
+    def test_hidden_only_template_not_in_chain(self):
+        self.assertTrue(self.hermes.is_hidden, '前提：hermes-agent 未上架')
+        self.assertNotIn(
+            self.hermes.id, self.mixin._hidden_template_ids(self.env),
+            '僅未上架（is_hidden）的 template 不得進呈現鏈——其既有租戶服務、'
+            '訂閱、發票都要照常出現在前台（#471）')
+
+    def test_hidden_only_service_and_workspace_not_in_chain(self):
+        """實例層：hidden-only template 的 service／workspace 不被鏈剔除。
+
+        `_hidden_service_ids` / `_hidden_workspace_ids` 都由 template 集推導，這條
+        證明推導根換掉後，下游三個 helper 一併正確（含 dashboard 的 workspace 剔除
+        ——若判準錯，租戶那個 workspace 會整個從 dashboard 消失）。
+        """
+        ws = self.env['woow_paas_platform.workspace'].create({
+            'name': 'WS hidden-only 471',
+            'owner_id': self.env.ref('base.user_admin').id})
+        svc = self.env['woow_paas_platform.cloud_service'].create({
+            'workspace_id': ws.id, 'template_id': self.hermes.id,
+            'name': 'svc-chain-471', 'reference_id': 'test-chain-471',
+            'state': 'running', 'subdomain': 'svc-chain-471'})
+        self.assertNotIn(svc.id, self.mixin._hidden_service_ids(self.env))
+        self.assertNotIn(ws.id, self.mixin._hidden_workspace_ids(self.env))
 
 
 @tagged('post_install', '-at_install')

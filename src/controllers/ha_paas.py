@@ -35,7 +35,16 @@ def _auth(required_scopes):
 
 
 class HiddenChainMixin:
-    """HA PaaS 這類 hidden template 的呈現層過濾 helper。SSOT = ``template.is_hidden``。
+    """HA PaaS 這類 template 的**既有實例**呈現層過濾 helper。
+    SSOT = ``template.conceal_instances``。
+
+    ⚠️ #471：SSOT 從 ``is_hidden`` 換成 ``conceal_instances``。原本一個旗標同時承載
+    「不上架」與「既有實例整條鏈消失」，於是任何「暫時下架」的一般商品都會把租戶手上
+    正在跑的服務一起從前台抹掉（#464 實測 hermes-agent：詳情頁打不開、rollback／
+    change-plan／MCP 設定全不可達）。本鏈處理的一律是**既有實例**（service／訂閱／
+    發票／workspace），語意上就該由實例層旗標驅動；曝光層（marketplace 清單、template
+    詳情／plans、generic create）仍讀 ``is_hidden``，那四處不經本 mixin。
+    改判準前先讀 docs/decisions/patterns/hidden-template-presentation-chain.md。
 
     定性：呈現層過濾、**非 ACL**（租戶知 id 仍可打 JSON 端點；Odoo 原生 ``/my`` 與
     ``/report`` 繞過本層）。目的是讓平台自動開通的 0 元隱藏服務不污染前台清單。
@@ -59,8 +68,10 @@ class HiddenChainMixin:
     """
 
     def _hidden_template_ids(self, env):
+        # 下游三個 helper 全部由這一個 search 推導（DRY）——判準只有這一處，
+        # 換語意就只改這行。#471：conceal_instances 而非 is_hidden。
         return env['woow_paas_platform.cloud_app_template'].sudo() \
-            .search([('is_hidden', '=', True)]).ids
+            .search([('conceal_instances', '=', True)]).ids
 
     def _hidden_service_ids(self, env):
         CS = env['woow_paas_platform.cloud_service'].sudo()

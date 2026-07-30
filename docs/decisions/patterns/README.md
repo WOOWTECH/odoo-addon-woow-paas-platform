@@ -26,7 +26,7 @@
 | [[constraint-input-trust-expansion]] | model 有 attacker-writable Many2many + ir.rule / `@api.constrains` 用該 m2m 做 subset / authority 推導時 |
 | [[attachment-row-level-acl-and-anchor-stamping]] | 自家 model 透過 `ir.attachment` 存敏感 / RCE-class binary payload → anchor stamping + ir.attachment ir.rule 兩層 |
 | [[odoo-std-field-no-override]] | 任何想動 Odoo std model 欄位型態 / shape 的 PR |
-| [[hidden-template-presentation-chain]] | 新增/修改 /woow controllers 曝光點（list、by-id、dashboard、訂閱/發票清單）時 — template.is_hidden SSOT＋DRY helper 全鏈呈現層過濾（非 ACL；/my、/report 繞過；D2 專屬 hidden workspace 不變式） |
+| [[hidden-template-presentation-chain]] | 新增/修改 /woow controllers 曝光點（list、by-id、dashboard、訂閱/發票清單）**或既有服務的操作端點**時 — 先分層：曝光層 `is_hidden`（不上架）vs 實例層 `conceal_instances`（既有實例也隱藏，#471）；實例層以 DRY helper 全鏈過濾（非 ACL；/my、/report 繞過；D2 專屬 hidden workspace 不變式）；蘊含式＋repo-lint 機械強制 |
 
 ### 資料模型 / relation 設計（新增 agent 資源類型或動 binding 模型前）
 

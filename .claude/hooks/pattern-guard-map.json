@@ -27,7 +27,7 @@
         "docs/decisions/patterns/two-layer-acl-lockstep.md — 多 endpoint 各自 access resolver 時任一收緊須同步",
         "docs/tracking/pitfalls/two-layer-acl-asymmetric-deny.md — 兩層 deny 不對稱的實際翻車案例",
         "docs/tracking/pitfalls/orm-test-green-endpoint-leak-blindness.md — backend ORM test 全綠遮蔽 controller sudo bypass 的 incident 敘事",
-        "docs/decisions/patterns/hidden-template-presentation-chain.md — 新增/修改 /woow 曝光點（list、by-id、dashboard、訂閱/發票清單）時的 is_hidden 全鏈呈現層過濾",
+        "docs/decisions/patterns/hidden-template-presentation-chain.md — 動 /woow 曝光點或**既有服務的操作端點**時：先分層（曝光層 is_hidden vs 實例層 conceal_instances，#471），實例層判準用 template_id.conceal_instances（repo-lint check_conceal_instances_gate 機械攔），gate 要放在能力/狀態判準之前",
         "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動租戶 reconfigure/升級端點的 helm values 組裝時：背景執行緒無 ORM，全量 values 必主執行緒先算（_assemble_deploy_values）＋傳 reset_values=True",
         "docs/decisions/patterns/capability-gate-single-source-field.md — 回傳 template 子物件的 service payload 要鏡射能力欄位（has_admin_gui）給前端：直接搬不推導，否則前端只能猜 slug → 後端放行、租戶按不到（#357 C01 → #460）"
       ]
@@ -57,7 +57,8 @@
         "docs/decisions/patterns/constraint-input-trust-expansion.md — model 有 attacker-writable M2M 且 constraint 用它推導 authority 時",
         "docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md — skill bundle 等 ir.attachment payload 的 anchor stamping（skill 檔屬本 class）",
         "docs/decisions/patterns/external-resource-env-token-naming.md — 動 canonical_name / generate_subdomain 命名根時的 env token 注入與 create↔delete 對稱",
-        "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動 cloud_service 部署路徑（_assemble_deploy_values／action_redeploy／_reset_admin_password）時：既存 release 升級走全量 values 統一管線＋reset_values 語意，禁 reuse_values=True（repo-lint 攔）"
+        "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動 cloud_service 部署路徑（_assemble_deploy_values／action_redeploy／_reset_admin_password）時：既存 release 升級走全量 values 統一管線＋reset_values 語意，禁 reuse_values=True（repo-lint 攔）",
+        "docs/decisions/patterns/hidden-template-presentation-chain.md — 動 /woow 曝光點或**既有服務的操作端點**時：先分層（曝光層 is_hidden vs 實例層 conceal_instances，#471），實例層判準用 template_id.conceal_instances（repo-lint check_conceal_instances_gate 機械攔），gate 要放在能力/狀態判準之前"
       ]
     },
     {

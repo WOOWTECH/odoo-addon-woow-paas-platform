@@ -796,6 +796,8 @@ class PaasController(HiddenChainMixin, Controller):
         CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
 
         # #336：排除 hidden template（HA PaaS）不出現在 marketplace
+        # #471 B 組：曝光層判準**留 is_hidden**（不經 HiddenChainMixin）。這裡改成
+        # conceal_instances 會讓「定價未拍板／暫時下架」的商品重新出現在 marketplace。
         domain = [('is_active', '=', True), ('is_hidden', '=', False)]
 
         if category:
@@ -836,6 +838,8 @@ class PaasController(HiddenChainMixin, Controller):
         CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
 
         template = CloudAppTemplate.browse(template_id)
+        # #471 B 組：曝光層 by-id 判準留 is_hidden（未上架商品的規格頁不可讀）。
+        # 注意這擋的是 **template**，不是既有 service——後者判 conceal_instances。
         if not template.exists() or not template.is_active or template.is_hidden:
             return {'success': False, 'error': 'Template not found'}
 
@@ -923,6 +927,8 @@ class PaasController(HiddenChainMixin, Controller):
         """Get available subscription plans for a template."""
         CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
         template = CloudAppTemplate.browse(template_id)
+        # #471 B 組：曝光層 by-id 判準留 is_hidden（未上架商品的規格頁不可讀）。
+        # 注意這擋的是 **template**，不是既有 service——後者判 conceal_instances。
         if not template.exists() or not template.is_active or template.is_hidden:
             return {'success': False, 'error': 'Template not found'}
 
@@ -961,7 +967,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
-        if not service.exists() or service.template_id.is_hidden:
+        if not service.exists() or service.template_id.conceal_instances:
             return {'success': False, 'error': 'Service not found'}
 
         workspace = service.workspace_id
@@ -1067,7 +1073,7 @@ class PaasController(HiddenChainMixin, Controller):
         """
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
-        if not service.exists() or service.template_id.is_hidden:
+        if not service.exists() or service.template_id.conceal_instances:
             return {'success': False, 'error': 'Service not found'}
 
         workspace = service.workspace_id
@@ -1090,7 +1096,7 @@ class PaasController(HiddenChainMixin, Controller):
         """Skip trial period and start paid billing immediately."""
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
-        if not service.exists() or service.template_id.is_hidden:
+        if not service.exists() or service.template_id.conceal_instances:
             return {'success': False, 'error': 'Service not found'}
 
         workspace = service.workspace_id
@@ -1186,7 +1192,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         service = CloudService.browse(service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
-                or service.template_id.is_hidden):
+                or service.template_id.conceal_instances):
             return {'success': False, 'error': 'Service not found'}
 
         if action == 'get':
@@ -1251,7 +1257,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         service = CloudService.browse(service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
-                or service.template_id.is_hidden):
+                or service.template_id.conceal_instances):
             return {'success': False, 'error': 'Service not found'}
 
         # #423 W5a MAJOR-1：補上訂閱閘。
@@ -1295,7 +1301,13 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': 'Workspace not found or access denied'}
 
         service = CloudService.browse(service_id)
-        if (not service.exists() or service.workspace_id.id != workspace_id):
+        # #471 C 組：補上 conceal_instances gate，與其他既有服務操作端點同判準。
+        # 修前這裡**完全沒有**隱藏 gate，於是同一個服務「API 重設得了密碼，但唯一的
+        # UI 入口（詳情頁）打不開」——正是 #460／#464 反覆撞到的場景。gate 刻意放在
+        # exists() 之後、has_admin_gui 之前：能力判準（400）不該遮蔽存在性語意
+        # （not found），否則 conceal 服務會回「不支援 admin GUI」洩漏它存在。
+        if (not service.exists() or service.workspace_id.id != workspace_id
+                or service.template_id.conceal_instances):
             return {'success': False, 'error': 'Service not found'}
 
         # #357 C01：判別器讀 template.has_admin_gui，與 model 端（cloud_service
@@ -1371,7 +1383,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         service = CloudService.browse(service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
-                or service.template_id.is_hidden):
+                or service.template_id.conceal_instances):
             return {'success': False, 'error': 'Service not found'}
 
         return self._get_service_revisions(service)
@@ -1391,7 +1403,7 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': True, 'modules': {}}
 
         service = request.env['woow_paas_platform.cloud_service'].browse(service_id)
-        if not service.exists() or service.template_id.is_hidden:
+        if not service.exists() or service.template_id.conceal_instances:
             return {'success': False, 'error': 'Service not found'}
 
         workspace = service.workspace_id
@@ -1464,7 +1476,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         service = CloudService.browse(service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
-                or service.template_id.is_hidden):
+                or service.template_id.conceal_instances):
             return {'success': False, 'error': 'Service not found'}
 
         if action == 'list':
@@ -2228,6 +2240,8 @@ class PaasController(HiddenChainMixin, Controller):
 
         template = CloudAppTemplate.browse(template_id)
         # #336：generic create 拒絕 hidden template（hidden 只能經 provision 端點建）
+        # #471 B 組：判準留 is_hidden——「未上架」的唯一實質效力就是擋新建，改判
+        # conceal_instances 等於讓 hermes-agent 這類未定價商品可被直接下單。
         if not template.exists() or not template.is_active or template.is_hidden:
             return {'success': False,
                     'error': 'This template cannot be deployed directly.'}
