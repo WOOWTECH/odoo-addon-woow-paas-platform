@@ -10,13 +10,14 @@
 
                 <div class="o_woow_modal_body">
                     <p class="o_woow_dialog_desc">
-                        The following addon(s) are currently active (installed) in your Odoo instance and must be deactivated before removal:
+                        The following module(s) are still present in your Odoo instance and must be uninstalled before removal:
                     </p>
                     <div class="o_woow_installed_list">
-                        <t t-foreach="installedModules" t-as="mod" t-key="mod.name">
+                        <t t-foreach="blockingModules" t-as="mod" t-key="mod.name">
                             <div class="o_woow_installed_item">
                                 <WoowIcon name="'extension'" size="18"/>
                                 <span t-esc="mod.name"/>
+                                <span class="o_woow_module_state" t-esc="mod.state"/>
                                 <t t-if="mod.dependents and mod.dependents.length > 0">
                                     <span class="o_woow_dep_names">
                                         (required by: <t t-esc="mod.dependents.join(', ')"/>)
@@ -26,7 +27,7 @@
                         </t>
                     </div>
                     <p class="o_woow_dialog_hint">
-                        Please go to Odoo Apps and deactivate (uninstall) these modules first, then come back to remove them.
+                        Please go to Odoo Apps and uninstall these modules first, then come back to remove them.
                     </p>
                 </div>
 

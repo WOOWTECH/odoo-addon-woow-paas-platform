@@ -248,3 +248,5 @@ from . import test_haos_suspend_resume_runstrategy
 from . import test_conceal_instances_split_471
 # feat: #423 W5b HAOS 上架 seed（template/base plan/link/quota 建模/W2 image pin 閘）
 from . import test_haos_seed_423
+# fix: #474 check-addon-removal 從 JSON-RPC params 收參——安全檢查的 plumbing ＋ 行為矩陣
+from . import test_addon_removal_params_474
