@@ -250,3 +250,5 @@ from . import test_conceal_instances_split_471
 from . import test_haos_seed_423
 # fix: #474 check-addon-removal 從 JSON-RPC params 收參——安全檢查的 plumbing ＋ 行為矩陣
 from . import test_addon_removal_params_474
+# fix: #477 _update_service 模組守衛收斂單一裁決點——success:false 與非 running 皆 fail-closed
+from . import test_addon_removal_fail_closed_477
