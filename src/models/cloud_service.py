@@ -1430,15 +1430,38 @@ class CloudService(models.Model):
 
     @staticmethod
     def _is_container_ready(status):
-        """容器型就緒判定——**維持現行行為，一行不動**。
+        """容器型就緒判定。
 
-        ⚠ 這裡有一個已知的 fail-open：``pods`` 為空列表時回 True。v1 刻意
-        不修（design §4.1）——容器型服務有一個合法的短暫狀態是「helm release
-        已 deployed 但 pod 還沒被 controller 建出來」，改成 fail-closed 會讓
-        **所有現存租戶服務**多卡一輪 poll，風險大於收益。
-        以 characterization test 釘住現行行為；待評估項記在
-        ``docs/tracking/followups/follow-ups.md``。
+        「``pods`` 為空」有**兩個成因**，本方法對它們的處置刻意不同——分辨的依據
+        就是 operator 一起回來的 ``pod_retrieval_error``（#484）：
+
+        1. **查詢成功、真的還沒有 pod** —— ``pod_retrieval_error`` 是 ``None``。
+           回 True（fail-open），**這是既知且刻意保留的行為**（F-423-1 / design
+           §4.1）：容器型服務有一個合法的短暫狀態是「helm release 已 deployed 但
+           pod 還沒被 controller 建出來」，改成 fail-closed 會讓**所有現存租戶服務**
+           多卡一輪 poll，風險大於收益。characterization test 釘住它，本 PR 不動。
+        2. **查詢本身失敗** —— ``pod_retrieval_error`` 有值（RBAC 掉了、API server
+           抖動…）。operator 此時仍回 **HTTP 200**、``pods`` 保持空陣列
+           （``api/releases.py``），所以舊碼會把它讀成第 1 種而翻 ``running``——
+           平台從來沒看過任何一顆 pod 卻宣告服務就緒。這一種 fail-closed。
+
+        為什麼第 2 種可以修而第 1 種不行：F-423-1 拒絕的成本（所有服務多卡一輪
+        poll）**只存在於第 1 種**；正常過渡期 ``pod_retrieval_error`` 是 ``None``，
+        所以只擋第 2 種的代價是零。
+
+        與 VM 分支對稱：``_is_vm_ready`` 對 ``vmi_retrieval_error`` 就是這樣做的，
+        而 operator schema 把規則寫在**容器**欄位上——``vmi_retrieval_error`` 的
+        說明原文是「Mirrors pod_retrieval_error: the caller MUST NOT read an empty
+        vmis list as 'no VM' while this is set」。當初規則寫對了、實作只落在 VM 邊。
         """
+        if status.get('pod_retrieval_error'):
+            # 硬失效：查詢失敗＝狀態未知。不會自己好，且外觀與「pod 還沒建出來」
+            # 完全相同 → 必須是 HARD（`_log_not_ready` 會升 warning），否則正式
+            # 環境的 INFO 級 log 一行都看不到。
+            return False, (
+                f"HARD: pod lookup failed: {status['pod_retrieval_error']}"
+            )
+
         pods = status.get('pods') or []
         # Only Running-phase pods — terminators would block readiness forever
         active_pods = [p for p in pods if p.get('phase') == 'Running']
