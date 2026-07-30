@@ -1098,6 +1098,57 @@
             <field name="service_type">cloud_service</field>
         </record>
 
+        <!-- Home Assistant OS（#423 W5b）base plan：單級距 月 4500／年 36000（年×8）。
+             Q5 定價拍板（Eugene，2026-07-30，#423 留言）：方案 C 稀缺溢價、對標 Hermes T2；
+             天花板約 16 台（Longhorn 排程額度為瓶頸，非實體容量）＝稀缺高價值產品、非走量品。
+             **v1 不做加購變體**（HAOS 多為單機自用、席數不適用；規格升級留後續），故
+             generator 的 subscription_products_variants.xml 沒有本 family、
+             docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md 亦無需增列。
+
+             ⚠ **刻意不設 cs_vcpu／cs_ram_gb／cs_storage_gb**（沿用 opendesign 形制）。
+             這三欄非空會讓 `_allocated_vals_from` 改吃 plan 值、蓋掉 template 的
+             min_*（3／5.0／72）——那三個是 CDI import 期間的 **quota 峰值**，填成
+             「賣給租戶的 2/4/64」會讓 quota 只有 192 GiB、import 的 scratch PVC 被
+             ErrExceededQuota 拒收，且症狀只是 DataVolume 卡在 ImportInProgress。
+             另外 `_apply_plan_spec_overlay` 會把 cs_* 疊成 `resources.requests/limits`
+             ——那是容器型的鍵，本 chart 用 vm.cores／vm.memory，疊上去是死鍵。
+             守線＝src/tests/test_haos_seed_423.py 的 test_plans_do_not_override_cs_spec。 -->
+        <record id="plan_haos_monthly" model="sh.subscription.plan">
+            <field name="name">Home Assistant OS 雲端訂閱服務 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">4500</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
+        <record id="plan_haos_yearly" model="sh.subscription.plan">
+            <field name="name">Home Assistant OS 雲端訂閱服務 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">36000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
         <!-- ============================================================ -->
         <!--  Products (one per plan, each links to its plan)             -->
         <!--  sh_subscription_plan_id is on product.template              -->
@@ -1666,6 +1717,29 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_opendesign_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <!-- Home Assistant OS（#423 W5b）base product：taxes_id 明寫空、pts 免稅（#366）。 -->
+        <record id="product_haos_monthly" model="product.product">
+            <field name="name">Home Assistant OS 雲端訂閱服務 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">4500</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_haos_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <record id="product_haos_yearly" model="product.product">
+            <field name="name">Home Assistant OS 雲端訂閱服務 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">36000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_haos_yearly"/>
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 

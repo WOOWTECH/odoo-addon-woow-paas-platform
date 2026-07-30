@@ -53,20 +53,24 @@ class TestWorkloadTypeField(TransactionCase):
         才以「服務永遠卡 deploying」的形式浮現。"""
         self.assertTrue(self.Template._fields['workload_type'].required)
 
-    def test_existing_templates_are_all_container(self):
-        """既有 seed template 全部是 container。
+    def test_seeded_vm_templates_are_exactly_haos(self):
+        """seed 出來的 VM 型 template 恰為 ``haos``，其餘一律 container。
 
-        required=True 對既有 row 由 Odoo 套 default（不需 migration）——這條
-        測試就是那個假設的證據，而不是靠「應該沒問題」。
+        原本這條寫的是「全部都是 container」（W5a 落地時 seed 還沒有 VM 型），
+        #423 W5b 上架 HAOS 後改寫成白名單等值 —— 語意沒有變弱：它同時守住
+        「既有 template 零行為改變」（required=True 對既有 row 由 Odoo 套
+        default、不需 migration 的證據）與「沒有人順手把別的 template 標成
+        vm」。用 assertEqual 而非 assertIn：多一個 VM 型 template 也要紅，
+        因為 VM 路徑的就緒判定／啟停／quota 建模都是 per-template 調校過的。
         """
-        non_container = self.Template.search([
-            ('workload_type', '!=', 'container'),
+        vm_templates = self.Template.search([
+            ('workload_type', '=', 'vm'),
         ])
 
-        self.assertFalse(
-            non_container,
-            "既有 template 應全為 container，實際有：%s"
-            % non_container.mapped('slug'),
+        self.assertEqual(
+            vm_templates.mapped('slug'), ['haos'],
+            "seed 的 VM 型 template 應恰為 ['haos']，實際：%s"
+            % vm_templates.mapped('slug'),
         )
 
 
