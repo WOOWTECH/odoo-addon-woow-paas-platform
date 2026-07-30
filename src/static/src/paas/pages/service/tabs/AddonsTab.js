@@ -4,7 +4,7 @@ import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { OdooAddonSelector } from "../../../components/odoo-addon-selector/OdooAddonSelector";
-import { AddonRemovalDialog } from "../../../components/addon-removal-dialog/AddonRemovalDialog";
+import { AddonRemovalDialog, blocksRemoval } from "../../../components/addon-removal-dialog/AddonRemovalDialog";
 import { cloudService } from "../../../services/cloud_service";
 
 export class AddonsTab extends Component {
@@ -104,16 +104,15 @@ export class AddonsTab extends Component {
         return;
       }
 
+      // Same predicate the dialog lists by (blocksRemoval) — sharing it is what
+      // keeps "dialog shown" and "dialog has rows" from drifting apart.
       const modules = result.modules || {};
-      const SAFE_TO_REMOVE = new Set(['uninstalled', 'uninstallable', 'not_found']);
-      const hasActive = Object.values(modules).some(m => !SAFE_TO_REMOVE.has(m.state));
-
-      if (!hasActive) {
+      if (!Object.values(modules).some(blocksRemoval)) {
         return this._doUpdateAddons();
       }
 
-      // Installed addons found — block deselection, require user to
-      // deactivate in Odoo first
+      // Module still present in Odoo — block deselection, require the user to
+      // uninstall it in Odoo first.
       this.state.dialogModules = modules;
       this.state.showDialog = true;
     } catch (err) {

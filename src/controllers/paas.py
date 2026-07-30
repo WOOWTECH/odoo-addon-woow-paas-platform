@@ -1394,10 +1394,29 @@ class PaasController(HiddenChainMixin, Controller):
         '/api/cloud-services/services/<int:service_id>/check-addon-removal',
         type='json', auth='user', methods=['POST'],
     )
-    def api_check_addon_removal(self, service_id):
-        """Check if removed addons can be safely deselected."""
-        params = request.get_json_data()
-        removed_addon_ids = params.get('removed_addon_ids', [])
+    def api_check_addon_removal(
+        self,
+        service_id: int,
+        removed_addon_ids: list[int] | None = None,
+        **kw: Any,
+    ) -> dict[str, Any]:
+        """Check if removed addons can be safely deselected.
+
+        Odoo 對 ``type='json'`` route 會把 JSON-RPC 的 ``params`` 展開成 kwargs，
+        所以參數收進簽名即可（同檔 `api_service_change_plan` /
+        `api_workspace_services` 的形狀）。**不要**改回 `request.get_json_data()`
+        ——那支回的是整個 request body，讀不到住在 ``params`` 裡的鍵，會讓下面每
+        一道檢查都被 early return 靜默跳過（#474）。``**kw`` 必留，用來吸收前端
+        多送的鍵，否則 dispatch 會 TypeError。
+        """
+        if removed_addon_ids is None:
+            removed_addon_ids = []
+        if not isinstance(removed_addon_ids, (list, tuple)):
+            return {'success': False, 'error': 'Invalid removed_addon_ids: expected a list of addon IDs'}
+        try:
+            removed_addon_ids = [int(addon_id) for addon_id in removed_addon_ids]
+        except (TypeError, ValueError):
+            return {'success': False, 'error': 'Invalid removed_addon_ids: expected a list of addon IDs'}
 
         if not removed_addon_ids:
             return {'success': True, 'modules': {}}

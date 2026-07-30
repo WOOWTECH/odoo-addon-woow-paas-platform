@@ -32,6 +32,14 @@
     align-items: center;
     gap: 8px;
 
+    .o_woow_module_state {
+      font-size: 0.75rem;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: var(--woow-warning-subtle, rgba(245, 158, 11, 0.15));
+      color: var(--woow-warning, #f59e0b);
+    }
+
     .o_woow_dep_names {
       font-size: 0.85rem;
       color: var(--woow-text-muted);
