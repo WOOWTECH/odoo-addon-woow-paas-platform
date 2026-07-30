@@ -9,7 +9,7 @@ TestHaosQuotaModelling 全部由 seed 的 helm values **現算**、不硬編，�
 就紅。
 
 seed values 的鍵名已對真 chart 核對（`helm show values
-oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos --version 0.1.0`），不是轉抄
+oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos --version 0.1.2`），不是轉抄
 design 草案 —— 草案寫的是 `imagePullSecret`（單數）與 `ingress.enabled`，真 chart
 是 `imagePullSecrets`（複數 list）且**沒有** ingress 區塊。
 
@@ -81,16 +81,20 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
             % vm_templates.mapped('slug'))
 
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 的 charts/haos 0.1.0（OCI，helm_repo_url 空）。
+        """chart＝woow-paas-charts 的 charts/haos 0.1.2（OCI，helm_repo_url 空）。
 
         ⚠ 不是 charts/home-assistant —— 那是容器化的 HA Core（cloud_app_ha_paas）。
+
+        0.1.0 → 0.1.2 直上（跳過 0.1.1，不分兩段）：0.1.1 修的是 DataVolume 誤把
+        dockerconfigjson 當 CDI basic-auth `secretRef`（開通直接卡死），0.1.2 再加上
+        XFF 剝除代理（#479，外部一律 400）。兩個都是 v1 阻斷級，沒有只升一半的理由。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos')
-        self.assertEqual(tpl.helm_chart_version, '0.1.0')
+        self.assertEqual(tpl.helm_chart_version, '0.1.2')
         self.assertNotIn(
             'home-assistant', tpl.helm_chart_name,
             'HAOS（VM）與 home-assistant（容器）是不同 chart、不同產品')
@@ -158,12 +162,50 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
         """service.port/targetPort 8123 ＝ default_port（HAOS 前台埠）。
 
         operator 的 Cloudflare expose 取「名稱排序第一個非 headless Service」＋
-        http-like port，本 chart 只有一顆 ClusterIP:8123 —— 兩邊對不上就是 CF 502。
+        http-like port —— 兩邊對不上就是 CF 502。
+
+        ⚠ chart 0.1.2 起渲染**兩顆** ClusterIP:8123 Service（實查 registry 產物）：
+        ``{release}-haos``（主，selector 指 xff-proxy 的 Deployment）與
+        ``{release}-haos-vm``（selector 指 ``vm.kubevirt.io/name``，供 proxy 回打 VM）。
+        兩顆都非 headless，主 Service 是 ``-vm`` 的字串前綴 → 排序永遠在前 →
+        expose 仍取到主 Service、語意不變。下面那條 assertLess 就是把這個**隱性依賴**
+        釘成顯性斷言。
+
+        ⚠ 誠實標註侷限：assertLess 驗的是命名慣例下的排序關係，不是 chart 產物本身
+        （Odoo 測試環境沒有 helm）。chart 若把主 Service 改成排序落在 ``-vm`` 之後的
+        名字，tunnel 會直接打到 VM、繞過剝除代理，外部靜默退回 400 —— 而本測試不會紅。
+        產物層的守線在 chart tests；本斷言的作用是讓要改 Service 名稱的人 grep
+        ``haos-vm`` 時撞到這條紀錄。
         """
         values, tpl = self._values(), self._tpl()
         self.assertEqual(values['service']['port'], 8123)
         self.assertEqual(values['service']['targetPort'], 8123)
         self.assertEqual(values['service']['port'], tpl.default_port)
+
+        release = 'svc-c7187a7a'
+        main_svc, vm_svc = f'{release}-haos', f'{release}-haos-vm'
+        self.assertLess(
+            main_svc, vm_svc,
+            '主 Service 必須排在 -vm Service 之前，否則 operator expose 會選到直連 '
+            'VM 的那顆、繞過 XFF 剝除代理 —— #479 會靜默復發（外部一律 400）。')
+
+    def test_xff_strip_left_to_chart_default(self):
+        """xffStrip 刻意不寫進 seed —— 它是 chart 0.1.2 對 #479 的修復預設。
+
+        實查 registry 產物（``helm show values … --version 0.1.2``）：
+        ``xffStrip.enabled`` 預設 **true**，並附 nginx-unprivileged 的 digest pin。
+
+        平台沒有理由覆寫它：設成 false 會讓主 Service 直指 VM，而 HAOS 內的 HA Core
+        沒有 ``trusted_proxies`` 設定、會拒絕 CF tunnel 必帶的 ``X-Forwarded-For``，
+        租戶從外部一律拿到 400、連 onboarding 畫面都打不開（#423 W6.2 實測）。
+
+        本斷言守的是「seed 不要把 chart 的修復預設覆寫掉」，包含日後有人「為了明確」
+        把 xffStrip 寫進 seed 卻填錯值。
+        """
+        self.assertNotIn(
+            'xffStrip', self._values(),
+            'xffStrip 是 chart 0.1.2 的 #479 修復預設（enabled: true），seed 刻意不設；'
+            '真要覆寫請先確認不會讓外部退回 400。')
 
     def test_network_policy_enabled(self):
         """networkPolicy.enabled=true：租戶隔離第二層（第一層＝operator baseline NP）。

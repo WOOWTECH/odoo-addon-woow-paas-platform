@@ -933,8 +933,8 @@
 
         <!-- Home Assistant OS（HAOS，#423 W5b）：平台第一個 **VM 型** cloud service
              （KubeVirt VirtualMachine + CDI DataVolume），非容器。走 #380 金樣板上架
-             SOP；chart＝woow-paas-charts 的 charts/haos 0.1.0（本 seed 的鍵名已對
-             `helm show values` 對 registry 上的 0.1.0 逐鍵核對，非轉抄 design 草案）。
+             SOP；chart＝woow-paas-charts 的 charts/haos 0.1.2（本 seed 的鍵名已對
+             `helm show values` 對 registry 上的 0.1.2 逐鍵核對，非轉抄 design 草案）。
 
              ⚠ 與既有 cloud_app_ha_paas（slug ha-paas、chart home-assistant、image
              woowtech-ha）是**不同產品**：那是容器化的 HA Core（0 元自動開通、隱藏），
@@ -994,11 +994,19 @@
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos</field>
-            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_chart_version">0.1.2</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵；chart 內部契約
                  （UEFI secureBoot=false、masquerade 僅轉 8123、limits==requests、
-                 DataVolume 的 helm.sh/resource-policy: keep、Service selector
-                 vm.kubevirt.io/name）由 chart 預設＋chart tests 承擔、seed 不重寫。
+                 DataVolume 的 helm.sh/resource-policy: keep、`-vm` Service 的 selector
+                 vm.kubevirt.io/name、0.1.2 新增的 xffStrip.enabled 預設 true）
+                 由 chart 預設＋chart tests 承擔、seed 不重寫。
+
+                 ⚠ xffStrip（0.1.2 新增、預設 true）＝XFF 剝除代理，修的是 #479：
+                 HAOS 內的 HA Core 沒有 trusted_proxies 設定，會拒絕所有帶
+                 X-Forwarded-For 的請求，而 CF tunnel 必帶 XFF ——租戶從外部一律拿到
+                 400，連 onboarding 畫面都打不開（#423 W6.2 實測）。**seed 刻意不設**：
+                 它是 chart 的修復預設，平台沒有理由覆寫；設成 false 會讓主 Service
+                 直指 VM、外部立刻退回 400。
 
                  逐鍵理由：
                  - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。⚠ 此 image
@@ -1054,7 +1062,16 @@
 
             <!-- Service Configuration。8123＝HAOS 前台埠；對外＝平台 subdomain +
                  Cloudflare tunnel（operator expose 取「名稱排序第一個非 headless
-                 Service」＋ http-like port，本 chart 只有一顆 ClusterIP:8123）。 -->
+                 Service」＋ http-like port）。
+                 ⚠ 0.1.2 起本 chart 渲染**兩顆** ClusterIP:8123 Service：
+                 `svc-*-haos`（主，selector 指 xff-proxy 那顆 Deployment）與
+                 `svc-*-haos-vm`（selector 指 vm.kubevirt.io/name，供 proxy 回打 VM）。
+                 兩顆都非 headless，而字串排序上 `svc-*-haos` 在 `svc-*-haos-vm` 之前
+                 （前者是後者的前綴），所以 operator 的「名稱排序第一個」仍取到主
+                 Service、expose 語意不變。
+                 🔴 這條依賴是**隱性**的：chart 日後若把主 Service 改名（例如改成
+                 `svc-*-haos-proxy`）排序就會翻轉，tunnel 會直接打到 VM、繞過剝除代理，
+                 外部靜默退回 400。守線＝test_haos_seed_423 的 expose 排序斷言。 -->
             <field name="default_port">8123</field>
             <field name="ingress_enabled" eval="True"/>
 
@@ -1064,20 +1081,29 @@
                  （`cloud_service._compute_ns_quota`），而本 template 的 plan cs_* 皆為 0
                  → allocated_* 走 fallback 取這三個 min_*（`_allocated_vals_from`）。
 
-                 - min_vcpu 3：實測 Σlimits.cpu ＝ **2.015**（compute 2 ＋ init
-                   guest-console-log 15m）。欄位是 Integer，取 3 留餘裕 → quota 9 vCPU。
-                 - min_ram_gb 5.0：實測 Σrequests.memory ＝ **4.431 GiB**（compute
+                 - min_vcpu 3：實測 Σlimits.cpu ＝ **2.065**（compute 2 ＋ init
+                   guest-console-log 15m ＋ chart 0.1.2 的 xff-proxy 50m）。欄位是
+                   Integer，取 3 留餘裕（0.935）→ quota 9 vCPU。
+                 - min_ram_gb 5.0：實測 Σrequests.memory ＝ **4.462 GiB**（compute
                    4.375 GiB ＝ guest 4 GiB ＋ KubeVirt overhead 實測 384 MiB，加 init
-                   60M）。取 5.0 留 ~13% 餘裕 → quota 15Gi。**不是** guest 的 4Gi。
+                   60M，加 chart 0.1.2 的 xff-proxy 32Mi）。取 5.0 留 0.538 GiB 餘裕
+                   → quota 15Gi。**不是** guest 的 4Gi。
+                   ⚠ xff-proxy 是 requests==limits（Guaranteed QoS），所以 quota 的
+                   requests.* 與 limits.* 兩側都各加 50m／32Mi。
                  - min_storage_gb 72：🔴 **不是賣給租戶的磁碟大小（那是 64 GiB，見
                    helm_default_values.persistence.size）**。CDI v1.64 走 volume
-                   populator，import 期間 ns 內**同時存在三顆 PVC**（target ＋ prime ＋
-                   prime-scratch，各 67.8 GiB＝宣告 64Gi 經 WebhookPvcRendering 加
-                   filesystem overhead），**實測 quota used 峰值 203.5 GiB**。
-                   64×3＝192 GiB 短少 11.5 GiB → scratch PVC 被 ErrExceededQuota 拒收，
-                   而症狀只是 DataVolume 停在 ImportInProgress、要挖 events 才看得到
-                   quota 拒收。72×3＝216 GiB 實測放行（餘裕 +12.5 GiB；68 只剩 +0.5 太緊）。
-                   **看到 64 就把這裡改回去，會讓所有開通靜默卡死。**
+                   populator，import 期間 ns 內同時存在多顆 PVC（各 67.8 GiB＝宣告
+                   64Gi 經 WebhookPvcRendering 加 filesystem overhead）。**兩條 source
+                   路徑的峰值不同，72 取的是保守的那條**：
+                     · http source（W1 PoC，chart 的 escape hatch）：**三顆**
+                       （target ＋ prime ＋ prime-scratch）＝實測峰值 **203.5 GiB**。
+                     · registry source（v1 正式路徑）：**兩顆**（target ＋ prime，
+                       無 scratch，因為不需要下載暫存）＝#423 W6 實測峰值 **135.7 GiB**。
+                   64×3＝192 GiB 對 http 路徑短少 11.5 GiB → scratch PVC 被
+                   ErrExceededQuota 拒收，而症狀只是 DataVolume 停在 ImportInProgress、
+                   要挖 events 才看得到 quota 拒收。72×3＝216 GiB 兩條路徑都放行。
+                   **看到 registry 路徑只要 135.7 就把這裡改小，會讓 http escape hatch
+                   一被用到就靜默卡死。**
                  守線＝test_haos_seed_423.TestHaosQuotaModelling（由 seed values 現算、
                  不硬編：改 vm.memory／persistence.size 而不同步這裡就會紅）。
 
