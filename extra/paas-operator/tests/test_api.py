@@ -320,6 +320,69 @@ class TestReleaseEndpoints:
         injected = mock_helm.upgrade.call_args.kwargs["values"]
         assert injected.get("imagePullSecrets") == [{"name": "tenant-custom"}]
 
+    @patch("src.api.releases.helm_service")
+    def test_create_release_converges_default_sa_before_install(
+        self, mock_helm, client, sa_pull_secret_convergence
+    ):
+        """#423：install 前必須先把 ns default SA 收斂好。
+
+        順序是硬要求而非美感：chart 的 DataVolume 一被 apply，CDI 立刻生出
+        importer pod，而 ServiceAccount admission 只在 pod **建立當下**把 SA 的
+        imagePullSecrets 併進去。SA 晚一步 patch，那顆 importer 就永遠沒有憑證，
+        開通卡在 ImportScheduled。所以這裡同時斷言「有呼叫」與「在 helm 之前」。
+        """
+        order = []
+        sa_pull_secret_convergence.side_effect = lambda ns: order.append(("sa", ns))
+
+        def _install(**kwargs):
+            order.append(("helm", kwargs["namespace"]))
+            return ReleaseInfo(
+                name="svc-haos",
+                namespace="paas-ws-test",
+                revision=1,
+                status=ReleaseStatus.DEPLOYED,
+                chart="haos",
+                app_version="1.0.0",
+                updated="2024-01-01T00:00:00Z",
+            )
+
+        mock_helm.install.side_effect = _install
+
+        response = client.post(
+            "/api/releases",
+            json={
+                "namespace": "paas-ws-test",
+                "name": "svc-haos",
+                "chart": "oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos",
+            },
+        )
+
+        assert response.status_code == 201
+        assert order == [("sa", "paas-ws-test"), ("helm", "paas-ws-test")]
+
+    @patch("src.api.releases.helm_service")
+    def test_upgrade_release_converges_default_sa(
+        self, mock_helm, client, sa_pull_secret_convergence
+    ):
+        """#423：upgrade 也收斂 SA——VM 型 CS 換 golden image 會重跑 import。"""
+        mock_helm.upgrade.return_value = ReleaseInfo(
+            name="svc-haos",
+            namespace="paas-ws-test",
+            revision=2,
+            status=ReleaseStatus.DEPLOYED,
+            chart="haos",
+            app_version="1.0.0",
+            updated="2024-01-02T00:00:00Z",
+        )
+
+        response = client.patch(
+            "/api/releases/paas-ws-test/svc-haos",
+            json={"chart": "oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos"},
+        )
+
+        assert response.status_code == 200
+        sa_pull_secret_convergence.assert_called_once_with("paas-ws-test")
+
     @patch("src.api.releases.cloudflare_service")
     @patch("src.api.releases.k8s_service")
     @patch("src.api.releases.helm_service")
