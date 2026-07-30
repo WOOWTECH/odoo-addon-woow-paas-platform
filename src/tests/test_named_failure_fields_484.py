@@ -23,15 +23,20 @@
     ``_is_container_ready`` 只看 ``pods``，空陣列 → ``not pods`` → **True** → 服務翻
     ``running``，而平台從來沒看過任何一顆 pod。
 
-    ⚠ **與既有 follow-up F-423-1 的分界（別把兩件事混成一件）**：F-423-1 記載的是
+    ⚠ **與既有 follow-up F-423-1 的分界（寫於 #484 當時，現已合流）**：F-423-1 記載的是
     「**正常過渡期**的空 pod 列表」（helm 已 deployed 但 controller 還沒把 pod 建出來），
-    並以「改 fail-closed 會讓所有現存租戶服務多卡一輪 poll」為理由刻意 v1 不修。本檔
-    **不動那個決議**（見 `test_empty_pods_without_error_keeps_f423_1_behaviour`），只修
-    「pod 查詢**本身**失敗」這個子情形——它在正常過渡期成本為零，因為那時
-    ``pod_retrieval_error`` 是 ``None``。同一份 operator schema 自己也把規則寫在容器
-    欄位上（``vmi_retrieval_error`` 的說明：「Mirrors pod_retrieval_error: the caller
-    MUST NOT read an empty vmis list as 'no VM' while this is set」），但實作當初只落在
-    VM 分支。
+    並以「改 fail-closed 會讓所有現存租戶服務多卡一輪 poll」為理由刻意 v1 不修。#484
+    當時**不動那個決議**，只修「pod 查詢**本身**失敗」這個子情形——它在正常過渡期成本
+    為零，因為那時 ``pod_retrieval_error`` 是 ``None``。同一份 operator schema 自己也把
+    規則寫在容器欄位上（``vmi_retrieval_error`` 的說明：「Mirrors pod_retrieval_error:
+    the caller MUST NOT read an empty vmis list as 'no VM' while this is set」），但實作
+    當初只落在 VM 分支。
+
+    **後續**：F-423-1 Step 1（2026-07-31）已把 ``pods=[]`` 那條一併翻成 fail-closed
+    ——評估推翻了原本的兩個前提（VM 合取並不依賴它；影響面不是「所有現存租戶服務」），
+    並找到已發生的實例（#456）。所以現在兩條路的處置一致，差別只剩理由字串。翻轉的
+    完整論證與三層守線在 ``test_cloud_service_poll_vm_branch.py``；本檔保留原敘述是
+    為了讓「當時為什麼只修一半」這個判斷仍可考古。
 
 Refs #477 #481 #423
 """
@@ -309,21 +314,28 @@ class TestPodRetrievalErrorIsFailClosed(_ReadinessCase):
 
 
 @tagged('post_install', '-at_install')
-class TestF4231DecisionUntouched(_ReadinessCase):
-    """反過度修復錨：F-423-1 那個**刻意保留**的 fail-open 不許被順手改掉。"""
+class TestContainerReadinessAnchors(_ReadinessCase):
+    """容器就緒判定的其餘輸入型：兩種「不空但不健康」的 pods 必須維持 fail-closed。
 
-    def test_empty_pods_without_error_keeps_f423_1_behaviour(self):
-        """``pods=[]`` 而**沒有** ``pod_retrieval_error`` → 維持現行 True。
+    本 class 原名 ``TestF4231DecisionUntouched``，鎖的是 #484 當時**刻意不動**的
+    F-423-1 fail-open（``pods=[]`` 回 True）。F-423-1 Step 1（2026-07-31）已把那條
+    翻成 fail-closed，對應的斷言隨之搬到
+    ``test_cloud_service_poll_vm_branch.py``（判定 / model poll / controller poll
+    三層各一條）。這裡留下的是它的**鄰居**——它們在兩次改動中語意都沒變，正好用來
+    證明翻轉沒有波及其他輸入型。
+    """
 
-        這是 F-423-1 的決議：容器型有一個合法短暫狀態是「release 已 deployed 但
-        pod 還沒被 controller 建出來」，改 fail-closed 會讓**所有**現存租戶服務多卡
-        一輪 poll。本 PR 只收「查詢失敗」那個子情形（該欄位有值時），正常過渡期
-        成本為零。這條紅了代表修過頭。
+    def test_empty_pods_is_fail_closed(self):
+        """``pods=[]`` 而**沒有** ``pod_retrieval_error`` → 也不可就緒（Step 1）。
+
+        與 ``pod_retrieval_error`` 那條的差別只在**理由**：那條是「查不到」，這條是
+        「查到了，而且真的一顆都沒有」。兩者都不構成「服務可用」的證據，所以 Step 1
+        之後處置一致。詳細翻轉理由見
+        ``test_cloud_service_poll_vm_branch.py::test_5_container_with_no_pods_is_fail_closed``。
         """
         ready, _ = self.svc._is_release_ready(_status(pods=[]))
 
-        self.assertTrue(
-            ready, 'F-423-1 的 characterization 行為被改掉了（修過頭）')
+        self.assertFalse(ready)
 
     def test_ready_pods_still_ready(self):
         ready, _ = self.svc._is_release_ready(_status(
