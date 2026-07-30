@@ -41,20 +41,37 @@ k8s_service = KubernetesService()
 cloudflare_service = CloudflareService()
 
 
-def _ensure_image_pull_secrets(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """回傳補上預設 ``imagePullSecrets`` 的 values 淺複本（單一實作，install/upgrade 共用）。
+def _ensure_image_pull_secrets(
+    namespace: str, values: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """補齊 imagePullSecrets 的**兩層**，回傳 values 淺複本（install/upgrade/reset 共用）。
 
-    私有 image chart（如 mcp-server 拉 jcr-prod 的 hermes-mcp-admin）需要
-    imagePullSecrets 讓 kubelet 通過認證；secret 本體由 ensure_registry_secret
-    先佈建進 namespace。與 agent_runtimes.py（F-PILOT-4）同一 family——
-    install 路徑在 a0e7c25a 補上，但 upgrade 路徑漏了：#411 之後 upgrade 走
-    全量 reset values，私有 image 的 cloud service 任一次 redeploy /
-    reconfigure / reset-password 都會掉 pull secret → ImagePullBackOff 401
-    （#448）。抽成共用 helper 讓兩邊永不再漂移。
-
+    第一層 —— **values**（chart 自己 render 出來的 podSpec）：私有 image chart
+    （如 mcp-server 拉 jcr-prod 的 hermes-mcp-admin）需要 imagePullSecrets 讓
+    kubelet 通過認證；secret 本體由 ensure_registry_secret 先佈建進 namespace。
+    與 agent_runtimes.py（F-PILOT-4）同一 family——install 路徑在 a0e7c25a 補上，
+    但 upgrade 路徑漏了：#411 之後 upgrade 走全量 reset values，私有 image 的
+    cloud service 任一次 redeploy / reconfigure / reset-password 都會掉 pull
+    secret → ImagePullBackOff 401（#448）。抽成共用 helper 讓兩邊永不再漂移。
     用 setdefault：template 的 helm_default_values 可自行覆寫；public-image
     chart（bitnami n8n/odoo）不消費 top-level imagePullSecrets、多帶無害。
+
+    第二層 —— **ns 的 default ServiceAccount**（#423）：VM 型 cloud service 的
+    golden image 由 CDI importer pod 匯入，那顆 pod 由 CDI controller 生成、不屬於
+    任何 chart 的 podSpec，第一層完全碰不到它；它跑在 ns 的 default SA 上，只能靠
+    ServiceAccount admission 把 SA 的 imagePullSecrets 併進 pod。沒有這一層，HAOS
+    開通會永久卡在 ImportScheduled。細節與 stg 實證見
+    ``KubernetesService.ensure_default_sa_image_pull_secret``。
+
+    為什麼兩層綁在同一個 helper：#448 的教訓正是「install 補了、upgrade 漏了」。
+    綁在同一個呼叫上，任何一條路徑都不可能只補一半。``namespace`` 刻意設成必填的
+    位置參數——未來新增呼叫點時漏傳會直接 TypeError，而不是靜默少收斂一層。
     """
+    # SA 收斂必須發生在 helm install / upgrade **之前**：DataVolume 一旦被 apply，
+    # CDI 立刻生出 importer pod，屆時再 patch SA 已經來不及（admission 只在 pod
+    # 建立當下併入）。
+    k8s_service.ensure_default_sa_image_pull_secret(namespace)
+
     merged = dict(values or {})
     merged.setdefault(
         "imagePullSecrets", [{"name": settings.registry_secret_name}]
@@ -81,8 +98,9 @@ async def create_release(request: ReleaseCreateRequest):
         HTTPException: If installation fails
     """
     try:
-        # 注入預設 imagePullSecrets（理由見 _ensure_image_pull_secrets docstring）。
-        values = _ensure_image_pull_secrets(request.values)
+        # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
+        # _ensure_image_pull_secrets docstring）。
+        values = _ensure_image_pull_secrets(request.namespace, request.values)
         release = helm_service.install(
             namespace=request.namespace,
             name=request.name,
@@ -190,11 +208,12 @@ def upgrade_release(
         # #448：upgrade 也必須注入預設 imagePullSecrets。#411 之後 upgrade 走
         # 全量 reset values，沒有這行時私有 image 的 CS 任一次 redeploy /
         # reconfigure 都會掉 pull secret → ImagePullBackOff 401。
+        # #423：同一個呼叫連帶收斂 ns default SA（VM 型 CS 重跑 import 時要用）。
         release = helm_service.upgrade(
             namespace=namespace,
             name=name,
             chart=request.chart,
-            values=_ensure_image_pull_secrets(request.values),
+            values=_ensure_image_pull_secrets(namespace, request.values),
             sensitive_values=request.sensitive_values,
             version=request.version,
             reset_values=request.reset_values,
@@ -788,7 +807,7 @@ def reset_release_config(
             # #448/#449：reset 也走全量 reset values，沒有這行時私有 image 的 CS
             # 每次 reset password 都會掉 pull secret → ImagePullBackOff 401。
             # 之前只因呼叫端沿用 reuse_values 預設才沒踩到（#449 comment）。
-            values=_ensure_image_pull_secrets(request.values),
+            values=_ensure_image_pull_secrets(namespace, request.values),
             sensitive_values=request.sensitive_values,
             version=request.version,
             reset_values=request.reset_values,
@@ -941,7 +960,7 @@ def _reset_via_helm_secret(
             chart=request.chart,
             # #448：全量 reset values 會抹掉 install 時注入的 pull secret，兩條
             # reset 路都必須自己補回來。
-            values=_ensure_image_pull_secrets(request.values),
+            values=_ensure_image_pull_secrets(namespace, request.values),
             sensitive_values=request.sensitive_values,
             version=request.version,
             reset_values=request.reset_values,

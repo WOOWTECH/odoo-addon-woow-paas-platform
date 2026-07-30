@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -303,6 +304,18 @@ def _cloudflared_namespace() -> str:
     if settings.paas_env == "prod":
         return "paas-cloudflare-system"
     return ""
+
+
+# 每個 namespace 都有的內建 ServiceAccount。不設定 serviceAccountName 的 pod 一律
+# 跑在它上面——包含 CDI importer 這種由 controller 生成、不屬於任何 chart podSpec
+# 的 pod（見 KubernetesService.ensure_default_sa_image_pull_secret）。
+_DEFAULT_SERVICE_ACCOUNT = "default"
+
+# ns 剛建出來時 default SA 由 ServiceAccount controller 非同步補上，中間有一小段
+# 空窗。實測通常 <1s；5 次 × 0.5s 的上限（最多 2s 等待）足以吸收，又不會把 ns
+# 建立卡住太久。
+_SA_LOOKUP_ATTEMPTS = 5
+_SA_LOOKUP_BACKOFF_SECONDS = 0.5
 
 
 class HelmException(Exception):
@@ -1031,6 +1044,12 @@ class KubernetesService:
 
         self.ensure_registry_secret(name)
 
+        # #423：secret 佈進 ns 之後，緊接著讓 ns 的 default SA 指向它。CDI importer
+        # 這種由 controller 生成、不經任何 chart podSpec 的 pod，只有這條路拿得到
+        # 憑證。放在 ns 準備階段是為了讓不變式從 ns 出生就成立（不必等到第一次
+        # install）；install / upgrade / reset 各路徑另有同一個冪等收斂當後手。
+        self.ensure_default_sa_image_pull_secret(name)
+
         # #279 O4: apply the leg-2 tenant-isolation baseline NetworkPolicy bundle.
         if workspace_id is not None:
             self._apply_baseline_netpol(name, workspace_id)
@@ -1219,6 +1238,131 @@ class KubernetesService:
             Path(secret_file).unlink(missing_ok=True)
 
         return settings.registry_secret_name
+
+    @staticmethod
+    def is_not_found_error(exc: "KubectlException") -> bool:
+        """True only when kubectl failed because the object does not exist.
+
+        ``KubectlException`` 對**每一種** kubectl 失敗都會拋（RBAC Forbidden、30s
+        timeout、binary 不存在），所以想把「物件還沒被建出來」當成良性、可重試的
+        狀態時必須收窄到這裡。把整個例外類別當成 NotFound，會讓一個 Forbidden 偽裝
+        成「等一下就好」，靜默重試到放棄——與 ``is_crd_absent_error`` 同一道理。
+        """
+        stderr = (exc.stderr or "").lower()
+        return "(notfound)" in stderr.replace(" ", "") or "not found" in stderr
+
+    def _get_default_service_account(
+        self, namespace: str
+    ) -> Optional[Dict[str, Any]]:
+        """讀 ns 的 default ServiceAccount；**只**對 NotFound 做短重試。
+
+        ns 剛被 ``create_namespace`` 建出來時 default SA 尚未由 controller 補上，
+        這是本方法唯一容忍的失敗。重試耗盡回 ``None`` 讓呼叫端容忍：SA 出現之後，
+        任何一次 install / upgrade / reset 都會再收斂一次，不需要為了這個空窗把整個
+        ns 建立或部署弄失敗。其餘 kubectl 失敗一律往上拋。
+        """
+        for attempt in range(_SA_LOOKUP_ATTEMPTS):
+            try:
+                result = self._run_command([
+                    "get",
+                    "serviceaccount",
+                    _DEFAULT_SERVICE_ACCOUNT,
+                    "--namespace",
+                    namespace,
+                    "--output",
+                    "json",
+                ])
+                return json.loads(result.stdout)
+            except KubectlException as e:
+                if not self.is_not_found_error(e):
+                    raise
+                if attempt < _SA_LOOKUP_ATTEMPTS - 1:
+                    time.sleep(_SA_LOOKUP_BACKOFF_SECONDS)
+        return None
+
+    def ensure_default_sa_image_pull_secret(self, namespace: str) -> bool:
+        """把 registry pull secret 併進租戶 ns 的 default ServiceAccount（冪等）。
+
+        **為什麼 chart podSpec 的 imagePullSecrets 不夠**（#423 HAOS）：VM 型 cloud
+        service 開通時，golden image 是由 CDI 的 *importer pod* 匯進 PVC 的，而那顆
+        pod 由 CDI controller 依 DataVolume 生成、不屬於任何 chart 的 podSpec——
+        我們注入 values 的 imagePullSecrets（``_ensure_image_pull_secrets`` 第一層）
+        完全碰不到它。registry source + ``pullMethod=node`` 時 image 由節點的
+        containerd 拉，憑證只能來自 importer pod 的 pod-level imagePullSecrets，而
+        importer 跑在該 ns 的 **SA default** 上（stg 實查），靠 ServiceAccount
+        admission 把 SA 的 imagePullSecrets 併進 pod。default SA 是空的 ⇒ 拉不到
+        golden image ⇒ 開通永久卡在 ImportScheduled。
+
+        stg 案發 ns 熱線實證：patch 上 ``paas-registry`` 後 importer pod 的 spec 真的
+        長出 ``.spec.imagePullSecrets=[{"name": "paas-registry"}]``，node-pull 過
+        auth，DataVolume import 74 秒完成（#423 comment 3696）。
+
+        **冪等**：先讀再決定。已含同名項目就完全不發 patch；否則把新項目 append 到
+        現有清單後**整份**送出——JSON merge patch 對 array 是整份覆寫，不帶著既有
+        項目一起送就會把租戶／其他機制放進去的 pull secret 洗掉。
+
+        Args:
+            namespace: 目標 namespace（前綴守衛同其他 mutate 方法）
+
+        Returns:
+            True 表示這次真的補了；False 表示本來就有，或 default SA 在重試視窗內
+            仍未出現（容忍，見 ``_get_default_service_account``）。
+
+        Raises:
+            KubectlException: NotFound 以外的任何 kubectl 失敗（RBAC、timeout…）。
+            ValueError: namespace 不在允許前綴內。
+        """
+        # #284 W0-hardening 同款守衛：這是 mutate 方法，RBAC 不擋前綴，app 層是唯一
+        # 邊界。
+        validate_namespace(namespace)
+        secret_name = settings.registry_secret_name
+
+        service_account = self._get_default_service_account(namespace)
+        if service_account is None:
+            logger.warning(
+                "default ServiceAccount absent in namespace '%s' after %d attempts; "
+                "skipping imagePullSecrets convergence — a later install/upgrade/"
+                "reset will retry. VM-type provisioning in this ns would stall at "
+                "ImportScheduled until then (#423).",
+                namespace,
+                _SA_LOOKUP_ATTEMPTS,
+            )
+            return False
+
+        existing = service_account.get("imagePullSecrets") or []
+        if any(
+            isinstance(entry, dict) and entry.get("name") == secret_name
+            for entry in existing
+        ):
+            logger.debug(
+                "default ServiceAccount in '%s' already carries imagePullSecret "
+                "'%s'; no patch issued.",
+                namespace,
+                secret_name,
+            )
+            return False
+
+        merged = list(existing) + [{"name": secret_name}]
+        self._run_command([
+            "patch",
+            "serviceaccount",
+            _DEFAULT_SERVICE_ACCOUNT,
+            "--namespace",
+            namespace,
+            "--type",
+            "merge",
+            "--patch",
+            json.dumps({"imagePullSecrets": merged}),
+        ])
+        logger.info(
+            "default ServiceAccount in '%s' now carries imagePullSecret '%s' "
+            "(%d entr%s total, pre-existing ones preserved)",
+            namespace,
+            secret_name,
+            len(merged),
+            "y" if len(merged) == 1 else "ies",
+        )
+        return True
 
     def get_services(
         self, namespace: str, label_selector: Optional[str] = None

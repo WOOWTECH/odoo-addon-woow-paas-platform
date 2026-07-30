@@ -157,6 +157,9 @@ def test_create_namespace_wires_baseline_when_workspace_id(mock_run, mock_settin
     k = KubernetesService()
     k._apply_baseline_netpol = MagicMock()
     k.ensure_registry_secret = MagicMock()
+    # #423：本組只驗 baseline NP 接線，default-SA 收斂另有專屬測試；
+    # 這裡 mock 掉，避免 settings 被整顆 MagicMock 化後 json.dumps 炸開。
+    k.ensure_default_sa_image_pull_secret = MagicMock()
     k.create_namespace("paas-ws-stg-abc", cpu_limit="1", memory_limit="1Gi",
                        storage_limit="1Gi", workspace_id=7)
     k._apply_baseline_netpol.assert_called_once_with("paas-ws-stg-abc", 7)
@@ -174,6 +177,9 @@ def test_create_namespace_skips_baseline_when_no_workspace_id(mock_run, mock_set
     k = KubernetesService()
     k._apply_baseline_netpol = MagicMock()
     k.ensure_registry_secret = MagicMock()
+    # #423：本組只驗 baseline NP 接線，default-SA 收斂另有專屬測試；
+    # 這裡 mock 掉，避免 settings 被整顆 MagicMock 化後 json.dumps 炸開。
+    k.ensure_default_sa_image_pull_secret = MagicMock()
     k.create_namespace("paas-ws-dev", cpu_limit="1", memory_limit="1Gi", storage_limit="1Gi")
     k._apply_baseline_netpol.assert_not_called()
 
