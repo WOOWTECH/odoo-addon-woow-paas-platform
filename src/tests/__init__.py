@@ -252,3 +252,5 @@ from . import test_haos_seed_423
 from . import test_addon_removal_params_474
 # fix: #477 _update_service 模組守衛收斂單一裁決點——success:false 與非 running 皆 fail-closed
 from . import test_addon_removal_fail_closed_477
+# fix: #484 呼叫端讀齊 operator 具名失敗欄位——dns_failed / pod_retrieval_error fail-closed
+from . import test_named_failure_fields_484
