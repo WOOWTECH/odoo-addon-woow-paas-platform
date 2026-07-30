@@ -121,46 +121,40 @@ class _ServiceMatrixCase(HttpCase):
             'state': 'running', 'subdomain': 'svc-471-%s' % self.tpl.slug,
             'provision_partner_id': self.partner.id})
 
-    def _result(self, url, params='{}', top_level=''):
-        """打 JSON-RPC 端點。
-
-        ``top_level``：額外塞在 **envelope 頂層**（與 ``params`` 同層）的鍵。只有
-        ``check-addon-removal`` 需要——見 `_addon_removal_body` 的說明。
-        """
-        body = ('{"jsonrpc":"2.0","method":"call","params":' + params
-                + (',' + top_level if top_level else '') + '}')
+    def _result(self, url, params='{}'):
+        """打 JSON-RPC 端點——鍵一律住在 ``params`` 裡（＝前端的形狀）。"""
+        body = '{"jsonrpc":"2.0","method":"call","params":' + params + '}'
         resp = self.url_open(
             url, data=body, headers={'Content-Type': 'application/json'})
         parsed = resp.json()
         self.assertIn('result', parsed, 'resp: %s' % parsed)
         return parsed['result']
 
-    # ⚠️ 既有缺陷（非本 issue scope，僅在測試中繞過）：
-    # `api_check_addon_removal` 讀 ``request.get_json_data()``——那回的是**整個
-    # request body**（odoo/http.py:1810 `json.loads(httprequest.get_data())`），不是
-    # JSON-RPC 的 ``params``。而前端 `cloud_service.js:500` 走標準 envelope
-    # （`{jsonrpc, method, params:{removed_addon_ids}}`），於是端點永遠讀到
-    # ``removed_addon_ids=None`` → 命中 `if not removed_addon_ids` 提早回
-    # ``{'success': True, 'modules': {}}``，**隱藏 gate 與後續檢查全都跑不到**。
-    # 本檔要守的是 gate 判準，故刻意把鍵塞在頂層讓它抵達 gate；那個 param
-    # plumbing bug 另案處理（修它會改變端點對前端的行為，超出 #471 拍板範圍）。
-    _ADDON_REMOVAL_TOP = '"removed_addon_ids":[1]'
+    # check-addon-removal 的 gate 在 `if not removed_addon_ids` 的短路**之後**，
+    # 所以要抵達它就必須送非空的 id。刻意用一個不存在的 id：conceal 型會停在
+    # gate，hidden-only 型則往下走到 `CloudOdooAddon.browse(...).exists()` 為空
+    # 就返回——不會真的打 operator，測試無網路副作用。
+    #
+    # 這裡曾經是 #474 的重現點：端點原本讀 ``request.get_json_data()``（＝整個
+    # request body），這個鍵得塞在 envelope **頂層**才到得了 gate。#474 修好後
+    # 已回歸正規 params 路徑；若哪天又有人把端點改回讀 body，本檔這兩條會紅。
+    _ADDON_REMOVAL_PARAMS = '{"removed_addon_ids":[999999999]}'
 
     # ── 語意斷言的兩個方向 ────────────────────────────────────────────────
-    def _assert_gate_open(self, url, params='{}', label='', top_level=''):
+    def _assert_gate_open(self, url, params='{}', label=''):
         """端點沒被隱藏語意擋住。
 
         刻意**不**斷言 success=True：這些端點的隱藏 gate 之後還有訂閱閘、狀態閘、
         operator 呼叫等獨立關卡，在無 operator／無訂閱的測試環境本來就會回別的錯。
         受測面向只有一個——回的**不是** hidden gate 的 'Service not found'。
         """
-        r = self._result(url, params, top_level)
+        r = self._result(url, params)
         self.assertNotEqual(
             r.get('error'), _NOT_FOUND,
             '%s 不該被隱藏語意擋住（回 %r）' % (label or url, r))
 
-    def _assert_gate_closed(self, url, params='{}', label='', top_level=''):
-        r = self._result(url, params, top_level)
+    def _assert_gate_closed(self, url, params='{}', label=''):
+        r = self._result(url, params)
         self.assertFalse(r.get('success'), '%s 應被擋（回 %r）' % (label or url, r))
         self.assertEqual(
             r.get('error'), _NOT_FOUND,
@@ -218,7 +212,7 @@ class TestHiddenOnlyExistingServiceReachable(_ServiceMatrixCase):
     def test_check_addon_removal_reachable(self):
         self._assert_gate_open(
             '/api/cloud-services/services/%s/check-addon-removal' % self.svc.id,
-            '{}', 'check-addon-removal', top_level=self._ADDON_REMOVAL_TOP)
+            self._ADDON_REMOVAL_PARAMS, 'check-addon-removal')
 
     def test_service_mcp_servers_reachable(self):
         self._assert_gate_open(
@@ -310,7 +304,7 @@ class TestConcealTemplateOperationsBlocked(_ServiceMatrixCase):
     def test_check_addon_removal_blocked(self):
         self._assert_gate_closed(
             '/api/cloud-services/services/%s/check-addon-removal' % self.svc.id,
-            '{}', 'check-addon-removal', top_level=self._ADDON_REMOVAL_TOP)
+            self._ADDON_REMOVAL_PARAMS, 'check-addon-removal')
 
     def test_service_mcp_servers_blocked(self):
         self._assert_gate_closed(
