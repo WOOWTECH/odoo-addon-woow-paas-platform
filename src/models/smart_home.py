@@ -163,8 +163,46 @@ class SmartHome(models.Model):
         )
 
     def action_provision(self):
-        """Provision the smart home by creating a dedicated Cloudflare Tunnel."""
+        """Provision the smart home by creating a dedicated Cloudflare Tunnel.
+
+        **Idempotency guard（#484）**：這個 method 原本是**單段**的——``create_tunnel``
+        一次做完全部，所以「``error`` ⇒ 遠端沒有資源」恆成立，retry 無腦重跑也安全，
+        不需要 guard（``two-stage-remote-provision-idempotency`` 那份 pattern doc 正是
+        拿本 method 當「單段免 guard」的對照組）。
+
+        本次改動把它變成**雙結果**：operator 的 ``dns_failed=True`` 代表 tunnel 已經在
+        Cloudflare 誕生、但 DNS record 沒建成，於是 ``error`` 從此可能與一條**活著且在
+        計費**的 tunnel 共存。那份 pattern doc 的原話是「單段 method 的『免 guard 安全』
+        是它的單段性換來的，不是天生的；一旦加第二段，這份安全就得用 guard 重新買回
+        來」——所以下面的 stored-id guard 是這個修法的必要組成，不是附帶重構。
+
+        **與 SecurityAccess 的 guard 有一處刻意不同**：SA 的 guard 分支可以只重跑第二段
+        （declarative route sync）並收斂回 ``active``；SmartHome 沒有這個選項——operator
+        只有 ``create_tunnel`` 與 routes sync 兩處會建 DNS record，前者會建**新** tunnel，
+        後者需要 SmartHome 尚未建模的 route payload。既然平台無法修好 DNS，就不能假裝
+        可以：guard 分支 fail-loud，把「已經有一條 tunnel、重跑會多漏一條」講清楚，並指出
+        兩條安全出路（人工補 DNS，或刪掉重建——``action_delete`` 會連 tunnel 一起拆）。
+
+        順帶：``/api/smart-homes`` 的 ``action='provision'`` **沒有 state 閘**（只驗
+        OWNER/ADMIN ＋ 訂閱），所以對一個已經 ``active`` 的 Smart Home 再打一次
+        provision，修前同樣會建第二條 tunnel 並蓋掉 ``tunnel_id``。同一道 guard 一併關掉。
+        """
         self.ensure_one()
+
+        # stored-id guard —— 必須在任何 write 之前（含 state='provisioning'），
+        # 否則失敗的重試會把記錄推離 error 卻什麼也沒做成。
+        if self.tunnel_id:
+            raise UserError(
+                "This Smart Home already has a Cloudflare tunnel (%s). "
+                "Re-provisioning would create a second, separately billed tunnel "
+                "and leave this one orphaned with no record pointing at it. "
+                "If its DNS record is missing, ask an administrator to create it "
+                "for %s; otherwise delete this Smart Home (which tears the tunnel "
+                "down) and create it again."
+                % (self.tunnel_id,
+                   self.tunnel_route or self.subdomain or 'the configured hostname')
+            )
+
         client = self._get_operator_client()
 
         self.write({'state': 'provisioning', 'error_message': False})
@@ -184,15 +222,49 @@ class SmartHome(models.Model):
                 service_url=f"http://localhost:{self.ha_port}",
             )
 
-            self.write({
-                'state': 'active',
+            # tunnel 已經誕生且在計費——不論下面判成功或失敗，這些欄位都要落地，
+            # 否則就是一條沒有任何 DB row 指向的永久孤兒（F-ENV-4 守線）。
+            tunnel_vals = {
                 'tunnel_id': result.get('tunnel_id'),
                 'tunnel_token': result.get('tunnel_token'),
                 'tunnel_name': result.get('tunnel_name'),
                 'tunnel_route': f"https://{hostname}",
                 'subdomain': subdomain,
-                'deployed_at': fields.Datetime.now(),
-            })
+            }
+
+            if result.get('dns_failed'):
+                # operator 把 CF 的 DNS 例外就地吞成 HTTP 200 ＋ dns_failed=True
+                # （api/tunnels.py）——平台側 client 只在 HTTP >= 400 才 raise，所以
+                # 這條路無例外可接，只能讀這個欄位。hostname 不會解析，服務實際上
+                # 不可達，**不得**宣告 active。
+                #
+                # 注意 operator 註解假設「rely entirely on a later re-sync to
+                # self-heal」——那個假設對 SmartHome 不成立：src/data/ 底下沒有任何
+                # smart-home cron，沒有東西會回來補這筆 DNS。所以這裡必須留下
+                # 人看得懂、修得動的訊息，而不是一句籠統的失敗。
+                self.write(dict(
+                    tunnel_vals,
+                    state='error',
+                    error_message=(
+                        "Tunnel created but its DNS record could not be created, "
+                        "so %s will not resolve. The tunnel (%s) is kept so it is "
+                        "not orphaned — an administrator must create the DNS "
+                        "record, or delete and re-create this Smart Home."
+                        % (hostname, result.get('tunnel_id'))
+                    ),
+                ))
+                _logger.error(
+                    "[SH] provision left without DNS sh=%s tunnel=%s hostname=%s "
+                    "— record kept in 'error' with the tunnel anchored",
+                    self.id, result.get('tunnel_id'), hostname,
+                )
+                return
+
+            self.write(dict(
+                tunnel_vals,
+                state='active',
+                deployed_at=fields.Datetime.now(),
+            ))
 
             _logger.info(
                 "Smart Home '%s' provisioned successfully. Tunnel ID: %s",
