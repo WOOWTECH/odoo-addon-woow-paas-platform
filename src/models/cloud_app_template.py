@@ -272,14 +272,62 @@ class CloudAppTemplate(models.Model):
              '0＝不限制。HA PaaS 免費方案設 1。',
     )
 
+    # #471：原本 is_hidden 一個旗標同時承載「不上架」與「既有實例整條鏈消失」兩種
+    # 語意。對 HA PaaS（租戶入口是 App、不是 /woow）恰好無害，套到「暫時下架的一般
+    # 商品」就變成破壞性的——租戶手上 state=running 的服務詳情頁打不開、rollback／
+    # change-plan／MCP 設定全不可達（#464 實測 hermes-agent）。而「不可購買」這件事
+    # 本來就已由 plan 層 storefront_hidden 承擔，兩層縱深早有前例。故拆成：
+    #
+    #   is_hidden          ＝ 曝光層。marketplace 不列、template 詳情/plans 不可讀、
+    #                        generic create 拒收。**不動既有實例。**
+    #   conceal_instances  ＝ 實例層。既有實例的讀取/操作端點全擋、HiddenChainMixin
+    #                        全鏈（service／訂閱／發票／workspace）過濾。
+    #
+    # 上架／下架是常態營運動作，只翻 is_hidden 不該有破壞性副作用；要讓既有實例也
+    # 消失是**額外**的、少數的決定（目前僅 HA PaaS）。
     is_hidden = fields.Boolean(
         string='Hidden',
         default=False,
-        help='若為真，此 template 及其 services／訂閱／發票不出現在 /woow '
-             '前台任何清單（marketplace、workspace、dashboard、billing）。'
+        help='曝光層開關：若為真，此 template 不出現在 marketplace、詳情／plans '
+             '不可讀、不可經 generic create 新建。**既有服務不受影響**（照常可讀、'
+             '可操作、留在 workspace 清單）——要連既有實例一起隱藏請另開 '
+             '「既有實例一併隱藏」（conceal_instances，#471）。'
              '呈現層過濾、非 ACL（租戶知 id 仍可打 JSON 端點、Odoo 原生 /my '
-             '與 /report 繞過本層）。用於 HA PaaS 這類平台自動開通的隱藏服務（#336）。',
+             '與 /report 繞過本層）。用於定價未拍板或暫時下架的商品。',
     )
+
+    conceal_instances = fields.Boolean(
+        string='既有實例一併隱藏',
+        default=False,
+        help='實例層開關：若為真，此 template **既有** services／訂閱／發票／'
+             'workspace 不出現在 /woow 前台任何清單（workspace、dashboard、billing），'
+             '且既有服務的讀取／操作端點（詳情、更新、rollback、revisions、'
+             'change-plan、skip-trial、addon 檢查、MCP 設定、重設 admin 密碼）'
+             '一律回 Service not found。用於 HA PaaS 這類「租戶入口不是 /woow」'
+             '的平台自動開通服務（#336）。必須搭配 is_hidden=True（#471）。'
+             '呈現層過濾、非 ACL——租戶知 id 仍可打 Odoo 原生 /my 與 /report。',
+    )
+
+    @api.constrains('is_hidden', 'conceal_instances')
+    def _check_conceal_implies_hidden(self):
+        """conceal_instances=True ⟹ is_hidden=True（#471 蘊含式，fail-loud）。
+
+        反例語意矛盾：marketplace 賣得到、租戶買完服務立刻從前台消失且不可操作。
+        兩個旗標拆開後最可能的誤用形態有二——(a) 新 template 只設 conceal 忘了設
+        hidden；(b) 解封既有 conceal template 時只翻 is_hidden=False、留下
+        conceal_instances=True，於是「上架了但買到的人看不到自己的服務」。兩者都
+        在寫入當下就炸，不留給 code review 抓。
+
+        解封 conceal template 的正確作法是**兩個欄位一起翻**。
+        """
+        for record in self:
+            if record.conceal_instances and not record.is_hidden:
+                raise ValidationError(
+                    '「既有實例一併隱藏」必須搭配「Hidden」一起開啟（範本：%s）。'
+                    '既有實例隱藏但仍在 marketplace 上架，會讓租戶買到一個'
+                    '前台看不到、也操作不了的服務。若要上架，請同時關閉這兩個開關。'
+                    % (record.name or record.slug or record.id)
+                )
 
     @api.constrains('subscription_plan_ids')
     def _check_no_cross_service_type_plans(self):

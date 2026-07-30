@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-七個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+八個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -30,6 +30,11 @@
                      (b) Reset 密碼按鈕的 t-if 鏈必須追得到 has_admin_gui，
                          不論 getter 叫什麼名字（鎖「唯一的對形態」，擋任何第三判準）。
                      依據 docs/decisions/patterns/capability-gate-single-source-field.md
+8. conceal-instances src/**/*.py（除 src/tests/）不得用 `template_id.is_hidden` 判**既有
+                     service** 的可見性——實例層判準是 template_id.conceal_instances；
+                     is_hidden 只剩曝光層語意。照抄舊 gate ＝「暫時下架一個商品」會把租戶
+                     手上 state=running 的服務一起變成 Service not found（#471／#464）。
+                     依據 docs/decisions/patterns/hidden-template-presentation-chain.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -59,6 +64,11 @@ NOUPDATE_DOC = "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md"
 REUSE_VALUES_DOC = "docs/decisions/patterns/helm-reset-values-unified-pipeline.md"
 SEED_TOPOLOGY_DOC = "docs/decisions/patterns/seed-topology-invariants.md"
 CAPABILITY_GATE_DOC = "docs/decisions/patterns/capability-gate-single-source-field.md"
+HIDDEN_CHAIN_DOC = "docs/decisions/patterns/hidden-template-presentation-chain.md"
+
+# #471：既有實例的隱藏判準（實例層）vs 只擋上架曝光的舊旗標（曝光層）。
+CONCEAL_FIELD = "conceal_instances"
+CONCEAL_WRONG_FIELD = "is_hidden"
 
 OWL_ALLOWED_MODIFIERS = {"stop", "prevent", "self", "capture", "synthetic"}
 
@@ -662,6 +672,66 @@ def check_admin_gui_gate_anchor(root):
     return violations
 
 
+def _template_is_hidden_via_service_lines(src):
+    """回傳 ``<x>.template_id.is_hidden`` 屬性鏈的行號 list（AST 判定）。
+
+    只認「經由 ``template_id`` 取到 template 再讀 ``is_hidden``」這個形態——那必然是
+    在判**某個既有 service 的**可見性。曝光層的 ``template.is_hidden``（直接持有
+    template 變數，如 marketplace domain 與 template by-id）不匹配，因此 B 組四處
+    不會被誤報。
+
+    用 AST 而非 regex：註解與 docstring 裡本來就會出現 `template_id.is_hidden`
+    這串字（本次拆分的說明文字就是），regex 會全部誤報。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []  # 不 parse 的檔略過（fail-open，對齊本工具哲學）
+    lines = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Attribute) and node.attr == CONCEAL_WRONG_FIELD
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "template_id"):
+            lines.append(node.lineno)
+    return sorted(set(lines))
+
+
+def check_conceal_instances_gate(root, only_file=None):
+    """既有 service 的可見性判準不得是 ``template_id.is_hidden``（#471）。
+
+    #471：原本一個 ``is_hidden`` 同時承載「不上架」與「既有實例整條鏈消失」，於是
+    任何「暫時下架」的一般商品都會把租戶手上正在跑的服務一起從前台抹掉——詳情頁
+    打不開、rollback／change-plan／MCP 設定全回 Service not found（#464 實測
+    hermes-agent）。拆成 ``is_hidden``（曝光層）＋ ``conceal_instances``（實例層）後，
+    唯一的退化路徑就是**有人新增一個既有服務的操作端點、照抄舊 gate**。這條 gate
+    把那次照抄從「三個月後租戶回報服務不見了」提前成「寫下去當下就被擋」。
+
+    依據 docs/decisions/patterns/hidden-template-presentation-chain.md
+    """
+    violations = []
+    files = [only_file] if only_file else sorted(
+        glob.glob(os.path.join(root, "src/**/*.py"), recursive=True))
+    for fp in files:
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        if rel.startswith("src/tests/"):
+            continue  # 測試會刻意提及舊判準（紅燈對照、回歸描述）
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        for line_no in _template_is_hidden_via_service_lines(src):
+            violations.append(
+                "%s:%d：用 `template_id.%s` 判既有 service 的可見性。實例層判準是 "
+                "`template_id.%s`——`%s` 只剩**曝光層**語意（marketplace 不列／template "
+                "詳情與 plans 不可讀／generic create 拒收，那四處直接持有 template 變數、"
+                "不經 template_id）。照抄舊 gate 的後果是「暫時下架一個商品」把租戶手上 "
+                "state=running 的服務一起變成 Service not found（#471／#464）。"
+                "曝光層 gate 請改成直接讀 template 的形態，見 %s"
+                % (rel, line_no, CONCEAL_WRONG_FIELD, CONCEAL_FIELD,
+                   CONCEAL_WRONG_FIELD, HIDDEN_CHAIN_DOC))
+    return violations
+
+
 # ---------------------------------------------------------------- modes
 
 def run_all(root):
@@ -672,14 +742,16 @@ def run_all(root):
                   + check_seed_topology(root)
                   + check_test_env_restore(root)
                   + check_slug_capability_gate(root)
-                  + check_admin_gui_gate_anchor(root))
+                  + check_admin_gui_gate_anchor(root)
+                  + check_conceal_instances_gate(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
             print("  ✗ " + v)
         return 1
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
-          "reuse-values / seed-topology / test-env-restore / capability-gate）")
+          "reuse-values / seed-topology / test-env-restore / capability-gate / "
+          "conceal-instances）")
     return 0
 
 
@@ -727,8 +799,10 @@ def run_hook():
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
+            violations += check_conceal_instances_gate(root, only_file=abs_path)
         elif re.match(r"^src/.*\.py$", rel):
             violations = check_reuse_values(root, only_file=abs_path)
+            violations += check_conceal_instances_gate(root, only_file=abs_path)
             if rel.startswith("src/tests/"):
                 violations += check_test_env_restore(root, only_file=abs_path)
         elif re.match(r"^src/static/src/.*\.xml$", rel):

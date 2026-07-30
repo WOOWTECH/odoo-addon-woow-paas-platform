@@ -551,11 +551,23 @@
             <field name="is_active" eval="True" />
         </record>
 
-        <!-- HA PaaS（免費雲端 Home Assistant，#336）。is_hidden=True：不出現在
+        <!-- HA PaaS（免費雲端 Home Assistant，#336）。**兩層都關**：不出現在
              /woow 前台任何清單，僅由 /api/ha-paas/provision 端點自動開通。
+               is_hidden=True         → 曝光層（marketplace／詳情／plans／generic create）
+               conceal_instances=True → 實例層（既有 service／訂閱／發票／workspace 全鏈
+                                        隱藏 ＋ 既有服務的讀取／操作端點一律 not found）
+             #471 把原本擠在 is_hidden 的兩種語意拆開後，本 template 是唯一需要「連既有
+             實例一起隱藏」的 case——#336 決議該服務的租戶入口是 App、不是 /woow，故行為
+             與拆分前完全相同。對照組 cloud_app_hermes_agent 只設 is_hidden（僅未上架，
+             既有服務照常可用）。⚠ 未來解封時**兩個欄位要一起翻**，只翻 is_hidden 會被
+             model 層 _check_conceal_implies_hidden 擋下（fail-loud）。
+
              migration：本 xmlid 首建即在 noupdate=0 塊（commit ed6287f4 晚於 noupdate=0
              收斂 d1cb2e32，git 實證），故既有 DB ir.model.data.noupdate=False，-u 直接
              重套下列欄位、無需 migration；healer 另清任何殘留 sticky flag。
+             conceal_instances 是本次新增欄位：新欄位由 ORM 於 -u 建欄並套 default=False，
+             既有 row 一律非 conceal；HA PaaS 這筆靠上述 noupdate=0 重套為 True。故本次
+             同樣無需 migration（推論已於 t471 沙盒實測驗證，見 PR 說明）。
 
              ⚠ 原子變更鐵律（chart NOTES.txt「OPERATOR COUPLING」）：本次自
              stopgap（chart 0.1.0 ＋ HA 官方 image ghcr.io/home-assistant/home-assistant）
@@ -580,6 +592,8 @@
             <field name="description">免費雲端 Home Assistant（平台自動開通）</field>
             <field name="category">container</field>
             <field name="is_hidden" eval="True"/>
+            <!-- #471：既有實例也全鏈隱藏＋操作端點照擋（#336 原始意圖，租戶入口是 App） -->
+            <field name="conceal_instances" eval="True"/>
             <field name="is_active" eval="True"/>
             <!-- 對齊現有 OCI template 慣例（postgresql/n8n/redis）：helm_repo_url 空、
                  helm_chart_name 帶完整 oci://。chart 由 woow-paas-charts repo 發佈。 -->
@@ -737,6 +751,13 @@
              generic create 擋（controllers/paas.py `_create_service`），本輪部署路徑＝
              odoo shell 直建（E2E）。定價拍板後比照 #431 模式解封（翻 is_hidden=False
              ＋掛 plan），本檔 noupdate=0、-u 自動套用、無需 migration。
+
+             ⚠ **刻意不設 conceal_instances**（#471 拆語意）：本筆只是「未上架」，既有
+             租戶服務必須照常可讀、可操作、留在 workspace 清單。拆分前 is_hidden 同時
+             擋掉既有實例，導致 stg 刻意留測的 svc60（hermes-e2e）詳情頁打不開、
+             rollback／change-plan／MCP 設定全不可達，且每次 -u 把手動解封翻回就再犯
+             （#449 報告記載 2026-07-28 曾以 DB 直改臨時解封）。與 cloud_app_ha_paas
+             的「兩層都關」是刻意的對照組，勿照抄那筆的 conceal_instances=True。
 
              image：
              - agent＝#424 ② 交付的衍生 image（Elmo 的 MCP OAuth 熱修已轉 build-time

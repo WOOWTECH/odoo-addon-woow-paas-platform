@@ -244,3 +244,5 @@ from . import test_haos_workload_type
 from . import test_cloud_service_poll_vm_branch
 # feat: #423 W5a suspend/resume 映射 runStrategy（防 helm upgrade 喚醒停權 VM）
 from . import test_haos_suspend_resume_runstrategy
+# fix: #471 is_hidden 拆兩語意——曝光層 vs conceal_instances 實例層的行為矩陣
+from . import test_conceal_instances_split_471
