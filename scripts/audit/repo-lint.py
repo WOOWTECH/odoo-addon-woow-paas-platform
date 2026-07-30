@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-八個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+九個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -35,6 +35,13 @@
                      is_hidden 只剩曝光層語意。照抄舊 gate ＝「暫時下架一個商品」會把租戶
                      手上 state=running 的服務一起變成 Service not found（#471／#464）。
                      依據 docs/decisions/patterns/hidden-template-presentation-chain.md
+9. reset-budget-ladder  reset 密碼的三層 timeout 預算必須嚴格外大於內、且算式自洽
+                     （前端 JS 90s > 平台 client 75s > operator hard cap 65s，後者
+                     ＝2×helm --timeout ＋ CLI 開銷 ＋ exec ＋ cleanup ＋ slack）。
+                     #461／F-449-3 的根因就是三個預算彼此不知道對方；`--atomic` 失敗
+                     還會吃第二次 --timeout（rollback wait），少算就在 rollback 途中
+                     kill helm ⇒ release 卡 pending-rollback（真機實測）。
+                     依據 docs/decisions/patterns/reset-async-budget-ladder.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -65,6 +72,17 @@ REUSE_VALUES_DOC = "docs/decisions/patterns/helm-reset-values-unified-pipeline.m
 SEED_TOPOLOGY_DOC = "docs/decisions/patterns/seed-topology-invariants.md"
 CAPABILITY_GATE_DOC = "docs/decisions/patterns/capability-gate-single-source-field.md"
 HIDDEN_CHAIN_DOC = "docs/decisions/patterns/hidden-template-presentation-chain.md"
+RESET_LADDER_DOC = "docs/decisions/patterns/reset-async-budget-ladder.md"
+
+# #461 reset 預算階梯：三層各自的常數位置（跨 repo 內兩條發版線，故一定要跨檔算）。
+RESET_LADDER_FRONTEND = "src/static/src/paas/services/cloud_service.js"
+RESET_LADDER_PLATFORM = "src/services/paas_operator.py"
+RESET_LADDER_OPERATOR = "extra/paas-operator/src/api/releases.py"
+RESET_LADDER_HELM = "extra/paas-operator/src/services/helm.py"
+RESET_LADDER_FILES = (
+    RESET_LADDER_FRONTEND, RESET_LADDER_PLATFORM,
+    RESET_LADDER_OPERATOR, RESET_LADDER_HELM,
+)
 
 # #471：既有實例的隱藏判準（實例層）vs 只擋上架曝光的舊旗標（曝光層）。
 CONCEAL_FIELD = "conceal_instances"
@@ -278,6 +296,151 @@ def check_reuse_values(root, only_file=None):
                 "預設永不生效（既存 release 升級靜默漏 chart 新預設，Gap 2 bug class）。平台既存"
                 " release 升級一律走全量 values 組裝 ＋ reset_values=True（見 %s）。"
                 % (rel, line_no, REUSE_VALUES_DOC))
+    return violations
+
+
+def _fold_int_constants(src, seed=None):
+    """回傳 module 層 ``NAME = <int 算式>`` 的 {name: value}（小型常數折疊）。
+
+    只認 int 字面值、以及由已解析常數／字面值組成的 ``+`` / ``*`` 算式——夠用來讀
+    `2 * RESET_HELM_TIMEOUT_SECONDS + HELM_CLI_OVERHEAD_SECONDS` 這種預算算式，
+    又不需要 import 模組（operator 的套件不在平台的 sys.path 上，import 不可行）。
+    解不開的 assignment 直接略過（缺鍵由呼叫端 fail-loud，不靜默當 0）。
+
+    ``seed`` 供跨檔的名字：算式可以引用**別的模組 import 進來的**常數
+    （releases.py 的 subprocess 預算就引用 helm.py 的 HELM_CLI_OVERHEAD_SECONDS），
+    那個名字在本檔沒有 assignment，必須由呼叫端先解好餵進來。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return {}
+    resolved = dict(seed or {})
+
+    def value_of(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, int) \
+                and not isinstance(node.value, bool):
+            return node.value
+        if isinstance(node, ast.Name):
+            return resolved.get(node.id)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mult)):
+            left, right = value_of(node.left), value_of(node.right)
+            if left is None or right is None:
+                return None
+            return left + right if isinstance(node.op, ast.Add) else left * right
+        return None
+
+    for node in tree.body:  # module 層即可：預算常數不該藏在 function 裡
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        val = value_of(node.value)
+        if val is not None:
+            resolved[target.id] = val
+    return resolved
+
+
+def _read_repo_file(root, rel):
+    path = os.path.join(root, rel)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def check_reset_budget_ladder(root):
+    """#461：reset 的三層 timeout 預算必須嚴格外大於內，且算式自洽。
+
+    為什麼要一條 gate 而不是註解：#461（F-449-3）的根因就是「前端 30s / 平台 120s /
+    operator ≈560s 三個預算**彼此不知道對方**」——每一層各自都看起來合理，合起來
+    卻保證冷 image cache 時必逾時。散文攔不住這件事，它已經被攔失敗過一次了。
+
+    兩層算式各自釘：
+      (a) subprocess == 2 * helm --timeout + CLI 開銷
+          `--timeout` 是 per-operation，`--atomic` 失敗時 helm 會再跑一次帶 wait 的
+          rollback ⇒ 只給 n+slack 會在 rollback 進行中 SIGKILL helm ⇒ release 卡
+          pending-rollback、Secret 停在沒人持有的新密碼（真機實測，見 doc）。
+      (b) hard cap == subprocess + exec + cleanup + kubectl slack
+    然後跨層：前端 > 平台 > operator hard cap。
+
+    依據 docs/decisions/patterns/reset-async-budget-ladder.md
+    """
+    violations = []
+
+    def fail(msg):
+        violations.append("%s（見 %s）" % (msg, RESET_LADDER_DOC))
+
+    js = _read_repo_file(root, RESET_LADDER_FRONTEND)
+    operator_src = _read_repo_file(root, RESET_LADDER_OPERATOR)
+    platform_src = _read_repo_file(root, RESET_LADDER_PLATFORM)
+    helm_src = _read_repo_file(root, RESET_LADDER_HELM)
+    if js is None or operator_src is None or platform_src is None or helm_src is None:
+        # 檔案被搬走／改名：不能靜默放行，否則階梯守衛整條失效。
+        fail("預算階梯的來源檔缺失（預期 %s）" % ", ".join(RESET_LADDER_FILES))
+        return violations
+
+    front = re.search(
+        r"^const\s+RESET_REQUEST_TIMEOUT_MS\s*=\s*(\d+)\s*;", js, re.MULTILINE)
+    helm = _fold_int_constants(helm_src)
+    # operator 的 subprocess 算式引用 helm.py import 進來的開銷常數，故先解 helm.py
+    # 再把它當 seed 餵進去（否則那條算式解不開，會被誤報成「缺常數」）。
+    op = _fold_int_constants(operator_src, seed={
+        k: v for k, v in helm.items() if k == "HELM_CLI_OVERHEAD_SECONDS"
+    })
+    plat = _fold_int_constants(platform_src)
+
+    needed_op = (
+        "RESET_HELM_TIMEOUT_SECONDS", "RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS",
+        "RESET_EXEC_TIMEOUT_SECONDS", "RESET_CLEANUP_EXEC_TIMEOUT_SECONDS",
+        "RESET_KUBECTL_SLACK_SECONDS", "RESET_HARD_CAP_SECONDS",
+    )
+    missing = [k for k in needed_op if k not in op]
+    if missing:
+        fail("%s 缺少預算常數 %s" % (RESET_LADDER_OPERATOR, ", ".join(missing)))
+    if "HELM_CLI_OVERHEAD_SECONDS" not in helm:
+        fail("%s 缺少 HELM_CLI_OVERHEAD_SECONDS" % RESET_LADDER_HELM)
+    if "RESET_CONFIG_TIMEOUT" not in plat:
+        fail("%s 缺少 RESET_CONFIG_TIMEOUT" % RESET_LADDER_PLATFORM)
+    if front is None:
+        fail("%s 缺少 RESET_REQUEST_TIMEOUT_MS" % RESET_LADDER_FRONTEND)
+    if violations:
+        return violations
+
+    n = op["RESET_HELM_TIMEOUT_SECONDS"]
+    overhead = helm["HELM_CLI_OVERHEAD_SECONDS"]
+    subprocess_budget = op["RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS"]
+    hard_cap = op["RESET_HARD_CAP_SECONDS"]
+    platform_budget = plat["RESET_CONFIG_TIMEOUT"]
+    frontend_seconds = int(front.group(1)) / 1000
+
+    if subprocess_budget != 2 * n + overhead:
+        fail(
+            "RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS=%s 不等於 2×%s（helm --timeout）"
+            "＋%s（CLI 開銷）=%s。`--atomic` 失敗要吃兩次 --timeout（upgrade wait ＋"
+            "自動 rollback wait），少算會在 rollback 進行中 kill helm ⇒ release 卡"
+            " pending-rollback、Secret 停在沒人持有的新密碼"
+            % (subprocess_budget, n, overhead, 2 * n + overhead))
+
+    parts_sum = (
+        subprocess_budget + op["RESET_EXEC_TIMEOUT_SECONDS"]
+        + op["RESET_CLEANUP_EXEC_TIMEOUT_SECONDS"] + op["RESET_KUBECTL_SLACK_SECONDS"]
+    )
+    if hard_cap != parts_sum:
+        fail("RESET_HARD_CAP_SECONDS=%s 不等於各子步之和 %s（改了子步沒同步硬上限）"
+             % (hard_cap, parts_sum))
+
+    if not platform_budget > hard_cap:
+        fail(
+            "平台 RESET_CONFIG_TIMEOUT=%ss 必須 > operator RESET_HARD_CAP_SECONDS=%ss"
+            "；否則平台會在 operator 還沒答完就斷線 ⇒ 密碼不落庫、租戶得重按（#461 原症狀）"
+            % (platform_budget, hard_cap))
+    if not frontend_seconds > platform_budget:
+        fail(
+            "前端 RESET_REQUEST_TIMEOUT_MS=%ss 必須 > 平台 RESET_CONFIG_TIMEOUT=%ss"
+            "；否則瀏覽器先 abort ⇒ 後端修好了租戶也看不到成功（#459 實測成功案例"
+            "也要 49.9s／76.7s）" % (frontend_seconds, platform_budget))
     return violations
 
 
@@ -743,7 +906,8 @@ def run_all(root):
                   + check_test_env_restore(root)
                   + check_slug_capability_gate(root)
                   + check_admin_gui_gate_anchor(root)
-                  + check_conceal_instances_gate(root))
+                  + check_conceal_instances_gate(root)
+                  + check_reset_budget_ladder(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -751,7 +915,7 @@ def run_all(root):
         return 1
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
           "reuse-values / seed-topology / test-env-restore / capability-gate / "
-          "conceal-instances）")
+          "conceal-instances / reset-budget-ladder）")
     return 0
 
 
@@ -796,6 +960,10 @@ def run_hook():
         if rel.startswith(".."):
             return 0
         abs_path = os.path.abspath(file_path)
+        # #461 預算階梯是**跨檔**不變式（前端 JS ／ 平台 client ／ operator 常數各在
+        # 一處），所以只要動到其中任一檔就整條重算，不做 only_file 切片。
+        ladder = (check_reset_budget_ladder(root)
+                  if rel in RESET_LADDER_FILES else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -817,8 +985,12 @@ def run_hook():
             violations = check_data_noupdate(root, only_file=abs_path)
             if re.match(r"^src/data/subscription_(products|template_links).*\.xml$", rel):
                 violations += check_seed_topology(root)
+        elif ladder:
+            # extra/paas-operator/** 不在上面任何分支，但它持有階梯的內層常數。
+            violations = []
         else:
             return 0
+        violations += ladder
         if violations:
             print(json.dumps({
                 "decision": "block",

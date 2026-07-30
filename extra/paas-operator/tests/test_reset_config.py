@@ -6,10 +6,24 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from src.api.releases import _validate_namespace_or_raise, reset_release_config
+from src.api.releases import (
+    RESET_CLEANUP_EXEC_TIMEOUT_SECONDS,
+    RESET_EXEC_TIMEOUT_SECONDS,
+    RESET_HARD_CAP_SECONDS,
+    RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
+    RESET_HELM_TIMEOUT_SECONDS,
+    RESET_KUBECTL_SLACK_SECONDS,
+    _validate_namespace_or_raise,
+    reset_release_config,
+)
 from src.config import settings
 from src.models.schemas import ReleaseResetConfigRequest
-from src.services.helm import HelmException, KubectlException, KubernetesService
+from src.services.helm import (
+    HELM_CLI_OVERHEAD_SECONDS,
+    HelmException,
+    KubectlException,
+    KubernetesService,
+)
 
 
 def _request(**overrides):
@@ -101,6 +115,10 @@ class TestResetConfigEndpoint:
             reset_values=False,
             reuse_values=True,
             atomic=True,
+            # #461：兩個預算都要傳。少了 subprocess_timeout_seconds，atomic 失敗
+            # 時的自動 rollback 會被 SIGKILL 腰斬（見 T7 的算式守線）。
+            timeout_seconds=RESET_HELM_TIMEOUT_SECONDS,
+            subprocess_timeout_seconds=RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
         )
         patch_call = mock_exec.call_args_list[0].kwargs
         assert patch_call["command"][:3] == ["python3", "-c", patch_call["command"][2]]
@@ -120,9 +138,11 @@ class TestResetConfigEndpoint:
         mock_restart.assert_called_once_with(
             namespace="paas-ws-test", deployment_name="svc-abc-mcp-server",
         )
-        mock_status.assert_called_once_with(
-            namespace="paas-ws-test", deployment_name="svc-abc-mcp-server",
-        )
+        # #461：restart 只下達、**不等**。等 rollout 就是把呼叫端預算綁在 image
+        # pull／RWO PVC re-attach 上（#459 實測冷 cache 必逾時），而密碼在 helm
+        # upgrade 回來時就已經是權威值了。
+        mock_status.assert_not_called()
+        assert response["rollout_awaited"] is False
         assert mock_exec.call_count == 2  # patch + backup cleanup
 
     @patch("src.api.releases.k8s_service.get_deployment_name", return_value="svc-abc-mcp-server")
@@ -179,12 +199,18 @@ class TestResetConfigEndpoint:
     @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
     @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
     @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
-    def test_rollout_failure_restores_config_and_secret(
+    def test_restart_issue_failure_restores_config_and_secret(
         self, mock_get, mock_upgrade, mock_pod, mock_exec, mock_restart,
         mock_status, mock_rollback, mock_deployment,
     ):
+        """#461：觸發點由「rollout status 逾時」改成「restart 下達失敗」。
+
+        rollout 的**完成**已移出 request，所以那裡不再有失敗可補償；仍然同步的
+        最後一步是「下達 restart」，它失敗時補償語意與原本完全相同（還原
+        config.json ＋ helm rollback ＋ 重新下達 restart）。
+        """
         mock_exec.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        mock_status.side_effect = [
+        mock_restart.side_effect = [
             KubectlException("failed", "kubectl", "stderr"),
             None,
         ]
@@ -200,7 +226,9 @@ class TestResetConfigEndpoint:
         # dragged the rollback down with it — recovery_failed=True and a 500
         # telling the tenant to call an operator.
         assert mock_restart.call_args_list[-1].args == ("paas-ws-test", "svc-abc-mcp-server")
-        assert mock_status.call_args_list[-1].args == ("paas-ws-test", "svc-abc-mcp-server")
+        # #461：補償路徑同樣不等 rollout——否則一個失敗的 reset 要 2×130s 才回
+        # 500，補償反而衝破本次要建立的預算天花板。
+        mock_status.assert_not_called()
 
     @patch("src.api.releases.helm_service.rollback")
     @patch("src.api.releases.k8s_service.exec_in_pod")
@@ -249,14 +277,13 @@ class TestResetConfigHelmSecretCarrier:
         mock_exec.assert_not_called()
         mock_pod.assert_not_called()
 
-        # 兩顆 Deployment 都要滾，而且是「先全部 restart 再逐一等待」（並行推進，
-        # 總耗時 ≈ max 而非 sum；平台 client 只有 120s 預算）。
+        # 兩顆 Deployment 都要下 restart（少下一顆＝那個入口還吃舊密碼，#449 的
+        # 靜默失敗），但 #461 起**不等** rollout 完成。
         assert [c.kwargs["deployment_name"] for c in mock_restart.call_args_list] == [
             "svc-abc-hermes-agent", "svc-abc-hermes-agent-console",
         ]
-        assert [c.kwargs["deployment_name"] for c in mock_status.call_args_list] == [
-            "svc-abc-hermes-agent", "svc-abc-hermes-agent-console",
-        ]
+        mock_status.assert_not_called()
+        assert response["rollout_awaited"] is False
         mock_names.assert_called_once_with(
             namespace="paas-ws-test",
             label_selector="app.kubernetes.io/instance=svc-abc",
@@ -330,7 +357,7 @@ class TestResetConfigHelmSecretCarrier:
     @patch("src.api.releases.k8s_service.get_deployment_names", return_value=["d1", "d2"])
     @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
     @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
-    def test_rollout_failure_rolls_helm_back_and_re_rolls_pods(
+    def test_restart_issue_failure_rolls_helm_back_and_re_rolls_pods(
         self, mock_get, mock_upgrade, mock_names, mock_restart, mock_status,
         mock_rollback,
     ):
@@ -338,8 +365,16 @@ class TestResetConfigHelmSecretCarrier:
 
         Secret 回到舊密碼，但已經重啟成功的那顆 pod 仍跑著新密碼；不再滾一次，
         叢集就停在「Secret 說 A、pod 用 B」的分裂狀態。
+
+        #461：觸發點改成「第二顆的 restart 下達失敗」（rollout 的完成已不在
+        request 內，那裡沒有可補償的失敗了）。這也是最貼近真實的形狀：d1 已滾、
+        d2 沒滾 ⇒ 半套狀態，正是補償要收的。
         """
-        mock_status.side_effect = [KubectlException("failed", "kubectl", "stderr"), None, None]
+        mock_restart.side_effect = [
+            None,  # d1 下達成功
+            KubectlException("failed", "kubectl", "stderr"),  # d2 失敗
+            None, None,  # 補償重新下達
+        ]
 
         with pytest.raises(HTTPException) as error:
             reset_release_config("paas-ws-test", "svc-abc", _helm_secret_request())
@@ -347,9 +382,11 @@ class TestResetConfigHelmSecretCarrier:
         assert error.value.status_code == 500
         assert "previous password restored" in error.value.detail
         mock_rollback.assert_called_once_with("paas-ws-test", "svc-abc", 7)
-        # 主路 2 次（d1/d2）＋補償再 2 次。
+        # 主路 2 次（d1 成功、d2 炸）＋補償再 2 次。
         assert len(mock_restart.call_args_list) == 4
         assert mock_restart.call_args_list[-1].args == ("paas-ws-test", "d2")
+        # 補償同樣不等 rollout（否則失敗路徑要 2×130s 才回 500）。
+        mock_status.assert_not_called()
 
     @patch("src.api.releases.helm_service.rollback")
     @patch("src.api.releases.k8s_service.rollout_status_deployment")
@@ -361,7 +398,7 @@ class TestResetConfigHelmSecretCarrier:
         self, mock_get, mock_upgrade, mock_names, mock_restart, mock_status,
         mock_rollback,
     ):
-        mock_status.side_effect = KubectlException("failed", "kubectl", "stderr")
+        mock_restart.side_effect = KubectlException("failed", "kubectl", "stderr")
         mock_rollback.side_effect = HelmException("rollback failed", "helm", "stderr")
 
         with pytest.raises(HTTPException) as error:
@@ -399,6 +436,90 @@ class TestResetConfigHelmSecretCarrier:
                 ReleaseResetConfigRequest(admin_password_carrier="helm_secret"),
             )
         assert error.value.status_code == 400
+
+
+class TestResetBudgetLadder:
+    """#461：reset 的時間預算是算出來的，不是猜的。"""
+
+    def test_subprocess_budget_covers_the_atomic_rollback_too(self):
+        """helm `--timeout` 是 per-operation ⇒ atomic 失敗要吃兩次 wait。
+
+        修前（也是本 repo 改動前的實況）：subprocess 上限沒有把「自動 rollback 的
+        wait」算進去 ⇒ helm 會在 rollback **進行中**被 SIGKILL ⇒ release 卡
+        pending-*、Secret 狀態不明 ⇒ 打破「2xx 之前失敗保證叢集仍是舊密碼」。
+        這條斷言把 `2n + O` 的會計釘死；只改 n 或只改 O 都會紅。
+        """
+        assert RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS == (
+            2 * RESET_HELM_TIMEOUT_SECONDS + HELM_CLI_OVERHEAD_SECONDS
+        )
+        # 不只釘算式、也釘值：算式對但 n 被改小到不夠 helm 跑完一次 upgrade，
+        # 對租戶就是「reset 永遠失敗」。
+        assert RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS == 45
+        assert RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS > RESET_HELM_TIMEOUT_SECONDS * 2
+
+    def test_hard_cap_equals_sum_of_its_parts(self):
+        """硬上限＝各子步之和；外層（平台 75s／前端 90s）必須大於它。
+
+        跨層的那道不等式由 scripts/audit/repo-lint.py 的
+        check_reset_budget_ladder 驗（它讀得到平台與前端的常數，這裡讀不到）。
+        """
+        assert RESET_HARD_CAP_SECONDS == (
+            RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS
+            + RESET_EXEC_TIMEOUT_SECONDS
+            + RESET_CLEANUP_EXEC_TIMEOUT_SECONDS
+            + RESET_KUBECTL_SLACK_SECONDS
+        )
+        assert RESET_HARD_CAP_SECONDS == 65
+
+
+class TestResetBackupHygiene:
+    """#461：不等 rollout ⇒ 備份清理常常來不及，殘留必須有上限。"""
+
+    @patch("src.api.releases.k8s_service.get_deployment_name", return_value="svc-abc-mcp-server")
+    @patch("src.api.releases.k8s_service.rollout_restart_deployment")
+    @patch("src.api.releases.k8s_service.exec_in_pod")
+    @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
+    def test_patch_script_sweeps_stale_backups_first(
+        self, mock_get, mock_upgrade, mock_pod, mock_exec, mock_restart, mock_deployment,
+    ):
+        """patch 腳本開頭要先清掉前一次殘留的 backup。
+
+        收尾的 cleanup exec 是 best-effort，而 restart 一下達 pod 就開始
+        Terminating ⇒ 它常常失敗 ⇒ 每次 reset 都可能留下一個含**上一把明文密碼**
+        的檔。腳本自清把殘留從「每次 reset 累積一個」壓成「每個 release 最多一個」。
+        """
+        mock_exec.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        reset_release_config("paas-ws-test", "svc-abc", _request())
+
+        script = mock_exec.call_args_list[0].kwargs["command"][2]
+        assert "glob.glob('/data/.config.json.reset-backup-*')" in script
+        assert "os.unlink" in script
+        # 清除必須發生在讀取原檔之前（否則會把這次剛建的備份也掃掉）。
+        assert script.index("glob.glob") < script.index("original=open")
+
+    @patch("src.api.releases.k8s_service.get_deployment_name", return_value="svc-abc-mcp-server")
+    @patch("src.api.releases.k8s_service.rollout_restart_deployment")
+    @patch("src.api.releases.k8s_service.exec_in_pod")
+    @patch("src.api.releases.k8s_service.get_pod_name", return_value="mcp-abc")
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=8))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=7))
+    def test_exec_timeouts_come_from_the_budget_constants(
+        self, mock_get, mock_upgrade, mock_pod, mock_exec, mock_restart, mock_deployment,
+    ):
+        """兩次 exec 的 timeout 必須來自預算常數，不能是散落的字面 30。
+
+        散落的字面值就是 #461 的成因：硬上限算式與實際傳給 kubectl 的值各走各的，
+        改一邊不會有人發現。
+        """
+        mock_exec.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        reset_release_config("paas-ws-test", "svc-abc", _request())
+
+        assert mock_exec.call_args_list[0].kwargs["timeout"] == RESET_EXEC_TIMEOUT_SECONDS
+        assert mock_exec.call_args_list[1].kwargs["timeout"] == RESET_CLEANUP_EXEC_TIMEOUT_SECONDS
 
 
 class TestExecInPodStdin:

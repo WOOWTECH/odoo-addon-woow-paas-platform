@@ -469,6 +469,21 @@ class CloudService(models.Model):
         values = self._assemble_deploy_values()['values']
         operator_sensitive_values = self._build_mcp_sensitive_values(new_password)
 
+        # #461 可診斷性：reset 夾帶 chart 升版時，operator 的 helm upgrade 會真的
+        # 等新 pod（pod template 變了），可能撞上 --timeout 15s 而 fail-safe 失敗。
+        # 這種情境下「重按」**不會**收斂（每次都夾帶同一次升版），正解是先 redeploy
+        # 讓 chart 升版落地。租戶側引導記在 F-461-2；這行是維運判讀的線索。
+        target_chart_version = self.template_id.helm_chart_version
+        # 兩邊都要有值才算「漂移」：helm_chart_version 為空代表平台**不知道**線上是
+        # 哪一版（legacy 服務），印「False -> 0.1.5」是誤導而非線索。
+        if (target_chart_version and self.helm_chart_version
+                and target_chart_version != self.helm_chart_version):
+            _logger.info(
+                "reset-admin-password for service %s (id=%s) also carries a chart "
+                "upgrade %s -> %s; if it fails on timeout, redeploy first (F-461-2)",
+                self.name, self.id, self.helm_chart_version, target_chart_version,
+            )
+
         client = get_paas_operator_client(self.env)
         if not client:
             raise UserError("PaaS Operator not configured. Contact administrator.")
@@ -491,17 +506,37 @@ class CloudService(models.Model):
                 admin_password_carrier=self.template_id.admin_password_carrier,
             )
         except PaaSOperatorTimeoutError as e:
-            # #357 C11: our 120s client budget is not the operator's. reset-config
-            # runs helm upgrade --atomic + exec + rollout wait in a sync handler,
-            # so a client timeout aborts our *wait*, not the saga — the rotation
-            # can still land. "Reset failed" would be a lie the tenant acts on:
-            # they close the dialog, the cluster rotates to a password nobody
-            # holds, and the admin GUI is locked out for good.
+            # #461 C11′ (commit-on-secret) — this branch survived the async
+            # rewrite, but its *reason* changed. Read this before touching it.
             #
-            # Deliberately NOT stored: the invariant is that a password in the DB
-            # is one that really took effect. Reset is idempotent — pressing it
-            # again mints a fresh password and replays the whole saga, so the
-            # cluster and the DB converge on the newest attempt.
+            # OLD C11: the DB may only hold a password that really took effect,
+            # because the operator waited for the rollout and rolled the Secret
+            # BACK when it failed. Storing on an ambiguous outcome could therefore
+            # record a password the cluster had already discarded.
+            #
+            # C11′: the operator no longer waits for the rollout, so there is no
+            # rollback after 2xx either. The commit point moved to "the operator
+            # answered 2xx" ⇒ the new password IS the authoritative value in the
+            # chart Secret / config.json and nothing reverts it. Everything that
+            # can still fail happens BEFORE that answer and is compensated (helm
+            # --atomic rolls itself back; a failed config.json patch restores the
+            # backup) ⇒ on any error the cluster still holds the OLD password ⇒
+            # not storing is still exactly right.
+            #
+            # What this branch now means: the budget ladder makes the platform's
+            # 75s strictly larger than the operator's own 65s hard cap
+            # (RESET_HARD_CAP_SECONDS), so a client timeout is no longer the
+            # expected outcome of a slow-but-healthy reset — it means the operator
+            # blew its own ceiling, or the 2xx was lost in flight. The cluster may
+            # then hold a password we never stored, so "Reset failed" would still
+            # be a lie the tenant acts on.
+            #
+            # Recovery is unchanged and does not need the old password: state stays
+            # 'running' (nothing was written), so the tenant can press Reset again;
+            # it mints a fresh password and re-commits. Deliberately no pending-
+            # password column — storing an unconfirmed credential buys only this
+            # narrow window and costs a second live secret plus a mid-request
+            # commit that would break this handler's row lock (design §4.4).
             _logger.error(
                 "reset-admin-password timed out for service %s (id=%s): %s — "
                 "operator saga may still be in flight; new password NOT stored",

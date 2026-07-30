@@ -5,6 +5,21 @@ import { reactive } from "@odoo/owl";
 const REQUEST_TIMEOUT_MS = 30000;
 
 /**
+ * #461 Reset admin password 專屬預算（90 秒）。
+ *
+ * 為什麼不用共用的 30s：reset 是「等 operator 換完叢集憑證」而不是一次讀取，
+ * stg 實測連**成功**的案例都要 49.9s／76.7s（#459）——共用預設會讓瀏覽器在後端
+ * 還在跑的時候就 abort，等於後端修好了租戶也看不到成功。
+ *
+ * 90s 是預算階梯的最外層，必須大於平台 client 的 75s（RESET_CONFIG_TIMEOUT）、
+ * 而後者必須大於 operator 自己的 65s 硬上限（RESET_HARD_CAP_SECONDS）。三層由
+ * scripts/audit/repo-lint.py 的 check_reset_budget_ladder 驗算。
+ * 上限訂在 90s 而非更大，是為了繞開 Cloudflare 對 origin 回應約 100s 就回 524 的
+ * 行為（未實證，但不必為此賭）。移除 rollout 等待後典型只花 5–15s。
+ */
+const RESET_REQUEST_TIMEOUT_MS = 90000;
+
+/**
  * JSON-RPC helper for Odoo API calls
  * @param {string} url - API endpoint
  * @param {Object} params - Request parameters
@@ -410,7 +425,10 @@ export const cloudService = reactive({
         try {
             const result = await jsonRpc(
                 `/api/workspaces/${workspaceId}/services/${serviceId}/reset-admin-password`,
-                {}
+                {},
+                // #461：共用的 30s 會在後端還在換憑證時就 abort（#459 實測成功案例
+                // 也要 49.9s／76.7s）。這一層必須是階梯裡最寬的。
+                RESET_REQUEST_TIMEOUT_MS
             );
             return result.success
                 ? { success: true, data: result.data }
