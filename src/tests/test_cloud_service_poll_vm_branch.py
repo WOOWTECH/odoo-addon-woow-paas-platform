@@ -169,19 +169,37 @@ class TestReadinessDecision(_Base):
 
     # ---- container：characterization（釘住現行行為，本輪不修）-----------
 
-    def test_5_container_with_no_pods_keeps_current_behaviour(self):
-        """容器型 + 無 pod → **維持現行的 True**（characterization）。
+    def test_5_container_with_no_pods_is_fail_closed(self):
+        """容器型 + 無 pod → **不可就緒**（F-423-1 Step 1，2026-07-31 翻轉）。
 
-        這是既知的 fail-open，v1 刻意不修（design §4.1）：容器服務有一個合法
-        短暫狀態是「release 已 deployed 但 pod 還沒被建出來」，改 fail-closed
-        會讓**所有現存租戶服務**多卡一輪。此測試的用途是「改動沒有波及容器型」
-        的證據，不是為這個行為背書。
+        本條原本是 characterization（`..._keeps_current_behaviour`），釘住 W5a
+        刻意保留的 fail-open：`pods` 為空回 True。翻轉理由見 F-423-1 評估——
+
+        - **誤報已實際發生**：#456 兩筆 hermes-agent 服務因 ResourceQuota 拒絕
+          pod 建立（ReplicaSet `FailedCreate`）而永久壞掉，DB / UI 卻都顯示
+          Running/ONLINE。hermes-agent 的 `post_deploy_init_type='none'`，所以
+          走到 `running` 的唯一路徑就是這裡回 True。
+        - **誤報是黏住的**：poll 只撈 deploying / upgrading / initializing，一旦
+          寫進 `running` 就沒有任何東西會再回頭看。
+        - **當初的顧慮不成立**：W5a 認為 VM 合取依賴容器端對空 pods 回 True
+          （`cloud_service.py` 舊註解），實測 KubeVirt 的 virt-launcher pod **帶著**
+          `app.kubernetes.io/instance` 標籤且回報 `2/2`，所以純 VM 是憑自身條件
+          通過的，不靠這個 fail-open。
+        - **代價有界**：合法的「release 已 deployed 但 pod 還沒被建出來」窗口只讓
+          服務多停留一輪 poll（前台 5 秒 / cron 60 秒），且對已 `running` 的現存
+          機隊零影響——它們根本不會被 poll。
+
+        殘餘風險（chart 的 pod 不帶 instance 標籤 → 永久卡 deploying）由合併前
+        的 15-template 標籤實證擋住，長期由 #489 的 age timeout 封頂。
         """
         svc = self._make_service('container')
 
-        ready, _ = svc._is_release_ready(_status(pods=[]))
+        ready, detail = svc._is_release_ready(_status(pods=[]))
 
-        self.assertTrue(ready)
+        self.assertFalse(
+            ready,
+            '沒看過任何一顆 pod 就宣告就緒＝#456 那種「壞掉卻顯示 Running」'
+            '（detail=%r）' % detail)
 
     def test_6_container_with_ready_pods_is_ready(self):
         svc = self._make_service('container')
@@ -267,11 +285,33 @@ class TestModelPollTransitions(_Base):
         client.get_status.return_value = _status(
             vm_included=True,
             vmis=[{'name': 'svc-test', 'phase': 'Running', 'ready': True}],
+            # VM 就緒後仍要過容器閘（`_is_release_ready` 是合取）。實測 KubeVirt
+            # 的 virt-launcher pod 帶 `app.kubernetes.io/instance` 且回報 `2/2`，
+            # 所以真實世界這裡本來就是非空的——F-423-1 Step 1 之後這個事實變成
+            # **必要條件**（舊碼靠容器端對空 pods 回 True 才讓純 VM 通過）。
+            pods=[{'name': 'virt-launcher-svc-test', 'phase': 'Running',
+                   'ready': '2/2'}],
         )
 
         svc._poll_and_update_status(client)
 
         self.assertEqual(svc.state, 'running')
+
+    def test_container_without_pods_stays_deploying(self):
+        """🔴 端到端版的 #5：容器型 + 無 pod，整條 poll 跑完必須還是 deploying。
+
+        判定單元測試（#5）與 controller 層（#9）之外再鎖 model poll 這一層——
+        #456 的誤報是「寫進 DB 的 state」，所以要有一條直接對 state 斷言的。
+        """
+        svc = self._make_service('container')
+        client = MagicMock()
+        client.get_status.return_value = _status(pods=[])
+
+        svc._poll_and_update_status(client)
+
+        self.assertEqual(
+            svc.state, 'deploying',
+            '沒看過任何一顆 pod 就寫 %r 進 DB' % svc.state)
 
     def test_import_progress_is_stored_for_display(self):
         """進度落地供卡片顯示；未就緒時正是最有用的時候。"""
@@ -349,17 +389,19 @@ class TestControllerLayerUsesSharedDecision(_Base):
 
         self.assertTrue(client.get_status.call_args.kwargs['include_vm'])
 
-    def test_9_controller_container_behaviour_unchanged(self):
-        """characterization：容器型 + 無 pod 仍翻 running（現行行為）。
+    def test_9_controller_container_no_pods_stays_deploying(self):
+        """容器型 + 無 pod 在 **controller 層**也必須擋住（F-423-1 Step 1）。
 
-        重構本身會改變 controller 的執行路徑，所以這條「不改」的承諾更需要
-        測試守住。
+        本條原本斷言 `running`（characterization）。與 #7 同樣的理由必須在這一層
+        獨立鎖一次：只修 model 層不夠——租戶打開前台服務詳情頁，controller 那條
+        poll（每 5 秒）就會把狀態覆寫回去。#456 的誤報就是從這兩條路之一寫進
+        `running` 的。
         """
         svc = self._make_service('container')
 
         self._run_update(svc, _status(pods=[]))
 
-        self.assertEqual(svc.state, 'running')
+        self.assertEqual(svc.state, 'deploying', svc.state)
 
     def test_10_controller_vm_ready_becomes_running(self):
         svc = self._make_service('vm')
