@@ -28,6 +28,24 @@ export function blocksRemoval(module) {
 }
 
 /**
+ * A removal can only be authorised while the service is running: reading module
+ * states requires reaching into the tenant's Odoo, which is exactly what a
+ * non-running service cannot offer. The backend refuses outright in every other
+ * state (#477) — see `_assess_addon_removal` in `controllers/paas.py`, which is
+ * the authoritative single adjudication point.
+ *
+ * This mirror exists only to spare the user a round-trip to a guaranteed
+ * rejection, so it must stay in lock-step with that backend gate: change one,
+ * change the other. Deliberately narrower than `AddonsTab.canEdit` — *adding*
+ * addons in a non-running state is still allowed, so gating the whole tab would
+ * over-restrict.
+ * @param {string} state cloud service state
+ */
+export function serviceAllowsRemoval(state) {
+  return state === "running";
+}
+
+/**
  * AddonRemovalDialog Component
  *
  * Blocks deselection of addons that are still present in the tenant's Odoo.

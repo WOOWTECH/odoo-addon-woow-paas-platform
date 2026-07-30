@@ -4,7 +4,7 @@ import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { OdooAddonSelector } from "../../../components/odoo-addon-selector/OdooAddonSelector";
-import { AddonRemovalDialog, blocksRemoval } from "../../../components/addon-removal-dialog/AddonRemovalDialog";
+import { AddonRemovalDialog, blocksRemoval, serviceAllowsRemoval } from "../../../components/addon-removal-dialog/AddonRemovalDialog";
 import { cloudService } from "../../../services/cloud_service";
 
 export class AddonsTab extends Component {
@@ -88,6 +88,16 @@ export class AddonsTab extends Component {
 
     if (removed.length === 0) {
       return this._doUpdateAddons();
+    }
+
+    // Removal needs the module's state inside the tenant's Odoo, which is only
+    // readable while the service runs — the backend refuses outright otherwise
+    // (#477), and so does the preflight below. Saying it here just avoids a
+    // round-trip to a guaranteed rejection. `canEdit` stays permissive on
+    // purpose: adding addons in a non-running state is still allowed.
+    if (!serviceAllowsRemoval(this.props.service.state)) {
+      this.state.error = `Cannot remove addons while the service is ${this.props.service.state}. Start the service and try again.`;
+      return;
     }
 
     this.state.checking = true;

@@ -40,6 +40,18 @@ _SSRF_BLOCKED_IPV6 = frozenset({
 _SSRF_ALLOWED_SCHEMES = frozenset({'http', 'https'})
 
 
+# `ir.module.module.state` 值代表「模組不在租戶 DB 裡」，把對應 addon 從選擇裡拿掉是
+# 安全的。其餘一律擋——Odoo 還會有 to install / to upgrade / to remove，那些同樣不能
+# 把程式碼從底下抽掉。
+#
+# ⚠ 這份是**後端唯一權威**（#477）。前端 addon-removal-dialog/AddonRemovalDialog.js 的
+# SAFE_TO_REMOVE_STATES 是同一判準的 JS 表達（對話框要拿原始 state 決定列哪幾列、
+# 怎麼寫），兩邊必須 lock-step：改這裡就要改那裡。見
+# docs/decisions/patterns/two-layer-acl-lockstep.md。
+_ADDON_REMOVAL_SAFE_STATES = frozenset({
+    'uninstalled', 'uninstallable', 'not_found'})
+
+
 PORTAL_SETTINGS_FLAG = 'woow_paas_platform.portal_project_settings_editable'
 
 
@@ -1390,6 +1402,120 @@ class PaasController(HiddenChainMixin, Controller):
 
     # ==================== Addon Module Operations ====================
 
+    def _assess_addon_removal(
+        self, service: Any, removed_addon_ids: list[int],
+    ) -> dict[str, Any]:
+        """「把這些 addon 從選擇裡拿掉安不安全」的**單一裁決點**。
+
+        advisory 的預檢端點（`api_check_addon_removal`）與 authoritative 的寫入路徑
+        （`_update_service`）共用這一份。回傳兩個**正交**維度，呼叫端各取所需：
+
+        - ``can_assess`` / ``error`` — **能不能做出裁決**。服務非 running、operator 沒
+          設定、operator 回 ``success: false``、查詢丟例外，全部落在這裡。兩條路徑都
+          必須把它當「不安全」處理（fail-closed）：查不到模組狀態的時刻，正是租戶
+          Odoo 不健康的時刻（rolling restart / OOMKilled / node drain 會讓 operator 的
+          ``find_pod`` step 失敗），也正是這道保護最該生效的時刻。
+        - ``modules`` / ``blocking`` — **裁決結果**。``modules`` 是逐模組的原始狀態
+          （預檢端點交給前端對話框列「哪個模組、什麼狀態、被誰依賴」），``blocking``
+          是其中不在 `_ADDON_REMOVAL_SAFE_STATES` 裡的子集。
+
+        兩個維度**必須分開回**：預檢端點的 ``success`` 只反映第一個維度——它是
+        advisory，查得到就回成功連同模組狀態，擋不擋由前端 ``blocksRemoval`` 依
+        ``modules`` 判。把 ``blocking`` 併進 ``success`` 會讓 #476 鎖住的行為矩陣反轉
+        （installed 模組本來就該回 ``success=True`` 讓對話框列出來）。
+
+        #477 的根因是**同一個裁決有兩份實作、且失敗語意相反**：同一份 operator 回應，
+        預檢端點 fail-closed，`_update_service` 卻讓它掉出 ``if`` 繼續跑 helm upgrade
+        （operator 對 ``OdooModuleError`` 回的是 HTTP 200 ＋ ``success: false``，而平台
+        client 只在 HTTP >= 400 才 raise，所以那條路無例外、也進不了註明
+        ``# Fail-closed`` 的 ``except``）。safe-states 集合當時也散在兩處。抽成單一裁決
+        點是為了讓「兩邊會漂開」在結構上不可能發生，不只是把當下的 diff 補齊——見
+        docs/decisions/patterns/two-layer-acl-lockstep.md。
+        """
+        nothing_to_remove = {
+            'can_assess': True, 'error': None, 'modules': {}, 'blocking': {}}
+        if not removed_addon_ids:
+            return nothing_to_remove
+
+        def cannot(error: str) -> dict[str, Any]:
+            return {
+                'can_assess': False, 'error': error, 'modules': {}, 'blocking': {}}
+
+        # 非 running 就讀不到租戶 Odoo 的模組狀態——那是**拒絕**的理由，不是「跳過檢查」
+        # 的理由（#477 縫 (b)）。上游沒有別的閘擋得住：`_update_service` 的前置閘只擋
+        # pending / deleting / error，`_check_operation_allowed` 是訂閱閘（判 active /
+        # grace / past-grace，且 base.group_system 直接 bypass），與 service state 正交。
+        if service.state != 'running':
+            return cannot(
+                f'Service must be running to check module states '
+                f'(current: {service.state})')
+
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return cannot('PaaS Operator not configured')
+
+        CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+        addons = CloudOdooAddon.browse(removed_addon_ids).exists()
+        if not addons:
+            return nothing_to_remove
+
+        name_to_id = {a.technical_name: a.id for a in addons}
+
+        try:
+            result = client.get_odoo_module_states(
+                namespace=service.helm_namespace,
+                release_name=service.helm_release_name,
+                module_names=list(name_to_id),
+            )
+        except Exception as e:
+            _logger.warning(
+                "Cannot verify module states for addon removal on %s: %s",
+                service.helm_release_name, e)
+            return cannot(f'Cannot verify module states: {e}')
+
+        if not result.get('success'):
+            # operator 對 OdooModuleError 回 HTTP 200 ＋ success:false（step 為
+            # find_pod / query_modules / validate 之一），client 不 raise。**必須與上面
+            # 那個 except 同處置** —— #477 縫 (a) 就是這裡當初只有 if 沒有 else。
+            error = result.get('error') or 'Unknown error'
+            _logger.warning(
+                "Operator could not report module states for %s: %s",
+                service.helm_release_name, error)
+            return cannot(f'Cannot verify module states: {error}')
+
+        modules: dict[str, Any] = {}
+        blocking: dict[str, Any] = {}
+        for name, info in (result.get('modules') or {}).items():
+            entry = {
+                'addon_id': name_to_id.get(name),
+                'state': info.get('state', 'unknown'),
+                'dependents': info.get('dependents', []),
+            }
+            modules[name] = entry
+            if entry['state'] not in _ADDON_REMOVAL_SAFE_STATES:
+                blocking[name] = entry
+
+        return {
+            'can_assess': True, 'error': None,
+            'modules': modules, 'blocking': blocking,
+        }
+
+    @staticmethod
+    def _addon_removal_blocking_error(blocking: dict[str, Any]) -> str:
+        """把 `_assess_addon_removal` 的 ``blocking`` 子集轉成給租戶看的拒絕理由。
+
+        只有 authoritative 路徑會用到（advisory 預檢把 ``modules`` 原封不動交給前端
+        對話框，由它渲染更完整的「被誰依賴 / 去哪裡停用」）。措辭放這裡是為了讓未來
+        若有第三個呼叫端出現時拿到同一句話。
+        """
+        parts = ', '.join(
+            f"'{name}' ({info.get('state')})"
+            for name, info in sorted(blocking.items()))
+        return (
+            f'Cannot remove {parts}: still present in Odoo. '
+            f'Please deactivate the module in Odoo first.'
+        )
+
     @route(
         '/api/cloud-services/services/<int:service_id>/check-addon-removal',
         type='json', auth='user', methods=['POST'],
@@ -1430,42 +1556,17 @@ class PaasController(HiddenChainMixin, Controller):
         if not access:
             return {'success': False, 'error': 'Access denied'}
 
-        if service.state != 'running':
-            return {'success': False, 'error': f'Service must be running to check module states (current: {service.state})'}
+        # 狀態閘 / operator 設定 / 查詢失敗 / safe-states 全部住在
+        # `_assess_addon_removal`——與 `_update_service` 的 authoritative 拒絕同源
+        # （#477）。這支是 **advisory**：``success`` 只反映「查得到模組狀態」，
+        # 「安不安全」交給前端 ``blocksRemoval`` 依 ``modules`` 判，所以這裡刻意
+        # **不**把 ``verdict['blocking']`` 併進 ``success``（#476 的行為矩陣鎖住這件事：
+        # installed 模組要回 success=True 才有東西給對話框列）。
+        verdict = self._assess_addon_removal(service, removed_addon_ids)
+        if not verdict['can_assess']:
+            return {'success': False, 'error': verdict['error']}
 
-        client = get_paas_operator_client(request.env)
-        if not client:
-            return {'success': False, 'error': 'PaaS Operator not configured'}
-
-        CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
-        addons = CloudOdooAddon.browse(removed_addon_ids).exists()
-        if not addons:
-            return {'success': True, 'modules': {}}
-
-        tech_names = [a.technical_name for a in addons]
-        name_to_id = {a.technical_name: a.id for a in addons}
-
-        try:
-            result = client.get_odoo_module_states(
-                namespace=service.helm_namespace,
-                release_name=service.helm_release_name,
-                module_names=tech_names,
-            )
-        except Exception as e:
-            return {'success': False, 'error': f'Failed to query module states: {e}'}
-
-        if not result.get('success'):
-            return {'success': False, 'error': result.get('error', 'Unknown error')}
-
-        modules = {}
-        for name, info in result.get('modules', {}).items():
-            modules[name] = {
-                'addon_id': name_to_id.get(name),
-                'state': info.get('state', 'unknown'),
-                'dependents': info.get('dependents', []),
-            }
-
-        return {'success': True, 'modules': modules}
+        return {'success': True, 'modules': verdict['modules']}
 
     # ==================== MCP Server API (per-service) ====================
 
@@ -2494,37 +2595,28 @@ class PaasController(HiddenChainMixin, Controller):
                 service.write({'odoo_addon_ids': [(6, 0, all_addons.ids)]})
                 addon_changed = set(all_addons.ids) != old_addon_ids
 
-                # Server-side validation: block removal of installed modules
+                # Server-side validation: block removal of modules still present in
+                # the tenant's Odoo. **這是 authoritative 的那一道**——advisory 的
+                # `api_check_addon_removal` 只是讓前端能先開對話框，任何不走預檢的呼叫
+                # 端（直接 RPC、未來前端重構、預檢與此處之間的 TOCTOU 空窗）都只會撞到
+                # 這裡，所以安全判準不能掛在預檢上。
+                #
+                # #477：兩個維度都是拒絕理由——「查不到狀態」（``can_assess``，含服務非
+                # running 與 operator 回 ``success: false``）與「查到但不安全」
+                # （``blocking``）。舊碼只處理後者，且對 ``success: false`` 沒有 else，
+                # 那條路會掉出檢查區塊直接跑 helm upgrade；非 running 也整段跳過。
                 removed_ids = old_addon_ids - set(all_addons.ids)
-                if removed_ids and service.state == 'running':
-                    removed_addons = CloudOdooAddon.browse(list(removed_ids)).exists()
-                    if removed_addons:
-                        tech_names = [a.technical_name for a in removed_addons]
-                        try:
-                            check_result = client.get_odoo_module_states(
-                                namespace=service.helm_namespace,
-                                release_name=service.helm_release_name,
-                                module_names=tech_names,
-                            )
-                            if check_result.get('success'):
-                                safe_states = {'uninstalled', 'uninstallable', 'not_found'}
-                                for name, info in check_result.get('modules', {}).items():
-                                    if info.get('state') not in safe_states:
-                                        # Rollback the addon write
-                                        service.write({'odoo_addon_ids': [(6, 0, list(old_addon_ids))]})
-                                        return {
-                                            'success': False,
-                                            'error': f"Cannot remove '{name}': module is {info.get('state')} in Odoo. "
-                                                     f"Please deactivate it in Odoo first.",
-                                        }
-                        except Exception as e:
-                            # Fail-closed: rollback and reject
-                            service.write({'odoo_addon_ids': [(6, 0, list(old_addon_ids))]})
-                            _logger.warning("Failed to verify module states for addon removal: %s", e)
-                            return {
-                                'success': False,
-                                'error': 'Cannot verify module states. Please try again later.',
-                            }
+                if removed_ids:
+                    verdict = self._assess_addon_removal(service, sorted(removed_ids))
+                    if not verdict['can_assess'] or verdict['blocking']:
+                        # Fail-closed: rollback the addon write and reject.
+                        service.write({
+                            'odoo_addon_ids': [(6, 0, sorted(old_addon_ids))]})
+                        return {
+                            'success': False,
+                            'error': verdict['error'] or (
+                                self._addon_removal_blocking_error(verdict['blocking'])),
+                        }
 
             # Filter user values to only allowed keys, reject unauthorized
             existing_values = json.loads(service.helm_values) if service.helm_values else {}
