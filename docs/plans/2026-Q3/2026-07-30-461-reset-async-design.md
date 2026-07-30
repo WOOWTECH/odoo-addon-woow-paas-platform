@@ -141,31 +141,72 @@ F-449-3 的核心指控是「兩個獨立預算彼此不知道對方」。修法
 
 ⇒ 取 **90s 為前端天花板**：同時繞開 CF 524 的不確定性（不需要先證實它），也是合理的 UX 上限。
 
-**建議階梯**：
+**建議階梯**（數字依 §3.2.1 的 `--atomic` 失敗路徑重算；leader3 2026-07-30 審核意見）：
 
 | 層 | 常數（新增） | 值 | 理由 |
 | --- | --- | --- | --- |
-| 前端 | `RESET_REQUEST_TIMEOUT_MS`（`cloud_service.js`） | **90_000** | > 平台；≤ CF 疑慮線 |
-| 平台 client | `RESET_CONFIG_TIMEOUT`（`paas_operator.py`，**不再借用** `HELM_OPERATION_TIMEOUT`） | **75** | > operator 硬上限 |
-| operator 硬上限 | `RESET_HARD_CAP_SECONDS`（`releases.py`，由下列各項相加得出） | **60** | 單一權威 |
-| ├ helm upgrade | `RESET_HELM_TIMEOUT_SECONDS=30` → helm `--timeout 30s`；subprocess `30+10=40` | 40 | 實測 4–12s，2.5× 餘裕 |
+| 前端 | `RESET_REQUEST_TIMEOUT_MS`（`cloud_service.js`） | **90_000** | > 平台（餘裕 15s）；≤ CF 疑慮線 |
+| 平台 client | `RESET_CONFIG_TIMEOUT`（`paas_operator.py`，**不再借用** `HELM_OPERATION_TIMEOUT`） | **75** | > operator 硬上限（餘裕 10s，吸收 HTTP／FastAPI 開銷） |
+| operator 硬上限 | `RESET_HARD_CAP_SECONDS`（`releases.py`，由下列各項相加得出） | **65** | 單一權威 |
+| ├ helm upgrade（含失敗時的自動 rollback） | `RESET_HELM_TIMEOUT_SECONDS=15` → helm `--timeout 15s`；subprocess `2×15+15=45`（§3.2.1） | 45 | wait 段實測 ≈0（Secret-only 不動 pod template）；**subprocess 必須蓋住 upgrade wait ＋ rollback wait 兩段** |
 | ├ config_json patch exec | `RESET_EXEC_TIMEOUT_SECONDS=12`（現行 30） | 12 | 內嵌 python 腳本，10× 餘裕 |
 | ├ backup cleanup exec | `RESET_CLEANUP_EXEC_TIMEOUT_SECONDS=5`（best-effort） | 5 | 失敗只 warning |
 | └ 探索 ＋ restart 下達 | `RESET_KUBECTL_SLACK_SECONDS=3` | 3 | 各 ~1s 的 kubectl 呼叫 |
 
-典型端到端：**5–15s**（實測 helm upgrade 4–12s ＋ 一次 exec）。
+典型端到端：**5–15s**（實測 helm upgrade 4–12s ＋ 一次 exec）——與硬上限差 4× 以上，硬上限只在失敗路徑才會被逼近。
 
-**需要的實作支點**：`helm.py:570` `upgrade()` 新增 `timeout_seconds: Optional[int] = None`——有值就渲染 `--timeout {n}s` 並把該次 subprocess timeout 收成 `n+10`；`None` 時**完全不變**（不出現 `--timeout`、沿用 `settings.helm_timeout`）。只有 reset 路徑傳值，install / 其他 upgrade 路徑零行為變化。
+**需要的實作支點**：
 
-**機械 gate（repo-lint 新增第 10 條 `check_reset_budget_ladder`；`run_all`（`repo-lint.py:737-755`）現註冊 9 條，須同步加進註冊串與通過訊息字串）**：AST 讀 `paas_operator.py` 與 `releases.py` 的常數、regex 讀 `cloud_service.js` 的常數，斷言
-`90_000ms > 75s > RESET_HARD_CAP_SECONDS == 40+12+5+3`。
+1. `helm.py:570` `upgrade()` 新增兩個 optional 參數：`timeout_seconds`（有值 ⇒ 渲染 `--timeout {n}s`）與 `subprocess_timeout_seconds`（有值 ⇒ 覆寫該次 `self.timeout`）。兩者皆 `None` 時**行為完全不變**（不出現 `--timeout`、沿用 `settings.helm_timeout`）⇒ install 與其他 upgrade 路徑零影響。
+2. `helm.py` 模組層新增並匯出 `HELM_CLI_OVERHEAD_SECONDS = 15`——helm CLI 的**非-wait**開銷（OCI pull ＋ render ＋ apply，實測上界 12s；rollback 不重拉 chart，其 apply 再 ~1–2s ⇒ 15s 蓋住兩次 apply）。**這個數字必須跟 `--timeout` 分開**，因為 `--timeout` 只約束 wait 段，不約束 pull／render。
+3. `releases.py` 用它做算式（讓 gate 與 T7 有單一權威可讀）：
+   `RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS = 2 * RESET_HELM_TIMEOUT_SECONDS + HELM_CLI_OVERHEAD_SECONDS`
+
+**機械 gate（repo-lint 新增第 10 條 `check_reset_budget_ladder`；`run_all`（`repo-lint.py:737-755`）現註冊 9 條，須同步加進註冊串與通過訊息字串）**：AST 讀 `paas_operator.py`／`releases.py`／`helm.py` 的常數（做一輪小型常數折疊：int 字面值 ＋ 只含已解析 Name 的 BinOp）、regex 讀 `cloud_service.js` 的常數，斷言
+`90_000ms > 75s > RESET_HARD_CAP_SECONDS == (2×15+15) + 12 + 5 + 3 == 65`。
 這條 gate 是本案對 F-449-3 的**結構性回應**：以後任何人單改一層的數字都會紅。散文註解攔不住這件事——它已經被攔失敗過一次了。
 
 > ⚠️ **CI paths 盲點**（#463 教訓）：`.gitea/workflows/repo-lint.yml` 現在只在 `src/**` / `scripts/audit/**` 觸發。這條 gate 會讀 `extra/paas-operator/**`，所以**必須同時把該路徑加進 workflow 的 `paths`**，否則「只改 operator 常數」的 PR 不會跑到 gate ＝ 守線休眠。
 
-**已知的權衡（`helm --timeout 30s`）**：reset 會夾帶 chart 升版（`cloud_service.py:465-468`、`:481` 帶 `template.helm_chart_version`，#411 的刻意設計）。若那次 reset 剛好是 chart 版號 bump 後的第一次操作，pod template 會變 ⇒ `--atomic --wait` 會真的等新 pod（**推論**，非實測）⇒ 30s 可能不夠 ⇒ helm 自動 rollback ＋ 500 ＋ 舊密碼保留（fail-safe）⇒ 租戶重按（此時 chart 已由 rollback 回原版；建議先走 redeploy）。
-- 為此在平台端加一行**可診斷性**日誌：`helm_chart_version != template.helm_chart_version` 時 log「本次 reset 夾帶 chart 升版 X→Y」。
-- 這是 **D2 待裁決項**：若 leader3 認為這種 reset 應該撐過去，可把三層拉成 60/90/105s，代價是貼近 CF 524 的不確定性 ＋ 更長的等待。
+**已知的權衡（`helm --timeout 15s`）**：reset 會夾帶 chart 升版（`cloud_service.py:465-468`、`:481` 帶 `template.helm_chart_version`，#411 的刻意設計）。若那次 reset 剛好是 chart 版號 bump 後的第一次操作，pod template 會變 ⇒ `--atomic --wait` 會真的等新 pod（**推論**，非實測）⇒ 15s 必然不夠 ⇒ helm 自動 rollback ＋ 500 ＋ 舊密碼保留（fail-safe）⇒ 但**重按不會收斂**（重按仍夾帶同一次升版、仍逾時），正解是先走 redeploy 讓 chart 升版落地，再 reset。
+- 平台端加一行**可診斷性**日誌：`helm_chart_version != template.helm_chart_version` 時 log「本次 reset 夾帶 chart 升版 X→Y」。
+- **租戶側引導**（偵測版號漂移時提示「請先更新服務再重設密碼」）不進本 PR，記為 **F-461-2**（leader3 2026-07-30 建議）。
+- leader3 已裁決取 90/75/65（而非把 helm 拉到 60s 的 105/90/60+ 版）：#459 實測冷 cache 光 pull 就要 70s，兩案**都救不了** chart-bump-riding 情境，故取小的、繞開 CF 524 疑慮線的那一組。
+
+### 3.2.1 `--atomic` 失敗路徑的 helm 時間預算（leader3 必修項）
+
+**leader3 的指摘成立，而且它同時揭露一個既有缺陷。**
+
+`helm --timeout` 的語意是「等待任一個 Kubernetes 操作的時間」＝**per-operation**，不是 per-invocation。`--atomic` 失敗時 helm 會**自己再跑一次 rollback**，那是另一個帶 wait 的 operation，會再吃一次完整的 `--timeout`。因此：
+
+| 路徑 | helm 牆鐘上限 | 組成 |
+| --- | --- | --- |
+| 成功 | `n_wait(≈0) + O` | Secret-only 變更不動 pod template ⇒ wait 立即通過（實測整次 10.7／11.9s，全是 O） |
+| **失敗（atomic rollback）** | **`2n + O`** | upgrade wait 逾時（n）＋ 自動 rollback 的 wait（n）＋ CLI 開銷（O，含兩次 apply） |
+
+若 subprocess timeout 只給 `n + 10`，失敗路徑會在 rollback **進行中**被 SIGKILL ⇒ release 卡 `pending-upgrade`／rollback 半套 ⇒ Secret 狀態不明 ⇒ **§3.4「2xx 前失敗保證叢集仍是舊密碼」的前提被打破**。這是放行前必修的正確性問題，不是效能調校。
+
+**既有缺陷（程式碼實查，非本案引入）**：現行 `helm.upgrade()` **不傳** `--timeout` ⇒ helm 用預設 **5m**；subprocess 上限是 `settings.helm_timeout` = **300s**（`helm.py:333`、`config.py:23`）。⇒ `2n = 600s > 300s`：**今天的 atomic 失敗路徑本來就會在 rollback 開始前就被 kill**（upgrade wait 用滿 300s 的那一刻 subprocess 就到期）。#459 沒撞到只是因為那兩次的 helm upgrade 都成功了。本案把 subprocess 預算改成蓋住 `2n + O`，**順手把這個既有缺陷修掉**——這一點要寫進 PR 描述，因為它比 #461 本身更接近「會把 release 卡死」的等級。
+
+**重算**（維持「階梯不變式 ＋ 單一權威」原則）：
+
+```
+n  = RESET_HELM_TIMEOUT_SECONDS          = 15   # helm --timeout（wait 段）
+O  = HELM_CLI_OVERHEAD_SECONDS           = 15   # 非-wait 開銷：OCI pull + render + apply(×2)
+     RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS = 2n + O = 45   # 必須蓋住 upgrade wait + rollback wait
+     RESET_EXEC_TIMEOUT_SECONDS            = 12
+     RESET_CLEANUP_EXEC_TIMEOUT_SECONDS    = 5
+     RESET_KUBECTL_SLACK_SECONDS           = 3
+     RESET_HARD_CAP_SECONDS                = 45 + 12 + 5 + 3 = 65
+平台 RESET_CONFIG_TIMEOUT = 75     （餘裕 10）
+前端 RESET_REQUEST_TIMEOUT_MS = 90_000（餘裕 15）
+```
+
+`O` 的依據：實測單次 helm upgrade 總牆鐘 10.7／11.9s、其中 wait 段 ≈0 ⇒ O 實測上界 ≈12s；rollback 不重拉 chart（走 stored manifest）其 apply 再 ~1–2s ⇒ 15s 蓋住兩次 apply。
+
+**殘留最壞情形**：若真的連 `2n + O` 都超出（registry 異常慢），subprocess 仍會 kill helm ⇒ 500 ＋ Secret 狀態不明。這與今天同型，但窗口從「必然（600 > 300）」縮到「pull 超過 15s 的異常日」。可觀測性：該情形 helm 會拋 `Helm command timed out after 45s`，log 可辨識。
+
+**這個 2n 的會計不靠推論驗收**：新增 integration test **I4**（§8.2）強制一次 atomic 失敗，實測牆鐘 ＋ 斷言 Secret 真的被 rollback 回舊值 —— 把「2xx 前失敗 ⇒ 叢集舊密碼」這個 C11′ 前提釘在真 helm 上。
 
 ### 3.3 (a″) `config_json` 路的 backup 生命週期
 
@@ -280,7 +321,8 @@ leader3 的 brief 預期「`test_mcp_admin_password.py:141/172/204/223` 釘死�
    - 窗口很短（Recreate 幾乎立刻建出 Pending pod，`pods` 非空 ⇒ 正確回 not-ready），poll 間隔 5s／60s。後果是顯示層誤導，不是資料損毀。
    - 本案在 plan 與 follow-up 明白標註，串回 F-423-1。
 2. **`upgrading` 停滯沒有上限**：若 rollout 永遠不成功，state 會一直停在 `upgrading`（cron 只 log not-ready，`:1465`）。同樣是既有行為（deploy 路徑相同），本案不修，**新開 follow-up F-461-1**（建議：stuck-state 偵測／`upgrading` 超時轉 `error`）。
-3. **row lock 佔用時間變短（附帶收益）**：`FOR UPDATE` 現在最壞握 560s，改後 ≤75s、典型 10s。
+3. **chart-bump-riding reset 重按不收斂**：版號漂移時 reset 每次都夾帶同一次升版、每次都在 `helm --timeout 15s` 逾時，「重按」這個通用恢復手段在此情境失效（正解＝先 redeploy）。本案只加 log，**租戶側引導記為 follow-up F-461-2**（leader3 2026-07-30 建議，不進本 PR）。
+4. **row lock 佔用時間變短（附帶收益）**：`FOR UPDATE` 現在最壞握 560s，改後 ≤75s、典型 10s。
 
 ---
 
@@ -293,8 +335,9 @@ leader3 的 brief 預期「`test_mcp_admin_password.py:141/172/204/223` 釘死�
 | `src/api/releases.py:723-905`（config_json 路） | 刪 `rollout_status`（`:864-867`）；exec timeout 30→12；cleanup timeout →5；patch script 前置清殘留 backup；response 加 `rollout_awaited: False` |
 | `src/api/releases.py:908-1003`（helm_secret 路） | 刪 `rollout_status` 迴圈（`:974-978`）；response 加 `rollout_awaited: False` |
 | `src/api/releases.py:1006-1095`（兩個補償） | 刪補償內 `rollout_status`（`:1040`、`:1091`）；`recovery_failed` 判定改只看 rollback ＋ restart 下達 |
-| `src/api/releases.py`（新常數區） | `RESET_HELM_TIMEOUT_SECONDS` / `RESET_EXEC_TIMEOUT_SECONDS` / `RESET_CLEANUP_EXEC_TIMEOUT_SECONDS` / `RESET_KUBECTL_SLACK_SECONDS` / `RESET_HARD_CAP_SECONDS`（＝前四者和，附推導註解） |
-| `src/services/helm.py:570-673` | `upgrade()` 加 `timeout_seconds: Optional[int]=None` → `--timeout {n}s` ＋ 該次 subprocess `n+10`；`None` 行為完全不變 |
+| `src/api/releases.py`（新常數區） | `RESET_HELM_TIMEOUT_SECONDS=15` / `RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS=2n+O` / `RESET_EXEC_TIMEOUT_SECONDS=12` / `RESET_CLEANUP_EXEC_TIMEOUT_SECONDS=5` / `RESET_KUBECTL_SLACK_SECONDS=3` / `RESET_HARD_CAP_SECONDS=65`（＝後四者和，附 §3.2.1 的 `2n+O` 推導註解） |
+| `src/services/helm.py:570-673` | `upgrade()` 加 `timeout_seconds`（→ `--timeout {n}s`）與 `subprocess_timeout_seconds`（→ 覆寫該次 `self.timeout`）兩個 optional 參數；皆 `None` 時行為完全不變。**不可**在 helm.py 內自行推導 `n+10`——失敗路徑是 `2n+O`（§3.2.1） |
+| `src/services/helm.py`（模組層） | 新增並匯出 `HELM_CLI_OVERHEAD_SECONDS = 15`（非-wait 開銷的單一權威，供 `releases.py` 與 repo-lint gate 讀） |
 | `src/models/schemas.py:103` | 只補 docstring（說明不再等 rollout；request 欄位不變） |
 
 **平台（`src/**` → paas-odoo image）**
@@ -307,8 +350,8 @@ leader3 的 brief 預期「`test_mcp_admin_password.py:141/172/204/223` 釘死�
 | `src/static/src/paas/components/modal/AdminPasswordModal.xml` | 加「服務正在重新啟動」文案 |
 | `scripts/audit/repo-lint.py` | 新增 `check_reset_budget_ladder`（第 10 條）＋ 註冊進 `run_all`（`:737-746`）＋ 更新通過訊息（`:752-754`） |
 | `.gitea/workflows/repo-lint.yml` | `paths` 加 `extra/paas-operator/**`（否則新 gate 對 operator-only PR 休眠） |
-| `docs/decisions/patterns/` | 新增 `reset-async-budget-ladder.md`（跨層預算階梯 ＋ commit-on-secret 提交點）；`README.md`「何時必看」表加一列；`.claude/hooks/pattern-guard-map.json` 的 `paas-operator` 與 `model-write-guard` class 各 append 指標 |
-| `docs/tracking/followups/follow-ups.md` | F-449-3 標 RESOLVED（指向本檔 ＋ PR）；新增 F-461-1（`upgrading` 停滯無上限） |
+| `docs/decisions/patterns/` | 新增 `reset-async-budget-ladder.md`（跨層預算階梯 ＋ commit-on-secret 提交點 ＋ **`--atomic` 失敗路徑是 `2n+O` 不是 `n`** 這條 helm 語意陷阱）；`README.md`「何時必看」表加一列；`.claude/hooks/pattern-guard-map.json` 的 `paas-operator` 與 `model-write-guard` class 各 append 指標 |
+| `docs/tracking/followups/follow-ups.md` | F-449-3 標 RESOLVED（指向本檔 ＋ PR）；新增 F-461-1（`upgrading` 停滯無上限）、**F-461-2**（chart 版號漂移時的租戶側引導） |
 
 **pattern-guard 預期會攔的路徑**（Phase 2 動工前先讀對應 docs）：`src/models/cloud_service.py`（model-write-guard）、`src/static/src/paas/**`（owl-template / frontend-capability-gate）、`extra/paas-operator/**`（paas-operator：**merge 前必須本地跑 integration tests**）。
 
@@ -325,18 +368,19 @@ leader3 的 brief 預期「`test_mcp_admin_password.py:141/172/204/223` 釘死�
 | T3 | `test_rollout_failure_restores_config_and_secret`（`:167`） | **改**：觸發點 `rollout_status` → `rollout_restart` 失敗；補償不再等 status |
 | T4 | `test_rollout_failure_rolls_helm_back_and_re_rolls_pods`（`:302`） | **改**：同 T3；保留「主路 ＋ 補償都要重新下達 restart」的計數斷言 |
 | T5 | `test_recovery_failure_asks_for_intervention`（`:325`） | **改**：觸發點改 restart；保留「rollback 失敗就不再滾 pod」 |
-| T6 | **新** `test_reset_passes_bounded_helm_timeout` | `helm_service.upgrade` 收到 `timeout_seconds=RESET_HELM_TIMEOUT_SECONDS` |
-| T7 | **新** `test_reset_hard_cap_equals_sum_of_parts` | `RESET_HARD_CAP_SECONDS == 40+12+5+3`（防單改一項） |
+| T6 | **新** `test_reset_passes_bounded_helm_timeouts` | `helm_service.upgrade` 同時收到 `timeout_seconds=15` **與** `subprocess_timeout_seconds=45`（少傳後者＝失敗路徑會腰斬 rollback，§3.2.1） |
+| T7 | **新** `test_reset_hard_cap_equals_sum_of_parts` | `RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS == 2*15+15 == 45` **且** `RESET_HARD_CAP_SECONDS == 45+12+5+3 == 65`（兩層算式各自釘，防單改一項） |
 | T8 | **新** `test_patch_script_clears_stale_backups` | patch script 內含清殘留的 glob（§3.3 ③） |
-| T9 | **新**（`tests/test_helm.py`） | `upgrade(timeout_seconds=30)` 渲染 `--timeout 30s` 且 subprocess timeout=40；**不傳時 argv 不得出現 `--timeout`**（回歸守線） |
+| T9 | **新**（`tests/test_helm.py`） | `upgrade(timeout_seconds=15, subprocess_timeout_seconds=45)` 渲染 `--timeout 15s` 且該次 subprocess timeout==45；**兩者皆不傳時 argv 不得出現 `--timeout`、且沿用 `settings.helm_timeout`**（回歸守線） |
 
 ### 8.2 operator integration（真 K8s，**merge 前本機必跑**）
 
 | # | 測試 | 為什麼需要真叢集 |
 | --- | --- | --- |
 | I1 | 既有三支（`tests/integration/test_reset_config_carrier.py:197/234/254`） | **不需改**——它們斷言 Secret 值與 `restartedAt` annotation，不依賴 readiness；改後只會變快 |
-| I2 | **新** `test_reset_returns_before_pods_are_ready` | **本案最有價值的新測試**：把合成 chart 加一個 `initContainer: sleep 40`（restart 後的新 pod 要 40s 才 Ready，但 upgrade 當下舊 pod 是 Ready 的 ⇒ `--atomic --wait` 立即通過）。斷言：200 ＋ **wall-clock < 20s** ＋ Secret 已換 ＋ 兩顆 `restartedAt` 已蓋。**這正是 #461 的機制**，把「不等」變成可機械驗證的行為，而不是等下一次 stg 才發現。 |
+| I2 | **新** `test_reset_returns_before_pods_are_ready` | **本案最有價值的新測試**：把合成 chart 加一個 `initContainer: sleep 40`（restart 後的新 pod 要 40s 才 Ready，但 upgrade 當下舊 pod 是 Ready 的 ⇒ `--atomic --wait` 立即通過）。斷言：200 ＋ **wall-clock < 20s** ＋ Secret 已換 ＋ 兩顆 `restartedAt` 已蓋。**這正是 #461 的機制**，把「不等」變成可機械驗證的行為，而不是等下一次 stg 才發現。<br>⚠️ **fixture 前置條件**：reset 前必須先等首裝的 Deployment 真的 Ready（`kubectl rollout status`），否則 `--atomic --wait` 會在 15s 逾時 ⇒ 測到的是 atomic 失敗（I4 的情境）而非「不等 rollout」。 |
 | I3 | 紅燈對照（手動，寫進 PR 描述） | 暫時把 `rollout_status` 加回去 → I2 必須因 wall-clock 超標而紅（證明斷言有牙，非恆真） |
+| **I4** | **新** `test_atomic_failure_rolls_secret_back_within_hard_cap`（§3.2.1 必修項的驗收） | 合成 chart 加 `values.breakReadiness`（渲染指向關閉 port 的 readinessProbe）⇒ reset 帶該 values ⇒ pod template 變且永不 Ready ⇒ `--atomic` 失敗 → 自動 rollback。斷言：**(i)** 500、**(ii)** Secret **回到舊值**（＝rollback 真的跑完，沒被 subprocess 腰斬——C11′「2xx 前失敗保證叢集舊密碼」的真機證據）、**(iii)** wall-clock < `RESET_HARD_CAP_SECONDS`(65)、**(iv)** release 最終 status 不是 `pending-*`。這條把 `2n+O` 的會計從推論變成量測；紅燈對照＝把 subprocess 改回 `n+10`(25) → (ii)/(iv) 必紅 |
 
 > 環境：`cd extra/paas-operator && HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v`（context `docker-desktop`）。殘留 ns 風險與 recipe 見 `tests/integration/README.md`。
 
@@ -354,7 +398,7 @@ leader3 的 brief 預期「`test_mcp_admin_password.py:141/172/204/223` 釘死�
 
 | # | 項目 | 說明 |
 | --- | --- | --- |
-| G1 | `scripts/audit/repo-lint.py --all` | 新 gate 自身要有紅燈對照：暫時把 `RESET_CONFIG_TIMEOUT` 改成 50（< 60）→ gate 必紅 |
+| G1 | `scripts/audit/repo-lint.py --all` | 新 gate 自身要有紅燈對照：暫時把 `RESET_CONFIG_TIMEOUT` 改成 60（< hard cap 65）→ gate 必紅；再把 `RESET_HELM_TIMEOUT_SECONDS` 15→25（cap 變 85 > 75）→ gate 也必紅（證明它真的跨三層算，不是只比對字面值） |
 | G2 | CI paths | 確認 `repo-lint.yml` 加了 `extra/paas-operator/**`（改前的 operator-only PR 不會跑 gate ＝ 守線休眠，#463 同型） |
 | E1 | headed E2E（`tests/e2e/`，比照 `service-reset-button/`） | 按 Reset → modal 出現且含「重新啟動」文案 → badge 變 `Upgrading` → 輪詢後回 `Running`。**建議新目錄 `tests/e2e/service-reset-async/`**，沿用 #464 的 fixture 手法（ci-local sandbox） |
 | S1 | stg 真機驗收 | 見 §10 |
@@ -367,7 +411,7 @@ leader3 的 brief 預期「`test_mcp_admin_password.py:141/172/204/223` 釘死�
 2. **不加 pending 密碼欄位**（§4.4）。
 3. **不加 `wait_rollout` 旋鈕**（§3.1）。
 4. **不修 `_is_container_ready` 的 fail-open**（F-423-1 已定案 v1 不動；reset 只是加入既有風險池，§6.1）。
-5. **不修 `upgrading` 停滯無上限**（新開 F-461-1，§6.2）。
+5. **不修 `upgrading` 停滯無上限**（新開 F-461-1，§6.2）；**不做 chart 版號漂移的租戶側引導**（新開 F-461-2，§6.3——本案只加 log）。
 6. **不只把 120s 調大**——本案改的是結構（rollout 移出 request ＋ 宣告階梯 ＋ 機械 gate）；120→75 是階梯的**副產品**，方向甚至是變小。
 7. **不動 chart**（`woow-paas-charts`）：不加 `checksum/secret` 讓 helm 自己滾 pod。理由不只是跨 repo——加了之後 pod template 每次都變 ⇒ `--atomic --wait` 會把 rollout 等待**拉回 request 內**，與本案方向相反（要同時改成不 atomic，等於把補償語意重寫一遍）。
 8. **不做 image 縮小 / cache 預熱**（F-449-3 選項 c）：屬 chart／CI 領域，另案。
@@ -382,20 +426,31 @@ leader3 的 brief 預期「`test_mcp_admin_password.py:141/172/204/223` 釘死�
 
 | 階段 | 判準 |
 | --- | --- |
-| 本機 | operator unit 全綠；**operator integration 全綠（含 I2 ＋ I3 紅燈對照）**；`--test-tags /woow_paas_platform` 全套無新增 F/E；`repo-lint.py --all` 綠（含 G1 紅燈對照） |
-| PR | zh-tw；`Closes #461`；target `develop`；描述要含 (i) 階梯表 (ii) C11′ 與四條守線保持綠的說明 (iii) integration 實跑輸出 (iv) 發版順序 |
+| 本機 | operator unit 全綠；**operator integration 全綠（含 I2 ＋ I4 ＋ 各自的紅燈對照 I3／subprocess 改回 `n+10`）**；`--test-tags /woow_paas_platform` 全套無新增 F/E；`repo-lint.py --all` 綠（含 G1 兩個紅燈對照） |
+| PR | zh-tw；`Closes #461`；target `develop`；描述要含 (i) 階梯表 ＋ **`2n+O` 推導** (ii) C11′ 與四條守線保持綠的說明 (iii) **順手修掉的既有缺陷：現行 subprocess 300s < helm atomic 失敗的 2×5m ⇒ 今天的 rollback 本來就會被腰斬**（§3.2.1） (iv) integration 實跑輸出 (v) 發版順序 |
 | stg | operator 先發（`operator-v*`）→ 平台後發（`stg-*`）→ 對 hermes-agent／open-design 各 reset **兩次**，第一次就必須 ≤20s 成功（＝#461 的正面證據）；記錄 wall-clock、`restartedAt`、Secret 值、DB 值、state 收斂時間 |
 | prod | 隨下一次 rollout；發版單按目錄分流（operator ＋ 平台各一次），並記錄 operator 版本（新平台 ＋ 舊 operator 時階梯不成立，見 §3.1） |
 
 ---
 
-## 11. 待裁決（leader3）
+## 11. 裁決紀錄（leader3，2026-07-30）
 
-| # | 問題 | 建議 |
+| # | 問題 | 裁決 |
 | --- | --- | --- |
-| **D1** | API 語意採 A（同步 200 不等 rollout）而非 202/task | **採 A**（§2.2） |
-| **D2** | 階梯數字 90/75/60（helm 30s）vs 105/90/60+（helm 60s） | **採 90/75/60**；代價是 chart-bump-riding reset 可能 30s fail-safe 失敗（§3.2 末） |
-| **D3** | `config_json` backup 生命週期三選一 | **採 ③**（維持順序 ＋ patch script 清殘留，§3.3） |
-| **D4** | pending 密碼欄位 | **不做**（§4.4） |
-| **D5** | 四條 C11 守線測試 | **刻意不改**，作為不變式未破的證據（§4.5） |
-| **D6** | repo-lint 第 9 條 gate ＋ CI paths 擴充要不要進本 PR | **要**——這是對「兩個預算互不知情」唯一的機械性回應；且 CI paths 不補等於 gate 休眠 |
+| **D1** | API 語意採 A（同步 200 不等 rollout）而非 202/task | ✅ **採 A**（§2.2） |
+| **D2** | 階梯數字 | ✅ **採 90/75 方向**，operator 硬上限依 §3.2.1 的 `2n+O` 重算為 **65**（helm `--timeout 15s`、subprocess 45）。理由（leader3）：#459 實測冷 cache pull 要 70s，105/90/60+ 一樣救不回 chart-bump-riding，卻貼近 CF 524 疑慮線 ⇒ 取小的 |
+| **D3** | `config_json` backup 生命週期三選一 | ✅ **採 ③**（維持順序 ＋ patch script 清殘留，§3.3） |
+| **D4** | pending 密碼欄位 | ✅ **不做**（§4.4） |
+| **D5** | 四條 C11 守線測試 | ✅ **刻意不改**，PR 描述必須明講（§4.5、P1） |
+| **D6** | repo-lint **第 10 條** gate ＋ CI paths 擴充要不要進本 PR | ✅ **要**——對「兩個預算互不知情」唯一的機械性回應；CI paths 不補等於 gate 休眠 |
+| **必修** | `--atomic` 失敗路徑的 helm 時間預算（`2n` 而非 `n`） | ✅ 已補 **§3.2.1**：重算階梯（65/75/90）、helm.py 加 `subprocess_timeout_seconds` ＋ `HELM_CLI_OVERHEAD_SECONDS`、T6/T7/T9/G1 斷言值同步、新增 integration **I4** 實測驗收；並記錄這是**既有缺陷**（今天 300s subprocess < 2×5m ⇒ rollback 本來就被腰斬） |
+| **建議** | chart 版號漂移的租戶側引導 | 記為 **F-461-2**，不進本 PR（§6.3、§9-5） |
+
+---
+
+## 12. 修訂紀錄
+
+| 版次 | 日期 | 內容 |
+| --- | --- | --- |
+| v1 | 2026-07-30 | 初版（commit `133a0435`） |
+| v2 | 2026-07-30 | leader3 審核：新增 §3.2.1（`--atomic` 失敗路徑 `2n+O` 預算 ＋ 既有缺陷發現）、階梯 60→**65**／helm 30→**15s**／subprocess `n+10`→**`2n+O`=45**、helm.py 多一個 `subprocess_timeout_seconds` 參數與 `HELM_CLI_OVERHEAD_SECONDS` 常數、T6/T7/T9/G1 斷言值更新、新增 integration I4、新增 F-461-2、gate 編號對齊第 10 條 |
