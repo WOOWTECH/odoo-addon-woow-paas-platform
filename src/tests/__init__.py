@@ -238,3 +238,9 @@ from . import test_hermes_agent_seed_424
 from . import test_admin_password_carrier_449
 # fix: #462（#460 S1）service payload 帶 template.has_admin_gui（前端 Reset gate 唯一入口）
 from . import test_service_payload_has_admin_gui_462
+# feat: #423 W5a HAOS×KubeVirt 平台側——workload_type 欄位 ＋ stopped state 守線
+from . import test_haos_workload_type
+# feat: #423 W5a 就緒判定 VM 分支 fail-closed（model ＋ controller 兩層守線）
+from . import test_cloud_service_poll_vm_branch
+# feat: #423 W5a suspend/resume 映射 runStrategy（防 helm upgrade 喚醒停權 VM）
+from . import test_haos_suspend_resume_runstrategy

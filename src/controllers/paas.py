@@ -1254,6 +1254,18 @@ class PaasController(HiddenChainMixin, Controller):
                 or service.template_id.is_hidden):
             return {'success': False, 'error': 'Service not found'}
 
+        # #423 W5a MAJOR-1：補上訂閱閘。
+        #
+        # 同檔 api_workspace_service 的 update / delete 兩個分支都有這道檢查，
+        # 只有 rollback 漏了（既有缺陷）。而 `suspended` 的成因正是訂閱
+        # expire / cancel——沒有這道閘，欠費租戶自己就打得到這支 API。
+        # 與上方 _rollback_service 的狀態閘是兩層獨立防護：一層擋權限，
+        # 一層擋狀態。
+        try:
+            service._check_operation_allowed(operation='write')
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
         return self._rollback_service(service, revision)
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/reset-admin-password", auth="user", methods=["POST"], type="json")
@@ -2638,7 +2650,17 @@ class PaasController(HiddenChainMixin, Controller):
 
     def _rollback_service(self, service: Any, revision: int | None) -> dict[str, Any]:
         """Rollback service to a previous revision."""
-        if service.state in ['pending', 'deleting']:
+        # #423 W5a MAJOR-1：suspended 必須擋下。
+        #
+        # 語意上：停權中的服務本來就不該允許改版本。
+        # 技術上更關鍵：rollback 直呼 client.rollback_release()，**全程不經
+        # _assemble_deploy_values**，所以 W5a.4 的 runStrategy 同源守衛對這條
+        # 路徑完全不生效。而 helm rollback 重放的是 **stored manifest**
+        # （其中 runStrategy: Always），停權卻是 operator 外科式
+        # `kubectl patch vm` 改 **live 物件**——兩者本就不同步（同
+        # reference_helm_resource_policy_stored_manifest 的既有教訓）。
+        # 結果就是欠費停權的 VM 被喚醒並繼續計費。
+        if service.state in ['pending', 'deleting', 'suspended']:
             return {'success': False, 'error': f'Cannot rollback service in {service.state} state'}
 
         client = get_paas_operator_client(request.env)
@@ -2710,10 +2732,13 @@ class PaasController(HiddenChainMixin, Controller):
             status = client.get_status(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
+                # #423 W5a：VM 型必須帶 include_vm。operator 未查詢時回
+                # vmis: None，而 VM 的就緒判定是 fail-closed → 漏帶會讓服務
+                # 永遠停在 deploying。
+                include_vm=service._needs_vm_status(),
             )
 
             release = status.get('release', {})
-            pods = status.get('pods', [])
 
             release_status = release.get('status', '')
             helm_revision = release.get('revision', service.helm_revision)
@@ -2734,19 +2759,20 @@ class PaasController(HiddenChainMixin, Controller):
                 )
                 return
 
-            # Determine new state based on release status and pod status
+            # Determine new state based on release status.
+            #
+            # #423 W5a：就緒判定已收斂為單一事實源
+            # ``CloudService._is_release_ready``（model 層），container 與 VM
+            # 兩種 workload 的分支都在那裡。這裡曾有一份與 model 完全同型的
+            # 複製品，導致「只修 model 層」時前台一 poll 就把還在 import 的
+            # VM 標成 running。**不要把判定邏輯搬回來。**
+            # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
+            service._store_import_progress(status)
+
             if release_status == 'deployed':
-                # Filter to Running-phase pods only — after helm upgrade,
-                # old pods may be Terminating (phase=Succeeded/Failed) and
-                # would cause the readiness check to fail permanently.
-                active_pods = [
-                    p for p in pods if p.get('phase') == 'Running'
-                ]
-                all_ready = all(
-                    '/' in pod.get('ready', '0/0')
-                    and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
-                    for pod in active_pods
-                ) if active_pods else (not pods)
+                all_ready, detail = service._is_release_ready(status)
+                if not all_ready:
+                    service._log_not_ready(detail)
 
                 if all_ready:
                     template = service.template_id
@@ -3026,6 +3052,9 @@ class PaasController(HiddenChainMixin, Controller):
             'subdomain': service.subdomain or '',
             'custom_domain': service.custom_domain or '',
             'error_message': service.error_message or '',
+            # #423 W5a：VM 首次開通的磁碟 import 進度（容器型恆為空）。
+            # 純顯示用，不參與狀態機。
+            'import_progress': service.import_progress or '',
             'has_project': bool(service.project_ids),
             'template': {
                 'id': service.template_id.id,

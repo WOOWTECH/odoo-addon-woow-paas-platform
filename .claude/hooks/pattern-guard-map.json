@@ -28,7 +28,17 @@
         "docs/tracking/pitfalls/two-layer-acl-asymmetric-deny.md — 兩層 deny 不對稱的實際翻車案例",
         "docs/tracking/pitfalls/orm-test-green-endpoint-leak-blindness.md — backend ORM test 全綠遮蔽 controller sudo bypass 的 incident 敘事",
         "docs/decisions/patterns/hidden-template-presentation-chain.md — 新增/修改 /woow 曝光點（list、by-id、dashboard、訂閱/發票清單）時的 is_hidden 全鏈呈現層過濾",
-        "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動租戶 reconfigure/升級端點的 helm values 組裝時：背景執行緒無 ORM，全量 values 必主執行緒先算（_assemble_deploy_values）＋傳 reset_values=True"
+        "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動租戶 reconfigure/升級端點的 helm values 組裝時：背景執行緒無 ORM，全量 values 必主執行緒先算（_assemble_deploy_values）＋傳 reset_values=True",
+        "docs/decisions/patterns/capability-gate-single-source-field.md — 回傳 template 子物件的 service payload 要鏡射能力欄位（has_admin_gui）給前端：直接搬不推導，否則前端只能猜 slug → 後端放行、租戶按不到（#357 C01 → #460）"
+      ]
+    },
+    {
+      "class": "frontend-capability-gate",
+      "pattern": "^src/static/src/paas/pages/.*\\.(js|xml)$",
+      "why": "前端頁面的能力 gate（按鈕/分頁顯不顯示）若自建 slug 名單，會與後端授權判準無聲漂移——方向永遠是「後端放行、租戶按不到」＝修復不可達",
+      "docs": [
+        "docs/decisions/patterns/capability-gate-single-source-field.md — 能力判準收斂到後端單一欄位；前端 fail-closed 讀 payload 欄位，禁 slug 名單（單值 identity 如 slug === 'odoo' 不在 scope）。repo-lint capability-gate 兩條規則機械強制（禁壞形態 + 鎖 t-if 鏈追得到 has_admin_gui）",
+        "docs/decisions/patterns/hidden-template-presentation-chain.md — model 欄位一路貫穿到 UI 的呈現層過濾同型問題"
       ]
     },
     {

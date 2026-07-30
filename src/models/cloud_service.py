@@ -130,6 +130,19 @@ class CloudService(models.Model):
         help='Error details if deployment failed',
     )
 
+    # VM 型服務的開通進度（#423 W5a，design §7.4）。
+    #
+    # 為何需要：VM 首次開通要把一整顆磁碟映像 import 進 PVC，耗時遠長於容器
+    # 型的 pull image。沒有進度時服務只是停在 `deploying`，租戶（與維運）
+    # 看不出是「正在跑」還是「卡住了」。CDI 原生提供百分比，poll 時順手帶回。
+    #
+    # 這**不是**狀態機的一部分：它純供顯示，就緒判定完全不看它
+    # （DataVolume 查詢失敗只會讓進度消失，不該擋住一台已 Ready 的 VM）。
+    import_progress = fields.Char(
+        string='Import Progress',
+        help='VM 磁碟映像的 import 進度（例 "42.31%"）；僅供顯示，不參與就緒判定',
+    )
+
     # Post-deploy initialization tracking
     init_retries = fields.Integer(
         string='Init Retries',
@@ -755,6 +768,19 @@ class CloudService(models.Model):
                 values, template.slug, apiserver_cidrs,
             )
 
+        # #423 W5a：VM 型的 runStrategy 必須與服務狀態同源。
+        #
+        # 為什麼一定要寫進 values：suspend/resume 走的是 operator 的外科式
+        # `kubectl patch vm`（不動 helm release），所以 live 物件與 helm 的
+        # stored manifest 會漂移。下一次 helm upgrade 若 render 出 chart 預設
+        # 的 `Always`，就會**把停權中（欠費）的 VM 喚醒**——沉默失效，且會演
+        # 變成計費爭議。把當前狀態餵進 values 讓兩條路徑同源。
+        # 守線測試：src/tests/test_haos_suspend_resume_runstrategy.py
+        if template.workload_type == 'vm':
+            values.setdefault('vm', {})['runStrategy'] = (
+                'Halted' if self._is_halted() else 'Always'
+            )
+
         # Inject Odoo addon selection (initContainer + addons_path)
         if self.odoo_addon_ids and template.slug == 'odoo':
             image_vals = values.get('image', {})
@@ -926,6 +952,17 @@ class CloudService(models.Model):
                 ('persistence', 'storageClass'),
             ],
             'mcp-n8n': [
+                ('persistence', 'storageClass'),
+            ],
+            # #423 W5a: HAOS（VM 型）。chart 的 DataVolume 用扁平
+            # persistence.storageClass，與 mcp-* 同鍵名，故預設 fallback 本來
+            # 就會命中——列出顯式 entry 是記錄意圖並防 default 漂移（同 mcp-*
+            # 的既有做法）。
+            # ⚠ chart 端此鍵 required：woow-k3s 有兩個 default StorageClass
+            # （local-path 與 longhorn），留空會讓 DataVolume 落點不確定，
+            # 可能掉到 node-local 的 local-path（節點故障即資料失聯）。故
+            # chart 讓空值直接 render 失敗，平台這邊也絕不可傳空字串。
+            'haos': [
                 ('persistence', 'storageClass'),
             ],
             # #424①: hermes-agent（open-design 派生 chart）走扁平
@@ -1291,6 +1328,216 @@ class CloudService(models.Model):
                     service.name, service.id,
                 )
 
+    # ------------------------------------------------------------------ #
+    #  就緒判定：兩層共用的單一事實源（#423 W5a）                          #
+    # ------------------------------------------------------------------ #
+
+    def _needs_vm_status(self):
+        """本服務的就緒判定是否需要 operator 回傳 VM 資訊。
+
+        呼叫 operator ``get_status`` 時必須據此帶 ``include_vm``。**漏帶會讓
+        VM 服務永遠停在 ``deploying``**：operator 在未查詢時回 ``vmis: None``，
+        而下方 :meth:`_is_release_ready` 對 VM 是 fail-closed。
+        """
+        self.ensure_one()
+        return self.template_id.workload_type == 'vm'
+
+    def _is_halted(self):
+        """這台 VM 是否應該處於停機（``runStrategy: Halted``）狀態。
+
+        🔴 **不可以只看 ``state == 'suspended'``。** reconfigure 路徑
+        （``controllers/paas.py``）**先**把 state 寫成 ``upgrading``、19 行後
+        才組裝 values，屆時守衛讀到的已經不是 ``suspended`` → 組出 ``Always``
+        → 以 ``reset_values=True`` 送出 → **停權中（欠費）的 VM 被喚醒**。
+        （對照組：``action_redeploy`` 與 ``_reset_admin_password`` 都是先組裝
+        再寫 state，只有 reconfigure 順序相反。）
+
+        改讀 ``pre_suspend_state`` 作為不受呼叫順序影響的單一事實源：它只在
+        :meth:`_do_suspend` 設、:meth:`_do_resume` 清，語意穩定，且在
+        「state 已被中途改寫但服務仍處於停權」的窗口內仍為真。
+
+        兩者取聯集而非擇一：``state == 'suspended'`` 涵蓋 pre_suspend_state
+        因故為空的情形，``pre_suspend_state`` 涵蓋 state 被中途改寫的情形。
+        """
+        self.ensure_one()
+        return self.state == 'suspended' or bool(self.pre_suspend_state)
+
+    def _is_release_ready(self, status):
+        """判定「這個 release 就緒了嗎」——**model 與 controller 兩層共用**。
+
+        這段邏輯原本在 model（``_poll_and_update_status``）與 controller
+        （``PaasController._update_service_status``）各有一份完全同型的複製品。
+        #423 設計審查抓到：只修其中一份，租戶只要打開前台服務詳情頁，
+        controller 那份就會把還在 import 的 VM 標成 ``running``——cron 修好的
+        東西被前台查詢覆寫回去。故抽成單一事實源，兩層都呼叫這裡。
+
+        （post-deploy-init 兩層仍各自實作，那是既存且有實質差異的另一件事，
+        不在本次收斂範圍。）
+
+        Args:
+            status: operator ``get_status`` 的回應 dict
+
+        Returns:
+            ``(ready: bool, detail: str)`` —— detail 供 log 判讀為何未就緒
+        """
+        self.ensure_one()
+
+        if self._needs_vm_status():
+            vm_ready, detail = self._is_vm_ready(status)
+            if not vm_ready:
+                return vm_ready, detail
+            # MINOR-2：VM 就緒後仍要看容器面。v1 的 haos chart 只有 VM，但
+            # template 日後若啟用 MCP sidecar、或 chart 加了輔助 Deployment，
+            # 只看 VMI 會在那些容器還沒起來時就報就緒。
+            # 容器端對「pods 為空」回 True，所以這個合取不會讓純 VM 卡住。
+            return self._is_container_ready(status)
+        return self._is_container_ready(status)
+
+    @staticmethod
+    def _is_container_ready(status):
+        """容器型就緒判定——**維持現行行為，一行不動**。
+
+        ⚠ 這裡有一個已知的 fail-open：``pods`` 為空列表時回 True。v1 刻意
+        不修（design §4.1）——容器型服務有一個合法的短暫狀態是「helm release
+        已 deployed 但 pod 還沒被 controller 建出來」，改成 fail-closed 會讓
+        **所有現存租戶服務**多卡一輪 poll，風險大於收益。
+        以 characterization test 釘住現行行為；待評估項記在
+        ``docs/tracking/followups/follow-ups.md``。
+        """
+        pods = status.get('pods') or []
+        # Only Running-phase pods — terminators would block readiness forever
+        active_pods = [p for p in pods if p.get('phase') == 'Running']
+        if not active_pods:
+            return (not pods), 'no active pods'
+        ready = all(
+            '/' in pod.get('ready', '0/0')
+            and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
+            for pod in active_pods
+        )
+        return ready, 'pods ready' if ready else 'pods not ready'
+
+    @staticmethod
+    def _is_vm_ready(status):
+        """VM 型就緒判定——**fail-closed**（#423 design §4.1）。
+
+        與容器型的關鍵差異：**virt-launcher pod Running ≠ guest 開機完成**。
+        pod 一起來就翻 running 會讓租戶拿到一台還在 import 磁碟的機器。故改讀
+        VMI 的 ``phase`` ＋ ``Ready`` condition。
+
+        fail-closed 的三種情形（全部「維持 deploying」而非翻 running）：
+
+        1. ``vm_included`` 為 False —— 呼叫端漏帶 ``include_vm``。這是程式錯誤，
+           但寧可卡住也不能誤報就緒。
+        2. ``vmi_retrieval_error`` 有值 —— 查詢失敗，狀態未知。
+        3. ``vmis`` 為 None（未查詢）或空 list（還沒建出來）。
+
+        ⚠ ``datavolume_retrieval_error`` **不**參與就緒判定：DataVolume 只供
+        進度顯示，它掛掉頂多讓進度條消失，不該擋住一台已經 Ready 的 VM。
+        """
+        if not status.get('vm_included'):
+            # 硬失效：呼叫端漏帶 include_vm，或 operator 版本太舊沒有這個欄位。
+            # 兩者都不會自己好，且外觀與「還在 import」完全相同 → 必須是
+            # warning，否則正式環境的 INFO 級 log 一行都看不到（MINOR-1）。
+            return False, (
+                'HARD: operator was not asked for VM status (include_vm '
+                'missing, or operator too old to echo it) — refusing to '
+                'report ready'
+            )
+        if status.get('vmi_retrieval_error'):
+            # 硬失效：多半是 RBAC 缺 virtualmachineinstances 權限。
+            return False, (
+                f"HARD: VMI lookup failed: {status['vmi_retrieval_error']}"
+            )
+
+        vmis = status.get('vmis')
+        if not vmis:
+            # 正常過渡：VMI 還沒建出來（磁碟 import 中）。
+            return False, 'no VMI yet'
+
+        not_ready = [
+            v.get('name') for v in vmis
+            if not (v.get('phase') == 'Running' and v.get('ready'))
+        ]
+        if not_ready:
+            return False, f"VMI not ready: {', '.join(filter(None, not_ready))}"
+        return True, 'VMI ready'
+
+    def _log_not_ready(self, detail):
+        """把「為何還沒就緒」記進 log，硬失效升 warning（MINOR-1）。
+
+        為什麼分級很重要：VM 卡在 ``deploying`` 有兩種成因，在 Odoo 側**外觀
+        完全相同**——
+          * 正常過渡：磁碟還在 import（可能數十分鐘），
+          * 硬失效：operator RBAC 缺 ``virtualmachineinstances`` 權限、或
+            平台漏帶 ``include_vm``。
+        後者不會自己好，而 ``_cron_check_deploying_services`` 沒有 age 逾時
+        機制，所以若兩者都寫 debug，正式環境（INFO 級）不會留下任何線索，
+        只能靠人去猜。這一個字決定 W6 上線時能不能直接從 log 定位（#315
+        同型教訓）。
+        """
+        self.ensure_one()
+        if detail.startswith('HARD:'):
+            _logger.warning(
+                "Service %s (id=%s) blocked from becoming ready: %s",
+                self.name, self.id, detail,
+            )
+        else:
+            _logger.debug(
+                "Service %s not ready yet: %s", self.name, detail,
+            )
+
+    @staticmethod
+    def _extract_import_progress(status):
+        """取 CDI DataVolume 的 import 進度字串（供前台進度顯示，design §7.4）。
+
+        回 None 代表沒有進度可顯示——**呼叫端不得據此判斷就緒**
+        （``datavolume_retrieval_error`` 時這裡就會回 None）。
+
+        多顆 DataVolume 時取「仍在 import 的那顆」而非第一顆：v1 每台 VM 只有
+        一顆 disk，但 chart 日後若加第二顆（例如獨立 data volume），先完成的
+        那顆會是 100% 而遮住仍在跑的，進度條就會卡在 100% 不動。優先取
+        ``ImportInProgress``，再退回百分比最小者。
+        """
+        dvs = status.get('datavolumes') or []
+        in_progress = [
+            dv for dv in dvs if dv.get('phase') == 'ImportInProgress'
+        ]
+        candidates = in_progress or dvs
+
+        def _pct(dv):
+            raw = (dv.get('progress') or '').rstrip('%')
+            try:
+                return float(raw)
+            except ValueError:
+                return None
+
+        usable = [
+            (pct, dv.get('progress'))
+            for dv in candidates
+            for pct in [_pct(dv)]
+            if pct is not None
+        ]
+        if usable:
+            return min(usable)[1]
+
+        # 沒有可解析的百分比就退回第一個非 N/A 的原始字串（保守）。
+        for dv in candidates:
+            progress = dv.get('progress')
+            if progress and progress != 'N/A':
+                return progress
+        return None
+
+    def _store_import_progress(self, status):
+        """把 import 進度寫進記錄供前台顯示（兩層 poll 共用）。
+
+        只在值真的改變時 write，避免每次 poll 都髒一次記錄。就緒後清空
+        （避免卡片一直掛著 "100.0%"）。
+        """
+        self.ensure_one()
+        progress = self._extract_import_progress(status)
+        if (self.import_progress or None) != progress:
+            self.sudo().write({'import_progress': progress or False})
+
     def _poll_and_update_status(self, client):
         """Poll operator and transition state for a single service.
 
@@ -1306,6 +1553,9 @@ class CloudService(models.Model):
             status = client.get_status(
                 namespace=self.helm_namespace,
                 release_name=self.helm_release_name,
+                # VM 型必須帶 include_vm，否則 operator 不回 vmis，
+                # 而 _is_vm_ready 是 fail-closed → 服務永遠卡 deploying。
+                include_vm=self._needs_vm_status(),
             )
         except PaaSOperatorError as e:
             if e.status_code == 404 and self.state == 'deleting':
@@ -1318,7 +1568,6 @@ class CloudService(models.Model):
             return
 
         release = status.get('release', {})
-        pods = status.get('pods', [])
         release_status = release.get('status', '')
         helm_revision = release.get('revision', self.helm_revision)
 
@@ -1327,14 +1576,13 @@ class CloudService(models.Model):
         if not service.exists() or service.state != original_state:
             return
 
+        # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
+        service._store_import_progress(status)
+
         if release_status == 'deployed':
-            # Only Running-phase pods — terminators would block readiness forever
-            active_pods = [p for p in pods if p.get('phase') == 'Running']
-            all_ready = all(
-                '/' in pod.get('ready', '0/0')
-                and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
-                for pod in active_pods
-            ) if active_pods else (not pods)
+            all_ready, detail = service._is_release_ready(status)
+            if not all_ready:
+                service._log_not_ready(detail)
 
             if all_ready:
                 template = service.template_id
@@ -1549,6 +1797,11 @@ class CloudService(models.Model):
                 self.write({'state': 'error', 'error_message': f'Resume failed: {e}'})
                 return
 
+        # MINOR-4（既存設計，本 PR 未改）：resume 後直接寫回 pre_suspend_state。
+        # 對 VM 型而言，patch runStrategy=Always 只是「叫它開機」，guest 真正
+        # 可用還要數分鐘，所以這段期間 UI 會顯示 running 但服務尚未就緒。
+        # 容器型的 resume 成本低、窗口短，故沿用同一路徑；VM 型是否改成回
+        # deploying 交給 poll 收斂，列為 v1.1 評估（design §7.2）。
         restore_state = self.pre_suspend_state or 'running'
         self.write({
             'state': restore_state,
