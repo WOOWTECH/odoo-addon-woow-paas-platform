@@ -931,6 +931,213 @@
             <field name="is_hidden" eval="True"/>
         </record>
 
+        <!-- Home Assistant OS（HAOS，#423 W5b）：平台第一個 **VM 型** cloud service
+             （KubeVirt VirtualMachine + CDI DataVolume），非容器。走 #380 金樣板上架
+             SOP；chart＝woow-paas-charts 的 charts/haos 0.1.0（本 seed 的鍵名已對
+             `helm show values` 對 registry 上的 0.1.0 逐鍵核對，非轉抄 design 草案）。
+
+             ⚠ 與既有 cloud_app_ha_paas（slug ha-paas、chart home-assistant、image
+             woowtech-ha）是**不同產品**：那是容器化的 HA Core（0 元自動開通、隱藏），
+             本筆是跑真正 HAOS 作業系統的完整虛擬機（含 Supervisor／add-on／HAOS 更新）。
+             xmlid／slug／chart／image 刻意全部區隔，勿 reuse、勿互抄 helm values
+             （#336 的 chart↔image 原子變更鐵律就是被這種耦合咬過）。
+
+             ⚠ **workload_type=vm**（#423 W5a Q3 拍板：顯式欄位、不從 chart 嗅探）。
+             這個值一改就同時改掉三條路徑：就緒判定讀 VMI phase／Ready 而非 pod
+             （model `_poll_and_update_status` ＋ controller `_update_service_status`
+             兩層皆 fail-closed，vmis 為空**不翻 running**）、啟停走
+             `vm.runStrategy` patch 而非 replicas、以及 helm values 組裝時由
+             `cloud_service.py` 依 state 注入 runStrategy。改成 container 不會報錯，
+             只會讓 VM 服務在 import 途中被誤判成 running ——**靜默**。
+
+             ⚠ 叢集前置（不在本 repo 職權）：KubeVirt >= v1.8 ＋ CDI >= v1.64 已裝，
+             且 paas-operator ClusterRole 帶 kubevirt.io / cdi.kubevirt.io apiGroups
+             （operator chart >= 0.1.19）。缺 CRD 時 helm render **照樣成功**、install
+             才失敗（#315 教訓的同型）。
+
+             ⚠ 原子變更鐵律（chart Chart.yaml「OPERATOR COUPLING」）：
+             helm_chart_version 與 helm_default_values.image.* **必須同一次變更一起動**。
+             chart 刻意移除 `default .Chart.AppVersion` fallback（appVersion 18.1 追的是
+             HAOS OS 版本、registry 只有時間戳 build tag），image.tag 留空會 render 失敗
+             而非靜默產生拉不到的 image。守線測試＝src/tests/test_haos_seed_423.py。
+
+             ✅ **image.tag 已釘 W2 golden image 真值**（W2 收官：woow-paas-ci
+             run 1288 success、2026-07-30，digest 已直查 registry 複驗，#423 有
+             驗收留言）。形制為 `{haos-os-version}-{UTC 時間戳}@sha256:…` 雙釘
+             ——tag 欄同時帶可讀版本與 digest，實際拉取以 digest 為準（對齊
+             woowtech-ha／open-design／hermes-agent 的既有形制）。守線＝
+             test_haos_seed_423.TestHaosImagePinW2Gate（斷言 `@sha256:` 存在）；
+             日後換 image 時**不得**為了讓 CI 綠而放寬該斷言，也不得只改可讀
+             版本不改 digest（那是 no-op 卻假裝成功）。 -->
+        <record id="cloud_app_haos" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Home Assistant OS</field>
+            <field name="slug">haos</field>
+            <field name="description">完整 Home Assistant OS 專屬虛擬機（含 Supervisor 與 Add-on 生態），2 vCPU／4 GB RAM／64 GB 磁碟</field>
+            <field name="full_description">Home Assistant OS（HAOS）雲端專屬虛擬機：跑的是完整的
+                Home Assistant 作業系統本體，而不是容器化的 Home Assistant Core——因此
+                Supervisor、Add-on 商店、HAOS 系統更新與備份快照全部原生可用，與自架
+                在樹莓派／NUC 上的體驗一致。規格為 2 vCPU、4 GB RAM、64 GB 專屬磁碟。
+                首次開通需匯入作業系統磁碟映像，耗時較一般容器服務長（數分鐘至數十分鐘），
+                期間服務顯示「部署中」屬正常。開通完成後於瀏覽器完成 HAOS 的初始設定
+                （建立你自己的管理者帳號）即可使用；平台不持有你的 Home Assistant 帳密。
+                對外僅曝露 Home Assistant 網頁介面（8123 埠），MQTT 等其他埠不在本版範圍。
+                欠費停權時虛擬機會關機（資料磁碟保留），恢復繳費後開機、資料原樣還在。
+                刪除服務即為全新開通——重新建立將使用全新的虛擬機與全新磁碟，不會沿用
+                先前的資料；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
+            <field name="category">container</field>
+            <!-- category 沒有 'vm' 選項（新增選項＝改 model + 前台分類 UI，非本 PR 範圍）；
+                 沿用 ha-paas 的 container 分類，讓兩個 Home Assistant 產品在前台同一格。 -->
+            <field name="tags">["home-assistant", "haos", "smart-home", "vm", "kubevirt"]</field>
+
+            <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+
+            <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵；chart 內部契約
+                 （UEFI secureBoot=false、masquerade 僅轉 8123、limits==requests、
+                 DataVolume 的 helm.sh/resource-policy: keep、Service selector
+                 vm.kubevirt.io/name）由 chart 預設＋chart tests 承擔、seed 不重寫。
+
+                 逐鍵理由：
+                 - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。⚠ 此 image
+                   **不是**給 Pod 跑的——它是 CDI DataVolume 的 registry source（OCI
+                   containerDisk），chart 裡沒有任何容器會拉它。
+                 - dataVolume.source=registry：另一個合法值 `http` 直接對外網抓
+                   .qcow2.xz，**沒有 digest 釘選**且每租戶一次公網下載，是 W1 PoC 的
+                   逃生口、不是產品路徑。漂移到 http 不會報錯，只會讓釘版治理靜默失效。
+                 - dataVolume.registry.pullMethod=node：`pod` 模式下 CDI 自己拉，
+                   secretRef 需要 accessKeyId／secretKey 形狀的 secret，而平台注入的
+                   paas-registry 是 dockerconfigjson ——設錯的症狀是 DataVolume 卡在
+                   ImportInProgress，原因埋在 importer pod log 裡（不指向根因）。
+                 - persistence.size 64Gi：賣給租戶的磁碟大小（⚠ 與 min_storage_gb 不同，
+                   見下方 Resource Requirements 註解）。
+                 - persistence.volumeMode=Filesystem：🔴 **D1 實證**（#423 W1 PoC 受控
+                   A/B，唯一變因＝volumeMode）。`Block` 在本叢集必掛：CDI importer 以
+                   UID 107／runAsNonRoot 執行且 pod 層無 fsGroup，而 fsGroup 對 raw
+                   block volume 不適用 → device node 屬 root，importer 死在
+                   `blockdev: cannot open /dev/cdi-block-volume: Permission denied`。
+                   chart 預設已是 Filesystem，此處明寫是防漂移（改回 Block ＝ 所有開通
+                   CrashLoop）。
+                 - vm.cores 2 / vm.memory 4Gi：賣給租戶的 guest 規格（拍板起點，與 Elmo
+                   實測規格一致）。chart 由這兩個值推導 limits==requests，故不可能漂開。
+                 - service.port/targetPort 8123：HAOS 前台埠，＝default_port。
+                 - networkPolicy.enabled=true：租戶隔離的第二層（第一層是 operator 的
+                   baseline NP，#279/#280）。明寫防 chart 預設漂移把它關掉。
+
+                 刻意**不**寫進本 seed 的鍵（寫了會蓋掉平台注入或誤導後人）：
+                 - persistence.storageClass：平台 `_inject_storage_class` 每次部署注入
+                   （預設 longhorn-delete）。⚠ 此鍵在 chart 端 required 且不可為空——
+                   woow-k3s 有兩個 default StorageClass（local-path 與 longhorn），
+                   落到 node-local 的 local-path ＝ 64 GiB 磁碟無副本、節點死即資料失聯。
+                 - imagePullSecrets：operator `_ensure_image_pull_secrets` 注入，且
+                   chart 自帶 paas-registry 預設（自足立場，同 home-assistant／
+                   agent-runtime——後者的 e2e 曾因空預設撞 401 ImagePullBackOff）。
+                 - vm.runStrategy：由 `cloud_service.py` 依 CloudService.state 每次
+                   組 values 時注入（suspended → Halted，否則 Always）。這是防
+                   「helm upgrade 把停權中的 VM 喚醒」的關鍵，seed 寫死任何值都會被
+                   覆寫、只會誤導後人以為那是權威來源。
+                 - nodeSelector：chart 預設已釘 kubernetes.io/arch=amd64（HAOS OVA
+                   僅 x86-64）。且 helm deep-merge 下 `{}` 蓋不掉，要清得寫 null。
+                 - networkPolicy.ingressNamespaces：刻意留空——CS ns 的 ingress 由
+                   operator baseline NP 管，兩層 allow 只會互相打架。
+                 - networkPolicy.apiServerCidrs：本 chart **沒有**此鍵（VM 不需要打
+                   apiserver；那是 open-design／hermes-agent 的 console 走 kubectl 才要），
+                   故 `_inject_apiserver_cidrs` 的 path_map 也刻意不收 'haos'。
+                 - ingress.*：本 chart **沒有** ingress 區塊（對外走平台 subdomain +
+                   Cloudflare tunnel）。寫了是死鍵，會讓後人以為 chart 支援 Ingress。 -->
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "64Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 8123}, "networkPolicy": {"enabled": true}}</field>
+            <!-- 租戶無需（也不該）填任何部署參數：HAOS 的所有設定都在開通後於它自己的
+                 網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <!-- Service Configuration。8123＝HAOS 前台埠；對外＝平台 subdomain +
+                 Cloudflare tunnel（operator expose 取「名稱排序第一個非 headless
+                 Service」＋ http-like port，本 chart 只有一顆 ClusterIP:8123）。 -->
+            <field name="default_port">8123</field>
+            <field name="ingress_enabled" eval="True"/>
+
+            <!-- Resource Requirements —— 🔴 **這三個數字填的是 quota 用量峰值，不是
+                 賣給租戶的規格**（D5／D6，#423 W1 PoC 實測回填；design §6.3）。
+                 workspace ns quota ＝ 存活 service 的 allocated_* 加總 × 3
+                 （`cloud_service._compute_ns_quota`），而本 template 的 plan cs_* 皆為 0
+                 → allocated_* 走 fallback 取這三個 min_*（`_allocated_vals_from`）。
+
+                 - min_vcpu 3：實測 Σlimits.cpu ＝ **2.015**（compute 2 ＋ init
+                   guest-console-log 15m）。欄位是 Integer，取 3 留餘裕 → quota 9 vCPU。
+                 - min_ram_gb 5.0：實測 Σrequests.memory ＝ **4.431 GiB**（compute
+                   4.375 GiB ＝ guest 4 GiB ＋ KubeVirt overhead 實測 384 MiB，加 init
+                   60M）。取 5.0 留 ~13% 餘裕 → quota 15Gi。**不是** guest 的 4Gi。
+                 - min_storage_gb 72：🔴 **不是賣給租戶的磁碟大小（那是 64 GiB，見
+                   helm_default_values.persistence.size）**。CDI v1.64 走 volume
+                   populator，import 期間 ns 內**同時存在三顆 PVC**（target ＋ prime ＋
+                   prime-scratch，各 67.8 GiB＝宣告 64Gi 經 WebhookPvcRendering 加
+                   filesystem overhead），**實測 quota used 峰值 203.5 GiB**。
+                   64×3＝192 GiB 短少 11.5 GiB → scratch PVC 被 ErrExceededQuota 拒收，
+                   而症狀只是 DataVolume 停在 ImportInProgress、要挖 events 才看得到
+                   quota 拒收。72×3＝216 GiB 實測放行（餘裕 +12.5 GiB；68 只剩 +0.5 太緊）。
+                   **看到 64 就把這裡改回去，會讓所有開通靜默卡死。**
+                 守線＝test_haos_seed_423.TestHaosQuotaModelling（由 seed values 現算、
+                 不硬編：改 vm.memory／persistence.size 而不同步這裡就會紅）。
+
+                 ⚠ 承上：本 template 的 plan **刻意不設 cs_vcpu／cs_ram_gb／cs_storage_gb**。
+                 設了會有兩個後果：(1) allocated_* 改吃 plan 值，若填「賣給租戶的
+                 64GB」就直接重演上面那個 quota 卡死；(2) `_apply_plan_spec_overlay`
+                 會把 `resources.requests/limits` 疊進 values —— 那是**容器型**的鍵，
+                 本 chart 用 `vm.cores`／`vm.memory`，疊上去是死鍵。守線＝
+                 TestHaosPlansSeed.test_plans_do_not_override_cs_spec。 -->
+            <field name="min_vcpu">3</field>
+            <field name="min_ram_gb">5.0</field>
+            <field name="min_storage_gb">72</field>
+
+            <!-- MCP 能力不在本 template（HAOS 的 MCP 生態由 smart_home / mcp-* 系列承擔）。 -->
+            <field name="mcp_enabled" eval="False"/>
+            <!-- has_admin_gui=False：HAOS 的管理者帳號由**租戶自己**在首次開機的
+                 onboarding 畫面建立，平台不生成、不持有、也無從重置。開了這個旗標會讓
+                 平台憑空生一組 admin_password 塞進 config.sensitive（chart 沒有對應鍵
+                 ＝白生），並在前台長出一顆按了必失敗的「重置密碼」按鈕（#460 能力 gate
+                 直接鏡射本欄位）。admin_password_carrier 因此維持預設、不具意義。 -->
+            <field name="has_admin_gui" eval="False"/>
+            <field name="post_deploy_init_type">none</field>
+
+            <!-- 每帳號限一。兩個理由，任一單獨成立：
+                 (1) 商業：Q5 拍板首批**限量 8 台**（waitlist）。平台沒有「全域實例
+                     上限」的機制（見 PR 說明），per-partner 上限是 seed 層唯一能承載
+                     的部分——它保證 8 台散佈在 ≥8 個帳號、不會被單一租戶一次掃光。
+                 (2) 技術：CS ns 的 ResourceQuota 硬上限 `persistentvolumeclaims: 10`，
+                     而每台 HAOS 在 import 期間短暫佔 **3 顆** PVC（target/prime/scratch）。
+                     同 workspace 併發開通 3 台以上就會撞 PVC 數量上限（design §6.3）。 -->
+            <field name="max_per_partner" eval="1"/>
+
+            <field name="is_active" eval="True"/>
+            <!-- is_hidden 維持預設 False：走 #380 金樣板上架前台販售。
+                 ⚠ 首批 8 台售罄後的下架開關＝**is_hidden=True**，且**不要**碰
+                 conceal_instances。#473（#471 的修正，已在 develop）把原本一個旗標
+                 拆成兩層，以下是 controllers/paas.py 現況實查：
+                   - 曝光層讀 is_hidden 共四處：marketplace domain（:801，同時查
+                     is_active）、template 詳情 by-id（:843）、template plans（:932）、
+                     下單建立（:2245）。翻 is_hidden=True ＝「不列、規格頁不可讀、
+                     不能再下單」，正是售罄要的效果。
+                   - 既有服務的讀取／操作端點改判 template_id.conceal_instances
+                     （:970 / :1076 / :1099 / :1195 / :1260 / :1310 / :1386 / :1406 /
+                     :1479），與 is_hidden 正交。故只翻 is_hidden 不會把已付費租戶
+                     手上 state=running 的 HAOS 鎖在門外（#464 在 hermes-agent 實測到
+                     的「詳情頁整個打不開」形態，已由 #473 消除）。
+                   - models/cloud_app_template.py:311 有 fail-loud constraint：
+                     conceal_instances=True ⟹ is_hidden=True。只有平台自動開通類
+                     （#336 那種不該讓租戶自己看到實例的）才兩個一起翻。
+                 is_active=False 也擋得住（四處曝光層都查 is_active），但它的語意是
+                 「模板停用／不可部署」（ha_paas.py:137 拿它當 deployable 安全網），
+                 售罄下架用 is_hidden 更貼語意。
+                 ⚠ 另一層：平台**沒有**全域實例上限機制，所以「限量 8 台」是營運控制
+                 （waitlist）＋本 record 的 max_per_partner=1，不是 seed 能表達的硬閘。
+                 且直接改 DB 的旗標會被下一次 -u 依本 seed 翻回（本檔 noupdate=0）
+                 ——真要下架得改這裡並發版。 -->
+
+            <field name="workload_type">vm</field>
+        </record>
+
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
              helm_value_specs above is silently skipped on -u. <function> runs on every

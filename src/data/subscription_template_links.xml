@@ -72,6 +72,15 @@
                    eval="[(6, 0, [ref('plan_opendesign_monthly'), ref('plan_opendesign_yearly')])]"/>
         </record>
 
+        <!-- #423 W5b：Home Assistant OS（VM 型）template ↔ 兩 base plan（4500/36000）。
+             v1 不做加購變體，故本 family 在 subscription_template_links_variants.xml
+             沒有對應的 (4,) append。本檔 <data noupdate="0"> ＋ (6, 0, [...]) 全量 reset
+             ＝ 每次 -u 都把 DB 的 M2M 重寫成檔案內容（變體 links 必 noupdate=0 鐵律）。 -->
+        <record id="cloud_app_haos" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_haos_monthly'), ref('plan_haos_yearly')])]"/>
+        </record>
+
         <!-- #341（Wave A）撞車收斂：HA PaaS plan（plan_ha_paas_monthly）刻意 orphan——
              不掛任何 template M2M（Wave A test_orphan_no_template_links 斷言 M2M=0，且
              storefront_hidden 已在 plan 層擋前台）。provision 端點直接把 plan ref 傳給

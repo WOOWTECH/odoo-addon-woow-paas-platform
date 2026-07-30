@@ -246,3 +246,5 @@ from . import test_cloud_service_poll_vm_branch
 from . import test_haos_suspend_resume_runstrategy
 # fix: #471 is_hidden 拆兩語意——曝光層 vs conceal_instances 實例層的行為矩陣
 from . import test_conceal_instances_split_471
+# feat: #423 W5b HAOS 上架 seed（template/base plan/link/quota 建模/W2 image pin 閘）
+from . import test_haos_seed_423
