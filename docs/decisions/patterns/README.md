@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 30 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 31 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -47,6 +47,7 @@
 | [[plan-driven-date-helper]] | subscription 日期由 plan 強制覆寫（trial / non-trial path），且與第三方 onchange 有 post-confirm coupling 時 |
 | [[two-stage-remote-provision-idempotency]] | provision method 先建遠端資源（CF tunnel / 雲端 DNS / SaaS 帳號 / k8s ns）再跑後續步驟，且 UI 把 retry 掛在 `error` 上 → 第二段失敗讓遠端資源孤兒掛著、retry 重跑第一段在雲端再建一條（永久孤兒 / 計費外洩）→ 遠端建立步驟必須被 stored-id guard 包住，每條失敗路徑保留 stored id 讓 retry 安全（單段 method 的免-guard 安全是單段性換來的，加段就要買回來） |
 | [[ns-quota-hard-limits-limitrange-lockstep]] | 新 ns 類型要加 ResourceQuota、或動既有 ns quota hard map 時：hard 一旦宣告 `limits.cpu/memory`，admission 強制 ns 內每個 container（含 init/sidecar）必帶 limits，缺者拒建且訊息隱晦 → LimitRange default（500m/512Mi）是 correctness requirement 非 best-practice，兩者必須同 PR 同落點 lock-step（出自 #278/PR #312） |
+| [[reset-async-budget-ladder]] | (a) 端點在 **HTTP request 內等 Kubernetes 收斂**（等 rollout／等 pod Ready）時 → 先問「這個等待是提交所必需，還是只想給呼叫端一個確認？」後者一律移出 request 交給既有狀態機＋輪詢；(b) 動任何 **`--atomic` / `--wait` 的 helm 呼叫點 timeout**：`--timeout` 是 per-operation，atomic 失敗會再吃一次同額 wait（自動 rollback）⇒ subprocess 上限要算 `2n + CLI 開銷`，少算會在 rollback 途中 SIGKILL helm ⇒ release 卡 `pending-rollback`＋Secret 停在沒人持有的新密碼（真機實測）；(c) 任何**跨層 timeout 預算**（前端／平台／operator）→ 宣告階梯（外層嚴格 > 內層硬上限）＋寫 gate，而不是挑「夠大的數字」：三個各自合理的預算合起來可以保證失敗（#461／F-449-3）；(d) 改**提交點**（等確認→等承諾）時，連同落庫的不變式一起重寫並在註解寫下舊語意為何不再適用。repo-lint `reset-budget-ladder` 機械強制 |
 | [[external-resource-env-token-naming]] | 平台代為在 prod/stg **共用**的外部系統（CF account/zone、雲端 DNS、SaaS 帳號）產生資源時，命名/標籤要帶可一眼辨識 prod/stg 的 env token（共用帳號裡無此 token → 孤兒清理 / 稽核無法自證歸屬）→ 注入在「平台命名的單一根」（本 repo = Odoo `naming.py` 的 `canonical_name`，一改全覆蓋 tunnel/DNS/Access 且 create/delete 天然對稱），env 源用**顯式** config（禁從 `namespace_prefix` 隱式推 prod=空字串），只注入不參與反查的標籤欄位（name/comment/tag），靠重算 name 反推的路徑（`generate_subdomain`）須 create↔delete 雙向對稱 |
 
 ### 測試紀律（multi-phase / credential 硬化）
@@ -92,6 +93,7 @@
 - [plan-driven-date-helper](plan-driven-date-helper.md)
 - [plan-gap-stop-and-report](plan-gap-stop-and-report.md)
 - [resource-ownership-vs-template-activation](resource-ownership-vs-template-activation.md)
+- [reset-async-budget-ladder](reset-async-budget-ladder.md)
 - [scope-flip-write-guard-not-ir-rule](scope-flip-write-guard-not-ir-rule.md)
 - [seed-agent-template-design](seed-agent-template-design.md)
 - [seed-topology-invariants](seed-topology-invariants.md)

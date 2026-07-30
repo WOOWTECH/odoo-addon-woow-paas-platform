@@ -58,7 +58,8 @@
         "docs/decisions/patterns/attachment-row-level-acl-and-anchor-stamping.md — skill bundle 等 ir.attachment payload 的 anchor stamping（skill 檔屬本 class）",
         "docs/decisions/patterns/external-resource-env-token-naming.md — 動 canonical_name / generate_subdomain 命名根時的 env token 注入與 create↔delete 對稱",
         "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動 cloud_service 部署路徑（_assemble_deploy_values／action_redeploy／_reset_admin_password）時：既存 release 升級走全量 values 統一管線＋reset_values 語意，禁 reuse_values=True（repo-lint 攔）",
-        "docs/decisions/patterns/hidden-template-presentation-chain.md — 動 /woow 曝光點或**既有服務的操作端點**時：先分層（曝光層 is_hidden vs 實例層 conceal_instances，#471），實例層判準用 template_id.conceal_instances（repo-lint check_conceal_instances_gate 機械攔），gate 要放在能力/狀態判準之前"
+        "docs/decisions/patterns/hidden-template-presentation-chain.md — 動 /woow 曝光點或**既有服務的操作端點**時：先分層（曝光層 is_hidden vs 實例層 conceal_instances，#471），實例層判準用 template_id.conceal_instances（repo-lint check_conceal_instances_gate 機械攔），gate 要放在能力/狀態判準之前",
+        "docs/decisions/patterns/reset-async-budget-ladder.md — 動 _reset_admin_password 的落庫／狀態語意時：提交點＝operator 回 2xx（commit-on-secret，C11′），2xx 前失敗保證叢集仍是舊密碼所以刻意不落庫、成功必 stamp upgrading 交給 cron／前端輪詢收斂；改提交點要連同不變式一起重寫，勿照舊 C11「已生效」語意把它「修正」回去"
       ]
     },
     {
@@ -100,7 +101,8 @@
         "extra/paas-operator/tests/integration/README.md — 本地 integration tests 跑法（HELM_BINARY=$(which helm) pytest -m integration）",
         "docs/decisions/patterns/ns-quota-hard-limits-limitrange-lockstep.md — 動 ResourceQuota hard map / 新 ns 類型時 LimitRange 必同 PR lock-step",
         "docs/decisions/patterns/spawn-install-values-missed-forward.md — 動上游資料→helm install values 組裝點時的系統性漏轉＋contract test",
-        "docs/decisions/patterns/external-resource-env-token-naming.md — operator 側在共用外部系統（CF）產生資源的 env token 命名紀律"
+        "docs/decisions/patterns/external-resource-env-token-naming.md — operator 側在共用外部系統（CF）產生資源的 env token 命名紀律",
+        "docs/decisions/patterns/reset-async-budget-ladder.md — 動 helm 呼叫點的 timeout、或動「在 request 內等 K8s 收斂」的 handler 時：--timeout 是 per-operation（--atomic 失敗會再吃一次 wait 做自動 rollback）⇒ subprocess 上限要算 2n＋CLI 開銷，少算會在 rollback 途中 SIGKILL helm ⇒ release 卡 pending-rollback、Secret 停在沒人持有的新密碼；跨層預算須維持階梯（repo-lint reset-budget-ladder 機械攔，CI paths 已含本目錄）"
       ]
     },
     {

@@ -1,7 +1,11 @@
 name: repo-lint
 on:
   pull_request:
-    paths: ["src/**", "scripts/audit/**"]
+    # #461：extra/paas-operator/** 持有 reset 預算階梯的**內層**常數
+    # （RESET_HARD_CAP_SECONDS 等）。沒有這一行，「只改 operator 常數」的 PR
+    # 不會觸發 repo-lint ⇒ check_reset_budget_ladder 對它完全休眠（#463 同型的
+    # CI paths 盲點：gate 寫好了卻不會被跑到）。
+    paths: ["src/**", "scripts/audit/**", "extra/paas-operator/**"]
 jobs:
   repo-lint:
     runs-on: ubuntu-latest

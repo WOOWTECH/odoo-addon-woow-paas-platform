@@ -16,6 +16,22 @@ _logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
 # Longer timeout for helm operations that may take time
 HELM_OPERATION_TIMEOUT = 120
+# #461：reset-admin-password 專屬預算。**刻意不共用** HELM_OPERATION_TIMEOUT——
+# 那個 120s 是「helm 操作大概要多久」的猜測，與 operator 端真正的上限沒有關係，
+# 而 reset 是唯一會撞到那個落差的路徑（#459 stg 實測：operator 最壞 ≈560s，
+# 平台 120s 必先斷線 ⇒ 密碼不落庫、租戶得重按第二次，冷 image cache 時必然發生）。
+#
+# 修法是宣告一條可機械檢查的階梯，而不是把數字改大：
+#
+#     前端 RESET_REQUEST_TIMEOUT_MS(90_000)
+#       > 本常數(75s)
+#         > operator RESET_HARD_CAP_SECONDS(65s，見 extra/paas-operator/src/api/releases.py)
+#
+# 由 scripts/audit/repo-lint.py 的 check_reset_budget_ladder 跨三層驗算；改任一層
+# 的數字而沒同步，那道 gate 會紅。**這個 75 比 120 小是刻意的**：reset 移除
+# rollout 等待後，request 內只剩 helm upgrade（實測 4–12s），把外層預算收到
+# operator 硬上限之上一點，逾時才能重新變成「異常訊號」而不是常態。
+RESET_CONFIG_TIMEOUT = 75
 
 
 class PaaSOperatorError(Exception):
@@ -466,9 +482,16 @@ class PaaSOperatorClient:
                 不認得本欄會靜默忽略（＝退回 config_json 既有行為），故
                 **operator 必須先發版、平台後發版**。
 
+        #461：operator 兩條路都只「下達」rollout restart、**不等它完成**（回應含
+        ``rollout_awaited: False``）。所以 2xx 的語意由「密碼已生效」收斂成
+        「密碼已是叢集權威值、且不再自動回退」——這正是 C11′ 的提交點，見
+        ``models/cloud_service.py::_reset_admin_password``。服務何時恢復由狀態機
+        表達（成功後 stamp ``upgrading`` → cron／前端輪詢 → ``running``）。
+
         Returns:
             Operator 回應 dict（含 helm_revision、config_json_patched、helm_upgraded、
-            admin_password_carrier；helm_secret 路另含 restarted_deployments）
+            rollout_awaited、admin_password_carrier；helm_secret 路另含
+            restarted_deployments）
 
         Raises:
             PaaSOperatorError: 任一子步失敗
@@ -491,7 +514,8 @@ class PaaSOperatorClient:
             'POST',
             f'/api/releases/{namespace}/{release_name}/reset-config',
             data=data,
-            timeout=HELM_OPERATION_TIMEOUT,
+            # #461：專屬預算，見模組頂端 RESET_CONFIG_TIMEOUT 的階梯說明。
+            timeout=RESET_CONFIG_TIMEOUT,
         )
 
     def uninstall_release(

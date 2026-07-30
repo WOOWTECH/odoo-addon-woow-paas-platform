@@ -19,9 +19,14 @@ unit 測試 mock 掉 ``k8s_service`` 與 ``helm_service``，只驗得到「handl
         tests/integration/test_reset_config_carrier.py -v
 """
 import base64
+import json
+import os
 import subprocess
+import time
 
 import pytest
+
+from src.api.releases import RESET_HARD_CAP_SECONDS
 
 pytestmark = pytest.mark.integration
 
@@ -71,6 +76,12 @@ metadata:
     app.kubernetes.io/component: daemon
 spec:
   replicas: 1
+  # 真 chart 的四顆 Deployment 全是 Recreate（#459 §0 實查，與 RWO PVC 一致）：
+  # 先殺舊 pod 再建新 pod。這個差異對 #461 是**實質的**——RollingUpdate 下舊 pod
+  # 會撐到新 pod Ready，helm 的 rollback wait 因此瞬間通過、量不到「第二次
+  # --timeout」；Recreate 才會讓 rollback 也真的等一次。
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: {{ .Release.Name }}-daemon
@@ -83,6 +94,20 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.slowStart }}
+      # #461：讓「重啟後的新 pod 要一段時間才 Ready」可控地重現。真 chart 的
+      # 慢來源是跨節點 pull 954MB image ＋ RWO PVC detach/attach（#459 實測
+      # 70s ＋ 19s），合成 chart 用 sleep 取代——要驗的是「handler 有沒有等」，
+      # 不是「為什麼慢」。
+      initContainers:
+      - name: slow-start
+        image: nginx:alpine
+        command: ["sleep", "30"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+      {{- end }}
       containers:
       - name: app
         image: nginx:alpine
@@ -92,6 +117,17 @@ spec:
             secretKeyRef:
               name: {{ .Release.Name }}-auth
               key: admin_password
+        {{- if .Values.breakReadiness }}
+        # #461：指向關閉的 port ⇒ 新 ReplicaSet 永遠不 Ready ⇒ `helm upgrade
+        # --atomic --wait` 必逾時並自動 rollback。這是用來量測「atomic 失敗路徑
+        # 吃兩次 --timeout」的手術刀。
+        readinessProbe:
+          tcpSocket:
+            port: 9999
+          initialDelaySeconds: 1
+          periodSeconds: 2
+          failureThreshold: 1
+        {{- end }}
         resources:
           requests:
             cpu: 10m
@@ -144,24 +180,27 @@ def carrier_chart(tmp_path):
     return str(chart_dir)
 
 
-def _install(app_client, namespace, release, chart):
+def _install(app_client, namespace, release, chart, values=None):
     resp = app_client.post(
         "/api/releases",
         json={
             "namespace": namespace,
             "name": release,
             "chart": chart,
-            "values": {},
+            "values": values or {},
         },
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["status"] == "deployed"
 
 
-def _reset_body(password, chart, carrier=None):
+def _reset_body(password, chart, carrier=None, values=None):
     body = {
         "chart": chart,
-        "values": {},
+        # reset_values=True ⇒ chart values.yaml 為 base。呼叫端（平台）一律傳全量
+        # values；測試若省略，pod template 會跟著變（例如 slowStart 消失），那就
+        # 不再是「Secret-only 升級」的形狀了。
+        "values": values or {},
         "sensitive_values": {"config": {"sensitive": {"admin_password": password}}},
         "reset_values": True,
         "reuse_values": False,
@@ -169,6 +208,37 @@ def _reset_body(password, chart, carrier=None):
     if carrier is not None:
         body["admin_password_carrier"] = carrier
     return body
+
+
+def _wait_rollout(namespace, deployment, timeout_seconds=180):
+    """等 Deployment 真的滾完（install 不帶 --wait，所以要自己等）。"""
+    subprocess.run(
+        ["kubectl", "rollout", "status", f"deployment/{deployment}",
+         "-n", namespace, f"--timeout={timeout_seconds}s"],
+        check=True, capture_output=True,
+    )
+
+
+def _rollout_in_progress(namespace, deployment, probe_seconds=2):
+    """True ⇒ 此刻 rollout **尚未**完成（用 kubectl 自己的判準，不自研）。"""
+    probe = subprocess.run(
+        ["kubectl", "rollout", "status", f"deployment/{deployment}",
+         "-n", namespace, f"--timeout={probe_seconds}s"],
+        capture_output=True,
+    )
+    return probe.returncode != 0
+
+
+def _release_status(namespace, release):
+    """helm 眼中的 release 狀態（`deployed` / `failed` / `pending-*` …）。
+
+    用 operator 自己解析到的同一個 helm binary，避免本機 PATH 上是另一版。
+    """
+    helm_bin = os.environ.get("HELM_BINARY") or "helm"
+    raw = subprocess.check_output(
+        [helm_bin, "status", release, "-n", namespace, "-o", "json"],
+    ).decode()
+    return json.loads(raw)["info"]["status"]
 
 
 def _secret_password(namespace, release):
@@ -278,3 +348,118 @@ def test_config_json_carrier_reproduces_the_449_failure_on_such_a_chart(
     # fail-safe 邊界：helm 已回滾，Secret 回到舊密碼 —— 租戶不會被鎖死，只是
     # 換不了密碼（#449 描述的「fail-safe 有效不鎖死」）。
     assert _secret_password(test_namespace, release) == "chart-default-password"
+
+
+# ── #461：把「不等 rollout」與「atomic 失敗吃兩次 --timeout」變成量測 ──────────
+#
+# 這兩條是 #461 的核心機制，而 unit 測試永遠測不到它們：mock 掉 kubectl 之後
+# 「有沒有等」只是「有沒有呼叫某個方法」，量不到牆鐘；`--atomic` 的自動 rollback
+# 更是 helm 自己的行為，mock 裡根本不存在。#459 就是因此讓 120s 預算的問題一路
+# 活到 stg 真機才現形（合成 chart：小 image、無 PVC、同節點 ⇒ 永遠不逾時）。
+
+
+def test_helm_secret_reset_returns_before_pods_are_ready(
+    app_client, test_namespace, carrier_chart
+):
+    """#461：reset 必須在 rollout 還沒完成時就回 200。
+
+    fixture 前置條件（**必要**）：先等首裝滾完。若 pod 當下不是 Ready，
+    `helm upgrade --atomic --wait` 會等它 ⇒ 逾時 ⇒ 測到的是 atomic 失敗路徑
+    （下一條），而不是「不等 rollout」。
+
+    slowStart 讓**重啟後**的新 pod 要 ~30s 才 Ready，但升級當下的舊 pod 是
+    Ready 的 ⇒ Secret-only 的 `--wait` 立即通過 ⇒ 剩下的等待就只有 rollout。
+    修前（等 rollout status）這裡會花 >30s；修後應該 <20s。
+    """
+    release = "carrier-nowait-rel"
+    values = {"slowStart": True}
+    _install(app_client, test_namespace, release, carrier_chart, values=values)
+    _wait_rollout(test_namespace, f"{release}-daemon")
+    _wait_rollout(test_namespace, f"{release}-console")
+
+    started = time.monotonic()
+    resp = app_client.post(
+        f"/api/releases/{test_namespace}/{release}/reset-config",
+        # values 必須帶上 slowStart：reset_values=True 之下省略它會讓 initContainer
+        # 從 pod template 消失＝pod template 有變，`--wait` 就會等新 pod（形狀不對）。
+        json=_reset_body("rotated-nowait", carrier_chart, carrier="helm_secret",
+                         values=values),
+    )
+    elapsed = time.monotonic() - started
+    print(f"\n[#461] helm_secret reset wall-clock = {elapsed:.1f}s (門檻 20s)")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["rollout_awaited"] is False
+    assert elapsed < 20, (
+        f"reset 花了 {elapsed:.1f}s —— 超過門檻代表它在等 rollout（新 pod 要 ~30s "
+        f"才 Ready）。這正是 #461：等待落在 request 內 ⇒ 冷 image cache 時必逾時"
+    )
+
+    # 提交點已完成：Secret 換新、兩顆都下了 restart。
+    assert _secret_password(test_namespace, release) == "rotated-nowait"
+    for suffix in ("daemon", "console"):
+        assert _restarted_at(test_namespace, f"{release}-{suffix}"), (
+            f"{suffix} 沒有 restartedAt ⇒ 新密碼不會生效（chart 沒有 "
+            f"checksum/secret，helm 不會自己滾 pod）"
+        )
+
+    # 而且此刻 rollout **確實還沒完成** —— 否則 <20s 只是「pod 起太快」，
+    # 斷言就沒有牙（fixture 的 slowStart 失效時這裡會抓到）。
+    assert _rollout_in_progress(test_namespace, f"{release}-daemon"), (
+        "daemon rollout 已完成 ⇒ slowStart fixture 沒生效，上面的時間斷言不成立"
+    )
+
+
+def test_atomic_failure_rolls_secret_back_within_hard_cap(
+    app_client, test_namespace, carrier_chart
+):
+    """#461：`--atomic` 失敗路徑要吃兩次 `--timeout`，subprocess 上限必須蓋住。
+
+    `helm --timeout` 是 per-operation：`--atomic` 失敗時 helm 會再跑一次帶 wait 的
+    rollback。subprocess 上限只給「一次 timeout + 零頭」會在 rollback **進行中**
+    SIGKILL helm ⇒ release 卡 `pending-*`、Secret 停在沒人持有的新密碼 ⇒ 打破
+    「2xx 之前的失敗保證叢集仍是舊密碼」（C11′ 的前提）。
+
+    breakReadiness 讓新 ReplicaSet 永遠不 Ready ⇒ 強制一次真的 atomic 失敗。
+    **slowStart 同時開著是刻意的**：Recreate ＋ 慢啟動讓 rollback 之後的那顆新 pod
+    也要 ~30s 才 Ready ⇒ helm 的 rollback wait 也會用滿一次 `--timeout` ⇒ 這條測試
+    才真的量到 `2n`（只開 breakReadiness 時舊 pod 會撐著、rollback 瞬間通過，
+    量到的是 1n，斷言就沒有牙）。
+
+    紅燈對照：把 RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS 改回 `n+10`(25) 重跑，
+    helm 會在 rollback 途中被 SIGKILL ⇒ release status 卡 `pending-rollback`。
+    """
+    release = "carrier-atomic-rel"
+    values = {"slowStart": True}
+    _install(app_client, test_namespace, release, carrier_chart, values=values)
+    _wait_rollout(test_namespace, f"{release}-daemon")
+    _wait_rollout(test_namespace, f"{release}-console")
+
+    started = time.monotonic()
+    resp = app_client.post(
+        f"/api/releases/{test_namespace}/{release}/reset-config",
+        json=_reset_body("rotated-atomic", carrier_chart, carrier="helm_secret",
+                         values={**values, "breakReadiness": True}),
+    )
+    elapsed = time.monotonic() - started
+    print(
+        f"\n[#461] atomic 失敗路徑 wall-clock = {elapsed:.1f}s "
+        f"(hard cap {RESET_HARD_CAP_SECONDS}s；2n+O 的實測驗算)"
+    )
+
+    assert resp.status_code == 500, resp.text
+    assert "chart Secret" in resp.json()["detail"]
+    assert elapsed < RESET_HARD_CAP_SECONDS, (
+        f"失敗路徑花了 {elapsed:.1f}s，超過 operator 自己宣告的硬上限 "
+        f"{RESET_HARD_CAP_SECONDS}s ⇒ 外層預算階梯（平台 75s／前端 90s）失效"
+    )
+
+    # 最關鍵的一條：rollback **跑完了**（沒被腰斬），所以叢集回到舊密碼。
+    assert _secret_password(test_namespace, release) == "chart-default-password", (
+        "Secret 沒有回到舊密碼 ⇒ atomic rollback 被 subprocess 上限腰斬 ⇒ "
+        "租戶會被鎖在一把沒人持有的密碼上"
+    )
+    status = _release_status(test_namespace, release)
+    assert not status.startswith("pending"), (
+        f"release 卡在 {status} ⇒ helm 在收尾途中被 kill（同上，預算不足）"
+    )

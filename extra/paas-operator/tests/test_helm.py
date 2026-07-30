@@ -466,6 +466,70 @@ class TestHelmService:
         assert "--username" not in cmd
         assert "--password" not in cmd
 
+    # ── #461: per-call timeout plumbing ────────────────────────────────────
+
+    @staticmethod
+    def _upgrade_stdout():
+        return json.dumps({
+            "name": "test-release",
+            "namespace": "paas-ws-test",
+            "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+            "chart": {"metadata": {"name": "mcp-server", "appVersion": "1.0.0"}},
+        })
+
+    @patch("subprocess.run")
+    def test_upgrade_without_timeouts_is_behaviour_neutral(self, mock_run, helm_service):
+        """#461：不傳 timeout 的呼叫端一行都不能變。
+
+        `--timeout` 缺席 ⇒ helm 用自己的 5m 預設（改動前的實況），subprocess 上限
+        仍是 settings.helm_timeout。install / redeploy / reconfigure 全走這條，
+        本次只有 reset 路徑帶界，blast radius 必須為零。
+        """
+        mock_run.return_value = Mock(returncode=0, stdout=self._upgrade_stdout(), stderr="")
+
+        helm_service.upgrade(
+            namespace="paas-ws-test", name="test-release", chart="oci://example/mcp-server",
+        )
+
+        assert "--timeout" not in mock_run.call_args[0][0]
+        assert mock_run.call_args.kwargs["timeout"] == helm_service.timeout
+
+    @patch("subprocess.run")
+    def test_upgrade_renders_timeout_and_bounds_subprocess(self, mock_run, helm_service):
+        """兩個預算各管一段，不可互相推導。
+
+        `--timeout` 只約束 helm 等 K8s 資源就緒的那一段；subprocess 上限管整個
+        CLI 進程。reset 路徑刻意讓後者 = 2×前者 + CLI 開銷，因為 `--atomic` 失敗
+        時 helm 會再跑一次帶 wait 的 rollback——上限抓太緊會把 rollback 腰斬。
+        """
+        mock_run.return_value = Mock(returncode=0, stdout=self._upgrade_stdout(), stderr="")
+
+        helm_service.upgrade(
+            namespace="paas-ws-test", name="test-release", chart="oci://example/mcp-server",
+            atomic=True, timeout_seconds=15, subprocess_timeout_seconds=45,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[cmd.index("--timeout") + 1] == "15s"
+        assert "--atomic" in cmd
+        assert mock_run.call_args.kwargs["timeout"] == 45
+
+    @patch("subprocess.run")
+    def test_subprocess_timeout_message_reports_the_effective_budget(
+        self, mock_run, helm_service,
+    ):
+        """逾時訊息要講**這次**的預算，不是服務層預設——否則 log 無法判讀。"""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="helm", timeout=45)
+
+        with pytest.raises(HelmException) as error:
+            helm_service.upgrade(
+                namespace="paas-ws-test", name="test-release",
+                chart="oci://example/mcp-server", subprocess_timeout_seconds=45,
+            )
+
+        assert "45s" in error.value.message
+        assert str(helm_service.timeout) not in error.value.message
+
     @patch("subprocess.run")
     def test_get_release(self, mock_run, helm_service):
         """Test get release info."""

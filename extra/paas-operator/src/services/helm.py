@@ -24,6 +24,17 @@ from src.models.schemas import (
 logger = logging.getLogger(__name__)
 
 
+# #461：helm CLI 的**非-wait** 開銷（OCI pull ＋ render ＋ apply），供呼叫端推算
+# subprocess 預算用。**必須與 `--timeout` 分開記**：`--timeout` 只約束 helm 等待
+# Kubernetes 資源就緒的那一段，不約束 chart 下載與 render。
+#
+# 依據（#459 stg 實測）：Secret-only 的 `helm upgrade` 整次牆鐘 10.7s／11.9s，
+# 而其中 wait 段 ≈0（不動 pod template ⇒ 既有 pod 已 Ready，--wait 立即通過）
+# ⇒ 非-wait 開銷實測上界 ≈12s。`--atomic` 失敗時的自動 rollback 走 stored
+# manifest、不重拉 chart，其 apply 再 ~1–2s ⇒ 15s 蓋住兩次 apply。
+HELM_CLI_OVERHEAD_SECONDS = 15
+
+
 # #317: post-renderer that stamps helm.sh/resource-policy: keep on every PVC so
 # chart-owned PVCs survive `helm uninstall`. helm decides deletion from the STORED
 # manifest, not live objects, so keep must be present at install/upgrade time.
@@ -350,6 +361,7 @@ class HelmService:
         args: List[str],
         input_data: Optional[str] = None,
         capture_output: bool = True,
+        timeout: Optional[int] = None,
     ) -> subprocess.CompletedProcess:
         """Execute a Helm command.
 
@@ -357,6 +369,8 @@ class HelmService:
             args: Command arguments (without 'helm' prefix)
             input_data: Optional stdin input
             capture_output: Whether to capture stdout/stderr
+            timeout: Per-call subprocess timeout override (seconds). ``None``
+                keeps the service-wide ``settings.helm_timeout``.
 
         Returns:
             CompletedProcess object
@@ -364,6 +378,7 @@ class HelmService:
         Raises:
             HelmException: If command fails
         """
+        effective_timeout = timeout if timeout is not None else self.timeout
         cmd = [self.helm_bin] + args
         # issue #29: redact the repo token (--password) before logging / before it
         # lands in HelmException.command. NEVER log/raise the raw cmd.
@@ -380,7 +395,7 @@ class HelmService:
                 input=input_data if input_data else None,
                 capture_output=capture_output,
                 text=True,
-                timeout=self.timeout,
+                timeout=effective_timeout,
                 check=False,
             )
 
@@ -395,7 +410,7 @@ class HelmService:
 
         except subprocess.TimeoutExpired as e:
             raise HelmException(
-                message=f"Helm command timed out after {self.timeout}s",
+                message=f"Helm command timed out after {effective_timeout}s",
                 command=safe_cmd,
                 stderr=str(e),
             )
@@ -594,6 +609,8 @@ class HelmService:
         username: Optional[str] = None,
         password: Optional[str] = None,
         atomic: bool = False,
+        timeout_seconds: Optional[int] = None,
+        subprocess_timeout_seconds: Optional[int] = None,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
 
@@ -609,12 +626,30 @@ class HelmService:
             repo: Optional classic Helm repo URL for stateless fetch (--repo).
             username: Optional repo username for a private Helm repo (--username).
             password: Optional repo password/token for a private repo (--password).
+            timeout_seconds: Renders ``--timeout {n}s`` — bounds how long helm waits
+                for *one* Kubernetes operation. ``None`` omits the flag entirely
+                (helm's own 5m default) ＝ pre-#461 behaviour.
+            subprocess_timeout_seconds: Per-call subprocess ceiling. ``None`` keeps
+                ``settings.helm_timeout``.
 
         Returns:
             Updated release information
 
         Raises:
             ValueError: If chart is not provided (Helm doesn't store original chart URL)
+
+        Note:
+            #461 — a caller passing both MUST size the subprocess ceiling for the
+            **failure** path, not the success path. ``--timeout`` is *per
+            operation*: when ``--atomic`` fails, helm runs a second waiting
+            operation (its automatic rollback), so the worst case is
+            ``2 * timeout_seconds + HELM_CLI_OVERHEAD_SECONDS``. A ceiling sized
+            ``timeout_seconds + slack`` SIGKILLs helm **mid-rollback**, leaving the
+            release ``pending-*`` with an undefined Secret — i.e. it breaks the very
+            invariant atomic exists to provide. That arithmetic is deliberately NOT
+            done here: it lives with the caller that owns the budget ladder
+            (``api/releases.py`` RESET_* constants) so one authority is readable by
+            both the unit test and the repo-lint gate.
         """
         validate_namespace(namespace)
 
@@ -654,6 +689,10 @@ class HelmService:
             args.append("--reuse-values")
         if atomic:
             args.append("--atomic")
+        # #461: omitted when None so every pre-existing caller keeps helm's 5m
+        # default verbatim (behaviour-neutral); only the reset path bounds it.
+        if timeout_seconds is not None:
+            args.extend(["--timeout", f"{timeout_seconds}s"])
 
         # Classic Helm repo (stateless) — mirrors install(); see its note.
         if repo:
@@ -678,7 +717,7 @@ class HelmService:
                 temp_file = f.name
 
         try:
-            result = self._run_command(args)
+            result = self._run_command(args, timeout=subprocess_timeout_seconds)
             release_data = json.loads(result.stdout)
             return self._parse_release_info(release_data)
         finally:
