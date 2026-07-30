@@ -666,6 +666,11 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
     state instead of being suspended. VMs map to `runStrategy` instead:
     Halted (stop the guest, keep the definition + disk) / Always.
 
+    #423 W6.3 — 三種 workload **一律都查、都處理**：一個 release 可以同時擁有
+    容器與 VM（HAOS chart 0.1.2 起有 xff-proxy Deployment + VirtualMachine）。
+    早期版本只在沒有容器 workload 時才查 VM，混合拓撲下等於 suspend 只停了
+    proxy、VM 照跑照計費——詳見下方 VM lookup 前的註解。
+
     Args:
         namespace: Release namespace
         name: Release name
@@ -688,45 +693,64 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
             label_selector=selector,
         )
 
-        # Only look for VMs when there is no container workload. Keeps the
-        # existing (overwhelmingly common) path at exactly the same cost and
-        # avoids a CRD lookup on clusters without KubeVirt.
+        # 三種 workload 一律都查、都處理——**不再**拿「有沒有容器 workload」當閘門。
+        #
+        # W4 原本只在 deployments 與 statefulsets 都空時才查 VM，為的是替沒有
+        # KubeVirt 的叢集省一次 CRD lookup。那個前提假設「一個 release 不是純容器
+        # 就是純 VM」，而它在 chart 0.1.2 替 HAOS 加上 xff-proxy Deployment 的當下
+        # 就破了：release 同時擁有 Deployment 與 VirtualMachine，閘門於是永遠不成立，
+        # suspend 只把 proxy scale 到 0，VM 從頭到尾沒有被 patch runStrategy。
+        #
+        # stg 實測（#423 W6.3 紅燈，現場 paas-ws-stg-0f5bf95d / svc-5851cdbf）：
+        # Odoo state=suspended、proxy replicas=0，但 VM 仍 Running，ns quota 只釋放
+        # 50m —— VM 的 2000m/4.4Gi 照燒。這比 W4 修掉的 404 更危險：欠費停權在帳面上
+        # 「成功」了，成本卻全額繼續產生，沒有任何錯誤訊號可循（operator log 整段只有
+        # get deployments/statefulsets + scale deployment，零 VM 操作）。
+        #
+        # 省下一次 lookup 的代價，是把「這個 release 究竟有哪些 workload」變成基於
+        # chart 拓撲的猜測。混合拓撲只會越來越多（proxy / sidecar / 只有 init 的
+        # chart），所以改成無條件查詢：正確性不該依賴 chart 長什麼樣子。代價是沒有
+        # KubeVirt 的叢集每次 scale 多付一次必定失敗的 CRD lookup，由下面既有的
+        # CRD-absent 容忍吸收。
         virtualmachines = []
-        if not deployments and not statefulsets:
-            try:
-                virtualmachines = k8s_service.get_virtualmachines(
-                    namespace=namespace,
-                    label_selector=selector,
+        try:
+            virtualmachines = k8s_service.get_virtualmachines(
+                namespace=namespace,
+                label_selector=selector,
+            )
+        except KubectlException as e:
+            # ⚠ Narrow to "the CRD does not exist". Everything else —
+            # RBAC Forbidden, a 30s timeout, a missing kubectl — must
+            # NOT be folded into "no VM workload".
+            #
+            # This is not hypothetical: KubeVirt CRDs are already
+            # installed on woow-k3s while the operator ClusterRole has
+            # not yet been republished with the kubevirt.io apiGroup
+            # (chart 0.1.19 still in the CI queue). With a blanket
+            # catch, the very first VM suspend would go
+            #   Forbidden → 404 → _do_suspend writes state=error
+            # leaving an unpaid VM running — precisely the failure this
+            # branch exists to fix, re-created one layer up.
+            #
+            # 拆掉閘門後這條規則更要緊：混合拓撲下容器那半會成功，一個被吞掉的
+            # Forbidden 會讓端點回 200「已 suspend」，而 VM 依然在跑——正是上面
+            # 那個「成功地沒停機」的故障。所以只有 CRD-absent 能被容忍。
+            #
+            # Note the deliberate asymmetry with the container path
+            # above: get_deployments/get_statefulsets do not catch at
+            # all, so their failures surface as 500. VM lookups get one
+            # narrow exemption and nothing more.
+            if not KubernetesService.is_crd_absent_error(e):
+                logger.error(
+                    f"VirtualMachine lookup failed for {namespace}/{name} "
+                    f"(not a missing-CRD error — refusing to report "
+                    f"'no workloads'): {e.stderr}"
                 )
-            except KubectlException as e:
-                # ⚠ Narrow to "the CRD does not exist". Everything else —
-                # RBAC Forbidden, a 30s timeout, a missing kubectl — must
-                # NOT be folded into "no VM workload".
-                #
-                # This is not hypothetical: KubeVirt CRDs are already
-                # installed on woow-k3s while the operator ClusterRole has
-                # not yet been republished with the kubevirt.io apiGroup
-                # (chart 0.1.19 still in the CI queue). With a blanket
-                # catch, the very first VM suspend would go
-                #   Forbidden → 404 → _do_suspend writes state=error
-                # leaving an unpaid VM running — precisely the failure this
-                # branch exists to fix, re-created one layer up.
-                #
-                # Note the deliberate asymmetry with the container path
-                # above: get_deployments/get_statefulsets do not catch at
-                # all, so their failures surface as 500. VM lookups get one
-                # narrow exemption and nothing more.
-                if not KubernetesService.is_crd_absent_error(e):
-                    logger.error(
-                        f"VirtualMachine lookup failed for {namespace}/{name} "
-                        f"(not a missing-CRD error — refusing to report "
-                        f"'no workloads'): {e.stderr}"
-                    )
-                    raise
-                logger.info(
-                    f"No KubeVirt CRD in this cluster; skipping VirtualMachine "
-                    f"lookup for {namespace}/{name}"
-                )
+                raise
+            logger.info(
+                f"No KubeVirt CRD in this cluster; skipping VirtualMachine "
+                f"lookup for {namespace}/{name}"
+            )
 
         if not deployments and not statefulsets and not virtualmachines:
             raise HTTPException(
