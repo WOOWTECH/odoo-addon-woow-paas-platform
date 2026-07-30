@@ -16,10 +16,33 @@
 W5a 的收斂做法是把判定抽成單一事實源 ``CloudService._is_release_ready``，
 兩層都呼叫它。#1–#6 直接測該判定，#7–#10 測兩個 controller 呼叫點確實走到
 同一條路（＝重構的驗收）。
+
+**2026-07-31 更新（F-423-1 Step 1）**：上面「容器型邏輯在 pods 為空時回 True」那句
+描述的是 W5a 當時的狀態；容器分支已經一併改成 fail-closed（#456 實錄兩筆「壞掉卻
+顯示 Running」）。連帶地，W5a 對「純 VM 的 pods 是空的」這個假設也被實測推翻——見
+下面 ``_VIRT_LAUNCHER`` 的說明。本檔因此有三類測試：VM fail-closed（W5a 原有）、
+container fail-closed（Step 1 新語意）、以及兩層 poll 的端到端鎖。
 """
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
+
+
+# KubeVirt 的 VM 跑在 virt-launcher pod 裡，而 haos chart 把
+# `app.kubernetes.io/instance` 標在 VirtualMachine 的 pod template 上 —— 所以那顆
+# pod **帶著** operator 抓 pod 用的 selector，一個 Running 的 VM 在 `get_status` 的
+# `pods` 裡看得到。2026-07-31 於 woow-k3s 實測：
+#
+#   NAME                                    READY  STATUS   LABELS
+#   virt-launcher-svc-5851cdbf-haos-7b876   2/2    Running  app.kubernetes.io/instance=svc-5851cdbf,...
+#
+# W5a 當時的假設相反（以為純 VM 的 `pods` 是空的，靠容器端 fail-open 才不會卡住），
+# 那句話寫進了 `cloud_service.py` 的註解，也寫進了下面幾條 VM 測試的 fixture。
+# F-423-1 Step 1 把容器端的空陣列改成 fail-closed 之後，這個差異就從「碰巧不影響」
+# 變成「fixture 不真實就會紅」——故補上這顆 pod，讓 VM 的 fixture 反映實測。
+_VIRT_LAUNCHER = [{
+    'name': 'virt-launcher-svc-test-7b876', 'phase': 'Running', 'ready': '2/2',
+}]
 
 
 def _status(release_status='deployed', pods=None, **vm_fields):
@@ -110,6 +133,7 @@ class TestReadinessDecision(_Base):
         ready, _ = svc._is_release_ready(_status(
             vm_included=True,
             vmis=[{'name': 'svc-test', 'phase': 'Running', 'ready': True}],
+            pods=_VIRT_LAUNCHER,
         ))
 
         self.assertTrue(ready)
@@ -163,11 +187,12 @@ class TestReadinessDecision(_Base):
             vm_included=True,
             vmis=[{'name': 'svc-test', 'phase': 'Running', 'ready': True}],
             datavolume_retrieval_error='CRD missing',
+            pods=_VIRT_LAUNCHER,
         ))
 
         self.assertTrue(ready, "DataVolume 錯誤不該擋住已 Ready 的 VM")
 
-    # ---- container：characterization（釘住現行行為，本輪不修）-----------
+    # ---- container：F-423-1 Step 1 之後同樣 fail-closed --------------------
 
     def test_5_container_with_no_pods_is_fail_closed(self):
         """容器型 + 無 pod → **不可就緒**（F-423-1 Step 1，2026-07-31 翻轉）。
@@ -409,6 +434,7 @@ class TestControllerLayerUsesSharedDecision(_Base):
         self._run_update(svc, _status(
             vm_included=True,
             vmis=[{'name': 'svc-test', 'phase': 'Running', 'ready': True}],
+            pods=_VIRT_LAUNCHER,
         ))
 
         self.assertEqual(svc.state, 'running')

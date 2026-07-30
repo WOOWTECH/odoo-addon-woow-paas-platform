@@ -1421,10 +1421,18 @@ class CloudService(models.Model):
             vm_ready, detail = self._is_vm_ready(status)
             if not vm_ready:
                 return vm_ready, detail
-            # MINOR-2：VM 就緒後仍要看容器面。v1 的 haos chart 只有 VM，但
-            # template 日後若啟用 MCP sidecar、或 chart 加了輔助 Deployment，
-            # 只看 VMI 會在那些容器還沒起來時就報就緒。
-            # 容器端對「pods 為空」回 True，所以這個合取不會讓純 VM 卡住。
+            # MINOR-2：VM 就緒後仍要看容器面。template 日後若啟用 MCP sidecar、
+            # 或 chart 加了輔助 Deployment，只看 VMI 會在那些容器還沒起來時就
+            # 報就緒。
+            #
+            # ⚠ 這裡原本寫「容器端對『pods 為空』回 True，所以這個合取不會讓純
+            # VM 卡住」——那句話的**前提是錯的**（F-423-1 Step 1 實測推翻）：
+            # KubeVirt 的 VM 跑在 virt-launcher pod 裡，而 haos chart 把
+            # `app.kubernetes.io/instance` 標在 VirtualMachine 的 pod template 上，
+            # virt-launcher 因此**帶著** operator selector 用的那個標籤（實測
+            # `virt-launcher-svc-…-haos` 回報 `2/2`）。所以純 VM 的 `pods` 從來
+            # 不是空的，容器閘是**憑自身條件**通過的，不靠任何 fail-open。
+            # 這個事實在 Step 1 之後從「碰巧成立」變成「必要條件」。
             return self._is_container_ready(status)
         return self._is_container_ready(status)
 
@@ -1432,32 +1440,41 @@ class CloudService(models.Model):
     def _is_container_ready(status):
         """容器型就緒判定。
 
-        「``pods`` 為空」有**兩個成因**，本方法對它們的處置刻意不同——分辨的依據
-        就是 operator 一起回來的 ``pod_retrieval_error``（#484）：
+        **fail-closed**：沒有看到「至少一顆 Running 且容器全 ready 的 pod」，就不算
+        就緒。``pods`` 為空的兩個成因處置相同，只在理由字串上區分：
 
-        1. **查詢成功、真的還沒有 pod** —— ``pod_retrieval_error`` 是 ``None``。
-           回 True（fail-open），**這是既知且刻意保留的行為**（F-423-1 / design
-           §4.1）：容器型服務有一個合法的短暫狀態是「helm release 已 deployed 但
-           pod 還沒被 controller 建出來」，改成 fail-closed 會讓**所有現存租戶服務**
-           多卡一輪 poll，風險大於收益。characterization test 釘住它，本 PR 不動。
-        2. **查詢本身失敗** —— ``pod_retrieval_error`` 有值（RBAC 掉了、API server
+        1. **查詢本身失敗** —— ``pod_retrieval_error`` 有值（RBAC 掉了、API server
            抖動…）。operator 此時仍回 **HTTP 200**、``pods`` 保持空陣列
-           （``api/releases.py``），所以舊碼會把它讀成第 1 種而翻 ``running``——
-           平台從來沒看過任何一顆 pod 卻宣告服務就緒。這一種 fail-closed。
+           （``api/releases.py``），所以呼叫端不讀這個欄位就會誤讀成第 2 種（#484）。
+        2. **查詢成功、真的一顆 pod 都沒有** —— ``pod_retrieval_error`` 是 ``None``。
 
-        為什麼第 2 種可以修而第 1 種不行：F-423-1 拒絕的成本（所有服務多卡一輪
-        poll）**只存在於第 1 種**；正常過渡期 ``pod_retrieval_error`` 是 ``None``，
-        所以只擋第 2 種的代價是零。
+        第 2 種原本回 True（fail-open，F-423-1 / design §4.1），理由是「容器型有一個
+        合法的短暫狀態是 helm release 已 deployed 但 pod 還沒被 controller 建出來，
+        改 fail-closed 會讓所有現存租戶服務多卡一輪 poll」。**F-423-1 Step 1
+        (2026-07-31) 翻掉了它**，因為評估推翻了這個取捨的兩邊：
 
-        與 VM 分支對稱：``_is_vm_ready`` 對 ``vmi_retrieval_error`` 就是這樣做的，
-        而 operator schema 把規則寫在**容器**欄位上——``vmi_retrieval_error`` 的
-        說明原文是「Mirrors pod_retrieval_error: the caller MUST NOT read an empty
-        vmis list as 'no VM' while this is set」。當初規則寫對了、實作只落在 VM 邊。
+        - **代價被高估**：poll 只撈 deploying / upgrading / initializing，所以「多卡
+          一輪」只發生在**正在轉移**的服務上，對已 ``running`` 的現存機隊零影響；
+          而一輪是前台 5 秒、cron 60 秒。
+        - **收益被低估**：``pods`` 為空**不必然是短暫的**。ResourceQuota 拒絕 pod
+          建立時，ReplicaSet 根本產不出 Pod 物件（``FailedCreate``），空陣列會**永久
+          持續**；而誤報是**黏住**的（寫進 ``running`` 後沒有任何東西會再 poll 它），
+          15 個 template 有 13 個 ``post_deploy_init_type='none'``、連 post-deploy
+          init 那層巧合的網都沒有。#456 就是實錄：兩筆 hermes-agent 永久壞掉，
+          DB 與 UI 卻都顯示 Running/ONLINE。
+
+        ⚠ 注意這裡**只**對「空陣列」改判。``pods`` 非空但沒有 Running 的（例如排程
+        失敗卡 Pending、或 maxPods 滿）本來就回 False，那條路沒有改動。
+
+        殘餘風險與封頂：若某 chart 的 pod 不帶 ``app.kubernetes.io/instance``
+        （operator 的 selector），服務會從「假就緒」變成「永久卡 deploying」。合併前
+        已逐一實證現行 15 個 template 涵蓋的 9 支 chart 都帶該標籤；長期由 #489 的
+        部署 age timeout 封頂。
         """
         if status.get('pod_retrieval_error'):
-            # 硬失效：查詢失敗＝狀態未知。不會自己好，且外觀與「pod 還沒建出來」
-            # 完全相同 → 必須是 HARD（`_log_not_ready` 會升 warning），否則正式
-            # 環境的 INFO 級 log 一行都看不到。
+            # 硬失效：查詢失敗＝狀態未知。不會自己好 → 必須是 HARD
+            # （`_log_not_ready` 會升 warning），否則正式環境的 INFO 級 log
+            # 一行都看不到。
             return False, (
                 f"HARD: pod lookup failed: {status['pod_retrieval_error']}"
             )
@@ -1465,8 +1482,13 @@ class CloudService(models.Model):
         pods = status.get('pods') or []
         # Only Running-phase pods — terminators would block readiness forever
         active_pods = [p for p in pods if p.get('phase') == 'Running']
+        if not pods:
+            # 查得到、但一顆 pod 都沒有。可能是合法的建立中窗口，也可能是永久的
+            # （quota 擋住 Pod 物件建立）。兩者在這一層**分不出來**，所以 HARD——
+            # 分辨要靠時間，那是 #489 的職責。
+            return False, 'HARD: no pods found for this release'
         if not active_pods:
-            return (not pods), 'no active pods'
+            return False, 'no active pods'
         ready = all(
             '/' in pod.get('ready', '0/0')
             and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
