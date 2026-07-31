@@ -925,7 +925,7 @@ class PaasController(HiddenChainMixin, Controller):
         # （api_template_plans 完全不濾 unit）照樣列得出價目，變成「卡片說不知道、
         # 點進去有價錢」。那是 #478 的鏡像。判準與年繳-only 的 fallback 同源：
         # **有價格就該顯示**，「不渲染」只保留給真的沒有可見 plan。
-        # 跨端點一致性由 test_pricing_matches_visible_plans_endpoint 實打
+        # 跨端點一致性由 test_card_price_exists_in_the_plans_endpoint 實打
         # api_template_plans 比對（不是就地重寫過濾條件）。
         for unit in ('month', 'year'):
             scoped = visible.filtered(lambda p: p.sh_unit == unit)
