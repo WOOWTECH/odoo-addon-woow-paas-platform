@@ -260,3 +260,5 @@ from . import test_cloud_service_deploy_timeout
 from . import test_suspended_redeploy_state_482
 # fix: #497 #482 既有卡死資料收斂回停權＋訂閱已恢復者自癒（migration＋cron 縱深）
 from . import test_stuck_suspended_converge_497
+# fix: #478 marketplace 卡片／configure header 價格標籤（起價摘要，移除硬編 Free）
+from . import test_marketplace_price_label_478
