@@ -2653,7 +2653,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'state': 'upgrading',
                 'helm_values': json.dumps(merged_values),
                 'helm_chart_version': version or service.helm_chart_version,
-                'last_upgraded_at': datetime.now(),
+                # ⚠ `fields.Datetime.now()`（UTC）而**不是** `datetime.now()`
+                # （本機時區）。#489 讓這個欄位從「前台顯示用」變成 age timeout
+                # 的**判定用**錨：伺服器時區若不是 UTC，錨與 `fields.Datetime.now()`
+                # 就不同基準——UTC+8 會讓 age 算成負的（保護靜默失效），UTC-x 會
+                # 讓 age 虛增（誤殺）。repo-lint `transition-anchor-utc` 機械攔。
+                'last_upgraded_at': fields.Datetime.now(),
                 'error_message': False,
                 'addon_update_pending': addon_changed,
             })
@@ -2801,10 +2806,11 @@ class PaasController(HiddenChainMixin, Controller):
 
             # #489：rollback 也是一次 helm 寫入，`last_upgraded_at` 是它的時間
             # 錨。不記的話 age timeout 會退回首裝時間，rollback 一發出就被判逾時。
+            # （`fields.Datetime.now()` 的 UTC 基準要求見 `_update_service`。）
             service.write({
                 'state': 'upgrading',
                 'error_message': False,
-                'last_upgraded_at': datetime.now(),
+                'last_upgraded_at': fields.Datetime.now(),
             })
 
             return {'success': True, 'message': f'Rollback to revision {revision} initiated'}
