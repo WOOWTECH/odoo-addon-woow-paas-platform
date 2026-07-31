@@ -24,6 +24,7 @@ cron 每分鐘、前台每 5 秒都只是「再問一次 operator」，沒有一
 （``reference_odoo_shell_run_testcase_simulated_clock`` 的教訓）。每條測試的錨都
 刻意壓在門檻的**兩側 1 分鐘**內，所以門檻若被算錯一個量級（分鐘當秒之類）必紅。
 """
+import logging
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
@@ -321,6 +322,52 @@ class TestModelPollTimeout(_Base):
         self._poll(svc, _status())  # vm_included=False
 
         self.assertEqual(svc.state, 'error')
+
+    def test_pending_rollback_times_out(self):
+        """helm release 卡在 ``pending-*`` 同樣封頂。
+
+        兩層 poll 原本對 ``pending-install`` / ``pending-upgrade`` /
+        ``pending-rollback`` 一律靜置等下一輪。但被 SIGKILL 腰斬的 rollback 會
+        把 release 永久留在 ``pending-rollback``，沒有任何東西會再推它
+        （``reference_helm_atomic_failure_double_timeout`` 的實錄）——就緒判定
+        根本不會被呼叫，所以這條路必須自己有話可說。
+        """
+        svc = self._make_service('container',
+                                 anchor_minutes_ago=_CONTAINER_DEFAULT + 1)
+
+        self._poll(svc, _status(release_status='pending-rollback'))
+
+        self.assertEqual(svc.state, 'error')
+        self.assertIn('pending-rollback', svc.error_message)
+
+    def test_pending_install_below_threshold_stays_deploying(self):
+        """門檻內的 ``pending-install`` 是正常首裝，不得動它。"""
+        svc = self._make_service('container', anchor_minutes_ago=1)
+
+        self._poll(svc, _status(release_status='pending-install'))
+
+        self.assertEqual(svc.state, 'deploying')
+
+    def test_normal_pending_install_is_not_logged_as_hard(self):
+        """正常首裝就會撞到 ``pending-install``（helm 還在跑、cron 已在 poll）。
+
+        把它記成 ``HARD:`` 會讓每一次正常部署都刷一行 warning，正好稀釋掉
+        ``HARD`` 的語意——那個前綴專指「不會自己好」，是維運在正式環境
+        （INFO 級）唯一能撈到硬失效的訊號（W5a MINOR-1）。卡住與否由時間
+        分辨，真的逾時時 `_check_transition_timeout` 會印 error 級。
+        """
+        svc = self._make_service('container', anchor_minutes_ago=1)
+
+        with self.assertLogs(
+            'odoo.addons.woow_paas_platform.models.cloud_service', level='DEBUG',
+        ) as logs:
+            self._poll(svc, _status(release_status='pending-install'))
+
+        self.assertFalse(
+            [r for r in logs.records if r.levelno >= logging.WARNING],
+            '正常的 pending-install 不該升 warning：'
+            f'{[r.getMessage() for r in logs.records]}',
+        )
 
     def test_vm_uses_its_own_longer_threshold(self):
         """🔴 防誤殺核心：CDI 磁碟 import 動輒數十分鐘，VM 不得套容器門檻。

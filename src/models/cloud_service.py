@@ -1927,8 +1927,13 @@ class CloudService(models.Model):
             # `reference_helm_atomic_failure_double_timeout` 的實錄）。故一併
             # 納入封頂：狀態不動，只是讓 age timeout 有話可說。
             # （限縮在受管狀態，避免給 `deleting` / `initializing` 添 log 噪音。）
+            #
+            # ⚠ 刻意**不**加 `HARD:` 前綴：`pending-install` 在正常首裝時就會被
+            # 撞到（helm 還在跑、cron 已經在 poll），升 warning 會讓每一次正常
+            # 部署都刷一行「硬失效」——那正好稀釋掉 HARD 的語意（它專指「不會
+            # 自己好」）。卡住與否由時間分辨，逾時本身會印 error 級。
             stuck_detail = f"helm release status is {release_status or 'unknown'}"
-            service._log_not_ready(f'HARD: {stuck_detail}')
+            service._log_not_ready(stuck_detail)
 
         if stuck_detail:
             service._check_transition_timeout(stuck_detail)

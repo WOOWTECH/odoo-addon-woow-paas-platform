@@ -2963,8 +2963,10 @@ class PaasController(HiddenChainMixin, Controller):
                 # `unknown` — 狀態不動（仍在進行中），但它們同樣會永久卡：被
                 # SIGKILL 腰斬的 rollback 會把 release 留在 `pending-rollback`
                 # 而沒人再推它。納入封頂讓 age timeout 有話可說。
+                # 不加 `HARD:` 前綴的理由同 model 層：正常首裝就會撞到
+                # pending-install，升 warning 會稀釋 HARD 的語意。
                 stuck_detail = f"helm release status is {release_status or 'unknown'}"
-                service._log_not_ready(f'HARD: {stuck_detail}')
+                service._log_not_ready(stuck_detail)
 
             if stuck_detail:
                 service._check_transition_timeout(stuck_detail)
