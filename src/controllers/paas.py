@@ -2799,9 +2799,12 @@ class PaasController(HiddenChainMixin, Controller):
                 revision=revision,
             )
 
+            # #489：rollback 也是一次 helm 寫入，`last_upgraded_at` 是它的時間
+            # 錨。不記的話 age timeout 會退回首裝時間，rollback 一發出就被判逾時。
             service.write({
                 'state': 'upgrading',
                 'error_message': False,
+                'last_upgraded_at': datetime.now(),
             })
 
             return {'success': True, 'message': f'Rollback to revision {revision} initiated'}
@@ -2894,10 +2897,19 @@ class PaasController(HiddenChainMixin, Controller):
             # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
             service._store_import_progress(status)
 
+            # #489：「這一輪 poll 沒能讓服務離開轉移狀態」的理由，供 age
+            # timeout 組診斷訊息（語意與判定同 model 層，見
+            # ``CloudService._check_transition_timeout``）。**兩層都要接**：
+            # 就緒判定是單一事實源，但寫 error 的動作在各自的 poll 裡——只接
+            # model 層的話，租戶打開服務詳情頁（每 5 秒一次）就會把逾時判定
+            # 蓋回 deploying。
+            stuck_detail = None
+
             if release_status == 'deployed':
                 all_ready, detail = service._is_release_ready(status)
                 if not all_ready:
                     service._log_not_ready(detail)
+                    stuck_detail = detail
 
                 if all_ready:
                     template = service.template_id
@@ -2946,9 +2958,16 @@ class PaasController(HiddenChainMixin, Controller):
                     'error_message': release.get('description', 'Deployment failed'),
                 })
 
-            elif release_status in ['pending-install', 'pending-upgrade', 'pending-rollback']:
-                # Still in progress
-                pass
+            elif service._is_timeout_governed():
+                # `pending-install` / `pending-upgrade` / `pending-rollback` /
+                # `unknown` — 狀態不動（仍在進行中），但它們同樣會永久卡：被
+                # SIGKILL 腰斬的 rollback 會把 release 留在 `pending-rollback`
+                # 而沒人再推它。納入封頂讓 age timeout 有話可說。
+                stuck_detail = f"helm release status is {release_status or 'unknown'}"
+                service._log_not_ready(f'HARD: {stuck_detail}')
+
+            if stuck_detail:
+                service._check_transition_timeout(stuck_detail)
 
         except PaaSOperatorError as e:
             if e.status_code == 404:

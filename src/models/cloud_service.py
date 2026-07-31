@@ -17,6 +17,86 @@ TERMINAL_STATES = ('deleting',)
 # _REACH_LOCK_NS reach-lock；任意固定 int、全 module 唯一即可）。'HAPA' = 0x48415041。
 _HA_PROVISION_LOCK_NS = 0x48415041
 
+# ------------------------------------------------------------------------- #
+#  #489：轉移狀態的 age timeout（F-423-1 Step 2）                             #
+# ------------------------------------------------------------------------- #
+#
+# `deploying` / `upgrading` 在此之前**沒有任何時間上界**：cron 每分鐘、前台每
+# 5 秒都只是「再問一次 operator」，沒有一方會說「問太久了，這條不會好了」。
+# 永遠不會就緒的服務因此無限期停在轉移狀態，而它與「正在正常部署」在 Odoo 側
+# 外觀完全相同（#456 兩筆、#423 W5a 的 VM RBAC 缺權皆屬此類）。
+#
+# ⚠ 門檻**寧鬆勿緊**，因為誤殺不可自癒：兩層 poll 都只在 deploying /
+# upgrading / initializing 才呼叫，一旦寫進 `error` 就再也沒有任何路徑會把它
+# poll 回 `running`——即使叢集裡的服務在門檻之後其實就緒了。誤殺＝本來會好的
+# 服務被打成 error、租戶得重新下單；晚報＝維運晚 N 分鐘知道。兩者不對稱。
+#
+# 預設值的實證依據（見 PR 論證）：
+#   * 容器型 30 分 —— 本 repo 沒有容器型的分段計時實測，取 #489 建議值 15 分
+#     的兩倍餘裕。這段時間涵蓋 image pull（跨 registry 的大 image）＋ PVC
+#     provision ＋ pod 排程。
+#   * VM 型 120 分 —— #423 W6 stg e2e 第二輪實測「下單→running 98s」
+#     （registry/OCI 路徑，import 58s）；design §5.2 對 http source 的估計是
+#     30–60 分（**二手估計，未實測**）。對未實測的最慢合法路徑取兩倍餘裕。
+#     CDI 磁碟 import 是這裡最大的變數，故 VM 必須有自己的一檔。
+#
+# 兩者皆可用 ir.config_parameter 覆寫——正確值依叢集規格／網路而異，prod 與
+# stg 未必相同，不該要改 code 才能調。
+DEPLOY_TIMEOUT_MINUTES_DEFAULT = 30
+VM_DEPLOY_TIMEOUT_MINUTES_DEFAULT = 120
+
+_DEPLOY_TIMEOUT_PARAM = 'woow_paas_platform.deploy_timeout_minutes'
+_VM_DEPLOY_TIMEOUT_PARAM = 'woow_paas_platform.vm_deploy_timeout_minutes'
+
+# age timeout 管轄的狀態。**`initializing` 刻意不在內**：post-deploy init 有
+# 自己的上界（`init_retries`，5 次後翻 error），兩套機制夾擊同一個狀態只會讓
+# 失敗歸因更難（#489 明列）。
+_TIMEOUT_GOVERNED_STATES = ('deploying', 'upgrading')
+
+# 逾時訊息的分型提示：把 `_is_release_ready` 的 detail 對應到「維運該往哪查」。
+# 目的是讓人不必進叢集就知道方向——detail 說「卡在哪」，hint 說「去查什麼」。
+#
+# 以 detail 的子字串比對（順序即優先序）。detail 字串日後若改動，
+# `TestTimeoutDiagnosis` 會紅——這個耦合是刻意用測試守住的，而不是靠註解。
+# 未命中時不附 hint（fail-soft：訊息仍有前綴與 detail，只是少了方向）。
+_TIMEOUT_HINTS = (
+    ('pod lookup failed',
+     'the operator could not list pods — check its RBAC and the API server'),
+    ('no pods found',
+     'no Pod object was ever created — check the namespace ResourceQuota (a '
+     'rejected Pod never materialises) and that the chart labels its pods '
+     'with app.kubernetes.io/instance'),
+    ('no active pods',
+     'pods exist but none reached Running — check pod events (scheduling, '
+     'image pull) and node capacity'),
+    ('pods not ready',
+     'pods are Running but never became ready — check container logs and the '
+     'readiness probe'),
+    ('include_vm',
+     'the platform never received VM status — the operator is likely too old '
+     'to report it'),
+    ('VMI lookup failed',
+     'the operator could not read the VirtualMachineInstance — check its RBAC '
+     'for virtualmachineinstances'),
+    ('no VMI yet',
+     'no VirtualMachineInstance was created — check the DataVolume / CDI '
+     'importer, the disk import may have stalled'),
+    ('VMI not ready',
+     'the VM is running but never reported Ready — check the guest boot '
+     'inside the VM'),
+    ('helm release status is',
+     'the helm release never reached "deployed" — a killed rollback leaves it '
+     'stuck in pending-*; inspect `helm history` for the release'),
+)
+
+# 停權中的服務被 redeploy 後會卡在 `deploying`（#482）：VM 被**正確地** Halted
+# 著，所以永遠不會 ready。此時上面那些 hint 全是誤導（叫人去查 pod / quota，
+# 而真因是停權），故停權時**取代**而非附加。
+_SUSPENDED_HINT = (
+    'the service is suspended — its workload is intentionally halted, so it '
+    'can never become ready while a deploy/upgrade is pending (see #482)'
+)
+
 
 def _unflatten_dotpath_keys(flat_dict):
     """Convert flat dot-path keys to nested dict.
@@ -343,12 +423,18 @@ class CloudService(models.Model):
 
             # Set to 'deploying' — cron + frontend polling will handle
             # the rest (pod readiness check → init → running)
+            #
+            # #489：`last_upgraded_at` 是這條路徑的時間錨。這裡寫的 state 是
+            # `deploying`（首裝路徑的狀態）但做的是 helm **upgrade**——不記錨的
+            # 話，age timeout 會退回 `deployed_at`（首裝時間），一台跑了三個月
+            # 的服務按下重新部署就會在第一輪 poll 被判逾時。
             self.write({
                 'state': 'deploying',
                 'error_message': False,
                 'init_error': False,
                 'init_retries': 0,
                 'helm_revision': release_info.get('revision', self.helm_revision),
+                'last_upgraded_at': fields.Datetime.now(),
             })
             # Trigger cron so state transitions without frontend polling
             cron = self.env.ref(
@@ -557,9 +643,12 @@ class CloudService(models.Model):
 
         self._set_admin_password_secret(new_password)
 
+        # `last_upgraded_at` 同 action_redeploy：reset 走的是同一條 helm
+        # upgrade 管線，不記錨就會讓 #489 的 age timeout 拿首裝時間當起點。
         self.write({
             'state': 'upgrading',
             'error_message': False,
+            'last_upgraded_at': fields.Datetime.now(),
         })
         return new_password
 
@@ -1566,6 +1655,125 @@ class CloudService(models.Model):
                 "Service %s not ready yet: %s", self.name, detail,
             )
 
+    # ------------------------------------------------------------------ #
+    #  轉移狀態的 age timeout（#489 / F-423-1 Step 2）                     #
+    # ------------------------------------------------------------------ #
+
+    def _is_timeout_governed(self):
+        """本服務目前的狀態是否受 age timeout 管轄。
+
+        兩層 poll 共用這個判準（controller 那層要用它決定 pending-* 要不要記
+        stuck 理由），避免狀態清單在兩處雙寫後無聲漂移。
+        """
+        self.ensure_one()
+        return self.state in _TIMEOUT_GOVERNED_STATES
+
+    def _transition_anchor(self):
+        """本輪狀態轉移的起算時間；``None`` ＝ 無法判定。
+
+        取 ``deployed_at`` 與 ``last_upgraded_at`` 的**較晚者**，而不是依
+        ``state`` 擇一。理由是寫入這兩個欄位的路徑與 state 不是一一對應：
+        ``action_redeploy`` 寫的是 ``deploying``（首裝路徑的狀態）卻是 upgrade
+        語意，依 state 擇一會取到**首裝**時間——一台部署了三個月的服務按下重新
+        部署，第一輪 poll 就被判逾時。取較晚者天然涵蓋所有入口。
+
+        （本 PR 一併把三個漏記錨的轉移入口補上 ``last_upgraded_at``：
+        ``action_redeploy`` 的 upgrade 分支、``_reset_admin_password``、
+        controller 的 rollback。少一個都會讓那條路徑用陳舊的錨誤殺。）
+
+        回 ``None`` 的唯一情形是兩個欄位都空——只發生在 ``_execute_deploy``
+        的 helm install 執行期間（install 回來就寫 ``deployed_at``，同一個
+        transaction 內）。**此時不逾時**：沒有依據就不裁決，而誤殺不可自癒。
+        這與「參數缺值走內建預設」的 fail-safe 方向鎖不衝突——那條鎖的是**設定
+        漏設**（可預期、可補），這裡是**事實未知**（無從推算）。
+        """
+        self.ensure_one()
+        stamps = [t for t in (self.deployed_at, self.last_upgraded_at) if t]
+        return max(stamps) if stamps else None
+
+    def _transition_timeout_minutes(self):
+        """本服務的逾時門檻（分鐘）。VM 型與容器型各一檔。
+
+        缺值、空白、非整數、非正數一律**退回內建預設**而不是停用逾時——否則
+        這道保護會因為漏設一個參數而靜默失效（#404 apiServerCidrs 的教訓）。
+        """
+        self.ensure_one()
+        is_vm = self._needs_vm_status()
+        key = _VM_DEPLOY_TIMEOUT_PARAM if is_vm else _DEPLOY_TIMEOUT_PARAM
+        default = (
+            VM_DEPLOY_TIMEOUT_MINUTES_DEFAULT if is_vm
+            else DEPLOY_TIMEOUT_MINUTES_DEFAULT
+        )
+
+        raw = self.env['ir.config_parameter'].sudo().get_param(key)
+        try:
+            minutes = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return default
+        if minutes <= 0:
+            _logger.warning(
+                "%s is %r (not a positive integer) — falling back to %s minutes",
+                key, raw, default,
+            )
+            return default
+        return minutes
+
+    def _timeout_diagnosis(self, detail):
+        """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話。
+
+        回空字串代表沒有對應的方向可給（fail-soft：訊息仍帶前綴與 detail）。
+        """
+        self.ensure_one()
+        if self._is_halted():
+            return _SUSPENDED_HINT
+        for needle, hint in _TIMEOUT_HINTS:
+            if needle in (detail or ''):
+                return hint
+        return ''
+
+    def _check_transition_timeout(self, detail):
+        """轉移狀態逾時就翻 ``error``；回傳「是否已翻」。
+
+        **只變狀態與訊息**——不刪任何叢集資源、不觸發 rollback。卡住的 release
+        原樣留在叢集裡供診斷，維運看完再決定要 redeploy 還是清掉。
+
+        呼叫端契約：必須在 poll 的 optimistic locking（re-fetch ＋ 比對
+        ``original_state``）**之後**呼叫，且 ``self`` 是 re-fetch 過的 record。
+        逾時寫入走同一套鎖，否則會蓋掉別的 process 剛寫進去的狀態。
+        """
+        self.ensure_one()
+        if self.state not in _TIMEOUT_GOVERNED_STATES:
+            return False
+
+        anchor = self._transition_anchor()
+        if not anchor:
+            _logger.warning(
+                "Service %s (id=%s) is %s but has neither deployed_at nor "
+                "last_upgraded_at — age timeout cannot be evaluated",
+                self.name, self.id, self.state,
+            )
+            return False
+
+        minutes = self._transition_timeout_minutes()
+        age = fields.Datetime.now() - anchor
+        if age.total_seconds() <= minutes * 60:
+            return False
+
+        hint = self._timeout_diagnosis(detail)
+        message = f"Deployment timed out after {minutes} minutes: {detail}"
+        if hint:
+            message = f"{message} — {hint}"
+
+        # error 分兩種來源，log 要能一眼分辨：這條是「平台判定逾時」，
+        # `release_status == 'failed'` 那條是「operator 明確回報失敗」。
+        _logger.error(
+            "Service %s (id=%s) timed out in state %s after %s minutes "
+            "(anchor=%s): %s",
+            self.name, self.id, self.state, minutes, anchor, message,
+        )
+        self.write({'state': 'error', 'error_message': message})
+        return True
+
     @staticmethod
     def _extract_import_progress(status):
         """取 CDI DataVolume 的 import 進度字串（供前台進度顯示，design §7.4）。
@@ -1659,10 +1867,15 @@ class CloudService(models.Model):
         # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
         service._store_import_progress(status)
 
+        # #489：「這一輪 poll 沒能讓服務離開轉移狀態」的理由，供 age timeout
+        # 組診斷訊息。None ＝ 這一輪有進展（就緒或明確失敗），不必判逾時。
+        stuck_detail = None
+
         if release_status == 'deployed':
             all_ready, detail = service._is_release_ready(status)
             if not all_ready:
                 service._log_not_ready(detail)
+                stuck_detail = detail
 
             if all_ready:
                 template = service.template_id
@@ -1705,6 +1918,20 @@ class CloudService(models.Model):
                 'helm_revision': helm_revision,
                 'error_message': release.get('description', 'Deployment failed'),
             })
+
+        elif service._is_timeout_governed():
+            # `pending-install` / `pending-upgrade` / `pending-rollback` /
+            # `unknown`。既有碼對這些一律靜置等下一輪——**但它們同樣會永久卡**：
+            # helm 的 subprocess 被 SIGKILL 在 rollback 途中就會把 release 留在
+            # `pending-rollback`，沒有任何東西會再推它（同
+            # `reference_helm_atomic_failure_double_timeout` 的實錄）。故一併
+            # 納入封頂：狀態不動，只是讓 age timeout 有話可說。
+            # （限縮在受管狀態，避免給 `deleting` / `initializing` 添 log 噪音。）
+            stuck_detail = f"helm release status is {release_status or 'unknown'}"
+            service._log_not_ready(f'HARD: {stuck_detail}')
+
+        if stuck_detail:
+            service._check_transition_timeout(stuck_detail)
 
     # ------------------------------------------------------------------ #
     #  Post-deploy init (model context)                                  #
