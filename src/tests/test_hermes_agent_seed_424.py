@@ -16,6 +16,13 @@
 - **DB 開關 lock-step**：Step 0 若翻案要開內建 pg/redis，storageClass path_map ／
   min_ram_gb ／ min_storage_gb 三處必須同 PR 一起動，否則 PVC 拿不到 StorageClass
   或 quota 不足。三條 lock-step 測試把它們綁死。
+- **quota 蓋不住全容器 limits.cpu**（#456，2026-07-28 stg 實證）：RAM 早有守線、
+  CPU 沒有，於是 `min_vcpu=1` 的邊際貢獻（×3＝3）蓋不住 3.4，共用 workspace 的
+  主 pod 永久卡 FailedCreate 而 DB／UI 照樣顯示 Running。#494 上架時修成 2，並補
+  上與 RAM 對稱的兩條 CPU 守線（**用邊際、不套 floor**，理由見該測試 docstring）。
+- **定價上架形態**（#494）：`is_hidden=False` ＋ 兩 base plan（4,500／36,000／7 天
+  trial）＋ M2M；plan 刻意不設 `cs_*`（設了就繞過上面的 quota 修法）；
+  `conceal_instances` 維持不設（#471 拆語意，實例層不受曝光層變更影響）。
 - **主 Service 命名**：operator 的 Cloudflare expose 取「名稱排序第一個非 headless
   Service」＋http-like port 猜測，主 Service 必須是裸 release fullname ＋ 8080。
 - **平台注入鍵不得被 seed 蓋掉**：storageClass／imagePullSecrets／apiServerCidrs／
@@ -50,6 +57,12 @@ _PENDING_IMAGE_KEYS = set()
 #  pod 直接被拒（FailedCreate，是宣告問題不是額度問題）。chart 兩邊都有寫。）
 AUTH_PROXY_LIMIT_GI = 128 / 1024.0
 
+# 同上，CPU 側：chart values 的 `authProxy.resources.limits.cpu`（200m）。2026-07-31
+# 以 `helm show values oci://…/hermes-agent --version 0.1.0` 向 registry 直驗，非轉抄。
+# #456 的 stg 事件訊息（exceeded quota: limits.cpu=3200m）正是主 pod 的
+# agent 2000m ＋ webui 1000m ＋ 本 sidecar 200m，可交叉印證。
+AUTH_PROXY_LIMIT_CPU = 0.2
+
 
 def _gi(quantity):
     """把 K8s 記憶體 quantity（'6Gi' / '512Mi'）換算成 float GiB。"""
@@ -58,6 +71,15 @@ def _gi(quantity):
     if quantity.endswith('Mi'):
         return float(quantity[:-2]) / 1024.0
     raise AssertionError('未預期的記憶體單位（只支援 Gi/Mi）：%s' % quantity)
+
+
+def _cpu(quantity):
+    """把 K8s CPU quantity（'2' / '200m'）換算成 float core。"""
+    if isinstance(quantity, (int, float)):
+        return float(quantity)
+    if quantity.endswith('m'):
+        return float(quantity[:-1]) / 1000.0
+    return float(quantity)
 
 
 @tagged('post_install', '-at_install')
@@ -69,7 +91,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
     def _values(self):
         return json.loads(self._tpl().helm_default_values)
 
-    # ── 上架形態（不可購買）─────────────────────────────────────────────────
+    # ── 上架形態（已定價開賣，#494）──────────────────────────────────────────
     def test_marketplace_fields(self):
         """name/slug/category、對外埠 8080（auth-proxy）、ingress 開。"""
         tpl = self._tpl()
@@ -79,23 +101,41 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(tpl.default_port, 8080)
         self.assertTrue(tpl.ingress_enabled)
 
-    def test_hidden_but_deployable(self):
-        """本輪不可購買：is_hidden=True（擋 generic create）＋ is_active=True（可部署）。
+    def test_visible_and_deployable(self):
+        """#494 定價拍板解封：is_hidden=False（generic create 放行）＋ is_active=True。
 
-        定價未拍板，故只上架不販售；解封比照 #431 模式（翻 is_hidden ＋掛 plan）。
+        #424① 上架時因定價未拍板而 is_hidden=True；4,500／36,000 拍板後比照 #431
+        模式解封（翻 is_hidden ＋掛 plan）。hidden 是 generic create 的唯一擋線
+        （controllers/paas.py `_create_service`），翻回 True 等於整個商品下架。
         """
         tpl = self._tpl()
-        self.assertTrue(
-            tpl.is_hidden,
-            '定價未拍板前必須隱藏——hidden 是 generic create 的唯一擋線'
-            '（controllers/paas.py _create_service）')
-        self.assertTrue(tpl.is_active, 'template 仍須可部署（shell / 未來 provision 路徑）')
-
-    def test_no_subscription_plans(self):
-        """不掛任何 plan（本輪零定價變更 → seed 拓撲 gate 不觸發）。"""
         self.assertFalse(
-            self._tpl().sudo().subscription_plan_ids,
-            '定價未拍板：不得掛 subscription plan')
+            tpl.is_hidden,
+            '已定價上架：is_hidden 必須為 False，否則 marketplace 買不到')
+        self.assertTrue(tpl.is_active, 'template 須可部署')
+
+    def test_conceal_instances_untouched(self):
+        """🔴 #471 拆語意：本 template 刻意**不**設 conceal_instances。
+
+        解封只該動「曝光層」（is_hidden）。conceal_instances 是「實例層」——設了
+        會讓既有租戶服務的詳情頁打不開、rollback／change-plan／MCP 設定全不可達
+        （#464 在本 template 實測過）。cloud_app_ha_paas 的「兩層都關」是刻意的
+        對照組，勿照抄。
+        """
+        self.assertFalse(
+            self._tpl().conceal_instances,
+            '本 template 只有曝光層語意；設了 conceal_instances 會鎖死既有實例')
+
+    def test_subscription_plans_linked(self):
+        """#494：template ↔ 兩 base plan 的 M2M（links.xml noupdate=0 全量 reset）。"""
+        tpl = self._tpl()
+        plans = tpl.sudo().subscription_plan_ids
+        for xmlid in ('plan_hermes_agent_monthly', 'plan_hermes_agent_yearly'):
+            self.assertIn(
+                self.env.ref('woow_paas_platform.%s' % xmlid), plans, xmlid)
+        base = plans.filtered(lambda p: p.ac_max_access_seats == 0)
+        self.assertEqual(
+            len(base), 2, '恰兩筆 base plan（月／年）；v1 不做席數加購變體')
 
     def test_max_per_partner_one(self):
         """每帳號限一（agent limits 6Gi 是平台最重單容器，防同帳號吃乾 ws quota）。"""
@@ -384,18 +424,42 @@ class TestHermesAgentTemplateSeed(TransactionCase):
                 total += _gi(limits['memory'])
         return total
 
+    def _seed_container_limits_cpu(self):
+        """CPU 側的對稱版本：由 seed values 現算「本服務全容器 limits.cpu」總和。
+
+        #456 的根因就在這條線上：邊際需求 3.4（agent 2 ＋ webui 1 ＋ console 0.2
+        ＋ auth-proxy 0.2）> 邊際貢獻 min_vcpu×3。RAM 早有守線、CPU 沒有，所以
+        「共用 workspace 才露餡」的缺口一路活到 stg。
+        """
+        values = self._values()
+        total = AUTH_PROXY_LIMIT_CPU
+        for key in ('agent', 'webui', 'console', 'postgresql', 'redis'):
+            node = values.get(key) or {}
+            if not node or node.get('enabled') is False:
+                continue
+            limits = (node.get('resources') or {}).get('limits') or {}
+            if limits.get('cpu'):
+                total += _cpu(limits['cpu'])
+        return total
+
     @staticmethod
     def _quota_gi(min_ram_gb):
         """複製 cloud_service._compute_ns_quota 的記憶體算式（**int 是截斷**）。"""
         return max(int(min_ram_gb * 3), 8)
 
+    @staticmethod
+    def _quota_cpu(min_vcpu):
+        """複製 cloud_service._compute_ns_quota 的 CPU 算式（floor 8 vCPU）。"""
+        return max(min_vcpu * 3, 8)
+
     def test_min_ram_covers_all_container_limits(self):
         """結構關係守線：workspace ns quota 必須蓋得住全容器 limits.memory 總和。
 
         quota = max(int(sum(存活 service allocated_ram_gb) × 3), 8) Gi
-        （cloud_service._compute_ns_quota）。本 template 無 plan → allocated_ram_gb
-        走 min_ram_gb fallback。不足 → pod FailedCreate(exceeded quota) → 服務對外
-        永遠 CF 502（#380 端到端回歸）。
+        （cloud_service._compute_ns_quota）。本 template 的 plan 刻意不設 cs_*
+        → allocated_ram_gb 走 min_ram_gb fallback（見
+        test_allocated_vals_fall_back_to_template_min_star）。不足 → pod
+        FailedCreate(exceeded quota) → 服務對外永遠 CF 502（#380 端到端回歸）。
         """
         tpl = self._tpl()
         quota_gi = self._quota_gi(tpl.min_ram_gb)
@@ -423,6 +487,60 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             self._tpl().min_ram_gb, minimal,
             '全容器 limits.memory 合計 %.3fGi → 最小夠用的 min_ram_gb 是 %s'
             % (needed_gi, minimal))
+
+    def test_min_vcpu_covers_all_container_limits(self):
+        """🔴 #456 修法守線：min_vcpu 的**邊際貢獻**須蓋住全容器 limits.cpu 總和。
+
+        ⚠ 這裡刻意用「邊際」（min_vcpu × 3）而非 `_quota_cpu()` 的含 floor 值——
+        floor（8 vCPU）只在「workspace 裡只有這一個服務」時成立。#456 就是這樣
+        溜過去的：#424① 的 E2E 全在空 workspace 跑，靠 floor 蓋住而全綠；一放到
+        既有服務的共用 workspace，每加一個服務缺口就擴大 0.4，主 pod 永久卡
+        FailedCreate(exceeded quota: limits.cpu=3200m)，而 DB／UI 照樣顯示
+        Running——調度失敗不反映在服務狀態，所以只能靠這條在 seed 當下擋。
+
+        套 floor 的寫法會讓 min_vcpu=1（＝#456 的缺陷值）假綠，等於守線失效。
+        """
+        tpl = self._tpl()
+        marginal = tpl.min_vcpu * 3
+        needed = self._seed_container_limits_cpu()
+        self.assertGreaterEqual(
+            marginal, needed,
+            'min_vcpu=%s → 每個服務只替 workspace quota 加 %s vCPU，蓋不住本服務'
+            '全容器 limits.cpu 合計 %.2f → 共用 workspace 必然 FailedCreate（#456）'
+            % (tpl.min_vcpu, marginal, needed))
+
+    def test_min_vcpu_is_the_minimal_sufficient_step(self):
+        """min_vcpu ＝滿足上一條的**最小**整數（欄位是 Integer，級距 1）。
+
+        與 RAM 側同樣的兩面夾擊：上一條擋太小、這條擋太大。quota 是 workspace 級
+        天花板，灌水等於把同 workspace 其他服務的保護一起放鬆。合計 3.4 ÷ 3 上取
+        ＝ 2；limits 一改，期望值自動跟著算。
+        """
+        needed = self._seed_container_limits_cpu()
+        minimal = 1
+        while minimal * 3 < needed:
+            minimal += 1
+        self.assertEqual(
+            self._tpl().min_vcpu, minimal,
+            '全容器 limits.cpu 合計 %.2f → 最小夠用的 min_vcpu 是 %d'
+            % (needed, minimal))
+
+    def test_allocated_vals_fall_back_to_template_min_star(self):
+        """實呼 `_allocated_vals_from`：plan cs_* 全 0 → allocated_* 取 template min_*。
+
+        把「plan 不覆寫規格」與「quota 建模」接起來——只要有人在 hermes plan 上
+        填了 cs_*（#456 stg 臨時測試用的 0 元 plan 就填了 1/3.0/5），這裡立刻回
+        別的值而紅，上面兩條 CPU／RAM 守線的前提也隨之失效。
+        """
+        tpl = self._tpl()
+        Service = self.env['woow_paas_platform.cloud_service']
+        for xmlid in ('plan_hermes_agent_monthly', 'plan_hermes_agent_yearly'):
+            plan = self.env.ref('woow_paas_platform.%s' % xmlid)
+            vals = Service._allocated_vals_from(tpl, plan)
+            self.assertEqual(vals['allocated_vcpu'], tpl.min_vcpu, xmlid)
+            self.assertEqual(vals['allocated_ram_gb'], tpl.min_ram_gb, xmlid)
+            self.assertEqual(
+                vals['allocated_storage_gb'], tpl.min_storage_gb, xmlid)
 
     def test_resources_present_on_every_seeded_container(self):
         """每個 seed 覆寫的容器都要 requests+limits 齊備（paas-ws quota 缺一即 FailedCreate）。"""
@@ -490,6 +608,106 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertIn('admin', text)
         self.assertIn('/dashboard', text)
         self.assertIn('console', text)
+
+
+@tagged('post_install', '-at_install')
+class TestHermesAgentPlansSeed(TransactionCase):
+    """#494 定價拍板（Eugene 2026-07-31）：月 4,500／年 36,000（×8）＋7 天 trial。"""
+
+    # base plan → (price, unit)
+    EXPECTED = {
+        'plan_hermes_agent_monthly': (4500, 'month'),
+        'plan_hermes_agent_yearly': (36000, 'year'),
+    }
+
+    def _plan(self, xmlid):
+        return self.env.ref('woow_paas_platform.%s' % xmlid)
+
+    def test_base_plans(self):
+        for xmlid, (price, unit) in self.EXPECTED.items():
+            plan = self._plan(xmlid)
+            self.assertEqual(plan.sh_plan_price, price, xmlid)
+            self.assertEqual(plan.sh_unit, unit, xmlid)
+            self.assertEqual(plan.sh_duration, 1, xmlid)
+            self.assertEqual(plan.service_type, 'cloud_service', xmlid)
+
+    def test_yearly_is_eight_times_monthly(self):
+        """年繳＝月繳×8（沿用現行折扣慣例，省 33%）。"""
+        monthly = self._plan('plan_hermes_agent_monthly')
+        yearly = self._plan('plan_hermes_agent_yearly')
+        self.assertEqual(yearly.sh_plan_price, monthly.sh_plan_price * 8)
+
+    def test_trial_seven_days(self):
+        """拍板 7 天 trial（沿 Open Design 雲端形制）——兩個週期都要有。"""
+        for xmlid in self.EXPECTED:
+            plan = self._plan(xmlid)
+            self.assertTrue(plan.sh_trial, xmlid)
+            self.assertEqual(plan.sh_trial_duration, 7, xmlid)
+            self.assertEqual(plan.sh_trial_unit, 'day', xmlid)
+
+    def test_products_taxfree_and_link(self):
+        """product 綁對 plan、taxes_id 空（#366：pts 交易免稅）。"""
+        for xmlid, (price, _unit) in self.EXPECTED.items():
+            plan = self._plan(xmlid)
+            product = self.env.ref(
+                'woow_paas_platform.%s' % xmlid.replace('plan_', 'product_'))
+            self.assertEqual(product.sh_subscription_plan_id, plan, xmlid)
+            self.assertEqual(product.list_price, price, xmlid)
+            self.assertTrue(product.sh_product_subscribe, xmlid)
+            self.assertFalse(product.taxes_id, '%s：pts 免稅、taxes_id 應為空' % xmlid)
+
+    def test_plans_are_storefront_visible(self):
+        """base plan 不隱藏、非席數變體（前台要看得到才賣得出去）。"""
+        for xmlid in self.EXPECTED:
+            plan = self._plan(xmlid)
+            self.assertFalse(plan.storefront_hidden, xmlid)
+            self.assertEqual(plan.ac_max_access_seats, 0, xmlid)
+
+    def test_plans_do_not_override_cs_spec(self):
+        """🔴 #456 的直接修法之一：plan 的 cs_* 必須全為 0。
+
+        填了會讓 `_allocated_vals_from` 改吃 plan 值、蓋掉 template 的 min_*
+        ——min_vcpu／min_ram_gb 是**quota 峰值模型**（要蓋住全容器 limits），
+        不是賣給租戶的規格。stg 臨時測試用的 0 元 plan 就填了 1/3.0/5，於是
+        `min_vcpu=2` 的修法會被整個繞過，#456 原地復發。
+
+        另外 `_apply_plan_spec_overlay` 會把 cs_* 疊成 resources.requests/limits，
+        與本 seed 已寫死的 agent／webui／console resources 打架。
+        """
+        for xmlid in self.EXPECTED:
+            plan = self._plan(xmlid)
+            self.assertEqual(plan.cs_vcpu, 0, xmlid)
+            self.assertEqual(plan.cs_ram_gb, 0.0, xmlid)
+            self.assertEqual(plan.cs_storage_gb, 0, xmlid)
+
+    def test_no_access_variants_in_v1(self):
+        """v1 不做席數加購變體——template 上不得掛任何變體 plan。
+
+        要加變體請回 generator（scripts/seed/generate_plan_variants.py）＋變體
+        manifest 走一輪，不要手寫 (4,) append 進 links_variants.xml。
+        """
+        tpl = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
+        variants = tpl.sudo().subscription_plan_ids.filtered(
+            lambda p: p.ac_max_access_seats > 0)
+        self.assertFalse(
+            variants,
+            'v1 不做加購變體，實際掛上：%s' % variants.mapped('name'))
+
+    def test_distinct_from_mcp_hermes_plans(self):
+        """與既有 Hermes MCP Server 三級距 plan 是不同商品，勿互掛。
+
+        撞名風險同 template 側（#424 brief 風險 10）：那是 Hermes 的 MCP server
+        （T1–T3，1500/4500/6000），本組是 Hermes Agent 完整應用。
+        """
+        agent_plans = self.env.ref(
+            'woow_paas_platform.cloud_app_hermes_agent').sudo().subscription_plan_ids
+        mcp_plans = self.env.ref(
+            'woow_paas_platform.cloud_app_mcp_hermes').sudo().subscription_plan_ids
+        self.assertTrue(agent_plans)
+        self.assertTrue(mcp_plans)
+        self.assertFalse(
+            agent_plans & mcp_plans,
+            '兩個 Hermes 產品共用了 plan：%s' % (agent_plans & mcp_plans).mapped('name'))
 
 
 @tagged('post_install', '-at_install')
