@@ -258,3 +258,5 @@ from . import test_named_failure_fields_484
 from . import test_cloud_service_deploy_timeout
 # fix: #482 停權服務被 redeploy／reconfigure 後留在停權（state 收斂＋workload 收回 0）
 from . import test_suspended_redeploy_state_482
+# fix: #497 #482 既有卡死資料收斂回停權＋訂閱已恢復者自癒（migration＋cron 縱深）
+from . import test_stuck_suspended_converge_497
