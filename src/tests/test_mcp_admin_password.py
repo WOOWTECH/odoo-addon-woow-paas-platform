@@ -1,5 +1,6 @@
 """Regression tests for #357's one-time MCP admin password flow."""
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import UserError
@@ -317,8 +318,18 @@ class TestMcpAdminPassword(TransactionCase):
         # 已部署 0.1.4，template 已升到 0.1.5 ⇒ 這次 reset 會夾帶升版。
         self.service.helm_chart_version = '0.1.4'
 
+        # ⚠️ level 必須傳 **數值** logging.INFO，不能傳字串 'INFO'（#492）：
+        # odoo/netsvc.py:338 有 `logging.addLevelName(logging.RUNBOT, "INFO")`
+        # 且 RUNBOT=25，這會把 stdlib 的 `logging._nameToLevel['INFO']` 由 20
+        # **覆寫成 25**；unittest/_log.py:37 正是查那張表（`_nameToLevel.get`），
+        # 於是 `level='INFO'` 實際 setLevel(25) → 被測的 `_logger.info()`（20）
+        # 被過濾掉 → 恆紅「no logs of level INFO or higher triggered」，而且紅得
+        # 像是 code 掉了 log（實際上生產行為好好的）。此坑由 repo-lint 的
+        # check_assertlogs_numeric_level 把關，敘事見
+        # docs/tracking/pitfalls/assertlogs-string-level-shadowed-by-odoo.md。
         with self.assertLogs(
-            'odoo.addons.woow_paas_platform.models.cloud_service', level='INFO',
+            'odoo.addons.woow_paas_platform.models.cloud_service',
+            level=logging.INFO,
         ) as logs:
             self.service._reset_admin_password()
 

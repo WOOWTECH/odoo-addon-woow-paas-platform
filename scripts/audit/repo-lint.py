@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-九個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+十一個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -42,6 +42,15 @@
                      還會吃第二次 --timeout（rollback wait），少算就在 rollback 途中
                      kill helm ⇒ release 卡 pending-rollback（真機實測）。
                      依據 docs/decisions/patterns/reset-async-budget-ladder.md
+10. transition-anchor-utc  src/**（除 src/tests/）寫 deployed_at / last_upgraded_at
+                     不得用 `datetime.now()`（本機時區）——Odoo Datetime 契約是 UTC
+                     naive，非 UTC 伺服器上 age timeout 會靜默失效或誤殺，而容器時區
+                     是 UTC 所以**測不出來**，只能靠 gate（#489）。
+11. assertlogs-numeric-level  src/tests/** 的 assertLogs/assertNoLogs 不得用字串
+                     `'INFO'` 當 level——Odoo 的 addLevelName(RUNBOT=25, "INFO") 覆寫
+                     了名稱→數值表，字串會解析成 25 ⇒ `_logger.info()`(20) 全被擋掉：
+                     assertLogs 恆紅（且紅得像被測 code 掉了 log）、assertNoLogs 恆綠。
+                     改傳數值 logging.INFO（#492）。
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -73,6 +82,8 @@ SEED_TOPOLOGY_DOC = "docs/decisions/patterns/seed-topology-invariants.md"
 CAPABILITY_GATE_DOC = "docs/decisions/patterns/capability-gate-single-source-field.md"
 HIDDEN_CHAIN_DOC = "docs/decisions/patterns/hidden-template-presentation-chain.md"
 RESET_LADDER_DOC = "docs/decisions/patterns/reset-async-budget-ladder.md"
+ASSERTLOGS_LEVEL_DOC = (
+    "docs/tracking/pitfalls/assertlogs-string-level-shadowed-by-odoo.md")
 
 # #461 reset 預算階梯：三層各自的常數位置（跨 repo 內兩條發版線，故一定要跨檔算）。
 RESET_LADDER_FRONTEND = "src/static/src/paas/services/cloud_service.js"
@@ -509,6 +520,81 @@ def check_test_env_restore(root, only_file=None):
                 "        （test method 內可直接用 with patch.dict(...) context manager；"
                 "需要條件式還原的多變數情境見 test_agent_pod_phase_d_hardening.py 的 "
                 "_env_guard。）" % (rel, line_no))
+    return violations
+
+
+# #492：odoo/netsvc.py:338 有 `logging.addLevelName(logging.RUNBOT, "INFO")`
+# 且 `logging.RUNBOT = 25`。addLevelName 會**雙向**寫表，於是 stdlib 的
+# `logging._nameToLevel['INFO']` 被由 20 覆寫成 25。而 unittest 的
+# `_log.py:37` 正是 `self.level = logging._nameToLevel.get(level, level)`
+# ⇒ `level='INFO'` 在 Odoo 進程裡實際是 setLevel(25)，把所有 `_logger.info()`
+# （20）擋在門外。（不傳 level 反而安全：`_log.py:39` 用的是數值 logging.INFO。）
+# 只列**確定被 Odoo 覆寫**的名字：其餘 level 名的字串形式仍與數值等價，不必為了
+# 一致性去改動無辜的既有測試（本 repo 現存的 'DEBUG' / 'WARNING' 用法沒有問題）。
+ASSERTLOGS_SHADOWED_LEVELS = {"INFO": (25, 20)}
+
+
+def _assertlogs_string_level_hits(src):
+    """回 [(lineno, level 名)]：assertLogs/assertNoLogs 用了被覆寫的字串 level。"""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (func.attr if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name) else None)
+        if name not in ("assertLogs", "assertNoLogs"):
+            continue
+        level = next((kw.value for kw in node.keywords if kw.arg == "level"), None)
+        if level is None and len(node.args) >= 2:
+            level = node.args[1]        # assertLogs(logger, level) 的 positional 形式
+        if (isinstance(level, ast.Constant) and isinstance(level.value, str)
+                and level.value.upper() in ASSERTLOGS_SHADOWED_LEVELS):
+            hits.append((level.lineno, level.value.upper()))
+    return hits
+
+
+def check_assertlogs_numeric_level(root, only_file=None):
+    """src/tests/**：``assertLogs`` 的 level 不得用字串 ``'INFO'``（#492）。
+
+    這條守的是**恆紅／恆綠的自我否定斷言**——不是被測行為，而是斷言本身失效：
+
+    * ``assertLogs(logger, level='INFO')`` 在 Odoo 進程裡等於 setLevel(**25**)
+      （見 ASSERTLOGS_SHADOWED_LEVELS 上方的成因），於是任何 `_logger.info()`
+      都捕捉不到 → 測試恆紅（`no logs of level INFO or higher triggered`），
+      **且紅得像是被測 code 掉了 log**，實際上生產行為完好；
+    * 反向同樣危險：`assertNoLogs(..., level='INFO')` 會漏放 20–24 級的 log，
+      恆綠、零鑑別力。
+
+    #492 就是前者：#461 加的 `test_chart_version_drift_is_logged` 從**引入當下
+    就紅**（在 59e17eb2 上實測同一訊息），一路帶到 develop 破掉 0F/0E 基線。
+    改用數值 ``logging.INFO`` 即可——不經過那張被覆寫的名稱表。
+    """
+    violations = []
+    files = [only_file] if only_file else sorted(
+        glob.glob(os.path.join(root, "src/tests/**/*.py"), recursive=True))
+    for fp in files:
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        for line_no, level_name in _assertlogs_string_level_hits(src):
+            shadow, real = ASSERTLOGS_SHADOWED_LEVELS[level_name]
+            violations.append(
+                "%s:%d：assertLogs/assertNoLogs 的 level 用了字串 '%s' —— Odoo 的 "
+                "odoo/netsvc.py `logging.addLevelName(logging.RUNBOT, \"INFO\")`"
+                "（RUNBOT=%d）覆寫了 stdlib 的 `logging._nameToLevel`，而 unittest 的 "
+                "_log.py:37 正是查那張表 ⇒ 這個字串被解析成 %d 而非 %d："
+                "`_logger.%s()` 全部落在門檻外，assertLogs 恆紅（訊息長得像被測 code "
+                "掉了 log，實際上生產行為好好的）、assertNoLogs 恆綠。"
+                "改傳**數值**：level=logging.%s。依據 %s"
+                % (rel, line_no, level_name, shadow, shadow, real,
+                   level_name.lower(), level_name, ASSERTLOGS_LEVEL_DOC))
     return violations
 
 
@@ -964,7 +1050,8 @@ def run_all(root):
                   + check_admin_gui_gate_anchor(root)
                   + check_conceal_instances_gate(root)
                   + check_reset_budget_ladder(root)
-                  + check_transition_anchor_utc(root))
+                  + check_transition_anchor_utc(root)
+                  + check_assertlogs_numeric_level(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -972,7 +1059,8 @@ def run_all(root):
         return 1
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
           "reuse-values / seed-topology / test-env-restore / capability-gate / "
-          "conceal-instances / reset-budget-ladder / transition-anchor-utc）")
+          "conceal-instances / reset-budget-ladder / transition-anchor-utc / "
+          "assertlogs-numeric-level）")
     return 0
 
 
@@ -1032,6 +1120,7 @@ def run_hook():
             violations += check_transition_anchor_utc(root, only_file=abs_path)
             if rel.startswith("src/tests/"):
                 violations += check_test_env_restore(root, only_file=abs_path)
+                violations += check_assertlogs_numeric_level(root, only_file=abs_path)
         elif re.match(r"^src/static/src/.*\.xml$", rel):
             violations = check_owl_template(root, only_file=abs_path)
             violations += check_slug_capability_gate(root, only_file=abs_path)
