@@ -558,9 +558,11 @@
                                         隱藏 ＋ 既有服務的讀取／操作端點一律 not found）
              #471 把原本擠在 is_hidden 的兩種語意拆開後，本 template 是唯一需要「連既有
              實例一起隱藏」的 case——#336 決議該服務的租戶入口是 App、不是 /woow，故行為
-             與拆分前完全相同。對照組 cloud_app_hermes_agent 只設 is_hidden（僅未上架，
-             既有服務照常可用）。⚠ 未來解封時**兩個欄位要一起翻**，只翻 is_hidden 會被
-             model 層 _check_conceal_implies_hidden 擋下（fail-loud）。
+             與拆分前完全相同。對照組 cloud_app_hermes_agent 待定價期間只設 is_hidden
+             （僅未上架、既有服務照常可用），#494 定價拍板後只翻 is_hidden=False 就解封，
+             conceal_instances 自始至終不設——那才是「未上架」該有的形態。
+             ⚠ 本筆未來解封時**兩個欄位要一起翻**，只翻 is_hidden 會被 model 層
+             _check_conceal_implies_hidden 擋下（fail-loud）。
 
              migration：本 xmlid 首建即在 noupdate=0 塊（commit ed6287f4 晚於 noupdate=0
              收斂 d1cb2e32，git 實證），故既有 DB ir.model.data.noupdate=False，-u 直接
@@ -737,27 +739,31 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- Hermes Agent 完整應用（#424 ①）：Elmo compose 部署（Woow_hermes_agent_docker_compose_all）
-             搬進平台的 CS 化版本。金樣板＝#380 OpenDesign 上架 SOP，chart 骨架亦由
-             charts/open-design 派生（daemon 多容器＋auth-proxy sidecar＋ttyd console）。
+        <!-- Hermes Agent 完整應用（#424 ① 上架 → #494 定價解封）：Elmo compose 部署
+             （Woow_hermes_agent_docker_compose_all）搬進平台的 CS 化版本。金樣板＝
+             #380 OpenDesign 上架 SOP，chart 骨架亦由 charts/open-design 派生
+             （daemon 多容器＋auth-proxy sidecar＋ttyd console）。
 
              ⚠ 與既有 cloud_app_mcp_hermes（slug mcp-hermes、chart mcp-server、image
              hermes-mcp-admin）是**不同產品**：那是 Hermes 的 MCP server，本筆是 Hermes
              Agent 完整應用（gateway + webui + dashboard）。xmlid／slug／顯示名刻意區隔，
              勿 reuse、勿互抄 helm values。
 
-             ⚠ **本輪不可購買上架**：定價未拍板（#424 只涵蓋「上架」，不含商品化），故
-             is_hidden=True ＋ 不掛任何 subscription plan（HA PaaS 先例）。hidden 會被
-             generic create 擋（controllers/paas.py `_create_service`），本輪部署路徑＝
-             odoo shell 直建（E2E）。定價拍板後比照 #431 模式解封（翻 is_hidden=False
-             ＋掛 plan），本檔 noupdate=0、-u 自動套用、無需 migration。
+             **已定價開賣**（#494，Eugene 2026-07-31 拍板月 4500／年 36000＋7 天 trial）：
+             is_hidden=False ＋ 掛 plan_hermes_agent_{monthly,yearly}（links.xml）。
+             #424① 當時定價未拍板故 is_hidden=True ＋不掛 plan（HA PaaS 先例），本次
+             比照 #431 模式解封；本檔 noupdate=0、-u 自動套用、無需 migration。
+             ⚠ is_hidden 是 generic create 的唯一擋線（controllers/paas.py
+             `_create_service`）——翻回 True 等於整個商品下架，守線＝
+             test_hermes_agent_seed_424.test_visible_and_deployable。
 
-             ⚠ **刻意不設 conceal_instances**（#471 拆語意）：本筆只是「未上架」，既有
-             租戶服務必須照常可讀、可操作、留在 workspace 清單。拆分前 is_hidden 同時
-             擋掉既有實例，導致 stg 刻意留測的 svc60（hermes-e2e）詳情頁打不開、
-             rollback／change-plan／MCP 設定全不可達，且每次 -u 把手動解封翻回就再犯
-             （#449 報告記載 2026-07-28 曾以 DB 直改臨時解封）。與 cloud_app_ha_paas
-             的「兩層都關」是刻意的對照組，勿照抄那筆的 conceal_instances=True。
+             ⚠ **刻意不設 conceal_instances**（#471 拆語意）：解封只動「曝光層」。
+             conceal_instances 是「實例層」，設了會讓既有租戶服務詳情頁打不開、
+             rollback／change-plan／MCP 設定全不可達——拆分前 is_hidden 同時擋掉既有
+             實例就是這樣咬到 stg 刻意留測的 svc60（hermes-e2e），且每次 -u 把手動
+             解封翻回就再犯（#449 報告記載 2026-07-28 曾以 DB 直改臨時解封）。與
+             cloud_app_ha_paas 的「兩層都關」是刻意的對照組，勿照抄那筆的
+             conceal_instances=True。守線＝test_conceal_instances_untouched。
 
              image：
              - agent＝#424 ② 交付的衍生 image（Elmo 的 MCP OAuth 熱修已轉 build-time
@@ -882,16 +888,27 @@
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
 
-            <!-- Resource Requirements（v1.1 §8.8 定值）。min_ram_gb 驅動 workspace ns quota
-                 （cloud_service._compute_ns_quota：sum(存活 service allocated_ram_gb)×3，
-                 本 template 無 plan → allocated_ram_gb 走 min_ram_gb fallback）。3× headroom
-                 必須蓋得住**全容器** limits.memory 總和：agent 6Gi + webui 2Gi + console
-                 512Mi + authProxy sidecar 128Mi ＝ 8.625Gi（CPU 合計 3.4，由 quota 的
-                 8 vCPU floor 蓋住）→ min_ram_gb = 3.0（÷3 上取；無 DB 拓撲）。
-                 ⚠ headroom 只剩 0.375Gi（9Gi − 8.625Gi）：**任何一邊加容器或調高 limits
-                 都必須同時重算本欄**——守線＝test_min_ram_covers_all_container_limits
-                 （由 seed values 現算、不硬編，加了就紅）。#380 血訓＝quota 不足 → pod
-                 FailedCreate(exceeded quota) → 服務對外永遠 CF 502。
+            <!-- Resource Requirements（v1.1 §8.8 定值）。min_vcpu／min_ram_gb 驅動
+                 workspace ns quota（cloud_service._compute_ns_quota：
+                 max(sum(存活 service allocated_*)×3, floor)）。本 template 的 plan
+                 刻意不設 cs_* → allocated_* 走 min_* fallback（見 subscription_products.xml
+                 的 plan_hermes_agent_* 註解）。3× headroom 必須蓋得住**全容器** limits：
+                 - memory：agent 6Gi + webui 2Gi + console 512Mi + authProxy sidecar
+                   128Mi ＝ 8.625Gi → min_ram_gb = 3.0（÷3 上取；無 DB 拓撲）
+                 - cpu：agent 2 + webui 1 + console 0.2 + authProxy sidecar 0.2 ＝ 3.4
+                   → min_vcpu = 2（÷3 上取，同一條規則）
+                 ⚠ **min_vcpu 1→2 是 #456 的修法**（2026-07-28 stg 實證）：舊值的邊際
+                 貢獻只有 +3 < 3.4，但空 workspace 有 8 vCPU floor 蓋著，所以 #424① 的
+                 E2E 全綠、**一放進既有服務的共用 workspace 才露餡**——主 pod 永久卡
+                 FailedCreate(exceeded quota: limits.cpu=3200m)，而 DB／UI 照樣顯示
+                 Running（調度失敗不反映在服務狀態）。守線因此斷言**邊際貢獻**而非含
+                 floor 的 quota 值，否則缺陷值 1 會假綠。
+                 ⚠ RAM headroom 只剩 0.375Gi（9Gi − 8.625Gi）、CPU 剩 2.6：**任何一邊
+                 加容器或調高 limits 都必須同時重算本欄**——守線＝
+                 test_min_ram_covers_all_container_limits ／
+                 test_min_vcpu_covers_all_container_limits（皆由 seed values 現算、不硬編，
+                 加了就紅；另各有一條擋灌水的 minimal-step）。#380 血訓＝quota 不足 →
+                 pod FailedCreate(exceeded quota) → 服務對外永遠 CF 502。
                  min_storage_gb 5＝單顆 data PVC（agent /opt/data ＋ webui ~/.hermes 共用
                  同一顆 RWO，沿用 Elmo 原架構）。
                  ⚠ **未來若替本 template 寫專用 provision 端點**（如 HA PaaS 的
@@ -901,7 +918,7 @@
                  這三欄無預設值，漏帶則 quota 落到 floor 8Gi < 本服務 8.63Gi 全容器
                  limits → pod FailedCreate。ha_paas.py 的 provision 沒帶是因為 HA 只
                  吃 1Gi、floor 蓋得住，勿照抄。 -->
-            <field name="min_vcpu">1</field>
+            <field name="min_vcpu">2</field>
             <field name="min_ram_gb">3.0</field>
             <field name="min_storage_gb">5</field>
 
@@ -923,12 +940,15 @@
             <field name="admin_password_carrier">helm_secret</field>
             <field name="post_deploy_init_type">none</field>
 
-            <!-- 每帳號限一：本輪僅供內部試用／單一實例驗證，且 agent limits 6Gi 是平台
-                 最重的單一容器，避免同帳號開多台把 workspace quota 吃乾。 -->
+            <!-- 每帳號限一：agent limits 6Gi 是平台最重的單一容器（全容器合計 8.625Gi
+                 ／3.4 CPU），避免同帳號開多台把 workspace quota 吃乾。#494 定價上架後
+                 仍維持 1——這條的理由是資源面而非「內部試用」，要放寬得先重算 quota
+                 模型。守線＝test_max_per_partner_one。 -->
             <field name="max_per_partner" eval="1"/>
 
             <field name="is_active" eval="True"/>
-            <field name="is_hidden" eval="True"/>
+            <!-- #494 定價拍板解封（曝光層）；conceal_instances 刻意不設，見上方註解。 -->
+            <field name="is_hidden" eval="False"/>
         </record>
 
         <!-- Home Assistant OS（HAOS，#423 W5b）：平台第一個 **VM 型** cloud service

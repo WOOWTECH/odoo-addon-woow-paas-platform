@@ -8,10 +8,12 @@
 
 | 語意 | 欄位 | 擋什麼 | 誰在用 |
 | --- | --- | --- | --- |
-| **曝光層** | `is_hidden` | marketplace 不列、template 詳情／plans 不可讀、generic create 拒收。**完全不動既有實例。** | hermes-agent（#424 定價未拍板）、HA PaaS |
+| **曝光層** | `is_hidden` | marketplace 不列、template 詳情／plans 不可讀、generic create 拒收。**完全不動既有實例。** | HA PaaS（＋任何待定價／暫時下架的商品） |
 | **實例層** | `conceal_instances` | 既有 service／訂閱／發票／workspace 全鏈過濾 ＋ 既有服務的**所有**讀取／操作端點回 not found | 僅 HA PaaS |
 
 判斷法：**你要擋的對象是「還沒買的人」還是「已經買了的人」？** 前者是曝光層、後者是實例層。絕大多數上架／下架需求只需要曝光層。
+
+> **hidden-only 目前沒有 seed 樣本**（#494：唯一的 hidden-only 商品 hermes-agent 已定價上架，解封時只翻 `is_hidden`、`conceal_instances` 自始未設——正是本表想要的形態）。因此該語意的行為矩陣（`test_conceal_instances_split_471.py` / `test_hidden_template_chain.py`）改用**合成 fixture**（`make_hidden_only_template`），不再綁任何商品：受測的是語意，不該隨商品上下架而生滅。下次有商品要暫時下架時，直接翻它的 `is_hidden` 即可，**不要**順手加 `conceal_instances`。
 
 **蘊含式（model 層 fail-loud）**：`conceal_instances=True ⟹ is_hidden=True`（`cloud_app_template.py` `_check_conceal_implies_hidden`）。反例語意矛盾——marketplace 賣得到、買完立刻從前台消失且不可操作。這也擋掉「解封時只翻 is_hidden、留下 conceal_instances=True」的半套變更：解封 conceal template 必須**兩個欄位一起翻**。
 

@@ -15,10 +15,16 @@
 本檔守**兩語意各自的行為矩陣**——單測任一欄位都無法證明拆分成立，必須成對比對：
 
 - `TestConcealInstancesSeed`：seed 盤點＋「conceal ⟹ hidden」蘊含式。
-- `TestHiddenOnlyExistingServiceReachable`：hidden-only（hermes-agent）既有服務全可達，
-  但仍不上架、不可新建 —— 這組是 #471 的 RED。
+- `TestHiddenOnlyExistingServiceReachable`：hidden-only 既有服務全可達，但仍不上架、
+  不可新建 —— 這組是 #471 的 RED。
 - `TestConcealTemplateOperationsBlocked`：conceal（HA PaaS）操作端點照擋，含 C 組
   這次補上的 reset-admin-password —— reset 的 gate 缺失是 #471 順帶收斂項。
+
+⚠ hidden-only 那組**刻意用合成 fixture、不綁任何 seed 商品**（#494）：原本綁的是
+當時唯一的 hidden-only 商品 hermes-agent，它一定價上架（is_hidden 翻 False）整組
+B 組斷言就集體變紅——受測的是「hidden-only 語意」，卻被某個商品的**商業狀態**綁架。
+seed 側的對應守線各自留在該商品的 seed 測試檔（hermes ＝
+test_hermes_agent_seed_424.test_conceal_instances_untouched）。
 
 HA PaaS 既有隱藏鏈（workspace／dashboard／billing 全鏈）的零回歸由
 `test_hidden_template_chain.py` 承擔，本檔不重複。
@@ -27,6 +33,27 @@ from odoo.tests.common import HttpCase, TransactionCase, tagged
 from odoo.exceptions import ValidationError
 
 _NOT_FOUND = 'Service not found'
+
+
+def make_hidden_only_template(env, slug='hidden-only-fixture-471'):
+    """建一個「只關曝光層」的合成 template（is_hidden ＋ 不 conceal）。
+
+    has_admin_gui=True 是刻意的——reset-admin-password 的 gate 只有在支援 admin GUI
+    的 template 上才觀測得到（否則會先撞「不支援」而看不到隱藏語意本身）。
+    """
+    return env['woow_paas_platform.cloud_app_template'].sudo().create({
+        'name': 'Hidden Only Fixture 471',
+        'slug': slug,
+        # helm_* 三欄 required=True（NOT NULL），不給會撞 NotNullViolation。
+        'helm_repo_url': 'oci://example.invalid',
+        'helm_chart_name': 'hidden-only-fixture',
+        'helm_chart_version': '0.0.0',
+        'is_active': True,
+        'is_hidden': True,
+        'conceal_instances': False,
+        'has_admin_gui': True,
+        'admin_password_carrier': 'helm_secret',
+    })
 
 
 class TestConcealInstancesSeed(TransactionCase):
@@ -41,14 +68,20 @@ class TestConcealInstancesSeed(TransactionCase):
             'HA PaaS 既有實例必須全鏈隱藏＋操作端點照擋（#336 設計意圖，'
             '拆語意後這條由 conceal_instances 承載）')
 
-    def test_hermes_agent_hidden_only(self):
-        """hermes-agent＝只關曝光層（#424 定價未拍板，但既有服務照用）。"""
+    def test_hermes_agent_unlocked_without_touching_instance_layer(self):
+        """hermes-agent＝#494 定價拍板後兩層都開（解封只翻曝光層）。
+
+        它曾是本 repo 唯一的 hidden-only 商品（#424① 定價未拍板期間）。解封時
+        **只翻 is_hidden**、conceal_instances 自始不設——這條鎖住「別在解封或
+        再次下架時順手動實例層」：設了會讓既有租戶服務詳情頁打不開、rollback／
+        change-plan／MCP 設定全不可達（#464 在本 template 實測過，stg 刻意留測的
+        svc60 就是這樣整個不可達的）。
+        """
         tpl = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
-        self.assertTrue(tpl.is_hidden, '定價未拍板前不上架')
+        self.assertFalse(tpl.is_hidden, '#494 已定價上架')
         self.assertFalse(
             tpl.conceal_instances,
-            'hermes-agent 只是「未上架」，既有租戶服務必須照常可讀可操作'
-            '（#471：stg 刻意留測的 svc60 曾因此整個不可達）')
+            '實例層自始不該設——它與上不上架正交')
 
     def test_visible_template_conceals_nothing(self):
         """正常販售的 template 兩層都開。"""
@@ -56,15 +89,17 @@ class TestConcealInstancesSeed(TransactionCase):
         self.assertFalse(n8n.is_hidden)
         self.assertFalse(n8n.conceal_instances)
 
-    def test_seed_inventory_is_exactly_these_two(self):
-        """盤點鎖定：隱藏 template 恰為 HA PaaS ＋ hermes-agent，且只有前者 conceal。
+    def test_seed_inventory_is_exactly_ha_paas(self):
+        """盤點鎖定：seed 的隱藏 template 恰為 HA PaaS，且它是 conceal 型。
 
         新增隱藏 template 時這條會紅——那正是要停下來決定它屬哪一類的時刻。
+        （#494 前這裡還有 hermes-agent；它定價上架後 seed 已無 hidden-only 商品，
+        故該語意的行為矩陣改用合成 fixture，見 make_hidden_only_template。）
         """
         Tpl = self.env['woow_paas_platform.cloud_app_template'].sudo()
         hidden = Tpl.with_context(active_test=False).search([('is_hidden', '=', True)])
         self.assertEqual(
-            set(hidden.mapped('slug')), {'ha-paas', 'hermes-agent'},
+            set(hidden.mapped('slug')), {'ha-paas'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(
@@ -107,12 +142,16 @@ class _ServiceMatrixCase(HttpCase):
 
     template_xmlid = None
 
+    def _template(self):
+        """受測 template。預設取 seed xmlid；hidden-only 組覆寫成合成 fixture。"""
+        return self.env.ref(self.template_xmlid)
+
     def setUp(self):
         super().setUp()
         self.authenticate('admin', 'admin')
         self.partner = self.env.ref('base.partner_admin')
         self.admin_user = self.env.ref('base.user_admin')
-        self.tpl = self.env.ref(self.template_xmlid)
+        self.tpl = self._template()
         self.ws = self.env['woow_paas_platform.workspace'].create({
             'name': 'WS 471 %s' % self.tpl.slug, 'owner_id': self.admin_user.id})
         self.svc = self.env['woow_paas_platform.cloud_service'].create({
@@ -164,12 +203,16 @@ class _ServiceMatrixCase(HttpCase):
 
 @tagged('post_install', '-at_install')
 class TestHiddenOnlyExistingServiceReachable(_ServiceMatrixCase):
-    """hidden-only（hermes-agent）：既有服務全可達，但仍不上架、不可新建。
+    """hidden-only：既有服務全可達，但仍不上架、不可新建。
 
     這組是 #471 的 RED —— 修前 8 個操作端點 ＋ 清單全部回 'Service not found'。
+
+    fixture 是**合成** template（原本綁 hermes-agent，#494 定價上架後 seed 已無
+    hidden-only 商品）：受測的是語意，不該隨任何商品的上架與否而生滅。
     """
 
-    template_xmlid = 'woow_paas_platform.cloud_app_hermes_agent'
+    def _template(self):
+        return make_hidden_only_template(self.env)
 
     # ── A 組：既有服務的讀取／操作，全部應可達 ──────────────────────────
     def test_service_detail_reachable(self):

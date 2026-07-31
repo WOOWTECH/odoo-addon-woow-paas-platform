@@ -15,6 +15,10 @@
 from odoo import fields
 from odoo.tests.common import HttpCase, TransactionCase, tagged
 
+from odoo.addons.woow_paas_platform.tests.test_conceal_instances_split_471 import (
+    make_hidden_only_template,
+)
+
 
 class TestHAPaaSSeed(TransactionCase):
     """HA PaaS 0 元 plan／product／隱藏 template seed 存在性與屬性。"""
@@ -63,9 +67,12 @@ class TestHiddenChainSsotIsConcealInstances(TransactionCase):
     直接對 mixin helper 斷言，而非繞一圈打端點——四個 helper（template／service／
     subscription／workspace）全部由 ``_hidden_template_ids`` 推導（DRY，見
     docs/decisions/patterns/hidden-template-presentation-chain.md），鎖住這一個推導
-    根就鎖住整條鏈。若判準退回 ``is_hidden``，hermes-agent 這類「僅未上架」的
-    template 其既有服務會連 workspace 清單／dashboard 計數／billing 歷史一起消失
-    —— 那正是 #471 的症狀。
+    根就鎖住整條鏈。若判準退回 ``is_hidden``，「僅未上架」的 template 其既有服務會
+    連 workspace 清單／dashboard 計數／billing 歷史一起消失 —— 那正是 #471 的症狀
+    （#464 在當時尚未上架的 hermes-agent 上實測到）。
+
+    hidden-only 的樣本用**合成** template：#494 把 hermes-agent 定價上架後，seed 裡
+    已無 hidden-only 商品，而這條鏈的語意不該隨商品上下架而生滅。
     """
 
     def setUp(self):
@@ -73,16 +80,18 @@ class TestHiddenChainSsotIsConcealInstances(TransactionCase):
         from odoo.addons.woow_paas_platform.controllers.ha_paas import HiddenChainMixin
         self.mixin = HiddenChainMixin()
         self.ha = self.env.ref('woow_paas_platform.cloud_app_ha_paas')
-        self.hermes = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
+        self.hidden_only = make_hidden_only_template(
+            self.env, slug='hidden-only-fixture-chain')
 
     def test_conceal_template_in_chain(self):
         self.assertIn(self.ha.id, self.mixin._hidden_template_ids(self.env),
                       'conceal template 必須進呈現鏈過濾集')
 
     def test_hidden_only_template_not_in_chain(self):
-        self.assertTrue(self.hermes.is_hidden, '前提：hermes-agent 未上架')
+        self.assertTrue(self.hidden_only.is_hidden, '前提：fixture 未上架')
+        self.assertFalse(self.hidden_only.conceal_instances, '前提：實例層未關')
         self.assertNotIn(
-            self.hermes.id, self.mixin._hidden_template_ids(self.env),
+            self.hidden_only.id, self.mixin._hidden_template_ids(self.env),
             '僅未上架（is_hidden）的 template 不得進呈現鏈——其既有租戶服務、'
             '訂閱、發票都要照常出現在前台（#471）')
 
@@ -97,7 +106,7 @@ class TestHiddenChainSsotIsConcealInstances(TransactionCase):
             'name': 'WS hidden-only 471',
             'owner_id': self.env.ref('base.user_admin').id})
         svc = self.env['woow_paas_platform.cloud_service'].create({
-            'workspace_id': ws.id, 'template_id': self.hermes.id,
+            'workspace_id': ws.id, 'template_id': self.hidden_only.id,
             'name': 'svc-chain-471', 'reference_id': 'test-chain-471',
             'state': 'running', 'subdomain': 'svc-chain-471'})
         self.assertNotIn(svc.id, self.mixin._hidden_service_ids(self.env))

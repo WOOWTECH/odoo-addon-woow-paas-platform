@@ -2361,7 +2361,8 @@ class PaasController(HiddenChainMixin, Controller):
         template = CloudAppTemplate.browse(template_id)
         # #336：generic create 拒絕 hidden template（hidden 只能經 provision 端點建）
         # #471 B 組：判準留 is_hidden——「未上架」的唯一實質效力就是擋新建，改判
-        # conceal_instances 等於讓 hermes-agent 這類未定價商品可被直接下單。
+        # conceal_instances 等於讓待定價／暫時下架的商品可被直接下單。
+        # （原註解舉的 hermes-agent 已於 #494 定價上架；語意本身不變。）
         if not template.exists() or not template.is_active or template.is_hidden:
             return {'success': False,
                     'error': 'This template cannot be deployed directly.'}

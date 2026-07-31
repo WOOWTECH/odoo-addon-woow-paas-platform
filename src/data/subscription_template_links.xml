@@ -81,6 +81,19 @@
                    eval="[(6, 0, [ref('plan_haos_monthly'), ref('plan_haos_yearly')])]"/>
         </record>
 
+        <!-- #494：Hermes Agent 完整應用 template ↔ 兩 base plan（4500/36000）。
+             #424① 上架時定價未拍板、刻意不掛 plan；拍板後比照 #431 解封（翻
+             is_hidden ＋掛 plan），本檔 noupdate=0 ＋ (6, 0, [...]) 全量 reset ⇒
+             -u 直接生效、無需 migration。v1 不做加購變體，故
+             subscription_template_links_variants.xml 沒有對應的 (4,) append。
+             ⚠ 勿與 cloud_app_mcp_hermes（Hermes MCP Server，上面那筆六 plan）
+             互掛：兩者是不同產品。 -->
+        <record id="cloud_app_hermes_agent" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_hermes_agent_monthly'),
+                                  ref('plan_hermes_agent_yearly')])]"/>
+        </record>
+
         <!-- #341（Wave A）撞車收斂：HA PaaS plan（plan_ha_paas_monthly）刻意 orphan——
              不掛任何 template M2M（Wave A test_orphan_no_template_links 斷言 M2M=0，且
              storefront_hidden 已在 plan 層擋前台）。provision 端點直接把 plan ref 傳給
