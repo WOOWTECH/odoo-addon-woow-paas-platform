@@ -4,10 +4,10 @@
 鏡射 test_opendesign_seed_380.py（金樣板 SOP）＋ test_ha_paas_seed_woowtech_image.py
 （hidden template ＋ 原子綁定）兩者的結構。本檔守的是「錯了就靜默壞掉」的點：
 
-- **webui image 尚未鏡像**：Phase A（woow-paas-charts）負責把上游
-  ghcr.io/nesquena/hermes-webui 鏡像進 jcr-prod 並回報 tag@digest。補釘前
-  ``test_webui_image_pinned_digest`` **刻意恆紅**（不 skip、不放行）——PENDING 佔位
-  被部署出去就是 Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
+- **image 雙釘**：webui 已由 Phase A（woow-paas-charts）鏡像進 jcr-prod 並補釘
+  tag@digest，``_PENDING_IMAGE_KEYS`` 因此為空；``test_webui_image_pinned_digest``
+  自「交付前刻意恆紅」轉為**回歸守線**（防 tag 被改回 PENDING 佔位或掉 @sha256）
+  ——佔位被部署出去就是 Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
 - **quota 蓋不住全容器 limits**：#380 血訓，min_ram_gb×3 不足 → pod FailedCreate
   → 對外永遠 CF 502。這裡用**結構關係**斷言（由 seed values 現算），不硬編數字：
   一條擋太小、一條擋太大（＝把契約 v1.1 §8.8 的「÷3 上取」規則機械化）。無 DB
@@ -33,7 +33,7 @@
 """
 import json
 
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 PLATFORM_REGISTRY = 'jcr-prod.woowtech.io/'
 HERMES_AGENT_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent'
@@ -708,6 +708,66 @@ class TestHermesAgentPlansSeed(TransactionCase):
         self.assertFalse(
             agent_plans & mcp_plans,
             '兩個 Hermes 產品共用了 plan：%s' % (agent_plans & mcp_plans).mapped('name'))
+
+
+@tagged('post_install', '-at_install')
+class TestHermesAgentStorefrontReachable(HttpCase):
+    """端到端：#494 之後真的**買得到**（marketplace → 詳情 → plans 三個端點全通）。
+
+    上面的欄位斷言證明「資料對」，這組證明「鏈路通」——#424① 期間這三個端點
+    全是關的（is_hidden 同時擋 list／by-id 詳情／plans），解封的實質效力就在這裡。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.authenticate('admin', 'admin')
+        self.tpl = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
+
+    def _result(self, url, params='{}'):
+        body = '{"jsonrpc":"2.0","method":"call","params":' + params + '}'
+        resp = self.url_open(
+            url, data=body, headers={'Content-Type': 'application/json'})
+        parsed = resp.json()
+        self.assertIn('result', parsed, 'resp: %s' % parsed)
+        return parsed['result']
+
+    def test_listed_in_marketplace(self):
+        r = self._result('/api/cloud/templates')
+        self.assertTrue(r.get('success'), r)
+        self.assertIn(
+            self.tpl.id, [t['id'] for t in r['data']],
+            '已定價上架的 template 必須出現在 marketplace 清單')
+
+    def test_template_detail_readable(self):
+        r = self._result('/api/cloud/templates/%s' % self.tpl.id)
+        self.assertTrue(r.get('success'), '規格頁必須讀得到（回 %r）' % r)
+
+    def test_plans_endpoint_returns_both_cycles(self):
+        """月／年兩張卡，價格與 trial 是拍板值（前台真正拿到的數字）。"""
+        r = self._result('/api/cloud-services/templates/%s/plans' % self.tpl.id)
+        self.assertTrue(r.get('success'), r)
+        by_unit = {p['unit']: p for p in r['data']}
+        self.assertEqual(set(by_unit), {'month', 'year'}, r['data'])
+        self.assertEqual(by_unit['month']['price'], 4500)
+        self.assertEqual(by_unit['year']['price'], 36000)
+        for unit, plan in by_unit.items():
+            self.assertTrue(plan['has_trial'], unit)
+            self.assertEqual(
+                (plan['trial_duration'], plan['trial_unit']), (7, 'day'), unit)
+            self.assertFalse(plan['variants'], 'v1 不做席數加購變體')
+
+    def test_displayed_specs_fall_back_to_template_minimums(self):
+        """前台卡片的規格 label ＝ template min_*（plan cs_* 全 0 的可見結果）。
+
+        #456 修法（min_vcpu → 2）在這裡是**使用者看得到的數字**；若有人替 plan
+        填了 cs_vcpu，label 會跟著變而紅——同一件事的另一個觀測面，與
+        test_plans_do_not_override_cs_spec 互為佐證。
+        """
+        r = self._result('/api/cloud-services/templates/%s/plans' % self.tpl.id)
+        expected = '%s vCPU · %s GB RAM' % (self.tpl.min_vcpu, self.tpl.min_ram_gb)
+        for plan in r['data']:
+            labels = [s['label'] for s in plan['specs']]
+            self.assertIn(expected, labels, '%s：%r' % (plan['unit'], labels))
 
 
 @tagged('post_install', '-at_install')

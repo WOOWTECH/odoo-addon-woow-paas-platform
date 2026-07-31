@@ -1149,6 +1149,65 @@
             <field name="service_type">cloud_service</field>
         </record>
 
+        <!-- Hermes Agent 完整應用（#424 ① 上架 → #494 定價解封）base plan：
+             單級距 月 4500／年 36000（年×8）＋7 天 trial。定價拍板 Eugene
+             2026-07-31，對標同為「完整應用」的 Open Design 雲端訂閱服務（同價）。
+             ⚠ 與 plan_mcp_hermes_*（Hermes **MCP Server** T1–T3，1500/4500/6000）
+             是不同商品，勿互掛、勿互抄——守線＝test_hermes_agent_seed_424 的
+             test_distinct_from_mcp_hermes_plans。
+
+             **v1 不做加購變體**（席數不適用：單一 agent 實例、單一憑證，且
+             max_per_partner=1），故 generator 的 subscription_products_variants.xml
+             沒有本 family、docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md
+             亦無需增列（同 HAOS 慣例）。
+
+             ⚠ **刻意不設 cs_vcpu／cs_ram_gb／cs_storage_gb**（沿用 opendesign／
+             HAOS 形制）。這三欄非空會讓 `_allocated_vals_from` 改吃 plan 值、蓋掉
+             template 的 min_*（2／3.0／5）——那三個是**quota 峰值模型**（要蓋住
+             全容器 limits），不是賣給租戶的規格。#456 就是這樣炸的：stg 臨時測試
+             的 0 元 plan 填了 cs 1/3.0/5，workspace quota 的 CPU 邊際貢獻只有 +3
+             而全容器 limits.cpu 合計 3.4，共用 workspace 的主 pod 永久卡
+             FailedCreate(exceeded quota)，DB／UI 卻照樣顯示 Running。
+             另外 `_apply_plan_spec_overlay` 會把 cs_* 疊成 resources.requests/limits，
+             與本 template seed 已寫死的 agent／webui／console resources 打架。
+             守線＝test_hermes_agent_seed_424.py 的 test_plans_do_not_override_cs_spec
+             與 test_allocated_vals_fall_back_to_template_min_star。 -->
+        <record id="plan_hermes_agent_monthly" model="sh.subscription.plan">
+            <field name="name">Hermes Agent 雲端訂閱服務 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">4500</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
+        <record id="plan_hermes_agent_yearly" model="sh.subscription.plan">
+            <field name="name">Hermes Agent 雲端訂閱服務 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">36000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
         <!-- ============================================================ -->
         <!--  Products (one per plan, each links to its plan)             -->
         <!--  sh_subscription_plan_id is on product.template              -->
@@ -1740,6 +1799,29 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_haos_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <!-- Hermes Agent 完整應用（#494）base product：taxes_id 明寫空、pts 免稅（#366）。 -->
+        <record id="product_hermes_agent_monthly" model="product.product">
+            <field name="name">Hermes Agent 雲端訂閱服務 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">4500</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_hermes_agent_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <record id="product_hermes_agent_yearly" model="product.product">
+            <field name="name">Hermes Agent 雲端訂閱服務 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">36000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_hermes_agent_yearly"/>
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
