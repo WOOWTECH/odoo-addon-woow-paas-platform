@@ -254,3 +254,5 @@ from . import test_addon_removal_params_474
 from . import test_addon_removal_fail_closed_477
 # fix: #484 呼叫端讀齊 operator 具名失敗欄位——dns_failed / pod_retrieval_error fail-closed
 from . import test_named_failure_fields_484
+# feat: #489 部署／升級 age timeout——轉移狀態超時未就緒轉 error＋診斷（F-423-1 Step 2）
+from . import test_cloud_service_deploy_timeout

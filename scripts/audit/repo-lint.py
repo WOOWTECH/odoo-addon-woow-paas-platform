@@ -895,6 +895,62 @@ def check_conceal_instances_gate(root, only_file=None):
     return violations
 
 
+def check_transition_anchor_utc(root, only_file=None):
+    """轉移狀態的時間錨不得用 ``datetime.now()`` 寫入（#489）。
+
+    ``deployed_at`` / ``last_upgraded_at`` 從 #489 起是 age timeout 的**判定用**
+    錨，不再只是前台顯示。Odoo 的 Datetime 欄位契約是 **UTC naive**，而 Python
+    的 ``datetime.now()`` 回的是**本機時區** naive——兩者在非 UTC 的伺服器上不
+    同基準：
+
+      * UTC+8 → 錨比 ``fields.Datetime.now()`` 大 8 小時 → age 恆為負 →
+        **逾時保護靜默失效**；
+      * UTC-x → age 虛增 → **誤殺**（而誤殺不可自癒：poll 只撈轉移狀態，
+        寫進 error 後沒有任何路徑會把它 poll 回 running）。
+
+    測試環境的容器時區是 UTC，所以這個缺陷**測不出來**——只能靠 gate。
+    （合併前 `controllers/paas.py` 的 reconfigure 路徑正是這個寫法。）
+    """
+    anchor_fields = {"deployed_at", "last_upgraded_at"}
+    violations = []
+    files = [only_file] if only_file else sorted(
+        glob.glob(os.path.join(root, "src/**/*.py"), recursive=True))
+    for fp in files:
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        if rel.startswith("src/tests/"):
+            continue
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values):
+                if not (isinstance(key, ast.Constant) and key.value in anchor_fields):
+                    continue
+                if not (isinstance(value, ast.Call)
+                        and isinstance(value.func, ast.Attribute)
+                        and value.func.attr == "now"):
+                    continue
+                # 合格：fields.Datetime.now()。不合格：datetime.now() /
+                # datetime.datetime.now()（本機時區）。
+                owner = value.func.value
+                if isinstance(owner, ast.Attribute) and owner.attr == "Datetime":
+                    continue
+                violations.append(
+                    "%s:%d：`%s` 用 datetime.now() 寫入。#489 起這是 age timeout 的判定"
+                    "用錨，必須與 fields.Datetime.now() 同基準（Odoo Datetime 欄位是 UTC "
+                    "naive；datetime.now() 是本機時區）。非 UTC 伺服器上這會讓逾時保護"
+                    "靜默失效或誤殺，而測試容器是 UTC → 測不出來。"
+                    % (rel, getattr(value, "lineno", key.lineno), key.value))
+    return violations
+
+
 # ---------------------------------------------------------------- modes
 
 def run_all(root):
@@ -907,7 +963,8 @@ def run_all(root):
                   + check_slug_capability_gate(root)
                   + check_admin_gui_gate_anchor(root)
                   + check_conceal_instances_gate(root)
-                  + check_reset_budget_ladder(root))
+                  + check_reset_budget_ladder(root)
+                  + check_transition_anchor_utc(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -915,7 +972,7 @@ def run_all(root):
         return 1
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
           "reuse-values / seed-topology / test-env-restore / capability-gate / "
-          "conceal-instances / reset-budget-ladder）")
+          "conceal-instances / reset-budget-ladder / transition-anchor-utc）")
     return 0
 
 
@@ -968,9 +1025,11 @@ def run_hook():
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
             violations += check_conceal_instances_gate(root, only_file=abs_path)
+            violations += check_transition_anchor_utc(root, only_file=abs_path)
         elif re.match(r"^src/.*\.py$", rel):
             violations = check_reuse_values(root, only_file=abs_path)
             violations += check_conceal_instances_gate(root, only_file=abs_path)
+            violations += check_transition_anchor_utc(root, only_file=abs_path)
             if rel.startswith("src/tests/"):
                 violations += check_test_env_restore(root, only_file=abs_path)
         elif re.match(r"^src/static/src/.*\.xml$", rel):

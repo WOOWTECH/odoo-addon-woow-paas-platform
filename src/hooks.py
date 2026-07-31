@@ -142,6 +142,9 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.sa_default_service_url',
     'woow_paas_platform.agent_idle_reap_seconds',
     'woow_paas_platform.agent_gc_seconds',
+    # #489：轉移狀態的 age timeout 門檻（缺值時走 cloud_service.py 的內建預設）
+    'woow_paas_platform.deploy_timeout_minutes',
+    'woow_paas_platform.vm_deploy_timeout_minutes',
     # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
     # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
 ]

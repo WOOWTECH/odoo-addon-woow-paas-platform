@@ -2653,7 +2653,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'state': 'upgrading',
                 'helm_values': json.dumps(merged_values),
                 'helm_chart_version': version or service.helm_chart_version,
-                'last_upgraded_at': datetime.now(),
+                # ⚠ `fields.Datetime.now()`（UTC）而**不是** `datetime.now()`
+                # （本機時區）。#489 讓這個欄位從「前台顯示用」變成 age timeout
+                # 的**判定用**錨：伺服器時區若不是 UTC，錨與 `fields.Datetime.now()`
+                # 就不同基準——UTC+8 會讓 age 算成負的（保護靜默失效），UTC-x 會
+                # 讓 age 虛增（誤殺）。repo-lint `transition-anchor-utc` 機械攔。
+                'last_upgraded_at': fields.Datetime.now(),
                 'error_message': False,
                 'addon_update_pending': addon_changed,
             })
@@ -2799,9 +2804,13 @@ class PaasController(HiddenChainMixin, Controller):
                 revision=revision,
             )
 
+            # #489：rollback 也是一次 helm 寫入，`last_upgraded_at` 是它的時間
+            # 錨。不記的話 age timeout 會退回首裝時間，rollback 一發出就被判逾時。
+            # （`fields.Datetime.now()` 的 UTC 基準要求見 `_update_service`。）
             service.write({
                 'state': 'upgrading',
                 'error_message': False,
+                'last_upgraded_at': fields.Datetime.now(),
             })
 
             return {'success': True, 'message': f'Rollback to revision {revision} initiated'}
@@ -2894,10 +2903,19 @@ class PaasController(HiddenChainMixin, Controller):
             # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
             service._store_import_progress(status)
 
+            # #489：「這一輪 poll 沒能讓服務離開轉移狀態」的理由，供 age
+            # timeout 組診斷訊息（語意與判定同 model 層，見
+            # ``CloudService._check_transition_timeout``）。**兩層都要接**：
+            # 就緒判定是單一事實源，但寫 error 的動作在各自的 poll 裡——只接
+            # model 層的話，租戶打開服務詳情頁（每 5 秒一次）就會把逾時判定
+            # 蓋回 deploying。
+            stuck_detail = None
+
             if release_status == 'deployed':
                 all_ready, detail = service._is_release_ready(status)
                 if not all_ready:
                     service._log_not_ready(detail)
+                    stuck_detail = detail
 
                 if all_ready:
                     template = service.template_id
@@ -2946,9 +2964,18 @@ class PaasController(HiddenChainMixin, Controller):
                     'error_message': release.get('description', 'Deployment failed'),
                 })
 
-            elif release_status in ['pending-install', 'pending-upgrade', 'pending-rollback']:
-                # Still in progress
-                pass
+            elif service._is_timeout_governed():
+                # `pending-install` / `pending-upgrade` / `pending-rollback` /
+                # `unknown` — 狀態不動（仍在進行中），但它們同樣會永久卡：被
+                # SIGKILL 腰斬的 rollback 會把 release 留在 `pending-rollback`
+                # 而沒人再推它。納入封頂讓 age timeout 有話可說。
+                # 不加 `HARD:` 前綴的理由同 model 層：正常首裝就會撞到
+                # pending-install，升 warning 會稀釋 HARD 的語意。
+                stuck_detail = f"helm release status is {release_status or 'unknown'}"
+                service._log_not_ready(stuck_detail)
+
+            if stuck_detail:
+                service._check_transition_timeout(stuck_detail)
 
         except PaaSOperatorError as e:
             if e.status_code == 404:
