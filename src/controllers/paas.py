@@ -875,6 +875,7 @@ class PaasController(HiddenChainMixin, Controller):
             'min_vcpu': template.min_vcpu,
             'min_ram_gb': template.min_ram_gb,
             'min_storage_gb': template.min_storage_gb,
+            'pricing': self._template_pricing(template),
         }
         if include_values:
             data['helm_chart_name'] = template.helm_chart_name
@@ -884,6 +885,64 @@ class PaasController(HiddenChainMixin, Controller):
             data['helm_value_specs'] = self._parse_helm_value_specs(template)
             data['full_description'] = template.full_description or ''
         return data
+
+    def _template_pricing(self, template: Any) -> dict[str, Any]:
+        """marketplace 卡片／configure header 的價格摘要（#478）。
+
+        #478 之前這裡什麼價格都不回，而前端 ``AppCard.formattedPrice`` 直接寫死
+        ``"Free"`` ⇒ 每個付費商品都在卡片上謊報免費，點進去才看到 4500。修法是
+        「A 為主、B 為底」：能算出價格就回真實起價，**算不出就回 None 讓前端不渲染**
+        （而不是編一個 Free 出來）。
+
+        ⚠ 可見性判準必須與 ``api_template_plans``（前台 plan 選卡區）**同源**：
+        ``active`` ＋ 非 ``storefront_hidden``。兩邊不同源會讓卡片標一個使用者
+        點進去看不到的價格——那只是把 #478 從「謊報免費」換成「謊報數字」。
+        - ``active``：**顯式過濾**，不倚賴 x2many 讀取是否套 active_test。stg 的
+          0 元測試 plan 268（2026-07-31 archived）就是現成反例：漏掉它會把起價
+          拉回 0，付費商品又被標成 Free。
+        - ``storefront_hidden``：席數變體（open-design +1access 5100）藏在這個
+          旗標後面，計入會讓 tier_count 憑空多一個看不到的價位。
+
+        回傳鍵：
+          has_plans   有無「前台看得到的」plan
+          min_price   起價（無則 None ⇒ 前端不渲染標籤）
+          unit        起價的計價週期（month／year）
+          tier_count  同週期的 distinct 價位數（>1 前端才加「起」）
+          is_free     起價為 0（**唯一**還會顯示 Free 的情境）
+        """
+        empty = {'has_plans': False, 'min_price': None, 'unit': None,
+                 'tier_count': 0, 'is_free': False}
+        visible = template.sudo().subscription_plan_ids.filtered(
+            lambda p: p.active and not p.storefront_hidden)
+        if not visible:
+            return empty
+
+        # 週期優先序：月 → 年 → 其他。月／年並存時起價講的是月價（拿 36000 當
+        # 「起價」是另一種誤導）。
+        #
+        # ⚠ 最後那個「其他」分支是**刻意**的：起初只認 month/year，於是 day/week
+        # 計價的 template 會落到「沒有價格」而整個標籤不渲染——但 plan 選卡區
+        # （api_template_plans 完全不濾 unit）照樣列得出價目，變成「卡片說不知道、
+        # 點進去有價錢」。那是 #478 的鏡像。判準與年繳-only 的 fallback 同源：
+        # **有價格就該顯示**，「不渲染」只保留給真的沒有可見 plan。
+        # 跨端點一致性由 test_card_price_exists_in_the_plans_endpoint 實打
+        # api_template_plans 比對（不是就地重寫過濾條件）。
+        for unit in ('month', 'year'):
+            scoped = visible.filtered(lambda p: p.sh_unit == unit)
+            if scoped:
+                break
+        else:
+            scoped = visible
+            unit = min(scoped, key=lambda p: p.sh_plan_price).sh_unit or None
+
+        prices = sorted(set(scoped.mapped('sh_plan_price')))
+        return {
+            'has_plans': True,
+            'min_price': prices[0],
+            'unit': unit,
+            'tier_count': len(prices),
+            'is_free': prices[0] == 0,
+        }
 
     # ==================== Odoo Addons API ====================
 

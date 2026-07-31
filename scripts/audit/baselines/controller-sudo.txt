@@ -9,7 +9,7 @@
 6	src/controllers/ha_api.py
 17	src/controllers/ha_paas.py
 15	src/controllers/oauth2.py
-27	src/controllers/paas.py
+28	src/controllers/paas.py
 3	src/controllers/portal.py
 1	src/controllers/profile.py
 0	src/controllers/reconcile_report.py

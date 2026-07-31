@@ -41,9 +41,11 @@
                                     <WoowIcon name="'category'" size="14"/>
                                     <t t-esc="template.category"/>
                                 </span>
-                                <span class="o_woow_template_price">
+                                <!-- #478：起價（與 marketplace 卡片同源）；查無價格
+                                     時整欄不渲染，不再硬寫 Free。 -->
+                                <span t-if="formattedPrice" class="o_woow_template_price">
                                     <WoowIcon name="'payments'" size="14"/>
-                                    Free
+                                    <t t-esc="formattedPrice"/>
                                 </span>
                                 <span class="o_woow_template_resources">
                                     <WoowIcon name="'memory'" size="14"/>
