@@ -256,3 +256,5 @@ from . import test_addon_removal_fail_closed_477
 from . import test_named_failure_fields_484
 # feat: #489 部署／升級 age timeout——轉移狀態超時未就緒轉 error＋診斷（F-423-1 Step 2）
 from . import test_cloud_service_deploy_timeout
+# fix: #482 停權服務被 redeploy／reconfigure 後留在停權（state 收斂＋workload 收回 0）
+from . import test_suspended_redeploy_state_482
