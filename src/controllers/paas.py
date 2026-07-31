@@ -917,19 +917,29 @@ class PaasController(HiddenChainMixin, Controller):
         if not visible:
             return empty
 
-        # 月繳優先：月／年並存時起價講的是月價（拿 36000 當「起價」是另一種誤導）。
-        # 年繳-only 才退到年繳——沒有月繳不等於沒有價格，退回不渲染會讓使用者在
-        # 卡片上完全看不到價錢。
-        monthly = visible.filtered(lambda p: p.sh_unit == 'month')
-        scoped = monthly or visible.filtered(lambda p: p.sh_unit == 'year')
-        if not scoped:
-            return empty
+        # 週期優先序：月 → 年 → 其他。月／年並存時起價講的是月價（拿 36000 當
+        # 「起價」是另一種誤導）。
+        #
+        # ⚠ 最後那個「其他」分支是**刻意**的：起初只認 month/year，於是 day/week
+        # 計價的 template 會落到「沒有價格」而整個標籤不渲染——但 plan 選卡區
+        # （api_template_plans 完全不濾 unit）照樣列得出價目，變成「卡片說不知道、
+        # 點進去有價錢」。那是 #478 的鏡像。判準與年繳-only 的 fallback 同源：
+        # **有價格就該顯示**，「不渲染」只保留給真的沒有可見 plan。
+        # 跨端點一致性由 test_pricing_matches_visible_plans_endpoint 實打
+        # api_template_plans 比對（不是就地重寫過濾條件）。
+        for unit in ('month', 'year'):
+            scoped = visible.filtered(lambda p: p.sh_unit == unit)
+            if scoped:
+                break
+        else:
+            scoped = visible
+            unit = min(scoped, key=lambda p: p.sh_plan_price).sh_unit or None
 
         prices = sorted(set(scoped.mapped('sh_plan_price')))
         return {
             'has_plans': True,
             'min_price': prices[0],
-            'unit': 'month' if monthly else 'year',
+            'unit': unit,
             'tier_count': len(prices),
             'is_free': prices[0] == 0,
         }

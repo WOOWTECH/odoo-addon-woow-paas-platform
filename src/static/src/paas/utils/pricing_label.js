@@ -21,15 +21,20 @@ export function formatTemplatePrice(pricing) {
       pricing.min_price === undefined) {
     return "";
   }
-  // 真 0 元才叫 Free——這是唯一還會出現 Free 的情境。
+  // 多個價位（如 n8n T1–T4）才是「起價」；單一價位加「起」會讓使用者以為還有
+  // 更貴的選項。
+  const isFrom = pricing.tier_count > 1;
   if (pricing.is_free) {
-    return "Free";
+    // ⚠ 起價 0 但**還有更貴的階**（freemium：0 元入門＋付費階）時不能只寫
+    // "Free" —— 那是 #478「謊報免費」的鏡像：使用者以為整個商品免費，點進去
+    // 才看到付費階。這種商品目前 seed 觸及不到，但規則先立好。
+    return isFrom ? "Free 起" : "Free";
   }
-  // 單位縮寫沿用 PlanSelector._unitLabel 的慣例（mo／yr），讓卡片、header 與
-  // 下一頁的 plan 選卡區、總計列字樣一致。
-  const unit = pricing.unit === "year" ? "yr" : "mo";
+  // 單位縮寫沿用 PlanSelector._unitLabel 的三態慣例（mo／yr／原樣），讓卡片、
+  // header 與下一頁的 plan 選卡區、總計列字樣一致；day/week 之類的週期照原字串
+  // 顯示，而不是被誤標成 mo。
+  const unit =
+    pricing.unit === "month" ? "mo" : pricing.unit === "year" ? "yr" : pricing.unit;
   const price = `${pricing.min_price} pts/${unit}`;
-  // 多個價位（如 n8n T1–T4）才是「起價」，單一價位加「起」會讓使用者以為
-  // 還有更貴的選項。
-  return pricing.tier_count > 1 ? `${price} 起` : price;
+  return isFrom ? `${price} 起` : price;
 }
