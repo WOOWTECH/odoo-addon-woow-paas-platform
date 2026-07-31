@@ -19,7 +19,15 @@
 - **quota 蓋不住全容器 limits.cpu**（#456，2026-07-28 stg 實證）：RAM 早有守線、
   CPU 沒有，於是 `min_vcpu=1` 的邊際貢獻（×3＝3）蓋不住 3.4，共用 workspace 的
   主 pod 永久卡 FailedCreate 而 DB／UI 照樣顯示 Running。#494 上架時修成 2，並補
-  上與 RAM 對稱的兩條 CPU 守線（**用邊際、不套 floor**，理由見該測試 docstring）。
+  上與 RAM 對稱的兩條 CPU 守線。**四條 quota 守線一律斷言「邊際貢獻」、不套
+  `max(..., floor)`**——floor 只在「workspace 裡只有這一個服務」時成立，套了就會
+  讓不足的值假綠（#456 正是這樣溜到 stg 的）。RAM 側原本仍留著含 floor 的寫法，
+  #494 review 抓出這個一半的修法後一併校齊；兩側各只有 `_marginal_gi` /
+  `_marginal_cpu` 一個定義點，避免再次分歧。
+- **quota 守線的前提是 sidecar 規格不可從 seed 覆寫**：auth-proxy 的 resources 不在
+  seed values 裡，是以常數代表 chart 契約值計入總量。chart 有那個鍵、seed 走全量
+  管線 ⇒ 覆寫得掉，覆寫後四條斷言全部以低估值計算而假綠。由
+  ``test_auth_proxy_resources_stay_chart_contract`` 明文鎖住（#494 review finding 2）。
 - **定價上架形態**（#494）：`is_hidden=False` ＋ 兩 base plan（4,500／36,000／7 天
   trial）＋ M2M；plan 刻意不設 `cs_*`（設了就繞過上面的 quota 修法）；
   `conceal_instances` 維持不設（#471 拆語意，實例層不受曝光層變更影響）。
@@ -443,31 +451,48 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         return total
 
     @staticmethod
-    def _quota_gi(min_ram_gb):
-        """複製 cloud_service._compute_ns_quota 的記憶體算式（**int 是截斷**）。"""
-        return max(int(min_ram_gb * 3), 8)
+    def _marginal_gi(min_ram_gb):
+        """本服務替 workspace quota 帶來的**記憶體邊際貢獻**（Gi）。
+
+        ＝ `_compute_ns_quota` 記憶體算式的 per-service 項（**int 是截斷**），
+        **刻意不套 `max(..., 8)` 的 floor**——理由同 CPU 側（見
+        test_min_vcpu_covers_all_container_limits）：floor 只在「workspace 裡只有
+        這一個服務」時成立，拿它當守線會讓不足的值假綠。
+        """
+        return int(min_ram_gb * 3)
 
     @staticmethod
-    def _quota_cpu(min_vcpu):
-        """複製 cloud_service._compute_ns_quota 的 CPU 算式（floor 8 vCPU）。"""
-        return max(min_vcpu * 3, 8)
+    def _marginal_cpu(min_vcpu):
+        """本服務替 workspace quota 帶來的 **CPU 邊際貢獻**（vCPU）。
+
+        與 `_marginal_gi` 對稱，同樣不套 floor。兩側各只有這一個定義點——想改成
+        「含 floor」時只會改到一處，不會出現一側修好、另一側還留著假綠的分歧
+        （#494 review 抓到的正是這種一半的修法）。
+        """
+        return min_vcpu * 3
 
     def test_min_ram_covers_all_container_limits(self):
-        """結構關係守線：workspace ns quota 必須蓋得住全容器 limits.memory 總和。
+        """結構關係守線：min_ram_gb 的**邊際貢獻**須蓋住全容器 limits.memory 總和。
 
         quota = max(int(sum(存活 service allocated_ram_gb) × 3), 8) Gi
         （cloud_service._compute_ns_quota）。本 template 的 plan 刻意不設 cs_*
         → allocated_ram_gb 走 min_ram_gb fallback（見
         test_allocated_vals_fall_back_to_template_min_star）。不足 → pod
         FailedCreate(exceeded quota) → 服務對外永遠 CF 502（#380 端到端回歸）。
+
+        ⚠ 與 CPU 側同樣**只看邊際、不套 floor**（8Gi）。本 template 目前的邊際
+        （9Gi）本來就高於 floor，兩種寫法同結論；但只要有人把 limits.memory 調到
+        合計 8Gi 以下，套 floor 的版本就會**恆綠**——連 min_ram_gb=0.5（邊際僅
+        1.5Gi）都放行，共用 workspace 一樣爆。#494 review 指出的自我弱化。
         """
         tpl = self._tpl()
-        quota_gi = self._quota_gi(tpl.min_ram_gb)
+        marginal_gi = self._marginal_gi(tpl.min_ram_gb)
         needed_gi = self._seed_container_limits_gi()
         self.assertGreaterEqual(
-            quota_gi, needed_gi,
-            'min_ram_gb=%s → ns quota %sGi，蓋不住全容器 limits.memory 合計 %.3fGi'
-            % (tpl.min_ram_gb, quota_gi, needed_gi))
+            marginal_gi, needed_gi,
+            'min_ram_gb=%s → 每個服務只替 workspace quota 加 %sGi，蓋不住全容器'
+            ' limits.memory 合計 %.3fGi → 共用 workspace 必然 FailedCreate'
+            % (tpl.min_ram_gb, marginal_gi, needed_gi))
 
     def test_min_ram_is_the_minimal_sufficient_step(self):
         """min_ram_gb ＝滿足上一條的**最小** 0.5 級距值（契約 v1.1 §8.8「÷3 上取」）。
@@ -478,10 +503,14 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
         真要留額外 headroom 時就改這條並在訊息裡寫明理由，讓它成為一個**看得見的
         決定**，而不是一個沒人知道為什麼的浮動數字。
+
+        ⚠ 同樣用邊際解 minimal：套 floor 的版本在 limits 合計 ≤ 8Gi 時會解出
+        `0.5` 並用 assertEqual **強制把不安全值寫進 seed**——擋太大的那一側反而
+        變成擋著「唯一安全的值」。
         """
         needed_gi = self._seed_container_limits_gi()
         minimal = 0.5
-        while self._quota_gi(minimal) < needed_gi:
+        while self._marginal_gi(minimal) < needed_gi:
             minimal += 0.5
         self.assertEqual(
             self._tpl().min_ram_gb, minimal,
@@ -491,17 +520,17 @@ class TestHermesAgentTemplateSeed(TransactionCase):
     def test_min_vcpu_covers_all_container_limits(self):
         """🔴 #456 修法守線：min_vcpu 的**邊際貢獻**須蓋住全容器 limits.cpu 總和。
 
-        ⚠ 這裡刻意用「邊際」（min_vcpu × 3）而非 `_quota_cpu()` 的含 floor 值——
-        floor（8 vCPU）只在「workspace 裡只有這一個服務」時成立。#456 就是這樣
-        溜過去的：#424① 的 E2E 全在空 workspace 跑，靠 floor 蓋住而全綠；一放到
-        既有服務的共用 workspace，每加一個服務缺口就擴大 0.4，主 pod 永久卡
+        ⚠ 這裡刻意用「邊際」（min_vcpu × 3）而非 `_compute_ns_quota` 的含 floor
+        值——floor（8 vCPU）只在「workspace 裡只有這一個服務」時成立。#456 就是
+        這樣溜過去的：#424① 的 E2E 全在空 workspace 跑，靠 floor 蓋住而全綠；一放
+        到既有服務的共用 workspace，每加一個服務缺口就擴大 0.4，主 pod 永久卡
         FailedCreate(exceeded quota: limits.cpu=3200m)，而 DB／UI 照樣顯示
         Running——調度失敗不反映在服務狀態，所以只能靠這條在 seed 當下擋。
 
         套 floor 的寫法會讓 min_vcpu=1（＝#456 的缺陷值）假綠，等於守線失效。
         """
         tpl = self._tpl()
-        marginal = tpl.min_vcpu * 3
+        marginal = self._marginal_cpu(tpl.min_vcpu)
         needed = self._seed_container_limits_cpu()
         self.assertGreaterEqual(
             marginal, needed,
@@ -518,12 +547,38 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         """
         needed = self._seed_container_limits_cpu()
         minimal = 1
-        while minimal * 3 < needed:
+        while self._marginal_cpu(minimal) < needed:
             minimal += 1
         self.assertEqual(
             self._tpl().min_vcpu, minimal,
             '全容器 limits.cpu 合計 %.2f → 最小夠用的 min_vcpu 是 %d'
             % (needed, minimal))
+
+    def test_auth_proxy_resources_stay_chart_contract(self):
+        """🔴 上面四條 quota 守線的**前提**：seed 不得覆寫 auth-proxy 的 resources。
+
+        agent／webui／console 的 limits 由 `_seed_container_limits_*` 從 seed values
+        現算，改了就自動反映；唯獨 auth-proxy sidecar 的 resources **不在 seed 裡**，
+        是以常數（AUTH_PROXY_LIMIT_GI／AUTH_PROXY_LIMIT_CPU）代表 chart 契約值計入。
+
+        但 chart **有** `authProxy.resources` 這個鍵，而 seed 的 helm_default_values
+        走全量 values 管線 ⇒ 真的覆寫得掉。一旦有人從 seed 寫了更大的 limits，常數
+        與實際脫節、四條 quota 斷言全部以**低估值**計算，卻照樣全綠——守線在最需要
+        它的時候失效（#494 review finding 2）。
+
+        `initResources` 一併鎖：pod 的有效需求取 max(Σ一般容器, max(initContainer))，
+        init 調得夠大一樣會撐破 quota，而它同樣不在現算範圍內。
+
+        要調 sidecar 規格請改 chart，並同步這裡的兩個常數。
+        """
+        auth_proxy = self._values().get('authProxy') or {}
+        for key in ('resources', 'initResources'):
+            self.assertNotIn(
+                key, auth_proxy,
+                'seed 覆寫了 authProxy.%s：quota 守線是以 chart 契約常數'
+                '（AUTH_PROXY_LIMIT_GI／AUTH_PROXY_LIMIT_CPU）把這顆 sidecar 計入的，'
+                '從 seed 覆寫會讓四條 quota 斷言以低估值計算而假綠。'
+                '要調規格請改 chart 並同步那兩個常數。' % key)
 
     def test_allocated_vals_fall_back_to_template_min_star(self):
         """實呼 `_allocated_vals_from`：plan cs_* 全 0 → allocated_* 取 template min_*。
