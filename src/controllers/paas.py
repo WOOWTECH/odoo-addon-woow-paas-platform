@@ -2647,10 +2647,18 @@ class PaasController(HiddenChainMixin, Controller):
                     # All addons deselected — remove addon-specific helm values
                     service._remove_addon_helm_values(merged_values)
 
+            # #482: 停權中的服務 reconfigure 後不得停在 'upgrading' —— poll
+            # (_cron_check_deploying_services 掃 deploying/upgrading/initializing)
+            # 會把容器型一路收斂成 running＝帳面復權，而 _do_resume 的 guard 又
+            # 只認停權訊號，於是租戶的服務「看起來活著」卻沒有任何訂閱在付費。
+            # 本入口的守衛只擋 pending/deleting/error，suspended 是放行的，所以
+            # 這條路真的可達（對照 action_redeploy 的同款收斂）。
+            halted = service._is_halted()
+
             # Transition to upgrading BEFORE calling operator so the
             # frontend gets an immediate response with state='upgrading'.
             service.write({
-                'state': 'upgrading',
+                'state': 'suspended' if halted else 'upgrading',
                 'helm_values': json.dumps(merged_values),
                 'helm_chart_version': version or service.helm_chart_version,
                 # ⚠ `fields.Datetime.now()`（UTC）而**不是** `datetime.now()`
@@ -2693,10 +2701,29 @@ class PaasController(HiddenChainMixin, Controller):
                 bg_client = PaaSOperatorClient(operator_url, operator_api_key)
                 try:
                     release_info = bg_client.upgrade_release(**upgrade_kwargs)
+                    # #482: upgrade 以 chart 預設重渲染 workload，會把停權中的
+                    # 容器喚醒（實測 replicas 0→1、pod 真的 Running）。收回停機
+                    # 必須在 upgrade **之後**，所以只能在這條背景執行緒裡做；
+                    # halted 是主執行緒算好傳進來的（這裡沒有 ORM 可用）。
+                    if halted:
+                        try:
+                            bg_client.scale_release(
+                                upgrade_kwargs['release_name'],
+                                upgrade_kwargs['namespace'],
+                                replicas=0,
+                            )
+                        except Exception:
+                            _logger.exception(
+                                "Failed to scale suspended service %s back down "
+                                "after upgrade — workload may still be running "
+                                "(billing bypass)", service_id,
+                            )
                     with odoo.registry(db_name).cursor() as cr:
                         env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
                         svc = env['woow_paas_platform.cloud_service'].browse(service_id)
-                        if svc.exists() and svc.state == 'upgrading':
+                        # 'suspended' 一併放行：#482 之後停權服務走的是這個 state，
+                        # 少了它 helm_revision 就永遠停在升級前的版本。
+                        if svc.exists() and svc.state in ('upgrading', 'suspended'):
                             svc.write({
                                 'helm_revision': release_info.get('revision', svc.helm_revision + 1),
                             })
@@ -2706,12 +2733,16 @@ class PaasController(HiddenChainMixin, Controller):
                         with odoo.registry(db_name).cursor() as cr:
                             env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
                             svc = env['woow_paas_platform.cloud_service'].browse(service_id)
-                            if svc.exists() and svc.state == 'upgrading':
+                            if svc.exists() and svc.state in ('upgrading', 'suspended'):
                                 detail = getattr(exc, 'detail', None) or str(exc)
-                                svc.write({
-                                    'state': 'error',
-                                    'error_message': f'Upgrade failed: {detail}',
-                                })
+                                vals = {'error_message': f'Upgrade failed: {detail}'}
+                                # #482: 停權服務升級失敗仍該停著 —— 翻成 'error'
+                                # 會讓它離開停權語意（且 lifecycle cron 會把
+                                # error 當成可再 suspend 的狀態來回搬）。錯誤本身
+                                # 仍寫進 error_message，不靜默。
+                                if svc.state == 'upgrading':
+                                    vals['state'] = 'error'
+                                svc.write(vals)
                     except Exception:
                         _logger.exception("Failed to write error state for service %s", service_id)
 

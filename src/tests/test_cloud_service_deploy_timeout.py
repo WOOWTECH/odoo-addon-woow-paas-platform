@@ -684,8 +684,16 @@ class TestMigrationReAnchor489(_Base):
         manifest 卻沒同步搬目錄（或反過來建了一個 ≤ 現版號的目錄），整支 migration
         不會執行、也不會有任何錯誤訊息——那正是 #489 上線窗口重新打開的形狀。
 
-        本檔的 migration 目錄必須恰好等於 manifest 版號：目錄 ``.84`` ＋ manifest
-        ``.84`` ⇒ 從 ``.83`` 升上來時 ``latest_version(.83) < .84`` 成立、會跑。
+        Odoo 的實際判準是 ``latest_version < 目錄版號 <= 新版號``，所以真正的
+        不變式是**目錄版號不得高於 manifest 版號**——低於是正常且必然的：後續
+        每個 PR 都會 bump manifest，而這個目錄要留在原地（它的語意是「升到這一
+        版時要跑的一次性動作」）。目錄 ``.84`` ＋ manifest ``.85``，一台還在
+        ``.83`` 的實例升上來時 ``.83 < .84 <= .85`` 仍然成立、照跑。
+
+        ⚠️ #482 修正（原斷言是 ``manifest == .84``）：那把「#491 合併當下 manifest
+        恰好也是 .84」這個巧合鎖成了契約，於是**任何**後續 bump 版號的 PR 都會
+        踩紅——包括不碰 migration 的 PR。守的東西沒變（目錄 > manifest ＝ 永遠
+        不執行），只是不再連帶鎖死一個與本 gate 無關的變數。
         """
         from odoo.modules.module import get_module_path
 
@@ -707,10 +715,10 @@ class TestMigrationReAnchor489(_Base):
             max(dirs, key=_key), '18.0.1.0.84',
             '有更新的 migration 目錄 ⇒ 本 PR 的 .84 需要順延並改目錄名',
         )
-        self.assertEqual(
-            _key(manifest_version), _key('18.0.1.0.84'),
-            f'manifest 版號 {manifest_version} 與 migration 目錄 18.0.1.0.84 不一致'
-            ' ⇒ 目錄 ≤ 現版號的那一側會讓 migration 靜默 no-op（F4 陷阱）',
+        self.assertLessEqual(
+            _key('18.0.1.0.84'), _key(manifest_version),
+            f'migration 目錄 18.0.1.0.84 高於 manifest 版號 {manifest_version}'
+            ' ⇒ 這個目錄永遠不會被執行（F4 陷阱）',
         )
 
 
