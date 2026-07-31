@@ -9,6 +9,7 @@ import { PlanSelector } from "../../components/subscription/PlanSelector";
 import { PlanTotalBar } from "../../components/subscription/PlanTotalBar";
 import { pickDefaultPlan } from "../../components/subscription/plan_selector_utils";
 import { AdminPasswordModal } from "../../components/modal/AdminPasswordModal";
+import { formatTemplatePrice } from "../../utils/pricing_label";
 import { cloudService } from "../../services/cloud_service";
 import { workspaceService } from "../../services/workspace_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -137,6 +138,23 @@ export class AppConfigurationPage extends Component {
 
     get template() {
         return this.state.template;
+    }
+
+    /**
+     * Header 資訊列的價格標籤（#478）。
+     *
+     * 這裡原本硬寫字面值 `Free`，於是同一個畫面上方說免費、下方的 Subscription
+     * Plan 區與總計說 4500 pts/mo，自相矛盾。
+     *
+     * 顯示的是**商品起價**（與 marketplace 卡片同一個 `formatTemplatePrice`、
+     * 同一份後端 `pricing` 資料），而不是「目前選中的方案價」：header 與
+     * category／規格並列，講的是這個商品本身；選中方案的精確金額由下方 plan 區
+     * 與總計列負責（那兩處本來就正確，本次不動）。單一事實源也讓卡片與 header
+     * 不可能再各說各話。
+     * @returns {string} 空字串 ⇒ 不渲染標籤
+     */
+    get formattedPrice() {
+        return formatTemplatePrice(this.template?.pricing);
     }
 
     get helmValueSpecs() {

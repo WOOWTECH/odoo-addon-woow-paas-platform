@@ -27,7 +27,9 @@
                         <span class="o_woow_app_card_tag" t-esc="tag"/>
                     </t>
                 </div>
-                <div class="o_woow_app_card_price" t-esc="formattedPrice"/>
+                <!-- #478：查無價格時整個標籤不渲染（空字串 ⇒ t-if 為 false），
+                     而不是 fallback 成 Free。 -->
+                <div t-if="formattedPrice" class="o_woow_app_card_price" t-esc="formattedPrice"/>
             </div>
         </div>
     </t>

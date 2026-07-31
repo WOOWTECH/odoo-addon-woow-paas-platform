@@ -1,6 +1,7 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
 import { WoowIcon } from "../icon/WoowIcon";
+import { formatTemplatePrice } from "../../utils/pricing_label";
 
 /**
  * AppCard Component
@@ -61,11 +62,21 @@ export class AppCard extends Component {
     }
 
     /**
-     * Format price for display
+     * 卡片價格標籤（#478）。
+     *
+     * 這裡曾經寫死 `return "Free"`，於是每個付費商品都在 marketplace 謊報免費、
+     * 點進配置頁才看到 4500。改讀後端 `_template_pricing` 算出的起價：
+     * - 沒有價格資訊 → 回空字串，模板端 `t-if` 據此**不渲染標籤**（寧可沉默，
+     *   也不要編一個價格出來）
+     * - 起價 0 → Free（真 0 元才叫 Free）
+     * - 多個價位 → 「750 pts/mo 起」；單一價位不加「起」
+     *
+     * 單位縮寫沿用 PlanSelector 的 `_unitLabel` 慣例（mo／yr），讓卡片與下一頁
+     * 的 plan 選卡區、總計列字樣一致。
      * @returns {string}
      */
     get formattedPrice() {
-        return "Free";
+        return formatTemplatePrice(this.props.template.pricing);
     }
 
     /**

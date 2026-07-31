@@ -230,3 +230,109 @@ class TestMarketplaceEndpointCarriesPricing(HttpCase):
         self.assertTrue(r.get('success'), r)
         self.assertIn('pricing', r['data'])
         self.assertEqual(r['data']['pricing']['min_price'], 4500)
+
+
+@tagged('post_install', '-at_install')
+class TestPricingSudoIsPublicReadOnly(HttpCase):
+    """`_template_pricing` 的 `sudo()` 舉證（repo-lint controller-sudo gate 要求）。
+
+    為什麼需要 sudo：起價要與前台 plan 選卡區（``api_template_plans``，同樣 sudo）
+    **同源**，否則卡片會標一個使用者點進去看不到的價格。
+
+    為什麼是安全的 —— 這組測試就是那個舉證：sudo 只用來**算聚合**，回給 caller 的
+    永遠是 5 個純量（起價／單位／價位數／旗標），從不把 plan recordset 或其 id
+    交出去；而且 sudo **之後**的過濾（storefront_hidden／active）仍然生效，隱藏
+    價位不會因為繞過 ir.rule 而外洩。屬 gate 說的 platform public-read 型：
+    marketplace 價格對每個登入者本來就該一樣。
+    """
+
+    PASSWORD = 'pricing478pw'
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        suffix = cls.env.cr.dbname[-6:]
+        partner = cls.env['res.partner'].create({
+            'name': 'Pricing 478 Tenant', 'email': f'p478-{suffix}@t.example'})
+        # 用**非 admin 的 internal user**當對照，而不是 portal：實測
+        # （2026-07-31）portal 連 cloud_app_template 都讀不到（該 model 的 ACL
+        # 只開 Internal User），marketplace 端點本來就不對 portal 開放——拿 portal
+        # 當對照只會測到「它進不來」，測不到 sudo 有沒有替不同人算出不同價格。
+        cls.tenant_user = cls.env['res.users'].create({
+            'login': f'p478_{suffix}',
+            'name': 'Pricing 478 Tenant',
+            'password': cls.PASSWORD,
+            'partner_id': partner.id,
+            'groups_id': [(6, 0, [cls.env.ref('base.group_user').id])],
+        })
+
+    def _result(self, url, params='{}'):
+        body = '{"jsonrpc":"2.0","method":"call","params":' + params + '}'
+        resp = self.url_open(
+            url, data=body, headers={'Content-Type': 'application/json'})
+        parsed = resp.json()
+        self.assertIn('result', parsed, 'resp: %s' % parsed)
+        return parsed['result']
+
+    def _templates_as(self, login, password):
+        self.authenticate(login, password)
+        r = self._result('/api/cloud/templates')
+        self.assertTrue(r.get('success'), r)
+        return {t['id']: t for t in r['data']}
+
+    def test_pricing_is_identical_across_users(self):
+        """平台級公開事實：一般租戶（internal user）看到的起價與 admin 完全一致。
+
+        不一致就代表這個 sudo 在替不同人算出不同價格——那就不是 public-read，
+        而是需要收斂的權限洩漏面。
+        """
+        as_admin = self._templates_as('admin', 'admin')
+        as_portal = self._templates_as(self.tenant_user.login, self.PASSWORD)
+        self.assertEqual(
+            set(as_admin), set(as_portal), 'marketplace 可見清單不該因使用者而異')
+        for tid, item in as_admin.items():
+            self.assertEqual(
+                item['pricing'], as_portal[tid]['pricing'],
+                '%s 的起價因使用者而異' % item['name'])
+
+    def test_pricing_leaks_no_plan_entities(self):
+        """🔴 只回聚合純量，不回 plan recordset／id ——非 sudo-list-and-return。"""
+        allowed = {'has_plans', 'min_price', 'unit', 'tier_count', 'is_free'}
+        for item in self._templates_as(
+                self.tenant_user.login, self.PASSWORD).values():
+            pricing = item['pricing']
+            self.assertEqual(
+                set(pricing), allowed,
+                '%s.pricing 多了非聚合鍵（疑似把 plan 實體交出去）：%s'
+                % (item['name'], sorted(set(pricing) - allowed)))
+            for value in pricing.values():
+                self.assertNotIsInstance(
+                    value, (list, dict),
+                    '%s.pricing 出現容器型值 ⇒ 可能夾帶 plan 清單' % item['name'])
+
+    def test_sudo_does_not_leak_hidden_price_tiers(self):
+        """🔴 sudo 之後的過濾仍然生效：storefront_hidden 價位不得外洩。
+
+        open-design 的 +1access 變體（5100，storefront_hidden）是現成樣本——
+        它若因為繞過 ir.rule 而被算進去，tier_count 會變 2、卡片憑空多一個
+        使用者看不到的價位。
+        """
+        tpl = self.env.ref('%s.cloud_app_opendesign' % MOD)
+        hidden_prices = tpl.sudo().subscription_plan_ids.filtered(
+            lambda p: p.storefront_hidden and p.sh_unit == 'month'
+        ).mapped('sh_plan_price')
+        self.assertTrue(hidden_prices, '前提：open-design 應有隱藏的席數變體')
+
+        pricing = self._templates_as(
+            self.tenant_user.login, self.PASSWORD)[tpl.id]['pricing']
+        self.assertEqual(pricing['tier_count'], 1)
+        self.assertNotIn(
+            pricing['min_price'], hidden_prices,
+            '起價取到了 storefront_hidden 的價位')
+
+    def test_sudo_does_not_bypass_marketplace_visibility(self):
+        """sudo 只作用在價格，不得讓 hidden template 重新出現在清單（#471 曝光層）。"""
+        ha_paas = self.env.ref('%s.cloud_app_ha_paas' % MOD)
+        listed = self._templates_as(self.tenant_user.login, self.PASSWORD)
+        self.assertNotIn(
+            ha_paas.id, listed, 'hidden template 不得因 pricing 的 sudo 而曝光')
