@@ -97,6 +97,20 @@ _SUSPENDED_HINT = (
     'can never become ready while a deploy/upgrade is pending (see #482)'
 )
 
+# #497 一次性收斂的判別式：停權旗標仍在，但 state 已被 #493 合併前的舊碼汙染成
+# 這些「對租戶不可用」的狀態之一。`initializing` 在內是因為容器型被 upgrade 喚醒後
+# poll 會把它從 `deploying` 推進去（poll 不看 `_is_halted`）。
+#
+# **`running` 刻意不在內**：那批同樣帶 stale 旗標，但誤動的代價是把正在跑的服務關掉
+# ——交給 lifecycle cron 分支 2 分流（訂閱有效 → resume 清旗標且零停機）。
+_STUCK_SUSPENDED_STATES_497 = ('deploying', 'upgrading', 'initializing', 'error')
+
+# 殘留記號的固定前綴：state 已收斂但 workload 沒能確認停機時寫進 `error_message`。
+# 停權服務照跑就是計費繞過，所以這個窗口必須能被 prod rollout 的 checklist 一條
+# search 盤出來，而不是散在 log 裡靠人翻。文字改動會讓 #497 的測試紅——它是對維運的
+# 契約，不該靜默漂移。
+_UNCONFIRMED_WORKLOAD_MARKER_497 = '#497 已收斂但無法確認 workload 已停機'
+
 
 def _unflatten_dotpath_keys(flat_dict):
     """Convert flat dot-path keys to nested dict.
@@ -1533,12 +1547,18 @@ class CloudService(models.Model):
         非停權服務一律 no-op —— 這裡誤動就是把正常服務關掉。失敗不 raise
         （upgrade 本身已經成功，讓整個操作看起來失敗是誤導），但**必須留下
         可觀察的痕跡**：停權服務照跑就是計費繞過，靜默吞掉等於把帳務問題藏起來。
+
+        Returns:
+            bool: ``True`` ＝ 這台的 workload 已確認被送去停機（或本來就不該停機）；
+            ``False`` ＝ **沒能**收回（operator 不可達、或連 release 座標都沒有）。
+            三條 upgrade 路徑忽略回傳值——它們的 error_message 已足夠。#497 的
+            migration 用它決定要不要在 ``error_message`` 留可機械盤點的殘留記號。
         """
         self.ensure_one()
         if not self._is_halted():
-            return
+            return True
         if not (client and self.helm_release_name and self.helm_namespace):
-            return
+            return False
         try:
             client.scale_release(
                 self.helm_release_name, self.helm_namespace, replicas=0,
@@ -1548,6 +1568,7 @@ class CloudService(models.Model):
                 "service=%s release=%s ns=%s",
                 self.id, self.helm_release_name, self.helm_namespace,
             )
+            return True
         except Exception as e:
             _logger.warning(
                 "[CLOUD_SVC] _rescale_halted_after_upgrade failed service=%s: %s "
@@ -1560,6 +1581,7 @@ class CloudService(models.Model):
                     f'after the upgrade: {e}'
                 ),
             })
+            return False
 
     def _is_release_ready(self, status):
         """判定「這個 release 就緒了嗎」——**model 與 controller 兩層共用**。
@@ -1901,6 +1923,104 @@ class CloudService(models.Model):
         )
         return stuck
 
+    @api.model
+    def _woow_migrate_converge_stuck_suspended_497(self):
+        """把 #482 合併前就卡死的停權服務收斂回 ``suspended``（一次性窗口）。
+
+        **為什麼需要**：#493 從源頭修掉了「停權服務被 redeploy／reconfigure 汙染
+        state」，但那只對**新**操作有效。合併前就已經被汙染的 row 仍在，而 #489／
+        #491 的 age timeout 一上線就會把其中 ``deploying`` / ``upgrading`` 那批逐一
+        打成 ``error``。那批的 ``pre_suspend_state`` 仍在＝:meth:`_is_halted` 仍為真
+        ＝**它其實還在停權中**，於是撞上 ``subscription_lifecycle_cron`` 的分支落差：
+        訂閱已恢復（``in_progress``）走分支 2，而分支 2 要求 ``state ==
+        'suspended'`` 才 resume → 既不 resume 也不再 suspend ＝ **租戶付了錢、服務
+        永遠回不來，且沒有任何排程會修好它**（#497）。
+
+        **收斂集合**：``pre_suspend_state`` 有值（停權的權威旗標）且 state 落在
+        :data:`_STUCK_SUSPENDED_STATES_497`。``initializing`` 也在內——容器型被
+        upgrade 喚醒後（#482 的 A/B 實證），poll 會判 pod ready 而把它從
+        ``deploying`` 推進 ``initializing``（:meth:`_poll_and_update_status` 不看
+        :meth:`_is_halted`）。
+
+        **不誤傷**：``pre_suspend_state`` 全 repo 只在 :meth:`_do_suspend` 寫、
+        :meth:`_do_resume` 清，沒有 seed、沒有其他寫入點——所以「真部署失敗」的
+        ``error`` 服務該欄位恆為 ``False``，天然落在集合外。不再疊訂閱狀態這種條件：
+        那會漏掉欠費那批（它們同樣卡死，容器型還可能在燒錢）。
+
+        **``running`` 刻意不收**：容器型被喚醒後 poll 會一路把它標成 ``running``，
+        那批同樣帶著 stale 旗標，但這裡誤動的代價是**把正在跑的服務關掉**。它們交給
+        放寬後的 lifecycle cron 分支 2 處理（訂閱有效 → ``_do_resume`` 清掉旗標、
+        scale 1 對在跑的服務冪等＝零停機；欠費 → 分支 3／4 照舊 suspend），最壞
+        延遲一個 cron 週期。
+
+        🔴 **收斂 state 必須連 workload 一起收**：:meth:`_do_suspend` 開頭就
+        ``if self.state == 'suspended': return``，所以一旦把 state 寫成
+        ``suspended``，cron 的欠費分支便永遠早退——唯一還會 ``scale_release(0)`` 的
+        路徑會被這個 migration 自己關掉。故先走 #493 的
+        :meth:`_rescale_halted_after_upgrade`（外科式、與 chart 無關、對 VM 型冪等）
+        再寫 state。
+
+        **operator 失敗一律不 raise**：migration 拋例外＝整支 ``-u`` 失敗＝平台起不
+        來。state 收斂是本地事實修正、不依賴叢集，所以 scale 失敗也照收斂（不收斂
+        的話這筆 row 留在 ``error``，自癒路徑仍然是斷的）。代價是 workload 可能還在
+        跑，因此**必須留下可機械盤點的記號**：``error_message`` 以
+        :data:`_UNCONFIRMED_WORKLOAD_MARKER_497` 起頭，prod rollout 的 checklist 用
+        它掃出「收斂了但未確認停機」的那批。
+
+        **冪等**：收斂後的 row 是 ``suspended``，不再落在判別式內，重跑即空集合。
+        """
+        stuck = self.sudo().with_context(active_test=False).search([
+            ('pre_suspend_state', '!=', False),
+            ('state', 'in', list(_STUCK_SUSPENDED_STATES_497)),
+        ])
+        if not stuck:
+            _logger.info(
+                "#497 migration: no stuck suspended service — nothing to converge"
+            )
+            return stuck
+
+        from ..services.paas_operator import get_paas_operator_client
+
+        client = get_paas_operator_client(self.env)
+        unconfirmed = self.browse()
+        for service in stuck:
+            has_coordinates = bool(
+                client and service.helm_release_name and service.helm_namespace
+            )
+            confirmed = service._rescale_halted_after_upgrade(client)
+            vals = {'state': 'suspended'}
+            if confirmed:
+                # age timeout 留下的「部署逾時」訊息會把維運指向叢集，而真因是停權。
+                vals['error_message'] = False
+            elif has_coordinates:
+                # helper 已把具體例外寫進 error_message；套上固定前綴讓它可被盤點。
+                vals['error_message'] = (
+                    f'{_UNCONFIRMED_WORKLOAD_MARKER_497}：{service.error_message}'
+                )
+            else:
+                vals['error_message'] = (
+                    f'{_UNCONFIRMED_WORKLOAD_MARKER_497}：'
+                    'operator client 或 release 座標不可用'
+                )
+            if not confirmed:
+                unconfirmed |= service
+            service.write(vals)
+
+        _logger.info(
+            "#497 migration: converged %d stuck suspended service(s) back to "
+            "'suspended': %s",
+            len(stuck),
+            ', '.join(f"{s.name}(id={s.id})" for s in stuck),
+        )
+        if unconfirmed:
+            _logger.warning(
+                "#497 migration: %d service(s) converged but their workload "
+                "could not be confirmed stopped (billing bypass risk) — %s",
+                len(unconfirmed),
+                ', '.join(f"{s.name}(id={s.id})" for s in unconfirmed),
+            )
+        return stuck
+
     @staticmethod
     def _extract_import_progress(status):
         """取 CDI DataVolume 的 import 進度字串（供前台進度顯示，design §7.4）。
@@ -2201,7 +2321,14 @@ class CloudService(models.Model):
                 return
 
         self.write({
-            'pre_suspend_state': self.state if self.state in ('running', 'error') else 'running',
+            # #497 縱深：已經在停權中的服務（旗標仍在、state 被別的路徑改寫過）再走
+            # 一次 suspend 時，**不覆寫**既有的停權前狀態。這裡讀的是**當下**的
+            # state，而卡死 row 的當下 state 是 age timeout 寫的 'error' —— 覆寫後
+            # 租戶付款復權會拿回一台顯示 error 的服務（癒後帶傷）。首次停權（旗標為
+            # 空）仍如實記下當下狀態。
+            'pre_suspend_state': self.pre_suspend_state or (
+                self.state if self.state in ('running', 'error') else 'running'
+            ),
             'state': 'suspended',
         })
         _logger.info("[CLOUD_SVC] _do_suspend done service=%s new_state=suspended", self.id)

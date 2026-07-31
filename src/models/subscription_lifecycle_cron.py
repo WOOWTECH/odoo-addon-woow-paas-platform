@@ -74,9 +74,20 @@ class SubscriptionLifecycleCron(models.AbstractModel):
                 )
                 sub = new_sub
 
-        # 2. Active subscription → resume if suspended
+        # 2. Active subscription → resume if halted
+        #
+        # #497：判準是 `_is_halted()` 而不是 `state == 'suspended'`。CloudService 的
+        # state 會被 upgrade 管線改寫（#482），改寫過的服務**仍在停權中**卻走不到
+        # 這條分支：既不 resume 也不再 suspend（分支 3／4 只在訂閱失效時才跑），於是
+        # 租戶付了錢、服務永遠回不來——天級窗口，且沒有任何排程會修好它。
+        #
+        # 對 SmartHome / SecurityAccess 是零行為變化（mixin 的預設實作就是
+        # `state == 'suspended'`）。對 CloudService 還額外拆掉一顆地雷：被 upgrade
+        # 喚醒後被 poll 標成 `running` 但停權旗標還在的服務，`_do_resume` 會把旗標
+        # 清掉——不清的話，#493 的 state 收斂會在它下一次被 redeploy／reconfigure
+        # 時把這台**正在跑的付費服務**關掉。scale 1 對已在跑的服務是冪等的，零停機。
         if sub.state == 'in_progress':
-            if entity.state == 'suspended':
+            if entity._is_halted():
                 entity._do_resume()
                 _logger.info(
                     "[SUB_CRON] resumed %s %s (subscription active)",

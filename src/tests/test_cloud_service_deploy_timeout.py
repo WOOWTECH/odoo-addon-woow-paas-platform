@@ -694,6 +694,13 @@ class TestMigrationReAnchor489(_Base):
         恰好也是 .84」這個巧合鎖成了契約，於是**任何**後續 bump 版號的 PR 都會
         踩紅——包括不碰 migration 的 PR。守的東西沒變（目錄 > manifest ＝ 永遠
         不執行），只是不再連帶鎖死一個與本 gate 無關的變數。
+
+        ⚠️ #497 再修（原斷言還有 ``max(dirs) == .84``）：同一種病的另一個變體——
+        它把「.84 是當下最新的 migration 目錄」這個一次性事實鎖成契約，於是**任何
+        新增 migration 目錄**的 PR 都會踩紅。Odoo 會依序跑所有落在
+        ``latest_version < 目錄 <= 新版號`` 區間內的目錄，所以新目錄與 .84 並不
+        互斥（一台還在 .83 的實例升到 .87 時，``.83 < .84 <= .87`` 仍成立、.84
+        照跑）。真正的不變式只有下面那條「目錄不得高於 manifest」。
         """
         from odoo.modules.module import get_module_path
 
@@ -711,10 +718,6 @@ class TestMigrationReAnchor489(_Base):
                 and d.startswith('18.0.')]
 
         self.assertIn('18.0.1.0.84', dirs, '#489 的 migration 目錄不見了')
-        self.assertEqual(
-            max(dirs, key=_key), '18.0.1.0.84',
-            '有更新的 migration 目錄 ⇒ 本 PR 的 .84 需要順延並改目錄名',
-        )
         self.assertLessEqual(
             _key('18.0.1.0.84'), _key(manifest_version),
             f'migration 目錄 18.0.1.0.84 高於 manifest 版號 {manifest_version}'

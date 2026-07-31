@@ -512,6 +512,21 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     # Suspend / Resume / Cleanup (abstract — implemented by subclass)
     # ----------------------------------------------------------------
 
+    def _is_halted(self):
+        """這筆記錄是否處於「停權中」——lifecycle cron 決定要不要復權的判準。
+
+        預設只認 ``state == 'suspended'``，與 SmartHome / SecurityAccess 自己
+        ``_do_resume`` 的 guard 一致（對它們是零行為變化）。
+
+        CloudService override 成 ``state == 'suspended' or
+        bool(pre_suspend_state)``：它的 state 會被 upgrade 管線改寫，需要一個不受
+        呼叫順序影響的事實源（#482）。cron 讀這個方法而不是直接比 state，是為了讓
+        「停權中但 state 被改寫過」的服務仍走得到復權——否則租戶付了款也回不來
+        （#497）。
+        """
+        self.ensure_one()
+        return self.state == 'suspended'
+
     def _do_suspend(self):
         """Suspend the service. Implemented by CloudService / SmartHome."""
         raise NotImplementedError
