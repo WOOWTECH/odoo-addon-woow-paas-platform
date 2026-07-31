@@ -1706,15 +1706,20 @@ class CloudService(models.Model):
         )
 
         raw = self.env['ir.config_parameter'].sudo().get_param(key)
+        # 未設定是正常的（走內建預設，不吵）。**設了但看不懂**才要吵——否則
+        # 有人把門檻打錯字（"30m"、"0"）會靜默被忽略，而他以為自己調成功了。
+        unset = raw in (None, False, '') or not str(raw).strip()
         try:
             minutes = int(str(raw).strip())
         except (TypeError, ValueError):
-            return default
+            minutes = 0
         if minutes <= 0:
-            _logger.warning(
-                "%s is %r (not a positive integer) — falling back to %s minutes",
-                key, raw, default,
-            )
+            if not unset:
+                _logger.warning(
+                    "%s is %r (not a positive integer of minutes) — falling "
+                    "back to the built-in default of %s minutes",
+                    key, raw, default,
+                )
             return default
         return minutes
 
