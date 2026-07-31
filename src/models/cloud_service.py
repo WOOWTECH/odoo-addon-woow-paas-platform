@@ -421,6 +421,12 @@ class CloudService(models.Model):
                     f"Upgrade failed: {e.detail or e.message}"
                 ) from e
 
+            # #482: 停權中的服務不得被 upgrade 拉出停權。寫成 'deploying' 會讓
+            # _do_resume 的 guard 擋掉復權（租戶付款也回不來），而 poll 又永遠
+            # 等不到一台本該停著的服務就緒 —— 兩頭卡死。必須在 write 之前判定，
+            # 因為 write 本身會改掉 state 這個判斷來源。
+            halted = self._is_halted()
+
             # Set to 'deploying' — cron + frontend polling will handle
             # the rest (pod readiness check → init → running)
             #
@@ -429,20 +435,28 @@ class CloudService(models.Model):
             # 話，age timeout 會退回 `deployed_at`（首裝時間），一台跑了三個月
             # 的服務按下重新部署就會在第一輪 poll 被判逾時。
             self.write({
-                'state': 'deploying',
+                'state': 'suspended' if halted else 'deploying',
                 'error_message': False,
                 'init_error': False,
                 'init_retries': 0,
                 'helm_revision': release_info.get('revision', self.helm_revision),
                 'last_upgraded_at': fields.Datetime.now(),
             })
-            # Trigger cron so state transitions without frontend polling
-            cron = self.env.ref(
-                'woow_paas_platform.ir_cron_check_deploying_services',
-                raise_if_not_found=False,
-            )
-            if cron:
-                cron._trigger()
+            # #482: upgrade 用 chart 預設把 replicas 渲染回去了，收回停機。
+            # 放在 write 之後 —— 這個 helper 失敗時要寫 error_message，順序反過來
+            # 會被上面那行 'error_message': False 清掉。
+            self._rescale_halted_after_upgrade(client)
+
+            # Trigger cron so state transitions without frontend polling.
+            # 停權服務不觸發：poll 掃 deploying/upgrading/initializing，把停權
+            # 服務餵進去只會讓它被判定成「還沒就緒」而空轉。
+            if not halted:
+                cron = self.env.ref(
+                    'woow_paas_platform.ir_cron_check_deploying_services',
+                    raise_if_not_found=False,
+                )
+                if cron:
+                    cron._trigger()
         else:
             # No release yet — do a full fresh deploy via cron
             deploy_params = {}
@@ -645,11 +659,21 @@ class CloudService(models.Model):
 
         # `last_upgraded_at` 同 action_redeploy：reset 走的是同一條 helm
         # upgrade 管線，不記錨就會讓 #489 的 age timeout 拿首裝時間當起點。
+        #
+        # #482 縱深：這條路對 suspended 服務**不可達**（本方法開頭就要求
+        # state == 'running'），但 reset 同樣是一次 reset_values 重渲染。二階
+        # 情境是服務先被 reconfigure 汙染（suspended → upgrading → poll →
+        # running）而 pre_suspend_state 仍在：此時 _is_halted() 仍為真＝它其實
+        # 還在停權中，reset 完必須把它收回停機，而不是留下一台跑著的欠費服務。
+        halted = self._is_halted()
+
+
         self.write({
-            'state': 'upgrading',
+            'state': 'suspended' if halted else 'upgrading',
             'error_message': False,
             'last_upgraded_at': fields.Datetime.now(),
         })
+        self._rescale_halted_after_upgrade(client)
         return new_password
 
     # ------------------------------------------------------------------ #
@@ -1486,6 +1510,57 @@ class CloudService(models.Model):
         self.ensure_one()
         return self.state == 'suspended' or bool(self.pre_suspend_state)
 
+    def _rescale_halted_after_upgrade(self, client):
+        """upgrade 之後把仍在停權中的 workload 重新收回停機（#482）。
+
+        三條 upgrade 路徑（``action_redeploy`` / controller ``_update_service``
+        / ``_reset_admin_password``）都以 ``reset_values=True`` 重新渲染 chart，
+        而平台組出的 values **完全不帶 replicas** —— 容器型的 replicas 鍵名因
+        chart 而異（bitnami 是 ``primary.replicaCount``、n8n 又是另一套），平台
+        對任意第三方 chart 無法猜鍵名。VM 型能在 values 注入 ``vm.runStrategy``
+        只是因為 haos 是自家 chart、鍵固定。
+
+        於是 chart 預設的 ``replicas: 1`` 會把停權（欠費）中的容器直接喚醒：
+        2026-07-31 docker-desktop 實測（真 operator + helm 3.13.3 + 真 chart），
+        n8n 的 Deployment 與 postgresql 的 StatefulSet 都 0→1，且 pod 實測
+        Running/ready=true —— 喚醒是實質的，不只是欄位。
+        ``subscription_lifecycle_cron`` 每天只跑一次，最壞情況白燒約一天。
+
+        收斂走與 :meth:`_do_suspend` 相同的外科式 ``scale_release``：與 chart
+        無關，且對 VM 型冪等（operator 把 ``replicas=0`` 映射成
+        ``runStrategy: Halted``——依賴 operator #488 的三 workload 語意）。
+
+        非停權服務一律 no-op —— 這裡誤動就是把正常服務關掉。失敗不 raise
+        （upgrade 本身已經成功，讓整個操作看起來失敗是誤導），但**必須留下
+        可觀察的痕跡**：停權服務照跑就是計費繞過，靜默吞掉等於把帳務問題藏起來。
+        """
+        self.ensure_one()
+        if not self._is_halted():
+            return
+        if not (client and self.helm_release_name and self.helm_namespace):
+            return
+        try:
+            client.scale_release(
+                self.helm_release_name, self.helm_namespace, replicas=0,
+            )
+            _logger.info(
+                "[CLOUD_SVC] _rescale_halted_after_upgrade scaled to 0 "
+                "service=%s release=%s ns=%s",
+                self.id, self.helm_release_name, self.helm_namespace,
+            )
+        except Exception as e:
+            _logger.warning(
+                "[CLOUD_SVC] _rescale_halted_after_upgrade failed service=%s: %s "
+                "— suspended workload may still be running (billing bypass)",
+                self.id, e,
+            )
+            self.write({
+                'error_message': (
+                    f'Service is suspended but could not be scaled back down '
+                    f'after the upgrade: {e}'
+                ),
+            })
+
     def _is_release_ready(self, status):
         """判定「這個 release 就緒了嗎」——**model 與 controller 兩層共用**。
 
@@ -2138,7 +2213,15 @@ class CloudService(models.Model):
             "[CLOUD_SVC] _do_resume service=%s name=%s state=%s pre_suspend=%s",
             self.id, self.name, self.state, self.pre_suspend_state,
         )
-        if self.state != 'suspended':
+        # #482 縱深：guard 讀 _is_halted() 的聯集，而非只認 state == 'suspended'。
+        #
+        # 舊 guard 讓任何把 state 改寫掉的路徑（upgrade 寫 deploying/upgrading）
+        # 都變成單向門：服務仍在停權中，卻再也回不來 —— 租戶付了款也復不了權，
+        # 只能人工 write({'state': 'suspended'}) 再 resume（#482 的脫困 runbook）。
+        # 主修已讓那三條路不再汙染 state；這裡保證**即使**將來又有新路徑改寫
+        # state，或要處理既有已卡死的資料，復權仍然走得通。這是縱深，不是主修的
+        # 替代品。
+        if not self._is_halted():
             return
 
         from ..services.paas_operator import get_paas_operator_client
