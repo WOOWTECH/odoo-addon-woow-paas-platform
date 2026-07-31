@@ -359,6 +359,86 @@ class TestResetAdminPasswordHaltedDefenseInDepth(_Base):
         self.assertIsNone(_scaled_replicas(client))
 
 
+class TestTimeoutInteraction489(_Base):
+    """與 #489／#491 age timeout 的語意交互（rebase 到 f0bcd5ec 後補）。
+
+    #491 讓久滯 ``deploying``／``upgrading`` 的服務逾時轉 ``error``，且它的
+    ``_timeout_diagnosis`` **明確認得 #482**——`_SUSPENDED_HINT` 的註解寫著
+    「停權中的服務被 redeploy 後會卡在 deploying，VM 被正確地 Halted 著所以
+    永遠不會 ready」。換句話說 #491 是在**假設 #482 的缺陷還在**的前提下，把
+    那批必然逾時的服務的錯誤訊息講清楚。
+
+    本 PR 修掉缺陷之後，兩者的正確關係是**不相交**：停權服務根本不再進入
+    ``_TIMEOUT_GOVERNED_STATES``，所以 age timeout 掃不到它，也就不會把一台
+    「本來就該停著」的服務打成 ``error``（那會是 #482 換皮重演——error 同樣
+    不是 lifecycle cron 分支 2 認得的 ``suspended``）。
+
+    這裡把「不相交」釘成契約：任何讓停權服務重新落回轉移狀態的改動都會紅。
+    """
+
+    def test_suspended_redeploy_leaves_service_outside_timeout_governance(self):
+        """redeploy 後的停權服務不得落在 age timeout 的管轄狀態內。"""
+        svc = self._service(self.container_template)
+        self._suspend(svc)
+
+        patcher, client = _patch_operator_client()
+        with patcher:
+            svc.action_redeploy()
+
+        self.assertFalse(
+            svc._is_timeout_governed(),
+            "停權服務被 redeploy 後若落在 deploying/upgrading，#489 的 age "
+            "timeout 會把它打成 error —— 而 error 同樣不是 lifecycle cron 認得"
+            "的復權起點，等於 #482 換皮重演",
+        )
+
+    def test_suspended_reconfigure_leaves_service_outside_timeout_governance(self):
+        """reconfigure 路徑同上（它寫的是 upgrading，同樣受 timeout 管轄）。"""
+        svc = self._service(self.container_template)
+        self._suspend(svc)
+
+        patcher, client = _patch_operator_client()
+        with patcher:
+            TestReconfigureKeepsSuspendedServiceSuspended._run_update(
+                self, svc, client)
+
+        self.assertFalse(svc._is_timeout_governed())
+
+    def test_timeout_never_fires_on_a_suspended_service(self):
+        """直接對 `_check_transition_timeout` 斷言：停權狀態一律不裁決逾時。
+
+        錨點刻意設成遠古（門檻預設 30 分），確認擋下來的是 state 判斷而不是
+        「還沒到期」這種會隨預設值漂移的理由。
+        """
+        svc = self._service(self.container_template)
+        self._suspend(svc)
+        svc.write({
+            'deployed_at': '2020-01-01 00:00:00',
+            'last_upgraded_at': '2020-01-01 00:00:00',
+        })
+
+        fired = svc._check_transition_timeout('no pods found')
+
+        self.assertFalse(fired, "停權服務不該被 age timeout 裁決")
+        self.assertEqual(svc.state, 'suspended')
+
+    def test_halted_hint_still_reachable_for_legacy_stuck_rows(self):
+        """#491 的 `_SUSPENDED_HINT` 不因本 PR 而失效。
+
+        本 PR 只讓**新**的 redeploy 不再汙染 state；合併前就已經卡在
+        ``deploying`` 的既有資料仍存在，那批仍要拿得到「這台是停權中」的診斷，
+        否則維運會被 pod/quota 方向的 hint 帶偏。
+        """
+        svc = self._service(self.container_template)
+        self._suspend(svc)
+        # 模擬合併前留下的卡死列：state 已被舊碼汙染，停權訊號仍在
+        svc.write({'state': 'deploying'})
+
+        hint = svc._timeout_diagnosis('no pods found')
+
+        self.assertIn('suspended', hint)
+
+
 class TestResumeGuardDefenseInDepth(_Base):
     """(b) 縱深：``_do_resume`` 的 guard 補認 ``pre_suspend_state``。
 
