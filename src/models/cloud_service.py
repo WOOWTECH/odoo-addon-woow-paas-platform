@@ -1779,6 +1779,53 @@ class CloudService(models.Model):
         self.write({'state': 'error', 'error_message': message})
         return True
 
+    @api.model
+    def _woow_migrate_refresh_transition_anchor_489(self):
+        """把當下處於轉移狀態的服務的錨刷成 now（#489 上線的一次性窗口）。
+
+        **為什麼需要**：合併前有三條轉移入口不記錨（``action_redeploy`` 的
+        upgrade 分支、``_reset_admin_password``、controller 的 rollback），經它們
+        進入 ``deploying`` / ``upgrading`` 的服務，錨是 ``deployed_at``＝**首裝**
+        時間。`-u` 完成後第一次 cron 會拿那個陳舊的錨去判 age，於是**正在正常
+        部署**的服務也會被判逾時——而誤殺不可自癒（poll 只撈轉移狀態，寫進
+        ``error`` 後沒有任何路徑會把它 poll 回 ``running``）。
+
+        本 method 給它們一個新鮮的起點，把那個窗口降到零。**代價**：真正已經
+        卡住的那批（#456 / #482 那類）會晚一個門檻週期才被抓到——一次性，且
+        它們本來就已經卡了不知道多久。
+
+        只動 ``last_upgraded_at``，不動 ``deployed_at``——後者的語意是「首次
+        部署時間」，還掛在前台 Overview 上，改它會說謊。錨取兩者較晚者，所以
+        刷新 ``last_upgraded_at`` 就足以讓錨變新鮮。
+
+        **只動轉移中的服務**：``running`` / ``suspended`` / ``error`` 一律不碰
+        （它們的 ``last_upgraded_at`` 是真實的升級歷史，改了就是竄改紀錄）。
+
+        **冪等**：無條件把「當下轉移中」那一批的錨寫成 now，不累加、不依賴前次
+        執行結果。重跑的效果只取決於執行當下的 state 集合。
+
+        ``active_test=False``：本 model 目前沒有 ``active`` 欄位（此 context 是
+        no-op），但漏掉任何一筆就等於那筆被誤殺，所以明確寫死不靠 model 的現況。
+        """
+        stuck = self.sudo().with_context(active_test=False).search([
+            ('state', 'in', list(_TIMEOUT_GOVERNED_STATES)),
+        ])
+        if not stuck:
+            _logger.info(
+                "#489 migration: no service in a transitional state — "
+                "nothing to re-anchor"
+            )
+            return stuck
+
+        stuck.write({'last_upgraded_at': fields.Datetime.now()})
+        _logger.info(
+            "#489 migration: re-anchored %d service(s) in a transitional "
+            "state so the new deploy age timeout starts counting from now: %s",
+            len(stuck),
+            ', '.join(f"{s.name}(id={s.id},state={s.state})" for s in stuck),
+        )
+        return stuck
+
     @staticmethod
     def _extract_import_progress(status):
         """取 CDI DataVolume 的 import 進度字串（供前台進度顯示，design §7.4）。

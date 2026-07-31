@@ -25,6 +25,7 @@ cron 每分鐘、前台每 5 秒都只是「再問一次 operator」，沒有一
 刻意壓在門檻的**兩側 1 分鐘**內，所以門檻若被算錯一個量級（分鐘當秒之類）必紅。
 """
 import logging
+import os
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
@@ -431,6 +432,11 @@ class TestTimeoutDoesNotOverreach(_Base):
 
         直接對 cron 的行為斷言而不是對 domain 字串斷言：換寫法不該讓這條紅，
         真的把 running 撈進來才該紅。
+
+        ⚠ 斷言的是「**這台**沒被 poll」而不是「完全沒有任何 poll」：cron 撈的是
+        全 DB 的轉移中服務，所以後者會在**任何有既有資料的 DB** 上誤紅（stg 沙盒
+        跑 `-u --test-enable`、或本地測完 migration 的 DB 都是）。那種紅與被測
+        行為無關，只是把「這個 DB 剛好乾淨」寫進了斷言。
         """
         svc = self._make_service('container', state='running',
                                  anchor_minutes_ago=_CONTAINER_DEFAULT + 999)
@@ -441,8 +447,12 @@ class TestTimeoutDoesNotOverreach(_Base):
         with patch(f'{module}.get_paas_operator_client', return_value=client):
             self.Service._cron_check_deploying_services()
 
+        polled = [
+            call.kwargs.get('release_name')
+            for call in client.get_status.call_args_list
+        ]
         self.assertEqual(svc.state, 'running')
-        self.assertFalse(client.get_status.called,
+        self.assertNotIn(svc.helm_release_name, polled,
                          'running 的服務不該被 poll，遑論被判逾時')
 
     def test_timeout_does_not_uninstall_or_rollback(self):
@@ -578,6 +588,130 @@ class TestTimeoutDiagnosis(_Base):
 
         self.assertIn('suspend', msg.lower())
         self.assertIn('482', msg)
+
+
+class TestMigrationReAnchor489(_Base):
+    """`18.0.1.0.84/post-migrate.py` 的重新錨定（上線窗口消除）。
+
+    合併前有三條轉移入口不記錨，所以升上來那一刻，經它們進入轉移狀態的服務錨是
+    **首裝**時間 → 第一次 cron 就誤殺正在正常部署的服務。migration 給那批一個
+    新鮮起點。測 model 方法而不是跑 `migrate()`——邏輯全在 model（repo 的
+    delegate-to-model 慣例），而真正跑一次 `-u` 的實跑證據附在 PR。
+    """
+
+    def _anchors(self, svc):
+        svc.invalidate_recordset()
+        return svc.deployed_at, svc.last_upgraded_at
+
+    def test_transitional_services_get_a_fresh_anchor(self):
+        deploying = self._make_service('container', state='deploying',
+                                       anchor_minutes_ago=60 * 24 * 90)
+        upgrading = self._make_service('vm', state='upgrading',
+                                       anchor_minutes_ago=60 * 24 * 90)
+
+        self.Service._woow_migrate_refresh_transition_anchor_489()
+
+        for svc in (deploying, upgrading):
+            with self.subTest(state=svc.state):
+                _, last_upgraded = self._anchors(svc)
+                age = fields.Datetime.now() - last_upgraded
+                self.assertLess(
+                    age, timedelta(minutes=1),
+                    '轉移中的服務沒拿到新鮮的錨 → -u 後第一次 cron 就誤殺',
+                )
+
+    def test_re_anchored_service_no_longer_times_out(self):
+        """🔴 端到端：migration 跑完之後，那台服務不會在下一輪 poll 被判逾時。"""
+        svc = self._make_service('container', state='deploying',
+                                 anchor_minutes_ago=60 * 24 * 90)
+
+        self.Service._woow_migrate_refresh_transition_anchor_489()
+        self._poll(svc, _status(pods=[]))
+
+        self.assertEqual(svc.state, 'deploying')
+
+    def test_settled_states_are_not_touched(self):
+        """``running`` / ``suspended`` / ``error`` 的 last_upgraded_at 是真實的
+        升級歷史，migration 改它就是竄改紀錄。"""
+        for state in ('running', 'suspended', 'error'):
+            with self.subTest(state=state):
+                svc = self._make_service('container', state=state,
+                                         anchor_minutes_ago=60 * 24 * 90)
+                svc.last_upgraded_at = fields.Datetime.now() - timedelta(days=7)
+                before = svc.last_upgraded_at
+
+                self.Service._woow_migrate_refresh_transition_anchor_489()
+
+                _, after = self._anchors(svc)
+                self.assertEqual(after, before, f'{state} 的錨被動到了')
+
+    def test_deployed_at_is_never_rewritten(self):
+        """``deployed_at`` 是「首次部署時間」，還掛在前台 Overview 上——不能改。"""
+        svc = self._make_service('container', state='deploying',
+                                 anchor_minutes_ago=60 * 24 * 90)
+        before = svc.deployed_at
+
+        self.Service._woow_migrate_refresh_transition_anchor_489()
+
+        deployed_at, _ = self._anchors(svc)
+        self.assertEqual(deployed_at, before)
+
+    def test_is_idempotent(self):
+        """重跑不累加、不依賴前次結果——效果只取決於執行當下的 state 集合。"""
+        svc = self._make_service('container', state='deploying',
+                                 anchor_minutes_ago=60 * 24 * 90)
+
+        self.Service._woow_migrate_refresh_transition_anchor_489()
+        first = self._anchors(svc)[1]
+        self.Service._woow_migrate_refresh_transition_anchor_489()
+        second = self._anchors(svc)[1]
+
+        self.assertGreaterEqual(second, first)
+        self.assertLess(fields.Datetime.now() - second, timedelta(minutes=1))
+
+    def test_empty_fleet_does_not_raise(self):
+        """沒有任何轉移中的服務時要安靜返回，不能炸掉整個 -u。"""
+        self.Service.sudo().search([
+            ('state', 'in', ['deploying', 'upgrading']),
+        ]).write({'state': 'running'})
+
+        self.assertFalse(self.Service._woow_migrate_refresh_transition_anchor_489())
+
+    def test_migration_dir_is_newer_than_manifest_version(self):
+        """🔴 F4 鐵律：migration 目錄版號 ≤ manifest 版號 ＝ **靜默 no-op**。
+
+        Odoo 只跑 ``latest_version < 目錄版號`` 的 migration。若有人 bump 了
+        manifest 卻沒同步搬目錄（或反過來建了一個 ≤ 現版號的目錄），整支 migration
+        不會執行、也不會有任何錯誤訊息——那正是 #489 上線窗口重新打開的形狀。
+
+        本檔的 migration 目錄必須恰好等於 manifest 版號：目錄 ``.84`` ＋ manifest
+        ``.84`` ⇒ 從 ``.83`` 升上來時 ``latest_version(.83) < .84`` 成立、會跑。
+        """
+        from odoo.modules.module import get_module_path
+
+        module_path = get_module_path('woow_paas_platform')
+        manifest_version = self.env['ir.module.module'].sudo().search(
+            [('name', '=', 'woow_paas_platform')], limit=1,
+        ).latest_version
+
+        def _key(v):
+            return tuple(int(p) for p in v.split('.') if p.isdigit())
+
+        migrations = os.path.join(module_path, 'migrations')
+        dirs = [d for d in os.listdir(migrations)
+                if os.path.isdir(os.path.join(migrations, d))
+                and d.startswith('18.0.')]
+
+        self.assertIn('18.0.1.0.84', dirs, '#489 的 migration 目錄不見了')
+        self.assertEqual(
+            max(dirs, key=_key), '18.0.1.0.84',
+            '有更新的 migration 目錄 ⇒ 本 PR 的 .84 需要順延並改目錄名',
+        )
+        self.assertEqual(
+            _key(manifest_version), _key('18.0.1.0.84'),
+            f'manifest 版號 {manifest_version} 與 migration 目錄 18.0.1.0.84 不一致'
+            ' ⇒ 目錄 ≤ 現版號的那一側會讓 migration 靜默 no-op（F4 陷阱）',
+        )
 
 
 class TestControllerLayerTimeout(_Base):
