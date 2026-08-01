@@ -78,19 +78,54 @@ _OPAQUE_PAYLOAD_FIELDS = frozenset({"data", "stringData"})
 # JSON keys inside a payload whose value must be masked. Superset of the --set
 # hints: an inline HTTP script carries credentials as headers too.
 _PAYLOAD_KEY_HINTS = _SECRET_SET_KEY_HINTS + ("passwd", "cookie", "authorization")
+# ``valueFrom`` subtrees (secretKeyRef / configMapKeyRef) name *where* a value
+# lives — ``{"name": "n8n-release", "key": "N8N_API_KEY"}`` is a public pointer,
+# never the value itself. Masking it by key-name substring would hide the only
+# readable half while the real secret sits in a sibling ``value`` slot.
+_REFERENCE_ONLY_FIELDS = frozenset({"valueFrom", "secretKeyRef", "configMapKeyRef",
+                                    "secretRef", "configMapRef", "fieldRef"})
 # ``"password": "v"`` and its backslash-escaped twin ``\"password\": \"v\"`` —
-# the n8n script embeds the request body as an escaped JSON string literal.
-_INLINE_SECRET_RE = re.compile(
-    r'(\\?"[\w.\-]*(?:' + "|".join(_PAYLOAD_KEY_HINTS) + r')[\w.\-]*\\?"\s*:\s*\\?")'
-    r'([^"\\]*)'
-    r'(\\?")',
-    re.IGNORECASE,
+# the n8n script embeds the request body as an escaped JSON string literal, so
+# both quote forms must match. The value runs lazily up to the closing quote
+# *plus a JSON delimiter*, which is what lets it step over an escaped quote
+# inside the value (a tenant password may legally contain " and \).
+_INLINE_KEY_RE = (
+    r'\\?"[\w.\-]*(?:' + "|".join(_PAYLOAD_KEY_HINTS) + r')[\w.\-]*\\?"\s*:\s*'
 )
+_INLINE_SECRET_RE = re.compile(
+    r'(' + _INLINE_KEY_RE + r'\\?")'
+    r'(.*?)'
+    r'(\\?"\s*[,}])',
+    re.IGNORECASE | re.DOTALL,
+)
+# Presence of a secret-ish key *with a string value* — the pair regex above must
+# account for every one of these; any shortfall means a value whose end could not
+# be delimited, and an undelimited secret must not be logged.
+_INLINE_KEY_PRESENT_RE = re.compile(_INLINE_KEY_RE + r'\\?"', re.IGNORECASE)
 
 
 def _redact_inline_secrets(text: str) -> str:
-    """Mask ``"<secret-ish key>": "<value>"`` pairs embedded in a free-form token."""
-    return _INLINE_SECRET_RE.sub(r"\1<redacted>\3", text)
+    """Mask ``"<secret-ish key>": "<value>"`` pairs embedded in a free-form token.
+
+    Fails closed in the two cases where the value's boundary is not trustworthy
+    — a secret-ish key the pair regex could not match at all, or a value that
+    itself contains a quote (a tenant password may legally contain " and \\, and
+    an escaped quote makes the lazy match's stopping point a guess). Then the
+    whole token is replaced instead of logged: a regex that stops matching must
+    never degrade into plaintext.
+    """
+    ambiguous = False
+
+    def _mask(match: "re.Match[str]") -> str:
+        nonlocal ambiguous
+        if '"' in match.group(2):
+            ambiguous = True
+        return f"{match.group(1)}<redacted>{match.group(3)}"
+
+    masked, replaced = _INLINE_SECRET_RE.subn(_mask, text)
+    if ambiguous or replaced < len(_INLINE_KEY_PRESENT_RE.findall(text)):
+        return "<redacted-payload>"
+    return masked
 
 
 def _mask_payload_tree(node: Any, opaque: bool = False) -> Any:
@@ -100,10 +135,22 @@ def _mask_payload_tree(node: Any, opaque: bool = False) -> Any:
     value is masked regardless of its key name.
     """
     if isinstance(node, dict):
+        # k8s EnvVar: the secret lives in the ``value`` slot and the key that
+        # names it is a *sibling* (``{"name": "AUTH_TOKEN", "value": "…"}``), so
+        # key-name matching alone can never reach it. This is how the MCP
+        # sidecar's bearer token rides a `--type=json` patch.
+        if ("name" in node and "value" in node
+                and not isinstance(node["value"], (dict, list))
+                and any(h in str(node["name"]).lower() for h in _PAYLOAD_KEY_HINTS)):
+            return {k: ("<redacted>" if k == "value"
+                        else _mask_payload_tree(v, opaque=opaque))
+                    for k, v in node.items()}
         masked = {}
         for key, value in node.items():
             key_lower = str(key).lower()
-            if opaque or any(h in key_lower for h in _PAYLOAD_KEY_HINTS):
+            if key in _REFERENCE_ONLY_FIELDS:
+                masked[key] = value
+            elif opaque or any(h in key_lower for h in _PAYLOAD_KEY_HINTS):
                 masked[key] = "<redacted>"
             elif key in _OPAQUE_PAYLOAD_FIELDS:
                 masked[key] = _mask_payload_tree(value, opaque=True)
@@ -511,11 +558,16 @@ class HelmService:
 
             return result
 
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
+            # NOT str(e): TimeoutExpired stringifies to "Command '<raw cmd list>'
+            # timed out after Ns", which puts the very password safe_cmd just
+            # masked back into api/releases.py's `Stderr: {e.stderr}` log line.
+            # helm --atomic timing out is a routine path (the rollback waits a
+            # second time), so this is the leak's most-travelled route.
             raise HelmException(
                 message=f"Helm command timed out after {effective_timeout}s",
                 command=safe_cmd,
-                stderr=str(e),
+                stderr=f"Command '{safe_cmd}' timed out after {effective_timeout} seconds",
             )
         except FileNotFoundError:
             raise HelmException(
@@ -1025,11 +1077,15 @@ class KubernetesService:
 
             return result
 
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
+            # See the helm twin above. This one's raw cmd is the `node -e` script
+            # holding the tenant's n8n owner password, and the text travels
+            # further than a log line: n8n_init wraps e.stderr into N8nInitError,
+            # which api/init.py returns as N8nInitResponse.error — an HTTP body.
             raise KubectlException(
                 message=f"kubectl command timed out after {timeout}s",
                 command=safe_cmd,
-                stderr=str(e),
+                stderr=f"Command '{safe_cmd}' timed out after {timeout} seconds",
             )
         except FileNotFoundError:
             raise KubectlException(
