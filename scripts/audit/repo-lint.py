@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-十一個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+十二個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -46,6 +46,13 @@
                      不得用 `datetime.now()`（本機時區）——Odoo Datetime 契約是 UTC
                      naive，非 UTC 伺服器上 age timeout 會靜默失效或誤殺，而容器時區
                      是 UTC 所以**測不出來**，只能靠 gate（#489）。
+12. mixin-subscription-sudo  src/models/subscription_lifecycle_mixin.py 內不得裸讀
+                     `self.subscription_id`——那是對 sh.subscription.subscription 的
+                     relation traversal，而 workspace 擁有權不給 Odoo 群組，典型租戶
+                     會在 env cache 落空時撞 AccessError（SH delete/provision、
+                     CS update/delete 全中，#29）。統一走 `_sub()`（sudo）。
+                     依據 docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md
+
 11. assertlogs-numeric-level  src/tests/** 的 assertLogs/assertNoLogs 不得用字串
                      `'INFO'` 當 level——Odoo 的 addLevelName(RUNBOT=25, "INFO") 覆寫
                      了名稱→數值表，字串會解析成 25 ⇒ `_logger.info()`(20) 全被擋掉：
@@ -98,6 +105,9 @@ RESET_LADDER_FILES = (
 # #471：既有實例的隱藏判準（實例層）vs 只擋上架曝光的舊旗標（曝光層）。
 CONCEAL_FIELD = "conceal_instances"
 CONCEAL_WRONG_FIELD = "is_hidden"
+
+# #29：mixin 內部的 subscription traversal 唯一入口是 `_sub()`（sudo）。
+MIXIN_SUDO_FILE = "src/models/subscription_lifecycle_mixin.py"
 
 OWL_ALLOWED_MODIFIERS = {"stop", "prevent", "self", "capture", "synthetic"}
 
@@ -1037,6 +1047,55 @@ def check_transition_anchor_utc(root, only_file=None):
     return violations
 
 
+def check_mixin_subscription_sudo(root, only_file=None):
+    """``subscription_lifecycle_mixin`` 內不得裸讀 ``self.subscription_id``（#29）。
+
+    ``subscription_id`` 指向 ``sh.subscription.subscription``，其 read ACL 只發給
+    ``group_manager_sh_subscription`` / ``group_user_sh_subscription`` /
+    ``base.group_portal``。workspace 擁有權是**平台側**概念、不連帶給 Odoo 群組，
+    所以 mixin 內部一裸讀，典型租戶（只有 ``base.group_user``）就在 env cache 落空
+    時撞 AccessError——SH delete / provision、CS update / delete 回
+    "You are not allowed to access sh.subscription.subscription"。
+
+    這條缺陷**測不出來也看不出來**的原因是 cache：admin 端的任何前置讀取都會餵飽
+    transaction 級 cache，讓後續 user-scoped traversal 不再查 ACL（#27 當年就是被
+    這個假象騙過，把稽核界線畫在 controller）。production 沒有這個假象——每個 HTTP
+    request 都從空 cache 開始。
+
+    修法是把 traversal 收斂到唯一入口 ``_sub()``（回 ``self.sudo()
+    .subscription_id``）。這條 gate 守的就是「唯一入口」這個不變式：新增方法時照抄
+    舊寫法會在編輯當下被擋，而不是三個月後由租戶回報。
+    """
+    violations = []
+    target = os.path.join(root, MIXIN_SUDO_FILE)
+    if only_file and os.path.abspath(only_file) != os.path.abspath(target):
+        return violations
+    if not os.path.exists(target):
+        return violations
+    with open(target, encoding="utf-8", errors="replace") as f:
+        src = f.read()
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return violations  # fail-open，對齊本工具哲學
+    for node in ast.walk(tree):
+        # 只認 `self.subscription_id`（Name self）。`self.sudo().subscription_id`
+        # 的 value 是 Call，不匹配；docstring / 註解裡的同名字串也不匹配（AST）。
+        if (isinstance(node, ast.Attribute)
+                and node.attr == "subscription_id"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "self"):
+            violations.append(
+                "%s:%d：裸讀 `self.subscription_id`。mixin 內部的 subscription "
+                "traversal 一律走 `self._sub()`（sudo）——workspace 擁有者拿不到 "
+                "sh_subscription 的 Odoo 群組，裸讀會讓典型租戶在 cache 落空時撞 "
+                "AccessError（#29；controller 端同 class 缺陷見 #27／PR #28）。"
+                "sudo 在這裡不是權限放大：controller 已先做完 workspace 歸屬 + "
+                "role 兩道閘。"
+                % (MIXIN_SUDO_FILE, node.lineno))
+    return violations
+
+
 # ---------------------------------------------------------------- modes
 
 def run_all(root):
@@ -1051,7 +1110,8 @@ def run_all(root):
                   + check_conceal_instances_gate(root)
                   + check_reset_budget_ladder(root)
                   + check_transition_anchor_utc(root)
-                  + check_assertlogs_numeric_level(root))
+                  + check_assertlogs_numeric_level(root)
+                  + check_mixin_subscription_sudo(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -1060,7 +1120,7 @@ def run_all(root):
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
           "reuse-values / seed-topology / test-env-restore / capability-gate / "
           "conceal-instances / reset-budget-ladder / transition-anchor-utc / "
-          "assertlogs-numeric-level）")
+          "assertlogs-numeric-level / mixin-subscription-sudo）")
     return 0
 
 
@@ -1118,6 +1178,7 @@ def run_hook():
             violations = check_reuse_values(root, only_file=abs_path)
             violations += check_conceal_instances_gate(root, only_file=abs_path)
             violations += check_transition_anchor_utc(root, only_file=abs_path)
+            violations += check_mixin_subscription_sudo(root, only_file=abs_path)
             if rel.startswith("src/tests/"):
                 violations += check_test_env_restore(root, only_file=abs_path)
                 violations += check_assertlogs_numeric_level(root, only_file=abs_path)

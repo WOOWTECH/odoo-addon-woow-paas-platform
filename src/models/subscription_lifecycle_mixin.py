@@ -102,6 +102,38 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     )
 
     # ----------------------------------------------------------------
+    # Subscription access
+    # ----------------------------------------------------------------
+
+    def _sub(self):
+        """本記錄的訂閱（**sudo**）——mixin 內部唯一的 subscription traversal 入口。
+
+        ``subscription_id`` 指向 ``sh.subscription.subscription``，而該 model 的
+        read ACL 只發給 ``group_manager_sh_subscription`` /
+        ``group_user_sh_subscription`` / ``base.group_portal``。workspace 擁有權是
+        **平台側**概念，不會連帶給到那三個 Odoo 群組——所以 mixin 內部只要直接
+        traversal（``self.subscription_id.state`` 之類），典型租戶（只有
+        ``base.group_user`` 的內部使用者）就會在 env cache 落空時撞 AccessError，
+        endpoint 回 "You are not allowed to access sh.subscription.subscription"
+        （#29；#27 的 controller 端已於 PR #28 修過同一個 class 的缺陷）。
+
+        「cache 命中所以看起來沒事」不是健全性——production 每個 HTTP request 都
+        從空 cache 開始，所以這條路是必現而非偶發。
+
+        sudo 不是權限放大：mixin 是 CloudService / SmartHome / SecurityAccess 三
+        個 controller 共用的**內部** helper，走到這裡之前 controller 已經做完
+        workspace 歸屬 + [OWNER, ADMIN] role 兩道閘——誰能驅動這些方法早就決定
+        好了。與 ``controllers/paas.py`` / ``controllers/smart_home.py`` 既有的
+        cascade-sudo 是同一個 pattern。
+
+        新增任何要讀訂閱的 mixin 方法都走這裡，不要再寫 ``self.subscription_id``
+        ——``scripts/audit/repo-lint.py`` 的 ``check_mixin_subscription_sudo``
+        會在編輯當下機械攔下。
+        """
+        self.ensure_one()
+        return self.sudo().subscription_id
+
+    # ----------------------------------------------------------------
     # Subscription creation
     # ----------------------------------------------------------------
 
@@ -134,7 +166,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         #     subscription, so it never reaches this method → trial untouched
         # Read here, before the create + the trailing self.write() that replaces
         # it at the end of this method, so it reflects the entity's PRIOR state.
-        entity_has_prior_sub = bool(self.sudo().subscription_id)
+        entity_has_prior_sub = bool(self._sub())
         _logger.info(
             "[SUB_MIXIN] _create_and_confirm_subscription entry entity=%s:%s partner=%s plan=%s prior_sub=%s",
             self._name, self.id, partner.id, plan.id, entity_has_prior_sub,
@@ -305,7 +337,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     def _is_subscription_active(self):
         """Check if subscription allows normal operations."""
         self.ensure_one()
-        sub = self.subscription_id
+        sub = self._sub()
         if not sub:
             return True  # No subscription = unrestricted (admin/legacy)
         return sub.state == 'in_progress'
@@ -313,7 +345,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     def _is_in_grace_period(self):
         """Check if subscription is expired but within grace period."""
         self.ensure_one()
-        sub = self.subscription_id
+        sub = self._sub()
         if not sub or not sub.sh_end_date:
             return False
         if sub.state not in ('expire', 'close'):
@@ -324,7 +356,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     def _is_past_grace_period(self):
         """Check if subscription expired beyond grace period."""
         self.ensure_one()
-        sub = self.subscription_id
+        sub = self._sub()
         if not sub:
             return False
         if sub.state == 'cancel':
@@ -391,7 +423,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             UserError when no subscription / not active / not in trial.
         """
         self.ensure_one()
-        sub = self.sudo().subscription_id
+        sub = self._sub()
         if not sub:
             raise UserError("No subscription linked to this service.")
         if sub.state != 'in_progress':
@@ -437,7 +469,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             UserError if not in trial
         """
         self.ensure_one()
-        sub = self.sudo().subscription_id
+        sub = self._sub()
         _logger.info(
             "[SUB_MIXIN] _skip_trial entry entity=%s:%s sub=%s",
             self._name, self.id, sub.id if sub else None,
@@ -546,7 +578,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     def _get_subscription_info(self):
         """Return subscription data dict for API responses."""
         self.ensure_one()
-        sub = self.sudo().subscription_id
+        sub = self._sub()
         if not sub:
             return None
         return {
