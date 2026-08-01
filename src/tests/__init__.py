@@ -264,3 +264,5 @@ from . import test_stuck_suspended_converge_497
 from . import test_marketplace_price_label_478
 # fix: #29 subscription_lifecycle_mixin 內部 subscription traversal 的 cascade sudo
 from . import test_subscription_mixin_cascade_sudo_29
+# fix: #389 低餘額通知 dedup marker 改跟著投遞下場走（排入失敗／exception 要重送）
+from . import test_low_balance_dedup_retry_389
