@@ -79,8 +79,8 @@ Display a summary and ask for confirmation before proceeding:
 🔗 Trigger Flow:
   1. Push tag v{version} to origin
   2. Gitea workflow trigger-odoo-build.yml fires
-  3. Calls paas-odoo-ci → build-image.yml
-  4. paas-odoo-ci clones addon at tag v{version}
+  3. Calls paas-odoo-ci → build-image.yml (addon_ref=v{version})
+  4. paas-odoo-ci clones addon at ref v{version}
   5. Builds & pushes paas-odoo:{timestamp} image to JCR
 
 Proceed with release? (yes/no)
@@ -108,4 +108,20 @@ git push origin v{version}
 🔍 Check build status:
   - woow_paas_platform CI: https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/actions
   - paas-odoo-ci CI:       https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions
+
+✅ Build 驗收（CI 綠燈不等於烤對版本）：
+  paas-odoo-ci build log 必須同時出現，且都對上本次版號：
+    at ref: v{version}                ← 看 at ref:，不是 at HEAD
+    Built addon version: {version}    ← 從 image 內 __manifest__.py 反讀
 ```
+
+### 6. 若 CI 失敗需要重跑
+
+**這條路徑上的 tag 已經存在，重推 tag 不會重新觸發**——改用 `workflow_dispatch` 手動跑 paas-odoo-ci 的 `build-image.yml`，且**必須自己帶 `addon_ref`**（自動路徑由 `trigger-odoo-build.yml` 代填，人工路徑沒有人代填）：
+
+- `addon_ref` = `v{version}`（本次發版 tag）
+- `tag` = 新的 `YYYYMMDD.HHMM`
+
+留空會被 paas-odoo-ci 擋下（fail-closed，`exit 1`，issue #46）。**這是設計行為，不是 CI 壞掉**——補上 `addon_ref` 重跑即可。
+
+> 為什麼要擋：留空時 CI 會 clone 本 repo 預設分支（`develop`）的**當下 HEAD**，烤出不可重現、含未發版 commit 的 image，而 CI 全綠、image tag 與 digest 都是新的，完全沒有訊號。完整說明見 [`docs/guides/deployment/prod-release-sop.md`](../../../docs/guides/deployment/prod-release-sop.md) §5.1.4。
