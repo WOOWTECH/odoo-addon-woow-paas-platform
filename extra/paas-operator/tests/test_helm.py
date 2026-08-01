@@ -680,6 +680,140 @@ class TestCommandRedaction:
         assert "TOPSECRETTOKEN" in mock_run.call_args[0][0]
 
 
+class TestPayloadRedaction:
+    """issue #29 second audit pass: secrets that ride on argv INSIDE a payload —
+    a ``--patch`` JSON body or an inline ``kubectl exec`` script — were untouched
+    by the flag-oriented first pass, so they still reached the 'Executing:' log
+    line verbatim. Assertions are on the *log text* (the surface a reader of
+    ``kubectl logs`` / the log aggregator actually sees), not on _redact_cmd's
+    return, so a redaction that misses the real call path cannot pass."""
+
+    @patch("subprocess.run")
+    def test_patch_secret_data_never_reaches_log(self, mock_run, caplog):
+        """`kubectl patch secret --patch={"data":{...}}` carries the tenant's real
+        n8n API key (base64 is encoding, not protection) — n8n_init.py:158."""
+        import base64
+        import logging
+        from src.services.helm import KubernetesService
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="secret/x patched", stderr="")
+        api_key = "n8n_api_REALKEY_deadbeef"
+        with caplog.at_level(logging.INFO):
+            KubernetesService().patch_secret(
+                namespace="paas-ws-abc",
+                secret_name="n8n-release",
+                data={"N8N_API_KEY": api_key},
+            )
+
+        encoded = base64.b64encode(api_key.encode()).decode()
+        assert api_key not in caplog.text
+        assert encoded not in caplog.text
+        # key names stay visible — you can still tell *what* was patched
+        assert "N8N_API_KEY" in caplog.text
+        # subprocess still got the real payload, base64-encoded as kubectl expects
+        assert any(encoded in str(a) for a in mock_run.call_args[0][0])
+
+    @patch("subprocess.run")
+    def test_configmap_patch_values_never_reach_log(self, mock_run, caplog):
+        """mcp.json / skills.json snapshots carry tenant MCP server credentials
+        (mcp_invalidator.py:37, skill_invalidator.py:45)."""
+        import json as _json
+        import logging
+        from src.services.helm import KubernetesService
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="configmap/x patched", stderr="")
+        snapshot = _json.dumps({"mcpServers": {"gh": {"env": {"GITHUB_PAT": "ghp_REALPAT"}}}})
+        with caplog.at_level(logging.INFO):
+            KubernetesService().patch_configmap(
+                namespace="paas-ws-abc",
+                configmap_name="mcp-config",
+                data={"mcp.json": snapshot},
+            )
+
+        assert "ghp_REALPAT" not in caplog.text
+        assert "mcp.json" in caplog.text  # which key was patched stays visible
+
+    @patch("subprocess.run")
+    def test_exec_inline_script_password_never_reaches_log(self, mock_run, caplog):
+        """n8n owner setup/login passes the tenant password inside a `node -e`
+        one-liner on argv (n8n_init.py:106 via _build_node_http_script)."""
+        import logging
+        from src.services.helm import KubernetesService
+        from src.services.n8n_init import _build_node_http_script
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="{}", stderr="")
+        script = _build_node_http_script(
+            "POST", "/rest/owner/setup",
+            body={"email": "owner@example.com", "password": "OWNERPW_REAL123"},
+        )
+        assert "OWNERPW_REAL123" in script  # premise: the secret is really on argv
+        with caplog.at_level(logging.INFO):
+            KubernetesService().exec_in_pod(
+                namespace="paas-ws-abc", pod_name="n8n-0", container="n8n",
+                command=["node", "-e", script],
+            )
+
+        assert "OWNERPW_REAL123" not in caplog.text
+        assert "OWNERPW_REAL123" in str(mock_run.call_args[0][0])
+
+    @patch("subprocess.run")
+    def test_exec_inline_script_cookie_never_reaches_log(self, mock_run, caplog):
+        """The n8n auth cookie is a bearer-equivalent session credential and is
+        embedded in the same argv script (n8n_init.py:394)."""
+        import logging
+        from src.services.helm import KubernetesService
+        from src.services.n8n_init import _build_node_http_script
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="{}", stderr="")
+        script = _build_node_http_script(
+            "POST", "/rest/api-keys",
+            body={"label": "mcp"},
+            headers={"Cookie": "n8n-auth=REALSESSIONJWT"},
+        )
+        assert "REALSESSIONJWT" in script
+        with caplog.at_level(logging.INFO):
+            KubernetesService().exec_in_pod(
+                namespace="paas-ws-abc", pod_name="n8n-0", container="n8n",
+                command=["node", "-e", script],
+            )
+
+        assert "REALSESSIONJWT" not in caplog.text
+
+    def test_redact_preserves_non_secret_patch(self):
+        """The VM runStrategy patch carries no secret — keep it readable, else
+        suspend/resume debugging loses its only argv-level signal."""
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "kubectl", "patch", "virtualmachine", "vm-x",
+            "--namespace", "paas-ws-abc", "--type=merge",
+            "--patch", '{"spec": {"runStrategy": "Halted"}}',
+        ]))
+        assert "Halted" in joined
+        assert "<redacted>" not in joined
+
+    def test_redact_masks_set_comma_separated_pairs(self):
+        """helm accepts several key=value pairs in ONE --set token; the first-pass
+        implementation only inspected the first pair's key."""
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "helm", "upgrade", "x", "--set", "replicaCount=1,auth.password=PWREAL",
+        ]))
+        assert "PWREAL" not in joined
+        assert "replicaCount=1" in joined
+
+    def test_redact_masks_set_equals_form(self):
+        """`--set=key=value` is a single token; the flag-lookahead misses it."""
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "helm", "upgrade", "x", "--set=auth.currentKey=CURKEYREAL",
+        ]))
+        assert "CURKEYREAL" not in joined
+
+
 class TestKubernetesService:
     """Test cases for KubernetesService."""
 
