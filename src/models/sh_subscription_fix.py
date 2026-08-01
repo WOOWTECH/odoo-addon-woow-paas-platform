@@ -361,13 +361,18 @@ class ShSubscriptionFix(models.Model):
             'woow_last_payment_failure_at': fields.Datetime.now(),
         })
 
-        # Existing per-cycle low-balance warning, deduped on the original
-        # next_payment date so retries on the same cycle don't re-spam.
+        # Per-cycle low-balance warning. The marker is stamped **only** when the
+        # mail actually reached the queue, and is re-opened when that mail ends
+        # up undelivered — see `_low_balance_warning_needs_send` (#389).
         partner = subscription.sh_partner_id
         warn_key = subscription.sh_date_of_next_payment or today
-        if subscription.woow_last_low_balance_warned_for != warn_key:
-            self._notify_low_balance(partner, invoice)
-            subscription.write({'woow_last_low_balance_warned_for': warn_key})
+        if self._low_balance_warning_needs_send(subscription, warn_key):
+            mail = self._notify_low_balance(partner, invoice)
+            if mail:
+                subscription.write({
+                    'woow_last_low_balance_warned_for': warn_key,
+                    'woow_last_low_balance_mail_id': mail.id,
+                })
 
         # Threshold check (Decision 4: hard-cancel; Decision 3: 0 = disabled).
         if threshold and new_count >= threshold:
@@ -412,19 +417,59 @@ class ShSubscriptionFix(models.Model):
             )
 
     @api.model
+    def _low_balance_warning_needs_send(self, subscription, warn_key):
+        """這個續費週期還需不需要（再）送一次低餘額通知？（#389）
+
+        原本的判準是「``woow_last_low_balance_warned_for`` 有沒有等於 warn_key」
+        ——也就是「有沒有**呼叫過**通知函式」。但 ``_notify_low_balance`` 用
+        ``force_send=False``，只把信排進佇列；真正的投遞是 mail queue cron，
+        失敗的信會停在 ``mail.mail.state == 'exception'``，而 Odoo 的 scheduler
+        **只撿 outgoing**——沒有任何人會重試它。於是投遞一失敗（#389 的 prod
+        SMTP 全 exception），租戶在整個 ``sh_date_of_next_payment`` 不變的週期
+        內就再也收不到提醒。
+
+        改成看**載體的下場**：
+
+        * marker 不是本週期 → 要送（第一次）。
+        * 有 marker 但沒有載體 → 不送。Odoo 對 ``auto_delete`` 的信在送出成功後
+          會刪掉 mail.mail，所以「查不到載體」的正常成因就是**送成功了**；升級
+          前的既有資料（欄位為 NULL）走同一條，上線當天不會對所有欠費租戶補發
+          一輪。
+        * 載體停在 ``exception`` → 要送（重試）。
+        * 載體是 ``outgoing`` / ``sent`` → 不送（去重仍然有效）。
+
+        重送有天然上限：連續失敗到 ``max_consecutive_payment_failures``（預設 6）
+        就 auto-cancel，訂閱離開 ``in_progress`` 後 dunning cron 不再撈它。
+        """
+        if subscription.woow_last_low_balance_warned_for != warn_key:
+            return True
+        mail = subscription.sudo().woow_last_low_balance_mail_id
+        if not mail or not mail.exists():
+            return False
+        return mail.state == 'exception'
+
+    @api.model
     def _notify_low_balance(self, partner, invoice):
         """Send a low-wallet-balance email to the partner.
 
         Called when an auto-invoice cannot be paid because wallet balance
         is insufficient.
+
+        Returns:
+            ``mail.mail`` recordset — the queued notification, or an **empty**
+            recordset when nothing made it into the queue (no template, or
+            ``send_mail`` raised). The caller keys the per-cycle dedup marker
+            off this: stamping on a failed enqueue is what silenced the whole
+            renewal cycle in #389.
         """
+        Mail = self.env['mail.mail'].sudo()
         template = self.env.ref(
             'woow_paas_platform.mail_template_low_balance',
             raise_if_not_found=False,
         )
         if not template:
             _logger.warning("mail_template_low_balance not found; skip notification")
-            return
+            return Mail
 
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url', '')
         amount_text = formatLang(
@@ -441,17 +486,23 @@ class ShSubscriptionFix(models.Model):
             'topup_url': '%s/woow#/billing/topup' % base_url.rstrip('/'),
         }
         try:
-            template.with_context(**ctx).send_mail(
+            mail_id = template.with_context(**ctx).send_mail(
                 partner.id,
                 force_send=False,
                 email_layout_xmlid='mail.mail_notification_light',
             )
-            _logger.info("Low-balance notification queued for partner %s", partner.id)
         except Exception:
             _logger.exception(
                 "Failed to queue low-balance notification for partner %s",
                 partner.id,
             )
+            return Mail
+        mail = Mail.browse(mail_id) if mail_id else Mail
+        _logger.info(
+            "Low-balance notification queued for partner %s mail=%s",
+            partner.id, mail.id or None,
+        )
+        return mail
 
     @api.model
     def _notify_subscription_cancelled(self, subscription, invoice):
