@@ -23,8 +23,11 @@ class LowBalanceWarningCron(models.AbstractModel):
         """Scan subscriptions renewing within WARNING_WINDOW_DAYS.
 
         For each subscription whose partner's wallet balance is below
-        the plan price, send a single warning email per renewal cycle.
-        Dedup via `sh.subscription.subscription.woow_last_low_balance_warned_for`.
+        the plan price, send a single **delivered** warning email per renewal
+        cycle. Dedup 判準與蓋章共用 ``sh.subscription.subscription`` 上的
+        ``_low_balance_warning_needs_send`` / ``_stamp_low_balance_warning``
+        ——本 cron 與 dunning 的 ``_on_payment_failure`` 是同一個 marker 的兩個
+        寫入者，語意必須綁在一起（#389）。
         """
         today = fields.Date.today()
         cutoff = today + timedelta(days=self.WARNING_WINDOW_DAYS)
@@ -63,22 +66,22 @@ class LowBalanceWarningCron(models.AbstractModel):
         if partner.wallet_balance >= price:
             return
 
-        # Dedup: only warn once per renewal cycle.
+        # Dedup: 每個續費週期只提醒一次——但「提醒過」的判準是**那封信還活著**，
+        # 不是「我呼叫過通知函式」。
+        #
+        # 這裡是 ``woow_last_low_balance_warned_for`` 的**第二個**寫入者（另一個
+        # 是 dunning 的 ``_on_payment_failure``），兩邊寫的是同一個欄位、同一個
+        # key（``sh_date_of_next_payment``）。所以判準與蓋章一律走
+        # ``sh.subscription.subscription`` 上的共用 helper——只改其中一個寫入者
+        # 等於沒改：#389 的 prod 時序正是「D-3 這裡排信＋寫 marker（舊版不記
+        # 載體）→ SMTP 掛 → D 日 dunning 讀到『有 marker 查無載體』判成已送達
+        # → 整個週期靜音」。
         next_payment = subscription.sh_date_of_next_payment
         if not next_payment:
             return
-        last_warned = subscription.woow_last_low_balance_warned_for
-        if last_warned and last_warned == next_payment:
-            return
-
-        template = self.env.ref(
-            'woow_paas_platform.mail_template_low_balance',
-            raise_if_not_found=False,
-        )
-        if not template:
-            _logger.warning(
-                "mail_template_low_balance not found; skip pre-renewal warning"
-            )
+        Subscription = self.env['sh.subscription.subscription']
+        if not Subscription._low_balance_warning_needs_send(
+                subscription, next_payment):
             return
 
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url', '')
@@ -94,14 +97,15 @@ class LowBalanceWarningCron(models.AbstractModel):
             ),
             'topup_url': '%s/woow#/billing/topup' % base_url.rstrip('/'),
         }
-        template.with_context(**ctx).send_mail(
-            partner.id,
-            force_send=False,
-            email_layout_xmlid='mail.mail_notification_light',
-        )
-        # Persist dedup marker
-        subscription.write({'woow_last_low_balance_warned_for': next_payment})
+        mail = Subscription._queue_low_balance_mail(partner, ctx)
+        if not mail:
+            # 沒排進佇列（無模板／send_mail 丟例外）就不蓋 marker——明天這支
+            # cron 還在視窗內就會再試一次。
+            return
+        Subscription._stamp_low_balance_warning(subscription, next_payment, mail)
         _logger.info(
-            "[LOW_BAL] warning queued partner=%s sub=%s renewal=%s price=%.2f balance=%.2f",
-            partner.id, subscription.id, next_payment, price, partner.wallet_balance,
+            "[LOW_BAL] warning queued partner=%s sub=%s renewal=%s price=%.2f "
+            "balance=%.2f mail=%s",
+            partner.id, subscription.id, next_payment, price,
+            partner.wallet_balance, mail.id,
         )
