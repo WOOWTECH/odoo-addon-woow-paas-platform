@@ -58,21 +58,156 @@ def _pvc_keep_post_renderer_args() -> List[str]:
 # aggregation / SIEM. (The argv is still briefly visible via /proc/<pid>/cmdline
 # during the subprocess lifetime — a narrower, transient exposure tracked as a
 # follow-up; this change kills the persistent, broadly-readable log leak.)
+#
+# Second audit pass (same issue): the flag-oriented rules above only see secrets
+# that sit in their OWN argv token. Two call paths carry the secret *inside a
+# payload token* and were therefore still logged verbatim:
+#   1. ``kubectl patch secret --patch={"data":{"N8N_API_KEY":"<b64>"}}``
+#      (patch_secret ← n8n_init) — base64 is encoding, not protection. The same
+#      shape carries tenant MCP credentials through patch_configmap.
+#   2. ``kubectl exec … -- node -e '<script>'`` where the inline script embeds
+#      the tenant's n8n owner password / auth cookie (n8n_init._node_request).
+# Both are masked below by payload-aware rules.
 _SECRET_VALUE_FLAGS = frozenset({"--password", "--username"})
 _SECRET_SET_KEY_HINTS = ("password", "token", "secret", "key", "credential")
+_SET_FLAGS = ("--set", "--set-string", "--set-json", "--set-literal")
+_PATCH_VALUE_FLAGS = frozenset({"--patch", "-p"})
+# Fields whose *every* value is a secret by definition, whatever the key is
+# named (a Secret's ``data`` needs no hint to justify masking).
+_OPAQUE_PAYLOAD_FIELDS = frozenset({"data", "stringData"})
+# JSON keys inside a payload whose value must be masked. Superset of the --set
+# hints: an inline HTTP script carries credentials as headers too.
+_PAYLOAD_KEY_HINTS = _SECRET_SET_KEY_HINTS + ("passwd", "cookie", "authorization")
+# ``valueFrom`` subtrees (secretKeyRef / configMapKeyRef) name *where* a value
+# lives — ``{"name": "n8n-release", "key": "N8N_API_KEY"}`` is a public pointer,
+# never the value itself. Masking it by key-name substring would hide the only
+# readable half while the real secret sits in a sibling ``value`` slot.
+_REFERENCE_ONLY_FIELDS = frozenset({"valueFrom", "secretKeyRef", "configMapKeyRef",
+                                    "secretRef", "configMapRef", "fieldRef"})
+# ``"password": "v"`` and its backslash-escaped twin ``\"password\": \"v\"`` —
+# the n8n script embeds the request body as an escaped JSON string literal, so
+# both quote forms must match. The value runs lazily up to the closing quote
+# *plus a JSON delimiter*, which is what lets it step over an escaped quote
+# inside the value (a tenant password may legally contain " and \).
+_INLINE_KEY_RE = (
+    r'\\?"[\w.\-]*(?:' + "|".join(_PAYLOAD_KEY_HINTS) + r')[\w.\-]*\\?"\s*:\s*'
+)
+_INLINE_SECRET_RE = re.compile(
+    r'(' + _INLINE_KEY_RE + r'\\?")'
+    r'(.*?)'
+    r'(\\?"\s*[,}])',
+    re.IGNORECASE | re.DOTALL,
+)
+# Presence of a secret-ish key *with a string value* — the pair regex above must
+# account for every one of these; any shortfall means a value whose end could not
+# be delimited, and an undelimited secret must not be logged.
+_INLINE_KEY_PRESENT_RE = re.compile(_INLINE_KEY_RE + r'\\?"', re.IGNORECASE)
+
+
+def _redact_inline_secrets(text: str) -> str:
+    """Mask ``"<secret-ish key>": "<value>"`` pairs embedded in a free-form token.
+
+    Fails closed in the two cases where the value's boundary is not trustworthy
+    — a secret-ish key the pair regex could not match at all, or a value that
+    itself contains a quote (a tenant password may legally contain " and \\, and
+    an escaped quote makes the lazy match's stopping point a guess). Then the
+    whole token is replaced instead of logged: a regex that stops matching must
+    never degrade into plaintext.
+    """
+    ambiguous = False
+
+    def _mask(match: "re.Match[str]") -> str:
+        nonlocal ambiguous
+        if '"' in match.group(2):
+            ambiguous = True
+        return f"{match.group(1)}<redacted>{match.group(3)}"
+
+    masked, replaced = _INLINE_SECRET_RE.subn(_mask, text)
+    if ambiguous or replaced < len(_INLINE_KEY_PRESENT_RE.findall(text)):
+        return "<redacted-payload>"
+    return masked
+
+
+def _mask_payload_tree(node: Any, opaque: bool = False) -> Any:
+    """Mask secret leaves of a parsed JSON payload, keeping keys visible.
+
+    ``opaque`` propagates into ``data`` / ``stringData`` subtrees, where every
+    value is masked regardless of its key name.
+    """
+    if isinstance(node, dict):
+        # k8s EnvVar: the secret lives in the ``value`` slot and the key that
+        # names it is a *sibling* (``{"name": "AUTH_TOKEN", "value": "…"}``), so
+        # key-name matching alone can never reach it. This is how the MCP
+        # sidecar's bearer token rides a `--type=json` patch.
+        if ("name" in node and "value" in node
+                and not isinstance(node["value"], (dict, list))
+                and any(h in str(node["name"]).lower() for h in _PAYLOAD_KEY_HINTS)):
+            return {k: ("<redacted>" if k == "value"
+                        else _mask_payload_tree(v, opaque=opaque))
+                    for k, v in node.items()}
+        masked = {}
+        for key, value in node.items():
+            key_lower = str(key).lower()
+            if key in _REFERENCE_ONLY_FIELDS:
+                masked[key] = value
+            elif opaque or any(h in key_lower for h in _PAYLOAD_KEY_HINTS):
+                masked[key] = "<redacted>"
+            elif key in _OPAQUE_PAYLOAD_FIELDS:
+                masked[key] = _mask_payload_tree(value, opaque=True)
+            else:
+                masked[key] = _mask_payload_tree(value, opaque=opaque)
+        return masked
+    if isinstance(node, list):
+        return [_mask_payload_tree(item, opaque=opaque) for item in node]
+    return "<redacted>" if opaque else node
+
+
+def _redact_payload(value: str) -> str:
+    """Mask secrets in a ``--patch`` payload, preserving its non-secret shape.
+
+    Falls back to the inline regex when the payload isn't parseable JSON, so an
+    unexpected payload form degrades to *masked*, never to *leaked*.
+    """
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError):
+        return _redact_inline_secrets(value)
+    masked = _mask_payload_tree(parsed)
+    # Unchanged payload → return the caller's exact string so a non-secret patch
+    # (e.g. the VM runStrategy patch) stays byte-identical in the log.
+    return value if masked == parsed else json.dumps(masked)
+
+
+def _redact_set_pairs(value: str) -> str:
+    """Mask secret pairs of a ``--set`` value, which may hold several pairs.
+
+    helm accepts ``--set a=1,auth.password=x``; masking only the first pair
+    would leak every later one.
+    """
+    if "=" not in value:
+        return value
+    out = []
+    for pair in value.split(","):
+        key = pair.split("=", 1)[0]
+        if "=" in pair and any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
+            out.append(f"{key}=<redacted>")
+        else:
+            out.append(pair)
+    return ",".join(out)
 
 
 def _redact_cmd(cmd: List[str]) -> List[str]:
     """Return a copy of a CLI argv with credential values masked for logging.
 
     Handles ``--password value`` / ``--password=value`` (and ``--username``),
-    plus ``--set key=value`` / ``--set-string`` where the key hints at a secret
-    (future-proofing — the operator currently passes secrets via ``--values``
-    file, whose path is non-sensitive, not via ``--set``).
+    ``--set key=value`` family where the key hints at a secret, ``--patch``
+    JSON payloads (Secret/ConfigMap ``data``), and secrets embedded in any
+    remaining token — notably the inline ``kubectl exec … -- node -e`` script.
     """
     redacted: List[str] = []
-    mask_next = False  # next token is a bare credential value
-    set_next = False   # next token is a `--set key=value` pair
+    mask_next = False   # next token is a bare credential value
+    set_next = False    # next token is a `--set key=value` pair
+    patch_next = False  # next token is a `--patch` JSON payload
     for tok in cmd:
         if mask_next:
             redacted.append("<redacted>")
@@ -80,19 +215,31 @@ def _redact_cmd(cmd: List[str]) -> List[str]:
             continue
         if set_next:
             set_next = False
-            key = tok.split("=", 1)[0]
-            if "=" in tok and any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
-                redacted.append(f"{key}=<redacted>")
-            else:
-                redacted.append(tok)
+            redacted.append(_redact_set_pairs(tok))
+            continue
+        if patch_next:
+            patch_next = False
+            redacted.append(_redact_payload(tok))
             continue
         if tok in _SECRET_VALUE_FLAGS:
             redacted.append(tok)
             mask_next = True
             continue
-        if tok in ("--set", "--set-string"):
+        if tok in _SET_FLAGS:
             redacted.append(tok)
             set_next = True
+            continue
+        if tok in _PATCH_VALUE_FLAGS:
+            redacted.append(tok)
+            patch_next = True
+            continue
+        if "=" in tok and tok.split("=", 1)[0] in _SET_FLAGS:
+            flag, value = tok.split("=", 1)
+            redacted.append(f"{flag}={_redact_set_pairs(value)}")
+            continue
+        if "=" in tok and tok.split("=", 1)[0] in _PATCH_VALUE_FLAGS:
+            flag, value = tok.split("=", 1)
+            redacted.append(f"{flag}={_redact_payload(value)}")
             continue
         if "=" in tok and tok.split("=", 1)[0] in _SECRET_VALUE_FLAGS:
             redacted.append(f"{tok.split('=', 1)[0]}=<redacted>")
@@ -105,7 +252,10 @@ def _redact_cmd(cmd: List[str]) -> List[str]:
             if any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
                 redacted.append(f"{key}=<redacted>")
                 continue
-        redacted.append(tok)
+        # Catch-all: a secret embedded in an otherwise ordinary token — the
+        # `kubectl exec … -- node -e '<script>'` one-liner whose body/headers
+        # carry the tenant password and auth cookie.
+        redacted.append(_redact_inline_secrets(tok))
     return redacted
 
 
@@ -408,11 +558,16 @@ class HelmService:
 
             return result
 
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
+            # NOT str(e): TimeoutExpired stringifies to "Command '<raw cmd list>'
+            # timed out after Ns", which puts the very password safe_cmd just
+            # masked back into api/releases.py's `Stderr: {e.stderr}` log line.
+            # helm --atomic timing out is a routine path (the rollback waits a
+            # second time), so this is the leak's most-travelled route.
             raise HelmException(
                 message=f"Helm command timed out after {effective_timeout}s",
                 command=safe_cmd,
-                stderr=str(e),
+                stderr=f"Command '{safe_cmd}' timed out after {effective_timeout} seconds",
             )
         except FileNotFoundError:
             raise HelmException(
@@ -922,11 +1077,15 @@ class KubernetesService:
 
             return result
 
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
+            # See the helm twin above. This one's raw cmd is the `node -e` script
+            # holding the tenant's n8n owner password, and the text travels
+            # further than a log line: n8n_init wraps e.stderr into N8nInitError,
+            # which api/init.py returns as N8nInitResponse.error — an HTTP body.
             raise KubectlException(
                 message=f"kubectl command timed out after {timeout}s",
                 command=safe_cmd,
-                stderr=str(e),
+                stderr=f"Command '{safe_cmd}' timed out after {timeout} seconds",
             )
         except FileNotFoundError:
             raise KubectlException(

@@ -680,6 +680,397 @@ class TestCommandRedaction:
         assert "TOPSECRETTOKEN" in mock_run.call_args[0][0]
 
 
+# Process-spawning APIs, as `module.attribute`. Anything here reaches an argv
+# without passing _run_command's credential redaction.
+_SPAWN_APIS = {
+    "subprocess": {"run", "Popen", "call", "check_call", "check_output",
+                   "getoutput", "getstatusoutput"},
+    "os": {"system", "popen", "execl", "execle", "execlp", "execv", "execve",
+           "execvp", "execvpe", "spawnl", "spawnv", "spawnve", "posix_spawn"},
+    "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
+}
+
+
+def find_process_spawns(source, path):
+    """Locate process-spawning calls in ``source``.
+
+    Returns ``[(lineno, enclosing_function, "module.attr"), …]``. Import
+    bindings are resolved first, so ``import subprocess as sp`` and
+    ``from subprocess import run as _run`` are recognised as readily as the
+    plain spelling — a gate keyed to one syntax form guards the form, not the
+    invariant. Names that merely *look* like a spawn (``self.run``, a locally
+    defined ``run``) are not reported: nothing bound them to a spawn module.
+    """
+    import ast
+
+    tree = ast.parse(source, filename=path)
+    module_aliases = {}  # local name -> spawn module (import x [as y])
+    symbol_aliases = {}  # local name -> (module, attr) (from x import y [as z])
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _SPAWN_APIS:
+                    module_aliases[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom):
+            if node.module in _SPAWN_APIS:
+                for alias in node.names:
+                    if alias.name in _SPAWN_APIS[node.module]:
+                        symbol_aliases[alias.asname or alias.name] = (
+                            node.module, alias.name)
+
+    parents = {child: node for node in ast.walk(tree)
+               for child in ast.iter_child_nodes(node)}
+
+    def enclosing_func(node):
+        while node is not None:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return node.name
+            node = parents.get(node)
+        return "<module>"
+
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        spawn = None
+        if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                and func.value.id in module_aliases):
+            module = module_aliases[func.value.id]
+            if func.attr in _SPAWN_APIS[module]:
+                spawn = f"{module}.{func.attr}"
+        elif isinstance(func, ast.Name) and func.id in symbol_aliases:
+            spawn = "{}.{}".format(*symbol_aliases[func.id])
+        if spawn:
+            found.append((node.lineno, enclosing_func(node), spawn))
+    return found
+
+
+class TestPayloadRedaction:
+    """issue #29 second audit pass: secrets that ride on argv INSIDE a payload —
+    a ``--patch`` JSON body or an inline ``kubectl exec`` script — were untouched
+    by the flag-oriented first pass, so they still reached the 'Executing:' log
+    line verbatim. Assertions are on the *log text* (the surface a reader of
+    ``kubectl logs`` / the log aggregator actually sees), not on _redact_cmd's
+    return, so a redaction that misses the real call path cannot pass."""
+
+    @patch("subprocess.run")
+    def test_patch_secret_data_never_reaches_log(self, mock_run, caplog):
+        """`kubectl patch secret --patch={"data":{...}}` carries the tenant's real
+        n8n API key (base64 is encoding, not protection) — n8n_init.py:158."""
+        import base64
+        import logging
+        from src.services.helm import KubernetesService
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="secret/x patched", stderr="")
+        api_key = "n8n_api_REALKEY_deadbeef"
+        with caplog.at_level(logging.INFO):
+            KubernetesService().patch_secret(
+                namespace="paas-ws-abc",
+                secret_name="n8n-release",
+                data={"N8N_API_KEY": api_key},
+            )
+
+        encoded = base64.b64encode(api_key.encode()).decode()
+        assert api_key not in caplog.text
+        assert encoded not in caplog.text
+        # key names stay visible — you can still tell *what* was patched
+        assert "N8N_API_KEY" in caplog.text
+        # subprocess still got the real payload, base64-encoded as kubectl expects
+        assert any(encoded in str(a) for a in mock_run.call_args[0][0])
+
+    @patch("subprocess.run")
+    def test_configmap_patch_values_never_reach_log(self, mock_run, caplog):
+        """mcp.json / skills.json snapshots carry tenant MCP server credentials
+        (mcp_invalidator.py:37, skill_invalidator.py:45)."""
+        import json as _json
+        import logging
+        from src.services.helm import KubernetesService
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="configmap/x patched", stderr="")
+        snapshot = _json.dumps({"mcpServers": {"gh": {"env": {"GITHUB_PAT": "ghp_REALPAT"}}}})
+        with caplog.at_level(logging.INFO):
+            KubernetesService().patch_configmap(
+                namespace="paas-ws-abc",
+                configmap_name="mcp-config",
+                data={"mcp.json": snapshot},
+            )
+
+        assert "ghp_REALPAT" not in caplog.text
+        assert "mcp.json" in caplog.text  # which key was patched stays visible
+
+    @patch("subprocess.run")
+    def test_exec_inline_script_password_never_reaches_log(self, mock_run, caplog):
+        """n8n owner setup/login passes the tenant password inside a `node -e`
+        one-liner on argv (n8n_init.py:106 via _build_node_http_script)."""
+        import logging
+        from src.services.helm import KubernetesService
+        from src.services.n8n_init import _build_node_http_script
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="{}", stderr="")
+        script = _build_node_http_script(
+            "POST", "/rest/owner/setup",
+            body={"email": "owner@example.com", "password": "OWNERPW_REAL123"},
+        )
+        assert "OWNERPW_REAL123" in script  # premise: the secret is really on argv
+        with caplog.at_level(logging.INFO):
+            KubernetesService().exec_in_pod(
+                namespace="paas-ws-abc", pod_name="n8n-0", container="n8n",
+                command=["node", "-e", script],
+            )
+
+        assert "OWNERPW_REAL123" not in caplog.text
+        assert "OWNERPW_REAL123" in str(mock_run.call_args[0][0])
+
+    @patch("subprocess.run")
+    def test_exec_inline_script_cookie_never_reaches_log(self, mock_run, caplog):
+        """The n8n auth cookie is a bearer-equivalent session credential and is
+        embedded in the same argv script (n8n_init.py:394)."""
+        import logging
+        from src.services.helm import KubernetesService
+        from src.services.n8n_init import _build_node_http_script
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="{}", stderr="")
+        script = _build_node_http_script(
+            "POST", "/rest/api-keys",
+            body={"label": "mcp"},
+            headers={"Cookie": "n8n-auth=REALSESSIONJWT"},
+        )
+        assert "REALSESSIONJWT" in script
+        with caplog.at_level(logging.INFO):
+            KubernetesService().exec_in_pod(
+                namespace="paas-ws-abc", pod_name="n8n-0", container="n8n",
+                command=["node", "-e", script],
+            )
+
+        assert "REALSESSIONJWT" not in caplog.text
+
+    def test_redact_preserves_non_secret_patch(self):
+        """The VM runStrategy patch carries no secret — keep it readable, else
+        suspend/resume debugging loses its only argv-level signal."""
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "kubectl", "patch", "virtualmachine", "vm-x",
+            "--namespace", "paas-ws-abc", "--type=merge",
+            "--patch", '{"spec": {"runStrategy": "Halted"}}',
+        ]))
+        assert "Halted" in joined
+        assert "<redacted>" not in joined
+
+    def test_redact_masks_set_comma_separated_pairs(self):
+        """helm accepts several key=value pairs in ONE --set token; the first-pass
+        implementation only inspected the first pair's key."""
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "helm", "upgrade", "x", "--set", "replicaCount=1,auth.password=PWREAL",
+        ]))
+        assert "PWREAL" not in joined
+        assert "replicaCount=1" in joined
+
+    def test_redact_masks_set_equals_form(self):
+        """`--set=key=value` is a single token; the flag-lookahead misses it."""
+        from src.services.helm import _redact_cmd
+        joined = " ".join(_redact_cmd([
+            "helm", "upgrade", "x", "--set=auth.currentKey=CURKEYREAL",
+        ]))
+        assert "CURKEYREAL" not in joined
+
+    @patch("subprocess.run")
+    def test_timeout_exception_does_not_carry_raw_cmd_to_log(self, mock_run, caplog):
+        """PR#505 review B1: ``str(TimeoutExpired)`` embeds the *raw* cmd list, so
+        `stderr=str(e)` re-leaks the password the line above just masked. The
+        install path logs e.stderr verbatim (api/releases.py:182), and helm
+        --atomic timing out is a routine path (rollback waits a second time)."""
+        import logging
+        from src.services.helm import HelmException, HelmService
+
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["helm", "install", "x", "--password", "TIMEOUTLEAKTOKEN"], timeout=600)
+        with pytest.raises(HelmException) as excinfo:
+            HelmService()._run_command(["install", "x", "--password", "TIMEOUTLEAKTOKEN"])
+
+        err = excinfo.value
+        # the real log statement at api/releases.py:182
+        with caplog.at_level(logging.ERROR):
+            logging.getLogger("src.api.releases").error(
+                f"Helm install failed: {err.message}\nStderr: {err.stderr}")
+        assert "TIMEOUTLEAKTOKEN" not in caplog.text
+        assert "TIMEOUTLEAKTOKEN" not in err.stderr
+        # diagnostics survive: which command it was, and that it timed out
+        assert "--password <redacted>" in err.stderr
+        assert "timed out after" in err.stderr
+
+    @patch("subprocess.run")
+    def test_timeout_exception_does_not_carry_raw_cmd_to_http_body(self, mock_run):
+        """PR#505 review B1, second outlet: the kubectl timeout's str(e) reaches
+        the caller as N8nInitError text, which api/init.py:64-68 hands back in
+        N8nInitResponse.error — i.e. straight into the HTTP body Odoo receives.
+        The raw cmd there is the `node -e` script holding the owner password."""
+        from src.services.n8n_init import N8nInitError, N8nInitService
+
+        password = "TENANTPW_HTTPLEAK"
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["kubectl", "exec", "n8n-0", "--", "node", "-e",
+                 'const d="{\\"emailOrLdapLoginId\\": \\"o@e.c\\", '
+                 '\\"password\\": \\"' + password + '\\"}";'],
+            timeout=30,
+        )
+        with pytest.raises(N8nInitError) as excinfo:
+            N8nInitService()._login("paas-ws-abc", "n8n-0", "n8n", "o@e.c", password)
+
+        assert password not in str(excinfo.value)
+
+    @patch("subprocess.run")
+    def test_json_patch_envvar_value_never_reaches_log(self, mock_run, caplog):
+        """PR#505 review B2: `--type=json` payloads are *arrays*, and a k8s EnvVar
+        keeps its secret in the ``value`` slot with a neutral ``name`` sibling —
+        a key-name-only mask can never fire on it. This is how the MCP sidecar's
+        bearer token is injected (api/releases.py:1306-1312)."""
+        import logging
+        from src.services.helm import KubernetesService
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="{}", stderr="")
+        patch_body = json.dumps([{
+            "op": "add",
+            "path": "/spec/template/spec/containers/-",
+            "value": {
+                "name": "mcp-sidecar",
+                "image": "woow/mcp:1.2.3",
+                "env": [
+                    {"name": "AUTH_TOKEN", "value": "bearer_REALSIDECARTOKEN"},
+                    {"name": "LOG_LEVEL", "value": "info"},
+                ],
+            },
+        }])
+        with caplog.at_level(logging.INFO):
+            KubernetesService().patch_deployment(
+                namespace="paas-ws-abc", deployment_name="app",
+                patch=patch_body, patch_type="json",
+            )
+
+        assert "bearer_REALSIDECARTOKEN" not in caplog.text
+        # non-secret env and the patch shape stay readable
+        assert "LOG_LEVEL" in caplog.text and "info" in caplog.text
+        assert "AUTH_TOKEN" in caplog.text
+        assert "mcp-sidecar" in caplog.text
+
+    def test_secret_key_ref_is_a_public_reference_not_a_secret(self):
+        """PR#505 review C6: ``secretKeyRef: {name, key}`` names *where* a value
+        lives; the value itself never appears. Masking it by substring ('key')
+        hides the only readable half while the real secret sits in a sibling
+        `value` slot — exactly inverted."""
+        from src.services.helm import _redact_cmd
+
+        patch_body = json.dumps([{
+            "op": "add",
+            "path": "/spec/template/spec/containers/-",
+            "value": {"name": "sidecar", "env": [{
+                "name": "N8N_API_KEY",
+                "valueFrom": {"secretKeyRef": {"name": "n8n-release", "key": "N8N_API_KEY"}},
+            }]},
+        }])
+        joined = " ".join(_redact_cmd([
+            "kubectl", "patch", "deployment", "app", "--type=json", f"--patch={patch_body}",
+        ]))
+        assert "n8n-release" in joined  # which Secret is referenced
+        assert "secretKeyRef" in joined
+        assert "<redacted>" not in joined  # nothing here is a secret value
+
+    def test_inline_redaction_survives_escaped_characters_in_value(self):
+        """PR#505 review G3: tenants pick their own n8n password with no charset
+        limit. A quote/backslash in it becomes an escape inside the inline JSON
+        string, the value group stops early, and the whole match dies — the
+        old regex then redacted *nothing*. Never degrade to plaintext."""
+        from src.services.helm import _redact_cmd
+        from src.services.n8n_init import _build_node_http_script
+
+        tricky = 'pa"ss\\G3UNIQUEWORD'  # a literal quote and backslash, both legal
+        script = _build_node_http_script(
+            "POST", "/rest/login",
+            body={"emailOrLdapLoginId": "o@e.c", "password": tricky},
+        )
+        # premise: the escaping mangles the quote/backslash but the rest of the
+        # password sits on argv verbatim
+        assert "G3UNIQUEWORD" in script
+        joined = " ".join(_redact_cmd(["kubectl", "exec", "p", "--", "node", "-e", script]))
+        assert "<redacted" in joined
+        # no fragment survives on either side of the escape
+        assert "G3UNIQUEWORD" not in joined
+
+    def test_shell_out_stays_funnelled_through_redacting_run_command(self):
+        """Redaction only protects what goes through ``_run_command``. issue #29
+        needed two passes because secrets kept arriving on argv by new routes; a
+        shell-out added elsewhere would bypass the mask entirely and silently.
+
+        Scope of what this can catch (PR#505 review G5 — stated so the guarantee
+        isn't overclaimed): calls that *name* a process-spawning API, resolved
+        through plain imports, ``from`` imports and aliases. It cannot see a
+        spawn reached indirectly (a callable stored in a variable, getattr, a
+        third-party wrapper) — those need review, not AST.
+
+        If this fails: route the call through ``_run_command`` (preferred), or —
+        if it provably carries no credential — add its location to ALLOWED below
+        with a one-line justification."""
+        from pathlib import Path
+
+        # (file suffix, enclosing function) pairs allowed to shell out directly.
+        ALLOWED = {
+            ("services/helm.py", "_run_command"),  # the two redacting choke points
+        }
+        src_root = Path(__file__).resolve().parent.parent / "src"
+        offenders = []
+        for py in sorted(src_root.rglob("*.py")):
+            rel = py.relative_to(src_root).as_posix()
+            for lineno, func_name, spawn in find_process_spawns(py.read_text(), rel):
+                if (rel, func_name) not in ALLOWED:
+                    offenders.append(f"{rel}:{lineno} in {func_name}() → {spawn}")
+
+        assert not offenders, (
+            "shell-out bypassing _run_command's credential redaction: "
+            + ", ".join(offenders)
+        )
+
+    def test_shell_out_gate_sees_every_import_idiom_used_in_this_repo(self):
+        """PR#505 review G5: an AST gate that only matches ``subprocess.run(...)``
+        is a gate against one *spelling*, not against the invariant. Each snippet
+        below is written in an import idiom this repo already uses elsewhere
+        (plain ``import x``, ``from x import y``, aliased import), so a bypass
+        would look entirely ordinary in review."""
+        cases = {
+            "attribute": "import subprocess\ndef f():\n    subprocess.run(['helm'])\n",
+            "from-import": "from subprocess import run\ndef f():\n    run(['helm'])\n",
+            "aliased-module": "import subprocess as sp\ndef f():\n    sp.Popen(['helm'])\n",
+            "aliased-symbol": "from subprocess import run as _run\ndef f():\n    _run(['helm'])\n",
+            "os-system": "import os\ndef f():\n    os.system('helm install')\n",
+            "os-popen": "from os import popen\ndef f():\n    popen('helm install')\n",
+            "asyncio": (
+                "import asyncio\n"
+                "async def f():\n"
+                "    await asyncio.create_subprocess_exec('helm')\n"
+            ),
+        }
+        missed = [name for name, code in cases.items()
+                  if not find_process_spawns(code, "probe.py")]
+        assert not missed, f"gate blind to these spawn idioms: {missed}"
+
+    def test_shell_out_gate_does_not_cry_wolf(self):
+        """The flip side: a gate that fires on ordinary code gets muted. These
+        must stay silent — same names, no process spawned."""
+        cases = {
+            "unrelated-run": "def f():\n    self.run(['x'])\n",
+            "own-method": "def f():\n    _run_command(['get', 'pods'])\n",
+            "shadowed-name": "def run(x):\n    return x\ndef f():\n    run(['x'])\n",
+        }
+        noisy = [name for name, code in cases.items()
+                 if find_process_spawns(code, "probe.py")]
+        assert not noisy, f"gate fires on non-spawning code: {noisy}"
+
+
 class TestKubernetesService:
     """Test cases for KubernetesService."""
 
