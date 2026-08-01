@@ -8,7 +8,7 @@
 2. **評估機械化**（`/retro` skill 的分流，按強度優先）：可 grep/parse 判定 → `scripts/audit/repo-lint.py` 加 check；綁特定路徑 → `.claude/hooks/pattern-guard-map.json` append；皆不可 → 狀態欄留 `—`。
 3. 教訓已被 code guard / gate 取代時，更新狀態欄並讓 doc 記錄 guard 位置（file:line）。
 
-## 索引（36 條）
+## 索引（37 條）
 
 | pitfall | 一行症狀 | 機械化狀態 |
 | --- | --- | --- |
@@ -20,6 +20,7 @@
 | [agent-runtime-webhook-statesync-deploy-hazards](agent-runtime-webhook-statesync-deploy-hazards.md) | webhook state-sync 在 stg 接通的 3 個部署層陷阱（含一次 namespace 資料全失） | — |
 | [assertlogs-string-level-shadowed-by-odoo](assertlogs-string-level-shadowed-by-odoo.md) | `assertLogs(level='INFO')` 在 Odoo 進程是 setLevel(25)（netsvc addLevelName 覆寫 `_nameToLevel`）→ 守 `_logger.info` 的測試**引入即恆紅**、訊息卻長得像 code 掉了 log；`assertNoLogs` 版本則恆綠 | repo-lint `check_assertlogs_numeric_level`（第 11 條）|
 | [cf-ns-orphan-no-account-gc](cf-ns-orphan-no-account-gc.md) | CF/ns 孤兒無帳號級反向 GC；繞過 Odoo unlink 的刪除 → stored id 蒸發成永久孤兒；SmartHome 連 fail-loud guard 都沒有 | — |
+| [ci-addon-ref-empty-drifting-default-branch](ci-addon-ref-empty-drifting-default-branch.md) | 人工重跑 build 忘填 `addon_ref` → CI clone 移動中的預設分支 HEAD；CI 全綠、image_tag 與 digest 全新、pod digest 閉環全對，但 image 內容是另一個版本（要到 pod 跑 `-u` 才現形） | CI fail-closed（`paas-odoo-ci/build-image.yml`，跨 repo）+ SOP §11 checklist 1.5 STOP gate |
 | [ci-workflow-container-missing-node](ci-workflow-container-missing-node.md) | CI `container: <lang-image>` 缺 node → checkout exit 127 → pytest 從沒跑到（false green）；本 repo Odoo CI 不受影響 | — |
 | [cross-repo-artifact-landing-assumption](cross-repo-artifact-landing-assumption.md) | plan 假設部署 artifact 落 cross-repo X 實際落本 repo Y → impl 前按「修改誰的 deployment」勘查實體落點 | — |
 | [cross-workspace-task-data-leak](cross-workspace-task-data-leak.md) | CAQA B1 incident：跨 workspace task 資料外洩 | — |
