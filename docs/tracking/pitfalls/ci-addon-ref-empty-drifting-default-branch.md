@@ -56,8 +56,20 @@ metadata:
   非 `stg-*` 路徑 → 直接 `exit 1`，要求呼叫端明示 ref。
   **`stg-*` → `develop` 的 fallback 刻意保留不動** —— `deploy-stg.sh:298` 建 tag 時從不傳
   `addon_ref`，完全依賴這個 fallback，一併收掉會讓 `/woow:deploy-stg` 立刻全壞。
-- **build log 加兩行可驗錨點**：`at ref:`（clone 的實際 ref）與 `Built addon version:`
-  （從產出 image 內 `__manifest__.py` 反讀的版號）。
+- **build log 加兩行可驗錨點**：`Cloning … at ref:`（clone 的實際 ref）與
+  `Built addon version:`（該 ref 的 `src/__manifest__.py` 版號）。
+
+  **這兩行是 source 層訊號，且不互相獨立** —— 同源於**同一次 `git clone`**，讀的是
+  `/tmp/woow_paas_platform/src/__manifest__.py`（剛 clone 下來的原始碼，連 build context
+  裡那份複本都不是），且該 step 跑在 `docker build` **之前**。合起來只證明「clone 的是
+  指定的 ref、該 ref 的 manifest 是這個版號」，**不證明 image 裡裝的是它**：Dockerfile
+  `COPY` 路徑錯、build context 組錯、layer cache 問題一律抓不到。
+  CI 側也**不是 gate**（自陳「只印，不與任何硬編版號比對」「解析失敗不擋 build」），
+  擋不擋得住取決於平台側的人工 gate。
+
+  **剩下的缺口要明講**：從「clone 到正確 source」到「image 裡真的是那份 source」之間
+  **沒有任何自動驗證**；能觸及 image 實際內容的最早時機仍是 pod 起來之後。兩行錨點
+  消滅的是「烤錯 ref」這一類，不是「image 內容不對」這個大類。
 - **平台側 SOP 補驗收與重跑路徑**（本 pitfall 同批）：
   - `docs/guides/deployment/prod-release-sop.md` §5.1.4 —— 為什麼 tag/digest 驗不出來、
     兩行錨點怎麼驗、CI 失敗要重跑的正確做法（整份 SOP 原本**完全沒有**重跑段落）
@@ -80,6 +92,19 @@ metadata:
    pin 證明的是「我寫進 CD 的值」—— 沒有一環把 image **內容**錨回**意圖**。
    設計驗收時要問的不是「有沒有查」，是「這項查驗在缺陷發生時會不會變紅」。
    本案的答案是：全部不會。
+
+   > **這條教訓的活例，就發生在本 pitfall 自己的修復過程中。** 本文件與 SOP 的第一版把
+   > `Built addon version:` 描述成「從產出的 image 裡反讀」，並宣稱它「能同時擋掉 ref 對
+   > 但 build context 錯」。去讀 `build-image.yml` 實體才發現：它讀的是
+   > `/tmp/woow_paas_platform/src/__manifest__.py`（clone 下來的原始碼），而且跑在
+   > `docker build` **之前** —— 那個宣稱剛好完全相反。
+   > **把 source 層的訊號寫成 image 層的保證**，等於在修這個缺陷的文件裡把同一個錯再犯
+   > 一次，而且傷害更大：下一個人會照著它做發版驗收，並以為自己驗過了 image。
+   > 由 PR #511 的 review 抓下（2026-08-01）。
+   >
+   > 可帶走的規則：**寫「這項驗收能擋住 X」之前，先去讀那個訊號的產生點**——
+   > 它在 pipeline 的哪一段、讀的是什麼、跑在什麼之前、失敗時擋不擋。
+   > 訊號的名字（`Built addon version`）會誤導你，只有產生它的那幾行不會。
 3. **「fallback 到預設分支」＝ 把一個不在版控的設定變成 build 的隱含輸入**。
    不可變錨點（tag / commit SHA）與移動指標（branch HEAD）在 build 系統裡語意天差地遠，
    前者可重現、後者不可；讓後者當預設值等於預設放棄可重現性。

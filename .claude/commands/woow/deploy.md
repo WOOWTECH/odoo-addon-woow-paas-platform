@@ -109,10 +109,13 @@ git push origin v{version}
   - woow_paas_platform CI: https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/actions
   - paas-odoo-ci CI:       https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions
 
-✅ Build 驗收（CI 綠燈不等於烤對版本）：
+✅ Build 驗收（CI 綠燈不等於 clone 對 ref）：
   paas-odoo-ci build log 必須同時出現，且都對上本次版號：
-    at ref: v{version}                ← 看 at ref:，不是 at HEAD
-    Built addon version: {version}    ← 從 image 內 __manifest__.py 反讀
+    Cloning woow_paas_platform at ref: v{version}    ← 看 at ref:，不是 at HEAD
+    Built addon version: {version} (from ref: ...)   ← 該 ref 的 src/__manifest__.py
+  ⚠ 兩行同源於同一次 clone、屬 source 層訊號：只釘住「clone 了哪個 ref」，
+    不保證 image 內容（Dockerfile COPY / build context / cache 問題一律抓不到）。
+    詳見 SOP §5.1.4「已知極限」。
 ```
 
 ### 6. 若 CI 失敗需要重跑
