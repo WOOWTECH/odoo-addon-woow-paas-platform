@@ -813,6 +813,54 @@ class TestPayloadRedaction:
         ]))
         assert "CURKEYREAL" not in joined
 
+    def test_shell_out_stays_funnelled_through_redacting_run_command(self):
+        """Redaction only protects what goes through ``_run_command``. issue #29
+        needed two passes because secrets kept arriving on argv by new routes; a
+        shell-out added elsewhere would bypass the mask entirely and silently.
+
+        If this fails: route the call through ``_run_command`` (preferred), or —
+        if it provably carries no credential — add its location to ALLOWED below
+        with a one-line justification."""
+        import ast
+        from pathlib import Path
+
+        # (file suffix, enclosing function) pairs allowed to shell out directly.
+        ALLOWED = {
+            ("services/helm.py", "_run_command"),  # the two redacting choke points
+        }
+        src_root = Path(__file__).resolve().parent.parent / "src"
+        offenders = []
+        for py in sorted(src_root.rglob("*.py")):
+            tree = ast.parse(py.read_text(), filename=str(py))
+            parents = {child: node for node in ast.walk(tree)
+                       for child in ast.iter_child_nodes(node)}
+
+            def enclosing_func(node):
+                while node is not None:
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        return node.name
+                    node = parents.get(node)
+                return "<module>"
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not (isinstance(func, ast.Attribute)
+                        and func.attr in ("run", "Popen", "call", "check_output", "check_call")
+                        and isinstance(func.value, ast.Name)
+                        and func.value.id == "subprocess"):
+                    continue
+                rel = py.relative_to(src_root).as_posix()
+                where = (rel, enclosing_func(node))
+                if where not in ALLOWED:
+                    offenders.append(f"{rel}:{node.lineno} in {where[1]}()")
+
+        assert not offenders, (
+            "shell-out bypassing _run_command's credential redaction: "
+            + ", ".join(offenders)
+        )
+
 
 class TestKubernetesService:
     """Test cases for KubernetesService."""

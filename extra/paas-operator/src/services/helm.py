@@ -58,21 +58,109 @@ def _pvc_keep_post_renderer_args() -> List[str]:
 # aggregation / SIEM. (The argv is still briefly visible via /proc/<pid>/cmdline
 # during the subprocess lifetime — a narrower, transient exposure tracked as a
 # follow-up; this change kills the persistent, broadly-readable log leak.)
+#
+# Second audit pass (same issue): the flag-oriented rules above only see secrets
+# that sit in their OWN argv token. Two call paths carry the secret *inside a
+# payload token* and were therefore still logged verbatim:
+#   1. ``kubectl patch secret --patch={"data":{"N8N_API_KEY":"<b64>"}}``
+#      (patch_secret ← n8n_init) — base64 is encoding, not protection. The same
+#      shape carries tenant MCP credentials through patch_configmap.
+#   2. ``kubectl exec … -- node -e '<script>'`` where the inline script embeds
+#      the tenant's n8n owner password / auth cookie (n8n_init._node_request).
+# Both are masked below by payload-aware rules.
 _SECRET_VALUE_FLAGS = frozenset({"--password", "--username"})
 _SECRET_SET_KEY_HINTS = ("password", "token", "secret", "key", "credential")
+_SET_FLAGS = ("--set", "--set-string", "--set-json", "--set-literal")
+_PATCH_VALUE_FLAGS = frozenset({"--patch", "-p"})
+# Fields whose *every* value is a secret by definition, whatever the key is
+# named (a Secret's ``data`` needs no hint to justify masking).
+_OPAQUE_PAYLOAD_FIELDS = frozenset({"data", "stringData"})
+# JSON keys inside a payload whose value must be masked. Superset of the --set
+# hints: an inline HTTP script carries credentials as headers too.
+_PAYLOAD_KEY_HINTS = _SECRET_SET_KEY_HINTS + ("passwd", "cookie", "authorization")
+# ``"password": "v"`` and its backslash-escaped twin ``\"password\": \"v\"`` —
+# the n8n script embeds the request body as an escaped JSON string literal.
+_INLINE_SECRET_RE = re.compile(
+    r'(\\?"[\w.\-]*(?:' + "|".join(_PAYLOAD_KEY_HINTS) + r')[\w.\-]*\\?"\s*:\s*\\?")'
+    r'([^"\\]*)'
+    r'(\\?")',
+    re.IGNORECASE,
+)
+
+
+def _redact_inline_secrets(text: str) -> str:
+    """Mask ``"<secret-ish key>": "<value>"`` pairs embedded in a free-form token."""
+    return _INLINE_SECRET_RE.sub(r"\1<redacted>\3", text)
+
+
+def _mask_payload_tree(node: Any, opaque: bool = False) -> Any:
+    """Mask secret leaves of a parsed JSON payload, keeping keys visible.
+
+    ``opaque`` propagates into ``data`` / ``stringData`` subtrees, where every
+    value is masked regardless of its key name.
+    """
+    if isinstance(node, dict):
+        masked = {}
+        for key, value in node.items():
+            key_lower = str(key).lower()
+            if opaque or any(h in key_lower for h in _PAYLOAD_KEY_HINTS):
+                masked[key] = "<redacted>"
+            elif key in _OPAQUE_PAYLOAD_FIELDS:
+                masked[key] = _mask_payload_tree(value, opaque=True)
+            else:
+                masked[key] = _mask_payload_tree(value, opaque=opaque)
+        return masked
+    if isinstance(node, list):
+        return [_mask_payload_tree(item, opaque=opaque) for item in node]
+    return "<redacted>" if opaque else node
+
+
+def _redact_payload(value: str) -> str:
+    """Mask secrets in a ``--patch`` payload, preserving its non-secret shape.
+
+    Falls back to the inline regex when the payload isn't parseable JSON, so an
+    unexpected payload form degrades to *masked*, never to *leaked*.
+    """
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError):
+        return _redact_inline_secrets(value)
+    masked = _mask_payload_tree(parsed)
+    # Unchanged payload → return the caller's exact string so a non-secret patch
+    # (e.g. the VM runStrategy patch) stays byte-identical in the log.
+    return value if masked == parsed else json.dumps(masked)
+
+
+def _redact_set_pairs(value: str) -> str:
+    """Mask secret pairs of a ``--set`` value, which may hold several pairs.
+
+    helm accepts ``--set a=1,auth.password=x``; masking only the first pair
+    would leak every later one.
+    """
+    if "=" not in value:
+        return value
+    out = []
+    for pair in value.split(","):
+        key = pair.split("=", 1)[0]
+        if "=" in pair and any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
+            out.append(f"{key}=<redacted>")
+        else:
+            out.append(pair)
+    return ",".join(out)
 
 
 def _redact_cmd(cmd: List[str]) -> List[str]:
     """Return a copy of a CLI argv with credential values masked for logging.
 
     Handles ``--password value`` / ``--password=value`` (and ``--username``),
-    plus ``--set key=value`` / ``--set-string`` where the key hints at a secret
-    (future-proofing — the operator currently passes secrets via ``--values``
-    file, whose path is non-sensitive, not via ``--set``).
+    ``--set key=value`` family where the key hints at a secret, ``--patch``
+    JSON payloads (Secret/ConfigMap ``data``), and secrets embedded in any
+    remaining token — notably the inline ``kubectl exec … -- node -e`` script.
     """
     redacted: List[str] = []
-    mask_next = False  # next token is a bare credential value
-    set_next = False   # next token is a `--set key=value` pair
+    mask_next = False   # next token is a bare credential value
+    set_next = False    # next token is a `--set key=value` pair
+    patch_next = False  # next token is a `--patch` JSON payload
     for tok in cmd:
         if mask_next:
             redacted.append("<redacted>")
@@ -80,19 +168,31 @@ def _redact_cmd(cmd: List[str]) -> List[str]:
             continue
         if set_next:
             set_next = False
-            key = tok.split("=", 1)[0]
-            if "=" in tok and any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
-                redacted.append(f"{key}=<redacted>")
-            else:
-                redacted.append(tok)
+            redacted.append(_redact_set_pairs(tok))
+            continue
+        if patch_next:
+            patch_next = False
+            redacted.append(_redact_payload(tok))
             continue
         if tok in _SECRET_VALUE_FLAGS:
             redacted.append(tok)
             mask_next = True
             continue
-        if tok in ("--set", "--set-string"):
+        if tok in _SET_FLAGS:
             redacted.append(tok)
             set_next = True
+            continue
+        if tok in _PATCH_VALUE_FLAGS:
+            redacted.append(tok)
+            patch_next = True
+            continue
+        if "=" in tok and tok.split("=", 1)[0] in _SET_FLAGS:
+            flag, value = tok.split("=", 1)
+            redacted.append(f"{flag}={_redact_set_pairs(value)}")
+            continue
+        if "=" in tok and tok.split("=", 1)[0] in _PATCH_VALUE_FLAGS:
+            flag, value = tok.split("=", 1)
+            redacted.append(f"{flag}={_redact_payload(value)}")
             continue
         if "=" in tok and tok.split("=", 1)[0] in _SECRET_VALUE_FLAGS:
             redacted.append(f"{tok.split('=', 1)[0]}=<redacted>")
@@ -105,7 +205,10 @@ def _redact_cmd(cmd: List[str]) -> List[str]:
             if any(h in key.lower() for h in _SECRET_SET_KEY_HINTS):
                 redacted.append(f"{key}=<redacted>")
                 continue
-        redacted.append(tok)
+        # Catch-all: a secret embedded in an otherwise ordinary token — the
+        # `kubectl exec … -- node -e '<script>'` one-liner whose body/headers
+        # carry the tenant password and auth cookie.
+        redacted.append(_redact_inline_secrets(tok))
     return redacted
 
 
