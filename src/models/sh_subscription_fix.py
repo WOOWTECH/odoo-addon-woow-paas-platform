@@ -9,6 +9,18 @@ from odoo.tools.misc import formatLang
 
 _logger = logging.getLogger(__name__)
 
+#: #389：同一個 warn_key（＝一個續費週期）最多追著重送幾天。
+#:
+#: 不能只靠 dunning 的 ``max_consecutive_payment_failures`` 當上限——那個值
+#: **可以設 0**（Decision 3：0 ＝ 停用 auto-cancel），一旦停用，訂閱就永遠留在
+#: ``in_progress`` 且 ``next_payment <= today`` 永遠成立，dunning cron 每天都會
+#: 重跑，「投遞失敗就重送」在沒有獨立上限時等於每天一封、無限（R1 review S2）。
+#:
+#: 7 天對齊 ``grace_period_days`` 的預設：寬限期一過服務就會被停權，再追著提醒
+#: 也改變不了什麼。刻意寫成模組常數而不是 config parameter——它是這條重試機制
+#: 自己的安全閥，不該跟著營運參數一起被關掉。
+_LOW_BALANCE_RETRY_WINDOW_DAYS = 7
+
 
 class ShSubscriptionFix(models.Model):
     """Fix upstream sh_subscription bug in _sh_create_auto_invoice.
@@ -361,18 +373,14 @@ class ShSubscriptionFix(models.Model):
             'woow_last_payment_failure_at': fields.Datetime.now(),
         })
 
-        # Per-cycle low-balance warning. The marker is stamped **only** when the
-        # mail actually reached the queue, and is re-opened when that mail ends
-        # up undelivered — see `_low_balance_warning_needs_send` (#389).
+        # Per-cycle low-balance warning. Marker 只在信真的排進佇列後才蓋，且會在
+        # 那封信投遞失敗時重新打開——判準與蓋章都走共用 helper，因為
+        # `low_balance_warning_cron` 是同一個 marker 的**第二個**寫入者（#389）。
         partner = subscription.sh_partner_id
         warn_key = subscription.sh_date_of_next_payment or today
         if self._low_balance_warning_needs_send(subscription, warn_key):
             mail = self._notify_low_balance(partner, invoice)
-            if mail:
-                subscription.write({
-                    'woow_last_low_balance_warned_for': warn_key,
-                    'woow_last_low_balance_mail_id': mail.id,
-                })
+            self._stamp_low_balance_warning(subscription, warn_key, mail)
 
         # Threshold check (Decision 4: hard-cancel; Decision 3: 0 = disabled).
         if threshold and new_count >= threshold:
@@ -421,46 +429,95 @@ class ShSubscriptionFix(models.Model):
         """這個續費週期還需不需要（再）送一次低餘額通知？（#389）
 
         原本的判準是「``woow_last_low_balance_warned_for`` 有沒有等於 warn_key」
-        ——也就是「有沒有**呼叫過**通知函式」。但 ``_notify_low_balance`` 用
-        ``force_send=False``，只把信排進佇列；真正的投遞是 mail queue cron，
-        失敗的信會停在 ``mail.mail.state == 'exception'``，而 Odoo 的 scheduler
-        **只撿 outgoing**——沒有任何人會重試它。於是投遞一失敗（#389 的 prod
-        SMTP 全 exception），租戶在整個 ``sh_date_of_next_payment`` 不變的週期
-        內就再也收不到提醒。
+        ——也就是「有沒有**呼叫過**通知函式」。但通知一律 ``force_send=False``，
+        只把信排進佇列；真正的投遞是 mail queue cron，失敗的信停在
+        ``mail.mail.state == 'exception'``，而 ``process_email_queue`` 的 domain
+        **只撿 outgoing**（`mail_mail.py:235-241`）——沒有任何人會重試它。於是
+        投遞一失敗（#389 的 prod SMTP 全 exception），租戶在整個
+        ``sh_date_of_next_payment`` 不變的週期內就再也收不到提醒。
 
         改成看**載體的下場**：
 
         * marker 不是本週期 → 要送（第一次）。
-        * 有 marker 但沒有載體 → 不送。Odoo 對 ``auto_delete`` 的信在送出成功後
-          會刪掉 mail.mail，所以「查不到載體」的正常成因就是**送成功了**；升級
-          前的既有資料（欄位為 NULL）走同一條，上線當天不會對所有欠費租戶補發
-          一輪。
-        * 載體停在 ``exception`` → 要送（重試）。
-        * 載體是 ``outgoing`` / ``sent`` → 不送（去重仍然有效）。
+        * 有 marker 但查不到載體 → 不送。這是保守 fallback，涵蓋升級前的既有
+          資料（欄位為 NULL）與被人工清掉的信；讓上線當天不會對所有欠費租戶
+          補發一輪。**注意這條的正確性依賴載體不會被 Odoo 自己刪掉**——所以
+          ``_queue_low_balance_mail`` 會顯式關掉 ``auto_delete``，理由見那裡。
+        * 載體停在 ``exception`` → 要送（重試），但受 retry 視窗節制（見下）。
+        * 載體是 ``outgoing`` / ``sent`` / ``received`` → 不送（去重仍然有效）。
+        * 載體是 ``cancel`` → 不送。``cancel`` 只由 ``mail.cancel()`` 明寫（維運
+          手動取消／程式主動放棄），不是投遞管道的暫時性故障；重送必然再得到
+          一次 cancel，而且會蓋掉「不要送這封」的意思。記一行 warning 讓維運看
+          得到，而不是靜靜跳過（R1 review S4）。
 
-        重送有天然上限：連續失敗到 ``max_consecutive_payment_failures``（預設 6）
-        就 auto-cancel，訂閱離開 ``in_progress`` 後 dunning cron 不再撈它。
+        **兩個寫入者共用這個判準**：dunning 的 ``_on_payment_failure`` 與
+        D-3 預警 cron ``low_balance_warning_cron._warn_if_needed`` 寫的是同一個
+        marker 欄位、同一個 key（``sh_date_of_next_payment``）。只改其中一個等於
+        沒改：R1 review S1 的 prod 時序就是「D-3 預警排信＋寫 marker（無載體）
+        → SMTP 掛 → D 日 dunning 判成已送達 → 整週期靜音」。
         """
         if subscription.woow_last_low_balance_warned_for != warn_key:
             return True
         mail = subscription.sudo().woow_last_low_balance_mail_id
         if not mail or not mail.exists():
             return False
-        return mail.state == 'exception'
+        if mail.state == 'cancel':
+            _logger.warning(
+                "[LOW_BAL] sub=%s cycle=%s 的通知被取消（mail=%s），不重送——"
+                "cancel 是明確的『不要送』，不是暫時性投遞失敗。",
+                subscription.id, warn_key, mail.id,
+            )
+            return False
+        if mail.state != 'exception':
+            return False
+        overdue_days = (fields.Date.today() - warn_key).days
+        if overdue_days > _LOW_BALANCE_RETRY_WINDOW_DAYS:
+            _logger.warning(
+                "[LOW_BAL] sub=%s cycle=%s 已逾期 %s 天（>%s），停止追送低餘額"
+                "通知（mail=%s 仍停在 exception）。",
+                subscription.id, warn_key, overdue_days,
+                _LOW_BALANCE_RETRY_WINDOW_DAYS, mail.id,
+            )
+            return False
+        return True
 
     @api.model
-    def _notify_low_balance(self, partner, invoice):
-        """Send a low-wallet-balance email to the partner.
+    def _stamp_low_balance_warning(self, subscription, warn_key, mail):
+        """記下「這個週期已經有一封活著的通知」。兩個寫入者共用。
 
-        Called when an auto-invoice cannot be paid because wallet balance
-        is insufficient.
+        ``mail`` 為空（沒排進佇列）時**什麼都不寫**——在那種情況下蓋 marker
+        正是 #389 讓整個週期靜音的動作。
+        """
+        if not mail:
+            return
+        subscription.write({
+            'woow_last_low_balance_warned_for': warn_key,
+            'woow_last_low_balance_mail_id': mail.id,
+        })
+
+    @api.model
+    def _queue_low_balance_mail(self, partner, ctx):
+        """把一封低餘額通知排進佇列，回傳它的 ``mail.mail``。兩個寫入者共用。
+
+        Args:
+            partner: 收件的 ``res.partner``。
+            ctx: 餵給 ``mail_template_low_balance`` 的 render context
+                （``invoice_name`` / ``amount_text`` / ``balance_text`` /
+                ``topup_url``）；dunning 與 D-3 預警各自組自己的字樣。
 
         Returns:
-            ``mail.mail`` recordset — the queued notification, or an **empty**
-            recordset when nothing made it into the queue (no template, or
-            ``send_mail`` raised). The caller keys the per-cycle dedup marker
-            off this: stamping on a failed enqueue is what silenced the whole
-            renewal cycle in #389.
+            ``mail.mail`` recordset——排入成功回那一封，**排入失敗回空集**
+            （找不到模板、或 ``send_mail`` 丟例外）。呼叫端據此決定要不要蓋
+            marker：排入失敗還蓋 marker，就是 #389 讓整個週期靜音的那個動作。
+
+        排入後顯式關掉 ``auto_delete``（R1 review S3）：Odoo 在
+        `mail_mail.py:304-305` 會把 ``auto_delete`` 的信在
+        ``failure_type in ('mail_email_invalid', 'mail_email_missing')`` 時
+        一併 unlink，而 ``mail.template`` 沒設就吃預設 ``True``。載體被刪掉的話，
+        ``_low_balance_warning_needs_send`` 的「查不到載體＝已送達」就會把
+        「這個人的 email 是壞的」誤判成送到了——換一個殼的同一個 #389。這些信
+        量很小（每個週期每筆訂閱個位數且受 retry 視窗節制），留著不刪的成本
+        遠低於誤判。
         """
         Mail = self.env['mail.mail'].sudo()
         template = self.env.ref(
@@ -470,7 +527,37 @@ class ShSubscriptionFix(models.Model):
         if not template:
             _logger.warning("mail_template_low_balance not found; skip notification")
             return Mail
+        try:
+            mail_id = template.with_context(**ctx).send_mail(
+                partner.id,
+                force_send=False,
+                email_layout_xmlid='mail.mail_notification_light',
+            )
+        except Exception:
+            _logger.exception(
+                "Failed to queue low-balance notification for partner %s",
+                partner.id,
+            )
+            return Mail
+        mail = Mail.browse(mail_id) if mail_id else Mail
+        if mail:
+            mail.write({'auto_delete': False})
+        _logger.info(
+            "Low-balance notification queued for partner %s mail=%s",
+            partner.id, mail.id or None,
+        )
+        return mail
 
+    @api.model
+    def _notify_low_balance(self, partner, invoice):
+        """Send a low-wallet-balance email to the partner (dunning wording).
+
+        Called when an auto-invoice cannot be paid because wallet balance
+        is insufficient.
+
+        Returns:
+            ``mail.mail`` recordset — see ``_queue_low_balance_mail``.
+        """
         base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url', '')
         amount_text = formatLang(
             self.env, invoice.amount_total, currency_obj=invoice.currency_id,
@@ -485,24 +572,7 @@ class ShSubscriptionFix(models.Model):
             'balance_text': balance_text,
             'topup_url': '%s/woow#/billing/topup' % base_url.rstrip('/'),
         }
-        try:
-            mail_id = template.with_context(**ctx).send_mail(
-                partner.id,
-                force_send=False,
-                email_layout_xmlid='mail.mail_notification_light',
-            )
-        except Exception:
-            _logger.exception(
-                "Failed to queue low-balance notification for partner %s",
-                partner.id,
-            )
-            return Mail
-        mail = Mail.browse(mail_id) if mail_id else Mail
-        _logger.info(
-            "Low-balance notification queued for partner %s mail=%s",
-            partner.id, mail.id or None,
-        )
-        return mail
+        return self._queue_low_balance_mail(partner, ctx)
 
     @api.model
     def _notify_subscription_cancelled(self, subscription, invoice):

@@ -45,6 +45,10 @@ from odoo import api, fields
 from odoo.tests.common import TransactionCase
 
 _LOW_BALANCE_TEMPLATE_XMLID = 'woow_paas_platform.mail_template_low_balance'
+#: prod 的 ``max_consecutive_payment_failures`` 預設。測試一律帶這個值，不要用
+#: 0（＝停用 auto-cancel）當「同週期可以多跑幾 tick」的免費午餐——那正是 R1
+#: review S2 指出的巧合依賴。
+_REALISTIC_THRESHOLD = 6
 
 
 def _patch_template_missing():
@@ -102,7 +106,15 @@ class TestLowBalanceDedupRetry(TransactionCase):
         self.subscription.write({
             'state': 'in_progress',
             'sh_date_of_next_payment': self.today,
+            # 直接 create 不會跑 onchange 鏈，`sh_plan_price` 會留 0——而 D-3
+            # 預警 cron 的第一道 guard 就是 `price <= 0: return`。不設的話那組
+            # 測試會因為「cron 根本沒跑到」而紅，看起來像抓到缺陷，其實是 fixture
+            # 壞掉（假 RED）。
+            'sh_plan_price': 500.0,
         })
+        self.assertEqual(
+            self.subscription.sh_plan_price, 500.0,
+            "fixture 前提：預警 cron 需要 sh_plan_price > 0 才會評估這筆訂閱。")
         self.invoice = self.env['account.move'].create({
             'move_type': 'out_invoice',
             'partner_id': self.partner.id,
@@ -123,11 +135,24 @@ class TestLowBalanceDedupRetry(TransactionCase):
     # helpers
     # ------------------------------------------------------------------ #
 
-    def _fail_once(self):
-        """跑一次 dunning cron 的失敗分支（threshold=0 ＝ 關掉 auto-cancel）。"""
+    def _fail_once(self, threshold=_REALISTIC_THRESHOLD):
+        """跑一次 dunning cron 的失敗分支。
+
+        預設帶**正常的** threshold（6，等同 prod 預設），不是 0。R1 review S2：
+        原本這裡硬寫 0（＝關掉 auto-cancel），於是「同週期可以連跑好幾 tick」
+        變成靠「threshold 被停用」這個巧合成立——而 threshold=0 恰好也是
+        重送上限唯一的來源被抽掉的那個設定。要驗上限就明寫 0（見
+        ``test_retry_window_bounds_resends_when_threshold_disabled``），不要讓
+        一般測試順便依賴它。
+        """
         self.Subscription._on_payment_failure(
-            self.subscription, self.invoice, self.today, 0,
+            self.subscription, self.invoice, self.today, threshold,
         )
+
+    def _run_pre_renewal_cron(self):
+        """跑一次 D-3 預警 cron（marker 的**第二個**寫入者）。"""
+        self.env['woow_paas_platform.low_balance_warning_cron'] \
+            ._cron_warn_upcoming_renewal_low_balance()
 
     def _queued_mails(self):
         """本 partner 這條通知線上目前存在的 mail.mail（依 id 排序）。"""
@@ -248,6 +273,144 @@ class TestLowBalanceDedupRetry(TransactionCase):
         self.assertFalse(
             self._queued_mails(),
             "載體被刪＝送出成功，不該重送。")
+
+    def test_cancelled_carrier_is_not_resent(self):
+        """載體被取消（``cancel``）→ 不重送，但要留 warning（R1 review S4）。
+
+        ``mail.mail.state='cancel'`` 只由 ``mail.cancel()`` 明寫（維運手動取消／
+        程式主動放棄），不是投遞管道的暫時性故障——重送必然再得到一次 cancel，
+        而且會蓋掉維運「不要送這封」的意思。所以判準要**顯式**把它列成不重送，
+        而不是靠「`state != 'exception'` 剛好涵蓋到」。
+        """
+        self._fail_once()
+        carrier = self.subscription.woow_last_low_balance_mail_id
+        carrier.sudo().write({'state': 'cancel'})
+
+        self._fail_once()
+        self.assertEqual(
+            len(self._queued_mails()), 1,
+            "cancel 是明確的『不要送』，重送只會再拿到一次 cancel。")
+
+    def test_carrier_is_not_auto_deleted(self):
+        """載體必須關掉 ``auto_delete``（R1 review S3）。
+
+        `addons/mail/models/mail_mail.py:304-305`（Odoo 18）：
+
+            if not failure_type or failure_type in ['mail_email_invalid',
+                                                    'mail_email_missing']:
+                self.sudo().filtered(lambda mail: mail.auto_delete).unlink()
+
+        也就是 auto_delete 的信被刪有**三種**成因，不只「送成功」——收件人
+        email 無效或缺漏也會被刪。而 ``mail.template`` 沒顯式設 auto_delete 就
+        吃預設 True，本平台的低餘額模板正是如此。若載體會被這樣刪掉，
+        「查不到載體 ＝ 已送達」就會把「這個人的 email 根本是壞的」誤判成送到
+        了，整個週期靜音——換一個殼的同一個 #389。
+
+        所以凡是要當**投遞下場載體**的信，都在排入後顯式關掉 auto_delete。
+        （SMTP 斷線 ``mail_smtp`` 不在上面那個刪除清單裡，所以 #389 本尊即使
+        沒有這條也還是有效；這條堵的是同族的另外兩個入口。）
+        """
+        self._fail_once()
+        carrier = self.subscription.woow_last_low_balance_mail_id
+        self.assertFalse(
+            carrier.auto_delete,
+            "載體會被 auto_delete 清掉的話，invalid/missing email 會被誤判成已送達。")
+
+    def test_retry_window_bounds_resends_when_threshold_disabled(self):
+        """重送上限不得只靠 dunning threshold（R1 review S2）。
+
+        ``max_consecutive_payment_failures = 0`` 是**合法設定**（Decision 3：
+        0 ＝ 停用 auto-cancel）。那條路上訂閱永遠留在 ``in_progress``、
+        ``next_payment <= today`` 也永遠成立，於是 dunning cron 每天都會重跑
+        ——「投遞失敗就重送」在沒有獨立上限時就是每天一封、無限。
+
+        改用與設定無關的視窗：同一個 warn_key 只追著重試
+        ``_LOW_BALANCE_RETRY_WINDOW_DAYS`` 天。
+        """
+        overdue_key = self.today - timedelta(days=30)
+        self.subscription.write({'sh_date_of_next_payment': overdue_key})
+        self._fail_once(threshold=0)
+        carrier = self.subscription.woow_last_low_balance_mail_id
+        self.assertTrue(carrier, "第一封仍要送（視窗是給重送用的）")
+        carrier.sudo().write({'state': 'exception'})
+
+        self._fail_once(threshold=0)
+        self.assertEqual(
+            len(self._queued_mails()), 1,
+            "同一個週期逾期 30 天還在每天重送＝把 threshold=0 當成無限額度。")
+
+    # ------------------------------------------------------------------ #
+    # marker 的第二個寫入者：D-3 預警 cron（R1 review S1）
+    # ------------------------------------------------------------------ #
+
+    def test_pre_renewal_cron_stamps_carrier(self):
+        """預警 cron 也必須記載體——它寫的是**同一個** marker 欄位。
+
+        兩個寫入者只要有一個不記載體，讀取端的「查不到載體＝已送達」就會把
+        對方寫下的 marker 判成已送達。
+        """
+        self.subscription.write({
+            'sh_date_of_next_payment': self.today + timedelta(days=3),
+        })
+        self._run_pre_renewal_cron()
+
+        self.assertEqual(len(self._queued_mails()), 1)
+        self.assertEqual(
+            self.subscription.woow_last_low_balance_warned_for,
+            self.today + timedelta(days=3),
+        )
+        self.assertTrue(
+            self.subscription.woow_last_low_balance_mail_id,
+            "預警 cron 寫了 marker 卻沒記載體——dunning 端會判成已送達。")
+
+    def test_pre_renewal_cron_resends_when_previous_delivery_failed(self):
+        """預警 cron 自己的去重也要看載體下場（D-3 送失敗，D-2 要補送）。"""
+        self.subscription.write({
+            'sh_date_of_next_payment': self.today + timedelta(days=3),
+        })
+        self._run_pre_renewal_cron()
+        self._queued_mails().sudo().write({'state': 'exception'})
+
+        self._run_pre_renewal_cron()
+        self.assertEqual(
+            len(self._queued_mails()), 2,
+            "預警 cron 的去重仍停在『有 marker 就跳過』，投遞失敗不會補送。")
+
+    def test_pre_renewal_failure_does_not_silence_dunning(self):
+        """#389 的 prod 主場景：D-3 預警排信 → SMTP 掛 → D 日 dunning 靜音。
+
+        時序（``warn_key`` 兩邊都是 ``sh_date_of_next_payment``，**同一個鍵**）：
+
+        1. D-3：預警 cron 排信、寫 marker。修法前它不記載體。
+        2. SMTP 掛：那封信停在 ``exception``，Odoo scheduler 只撿 ``outgoing``
+           ⇒ 沒有人會重試它。
+        3. D 日：扣款失敗，dunning 的 warn_key 恰好等於同一個 marker →
+           讀取端看到「有 marker、查無載體」→ 判成已送達 → **整個週期靜音**。
+
+        也就是說只修 dunning 那一個寫入者，#389 的主場景根本沒被修到。
+        """
+        renewal = self.today + timedelta(days=3)
+        self.subscription.write({'sh_date_of_next_payment': renewal})
+
+        # ① D-3 預警
+        self._run_pre_renewal_cron()
+        pre_renewal_mail = self._queued_mails()
+        self.assertEqual(len(pre_renewal_mail), 1)
+        self.assertEqual(
+            self.subscription.woow_last_low_balance_warned_for, renewal)
+
+        # ② SMTP 掛
+        pre_renewal_mail.sudo().write({
+            'state': 'exception', 'failure_reason': 'SMTP connection refused',
+        })
+
+        # ③ D 日 dunning（warn_key = sh_date_of_next_payment = 同一個鍵）
+        self._fail_once()
+        self.assertEqual(
+            len(self._queued_mails()), 2,
+            "D-3 的預警信投遞失敗後，D 日的扣款失敗必須補一封——這正是 #389 "
+            "的 prod 主場景。",
+        )
 
     # ------------------------------------------------------------------ #
     # 既有 per-cycle 語意不得回歸

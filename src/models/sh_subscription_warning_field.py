@@ -14,10 +14,14 @@ class ShSubscriptionExtensionFields(models.Model):
 
     woow_last_low_balance_warned_for = fields.Date(
         string='Last Low-Balance Warning Renewal Date',
-        help='Date of the upcoming renewal for which a low-balance email was '
-             'last queued. Prevents duplicate warnings per renewal cycle. '
-             'Only stamped when the mail actually made it into the queue — '
-             'see woow_last_low_balance_mail_id.',
+        help='Renewal date (sh_date_of_next_payment) this cycle\'s low-balance '
+             'warning belongs to. Written by BOTH the D-3 pre-renewal cron '
+             '(low_balance_warning_cron) and the dunning failure path '
+             '(_on_payment_failure) — they share the same key, so the '
+             'send/skip decision lives in one place '
+             '(_low_balance_warning_needs_send). Only stamped when the mail '
+             'actually reached the queue, and never read on its own: the '
+             'carrier below decides whether the cycle still needs a retry.',
         copy=False,
     )
     woow_last_low_balance_mail_id = fields.Many2one(
@@ -25,15 +29,22 @@ class ShSubscriptionExtensionFields(models.Model):
         string='Last Low-Balance Mail',
         ondelete='set null',
         copy=False,
-        help='The queued low-balance notification this cycle. The dedup '
+        help='The queued low-balance notification for this cycle. The date '
              'marker alone cannot tell "queued" from "delivered": '
              'force_send=False only enqueues, and a mail that fails delivery '
              'parks at state=exception which Odoo\'s scheduler never retries '
-             '(it only picks up outgoing). Keeping the carrier lets the '
-             'dunning cron re-send on the next tick instead of going silent '
-             'for the whole renewal cycle (#389). Empty means either legacy '
-             'data or a successfully sent auto_delete mail Odoo already '
-             'removed — both treated as delivered.',
+             '(process_email_queue only picks up outgoing). Keeping the '
+             'carrier lets the next cron tick re-send instead of going silent '
+             'for the whole renewal cycle (#389). state=cancel is an explicit '
+             '"do not send", not a transient failure, so it is not retried. '
+             'Retries are bounded by _LOW_BALANCE_RETRY_WINDOW_DAYS rather '
+             'than by the dunning threshold (which may legitimately be 0). '
+             'The mail is created with auto_delete=False so the carrier '
+             'survives — Odoo unlinks auto_delete mails not only on success '
+             'but also on mail_email_invalid / mail_email_missing. Empty '
+             'means legacy data (pre-.89) or a manually purged mail; both are '
+             'conservatively treated as delivered so upgrading does not '
+             're-notify every overdue tenant at once.',
     )
 
     # --- T19 dunning state ------------------------------------------------ #
