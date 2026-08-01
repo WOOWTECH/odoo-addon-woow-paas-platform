@@ -262,3 +262,5 @@ from . import test_suspended_redeploy_state_482
 from . import test_stuck_suspended_converge_497
 # fix: #478 marketplace 卡片／configure header 價格標籤（起價摘要，移除硬編 Free）
 from . import test_marketplace_price_label_478
+# fix: #29 subscription_lifecycle_mixin 內部 subscription traversal 的 cascade sudo
+from . import test_subscription_mixin_cascade_sudo_29
