@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from odoo import fields
 from odoo.exceptions import AccessError, UserError, ValidationError
+from psycopg2 import OperationalError
 from odoo.http import request, route, Controller
 
 from .ha_paas import HiddenChainMixin
@@ -2716,6 +2717,16 @@ class PaasController(HiddenChainMixin, Controller):
         # 框架時框架會做的事，我們只是在**保留 `{'success': False}` response 形狀**
         # （前端 AppConfigurationPage 靠 result.error 顯示訊息）的前提下自己做。
         # 本 request 走到 try 之前只有讀取與參數驗證，沒有任何要保留的寫入。
+        except OperationalError:
+            # #518：並發類 DB 例外（SerializationFailure 40001 等）**必須**傳出去。
+            # 它是 Exception 子類，被下面任何一個 except 收掉的話 Odoo 的
+            # `retrying()` 永遠看不到、不會以新 snapshot 重試——全域上限
+            # （#501）在並發下就形同虛設。且當下 PG 交易已 aborted，硬回一個
+            # result 只會讓後續 flush 再炸。
+            #
+            # 必須排在 #520 那三段之前：`SerializationFailure` 不是 `UserError`
+            # 子類，但會被最後的 `except Exception` 吃掉。
+            raise
         except AccessError as e:
             # AccessError 繼承 UserError，但訊息帶 Odoo 內部 model／欄位技術名，
             # 不是「講給租戶聽」的業務規則 → 與未預期例外同樣只回泛用訊息。

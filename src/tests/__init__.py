@@ -280,3 +280,5 @@ from . import test_workspace_create_rollback_525
 from . import test_invite_member_rollback_525
 # feat: #501 全域實例上限硬閘 + 停售開關（config_parameter 載體、售罄現算）
 from . import test_global_instance_cap_501
+# fix: #518 並發類 DB 例外必須傳到 retrying，不能被 controller 的 except 鏈吃掉
+from . import test_concurrency_error_propagation_518
