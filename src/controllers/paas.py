@@ -2663,23 +2663,20 @@ class PaasController(HiddenChainMixin, Controller):
             )
             service = service_model.create(service_vals)
 
-            # Create subscription for this service
-            partner = workspace.owner_id.partner_id
-            _logger.info(
-                "[CLOUD_SVC] deploy_service created service=%s workspace=%s template=%s partner=%s plan=%s",
-                service.id, workspace.id, template.id, partner.id, plan.id,
-            )
-            service._create_and_confirm_subscription(partner, plan)
-
-            # Build expose configuration before spawning background thread
+            # ⚠ 順序刻意：所有「還可能失敗」的落庫步驟都排在建訂閱**之前**。
+            # `_create_and_confirm_subscription` 會同步寄出訂閱確認信
+            # （sh_subscription 的 `_sh_send_subscription_email` 用
+            # `send_mail(force_send=True)`），那是 **rollback 撤不回**的外部副作用
+            # ——#520 的整段 `cr.rollback()` 也一樣撤不回它。它之後若還有步驟失敗，
+            # DB 全撤但信已寄出 ⇒ 租戶收到「訂閱成功」卻沒有服務。把可失敗的步驟
+            # 前移，讓寄信之後只剩 cron trigger 與純讀的 `_format_service`，窗口
+            # 縮到近乎零。徹底解需把寄信移出交易＝動第三方 addon，不在本 PR 範圍。
             expose_config = None
             if template.ingress_enabled:
                 expose_config = {
                     'enabled': True,
                     'subdomain': subdomain,
                 }
-
-            # Store deploy params and trigger cron for background deployment
             deploy_params = {}
             if expose_config:
                 deploy_params['expose_config'] = expose_config
@@ -2687,6 +2684,14 @@ class PaasController(HiddenChainMixin, Controller):
                 deploy_params['mcp_api_key'] = mcp_api_key
             if deploy_params:
                 service.write({'deploy_params': json.dumps(deploy_params)})
+
+            # Create subscription（此後不再有可失敗的落庫步驟）
+            partner = workspace.owner_id.partner_id
+            _logger.info(
+                "[CLOUD_SVC] deploy_service created service=%s workspace=%s template=%s partner=%s plan=%s",
+                service.id, workspace.id, template.id, partner.id, plan.id,
+            )
+            service._create_and_confirm_subscription(partner, plan)
 
             # Trigger the deploy cron to pick up this service ASAP
             cron = request.env.ref(
