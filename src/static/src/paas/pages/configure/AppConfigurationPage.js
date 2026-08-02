@@ -8,7 +8,7 @@ import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddo
 import { PlanSelector } from "../../components/subscription/PlanSelector";
 import { PlanTotalBar } from "../../components/subscription/PlanTotalBar";
 import { pickDefaultPlan } from "../../components/subscription/plan_selector_utils";
-import { AdminPasswordModal } from "../../components/modal/AdminPasswordModal";
+import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
 import { formatTemplatePrice } from "../../utils/pricing_label";
 import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
 import { cloudService } from "../../services/cloud_service";
@@ -22,7 +22,7 @@ import { router } from "../../core/router";
  */
 export class AppConfigurationPage extends Component {
     static template = "woow_paas_platform.AppConfigurationPage";
-    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, PlanTotalBar, AdminPasswordModal };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, PlanTotalBar, OneTimeCredentialsModal };
     static props = {
         workspaceId: { type: Number },
         templateId: { type: Number },
@@ -47,7 +47,9 @@ export class AppConfigurationPage extends Component {
             // Launch state
             launching: false,
             launchError: null,
-            adminPassword: null,
+            // #530：一次性憑證由單一字串改成具名清單（Admin Password ＋ Gateway
+            // API Key）。null＝不開視窗；非空陣列＝開。
+            oneTimeCredentials: null,
             createdServiceId: null,
         });
         this.router = useState(router);
@@ -357,8 +359,9 @@ export class AppConfigurationPage extends Component {
 
             if (result.success) {
                 const serviceId = result.data.id;
-                if (result.data.admin_password) {
-                    this.state.adminPassword = result.data.admin_password;
+                const credentials = buildOneTimeCredentials(result.data);
+                if (credentials.length) {
+                    this.state.oneTimeCredentials = credentials;
                     this.state.createdServiceId = serviceId;
                 } else {
                     this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
@@ -380,9 +383,9 @@ export class AppConfigurationPage extends Component {
         this.router.navigate(`workspace/${this.props.workspaceId}/marketplace`);
     }
 
-    onAdminPasswordClose() {
+    onCredentialsClose() {
         const serviceId = this.state.createdServiceId;
-        this.state.adminPassword = null;
+        this.state.oneTimeCredentials = null;
         this.state.createdServiceId = null;
         this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
     }

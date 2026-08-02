@@ -202,6 +202,11 @@ class TestAdminPasswordCarrierForwarded(TransactionCase):
         ``.Values.config.sensitive.admin_password``）。載體**只**影響 reset 怎麼
         做，不影響注入形狀——把它們混為一談會讓人誤以為 helm_secret 需要另一套
         sensitive_values 結構。
+
+        #530 加入的 ``auth.apiServerKey``（gateway API key）同樣是**載體無關**的：
+        它的閘門是 ``has_admin_gui``，與 admin_password 走同一條 sensitive 通道。
+        新憑證若哪天長出「依載體分岔」的供給形狀，這條會紅——那正是本檔要擋的
+        混淆（載體是 reset 怎麼做，不是注入長什麼樣）。
         """
         shapes = {}
         for carrier, chart, slug in (
@@ -212,10 +217,16 @@ class TestAdminPasswordCarrierForwarded(TransactionCase):
             get_client.return_value = client
             service = self._make_service(carrier, chart, slug)
             new_password = service._reset_admin_password()
+            secret = self.env['woow_paas_platform.cloud_service_secret'].sudo().search(
+                [('service_id', '=', service.id)], limit=1)
             sensitive = client.reset_release_config.call_args.kwargs['sensitive_values']
             self.assertEqual(
-                sensitive, {'config': {'sensitive': {'admin_password': new_password}}})
-            # 密碼本身當然不同，比較的是「鍵路徑集合」這個形狀。
+                sensitive,
+                {
+                    'config': {'sensitive': {'admin_password': new_password}},
+                    'auth': {'apiServerKey': secret.gateway_api_key},
+                })
+            # 憑證本身當然不同，比較的是「鍵路徑集合」這個形狀。
             shapes[carrier] = _leaf_paths(sensitive)
         self.assertEqual(shapes['config_json'], shapes['helm_secret'])
 

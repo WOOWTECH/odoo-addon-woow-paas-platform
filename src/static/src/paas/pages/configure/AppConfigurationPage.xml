@@ -268,10 +268,10 @@
                     </div>
                 </div>
 
-                <AdminPasswordModal
-                    t-if="state.adminPassword"
-                    password="state.adminPassword"
-                    onClose.bind="onAdminPasswordClose"/>
+                <OneTimeCredentialsModal
+                    t-if="state.oneTimeCredentials"
+                    credentials="state.oneTimeCredentials"
+                    onClose.bind="onCredentialsClose"/>
             </t>
         </div>
     </t>
