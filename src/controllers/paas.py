@@ -2534,11 +2534,17 @@ class PaasController(HiddenChainMixin, Controller):
         端點**——本 repo 的憑證一律一次性，新增回讀等於開一條新的外洩面並要自行
         承擔授權；租戶弄丟就跑 Reset 換發。
 
-        交付判準＝「這個 chart 真的有 gateway 對外路徑」（`_gateway_public_url`
-        非空）。憑證的**鑄造與供給**判準仍是 `template.has_admin_gui`（#357 C01
-        的同一條紀律，不新建 slug allowlist）；兩者刻意分開：對沒有 gateway 的
-        chart 交付一把 key ＋ 一條不存在的網址，比不交付更糟——它看起來像產品
-        保證，而租戶會拿它去 debug 一個根本不存在的端點。
+        交付判準＝`service._gateway_public_url()` 非空（chart 有 gateway 對外路徑
+        **且**這台服務有對外根位址）。憑證的**鑄造與供給**判準是同源但較寬的
+        `CloudService._chart_has_gateway()`（只看 chart 有沒有 gateway）——沒有
+        subdomain 的服務仍要有 key（gateway 在叢集內照跑），只是平台沒有網址可以
+        交出去。兩者刻意分層：對沒有 gateway 的 chart 交付一把 key ＋ 一條不存在的
+        網址，比不交付更糟——它看起來像產品保證，而租戶會拿它去 debug 一個根本不
+        存在的端點。
+
+        三個閘門（鑄造／供給／交付）都從 seed 的 `gateway.externalPath` 推導，
+        **沒有任何一處是 slug allowlist**，也不再借用 `template.has_admin_gui`
+        （那是 admin_password 的閘門；8 個 has_admin_gui 模板裡只有 1 個有 gateway）。
 
         放 controller 而非 model：本 method 讀出明文，而授權只存在 controller 層
         （#357 C05）。回傳明文的 model 方法一律 private 且只有單一 controller 入口，
@@ -3518,6 +3524,14 @@ class PaasController(HiddenChainMixin, Controller):
             # 純顯示用，不參與狀態機。
             'import_progress': service.import_progress or '',
             'has_project': bool(service.project_ids),
+            # #530：前端「Reset 會一併換發 Gateway API Key」那句文案的唯一資料入口
+            # （ServiceDetailPage 的 hasGateway getter）。值＝**交付判準本體**
+            # （service._gateway_public_url() 非空），與 _gateway_credentials 讀同一個
+            # method——不得改判 template.has_admin_gui：那 8 個模板裡只有 hermes-agent
+            # 真的有 gateway，用它當 gate 等於對另外 7 個模板的租戶宣告一件永遠不會
+            # 發生的事。放在 service 層而非 template 子物件，因為判準含「這台服務有沒有
+            # 對外根位址」（subdomain），那是 service 的屬性不是 template 的。
+            'has_gateway': bool(service._gateway_public_url()),
             'template': {
                 'id': service.template_id.id,
                 'name': service.template_id.name,

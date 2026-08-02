@@ -144,6 +144,12 @@ class TestAdminPasswordCarrierForwarded(TransactionCase):
             'mcp_enabled': False,
             'has_admin_gui': True,
             'admin_password_carrier': carrier,
+            # #530 review finding 3：gateway API key 的閘門是 chart 有沒有對外
+            # gateway（seed 的 gateway.externalPath），與**載體**正交。兩個載體的
+            # fixture 都宣告 gateway，test_sensitive_values_shape_is_carrier_independent
+            # 才驗得到「auth.apiServerKey 也是載體無關的」——少了這行，兩邊都沒有
+            # 那個鍵，形狀當然相同，那條斷言就退化成恆真。
+            'helm_default_values': json.dumps({'gateway': {'externalPath': '/gateway'}}),
         })
         return self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',
@@ -204,9 +210,11 @@ class TestAdminPasswordCarrierForwarded(TransactionCase):
         sensitive_values 結構。
 
         #530 加入的 ``auth.apiServerKey``（gateway API key）同樣是**載體無關**的：
-        它的閘門是 ``has_admin_gui``，與 admin_password 走同一條 sensitive 通道。
-        新憑證若哪天長出「依載體分岔」的供給形狀，這條會紅——那正是本檔要擋的
-        混淆（載體是 reset 怎麼做，不是注入長什麼樣）。
+        它的閘門是 ``_chart_has_gateway``（seed 的 gateway.externalPath，與
+        admin_password 的 ``has_admin_gui`` 是兩個獨立閘門），但走同一條 sensitive
+        通道。兩個 fixture 都宣告了 gateway（見 ``_make_service``），所以這條真的
+        比較到那個鍵。新憑證若哪天長出「依載體分岔」的供給形狀，這條會紅——那正是
+        本檔要擋的混淆（載體是 reset 怎麼做，不是注入長什麼樣）。
         """
         shapes = {}
         for carrier, chart, slug in (

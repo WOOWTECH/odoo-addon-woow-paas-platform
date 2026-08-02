@@ -34,10 +34,16 @@ class _McpServiceFixture(TransactionCase):
             'helm_repo_url': '',
             'helm_chart_name': 'oci://example/mcp-server',
             'helm_chart_version': '0.1.5',
-            # 對齊真實 seed：MCP 內建於 body（mcp_enabled=False），供給鏈閘門是
-            # has_admin_gui。
+            # 對齊真實 seed：MCP 內建於 body（mcp_enabled=False），admin_password
+            # 供給鏈閘門是 has_admin_gui。
             'mcp_enabled': False,
             'has_admin_gui': True,
+            # #530 review finding 3：gateway API key 有**自己的**閘門
+            # （_chart_has_gateway ← seed 的 gateway.externalPath），不跟著
+            # has_admin_gui 走。本 class 的四條 gateway key 遮罩／不外洩斷言都要求
+            # 「這台服務真的有一把 key」，所以 fixture chart 必須宣告 gateway；少了
+            # 這行，那些斷言會因為「根本沒有 key」而恆真（assertNotIn '' 家族）。
+            'helm_default_values': json.dumps({'gateway': {'externalPath': '/gateway'}}),
         })
         self.service = self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',

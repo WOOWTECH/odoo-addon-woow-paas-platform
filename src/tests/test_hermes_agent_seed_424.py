@@ -249,22 +249,22 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             'gateway.externalPath 為空＝gateway 不對外路由（#530 的原始症狀）')
         self.assertEqual(gateway['externalPath'], '/gateway')
 
-    def test_gateway_external_path_matches_public_url_builder(self):
-        """跨層 lock-step：seed 的 gateway.externalPath ＝平台交付網址的尾綴。
+    def test_gateway_external_path_is_read_from_this_seed(self):
+        """交付判準的事實源就是本 seed 欄位（``_gateway_external_path`` 讀得出來）。
 
-        chart 用 externalPath 決定 auth-proxy 把 ``/gateway/`` 轉去哪；平台則把
-        ``{public}{externalPath}`` 當**交給租戶去填進 MCP 設定頁**的權威網址
-        （建立服務與 Reset 的一次性回應各回一次）。兩者任一單獨改動 → 租戶拿到
-        一條死鏈，而且**兩邊各自看起來都正常**（chart 那條路徑存在、平台那個字串
-        也組得出來）。這條把它們綁死，形狀比照 dashboard 那條。
+        平台原本另存一份 ``{'hermes-agent': '/gateway'}`` 對照表，於是路徑有兩份：
+        任一單獨改動 → 租戶拿到一條死鏈，而且**兩邊各自看起來都正常**（chart 那條
+        路徑存在、平台那個字串也組得出來）。#530 review 後改成單一事實源，這條確認
+        「讀得到、且讀到的就是上面那條跨 repo 契約值」——helper 回 '' 時（欄位被改名／
+        形態變了）交付會靜默消失，不能只靠 runtime fail-closed 而沒有守線。
+
+        derivation 本身（不是硬編）由 ``test_gateway_public_url_follows_seed_not_slug``
+        （test_gateway_capability_payload_530.py）以不同路徑值反證。
         """
-        external_path = self._values()['gateway']['externalPath']
-        built = self.env['woow_paas_platform.cloud_service']._build_gateway_public_url(
-            'hermes-agent', 'https://svc-abc.woowtech.io',
-        )
         self.assertEqual(
-            built, 'https://svc-abc.woowtech.io' + external_path,
-            '平台交付的 gateway URL 尾綴與 seed 的 gateway.externalPath 不一致')
+            self._tpl()._gateway_external_path(),
+            self._values()['gateway']['externalPath'],
+            '_gateway_external_path 沒讀到 seed 的 gateway.externalPath')
 
     def test_no_sensitive_values_in_git(self):
         """admin_password／LLM key／gateway API key 不得出現在 git 的 helm_default_values。
@@ -920,10 +920,10 @@ class TestHermesAgentValueInjection(TransactionCase):
 
     # ── gateway 公開網址（#530）─────────────────────────────────────────────
     def test_build_gateway_public_url(self):
-        """hermes-agent：公開根位址 + /gateway＝交給租戶填進 MCP 的權威網址。"""
+        """公開根位址 + seed 子路徑＝交給租戶填進 MCP 的權威網址。"""
         self.assertEqual(
             self.CloudService._build_gateway_public_url(
-                'hermes-agent', 'https://svc-abc.woowtech.io'),
+                '/gateway', 'https://svc-abc.woowtech.io'),
             'https://svc-abc.woowtech.io/gateway')
 
     def test_build_gateway_public_url_strips_trailing_slash(self):
@@ -935,20 +935,46 @@ class TestHermesAgentValueInjection(TransactionCase):
         """
         self.assertEqual(
             self.CloudService._build_gateway_public_url(
-                'hermes-agent', 'https://svc-abc.woowtech.io/'),
+                '/gateway', 'https://svc-abc.woowtech.io/'),
             'https://svc-abc.woowtech.io/gateway')
 
-    def test_build_gateway_public_url_noop_for_other_templates(self):
-        """其他 template 一律回空字串（沒有 gateway 就不得憑空生一條網址）。
+    def test_build_gateway_public_url_empty_when_either_side_missing(self):
+        """任一側缺就回空字串（沒有 gateway、或沒有對外根位址）。
 
         回了非空值＝租戶會在一次性視窗看到一條指向不存在路徑的 gateway 網址，
         比不給還糟（它看起來像產品保證）。
         """
-        for slug in ('open-design', 'n8n', 'mcp-hermes', 'mcp-odoo'):
-            self.assertEqual(
-                self.CloudService._build_gateway_public_url(
-                    slug, 'https://x.woowtech.io'),
-                '', slug)
+        for external_path, base_url in (
+            ('', 'https://x.woowtech.io'),   # chart 沒有 gateway
+            ('/gateway', ''),                # 服務沒有 subdomain
+            ('', ''),
+        ):
+            with self.subTest(external_path=external_path, base_url=base_url):
+                self.assertEqual(
+                    self.CloudService._build_gateway_public_url(
+                        external_path, base_url),
+                    '')
+
+    def test_other_seeded_templates_have_no_gateway_path(self):
+        """其他既有 seed template 一律沒有 gateway 對外路徑（hermes-agent 是唯一）。
+
+        這條是 finding 3 的守線：鑄造／供給閘門改判 ``_chart_has_gateway`` 之後，
+        「哪些 template 會拿到 gateway API key」由 seed 決定。若哪天有人替別的 chart
+        補上 ``gateway.externalPath``，那顆 chart 就會開始收到平台供給的
+        ``auth.apiServerKey``——這條讓那個決定變成**要動測試才過得去**的顯式動作，
+        而不是順手改 seed 的副作用。
+        """
+        for xmlid in ('cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
+                      'cloud_app_mcp_n8n', 'cloud_app_mcp_k8s', 'cloud_app_mcp_vk',
+                      'cloud_app_mcp_opendesign', 'cloud_app_opendesign',
+                      'cloud_app_haos', 'cloud_app_ha_paas'):
+            with self.subTest(template=xmlid):
+                tpl = self.env.ref('woow_paas_platform.%s' % xmlid)
+                self.assertEqual(
+                    tpl._gateway_external_path(), '',
+                    '%s 的 seed 有 gateway.externalPath：它會開始收到平台供給的 '
+                    'auth.apiServerKey。若是有意的，請在本清單移除它並補上該 chart '
+                    '真的吃這個鍵的證據。' % xmlid)
 
     def test_inject_apiserver_cidrs_covers_hermes_agent(self):
         """console 同構需求：hermes-agent 也要進 apiServerCidrs 白名單（#404）。"""

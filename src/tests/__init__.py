@@ -282,3 +282,5 @@ from . import test_invite_member_rollback_525
 from . import test_global_instance_cap_501
 # fix: #518 並發類 DB 例外必須傳到 retrying，不能被 controller 的 except 鏈吃掉
 from . import test_concurrency_error_propagation_518
+# feat: #530 gateway 交付判準（seed 推導）＋ service payload 的 has_gateway 合約
+from . import test_gateway_capability_payload_530
