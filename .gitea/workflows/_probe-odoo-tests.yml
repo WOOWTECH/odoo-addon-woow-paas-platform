@@ -81,11 +81,10 @@ jobs:
           docker run -d --name pg \
             -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo -e POSTGRES_DB=postgres \
             postgres:15
-          # MALLOC_ARENA_MAX：這台 node 有 256 核，glibc 每核最多開 8 個 arena，
-          # 每個 arena 預留 64MB 虛擬位址 → 撞上 RLIMIT_AS 會噴 MemoryError。
+          # ⚠ 這一輪刻意「不」在容器層設 MALLOC_ARENA_MAX，
+          # 才能在 R6 用 docker exec -e 做 A/B 隔離（run 1422 兩個緩解一起上，不知哪個生效）。
           docker run -d --name odoo \
             -e AGENT_RUNTIME_NAMESPACE_SECRET="${AGENT_RUNTIME_NAMESPACE_SECRET}" \
-            -e MALLOC_ARENA_MAX=2 \
             --entrypoint bash "$IMG" -c 'sleep infinity'
           for i in $(seq 1 60); do
             if docker exec pg pg_isready -U odoo >/dev/null 2>&1; then break; fi
@@ -149,48 +148,44 @@ jobs:
             "import sys; sys.argv=['odoo']; from odoo.tools import config; \
              print({k: config[k] for k in ('workers','limit_memory_hard','limit_memory_soft','max_cron_threads','config','data_dir')})" || true
 
-      - name: R6 - install（不跑測試，計時）
+      - name: R6 - MemoryError 真因隔離（A/B，各一次 install）
         run: |
+          echo "--- 核心/記憶體策略 ---"
+          docker exec odoo sh -c 'cat /proc/sys/vm/overcommit_memory /proc/sys/vm/overcommit_ratio' || true
+          docker exec odoo sh -c 'grep -E "CommitLimit|Committed_AS|MemTotal|MemAvailable" /proc/meminfo' || true
+
+          # A：不設 MALLOC_ARENA_MAX，但帶 odoo 的 workers/limit-memory 旗標
           T0=$(date +%s)
           set +e
-          docker exec odoo "${ODOO_BIN}" -d test -i woow_paas_platform \
+          docker exec odoo "${ODOO_BIN}" -d testA -i woow_paas_platform \
             --stop-after-init --without-demo=all --no-http \
             --workers=0 --max-cron-threads=0 \
             --limit-memory-hard=0 --limit-memory-soft=0 \
-            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
-            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/install.log 2>&1
-          RC=$?
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data-a \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/a.log 2>&1
+          RCA=$?
           set -e
           T1=$(date +%s)
-          echo "MEASURE install_seconds=$((T1-T0)) exit=$RC"
-          tail -40 /tmp/install.log
-          if [ "$RC" -ne 0 ]; then echo "::error::install 失敗（exit $RC）"; exit "$RC"; fi
-          grep -c "^" /tmp/install.log | sed 's/^/install_log_lines=/'
+          echo "MEASURE isolate_A_no_arena_with_odoo_flags exit=$RCA seconds=$((T1-T0))"
+          { grep -E "MemoryError|CRITICAL|Modules loaded" /tmp/a.log || true; } | tail -5
 
-      - name: R7 - 跑全套測試（計時）★ 本探針的主要產出
-        run: |
+          # B：設 MALLOC_ARENA_MAX=2，但不帶任何 odoo 旗標
           T0=$(date +%s)
           set +e
-          docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
-            --test-enable --test-tags /woow_paas_platform \
-            --stop-after-init \
-            --workers=0 --max-cron-threads=0 \
-            --limit-memory-hard=0 --limit-memory-soft=0 \
-            --http-port=18069 --gevent-port=18072 \
-            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
-            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
-            --log-handler=odoo.tests.result:INFO > /tmp/test.log 2>&1
-          RC=$?
+          docker exec -e MALLOC_ARENA_MAX=2 odoo "${ODOO_BIN}" -d testB -i woow_paas_platform \
+            --stop-after-init --without-demo=all --no-http \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data-b \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/b.log 2>&1
+          RCB=$?
           set -e
           T1=$(date +%s)
-          echo "MEASURE test_seconds=$((T1-T0)) odoo_exit=$RC"
-          echo "--- summary 行（沒有這行代表 log 被截斷，數字不可信）---"
-          grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log \
-            || echo "::error::找不到 summary 行"
-          echo "--- FAIL/ERROR 清單（前 40）---"
-          { grep -E "^(FAIL|ERROR):" /tmp/test.log || true; } | head -40 || true
-          echo "--- log 尾 20 行 ---"
-          tail -20 /tmp/test.log
+          echo "MEASURE isolate_B_arena_no_odoo_flags exit=$RCB seconds=$((T1-T0))"
+          { grep -E "MemoryError|CRITICAL|Modules loaded" /tmp/b.log || true; } | tail -5
+
+          echo "VERDICT A(no-arena)=$RCA B(arena-only)=$RCB"
+          echo "  A!=0 且 B==0  ⇒ 真因是 glibc arena，唯一需要保留的緩解是 MALLOC_ARENA_MAX"
+          echo "  A==0 且 B==0  ⇒ 1421 的 MemoryError 是暫時性，兩個緩解都不是必要條件"
+          echo "  A==0 且 B!=0  ⇒ 真因與 odoo 旗標有關（與診斷結果矛盾，需重查）"
 
       - name: R8 - 收尾與磁碟盤點
         if: always()
@@ -199,4 +194,4 @@ jobs:
           df -h
           docker system df || true
           docker rm -f odoo pg 2>/dev/null || true
-          echo "（保留 image 讓下一次 job 命中快取，用以量測 warm pull 成本）"
+          echo "（保留 image 讓下一次 job 命中快取）"
