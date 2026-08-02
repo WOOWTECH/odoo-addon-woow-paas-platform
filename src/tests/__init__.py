@@ -270,3 +270,5 @@ from . import test_low_balance_dedup_retry_389
 from . import test_create_service_validation_rollback_520
 # fix: #352 allow 型 Access 政策的 include 不得整批放行（email_domain/everyone）
 from . import test_allow_policy_bulk_grant_352
+# fix: #525 A1 skip-trial 吞例外 → 錢包已扣／發票已開，畫面卻說失敗（金流殘留＋重試被鎖死）
+from . import test_skip_trial_rollback_525

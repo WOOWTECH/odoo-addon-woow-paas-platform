@@ -1175,11 +1175,58 @@ class PaasController(HiddenChainMixin, Controller):
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {'success': False, 'error': 'Admin access required'}
 
+        # #525 A1：`_skip_trial()` 的寫入是**分段**的，例外噴在哪一步，殘留就
+        # 累積到哪——訂閱先脫離試用（`subscription_lifecycle_mixin._skip_trial`）
+        # → 開出 out_invoice → `account_move._pay_from_wallet` post 發票、扣錢包
+        # 點數 → 才建 `account.payment` 並 reconcile。例外被 except 吃掉後不會
+        # 傳播到框架層，request 正常結束 → transaction 照常 commit → 上述殘留
+        # 全部落地：**畫面說失敗，錢卻已經從錢包扣走**，發票停在 posted／未付款、
+        # 沒有 payment、沒有 reconcile。
+        #
+        # 更糟的是殘留會**把重試路徑鎖死**：脫離試用的 write 排在 invoice create
+        # 之前，而 `_skip_trial` 的前置檢查是 `if not sub.sh_trial: raise
+        # UserError('Subscription is not in trial period.')`。使用者看到失敗再按
+        # 一次會被自己剛剛的殘留擋掉——試用期燒掉、計費沒開始，且無法自我修復。
+        #
+        # 用 savepoint 而不是整個 request 的 `cr.rollback()`（#520／PR #523 在
+        # `_create_service` 用的是後者）：那裡的殘留是單一 INSERT；這裡橫跨訂閱、
+        # account.move（含明細、已 posted）、loyalty.card、wallet.transaction 四
+        # 個 model，把撤回範圍界定在「這一段」比界定在「整個 request」穩健——不必
+        # 依賴「這個 endpoint 在 try 之前永遠不會有別的寫入」這個會隨程式碼演進
+        # 失效的前提。附帶好處：`cr.savepoint()` 失敗時會先 `cr.clear()` 再
+        # `ROLLBACK TO SAVEPOINT`（`sql_db._FlushingSavepoint.rollback`），ORM
+        # cache 與待計算欄位一併清乾淨；只補 `cr.rollback()` 得自己處理髒 cache。
         try:
-            invoice_info = service._skip_trial()
+            with request.env.cr.savepoint():
+                invoice_info = service._skip_trial()
+
+        except AccessError as e:
+            # AccessError 繼承 UserError，但訊息帶 Odoo 內部 model／欄位技術名，
+            # 不是「講給租戶聽」的業務規則 → 與未預期例外同樣只回泛用訊息（#520）。
+            _logger.error(
+                "Access error skipping trial for service %s: %s\n%s",
+                service_id, e, traceback.format_exc(),
+            )
+            return {'success': False,
+                    'error': 'An error occurred while skipping the trial period.'}
+
+        except (ValidationError, UserError) as e:
+            # 業務規則例外（不在試用期、訂閱非 in_progress、錢包餘額不足、收款
+            # journal 未設…）：訊息本來就是寫給使用者看的，原文回前端。統一成泛用
+            # 字串的話，真正的原因只留在 server log，使用者與第一線支援都無從排錯。
+            message = str(e)
+            _logger.warning(
+                "Skip trial rejected for service %s: %s", service_id, message,
+            )
+            return {'success': False, 'error': message}
+
         except Exception as e:
-            _logger.error("Error skipping trial for service %s: %s", service_id, e)
-            return {'success': False, 'error': str(e)}
+            _logger.error(
+                "Error skipping trial for service %s: %s\n%s",
+                service_id, e, traceback.format_exc(),
+            )
+            return {'success': False,
+                    'error': 'An error occurred while skipping the trial period.'}
 
         return {
             'success': True,
