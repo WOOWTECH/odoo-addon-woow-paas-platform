@@ -278,3 +278,6 @@ from . import test_security_access_identity_anchor_522
 from . import test_workspace_create_rollback_525
 # fix: #525 A3 _invite_member 吞例外 → 被邀請者已入群、API 卻說失敗（結構缺陷，目前潛伏）
 from . import test_invite_member_rollback_525
+# T2：以下兩檔自建立起未被匯入 ⇒ Odoo test loader 收不到、15 條測試從未執行過
+from . import test_ai_assistant
+from . import test_security_access_p_rule_migration
