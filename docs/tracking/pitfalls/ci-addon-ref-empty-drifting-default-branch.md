@@ -42,8 +42,12 @@ metadata:
    | `digest` 是新的 | 坑 #4 給的解法。但**新 build 本來就產生新 digest** —— 對「烤錯 ref」零鑑別力 |
    | pod `imageID` == pin 的 digest | 只證明「跑的是我 pin 的那顆」，**不證明那顆裝的是我要的程式碼** |
    | Fleet `nonModified=true` | 只證明「live 沒漂離 git 宣告態」，宣告態本身指錯照樣全綠 |
+   | `Image addon version:`（#50 後新增的 image 端 gate） | **對本缺陷仍然無鑑別力**：clone 到錯的 ref 時，image 就是照著那份錯的 clone 烤的 —— 兩邊版號**完美相符**、gate 全綠。它擋的是「image ≠ clone」，與本缺陷（「clone ≠ 你要的 ref」）**正交** |
 
    整條驗證鏈證明的是**內部一致性**，沒有任何一環把 image 內容錨回「本次要發的那個 ref」。
+   #50 補上 image↔clone 這一環之後，這句話**依然成立**——它錨的是 image 對 clone，
+   不是 image 對「你要發的那個版本」。錨回意圖的只有 `at ref:` 那一行、`addon_ref`
+   的 fail-closed（#46），以及「把版號拿去跟發版單核對」這個人工動作。
 4. **只有人工路徑會留空，而人工路徑正是出事時的補救動作**。正式發版
    （`.gitea/workflows/trigger-odoo-build.yml:14,26`）從 tag 名推導 `TAG_REF`、恆帶
    `addon_ref`，結構上不可能為空 —— 所以平常永遠不會踩到。踩到的時機是
@@ -56,31 +60,48 @@ metadata:
   非 `stg-*` 路徑 → 直接 `exit 1`，要求呼叫端明示 ref。
   **`stg-*` → `develop` 的 fallback 刻意保留不動** —— `deploy-stg.sh:298` 建 tag 時從不傳
   `addon_ref`，完全依賴這個 fallback，一併收掉會讓 `/woow:deploy-stg` 立刻全壞。
-- **build log 加兩行可驗錨點**：`Cloning … at ref:`（clone 的實際 ref）與
-  `Built addon version:`（該 ref 的 `src/__manifest__.py` 版號）。
+- **build log 三行可驗錨點**（前兩行 #46 同批、第三行 #50 新增）：
 
-  **這兩行是 source 層訊號，且不互相獨立** —— 同源於**同一次 `git clone`**，讀的是
-  `/tmp/woow_paas_platform/src/__manifest__.py`（剛 clone 下來的原始碼，連 build context
-  裡那份複本都不是），且該 step 跑在 `docker build` **之前**。合起來只證明「clone 的是
-  指定的 ref、該 ref 的 manifest 是這個版號」，**不證明 image 裡裝的是它**：Dockerfile
-  `COPY` 路徑錯、build context 組錯、layer cache 問題一律抓不到。
-  CI 側也**不是 gate**（自陳「只印，不與任何硬編版號比對」「解析失敗不擋 build」），
-  擋不擋得住取決於平台側的人工 gate。
+  | 行 | 層 | 證明 |
+  |---|---|---|
+  | `Cloning … at ref:` | source | clone 的是指定的那個 ref |
+  | `Cloned addon version:` | source | 該 ref 的 `src/__manifest__.py` 版號 |
+  | `Image addon version:` | image | 產出 image 裡那份 addon source 的版號 == clone 側版號 |
 
-  **剩下的缺口要明講**：從「clone 到正確 source」到「image 裡真的是那份 source」之間
-  **沒有任何自動驗證**；能觸及 image 實際內容的最早時機仍是 pod 起來之後。兩行錨點
-  消滅的是「烤錯 ref」這一類，不是「image 內容不對」這個大類。
-- **平台側 SOP 補驗收與重跑路徑**（本 pitfall 同批）：
+  **前兩行同源、不互相獨立** —— 都出自同一次 `git clone`，`Cloned addon version:` 讀的是
+  `/tmp/woow_paas_platform/src/__manifest__.py`（clone 原件，連 build context 裡那份複本
+  都不是），step 跑在 `docker build` **之前**。
+
+  **第三行是 image 端 fail-closed gate**（#50）：`docker run --rm --entrypoint cat` 從剛
+  build 出來的 image 讀 `/opt/bitnami/odoo/custom-addons/woow_paas_platform/__manifest__.py`
+  與 clone 側比對，四種情況 `exit 1`（版號不符／讀不到 manifest ＝`COPY` 路徑或 build
+  context 錯／解析不出版號／clone 側基準缺失），**位在 `Push image` 之前 ⇒ 不符的 image
+  進不了 registry**。
+
+  ⚠ **它的 `matches clone` 只證明 image == clone，不證明 clone 是你要的 ref**（見上方
+  Root cause 表最後一列）。**三行都要拿去跟本次預期版號核對，不是核對三行互相一致。**
+
+  **剩下的缺口**：錨到的是**版號字串**這一層。同版號但檔案被動過、addon 以外的內容
+  （vendored `addons/`、`requirements-paas.txt`）、以及「registry 上之後被 pin 的是不是
+  本次驗過的這一顆」（屬 digest pin 範疇），都不在範圍內。
+- **平台側 SOP 補驗收與重跑路徑**（本 pitfall 同批，#50 後同步更新）：
   - `docs/guides/deployment/prod-release-sop.md` §5.1.4 —— 為什麼 tag/digest 驗不出來、
-    兩行錨點怎麼驗、CI 失敗要重跑的正確做法（整份 SOP 原本**完全沒有**重跑段落）
-  - 同檔 §9 坑 #12、§11 checklist step 1.5（STOP gate）、§1.1 CI 觸發欄
+    三行錨點各證明什麼、已知極限、CI 失敗要重跑的正確做法（整份 SOP 原本**完全沒有**
+    重跑段落）
+  - 同檔 §9 坑 #12、§11 checklist step 1.5（STOP gate，#50 後降級為**複核**）、§1.1 CI 觸發欄
   - `.claude/commands/woow/deploy.md` —— flow 明示 `addon_ref` 來源 + 重跑必帶
 
 ## Guard
 
-- **CI fail-closed**（`paas-odoo-ci/.gitea/workflows/build-image.yml`）—— 主守線，
-  但**在另一個 repo**，本 repo 的 `scripts/audit/repo-lint.py` 管不到。
-- **SOP §11 checklist step 1.5** 是平台側的 STOP gate：兩行錨點任一對不上即不得進 pin 步驟。
+- **CI 兩道 fail-closed**（`paas-odoo-ci/.gitea/workflows/build-image.yml`）—— 主守線，
+  但**在另一個 repo**，本 repo 的 `scripts/audit/repo-lint.py` 管不到：
+  - `Validate addon ref`（#46）：`addon_ref` 留空且非 `stg-*` → `exit 1`。**擋本 pitfall 的缺陷**，
+    但只擋「留空」，擋不了「填錯」。
+  - `Verify image addon version matches clone (image side)`（#50）：image 版號 ≠ clone 版號
+    → `exit 1`，位在 push 之前。擋的是**另一類**（image ≠ clone），與本 pitfall 正交。
+- **SOP §11 checklist step 1.5** 是平台側 gate。#50 之後它從「唯一防線」**降級為複核**——
+  image↔clone 不符 CI 自己就會擋；人工核對真正不可取代的部分是**「`at ref:` 與版號 vs 發版單」**，
+  因為 ref 填錯時 CI 三行會一致地全綠。
 - 本 repo 無 lint gate：唯一的呼叫端 `trigger-odoo-build.yml` 已恆帶 `addon_ref`，
   沒有可 grep 的缺陷形態；真正的風險在**人工操作**與**跨 repo 設定**，兩者都不在本 repo 可判定範圍。
 
@@ -105,6 +126,18 @@ metadata:
    > 可帶走的規則：**寫「這項驗收能擋住 X」之前，先去讀那個訊號的產生點**——
    > 它在 pipeline 的哪一段、讀的是什麼、跑在什麼之前、失敗時擋不擋。
    > 訊號的名字（`Built addon version`）會誤導你，只有產生它的那幾行不會。
+
+   > **第二個活例（2026-08-02，同一條規則的另一面）**：上面那句「訊號的名字會誤導你」
+   > 一天後就應驗得更徹底 —— paas-odoo-ci #50 補 image 端 gate 時，**順手把那個誤導的
+   > step 改名了**（`Record baked addon version` → `Record addon version from clone (source side)`，
+   > 理由正是 `baked` 讓人以為 image 端已驗過）。於是 `Built addon version:` **這個字串
+   > 從 CI 輸出裡消失**，而本文件與 SOP checklist 把它當驗收錨點寫死了 ——
+   > 下一個照著發版的人會去 log 裡找一行**不存在**的字串，要嘛卡住、要嘛就直接放行。
+   >
+   > ⇒ **寫死外部系統的輸出字串，就是把它的實作細節變成自己的契約**，而對方沒有義務
+   > 為你維持它。這類引用要嘛標明來源與查證日期（讓下一個人知道該去哪裡復驗）、
+   > 要嘛就別寫死。**升級 checklist 的同時要問：這條驗收依賴的字串，誰有權改、改了誰會知道？**
+   > 本案的答案是「上游隨時可改、沒有人會通知」——所以它註定會再腐一次。
 3. **「fallback 到預設分支」＝ 把一個不在版控的設定變成 build 的隱含輸入**。
    不可變錨點（tag / commit SHA）與移動指標（branch HEAD）在 build 系統裡語意天差地遠，
    前者可重現、後者不可；讓後者當預設值等於預設放棄可重現性。

@@ -109,13 +109,15 @@ git push origin v{version}
   - woow_paas_platform CI: https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/actions
   - paas-odoo-ci CI:       https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions
 
-✅ Build 驗收（CI 綠燈不等於 clone 對 ref）：
-  paas-odoo-ci build log 必須同時出現，且都對上本次版號：
-    Cloning woow_paas_platform at ref: v{version}    ← 看 at ref:，不是 at HEAD
-    Built addon version: {version} (from ref: ...)   ← 該 ref 的 src/__manifest__.py
-  ⚠ 兩行同源於同一次 clone、屬 source 層訊號：只釘住「clone 了哪個 ref」，
-    不保證 image 內容（Dockerfile COPY / build context / cache 問題一律抓不到）。
-    詳見 SOP §5.1.4「已知極限」。
+✅ Build 驗收（CI 綠燈不等於 image 裝對版本）：
+  paas-odoo-ci build log 必須出現這三行，且**每一行都對上本次版號**：
+    Cloning woow_paas_platform at ref: v{version}          ← 看 at ref:，不是 at HEAD
+    Cloned addon version: {version} (from ref: ...)        ← source 端
+    Image addon version: {version} (matches clone, ...)    ← image 端（CI 已 fail-closed 比對）
+  ⚠ matches clone 只證明 image == clone，**不證明 clone 是你要的那個 ref**——
+    addon_ref 填錯時三行會一致地顯示錯的版號、gate 全綠，只有 at ref: 露餡。
+    fail-closed 只擋「留空」，擋不了「填錯」。
+  ⚠ 錨到的只是版號這一層。詳見 SOP §5.1.4「已知極限」。
 ```
 
 ### 6. 若 CI 失敗需要重跑
