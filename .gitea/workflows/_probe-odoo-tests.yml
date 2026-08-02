@@ -40,9 +40,9 @@
 name: PROBE - measure full Odoo test suite
 
 on:
-  push:
-    branches:
-      - ci/run-odoo-tests
+  # ⚠ 刻意只留 workflow_dispatch：原本掛 `push: ci/run-odoo-tests`，
+  # 結果連「只改註解」的 commit 都會重新觸發，白佔唯一的 runner slot 幾分鐘
+  # （2026-08-03 run 1428 就是這樣被我自己誤觸的）。要再量就手動 dispatch。
   workflow_dispatch:
 
 env:
