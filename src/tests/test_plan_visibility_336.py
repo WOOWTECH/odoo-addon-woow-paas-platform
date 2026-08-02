@@ -7,7 +7,7 @@ TestHermesRelisted，並保留 .54 hide 軌的歷史迴歸）。
 import importlib.util
 import os
 
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 _MIGRATION_79_PATH = os.path.abspath(
     os.path.join(
@@ -58,12 +58,12 @@ class TestPlansApiFiltersHidden(TransactionCase):
         return {p['id'] for p in plans_payload}
 
     def test_template_plans_helper_excludes_hidden(self):
-        """以 CS 家族驗證：隱藏 plan 不進 API 回傳集合。
+        """過濾語意本身：`filtered(lambda p: not p.storefront_hidden)` 的行為。
 
-        直測 controller 私有邏輯較脆——改為斷言過濾語意本身：
-        visible = template.subscription_plan_ids.filtered(
-            lambda p: not p.storefront_hidden)
-        並斷言三個 controller 皆改用此語意（見 test_three_controllers_filter_hidden）。
+        ⚠ 這條**不**證明任何 controller 有用這個語意——它把 lambda 寫在測試自己
+        身上，等於在驗 Odoo 的 `filtered()`。三個端點真的有濾，由
+        TestPlansApiExcludesHiddenWire 在 wire level 斷言（原本掛在這裡的
+        `test_three_controllers_filter_hidden` 是子字串守衛，可被註解餵飽，已移除）。
         """
         template = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
         all_plans = template.sudo().subscription_plan_ids
@@ -78,16 +78,111 @@ class TestPlansApiFiltersHidden(TransactionCase):
         self.assertNotIn(one, visible)
         self.assertEqual(len(visible), len(all_plans) - 1)
 
-    def test_three_controllers_filter_hidden(self):
-        """機械守衛：三個 controller 的 plans 迴圈必須帶 storefront_hidden 過濾。"""
-        import inspect
-        from odoo.addons.woow_paas_platform.controllers import (
-            paas, smart_home, security_access,
-        )
-        for mod in (paas, smart_home, security_access):
-            src = inspect.getsource(mod)
-            self.assertIn('storefront_hidden', src,
-                          f'{mod.__name__} 的 plans API 漏掉 storefront_hidden 過濾')
+
+@tagged('post_install', '-at_install')
+class TestPlansApiExcludesHiddenWire(HttpCase):
+    """三個前台 plans 端點：隱藏 plan 不得回傳、可見 plan 必須回傳（wire-level）。
+
+    取代原本的 `inspect.getsource(mod)` + `assertIn('storefront_hidden', src)`
+    子字串守衛——**那條可以被註解餵飽**：把 `filtered(lambda p: not
+    p.storefront_hidden)` 整段刪掉、只留 `# #336：前台 plans 一律排除
+    storefront_hidden` 這行註解，測試照樣全綠。
+
+    2026-08-02 實測（三個 controller 全刪過濾、註解留著）：舊守衛綠，全套 2191
+    tests 只紅 3 條，且**那 3 條全部只打 cloud-services 端點**
+    （test_plan_group_keys_368 / test_wave_c_variants_attach_330 /
+    test_marketplace_price_label_478 各一條，都是順帶打到而非專測過濾）。只注入
+    smart-home ＋ security-access 兩處時全套 0F/0E——那兩個端點的過濾在行為層
+    是**零覆蓋**。
+
+    🔴 每條測試都同時斷言「可見 plan 有在回傳裡」。少了它，端點回空集合
+    （template 被擋掉、plans 沒掛上、jsonrpc 形狀變了）一樣會讓 assertNotIn
+    恆真——那只是把「註解可餵飽」換成「空集合恆綠」，等於沒修。
+
+    ⚠ 用合成 fixture 而非 seed 商品：seed 的 `storefront_hidden` 是會變動的
+    商業狀態（#336 A5 曾全數隱藏、#431 又全數解封），錨在上面會讓這組測試在
+    過濾完全正確的情況下變紅（#478／#494 教訓）。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.authenticate('admin', 'admin')
+
+    def _make_plans(self, service_type):
+        """一組對照 plan：可見 + 隱藏（皆非席數變體，ac_max_access_seats=0）。"""
+        Plan = self.env['sh.subscription.plan']
+        common = {
+            'sh_duration': 1, 'sh_unit': 'month', 'sh_no_of_billing_cycle': -1,
+            'service_type': service_type,
+        }
+        visible = Plan.create(dict(
+            common, name='Visible 336 %s' % service_type,
+            sh_plan_price=1000, storefront_hidden=False))
+        hidden = Plan.create(dict(
+            common, name='Hidden 336 %s' % service_type,
+            sh_plan_price=2000, storefront_hidden=True))
+        return visible, hidden
+
+    def _result(self, url):
+        resp = self.url_open(
+            url, data='{"jsonrpc":"2.0","method":"call","params":{}}',
+            headers={'Content-Type': 'application/json'})
+        body = resp.json()
+        self.assertIn('result', body, 'resp: %s' % body)
+        return body['result']
+
+    def _assert_hidden_excluded(self, url, visible, hidden):
+        r = self._result(url)
+        self.assertTrue(r.get('success'), '端點應回成功（回 %r）' % r)
+        ids = [row['id'] for row in r['data']]
+
+        # 陽性對照（**必須**與否定斷言同在一條測試裡）
+        self.assertIn(
+            visible.id, ids,
+            '可見 plan 不在回傳裡——端點根本沒吐出這個 template 的 plans，'
+            '下面的「隱藏 plan 不在」就只是空集合恆綠')
+        # 核心：隱藏 plan 不得外洩到前台選購清單
+        self.assertNotIn(
+            hidden.id, ids,
+            'storefront_hidden 的 plan 出現在前台 plans 回傳裡（%s）' % url)
+        # 合成 template 只掛這兩筆 ⇒ 可直接鎖死回傳集合
+        self.assertEqual(
+            set(ids), {visible.id},
+            '回傳集合應恰為那一筆可見 plan（實得 %s）' % ids)
+
+    def test_cloud_services_endpoint_excludes_hidden(self):
+        visible, hidden = self._make_plans('cloud_service')
+        tpl = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'CS Hidden Fixture 336', 'slug': 'cs-hidden-336',
+            # helm_* 三欄 required=True（NOT NULL），不給會撞 NotNullViolation
+            'helm_repo_url': '',
+            'helm_chart_name': 'oci://example.invalid/cs-hidden-336',
+            'helm_chart_version': '0.0.0',
+            'is_active': True, 'is_hidden': False,
+            'subscription_plan_ids': [(6, 0, [visible.id, hidden.id])]})
+        self.env.flush_all()
+        self._assert_hidden_excluded(
+            '/api/cloud-services/templates/%s/plans' % tpl.id, visible, hidden)
+
+    def test_smart_home_endpoint_excludes_hidden(self):
+        visible, hidden = self._make_plans('smart_home')
+        tpl = self.env['woow_paas_platform.smart_home_template'].create({
+            'name': 'SH Hidden Fixture 336', 'slug': 'sh-hidden-336',
+            'is_active': True,
+            'subscription_plan_ids': [(6, 0, [visible.id, hidden.id])]})
+        self.env.flush_all()
+        self._assert_hidden_excluded(
+            '/api/smart-home/templates/%s/plans' % tpl.id, visible, hidden)
+
+    def test_security_access_endpoint_excludes_hidden(self):
+        visible, hidden = self._make_plans('security_access')
+        tpl = self.env['woow_paas_platform.security_access_template'].create({
+            'name': 'SA Hidden Fixture 336', 'slug': 'sa-hidden-336',
+            'is_active': True,
+            'subscription_plan_ids': [(6, 0, [visible.id, hidden.id])]})
+        self.env.flush_all()
+        self._assert_hidden_excluded(
+            '/api/security-access/templates/%s/plans' % tpl.id, visible, hidden)
 
 
 HERMES_PLAN_XMLIDS = [

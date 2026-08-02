@@ -4,9 +4,14 @@
 - TestAttachVariantsCorpus：全庫 hidden 席數變體以 xmlid 反查歸戶，零跳過、
   皆掛到「可見」base（fail-loud 測試層，把 generator xmlid 慣例釘死）。
 - TestAttachVariantsShape：抽 tier 代表驗 seats 集合／升序／price／plan_id 反查。
-- TestEndpointsWiring：機械守衛三端點皆呼叫 helper 並塞 variants key。
 - TestTemplatePlansEndpointsVariants：三個 *_template_plans 端點回傳的 base dict
   帶正確 variants（wire-level，HttpCase json-rpc）。
+
+原有的 TestEndpointsWiring（`inspect.getsource` + `assertIn('_attach_variants',
+src)`）已移除：它可被註解餵飽——刪掉三處呼叫與 variants key、只留一行提到
+`_attach_variants` 的註解，該守衛照樣全綠。2026-08-02 實測該注入下
+TestTemplatePlansEndpointsVariants 三條同時紅（`'variants' not found in {...}`），
+證明它守的東西已由本檔的 wire-level 測試以更強的形式守住，屬純冗餘。
 
 設計：docs/plans/2026-Q3/2026-07-14-wave-c-seat-picker-{design,implementation}.md
 Refs #330（AC 席數變體母案）。
@@ -97,25 +102,6 @@ class TestAttachVariantsShape(TransactionCase):
         for xmlid in ('plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly'):
             base = self.env.ref('%s.%s' % (MOD, xmlid))
             self.assertNotIn(base.id, result)
-
-
-@tagged('post_install', '-at_install')
-class TestEndpointsWiring(TransactionCase):
-    """機械守衛：三端點必須呼叫 _attach_variants 並塞 variants key。"""
-
-    def test_three_endpoints_wire_variants(self):
-        import inspect
-        from odoo.addons.woow_paas_platform.controllers import (
-            paas, smart_home, security_access,
-        )
-        for mod in (paas, smart_home, security_access):
-            src = inspect.getsource(mod).replace('"', "'")
-            self.assertIn(
-                '_attach_variants', src,
-                '%s 未呼叫 _attach_variants' % mod.__name__)
-            self.assertIn(
-                "'variants'", src,
-                '%s 未塞 variants key' % mod.__name__)
 
 
 @tagged('post_install', '-at_install')
