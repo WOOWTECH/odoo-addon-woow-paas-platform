@@ -94,8 +94,8 @@ class TestP2_5Migration(TransactionCase):
             # (route_id NULL) via raw SQL — the real upgraded shape.
             pol = self.Policy.create({
                 'route_id': primary.id, 'name': 'legacy-pol',
-                'decision': 'allow', 'rule_type': 'email_domain',
-                'rule_value': 'a.com'})
+                'decision': 'allow', 'rule_type': 'email_list',
+                'rule_value': 'user@a.com'})
             self._null_policy_route(pol, sa)
             # Seed legacy SA-level Access values.
             self._set_legacy(sa, login_google=True, login_email_otp=False,
@@ -139,7 +139,7 @@ class TestP2_5Migration(TransactionCase):
                 'is_protected': True})
             pol = self.Policy.create({
                 'route_id': primary.id, 'name': 'p', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@a.com'})
             self._null_policy_route(pol, sa)
             self._set_legacy(sa, session_duration='1h',
                              access_app_id='legacy-app-2')
@@ -182,7 +182,7 @@ class TestP2_5Migration(TransactionCase):
                 'is_protected': True})
             pol = self.Policy.create({
                 'route_id': r1.id, 'name': 'shared', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@a.com'})
             self._null_policy_route(pol, sa)
             # Non-default session ('8h' != model default '24h') + a login flag so
             # the copy onto the NON-primary route r2 is actually discriminating.
@@ -233,7 +233,7 @@ class TestP2_5Migration(TransactionCase):
                 'is_protected': True})
             pol = self.Policy.create({
                 'route_id': primary.id, 'name': 'dis-pol', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@a.com'})
             self._null_policy_route(pol, sa)
             # Master toggle OFF: in P2 there was NO live Access app, the routes
             # were public despite is_protected=True.
@@ -325,7 +325,7 @@ class TestP2_5Migration(TransactionCase):
                 'is_protected': True})
             pol = self.Policy.create({
                 'route_id': r1.id, 'name': 'shared-q', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@a.com'})
             self._null_policy_route(pol, sa)
             # access_enabled=True so the master-toggle reconciliation (step 0)
             # keeps both routes protected — the fan-out path under test only
@@ -357,7 +357,7 @@ class TestP2_5Migration(TransactionCase):
                                        "bypass is scoped to the one-shot move"):
                 self.Policy.create({
                     'route_id': r1.id, 'name': 'post-mig-overquota',
-                    'decision': 'allow', 'rule_type': 'email_domain',
-                    'rule_value': 'b.com'})
+                    'decision': 'allow', 'rule_type': 'email_list',
+                    'rule_value': 'user@b.com'})
         finally:
             self._drop_legacy_columns()

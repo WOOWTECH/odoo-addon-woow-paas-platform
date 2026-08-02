@@ -695,7 +695,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
             route.write({'is_protected': True})
             res = self.controller._create_policy(sa, {
                 'name': 'corp', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@acme.com'})
         self.assertTrue(res['success'], res.get('error'))
         self.assertEqual(len(self._sa_policies(sa)), 1)
         self.assertEqual(self._sa_policies(sa).route_id, route)
@@ -728,11 +728,11 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             r1 = self.controller._create_policy(sa, {
                 'name': 'p1', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@a.com'})
             self.assertTrue(r1['success'], r1.get('error'))
             r2 = self.controller._create_policy(sa, {
                 'name': 'p2', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@b.com'})
         self.assertFalse(r2['success'])
         self.assertIn('quota', r2['error'].lower())
         # the over-quota policy must not have landed
@@ -762,8 +762,8 @@ class TestSecurityAccessAccessControl(TransactionCase):
             pol = self.env[
                 'woow_paas_platform.security_access_access_policy'].create({
                     'route_id': route.id, 'name': 'corp',
-                    'decision': 'allow', 'rule_type': 'email_domain',
-                    'rule_value': 'acme.com'})
+                    'decision': 'allow', 'rule_type': 'email_list',
+                    'rule_value': 'user@acme.com'})
             res = self.controller._update_policy(sa, pol.id, {
                 'name': 'renamed', 'cf_policy_id': 'attacker-set',
                 'route_id': 999999})
@@ -801,13 +801,13 @@ class TestSecurityAccessAccessControl(TransactionCase):
             # (1) cross-SA route_id → deny, nothing created on either SA.
             cross = self.controller._create_policy(sa, {
                 'name': 'cross', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'cross.com',
+                'rule_type': 'email_list', 'rule_value': 'user@cross.com',
                 'cf_policy_id': 'attacker-set',
                 'route_id': other_route.id})
             # (2) valid same-SA route_id + forged cf_policy_id → cf dropped.
             ok = self.controller._create_policy(sa, {
                 'name': 'corp', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'acme.com',
+                'rule_type': 'email_list', 'rule_value': 'user@acme.com',
                 'cf_policy_id': 'attacker-set',
                 'route_id': route.id})
         # (1) cross-SA route_id rejected; no policy on either SA.
@@ -836,8 +836,8 @@ class TestSecurityAccessAccessControl(TransactionCase):
             pol = self.env[
                 'woow_paas_platform.security_access_access_policy'].create({
                     'route_id': route.id, 'name': 'corp',
-                    'decision': 'allow', 'rule_type': 'email_domain',
-                    'rule_value': 'acme.com'})
+                    'decision': 'allow', 'rule_type': 'email_list',
+                    'rule_value': 'user@acme.com'})
             res = self.controller._delete_policy(sa, pol.id)
         self.assertTrue(res['success'], res.get('error'))
         self.assertEqual(len(self._sa_policies(sa)), 0)
@@ -865,7 +865,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._create_policy(sa, {
                 'name': 'on-second', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'second.com',
+                'rule_type': 'email_list', 'rule_value': 'user@second.com',
                 'route_id': second.id})
         self.assertTrue(res['success'], res.get('error'))
         pol = self._sa_policies(sa).filtered(lambda p: p.name == 'on-second')
@@ -890,7 +890,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._create_policy(sa, {
                 'name': 'cross', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'cross.com',
+                'rule_type': 'email_list', 'rule_value': 'user@cross.com',
                 'route_id': other_route.id})
         self.assertFalse(res['success'])
         self.assertIn('route not found', (res.get('error') or '').lower())
@@ -987,11 +987,11 @@ class TestSecurityAccessAccessControl(TransactionCase):
             self.env[
                 'woow_paas_platform.security_access_access_policy'].create([
                     {'route_id': primary.id, 'name': 'on-primary',
-                     'decision': 'allow', 'rule_type': 'email_domain',
-                     'rule_value': 'p.com'},
+                     'decision': 'allow', 'rule_type': 'email_list',
+                     'rule_value': 'user@p.com'},
                     {'route_id': second.id, 'name': 'on-2nd',
-                     'decision': 'allow', 'rule_type': 'email_domain',
-                     'rule_value': 's.com'}])
+                     'decision': 'allow', 'rule_type': 'email_list',
+                     'rule_value': 'user@s.com'}])
         with _patch_request(self.env(user=self.env.user)), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):

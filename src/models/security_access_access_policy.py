@@ -97,6 +97,73 @@ class SecurityAccessAccessPolicy(models.Model):
                         "(email domain / email list). Use IP range, country, "
                         "or everyone instead.")
 
+    #: #352：讓「不特定多數人」通過認證的 include 選擇器。
+    #:
+    #: AC 方案按人數計費，而人數是「數 email_list 規則裡的位址」算出來的
+    #: ——這兩種選擇器計 0 人卻放行無限多人。
+    _BULK_GRANT_RULE_TYPES = ('email_domain', 'everyone')
+
+    @api.constrains('decision', 'rule_ids')
+    def _check_allow_policy_no_bulk_grant(self):
+        """allow 型政策的 include 規則不得整批放行（#352）。
+
+        ## 為什麼要擋
+
+        Cloudflare Access 的席位是 **per-ACCOUNT** 的全平台共用池（50 席），而且
+        是**使用者實際認證登入時**才消耗一席。AC 方案按人數計費，計數方式是數
+        ``email_list`` 規則裡的位址數——``email_domain``（整個網域放行）與
+        ``everyone``（所有人放行）**計 0 人**。兩者相乘的後果不是「少收一點
+        錢」，而是：租戶用一條規則放進不特定多數人，這些人登入時照樣吃席位，
+        第 51 人登入當場被擋——**受害的是平台上其他租戶，而他們零 workaround**。
+
+        ## 為什麼只擋 include
+
+        include 是 OR：命中任一條就放行，所以整批放行的入口在這裡。
+        ``require``（AND）與 ``exclude``（NOT）只會**縮小**放行範圍——
+        「allow 但排除 evil.com 這個網域」是正當且常見的寫法，擋它沒有道理。
+
+        ## 為什麼 bypass 豁免
+
+        bypass 政策**不驗證身分**，使用者不經 Cloudflare 認證 ⇒ **不消耗席位**，
+        因此不是繞過席數計費的路徑。而且無差別禁用 ``everyone`` 會與
+        ``_check_decision_selector_compat`` 打架：那條規定 bypass 不得用
+        identity-based 選擇器（email_domain / email_list），只剩 ip_range /
+        country / everyone 三種寫法，再拿掉 everyone 就只剩兩種。
+
+        ``deny`` 同樣不受限：整批**封鎖**一個網域不會放任何人進來。
+
+        ## 本檢查的邊界
+
+        擋掉繞過寫法 **≠ 席數計費成立**。``ac_max_access_seats`` 至今沒有任何
+        程式碼在讀，補完本檢查後席位數與實際放行人數之間仍然沒有連線（#521）。
+        另外 allow + include + ``ip_range``（如 ``0.0.0.0/0``）與 ``country``
+        同樣不計人頭卻會佔席位，是第三、四條繞過路徑，**不在本次範圍**。
+        """
+        for pol in self:
+            if pol.decision != 'allow':
+                continue
+            offenders = pol.rule_ids.filtered(
+                lambda r: (r.group == 'include'
+                           and r.rule_type in self._BULK_GRANT_RULE_TYPES))
+            if not offenders:
+                continue
+            raise ValidationError(
+                "Allow policy %r cannot use %s as an Include rule.\n\n"
+                "Why: seat-based Access plans count people by the addresses "
+                "listed in 'Email list' rules, so a whole-domain / everyone "
+                "rule admits an unlimited number of people while counting as "
+                "zero. Every one of them still consumes one of the 50 "
+                "Cloudflare Access seats shared by the whole platform, so the "
+                "51st login is refused — for every tenant, not just this one.\n"
+                "What to use instead: list the individual addresses in an "
+                "'Email list' Include rule. To narrow (not widen) access you "
+                "can still use these selectors in Require / Exclude rules, and "
+                "Block policies are unaffected. Bypass policies are exempt "
+                "because they skip authentication and therefore consume no "
+                "seat."
+                % (pol.name or pol.id,
+                   ' / '.join(sorted(set(offenders.mapped('rule_type'))))))
+
     @api.constrains('rule_ids')
     def _check_emails_per_policy(self):
         # Per-policy email cap (plan.sa_max_emails_per_policy, seeded 20). Counts

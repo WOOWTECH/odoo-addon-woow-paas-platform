@@ -53,8 +53,8 @@ class TestCollectLeftSet(TransactionCase):
             'decision': 'allow',
             'sequence': 1,
             'rule_ids': [(0, 0, {
-                'group': 'include', 'rule_type': 'email_domain',
-                'rule_value': 'acme.com', 'sequence': 1,
+                'group': 'include', 'rule_type': 'email_list',
+                'rule_value': 'user@acme.com', 'sequence': 1,
             })],
         })
         if cf_policy_id:
