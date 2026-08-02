@@ -151,6 +151,11 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # already covers the final state.
             policies._check_emails_per_policy()
             policies._check_decision_selector_compat()
+            # #352：新增一條 include 規則就可能把 allow 政策變成整批放行。
+            # policy 上的 @api.constrains 不會因為「單獨建 rule」而觸發，所以
+            # 這裡與上面兩條同樣要顯式再跑一次——否則只擋得到走 policy.rule_ids
+            # 的寫法，直接對 rule 表寫入的路徑（含 API）整條漏掉。
+            policies._check_allow_policy_no_bulk_grant()
             if not self._suppress_route_sync():
                 for route in rules.mapped('policy_id.route_id'):
                     route._sync_access_to_operator()
@@ -164,6 +169,9 @@ class SecurityAccessAccessPolicyRule(models.Model):
             policies._check_at_least_one_include()
             policies._check_emails_per_policy()
             policies._check_decision_selector_compat()
+            # #352：把既有規則改成 email_domain / everyone、或把它從 exclude
+            # 搬進 include，都是同一個繞過（見 policy 上的 constraint）。
+            policies._check_allow_policy_no_bulk_grant()
             if (not self._suppress_route_sync()
                     and any(k in vals for k in (
                         'group', 'rule_type', 'rule_value', 'sequence',

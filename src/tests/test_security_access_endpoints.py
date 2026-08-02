@@ -437,8 +437,8 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
         self.pol = self.env[
             'woow_paas_platform.security_access_access_policy'].sudo().create({
                 'route_id': self.route.id, 'name': 'p',
-                'decision': 'allow', 'rule_type': 'email_domain',
-                'rule_value': 'a.com'})
+                'decision': 'allow', 'rule_type': 'email_list',
+                'rule_value': 'user@a.com'})
 
     def _rpc(self, url, params=None):
         r = self.url_open(url, data=json.dumps({'jsonrpc': '2.0',
@@ -483,7 +483,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'create', 'name': 'inject', 'decision': 'allow',
-             'rule_type': 'email_domain', 'rule_value': 'evil.com'})
+             'rule_type': 'email_list', 'rule_value': 'user@evil.com'})
         self._assert_structured_denial(res)
         after = self.env[
             'woow_paas_platform.security_access_access_policy'].sudo(
@@ -544,7 +544,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'create', 'name': 'member-inject', 'decision': 'allow',
-             'rule_type': 'email_domain', 'rule_value': 'evil.com'})
+             'rule_type': 'email_list', 'rule_value': 'user@evil.com'})
         self._assert_structured_denial(res)
         self.assertIn('permission', (res.get('error') or '').lower())
         after = self.env[
@@ -594,7 +594,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
         pol2 = self.env[
             'woow_paas_platform.security_access_access_policy'].sudo().create({
                 'route_id': self.route.id, 'name': 'p2', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@b.com'})
         # foreign SA + policy (mallory's workspace) — alice must never touch it
         wsB = self.env['woow_paas_platform.workspace'].sudo().create({
             'name': 'AC WS B', 'owner_id': self.mallory.id})
@@ -606,7 +606,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
         polB = self.env[
             'woow_paas_platform.security_access_access_policy'].sudo().create({
                 'route_id': routeB.id, 'name': 'pB', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@b.com'})
         polB_seq = polB.sequence
         self.authenticate(self.alice.login, self.alice.login)
         res = self._rpc(
@@ -631,8 +631,8 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'create', 'name': 'three-grp', 'decision': 'allow',
              'route_id': self.route.id,
-             'include': [{'rule_type': 'email_domain',
-                          'rule_value': 'acme.com'}],
+             'include': [{'rule_type': 'email_list',
+                          'rule_value': 'user@acme.com'}],
              'require': [{'rule_type': 'country', 'rule_value': 'TW'}],
              'exclude': [{'rule_type': 'email_domain',
                           'rule_value': 'evil.com'}]})
@@ -640,7 +640,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
         data = res['data']
         self.assertEqual(
             data['include'],
-            [{'rule_type': 'email_domain', 'rule_value': 'acme.com'}])
+            [{'rule_type': 'email_list', 'rule_value': 'user@acme.com'}])
         self.assertEqual(
             data['require'], [{'rule_type': 'country', 'rule_value': 'TW'}])
         self.assertEqual(
@@ -790,7 +790,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'create', 'name': 'owner-pol', 'decision': 'allow',
-             'rule_type': 'email_domain', 'rule_value': 'owner.com'})
+             'rule_type': 'email_list', 'rule_value': 'user@owner.com'})
         self.assertNotIn('error', self._last_body,
                          "create crashed: %s" % self._last_body.get('error'))
         self.assertTrue(created.get('success'), created.get('error'))
@@ -919,8 +919,8 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'create', 'name': 'member-route-inject',
-             'decision': 'allow', 'rule_type': 'email_domain',
-             'rule_value': 'evil.com', 'route_id': self.route.id})
+             'decision': 'allow', 'rule_type': 'email_list',
+             'rule_value': 'user@evil.com', 'route_id': self.route.id})
         self._assert_structured_denial(res)
         self.assertIn('permission', (res.get('error') or '').lower())
         after = self.env[
@@ -940,7 +940,7 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'create', 'name': 'cross-sa-pol', 'decision': 'allow',
-             'rule_type': 'email_domain', 'rule_value': 'cross.com',
+             'rule_type': 'email_list', 'rule_value': 'user@cross.com',
              'route_id': other_route.id})
         self.assertNotIn('error', self._last_body,
                          "endpoint crashed: %s" % self._last_body.get('error'))

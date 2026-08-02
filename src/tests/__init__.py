@@ -268,3 +268,5 @@ from . import test_subscription_mixin_cascade_sudo_29
 from . import test_low_balance_dedup_retry_389
 # fix: #520 generic create 吞掉業務例外 → 被拒絕的服務仍留在 DB 並被 cron 部署
 from . import test_create_service_validation_rollback_520
+# fix: #352 allow 型 Access 政策的 include 不得整批放行（email_domain/everyone）
+from . import test_allow_policy_bulk_grant_352

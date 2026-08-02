@@ -43,8 +43,8 @@ class TestAccessPolicyModel(TransactionCase):
         route = self._make_route(sa)
         pol = self.Policy.create({
             'route_id': route.id, 'name': 'corp',
-            'decision': 'allow', 'rule_type': 'email_domain',
-            'rule_value': 'acme.com', 'sequence': 1})
+            'decision': 'allow', 'rule_type': 'email_list',
+            'rule_value': 'user@acme.com', 'sequence': 1})
         self.assertIn(pol, route.access_policy_ids)
         # related store: 從 route 推導出 SA
         self.assertEqual(pol.security_access_id, sa)
@@ -56,16 +56,18 @@ class TestAccessPolicyModel(TransactionCase):
         with self.assertRaises(Exception):
             self.Policy.create({
                 'name': 'no-route', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'x.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@x.com'})
 
     def test_policy_rule_value_validation(self):
         sa = self._make_sa()
         route = self._make_route(sa)
         # email_domain 不可含 @
+        # #352：allow 型的 include 已禁用 email_domain，這裡改用 deny 政策，
+        # 讓紅燈的原因確定是「格式驗證」而不是新的整批放行 constraint。
         with self.assertRaises(ValidationError):
             self.Policy.create({
                 'route_id': route.id, 'name': 'bad',
-                'decision': 'allow', 'rule_type': 'email_domain',
+                'decision': 'deny', 'rule_type': 'email_domain',
                 'rule_value': '@acme.com'})
         # ip_range 必須是 CIDR
         with self.assertRaises(ValidationError):
@@ -91,12 +93,12 @@ class TestAccessPolicyModel(TransactionCase):
         # 第一筆（route 1）OK
         self.Policy.create({
             'route_id': r1.id, 'name': 'p1', 'decision': 'allow',
-            'rule_type': 'email_domain', 'rule_value': 'a.com'})
+            'rule_type': 'email_list', 'rule_value': 'user@a.com'})
         # 第二筆放到另一條 route 也應撞 SA 級總量配額
         with self.assertRaises(ValidationError):
             self.Policy.create({
                 'route_id': r2.id, 'name': 'p2', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@b.com'})
 
     # --- P-rule: include/require/exclude 三組 + bypass + email 上限 --- #
     def test_policy_requires_at_least_one_include(self):
@@ -164,8 +166,8 @@ class TestAccessPolicyModel(TransactionCase):
         pol = self.Policy.create({
             'route_id': route.id, 'name': 'multi', 'decision': 'allow',
             'rule_ids': [
-                (0, 0, {'group': 'include', 'rule_type': 'email_domain',
-                        'rule_value': 'acme.com', 'sequence': 1}),
+                (0, 0, {'group': 'include', 'rule_type': 'email_list',
+                        'rule_value': 'user@acme.com', 'sequence': 1}),
                 (0, 0, {'group': 'include', 'rule_type': 'ip_range',
                         'rule_value': '10.0.0.0/8', 'sequence': 2}),
                 (0, 0, {'group': 'require', 'rule_type': 'country',
@@ -175,7 +177,7 @@ class TestAccessPolicyModel(TransactionCase):
             ]})
         d = pol.to_dict()
         self.assertEqual(d['include'], [
-            {'rule_type': 'email_domain', 'rule_value': 'acme.com'},
+            {'rule_type': 'email_list', 'rule_value': 'user@acme.com'},
             {'rule_type': 'ip_range', 'rule_value': '10.0.0.0/8'}])
         self.assertEqual(d['require'],
                          [{'rule_type': 'country', 'rule_value': 'TW'}])
@@ -188,12 +190,12 @@ class TestAccessPolicyModel(TransactionCase):
         route = self._make_route(sa)
         p1 = self.Policy.create({
             'route_id': route.id, 'name': 'p1', 'decision': 'allow',
-            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'email_domain',
-                                 'rule_value': 'a.com'})]})
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'email_list',
+                                 'rule_value': 'user@a.com'})]})
         p2 = self.Policy.create({
             'route_id': route.id, 'name': 'p2', 'decision': 'allow',
-            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'email_domain',
-                                 'rule_value': 'b.com'})]})
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'email_list',
+                                 'rule_value': 'user@b.com'})]})
         self.assertEqual(p1.sequence, 10)
         self.assertEqual(p2.sequence, 20)
 
@@ -203,8 +205,10 @@ class TestAccessPolicyModel(TransactionCase):
         the operator's Optional[str] rule_value 422s the whole Access sync."""
         sa = self._make_sa()
         route = self._make_route(sa)
+        # #352：allow 型 include 已禁用 everyone（不算人頭卻佔席位）；bypass
+        # 豁免（不驗證身分＝不消耗席位），所以正規化行為改用 bypass 政策驗。
         pol = self.Policy.create({
-            'route_id': route.id, 'name': 'all', 'decision': 'allow',
+            'route_id': route.id, 'name': 'all', 'decision': 'bypass',
             'rule_ids': [(0, 0, {'group': 'include',
                                  'rule_type': 'everyone'})]})
         groups = pol._rules_by_group('include')
@@ -243,8 +247,15 @@ class TestAccessPolicyRule(TransactionCase):
                 'rule_type': 'everyone', 'rule_value': 'x'})
 
     def test_everyone_accepts_empty(self):
+        # #352：everyone 不得當 allow 政策的 include（self.pol 是 allow），
+        # 所以掛在 bypass 政策上驗 rule 層的空值接受。
+        bypass_pol = self.Policy.create({
+            'route_id': self.route.id, 'name': 'bypass-base',
+            'decision': 'bypass',
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'ip_range',
+                                 'rule_value': '10.0.0.0/8'})]})
         r = self.Rule.create({
-            'policy_id': self.pol.id, 'group': 'include',
+            'policy_id': bypass_pol.id, 'group': 'include',
             'rule_type': 'everyone'})
         self.assertEqual(r.rule_type, 'everyone')
 
@@ -309,7 +320,7 @@ class TestRouteAccessSync(TransactionCase):
                          'session_duration': '8h'})
             self.Policy.create({
                 'route_id': route.id, 'name': 'corp', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@acme.com'})
         payload = route._build_access_payload()
         host = f"{sa.canonical_name}.{sa._get_paas_domain()}"
         self.assertTrue(payload['enabled'])
@@ -321,8 +332,8 @@ class TestRouteAccessSync(TransactionCase):
         # P-rule: policy payload 是 include/require/exclude 三組，不再是扁平
         # rule_type/rule_value。compat shim 把扁平建立轉成單條 include rule。
         self.assertEqual(payload['policies'][0]['include'],
-                         [{'rule_type': 'email_domain',
-                           'rule_value': 'acme.com'}])
+                         [{'rule_type': 'email_list',
+                           'rule_value': 'user@acme.com'}])
         self.assertEqual(payload['policies'][0]['require'], [])
         self.assertEqual(payload['policies'][0]['exclude'], [])
 
@@ -334,7 +345,7 @@ class TestRouteAccessSync(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mc):
             pol = self.Policy.create({
                 'route_id': route.id, 'name': 'corp', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@acme.com'})
         self.assertTrue(mc.sync_access_app.called)
         self.assertEqual(route.access_app_id, 'app-1')
         self.assertEqual(pol.cf_policy_id, 'pol-1')
@@ -513,10 +524,10 @@ class TestRouteAccessSync(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mc):
             p1 = self.Policy.create({
                 'route_id': route.id, 'name': 'p1', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@a.com'})
             p2 = self.Policy.create({
                 'route_id': route.id, 'name': 'p2', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@b.com'})
             p1.cf_policy_id = 'cf-a'
             p2.cf_policy_id = 'cf-b'
             mc.sync_access_app.reset_mock()
@@ -533,10 +544,10 @@ class TestRouteAccessSync(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mc):
             p1 = self.Policy.create({
                 'route_id': route.id, 'name': 'p1', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'a.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@a.com'})
             p2 = self.Policy.create({
                 'route_id': route.id, 'name': 'p2', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'b.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@b.com'})
             p1.cf_policy_id = 'cf-a'
             p2.cf_policy_id = 'cf-b'
             mc.sync_access_app.reset_mock()
@@ -557,8 +568,8 @@ class TestRouteAccessSync(TransactionCase):
             with self.assertRaises(PaaSOperatorError):
                 self.Policy.create({
                     'route_id': route.id, 'name': 'ghost-pol',
-                    'decision': 'allow', 'rule_type': 'email_domain',
-                    'rule_value': 'ghost.com'})
+                    'decision': 'allow', 'rule_type': 'email_list',
+                    'rule_value': 'user@ghost.com'})
         self.assertFalse(self.Policy.search([('name', '=', 'ghost-pol')]))
 
     def test_policy_write_sync_failure_rolls_back_decision(self):
@@ -570,8 +581,8 @@ class TestRouteAccessSync(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mc):
             pol = self.Policy.create({
                 'route_id': route.id, 'name': 'flip-pol',
-                'decision': 'allow', 'rule_type': 'email_domain',
-                'rule_value': 'flip.com'})
+                'decision': 'allow', 'rule_type': 'email_list',
+                'rule_value': 'user@flip.com'})
             mc.sync_access_app.side_effect = PaaSOperatorError('cf down')
             with self.assertRaises(PaaSOperatorError):
                 pol.write({'decision': 'deny'})
@@ -609,7 +620,7 @@ class TestRouteAccessSync(TransactionCase):
                 'sequence': 20})
             pol_low = self.Policy.create({
                 'route_id': route.id, 'name': 'low', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'low.com',
+                'rule_type': 'email_list', 'rule_value': 'user@low.com',
                 'sequence': 5})
         self.assertEqual(pol_low.cf_policy_id, 'cf-low')
         self.assertEqual(pol_high.cf_policy_id, 'cf-high')
@@ -647,7 +658,7 @@ class TestRouteAccessSync(TransactionCase):
             mc.sync_access_app.reset_mock()
             self.Policy.create({
                 'route_id': route.id, 'name': 'err-pol', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'err.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@err.com'})
             policy_synced = mc.sync_access_app.called
         self.assertTrue(config_synced)
         self.assertTrue(policy_synced)
@@ -665,7 +676,7 @@ class TestRouteAccessSync(TransactionCase):
                 'is_protected': True})
             pol = self.Policy.create({
                 'route_id': route.id, 'name': 'pend', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'pend.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@pend.com'})
             pol.write({'decision': 'deny'})
             route.write({'session_duration': '8h'})
             pol.unlink()
@@ -708,7 +719,7 @@ class TestProvisionPushesRouteAccess(TransactionCase):
                 'login_google': True})
             self.Policy.create({
                 'route_id': route.id, 'name': 'corp', 'decision': 'allow',
-                'rule_type': 'email_domain', 'rule_value': 'acme.com'})
+                'rule_type': 'email_list', 'rule_value': 'user@acme.com'})
             self.assertFalse(mc.sync_access_app.called,
                              "pending SA must not push Access prematurely")
             sa.action_provision()
@@ -838,8 +849,8 @@ class TestAccessPolicyAcl(TransactionCase):
         self.pol = self.env[
             'woow_paas_platform.security_access_access_policy'].create({
                 'route_id': self.route.id, 'name': 'p',
-                'decision': 'allow', 'rule_type': 'email_domain',
-                'rule_value': 'a.com'})
+                'decision': 'allow', 'rule_type': 'email_list',
+                'rule_value': 'user@a.com'})
 
     def test_member_can_read_policy(self):
         v = self.env['woow_paas_platform.security_access_access_policy'
@@ -878,8 +889,8 @@ class TestAccessPolicyAcl(TransactionCase):
                 'woow_paas_platform.security_access_access_policy'].with_user(
                     carol).create({
                         'route_id': self.route.id, 'name': 'evil',
-                        'decision': 'allow', 'rule_type': 'email_domain',
-                        'rule_value': 'attacker.com'})
+                        'decision': 'allow', 'rule_type': 'email_list',
+                        'rule_value': 'user@attacker.com'})
         with self.assertRaises(AccessError):
             self.pol.with_user(carol).unlink()
 
@@ -888,8 +899,8 @@ class TestAccessPolicyAcl(TransactionCase):
             'woow_paas_platform.security_access_access_policy'].with_user(
                 self.alice).create({
                     'route_id': self.route.id, 'name': 'owner-pol',
-                    'decision': 'allow', 'rule_type': 'email_domain',
-                    'rule_value': 'owner.com'})
+                    'decision': 'allow', 'rule_type': 'email_list',
+                    'rule_value': 'user@owner.com'})
         self.assertTrue(new_pol.exists())
         new_pol.with_user(self.alice).write({'decision': 'deny'})
         self.assertEqual(new_pol.decision, 'deny')
@@ -908,8 +919,8 @@ class TestAccessPolicyAcl(TransactionCase):
             'woow_paas_platform.security_access_access_policy']
         pol = Policy.with_user(self.alice).create({
             'route_id': self.route.id, 'name': 'rel-store',
-            'decision': 'allow', 'rule_type': 'email_domain',
-            'rule_value': 'rel.com'})
+            'decision': 'allow', 'rule_type': 'email_list',
+            'rule_value': 'user@rel.com'})
         # stored related materialised to the route's SA (the real DB column the
         # ir.rule domain traversed at create time).
         self.assertEqual(pol.security_access_id, self.sa)
@@ -978,8 +989,8 @@ class TestAccessPolicyAcl(TransactionCase):
                 'woow_paas_platform.security_access_access_policy'].with_user(
                     self.mallory).create({
                         'route_id': self.route.id, 'name': 'cross-evil',
-                        'decision': 'allow', 'rule_type': 'email_domain',
-                        'rule_value': 'attacker.com'})
+                        'decision': 'allow', 'rule_type': 'email_list',
+                        'rule_value': 'user@attacker.com'})
 
     def test_owner_create_with_route_passes_create_rule(self):
         """正向對照：A 的 owner 在自己 route 上 create policy 成功，且新 row
@@ -989,7 +1000,7 @@ class TestAccessPolicyAcl(TransactionCase):
             'woow_paas_platform.security_access_access_policy']
         pol = Policy.with_user(self.alice).create({
             'route_id': self.route.id, 'name': 'own-create',
-            'decision': 'allow', 'rule_type': 'email_domain',
-            'rule_value': 'own.com'})
+            'decision': 'allow', 'rule_type': 'email_list',
+            'rule_value': 'user@own.com'})
         self.assertTrue(pol.exists())
         self.assertEqual(pol.security_access_id, self.sa)
