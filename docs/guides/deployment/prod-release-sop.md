@@ -3,7 +3,7 @@ title: 發佈到 Production 的標準作業流程（SOP）
 category: guides
 status: active
 created: 2026-06-14
-updated: 2026-08-01
+updated: 2026-08-02
 tags: [paas, release, production, fleet, gitops, helm, ci-cd, sop]
 related:
   - docs/tracking/pitfalls/ci-addon-ref-empty-drifting-default-branch.md
@@ -205,8 +205,9 @@ grep -rnE 'version:|tag:' /tmp/paas-app-bundle-cd/*/fleet.yaml /tmp/paas-app-bun
    → 觸發 trigger-odoo-build.yml → dispatch paas-odoo-ci
 4. 等 paas-odoo-ci build 完成，取得 image tag 與 digest  CI log 的 image_tag=YYYYMMDD.HHMM
    （tag = UTC date，非 addon 版號）                     ＋該 tag 的 sha256 digest
-   ⚠ image_tag / digest 驗不出「烤到別的 ref」——         ＋build log 的 at ref: 與
-     必查 build log 的兩行錨點，見 §5.1.4                Built addon version: 都對上本次版號
+   ⚠ image_tag / digest 驗不出「烤到別的 ref」——         ＋build log 三行錨點都對上本次版號：
+     必查 build log 的三行錨點，見 §5.1.4                at ref: / Cloned addon version: /
+                                                         Image addon version:
 5.〔人類操作者親跑〕建發版前 DB snapshot：pg + data      兩顆皆 readyToUse=true
    兩顆 PVC 都要，命名                                   且 markRemoved=false
    paas-odoo-{pg,data}-pre{版號}-{YYYYMMDD}              （只看 list 有東西會誤判）
@@ -312,7 +313,7 @@ kubectl --context $CTX get bundledeployment -A \
 
 #### 5.1.4 🔴 build 產物驗收與 CI 重跑（步驟 4）
 
-**要驗的不是「build 有沒有成功」，是「build clone 的是不是本次那個 ref」。** 這兩件事在 CI 上完全無法互相佐證。（能驗到的只到 ref 這一層——image 內容本身仍無自動檢查，見本節末「已知極限」。）
+**要驗的不是「build 有沒有成功」，是「image 裡裝的是不是本次那個 ref 的 addon」。** 這兩件事在 CI 上完全無法互相佐證。（能驗到的是**版號**這一層，不是「內容完全正確」——見本節末「已知極限」。）
 
 ##### 為什麼 image_tag / digest 驗不出來
 
@@ -330,30 +331,53 @@ paas-odoo-ci 的 `build-image.yml` 吃一個 `addon_ref` 輸入決定 clone 本 
 
 **這條路徑上 CI 全綠、`image_tag` 是新的、`digest` 也是新的**（新 build 本來就產生新 digest）—— §9 坑 #4「看 tag 判版本 → 改看 digest」對這個缺陷**同樣無效**，因為兩者都只證明「有 build 出東西」，不證明「build 的是誰」。不驗 ref 的話，要到 pod 起來跑 `-u` 才會發現裝進去的是別的版本。
 
-##### 驗收：build log 的兩行錨點
+##### 驗收：build log 的三行錨點
 
 ```
-# 在 paas-odoo-ci 的 build run log 裡找這兩行（缺任一 = 不得進步驟 5）
-Cloning woow_paas_platform at ref: v18.0.1.0.XX             ← clone 的實際 ref，必須 == 本次發版 tag
-Built addon version: 18.0.1.0.XX (from ref: v18.0.1.0.XX)   ← 該 ref 的 src/__manifest__.py 版號
+# 在 paas-odoo-ci 的 build run log 裡找這三行（缺任一 = 不得進步驟 5）
+Cloning woow_paas_platform at ref: v18.0.1.0.XX                      ← clone 的實際 ref，必須 == 本次發版 tag
+Cloned addon version: 18.0.1.0.XX (from ref: v18.0.1.0.XX)           ← source 端：該 ref 的 src/__manifest__.py 版號
+Image addon version: 18.0.1.0.XX (matches clone, ref: v18.0.1.0.XX)  ← image 端：從產出 image 反讀，CI 已比對通過
 ```
 
 > **看 `at ref:` 這一行，不要看 `at HEAD`**——後者只說明 clone 完停在該 ref 的 HEAD，不告訴你 ref 是誰。
+>
+> ⚠ **第二行的字串在 2026-08-02 改過名**（paas-odoo-ci #50）：原本叫 `Built addon version:`，**該字串現在不會出現**。改名的理由正是它誤導——`baked` 讓人以為 image 端已經驗過了，其實那時只讀到 clone 原件。任何還寫著舊字串的文件或筆記都是過期的。
 
-**這兩行證明什麼、不證明什麼**（照著念，不要外推）：
+**三行各自證明什麼**（照著念，不要外推）：
 
-- **都是 source 層訊號，且不互相獨立**——兩行同源於**同一次 `git clone`**：`Built addon version:` 讀的是 `/tmp/woow_paas_platform/src/__manifest__.py`，也就是**剛 clone 下來的原始碼**，而且這個 step 跑在 `docker build` **之前**（paas-odoo-ci `build-image.yml` 的 `Record baked addon version` step，2026-08-01 查證）。它甚至不是讀 build context 裡那份複本。
-- **合起來只證明**：「我們 clone 的是指定的那個 ref，且該 ref 的 manifest 版號是這個數字」。
-- **不證明 image 裡裝的是它**。Dockerfile `COPY` 路徑錯、build context 組錯、layer cache 問題——這一類「ref 對但 image 內容不對」的失效，**這兩行一律抓不到**。
-- CI 側是**純回報、不是 gate**：`build-image.yml` 自陳「只印，不與任何硬編版號比對」「解析失敗不擋 build」。版號解析失敗時該行不會出現，改印「無法從 … 解析版號（不影響 build）；請以 clone 的 ref 為準」。**擋不擋得住，取決於下面那道人工 gate（§11 checklist step 1.5）。**
+| 行 | 層 | 證明 |
+|---|---|---|
+| `Cloning … at ref:` | source | clone 的是指定的那個 ref |
+| `Cloned addon version:` | source | 該 ref 的 `src/__manifest__.py` 版號是這個數字 |
+| `Image addon version:` | **image** | **產出 image 裡那份 addon source 的版號 == 上面 clone 側的版號** |
 
-##### 已知極限：image 內容目前沒有任何自動檢查錨定
+- **前兩行同源、不互相獨立**：都出自**同一次 `git clone`**。`Cloned addon version:` 讀的是 `/tmp/woow_paas_platform/src/__manifest__.py`（clone 原件，連 build context 裡那份複本都不是），step 跑在 `docker build` **之前**。它們合起來只涵蓋 source 端。
+- **第三行才是 image 端錨點**（paas-odoo-ci #50 新增）：`Verify image addon version matches clone (image side)` step 用 `docker run --rm --entrypoint cat` 從**剛 build 出來的 image** 讀 `/opt/bitnami/odoo/custom-addons/woow_paas_platform/__manifest__.py`，與 clone 側版號比對。
+- **第三行是 CI 側的 fail-closed gate，不是回報**：四種情況都 `exit 1` —— 版號不符／讀不到 image 內 manifest（＝`COPY` 路徑或 build context 錯）／讀得到但解析不出版號／clone 側基準缺失。**位置在 `Push image` 之前，所以不符的 image 根本進不了 registry。**
 
-上面兩行把「**烤哪個 ref**」這件事釘住了——那正是 §9 坑 #12 的失效點，也是本節要解的問題。但要清楚知道剩下的缺口：
+> 🔴 **三行都要跟「本次預期的版號」比，不是比「三行互不互相一致」。**
+>
+> `Image addon version:` 那句 `matches clone` 只證明 **image == clone**，**不證明 clone 就是你要的那個 ref**。
+> 兩者正交：#50 擋的是「image 內容與 clone 不一致」，「clone 錯 ref」是 #46 的 `addon_ref` fail-closed 在擋。
+>
+> 具體會怎麼騙過你：如果 `addon_ref` 填成 `develop`（或打錯字填到別的存在的 ref），CI 會 clone 到它、
+> image 也照著它烤——於是 `Cloned addon version:` 與 `Image addon version:` **完美相符、gate 全綠**，
+> 但兩邊都是 `18.0.1.0.89`，而你要發的是 `.88`。這種情況下**唯一會露餡的是 `at ref:` 那一行**
+> （顯示 `develop` 而不是 `v18.0.1.0.88`），以及把版號拿去跟發版單核對這個動作。
+> `addon_ref` 的 fail-closed 只擋**留空**，擋不了**填錯**。
 
-**從「clone 到正確的 source」到「image 裡真的是那份 source」之間，沒有任何自動驗證。** 目前唯一能觸及 image 實際內容的時機，仍是 pod 起來之後（`-u` 的 boot log、或進 pod 查 `__manifest__.py`）。
+##### 已知極限：錨到的是「版號」這一層
 
-換句話說：兩行錨點消滅的是「**烤錯 ref**」這一類，不是「image 內容不對」這個大類。發版驗收時不要把前者的通過讀成後者的保證——那正是本節開頭那句「驗的不是 build 有沒有成功」想擋的思維錯誤，換一層再犯一次而已。
+image 端現在有錨點了（第三行），「烤錯 ref」與「addon 根本沒進 image」這兩類已由 CI 擋在 push 之前。但它比對的是**版號字串**，所以下面三件事**仍然證明不了**：
+
+| 仍然證明不了 | 為什麼 | 由誰涵蓋 |
+|---|---|---|
+| registry 上**之後被 pin 的**是不是本次驗過的那一顆 | 驗的是 build 當下那顆 image，之後 CD 去 pin 哪一顆是另一件事 | **digest pin**（§5.1 步驟 6：`tag` 與 `digest` 同改；§9 坑 #4） |
+| **版號以外的內容** | 同一個版號但檔案被動過（改了 code 沒 bump 版號），兩邊版號字串照樣相等 | 無自動檢查——靠 code review 與版號紀律 |
+| **addon 以外的東西** | 只讀 `woow_paas_platform` 的 manifest；vendored `addons/`、`requirements-paas.txt` 不在比對範圍 | 無自動檢查 |
+
+**所以：三行錨點消滅的是「image 裡裝的是別的 ref 的 addon」這一類，不是「image 內容完全正確」。** 發版驗收時不要把前者的通過讀成後者的保證——那正是本節開頭那句「驗的不是 build 有沒有成功」想擋的思維錯誤，換一層再犯一次而已。
 
 ##### CI 失敗要重跑時
 
@@ -366,6 +390,9 @@ Built addon version: 18.0.1.0.XX (from ref: v18.0.1.0.XX)   ← 該 ref 的 src/
 | build 本身失敗（依賴、registry、runner 問題） | Gitea UI 對 `build-image.yml` 做 `workflow_dispatch`，**`addon_ref` 填 `v{本次版號}`**、`tag` 填新的 `YYYYMMDD.HHMM` |
 | approval gate 撞 Gitea 5xx 讓 job 陣亡 | 同上。注意 gate 可能**已經把 issue 建出來了**，先看有沒有孤兒 approval issue，別重複建 |
 | 想重推 tag 觸發 | **不要**——`v*` tag 已存在，重推不會重新觸發，且 §9 坑 #9 的手打 tag 風險照樣存在。走 `workflow_dispatch` |
+| job 在 `Verify image addon version matches clone (image side)` 掛掉 | **這不是漏填參數，補 `addon_ref` 重跑沒有用。** 它代表 image 裡的 addon 與本次 clone 的 source **真的不一致**——照錯誤訊息查 Dockerfile 的 `COPY` 來源／build context／`.dockerignore`／layer cache。壞 image 已被擋在 `Push image` 之前，registry 乾淨，不必清理 |
+
+> 兩道 fail-closed 要分清楚：**`Validate addon ref`（#46）失敗＝你少給了輸入**，補上重跑即可；**`Verify image addon version …`（#50）失敗＝build 出來的東西真的不對**，重跑只會再失敗一次。
 
 > ⚠ `stg-*` 路徑（`/woow:deploy-stg`）**刻意保留** 留空 → `develop` 的 fallback：`deploy-stg.sh:298` 建 tag 時從不傳 `addon_ref`，完全依賴這個 fallback。fail-closed 只作用在非 `stg-*` 路徑。
 
@@ -604,7 +631,7 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 | 9 | tag prefix 寫錯（paas-odoo-ci 僅以 `startsWith('stg-')` 判環境） | prod image 被污染 | 發版用 skill / `/woow:deploy`，勿手打 tag。（prod build 另有人工 approval gate 擋在 build/push 之前，見 §10 第 3 點——但 gate 擋的是「這次要不要 build」，擋不掉「prefix 把環境判錯」） |
 | 10 | 手動 `helm uninstall` agent-runtime release | 繞過 operator owner → state 不一致 | 走 operator DELETE 端點（§5.3 連結） |
 | 11 | 把比 prod 現役**更舊或非超集**的 image/chart 推上 prod | 靜默回歸：prod 失去現役版本已有的修復（如 operator D1-D6 生命週期 teardown、Access 契約） | promote 前過超集 gate：`git merge-base --is-ancestor <現役來源 commit> <新來源 commit>`；manifest/版號單調不退；chart 用 `git log` 確認模板 wiring（如 `AGENT_RUNTIME_SKILL_RUNNER_ENABLED` env passthrough）沒被砍（見 §5.2.1 step 0） |
-| 12 | 人工 `workflow_dispatch` 重跑 `build-image.yml` 忘填 `addon_ref` | image 從**移動中的 `develop` HEAD** 烤出來——不可重現、含未發版 commit、發版紀錄與 image 內容脫鉤；「預設分支是誰」不在版控裡（Gitea repo 設定、CI 零校驗），被改成 `main` 就直接變版號倒退。**CI 全綠、`image_tag` 與 `digest` 都是新的 → 坑 #4 的 digest 驗法對此完全無效**，要到 pod 跑 `-u` 才現形 | 重跑必填 `addon_ref=v{版號}`；驗 build log 的 `at ref:` ＋ `Built addon version:` 兩行（§5.1.4——注意兩行同源於同一次 clone、屬 source 層，只釘住「clone 哪個 ref」，**不保證 image 內容**）。paas-odoo-ci 已 fail-closed：留空且非 `stg-*` 路徑 → `exit 1`（issue #46）。`stg-*` 的 `develop` fallback 刻意保留，`deploy-stg` 依賴它 |
+| 12 | 人工 `workflow_dispatch` 重跑 `build-image.yml` 忘填 `addon_ref` | image 從**移動中的 `develop` HEAD** 烤出來——不可重現、含未發版 commit、發版紀錄與 image 內容脫鉤；「預設分支是誰」不在版控裡（Gitea repo 設定、CI 零校驗），被改成 `main` 就直接變版號倒退。**CI 全綠、`image_tag` 與 `digest` 都是新的 → 坑 #4 的 digest 驗法對此完全無效**，要到 pod 跑 `-u` 才現形 | 重跑必填 `addon_ref=v{版號}`；驗 build log **三行錨點**（`at ref:`／`Cloned addon version:`／`Image addon version:`，§5.1.4——前兩行同源屬 source 端，第三行才是 image 端）。**三行都要跟本次預期版號比，不是比「三行互不互相一致」**——填錯 ref 時三行會一致地顯示錯的版號。paas-odoo-ci 有兩道 fail-closed：`addon_ref` 留空且非 `stg-*` → `exit 1`（#46，擋本列這個缺陷）；image 版號與 clone 不符 → `exit 1` 且擋在 push 之前（#50，擋的是另一類）。`stg-*` 的 `develop` fallback 刻意保留，`deploy-stg` 依賴它 |
 
 ---
 
@@ -640,14 +667,18 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 ```
 [ ] 0. 前置：`tailscale status` 已連；kubectl --context woow-k3s 可連；tea login 已設 default
 [ ] 1. 確認目標 image 已在 JCR（CI 綠燈 + registry 查得到 tag）
-[ ] 1.5（paas-odoo）驗 build clone 的是本次那個 ref（§5.1.4、§9 坑 #12）
-       CI 綠燈、新 image_tag、新 digest **都證明不了這件事** —— 忘填 addon_ref 的
-       漂移 build 這三項全部正常，要到 pod 跑 -u 才現形
-       build log 的 `at ref:` == v{本次版號}（看 at ref:，不是 at HEAD）
-       且 `Built addon version:` == 本次版號
-       ⚠ 兩行同源於同一次 clone、讀的是 src/__manifest__.py 而非 image；
-         它們只釘住「clone 哪個 ref」，**不保證 image 內容**（§5.1.4 已知極限）
-       任一對不上 = STOP，帶 addon_ref=v{版號} 重跑，不得進 step 3
+[ ] 1.5（paas-odoo）驗 image 裝的是本次那個 ref 的 addon（§5.1.4、§9 坑 #12）
+       CI 綠燈、新 image_tag、新 digest **都證明不了這件事**
+       build log 三行，**每一行都拿去跟本次版號核對**（不是核對「三行互相一致」）：
+         `at ref:`               == v{本次版號}（看 at ref:，不是 at HEAD）
+         `Cloned addon version:` == 本次版號          ← source 端
+         `Image addon version:`  == 本次版號          ← image 端，句尾帶 matches clone
+       ⚠ 這道現在是**複核、不再是唯一防線**：image 與 clone 不符 CI 自己會擋
+         （#50 fail-closed，位在 push 之前 ⇒ 壞 image 進不了 registry）
+       ⚠ 但 CI **擋不掉「ref 填錯」**——填錯時三行會一致地顯示錯的版號、gate 全綠；
+         露餡的只有 `at ref:` 與「版號 vs 發版單」這兩個人工核對（§5.1.4）
+       ⚠ 錨到的只是**版號**這一層：同版號改過檔案、addon 以外的內容都不在範圍
+       任一對不上 = STOP，帶正確的 addon_ref=v{版號} 重跑，不得進 step 3
 [ ] 2.（若改 chart）確認 chart 已在 Gitea Helm registry，且 Chart.yaml#version 已 bump
 [ ] 2.5 無回歸超集 gate（§9 坑 #11）：新 image/chart 是 prod 現役的「超集」
        （`git merge-base --is-ancestor <現役來源 commit> <新來源 commit>`；版號單調不退；chart 模板 wiring 未砍）
