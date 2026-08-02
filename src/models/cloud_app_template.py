@@ -27,13 +27,17 @@ _DEFAULT_GLOBAL_INSTANCE_CAPS = {
 class SupplyGateError(ValidationError):
     """供給閘門（停售／售罄／每帳號上限）對「不能再收這一筆」的拒絕。
 
-    存在的理由是**收窄 controller 的訊息轉出面**：`_create_service` 需要把拒絕
-    理由原樣回給租戶（#516——通用訊息對他不可行動），但若直接 catch
-    `ValidationError`，savepoint 內**任何**來源的驗證錯誤原文都會外流，其中包含
-    會計堆疊（`account.move`）拋的訊息。改用專用子類後，controller 只轉出這一種，
-    其餘維持通用訊息。
+    **用途是讓測試斷言例外「型別」而非文案片段**——措辭調整不該讓守線變紅，而
+    `assertRaises(ValidationError)` 又寬到分不出「被供給閘門擋下」與「別的驗證錯」。
 
-    附帶好處：測試可以斷言例外**型別**而不是訊息片段，措辭調整不會讓守線變紅。
+    ⚠ **controller 不特別捕獲它**。`_create_service` 走的是 #520 那組
+    `except (ValidationError, UserError)` 分支，把訊息原文回前端——那是刻意的：
+    業務規則例外的訊息本來就是寫給使用者看的，統一成泛用字串會讓第一線無從排錯
+    （#520 症狀 4），而真正帶內部技術名的 `AccessError` 已經被單獨收窄。
+
+    本 class 曾一度規劃讓 controller 單獨捕獲以收窄訊息轉出面，該設計在 rebase 到
+    #520 之後**未被採用**；docstring 一併更新，避免留下「已經這樣做了」的錯誤印象
+    （註解把未達成的性質寫成已確立事實，本 PR 第一輪已犯過一次）。
     """
 
 
