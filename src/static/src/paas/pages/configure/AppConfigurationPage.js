@@ -10,6 +10,7 @@ import { PlanTotalBar } from "../../components/subscription/PlanTotalBar";
 import { pickDefaultPlan } from "../../components/subscription/plan_selector_utils";
 import { AdminPasswordModal } from "../../components/modal/AdminPasswordModal";
 import { formatTemplatePrice } from "../../utils/pricing_label";
+import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
 import { cloudService } from "../../services/cloud_service";
 import { workspaceService } from "../../services/workspace_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -155,6 +156,35 @@ export class AppConfigurationPage extends Component {
      */
     get formattedPrice() {
         return formatTemplatePrice(this.template?.pricing);
+    }
+
+    /**
+     * 這個商品現在買不買得到（#501）——與 marketplace 卡片同一個判準來源。
+     * @returns {boolean}
+     */
+    get isPurchasable() {
+        return isPurchasable(this.template?.availability);
+    }
+
+    /**
+     * 不可購買時的狀態標籤（「已售罄」／「暫停販售」）。
+     * @returns {string} 空字串 ⇒ 可購買
+     */
+    get availabilityLabel() {
+        return availabilityLabel(this.template?.availability);
+    }
+
+    /**
+     * Launch 按鈕的 disabled 判準。
+     *
+     * 收斂成一個 getter 而不是在模板裡寫 `state.launching || !isPurchasable`：
+     * OWL 模板的語法錯誤不會被任何 Python 測試攔到、runtime 直接整站白屏
+     * （見 docs/tracking/pitfalls/owl-template-crash-class-syntax.md），能放在 JS
+     * 的判斷就不要放模板。
+     * @returns {boolean}
+     */
+    get launchDisabled() {
+        return this.state.launching || !this.isPurchasable;
     }
 
     get helmValueSpecs() {

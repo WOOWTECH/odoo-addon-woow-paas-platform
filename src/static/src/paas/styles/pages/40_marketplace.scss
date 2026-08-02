@@ -287,6 +287,22 @@
     color: $woow-primary;
 }
 
+// #501：售罄／停售時取代「＋」按鈕的狀態徽章。刻意佔與按鈕相同的位置，讓「這張
+// 卡片沒有下單入口」一眼看得出來，而不是把卡片整個藏起來（那是下架不是售罄）。
+// 與 add 按鈕不同，它**不隨 hover 淡入**：狀態必須一直看得見。
+.o_woow_app_card_badge {
+    display: flex;
+    align-items: center;
+    height: 36px;
+    padding: 0 0.75rem;
+    border-radius: $woow-radius-default;
+    background: rgba(107, 114, 128, 0.12);
+    color: $woow-text-secondary;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
 // -----------------------------------------------------------------------------
 // Empty State
 // -----------------------------------------------------------------------------

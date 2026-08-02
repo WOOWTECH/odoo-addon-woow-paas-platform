@@ -1,5 +1,44 @@
+import logging
+
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
+
+_logger = logging.getLogger(__name__)
+
+# #501：限量商品的**內建**全域實例上限（slug → 台數）。
+#
+# 這是**安全網不是設定值**——`ir.config_parameter` 有值就覆寫它（營運可不發版調整，
+# 見 `_global_instance_cap`）。它存在的唯一理由是「全新 DB／營運還沒設定」時硬閘
+# 仍然在：上限缺值若 fail-open，等於把「不超賣」這個不可逆的商業保證掛在「有人記得
+# 去設定」上，而超賣的善後是人工退點。
+#
+# ⚠ 上限值刻意**不放** seed（`src/data/cloud_app_templates.xml` 是 noupdate=0，且
+# 檔尾 healer 每次 `-u` 主動清 `ir.model.data.noupdate`，手改 DB 保不住）。「不寫進
+# seed XML 的 model 欄位」也不行——那是靠遺漏成立的保證，誰補一行 `<field/>` 就靜默
+# 失效。config_parameter 在結構上不可能被 `-u` 碰到。
+#
+# ⚠ 新增限量商品時改這裡，並在 `res_config_settings` 補一組營運欄位；守衛本身是
+# slug-generic 的，不需要動。
+_DEFAULT_GLOBAL_INSTANCE_CAPS = {
+    'haos': 8,
+}
+
+
+class SupplyGateError(ValidationError):
+    """供給閘門（停售／售罄／每帳號上限）對「不能再收這一筆」的拒絕。
+
+    **用途是讓測試斷言例外「型別」而非文案片段**——措辭調整不該讓守線變紅，而
+    `assertRaises(ValidationError)` 又寬到分不出「被供給閘門擋下」與「別的驗證錯」。
+
+    ⚠ **controller 不特別捕獲它**。`_create_service` 走的是 #520 那組
+    `except (ValidationError, UserError)` 分支，把訊息原文回前端——那是刻意的：
+    業務規則例外的訊息本來就是寫給使用者看的，統一成泛用字串會讓第一線無從排錯
+    （#520 症狀 4），而真正帶內部技術名的 `AccessError` 已經被單獨收窄。
+
+    本 class 曾一度規劃讓 controller 單獨捕獲以收窄訊息轉出面，該設計在 rebase 到
+    #520 之後**未被採用**；docstring 一併更新，避免留下「已經這樣做了」的錯誤印象
+    （註解把未達成的性質寫成已確立事實，本 PR 第一輪已犯過一次）。
+    """
 
 
 class CloudAppTemplate(models.Model):
@@ -328,6 +367,131 @@ class CloudAppTemplate(models.Model):
                     '前台看不到、也操作不了的服務。若要上架，請同時關閉這兩個開關。'
                     % (record.name or record.slug or record.id)
                 )
+
+    # ------------------------------------------------------------------ #
+    #  #501：供給閘門（全域實例上限 ＋ 營運停售）                          #
+    # ------------------------------------------------------------------ #
+    #
+    # 與既有三軸正交，別混用（見 docs/decisions/patterns/
+    # hidden-template-presentation-chain.md 的三軸分工表）：
+    #   plan.storefront_hidden → 這個**方案**不可選購
+    #   template.is_hidden     → 這個**商品**不上架（marketplace 不列、詳情不可讀）
+    #   template.conceal_instances → 這個商品的**既有實例**也不可見／不可操作
+    #   本組（#501）           → 商品**照常上架、照常可看**，只是現在買不到
+    #
+    # 售罄是**現算**不是存旗標：存旗標要指定「誰在刪除／狀態轉移／調高上限時把它
+    # 翻回去」，那是本 repo 反覆踩過的形態（#389 的第二個寫入者沒一起改）。現算也
+    # 讓上限調整立即生效。代價是顯示層與 create() 之間天生有 TOCTOU 窗（看到可買
+    # → 下單 → 被別人搶先 → 拿到 ValidationError），那個窗存旗標只會更大。
+
+    def _global_cap_param_key(self):
+        """上限參數的 key。守衛與設定畫面必須指向同一個（守線見
+        `test_global_instance_cap_501.TestSettingsFieldTargetsGuardParam`）。
+
+        ⚠ key 由 `slug` 推導 ⇒ **改 slug 會靜默失去上限**（param 還在舊 key 底下，
+        新 key 查無值 ⇒ 落回內建預設；若該 slug 不在內建表就變成不限）。刻意不加
+        機制防這件事：slug 是跨 repo 的穩定業務鍵（chart 名、seed xmlid、測試都綁
+        它），改名會先在別處炸開，不會只有這裡默默出事。改 slug 時請一併搬 param。
+        """
+        self.ensure_one()
+        return 'woow_paas_platform.global_instance_cap.%s' % (self.slug or '')
+
+    def _sales_paused_param_key(self):
+        self.ensure_one()
+        return 'woow_paas_platform.sales_paused.%s' % (self.slug or '')
+
+    def _global_instance_cap(self):
+        """本 template 的全域活躍實例上限；**0 ＝不限**（與 max_per_partner 同語意）。
+
+        解析順序：`ir.config_parameter` → 內建預設 → 0。
+
+        ⚠ 「填 0 ＝不限」在**設定畫面上不可表達**：`res.config.settings.set_values`
+        對 Integer 是 `repr(value) if value else False`，而 `set_param(key, False)`
+        會 unlink 該列 ⇒ 「填 0」與「從未設定」在儲存層是同一個狀態，於是回退到
+        內建預設。要真的解除限量，只能在 Technical → Parameters 直接把值寫成
+        `0`（這裡的 `if raw:` 讓顯式的 `'0'` 走得到 `int()`），或發版把 slug 從
+        `_DEFAULT_GLOBAL_INSTANCE_CAPS` 移除。這與 max_per_partner 的「0＝不限」
+        方向相反，是 Odoo 的儲存語意逼出來的，不是選擇。
+
+        參數**壞掉**（非數字）或**負數**時退回內建預設而不是「不限」：這裡 fail-open
+        的代價是超賣，而超賣不可逆。
+
+        ⚠ 精確說是「**退回內建預設**」而不是「fail-closed」——兩者只對**已登記在
+        `_DEFAULT_GLOBAL_INSTANCE_CAPS` 的 slug** 等價。未登記的商品（絕大多數）壞值
+        會落到 `.get(slug, 0)` ＝ 不限，方向看似與本段相反。這是正確的：那些商品的
+        內建預設本來就是「不限」，退回預設＝維持原狀，沒有任何保證被放寬。
+        真正要守的是「限量商品不會因為參數壞掉而變成無限」，那一條成立。
+
+        ⚠ 負數要與非數字走同一分支，這點原本寫成 `max(int(raw), 0)` 是錯的——負數被
+        夾成 0，而 0 在本設計＝不限 ⇒ 不計數、前台永不售罄、硬閘整個關掉且零訊號。
+        可達情境不是「填 -1 想表達不限」（意圖達成、無損害），而是**正負號打錯**：
+        要填 8 打成 -8。營運意圖是設限，畫面顯示 -8，實際全開。同一種營運手滑，
+        兩個形態的處理方向必須一致（PR #517 覆核 B2）。
+        """
+        self.ensure_one()
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            self._global_cap_param_key())
+        if raw:
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                value = None
+            if value is None or value < 0:
+                _logger.warning(
+                    "全域實例上限參數 %s 不是非負整數（%r）；退回內建預設。",
+                    self._global_cap_param_key(), raw)
+            else:
+                return value
+        return _DEFAULT_GLOBAL_INSTANCE_CAPS.get(self.slug, 0)
+
+    def _sales_paused(self):
+        """營運手動停售；**缺值＝未停售**。
+
+        語意與 `res.config.settings` 的 Boolean `config_parameter` 一致（框架把
+        非空字串指派給 Boolean 欄位即 True；取消勾選時 `set_param(False)` 會
+        unlink 該列）。兩邊同語意，設定畫面顯示什麼就是守衛看到什麼——刻意不自訂
+        `'0'`／`'False'` 的正規化，那會讓畫面與守衛各判一次。
+
+        缺值方向與上限**相反**是刻意的：停售缺值只造成「該手動收手卻沒收」，而
+        超賣仍被上限硬閘擋住；反過來設會讓 `-u` 後或全新環境直接不可購買，且沒有
+        任何訊號告訴營運去打開它——守線的預設值不該是「商城關門」。
+        """
+        self.ensure_one()
+        return bool(self.env['ir.config_parameter'].sudo().get_param(
+            self._sales_paused_param_key()))
+
+    def _reject_reason_for_new_instance(self, count_getter):
+        """再收一筆會不會被擋、擋的理由；``None`` ＝ 放行。
+
+        **這是可購買性的唯一裁決點**。`CloudService.create()`（權威閘門）與
+        `_format_template` 的 `availability`（顯示層）都呼叫它，差別只在計數的
+        時點——create() 呼叫時那筆已經 INSERT 進去了，顯示層則要自己 `+1`。兩邊
+        問的是同一個問題「總數變成 N 時會不會超過」，不是兩個表達式。
+
+        `count_getter` 是 callable 而不是數值：沒有上限（絕大多數商品）或已停售
+        時根本不必計數，惰性求值讓「要不要查」純屬效能決定，判準仍只有這一處。
+
+        優先序 paused > sold_out：停售是明示的營運意志，售罄是推導出來的狀態。
+        """
+        self.ensure_one()
+        if self._sales_paused():
+            return 'paused'
+        cap = self._global_instance_cap()
+        if cap and count_getter() > cap:
+            return 'sold_out'
+        return None
+
+    def _availability(self):
+        """顯示層可購買性（`_format_template` 的 payload 欄位）。
+
+        `+1` ＝「若現在再收一筆」。這是與 create() 的唯一差異，因為那邊呼叫時
+        新的一列已經在計數裡了。
+        """
+        self.ensure_one()
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        reason = self._reject_reason_for_new_instance(
+            lambda: CloudService._count_active_for_template(self) + 1)
+        return {'purchasable': reason is None, 'reason': reason or 'available'}
 
     @api.constrains('subscription_plan_ids')
     def _check_no_cross_service_type_plans(self):
