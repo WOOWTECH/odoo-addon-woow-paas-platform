@@ -1,0 +1,170 @@
+# ⚠ 拋棄式量測探針（T3 Phase 1）——不是交付物，量完即刪。
+#
+# 目的：取得「全套 Odoo 測試在 Gitea act-runner 上跑一次要多久」的實測數字，
+# 以及 runner 環境的實際能力（docker / 磁碟 / CPU / JCR image 可拉否 / 外網可達否）。
+# 這些數字是觸發策略決策的輸入，工單明訂「不准推估」。
+#
+# 只在 ci/run-odoo-tests 分支上跑，不掛任何 pull_request 觸發，
+# 因此不會影響其他人的 PR CI（但仍會佔用唯一的 runner slot）。
+#
+# 刻意用「預設 bridge network」而非自訂 network：
+# reference_act_runner_dind_mtu_custom_network —— dind 的 daemon.json mtu=1400
+# 只作用在預設 docker0，自訂 network 一律 1500 > pod eth0 1450，外網 TLS 會被丟。
+# 代價是預設 bridge 沒有 embedded DNS，所以用 IP 連 postgres。
+name: PROBE - measure full Odoo test suite
+
+on:
+  push:
+    branches:
+      - ci/run-odoo-tests
+  workflow_dispatch:
+
+env:
+  JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
+  ODOO_BIN: /opt/bitnami/odoo/bin/odoo
+  ADDONS_PATH: /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/custom-addons
+  MODULE_DIR: /opt/bitnami/odoo/custom-addons/woow_paas_platform
+  # reference_odoo_test_docker_desktop_paas_image：沒注入這個變數，
+  # TestNamespaceLeftSetUnion 會 fail-closed raise，基準會多 2E。
+  AGENT_RUNTIME_NAMESPACE_SECRET: probe-secret
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: R1 - runner 環境事實
+        run: |
+          echo "### R1 runner facts"
+          uname -a
+          echo "nproc=$(nproc)"
+          free -m || true
+          df -h
+          docker version
+          echo "--- docker info (head) ---"
+          docker info 2>&1 | head -40
+          echo "--- 既有 image（判斷 dind 儲存是否跨 job 保留）---"
+          docker images
+
+      - name: R2 - JCR login
+        run: |
+          echo "${{ secrets.JCR_PASSWORD }}" | \
+            docker login "${JCR}" -u "${{ secrets.JCR_USERNAME }}" --password-stdin
+
+      - name: R3 - pull paas-odoo image（計時）
+        run: |
+          T0=$(date +%s)
+          IMG=""
+          for CAND in \
+            "${JCR}/woow-paas-docker-local/paas-odoo:latest" \
+            "${JCR}/woow-paas-docker-local/paas-odoo-stg:latest"; do
+            echo "--- try pull $CAND ---"
+            if docker pull "$CAND"; then IMG="$CAND"; break; fi
+          done
+          if [ -z "$IMG" ]; then echo "::error::兩個候選 image 都拉不到"; exit 1; fi
+          T1=$(date +%s)
+          echo "MEASURE pull_seconds=$((T1-T0)) image=$IMG"
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+          docker image inspect "$IMG" --format 'image_size_bytes={{.Size}}'
+          df -h /
+
+      - name: R4 - 起 postgres + odoo 容器（預設 bridge，計時）
+        run: |
+          T0=$(date +%s)
+          docker run -d --name pg \
+            -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo -e POSTGRES_DB=postgres \
+            postgres:15
+          docker run -d --name odoo \
+            -e AGENT_RUNTIME_NAMESPACE_SECRET="${AGENT_RUNTIME_NAMESPACE_SECRET}" \
+            --entrypoint bash "$IMG" -c 'sleep infinity'
+          for i in $(seq 1 60); do
+            if docker exec pg pg_isready -U odoo >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker exec pg pg_isready -U odoo
+          PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pg)
+          if [ -z "$PG_IP" ]; then echo "::error::拿不到 pg IP"; exit 1; fi
+          echo "PG_IP=$PG_IP" >> "$GITHUB_ENV"
+          echo "PG_IP=$PG_IP"
+          T1=$(date +%s)
+          echo "MEASURE containers_up_seconds=$((T1-T0))"
+
+      - name: R5 - 覆蓋 addon + 驗私有 addon + 外網可達性
+        run: |
+          T0=$(date +%s)
+          # 整棵換掉，避免 stale 檔（reference_odoo_test_amd64_woowk3s_cp_overlay 的教訓）
+          docker exec odoo rm -rf "${MODULE_DIR}"
+          docker exec odoo mkdir -p "${MODULE_DIR}"
+          docker cp src/. "odoo:${MODULE_DIR}/"
+          docker exec odoo sh -c "find ${MODULE_DIR} -name __pycache__ -type d -exec rm -rf {} + || true"
+          echo "--- 覆蓋驗證：容器內 manifest 版號應等於本 checkout ---"
+          docker exec odoo sh -c "grep -m1 version ${MODULE_DIR}/__manifest__.py"
+          grep -m1 version src/__manifest__.py
+          echo "--- 工單指定要驗的三個私有 addon ---"
+          for A in sh_subscription ecpay_invoice_tw ai_base_gt; do
+            docker exec odoo sh -c "test -f /opt/bitnami/odoo/custom-addons/$A/__manifest__.py \
+              && echo \"ADDON_PRESENT $A\" || echo \"ADDON_MISSING $A\""
+          done
+          echo "--- image 內 custom-addons 全清單 ---"
+          docker exec odoo ls /opt/bitnami/odoo/custom-addons/
+          echo "--- 容器（預設 bridge）能不能連外網（決定 pip install 可行性）---"
+          docker exec odoo sh -c \
+            "curl -sS -m 25 -o /dev/null -w 'pypi_http=%{http_code}\n' https://pypi.org/simple/" \
+            || echo "pypi_http=FAILED"
+          echo "--- 本 checkout 的 python 依賴是否已在 image venv 內 ---"
+          docker exec odoo /opt/bitnami/odoo/venv/bin/python -c \
+            "import websockets, jwt, yaml; print('DEPS_OK', websockets.__version__)" \
+            || echo "DEPS_MISSING"
+          T1=$(date +%s)
+          echo "MEASURE overlay_seconds=$((T1-T0))"
+
+      - name: R6 - install（不跑測試，計時）
+        run: |
+          T0=$(date +%s)
+          set +e
+          docker exec odoo "${ODOO_BIN}" -d test -i woow_paas_platform \
+            --stop-after-init --without-demo=all --no-http \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/install.log 2>&1
+          RC=$?
+          set -e
+          T1=$(date +%s)
+          echo "MEASURE install_seconds=$((T1-T0)) exit=$RC"
+          tail -40 /tmp/install.log
+          if [ "$RC" -ne 0 ]; then echo "::error::install 失敗（exit $RC）"; exit "$RC"; fi
+          grep -c "^" /tmp/install.log | sed 's/^/install_log_lines=/'
+
+      - name: R7 - 跑全套測試（計時）★ 本探針的主要產出
+        run: |
+          T0=$(date +%s)
+          set +e
+          docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
+            --test-enable --test-tags /woow_paas_platform \
+            --stop-after-init \
+            --http-port=18069 --gevent-port=18072 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
+            --log-handler=odoo.tests.result:INFO > /tmp/test.log 2>&1
+          RC=$?
+          set -e
+          T1=$(date +%s)
+          echo "MEASURE test_seconds=$((T1-T0)) odoo_exit=$RC"
+          echo "--- summary 行（沒有這行代表 log 被截斷，數字不可信）---"
+          grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log \
+            || echo "::error::找不到 summary 行"
+          echo "--- FAIL/ERROR 清單（前 40）---"
+          grep -E "^(FAIL|ERROR):" /tmp/test.log | head -40 || true
+          echo "--- log 尾 20 行 ---"
+          tail -20 /tmp/test.log
+
+      - name: R8 - 收尾與磁碟盤點
+        if: always()
+        run: |
+          echo "### 最終磁碟"
+          df -h
+          docker system df || true
+          docker rm -f odoo pg 2>/dev/null || true
+          echo "（保留 image 讓下一次 job 命中快取，用以量測 warm pull 成本）"
