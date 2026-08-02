@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from odoo import fields
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.http import request, route, Controller
 
 from .ha_paas import HiddenChainMixin
@@ -2608,7 +2608,38 @@ class PaasController(HiddenChainMixin, Controller):
                 'data': resp_data,
             }
 
+        # #520：這三個分支的共同義務是 **rollback**。走到這裡代表建立被拒絕，
+        # 但 `super().create()` 的 INSERT 已經送進 DB 了——例外被 except 吃掉後就
+        # 不會傳播到框架層，request 正常結束 → transaction 照常 commit → 那一列
+        # 留在 DB，隨後被 `ir.cron`（Cloud Service: Deploy Pending）撿去 helm
+        # install。上限守衛（`CloudService.create()` 的 max_per_partner，#336/
+        # #345）整個「raise 以撤回」的設計就是這樣從唯一的使用者入口失效的。
+        #
+        # 撤回整個 transaction（而非 savepoint）是刻意的：這正是例外真的傳播到
+        # 框架時框架會做的事，我們只是在**保留 `{'success': False}` response 形狀**
+        # （前端 AppConfigurationPage 靠 result.error 顯示訊息）的前提下自己做。
+        # 本 request 走到 try 之前只有讀取與參數驗證，沒有任何要保留的寫入。
+        except AccessError as e:
+            # AccessError 繼承 UserError，但訊息帶 Odoo 內部 model／欄位技術名，
+            # 不是「講給租戶聽」的業務規則 → 與未預期例外同樣只回泛用訊息。
+            request.env.cr.rollback()
+            _logger.error("Access error creating service: %s\n%s", str(e), traceback.format_exc())
+            return {'success': False, 'error': 'An error occurred while creating the service.'}
+
+        except (ValidationError, UserError) as e:
+            # 業務規則例外（每帳號實例上限、訂閱前置條件…）：訊息本來就是寫給
+            # 使用者看的，原文回前端。統一成泛用字串的話，真正的原因只留在
+            # server log，使用者與第一線支援都無從排錯（#520 症狀 4）。
+            message = str(e)
+            request.env.cr.rollback()
+            _logger.warning(
+                "Service create rejected (workspace=%s, template=%s): %s",
+                workspace.id, template_id, message,
+            )
+            return {'success': False, 'error': message}
+
         except Exception as e:
+            request.env.cr.rollback()
             _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while creating the service.'}
 
