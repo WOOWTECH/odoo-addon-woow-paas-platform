@@ -14,7 +14,7 @@ import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
-import { AdminPasswordModal } from "../../components/modal/AdminPasswordModal";
+import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -53,7 +53,7 @@ export class ServiceDetailPage extends Component {
         EditDomainModal,
         ChangePlanModal,
         CreateProjectModal,
-        AdminPasswordModal,
+        OneTimeCredentialsModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -75,7 +75,9 @@ export class ServiceDetailPage extends Component {
             showCreateProjectModal: false,
             supportProject: null,
             supportProjectLoading: false,
-            adminPassword: null,
+            // #530：一次性憑證由單一字串改成具名清單（Admin Password ＋ Gateway
+            // API Key ＋ 完整 gateway 位址）。null＝不開視窗。
+            oneTimeCredentials: null,
             resetPasswordError: null,
         });
         this.router = useState(router);
@@ -186,6 +188,20 @@ export class ServiceDetailPage extends Component {
      */
     get hasAdminGui() {
         return this.service?.template?.has_admin_gui === true;
+    }
+
+    /**
+     * #530：這台服務的 Reset 會不會**一併換發 Gateway API Key**。
+     *
+     * 判準是後端交付判準本體的鏡射（payload 的 `has_gateway`
+     * ＝ `service._gateway_public_url()` 非空），**不是** `hasAdminGui`：
+     * has_admin_gui=True 的 8 個模板裡只有 hermes-agent 有 gateway，用
+     * hasAdminGui 當 gate 等於對另外 7 個模板的租戶宣告一件永遠不會發生的事
+     * （見 capability-gate-single-source-field：能力判準收斂到後端單一欄位）。
+     * fail-closed（`=== true`）：欄位缺席（舊快取／漏帶的 payload）一律不顯示。
+     */
+    get hasGateway() {
+        return this.service?.has_gateway === true;
     }
 
     get isResetAdminPasswordLoading() {
@@ -348,15 +364,15 @@ export class ServiceDetailPage extends Component {
             this.props.serviceId
         );
         if (result.success) {
-            this.state.adminPassword = result.data.admin_password;
+            this.state.oneTimeCredentials = buildOneTimeCredentials(result.data);
             await this.loadService();
         } else {
             this.state.resetPasswordError = result.error || "Failed to reset admin password";
         }
     }
 
-    closeAdminPassword() {
-        this.state.adminPassword = null;
+    closeCredentials() {
+        this.state.oneTimeCredentials = null;
     }
 
     async handleConfigSave(values) {

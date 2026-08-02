@@ -95,9 +95,20 @@ CloudAppTemplate.has_admin_gui          ← ① 能力的唯一事實源（model
 |---|---|---|
 | `check_slug_capability_gate` | 禁**已知的壞形態** | `src/static/src/**/*.{js,xml}` 出現以 slug 做集合成員判斷 |
 | `check_admin_gui_gate_anchor` | 鎖**唯一的對形態** | Reset 按鈕的 `t-if` 鏈（含祖先、含 getter body）追不到 `has_admin_gui` |
+| `check_gateway_copy_gate_anchor` | 同上，錨在**文案**而非按鈕 | 提到 "Gateway API Key" 的文字節點，其 `t-if` 鏈追不到 `has_gateway` |
 
 第二條是重點：它不管你把判準寫成什麼樣子、getter 改叫什麼名字——**只要追不到那個欄位就 fail**。
 所以「第三個判準」不論長相（category、`mcp_enabled`、新名單）都會在 review 之前被擋下。
+
+第三條（#530）示範**同一個 pattern 的另一種錨點**：要守的不是「按鈕在不在」而是「這句話會不會
+對不該看到的人出現」，所以錨在文案字面。它揭露的漂移方向也和 #460 相反——#460 是**後端放行、
+前端擋住**（功能不可達）；#530 是**前端宣告、後端不做**（承諾跳票）：Reset 提示語判
+`hasAdminGui`，但真正的交付判準是 `service._gateway_public_url()` 非空，而 `has_admin_gui=True`
+的 8 個模板裡只有 `hermes-agent` 有 gateway ⇒ 其餘 7 個的租戶被告知一件永遠不會發生的事。
+兩個方向的共同點不變：**兩個判準不會同時錯，只會無聲漂移**。
+
+> 複合 gate（`hasAdminGui and hasGateway`）是合法的：兩個都是後端鏡射欄位，各自代表一段語意
+> （按鈕在不在 ／ 會不會真的交付）。本 pattern 禁的是**自己算一份**，不是「只准引用一個欄位」。
 
 形態規則的 scope（抓什麼／不抓什麼，實測矩陣見 #463 的 PR 說明）：
 

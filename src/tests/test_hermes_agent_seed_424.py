@@ -230,22 +230,64 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             injected, 'https://svc-abc.woowtech.io' + external_path,
             '平台注入的 dashboardPublicUrl 尾綴與 seed 的 dashboard.externalPath 不一致')
 
+    def test_gateway_external_path_explicit(self):
+        """#530：gateway 的對外子路徑明寫（缺鍵／空字串＝gateway 永遠不對外）。
+
+        gateway API（容器內 :8642）原本沒有任何對外路徑——反向代理只有 dashboard／
+        console／webui 三條，跨 namespace 直連又被租戶 NetworkPolicy 擋掉，於是
+        MCP 的 Gateway 區無論填什麼都是 Disconnected。這個鍵是 chart 生出那條反向
+        代理區塊的唯一開關；空字串或缺鍵會讓路徑靜默不存在，而平台照樣把
+        ``{public}/gateway`` 當權威網址交給租戶 ⇒ 死鏈（形狀同 dashboard 那條）。
+
+        值本身刻意明寫而非只驗真值：``/gateway`` 是**跨 repo 鎖定的契約值**
+        （chart 端 values 的 ``gateway.externalPath`` 預設同值），兩邊任一單獨改動
+        就是死鏈。釘法比照 test_console_subpath 對 ``/console`` 的做法。
+        """
+        gateway = self._values()['gateway']
+        self.assertTrue(
+            gateway['externalPath'],
+            'gateway.externalPath 為空＝gateway 不對外路由（#530 的原始症狀）')
+        self.assertEqual(gateway['externalPath'], '/gateway')
+
+    def test_gateway_external_path_is_read_from_this_seed(self):
+        """交付判準的事實源就是本 seed 欄位（``_gateway_external_path`` 讀得出來）。
+
+        平台原本另存一份 ``{'hermes-agent': '/gateway'}`` 對照表，於是路徑有兩份：
+        任一單獨改動 → 租戶拿到一條死鏈，而且**兩邊各自看起來都正常**（chart 那條
+        路徑存在、平台那個字串也組得出來）。#530 review 後改成單一事實源，這條確認
+        「讀得到、且讀到的就是上面那條跨 repo 契約值」——helper 回 '' 時（欄位被改名／
+        形態變了）交付會靜默消失，不能只靠 runtime fail-closed 而沒有守線。
+
+        derivation 本身（不是硬編）由 ``test_gateway_public_url_follows_seed_not_slug``
+        （test_gateway_capability_payload_530.py）以不同路徑值反證。
+        """
+        self.assertEqual(
+            self._tpl()._gateway_external_path(),
+            self._values()['gateway']['externalPath'],
+            '_gateway_external_path 沒讀到 seed 的 gateway.externalPath')
+
     def test_no_sensitive_values_in_git(self):
-        """admin_password／LLM key 不得出現在 git 的 helm_default_values。
+        """admin_password／LLM key／gateway API key 不得出現在 git 的 helm_default_values。
 
         先做陽性對照再談「不含憑證」：``assertNotIn(secret, '')`` 恆真，而空字串
         是拿得到的——實測 Odoo 18 的 Text 欄位寫入 ``''`` 會原樣存進 DB（不是
         NULL）、讀回也是 ``''``，連 ``''.lower()`` 都不會炸。沒有這行的話，seed
         這欄被清空 ⇒ 這條「憑證不得進 git」的唯一守線靜默失效。
+
+        #530：``auth.apiServerKey``（gateway API key）由平台 per-service 生成、經
+        sensitive 通道供給，**永遠不得寫進 seed**。chart 的憑證解析優先序第一段就是
+        「顯式 values 值」，seed 一旦帶值就會蓋掉平台供給的 per-service key ⇒ 全體
+        租戶共用同一把、且那把還躺在 git 裡。
         """
         raw = self._tpl().helm_default_values
         self.assertIn(
             'authProxy', raw,
             'helm_default_values 裡找不到預期的 authProxy 區塊 —— 探針沒讀到真正的'
-            ' seed values（欄位被清空／改名），下面三條憑證斷言等於沒跑')
+            ' seed values（欄位被清空／改名），下面四條憑證斷言等於沒跑')
         self.assertNotIn('admin_password', raw)
         self.assertNotIn('minimax', raw.lower())
         self.assertNotIn('openrouter', raw.lower())
+        self.assertNotIn('apiServerKey', raw)
 
     def test_llm_keys_are_optional_specs(self):
         """LLM key 走 helm_value_specs optional password（拍板 Q2：租戶自帶）。"""
@@ -261,13 +303,20 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.1.0。"""
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.1.1。
+
+        #530 把版本從 0.1.0 推到 0.1.1（charts PR #69 新增 gateway 反向代理子路徑）。
+        這條斷言是刻意鎖精確值的少數例外：跨 repo chart 版本是**平台指向哪一顆已發佈
+        artifact** 的宣告，不是會自然演進的 living schema——寫成 `>=` 只會讓「chart 沒
+        跟著發版」這個真正的失效模式假綠。平台端沒有 chart values 的任何副本，鍵名
+        一致性只能靠兩邊各自的契約測試加 review。
+        """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.1.0')
+        self.assertEqual(tpl.helm_chart_version, '0.1.1')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
@@ -869,6 +918,64 @@ class TestHermesAgentValueInjection(TransactionCase):
                     {}, slug, 'https://x.woowtech.io'),
                 {}, slug)
 
+    # ── gateway 公開網址（#530）─────────────────────────────────────────────
+    def test_build_gateway_public_url(self):
+        """公開根位址 + seed 子路徑＝交給租戶填進 MCP 的權威網址。"""
+        self.assertEqual(
+            self.CloudService._build_gateway_public_url(
+                '/gateway', 'https://svc-abc.woowtech.io'),
+            'https://svc-abc.woowtech.io/gateway')
+
+    def test_build_gateway_public_url_strips_trailing_slash(self):
+        """根位址帶尾斜線也不能產出 //gateway。
+
+        MCP 端把這個值直接當 base URL 去接 gateway 的能力端點；``//gateway`` 在
+        nginx location 比對下不等同 ``/gateway``，租戶會拿到 404 卻以為是 key 錯。
+        與 dashboard 那條同一個成因，故同樣走 rstrip 正規化而非裸內插。
+        """
+        self.assertEqual(
+            self.CloudService._build_gateway_public_url(
+                '/gateway', 'https://svc-abc.woowtech.io/'),
+            'https://svc-abc.woowtech.io/gateway')
+
+    def test_build_gateway_public_url_empty_when_either_side_missing(self):
+        """任一側缺就回空字串（沒有 gateway、或沒有對外根位址）。
+
+        回了非空值＝租戶會在一次性視窗看到一條指向不存在路徑的 gateway 網址，
+        比不給還糟（它看起來像產品保證）。
+        """
+        for external_path, base_url in (
+            ('', 'https://x.woowtech.io'),   # chart 沒有 gateway
+            ('/gateway', ''),                # 服務沒有 subdomain
+            ('', ''),
+        ):
+            with self.subTest(external_path=external_path, base_url=base_url):
+                self.assertEqual(
+                    self.CloudService._build_gateway_public_url(
+                        external_path, base_url),
+                    '')
+
+    def test_other_seeded_templates_have_no_gateway_path(self):
+        """其他既有 seed template 一律沒有 gateway 對外路徑（hermes-agent 是唯一）。
+
+        這條是 finding 3 的守線：鑄造／供給閘門改判 ``_chart_has_gateway`` 之後，
+        「哪些 template 會拿到 gateway API key」由 seed 決定。若哪天有人替別的 chart
+        補上 ``gateway.externalPath``，那顆 chart 就會開始收到平台供給的
+        ``auth.apiServerKey``——這條讓那個決定變成**要動測試才過得去**的顯式動作，
+        而不是順手改 seed 的副作用。
+        """
+        for xmlid in ('cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
+                      'cloud_app_mcp_n8n', 'cloud_app_mcp_k8s', 'cloud_app_mcp_vk',
+                      'cloud_app_mcp_opendesign', 'cloud_app_opendesign',
+                      'cloud_app_haos', 'cloud_app_ha_paas'):
+            with self.subTest(template=xmlid):
+                tpl = self.env.ref('woow_paas_platform.%s' % xmlid)
+                self.assertEqual(
+                    tpl._gateway_external_path(), '',
+                    '%s 的 seed 有 gateway.externalPath：它會開始收到平台供給的 '
+                    'auth.apiServerKey。若是有意的，請在本清單移除它並補上該 chart '
+                    '真的吃這個鍵的證據。' % xmlid)
+
     def test_inject_apiserver_cidrs_covers_hermes_agent(self):
         """console 同構需求：hermes-agent 也要進 apiServerCidrs 白名單（#404）。"""
         values = self.CloudService._inject_apiserver_cidrs(
@@ -913,6 +1020,9 @@ class TestHermesAgentValueInjection(TransactionCase):
         # 1) template pin 值仍在（未被注入流程洗掉）
         self.assertEqual(values['image']['repository'], HERMES_AGENT_IMAGE)
         self.assertEqual(values['service']['port'], 8080)
+        # #530：gateway 對外子路徑是 seed 值、走同一條全量管線送出。少了它 chart
+        # 就不生那條反向代理區塊 ⇒ 平台交付的 gateway URL 變死鏈（而服務照樣 Running）。
+        self.assertEqual(values['gateway']['externalPath'], '/gateway')
         # 2) 四類平台注入
         self.assertTrue(values['persistence']['storageClass'])
         self.assertTrue(values['global']['imagePullSecrets'])
@@ -936,6 +1046,23 @@ class TestHermesAgentValueInjection(TransactionCase):
         values = svc._assemble_deploy_values()['values']
         self.assertNotIn('sensitive', values.get('config', {}))
         self.assertNotIn('should-be-stripped', json.dumps(values))
+
+    def test_assemble_deploy_values_excludes_gateway_api_key(self):
+        """🔴 #530：``auth.apiServerKey`` 也必須被剝掉——它**不在** config.sensitive 底下。
+
+        既有的 strip 是 path-aware 的（只 pop ``config.sensitive``），而 chart 要求
+        的 gateway key 鍵在 ``auth.apiServerKey``。照抄 admin_password 的做法卻沒
+        擴充 strip，這把 key 就會留在 ``_assemble_deploy_values`` 的輸出、被寫回
+        ``helm_values``，接著從服務詳情 API 明文流出——而只掃 config.sensitive 的
+        既有測試**不會紅**。這條就是那個缺口的守線。
+        """
+        svc = self._make_service()
+        svc.helm_values = json.dumps(dict(
+            json.loads(self.tpl.helm_default_values),
+            auth={'apiServerKey': 'gw-key-should-be-stripped'}))
+        values = svc._assemble_deploy_values()['values']
+        self.assertNotIn('apiServerKey', values.get('auth', {}))
+        self.assertNotIn('gw-key-should-be-stripped', json.dumps(values))
 
     def test_admin_password_secret_minted_on_create(self):
         """has_admin_gui=True → create 時自動鑄一組 admin_password（#357 供給鏈）。"""

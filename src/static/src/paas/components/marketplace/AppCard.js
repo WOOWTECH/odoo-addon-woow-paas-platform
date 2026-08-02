@@ -2,6 +2,7 @@
 import { Component } from "@odoo/owl";
 import { WoowIcon } from "../icon/WoowIcon";
 import { formatTemplatePrice } from "../../utils/pricing_label";
+import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
 
 /**
  * AppCard Component
@@ -77,6 +78,26 @@ export class AppCard extends Component {
      */
     get formattedPrice() {
         return formatTemplatePrice(this.props.template.pricing);
+    }
+
+    /**
+     * 這個商品現在買不買得到（#501）。
+     *
+     * 判準來自後端 `_format_template` 的 `availability`，與 `create()` 的權威
+     * 閘門同源（model 的 `_reject_reason_for_new_instance`）。卡片與 configure
+     * 頁共用 `utils/availability_label`，不各寫一份。
+     * @returns {boolean}
+     */
+    get isPurchasable() {
+        return isPurchasable(this.props.template.availability);
+    }
+
+    /**
+     * 不可購買時的狀態標籤（「已售罄」／「暫停販售」）。
+     * @returns {string} 空字串 ⇒ 可購買，不渲染標籤
+     */
+    get availabilityLabel() {
+        return availabilityLabel(this.props.template.availability);
     }
 
     /**

@@ -6,6 +6,8 @@ import uuid
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 
+from .cloud_app_template import SupplyGateError
+
 _logger = logging.getLogger(__name__)
 
 # #336（Wave A）：計數「活躍實例」時排除的刪除終態。CloudService 刪除走真 unlink
@@ -16,6 +18,29 @@ TERMINAL_STATES = ('deleting',)
 # provision「每帳號限一」的 advisory-lock namespace（比照 project_project 的
 # _REACH_LOCK_NS reach-lock；任意固定 int、全 module 唯一即可）。'HAPA' = 0x48415041。
 _HA_PROVISION_LOCK_NS = 0x48415041
+
+# #501/#518 全域實例上限的**衝突列** UPDATE。
+#
+# ⚠ 不能只用 advisory lock。Odoo 的 cursor 是 **REPEATABLE READ**
+# （`odoo/sql_db.py` 的 `set_isolation_level(ISOLATION_LEVEL_REPEATABLE_READ)`，
+# 該 class docstring 明文選用），所以「取鎖之後重新計數」在同一個 tx 內**拿不到新
+# snapshot**：輸家取得鎖後看到的仍是取鎖前的舊資料，照樣放行。實測（#518）：cap=1、
+# 兩並發，兩邊取鎖後計數都是 1，最終落 2 列——鎖確實序列化了執行，但在它唯一存在的
+# 理由上零貢獻。#345 的 docstring 寫「READ COMMITTED」是與事實相反的前提。
+#
+# 正解是讓並發的第二個 tx 撞上 **write-write 衝突**：兩者都 UPDATE 同一列時，
+# PostgreSQL 在 RR 下對後到者回 `could not serialize access due to concurrent
+# update`（SQLSTATE 40001），Odoo 的 `retrying()` 會以**新 tx／新 snapshot** 重試
+# （最多 5 次），重算後的計數才是對的。UPDATE 的 row lock 同時提供互斥，所以
+# advisory lock 在這裡是冗餘的，已移除——少一個機制少一份誤解。
+#
+# 衝突列選 template row：全域上限的語意範圍就是 template，粒度剛好，也不會誤傷
+# 無關交易。`max_per_partner` 的語意範圍是 (template, partner)，不能共用這一列
+# （會把它的併發粒度粗化），其修法另見 #518。
+_GLOBAL_CAP_CONFLICT_SQL = (
+    "UPDATE woow_paas_platform_cloud_app_template "
+    "SET write_date = (clock_timestamp() AT TIME ZONE 'UTC') WHERE id = %s"
+)
 
 # ------------------------------------------------------------------------- #
 #  #489：轉移狀態的 age timeout（F-423-1 Step 2）                             #
@@ -576,12 +601,24 @@ class CloudService(models.Model):
 
         # C20: the single generation point — never inline token_urlsafe here.
         new_password = self._generate_admin_password()
+        # #530：Reset 一次換發兩把憑證。它是租戶唯一的換發入口，也是**存量服務取得
+        # gateway key 的唯一路徑**（刻意不做從叢集回讀的 backfill——那會違反「憑證
+        # 權威來源在平台端」的不變式，且要新增 operator 端點）。只換一把的話 UI 那句
+        # 「Reset 會一併換掉 Gateway API Key」就是謊話。
+        # 沒有 gateway 的 chart 傳 None：`_set_admin_password_secret` 的補鑄同樣受
+        # `_chart_has_gateway` 閘門管，這裡硬生一把會繞過那道閘門（鑄造／供給／交付
+        # 三個閘門必須同源，否則就是 review finding 3 那條隱性契約再長回來）。
+        new_gateway_api_key = (
+            self._generate_admin_password() if self._chart_has_gateway() else None
+        )
         # #411: values 走全量組裝 helper（與 deploy/redeploy/reconfigure 同一條
         # 管線）。此路徑帶 template.helm_chart_version，reset password 會夾帶
         # chart 升版；改 reset_values 語意讓 chart 新增預設補位，不再以
         # --reuse-values 沿用舊 coalesced values（同一 bug class，見 #411）。
         values = self._assemble_deploy_values()['values']
-        operator_sensitive_values = self._build_mcp_sensitive_values(new_password)
+        operator_sensitive_values = self._build_mcp_sensitive_values(
+            new_password, gateway_api_key=new_gateway_api_key,
+        )
 
         # #461 可診斷性：reset 夾帶 chart 升版時，operator 的 helm upgrade 會真的
         # 等新 pod（pod template 變了），可能撞上 --timeout 15s 而 fail-safe 失敗。
@@ -669,7 +706,11 @@ class CloudService(models.Model):
             )
             raise UserError("Reset failed. Check service status and retry.") from e
 
-        self._set_admin_password_secret(new_password)
+        # #530：兩把憑證一起落庫。提交點語意不變（C11′ commit-on-secret）——2xx
+        # 代表兩者都已是叢集權威值，2xx 之前的任何失敗都保證叢集仍是舊憑證。
+        self._set_admin_password_secret(
+            new_password, gateway_api_key=new_gateway_api_key,
+        )
 
         # `last_upgraded_at` 同 action_redeploy：reset 走的是同一條 helm
         # upgrade 管線，不記錨就會讓 #489 的 age timeout 拿首裝時間當起點。
@@ -905,11 +946,8 @@ class CloudService(models.Model):
         # whitelisted verbatim; the chart never learns the tenant host — the
         # platform exposes services via a Cloudflare tunnel, not the chart's
         # ingress). No-op for other templates. See #380.
-        if self.subdomain:
-            paas_domain = self.env['ir.config_parameter'].sudo().get_param(
-                'woow_paas_platform.paas_domain', 'woowtech.io',
-            )
-            public_base_url = f"https://{self.subdomain}.{paas_domain}"
+        public_base_url = self._public_base_url()
+        if public_base_url:
             values = self._inject_allowed_origins(
                 values, template.slug, public_base_url,
             )
@@ -1329,18 +1367,98 @@ class CloudService(models.Model):
 
     @staticmethod
     def _generate_admin_password():
-        """#357 C20：mcp admin password 的**唯一**生成點。
+        """#357 C20：平台供給憑證的**唯一**生成點（admin password ＋ #530 gateway key）。
 
         ``secrets.token_urlsafe(24)`` 給 ~32 chars url-safe base64，強度足夠
-        mcp-admin-core 的明文比對（auth/middleware.py 的 secrets.compare_digest）。
+        mcp-admin-core 的明文比對（auth/middleware.py 的 secrets.compare_digest），
+        也**必然滿足** hermes gateway 對 api server key 的 16 字元下限（#530：低於
+        下限時上游會靜默不登記 api server 平台，健康信號直接消失——無聲失效）。
         只在建立 / reset 成功的 response 回傳一次，後續 API 一律走
-        ``PaasController._sanitize_helm_values`` 遮蔽 config.sensitive.*。
+        ``PaasController._sanitize_helm_values`` 遮蔽。
 
         收斂理由：原本 controller（自己 import secrets 生一份）與 model create()
         各寫一次 ``token_urlsafe(24)``，同一條安全屬性散在兩處＝改強度時容易只改
-        一邊，且「密碼唯一性」測試找不到單一標的。所有生成路徑都必須呼叫這裡。
+        一邊，且「密碼唯一性」測試找不到單一標的。所有生成路徑都必須呼叫這裡
+        ——#530 的 gateway key 同樣走這裡，不另開第二套隨機來源（兩套會分歧成
+        兩種強度，而弱的那把不會有任何測試盯著）。
         """
         return secrets.token_urlsafe(24)
+
+    @staticmethod
+    def _build_gateway_public_url(external_path, base_url):
+        """把 chart 的 gateway 子路徑接到服務的公開根位址上（純字串正規化）。
+
+        #530：hermes-agent 的 gateway（容器內 :8642）以 auth-proxy 的 ``/gateway``
+        子路徑對外。租戶要把這條網址填進 MCP 的 Gateway 區，所以**由後端組**而非
+        丟一個根位址讓前端或租戶自己拼——同一個坑已經在 dashboard 那區發生過
+        （租戶填成服務根網址、漏掉子路徑而永遠連不上）。
+
+        ``external_path`` 由 ``CloudAppTemplate._gateway_external_path()`` 從 seed
+        讀出，**平台側不再維護 slug→路徑對照表**（見該 method 的 docstring 與 spec
+        「不得新建 slug allowlist」）。本 method 因此只剩拼接與 rstrip 正規化：純
+        函式、沒有能力語意——「這個 chart 有沒有 gateway」由 external_path 空不空
+        表達，判準只有一處。
+
+        Args:
+            external_path: chart 對外的 gateway 子路徑（例 '/gateway'）；'' ＝沒有
+            base_url: 服務自身對外根位址，例 "https://<sub>.<domain>"
+
+        Returns:
+            完整 gateway URL；任一輸入為空時回 ''。
+        """
+        if not external_path or not base_url:
+            return ''
+        return '%s%s' % (base_url.rstrip('/'), external_path)
+
+    def _public_base_url(self):
+        """服務自身的對外根位址（Cloudflare tunnel 曝光）；無 subdomain 回 ''。
+
+        `_assemble_deploy_values` 的三個 injector 與 #530 的 gateway URL 交付都要
+        這個值，收斂成一處避免 domain 組法漂移。
+        """
+        self.ensure_one()
+        if not self.subdomain:
+            return ''
+        paas_domain = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io',
+        )
+        return 'https://%s.%s' % (self.subdomain, paas_domain)
+
+    def _chart_has_gateway(self):
+        """本服務的 chart 有沒有對外 gateway ⇒ 該不該有 gateway API key。
+
+        #530 的**鑄造／供給**閘門（`_set_admin_password_secret` 補鑄、
+        `_build_mcp_sensitive_values` 送出 `auth.apiServerKey`、Reset 換發），與
+        **交付**閘門 `_gateway_public_url()` 同源但條件較寬：交付另要求服務有對外
+        根位址（subdomain），沒有 subdomain 的服務仍然需要 key（gateway 在叢集內
+        仍在跑），只是平台沒有網址可以交給租戶。
+
+        為什麼鑄造也要判、而不是「先鑄好、之後 chart 支援了就能用」：`has_admin_gui`
+        的 8 個模板裡只有 hermes-agent 有 gateway，其餘 7 個 chart 會收到一個平台
+        並不打算給它的 `auth.apiServerKey`。今天無害純粹是因為 mcp-server／
+        open-design chart 沒有宣告 `auth` 區塊、也沒有 values.schema.json——是**隱性
+        契約**：哪天 mcp-server 補了 `auth:`（很合理的演進），這幾顆就會無聲吃下一
+        把不該給它的憑證。存量服務要補鑄有既定路徑（Reset 是唯一換發入口，本來就
+        會重跑本閘門），所以「先鑄起來放」買不到任何東西。
+        """
+        self.ensure_one()
+        return bool(self.template_id._gateway_external_path())
+
+    def _gateway_public_url(self):
+        """本服務的 gateway 完整網址（chart 無 gateway 或服務無 subdomain 時回 ''）。
+
+        #530 的**交付**判準本體：controller 的 `_gateway_credentials` 用它決定要不要
+        把明文憑證交給租戶，service payload 的 `has_gateway`（前端文案的 gate）也鏡射
+        它。三處讀同一個 method，不各自重算——否則「畫面說會換發、回應裡卻沒有」這種
+        漂移兩邊都不會報錯。
+        """
+        self.ensure_one()
+        external_path = self.template_id._gateway_external_path()
+        if not external_path:
+            # 短路：絕大多數 template 沒有 gateway，先擋掉才不會為了清單裡的每一列
+            # 服務都去查一次 paas_domain（_public_base_url 走 ir.config_parameter）。
+            return ''
+        return self._build_gateway_public_url(external_path, self._public_base_url())
 
     def _get_secret_record(self):
         self.ensure_one()
@@ -1349,17 +1467,42 @@ class CloudService(models.Model):
             limit=1,
         )
 
-    def _set_admin_password_secret(self, admin_password):
+    def _set_admin_password_secret(self, admin_password, gateway_api_key=None):
+        """建立／更新本服務的憑證記錄（create-or-write，secret 的**唯一**寫入點）。
+
+        #530：``gateway_api_key`` 未指定、記錄上還沒有值、**且 chart 真的有對外
+        gateway**（``_chart_has_gateway``）時在這裡補鑄。收斂在這一處而不是讓每條
+        呼叫路徑各自記得補——「有憑證記錄 ∧ chart 有 gateway ⟹ 兩把憑證都在」是狀態
+        不變式，逐路徑 stamp 必然漏（見 pitfall
+        reaped-since-single-path-stamp-gc-immunity：gate 欄位只在單一路徑 stamp，
+        其他路徑到達同狀態的列就永久缺值）。Reset 顯式帶新值以強制換發（它同樣先
+        判 ``_chart_has_gateway``，沒有 gateway 就傳 None 而不是硬換一把）。
+        """
         self.ensure_one()
         Secret = self.env['woow_paas_platform.cloud_service_secret'].sudo()
         secret = self._get_secret_record()
         vals = {'admin_password': admin_password, 'updated_at': fields.Datetime.now()}
+        if (gateway_api_key is None and not (secret and secret.gateway_api_key)
+                and self._chart_has_gateway()):
+            gateway_api_key = self._generate_admin_password()
+        if gateway_api_key:
+            vals['gateway_api_key'] = gateway_api_key
         if secret:
             secret.write(vals)
             return secret
         return Secret.create(dict(vals, service_id=self.id))
 
-    def _build_mcp_sensitive_values(self, admin_password=None):
+    def _build_mcp_sensitive_values(self, admin_password=None, gateway_api_key=None):
+        """組出送進 chart 的敏感值（**不寫回 helm_values**，另走 operator 的分離通道）。
+
+        #530：gateway API key 走 ``auth.apiServerKey``——chart 憑證解析優先序的第一段
+        就是「顯式 values 值」，所以平台供給的 per-service key 會勝過 chart 自產。
+        它有**自己的**閘門 ``_chart_has_gateway``（seed 的 gateway.externalPath），
+        不與 admin_password 的 ``has_admin_gui`` 共用：has_admin_gui=True 的 8 個模板
+        裡只有 hermes-agent 有 gateway，共用閘門會把這個鍵送給另外 7 個並不吃它的
+        chart（今天無害只因那些 chart 沒宣告 auth 區塊——隱性契約，見
+        ``_chart_has_gateway`` 的 docstring）。兩個閘門都不是 slug allowlist。
+        """
         self.ensure_one()
         if not self.template_id.has_admin_gui:
             return {}
@@ -1376,16 +1519,40 @@ class CloudService(models.Model):
                 # 租戶要取得密碼走 reset 流程（唯一同時換 Secret + patch config.json 者）。
                 return {}
             admin_password = secret.admin_password
-        return {'config': {'sensitive': {'admin_password': admin_password}}}
+            if gateway_api_key is None:
+                gateway_api_key = secret.gateway_api_key
+        values = {'config': {'sensitive': {'admin_password': admin_password}}}
+        # #530：沒有 key 時**整個鍵不送**，而不是送空字串。chart 的第一段優先序拿到
+        # 顯式空值就不會落到第二段「查既有 Secret」，等於把 chart 自產、agent 正在
+        # 用的那把洗掉 → gateway 當場拒絕所有請求。存量服務走 Reset 換發。
+        # `_chart_has_gateway` 是 fail-closed 的第二道：鑄造閘門已經讓沒有 gateway 的
+        # chart 不會有 key，但存量列（閘門上線前鑄的）仍可能有值，供給面必須自己判，
+        # 不能靠「上游應該不會給我髒資料」。
+        if gateway_api_key and self._chart_has_gateway():
+            values['auth'] = {'apiServerKey': gateway_api_key}
+        return values
 
     @staticmethod
     def _strip_mcp_sensitive_values(values):
+        """剝掉不得落庫（helm_values）的敏感子樹。
+
+        ⚠ 這層是 **path-aware** 的：新增一條敏感值通道時**必須**在這裡補對應路徑，
+        否則那個值會留在 ``helm_values`` 並經服務詳情 API 明文流出，而只掃既有路徑
+        的測試不會紅（#530 就是這個形狀：``auth.apiServerKey`` 不在 config.sensitive
+        底下）。與 ``PaasController._sanitize_helm_values`` 的遮罩層是兩道獨立防線，
+        新增路徑要**兩邊都補**。
+        """
         if not values or not isinstance(values, dict):
             return values
         result = json.loads(json.dumps(values))
         config = result.get('config')
         if isinstance(config, dict):
             config.pop('sensitive', None)
+        # #530 gateway API key。只 pop 這一個鍵、不動整個 auth 子樹——同層還有
+        # 非憑證欄位（PostgreSQL 家族 seed 的 auth.username／auth.database）。
+        auth = result.get('auth')
+        if isinstance(auth, dict):
+            auth.pop('apiServerKey', None)
         return result
 
     def _has_mcp_admin_secret(self):
@@ -2557,6 +2724,24 @@ class CloudService(models.Model):
                     raise UserError(
                         "不可變更已部署 CloudService 的 workspace（命名空間身分固定）。"
                     )
+        # ⚠ 這裡**刻意沒有**全域上限守衛。曾經有過（#501 B3，擋「先建成 `deleting`
+        # 再 write 回計數態」的繞道），已移除，理由記在 #519 與 PR #517 的第二輪覆核：
+        #
+        # 1. 它會誤傷刪除失敗的善後路徑。`_delete_service` 先寫 `state='deleting'`，
+        #    uninstall 失敗後在 except 分支寫 `state='error'`——那是「從終態寫回非
+        #    終態」，守衛判定為進入者。而裁決點 `_reject_reason_for_new_instance`
+        #    第一件事是 paused 檢查、**在計數之前就 return** ⇒ 營運一勾「暫停販售」，
+        #    任何刪除失敗都會 raise、整筆 rollback，`error_message` 遺失、狀態退回，
+        #    租戶看到的是「目前暫停販售」。與設定畫面 help 明載的「只擋新下單，不影響
+        #    已開通的服務」直接矛盾。
+        # 2. 它擋不完。`write({'template_id': …})` 不帶 state ⇒ 守衛不求值；
+        #    `state` 是 nullable Selection（無 `required=True`），插一個
+        #    `write({'state': False})` 當跳板即可整段跳過。
+        #
+        # 根因是租戶對本 model 有直接 write 權（`ir.model.access.csv`，#519）。用
+        # write() 守衛打地鼠會引入誤傷卻仍留下繞道；正解是收緊 ACL，一旦租戶沒有
+        # 直接 write 權，所有繞過路徑一次關閉。**create() 的閘門是防意外、不是安全
+        # 邊界**——不要在這裡補守衛來製造「已經守住」的錯覺。
         tracked = 'workspace_id' in vals or 'project_ids' in vals
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
@@ -2709,6 +2894,70 @@ class CloudService(models.Model):
             ('state', 'not in', list(TERMINAL_STATES)),
         ])
 
+    @api.model
+    def _count_active_for_template(self, template):
+        """該 template 的**全站**活躍實例數（#501 全域上限與售罄現算共用）。
+
+        口徑與 `_find_active_for_partner` 同源（`state not in TERMINAL_STATES`，
+        而 TERMINAL_STATES 只有 `deleting`）——`suspended` 與 `error` 照樣佔名額，
+        因為它們隨時可能被復原，位置沒有真的釋放出來。兩邊口徑漂移會讓同一台服務
+        在兩個上限裡算法不同。
+
+        ⚠ `sudo()` 是**正確性前提，不是效能選擇**：ir.rule
+        `cloud_service_rule_workspace_member` 把可見範圍限制在「呼叫者是成員的
+        workspace」，而全域計數必然跨租戶——不 sudo 就會少算，守衛靜默 fail-open。
+        這比 `_find_active_for_partner` 更依賴 sudo（那邊同 partner 常在同一個
+        workspace，這邊必然不是）。
+        回傳的是計數而非 recordset，跨租戶的 row 從不外流給呼叫端。
+        """
+        return self.sudo().search_count([
+            ('template_id', '=', template.id),
+            ('state', 'not in', list(TERMINAL_STATES)),
+        ])
+
+    @api.model
+    def _claim_global_cap_slots(self, records):
+        """對每個「有上限的 template」寫一次衝突列，讓並發第二者拿到 40001。
+
+        機制與取捨見 `_GLOBAL_CAP_CONFLICT_SQL` 的註解。排序去重是為了讓多筆
+        vals 跨 template 時的加鎖順序在所有 tx 中一致（避免死鎖）；沒有上限的
+        template 完全不進來——否則全站每次建服務都在同一列上排隊，代價會落到
+        與限量無關的商品身上。
+
+        用原生 SQL 而非 ORM `write()`：只需要製造 row 版本變更，不要觸發
+        template 的 constrains／cache 失效／`write_date` 之外的任何副作用。
+        """
+        capped_ids = sorted({
+            rec.template_id.id for rec in records
+            if rec.template_id._global_instance_cap()
+        })
+        for tpl_id in capped_ids:
+            self.env.cr.execute(_GLOBAL_CAP_CONFLICT_SQL, (tpl_id,))
+
+    @api.model
+    def _enforce_supply_gate(self, records):
+        """逐筆重跑供給閘門（停售／售罄），超過就 raise 讓整筆撤回。
+
+        判準的唯一定義點是 `cloud_app_template._reject_reason_for_new_instance`
+        ——marketplace payload 的 availability 呼叫的是同一個，不是第二份判準。
+        這裡傳的計數**已含剛落庫的這筆**（順序：寫入 → 取衝突列 → count →
+        超過就 raise），所以判定式是嚴格大於。
+
+        供給閘門先於 `max_per_partner` 判：「這個商品現在還賣不賣」邏輯上先於
+        「你還能不能再買一台」，訊息也比較貼近租戶當下的處境。
+        """
+        for rec in records:
+            template = rec.template_id
+            reason = template._reject_reason_for_new_instance(
+                lambda tpl=template: self._count_active_for_template(tpl))
+            if reason == 'paused':
+                raise SupplyGateError(_(
+                    '「%(tpl)s」目前暫停販售。', tpl=template.name))
+            if reason == 'sold_out':
+                raise SupplyGateError(_(
+                    '「%(tpl)s」目前已售罄，暫時無法開通新的實例。',
+                    tpl=template.name))
+
     @api.model_create_multi
     def create(self, vals_list):
         """#336：每帳號實例上限 enforcement（#345 補並發防護）。
@@ -2732,6 +2981,35 @@ class CloudService(models.Model):
         （partial unique index 只能保證「至多一列」，見 provision_partner_id），
         故泛化上限只能靠 advisory lock；單連線 TransactionCase 無法真並發，既有
         功能測試僅證非回歸、鎖的競態正確性靠與 provision 先例一致性 + code review。
+
+        ⚠⚠ **上面那段「READ COMMITTED」是錯的前提**（#345 起沿用，#518 證偽）。
+        Odoo 的 cursor 是 **REPEATABLE READ**，取鎖**不會**刷新 snapshot，所以
+        「輸家取鎖後的 count 看得到贏家已 commit 的列」不成立——實測兩並發各自
+        只看得到自己那筆、雙雙放行。`max_per_partner` 因此在並發下仍可被繞過；
+        它的修法（衝突列粒度需為 (template, partner)）另見 #518，本方法未修。
+        HA PaaS 由 `provision_partner_id` 的 partial unique index 兜底，不受影響。
+
+        #501 供給閘門（全域實例上限＋營運停售）改用**衝突列**而非 advisory lock：
+        `_claim_global_cap_slots` 對 template row 做 UPDATE，並發第二者在 RR 下拿到
+        SQLSTATE 40001，交給 `retrying()` 以新 tx／新 snapshot 重試（見
+        `_GLOBAL_CAP_CONFLICT_SQL` 的完整論證與實測）。判準本身在
+        `cloud_app_template._reject_reason_for_new_instance`，marketplace 的
+        availability payload 呼叫的是同一個——單點裁決，不做兩份漂移。
+
+        ⚠ 衝突列只有 template 一維，代價是**同一 template 的全站下單被序列化**：
+        輸家會阻塞到贏家整個 tx 結束（不只計數那一瞬，還包含建訂閱等後續工作），
+        且會多付一次重試。HAOS 是 VM 型、上限個位數、下單頻率極低，可接受。
+        **不要把這個形制直接套到熱門的容器型 template**——那需要先量測 create tx
+        的實際長度，或改用更細的分片鍵。
+
+        ⚠ 這條路徑要求呼叫端**不得吞掉並發例外**：`SerializationFailure` 是
+        `Exception` 子類，controller 若用裸 `except Exception` 收掉，`retrying()`
+        永遠看不到、不會重試，而且當下 PG 交易已 aborted，後續 flush 會再炸。
+        `_create_service` 已顯式重拋（見該處註解）。savepoint 幫不上忙——40001 之後
+        整個 tx 必須中止，`ROLLBACK TO SAVEPOINT` 繼續跑只會帶著同一個陳舊 snapshot。
+
+        ⚠ 本方法對所有入口一律生效、無 su/group 豁免（否則 TransactionCase 假綠，
+        見 docs/decisions/patterns/su-env-exempt-guard-false-green.md）。
         """
         normalized_vals_list = []
         for vals in vals_list:
@@ -2747,6 +3025,7 @@ class CloudService(models.Model):
             normalized_vals_list.append(normalized)
 
         records = super().create(normalized_vals_list)
+        self._claim_global_cap_slots(records)
         # 收集需 enforcement 的 (template_id, partner_id)，排序去重後依序取鎖：
         # 排序消除多筆跨組的 lock-ordering 死鎖；max_per_partner=0 常態集合為空、零開銷。
         lock_pairs = sorted({
@@ -2757,13 +3036,14 @@ class CloudService(models.Model):
         for tpl_id, partner_id in lock_pairs:
             self.env.cr.execute(
                 'SELECT pg_advisory_xact_lock(%s, %s)', (tpl_id, partner_id))
+        self._enforce_supply_gate(records)
         for rec in records:
             limit = rec.template_id.max_per_partner
             if limit and rec.workspace_id.owner_id:
                 partner = rec.workspace_id.owner_id.partner_id
                 count = len(self._find_active_for_partner(rec.template_id, partner))
                 if count > limit:
-                    raise ValidationError(_(
+                    raise SupplyGateError(_(
                         '「%(tpl)s」每個帳號最多 %(limit)s 個實例，'
                         '您已達上限。', tpl=rec.template_id.name, limit=limit))
         for rec in records.filtered(lambda r: r.template_id.has_admin_gui):

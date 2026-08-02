@@ -8,8 +8,9 @@ import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddo
 import { PlanSelector } from "../../components/subscription/PlanSelector";
 import { PlanTotalBar } from "../../components/subscription/PlanTotalBar";
 import { pickDefaultPlan } from "../../components/subscription/plan_selector_utils";
-import { AdminPasswordModal } from "../../components/modal/AdminPasswordModal";
+import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
 import { formatTemplatePrice } from "../../utils/pricing_label";
+import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
 import { cloudService } from "../../services/cloud_service";
 import { workspaceService } from "../../services/workspace_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -21,7 +22,7 @@ import { router } from "../../core/router";
  */
 export class AppConfigurationPage extends Component {
     static template = "woow_paas_platform.AppConfigurationPage";
-    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, PlanTotalBar, AdminPasswordModal };
+    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, PlanTotalBar, OneTimeCredentialsModal };
     static props = {
         workspaceId: { type: Number },
         templateId: { type: Number },
@@ -46,7 +47,9 @@ export class AppConfigurationPage extends Component {
             // Launch state
             launching: false,
             launchError: null,
-            adminPassword: null,
+            // #530：一次性憑證由單一字串改成具名清單（Admin Password ＋ Gateway
+            // API Key）。null＝不開視窗；非空陣列＝開。
+            oneTimeCredentials: null,
             createdServiceId: null,
         });
         this.router = useState(router);
@@ -155,6 +158,35 @@ export class AppConfigurationPage extends Component {
      */
     get formattedPrice() {
         return formatTemplatePrice(this.template?.pricing);
+    }
+
+    /**
+     * 這個商品現在買不買得到（#501）——與 marketplace 卡片同一個判準來源。
+     * @returns {boolean}
+     */
+    get isPurchasable() {
+        return isPurchasable(this.template?.availability);
+    }
+
+    /**
+     * 不可購買時的狀態標籤（「已售罄」／「暫停販售」）。
+     * @returns {string} 空字串 ⇒ 可購買
+     */
+    get availabilityLabel() {
+        return availabilityLabel(this.template?.availability);
+    }
+
+    /**
+     * Launch 按鈕的 disabled 判準。
+     *
+     * 收斂成一個 getter 而不是在模板裡寫 `state.launching || !isPurchasable`：
+     * OWL 模板的語法錯誤不會被任何 Python 測試攔到、runtime 直接整站白屏
+     * （見 docs/tracking/pitfalls/owl-template-crash-class-syntax.md），能放在 JS
+     * 的判斷就不要放模板。
+     * @returns {boolean}
+     */
+    get launchDisabled() {
+        return this.state.launching || !this.isPurchasable;
     }
 
     get helmValueSpecs() {
@@ -327,8 +359,9 @@ export class AppConfigurationPage extends Component {
 
             if (result.success) {
                 const serviceId = result.data.id;
-                if (result.data.admin_password) {
-                    this.state.adminPassword = result.data.admin_password;
+                const credentials = buildOneTimeCredentials(result.data);
+                if (credentials.length) {
+                    this.state.oneTimeCredentials = credentials;
                     this.state.createdServiceId = serviceId;
                 } else {
                     this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
@@ -350,9 +383,9 @@ export class AppConfigurationPage extends Component {
         this.router.navigate(`workspace/${this.props.workspaceId}/marketplace`);
     }
 
-    onAdminPasswordClose() {
+    onCredentialsClose() {
         const serviceId = this.state.createdServiceId;
-        this.state.adminPassword = null;
+        this.state.oneTimeCredentials = null;
         this.state.createdServiceId = null;
         this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
     }

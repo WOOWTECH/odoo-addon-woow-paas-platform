@@ -47,6 +47,13 @@
                                     <WoowIcon name="'payments'" size="14"/>
                                     <t t-esc="formattedPrice"/>
                                 </span>
+                                <!-- #501：售罄／停售是獨立的狀態欄位，**不塞進價格
+                                     字串**——讓同一欄位同時承載「多少錢」與「能不能
+                                     買」正是 #478 的根因形態。 -->
+                                <span t-if="availabilityLabel" class="o_woow_template_status">
+                                    <WoowIcon name="'block'" size="14"/>
+                                    <t t-esc="availabilityLabel"/>
+                                </span>
                                 <span class="o_woow_template_resources">
                                     <WoowIcon name="'memory'" size="14"/>
                                     <t t-esc="template.min_vcpu"/> vCPU, <t t-esc="template.min_ram_gb"/> GB RAM
@@ -243,11 +250,15 @@
                             variant="'primary'"
                             size="'lg'"
                             onClick.bind="onLaunch"
-                            disabled="state.launching"
+                            disabled="launchDisabled"
                         >
                             <t t-if="state.launching">
                                 <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
                                 Launching...
+                            </t>
+                            <t t-elif="availabilityLabel">
+                                <WoowIcon name="'block'" size="18"/>
+                                <t t-esc="availabilityLabel"/>
                             </t>
                             <t t-else="">
                                 <WoowIcon name="'rocket_launch'" size="18"/>
@@ -257,10 +268,10 @@
                     </div>
                 </div>
 
-                <AdminPasswordModal
-                    t-if="state.adminPassword"
-                    password="state.adminPassword"
-                    onClose.bind="onAdminPasswordClose"/>
+                <OneTimeCredentialsModal
+                    t-if="state.oneTimeCredentials"
+                    credentials="state.oneTimeCredentials"
+                    onClose.bind="onCredentialsClose"/>
             </t>
         </div>
     </t>

@@ -278,6 +278,12 @@ from . import test_security_access_identity_anchor_522
 from . import test_workspace_create_rollback_525
 # fix: #525 A3 _invite_member 吞例外 → 被邀請者已入群、API 卻說失敗（結構缺陷，目前潛伏）
 from . import test_invite_member_rollback_525
+# feat: #501 全域實例上限硬閘 + 停售開關（config_parameter 載體、售罄現算）
+from . import test_global_instance_cap_501
+# fix: #518 並發類 DB 例外必須傳到 retrying，不能被 controller 的 except 鏈吃掉
+from . import test_concurrency_error_propagation_518
+# feat: #530 gateway 交付判準（seed 推導）＋ service payload 的 has_gateway 合約
+from . import test_gateway_capability_payload_530
 # T2：以下兩檔自建立起未被匯入 ⇒ Odoo test loader 收不到、15 條測試從未執行過
 from . import test_ai_assistant
 from . import test_security_access_p_rule_migration

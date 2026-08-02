@@ -1,4 +1,7 @@
 """Tests for low balance notification during subscription auto-invoice."""
+from datetime import date, timedelta
+from unittest.mock import patch
+
 from odoo.tests.common import TransactionCase
 
 
@@ -77,24 +80,12 @@ class TestLowBalanceNotification(TransactionCase):
         ])
         self.assertTrue(mails, "A top-up notification email should have been queued")
 
-    def test_insufficient_balance_triggers_notify_via_auto_invoice(self):
-        """Regression guard: the auto-invoice flow must call _notify_low_balance.
-
-        Source-level guard against accidental removal. T19 split the cron
-        body into helpers (``_on_payment_failure`` is the call site now);
-        check that helper instead of the top-level cron entrypoint.
-        """
-        import inspect
-        from odoo.addons.woow_paas_platform.models.sh_subscription_fix import (
-            ShSubscriptionFix,
-        )
-        source = inspect.getsource(ShSubscriptionFix._on_payment_failure)
-        self.assertIn(
-            '_notify_low_balance',
-            source,
-            "_on_payment_failure must still call _notify_low_balance "
-            "in the insufficient-balance branch.",
-        )
+    # 已移除 test_insufficient_balance_triggers_notify_via_auto_invoice：
+    # `inspect.getsource(ShSubscriptionFix._on_payment_failure)` ＋
+    # `assertIn('_notify_low_balance', source)` 可被註解餵飽（拔掉呼叫、留一行
+    # 提到該名字的註解就照綠）。它守的行為已由 test_low_balance_dedup_retry_389
+    # 的 TestLowBalanceDedupRetry 覆蓋——2026-08-03 於當前 develop 實測該注入下
+    # 那 8 條全紅，屬純冗餘，故不另補替代測試。
 
     def test_attempt_auto_topup_success_credits_wallet(self):
         """When ECPG charge succeeds, helper credits the wallet and returns (True, 'ok')."""
@@ -179,23 +170,11 @@ class TestLowBalanceNotification(TransactionCase):
         self.assertFalse(ok)
         self.assertEqual(msg, 'error')
 
-    def test_auto_invoice_attempts_auto_topup_before_giving_up(self):
-        """Regression guard: settlement must try _attempt_auto_topup before the
-        failure path runs. T19 moved this into _try_settle_invoice."""
-        import inspect
-        from odoo.addons.woow_paas_platform.models.sh_subscription_fix import ShSubscriptionFix
-        source = inspect.getsource(ShSubscriptionFix._try_settle_invoice)
-        self.assertIn(
-            '_attempt_auto_topup', source,
-            "_try_settle_invoice must call _attempt_auto_topup before declaring failure",
-        )
-        # _handle_invoice_creation must be reachable on BOTH the wallet-cover
-        # and the auto-topup-success branches.
-        self.assertGreaterEqual(
-            source.count('_handle_invoice_creation'), 2,
-            "_try_settle_invoice must call _handle_invoice_creation in both "
-            "the balance-sufficient path AND the auto-topup-success path",
-        )
+    # 已移除 test_auto_invoice_attempts_auto_topup_before_giving_up：兩條斷言
+    # （`assertIn('_attempt_auto_topup', source)` 與
+    # `source.count('_handle_invoice_creation') >= 2`）都可被註解餵飽，見
+    # TestSettlementRunsAutoTopup 的 docstring。替代守線＝該 class 的三條行為
+    # 測試，它們對同樣的注入會紅。
 
     def test_attempt_auto_topup_returns_no_shortfall_for_zero(self):
         """Pre-condition: shortfall<=0 returns ('no_shortfall', False)
@@ -225,3 +204,226 @@ class TestLowBalanceNotification(TransactionCase):
             )
         self.assertFalse(ok)
         self.assertEqual(msg, 'currency_not_configured')
+
+
+class TestSettlementRunsAutoTopup(TransactionCase):
+    """`_try_settle_invoice` 的行為守線：餘額不足時**真的**去跑自動儲值。
+
+    取代原本的 `inspect.getsource(ShSubscriptionFix._try_settle_invoice)` ＋
+    `assertIn('_attempt_auto_topup', source)` ＋
+    `count('_handle_invoice_creation') >= 2` 子字串守衛。兩條都可被註解餵飽
+    ——把呼叫整段拔掉、只留一行提到那個名字的註解，守衛照樣綠；第二條更鬆，
+    註解裡提兩次就滿足 `>= 2`。
+
+    2026-08-02 於 #534 盤點時實測：拔掉 `sh_subscription_fix.py:332` 的
+    `_attempt_auto_topup` 呼叫後跑全套 → `0 failed, 0 error(s) of 2193`。
+    **自動儲值可以整段消失、全套照樣全綠**——這是金流路徑，且當時是全 repo
+    唯一憑據。
+
+    改測行為：造出「餘額不足以支付發票」的真實情境，斷言 settlement 真的扣款
+    成功、錢包真的被自動儲值補進來、發票真的被結清。三條測試覆蓋
+    `_handle_invoice_creation` 的兩條路徑（餘額夠／儲值成功）與失敗路徑。
+
+    🔴 前置條件一律**斷言**而非假設。特別是 `wallet_balance` 是 loyalty.card
+    支撐的 non-stored compute，**直接 write 是 no-op**（本檔上面那個 class 的
+    `setUp` 寫 `'wallet_balance': 100.0` 其實沒有生效）。錢包一定要走
+    `add_wallet_points()` 灌，然後斷言灌進去了——否則「餘額不足」這個前提會
+    因為別的原因成立，測試看似綠、實際上什麼都沒驗到。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Sub = cls.env['sh.subscription.subscription']
+        cls.Move = cls.env['account.move']
+        # `_pay_from_wallet` 需要一個 bank/cash journal 建 account.payment
+        # （慣例鏡射 test_account_move_pay_from_wallet.setUpClass）
+        journal = cls.env['account.journal'].sudo().search(
+            [('company_id', '=', cls.env.company.id),
+             ('type', 'in', ('bank', 'cash'))], limit=1)
+        if not journal:
+            cls.env['account.journal'].sudo().create({
+                'name': 'Test Bank T1', 'type': 'bank', 'code': 'TBT1',
+                'company_id': cls.env.company.id})
+
+    # ── fixture helpers ──────────────────────────────────────────────────
+    def _make_partner(self, name):
+        return self.env['res.partner'].create({
+            'name': name, 'email': '%s@example.test' % name.lower()})
+
+    def _credit(self, partner, amount):
+        """唯一有效的灌錢包途徑（wallet_balance 是 non-stored compute）。"""
+        partner.sudo().add_wallet_points(amount, description='T1 fixture')
+        partner.invalidate_recordset(['wallet_balance'])
+
+    def _make_sub(self, partner, price):
+        """直接落 in_progress，不走 confirm（避免 eager 開發票）。
+
+        慣例鏡射 test_subscription_failure_handling._make_sub_record。
+        """
+        today = date.today()
+        return self.Sub.sudo().create({
+            'sh_partner_id': partner.id, 'sh_unit': 'month',
+            'sh_recurrency': 1, 'sh_plan_price': price, 'sh_qty': 1,
+            'sh_start_date': today - timedelta(days=1),
+            'sh_end_date': today + timedelta(days=29),
+            'sh_date_of_next_payment': today,
+            'state': 'in_progress', 'sh_trial': False})
+
+    def _make_invoice(self, partner, sub, amount):
+        return self.Move.sudo().create({
+            'move_type': 'out_invoice', 'partner_id': partner.id,
+            'sh_subscription_id': sub.id,
+            'invoice_line_ids': [(0, 0, {
+                'name': 'Cycle fee T1', 'quantity': 1, 'price_unit': amount,
+                'tax_ids': [(5, 0, 0)]})]})   # 無稅：金額好對
+
+    def _setup_token(self, partner, bindcard_id):
+        """為 partner 備妥可用的 ECPG token（沒有 provider 就 skip）。"""
+        provider = self.env['payment.provider'].sudo().search(
+            [('code', '=', 'ECPay')], limit=1)
+        if not provider:
+            self.skipTest('ECPay provider not configured in this DB')
+        provider.write({
+            'enable_ecpg': True, 'MerchantID': '3002607',
+            'HashKey': 'pwFHCqoQZGmho4w6', 'HashIV': 'EkRm7iFT261dpevs',
+            'state': 'test'})
+        payment_method = self.env.ref(
+            'payment.payment_method_card', raise_if_not_found=False,
+        ) or self.env.ref('payment.payment_method_unknown')
+        token = self.env['payment.token'].sudo().create({
+            'provider_id': provider.id, 'partner_id': partner.id,
+            'payment_method_id': payment_method.id,
+            'payment_details': '**** **** **** ' + bindcard_id[-4:],
+            'provider_ref': bindcard_id, 'ecpg_bindcard_id': bindcard_id,
+            'ecpg_member_id': str(partner.id)})
+        if 'property_payment_token_id' in partner._fields:
+            partner.with_company(partner.company_id or self.env.company) \
+                   .sudo().property_payment_token_id = token
+        return token
+
+    def _fake_ecpay_ok(self):
+        """讓 ECPay 授權「成功」——tx 落 done，wallet.topup 於是入帳。"""
+        def _send(self_tx):
+            self_tx.state = 'done'
+            self_tx.provider_reference = 'FAKE_T1_REF'
+        return patch.object(
+            type(self.env['payment.transaction']), '_send_payment_request',
+            _send)
+
+    def _fake_ecpay_declined(self):
+        def _send(self_tx):
+            self_tx.state = 'error'
+        return patch.object(
+            type(self.env['payment.transaction']), '_send_payment_request',
+            _send)
+
+    # ── 路徑 B：餘額不足 → 自動儲值補足 → 發票結清 ──────────────────────
+    def test_shortfall_triggers_auto_topup_and_settles_invoice(self):
+        """核心：餘額不足時 settlement 必須真的跑自動儲值，並把發票結清。
+
+        注入 `_attempt_auto_topup` 呼叫消失時，這條會紅在 `assertTrue(result)`
+        ／錢包沒被補／發票沒被結清——而不是只有某個字串沒出現。
+        """
+        partner = self._make_partner('T1 Shortfall')
+        self._credit(partner, 100.0)
+        self._setup_token(partner, 'BC_T1_OK')
+        sub = self._make_sub(partner, 500.0)
+        invoice = self._make_invoice(partner, sub, 500.0)
+
+        # ── 陽性對照：情境真的成立（缺一則後面的斷言全部失去鑑別力）──
+        self.assertEqual(
+            invoice.amount_total, 500.0,
+            '發票金額不是預期值 ⇒ fixture 沒建對（稅／幣別介入？）')
+        self.assertEqual(
+            partner.wallet_balance, 100.0,
+            'add_wallet_points 沒把錢灌進去 ⇒ 「餘額不足」可能只是因為錢包是 0，'
+            '不是因為我造出了缺口')
+        self.assertLess(
+            partner.wallet_balance, invoice.amount_total,
+            '前置：餘額必須真的不足，否則走的是 balance-sufficient 那條路，'
+            '根本碰不到自動儲值')
+        self.assertEqual(invoice.state, 'draft', '前置：發票應仍為未結清的草稿')
+
+        with self._fake_ecpay_ok():
+            result = self.Sub._try_settle_invoice(sub, invoice)
+
+        # ── 核心斷言 ──
+        self.assertTrue(
+            result,
+            'settlement 應回報成功——餘額不足但自動儲值可以補足時，'
+            '_try_settle_invoice 必須先試自動儲值再放棄')
+        partner.invalidate_recordset(['wallet_balance'])
+        topups = self.env['woow.wallet.topup'].sudo().search([
+            ('partner_id', '=', partner.id)])
+        self.assertTrue(
+            topups,
+            '沒有任何 wallet.topup 被建出來 ⇒ 自動儲值根本沒被觸發'
+            '（正是 #534 盤點時注入的那個缺陷）')
+        self.assertEqual(
+            sum(topups.mapped('credits')), 400.0,
+            '自動儲值金額應等於缺口 500-100（實得 %s）'
+            % sum(topups.mapped('credits')))
+        invoice.invalidate_recordset()
+        self.assertEqual(
+            invoice.payment_state, 'paid',
+            '儲值成功後發票必須被結清——這條打的是 auto-topup-success 分支上的 '
+            '_handle_invoice_creation 呼叫（舊守衛的 count>=2 想守、但守不住的那個）')
+
+    # ── 路徑 A：餘額本來就夠 → 直接結清（不動用自動儲值）────────────────
+    def test_sufficient_balance_settles_without_topup(self):
+        """另一條 `_handle_invoice_creation` 路徑：餘額夠時直接從錢包扣。"""
+        partner = self._make_partner('T1 Sufficient')
+        self._credit(partner, 800.0)
+        sub = self._make_sub(partner, 500.0)
+        invoice = self._make_invoice(partner, sub, 500.0)
+
+        # 陽性對照：錢包真的有錢、且真的蓋得過發票
+        self.assertEqual(
+            partner.wallet_balance, 800.0,
+            'add_wallet_points 沒生效 ⇒ 這條會退化成在測「0 元錢包也能過」')
+        self.assertGreaterEqual(partner.wallet_balance, invoice.amount_total)
+        self.assertEqual(invoice.state, 'draft')
+
+        result = self.Sub._try_settle_invoice(sub, invoice)
+
+        self.assertTrue(result, '餘額足夠時 settlement 應成功')
+        invoice.invalidate_recordset()
+        self.assertEqual(
+            invoice.payment_state, 'paid',
+            '餘額足夠路徑上的 _handle_invoice_creation 沒把發票結清')
+        partner.invalidate_recordset(['wallet_balance'])
+        self.assertEqual(
+            partner.wallet_balance, 300.0,
+            '錢包應被扣掉發票金額 800-500（實得 %s）' % partner.wallet_balance)
+        self.assertFalse(
+            self.env['woow.wallet.topup'].sudo().search(
+                [('partner_id', '=', partner.id)]),
+            '餘額足夠時不得觸發自動儲值（會對使用者的卡多刷一筆）')
+
+    # ── 失敗路徑：自動儲值被拒 → 不得謊報成功、不得結清發票 ──────────────
+    def test_declined_topup_leaves_invoice_unpaid(self):
+        """儲值被拒時 settlement 必須回報失敗，且不得把發票當成已付。"""
+        partner = self._make_partner('T1 Declined')
+        self._credit(partner, 100.0)
+        self._setup_token(partner, 'BC_T1_NG')
+        sub = self._make_sub(partner, 500.0)
+        invoice = self._make_invoice(partner, sub, 500.0)
+
+        # 陽性對照：缺口真的存在（否則「回報失敗」可能只是因為別的原因）
+        self.assertEqual(partner.wallet_balance, 100.0)
+        self.assertLess(partner.wallet_balance, invoice.amount_total)
+
+        with self._fake_ecpay_declined():
+            result = self.Sub._try_settle_invoice(sub, invoice)
+
+        self.assertFalse(
+            result, '儲值被拒時 settlement 不得回報成功（會讓 dunning 不啟動）')
+        invoice.invalidate_recordset()
+        self.assertNotEqual(
+            invoice.payment_state, 'paid',
+            '儲值失敗卻把發票標成已付 ⇒ 平台白送一個週期')
+        partner.invalidate_recordset(['wallet_balance'])
+        self.assertEqual(
+            partner.wallet_balance, 100.0,
+            '儲值失敗不得動到錢包餘額（實得 %s）' % partner.wallet_balance)

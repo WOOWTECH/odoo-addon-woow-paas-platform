@@ -34,10 +34,16 @@ class _McpServiceFixture(TransactionCase):
             'helm_repo_url': '',
             'helm_chart_name': 'oci://example/mcp-server',
             'helm_chart_version': '0.1.5',
-            # 對齊真實 seed：MCP 內建於 body（mcp_enabled=False），供給鏈閘門是
-            # has_admin_gui。
+            # 對齊真實 seed：MCP 內建於 body（mcp_enabled=False），admin_password
+            # 供給鏈閘門是 has_admin_gui。
             'mcp_enabled': False,
             'has_admin_gui': True,
+            # #530 review finding 3：gateway API key 有**自己的**閘門
+            # （_chart_has_gateway ← seed 的 gateway.externalPath），不跟著
+            # has_admin_gui 走。本 class 的四條 gateway key 遮罩／不外洩斷言都要求
+            # 「這台服務真的有一把 key」，所以 fixture chart 必須宣告 gateway；少了
+            # 這行，那些斷言會因為「根本沒有 key」而恆真（assertNotIn '' 家族）。
+            'helm_default_values': json.dumps({'gateway': {'externalPath': '/gateway'}}),
         })
         self.service = self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',
@@ -215,6 +221,128 @@ class TestResetAdminPasswordSanitisation(_McpServiceFixture):
             'old-password', json.dumps(payload),
             'service detail 不得含明文 admin_password')
         self.assertNotIn('admin_password', payload)
+
+    def test_gateway_api_key_is_masked_without_any_plaintext_prefix(self):
+        """🔴 #530：``auth.apiServerKey`` 也必須被遮罩——它**不在** config.sensitive 底下。
+
+        既有的遮罩是 path-aware 的：只認 top-level ``secret`` 子樹與
+        ``config.sensitive`` 底下的葉節點。chart 要求的 gateway key 鍵路徑是
+        ``auth.apiServerKey``，兩條都不命中 ⇒ 照抄 admin_password 的做法卻沒擴充
+        這一層，這把 key 會原樣從服務詳情 API 流出，而**只掃 config.sensitive 的
+        既有測試不會紅**。這條就是那個缺口的守線。
+
+        同時做**陰性面的陽性對照**：``auth.username`` 這種同層非憑證欄位不得被
+        一起遮掉（Odoo/PostgreSQL 家族的 seed 就有 ``auth.username``／
+        ``auth.database``）。把整個 ``auth`` 子樹全遮會讓那些 template 的設定分頁
+        顯示成一排 ``***``——遮罩要精準命中憑證那一格。
+        """
+        values = {
+            'auth': {
+                'apiServerKey': 'SuperSecretGatewayKey123456',
+                'username': 'woow',
+            },
+        }
+        sanitized = PaasController._sanitize_helm_values(values, self.template)
+
+        # 主斷言看**結果**（整份輸出裡找不到那個值），不是「某個欄位等於某字串」。
+        # 只斷言 `sanitized['auth']['apiServerKey'] == '***'` 的話，換一條洩漏路徑
+        # （值被複製到別的鍵、遮罩實作改成把原值搬去 sibling）就漏掉了——斷言只看
+        # 得到自己預期的失敗形狀。
+        self.assertNotIn(
+            'SuperSecretGatewayKey123456', json.dumps(sanitized),
+            'gateway API key 的明文不得出現在遮罩後的任何位置')
+        self.assertNotIn(
+            'SuperSec', json.dumps(sanitized),
+            '遮罩後不得殘留任何明文前綴（legacy secret 子樹那條刻意留 8 字元，'
+            '這條不得比照）')
+        self.assertEqual(
+            sanitized['auth']['apiServerKey'], '***',
+            'gateway API key 必須全遮（而不是被整個鍵刪掉——刪掉會讓設定分頁'
+            '看不出這個值存在）')
+        self.assertEqual(
+            sanitized['auth']['username'], 'woow',
+            '同層的非憑證欄位不得被連坐遮掉（整個 auth 子樹全遮是過度修法）')
+
+    def test_service_detail_never_exposes_the_stored_gateway_api_key(self):
+        """#530：GET service detail 不得帶出 secret 表裡的 gateway API key。
+
+        與 admin_password 同一條紀律：key 只在 create／reset 的 response 回一次，
+        detail 是租戶每次開頁都會打的端點，任何洩漏都是長期可重放的。本 repo 刻意
+        **不新增回讀端點**——新增等於開一條新的外洩面並要自行承擔授權。
+
+        陽性對照先立：key 真的存在才談「它不在 payload 裡」。
+        """
+        gateway_key = self._secret_of(self.service).gateway_api_key
+        self.assertTrue(
+            gateway_key,
+            '前置：fixture 服務應鑄出 gateway key —— 沒有這行，下面的 assertNotIn '
+            '在「key 從未被鑄造」的世界也是綠的')
+
+        payload = self.controller._format_service(self.service, include_details=True)
+
+        self.assertEqual(payload['id'], self.service.id)
+        self.assertNotIn(
+            gateway_key, json.dumps(payload),
+            'service detail 不得含明文 gateway API key')
+        self.assertNotIn('gateway_api_key', payload)
+
+    def test_gateway_api_key_is_stripped_before_helm_values_are_persisted(self):
+        """#530：``auth.apiServerKey`` 不得被寫回 ``helm_values``。
+
+        遮罩是第二道防線；第一道是「根本不落庫」。既有的 strip 同樣 path-aware
+        （只 pop ``config.sensitive``），所以 gateway key 這條路徑要另外擴充。
+        兩道都失效才會外洩，但只補一道就是把安全性押在另一道從沒為它設計過的
+        程式碼上。
+
+        走真正的落庫入口（``create()`` 的 vals 正規化），不是直接呼 strip helper
+        ——要證明的是「這條路徑上的值不會留下」，不是「helper 可以被呼叫」。
+        """
+        service = self.env['woow_paas_platform.cloud_service'].create({
+            'name': 'Gateway strip probe',
+            'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+            'helm_values': json.dumps({
+                'auth': {'apiServerKey': 'gw-key-must-not-persist'},
+                'config': {'nonSensitive': {'tools': {'enabled': ['search']}}},
+            }),
+        })
+
+        stored = json.loads(service.helm_values)
+        self.assertEqual(
+            stored['config']['nonSensitive']['tools'], {'enabled': ['search']},
+            '前置：非敏感值必須原樣留下——整包被丟掉的話下面那條是 vacuous')
+        self.assertNotIn(
+            'apiServerKey', stored.get('auth', {}),
+            'gateway API key 不得落進 helm_values（git／API 可見面）')
+        self.assertNotIn('gw-key-must-not-persist', service.helm_values)
+
+    def test_each_service_gets_a_distinct_gateway_api_key(self):
+        """#530：連建兩個 service → 兩把 gateway key 不得相等。
+
+        單一租戶的憑證外洩不得波及他人，所以 key 必須 per-service 生成而非常數／
+        共用值。長度下限 16 是**上游的硬需求**：低於 16 時 hermes gateway 會靜默
+        不登記 api server 平台——不報錯、健康信號直接消失，是無聲失效。生成點與
+        admin_password 收斂在同一個 method（token_urlsafe(24) ≈ 32 chars），所以
+        這裡連 32 一起斷言，換弱時兩把憑證會一起紅。
+        """
+        svc_a, svc_b = [
+            self.env['woow_paas_platform.cloud_service'].create({
+                'name': f'MCP Odoo gw {suffix}',
+                'workspace_id': self.workspace.id,
+                'template_id': self.template.id,
+            })
+            for suffix in ('A', 'B')
+        ]
+
+        key_a = self._secret_of(svc_a).gateway_api_key
+        key_b = self._secret_of(svc_b).gateway_api_key
+        self.assertTrue(key_a and key_b, '兩個 service 都必須自動備妥 gateway key')
+        self.assertNotEqual(key_a, key_b, '每個 service 的 gateway key 必須獨立生成')
+        self.assertGreaterEqual(
+            len(key_a), 16,
+            '低於 16 字元 → 上游靜默不登記 api server 平台（無聲失效）')
+        self.assertGreaterEqual(
+            len(key_a), 32, 'gateway key 強度不得低於 token_urlsafe(24)')
 
     def test_each_service_gets_a_distinct_password(self):
         """C20：連建兩個 service → 兩組 secret 不得相等。
