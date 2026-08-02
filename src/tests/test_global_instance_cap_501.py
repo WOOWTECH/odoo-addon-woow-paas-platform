@@ -441,16 +441,39 @@ class TestAvailabilityPayload(_CapFixtureMixin, TransactionCase):
         self.assertEqual(self._availability(tpl)['reason'], 'paused')
 
     def test_availability_counts_across_all_tenants(self):
-        """計數必須 sudo：ir.rule `cloud_service_rule_workspace_member` 會讓非 sudo
-        的 search 只看得到呼叫者是成員的 workspace。全域計數必然跨租戶，少算就是
-        守衛靜默 fail-open。
+        """計數必須 sudo：ir.rule `cloud_service_rule_workspace_member` 讓非 sudo 的
+        search 只看得到呼叫者是成員的 workspace。全域計數必然跨租戶，少算＝守衛靜默
+        fail-open。
 
-        本條把「別人的服務也計入」釘住——fixture 的每台都屬別的帳號。
+        ⚠ **必須以真實租戶身分求值**。原版直接在 `self.env` 下斷言，而
+        `TransactionCase` 的 uid 是 SUPERUSER——ir.rule 對 superuser **不套用**，
+        所以把 `_count_active_for_template` 的 `.sudo()` 拿掉，那個版本**照樣綠**：
+        它證明的是「計數正確」，不是「計數有 sudo」。這裡改用一個對所有 fixture
+        workspace 都不是成員的租戶身分求值，`.sudo()` 才成為通過的必要條件。
         """
         tpl = self._make_template('avail-crosstenant-501')
         self._set_cap(tpl, str(self.CAP))
         self._fill_to_cap(tpl, self.CAP)
-        self.assertFalse(self._availability(tpl)['purchasable'])
+
+        outsider = self.env['res.users'].create({
+            'name': 'Outsider 501',
+            'login': 'cap-outsider-501',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        # 陽性對照：這個身分確實被 ir.rule 擋住——若它看得到別人的服務，
+        # 本條就退化成與原版一樣的恆真斷言。
+        visible = self.env['%s.cloud_service' % MOD].with_user(outsider).search_count(
+            [('template_id', '=', tpl.id)])
+        self.assertEqual(
+            visible, 0,
+            '這個租戶身分看得到別的 workspace 的服務 ⇒ ir.rule 沒生效，'
+            '本條對「計數是否 sudo」失去鑑別力（fixture 或 ACL 變了）')
+
+        avail = tpl.with_user(outsider)._availability()
+        self.assertFalse(
+            avail['purchasable'],
+            '以看不到那些服務的租戶身分求值時變成可購買 ⇒ 計數沒有 sudo、'
+            '每個租戶各自算自己的數 ⇒ 全域上限形同虛設')
 
 
 @tagged('post_install', '-at_install')
