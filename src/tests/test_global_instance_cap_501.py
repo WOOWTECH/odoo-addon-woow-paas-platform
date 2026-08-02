@@ -130,6 +130,20 @@ class _CapFixtureMixin:
         return [self._make_service(template, '%s-%d' % (template.slug, i))
                 for i in range(cap)]
 
+    def _assert_sales_paused_is_live(self, template, tag):
+        """陽性對照：確認停售旗標**此刻真的生效**。
+
+        「停售期間 X 仍寫得進去」這類斷言，若 `_set_paused` 失效（key 改名、param
+        沒寫進去），會在「根本沒停售」的情況下同樣通過 ⇒ 整條退化成恆真而無人察覺。
+        用 `create()` 反向確認：停售中的 template 不該再收得下新的實例。
+
+        擺在**主斷言之後**呼叫——這裡的 create 會 raise，讓它離開主斷言的路徑。
+        """
+        with self.assertRaises(
+                SupplyGateError,
+                msg='停售旗標沒生效 ⇒ 本條測不到「停售期間」，鑑別力歸零'):
+            self._make_service(template, tag)
+
 
 @tagged('post_install', '-at_install')
 class TestGlobalCapResolution(_CapFixtureMixin, TransactionCase):
@@ -360,14 +374,31 @@ class TestGlobalCapEnforcement(_CapFixtureMixin, TransactionCase):
         （#519），不是在 write() 打地鼠。
 
         繞道本身**可達**（租戶對 cloud_service 有全 CRUD），這正是 #519 要解的。
+
+        ⚠ **觸發器必須是「停售」而不是「填滿 cap」**，否則本條對它要偵測的 mutation
+        零鑑別力——這正是被刪掉的 `test_write_between_counted_states_is_not_guarded`
+        的死因（覆核 B-4），第一版的本條犯了同一個錯，實測才抓到：
+
+        `_enforce_supply_gate` 的判定式是**嚴格大於**，且它預期「計數已含剛落庫的
+        這筆」（create 路徑成立）。但 write 路徑的守衛在 `super().write()` **之前**
+        求值，此時該筆還是 `deleting`、不被計數 ⇒ 計數停在 `cap`、`cap > cap` 為假
+        ⇒ **守衛就算加回來也照樣放行**，本條照樣綠。（順帶說明那道守衛在 write 路徑
+        本來就有 off-by-one，又一個它不該存在的理由。）
+
+        `paused` 分支則在計數**之前**就 return，不受這個 off-by-one 影響 ⇒ 守衛一旦
+        回歸必然 raise。實測：注入守衛原文 → 本條紅；移除 → 綠。
         """
         self._fill_to_cap(self.tpl, self.CAP)
         sneaked = self._make_service(self.tpl, 'sneak', state='deleting')
+        # 停售要在 fixture 建好之後才開，否則 create() 的閘門會擋掉 fixture 本身。
+        self._set_paused(self.tpl, True)
+
         sneaked.write({'state': 'pending'})
         self.assertEqual(
             sneaked.state, 'pending',
             'write() 出現了上限守衛。若這是刻意加的，請先確認它不會誤傷 '
             '_delete_service 的 except 分支（state deleting → error），並更新 #519。')
+        self._assert_sales_paused_is_live(self.tpl, 'sneak-probe')
 
     def test_delete_failure_path_survives_sales_pause(self):
         """🔴 回歸守線：停售時「刪除失敗的善後」必須寫得進去（B3 誤傷的那個形態）。
@@ -379,12 +410,23 @@ class TestGlobalCapEnforcement(_CapFixtureMixin, TransactionCase):
 
         鑑別力：把 B3 那段守衛加回 `write()`，這條會 raise SupplyGateError 而紅。
         本條不走 HTTP——受測的是 model 層的可寫性，不是端點行為。
+
+        ⚠ **停售必須在 fixture 建好之後才打開，順序不可對調**。第一版寫成先
+        `_set_paused(True)` 再 `_make_service(...)`，結果 `create()` 的閘門（那道
+        **刻意保留**的守衛）把 fixture 自己擋掉，測試以 SupplyGateError 收場——
+        error 的來源是 create、與本條要驗的 write 無關，卻長得像「守衛還在」。
+        真實情境本來就是這個順序：服務先存在、營運後來才停售。
         """
-        self._set_paused(self.tpl, True)
         svc = self._make_service(self.tpl, 'delfail', state='deleting')
+        self._set_paused(self.tpl, True)
+
         svc.write({'state': 'error', 'error_message': 'uninstall failed'})
-        self.assertEqual(svc.state, 'error')
+        self.assertEqual(
+            svc.state, 'error',
+            '停售期間 deleting → error 被擋下 ⇒ 刪除失敗的善後寫不進去，'
+            '服務停在 deleting、錯誤原因遺失（B-1 的誤傷形態復發）')
         self.assertEqual(svc.error_message, 'uninstall failed')
+        self._assert_sales_paused_is_live(self.tpl, 'delfail-probe')
 
 
 @tagged('post_install', '-at_install')
