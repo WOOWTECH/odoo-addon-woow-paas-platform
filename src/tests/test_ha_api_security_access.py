@@ -9,6 +9,14 @@ from datetime import timedelta
 from odoo import fields
 from odoo.tests.common import HttpCase, tagged
 
+# #522: server-owned identity anchors (tunnel_id/tunnel_token/dns_record_id/
+# access_app_id/...) are immutable for everyone; provisioning code stores the
+# ids Cloudflare hands back through this in-process sentinel hatch, and these
+# fixtures simulate exactly that. See models/security_access.py.
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _internal_identity as _internal,
+)
+
 
 @tagged('post_install', '-at_install')
 class TestHaApiSecurityAccess(HttpCase):
@@ -40,7 +48,7 @@ class TestHaApiSecurityAccess(HttpCase):
                            'user_id': self.user.id, 'role': 'owner'})
         self.sa = self.env['woow_paas_platform.security_access'].sudo().create(
             {'name': 'HA Gateway', 'workspace_id': self.workspace.id})
-        self.sa.sudo().write({
+        _internal(self.sa.sudo()).write({
             'state': 'active', 'tunnel_id': 'tun-ha',
             'tunnel_token': 'tok-ha-secret',
         })

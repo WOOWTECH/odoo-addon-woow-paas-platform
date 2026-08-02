@@ -19,6 +19,14 @@ from ..services.reconciler import (
     reconcile_orphans,
 )
 
+# #522: server-owned identity anchors (tunnel_id/tunnel_token/dns_record_id/
+# access_app_id/...) are immutable for everyone; provisioning code stores the
+# ids Cloudflare hands back through this in-process sentinel hatch, and these
+# fixtures simulate exactly that. See models/security_access.py.
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _internal_identity as _internal,
+)
+
 
 class _FakeClient:
     """最小 operator client 替身：回固定 inventory（避免真打 HTTP）。"""
@@ -143,7 +151,7 @@ class TestReconcileOrphansEndToEnd(TransactionCase):
         """SA 持有 tun-keep → inventory 含 tun-keep（活躍）+ tun-ghost（孤兒）→ 只回 ghost。"""
         sa = self.env['woow_paas_platform.security_access'].create({
             'name': 'SAk', 'workspace_id': self.ws.id})
-        sa.write({'tunnel_id': 'tun-keep'})
+        _internal(sa).write({'tunnel_id': 'tun-keep'})
         client = _FakeClient({
             'paas_env': 'stg', 'shared_tunnel_id': _SHARED_TUN,
             'partial': False, 'failed_kinds': [],

@@ -1,4 +1,5 @@
 """F-ENV-5: workspace.unlink() 必須讓帶 Cloudflare tunnel 的子 record
+
 （SecurityAccess / SmartHome）走各自的 Python unlink()（含 F-ENV-4 fail-loud
 guard）做 teardown，而不是讓 DB 層 FK cascade 直接 SQL DELETE 繞過它、把計費中
 的 tunnel 變成無 retry 錨點的永久孤兒。
@@ -13,6 +14,14 @@ from unittest.mock import patch, MagicMock
 
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import UserError
+
+# #522: server-owned identity anchors (tunnel_id/tunnel_token/dns_record_id/
+# access_app_id/...) are immutable for everyone; provisioning code stores the
+# ids Cloudflare hands back through this in-process sentinel hatch, and these
+# fixtures simulate exactly that. See models/security_access.py.
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _internal_identity as _internal,
+)
 
 
 def _mock_sh():
@@ -60,10 +69,8 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         with _mock_sa() as mock_get:
             mock_client = MagicMock()
             mock_get.return_value = mock_client
-            sa = self.SA.create({
-                'name': 'sa', 'workspace_id': ws.id,
-                'tunnel_id': 'tun-live-2',
-            })
+            sa = self.SA.create({'name': 'sa', 'workspace_id': ws.id})
+            _internal(sa).write({'tunnel_id': 'tun-live-2'})
             sa_id = sa.id
             ws.unlink()
             mock_client.delete_tunnel.assert_called_once_with('tun-live-2')
@@ -118,9 +125,8 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
                 'name': 'sh', 'workspace_id': ws.id,
                 'tunnel_id': 'tun-sh', 'state': 'active',
             })
-            sa = self.SA.create({
-                'name': 'sa', 'workspace_id': ws.id, 'tunnel_id': 'tun-sa',
-            })
+            sa = self.SA.create({'name': 'sa', 'workspace_id': ws.id})
+            _internal(sa).write({'tunnel_id': 'tun-sa'})
             sh_id, sa_id = sh.id, sa.id
             ws.unlink()
             sh_client.delete_tunnel.assert_called_once_with('tun-sh')
@@ -269,8 +275,8 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             sh = self.SmartHome.create({
                 'name': 'sh', 'workspace_id': ws.id,
                 'tunnel_id': 'tun-mix-sh', 'state': 'active'})
-            sa = self.SA.create({
-                'name': 'sa', 'workspace_id': ws.id, 'tunnel_id': 'tun-mix-sa'})
+            sa = self.SA.create({'name': 'sa', 'workspace_id': ws.id})
+            _internal(sa).write({'tunnel_id': 'tun-mix-sa'})
             cs_id, sh_id, sa_id = cs.id, sh.id, sa.id
             subdomain = cs.subdomain
             ws.unlink()

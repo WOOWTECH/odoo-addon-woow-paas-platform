@@ -9,6 +9,14 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
 
+# #522: server-owned identity anchors (tunnel_id/tunnel_token/dns_record_id/
+# access_app_id/...) are immutable for everyone; provisioning code stores the
+# ids Cloudflare hands back through this in-process sentinel hatch, and these
+# fixtures simulate exactly that. See models/security_access.py.
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _internal_identity as _internal,
+)
+
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.security_access.'
     'get_paas_operator_client'
@@ -83,7 +91,7 @@ class TestSecurityAccessCron(TransactionCase):
             'security_access_id': sa.id,
             'subdomain_prefix': sa.canonical_name,
         })
-        sa.write({'state': 'active', 'tunnel_id': 'tun-cron'})
+        _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-cron'})
         sub = self._make_subscription(sub_state, **sub_kwargs)
         sa.write({'subscription_id': sub.id})
         return sa
@@ -175,7 +183,7 @@ class TestSecurityAccessCron(TransactionCase):
         """
         sa = self._make_sa_with_sub('cancel')
         # 模擬已經跑過 cleanup 的終態：tunnel 已清、state=deleting
-        sa.write({'state': 'deleting', 'tunnel_id': False})
+        _internal(sa).write({'state': 'deleting', 'tunnel_id': False})
         mock_client = MagicMock()
         mock_client.sync_tunnel_routes.return_value = {'routes': []}
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
