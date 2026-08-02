@@ -685,27 +685,46 @@ class PaasController(HiddenChainMixin, Controller):
         if existing:
             return {'success': False, 'error': 'User is already a member of this workspace'}
 
+        # #525 A3：唯一的寫入是這行 create，但例外被下面的 `except` 吃掉後不會傳播
+        # 到框架層 → request 正常結束 → transaction 照常 commit → 那一列授權留下來：
+        # **被邀請者實際已取得成員權限**，API 卻說失敗。加上
+        # `unique_user_workspace` 與上面的「已是成員」前置檢查，使用者會被鎖在
+        # 「第一次說邀請失敗、再邀說已是成員」的矛盾狀態，兩邊都不是真的。
+        #
+        # 殘留視窗在 `models.py` 的 `_create` 尾端：INSERT 已下 →
+        # `records._validate_fields(...)` → `records.check_access('create')`。
+        # 目前的規則與 constraint 下這條路徑不完全可達（`_check_owner_count` 只在
+        # role=='owner' 時拋，而 `ASSIGNABLE_ROLES` 不含 owner；`workspace_access`
+        # 的 create rule 對 `base.group_user` 全開）——但那是**設定**擋著，不是這段
+        # 程式有守。收緊 create rule 或加一條 `@api.constrains` 殘留立即可達，所以
+        # 結構上照 A1／A2 同一形態修掉。
         try:
-            new_access = WorkspaceAccess.create({
-                'workspace_id': workspace_id,
-                'user_id': target_user.id,
-                'role': role,
-                'invited_by_id': user.id,
-            })
-
-            return {
-                'success': True,
-                'data': {
-                    'id': new_access.id,
+            with request.env.cr.savepoint():
+                new_access = WorkspaceAccess.create({
+                    'workspace_id': workspace_id,
                     'user_id': target_user.id,
-                    'name': target_user.name,
-                    'email': target_user.email,
                     'role': role,
-                }
-            }
+                    'invited_by_id': user.id,
+                })
         except Exception as e:
             _logger.error("Error inviting member: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while inviting the member. Please try again.'}
+
+        # 回應組裝移出 try，與 `_create_workspace` 對齊。**這一半今天沒有對應的
+        # 測試，因為它造不出可達的失敗**：組裝只讀 `new_access.id`（純記憶體、
+        # 不碰 DB）與上面已 sudo 取得的 `target_user`。移出來是結構防護——savepoint
+        # 在離開 `with` 時就 release，日後若有人在組裝區加入一次 DB 讀取，留在 try
+        # 內就會以「邀請失敗、對方卻已入群」的形式把本次修掉的缺陷原樣帶回來。
+        return {
+            'success': True,
+            'data': {
+                'id': new_access.id,
+                'user_id': target_user.id,
+                'name': target_user.name,
+                'email': target_user.email,
+                'role': role,
+            }
+        }
 
     def _update_member_role(self, workspace_id: int, access_id: int, role: str | None) -> dict[str, Any]:
         """
