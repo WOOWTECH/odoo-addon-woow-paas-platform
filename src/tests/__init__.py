@@ -278,3 +278,5 @@ from . import test_security_access_identity_anchor_522
 from . import test_workspace_create_rollback_525
 # fix: #525 A3 _invite_member 吞例外 → 被邀請者已入群、API 卻說失敗（結構缺陷，目前潛伏）
 from . import test_invite_member_rollback_525
+# feat: #501 全域實例上限硬閘 + 停售開關（config_parameter 載體、售罄現算）
+from . import test_global_instance_cap_501

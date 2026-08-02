@@ -121,6 +121,16 @@
                             <field name="woow_show_projects"/>
                         </setting>
                     </block>
+                    <block title="限量商品供給" name="supply_gate">
+                        <setting string="HAOS 全域實例上限"
+                                 help="整個平台最多同時存在幾台 HAOS（跨所有帳號）。達到上限後商品仍顯示在應用商店並標示「已售罄」，但不能下單。留空＝使用內建預設上限（不是「不限」）；填 0 會被存成未設定，等同留空。（#501）">
+                            <field name="woow_haos_global_instance_cap"/>
+                        </setting>
+                        <setting string="HAOS 暫停販售"
+                                 help="營運手動停售：不論還剩幾個名額都不再收單。與自動推導的「已售罄」是兩件事，前台分別顯示。只擋新下單，不影響已開通的服務。（#501）">
+                            <field name="woow_haos_sales_paused"/>
+                        </setting>
+                    </block>
                     <block title="AI Assistant Configuration" name="ai_assistant">
                         <setting string="AI Configuration"
                                  help="Select the AI configuration and assistant for AI features.">

@@ -1,5 +1,7 @@
 from odoo import fields, models
 
+from .cloud_app_template import _DEFAULT_GLOBAL_INSTANCE_CAPS
+
 
 class ResConfigSettings(models.TransientModel):
     _inherit = 'res.config.settings'
@@ -128,6 +130,38 @@ class ResConfigSettings(models.TransientModel):
              'tasks, chat) nav + routes. Default OFF: Projects are hidden '
              '(cosmetic feature gate, same build per-env parameter). NOT a '
              'security boundary — see _show_projects in controllers/paas.py.',
+    )
+
+    # 限量商品的供給閘門（#501）
+    #
+    # 這兩個 key 必須與 `cloud_app_template._global_cap_param_key()` /
+    # `._sales_paused_param_key()` 對 HAOS 推導出來的字串一致——那是本設計最容易
+    # 無聲漂移的接縫（營運以為自己調了上限，守衛讀的還是內建預設，而且不會有任何
+    # 東西報錯）。守線＝`test_global_instance_cap_501.TestSettingsFieldTargetsGuardParam`。
+    #
+    # 新增限量商品時：這裡補一組欄位、`cloud_app_template._DEFAULT_GLOBAL_INSTANCE_CAPS`
+    # 補一筆、`hooks.py` 的 `_CONFIG_PARAMETERS` 補兩個 key。守衛本身不用動。
+    woow_haos_global_instance_cap = fields.Integer(
+        string='HAOS 全域實例上限',
+        config_parameter='woow_paas_platform.global_instance_cap.haos',
+        # 未設定時畫面顯示**內建預設**而不是 0：`get_values` 在 param 缺值時回退到
+        # 欄位 default，而守衛缺值時走的正是內建預設 —— 兩邊對齊才不會出現「畫面
+        # 說 0（看起來像不限）、實際擋在 8」的矛盾（PR #517 覆核）。
+        default=lambda self: _DEFAULT_GLOBAL_INSTANCE_CAPS.get('haos', 0),
+        help='整個平台最多同時存在幾台 HAOS（跨所有帳號）。達到上限後商品仍會'
+             '顯示在應用商店，但標示為「已售罄」且不能下單。'
+             '留空＝使用程式內建的預設上限（不是「不限」）。'
+             '⚠ 填 0 會被 Odoo 存成「未設定」，因此等同留空、回到內建預設；'
+             '要解除限量請填一個大於實際供給天花板的數字。'
+             '停權（suspended）與錯誤（error）的實例照樣佔名額，'
+             '只有刪除中（deleting）不佔。',
+    )
+    woow_haos_sales_paused = fields.Boolean(
+        string='HAOS 暫停販售',
+        config_parameter='woow_paas_platform.sales_paused.haos',
+        help='營運手動停售：不論還剩幾個名額都不再收單。與「已售罄」是兩件事'
+             '（售罄是達到上限後自動推導出來的），前台會分別顯示。'
+             '預設關閉——本開關只擋新下單，不影響任何已開通的服務。',
     )
 
     # Subscription Lifecycle Settings

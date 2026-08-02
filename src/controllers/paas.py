@@ -921,6 +921,11 @@ class PaasController(HiddenChainMixin, Controller):
             'min_ram_gb': template.min_ram_gb,
             'min_storage_gb': template.min_storage_gb,
             'pricing': self._template_pricing(template),
+            # #501：可購買性。**頂層欄位，刻意不塞進 pricing**——「能不能買」與
+            # 「多少錢」正交，混進同一個欄位正是 #478 的根因形態（一個欄位承載兩個
+            # 語意）。前端 fail-closed 讀 `availability.purchasable`，`reason` 只
+            # 決定文案。判準由 model 單點裁決，這裡直接搬、不做任何推導。
+            'availability': template._availability(),
         }
         if include_values:
             data['helm_chart_name'] = template.helm_chart_name
