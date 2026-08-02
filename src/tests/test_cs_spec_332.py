@@ -3,7 +3,7 @@
 import copy
 import json
 
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 
 @tagged('post_install', '-at_install')
@@ -168,12 +168,137 @@ class TestPlanSpecOverlay(TransactionCase):
         self.assertEqual(
             out.get('customPostInitScripts'), base.get('customPostInitScripts'))
 
-    def test_overlay_wired_into_create_path(self):
-        """接線守衛：overlay 必須在部署組裝路徑上被呼叫（定義 1 次＋呼叫 ≥1 次）。"""
-        import inspect
-        from odoo.addons.woow_paas_platform.controllers import paas
-        from odoo.addons.woow_paas_platform.models import cloud_service
-        combined = (inspect.getsource(paas) + inspect.getsource(cloud_service))
-        self.assertGreaterEqual(
-            combined.count('_apply_plan_spec_overlay'), 2,
-            'overlay 已定義但未接進 _create_service 部署組裝路徑')
+
+@tagged('post_install', '-at_install')
+class TestOverlayLandsInStoredHelmValues(HttpCase):
+    """建立服務後，**存下來的 helm_values** 必須帶著 plan 規格（wire-level）。
+
+    取代原本的 `inspect.getsource(paas) + getsource(cloud_service)` 再
+    `count('_apply_plan_spec_overlay') >= 2` 子字串守衛。那條有兩個洞：
+
+    1. 註解裡提到兩次就餵飽（`# 用 _apply_plan_spec_overlay 疊規格` 寫兩行即可）；
+    2. `>= 2` 讓「呼叫被刪、只剩定義 + 一個註解」照樣過——正是它該擋的那個回歸。
+
+    改測行為結果：走使用者唯一入口（`/api/workspaces/<id>/services` 的
+    `action='create'`）建立服務，再讀 DB 裡 `service.helm_values`——那份 JSON 就是
+    之後交給 Helm 的東西。overlay 沒被呼叫時，值會停在 template 的 base 預設。
+
+    🔴 陽性對照內建：base 預設值與 plan 規格**刻意取不同值**，且同一條測試先斷言
+    「服務真的建起來了、helm_values 解得出 JSON、未被 overlay 的 key 原樣保留」。
+    少了這些，`helm_values` 是空 dict／建立根本失敗時，規格斷言會退化成看不出
+    差別的假綠。
+    """
+
+    # base 與 plan 規格刻意全維度不同：任何一維沒被 overlay 都會被抓到
+    BASE_VALUES = {
+        'resources': {'requests': {'cpu': '1', 'memory': '1Gi'},
+                      'limits': {'cpu': '1', 'memory': '1Gi'}},
+        'persistence': {'size': '10Gi'},
+        'untouchedKey': 'keep-me',
+    }
+    PLAN_SPEC = {'cs_vcpu': 3, 'cs_ram_gb': 4.0, 'cs_storage_gb': 40}
+
+    def setUp(self):
+        super().setUp()
+        self.authenticate('admin', 'admin')
+        self.admin_user = self.env.ref('base.user_admin')
+        self.CloudService = self.env['woow_paas_platform.cloud_service']
+        self.ws = self.env['woow_paas_platform.workspace'].create({
+            'name': 'WS 332 overlay', 'owner_id': self.admin_user.id})
+
+        # 訂閱建立需要 company.sh_journal_id；bare install 的 at_install 環境不
+        # 保證已設好（見 test_create_service_validation_rollback_520 的同段註解）。
+        # 沒有它「建立成功」走不完，本檔的規格斷言就會退化成假綠。
+        company = self.env.company.sudo()
+        if not self.env['account.journal'].search([
+            ('company_id', '=', company.id), ('type', '=', 'sale'),
+        ], limit=1):
+            self.env['account.journal'].sudo().create({
+                'name': 'Test Sales 332', 'code': 'TS332', 'type': 'sale',
+                'company_id': company.id})
+        self.env['res.company'].sudo()._ensure_subscription_journal()
+        self.assertTrue(
+            company.sh_journal_id,
+            '本檔需要可用的訂閱 journal，否則建立服務走不完、規格斷言退化成假綠')
+
+        # 合成 plan／template：不綁 seed 商品的定價與規格（#478／#494 教訓）
+        self.plan = self.env['sh.subscription.plan'].create(dict(
+            self.PLAN_SPEC,
+            name='Plan 332 overlay', sh_duration=1, sh_unit='month',
+            sh_plan_price=100, sh_no_of_billing_cycle=-1,
+            service_type='cloud_service'))
+        self.env['product.template'].create({
+            'name': 'Product 332 overlay', 'type': 'service', 'list_price': 100,
+            'sh_product_subscribe': True,
+            'sh_subscription_plan_id': self.plan.id})
+        self.tpl = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'Overlay 332', 'slug': 'overlay-332',
+            'helm_repo_url': '',
+            'helm_chart_name': 'oci://example.invalid/overlay-332',
+            'helm_chart_version': '0.0.0',
+            'is_active': True, 'is_hidden': False,
+            'helm_default_values': json.dumps(self.BASE_VALUES),
+            'subscription_plan_ids': [(6, 0, [self.plan.id])]})
+        self.env.flush_all()
+
+    def _create(self, name):
+        body = (
+            '{"jsonrpc":"2.0","method":"call","params":'
+            '{"action":"create","template_id":%s,"name":"%s","plan_id":%s}}'
+            % (self.tpl.id, name, self.plan.id)
+        )
+        resp = self.url_open(
+            '/api/workspaces/%s/services' % self.ws.id,
+            data=body, headers={'Content-Type': 'application/json'})
+        parsed = resp.json()
+        self.assertIn('result', parsed, 'resp: %s' % parsed)
+        self.env.invalidate_all()
+        return parsed['result']
+
+    def test_created_service_helm_values_carry_plan_spec(self):
+        result = self._create('svc-332-overlay')
+
+        # 陽性對照①：服務真的建起來了（失敗的話下面全部無從談起）
+        self.assertTrue(result.get('success'), '建立服務應成功（回 %r）' % result)
+        svc = self.CloudService.search([
+            ('template_id', '=', self.tpl.id),
+            ('workspace_id', '=', self.ws.id)])
+        self.assertEqual(len(svc), 1, '應恰建立一筆服務（實得 %s 筆）' % len(svc))
+
+        # 陽性對照②：helm_values 解得出 JSON，且沒被 overlay 的 key 原樣保留
+        # ——證明讀到的確實是組裝出來的那份 values，而不是空 dict／別的東西
+        stored = json.loads(svc.helm_values)
+        self.assertEqual(
+            stored.get('untouchedKey'), 'keep-me',
+            'template base values 沒進到 helm_values ⇒ 讀錯東西了，'
+            '下面的規格斷言不具鑑別力')
+
+        # 核心：plan 的 cs_* 必須落進要交給 Helm 的那份 values
+        for scope in ('requests', 'limits'):
+            self.assertEqual(
+                stored['resources'][scope]['cpu'], '3',
+                'resources.%s.cpu 仍是 template base 的 1 ⇒ overlay 沒接進'
+                ' _create_service（cs_vcpu=3）' % scope)
+            self.assertEqual(
+                stored['resources'][scope]['memory'], '4Gi',
+                'resources.%s.memory 仍是 template base 的 1Gi ⇒ overlay 沒接進'
+                ' _create_service（cs_ram_gb=4.0）' % scope)
+        self.assertEqual(
+            stored['persistence']['size'], '40Gi',
+            'persistence.size 仍是 template base 的 10Gi ⇒ overlay 沒接進'
+            ' _create_service（cs_storage_gb=40）')
+
+    def test_allocated_fields_follow_plan_spec(self):
+        """同一條路徑的另一半：allocated_* 也必須跟著選定 plan（#332）。"""
+        result = self._create('svc-332-allocated')
+        self.assertTrue(result.get('success'), '建立服務應成功（回 %r）' % result)
+        svc = self.CloudService.search([
+            ('template_id', '=', self.tpl.id),
+            ('workspace_id', '=', self.ws.id)])
+        self.assertEqual(len(svc), 1)
+        self.assertEqual(
+            (svc.allocated_vcpu, svc.allocated_ram_gb, svc.allocated_storage_gb),
+            (3, 4.0, 40),
+            'allocated_* 應取自 plan 的 cs_*（實得 %s）'
+            % [svc.allocated_vcpu, svc.allocated_ram_gb,
+               svc.allocated_storage_gb])
