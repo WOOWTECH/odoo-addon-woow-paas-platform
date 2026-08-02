@@ -107,8 +107,8 @@ jobs:
           docker run -d --name pg \
             -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo -e POSTGRES_DB=postgres \
             postgres:15
-          # ⚠ 這一輪刻意「不」在容器層設 MALLOC_ARENA_MAX，
-          # 才能在 R6 用 docker exec -e 做 A/B 隔離（run 1422 兩個緩解一起上，不知哪個生效）。
+          # 不設 MALLOC_ARENA_MAX：run 1424 的 A/B 已證明它不是 MemoryError 的解，
+          # 真正載重的是 odoo 的 --limit-memory-hard=0（見檔頭）。
           docker run -d --name odoo \
             -e AGENT_RUNTIME_NAMESPACE_SECRET="${AGENT_RUNTIME_NAMESPACE_SECRET}" \
             --entrypoint bash "$IMG" -c 'sleep infinity'
@@ -174,50 +174,80 @@ jobs:
             "import sys; sys.argv=['odoo']; from odoo.tools import config; \
              print({k: config[k] for k in ('workers','limit_memory_hard','limit_memory_soft','max_cron_threads','config','data_dir')})" || true
 
-      - name: R6 - MemoryError 真因隔離（A/B，各一次 install）
+      - name: R6 - install（不跑測試，計時）
         run: |
-          echo "--- 核心/記憶體策略 ---"
-          docker exec odoo sh -c 'cat /proc/sys/vm/overcommit_memory /proc/sys/vm/overcommit_ratio' || true
-          docker exec odoo sh -c 'grep -E "CommitLimit|Committed_AS|MemTotal|MemAvailable" /proc/meminfo' || true
-
-          # A：不設 MALLOC_ARENA_MAX，但帶 odoo 的 workers/limit-memory 旗標
           T0=$(date +%s)
           set +e
-          docker exec odoo "${ODOO_BIN}" -d testA -i woow_paas_platform \
+          docker exec odoo "${ODOO_BIN}" -d test -i woow_paas_platform \
             --stop-after-init --without-demo=all --no-http \
-            --workers=0 --max-cron-threads=0 \
-            --limit-memory-hard=0 --limit-memory-soft=0 \
-            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data-a \
-            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/a.log 2>&1
-          RCA=$?
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/install.log 2>&1
+          RC=$?
           set -e
           T1=$(date +%s)
-          echo "MEASURE isolate_A_no_arena_with_odoo_flags exit=$RCA seconds=$((T1-T0))"
-          { grep -E "MemoryError|CRITICAL|Modules loaded" /tmp/a.log || true; } | tail -5
+          echo "MEASURE install_seconds=$((T1-T0)) exit=$RC"
+          if [ "$RC" -ne 0 ]; then tail -40 /tmp/install.log; exit "$RC"; fi
 
-          # B：設 MALLOC_ARENA_MAX=2，但不帶任何 odoo 旗標
+      - name: R7 - 全套測試 + skip 盤點 + stats:DEBUG 驗證
+        run: |
           T0=$(date +%s)
           set +e
-          docker exec -e MALLOC_ARENA_MAX=2 odoo "${ODOO_BIN}" -d testB -i woow_paas_platform \
-            --stop-after-init --without-demo=all --no-http \
-            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data-b \
-            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/b.log 2>&1
-          RCB=$?
+          docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
+            --test-enable --test-tags /woow_paas_platform \
+            --stop-after-init \
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --http-port=18069 --gevent-port=18072 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
+            --log-handler=odoo.tests.stats:DEBUG > /tmp/test.log 2>&1
+          RC=$?
           set -e
           T1=$(date +%s)
-          echo "MEASURE isolate_B_arena_no_odoo_flags exit=$RCB seconds=$((T1-T0))"
-          { grep -E "MemoryError|CRITICAL|Modules loaded" /tmp/b.log || true; } | tail -5
+          echo "MEASURE test_seconds=$((T1-T0)) odoo_exit=$RC"
 
-          echo "VERDICT A(no-arena)=$RCA B(arena-only)=$RCB"
-          echo "  A!=0 且 B==0  ⇒ 真因是 glibc arena，唯一需要保留的緩解是 MALLOC_ARENA_MAX"
-          echo "  A==0 且 B==0  ⇒ 1421 的 MemoryError 是暫時性，兩個緩解都不是必要條件"
-          echo "  A==0 且 B!=0  ⇒ 真因與 odoo 旗標有關（與診斷結果矛盾，需重查）"
+          echo "=== summary 行（沒有這行代表 log 截斷）==="
+          grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log || echo "::error::找不到 summary"
 
-      - name: R8 - 收尾與磁碟盤點
+          echo "=== ★ SKIP 盤點（summary 完全不會顯示這個）==="
+          SKIPS=$({ grep -cE "INFO .*: skipped " /tmp/test.log || true; })
+          echo "MEASURE skipped_count=${SKIPS}"
+          echo "--- 被 skip 的測試與理由（完整列名，不是只給數字）---"
+          { grep -oE "skipped [^:]+ : .*$" /tmp/test.log || true; } \
+            | sed 's/[[:space:]]*$//' | sort | uniq -c | sort -rn
+          echo "--- 依理由彙總 ---"
+          { grep -oE "skipped [^:]+ : .*$" /tmp/test.log || true; } \
+            | sed -E 's/^skipped [^:]+ : //' | sed 's/[[:space:]]*$//' | sort | uniq -c | sort -rn
+
+          echo "=== ★ stats:DEBUG 的 Detailed Tests Report 是否真的產出 ==="
+          if grep -q "Detailed Tests Report" /tmp/test.log; then
+            echo "DETAIL_REPORT_PRESENT=yes"
+          else
+            echo "DETAIL_REPORT_PRESENT=no  ::error::stats:DEBUG 沒產出報告，G2/G3 設計要改"
+          fi
+          for G in 1 3 4; do
+            N=$({ grep -oE "^\s+[A-Za-z_][A-Za-z0-9_.]*: [0-9.]+s [0-9]+ queries$" /tmp/test.log || true; } \
+                 | awk -v g="$G" -F: '{n=split($1,a,"."); if (n==g) c++} END {print c+0}')
+            echo "MEASURE detail_lines_granularity_${G}=${N}"
+          done
+          echo "--- Detailed report 取樣 5 行 ---"
+          { grep -E "^\s+[A-Za-z_][A-Za-z0-9_.]*: [0-9.]+s [0-9]+ queries$" /tmp/test.log || true; } | tail -5
+
+          echo "=== 交叉檢查：被 skip 的測試有沒有出現在 detail report 裡（若有 ⇒ G3 差集抓不到 skip）==="
+          FIRST_SKIP=$({ grep -oE "skipped [^ ]+ " /tmp/test.log || true; } | head -1 | awk '{print $2}')
+          if [ -n "$FIRST_SKIP" ]; then
+            echo "取第一個被 skip 的：$FIRST_SKIP"
+            { grep -E "\.${FIRST_SKIP}: [0-9.]+s" /tmp/test.log || echo "（不在 detail report 內）"; } | head -3
+          else
+            echo "本次沒有任何 skip"
+          fi
+
+          echo "=== FAIL/ERROR ==="
+          { grep -E "^(FAIL|ERROR):" /tmp/test.log || true; } | head -40 || true
+
+      - name: R8 - 收尾
         if: always()
         run: |
-          echo "### 最終磁碟"
           df -h
           docker system df || true
           docker rm -f odoo pg 2>/dev/null || true
-          echo "（保留 image 讓下一次 job 命中快取）"
