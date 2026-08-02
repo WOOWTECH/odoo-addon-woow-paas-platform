@@ -44,6 +44,11 @@ on:
   # 結果連「只改註解」的 commit 都會重新觸發，白佔唯一的 runner slot 幾分鐘
   # （2026-08-03 run 1428 就是這樣被我自己誤觸的）。要再量就手動 dispatch。
   workflow_dispatch:
+    inputs:
+      run_full:
+        description: "跑全套（5 分鐘）；false 時只跑哨兵驗證（約 1 分鐘）"
+        required: false
+        default: "false" 
 
 env:
   JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
@@ -190,6 +195,7 @@ jobs:
           if [ "$RC" -ne 0 ]; then tail -40 /tmp/install.log; exit "$RC"; fi
 
       - name: R7 - 全套測試 + skip 盤點 + stats:DEBUG 驗證
+        if: ${{ inputs.run_full == 'true' }}
         run: |
           T0=$(date +%s)
           set +e
@@ -244,6 +250,58 @@ jobs:
 
           echo "=== FAIL/ERROR ==="
           { grep -E "^(FAIL|ERROR):" /tmp/test.log || true; } | head -40 || true
+
+      - name: R9 - ★ skip 偵測的陽性對照（注入一個必然 skip 的哨兵）
+        run: |
+          # run 1432 量到 skipped_count=0。但那個 0 可能是「真的沒 skip」，
+          # 也可能是「shell grep 寫錯」——兩者輸出一模一樣，所以那個 0 目前零鑑別力。
+          # 這一步注入一個必然 skip + 一個必然通過的哨兵，證明偵測器抓得到。
+          cat > /tmp/test_probe_sentinel.py <<'PYEOF'
+          from odoo.tests.common import TransactionCase
+          from odoo.tests import tagged
+
+
+          @tagged('post_install', '-at_install')
+          class TestProbeSentinel(TransactionCase):
+              def test_probe_sentinel_skips(self):
+                  # 理由刻意含冒號，對齊 repo 真實樣態（"A.2 prerequisite: ... missing"）
+                  self.skipTest("probe sentinel: deliberately skipped")
+
+              def test_probe_sentinel_passes(self):
+                  # 陰性對照：這條必須真的跑起來，否則「沒抓到 skip」也可能是整個 class 沒跑
+                  self.assertTrue(True)
+          PYEOF
+          docker cp /tmp/test_probe_sentinel.py "odoo:${MODULE_DIR}/tests/test_probe_sentinel.py"
+          docker exec odoo sh -c "printf 'from . import test_probe_sentinel\n' >> ${MODULE_DIR}/tests/__init__.py"
+
+          set +e
+          docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
+            --test-enable --test-tags /woow_paas_platform:TestProbeSentinel \
+            --stop-after-init --limit-memory-hard=0 --max-cron-threads=0 \
+            --http-port=18069 --gevent-port=18072 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
+            --log-handler=odoo.tests.stats:DEBUG > /tmp/sentinel.log 2>&1
+          RC=$?
+          set -e
+          echo "sentinel odoo_exit=$RC"
+          echo "--- summary（應為 0 failed, 0 error(s) of 2 tests）---"
+          grep -E "failed, .* error\(s\) of .* tests" /tmp/sentinel.log || echo "::error::哨兵沒跑起來"
+
+          echo "--- ★ 用「與全套完全相同的」shell grep 數 skip ---"
+          SENT=$({ grep -cE "INFO .*: skipped " /tmp/sentinel.log || true; })
+          echo "MEASURE sentinel_skipped_count=${SENT}"
+
+          echo "--- ★ 真實 skip 行的原始樣貌（拿來驗 Python SKIP_LINE）---"
+          { grep -E "INFO .*: skipped " /tmp/sentinel.log || true; } | sed 's/^/RAW_SKIP_LINE| /'
+
+          if [ "${SENT}" -ge 1 ]; then
+            echo "POSITIVE_CONTROL=pass —— 偵測器抓得到 skip，故全套的 skipped_count=0 是真的 0"
+          else
+            echo "POSITIVE_CONTROL=FAIL"
+            echo "::error::注入了必然 skip 的測試卻數到 0 ⇒ skip 偵測器本身壞了，全套那個 0 不可信"
+            exit 1
+          fi
 
       - name: R8 - 收尾
         if: always()
