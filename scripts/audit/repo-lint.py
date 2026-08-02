@@ -1116,9 +1116,19 @@ CONFIG_PARAM_DOC = "CLAUDE.md「使用 config_parameter 時的卸載清理」"
 
 
 def _declared_config_parameters(path):
-    """`res.config.settings` 欄位上宣告的 config_parameter 字面（AST，避開註解／字串）。"""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        tree = ast.parse(f.read())
+    """`res.config.settings` 欄位上宣告的 config_parameter 字面（AST，避開註解／字串）。
+
+    回 `(found, error)`。SyntaxError 必須被接住並轉成 violation——本 gate 排在
+    `check_duplicate_class_methods` 之前，讓例外往外拋會使整輪 repo-lint 以
+    traceback 中斷，**其餘 13 條 gate 的違規完全不輸出**。那是「一條爆掉全部不跑」
+    的靜默失效，比本 gate 自己漏抓更嚴重。
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            tree = ast.parse(f.read())
+    except SyntaxError as exc:
+        return None, "%s 有語法錯誤（line %s），無法檢查 config_parameter 宣告：%s" % (
+            CONFIG_PARAM_SETTINGS_FILE, exc.lineno, exc.msg)
     found = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -1127,23 +1137,57 @@ def _declared_config_parameters(path):
             if kw.arg == "config_parameter" and isinstance(kw.value, ast.Constant) \
                     and isinstance(kw.value.value, str):
                 found.setdefault(kw.value.value, node.lineno)
-    return found
+    return found, None
 
 
 def _uninstall_cleanup_parameters(path):
-    """`hooks.py` 的 `_CONFIG_PARAMETERS` list 字面（AST）。"""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        tree = ast.parse(f.read())
-    for node in ast.walk(tree):
+    """`hooks.py` 的 `_CONFIG_PARAMETERS` list 字面（AST）。回 `(keys, error)`。
+
+    ⚠ **只掃 module scope（`tree.body`），且多個指派要 fail-loud**。原本用
+    `ast.walk` 並在第一個匹配就 return，有兩個獨立問題：
+
+    1. 取到的是**第一個**指派，但 Python 生效的是**最後一個**。有人在檔案後段
+       再寫一次 `_CONFIG_PARAMETERS = [...]`（靜默覆蓋前者），本檢查會拿前者去
+       比對 ⇒ 實際生效的清單漏登記時**不會報**。
+    2. 那個盲區正好落在 `check_duplicate_class_methods` 的覆蓋範圍之外（它只看
+       class body、不看 module scope），而 `hooks.py` 全檔都是 module-level
+       ⇒ 兩條 gate 的盲區交集把這一條整條關掉。
+
+    現在偵測到多個 module-level 指派就回 error 而非猜一個——這種寫法本身就是
+    可疑的，靜默取最後一個只會把問題往後推。`ast.walk` 改成只看 `tree.body`
+    順帶排除「函式內同名區域變數」的誤判。
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            tree = ast.parse(f.read())
+    except SyntaxError as exc:
+        return None, "%s 有語法錯誤（line %s），無法檢查卸載清理清單：%s" % (
+            CONFIG_PARAM_HOOKS_FILE, exc.lineno, exc.msg)
+    assigns = []
+    for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         names = [t.id for t in node.targets if isinstance(t, ast.Name)]
         if "_CONFIG_PARAMETERS" not in names:
             continue
-        if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
-            return {e.value for e in node.value.elts
-                    if isinstance(e, ast.Constant) and isinstance(e.value, str)}
-    return None
+        assigns.append(node)
+    if not assigns:
+        return None, ("%s：找不到 module scope 的 `_CONFIG_PARAMETERS` 指派，"
+                      "卸載清理的守線失效。" % CONFIG_PARAM_HOOKS_FILE)
+    if len(assigns) > 1:
+        return None, (
+            "%s：`_CONFIG_PARAMETERS` 在 module scope 被指派 %d 次（line %s）。"
+            "Python 生效的是最後一個，前面的全被靜默覆蓋——這種寫法讓「清單裡有什麼」"
+            "無法一眼判定，本檢查拒絕猜。請合併成單一指派。"
+            % (CONFIG_PARAM_HOOKS_FILE, len(assigns),
+               ", ".join(str(a.lineno) for a in assigns)))
+    node = assigns[0]
+    if not isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+        return None, ("%s:%d：`_CONFIG_PARAMETERS` 不是 list/tuple/set 字面，"
+                      "本檢查只認字面量（見 docstring 的覆蓋邊界）。"
+                      % (CONFIG_PARAM_HOOKS_FILE, node.lineno))
+    return {e.value for e in node.value.elts
+            if isinstance(e, ast.Constant) and isinstance(e.value, str)}, None
 
 
 def check_config_parameter_uninstall(root, only_file=None):
@@ -1172,11 +1216,12 @@ def check_config_parameter_uninstall(root, only_file=None):
             os.path.abspath(only_file), os.path.abspath(root)
     ).replace(os.sep, "/") not in (CONFIG_PARAM_SETTINGS_FILE, CONFIG_PARAM_HOOKS_FILE):
         return []
-    declared = _declared_config_parameters(settings_path)
-    registered = _uninstall_cleanup_parameters(hooks_path)
-    if registered is None:
-        return ["%s：找不到 `_CONFIG_PARAMETERS` 的 list 字面，卸載清理的守線失效。"
-                % CONFIG_PARAM_HOOKS_FILE]
+    declared, declared_err = _declared_config_parameters(settings_path)
+    registered, registered_err = _uninstall_cleanup_parameters(hooks_path)
+    # 任一側取不到就 fail-loud 並**停在這裡**：拿殘缺的一側去比對只會產生誤導的
+    # violation 清單（例如語法錯誤讓 declared 為空 ⇒ 「零違規」＝假綠）。
+    if declared_err or registered_err:
+        return [e for e in (declared_err, registered_err) if e]
     violations = []
     for key, lineno in sorted(declared.items(), key=lambda kv: kv[1]):
         if key not in registered:
@@ -1244,6 +1289,13 @@ def check_duplicate_class_methods(root, only_file=None):
       gate 對它是靜默的。
     - `@property` 的 `setter/getter/deleter` 與 `typing.overload` 豁免（刻意同名）。
     - 只掃 `src/**/*.py`。
+    - 🔴 **不含 module scope**：module-level 的重複 `def` 或重複變數指派（例如
+      `hooks.py` 全檔都是 module-level）**不在本 gate 的範圍**。這個盲區曾經與
+      `config-parameter-uninstall` 的盲區交集、把那一條整條關掉（它取第一個
+      `_CONFIG_PARAMETERS` 指派，而 Python 生效的是最後一個 ⇒ 有人在後面再指派
+      一次就靜默覆蓋，兩條 gate 都看不見）。該條已改成自己偵測多重指派並
+      fail-loud；本 gate 的邊界維持不變，但**新增 module-level 不變式時不要指望
+      這條 gate 守它**。
     """
     violations = []
     files = [only_file] if only_file else sorted(
