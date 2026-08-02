@@ -81,8 +81,11 @@ jobs:
           docker run -d --name pg \
             -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo -e POSTGRES_DB=postgres \
             postgres:15
+          # MALLOC_ARENA_MAX：這台 node 有 256 核，glibc 每核最多開 8 個 arena，
+          # 每個 arena 預留 64MB 虛擬位址 → 撞上 RLIMIT_AS 會噴 MemoryError。
           docker run -d --name odoo \
             -e AGENT_RUNTIME_NAMESPACE_SECRET="${AGENT_RUNTIME_NAMESPACE_SECRET}" \
+            -e MALLOC_ARENA_MAX=2 \
             --entrypoint bash "$IMG" -c 'sleep infinity'
           for i in $(seq 1 60); do
             if docker exec pg pg_isready -U odoo >/dev/null 2>&1; then break; fi
@@ -125,12 +128,35 @@ jobs:
           T1=$(date +%s)
           echo "MEASURE overlay_seconds=$((T1-T0))"
 
+      - name: R5b - MemoryError 診斷（run 1421 在 base 的 _reflect_fields 噴 MemoryError）
+        run: |
+          echo "--- ulimit ---"
+          docker exec odoo sh -c 'ulimit -a' || true
+          echo "--- python RLIMIT_AS ---"
+          docker exec odoo /opt/bitnami/odoo/venv/bin/python -c \
+            "import resource,os; print('RLIMIT_AS', resource.getrlimit(resource.RLIMIT_AS)); print('cpu', os.cpu_count())" || true
+          echo "--- cgroup memory ---"
+          docker exec odoo sh -c 'cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null' || true
+          echo "--- ODOO_* env（image baked）---"
+          docker exec odoo sh -c 'env | grep -i odoo' || true
+          echo "--- 可能被自動讀到的 conf ---"
+          for C in /opt/bitnami/odoo/conf/odoo.conf /etc/odoo/odoo.conf /opt/bitnami/odoo/odoo.conf; do
+            echo "### $C"
+            docker exec odoo sh -c "cat $C 2>/dev/null" || true
+          done
+          echo "--- odoo 實際生效設定（--stop-after-init 前先印）---"
+          docker exec odoo /opt/bitnami/odoo/venv/bin/python -c \
+            "import sys; sys.argv=['odoo']; from odoo.tools import config; \
+             print({k: config[k] for k in ('workers','limit_memory_hard','limit_memory_soft','max_cron_threads','config','data_dir')})" || true
+
       - name: R6 - install（不跑測試，計時）
         run: |
           T0=$(date +%s)
           set +e
           docker exec odoo "${ODOO_BIN}" -d test -i woow_paas_platform \
             --stop-after-init --without-demo=all --no-http \
+            --workers=0 --max-cron-threads=0 \
+            --limit-memory-hard=0 --limit-memory-soft=0 \
             --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
             --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/install.log 2>&1
           RC=$?
@@ -148,6 +174,8 @@ jobs:
           docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
             --test-enable --test-tags /woow_paas_platform \
             --stop-after-init \
+            --workers=0 --max-cron-threads=0 \
+            --limit-memory-hard=0 --limit-memory-soft=0 \
             --http-port=18069 --gevent-port=18072 \
             --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
             --db_host "${PG_IP}" --db_user odoo --db_password odoo \
