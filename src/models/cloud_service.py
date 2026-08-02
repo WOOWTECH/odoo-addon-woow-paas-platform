@@ -2582,33 +2582,28 @@ class CloudService(models.Model):
                     raise UserError(
                         "不可變更已部署 CloudService 的 workspace（命名空間身分固定）。"
                     )
-        # #518 B3：擋「先建成不計數的 state、再 write 回來」的繞道。
+        # ⚠ 這裡**刻意沒有**全域上限守衛。曾經有過（#501 B3，擋「先建成 `deleting`
+        # 再 write 回計數態」的繞道），已移除，理由記在 #519 與 PR #517 的第二輪覆核：
         #
-        # 計數口徑排除 `deleting`（見 `_count_active_for_template`），而 `state` 是
-        # 一般可寫欄位、`base.group_user` 對本 model 有全 CRUD
-        # （`ir.model.access.csv`）。於是租戶可以用 `state='deleting'` 建立（守衛
-        # 計數不含它 ⇒ 放行），再 `write({'state': 'pending'})` 把它變回活躍——兩道
-        # 上限都被繞過，而部署 cron 只看 `state='pending'`，會照樣開出去。已用真
-        # HTTP（`/web/dataset/call_kw`）實測可達。
+        # 1. 它會誤傷刪除失敗的善後路徑。`_delete_service` 先寫 `state='deleting'`，
+        #    uninstall 失敗後在 except 分支寫 `state='error'`——那是「從終態寫回非
+        #    終態」，守衛判定為進入者。而裁決點 `_reject_reason_for_new_instance`
+        #    第一件事是 paused 檢查、**在計數之前就 return** ⇒ 營運一勾「暫停販售」，
+        #    任何刪除失敗都會 raise、整筆 rollback，`error_message` 遺失、狀態退回，
+        #    租戶看到的是「目前暫停販售」。與設定畫面 help 明載的「只擋新下單，不影響
+        #    已開通的服務」直接矛盾。
+        # 2. 它擋不完。`write({'template_id': …})` 不帶 state ⇒ 守衛不求值；
+        #    `state` 是 nullable Selection（無 `required=True`），插一個
+        #    `write({'state': False})` 當跳板即可整段跳過。
         #
-        # 只在「**進入**計數態」時重跑閘門：`deleting` → 非終態。計數態之間的正常
-        # 生命週期轉移（pending → deploying → running…）不受影響——否則達到上限後
-        # 既有服務的每一次轉移都會炸，那比原缺陷嚴重得多。全 repo 沒有任何合法路徑
-        # 把 state 從 `deleting` 寫回非終態（只有讀 `state == 'deleting'`）。
-        #
-        # ⚠ `filtered` 必須在 `super().write()` **之前**求值，否則 state 已經改完、
-        # 判斷不出誰是「進入者」。
-        entering = self.browse()
-        new_state = vals.get('state')
-        if new_state and new_state not in TERMINAL_STATES:
-            entering = self.filtered(lambda r: r.state in TERMINAL_STATES)
+        # 根因是租戶對本 model 有直接 write 權（`ir.model.access.csv`，#519）。用
+        # write() 守衛打地鼠會引入誤傷卻仍留下繞道；正解是收緊 ACL，一旦租戶沒有
+        # 直接 write 權，所有繞過路徑一次關閉。**create() 的閘門是防意外、不是安全
+        # 邊界**——不要在這裡補守衛來製造「已經守住」的錯覺。
         tracked = 'workspace_id' in vals or 'project_ids' in vals
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
         res = super().write(vals)
-        if entering:
-            self._claim_global_cap_slots(entering)
-            self._enforce_supply_gate(entering)
         if tracked:
             # Union of projects bound before AND after (a project_ids write can add or
             # drop bindings); each reconciles against its own pre-write reach set.

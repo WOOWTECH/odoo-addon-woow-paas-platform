@@ -345,33 +345,46 @@ class TestGlobalCapEnforcement(_CapFixtureMixin, TransactionCase):
         self._make_service(plain, 'noconflict')
         self.assertEqual(self._row_version(plain), before)
 
-    def test_write_into_counted_state_is_guarded(self):
-        """🔴 B3：`create()` 守衛擋不住「先建成不計數的 state、再 write 回來」。
+    def test_write_is_deliberately_unguarded(self):
+        """🔴 **這條測試守的是「刻意不守」**——`write()` 沒有上限守衛是設計決定。
 
-        計數口徑排除 `deleting`，而 `state` 是一般可寫欄位。租戶（`base.group_user`
-        對 cloud_service 有全 CRUD，`ir.model.access.csv:9`）可以用 `state='deleting'`
-        建立（守衛計數不含它 ⇒ 放行），再 `write({'state': 'pending'})` 回來——兩道
-        上限都被繞過，而部署 cron 只看 `state='pending'`，會照樣開出去。
+        曾經有過一道（#501 B3，擋「先建成 `deleting` 再 write 回計數態」的繞道），
+        移除的理由見 `cloud_service.write()` 的註解與 #519：它誤傷刪除失敗的善後
+        路徑（`_delete_service` 在 except 寫 `state='error'`，正是「從終態寫回非終
+        態」，而裁決點的 paused 檢查排在計數之前 ⇒ 營運一勾停售就讓所有刪除失敗
+        rollback），而且擋不住 `template_id` 與 `state=False` 兩條繞道。
 
-        已用真 HTTP（`/web/dataset/call_kw`）實測可達，不是理論推演。
+        ⚠ 本條**不是**在保護那個繞道、也不是把捷徑寫成契約。它是**行為文件**：
+        誰要在 `write()` 補守衛，會先看到這裡的紅字與上面兩個理由，而不是以為
+        「漏了」就順手補回去——那會把已修好的誤傷再帶回來。真正的修法是收緊 ACL
+        （#519），不是在 write() 打地鼠。
 
-        全 repo 沒有任何合法路徑把 state 從 `deleting` 寫回非終態（只有讀
-        `state == 'deleting'`），所以在「進入計數態」時重跑閘門不會誤傷既有流程。
+        繞道本身**可達**（租戶對 cloud_service 有全 CRUD），這正是 #519 要解的。
         """
         self._fill_to_cap(self.tpl, self.CAP)
         sneaked = self._make_service(self.tpl, 'sneak', state='deleting')
-        with self.assertRaises(SupplyGateError):
-            sneaked.write({'state': 'pending'})
+        sneaked.write({'state': 'pending'})
+        self.assertEqual(
+            sneaked.state, 'pending',
+            'write() 出現了上限守衛。若這是刻意加的，請先確認它不會誤傷 '
+            '_delete_service 的 except 分支（state deleting → error），並更新 #519。')
 
-    def test_write_between_counted_states_is_not_guarded(self):
-        """非回歸：計數態之間的正常轉移（pending → running 等）不得被擋。
+    def test_delete_failure_path_survives_sales_pause(self):
+        """🔴 回歸守線：停售時「刪除失敗的善後」必須寫得進去（B3 誤傷的那個形態）。
 
-        沒有這條，守衛很容易寫成「只要 write state 就重跑閘門」，於是達到上限之後
-        既有服務的每一次生命週期轉移都會炸——那比原缺陷嚴重得多。
+        `_delete_service` 先寫 `state='deleting'`，uninstall 失敗後在 except 分支寫
+        `state='error'` ＋ `error_message`。B3 那道守衛把這一步判成「進入計數態」，
+        而裁決點 `_reject_reason_for_new_instance` 的 paused 檢查排在計數**之前**
+        就 return ⇒ 停售期間任何刪除失敗都 raise、整筆 rollback、錯誤訊息遺失。
+
+        鑑別力：把 B3 那段守衛加回 `write()`，這條會 raise SupplyGateError 而紅。
+        本條不走 HTTP——受測的是 model 層的可寫性，不是端點行為。
         """
-        services = self._fill_to_cap(self.tpl, self.CAP)
-        services[0].write({'state': 'running'})
-        self.assertEqual(services[0].state, 'running')
+        self._set_paused(self.tpl, True)
+        svc = self._make_service(self.tpl, 'delfail', state='deleting')
+        svc.write({'state': 'error', 'error_message': 'uninstall failed'})
+        self.assertEqual(svc.state, 'error')
+        self.assertEqual(svc.error_message, 'uninstall failed')
 
 
 @tagged('post_install', '-at_install')
