@@ -51,6 +51,13 @@
               Bypass skips authentication entirely — identity selectors (email)
               are not available; use IP range, country or everyone.
             </p>
+            <p t-if="state.decision === 'allow'" class="o_woow_sa_field_hint">
+              Allow grants access per person: Include rules must name who gets
+              in, so whole-domain and "everyone" rules are not offered there
+              (they admit an uncounted crowd while still consuming Cloudflare
+              Access seats). You can still use them in Require / Exclude rules
+              to narrow access.
+            </p>
           </div>
 
           <!-- include / require / exclude rule groups -->
@@ -63,7 +70,7 @@
                 <div class="o_woow_sa_rule_row">
                   <select class="o_woow_input o_woow_sa_rule_row__type"
                           t-on-change="(ev) => this.setRuleType(group.key, rule_index, ev.target.value)">
-                    <t t-foreach="selectorOptions" t-as="opt" t-key="opt.value">
+                    <t t-foreach="selectorOptionsFor(group.key)" t-as="opt" t-key="opt.value">
                       <option t-att-value="opt.value"
                               t-att-selected="rule.rule_type === opt.value"
                               t-esc="opt.label"/>
