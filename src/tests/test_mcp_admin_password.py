@@ -127,10 +127,18 @@ class TestMcpAdminPassword(TransactionCase):
                 'persistence': {'storageClass': 'longhorn-delete'},
             },
         )
+        # #530：本 fixture 的 chart 沒有對外 gateway，供給面因此**不含**
+        # auth.apiServerKey（review finding 3：那個鍵的閘門是 _chart_has_gateway，
+        # 不是 has_admin_gui）。exact-equality 是刻意的——它同時鎖住「新密碼有進
+        # 供給鏈」與「沒有第三個鍵偷偷長出來」。有 gateway 的那條路由
+        # test_reset_rotates_the_gateway_api_key_too 鎖。
         self.assertEqual(
             client.reset_release_config.call_args.kwargs['sensitive_values'],
             {'config': {'sensitive': {'admin_password': new_password}}},
         )
+        self.assertFalse(
+            secret.gateway_api_key,
+            'chart 沒有 gateway 時，Reset 也不得順手鑄一把 key')
 
     # ------------------------------------------------------------------
     # #357 C11：逾時語意 —— 落庫在後 + 冪等重試
@@ -360,13 +368,81 @@ class TestMcpAdminPassword(TransactionCase):
         self.assertEqual(secret.admin_password, 'old-password')
 
         # 供給鏈末端：helm 實際會收到的 sensitive values。
+        # #530 review finding 3：本 fixture 的 chart（mcp-server）**沒有**對外
+        # gateway，所以不該收到 auth.apiServerKey——那個鍵有自己的閘門
+        # （_chart_has_gateway，見 test_create_supplies_gateway_api_key_end_to_end）。
+        # exact-equality 是刻意的：它同時鎖「admin_password 有進供給鏈」與「沒有第
+        # 三個鍵偷偷長出來」。
         self.assertEqual(
             self.service._build_mcp_sensitive_values(),
             {'config': {'sensitive': {'admin_password': 'old-password'}}},
         )
+        self.assertFalse(
+            secret.gateway_api_key,
+            'chart 沒有 gateway 對外路徑時不得鑄 gateway key（見 finding 3：'
+            '那 7 個 chart 會收到一把平台並不打算給它的憑證）')
         self.assertTrue(self.service._has_mcp_admin_secret())
         # 密碼不得外洩到 helm_values（git/API 可見面）。
         self.assertNotIn('old-password', self.service.helm_values or '')
+
+    def test_create_supplies_gateway_api_key_end_to_end(self):
+        """#530 正面全鏈：**有 gateway 的** chart 建 CS → gateway key 落 secret →
+        供給鏈末端產出 chart 要吃的 ``auth.apiServerKey``。
+
+        鏡射上一條 admin_password 的形狀，但判別器**不同**：admin_password 的閘門
+        是 ``has_admin_gui``，gateway key 的閘門是 ``_chart_has_gateway``（seed 的
+        gateway.externalPath）。review finding 3：兩者共用會把這把 key 送給 8 個
+        has_admin_gui 模板中沒有 gateway 的那 7 個——今天無害只因那些 chart 沒宣告
+        ``auth`` 區塊，是隱性契約。負面對照在
+        ``test_create_supplies_admin_password_end_to_end``（同 fixture、無 gateway、
+        必須沒有這個鍵）。
+
+        ⚠ 上游（hermes gateway）對 **< 16 字元**的 key 會**靜默不登記 api server
+        平台**——健康信號直接消失、沒有任何錯誤，所以長度下限是正確性的一部分，
+        不是風格。生成點與 admin_password 共用（token_urlsafe(24) ≈ 32 chars）。
+        """
+        service = self._make_hermes_service(subdomain='hermes-gw-create')
+        secret = self._secret_of(service)
+        self.assertTrue(
+            secret.gateway_api_key,
+            '有 gateway 對外路徑的 template 必須在 create() 就備妥 gateway API key')
+        self.assertNotEqual(
+            secret.gateway_api_key, secret.admin_password,
+            '兩把憑證必須是不同的值——其一外洩不得讓另一個入口同時失守')
+        self.assertGreaterEqual(
+            len(secret.gateway_api_key), 16,
+            'gateway key 低於 16 字元 → 上游靜默不登記 api server 平台（無聲失效）')
+        self.assertEqual(
+            service._build_mcp_sensitive_values()['auth'],
+            {'apiServerKey': secret.gateway_api_key},
+        )
+        # key 不得外洩到 helm_values（git/API 可見面）。
+        self.assertNotIn(secret.gateway_api_key, service.helm_values or '')
+
+    def test_legacy_secret_without_gateway_key_omits_the_auth_channel(self):
+        """存量服務（secret 有密碼、無 gateway key）不得送出空的 ``auth.apiServerKey``。
+
+        #530 的存量處置是「跑一次 Reset 換發」，在那之前 redeploy 仍會走供給鏈。
+        此時若送 ``auth: {apiServerKey: ''}``，chart 的三段優先序第一段拿到顯式
+        空值，就可能把既有 Secret 裡那把（chart 自產、agent 正在用的）洗掉 ⇒
+        gateway 當場拒絕所有請求。**整個鍵不送**才會落到第二段「查既有 Secret」。
+
+        fixture 刻意用 **有** gateway 的 chart：用沒有 gateway 的 chart 的話，
+        ``auth`` 不出現的原因會變成 ``_chart_has_gateway`` 那道閘門，本條要守的
+        「空值不得送出」就永遠不會被執行到（恆真而看起來像守線）。
+        """
+        service = self._make_hermes_service(subdomain='hermes-gw-legacy')
+        secret = self._secret_of(service)
+        self.assertTrue(
+            secret.gateway_api_key,
+            '前置：fixture chart 有 gateway，key 應已鑄出——否則下面清空它沒有意義')
+        secret.gateway_api_key = False
+
+        sensitive = service._build_mcp_sensitive_values()
+
+        self.assertEqual(
+            sensitive, {'config': {'sensitive': {'admin_password': secret.admin_password}}},
+            '沒有 gateway key 時不得帶出 auth 子樹（空值會蓋掉 chart 既有 Secret）')
 
     def test_sidecar_template_without_admin_gui_gets_no_password(self):
         """C01 負面（判別器鑑別力）：mcp_enabled=True 但 has_admin_gui=False——
@@ -397,6 +473,11 @@ class TestMcpAdminPassword(TransactionCase):
             'mcp_enabled 是 sidecar 語意，不得觸發 admin_password 供給')
         self.assertEqual(service._build_mcp_sensitive_values(), {})
         self.assertFalse(service._has_mcp_admin_secret())
+        # #530：gateway key 沿用同一個閘門 —— 沒有 admin GUI 就連 secret 記錄都
+        # 不該存在，自然也不該有 gateway key（判別器只有一個，不會分岔）。
+        self.assertFalse(
+            self.controller._gateway_credentials(service),
+            'has_admin_gui=False → 不得交付任何 gateway 憑證')
 
     def test_legacy_service_without_secret_yields_empty_sensitive_values(self):
         """C03（方案 A）：secret 缺席回 {}，不 raise。
@@ -441,6 +522,36 @@ class TestMcpAdminPassword(TransactionCase):
         secret = self._secret_of(self.service)
         self.assertTrue(secret, 'reset 應為 legacy 服務補建 secret')
         self.assertEqual(secret.admin_password, new_password)
+        # #530：Reset 是存量服務取得 gateway key 的**唯一**路徑（刻意不做從叢集
+        # 回讀的 backfill——那會違反「憑證權威來源在平台端」）。補建 secret 時漏掉
+        # gateway key，等於這批服務永遠拿不到。本 fixture 的 chart 沒有 gateway，
+        # 所以正確行為是**不鑄**；有 gateway 的補鑄由下面那條同形測試鎖。
+        self.assertFalse(
+            secret.gateway_api_key,
+            'chart 沒有 gateway 時，補建 secret 不得順手鑄一把 gateway key')
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_reset_backfills_gateway_key_for_legacy_gateway_service(self, get_client):
+        """上一條的 gateway 版：**有** gateway 的 legacy 服務，Reset 必須補鑄 key。
+
+        兩條成對才有鑑別力：只有上面那條的話，「一律不鑄」也會綠——而那正是
+        #530 要修的原始症狀（存量服務永遠拿不到 gateway key）。
+        """
+        get_client.return_value = MagicMock()
+        service = self._make_hermes_service(subdomain='hermes-gw-backfill')
+        self._secret_of(service).unlink()
+        self.assertFalse(self._secret_of(service), '前置：secret 應已被清掉')
+
+        service._reset_admin_password()
+
+        secret = self._secret_of(service)
+        self.assertTrue(secret, 'reset 應為 legacy 服務補建 secret')
+        self.assertTrue(
+            secret.gateway_api_key,
+            '有 gateway 的服務，reset 補建 secret 時必須一併鑄出 gateway API key'
+            '——這是存量服務取得 key 的唯一路徑')
 
     # ------------------------------------------------------------------
     # #357 C01：controller ↔ model 兩端判別器收斂（#357 根因＝兩端漂移）
@@ -531,3 +642,105 @@ class TestMcpAdminPassword(TransactionCase):
             result['data']['id'])
         self.assertFalse(
             self._secret_of(service), 'has_admin_gui=False 不得建 secret')
+
+    # ------------------------------------------------------------------
+    # #530：gateway 憑證的換發與交付
+    # ------------------------------------------------------------------
+
+    def _make_hermes_service(self, subdomain='hermes-gw-530'):
+        """建一台 hermes-agent 服務（真 seed template，才有 gateway 對外路徑）。"""
+        return self.env['woow_paas_platform.cloud_service'].create({
+            'name': 'Hermes gateway probe',
+            'workspace_id': self.workspace.id,
+            'template_id': self.env.ref(
+                'woow_paas_platform.cloud_app_hermes_agent').id,
+            'state': 'running',
+            'subdomain': subdomain,
+            'helm_namespace': 'paas-ws-test',
+            'helm_release_name': 'svc-hermes-530',
+        })
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_reset_rotates_the_gateway_api_key_too(self, get_client):
+        """Reset 一次換發兩把憑證（單一 Reset 動作＝租戶唯一的換發入口）。
+
+        只換 admin_password 的話，存量服務永遠拿不到 gateway key（本 spec 刻意
+        不做從叢集回讀的 backfill），而「Reset 會一併換掉 Gateway API Key」這句
+        UI 文案也會變成謊話——租戶回 MCP 那端重填的是同一把舊 key。
+        """
+        client = MagicMock()
+        get_client.return_value = client
+        service = self._make_hermes_service(subdomain='hermes-gw-rotate')
+        before = self._secret_of(service).gateway_api_key
+        self.assertTrue(before, '前置：fixture 服務建立時就該有 gateway key')
+
+        service._reset_admin_password()
+
+        after = self._secret_of(service).gateway_api_key
+        self.assertTrue(after)
+        self.assertNotEqual(
+            after, before, 'Reset 必須同時換發 gateway API key，不能只換密碼')
+        # 換發≠有送出去：新 key 必須真的進到 operator 的 sensitive_values，否則
+        # DB 換了、叢集沒換 —— 租戶手上的新 key 打不通，而兩邊都不會報錯。
+        self.assertEqual(
+            client.reset_release_config.call_args.kwargs['sensitive_values']['auth'],
+            {'apiServerKey': after},
+            '有 gateway 的 chart，Reset 必須把新 key 送進供給鏈')
+
+    def test_gateway_credentials_delivered_with_the_full_url(self):
+        """交付端：hermes-agent 一次回「key ＋ 完整 gateway 網址」。
+
+        完整網址由**後端**組（公開根位址 + seed 的子路徑），不是丟一個根位址讓
+        前端或租戶自己拼——#530 的相鄰事實是租戶把 Dashboard 區填成服務根網址、
+        漏掉子路徑而連不上；gateway 區完全同一個坑。後端組出來才有東西可以跟
+        seed 做跨層 lock-step（test_gateway_external_path_matches_public_url_builder）。
+        """
+        service = self._make_hermes_service()
+        secret = self._secret_of(service)
+        paas_domain = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io')
+
+        data = self.controller._gateway_credentials(service)
+
+        self.assertTrue(secret.gateway_api_key, '前置：hermes 服務應鑄出 gateway key')
+        self.assertEqual(data['gateway_api_key'], secret.gateway_api_key)
+        self.assertEqual(
+            data['gateway_url'],
+            'https://hermes-gw-530.%s/gateway' % paas_domain)
+
+    def test_gateway_credentials_withheld_when_the_chart_has_no_gateway(self):
+        """判別力的另一半：有 admin GUI、但 chart 沒有 gateway ⇒ 不交付。
+
+        鑄造／供給／交付三個閘門自 review finding 3 起同源（``_chart_has_gateway``
+        ／``_gateway_public_url``），所以沒有 gateway 的 chart 是**整條**都不給：
+        不鑄 key、不送 auth 鍵、不交付。交了等於在一次性視窗給租戶一把打不到任何
+        端點的 key 與一條不存在的網址——那比不給更糟，它看起來像產品保證。
+
+        兩個陽性對照先立，否則這條會在錯誤的理由下變綠：
+
+        1. 服務**有** subdomain——fixture 沒有 subdomain 的話，withhold 的真正原因
+           會變成「算不出公開位址」，於是有人把 mcp-odoo 誤加進 gateway 子路徑
+           對照表時這條照樣綠（判別器指錯了東西）。
+        2. **同一支測試裡**有 gateway 的服務確實交付得出來——否則「一律不交付」
+           （功能整個沒接上）也會讓這條綠。
+        """
+        self.service.subdomain = 'mcp-odoo-gw-probe'
+        self.assertTrue(
+            self.service._public_base_url(),
+            '前置：服務要算得出公開位址 —— 否則 withhold 的原因是「沒有位址」'
+            '而不是「這個 chart 沒有 gateway」，判別器就指錯了東西')
+        self.assertTrue(
+            self.controller._gateway_credentials(
+                self._make_hermes_service(subdomain='hermes-gw-control')),
+            '陽性對照：有 gateway 的 chart 必須交付得出來 —— 沒有這行，'
+            '「一律不交付」也會讓本條綠')
+
+        self.assertEqual(
+            self.controller._gateway_credentials(self.service), {},
+            'chart 沒有 gateway 對外路徑時不得交付 gateway 憑證')
+        self.assertFalse(
+            self._secret_of(self.service).gateway_api_key,
+            '沒有 gateway 的 chart 連 key 都不該鑄（finding 3：不然那 7 個 chart '
+            '會收到一把平台不打算給它的憑證）')

@@ -131,6 +131,25 @@
                     </div>
                 </div>
 
+                <!--
+                    #530：Reset 現在一次換發兩把憑證。沒有這句的話，租戶按下去只
+                    預期換掉 dashboard 密碼，結果 MCP 那端沿用舊 gateway key 開始
+                    401——而失敗形狀（連線測試一個紅點）看不出憑證已被換掉。
+
+                    gate ＝ hasAdminGui **and** hasGateway，兩個都是後端鏡射欄位
+                    （見 capability-gate-single-source-field，前端不自建判準）：
+                      - hasAdminGui → 這顆 Reset 按鈕在不在（憑證鑄造閘門）
+                      - hasGateway  → Reset 會不會真的交付 gateway 憑證
+                                      （交付閘門＝後端 _gateway_public_url() 非空）
+                    只判前者的話，has_admin_gui=True 的 8 個模板有 7 個沒有 gateway，
+                    它們的租戶會讀到一句永遠不會發生的承諾。守線：repo-lint
+                    check_gateway_copy_gate_anchor ＋ test_gateway_capability_payload_530。
+                -->
+                <p t-if="hasAdminGui and hasGateway" class="o_woow_hint">
+                    Reset Admin Password also issues a new Gateway API Key. Update it
+                    wherever you configured it (e.g. your MCP server).
+                </p>
+
                 <!-- Error Message Banner -->
                 <div t-if="service.error_message" class="o_woow_service_error_banner">
                     <WoowIcon name="'error'" size="20"/>
@@ -241,10 +260,10 @@
                 onClose.bind="hideCreateProject"
                 onCreated.bind="onProjectCreated"/>
 
-            <AdminPasswordModal
-                t-if="state.adminPassword"
-                password="state.adminPassword"
-                onClose.bind="closeAdminPassword"/>
+            <OneTimeCredentialsModal
+                t-if="state.oneTimeCredentials"
+                credentials="state.oneTimeCredentials"
+                onClose.bind="closeCredentials"/>
         </div>
     </t>
 </templates>

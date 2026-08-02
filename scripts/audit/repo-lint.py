@@ -28,7 +28,10 @@
                      (a) src/static/src/**/*.{js,xml} 不得用 slug 做集合成員判斷
                          （X.includes(t.slug) / SLUGS.indexOf(x)）——那是自建第二判準；
                      (b) Reset 密碼按鈕的 t-if 鏈必須追得到 has_admin_gui，
-                         不論 getter 叫什麼名字（鎖「唯一的對形態」，擋任何第三判準）。
+                         不論 getter 叫什麼名字（鎖「唯一的對形態」，擋任何第三判準）；
+                     (c) 宣告 gateway 憑證的文案（"Gateway API Key"）其 t-if 鏈必須追得到
+                         has_gateway——改判 has_admin_gui 會讓 8 個模板裡沒有 gateway 的
+                         那 7 個對租戶宣告一件永遠不會發生的事（#530）。
                      依據 docs/decisions/patterns/capability-gate-single-source-field.md
 8. conceal-instances src/**/*.py（除 src/tests/）不得用 `template_id.is_hidden` 判**既有
                      service** 的可見性——實例層判準是 template_id.conceal_instances；
@@ -130,6 +133,11 @@ ADMIN_GUI_FIELD = "has_admin_gui"
 # 「哪顆按鈕」的 XML 端錨點：handler 名比 t-if 的 getter 名穩定（getter 可以更名，
 # 但按鈕綁的 action 更名就是改功能本身）。
 ADMIN_GUI_BUTTON_HANDLER = "resetAdminPassword"
+# #530 gateway 憑證交付的能力欄位（payload 鏡射 service._gateway_public_url() 非空）。
+GATEWAY_FIELD = "has_gateway"
+# 「哪段文案」的 XML 端錨點：向租戶宣告會發／已發 gateway 憑證的字面文案。錨在文案
+# 本身而非某個元素 id——這條規則要守的就是「這句話會不會對不該看到的人出現」。
+GATEWAY_COPY_RE = re.compile(r"gateway\s+api\s+key", re.IGNORECASE)
 # t-if 表達式裡不算 component member 的字（OWL 運算子 / literal / 內建 namespace）。
 OWL_EXPR_NON_MEMBERS = {
     "and", "or", "not", "in", "true", "false", "null", "undefined",
@@ -887,16 +895,30 @@ def _gate_js_sources(xml_path):
     return sources
 
 
-def _gate_reaches_admin_gui(exprs, js_sources):
-    """t-if 表達式（含祖先鏈）是否直接或經 getter 追到 has_admin_gui。"""
+def _gate_reaches_field(exprs, js_sources, field):
+    """t-if 表達式（含祖先鏈）是否直接或經 getter 追到 ``field``。"""
     for expr in exprs:
-        if ADMIN_GUI_FIELD in expr:
+        if field in expr:
             return True
         for name in set(re.findall(r"[A-Za-z_$][\w$]*", expr)) - OWL_EXPR_NON_MEMBERS:
             for src in js_sources:
-                if any(ADMIN_GUI_FIELD in body for body in _js_member_bodies(src, name)):
+                if any(field in body for body in _js_member_bodies(src, name)):
                     return True
     return False
+
+
+def _gate_exprs_with_ancestors(elem, parents):
+    """elem 自身 → 祖先鏈上的所有 t-if / t-elif 表達式（gate 可能掛在外層 wrapper）。"""
+    exprs, node = [], elem
+    while node is not None:
+        exprs += [node.get(attr) for attr in ("t-if", "t-elif") if node.get(attr)]
+        node = parents.get(node)
+    return exprs
+
+
+def _first_line_matching(path, pattern):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return next((i for i, line in enumerate(f, 1) if pattern.search(line)), 1)
 
 
 def check_admin_gui_gate_anchor(root):
@@ -921,17 +943,12 @@ def check_admin_gui_gate_anchor(root):
                    if any(handler_re.search(v or "") for v in elem.attrib.values())]
         if not buttons:
             continue
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            line_no = next((i for i, line in enumerate(f, 1)
-                            if handler_re.search(line)), 1)
+        line_no = _first_line_matching(fp, handler_re)
         parents = {child: parent for parent in tree.iter() for child in parent}
         js_sources = _gate_js_sources(fp)
         for elem in buttons:
-            exprs, node = [], elem
-            while node is not None:  # 自身 → 祖先鏈（gate 可能掛在外層 wrapper）
-                exprs += [node.get(attr) for attr in ("t-if", "t-elif") if node.get(attr)]
-                node = parents.get(node)
-            if _gate_reaches_admin_gui(exprs, js_sources):
+            exprs = _gate_exprs_with_ancestors(elem, parents)
+            if _gate_reaches_field(exprs, js_sources, ADMIN_GUI_FIELD):
                 continue
             violations.append(
                 "%s:%d：Reset 密碼按鈕（%s）的顯示 gate 追不到 %s（t-if 鏈：%s）。按鈕的 "
@@ -941,6 +958,63 @@ def check_admin_gui_gate_anchor(root):
                 "（slug 名單、category、mcp_enabled…），就會回到 #460：後端放行、租戶"
                 "按不到，修復不可達（見 %s）。"
                 % (rel, line_no, ADMIN_GUI_BUTTON_HANDLER, ADMIN_GUI_FIELD,
+                   "／".join(exprs) or "(無 t-if)", ADMIN_GUI_FIELD, CAPABILITY_GATE_DOC))
+    return violations
+
+
+def check_gateway_copy_gate_anchor(root):
+    """宣告 gateway 憑證的文案，其顯示 gate 必須（直接或經 getter）追得到 has_gateway。
+
+    與 check_admin_gui_gate_anchor 同型（鎖「唯一的對形態」），錨點換成**文案本身**
+    ——這條守的不是某顆按鈕在不在，而是「這句話會不會對不該看到的人出現」。
+
+    #530 review finding：Reset 提示語原本判 ``hasAdminGui``，但實際交付判準是
+    ``service._gateway_public_url()`` 非空。seed 裡 has_admin_gui=True 的模板有 8 個
+    （mcp-odoo／mcp-odoo-manage／mcp-n8n／mcp-k8s／mcp-vk／mcp-opendesign／
+    open-design／hermes-agent），其中只有 hermes-agent 有 gateway ⇒ **7 個模板的租戶
+    被告知一件永遠不會發生的事**。這類錯誤不會有任何測試變紅：後端測後端判準、前端
+    沒有能力測試，兩邊各自都「看起來對」（#460 的同一個家族，只是這次漂移在文案）。
+
+    ``hasAdminGui and hasGateway`` 這種複合 gate 通過：兩個都是後端鏡射欄位，本規則
+    只要求鏈上追得到 has_gateway。
+
+    Fail-open：沒有這類文案（拿掉／改寫成不提 gateway 憑證）就不擋——與按鈕那條同
+    紀律，形態守線由 check_slug_capability_gate 負責。
+
+    依據 docs/decisions/patterns/capability-gate-single-source-field.md
+    """
+    violations = []
+    for fp in sorted(glob.glob(os.path.join(root, "src/static/src/**/*.xml"),
+                               recursive=True)):
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        try:
+            tree = ET.parse(fp)   # ET 丟掉 XML 註解 → 註解裡引述本文案不會被誤報
+        except ET.ParseError:
+            continue  # XML 壞掉由 check_owl_template 報，這裡不重複
+        # 文字節點：元素自身的 text ＋ 直屬子元素的 tail（都屬於這個元素的內容）
+        copy_elems = [
+            elem for elem in tree.iter()
+            if any(GATEWAY_COPY_RE.search(t or "")
+                   for t in [elem.text] + [child.tail for child in elem])
+        ]
+        if not copy_elems:
+            continue
+        line_no = _first_line_matching(fp, GATEWAY_COPY_RE)
+        parents = {child: parent for parent in tree.iter() for child in parent}
+        js_sources = _gate_js_sources(fp)
+        for elem in copy_elems:
+            exprs = _gate_exprs_with_ancestors(elem, parents)
+            if _gate_reaches_field(exprs, js_sources, GATEWAY_FIELD):
+                continue
+            violations.append(
+                "%s:%d：宣告 gateway 憑證的文案，其顯示 gate 追不到 %s（t-if 鏈：%s）。"
+                "該文案的 t-if（含祖先）必須直接引用該欄位，或引用一個 body 讀該欄位的 "
+                "getter——那是與後端交付判準（service._gateway_public_url() 非空，"
+                "controllers/paas.py 的 _gateway_credentials 用同一個）唯一收斂的判準。"
+                "改判 %s 會讓 8 個 has_admin_gui 模板裡沒有 gateway 的那 7 個對租戶宣告"
+                "一件永遠不會發生的事，而兩邊各自都不會報錯（#530／#460 同家族，"
+                "見 %s）。"
+                % (rel, line_no, GATEWAY_FIELD,
                    "／".join(exprs) or "(無 t-if)", ADMIN_GUI_FIELD, CAPABILITY_GATE_DOC))
     return violations
 
@@ -1357,6 +1431,7 @@ def run_all(root):
                   + check_test_env_restore(root)
                   + check_slug_capability_gate(root)
                   + check_admin_gui_gate_anchor(root)
+                  + check_gateway_copy_gate_anchor(root)
                   + check_conceal_instances_gate(root)
                   + check_reset_budget_ladder(root)
                   + check_transition_anchor_utc(root)
@@ -1371,6 +1446,7 @@ def run_all(root):
         return 1
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
           "reuse-values / seed-topology / test-env-restore / capability-gate / "
+          "gateway-copy-gate / "
           "conceal-instances / reset-budget-ladder / transition-anchor-utc / "
           "assertlogs-numeric-level / mixin-subscription-sudo / "
           "config-parameter-uninstall / duplicate-class-methods）")
@@ -1442,10 +1518,12 @@ def run_hook():
             violations = check_owl_template(root, only_file=abs_path)
             violations += check_slug_capability_gate(root, only_file=abs_path)
             violations += check_admin_gui_gate_anchor(root)
+            violations += check_gateway_copy_gate_anchor(root)
         elif re.match(r"^src/static/src/.*\.js$", rel):
             # anchor 走全域：改 JS（getter 被刪／改名／改判準）壞掉的是 XML 那顆按鈕。
             violations = check_slug_capability_gate(root, only_file=abs_path)
             violations += check_admin_gui_gate_anchor(root)
+            violations += check_gateway_copy_gate_anchor(root)
         elif re.match(r"^src/data/.*\.xml$", rel):
             violations = check_data_noupdate(root, only_file=abs_path)
             if re.match(r"^src/data/subscription_(products|template_links).*\.xml$", rel):

@@ -601,12 +601,24 @@ class CloudService(models.Model):
 
         # C20: the single generation point — never inline token_urlsafe here.
         new_password = self._generate_admin_password()
+        # #530：Reset 一次換發兩把憑證。它是租戶唯一的換發入口，也是**存量服務取得
+        # gateway key 的唯一路徑**（刻意不做從叢集回讀的 backfill——那會違反「憑證
+        # 權威來源在平台端」的不變式，且要新增 operator 端點）。只換一把的話 UI 那句
+        # 「Reset 會一併換掉 Gateway API Key」就是謊話。
+        # 沒有 gateway 的 chart 傳 None：`_set_admin_password_secret` 的補鑄同樣受
+        # `_chart_has_gateway` 閘門管，這裡硬生一把會繞過那道閘門（鑄造／供給／交付
+        # 三個閘門必須同源，否則就是 review finding 3 那條隱性契約再長回來）。
+        new_gateway_api_key = (
+            self._generate_admin_password() if self._chart_has_gateway() else None
+        )
         # #411: values 走全量組裝 helper（與 deploy/redeploy/reconfigure 同一條
         # 管線）。此路徑帶 template.helm_chart_version，reset password 會夾帶
         # chart 升版；改 reset_values 語意讓 chart 新增預設補位，不再以
         # --reuse-values 沿用舊 coalesced values（同一 bug class，見 #411）。
         values = self._assemble_deploy_values()['values']
-        operator_sensitive_values = self._build_mcp_sensitive_values(new_password)
+        operator_sensitive_values = self._build_mcp_sensitive_values(
+            new_password, gateway_api_key=new_gateway_api_key,
+        )
 
         # #461 可診斷性：reset 夾帶 chart 升版時，operator 的 helm upgrade 會真的
         # 等新 pod（pod template 變了），可能撞上 --timeout 15s 而 fail-safe 失敗。
@@ -694,7 +706,11 @@ class CloudService(models.Model):
             )
             raise UserError("Reset failed. Check service status and retry.") from e
 
-        self._set_admin_password_secret(new_password)
+        # #530：兩把憑證一起落庫。提交點語意不變（C11′ commit-on-secret）——2xx
+        # 代表兩者都已是叢集權威值，2xx 之前的任何失敗都保證叢集仍是舊憑證。
+        self._set_admin_password_secret(
+            new_password, gateway_api_key=new_gateway_api_key,
+        )
 
         # `last_upgraded_at` 同 action_redeploy：reset 走的是同一條 helm
         # upgrade 管線，不記錨就會讓 #489 的 age timeout 拿首裝時間當起點。
@@ -930,11 +946,8 @@ class CloudService(models.Model):
         # whitelisted verbatim; the chart never learns the tenant host — the
         # platform exposes services via a Cloudflare tunnel, not the chart's
         # ingress). No-op for other templates. See #380.
-        if self.subdomain:
-            paas_domain = self.env['ir.config_parameter'].sudo().get_param(
-                'woow_paas_platform.paas_domain', 'woowtech.io',
-            )
-            public_base_url = f"https://{self.subdomain}.{paas_domain}"
+        public_base_url = self._public_base_url()
+        if public_base_url:
             values = self._inject_allowed_origins(
                 values, template.slug, public_base_url,
             )
@@ -1354,18 +1367,98 @@ class CloudService(models.Model):
 
     @staticmethod
     def _generate_admin_password():
-        """#357 C20：mcp admin password 的**唯一**生成點。
+        """#357 C20：平台供給憑證的**唯一**生成點（admin password ＋ #530 gateway key）。
 
         ``secrets.token_urlsafe(24)`` 給 ~32 chars url-safe base64，強度足夠
-        mcp-admin-core 的明文比對（auth/middleware.py 的 secrets.compare_digest）。
+        mcp-admin-core 的明文比對（auth/middleware.py 的 secrets.compare_digest），
+        也**必然滿足** hermes gateway 對 api server key 的 16 字元下限（#530：低於
+        下限時上游會靜默不登記 api server 平台，健康信號直接消失——無聲失效）。
         只在建立 / reset 成功的 response 回傳一次，後續 API 一律走
-        ``PaasController._sanitize_helm_values`` 遮蔽 config.sensitive.*。
+        ``PaasController._sanitize_helm_values`` 遮蔽。
 
         收斂理由：原本 controller（自己 import secrets 生一份）與 model create()
         各寫一次 ``token_urlsafe(24)``，同一條安全屬性散在兩處＝改強度時容易只改
-        一邊，且「密碼唯一性」測試找不到單一標的。所有生成路徑都必須呼叫這裡。
+        一邊，且「密碼唯一性」測試找不到單一標的。所有生成路徑都必須呼叫這裡
+        ——#530 的 gateway key 同樣走這裡，不另開第二套隨機來源（兩套會分歧成
+        兩種強度，而弱的那把不會有任何測試盯著）。
         """
         return secrets.token_urlsafe(24)
+
+    @staticmethod
+    def _build_gateway_public_url(external_path, base_url):
+        """把 chart 的 gateway 子路徑接到服務的公開根位址上（純字串正規化）。
+
+        #530：hermes-agent 的 gateway（容器內 :8642）以 auth-proxy 的 ``/gateway``
+        子路徑對外。租戶要把這條網址填進 MCP 的 Gateway 區，所以**由後端組**而非
+        丟一個根位址讓前端或租戶自己拼——同一個坑已經在 dashboard 那區發生過
+        （租戶填成服務根網址、漏掉子路徑而永遠連不上）。
+
+        ``external_path`` 由 ``CloudAppTemplate._gateway_external_path()`` 從 seed
+        讀出，**平台側不再維護 slug→路徑對照表**（見該 method 的 docstring 與 spec
+        「不得新建 slug allowlist」）。本 method 因此只剩拼接與 rstrip 正規化：純
+        函式、沒有能力語意——「這個 chart 有沒有 gateway」由 external_path 空不空
+        表達，判準只有一處。
+
+        Args:
+            external_path: chart 對外的 gateway 子路徑（例 '/gateway'）；'' ＝沒有
+            base_url: 服務自身對外根位址，例 "https://<sub>.<domain>"
+
+        Returns:
+            完整 gateway URL；任一輸入為空時回 ''。
+        """
+        if not external_path or not base_url:
+            return ''
+        return '%s%s' % (base_url.rstrip('/'), external_path)
+
+    def _public_base_url(self):
+        """服務自身的對外根位址（Cloudflare tunnel 曝光）；無 subdomain 回 ''。
+
+        `_assemble_deploy_values` 的三個 injector 與 #530 的 gateway URL 交付都要
+        這個值，收斂成一處避免 domain 組法漂移。
+        """
+        self.ensure_one()
+        if not self.subdomain:
+            return ''
+        paas_domain = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io',
+        )
+        return 'https://%s.%s' % (self.subdomain, paas_domain)
+
+    def _chart_has_gateway(self):
+        """本服務的 chart 有沒有對外 gateway ⇒ 該不該有 gateway API key。
+
+        #530 的**鑄造／供給**閘門（`_set_admin_password_secret` 補鑄、
+        `_build_mcp_sensitive_values` 送出 `auth.apiServerKey`、Reset 換發），與
+        **交付**閘門 `_gateway_public_url()` 同源但條件較寬：交付另要求服務有對外
+        根位址（subdomain），沒有 subdomain 的服務仍然需要 key（gateway 在叢集內
+        仍在跑），只是平台沒有網址可以交給租戶。
+
+        為什麼鑄造也要判、而不是「先鑄好、之後 chart 支援了就能用」：`has_admin_gui`
+        的 8 個模板裡只有 hermes-agent 有 gateway，其餘 7 個 chart 會收到一個平台
+        並不打算給它的 `auth.apiServerKey`。今天無害純粹是因為 mcp-server／
+        open-design chart 沒有宣告 `auth` 區塊、也沒有 values.schema.json——是**隱性
+        契約**：哪天 mcp-server 補了 `auth:`（很合理的演進），這幾顆就會無聲吃下一
+        把不該給它的憑證。存量服務要補鑄有既定路徑（Reset 是唯一換發入口，本來就
+        會重跑本閘門），所以「先鑄起來放」買不到任何東西。
+        """
+        self.ensure_one()
+        return bool(self.template_id._gateway_external_path())
+
+    def _gateway_public_url(self):
+        """本服務的 gateway 完整網址（chart 無 gateway 或服務無 subdomain 時回 ''）。
+
+        #530 的**交付**判準本體：controller 的 `_gateway_credentials` 用它決定要不要
+        把明文憑證交給租戶，service payload 的 `has_gateway`（前端文案的 gate）也鏡射
+        它。三處讀同一個 method，不各自重算——否則「畫面說會換發、回應裡卻沒有」這種
+        漂移兩邊都不會報錯。
+        """
+        self.ensure_one()
+        external_path = self.template_id._gateway_external_path()
+        if not external_path:
+            # 短路：絕大多數 template 沒有 gateway，先擋掉才不會為了清單裡的每一列
+            # 服務都去查一次 paas_domain（_public_base_url 走 ir.config_parameter）。
+            return ''
+        return self._build_gateway_public_url(external_path, self._public_base_url())
 
     def _get_secret_record(self):
         self.ensure_one()
@@ -1374,17 +1467,42 @@ class CloudService(models.Model):
             limit=1,
         )
 
-    def _set_admin_password_secret(self, admin_password):
+    def _set_admin_password_secret(self, admin_password, gateway_api_key=None):
+        """建立／更新本服務的憑證記錄（create-or-write，secret 的**唯一**寫入點）。
+
+        #530：``gateway_api_key`` 未指定、記錄上還沒有值、**且 chart 真的有對外
+        gateway**（``_chart_has_gateway``）時在這裡補鑄。收斂在這一處而不是讓每條
+        呼叫路徑各自記得補——「有憑證記錄 ∧ chart 有 gateway ⟹ 兩把憑證都在」是狀態
+        不變式，逐路徑 stamp 必然漏（見 pitfall
+        reaped-since-single-path-stamp-gc-immunity：gate 欄位只在單一路徑 stamp，
+        其他路徑到達同狀態的列就永久缺值）。Reset 顯式帶新值以強制換發（它同樣先
+        判 ``_chart_has_gateway``，沒有 gateway 就傳 None 而不是硬換一把）。
+        """
         self.ensure_one()
         Secret = self.env['woow_paas_platform.cloud_service_secret'].sudo()
         secret = self._get_secret_record()
         vals = {'admin_password': admin_password, 'updated_at': fields.Datetime.now()}
+        if (gateway_api_key is None and not (secret and secret.gateway_api_key)
+                and self._chart_has_gateway()):
+            gateway_api_key = self._generate_admin_password()
+        if gateway_api_key:
+            vals['gateway_api_key'] = gateway_api_key
         if secret:
             secret.write(vals)
             return secret
         return Secret.create(dict(vals, service_id=self.id))
 
-    def _build_mcp_sensitive_values(self, admin_password=None):
+    def _build_mcp_sensitive_values(self, admin_password=None, gateway_api_key=None):
+        """組出送進 chart 的敏感值（**不寫回 helm_values**，另走 operator 的分離通道）。
+
+        #530：gateway API key 走 ``auth.apiServerKey``——chart 憑證解析優先序的第一段
+        就是「顯式 values 值」，所以平台供給的 per-service key 會勝過 chart 自產。
+        它有**自己的**閘門 ``_chart_has_gateway``（seed 的 gateway.externalPath），
+        不與 admin_password 的 ``has_admin_gui`` 共用：has_admin_gui=True 的 8 個模板
+        裡只有 hermes-agent 有 gateway，共用閘門會把這個鍵送給另外 7 個並不吃它的
+        chart（今天無害只因那些 chart 沒宣告 auth 區塊——隱性契約，見
+        ``_chart_has_gateway`` 的 docstring）。兩個閘門都不是 slug allowlist。
+        """
         self.ensure_one()
         if not self.template_id.has_admin_gui:
             return {}
@@ -1401,16 +1519,40 @@ class CloudService(models.Model):
                 # 租戶要取得密碼走 reset 流程（唯一同時換 Secret + patch config.json 者）。
                 return {}
             admin_password = secret.admin_password
-        return {'config': {'sensitive': {'admin_password': admin_password}}}
+            if gateway_api_key is None:
+                gateway_api_key = secret.gateway_api_key
+        values = {'config': {'sensitive': {'admin_password': admin_password}}}
+        # #530：沒有 key 時**整個鍵不送**，而不是送空字串。chart 的第一段優先序拿到
+        # 顯式空值就不會落到第二段「查既有 Secret」，等於把 chart 自產、agent 正在
+        # 用的那把洗掉 → gateway 當場拒絕所有請求。存量服務走 Reset 換發。
+        # `_chart_has_gateway` 是 fail-closed 的第二道：鑄造閘門已經讓沒有 gateway 的
+        # chart 不會有 key，但存量列（閘門上線前鑄的）仍可能有值，供給面必須自己判，
+        # 不能靠「上游應該不會給我髒資料」。
+        if gateway_api_key and self._chart_has_gateway():
+            values['auth'] = {'apiServerKey': gateway_api_key}
+        return values
 
     @staticmethod
     def _strip_mcp_sensitive_values(values):
+        """剝掉不得落庫（helm_values）的敏感子樹。
+
+        ⚠ 這層是 **path-aware** 的：新增一條敏感值通道時**必須**在這裡補對應路徑，
+        否則那個值會留在 ``helm_values`` 並經服務詳情 API 明文流出，而只掃既有路徑
+        的測試不會紅（#530 就是這個形狀：``auth.apiServerKey`` 不在 config.sensitive
+        底下）。與 ``PaasController._sanitize_helm_values`` 的遮罩層是兩道獨立防線，
+        新增路徑要**兩邊都補**。
+        """
         if not values or not isinstance(values, dict):
             return values
         result = json.loads(json.dumps(values))
         config = result.get('config')
         if isinstance(config, dict):
             config.pop('sensitive', None)
+        # #530 gateway API key。只 pop 這一個鍵、不動整個 auth 子樹——同層還有
+        # 非憑證欄位（PostgreSQL 家族 seed 的 auth.username／auth.database）。
+        auth = result.get('auth')
+        if isinstance(auth, dict):
+            auth.pop('apiServerKey', None)
         return result
 
     def _has_mcp_admin_secret(self):

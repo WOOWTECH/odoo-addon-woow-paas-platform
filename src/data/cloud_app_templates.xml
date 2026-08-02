@@ -860,7 +860,9 @@
                 與 dashboard 同一實例，並附 console（ttyd 網頁終端）可直接進入 agent 容器操作。
                 Web UI 與 console 以 HTTP basic-auth 憑證登入，dashboard 走它自己的表單登入，
                 三者共用同一組憑證（帳號 admin、密碼由平台建立服務時產生並一次性顯示、可重置）。
-                dashboard 以 /dashboard 子路徑對外，供 MCP OAuth 授權流程回呼使用。LLM 供應商金鑰
+                dashboard 以 /dashboard 子路徑對外，供 MCP OAuth 授權流程回呼使用。
+                agent 的 gateway API 以 /gateway 子路徑對外（Bearer 驗證，不套 basic-auth），
+                對應的 Gateway API Key 於建立服務與重置密碼時一次性顯示，供 MCP 等外部客戶端連線。LLM 供應商金鑰
                 （MiniMax／OpenRouter）由租戶自行填入，存於 Kubernetes Secret、不落磁碟。
                 刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
             <field name="category">ai_llm</field>
@@ -871,8 +873,12 @@
                  契約 v1；只放平台 pin/覆寫值。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent</field>
-            <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "externalPath": "/dashboard", "username": "admin"}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "20260727.2228@sha256:98d48222bab03b385e6417875c0605d32c88a98b62e68e80c87fdc156b4c3f5f"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+            <!-- #530：0.1.0 → 0.1.1（charts PR woow-paas-charts#69 加 gateway 反向代理
+                 子路徑）。chart 版本 bump 與本欄位必須同一次變更一起動，否則平台指向
+                 不存在的 chart 版本；平台端沒有 chart values 的任何副本，**這條沒有
+                 測試守得住**，是已知的人工紀律缺口。 -->
+            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "externalPath": "/dashboard", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "20260727.2228@sha256:98d48222bab03b385e6417875c0605d32c88a98b62e68e80c87fdc156b4c3f5f"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},

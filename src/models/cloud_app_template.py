@@ -1,3 +1,4 @@
+import json
 import logging
 
 from odoo import api, fields, models
@@ -347,6 +348,42 @@ class CloudAppTemplate(models.Model):
              '呈現層過濾、非 ACL——租戶知 id 仍可打 Odoo 原生 /my 與 /report。',
     )
 
+    def _gateway_external_path(self):
+        """chart 對外的 gateway 子路徑（seed 的 ``gateway.externalPath``）；沒有回 ''。
+
+        #530 gateway 三個閘門（鑄造／供給／交付）的**唯一事實源**。原本平台側維護
+        一份 ``{'hermes-agent': '/gateway'}`` 的 slug 對照表，與 spec 的「不得新建
+        slug allowlist」字面相反，而且路徑存在兩份（chart 一份、平台一份）——兩邊
+        各自看起來都對（chart 有那條 location、平台也組得出字串），只有租戶會拿到
+        404。改讀 seed 之後路徑只有一份，seed 改動自動貫穿三個閘門。
+
+        資料源刻意是 ``template.helm_default_values`` 而非 ``service.helm_values``：
+
+        * ACL 上 ``cloud_app_template`` 對 ``base.group_user`` 是唯讀
+          （ir.model.access.csv `1,0,0,0`），租戶改不動；``service.helm_values``
+          混有租戶 config（雖有 ``_filter_allowed_helm_values`` 白名單擋著）。
+        * 更關鍵的是**存量服務**：``helm_values`` 是 create 當下的快照，本欄新增
+          ``gateway`` 鍵之前建立的服務其快照裡根本沒有這個鍵；但部署走
+          ``reset_values``（chart 自身 values.yaml 為 base），那些服務的 pod 仍然
+          有 ``/gateway``。讀 ``helm_values`` 會對這批回空 ⇒ 判準 fail-closed 成
+          「這台沒有 gateway」，#530 對他們就靜默不存在。
+
+        malformed／非預期形態一律回 ''（fail-closed）——寧可不交付，也不要交一條
+        ``https://x.woowtech.iogateway`` 這種看起來像產品保證的死鏈。create 路徑
+        本來就對 malformed ``helm_default_values`` fail-loud（controllers/paas.py
+        ``_create_service``），所以 '' 實務上只會落在「這個 chart 沒有 gateway」。
+        """
+        self.ensure_one()
+        try:
+            values = json.loads(self.helm_default_values or '{}')
+        except (ValueError, TypeError):
+            return ''
+        gateway = values.get('gateway') if isinstance(values, dict) else None
+        path = gateway.get('externalPath') if isinstance(gateway, dict) else None
+        if not isinstance(path, str) or not path.startswith('/'):
+            return ''
+        return path
+
     @api.constrains('is_hidden', 'conceal_instances')
     def _check_conceal_implies_hidden(self):
         """conceal_instances=True ⟹ is_hidden=True（#471 蘊含式，fail-loud）。
@@ -553,7 +590,6 @@ class CloudAppTemplate(models.Model):
 
         See docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md.
         """
-        import json
         import re
 
         def _clean(node):

@@ -1512,14 +1512,27 @@ class PaasController(HiddenChainMixin, Controller):
                 'error': 'Reset failed. Check operator logs for details.',
             }
 
+        # #530：Reset 同時換發 gateway API key，一併一次性回傳。訊息用複數形是
+        # 因為租戶要回 MCP 那端重填 key——只說「密碼」會讓人以為 gateway 沒動。
+        gateway = self._gateway_credentials(service)
+        message = (
+            'Admin password reset. Save the new password now — '
+            'it will not be shown again.'
+        )
+        if gateway:
+            message = (
+                'Admin password and Gateway API Key reset. Save both now — '
+                'they will not be shown again. Update the Gateway API Key '
+                'wherever you configured it (e.g. your MCP server).'
+            )
         return {
             'success': True,
-            'data': {
-                'service_id': service.id,
-                'admin_password': new_password,
-                'message': 'Admin password reset. Save the new password now — '
-                           'it will not be shown again.',
-            },
+            'data': dict(
+                gateway,
+                service_id=service.id,
+                admin_password=new_password,
+                message=message,
+            ),
         }
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/revisions", auth="user", methods=["POST"], type="json")
@@ -2340,10 +2353,18 @@ class PaasController(HiddenChainMixin, Controller):
     def _sanitize_helm_values(values: dict, template: Any) -> dict:
         """Remove secret values from helm_values before exposing in API responses.
 
-        Replaces values under both 'secret' (legacy n8n_owner_password pattern)
-        AND ``config.sensitive`` (mcp-admin-core secret channel — admin_password
-        等) keys with masked versions. The mask is path-aware so it keeps
-        ``config`` objects intact while redacting only the sensitive subtree.
+        Replaces values under 'secret' (legacy n8n_owner_password pattern),
+        ``config.sensitive`` (mcp-admin-core secret channel — admin_password 等)
+        AND ``auth.apiServerKey`` (#530 hermes gateway key) with masked versions.
+        The mask is path-aware so it keeps ``config`` / ``auth`` objects intact
+        while redacting only the sensitive leaves.
+
+        ⚠ path-aware 的代價：**新增一條敏感值通道時必須在這裡補它的路徑**。#530 的
+        gateway key 落在 ``auth.apiServerKey``，既有的兩條路徑（top-level ``secret``
+        子樹、``config.sensitive`` 葉節點）都掃不到它——照抄 admin_password 的做法
+        而沒補這裡，那把 key 就會原樣從服務詳情 API 流出，且**只掃 config.sensitive
+        的既有測試不會紅**。與 model 端 ``_strip_mcp_sensitive_values``（不落庫）是
+        兩道獨立防線，新增敏感路徑要**兩邊都補**。
 
         Mask surface: prefix 8 chars + '...' when long enough, else '***'.
         Depth bounded at 5 to bound CPU on adversarial payloads.
@@ -2392,6 +2413,12 @@ class PaasController(HiddenChainMixin, Controller):
                     # #357 C19：這條分支用 _mask_value_fully（無前綴）——不同於上面
                     # legacy 'secret' 分支刻意保留的 8 字元前綴。
                     result[key] = _mask_secret_tree(val, _mask_value_fully)
+                elif child_path[-2:] == ('auth', 'apiServerKey'):
+                    # #530 hermes gateway key：葉節點（字串），不在 config.sensitive
+                    # 底下。刻意只遮這一格而非整個 auth 子樹——同層還有非憑證欄位
+                    # （PostgreSQL 家族 seed 的 auth.username／auth.database），全遮
+                    # 會讓那些 template 的設定分頁變成一排 ***。
+                    result[key] = _mask_value_fully(val)
                 elif isinstance(val, dict) and depth < 5:
                     result[key] = _mask_secrets(val, child_path, depth + 1)
                 else:
@@ -2498,6 +2525,39 @@ class PaasController(HiddenChainMixin, Controller):
         保留本 wrapper 只為不動既有 controller 呼叫點的命名。
         """
         return request.env['woow_paas_platform.cloud_service']._generate_admin_password()
+
+    @staticmethod
+    def _gateway_credentials(service: Any) -> dict[str, Any]:
+        """#530：組出 gateway 憑證的**一次性**交付 payload（明文 key ＋ 完整網址）。
+
+        建立服務與 Reset 兩條既有回應共用這一處，形狀才不會分岔。**刻意沒有回讀
+        端點**——本 repo 的憑證一律一次性，新增回讀等於開一條新的外洩面並要自行
+        承擔授權；租戶弄丟就跑 Reset 換發。
+
+        交付判準＝`service._gateway_public_url()` 非空（chart 有 gateway 對外路徑
+        **且**這台服務有對外根位址）。憑證的**鑄造與供給**判準是同源但較寬的
+        `CloudService._chart_has_gateway()`（只看 chart 有沒有 gateway）——沒有
+        subdomain 的服務仍要有 key（gateway 在叢集內照跑），只是平台沒有網址可以
+        交出去。兩者刻意分層：對沒有 gateway 的 chart 交付一把 key ＋ 一條不存在的
+        網址，比不交付更糟——它看起來像產品保證，而租戶會拿它去 debug 一個根本不
+        存在的端點。
+
+        三個閘門（鑄造／供給／交付）都從 seed 的 `gateway.externalPath` 推導，
+        **沒有任何一處是 slug allowlist**，也不再借用 `template.has_admin_gui`
+        （那是 admin_password 的閘門；8 個 has_admin_gui 模板裡只有 1 個有 gateway）。
+
+        放 controller 而非 model：本 method 讀出明文，而授權只存在 controller 層
+        （#357 C05）。回傳明文的 model 方法一律 private 且只有單一 controller 入口，
+        這裡不新增第二個那樣的 model 方法。
+        """
+        secret = service._get_secret_record()
+        gateway_url = service._gateway_public_url()
+        if not secret or not secret.gateway_api_key or not gateway_url:
+            return {}
+        return {
+            'gateway_api_key': secret.gateway_api_key,
+            'gateway_url': gateway_url,
+        }
 
     def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
@@ -2706,6 +2766,9 @@ class PaasController(HiddenChainMixin, Controller):
             # 不提供回取 API。
             if admin_password:
                 resp_data['admin_password'] = admin_password
+            # #530: gateway API key ＋ 完整網址，同樣是一次性。有 gateway 對外
+            # 路徑的 chart 才交付（見 _gateway_credentials）。
+            resp_data.update(self._gateway_credentials(service))
             return {
                 'success': True,
                 'data': resp_data,
@@ -3461,6 +3524,14 @@ class PaasController(HiddenChainMixin, Controller):
             # 純顯示用，不參與狀態機。
             'import_progress': service.import_progress or '',
             'has_project': bool(service.project_ids),
+            # #530：前端「Reset 會一併換發 Gateway API Key」那句文案的唯一資料入口
+            # （ServiceDetailPage 的 hasGateway getter）。值＝**交付判準本體**
+            # （service._gateway_public_url() 非空），與 _gateway_credentials 讀同一個
+            # method——不得改判 template.has_admin_gui：那 8 個模板裡只有 hermes-agent
+            # 真的有 gateway，用它當 gate 等於對另外 7 個模板的租戶宣告一件永遠不會
+            # 發生的事。放在 service 層而非 template 子物件，因為判準含「這台服務有沒有
+            # 對外根位址」（subdomain），那是 service 的屬性不是 template 的。
+            'has_gateway': bool(service._gateway_public_url()),
             'template': {
                 'id': service.template_id.id,
                 'name': service.template_id.name,

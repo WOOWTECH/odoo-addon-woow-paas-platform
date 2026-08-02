@@ -18,6 +18,18 @@ class CloudServiceSecret(models.Model):
         required=True,
         help='One-time plaintext admin password for MCP admin GUI',
     )
+    # #530：本模型刻意維持「一個 service 一組憑證」的單記錄設計（service_id 帶
+    # UNIQUE），第二把固定用途的憑證就是加一個欄位——改建成通用 key-value 表要
+    # 另立 ACL、唯一鍵語意與清理路徑，換不到任何現有需求。
+    #
+    # 刻意**不設** required：存量服務（本欄位落地前建立的）讀回 False，那是合法
+    # 狀態而非錯誤——它們走 Reset 換發（`_build_mcp_sensitive_values` 對空值整個
+    # 鍵不送，讓 chart 沿用既有 Secret）。設 required 會讓 -u 對既有列直接炸。
+    gateway_api_key = fields.Char(
+        string='Gateway API Key',
+        help='One-time plaintext gateway API key; supplied to the chart at '
+             'auth.apiServerKey (hermes-agent gateway Bearer auth)',
+    )
     updated_at = fields.Datetime(
         string='Updated At',
         required=True,
