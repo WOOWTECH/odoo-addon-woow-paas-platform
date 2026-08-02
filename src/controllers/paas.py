@@ -305,29 +305,55 @@ class PaasController(HiddenChainMixin, Controller):
 
         Workspace = request.env['woow_paas_platform.workspace']
 
+        # #525 A2：`Workspace.create()` 在 model 層被拆成**兩段非原子寫入**
+        # （`workspace.py` 的 `create`：先 `super().create()` INSERT 主表列，再建
+        # owner 的 `workspace_access`）。第二段拋例外時主表列已經進去了，而例外被
+        # 這裡的 `except` 吃掉、以 HTTP 200 返回 → 不傳播到框架層 → request 正常
+        # 結束 → transaction 照常 commit → 孤兒落地。
+        #
+        # 孤兒的兩個後果都不會讓使用者察覺，只會累積：
+        #   1. `_list_workspaces` 是從 `workspace_access` 反查的，而 ir.rule
+        #      `workspace_rule_member_access` 的 domain 也是 `access_ids.user_id`
+        #      ⇒ 沒有 access 列的 workspace 對每個非 superuser 都不存在：看不到、
+        #      進不去、刪不掉。
+        #   2. `unique_slug` 是 DB 層 constraint、不看 ir.rule，但 `_generate_slug`
+        #      用的是**使用者身分**的 `search_count`、看不到孤兒 ⇒ 同名重試會產生
+        #      同一個 slug → 撞 unique → IntegrityError → 交易毀損 → 框架層 500。
+        #      使用者從此再也用不了那個名字，錯誤訊息也指不出原因。
+        #
+        # savepoint 而非整個 request 的 `cr.rollback()`：形態沿用 #525 A1／PR #527，
+        # 把撤回界定在這一段，不依賴「try 之前永遠沒有別的寫入」這個會隨程式碼
+        # 演進失效的前提；且 `_FlushingSavepoint` 失敗時會先 `cr.clear()` 再
+        # `ROLLBACK TO SAVEPOINT`，ORM cache 一併清乾淨。
         try:
-            workspace = Workspace.create({
-                'name': name,
-                'description': description,
-            })
-
-            return {
-                'success': True,
-                'data': {
-                    'id': workspace.id,
-                    'name': workspace.name,
-                    'description': workspace.description or '',
-                    'slug': workspace.slug,
-                    'state': workspace.state,
-                    'role': ROLE_OWNER,
-                    'member_count': 1,
-                    'is_owner': True,
-                    'created_date': workspace.create_date.isoformat() if workspace.create_date else None,
-                }
-            }
+            with request.env.cr.savepoint():
+                workspace = Workspace.create({
+                    'name': name,
+                    'description': description,
+                })
         except Exception as e:
             _logger.error("Error creating workspace: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while creating the workspace. Please try again.'}
+
+        # 回應組裝**移出 try**（#525 A2 點名的第二個殘留來源）：這裡全是純讀取，
+        # 屬於「已經建立成功之後」的工作。留在 try 內的話，連序列化／讀取錯誤都會
+        # 被回報成「建立失敗」，而此時 workspace 其實已完整建成（含 owner access、
+        # 使用者看得到）——又一種「畫面說失敗、東西卻在」。移出來之後這類例外會
+        # 傳播到框架層，由框架 rollback 整筆並回報錯誤，回應與資料重新一致。
+        return {
+            'success': True,
+            'data': {
+                'id': workspace.id,
+                'name': workspace.name,
+                'description': workspace.description or '',
+                'slug': workspace.slug,
+                'state': workspace.state,
+                'role': ROLE_OWNER,
+                'member_count': 1,
+                'is_owner': True,
+                'created_date': workspace.create_date.isoformat() if workspace.create_date else None,
+            }
+        }
 
     def _get_workspace(self, workspace_id: int) -> dict[str, Any]:
         """
@@ -659,27 +685,46 @@ class PaasController(HiddenChainMixin, Controller):
         if existing:
             return {'success': False, 'error': 'User is already a member of this workspace'}
 
+        # #525 A3：唯一的寫入是這行 create，但例外被下面的 `except` 吃掉後不會傳播
+        # 到框架層 → request 正常結束 → transaction 照常 commit → 那一列授權留下來：
+        # **被邀請者實際已取得成員權限**，API 卻說失敗。加上
+        # `unique_user_workspace` 與上面的「已是成員」前置檢查，使用者會被鎖在
+        # 「第一次說邀請失敗、再邀說已是成員」的矛盾狀態，兩邊都不是真的。
+        #
+        # 殘留視窗在 `models.py` 的 `_create` 尾端：INSERT 已下 →
+        # `records._validate_fields(...)` → `records.check_access('create')`。
+        # 目前的規則與 constraint 下這條路徑不完全可達（`_check_owner_count` 只在
+        # role=='owner' 時拋，而 `ASSIGNABLE_ROLES` 不含 owner；`workspace_access`
+        # 的 create rule 對 `base.group_user` 全開）——但那是**設定**擋著，不是這段
+        # 程式有守。收緊 create rule 或加一條 `@api.constrains` 殘留立即可達，所以
+        # 結構上照 A1／A2 同一形態修掉。
         try:
-            new_access = WorkspaceAccess.create({
-                'workspace_id': workspace_id,
-                'user_id': target_user.id,
-                'role': role,
-                'invited_by_id': user.id,
-            })
-
-            return {
-                'success': True,
-                'data': {
-                    'id': new_access.id,
+            with request.env.cr.savepoint():
+                new_access = WorkspaceAccess.create({
+                    'workspace_id': workspace_id,
                     'user_id': target_user.id,
-                    'name': target_user.name,
-                    'email': target_user.email,
                     'role': role,
-                }
-            }
+                    'invited_by_id': user.id,
+                })
         except Exception as e:
             _logger.error("Error inviting member: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': 'An error occurred while inviting the member. Please try again.'}
+
+        # 回應組裝移出 try，與 `_create_workspace` 對齊。**這一半今天沒有對應的
+        # 測試，因為它造不出可達的失敗**：組裝只讀 `new_access.id`（純記憶體、
+        # 不碰 DB）與上面已 sudo 取得的 `target_user`。移出來是結構防護——savepoint
+        # 在離開 `with` 時就 release，日後若有人在組裝區加入一次 DB 讀取，留在 try
+        # 內就會以「邀請失敗、對方卻已入群」的形式把本次修掉的缺陷原樣帶回來。
+        return {
+            'success': True,
+            'data': {
+                'id': new_access.id,
+                'user_id': target_user.id,
+                'name': target_user.name,
+                'email': target_user.email,
+                'role': role,
+            }
+        }
 
     def _update_member_role(self, workspace_id: int, access_id: int, role: str | None) -> dict[str, Any]:
         """
