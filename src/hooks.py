@@ -145,6 +145,11 @@ _CONFIG_PARAMETERS = [
     # #489：轉移狀態的 age timeout 門檻（缺值時走 cloud_service.py 的內建預設）
     'woow_paas_platform.deploy_timeout_minutes',
     'woow_paas_platform.vm_deploy_timeout_minutes',
+    # #501：限量商品的供給閘門（缺值時走 cloud_app_template.py 的內建預設）。
+    # key 由 slug 推導，新增限量商品時這裡要跟著補兩個
+    # （守線＝repo-lint 的 config-parameter-uninstall）。
+    'woow_paas_platform.global_instance_cap.haos',
+    'woow_paas_platform.sales_paused.haos',
     # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
     # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
 ]

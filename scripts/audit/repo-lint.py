@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-十二個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+十四個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -58,6 +58,20 @@
                      了名稱→數值表，字串會解析成 25 ⇒ `_logger.info()`(20) 全被擋掉：
                      assertLogs 恆紅（且紅得像被測 code 掉了 log）、assertNoLogs 恆綠。
                      改傳數值 logging.INFO（#492）。
+
+13. config-parameter-uninstall  res_config_settings.py 每個 `config_parameter=` 的 key
+                     必須登記進 src/hooks.py 的 `_CONFIG_PARAMETERS`。Odoo 卸載 addon
+                     **不會**清 ir.config_parameter，漏登記＝卸載後留下孤兒設定（重裝
+                     時被讀到、值卻是上一輪的）。CLAUDE.md 一直明載這條義務卻零機械
+                     保護——而「少寫一行」正是 review 最抓不到的形態（#501）。
+                     只查單向（宣告了沒登記）；反向不擋，清單裡有歷史遺留與非 settings
+                     來源的 key。
+14. duplicate-class-methods  同一個 class body 內重複定義同名 method 即 fail。Python
+                     靜默採用後者、前者整段失效（無錯誤、無警告、無 log），在 Odoo model
+                     上等於「新加的 override 把既有守衛整個關掉」。#501 PR 實例：新增的
+                     `write()` 覆蓋掉 #279 擋 workspace 重指派的租戶隔離守衛，針對性測試
+                     涵蓋不到、只有全套會紅。測試檔同樣涵蓋（重複 test method ＝前一個
+                     永不執行的無聲假綠）。
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1096,6 +1110,242 @@ def check_mixin_subscription_sudo(root, only_file=None):
     return violations
 
 
+CONFIG_PARAM_HOOKS_FILE = "src/hooks.py"
+CONFIG_PARAM_DOC = "CLAUDE.md「使用 config_parameter 時的卸載清理」"
+
+
+def _declared_config_parameters(root):
+    """全 `src/**/*.py` 上宣告的 `config_parameter=` 字面（AST，避開註解／字串）。
+
+    回 `(found, errors)`，`found` 是 `{key: "rel:lineno"}`、`errors` 是字串 list。
+
+    ⚠ **掃全 src 而不是死寫 `res_config_settings.py` 一個檔**。目前 repo 內 17 個
+    宣告確實全在那一檔，但那是**現況、不是約束**——`config_parameter=` 是欄位層的
+    kwarg，任何 `TransientModel` 都能用。死寫單檔的話，有人在別處宣告就靜默漏掉，
+    而 gate 照樣回綠 ⇒ 這條守線變成「靠遺漏成立的保證」，正是它自己要防的形態。
+    掃全 src 之後，涵蓋範圍與「哪個檔宣告」解耦。
+
+    `src/tests/` 排除：測試可能為了驗 gate 本身而寫假宣告，計入會誤報。
+
+    SyntaxError 必須被接住並轉成 violation——本 gate 排在
+    `check_duplicate_class_methods` 之前，讓例外往外拋會使整輪 repo-lint 以
+    traceback 中斷，**其餘 13 條 gate 的違規完全不輸出**。那是「一條爆掉全部不跑」
+    的靜默失效，比本 gate 自己漏抓更嚴重。
+    """
+    found, errors = {}, []
+    for fp in sorted(glob.glob(os.path.join(root, "src/**/*.py"), recursive=True)):
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        if rel.startswith("src/tests/"):
+            continue
+        try:
+            with open(fp, encoding="utf-8", errors="replace") as f:
+                tree = ast.parse(f.read())
+        except SyntaxError as exc:
+            errors.append(
+                "%s 有語法錯誤（line %s），無法檢查 config_parameter 宣告：%s"
+                % (rel, exc.lineno, exc.msg))
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "config_parameter" and isinstance(kw.value, ast.Constant) \
+                        and isinstance(kw.value.value, str):
+                    found.setdefault(kw.value.value, "%s:%d" % (rel, node.lineno))
+    return found, errors
+
+
+def _uninstall_cleanup_parameters(path):
+    """`hooks.py` 的 `_CONFIG_PARAMETERS` list 字面（AST）。回 `(keys, error)`。
+
+    ⚠ **只掃 module scope（`tree.body`），且多個指派要 fail-loud**。原本用
+    `ast.walk` 並在第一個匹配就 return，有兩個獨立問題：
+
+    1. 取到的是**第一個**指派，但 Python 生效的是**最後一個**。有人在檔案後段
+       再寫一次 `_CONFIG_PARAMETERS = [...]`（靜默覆蓋前者），本檢查會拿前者去
+       比對 ⇒ 實際生效的清單漏登記時**不會報**。
+    2. 那個盲區正好落在 `check_duplicate_class_methods` 的覆蓋範圍之外（它只看
+       class body、不看 module scope），而 `hooks.py` 全檔都是 module-level
+       ⇒ 兩條 gate 的盲區交集把這一條整條關掉。
+
+    現在偵測到多個 module-level 指派就回 error 而非猜一個——這種寫法本身就是
+    可疑的，靜默取最後一個只會把問題往後推。`ast.walk` 改成只看 `tree.body`
+    順帶排除「函式內同名區域變數」的誤判。
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            tree = ast.parse(f.read())
+    except SyntaxError as exc:
+        return None, "%s 有語法錯誤（line %s），無法檢查卸載清理清單：%s" % (
+            CONFIG_PARAM_HOOKS_FILE, exc.lineno, exc.msg)
+    assigns = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if "_CONFIG_PARAMETERS" not in names:
+            continue
+        assigns.append(node)
+    if not assigns:
+        return None, ("%s：找不到 module scope 的 `_CONFIG_PARAMETERS` 指派，"
+                      "卸載清理的守線失效。" % CONFIG_PARAM_HOOKS_FILE)
+    if len(assigns) > 1:
+        return None, (
+            "%s：`_CONFIG_PARAMETERS` 在 module scope 被指派 %d 次（line %s）。"
+            "Python 生效的是最後一個，前面的全被靜默覆蓋——這種寫法讓「清單裡有什麼」"
+            "無法一眼判定，本檢查拒絕猜。請合併成單一指派。"
+            % (CONFIG_PARAM_HOOKS_FILE, len(assigns),
+               ", ".join(str(a.lineno) for a in assigns)))
+    node = assigns[0]
+    if not isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+        return None, ("%s:%d：`_CONFIG_PARAMETERS` 不是 list/tuple/set 字面，"
+                      "本檢查只認字面量（見 docstring 的覆蓋邊界）。"
+                      % (CONFIG_PARAM_HOOKS_FILE, node.lineno))
+    return {e.value for e in node.value.elts
+            if isinstance(e, ast.Constant) and isinstance(e.value, str)}, None
+
+
+def check_config_parameter_uninstall(root, only_file=None):
+    """`config_parameter` 欄位的 key 必須進 `hooks.py` 的 `_CONFIG_PARAMETERS`。
+
+    Odoo 卸載 addon **不會**清 `ir.config_parameter`，所以每個 `config_parameter=`
+    都要在 uninstall hook 的清單裡登記一筆，否則卸載後留下孤兒設定（重裝時被讀到、
+    值卻是上一輪的）。CLAUDE.md 明載這條義務，但在 #501 之前**沒有任何機械保護**
+    ——漏了只能靠 review 抓，而 review 抓不到「少寫一行」。
+
+    只查一個方向（宣告了卻沒登記）。反向（登記了卻沒有對應欄位）刻意不擋：清單裡
+    本來就有歷史遺留與非 settings 來源的 key（`_CONFIG_PARAMETERS` 現有 25 個 key，
+    其中 8 個是 `get_param` 呼叫點生出來的、不對應任何欄位），擋它會逼人刪掉仍需
+    清理的項目。
+
+    ⚠ **覆蓋邊界**：兩側都只認**字面量**。`config_parameter=` 若寫成運算式
+    （字串串接、變數、f-string），或 `_CONFIG_PARAMETERS` 用推導式產生，本檢查會
+    **靜默略過**、不報 violation —— 綠燈不代表沒有漏登記的 key。目前 repo 內兩側
+    都是字面量（17 個宣告 / 一個 list literal），維持這個形態本檢查才有效力；要改成
+    動態產生時，請連同本檢查一起重寫，不要以為它還在守。
+
+    宣告側掃**全 `src/**/*.py`**（排除 `src/tests/`）而非死寫單一檔案，理由見
+    `_declared_config_parameters` 的 docstring。
+    """
+    hooks_path = os.path.join(root, CONFIG_PARAM_HOOKS_FILE)
+    if not os.path.exists(hooks_path):
+        return []
+    # 不變式跨「全 src 的宣告」與 hooks.py 兩側，動到任一個 src/*.py 都整條重算。
+    # 宣告可能出現在任何檔，只認固定兩個檔名的切片會讓新檔案的宣告漏檢。
+    if only_file:
+        rel = os.path.relpath(
+            os.path.abspath(only_file), os.path.abspath(root)
+        ).replace(os.sep, "/")
+        if not (rel.startswith("src/") and rel.endswith(".py")):
+            return []
+    declared, declared_errs = _declared_config_parameters(root)
+    registered, registered_err = _uninstall_cleanup_parameters(hooks_path)
+    # 任一側取不到就 fail-loud 並**停在這裡**：拿殘缺的一側去比對只會產生誤導的
+    # violation 清單（例如語法錯誤讓 declared 為空 ⇒ 「零違規」＝假綠）。
+    if declared_errs or registered_err:
+        return declared_errs + ([registered_err] if registered_err else [])
+    violations = []
+    for key, where in sorted(declared.items(), key=lambda kv: kv[1]):
+        if key not in registered:
+            violations.append(
+                "%s：config_parameter %r 沒有登記進 %s 的 `_CONFIG_PARAMETERS`。"
+                "Odoo 卸載 addon 不會清 ir.config_parameter，漏登記＝卸載後留下孤兒"
+                "設定（重裝時被讀到、值卻是上一輪的）。把這個 key 加進該清單即可"
+                "（見 %s）。"
+                % (where, key, CONFIG_PARAM_HOOKS_FILE, CONFIG_PARAM_DOC))
+    return violations
+
+
+DUP_METHOD_DOC = "docs/decisions/patterns/README.md"
+
+
+def _accessor_or_overload(node):
+    """`@x.setter/getter/deleter` 與 `@overload` 是**刻意**的同名成對定義，豁免。"""
+    for dec in node.decorator_list:
+        if isinstance(dec, ast.Attribute) and dec.attr in (
+                'setter', 'getter', 'deleter'):
+            return True
+        name = dec.id if isinstance(dec, ast.Name) else (
+            dec.attr if isinstance(dec, ast.Attribute) else None)
+        if name == 'overload':
+            return True
+    return False
+
+
+def _duplicate_methods(class_node):
+    """回傳 [(method_name, first_lineno, dup_lineno)]——只看 class body 的直接子節點。"""
+    seen, dups = {}, []
+    for child in class_node.body:
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if _accessor_or_overload(child):
+            continue
+        if child.name in seen:
+            dups.append((child.name, seen[child.name], child.lineno))
+        seen[child.name] = child.lineno
+    return dups
+
+
+def check_duplicate_class_methods(root, only_file=None):
+    """同一個 class body 內不得重複定義同名 method。
+
+    Python **靜默接受**重複定義，後者覆蓋前者——沒有錯誤、沒有警告、沒有 log。
+    在 Odoo model 上這等於「新加的 override 把既有的 override 整個關掉」，而既有
+    的那個往往是別人辛苦補的守衛。
+
+    實例（本檢查的來源，#501 PR #517）：為了擋「先建成 deleting 再 write 回來」
+    的上限繞道，新增了第二個 `CloudService.write()`，靜默覆蓋掉 #279 Path B 那個
+    「不可變更已部署服務的 workspace」的租戶隔離守衛。針對性測試涵蓋不到那條
+    路徑，**只有全套會紅**（`TestReachSyncTriggers.test_cs_workspace_reassign_on_live_ns_rejected`
+    → `UserError not raised`），而全套很貴、又容易被不乾淨的基準掩蓋成「本來就紅」。
+
+    測試檔同樣涵蓋：重複的 test method 會讓前一個**永遠不執行**，是無聲的假綠。
+
+    ⚠ **覆蓋邊界**（同 config-parameter-uninstall 的標準，寫明才不會被誤信）：
+    - 只比對**同一個 class body 的直接子節點**。跨 class 不比（那是正常的繼承
+      覆蓋）；巢狀 class 各自獨立比對。
+    - `if` / `try` / `with` 區塊**內**的 `def` **不納入**比對——條件式定義是合法
+      形態（依版本／可選相依定義不同實作）。代價：「兩個分支各定義一次且都會執行」
+      這種真的會覆蓋的寫法抓不到。目前 repo 內沒有這種用法；若日後出現，這條
+      gate 對它是靜默的。
+    - `@property` 的 `setter/getter/deleter` 與 `typing.overload` 豁免（刻意同名）。
+    - 只掃 `src/**/*.py`。
+    - 🔴 **不含 module scope**：module-level 的重複 `def` 或重複變數指派（例如
+      `hooks.py` 全檔都是 module-level）**不在本 gate 的範圍**。這個盲區曾經與
+      `config-parameter-uninstall` 的盲區交集、把那一條整條關掉（它取第一個
+      `_CONFIG_PARAMETERS` 指派，而 Python 生效的是最後一個 ⇒ 有人在後面再指派
+      一次就靜默覆蓋，兩條 gate 都看不見）。該條已改成自己偵測多重指派並
+      fail-loud；本 gate 的邊界維持不變，但**新增 module-level 不變式時不要指望
+      這條 gate 守它**。
+    """
+    violations = []
+    files = [only_file] if only_file else sorted(
+        glob.glob(os.path.join(root, "src/**/*.py"), recursive=True))
+    for fp in files:
+        if not os.path.exists(fp) or not fp.endswith(".py"):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        if not rel.startswith("src/"):
+            continue
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            try:
+                tree = ast.parse(f.read())
+            except SyntaxError:
+                continue  # 語法錯誤由 Python 自己報，這裡不重複
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for name, first, dup in _duplicate_methods(node):
+                violations.append(
+                    "%s:%d：class `%s` 重複定義 `%s()`（前一個在 :%d）。Python 靜默"
+                    "採用後者、前者整段失效——沒有錯誤也沒有警告，而前者往往是既有的"
+                    "守衛（#501 實例：新增的 write() 覆蓋掉 #279 擋 workspace 重指派的"
+                    "租戶隔離守衛，只有全套會紅）。要擴充既有 method 就**併進那一個**，"
+                    "不要新增第二個定義。（見 %s）"
+                    % (rel, dup, node.name, name, first, DUP_METHOD_DOC))
+    return violations
+
+
 # ---------------------------------------------------------------- modes
 
 def run_all(root):
@@ -1111,7 +1361,9 @@ def run_all(root):
                   + check_reset_budget_ladder(root)
                   + check_transition_anchor_utc(root)
                   + check_assertlogs_numeric_level(root)
-                  + check_mixin_subscription_sudo(root))
+                  + check_mixin_subscription_sudo(root)
+                  + check_config_parameter_uninstall(root)
+                  + check_duplicate_class_methods(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -1120,7 +1372,8 @@ def run_all(root):
     print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
           "reuse-values / seed-topology / test-env-restore / capability-gate / "
           "conceal-instances / reset-budget-ladder / transition-anchor-utc / "
-          "assertlogs-numeric-level / mixin-subscription-sudo）")
+          "assertlogs-numeric-level / mixin-subscription-sudo / "
+          "config-parameter-uninstall / duplicate-class-methods）")
     return 0
 
 
@@ -1174,11 +1427,14 @@ def run_hook():
             violations += check_reuse_values(root, only_file=abs_path)
             violations += check_conceal_instances_gate(root, only_file=abs_path)
             violations += check_transition_anchor_utc(root, only_file=abs_path)
+            violations += check_duplicate_class_methods(root, only_file=abs_path)
         elif re.match(r"^src/.*\.py$", rel):
             violations = check_reuse_values(root, only_file=abs_path)
             violations += check_conceal_instances_gate(root, only_file=abs_path)
             violations += check_transition_anchor_utc(root, only_file=abs_path)
             violations += check_mixin_subscription_sudo(root, only_file=abs_path)
+            violations += check_config_parameter_uninstall(root, only_file=abs_path)
+            violations += check_duplicate_class_methods(root, only_file=abs_path)
             if rel.startswith("src/tests/"):
                 violations += check_test_env_restore(root, only_file=abs_path)
                 violations += check_assertlogs_numeric_level(root, only_file=abs_path)

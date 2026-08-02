@@ -1148,9 +1148,9 @@
             <field name="post_deploy_init_type">none</field>
 
             <!-- 每帳號限一。兩個理由，任一單獨成立：
-                 (1) 商業：Q5 拍板首批**限量 8 台**（waitlist）。平台沒有「全域實例
-                     上限」的機制（見 PR 說明），per-partner 上限是 seed 層唯一能承載
-                     的部分——它保證 8 台散佈在 ≥8 個帳號、不會被單一租戶一次掃光。
+                 (1) 商業：Q5 拍板首批**限量 8 台**（waitlist）。這一條保證那幾台
+                     散佈在 ≥N 個帳號、不會被單一租戶一次掃光；**總量**的硬閘是
+                     #501 的全域實例上限（見下方 is_hidden 註解），兩者正交、都要有。
                  (2) 技術：CS ns 的 ResourceQuota 硬上限 `persistentvolumeclaims: 10`，
                      而每台 HAOS 在 import 期間短暫佔 **3 顆** PVC（target/prime/scratch）。
                      同 workspace 併發開通 3 台以上就會撞 PVC 數量上限（design §6.3）。 -->
@@ -1158,28 +1158,36 @@
 
             <field name="is_active" eval="True"/>
             <!-- is_hidden 維持預設 False：走 #380 金樣板上架前台販售。
-                 ⚠ 首批 8 台售罄後的下架開關＝**is_hidden=True**，且**不要**碰
-                 conceal_instances。#473（#471 的修正，已在 develop）把原本一個旗標
-                 拆成兩層，以下是 controllers/paas.py 現況實查：
-                   - 曝光層讀 is_hidden 共四處：marketplace domain（:801，同時查
-                     is_active）、template 詳情 by-id（:843）、template plans（:932）、
-                     下單建立（:2245）。翻 is_hidden=True ＝「不列、規格頁不可讀、
-                     不能再下單」，正是售罄要的效果。
-                   - 既有服務的讀取／操作端點改判 template_id.conceal_instances
-                     （:970 / :1076 / :1099 / :1195 / :1260 / :1310 / :1386 / :1406 /
-                     :1479），與 is_hidden 正交。故只翻 is_hidden 不會把已付費租戶
-                     手上 state=running 的 HAOS 鎖在門外（#464 在 hermes-agent 實測到
-                     的「詳情頁整個打不開」形態，已由 #473 消除）。
-                   - models/cloud_app_template.py:311 有 fail-loud constraint：
-                     conceal_instances=True ⟹ is_hidden=True。只有平台自動開通類
-                     （#336 那種不該讓租戶自己看到實例的）才兩個一起翻。
-                 is_active=False 也擋得住（四處曝光層都查 is_active），但它的語意是
-                 「模板停用／不可部署」（ha_paas.py:137 拿它當 deployable 安全網），
-                 售罄下架用 is_hidden 更貼語意。
-                 ⚠ 另一層：平台**沒有**全域實例上限機制，所以「限量 8 台」是營運控制
-                 （waitlist）＋本 record 的 max_per_partner=1，不是 seed 能表達的硬閘。
-                 且直接改 DB 的旗標會被下一次 -u 依本 seed 翻回（本檔 noupdate=0）
-                 ——真要下架得改這裡並發版。 -->
+
+                 ⚠ **不要**替本 record 補一行 `<field name="is_hidden" .../>`。
+                 它現在**刻意不在 seed 裡**：`-u` 對既有 record 只 write XML 列出的
+                 欄位，所以沒列出的欄位手改 DB 之後會存活。補上去（例如為了與
+                 cloud_app_hermes_agent 對稱）會靜默關掉這條逃生門，而且不會有任何
+                 測試變紅。同理 conceal_instances 也不要補。
+
+                 ⚠ 勘誤（#501）：本註解原本寫「直接改 DB 的旗標會被下一次 -u 依本
+                 seed 翻回」——那對 hermes-agent（有顯式寫 is_hidden）成立，對本
+                 record **不成立**，理由同上。
+
+                 ## 售罄／停售請走 #501 的供給閘門，不要翻 is_hidden
+
+                 首批限量的硬閘已經有程式機制了（#501）：全域實例上限與停售開關都是
+                 `ir.config_parameter`，營運在 Odoo 設定畫面（Woow PaaS →「限量商品
+                 供給」）調整，**不必發版**。達到上限後商品**照常顯示並標示「已售罄」**，
+                 只是不能下單。上限的內建預設在
+                 `models/cloud_app_template.py` 的 `_DEFAULT_GLOBAL_INSTANCE_CAPS`。
+
+                 翻 `is_hidden=True` 是**下架**不是售罄——marketplace 不列、規格頁與
+                 plans 都讀不到。誤翻 `conceal_instances` 更糟：已付費租戶手上
+                 state=running 的服務會整條被鎖住（#464 在 hermes-agent 實測到的
+                 「詳情頁整個打不開」形態）。兩者的完整分工、以及曝光層／實例層各自的
+                 判準位置，見 docs/decisions/patterns/hidden-template-presentation-chain.md
+                 （刻意不在這裡列 controllers/paas.py 的行號——本註解過去兩次就是被
+                 行號漂移誤導的，改引符號與 pattern doc）。
+
+                 is_active=False 也擋得住（曝光層四處都查 is_active），但它的語意是
+                 「模板停用／不可部署」（`ha_paas.py` 拿它當 deployable 安全網），
+                 與售罄無關。 -->
 
             <field name="workload_type">vm</field>
         </record>

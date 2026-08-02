@@ -75,6 +75,11 @@ if (not service.exists() or service.workspace_id.id != workspace_id
 - plan `storefront_hidden` → 這個**方案**不可選購
 - template `is_hidden` → 這個**商品**不上架
 - template `conceal_instances` → 這個商品的**既有實例**也不可見／不可操作
+- **供給閘門**（#501，第四軸）→ 這個商品**照常上架、照常可看，只是現在買不到**
+
+第四軸與前三者正交，且**不是欄位**：上限與停售是 `ir.config_parameter`（key 由 slug 推導），售罄則是**現算**（活躍實例數 vs 上限），對外只暴露 `_format_template` 的 `availability: {purchasable, reason}`。判準的唯一定義點是 `cloud_app_template._reject_reason_for_new_instance`，`CloudService.create()`／`write()`（權威閘門）與 marketplace payload（顯示層）都呼叫它。
+
+**要「暫時不賣」時先分清楚要哪一軸**：翻 `is_hidden` 是**下架**（商品連同規格頁、plans 一起消失）；供給閘門是**顯示並標示「已售罄／暫停販售」**。#501 拍板限量商品走後者——誤翻 `is_hidden` 會讓想買的人連商品都找不到，誤翻 `conceal_instances` 更會鎖死已付費租戶手上 running 的服務。
 
 ## D2 不變式（`_hidden_workspace_ids` 的成立前提）
 

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from odoo import fields
 from odoo.exceptions import AccessError, UserError, ValidationError
+from psycopg2 import OperationalError
 from odoo.http import request, route, Controller
 
 from .ha_paas import HiddenChainMixin
@@ -921,6 +922,11 @@ class PaasController(HiddenChainMixin, Controller):
             'min_ram_gb': template.min_ram_gb,
             'min_storage_gb': template.min_storage_gb,
             'pricing': self._template_pricing(template),
+            # #501：可購買性。**頂層欄位，刻意不塞進 pricing**——「能不能買」與
+            # 「多少錢」正交，混進同一個欄位正是 #478 的根因形態（一個欄位承載兩個
+            # 語意）。前端 fail-closed 讀 `availability.purchasable`，`reason` 只
+            # 決定文案。判準由 model 單點裁決，這裡直接搬、不做任何推導。
+            'availability': template._availability(),
         }
         if include_values:
             data['helm_chart_name'] = template.helm_chart_name
@@ -2657,23 +2663,20 @@ class PaasController(HiddenChainMixin, Controller):
             )
             service = service_model.create(service_vals)
 
-            # Create subscription for this service
-            partner = workspace.owner_id.partner_id
-            _logger.info(
-                "[CLOUD_SVC] deploy_service created service=%s workspace=%s template=%s partner=%s plan=%s",
-                service.id, workspace.id, template.id, partner.id, plan.id,
-            )
-            service._create_and_confirm_subscription(partner, plan)
-
-            # Build expose configuration before spawning background thread
+            # ⚠ 順序刻意：所有「還可能失敗」的落庫步驟都排在建訂閱**之前**。
+            # `_create_and_confirm_subscription` 會同步寄出訂閱確認信
+            # （sh_subscription 的 `_sh_send_subscription_email` 用
+            # `send_mail(force_send=True)`），那是 **rollback 撤不回**的外部副作用
+            # ——#520 的整段 `cr.rollback()` 也一樣撤不回它。它之後若還有步驟失敗，
+            # DB 全撤但信已寄出 ⇒ 租戶收到「訂閱成功」卻沒有服務。把可失敗的步驟
+            # 前移，讓寄信之後只剩 cron trigger 與純讀的 `_format_service`，窗口
+            # 縮到近乎零。徹底解需把寄信移出交易＝動第三方 addon，不在本 PR 範圍。
             expose_config = None
             if template.ingress_enabled:
                 expose_config = {
                     'enabled': True,
                     'subdomain': subdomain,
                 }
-
-            # Store deploy params and trigger cron for background deployment
             deploy_params = {}
             if expose_config:
                 deploy_params['expose_config'] = expose_config
@@ -2681,6 +2684,14 @@ class PaasController(HiddenChainMixin, Controller):
                 deploy_params['mcp_api_key'] = mcp_api_key
             if deploy_params:
                 service.write({'deploy_params': json.dumps(deploy_params)})
+
+            # Create subscription（此後不再有可失敗的落庫步驟）
+            partner = workspace.owner_id.partner_id
+            _logger.info(
+                "[CLOUD_SVC] deploy_service created service=%s workspace=%s template=%s partner=%s plan=%s",
+                service.id, workspace.id, template.id, partner.id, plan.id,
+            )
+            service._create_and_confirm_subscription(partner, plan)
 
             # Trigger the deploy cron to pick up this service ASAP
             cron = request.env.ref(
@@ -2711,6 +2722,34 @@ class PaasController(HiddenChainMixin, Controller):
         # 框架時框架會做的事，我們只是在**保留 `{'success': False}` response 形狀**
         # （前端 AppConfigurationPage 靠 result.error 顯示訊息）的前提下自己做。
         # 本 request 走到 try 之前只有讀取與參數驗證，沒有任何要保留的寫入。
+        except OperationalError:
+            # #518：並發類 DB 例外（SerializationFailure 40001 等）**必須**傳出去。
+            # 它是 Exception 子類，被下面任何一個 except 收掉的話 Odoo 的
+            # `retrying()` 永遠看不到、不會以新 snapshot 重試——全域上限
+            # （#501）在並發下就形同虛設。且當下 PG 交易已 aborted，硬回一個
+            # result 只會讓後續 flush 再炸。
+            #
+            # 必須排在 #520 那三段之前：`SerializationFailure` 不是 `UserError`
+            # 子類，但會被最後的 `except Exception` 吃掉。
+            #
+            # ⚠ 兩個已知的取捨（刻意接受，不是疏漏）：
+            #
+            # 1. **攔截面比「會被重試的那三種」寬**。`retrying()` 只重試
+            #    `PG_CONCURRENCY_ERRORS_TO_RETRY`（LOCK_NOT_AVAILABLE /
+            #    SERIALIZATION_FAILURE / DEADLOCK_DETECTED），其餘 OperationalError
+            #    走 `if not isinstance(...): raise` 原樣拋出 ⇒ 前端拿到框架的錯誤而
+            #    不是 `{'success': False}` 的形狀。這是**刻意的**：連線斷、磁碟滿、
+            #    statement timeout 本來就不該被包裝成「業務失敗」回 HTTP 200——那正是
+            #    #516／#520／#525 整個家族的根因形態。而且交易已 aborted，硬回一個
+            #    result 只會讓後續 flush 再炸。反過來收窄成只認那三個 pgcode，等於把
+            #    框架的白名單複製一份到這裡，框架改了我們不會知道。
+            # 2. **重試會重播整個 handler**，其中含 `_create_and_confirm_subscription`
+            #    的 `send_mail(force_send=True)`（交易撤不回的外部副作用）。若
+            #    OperationalError 在建訂閱**之後**才拋出（下方只剩 cron trigger 與純讀
+            #    的 `_format_service`，機率低但非零），重試會讓同一封訂閱確認信重送。
+            #    徹底解要把寄信移出交易＝動第三方 addon（sh_subscription），不在本 PR
+            #    範圍。窗口已由「把可失敗步驟前移到建訂閱之前」縮到最小。
+            raise
         except AccessError as e:
             # AccessError 繼承 UserError，但訊息帶 Odoo 內部 model／欄位技術名，
             # 不是「講給租戶聽」的業務規則 → 與未預期例外同樣只回泛用訊息。

@@ -108,6 +108,15 @@
     }
 }
 
+// #501：售罄／停售狀態。與價格並列但視覺上獨立——兩者是正交的資訊，混在同一個
+// 標籤裡正是 #478 的根因形態。
+.o_woow_template_status {
+    font-weight: 600;
+    // 與 marketplace 卡片的 o_woow_app_card_badge 同一組中性色：售罄／停售是狀態
+    // 不是錯誤，用告警色會讓租戶以為自己做錯了什麼。
+    color: $woow-text-secondary;
+}
+
 .o_woow_template_category {
     text-transform: capitalize;
 }
