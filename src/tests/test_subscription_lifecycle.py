@@ -369,10 +369,16 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
         if state != 'draft':
             sub.write({'state': state})
 
-        # Set additional fields
+        # Set additional fields. 打錯的欄位名必須大聲炸掉：靜默丟棄會讓呼叫端在
+        # 「我設過 sh_end_date」的假前提下跑斷言（例如 grace period 測試實際上
+        # 從未設過到期日），測試變成恆綠且完全看不出來。
         for key, val in kwargs.items():
-            if hasattr(sub, key):
-                sub.write({key: val})
+            if not hasattr(sub, key):
+                self.fail(
+                    "_mock_subscription: '%s' 不是 sh.subscription.subscription "
+                    "的欄位。fixture 的欄位名打錯若被靜默丟棄，測試會在假前提下"
+                    "通過。" % key)
+            sub.write({key: val})
 
         entity.write({'subscription_id': sub.id})
         return sub

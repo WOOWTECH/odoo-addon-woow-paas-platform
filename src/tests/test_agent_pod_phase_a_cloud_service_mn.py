@@ -55,8 +55,17 @@ Boundary（刻意不測）:
   via the seed URL constructed identically.
 """
 import uuid
+from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase, tagged
+
+# 檔案開頭的 Boundary 段宣稱「Helm uninstall path itself — mocked away」；下面兩條
+# 拆除 teardown 的測試就用這個 patch target 兌現那句話（原本是拿 blanket
+# ``except Exception: pass`` 頂替，見 TestPhaseACleanupFilterDelineation 的說明）。
+_OPERATOR_CLIENT = (
+    'odoo.addons.woow_paas_platform.services.paas_operator'
+    '.get_paas_operator_client'
+)
 
 
 def _sidecar_url(service):
@@ -256,6 +265,20 @@ class TestPhaseACleanupFilterDelineation(TransactionCase):
             'sidecar_backed': False,
         })
 
+    def _patch_operator_client(self):
+        """把 helm 這一段換成 mock，讓 teardown 路徑其餘部分的例外照常炸出來。
+
+        回傳 ``(get_client_mock, client_mock)``。刻意回傳 **可用的 client**（而非
+        ``None``）：``None`` 會讓 ``_do_cleanup`` 整段跳過 helm、``_cleanup_helm``
+        直接 return True，等於連「有沒有走到 helm」都測不出來，斷言就失去陽性對照。
+        """
+        patcher = patch(_OPERATOR_CLIENT)
+        get_client = patcher.start()
+        self.addCleanup(patcher.stop)
+        client = MagicMock()
+        get_client.return_value = client
+        return get_client, client
+
     # ------------------------------------------------------------------ #
     # C.2 — _do_cleanup filter narrows by URL prefix                      #
     # ------------------------------------------------------------------ #
@@ -267,23 +290,26 @@ class TestPhaseACleanupFilterDelineation(TransactionCase):
         only; it wipes BOTH svc_A and svc_B's sidecar MCP because they
         both share ``self.project_ids`` under M:N.
 
-        Mocking helm-uninstall: we don't reach helm RPC because the
-        filter step runs first. If helm call still fires (and fails in
-        this unit test env), we accept that — only the post-cleanup
-        ORM state matters for filter delineation.
+        Helm 走 mock（``_OPERATOR_CLIENT``），不再用 blanket
+        ``except Exception: pass`` 頂替。原寫法吞掉的不只是 helm：
+        ``_do_cleanup`` 內部本來就自己 catch 了 helm 失敗（cloud_service.py
+        ``Step 2`` 的 try/except → state='error' 後 return），所以外層那個 except
+        真正遮蔽的是 **MCP 過濾步驟之後**的任何例外（Step 3 的 state write、
+        Step 4 的 quota push）。MCP rows 在那之前就已刪除，三條斷言照樣全過 ⇒
+        cleanup 後半段整段壞掉也看不出來。
         """
+        get_client, mock_client = self._patch_operator_client()
         self.assertTrue(
             self.mcp_a.exists() and self.mcp_b.exists() and self.mcp_external.exists(),
             "Fixture sanity: all three MCP rows alive pre-cleanup.",
         )
-        try:
-            self.svc_a._do_cleanup()
-        except Exception:  # noqa: BLE001
-            # Helm RPC will fail in unit-test env; we only care about
-            # the ORM state set by the filter step. _do_cleanup deletes
-            # MCP rows before calling helm — so the filter has already
-            # run by the time helm raises. Swallow and continue.
-            pass
+
+        self.svc_a._do_cleanup()
+
+        # 陽性對照：確認 helm 這條路真的被走到（mock 有被呼叫），否則「沒有例外
+        # 炸出來」也可能只是因為整段根本沒執行。
+        self.assertTrue(get_client.called, "_do_cleanup 未取得 operator client")
+        mock_client.uninstall_release.assert_called_once()
 
         # svc_A's sidecar MCP MUST be unlinked.
         self.assertFalse(
@@ -315,12 +341,19 @@ class TestPhaseACleanupFilterDelineation(TransactionCase):
 
         Red today: ``unlink()`` override uses loose
         ``s.scope == 'user' and s.sidecar_backed`` only.
+
+        同 ``test_do_cleanup_*``：helm 走 mock、不吞例外。``unlink()`` 的 MCP 清除
+        在 ``super().unlink()`` **之前**，所以原本的 blanket except 會讓其後的
+        ``_settle_on_entity_delete`` / ``_push_ns_quota`` /
+        ``_reconcile_agent_runtime_reach`` 任何一段炸掉都靜默通過——三條 MCP 斷言
+        當時已經成立了。
         """
-        try:
-            self.svc_a.sudo().unlink()
-        except Exception:  # noqa: BLE001
-            # Same swallow rationale as test_do_cleanup_*.
-            pass
+        get_client, mock_client = self._patch_operator_client()
+
+        self.svc_a.sudo().unlink()
+
+        self.assertTrue(get_client.called, "unlink() 未取得 operator client")
+        mock_client.uninstall_release.assert_called_once()
 
         self.assertFalse(
             self.mcp_a.exists(),

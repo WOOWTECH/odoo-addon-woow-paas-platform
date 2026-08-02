@@ -306,24 +306,13 @@ class TestPhaseAAclDualLegM2MWalk(TransactionCase):
                 f"R.3: perm_read on '{xmlid}' must stay {expect_read}.",
             )
 
-    def test_mcp_acl_rule_count_parity(self):
-        """R.9: total 6 base rules (system_readonly × 2, workspace_user
-        × 2, admin_full × 2) must remain — no accidental removal.
-        """
-        count = self.IrRule.sudo().search_count([
-            ('model_id.model', 'in', [
-                'woow_paas_platform.mcp_server',
-                'woow_paas_platform.mcp_tool',
-            ]),
-            # Filter to module-defined (avoid demo/test-only rules).
-        ])
-        self.assertGreaterEqual(
-            count, 6,
-            "R.9: mcp_server / mcp_tool combined ir.rule count must be "
-            "≥ 6 (6-rule split parity). Got %d. Plan §Phase A — Phase "
-            "A walk-path update must not drop a rule. "
-            "[[mcp-acl-6-rule-split]] parity invariant." % count,
-        )
+    # R.9（6-rule split parity）刻意不另立計數測試：那 6 條規則已由上方三條逐條
+    # xmlid 守住（R.1 workspace_user、R.2 tool workspace_user、R.3 system_readonly
+    # ×2 ＋ admin_full ×2）。曾經存在的 ``test_mcp_acl_rule_count_parity`` 用
+    # ``search_count(...) >= 6`` 冒充 parity invariant：它的 domain 只有
+    # ``model_id.model in (...)``（註解宣稱要過濾 module-defined，實際上沒有這個
+    # 條件），所以「刪一條 + 補一條無關的」永遠不會紅，而且 >= 讓新增規則也永不
+    # 紅——不變式一件都守不住，卻掛著 parity 的名號讓人以為規則數量有守。
 
     # ------------------------------------------------------------------ #
     # R.5 — bound walk integration (M2M leg 1)                           #

@@ -30,9 +30,22 @@ class TestAdminPasswordCarrierSeed(TransactionCase):
     """seed 的載體標記與 chart 之間的結構不變式。"""
 
     def _templates_with_admin_gui(self):
-        return self.env['woow_paas_platform.cloud_app_template'].with_context(
+        """有 admin GUI 的 template（含 inactive）；**保證非空**。
+
+        下面兩條守線都是跑在這個 search 之上的全稱斷言：回空集合時迴圈整個跳過、
+        測試照樣綠，而假綠的輸出與真綠一模一樣。``has_admin_gui`` 改名／預設翻轉／
+        seed 未載入都會讓探針靜默失去鑑別力——#449 的原始症狀（載體標錯 ⇒ 每次
+        reset 500）正是這兩條要防的，所以陽性對照放在取樣點而非個別迴圈。
+        """
+        templates = self.env['woow_paas_platform.cloud_app_template'].with_context(
             active_test=False,
         ).search([('has_admin_gui', '=', True)])
+        self.assertTrue(
+            templates,
+            'has_admin_gui=True 的 template 一筆都沒有。這不代表「載體全部正確」，'
+            '而是探針讀不到東西（欄位改名／預設翻轉／seed 未載入）——此時 #449 '
+            '的載體守線等於不存在。')
+        return templates
 
     def test_hermes_agent_is_helm_secret(self):
         template = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
