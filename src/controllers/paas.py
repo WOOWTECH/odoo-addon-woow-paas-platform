@@ -2731,6 +2731,24 @@ class PaasController(HiddenChainMixin, Controller):
             #
             # 必須排在 #520 那三段之前：`SerializationFailure` 不是 `UserError`
             # 子類，但會被最後的 `except Exception` 吃掉。
+            #
+            # ⚠ 兩個已知的取捨（刻意接受，不是疏漏）：
+            #
+            # 1. **攔截面比「會被重試的那三種」寬**。`retrying()` 只重試
+            #    `PG_CONCURRENCY_ERRORS_TO_RETRY`（LOCK_NOT_AVAILABLE /
+            #    SERIALIZATION_FAILURE / DEADLOCK_DETECTED），其餘 OperationalError
+            #    走 `if not isinstance(...): raise` 原樣拋出 ⇒ 前端拿到框架的錯誤而
+            #    不是 `{'success': False}` 的形狀。這是**刻意的**：連線斷、磁碟滿、
+            #    statement timeout 本來就不該被包裝成「業務失敗」回 HTTP 200——那正是
+            #    #516／#520／#525 整個家族的根因形態。而且交易已 aborted，硬回一個
+            #    result 只會讓後續 flush 再炸。反過來收窄成只認那三個 pgcode，等於把
+            #    框架的白名單複製一份到這裡，框架改了我們不會知道。
+            # 2. **重試會重播整個 handler**，其中含 `_create_and_confirm_subscription`
+            #    的 `send_mail(force_send=True)`（交易撤不回的外部副作用）。若
+            #    OperationalError 在建訂閱**之後**才拋出（下方只剩 cron trigger 與純讀
+            #    的 `_format_service`，機率低但非零），重試會讓同一封訂閱確認信重送。
+            #    徹底解要把寄信移出交易＝動第三方 addon（sh_subscription），不在本 PR
+            #    範圍。窗口已由「把可失敗步驟前移到建訂閱之前」縮到最小。
             raise
         except AccessError as e:
             # AccessError 繼承 UserError，但訊息帶 Odoo 內部 model／欄位技術名，
