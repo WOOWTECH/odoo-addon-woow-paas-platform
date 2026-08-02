@@ -1,5 +1,31 @@
 # ⚠ 拋棄式量測探針（T3 Phase 1）——不是交付物，量完即刪。
 #
+# ══════ 量測結果（寫在這裡當耐久載體：scratchpad 有 TTL，git 沒有）══════
+#
+# run 1422（develop 3b840b29，唯一一次完整跑完）：
+#   image pull 0s（warm，2.48 GB）／容器起 3s／docker cp 覆蓋 addon 3s
+#   install 77s ／ 全套測試 298s ／ 整個 CI job ≈ 6 分鐘
+#   結果：0 failed, 0 error(s) of 2237 tests   ← develop 是乾淨綠燈基準
+#   （同次另印 odoo.tests.stats: 3067 tests 259.47s ——口徑不同，別跟 2237 混用）
+#
+# runner 環境：act-runner-runner-0 v2.0.1（capacity 1）／256 核 128 GB／native amd64
+#   job container = docker.gitea.com/runner-images:ubuntu-latest，entrypoint sleep 10800（job 上限 3h）
+#   step shell = bash --noprofile --norc -e -o pipefail（`| head` 會 SIGPIPE=141 中止 step）
+#   docker 28.5.2 走掛載的 /run/docker.sock ⇒ daemon 在 job container 外，`-v` 掛不到 workspace
+#   docker 資料所在 fs 剩 24 G；預設 bridge 可連 pypi（自訂 network MTU 1500 會壞）
+#
+# 私有 addon：sh_subscription / ecpay_invoice_tw / ai_base_gt 三個都在 paas-odoo image 內（ADDON_PRESENT）
+#   全部 8 個私有 addon checked in 在 woow-paas/paas-odoo-ci 的 addons/，CI 不需 clone 第二個 repo
+#   secrets.JCR_USERNAME/JCR_PASSWORD 在本 repo 可用（run 1349 實證）
+#
+# MemoryError 真因（run 1421 死在 base 的 _reflect_fields，run 1424 A/B 隔離）：
+#   odoo/service/server.py:556 ThreadedServer.start() 無條件呼叫 set_limit_memory_hard()，
+#   把 RLIMIT_AS 壓到 limit_memory_hard 預設 2.5 GB（config.py:349）；256 核的 glibc arena 撐爆它。
+#   ⇒ 唯一必要旗標是 --limit-memory-hard=0
+#     （--workers=0 本來就是預設＝no-op；--limit-memory-soft 只有 PreforkServer 讀＝no-op；
+#      MALLOC_ARENA_MAX 實測「有設但不帶旗標」仍 MemoryError ⇒ 不是解，別留在 recipe 裡）
+# ═══════════════════════════════════════════════════════════════════
+#
 # 目的：取得「全套 Odoo 測試在 Gitea act-runner 上跑一次要多久」的實測數字，
 # 以及 runner 環境的實際能力（docker / 磁碟 / CPU / JCR image 可拉否 / 外網可達否）。
 # 這些數字是觸發策略決策的輸入，工單明訂「不准推估」。
