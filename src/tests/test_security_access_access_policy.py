@@ -3,6 +3,14 @@ from unittest.mock import MagicMock, patch
 from odoo.exceptions import UserError, ValidationError
 from odoo.tests.common import TransactionCase
 
+# #522: server-owned identity anchors (tunnel_id/tunnel_token/dns_record_id/
+# access_app_id/...) are immutable for everyone; provisioning code stores the
+# ids Cloudflare hands back through this in-process sentinel hatch, and these
+# fixtures simulate exactly that. See models/security_access.py.
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _internal_identity as _internal,
+)
+
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.security_access.'
     'get_paas_operator_client'
@@ -294,7 +302,7 @@ class TestRouteAccessSync(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             sa = self.SA.create({'name': 'AS GW',
                                  'workspace_id': self.workspace.id})
-            sa.write({'state': 'active', 'tunnel_id': 'tun-as'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-as'})
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
@@ -483,7 +491,7 @@ class TestRouteAccessSync(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mc):
             sa = self.SA.create({'name': 'AS GW2',
                                  'workspace_id': self.workspace.id})
-            sa.write({'state': 'active', 'tunnel_id': 'tun-as2'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-as2'})
             mc.sync_access_app.reset_mock()
             self.Route.create({'security_access_id': sa.id,
                                'subdomain_prefix': 'as-public',
@@ -764,7 +772,7 @@ class TestRouteAccessCleanup(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mc):
             sa = self.SA.create({'name': 'AL GW',
                                  'workspace_id': self.workspace.id})
-            sa.write({'state': 'active', 'tunnel_id': 'tun-al'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-al'})
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
@@ -789,7 +797,7 @@ class TestRouteAccessCleanup(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mc):
             sa = self.SA.create({'name': 'AL GW err',
                                  'workspace_id': self.workspace.id})
-            sa.write({'state': 'active', 'tunnel_id': 'tun-al-err'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-al-err'})
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,

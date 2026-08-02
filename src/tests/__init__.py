@@ -272,3 +272,5 @@ from . import test_create_service_validation_rollback_520
 from . import test_allow_policy_bulk_grant_352
 # fix: #525 A1 skip-trial 吞例外 → 錢包已扣／發票已開，畫面卻說失敗（金流殘留＋重試被鎖死）
 from . import test_skip_trial_rollback_525
+# fix: #522 SA 身分錨點（tunnel_id 等）租戶可改寫 → 宣告式清單 + 不可偽造的 escape hatch
+from . import test_security_access_identity_anchor_522

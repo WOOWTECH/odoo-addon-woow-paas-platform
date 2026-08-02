@@ -9,6 +9,14 @@ from odoo.tests import TransactionCase, tagged
 
 from ..services.reconciler import LeftSet, collect_left_set
 
+# #522: server-owned identity anchors (tunnel_id/tunnel_token/dns_record_id/
+# access_app_id/...) are immutable for everyone; provisioning code stores the
+# ids Cloudflare hands back through this in-process sentinel hatch, and these
+# fixtures simulate exactly that. See models/security_access.py.
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _internal_identity as _internal,
+)
+
 
 @tagged('post_install', '-at_install')
 class TestCollectLeftSet(TransactionCase):
@@ -37,16 +45,16 @@ class TestCollectLeftSet(TransactionCase):
     def _make_sa_route_policy(self, suffix, *, tunnel_id, dns_id, app_id, cf_policy_id):
         sa = self.SA.create({'name': f'SA-{suffix}', 'workspace_id': self.ws.id})
         if tunnel_id:
-            sa.write({'tunnel_id': tunnel_id})
+            _internal(sa).write({'tunnel_id': tunnel_id})
         route = self.Route.create({
             'security_access_id': sa.id,
             'subdomain_prefix': f'l4-{suffix}',
             'service_url': 'http://localhost:80',
         })
         if dns_id:
-            route.dns_record_id = dns_id
+            _internal(route).dns_record_id = dns_id
         if app_id:
-            route.access_app_id = app_id
+            _internal(route).access_app_id = app_id
         policy = self.Policy.create({
             'route_id': route.id,
             'name': f'pol-{suffix}',

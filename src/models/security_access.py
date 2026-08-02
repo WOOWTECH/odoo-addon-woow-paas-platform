@@ -21,6 +21,122 @@ _logger = logging.getLogger(__name__)
 _PREFIX_RE = re.compile(r'^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$')
 
 
+# ---------------------------------------------------------------------- #
+#  Identity anchors                                                      #
+# ---------------------------------------------------------------------- #
+#
+# An identity anchor is a field whose value decides WHICH external
+# (Cloudflare-side) object this row is bound to, or from which that binding is
+# derived. Moving one is not "editing a setting": it re-aims the whole record —
+# its tunnel, its DNS records, its Access application — at somebody else's
+# resource, while the row keeps its own workspace's ir.rule blessing.
+#
+# These tuples are the SINGLE declarative source for the create()/write()
+# guards on both models below. #522 happened because protection was applied per
+# field by hand — create() popped two literals, write() blocked the same two —
+# so `tunnel_id`, added later, was simply never covered and a plain
+# base.group_user workspace owner could repoint a Security Access at an
+# arbitrary tunnel over /web/dataset/call_kw. Adding one more literal would not
+# have stopped the next one; deriving the guards from a list means a new anchor
+# is protected the moment it is listed here.
+#
+# NOT anchors, deliberately:
+#   * route.subdomain_prefix — user-CHOSEN at create (so it must not be
+#     stripped there), only immutable afterwards; it keeps its own guard below;
+#   * connector_id / connector_type / connector_version / tunnel_status /
+#     tunnel_uptime / edge_connection_count — poll-refreshed status, not
+#     bindings; forging one changes what a screen displays, not what any
+#     Cloudflare call targets.
+_IDENTITY_ANCHOR_FIELDS = (
+    'canonical_name',   # the tunnel's CF name + the subdomain stamp
+    'reference_id',     # hash salt the canonical_name/subdomain derive from
+    'tunnel_id',        # WHICH Cloudflare tunnel this row drives (#522)
+    'tunnel_name',      # its CF-side name, mirrored back from create_tunnel
+    'tunnel_token',     # the tunnel credential itself
+)
+
+_ROUTE_IDENTITY_ANCHOR_FIELDS = (
+    'dns_record_id',    # WHICH CF DNS record this route reconciles/deletes
+    'access_app_id',    # WHICH CF Access application this route configures
+)
+
+
+class _InternalIdentityWrite:
+    """Marker type for the identity-anchor escape hatch — see below."""
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal identity write>'
+
+
+# The single deliberate escape hatch: server-owned provisioning/sync code that
+# legitimately stores the ids Cloudflare just handed back opts in by putting
+# THIS OBJECT in the context.
+#
+# The value has to be the sentinel rather than True, and that is a security
+# property, not a style choice: /web/dataset/call_kw hands the CALLER's context
+# straight to the ORM — web/controllers/dataset.py passes the client's kwargs
+# through untouched and odoo/api.py::call_kw does
+#   context = kwargs.pop('context', None) or {}; recs = recs.with_context(context)
+# — so any guard keyed on a JSON-expressible value is opened by adding one key
+# to the RPC payload. Measured on 18.0 before this change: a plain
+# base.group_user tenant sending context={'sa_internal_identity_write': true}
+# rewrote canonical_name, and the new value was committed to Postgres. JSON
+# cannot carry object identity, so the sentinel closes that door while every
+# in-process call site keeps working exactly as before.
+#
+# Deliberately NOT an `env.su` exemption either: su would silently disable the
+# guard inside every TransactionCase (su env) and every sudo()'d controller
+# path — precisely where a test would otherwise prove that it works.
+_INTERNAL_IDENTITY_WRITE = _InternalIdentityWrite()
+
+
+def _internal_identity(records):
+    """Return ``records`` in the one context allowed to write identity anchors."""
+    return records.with_context(
+        sa_internal_identity_write=_INTERNAL_IDENTITY_WRITE)
+
+
+def _is_internal_identity_write(env):
+    return (env.context.get('sa_internal_identity_write')
+            is _INTERNAL_IDENTITY_WRITE)
+
+
+def _strip_identity_anchors(env, vals_list, anchors):
+    """create()-side half of the guard: drop caller-supplied identity anchors.
+
+    ``super().create()`` does not route through ``write()``, so the write guard
+    alone would leave a create-time squat open — a brand-new row bound to a
+    victim's tunnel / DNS record / Access app before anything is provisioned
+    (action_provision's ``if self.tunnel_id:`` branch would then skip tunnel
+    creation and push this tenant's routes onto it). Applies to EVERYONE
+    including superuser; the sentinel context is the only exemption. Stripping
+    rather than raising keeps ``copy()`` and ordinary data loads working — a
+    duplicate that drops the anchors is exactly what a duplicate should be.
+    """
+    if _is_internal_identity_write(env):
+        return
+    for vals in vals_list:
+        for field in anchors:
+            vals.pop(field, None)
+
+
+def _reject_identity_anchor_writes(env, vals, anchors):
+    """write()-side half of the guard: refuse to move an anchor, loudly.
+
+    Hard invariant for EVERYONE including superuser — see
+    ``_INTERNAL_IDENTITY_WRITE`` for why neither ``env.su`` nor a plain truthy
+    context value may open it.
+    """
+    if _is_internal_identity_write(env):
+        return
+    for field in anchors:
+        if field in vals:
+            raise UserError(
+                "Field '%s' is immutable after creation." % field
+            )
+
+
 class SecurityAccess(models.Model):
     _name = 'woow_paas_platform.security_access'
     _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
@@ -214,49 +330,42 @@ class SecurityAccess(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        # Identity anchors must not be attacker-injectable at create time.
-        # The write() guard only covers writes; super().create() does not run
-        # through write() nor pop these keys, so a workspace member calling ORM
-        # create directly could squat a victim-namespace canonical_name
-        # (decides tunnel name, primary subdomain_prefix, DNS comment stamp and
-        # the public FQDN). Strip both keys from caller vals — for EVERYONE
-        # incl. superuser, gated only by the same context escape hatch as the
-        # write() guard (no env.su exemption, else su-env tests false-green).
-        # canonical_name is then computed once below; reference_id falls back
-        # to its uuid4 default. Closes the create+write immutable chain.
-        if not self.env.context.get('sa_internal_identity_write'):
-            for vals in vals_list:
-                vals.pop('canonical_name', None)
-                vals.pop('reference_id', None)
+        # Identity anchors must not be attacker-injectable at create time — a
+        # workspace member calling ORM create directly could otherwise squat a
+        # victim-namespace canonical_name (decides tunnel name, subdomain
+        # prefix, DNS comment stamp and the public FQDN) or bind the new row
+        # straight onto a victim's tunnel. Which fields those are lives in
+        # _IDENTITY_ANCHOR_FIELDS, shared with the write() guard below, so a
+        # future anchor is covered by both the moment it is listed.
+        # canonical_name is computed once below; reference_id falls back to its
+        # uuid4 default. Closes the create+write immutable chain.
+        _strip_identity_anchors(self.env, vals_list, _IDENTITY_ANCHOR_FIELDS)
         records = super().create(vals_list)
         for record in records:
             if not record.canonical_name:
                 # compute ONCE and store; never recompute (name is mutable).
                 # The write() guard below blocks canonical_name writes for
                 # everyone (incl. superuser) — this initial assignment is the
-                # one legitimate internal write, opted in via the context
+                # one legitimate internal write, opted in via the sentinel
                 # escape hatch (not an env.su exemption: see write() comment).
-                record.with_context(
-                    sa_internal_identity_write=True,
-                ).write({
+                _internal_identity(record).write({
                     'canonical_name': record._generate_canonical_name(),
                 })
         return records
 
     def write(self, vals):
-        # canonical_name / reference_id are identity anchors — subdomain &
-        # tunnel naming derive from them; drift would break routing. Hard
-        # invariant for EVERYONE including superuser: an env.su exemption would
-        # silently skip this guard in TransactionCase (su env) and any sudo()'d
-        # path, giving false-green tests (same trap the route prefix guard
-        # documents). The context key is the single deliberate escape hatch —
-        # only the create-time initial assignment sets it.
-        if not self.env.context.get('sa_internal_identity_write'):
-            for forbidden in ('canonical_name', 'reference_id'):
-                if forbidden in vals:
-                    raise UserError(
-                        "Field '%s' is immutable after creation." % forbidden
-                    )
+        # Identity anchors (_IDENTITY_ANCHOR_FIELDS): subdomain & tunnel naming
+        # derive from canonical_name/reference_id and drift would break
+        # routing, while tunnel_id/tunnel_name/tunnel_token decide WHICH
+        # Cloudflare tunnel this row drives — repointing them hands this
+        # tenant's ingress to somebody else's tunnel (#522). Hard invariant for
+        # EVERYONE including superuser: an env.su exemption would silently skip
+        # this guard in TransactionCase (su env) and any sudo()'d path, giving
+        # false-green tests (same trap the route prefix guard documents). The
+        # sentinel context is the single deliberate escape hatch — only
+        # server-owned provisioning/sync code can set it.
+        _reject_identity_anchor_writes(
+            self.env, vals, _IDENTITY_ANCHOR_FIELDS)
         # P2.5: the SA layer no longer carries any service-wide Access config —
         # Access is per-route now, so a route's create/write/unlink fires its
         # OWN _sync_access_to_operator. There is no SA-level access write trigger
@@ -375,7 +484,13 @@ class SecurityAccess(models.Model):
                 service_url=default_url,
             )
 
-            self.write({
+            # The one legitimate anchor write: storing the ids Cloudflare just
+            # handed back. Opted in via the sentinel — see
+            # _INTERNAL_IDENTITY_WRITE. Note this does NOT widen the
+            # tunnel_token field-group ACL: super().write() still enforces
+            # groups='base.group_system', which is why a non-system caller
+            # reaching here still fails closed with AccessError (below).
+            _internal_identity(self).write({
                 'tunnel_id': result.get('tunnel_id'),
                 'tunnel_token': result.get('tunnel_token'),
                 'tunnel_name': result.get('tunnel_name'),
@@ -568,7 +683,8 @@ class SecurityAccess(models.Model):
         for route in self.route_ids:
             rec_id = dns_by_sub.get(route.subdomain_prefix)
             if rec_id and route.dns_record_id != rec_id:
-                route.dns_record_id = rec_id
+                # server-owned anchor: the CF DNS record id just returned
+                _internal_identity(route).dns_record_id = rec_id
 
     # ------------------------------------------------------------------ #
     #  Access sync (declarative; P2.5 per-route — see SecurityAccessRoute) #
@@ -792,7 +908,7 @@ class SecurityAccess(models.Model):
                 hostname=route.hostname,
             )
             if ok:
-                route.access_app_id = False
+                _internal_identity(route).access_app_id = False
                 for pol in route.access_policy_ids:
                     if pol.cf_policy_id:
                         pol.cf_policy_id = False
@@ -803,7 +919,7 @@ class SecurityAccess(models.Model):
             client.delete_tunnel(self.tunnel_id)
             _logger.info("[SA] tunnel deleted sa=%s tunnel=%s",
                          self.id, self.tunnel_id)
-            self.write({'tunnel_id': False})
+            _internal_identity(self).write({'tunnel_id': False})
         except Exception as e:
             # cleanup is re-entrant: log and keep tunnel_id so a later
             # retry (cron or manual) can finish the job.
@@ -993,6 +1109,14 @@ class SecurityAccessRoute(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        # Same create-time squat the SA model closes, one level down: without
+        # this a member could hand a brand-new route a victim's dns_record_id /
+        # access_app_id, and the next reconcile or teardown would act on the
+        # victim's Cloudflare objects. subdomain_prefix is deliberately NOT in
+        # this list — it is the one identity field the user legitimately
+        # chooses here (write() below makes it immutable afterwards).
+        _strip_identity_anchors(
+            self.env, vals_list, _ROUTE_IDENTITY_ANCHOR_FIELDS)
         # Atomicity scope: the savepoint makes the Odoo side atomic — a
         # create+sync where sync raises rolls the DB row back so there is no
         # "ghost route" committed in the DB but absent in CF that a later sync
@@ -1034,14 +1158,27 @@ class SecurityAccessRoute(models.Model):
         return routes
 
     def write(self, vals):
+        # Server-owned CF object ids (_ROUTE_IDENTITY_ANCHOR_FIELDS) — same
+        # invariant, same sentinel hatch, same list the create() strip above
+        # reads. The controller's _update_access_config / _update_route_access
+        # whitelists used to be the SOLE defense for these two Chars; they are
+        # now the outer of two layers, so a path that forgets the whitelist no
+        # longer hands the ORM a forged app id.
+        _reject_identity_anchor_writes(
+            self.env, vals, _ROUTE_IDENTITY_ANCHOR_FIELDS)
         # Hard invariant for everyone incl. superuser: hostname / DNS /
         # ingress all derive from the prefix, and no internal path
         # legitimately renames it (delete + recreate is the rename). The
-        # context key is a deliberate escape hatch for future data-repair
+        # sentinel context is a deliberate escape hatch for future data-repair
         # migrations only — an `env.su` exemption would silently skip this
-        # guard in TransactionCase (su env) and any sudo()'d controller path.
-        if 'subdomain_prefix' in vals and not self.env.context.get(
-                'sa_internal_prefix_write'):
+        # guard in TransactionCase (su env) and any sudo()'d controller path,
+        # and a plain truthy context value would be forgeable straight off the
+        # RPC payload (see _INTERNAL_IDENTITY_WRITE). Its own key, deliberately
+        # not the identity-anchor one: a data-repair migration that needs to
+        # rename a prefix should not thereby also be able to move tunnel ids.
+        if ('subdomain_prefix' in vals
+                and self.env.context.get('sa_internal_prefix_write')
+                is not _INTERNAL_IDENTITY_WRITE):
             for route in self:
                 if route.subdomain_prefix != vals['subdomain_prefix']:
                     raise UserError(
@@ -1270,8 +1407,8 @@ class SecurityAccessRoute(models.Model):
                 "CF Access policy(ies) after sync: %s", self.id,
                 self.subdomain_prefix, sa.id, len(orphaned),
                 ', '.join(orphaned))
-        # write back CF ids onto this route
-        self.access_app_id = result.get('app_id') or False
+        # write back CF ids onto this route (server-owned identity anchor)
+        _internal_identity(self).access_app_id = result.get('app_id') or False
         # Persist the operator's fail-open login-widening signal (requested
         # login methods with no matching CF IdP). Surfaced via to_dict().
         unresolved = result.get('unresolved_idp_types') or []

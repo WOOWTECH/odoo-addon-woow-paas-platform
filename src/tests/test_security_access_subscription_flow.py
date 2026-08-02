@@ -14,6 +14,14 @@ from odoo.addons.woow_paas_platform.controllers.security_access import (
     SecurityAccessController,
 )
 
+# #522: server-owned identity anchors (tunnel_id/tunnel_token/dns_record_id/
+# access_app_id/...) are immutable for everyone; provisioning code stores the
+# ids Cloudflare hands back through this in-process sentinel hatch, and these
+# fixtures simulate exactly that. See models/security_access.py.
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _internal_identity as _internal,
+)
+
 # 兩條呼叫路徑、兩個 patch target（namespace 不同，缺一不可）：
 # 1. controller._check_route_prefix 用 function-local import
 #    `from ..services.paas_operator import get_paas_operator_client`，每次
@@ -112,7 +120,7 @@ class TestSecurityAccessControllerFlow(TransactionCase):
         sa = self.SecurityAccess.create({
             'name': 'Check Gateway', 'workspace_id': self.workspace.id,
         })
-        sa.write({'state': 'active', 'tunnel_id': 'tun-x'})
+        _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-x'})
         mock_client = MagicMock()
         mock_client.sync_tunnel_routes.return_value = {'routes': []}
         mock_client.check_route_availability.return_value = {
@@ -175,7 +183,7 @@ class TestSecurityAccessControllerFlow(TransactionCase):
                 plan_id=self.plan.id, template_id=self.template.id,
             )
             sa = self.SecurityAccess.browse(res['data']['id'])
-            sa.write({'state': 'active', 'tunnel_id': 'tun-q'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-q'})
             r1 = self.controller._create_route(sa, 'quota-r1',
                                                'http://localhost:80', True)
             self.assertTrue(r1['success'], r1.get('error'))
@@ -605,7 +613,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             sa = self.SA.create({'name': 'AC GW',
                                  'workspace_id': self.workspace.id})
-            sa.write({'state': 'active', 'tunnel_id': 'tun-ac'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-ac'})
             self.env['woow_paas_platform.security_access_route'].create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name})

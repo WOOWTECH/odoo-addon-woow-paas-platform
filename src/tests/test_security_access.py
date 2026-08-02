@@ -3,6 +3,14 @@ from unittest.mock import MagicMock, patch
 from odoo.exceptions import UserError, ValidationError
 from odoo.tests.common import TransactionCase
 
+# #522: server-owned identity anchors (tunnel_id/tunnel_token/dns_record_id/
+# access_app_id/...) are immutable for everyone; provisioning code stores the
+# ids Cloudflare hands back through this in-process sentinel hatch, and these
+# fixtures simulate exactly that. See models/security_access.py.
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _internal_identity as _internal,
+)
+
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.security_access.'
     'get_paas_operator_client'
@@ -304,7 +312,7 @@ class TestSecurityAccess(TransactionCase):
         }
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
-        sa.write({'state': 'active', 'tunnel_id': 'tun-refresh'})
+        _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-refresh'})
         sa.action_refresh_status()
         self.assertEqual(sa.tunnel_status, 'connected')
         self.assertEqual(sa.connector_id, 'conn-123')
@@ -321,7 +329,7 @@ class TestSecurityAccess(TransactionCase):
         mock_client.get_tunnel_status.return_value = {'connections': []}
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
-        sa.write({'state': 'active', 'tunnel_id': 'tun-disc'})
+        _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-disc'})
         sa.action_refresh_status()
         self.assertEqual(sa.tunnel_status, 'disconnected')
 
@@ -336,7 +344,7 @@ class TestSecurityAccess(TransactionCase):
         mock_client.get_tunnel_status.side_effect = PaaSOperatorError('cf down')
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
-        sa.write({'state': 'active', 'tunnel_id': 'tun-err'})
+        _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-err'})
         sa.action_refresh_status()
         self.assertEqual(sa.tunnel_status, 'error')
         self.assertIn('cf down', sa.error_message)
@@ -352,7 +360,7 @@ class TestSecurityAccess(TransactionCase):
 
     def _make_active_sa(self):
         sa = self._make_sa()
-        sa.write({'state': 'active', 'tunnel_id': 'tun-sa-1'})
+        _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-sa-1'})
         # route create 會觸發 operator sync（sa 已 active）→ 必須 mock
         with patch(MOCK_GET_CLIENT) as mock_gc:
             mock_client = MagicMock()
@@ -524,7 +532,7 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
                 'name': 'LC Gateway',
                 'workspace_id': self.workspace.id,
             })
-            sa.write({'state': 'active', 'tunnel_id': 'tun-lc'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-lc'})
             self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name,
@@ -625,7 +633,7 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
             sa = self.SecurityAccess.create({
                 'name': 'Disable-While-Suspended GW',
                 'workspace_id': self.workspace.id})
-            sa.write({'state': 'active', 'tunnel_id': 'tun-dws'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-dws'})
             # A protected route that holds a live CF app id.
             mock_client.sync_access_app.return_value = {
                 'app_id': 'app-dws', 'policy_ids': [], 'allowed_idps': []}
@@ -863,7 +871,7 @@ class TestSecurityAccessAcl(TransactionCase):
 
     def test_tunnel_token_field_masked_for_non_system(self):
         """tunnel_token groups='base.group_system' field mask。"""
-        self.sa.sudo().write({'tunnel_token': 'super-secret'})
+        _internal(self.sa.sudo()).write({'tunnel_token': 'super-secret'})
         sa_as_alice = self.env[
             'woow_paas_platform.security_access'].with_user(
                 self.alice).browse(self.sa.id)
