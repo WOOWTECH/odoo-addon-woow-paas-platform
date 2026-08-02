@@ -126,8 +126,18 @@ class TestOpendesignTemplateSeed(TransactionCase):
 
     def test_no_od_api_token_in_git_values(self):
         """OD_API_TOKEN 由 chart 自產內部化（auth.odApiToken lookup+persist），租戶不碰，
-        不得出現在 git helm_default_values（sensitive 邊界）。"""
+        不得出現在 git helm_default_values（sensitive 邊界）。
+
+        先做陽性對照再談「不含憑證」：``assertNotIn(secret, '')`` 恆真，而空字串
+        是拿得到的——實測 Odoo 18 的 Text 欄位寫入 ``''`` 會原樣存進 DB（不是
+        NULL）、讀回也是 ``''``，不會有 TypeError 幫忙擋。沒有這行的話，seed 這欄
+        被清空 ⇒ 憑證守線靜默失效，而輸出與真綠一模一樣。
+        """
         raw = self._tpl().helm_default_values
+        self.assertIn(
+            'authProxy', raw,
+            'helm_default_values 裡找不到預期的 authProxy 區塊 —— 探針沒讀到真正的'
+            ' seed values（欄位被清空／改名），下面兩條「不含憑證」斷言等於沒跑')
         self.assertNotIn('OD_API_TOKEN', raw)
         self.assertNotIn('odApiToken', raw)
 

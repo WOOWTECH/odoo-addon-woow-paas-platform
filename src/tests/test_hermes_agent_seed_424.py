@@ -231,8 +231,18 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             '平台注入的 dashboardPublicUrl 尾綴與 seed 的 dashboard.externalPath 不一致')
 
     def test_no_sensitive_values_in_git(self):
-        """admin_password／LLM key 不得出現在 git 的 helm_default_values。"""
+        """admin_password／LLM key 不得出現在 git 的 helm_default_values。
+
+        先做陽性對照再談「不含憑證」：``assertNotIn(secret, '')`` 恆真，而空字串
+        是拿得到的——實測 Odoo 18 的 Text 欄位寫入 ``''`` 會原樣存進 DB（不是
+        NULL）、讀回也是 ``''``，連 ``''.lower()`` 都不會炸。沒有這行的話，seed
+        這欄被清空 ⇒ 這條「憑證不得進 git」的唯一守線靜默失效。
+        """
         raw = self._tpl().helm_default_values
+        self.assertIn(
+            'authProxy', raw,
+            'helm_default_values 裡找不到預期的 authProxy 區塊 —— 探針沒讀到真正的'
+            ' seed values（欄位被清空／改名），下面三條憑證斷言等於沒跑')
         self.assertNotIn('admin_password', raw)
         self.assertNotIn('minimax', raw.lower())
         self.assertNotIn('openrouter', raw.lower())

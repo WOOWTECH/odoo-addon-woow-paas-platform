@@ -408,10 +408,23 @@ class TestPricingSudoIsPublicReadOnly(HttpCase):
         return parsed['result']
 
     def _templates_as(self, login, password):
+        """以 login 身分取 marketplace 清單；**保證非空**。
+
+        ``success`` 只確認端點沒炸，不確認**看得到東西**。空清單會讓下游兩條
+        全稱守線同時 vacuously pass：``set(as_admin) == set(as_portal)`` 在兩邊
+        皆空時恆真、for 迴圈整個跳過。也就是說「ACL 回歸成兩邊都看不到任何
+        template」——一個真的迴歸——會讓 pricing parity 與洩密守線一起靜默失效，
+        而輸出與真綠一模一樣。
+        """
         self.authenticate(login, password)
         r = self._result('/api/cloud/templates')
         self.assertTrue(r.get('success'), r)
-        return {t['id']: t for t in r['data']}
+        by_id = {t['id']: t for t in r['data']}
+        self.assertTrue(
+            by_id,
+            '/api/cloud/templates 以 %s 身分回了 0 筆 template。空集合會讓 '
+            'pricing parity／plan 洩密守線恆綠，必須當成失敗處理。' % login)
+        return by_id
 
     def test_pricing_is_identical_across_users(self):
         """平台級公開事實：一般租戶（internal user）看到的起價與 admin 完全一致。
