@@ -1110,34 +1110,49 @@ def check_mixin_subscription_sudo(root, only_file=None):
     return violations
 
 
-CONFIG_PARAM_SETTINGS_FILE = "src/models/res_config_settings.py"
 CONFIG_PARAM_HOOKS_FILE = "src/hooks.py"
 CONFIG_PARAM_DOC = "CLAUDE.md「使用 config_parameter 時的卸載清理」"
 
 
-def _declared_config_parameters(path):
-    """`res.config.settings` 欄位上宣告的 config_parameter 字面（AST，避開註解／字串）。
+def _declared_config_parameters(root):
+    """全 `src/**/*.py` 上宣告的 `config_parameter=` 字面（AST，避開註解／字串）。
 
-    回 `(found, error)`。SyntaxError 必須被接住並轉成 violation——本 gate 排在
+    回 `(found, errors)`，`found` 是 `{key: "rel:lineno"}`、`errors` 是字串 list。
+
+    ⚠ **掃全 src 而不是死寫 `res_config_settings.py` 一個檔**。目前 repo 內 17 個
+    宣告確實全在那一檔，但那是**現況、不是約束**——`config_parameter=` 是欄位層的
+    kwarg，任何 `TransientModel` 都能用。死寫單檔的話，有人在別處宣告就靜默漏掉，
+    而 gate 照樣回綠 ⇒ 這條守線變成「靠遺漏成立的保證」，正是它自己要防的形態。
+    掃全 src 之後，涵蓋範圍與「哪個檔宣告」解耦。
+
+    `src/tests/` 排除：測試可能為了驗 gate 本身而寫假宣告，計入會誤報。
+
+    SyntaxError 必須被接住並轉成 violation——本 gate 排在
     `check_duplicate_class_methods` 之前，讓例外往外拋會使整輪 repo-lint 以
     traceback 中斷，**其餘 13 條 gate 的違規完全不輸出**。那是「一條爆掉全部不跑」
     的靜默失效，比本 gate 自己漏抓更嚴重。
     """
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            tree = ast.parse(f.read())
-    except SyntaxError as exc:
-        return None, "%s 有語法錯誤（line %s），無法檢查 config_parameter 宣告：%s" % (
-            CONFIG_PARAM_SETTINGS_FILE, exc.lineno, exc.msg)
-    found = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+    found, errors = {}, []
+    for fp in sorted(glob.glob(os.path.join(root, "src/**/*.py"), recursive=True)):
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        if rel.startswith("src/tests/"):
             continue
-        for kw in node.keywords:
-            if kw.arg == "config_parameter" and isinstance(kw.value, ast.Constant) \
-                    and isinstance(kw.value.value, str):
-                found.setdefault(kw.value.value, node.lineno)
-    return found, None
+        try:
+            with open(fp, encoding="utf-8", errors="replace") as f:
+                tree = ast.parse(f.read())
+        except SyntaxError as exc:
+            errors.append(
+                "%s 有語法錯誤（line %s），無法檢查 config_parameter 宣告：%s"
+                % (rel, exc.lineno, exc.msg))
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "config_parameter" and isinstance(kw.value, ast.Constant) \
+                        and isinstance(kw.value.value, str):
+                    found.setdefault(kw.value.value, "%s:%d" % (rel, node.lineno))
+    return found, errors
 
 
 def _uninstall_cleanup_parameters(path):
@@ -1199,39 +1214,45 @@ def check_config_parameter_uninstall(root, only_file=None):
     ——漏了只能靠 review 抓，而 review 抓不到「少寫一行」。
 
     只查一個方向（宣告了卻沒登記）。反向（登記了卻沒有對應欄位）刻意不擋：清單裡
-    本來就有歷史遺留與非 settings 來源的 key，擋它會逼人刪掉仍需清理的項目。
+    本來就有歷史遺留與非 settings 來源的 key（`_CONFIG_PARAMETERS` 現有 25 個 key，
+    其中 8 個是 `get_param` 呼叫點生出來的、不對應任何欄位），擋它會逼人刪掉仍需
+    清理的項目。
 
     ⚠ **覆蓋邊界**：兩側都只認**字面量**。`config_parameter=` 若寫成運算式
     （字串串接、變數、f-string），或 `_CONFIG_PARAMETERS` 用推導式產生，本檢查會
     **靜默略過**、不報 violation —— 綠燈不代表沒有漏登記的 key。目前 repo 內兩側
     都是字面量（17 個宣告 / 一個 list literal），維持這個形態本檢查才有效力；要改成
     動態產生時，請連同本檢查一起重寫，不要以為它還在守。
+
+    宣告側掃**全 `src/**/*.py`**（排除 `src/tests/`）而非死寫單一檔案，理由見
+    `_declared_config_parameters` 的 docstring。
     """
-    settings_path = os.path.join(root, CONFIG_PARAM_SETTINGS_FILE)
     hooks_path = os.path.join(root, CONFIG_PARAM_HOOKS_FILE)
-    if not (os.path.exists(settings_path) and os.path.exists(hooks_path)):
+    if not os.path.exists(hooks_path):
         return []
-    # 不變式跨兩個檔，動到任一個都整條重算，不做 only_file 切片。
-    if only_file and os.path.relpath(
+    # 不變式跨「全 src 的宣告」與 hooks.py 兩側，動到任一個 src/*.py 都整條重算。
+    # 宣告可能出現在任何檔，只認固定兩個檔名的切片會讓新檔案的宣告漏檢。
+    if only_file:
+        rel = os.path.relpath(
             os.path.abspath(only_file), os.path.abspath(root)
-    ).replace(os.sep, "/") not in (CONFIG_PARAM_SETTINGS_FILE, CONFIG_PARAM_HOOKS_FILE):
-        return []
-    declared, declared_err = _declared_config_parameters(settings_path)
+        ).replace(os.sep, "/")
+        if not (rel.startswith("src/") and rel.endswith(".py")):
+            return []
+    declared, declared_errs = _declared_config_parameters(root)
     registered, registered_err = _uninstall_cleanup_parameters(hooks_path)
     # 任一側取不到就 fail-loud 並**停在這裡**：拿殘缺的一側去比對只會產生誤導的
     # violation 清單（例如語法錯誤讓 declared 為空 ⇒ 「零違規」＝假綠）。
-    if declared_err or registered_err:
-        return [e for e in (declared_err, registered_err) if e]
+    if declared_errs or registered_err:
+        return declared_errs + ([registered_err] if registered_err else [])
     violations = []
-    for key, lineno in sorted(declared.items(), key=lambda kv: kv[1]):
+    for key, where in sorted(declared.items(), key=lambda kv: kv[1]):
         if key not in registered:
             violations.append(
-                "%s:%d：config_parameter %r 沒有登記進 %s 的 `_CONFIG_PARAMETERS`。"
+                "%s：config_parameter %r 沒有登記進 %s 的 `_CONFIG_PARAMETERS`。"
                 "Odoo 卸載 addon 不會清 ir.config_parameter，漏登記＝卸載後留下孤兒"
                 "設定（重裝時被讀到、值卻是上一輪的）。把這個 key 加進該清單即可"
                 "（見 %s）。"
-                % (CONFIG_PARAM_SETTINGS_FILE, lineno, key,
-                   CONFIG_PARAM_HOOKS_FILE, CONFIG_PARAM_DOC))
+                % (where, key, CONFIG_PARAM_HOOKS_FILE, CONFIG_PARAM_DOC))
     return violations
 
 
