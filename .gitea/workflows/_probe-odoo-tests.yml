@@ -44,10 +44,14 @@ jobs:
           free -m || true
           df -h
           docker version
-          echo "--- docker info (head) ---"
-          docker info 2>&1 | head -40
-          echo "--- 既有 image（判斷 dind 儲存是否跨 job 保留）---"
+          echo "--- docker info ---"
+          # ⚠ 這裡不能接 `| head`：runner 的 shell 是 bash -e -o pipefail，
+          # head 提早關 pipe 會讓上游收 SIGPIPE → 退出碼 141 → pipefail+(-e) 直接中止 step。
+          docker info 2>&1 | grep -E "Docker Root Dir|Storage Driver|Server Version|Total Memory|CPUs" || true
+          echo "--- 既有 image（判斷 daemon 儲存是否跨 job 保留）---"
           docker images
+          echo "--- docker 資料所在檔案系統餘量 ---"
+          docker system df || true
 
       - name: R2 - JCR login
         run: |
@@ -156,7 +160,7 @@ jobs:
           grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log \
             || echo "::error::找不到 summary 行"
           echo "--- FAIL/ERROR 清單（前 40）---"
-          grep -E "^(FAIL|ERROR):" /tmp/test.log | head -40 || true
+          { grep -E "^(FAIL|ERROR):" /tmp/test.log || true; } | head -40 || true
           echo "--- log 尾 20 行 ---"
           tail -20 /tmp/test.log
 
