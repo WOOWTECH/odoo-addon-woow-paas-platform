@@ -231,12 +231,6 @@
 5	test_named_failure_fields_484.TestDnsFailedIsFailClosed
 2	test_named_failure_fields_484.TestHealthyProvisionUnchanged
 3	test_named_failure_fields_484.TestPodRetrievalErrorIsFailClosed
-4	test_naming.TestClassifyEnvHint
-12	test_naming.TestNaming
-9	test_naming.TestNamingEnvToken
-5	test_naming.TestParsePaasName
-4	test_naming.TestReconstructMcpSubdomain
-4	test_naming.TestSecurityAccessNaming
 3	test_oauth2.TestAuthorizeEndpointPkce
 2	test_oauth2.TestHaRedirectModeHealer
 16	test_oauth2.TestOAuthClient
@@ -298,8 +292,6 @@
 2	test_project_mcp_project_centric.TestProjectMcpSyncAndTest
 5	test_project_mcp_project_centric.TestProjectMcpUpdateDelete
 12	test_reach_sync_triggers.TestReachSyncTriggers
-4	test_reconcile_delete_gate.TestReconcileDeleteGate
-5	test_reconcile_delete_gate.TestReconcileReportPathDeleteGate
 3	test_reconcile_report.TestReconcileReportCron
 9	test_reconcile_report.TestReconcileReportModel
 8	test_reconcile_report_endpoint.TestReconcileReportEndpoint

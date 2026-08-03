@@ -1,0 +1,20 @@
+# 已知「從未被執行」的測試模組（issue #467＝機制 A、#544＝機制 B，皆未修）
+# 產生／更新方式：手動維護（本檔不是 --update-baseline 產出）
+#
+# ⚠ 這**不是允許清單，是待修清單**。
+#   修好一個就刪一行；沒刪的話 C1 會反過來擋你「已不再是 X，請刪行」
+#   —— 否則這張清單會腐爛成一張沒人看的白名單，而那正是本 gate 要防的東西。
+#
+# 目的：讓 C1 今天就是綠的、而「新增從未執行的測試檔」明天立刻紅。
+#   常態帶紅的 gate 等於沒有 gate（#433 的斷言曾在一片紅裡藏了 8 天沒人發現）。
+#
+# 格式：<機制>\t<路徑或模組名>
+#   A = tests/__init__.py 未匯入          → 修法：補一行 import
+#   B = 整檔只有純 unittest.TestCase      → 修法：改基底成 Odoo TestCase（或加 tags）
+#     兩者症狀相同（0F/0E 照樣綠）但修法相反，故分開標。
+#     機制 B 的判準是 **module 級**：只要同檔有任一個 Odoo TestCase，整個 module 就會被載入
+#     （對照組 test_reconciler_diff.py 含 unittest.TestCase 卻確實有執行）。
+A	src/tests/test_ai_assistant
+A	src/tests/test_security_access_p_rule_migration
+B	test_naming
+B	test_reconcile_delete_gate

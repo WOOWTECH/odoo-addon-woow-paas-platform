@@ -12,7 +12,8 @@ Odoo 全套跑完印的是
 
 | 失效形態 | 在執行清單裡？ | 算進 `of N tests`？ | summary 看得出來？ |
 |---|---|---|---|
-| 檔案沒被 `tests/__init__.py` 匯入 | ❌ | ❌ | ❌ 完全看不出來 |
+| 檔案沒被 `tests/__init__.py` 匯入（機制 A，#467） | ❌ | ❌ | ❌ 完全看不出來 |
+| **整檔只有純 `unittest.TestCase`（機制 B，#544）** | ❌ | ❌ | ❌ **C1 的匯入比對看不到它——import 都在** |
 | 整批 deselect（tag 沒匹配／module 沒裝） | ❌ | ❌ | ❌ |
 | **skip** | ✅ | ✅ | ❌（`skipped` 不出現在 summary） |
 
@@ -23,7 +24,8 @@ Odoo 全套跑完印的是
 
 ## 檢查
 
-    C1 --check-imports   `src/tests/` 可匯入名字 vs `__init__.py` 實際匯入（含子套件遞迴，雙向）
+    C1  --check-imports  `src/tests/` 可匯入名字 vs `__init__.py` 實際匯入（含子套件遞迴，雙向）
+    C1b --check-imports  整檔只有純 unittest.TestCase 的模組（會被 --test-tags 整批過濾）
     C2 --check-baseline  靜態推導的預期 class 清單 vs baseline 檔（雙向差集）
     C3 --check-executed  baseline vs 測試 log 的實際執行清單（雙向差集）
     C4 --check-skips     測試 log 的 skip 盤點（列名＋理由，配白名單）
@@ -46,7 +48,7 @@ import sys
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "src" / "tests"
 BASELINE = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection.txt"
-KNOWN_ORPHANS = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-known-orphans.txt"
+KNOWN_ORPHANS = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-known-unexecuted.txt"
 
 # ── log matcher ───────────────────────────────────────────────────────────
 # Odoo 18 `odoo/tests/result.py:263` log_stats() 在 stats logger 開到 DEBUG 時輸出
@@ -117,6 +119,40 @@ def _decorator_tags(node: ast.ClassDef) -> list[str]:
     return tags
 
 
+def _pure_unittest_module(tree: ast.Module) -> bool:
+    """整個 module 是否「只有純 unittest.TestCase」⇒ 會被 --test-tags 整批過濾掉。
+
+    這是「從未執行」的**機制 B**（#544 實證，62 條中的 47 條）：檔案有被
+    `tests/__init__.py` 匯入、import 也都在，所以 C1 的匯入比對**結構上看不到它**。
+    Odoo 的 `--test-tags /module` 過濾依賴 Odoo tags 機制，純 `unittest.TestCase`
+    沒有該屬性 —— 但只要**同檔有任一個 Odoo TestCase**，整個 module 就會被載入
+    （對照組：`test_reconciler_diff.py` 同樣含 unittest.TestCase 卻有被執行）。
+
+    ⇒ 判準是 module 級的「有沒有至少一個非 unittest 基底」，不是 class 級的
+      「有沒有用 unittest.TestCase」。後者會把 test_reconciler_diff 誤殺。
+    """
+    unittest_aliases = {"unittest.TestCase"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "unittest":
+            unittest_aliases |= {a.asname or a.name for a in node.names if a.name == "TestCase"}
+
+    saw_class = False
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        saw_class = True
+        for b in node.bases:
+            if isinstance(b, ast.Name):
+                name = b.id
+            elif isinstance(b, ast.Attribute):
+                name = f"{getattr(b.value, 'id', '')}.{b.attr}"
+            else:
+                return False          # 無法靜態判定 → 保守視為可收集
+            if name not in unittest_aliases:
+                return False          # 有非 unittest 基底 ⇒ 整個 module 會被載入
+    return saw_class
+
+
 def scan_expected(tests_dir: pathlib.Path) -> tuple[dict[str, int], list[tuple[str, str]]]:
     """回傳 (預期會被收集的 {`<檔>.<Class>`: test 方法數}, [(被排除者, 原因)])。
 
@@ -145,6 +181,7 @@ def scan_expected(tests_dir: pathlib.Path) -> tuple[dict[str, int], list[tuple[s
             excluded.append((str(rel), f"語法錯誤無法解析：{exc}"))
             continue
 
+        pure_unittest = _pure_unittest_module(tree)
         for node in tree.body:
             if not isinstance(node, ast.ClassDef):
                 continue
@@ -163,6 +200,10 @@ def scan_expected(tests_dir: pathlib.Path) -> tuple[dict[str, int], list[tuple[s
             deselect = [t for t in _decorator_tags(node) if t in DESELECT_TAGS]
             if deselect:
                 excluded.append((ident, f"@tagged{tuple(deselect)} 不進標準跑"))
+                continue
+            if pure_unittest:
+                excluded.append((ident, f"所在檔 `{stem}` 整檔只有純 unittest.TestCase"
+                                        " → 被 --test-tags 整批過濾（機制 B，#544）"))
                 continue
             expected[ident] = n
 
@@ -248,7 +289,7 @@ def check_imports(tests_dir: pathlib.Path, _prefix: str = "") -> int:
     on_disk, imported = on_disk_submodules(tests_dir), imported_submodules(init)
     orphan, phantom = sorted(on_disk - imported), sorted(imported - on_disk)
 
-    known = _load_known_orphans()
+    known = _load_known_unexecuted()["A"]
     fresh = [o for o in orphan if f"{label}/{o}" not in known]
     stale = [k for k in sorted(known) if k.startswith(f"{label}/")
              and k.rsplit("/", 1)[-1] not in orphan]
@@ -291,11 +332,72 @@ def check_imports(tests_dir: pathlib.Path, _prefix: str = "") -> int:
     return rc
 
 
-def _load_known_orphans() -> set[str]:
+def _load_known_unexecuted() -> dict[str, set[str]]:
+    """回傳 {"A": {路徑…}, "B": {模組名…}}。"""
+    out: dict[str, set[str]] = {"A": set(), "B": set()}
     if not KNOWN_ORPHANS.is_file():
-        return set()
-    return {ln.strip() for ln in KNOWN_ORPHANS.read_text(encoding="utf-8").splitlines()
-            if ln.strip() and not ln.startswith("#")}
+        return out
+    for ln in KNOWN_ORPHANS.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        mech, _, name = ln.partition("\t")
+        if mech in out and name:
+            out[mech].add(name.strip())
+    return out
+
+
+def check_pure_unittest_modules(tests_dir: pathlib.Path) -> int:
+    """C1b：抓「機制 B」——整檔只有純 unittest.TestCase ⇒ 被 --test-tags 整批過濾。
+
+    C1 的匯入比對**結構上看不到這種**（import 都在），所以必須是獨立一道。
+    #544 實證：全 repo 62 條從未執行的測試裡，47 條是機制 B。
+    """
+    known = _load_known_unexecuted()["B"]
+    found: dict[str, int] = {}
+    for path in sorted(tests_dir.rglob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        if not _pure_unittest_module(tree):
+            continue
+        n = sum(1 for node in tree.body if isinstance(node, ast.ClassDef)
+                for b in node.body
+                if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and b.name.startswith("test_"))
+        if n:
+            found[path.stem] = n
+
+    fresh = {k: v for k, v in found.items() if k not in known}
+    stale = sorted(known - set(found))
+
+    rc = 0
+    if fresh:
+        rc = 1
+        print(f"\nC1b FAIL — 以下 {len(fresh)} 個測試檔整檔只有純 unittest.TestCase，")
+        print("        會被 --test-tags 整批過濾 ⇒ 從未執行（`of N tests` 看起來正常）：")
+        for name, n in sorted(fresh.items()):
+            print(f"  - src/tests/{name}.py   （{n} 條 def test_*）"
+                  f"\n      修法：把基底改成 Odoo TestCase（TransactionCase / HttpCase 等）")
+    known_hit = sorted(set(found) & known)
+    if known_hit:
+        print(f"\nC1b 註記：{len(known_hit)} 個已在待修清單（issue #544），不重複擋：")
+        for name in known_hit:
+            print(f"  ~ src/tests/{name}.py   （{found[name]} 條 def test_*，仍未執行）")
+    if stale:
+        rc = 1
+        print(f"\nC1b FAIL — 以下 {len(stale)} 項已不再是純 unittest 模組，"
+              "請從 test-collection-known-unexecuted.txt 刪掉（清單腐爛防線）：")
+        for name in stale:
+            print(f"  ✓ B\t{name}")
+    if rc == 0 and not known_hit:
+        print("C1b PASS：沒有整檔純 unittest.TestCase 的測試模組")
+    elif rc == 0:
+        print("C1b PASS：除待修清單外，沒有新的純 unittest.TestCase 模組")
+    return rc
 
 
 def count_test_defs(path: pathlib.Path) -> int:
@@ -527,6 +629,42 @@ def self_test() -> int:
         if not any(i == "test_s.TestDeselected" for i, _ in exc):
             failures.append("@tagged('-standard') 被靜默排除而非列名")
 
+    # (5b) 機制 B：整檔純 unittest.TestCase ⇒ 排除；但**混用**時不得誤殺
+    #      對照組來自 #544：test_reconciler_diff.py 同樣含 unittest.TestCase，
+    #      卻因同檔有 TransactionCase 而確實被執行。判準必須是 module 級不是 class 級。
+    for label, src, want_pure in [
+        ("全純 unittest",
+         "import unittest\nclass TestA(unittest.TestCase):\n    def test_x(self): pass\n", True),
+        ("from unittest import TestCase 別名形",
+         "from unittest import TestCase\nclass TestA(TestCase):\n    def test_x(self): pass\n", True),
+        ("混用（對照組，不得誤殺）",
+         "import unittest\nclass TestA(unittest.TestCase):\n    def test_x(self): pass\n"
+         "class TestB(TransactionCase):\n    def test_y(self): pass\n", False),
+        ("基底是複雜運算式 → 保守視為可收集",
+         "class TestA(mod.get_base()):\n    def test_x(self): pass\n", False),
+        ("沒有任何 class",
+         "def helper(): pass\n", False),
+    ]:
+        if _pure_unittest_module(ast.parse(src)) is not want_pure:
+            failures.append(f"_pure_unittest_module 對「{label}」判錯（期望 pure={want_pure}）")
+
+    # 端到端：混用檔的純 unittest class 也必須留在 expected（module 會整個載入）
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        (root / "__init__.py").write_text("from . import test_mix\nfrom . import test_pure\n")
+        (root / "test_mix.py").write_text(
+            "import unittest\nclass TestPureOne(unittest.TestCase):\n    def test_x(self): pass\n"
+            "class TestOdoo(TransactionCase):\n    def test_y(self): pass\n")
+        (root / "test_pure.py").write_text(
+            "import unittest\nclass TestOnlyPure(unittest.TestCase):\n    def test_z(self): pass\n")
+        exp, exc = scan_expected(root)
+        if "test_mix.TestPureOne" not in exp:
+            failures.append("混用檔的純 unittest class 被誤殺（#544 的對照組會被誤判）")
+        if "test_pure.TestOnlyPure" in exp:
+            failures.append("全純 unittest 模組沒被排除（機制 B 漏抓）")
+        if not any(i == "test_pure.TestOnlyPure" for i, _ in exc):
+            failures.append("機制 B 的排除被靜默丟棄而非列名")
+
     # (6) 雙向差集：單向會有「把項目從 baseline 拿掉就通過」的假綠洞
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -543,7 +681,7 @@ def self_test() -> int:
             print(f"  ✗ {f}")
         return 1
     print("SELF-TEST PASS：import 五形態／子套件遞迴／SKIP_LINE 三形態＋陰性對照／"
-          "粒度切分／繼承與 -standard 排除／雙向差集 —— 全部命中")
+          "粒度切分／繼承與 -standard 排除／機制 B（含混用對照組）／雙向差集 —— 全部命中")
     return 0
 
 
@@ -575,6 +713,8 @@ def main() -> int:
     ran = False
     if args.all or args.check_imports:
         rc |= check_imports(TESTS_DIR); ran = True
+    if args.all or args.check_imports:
+        rc |= check_pure_unittest_modules(TESTS_DIR)
     if args.all or args.check_baseline:
         rc |= check_baseline(TESTS_DIR, BASELINE); ran = True
     if args.check_executed:
