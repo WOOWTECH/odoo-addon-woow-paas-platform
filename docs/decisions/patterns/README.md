@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 32 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 33 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
@@ -50,6 +50,7 @@
 | [[spawn-install-values-missed-forward]] | 有組裝點把上游資料 → 下游 helm install values / config，下游硬性 `required`：撞「缺一個 value」時通常系統性漏轉多個 → 修一個就全盤對齊 + 加 contract test |
 | [[helm-reset-values-unified-pipeline]] | 動**既存 release 的升級路徑**（redeploy / reconfigure / reset admin password）的 helm values 組裝時：`--reuse-values` 會把 render 用的 chart values 換成舊 release 的 coalesced values ⇒ **chart 升版新增的預設永遠不生效**（靜默漏，#411／#413 Gap 2 已咬多次）→ 一律走全量 values 統一管線（`_assemble_deploy_values` 在主執行緒先算，背景執行緒無 ORM）＋傳 `reset_values=True`；`reuse_values=True` 由 repo-lint `reuse-values` 機械攔 |
 | [[plan-driven-date-helper]] | subscription 日期由 plan 強制覆寫（trial / non-trial path），且與第三方 onchange 有 post-confirm coupling 時 |
+| [[post-commit-bookkeeping-rollback-unit]] | handler **先對外部系統下達不可回捲的變更、再寫 DB**（helm upgrade／Secret 換發／遠端帳號開通）時：先找出**提交點**（外部回報成功那一刻），再問手上這個 `except` 落在哪一側——落在**之前**是 #520 那條 bug class（該補 rollback 撤回）；落在**之後**則外部事實已成立，例外只是**記帳**失敗，不得翻轉回應語意，更不得補 `cr.rollback()`（那會把「一致但租戶不知情」換成「DB↔叢集不一致」＝不可回復）。回捲單位要對齊事實邊界：與外部事實同構的那筆（憑證落庫）必須存活，衍生記帳（state／時間戳／版本帳本）才可整組回捲 ⇒ **分開包 `cr.savepoint()`**；`OperationalError` 一律外拋（#518）。有「只有這一次能交付」的產物（一次性明文憑證）時必看 |
 | [[two-stage-remote-provision-idempotency]] | provision method 先建遠端資源（CF tunnel / 雲端 DNS / SaaS 帳號 / k8s ns）再跑後續步驟，且 UI 把 retry 掛在 `error` 上 → 第二段失敗讓遠端資源孤兒掛著、retry 重跑第一段在雲端再建一條（永久孤兒 / 計費外洩）→ 遠端建立步驟必須被 stored-id guard 包住，每條失敗路徑保留 stored id 讓 retry 安全（單段 method 的免-guard 安全是單段性換來的，加段就要買回來） |
 | [[ns-quota-hard-limits-limitrange-lockstep]] | 新 ns 類型要加 ResourceQuota、或動既有 ns quota hard map 時：hard 一旦宣告 `limits.cpu/memory`，admission 強制 ns 內每個 container（含 init/sidecar）必帶 limits，缺者拒建且訊息隱晦 → LimitRange default（500m/512Mi）是 correctness requirement 非 best-practice，兩者必須同 PR 同落點 lock-step（出自 #278/PR #312） |
 | [[reset-async-budget-ladder]] | (a) 端點在 **HTTP request 內等 Kubernetes 收斂**（等 rollout／等 pod Ready）時 → 先問「這個等待是提交所必需，還是只想給呼叫端一個確認？」後者一律移出 request 交給既有狀態機＋輪詢；(b) 動任何 **`--atomic` / `--wait` 的 helm 呼叫點 timeout**：`--timeout` 是 per-operation，atomic 失敗會再吃一次同額 wait（自動 rollback）⇒ subprocess 上限要算 `2n + CLI 開銷`，少算會在 rollback 途中 SIGKILL helm ⇒ release 卡 `pending-rollback`＋Secret 停在沒人持有的新密碼（真機實測）；(c) 任何**跨層 timeout 預算**（前端／平台／operator）→ 宣告階梯（外層嚴格 > 內層硬上限）＋寫 gate，而不是挑「夠大的數字」：三個各自合理的預算合起來可以保證失敗（#461／F-449-3）；(d) 改**提交點**（等確認→等承諾）時，連同落庫的不變式一起重寫並在註解寫下舊語意為何不再適用。repo-lint `reset-budget-ladder` 機械強制 |
@@ -98,6 +99,7 @@
 - [phase-versioned-test-assertion](phase-versioned-test-assertion.md)
 - [plan-driven-date-helper](plan-driven-date-helper.md)
 - [plan-gap-stop-and-report](plan-gap-stop-and-report.md)
+- [post-commit-bookkeeping-rollback-unit](post-commit-bookkeeping-rollback-unit.md)
 - [resource-ownership-vs-template-activation](resource-ownership-vs-template-activation.md)
 - [reset-async-budget-ladder](reset-async-budget-ladder.md)
 - [scope-flip-write-guard-not-ir-rule](scope-flip-write-guard-not-ir-rule.md)
