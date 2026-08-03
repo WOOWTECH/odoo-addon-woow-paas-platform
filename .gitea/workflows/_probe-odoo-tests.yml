@@ -1,5 +1,8 @@
 # ⚠ 拋棄式量測探針（T3 Phase 1）——不是交付物，量完即刪。
 #
+# 設計與待裁決事項 → issue #546
+#   https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/546
+#
 # ══════ 量測結果（寫在這裡當耐久載體：scratchpad 有 TTL，git 沒有）══════
 #
 # run 1422（develop 3b840b29，唯一一次完整跑完）：
