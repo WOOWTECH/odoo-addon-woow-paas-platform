@@ -49,6 +49,10 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "src" / "tests"
 BASELINE = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection.txt"
 KNOWN_ORPHANS = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-known-unexecuted.txt"
+GREEN_STREAK = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-green-streak.txt"
+
+# 升級為 blocking 需要「連續 N 次 develop push 全綠」。N 取 3。
+GREEN_STREAK_REQUIRED = 3
 
 # ── log matcher ───────────────────────────────────────────────────────────
 # Odoo 18 `odoo/tests/result.py:263` log_stats() 在 stats logger 開到 DEBUG 時輸出
@@ -345,6 +349,48 @@ def _load_known_unexecuted() -> dict[str, set[str]]:
         if mech in out and name:
             out[mech].add(name.strip())
     return out
+
+
+def check_upgrade_readiness() -> int:
+    """本 gate 何時該從 warning-only 升級成 blocking —— **由 gate 自己判定並提醒**。
+
+    刻意**不用時間條件**（「跑一週再改」）：時間到了不保證問題解決，
+    而且沒有任何機制會在一週後提醒任何人回來改 ⇒ 它會永遠停在 warning-only。
+    **常態 warning 的 gate 等於沒有 gate**，與 known-unexecuted 檔頭那句
+    「常態帶紅的 gate 等於沒有 gate」是同一個孿生形態。
+
+    改用兩個**可判定的狀態**，兩者都要滿足：
+      1. `test-collection-known-unexecuted.txt` 清空（機制 A／B 都不剩）
+      2. 連續 GREEN_STREAK_REQUIRED 次 develop push 全套全綠
+
+    條件 2 的資料來源是 `baselines/test-collection-green-streak.txt`，
+    由跑全套的那支 workflow 每次成功後 append 一行 `<run_id>\t<UTC>`；
+    失敗時清空。⚠ 該 workflow 尚未落地（觸發策略待拍板）⇒ 檔案不存在時
+    **明確報「無法累計」而不是報 0**——那兩者意思完全不同。
+    """
+    known = _load_known_unexecuted()
+    remaining = sum(len(v) for v in known.values())
+
+    if GREEN_STREAK.is_file():
+        streak = len([ln for ln in GREEN_STREAK.read_text(encoding="utf-8").splitlines()
+                      if ln.strip() and not ln.startswith("#")])
+        streak_note = f"{streak}/{GREEN_STREAK_REQUIRED}"
+    else:
+        streak = -1
+        streak_note = f"無法累計（跑全套的 workflow 尚未落地，非 0）"
+
+    print(f"\n升級條件：待修清單剩 {remaining} 項；develop push 連續全綠 {streak_note}")
+    if remaining or streak < GREEN_STREAK_REQUIRED:
+        return 0
+
+    print("=" * 72)
+    print("★ 本 gate 已滿足升級條件，請把 .gitea/workflows/test-collection-audit.yml")
+    print("  的 `continue-on-error: true` 移除，讓它真正擋 merge。")
+    print(f"  依據：待修清單已清空、develop push 連續 {streak} 次全綠。")
+    print("  （本步驟以非零退出碼提醒你——這是唯一會讓它變紅的情況，")
+    print("    不是缺陷，是「該做的事」自己找上門。）")
+    print("=" * 72)
+    return 3
 
 
 def check_pure_unittest_modules(tests_dir: pathlib.Path) -> int:
@@ -693,6 +739,7 @@ def main() -> int:
     ap.add_argument("--check-skips", metavar="ODOO_TEST_LOG")
     ap.add_argument("--allow-skips", metavar="FILE")
     ap.add_argument("--update-baseline", action="store_true")
+    ap.add_argument("--upgrade-check", action="store_true")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--all", action="store_true", help="跑所有不需要 log 的檢查（C1+C2）")
     args = ap.parse_args()
@@ -715,8 +762,12 @@ def main() -> int:
         rc |= check_imports(TESTS_DIR); ran = True
     if args.all or args.check_imports:
         rc |= check_pure_unittest_modules(TESTS_DIR)
+    if args.all:
+        rc |= check_upgrade_readiness()
     if args.all or args.check_baseline:
         rc |= check_baseline(TESTS_DIR, BASELINE); ran = True
+    if args.upgrade_check:
+        rc |= check_upgrade_readiness(); ran = True
     if args.check_executed:
         rc |= check_executed(BASELINE, pathlib.Path(args.check_executed)); ran = True
     if args.check_skips:
