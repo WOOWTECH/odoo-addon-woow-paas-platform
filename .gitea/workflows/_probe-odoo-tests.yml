@@ -24,6 +24,22 @@
 #   ⇒ 唯一必要旗標是 --limit-memory-hard=0
 #     （--workers=0 本來就是預設＝no-op；--limit-memory-soft 只有 PreforkServer 讀＝no-op；
 #      MALLOC_ARENA_MAX 實測「有設但不帶旗標」仍 MemoryError ⇒ 不是解，別留在 recipe 裡）
+#
+# run 1432（重跑，數字可重現）：install 73s／測試 296s／同樣 0F/0E of 2237
+#   skipped_count=0；DETAIL_REPORT_PRESENT=yes（--log-handler=odoo.tests.stats:DEBUG 確實產出）
+#   detail 行數 module=1 / class=415 / method=3067（3067 ≠ 2237，口徑不同勿混用）
+#
+# run 1433（skip 偵測的陽性對照）：注入必然 skip 的哨兵
+#   哨兵 summary = 0 failed, 0 error(s) of 2 tests ← 其中一條什麼都沒驗，summary 一字未提
+#   sentinel_skipped_count=1（用與全套完全相同的 shell grep）⇒ 偵測器有效
+#   ⇒ 全套的 skipped_count=0 是真的 0，基準成立
+#   真實 skip 行原文（含「理由帶冒號」「行尾空白」兩個坑）：
+#     ... INFO test odoo.addons.woow_paas_platform.tests.test_probe_sentinel: \
+#         skipped TestProbeSentinel.test_probe_sentinel_skips : probe sentinel: deliberately skipped
+#
+# ⚠ 未解：靜態 424 個「直接定義 def test_* 的 class」vs CI detail report 的 415，差 9。
+#   已歸因 4（#467 的 3 個 + @tagged('-standard') 的 TestEcpayInvoiceReal），
+#   剩 5 個不明——需要匯出那 415 行清單才能列名，刻意不給推測解釋。
 # ═══════════════════════════════════════════════════════════════════
 #
 # 目的：取得「全套 Odoo 測試在 Gitea act-runner 上跑一次要多久」的實測數字，
