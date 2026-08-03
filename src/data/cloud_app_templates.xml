@@ -16,9 +16,27 @@
             <field name="documentation_url">https://www.postgresql.org/docs/</field>
 
             <!-- Helm Configuration -->
+            <!-- #552：本欄位原為空字串 ⇒ 整條 helm 管線不帶 helm 的 version 旗標（閘門在
+                 src/services/paas_operator.py:419-420、extra/paas-operator/src/services/helm.py:681
+                 與 :838），helm 解析成 registry 當下的 latest ⇒ 版本決定權交給上游、
+                 帳本記空、漂移偵測（cloud_service.py:630 的比較要求兩邊都有值）看不到。
+                 釘值＝2026-08-03 實測的 latest：
+                   helm show chart oci://registry-1.docker.io/bitnamicharts/postgresql
+                   → version 18.8.5 / appVersion 18.4.0
+                 （helm 3.13.3〔operator Dockerfile 釘的同一顆〕與系統 helm 4.2.3 量到同值。）
+                 本 template is_active=False，且 prod 0 顆 cloud service、stg 四個 paas-ws-*
+                 namespace 無任何 postgresql release ⇒ 沒有既存服務可被降版，「釘當下 latest」
+                 對現行行為零改變、只是把浮動變成固定。
+                 ⚠ 不得引用 docs/reference/features/cloud-services.md:894 的 15.5.0——那是
+                 spec 期示意值且配 classic repo（charts.bitnami.com），與現用 OCI 不同源。
+                 ⚠ 重新上架前必須先處理 image：18.8.5 的預設 image 是
+                 registry-1.docker.io/bitnami/postgresql:latest（Bitnami 2025-08 搬遷後公開
+                 tag 只剩 latest），而本 seed 的 helm_default_values 既無 image override 也無
+                 global.security.allowInsecureImages——對照 cloud_app_odoo 已改用 bitnamilegacy/。
+                 修 image 屬 helm_default_values 變更，不在本 PR 範圍。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/postgresql</field>
-            <field name="helm_chart_version"></field>
+            <field name="helm_chart_version">18.8.5</field>
             <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"},
                 "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits":
                 {"cpu": "2000m", "memory": "2Gi"}}}}</field>
@@ -53,9 +71,26 @@
             <field name="documentation_url">https://docs.n8n.io/</field>
 
             <!-- Helm Configuration (OCI registry format) -->
+            <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
+                 （機制與爆炸半徑見 cloud_app_postgresql 上方註解）。本 template
+                 is_active=True，是四個空值中風險最高的兩個之一。
+                 釘 2.0.1——兩個判準指向同一個值：
+                 (a) 既存服務優先：svc-16e7ac1a（paas-ws-stg-5a105e8b）實跑 n8n-2.0.1
+                     （helm history：rev 1 install 2026-07-06、rev 2 upgrade 2026-07-09，
+                     status deployed）。釘成「它正在跑的版本」⇒ 租戶按 Reset Admin Password
+                     不會把它推上別的版本；釘更高就等於下次 Reset 即升版。
+                 (b) 2026-08-03 實測 latest：
+                       helm show chart oci://8gears.container-registry.com/library/n8n
+                       → version 2.0.1 / appVersion 1.122.4
+                     （helm 3.13.3 與 4.2.3 同值。）
+                 ⚠ (a)(b) 今天恰好相同，是巧合不是恆等式：8gears 一發新版 (b) 就會前進，
+                 屆時本欄位不再等於 latest——那正是釘版的目的，不要「順手同步成新 latest」；
+                 升版要當成一次獨立變更、對照既存服務評估。
+                 ⚠ 不得引用 docs/reference/features/cloud-services.md:942 的 0.23.0——那是
+                 spec 期示意值且配 classic repo（8gears.github.io），與現用 OCI 不同源。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://8gears.container-registry.com/library/n8n</field>
-            <field name="helm_chart_version"></field>
+            <field name="helm_chart_version">2.0.1</field>
             <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main":
                 {"config": {"GENERIC_TIMEZONE": "Asia/Taipei", "N8N_LOG_LEVEL": "info",
                 "N8N_PUBLIC_API_ENABLED": "true"},
@@ -122,9 +157,26 @@
             <field name="documentation_url">https://redis.io/docs/</field>
 
             <!-- Helm Configuration -->
+            <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
+                 （機制見 cloud_app_postgresql 上方註解）。
+                 釘值＝2026-08-03 實測的 latest：
+                   helm show chart oci://registry-1.docker.io/bitnamicharts/redis
+                   → version 27.0.18 / appVersion 8.8.1
+                 （helm 3.13.3 與 4.2.3 同值。）
+                 本 template is_active=False，且 prod 0 顆 cloud service、stg 四個 paas-ws-*
+                 namespace 無任何 redis release ⇒ 無既存服務可被降版，釘當下 latest 對現行
+                 行為零改變。
+                 ⚠ 不得引用 docs/reference/features/cloud-services.md:984 的 19.0.0——那是
+                 spec 期示意值且配 classic repo（charts.bitnami.com），與現用 OCI 不同源。
+                 ⚠ 重新上架前必須先處理 image：27.0.18 的預設 image 是
+                 registry-1.docker.io/bitnami/redis:latest（Bitnami 2025-08 搬遷後公開 tag
+                 只剩 latest），本 seed 的 helm_default_values 無 image override 亦無
+                 global.security.allowInsecureImages。修 image 不在本 PR 範圍。
+                 ⚠ 27.0.18 的 chart 預設 architecture 是 replication，本 seed 覆寫為
+                 standalone（既有值，本 PR 未動）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/redis</field>
-            <field name="helm_chart_version"></field>
+            <field name="helm_chart_version">27.0.18</field>
             <field name="helm_default_values">{"architecture": "standalone", "master": {"resources":
                 {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory":
                 "512Mi"}}}}</field>
@@ -159,9 +211,29 @@
             <field name="documentation_url">https://www.odoo.com/documentation/</field>
 
             <!-- Helm Configuration (OCI registry format) -->
+            <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
+                 （機制見 cloud_app_postgresql 上方註解）。本 template is_active=True，是四個
+                 空值中風險最高的兩個之一。
+                 釘值＝2026-08-03 實測的 latest：
+                   helm show chart oci://registry-1.docker.io/bitnamicharts/odoo
+                   → version 28.2.10 / appVersion 18.0.20250805
+                 （helm 3.13.3 與 4.2.3 同值。）
+                 租戶側無既存服務（prod 0 顆 cloud service、stg 四個 paas-ws-* namespace 無
+                 odoo release）⇒ 無降版標的，釘當下 latest 對現行行為零改變。
+                 交叉佐證（為何 28.2.10 吃得下下面的 helm_default_values）：
+                 - 平台自身的 paas-odoo（paas-system，helm rev 78）跑的正是 odoo-28.2.10，
+                   且同樣以 global.security.allowInsecureImages ＋ customPostInitScripts ＋
+                   自家 image 覆寫的形制在線上運作；
+                 - 逐鍵實查 28.2.10 的 helm show values：odooEmail / odooPassword /
+                   odooSkipInstall / loadDemoData / customPostInitScripts / smtpHost /
+                   updateStrategy / persistence / postgresql 全部存在。
+                 ⚠ 下方 helm_default_values 的 image.* 與 postgresql.image.* 是既有的平台
+                 覆寫（cloud-odoo 自家 image ＋ bitnamilegacy/postgresql，因應 Bitnami
+                 2025-08 公開 image 搬遷），本 PR 未動；日後升 chart 版本時要一併複驗
+                 這兩組覆寫是否仍與新版 chart 相容。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/odoo</field>
-            <field name="helm_chart_version"></field>
+            <field name="helm_chart_version">28.2.10</field>
             <!-- helm_default_values: customPostInitScripts for:
                  1) fix-admin-credentials.sh - hash password with pbkdf2_sha512
                     (Bitnami writes plaintext; login stays as email per user choice)
