@@ -2,12 +2,16 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 31 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 32 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增 pattern doc 時）
 
 1. **同步登錄本索引**：新增 `patterns/<slug>.md` 時，務必在本檔「何時必看（按主題分組）」對應主題表補一行（pattern slug + 何時觸發 / 必看），並在「完整檔案清單」加一筆連結；同時更新頂部「完整 N 條」計數。
-2. **評估是否綁特定路徑**：若該 pattern 有明確的觸發檔案路徑（如 `src/security/`、`src/controllers/`、特定 model 檔）——則**額外**在 `.claude/hooks/pattern-guard-map.json` 對應 class 的 `docs` append 一行（`路徑 — 一句何時必看`），或新增 class；hook 會在編輯該路徑時自動餵給模型。純判斷類（無路徑可綁）的 pattern **只留本索引**。**勿再把守線散文寫回 CLAUDE.md**（該段已指針化，雙寫必漂移）。
+2. **評估是否綁特定路徑**：若該 pattern 有明確的觸發檔案路徑（如 `src/security/`、`src/controllers/`、特定 model 檔）——則**額外**在 `.claude/hooks/pattern-guard-map.json` 對應 class 的 `docs` append 一行（`路徑 — 一句何時必看`），或新增 class；hook 會在編輯該路徑時自動餵給模型。純判斷類（無路徑可綁）的 pattern **只留本索引**，並登記進 `scripts/audit/repo-lint.py` 的 `PATTERN_DOC_MAP_EXEMPT`（附理由）。**勿再把守線散文寫回 CLAUDE.md**（該段已指針化，雙寫必漂移）。
+
+> 🔒 上面兩條由 repo-lint 的 `pattern-doc-registry` check 機械強制（#547）：本目錄、pattern-guard-map、本索引的兩個登記面與頂部計數必須互為**雙射**，且 map 的每個 `docs` 條目都必須是**存在的檔案路徑**（`pattern-guard.py` 自己不驗證它印出來的路徑）。
+>
+> ⚠ 它保證的**只有名單一致與路徑存在**——**不驗證任何一份 doc 的內容是否與現行程式碼相符**。「repo-lint 綠」不代表這些 pattern 是對的（#547 的原型錯誤就是把「有守線」讀成「守線是對的」）；行號過期、處方與 code 相反、否定式散文主張（例「本 codebase 不是 M2M」）一律抓不到，那些留給人。
 
 ## 何時必看（按主題分組）
 
@@ -44,6 +48,7 @@
 | [[cloud-service-unlink-override-cleanup]] | parent 刪除時需先清 wrapper-class child rows、FK ondelete 不能 cascade（child 真正 owner 是別的 model）、且 caller 有多條 path → parent `unlink()` override 清理 |
 | [[sidecar-backed-flag-lifecycle]] | 同 model 既有系統 / lifecycle 建立的 row 也有 user-managed row、兩者 cleanup / sync 行為不同 → schema boolean flag 標誌物理依賴，cleanup filter + create path 對等遵守契約 |
 | [[spawn-install-values-missed-forward]] | 有組裝點把上游資料 → 下游 helm install values / config，下游硬性 `required`：撞「缺一個 value」時通常系統性漏轉多個 → 修一個就全盤對齊 + 加 contract test |
+| [[helm-reset-values-unified-pipeline]] | 動**既存 release 的升級路徑**（redeploy / reconfigure / reset admin password）的 helm values 組裝時：`--reuse-values` 會把 render 用的 chart values 換成舊 release 的 coalesced values ⇒ **chart 升版新增的預設永遠不生效**（靜默漏，#411／#413 Gap 2 已咬多次）→ 一律走全量 values 統一管線（`_assemble_deploy_values` 在主執行緒先算，背景執行緒無 ORM）＋傳 `reset_values=True`；`reuse_values=True` 由 repo-lint `reuse-values` 機械攔 |
 | [[plan-driven-date-helper]] | subscription 日期由 plan 強制覆寫（trial / non-trial path），且與第三方 onchange 有 post-confirm coupling 時 |
 | [[two-stage-remote-provision-idempotency]] | provision method 先建遠端資源（CF tunnel / 雲端 DNS / SaaS 帳號 / k8s ns）再跑後續步驟，且 UI 把 retry 掛在 `error` 上 → 第二段失敗讓遠端資源孤兒掛著、retry 重跑第一段在雲端再建一條（永久孤兒 / 計費外洩）→ 遠端建立步驟必須被 stored-id guard 包住，每條失敗路徑保留 stored id 讓 retry 安全（單段 method 的免-guard 安全是單段性換來的，加段就要買回來） |
 | [[ns-quota-hard-limits-limitrange-lockstep]] | 新 ns 類型要加 ResourceQuota、或動既有 ns quota hard map 時：hard 一旦宣告 `limits.cpu/memory`，admission 強制 ns 內每個 container（含 init/sidecar）必帶 limits，缺者拒建且訊息隱晦 → LimitRange default（500m/512Mi）是 correctness requirement 非 best-practice，兩者必須同 PR 同落點 lock-step（出自 #278/PR #312） |
@@ -80,6 +85,7 @@
 - [constraint-input-trust-expansion](constraint-input-trust-expansion.md)
 - [credential-claim-test-fixture-coupling](credential-claim-test-fixture-coupling.md)
 - [external-resource-env-token-naming](external-resource-env-token-naming.md)
+- [helm-reset-values-unified-pipeline](helm-reset-values-unified-pipeline.md)
 - [hidden-template-presentation-chain](hidden-template-presentation-chain.md)
 - [invariant-recompute-on-orm-write-hook](invariant-recompute-on-orm-write-hook.md)
 - [mcp-acl-6-rule-split](mcp-acl-6-rule-split.md)
