@@ -11,11 +11,24 @@
 
 中途拋錯就留下刪一半的狀態。而那一行在 **`except` handler 內**——Python 不會讓
 同一個 `try` 的 sibling `except Exception`（本函式末尾）接到它，例外直接**逸出**
-`_update_service_status`，落到呼叫端 `_list_services` 的 catch-all 被吞掉 →
-request 正常結束 → Odoo 照常 commit 那半套刪除 → 端點回 **`success: True`**。
+`_update_service_status`，落到呼叫端 `_list_services` 的 catch-all。
 
-比 #520 隱蔽的地方：#520 至少回 `success: False`（使用者知道出事了）。這裡回
-`success: True`，而服務就從清單上消失了——**沒有任何一方知道 teardown 只做了一半**。
+## 今天的實際症狀不是殘留，是整支清單端點 500（實測結果，不是 #525 的預測）
+
+`_list_services` 的 catch-all 接到例外後，**自己那行 log 讀 `svc.name`**，而該
+record 剛被 `super().unlink()` 刪掉 ⇒ 再拋 `MissingError`；這次同樣是在 except
+handler 裡拋的，一路逸出到框架 → **整筆交易被框架 rollback**。所以：
+
+- 殘留今天**不會落地**（被框架撿回去了）
+- 代價是**租戶整個服務清單頁 500**，且在 teardown 能成功之前不會自癒
+
+⚠ **那道保護只有一個 token 寬。** 把 log 換成 `svc.id`、或把 name 在 `try` 之前
+先取下來（兩者都是很自然的「改善 log」重構），吞例外就會真正完成，殘留立刻落地。
+本檔開發時做過這個實驗：只把那行改成讀事先取好的名字、savepoint 仍拿掉 ⇒ 端點回
+`{'success': True, 'data': [], 'count': 0}`、`row_exists=False`、
+`sub_state='in_progress'` ＝ **#520 bug class 完整重現**。
+
+⇒ savepoint 的價值有二：**修掉今天的 500**，並讓「不留殘留」不再依賴那個意外。
 
 ## 可達性（先讀，這決定了哪幾條測試是真的）
 
@@ -213,7 +226,11 @@ class TestPollTeardownLeavesNoHalfDeletedService(HttpCase):
             for p in reversed(patches):
                 p.stop()
         parsed = resp.json()
-        self.assertIn('result', parsed, 'resp: %s' % parsed)
+        self.assertIn(
+            'result', parsed,
+            '端點回了框架層錯誤而不是 JSON-RPC result——今天沒有 savepoint 時的'
+            '真實症狀：catch-all 自己 log `svc.name` 撞 MissingError 再逸出。'
+            'resp: %s' % parsed)
         self.env.invalidate_all()
         return parsed['result']
 
@@ -259,6 +276,25 @@ class TestPollTeardownLeavesNoHalfDeletedService(HttpCase):
     # ================================================================
     #  殘留：刪一半的服務不得留下
     # ================================================================
+    def test_teardown_failure_does_not_break_the_service_list_endpoint(self):
+        """今天（沒有 savepoint 時）的真實症狀：**整支清單端點掛掉**。
+
+        機制：teardown 中途失敗 → 例外逸出 `_update_service_status` →
+        `_list_services` 的 catch-all 接到 → 它自己那行 log 讀 `svc.name`，而該
+        record 已被 `super().unlink()` 刪掉 → `MissingError` 在 except handler
+        裡再拋一次 → 逸出到框架 → 整筆交易 rollback ＋ JSON-RPC error。
+
+        租戶端的後果不是「一台服務刪不掉」，是**整個工作區的服務清單打不開**，
+        而且在 teardown 能成功之前不會自癒。這條是本檔在現行碼上真正的 RED。
+        """
+        result = self._list_services(self._operator_404(),
+                                     injection=self._fail_settlement())
+
+        self.assertTrue(
+            result.get('success'),
+            '單一服務的 teardown 失敗不得讓整批清單失敗——輪詢器「一台壞不影響'
+            '整批」的設計意圖就是為了這個（回 %r）' % result)
+
     def test_teardown_failure_leaves_no_half_deleted_service(self):
         result = self._list_services(self._operator_404(),
                                      injection=self._fail_settlement())
