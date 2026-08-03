@@ -1013,6 +1013,12 @@ def reset_release_config(
         "namespace": namespace,
         "release": name,
         "helm_revision": release.revision,
+        # #552: reset carries `request.version` into a real helm upgrade, so it can
+        # move the chart version — report what Helm actually resolved so the
+        # platform ledger stops guessing. Mirrored in `_reset_via_helm_secret`:
+        # this endpoint has TWO implementations and covering only one leaves
+        # open-design / hermes-agent (the helm_secret carrier) blind.
+        "chart_version": release.chart_version,
         "config_json_patched": True,
         "helm_upgraded": True,
         "rollout_restart_issued": True,
@@ -1119,6 +1125,9 @@ def _reset_via_helm_secret(
         "namespace": namespace,
         "release": name,
         "helm_revision": release.revision,
+        # #552: same contract as the config_json branch above — both reset paths
+        # run `helm upgrade` and both must report the resolved chart version.
+        "chart_version": release.chart_version,
         "config_json_patched": False,
         "helm_upgraded": True,
         "rollout_restart_issued": True,
