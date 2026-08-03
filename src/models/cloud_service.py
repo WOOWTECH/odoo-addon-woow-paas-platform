@@ -844,9 +844,21 @@ class CloudService(models.Model):
         try:
             # #552 層 4 —— **backstop，不是主閘門**。主閘門在可購買性裁決點
             # （`cloud_app_template._reject_reason_for_new_instance`），擋在收錢之前。
-            # 這裡守的是那道閘門**攔不到的一種列**：閘門上線前就已經躺在 `pending`
-            # 的服務——cron 會照樣把它們撿起來 install，而 install 不帶 `--version`
-            # 就是 registry latest。
+            #
+            # 🔴 **這不是過渡期保險，是永久涵蓋——不要當成清得掉的舊碼。**
+            # 主閘門掛在 `CloudService.create()` 上，所以它只看得到**新建**的列。
+            # 有一條當前就存在、可重複觸發的路徑會讓一台服務走進 `_execute_deploy`
+            # 而**完全不經過 create**：
+            #
+            #     controllers/ha_paas.py 的 provision 重試 —— 既有服務處於 `error`
+            #     時，它 `existing.sudo().write({'state': 'pending'})` 再觸發 deploy
+            #     cron。**是 write 不是 create** ⇒ `_enforce_supply_gate` 不會跑，
+            #     cron 隨後直接呼叫本方法。這條路上**只有這道 backstop 接得住**。
+            #
+            # （另一種同樣接不到主閘門的列：閘門上線前就已經躺在 `pending` 的服務。
+            # 那個確實是過渡期的，但它**不是**本 backstop 存在的唯一理由。）
+            #
+            # 而 install 不帶 `--version` 就是 registry latest。
             #
             # 🔴 **位置在 `try` 之內是必要條件，不是風格**。放在 try 外面時，例外
             # 會直接穿過本方法，落進 `_cron_process_pending_deploys` 的泛用

@@ -308,9 +308,14 @@ class TestGuardDoesNotBlockShippedProducts(_Base):
     def _seeded_templates(self):
         templates = self.env['woow_paas_platform.cloud_app_template'].with_context(
             active_test=False).search([])
-        self.assertTrue(
-            templates,
-            '取樣點是空的：seed 沒載入或 model 改名 ⇒ 下面的全稱斷言退化成恆真')
+        # ⚠ 非空還不夠，要有 **floor**：全稱斷言在小集合上一樣會弱化，而
+        # 「seed 只載入了一部分」與「全部載入」在 `assertTrue` 下輸出相同。
+        # 15 是 #552 全程的實測數（四個空版號由 #561 補齊後仍是 15）；新增商品
+        # 時這個下限只會更寬鬆，不會變成需要維護的計數斷言。
+        self.assertGreaterEqual(
+            len(templates), 15,
+            '取樣點只有 %d 個 template（預期 ≥15）：seed 沒載入完 ⇒ 下面的'
+            '全稱斷言會在一個殘缺集合上通過' % len(templates))
         return templates
 
     def test_no_shipped_template_is_blocked_by_this_guard(self):
@@ -412,14 +417,34 @@ class TestUpgradeTimeWarning(_Base):
             self.Template._warn_unpinned_active_templates()
 
     def test_inactive_unpinned_template_is_only_a_warning(self):
-        """已下架的商品沒有租戶會撞到 ⇒ 不該用 ERROR 稀釋真正的警報。"""
+        """已下架的商品沒有租戶會撞到 ⇒ 不該用 ERROR 稀釋真正的警報。
+
+        🔴 **兩半都要斷言**。本測試第一版只寫了 `assertNoLogs(ERROR)` ⇒ 把整個
+        `_warn_unpinned_active_templates` 改成 `pass` 也照樣綠，而測試名稱
+        `is_only_a_warning` 宣稱的正是它沒驗的那一半。具體後果：有人把「已下架
+        用 WARNING」改成「完全不 log」時這條不會響，而「重新上架前必須釘版」
+        的訊號就此消失（#562 追蹤的正是那個場景）。
+
+        斷言「沒有 X」時必須連「本來會有 Y」一起斷言——否則被測程式一被掏空，
+        缺席那半就退化成恆真。
+        """
         template = self._template('warn-inactive-552c', '1.0.0', is_active=False)
         template.write({'helm_chart_version': ''})
-        with self.assertNoLogs(
+
+        # 前提：WARNING **真的**發生，而且指名 slug（維運不必自己翻 DB）。
+        with self.assertLogs(
             'odoo.addons.woow_paas_platform.models.cloud_app_template',
-            level=logging.ERROR,
-        ):
+            level=logging.WARNING,
+        ) as captured:
             self.Template._warn_unpinned_active_templates()
+        self.assertTrue(
+            any('warn-inactive-552c' in line for line in captured.output),
+            '已下架未釘版的商品必須被指名記下，否則重新上架前沒有任何提醒')
+
+        # 守線：分級正確——不得升成 ERROR 稀釋在售商品那條真正的警報。
+        self.assertFalse(
+            [line for line in captured.output if line.startswith('ERROR')],
+            '已下架商品沒有租戶撞得到，用 ERROR 會讓真正的在售警報被雜訊淹沒')
 
 
 class TestPollRecordsOutOfBandChartVersion(_Base):
