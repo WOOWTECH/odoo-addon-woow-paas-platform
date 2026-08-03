@@ -14,7 +14,5 @@
 #     兩者症狀相同（0F/0E 照樣綠）但修法相反，故分開標。
 #     機制 B 的判準是 **module 級**：只要同檔有任一個 Odoo TestCase，整個 module 就會被載入
 #     （對照組 test_reconciler_diff.py 含 unittest.TestCase 卻確實有執行）。
-A	src/tests/test_ai_assistant
-A	src/tests/test_security_access_p_rule_migration
 B	test_naming
 B	test_reconcile_delete_gate

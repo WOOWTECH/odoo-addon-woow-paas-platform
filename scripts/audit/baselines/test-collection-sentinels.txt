@@ -1,0 +1,11 @@
+# 完整性哨兵：這些測試**必然**會出現在每一次完整的全套結果裡（紅綠皆可）。
+# 產生／更新方式：手動維護（本檔不是 --update-baseline 產出）
+#
+# 🔑 用途：**哨兵沒出現 ⇒ 這次跑的範圍不完整** ⇒ 本次所有差集結論一律不成立。
+#   這比自造的邊界樣本強——它不是造出來的樣本，是真實環境裡必然存在的一條。
+#
+# ⚠ 哨兵會隨對應缺陷修好而消失。發現哨兵不存在時要更新本檔，不要放著讓 gate 永遠紅。
+#
+# 格式：<測試檔>.<Class>.<method>
+# 現行哨兵＝#543 的注入式驗證（刻意保持紅燈；改 fixture 轉綠＝用假綠掩蓋真缺陷）
+test_security_access_p_rule_migration.TestPRuleMigration.test_cursor_bypass_flag_cleared_after_migrate

@@ -1,0 +1,168 @@
+# 全套 Odoo 測試（Refs issue #546）
+#
+# 觸發策略 B + C（2026-08-03 Eugene 拍板）：
+#   B = merge 進 develop 後跑     → 事後發現，不擋 PR 迭代
+#   C = 每日 02:00 台北排程        → 保底安全網（離峰）
+# 刻意**不掛 pull_request**：全套 6 分鐘 × 單一 act-runner × 7 人並行
+# 會把 PR 回饋迴圈從 5 秒變成小時級排隊。終點暫停在「全套綠」，不 block merge。
+#
+# ⚠ 用 paths-ignore 而不是 paths —— 這是刻意的，兩者的**失效方向相反**：
+#   paths（允許清單）漏一項 ⇒ 該類改動**靜默不跑**，gate 寫好了卻不會被跑到
+#     （repo-lint.yml 的 #463 就是這個坑，註解還留在那支裡）。
+#   paths-ignore（排除清單）漏一項 ⇒ 最多多跑一次，浪費 6 分鐘，不會漏測。
+#   ⇒ 只排除**可證明不影響測試結果**的路徑，其餘一律跑。
+name: odoo-tests
+
+on:
+  push:
+    branches:
+      - develop
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".claude/**"
+      - "resource/**"
+  schedule:
+    # 02:00 台北（UTC+8）＝ 18:00 UTC 前一日。排程只在**預設分支**上跑（本 repo ＝ develop）。
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+env:
+  JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
+  ODOO_BIN: /opt/bitnami/odoo/bin/odoo
+  ADDONS_PATH: /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/custom-addons
+  MODULE_DIR: /opt/bitnami/odoo/custom-addons/woow_paas_platform
+  # 沒注入這個變數，TestNamespaceLeftSetUnion 會 fail-closed raise ⇒ 基準憑空多 2E。
+  AGENT_RUNTIME_NAMESPACE_SECRET: ci-full-suite
+
+jobs:
+  full-suite:
+    runs-on: ubuntu-latest
+    # 單一 job 硬上限是 3 小時（job container entrypoint = sleep 10800）；
+    # 實測全套約 6 分鐘，留大餘裕但不放到無限。
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 環境事實（出事時第一手證據）
+        run: |
+          echo "nproc=$(nproc)"; free -m || true; df -h
+          docker system df || true
+
+      - name: JCR login
+        run: |
+          echo "${{ secrets.JCR_PASSWORD }}" | \
+            docker login "${JCR}" -u "${{ secrets.JCR_USERNAME }}" --password-stdin
+
+      - name: Pull paas-odoo image
+        run: |
+          IMG=""
+          for CAND in "${JCR}/woow-paas-docker-local/paas-odoo:latest" \
+                      "${JCR}/woow-paas-docker-local/paas-odoo-stg:latest"; do
+            if docker pull "$CAND"; then IMG="$CAND"; break; fi
+          done
+          [ -n "$IMG" ] || { echo "::error::拉不到 paas-odoo image"; exit 1; }
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: 起 postgres + odoo（預設 bridge）
+        run: |
+          # 刻意不建自訂 docker network：自訂 network MTU 1500 > pod eth0 1450，
+          # 外網 TLS 會被靜默丟包（既有已知坑）。預設 bridge 是 1400。
+          # 代價是沒有 embedded DNS，所以用 IP 連 postgres。
+          docker run -d --name pg -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo \
+            -e POSTGRES_DB=postgres postgres:15
+          docker run -d --name odoo \
+            -e AGENT_RUNTIME_NAMESPACE_SECRET="${AGENT_RUNTIME_NAMESPACE_SECRET}" \
+            --entrypoint bash "$IMG" -c 'sleep infinity'
+          for i in $(seq 1 60); do
+            docker exec pg pg_isready -U odoo >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec pg pg_isready -U odoo
+          PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pg)
+          [ -n "$PG_IP" ] || { echo "::error::拿不到 pg IP"; exit 1; }
+          echo "PG_IP=$PG_IP" >> "$GITHUB_ENV"
+
+      - name: 用本 checkout 覆蓋 image 內 baked addon
+        run: |
+          # 整棵換掉、不要只 cp diff：舊 image 的 tests/__init__.py 會 import
+          # 後來才新增的測試檔 → ImportError → 整條 -u 掛掉。
+          docker exec odoo rm -rf "${MODULE_DIR}"
+          docker exec odoo mkdir -p "${MODULE_DIR}"
+          docker cp src/. "odoo:${MODULE_DIR}/"
+          docker exec odoo sh -c "find ${MODULE_DIR} -name __pycache__ -type d -exec rm -rf {} + || true"
+          echo "--- 覆蓋驗證：容器內版號應等於本 checkout ---"
+          docker exec odoo sh -c "grep -m1 version ${MODULE_DIR}/__manifest__.py"
+          grep -m1 version src/__manifest__.py
+
+      - name: Install（不跑測試）
+        run: |
+          # ⚠ 這一步不可與下一步合併。`-i` + `--test-enable` 一步到位實測 29F/89E，
+          # 兩步法同一個 DB 是 0F/0E —— 合併＝大規模假紅。
+          # --limit-memory-hard=0 是必要的：ThreadedServer.start() 無條件把 RLIMIT_AS
+          # 壓到預設 2.5 GB，在這台 256 核機器上會噴 MemoryError（本機不會重現）。
+          docker exec odoo "${ODOO_BIN}" -d test -i woow_paas_platform \
+            --stop-after-init --without-demo=all --no-http \
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/install.log 2>&1 \
+            || { tail -40 /tmp/install.log; echo "::error::install 失敗"; exit 1; }
+
+      - name: 跑全套測試
+        run: |
+          set +e
+          docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
+            --test-enable --test-tags /woow_paas_platform \
+            --stop-after-init --limit-memory-hard=0 --max-cron-threads=0 \
+            --http-port=18069 --gevent-port=18072 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
+            --log-handler=odoo.tests.stats:DEBUG > /tmp/test.log 2>&1
+          echo "odoo_exit=$? (非零僅代表有紅燈，判準以 C5 集合差為準)"
+          set -e
+          echo "--- summary ---"
+          grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log \
+            || { echo "::error::找不到 summary 行 ⇒ log 截斷，本次數據不可信"; exit 1; }
+
+      # ── 以下是完備性判準。**順序有意義**：哨兵先過，否則後面的差集全都不成立。 ──
+      - name: C0 完整性哨兵（沒過就不要看後面的差集）
+        run: python3 scripts/audit/test_collection_audit.py --check-sentinels /tmp/test.log
+
+      - name: C5 失敗集合差（驗收標準：集合相同、不得新增）
+        run: python3 scripts/audit/test_collection_audit.py --check-failures /tmp/test.log
+
+      - name: C3 實際執行清單雙向差集
+        run: python3 scripts/audit/test_collection_audit.py --check-executed /tmp/test.log
+
+      - name: C4 skip 盤點
+        run: python3 scripts/audit/test_collection_audit.py --check-skips /tmp/test.log
+
+      - name: 升級條件自檢
+        if: always()
+        run: python3 scripts/audit/test_collection_audit.py --upgrade-check || true
+
+      - name: 摘要 + streak 待辦
+        if: always()
+        run: |
+          {
+            echo "## 全套 Odoo 測試"
+            echo '```'
+            grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log 2>/dev/null || echo "(no summary)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ job.status }}" = "success" ]; then
+            {
+              echo ""
+              echo "### ✅ 本次全綠 —— 請把下面這行 append 到"
+              echo "\`scripts/audit/baselines/test-collection-green-streak.txt\`（升級 blocking 的條件 2）"
+              echo '```'
+              echo "${{ github.run_id }}	$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo '```'
+              echo "> ⚠ 目前這一步是人工的 —— CI 自動 commit 回 develop 會與本 workflow 的"
+              echo "> push 觸發形成迴圈，需要 loop guard，未經 review 不自行加。見 issue #546。"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 收尾
+        if: always()
+        run: docker rm -f odoo pg 2>/dev/null || true

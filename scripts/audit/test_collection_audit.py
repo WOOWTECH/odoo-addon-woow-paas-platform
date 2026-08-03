@@ -50,6 +50,8 @@ TESTS_DIR = REPO_ROOT / "src" / "tests"
 BASELINE = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection.txt"
 KNOWN_ORPHANS = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-known-unexecuted.txt"
 GREEN_STREAK = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-green-streak.txt"
+SENTINELS = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-sentinels.txt"
+KNOWN_FAILURES = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-known-failures.txt"
 
 # 升級為 blocking 需要「連續 N 次 develop push 全綠」。N 取 3。
 GREEN_STREAK_REQUIRED = 3
@@ -72,6 +74,15 @@ DETAIL_LINE = re.compile(
 #   那筆 skip 會直接從清單消失 ⇒ skip 數被低估 ⇒ gate 照樣通過。
 SKIP_LINE = re.compile(
     r"(?P<mod>odoo\.addons\.[\w.]+):\s+skipped\s+(?P<test>\S+)\s+:\s+(?P<reason>.*?)\s*$"
+)
+
+# Odoo 18 `odoo/tests/result.py:300` logError() →
+#     self.log(logging.ERROR, "%s: %s\n%s", flavour, self.getDescription(test), err, ...)
+# flavour ∈ {FAIL, ERROR}，logger 名 = test.__module__。
+# ⚠ 此樣式由源碼推導，尚未對真實紅燈觀察過——develop 目前有一條必然的 ERROR
+#   （TestPRuleMigration，#543 的注入式驗證），第一次跑全套就會成為它的陽性對照。
+FAILURE_LINE = re.compile(
+    r"(?P<mod>odoo\.addons\.[\w.]+):\s+(?P<flavour>FAIL|ERROR):\s+(?P<test>[\w.]+)"
 )
 
 # `@tagged` 內出現這些負向 tag 的 class 不會進標準跑，屬預期排除。
@@ -276,6 +287,83 @@ def parse_skips(log_path: pathlib.Path) -> list[tuple[str, str, str]]:
     return out
 
 
+def parse_failures(log_path: pathlib.Path) -> set[str]:
+    """回傳 {`<檔>.<Class>.<method>`} 的失敗／錯誤集合。"""
+    out: set[str] = set()
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = FAILURE_LINE.search(line)
+        if m:
+            out.add(f"{m.group('mod').rsplit('.', 1)[-1]}.{m.group('test')}")
+    return out
+
+
+def _load_list(path: pathlib.Path) -> set[str]:
+    if not path.is_file():
+        return set()
+    return {ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.startswith("#")}
+
+
+def check_sentinels(log_path: pathlib.Path) -> int:
+    """★ 完整性哨兵：某些測試**必然**會出現在每一次完整的全套結果裡（紅綠皆可）。
+
+    **哨兵沒出現 ⇒ 這次跑的範圍不完整** ⇒ 本次所有差集結論一律不成立，
+    必須大聲失敗而不是報綠。這比自造的邊界樣本強：它不是造出來的樣本，
+    是真實環境裡必然存在的一條，且會隨對應缺陷修好而消失（屆時要更新清單）。
+    """
+    sentinels = _load_list(SENTINELS)
+    if not sentinels:
+        print("C0 FATAL: 哨兵清單為空 —— 沒有哨兵就無法判斷收集是否完整", file=sys.stderr)
+        return 2
+    seen = extract_executed(log_path, "method") | parse_failures(log_path)
+    missing = sorted(s for s in sentinels if s not in seen)
+    if not missing:
+        print(f"C0 PASS：{len(sentinels)} 個完整性哨兵全部出現 ⇒ 收集範圍完整")
+        return 0
+    print(f"\nC0 FATAL — 以下 {len(missing)} 個哨兵沒有出現在結果中："
+          "\n        ⇒ **這次跑的範圍不完整**，本次所有差集結論一律不成立。",
+          file=sys.stderr)
+    for s in missing:
+        print(f"  ✗ {s}", file=sys.stderr)
+    print("        （若該缺陷已修好、測試已移除，請同步更新 "
+          "baselines/test-collection-sentinels.txt）", file=sys.stderr)
+    return 2
+
+
+def check_failure_set(log_path: pathlib.Path) -> int:
+    """C5：失敗／錯誤**集合**比對——取代「0F/0E」這種絕對值標準。
+
+    絕對值標準本質上是「差幾個」：develop 基準一旦不是 0 就整個失效。
+    集合差不受基準值影響，且直接回答「是哪一條」。
+    驗收語意＝**集合必須相同；本次不得新增任何一條**。
+    """
+    actual = parse_failures(log_path)
+    expected = _load_list(KNOWN_FAILURES)
+    if expected and not actual:
+        print(f"\nC5 FATAL — 預期有 {len(expected)} 條已知紅燈，本次卻解析到 0 條。",
+              file=sys.stderr)
+        print("        兩種可能且輸出一模一樣：(a) 缺陷被修好了（請刪行），"
+              "(b) FAIL/ERROR 解析器壞了。零結果不當作通過。", file=sys.stderr)
+        return 2
+    new = sorted(actual - expected)
+    fixed = sorted(expected - actual)
+    if not new and not fixed:
+        print(f"C5 PASS：失敗集合與 baseline 相同（{len(actual)} 條已知紅燈，零新增）")
+        return 0
+    rc = 0
+    if new:
+        rc = 1
+        print(f"\nC5 FAIL — 本次**新增** {len(new)} 條失敗（驗收標準：不得新增任何一條）：")
+        for x in new:
+            print(f"  + {x}")
+    if fixed:
+        print(f"\nC5 註記：以下 {len(fixed)} 條已知紅燈本次沒紅，"
+              "請從 test-collection-known-failures.txt 刪行：")
+        for x in fixed:
+            print(f"  ✓ {x}")
+    return rc
+
+
 # ── 檢查 ──────────────────────────────────────────────────────────────────
 def check_imports(tests_dir: pathlib.Path, _prefix: str = "") -> int:
     init = tests_dir / "__init__.py"
@@ -318,7 +406,7 @@ def check_imports(tests_dir: pathlib.Path, _prefix: str = "") -> int:
         # 待修清單不是允許清單：修好了就該刪行，否則它會慢慢腐爛成一張沒人看的白名單
         rc = 1
         print(f"\nC1 FAIL [{label}] — 以下 {len(stale)} 項已不再是 orphan，"
-              "請從 test-collection-known-orphans.txt 刪掉（清單腐爛防線）：")
+              "請從 test-collection-known-unexecuted.txt 刪掉（清單腐爛防線）：")
         for name in stale:
             print(f"  ✓ {name}")
     if phantom:
@@ -711,6 +799,84 @@ def self_test() -> int:
         if not any(i == "test_pure.TestOnlyPure" for i, _ in exc):
             failures.append("機制 B 的排除被靜默丟棄而非列名")
 
+    # (5c) FAILURE_LINE：FAIL/ERROR 兩種 flavour；skip／summary／detail 行不得誤抓
+    with tempfile.TemporaryDirectory() as td:
+        p_ = pathlib.Path(td) / "log.txt"
+        p_.write_text(
+            "2026-08-03 10:00:00,000 1 ERROR test odoo.addons.woow_paas_platform.tests."
+            "test_security_access_p_rule_migration: ERROR: TestPRuleMigration."
+            "test_cursor_bypass_flag_cleared_after_migrate\n"
+            "2026-08-03 10:00:01,000 1 ERROR test odoo.addons.woow_paas_platform.tests."
+            "test_a: FAIL: TestA.test_b\n"
+            # 陰性對照：以下三種都不得被當成失敗
+            "... INFO test odoo.addons.woow_paas_platform.tests.test_c: "
+            "skipped TestC.test_d : some reason\n"
+            "... INFO test odoo.tests.result: 0 failed, 0 error(s) of 2237 tests\n"
+            "\twoow_paas_platform.test_e.TestE.test_f: 0.01s 3 queries\n",
+            encoding="utf-8")
+        got_f = parse_failures(p_)
+        want_f = {"test_security_access_p_rule_migration.TestPRuleMigration."
+                  "test_cursor_bypass_flag_cleared_after_migrate",
+                  "test_a.TestA.test_b"}
+        if got_f != want_f:
+            failures.append(f"FAILURE_LINE：漏={sorted(want_f-got_f)} 誤抓={sorted(got_f-want_f)}")
+
+    # (5d) 哨兵：出現→PASS；不出現→FATAL(2)。這是「本次收集是否完整」的判準。
+    with tempfile.TemporaryDirectory() as td:
+        import io, contextlib
+        good = pathlib.Path(td) / "good.log"
+        good.write_text("\twoow_paas_platform.test_s.TestS.test_ok: 0.01s 1 queries\n"
+                        "... ERROR test odoo.addons.woow_paas_platform.tests.test_sent: "
+                        "ERROR: TestSent.test_sentinel\n", encoding="utf-8")
+        bad = pathlib.Path(td) / "bad.log"
+        bad.write_text("\twoow_paas_platform.test_s.TestS.test_ok: 0.01s 1 queries\n",
+                       encoding="utf-8")
+        sent = pathlib.Path(td) / "sent.txt"
+        sent.write_text("test_sent.TestSent.test_sentinel\n", encoding="utf-8")
+        real_sent = globals()["SENTINELS"]
+        try:
+            globals()["SENTINELS"] = sent
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                rc_good = check_sentinels(good)
+                rc_bad = check_sentinels(bad)
+            if rc_good != 0:
+                failures.append("哨兵出現在結果中卻沒 PASS")
+            if rc_bad != 2:
+                failures.append("哨兵消失時沒有 FATAL —— 收集不完整會被當成通過")
+            if "test_sent.TestSent.test_sentinel" not in buf.getvalue():
+                failures.append("哨兵失敗訊息沒有列名")
+        finally:
+            globals()["SENTINELS"] = real_sent
+
+    # (5e) C5 失敗集合：相同→0；新增→1；預期非空但解析到 0→FATAL(2) 不可當通過
+    with tempfile.TemporaryDirectory() as td:
+        import io, contextlib
+        kf = pathlib.Path(td) / "kf.txt"
+        kf.write_text("test_a.TestA.test_b\n", encoding="utf-8")
+        same = pathlib.Path(td) / "same.log"
+        same.write_text("... ERROR test odoo.addons.x.tests.test_a: FAIL: TestA.test_b\n")
+        more = pathlib.Path(td) / "more.log"
+        more.write_text("... ERROR test odoo.addons.x.tests.test_a: FAIL: TestA.test_b\n"
+                        "... ERROR test odoo.addons.x.tests.test_c: ERROR: TestC.test_d\n")
+        none = pathlib.Path(td) / "none.log"
+        none.write_text("... INFO test odoo.tests.result: 0 failed, 0 error(s) of 5 tests\n")
+        real_kf = globals()["KNOWN_FAILURES"]
+        try:
+            globals()["KNOWN_FAILURES"] = kf
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                r_same, r_more, r_none = (check_failure_set(same), check_failure_set(more),
+                                          check_failure_set(none))
+            if r_same != 0: failures.append("C5 對相同集合沒 PASS")
+            if r_more != 1: failures.append("C5 沒抓到新增的失敗")
+            if "test_c.TestC.test_d" not in buf.getvalue():
+                failures.append("C5 新增的失敗沒有列名")
+            if r_none != 2:
+                failures.append("C5 對「預期非空但解析到 0」當成通過了（零結果不可信）")
+        finally:
+            globals()["KNOWN_FAILURES"] = real_kf
+
     # (6) 雙向差集：單向會有「把項目從 baseline 拿掉就通過」的假綠洞
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -727,7 +893,8 @@ def self_test() -> int:
             print(f"  ✗ {f}")
         return 1
     print("SELF-TEST PASS：import 五形態／子套件遞迴／SKIP_LINE 三形態＋陰性對照／"
-          "粒度切分／繼承與 -standard 排除／機制 B（含混用對照組）／雙向差集 —— 全部命中")
+          "粒度切分／繼承與 -standard 排除／機制 B（含混用對照組）／"
+          "FAILURE_LINE／完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中")
     return 0
 
 
@@ -739,6 +906,8 @@ def main() -> int:
     ap.add_argument("--check-skips", metavar="ODOO_TEST_LOG")
     ap.add_argument("--allow-skips", metavar="FILE")
     ap.add_argument("--update-baseline", action="store_true")
+    ap.add_argument("--check-sentinels", metavar="ODOO_TEST_LOG")
+    ap.add_argument("--check-failures", metavar="ODOO_TEST_LOG")
     ap.add_argument("--upgrade-check", action="store_true")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--all", action="store_true", help="跑所有不需要 log 的檢查（C1+C2）")
@@ -768,6 +937,10 @@ def main() -> int:
         rc |= check_baseline(TESTS_DIR, BASELINE); ran = True
     if args.upgrade_check:
         rc |= check_upgrade_readiness(); ran = True
+    if args.check_sentinels:
+        rc |= check_sentinels(pathlib.Path(args.check_sentinels)); ran = True
+    if args.check_failures:
+        rc |= check_failure_set(pathlib.Path(args.check_failures)); ran = True
     if args.check_executed:
         rc |= check_executed(BASELINE, pathlib.Path(args.check_executed)); ran = True
     if args.check_skips:

@@ -1,0 +1,15 @@
+# 已知會紅的測試（失敗／錯誤集合的 baseline）
+# 產生／更新方式：手動維護（本檔不是 --update-baseline 產出）
+#
+# 🔑 驗收標準是**集合相同、不得新增**，不是「0F/0E」。
+#   絕對值標準本質上是「差幾個」——develop 基準一旦不是 0 就整個失效；
+#   集合差不受基準值影響，而且直接回答「是哪一條」。
+#
+# ⚠ 這裡的每一條都必須有「刻意保留」的理由，不是「還沒修」的堆放處。
+#
+# 格式：<測試檔>.<Class>.<method>
+#
+# #543：migration 撞上 _check_allow_policy_no_bulk_grant，post-migrate 的
+#       Rule.create 沒繞過該守衛 ⇒ 舊備份還原的 DB 升版會中斷。
+#       把 fixture 改成 deny 一行就能轉綠，但那是用假綠掩蓋真缺陷，刻意不做。
+test_security_access_p_rule_migration.TestPRuleMigration.test_cursor_bypass_flag_cleared_after_migrate
