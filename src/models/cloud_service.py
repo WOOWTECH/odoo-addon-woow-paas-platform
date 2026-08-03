@@ -443,6 +443,25 @@ class CloudService(models.Model):
             # chart 升版新增的預設能自然補位。見 docs/decisions/patterns/
             # helm-reset-values-unified-pipeline.md。
             template = self.template_id
+            # #552 層 4：redeploy 帶 `template.helm_chart_version` 做 helm upgrade，
+            # 空值 ⇒ 不帶 `--version` ⇒ **升到 registry 當下的 latest**，而
+            # `reset_values=True` 又讓 values 以新版 chart 的預設重新渲染。這條路
+            # 沒有 role gate（後台 button ＋ `call_kw`），一次誤按就是不可逆的跳版。
+            #
+            # ⚠ 這裡用 `UserError` 而不是靜默略過或背景失敗：本方法是**同步**的，
+            # 例外會直接回到呼叫端（後台 UI／RPC）。實查全 repo，`action_redeploy`
+            # 沒有任何 cron／自動化呼叫端（只有 `cloud_service_views.xml` 的兩顆
+            # button），所以擋下來一定有人看得到，不會變成靜默失敗。
+            #
+            # 刻意**不**退回 `self.helm_chart_version`：redeploy 的語意就是「重新
+            # 套用商品當前釘的版本」（允許夾帶升版），改讀服務自己的版本會把它
+            # 悄悄變成另一個功能。要放行就去把 template 的版本填上。
+            if not template.helm_chart_version:
+                raise UserError(
+                    f"無法重新部署：商品「{template.name}」尚未指定 chart 版本。"
+                    f"直接部署會抓 registry 當下的最新版（不可逆的跳版）。"
+                    f"請先在商品設定填入版本再重試。"
+                )
             values = self._assemble_deploy_values()['values']
             sensitive_values = self._build_mcp_sensitive_values()
             try:
@@ -823,6 +842,32 @@ class CloudService(models.Model):
         mcp_api_key = params.get('mcp_api_key')
 
         try:
+            # #552 層 4 —— **backstop，不是主閘門**。主閘門在可購買性裁決點
+            # （`cloud_app_template._reject_reason_for_new_instance`），擋在收錢之前。
+            # 這裡守的是那道閘門**攔不到的一種列**：閘門上線前就已經躺在 `pending`
+            # 的服務——cron 會照樣把它們撿起來 install，而 install 不帶 `--version`
+            # 就是 registry latest。
+            #
+            # 🔴 **位置在 `try` 之內是必要條件，不是風格**。放在 try 外面時，例外
+            # 會直接穿過本方法，落進 `_cron_process_pending_deploys` 的泛用
+            # `except Exception` —— 訊息被換成「Unexpected error during
+            # deployment. Check server logs.」，租戶與第一線都無從排錯（#520 症狀
+            # 4 同型）。實測踩過一次：`state` 確實變成 error，但 `error_message`
+            # 完全不提版本，看起來就像基礎設施故障。
+            #
+            # ⚠ 例外型別同理**必須**是 `PaaSOperatorError`：底下那個 handler 才會
+            # 把 detail 寫進 `error_message`。兩個條件（位置＋型別）少一個都會讓
+            # 這道 backstop 退化成「擋下來了，但沒人知道為什麼」。
+            if not template.helm_chart_version:
+                raise PaaSOperatorError(
+                    'chart version not pinned',
+                    detail=(
+                        f'商品「{template.name}」尚未指定部署版本，為避免部署到'
+                        f'未知的 chart 版本已中止開通。請在 seed 釘版後重新發版'
+                        f'（#552）。'
+                    ),
+                )
+
             # Create namespace (409 = already exists, OK)
             cpu_limit, memory_limit, storage_limit = self._compute_ns_quota(
                 self.workspace_id,
@@ -2993,6 +3038,20 @@ class CloudService(models.Model):
             if reason == 'paused':
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前暫停販售。', tpl=template.name))
+            if reason == 'unpinned_chart':
+                # #552 層 4：這是**平台端設定缺陷**不是營運狀態，所以 log 成 error
+                # ——租戶看到的是下面那句，但營運要在 log 裡看得到是哪個 template。
+                # 只在真的有人嘗試開通時才 log（判準本身每次 marketplace 渲染都會
+                # 跑一次，寫在裁決點會洗版）。
+                _logger.error(
+                    "供給閘門擋下開通：template %s (id=%s, slug=%s) 沒有 "
+                    "helm_chart_version ⇒ helm 會解析成 registry 當下的 latest。"
+                    "請在 seed 釘版後重新發版（#552）。",
+                    template.name, template.id, template.slug,
+                )
+                raise SupplyGateError(_(
+                    '「%(tpl)s」目前無法開通：平台尚未指定此商品的部署版本。'
+                    '請聯繫客服。', tpl=template.name))
             if reason == 'sold_out':
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前已售罄，暫時無法開通新的實例。',

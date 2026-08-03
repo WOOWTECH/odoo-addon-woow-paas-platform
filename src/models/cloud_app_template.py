@@ -508,11 +508,27 @@ class CloudAppTemplate(models.Model):
         `count_getter` 是 callable 而不是數值：沒有上限（絕大多數商品）或已停售
         時根本不必計數，惰性求值讓「要不要查」純屬效能決定，判準仍只有這一處。
 
-        優先序 paused > sold_out：停售是明示的營運意志，售罄是推導出來的狀態。
+        優先序 paused > unpinned_chart > sold_out：停售是明示的營運意志；未釘版是
+        平台端的設定缺陷；售罄是推導出來的狀態。**未釘版必須排在 sold_out 之前**
+        ——把設定缺陷報成「已售罄」是對租戶說謊，而且會讓營運去查根本不存在的名額
+        問題（同型前例：#478 一個欄位承載兩個語意）。
+
+        #552 層 4：`helm_chart_version` 留空 ⇒ 整條管線不帶 `--version` ⇒ helm 解析
+        成 registry **當下的 latest**，平台不知道也沒記錄裝了哪一版。判空放在**這裡**
+        （可購買性裁決點）而不是部署當下，是刻意的：
+
+        * `_availability()` 讀它 ⇒ marketplace 直接顯示不可購買＝**購買前就擋**。
+          擋在 `_execute_deploy` 等於「先收錢、建訂閱、寄確認信，再 error」。
+        * `CloudService.create()` 的 `_enforce_supply_gate` 也讀它 ⇒ 自動涵蓋
+          **兩個首裝入口**（marketplace 的 `_create_service` 與 HA PaaS 的
+          `controllers/ha_paas.py`，後者不經 `_create_service`）。守單一入口會被
+          第二個繞過；這裡是兩者的**共同咽喉**。
         """
         self.ensure_one()
         if self._sales_paused():
             return 'paused'
+        if not self.helm_chart_version:
+            return 'unpinned_chart'
         cap = self._global_instance_cap()
         if cap and count_getter() > cap:
             return 'sold_out'
@@ -570,6 +586,43 @@ class CloudAppTemplate(models.Model):
                             ', '.join(conflicts.mapped('name')),
                         )
                     )
+
+    @api.model
+    def _warn_unpinned_active_templates(self):
+        """升級期活體檢查：有沒有**在售**商品因為沒釘 chart 版本而被層 4 擋掉。
+
+        #552 層 4 之後，`helm_chart_version` 留空 ⇒ `_reject_reason_for_new_instance`
+        回 `unpinned_chart` ⇒ 商品在 marketplace 直接不可購買。那個失效形態
+        **完全靜默**：卡片消失、沒有例外、沒有 log。`_enforce_supply_gate` 只在
+        真的有人嘗試開通時才會 log，而「沒人買得到」正好讓那條路永遠不會被走到。
+
+        本方法由 `data/cloud_app_templates.xml` 檔尾的 `<function>` 在**每次 -u**
+        呼叫（`post_init_hook` 是 install-only，涵蓋不到升級——同 docstring 見
+        `hooks.py`）。它把「靜默下架」變成升級 log 裡一行指名道姓的 ERROR。
+
+        ⚠ 刻意不 raise：本 repo 的 prod 用 initContainer 跑 `-u`，raise 會讓 pod
+        卡在 Init ＝ 把資料狀態問題升級成停機。要不要硬擋是營運決策。
+        """
+        unpinned = self.search([('helm_chart_version', 'in', [False, ''])])
+        if not unpinned:
+            return
+        active = unpinned.filtered('is_active')
+        if active:
+            _logger.error(
+                "🔴 #552：%d 個**在售**商品沒有 helm_chart_version，層 4 會把它們"
+                "擋在購買前（marketplace 上會直接消失，且不會有任何其他訊號）：%s。"
+                "若這是升級當下看到的，代表 seed 值沒有落地——檢查 "
+                "ir_model_data.noupdate（見本檔上方 healer 與 "
+                "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md），"
+                "不要只看模組版號有沒有推進。",
+                len(active), sorted(active.mapped('slug')),
+            )
+        if unpinned - active:
+            _logger.warning(
+                "#552：%d 個已下架商品沒有 helm_chart_version（不影響租戶，"
+                "但重新上架前必須釘版）：%s",
+                len(unpinned - active), sorted((unpinned - active).mapped('slug')),
+            )
 
     @api.model
     def _heal_sticky_helm_value_specs(self):
