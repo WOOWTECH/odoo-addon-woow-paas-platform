@@ -302,8 +302,15 @@
   - 路徑 2：若評估 AI chat 已上 stg / 即將 prod，獨立 hotfix PR 立刻修（機械式 1-line fix：`service.helm_values` → `_sanitize_helm_values(service.helm_values)` 並 import）
 - **何時**：next AI chat 相關 PR 一併處理
 
-## F-N8N-1 — `_sanitize_helm_values` 不遮 top-level password 型 helm value（pre-existing，與 F2/F12 同家族）
+## ~~F-N8N-1~~ ✅ RESOLVED — `_sanitize_helm_values` 不遮 top-level password 型 helm value（pre-existing，與 F2/F12 同家族）
 
+- **✅ RESOLVED（2026-08-03，gitea issue #535）**：遮罩改 **spec-driven**（`helm_value_specs`
+  的 `type: password` 一律全遮，既有三條 hardcoded path 保留為增加的一層）＋ `ConfigurationTab`
+  password 欄位改「空白起始、僅使用者實際輸入才送出」＋ 後端兜底 `_drop_masked_echo_values`。
+  本條當初預測的「只在 read 端遮罩會回歸 odoo reconfigure，ConfigurationTab 會把遮罩後的
+  `***` 預填並於存檔覆寫真密碼」**已於真瀏覽器實測坐實**（issue #535 的 D1：`odooPassword`
+  從 `PLAIN_PW_D1_PROBE` 被寫成 `***`；同一套操作在沒有遮罩的世界則保住明文）。
+  本條與 issue #535 是同一件事，不再留兩個載體——後續討論一律看 #535。
 - **Severity**: medium
 - **Origin**: `fix/n8n-creation-issue` 第二輪對抗式審查 CONFIRMED（2026-07-01）
 - **Location**: `src/controllers/paas.py` `_sanitize_helm_values`（僅在 `key == 'secret' and isinstance(val, dict)` 時遮罩）

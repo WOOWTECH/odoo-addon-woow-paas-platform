@@ -18,7 +18,7 @@
                                         t-att-type="getInputType(spec)"
                                         t-att-id="'helm_' + spec.key"
                                         t-att-value="getDisplayValue(spec)"
-                                        t-att-placeholder="spec.placeholder || ''"
+                                        t-att-placeholder="getPlaceholder(spec)"
                                         t-on-input="(ev) => this.onInputChange(spec, ev)"
                                         class="o_woow_input"
                                     />
@@ -119,7 +119,7 @@
                                         t-att-type="getInputType(spec)"
                                         t-att-id="'helm_' + spec.key"
                                         t-att-value="getDisplayValue(spec)"
-                                        t-att-placeholder="spec.placeholder || ''"
+                                        t-att-placeholder="getPlaceholder(spec)"
                                         t-on-input="(ev) => this.onInputChange(spec, ev)"
                                         class="o_woow_input"
                                     />

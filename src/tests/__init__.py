@@ -290,3 +290,6 @@ from . import test_ai_assistant
 # T2：本檔自建立起未被匯入 ⇒ Odoo test loader 收不到、3 條測試從未執行過
 # ⚠️ 其中 1 條目前是紅的，紅的原因是 #543 的真缺陷（不是測試壞了）——詳見該檔註解
 from . import test_security_access_p_rule_migration
+# fix: #535 租戶填入的憑證（type: password）在服務詳情 API 明文回傳 —— 遮罩改 spec-driven
+# ＋ read/write 同契約（遮罩後的星號不得被存檔寫回真憑證，D1 實測坐實）
+from . import test_credential_mask_spec_driven_535

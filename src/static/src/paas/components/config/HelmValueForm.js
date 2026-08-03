@@ -23,6 +23,9 @@ export class HelmValueForm extends Component {
         onUpdate: { type: Function },     // callback when value changes
         showAdvanced: { type: Boolean, optional: true },
         errors: { type: Object, optional: true }, // validation errors by key
+        // #535：重新設定（ConfigurationTab）時密碼欄空白起始，留白＝不變更。
+        // 建立服務（AppConfigurationPage）不設此旗標——那裡的密碼是真的必填。
+        passwordBlankMeansUnchanged: { type: Boolean, optional: true },
     };
 
     setup() {
@@ -85,6 +88,23 @@ export class HelmValueForm extends Component {
             return value ? 'true' : 'false';
         }
         return value === null || value === undefined ? '' : String(value);
+    }
+
+    /**
+     * Placeholder for an input.
+     *
+     * #535：重新設定時密碼欄是空白起始的（留白＝不變更），但欄位仍帶必填星號，
+     * 沒有提示的話租戶會以為自己漏填。這個提示只在 `passwordBlankMeansUnchanged`
+     * 為真時出現——建立服務的表單不該說「留空不變更」，那裡沒有既有值可保留。
+     *
+     * @param {Object} spec - The spec object
+     * @returns {string}
+     */
+    getPlaceholder(spec) {
+        if (this.props.passwordBlankMeansUnchanged && this.isPasswordField(spec)) {
+            return "留空表示不變更";
+        }
+        return spec.placeholder || '';
     }
 
     /**
