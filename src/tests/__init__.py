@@ -285,6 +285,8 @@ from . import test_concurrency_error_propagation_518
 # feat: #530 gateway 交付判準（seed 推導）＋ service payload 的 has_gateway 合約
 from . import test_gateway_capability_payload_530
 # T2：本檔自建立起未被匯入 ⇒ Odoo test loader 收不到、12 條測試從未執行過
-# （同批的 test_security_access_p_rule_migration 拆到另一張 PR，因為它會帶進
-#   一條紅燈——見 #543，不讓 develop 的全綠基準被污染）
+# （2026-08-03 拆成兩張 PR：P-rule 那批帶一條紅燈見 #543，避免污染 develop 全綠基準）
 from . import test_ai_assistant
+# T2：本檔自建立起未被匯入 ⇒ Odoo test loader 收不到、3 條測試從未執行過
+# ⚠️ 其中 1 條目前是紅的，紅的原因是 #543 的真缺陷（不是測試壞了）——詳見該檔註解
+from . import test_security_access_p_rule_migration
