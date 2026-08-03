@@ -315,3 +315,8 @@ from . import test_reset_admin_password_post_commit_525b3
 # catch-all 自己 log `svc.name` 撞 MissingError 再逸出 ⇒ 今天是整支清單端點 500；
 # 那道保護只有一個 token 寬（實測：log 改成不會拋 ⇒ 殘留立刻落地）
 from . import test_poll_teardown_rollback_525
+# fix: #525 B4 _update_project_mcp_server 吞 ValidationError → 欄位已改、API 說失敗
+# （結構缺陷，目前潛伏；含「不包 try 的對照組真的不留殘留」實測）
+from . import test_update_project_mcp_residue_525_b4
+# fix: #554 MCP sync／connection test 失敗被雙層吞掉 → API 回 success:True（#525 B1／B2 的真修法）
+from . import test_mcp_sync_failure_visibility_554

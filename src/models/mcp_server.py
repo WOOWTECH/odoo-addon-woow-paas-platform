@@ -257,23 +257,54 @@ class McpServer(models.Model):
         return config
 
     def action_sync_tools(self):
-        """Sync tools from the MCP server via langchain-mcp-adapters."""
+        """Sync tools from the MCP server via langchain-mcp-adapters.
+
+        Returns:
+            bool: True if sync succeeded, False otherwise.
+
+        #554：原本失敗時隱式 ``return None``，呼叫端無從分辨成敗，於是
+        controller 一路回 ``success: True``——使用者看到「同步成功」，實際上
+        tool 清單處於半同步狀態。失敗原因不放進回傳值，呼叫端讀
+        ``state_message``（callee 在下面剛寫進去的那筆）。
+
+        ⚠ bool 語意與 :meth:`action_sync_tools_safe` **一致**：兩支都是
+        ``True``＝成功。差別只在失敗時的狀態處理——本方法寫 ``state='error'``
+        （使用者主動觸發，要看得到失敗）；safe 版留在 ``draft`` 讓 cron 重試。
+
+        ⚠ 回傳值不可改成 dict：Odoo backend 的 form 按鈕
+        （``mcp_server_views.xml``）走 ``doActionButton``，**object 回傳值會被
+        當成 action 執行**（``web/static/src/webclient/actions/action_service.js``），
+        缺 ``type`` 就 throw。bool 落進 ``ir.actions.act_window_close`` 分支被
+        安全忽略。
+
+        ⚠ 也不改成往外 raise：例外逸出到 JSON-RPC dispatcher 時
+        ``odoo/service/model.py`` 的 ``retrying()`` 走 ``env.reset()`` → ``raise``、
+        不會 commit，``Cursor.close(rollback=True)`` 回捲整筆交易 ⇒ 下面那筆
+        ``state='error'`` 稽核紀錄會被一起捲掉，使用者連「失敗過」都看不到。
+
+        tool 寫入包在 savepoint 內：迴圈中途失敗（實測可達——上游給的
+        ``args_schema`` 是 pydantic model 類別時 ``_async_sync_tools`` 的
+        ``json.dumps`` 會 TypeError，此時前幾個 tool 已經建立）會回捲半同步的
+        tool 列。``state='error'`` 寫在 savepoint **外**，所以留得住。
+        """
         self.ensure_one()
         try:
-            result = asyncio.run(self._async_sync_tools())
+            with self.env.cr.savepoint():
+                asyncio.run(self._async_sync_tools())
             self.write({
                 'state': 'connected',
                 'state_message': False,
                 'last_sync': fields.Datetime.now(),
                 'sync_retry_count': 0,
             })
-            return result
+            return True
         except Exception as e:
             _logger.warning("MCP sync failed for %s: %s", self.name, e)
             self.write({
                 'state': 'error',
                 'state_message': str(e),
             })
+            return False
 
     def action_sync_tools_safe(self):
         """Sync tools without setting error state on failure.
@@ -284,6 +315,11 @@ class McpServer(models.Model):
 
         Returns:
             bool: True if sync succeeded, False otherwise.
+
+        ⚠ bool 語意與 :meth:`action_sync_tools` **一致**（兩支都是 ``True``＝
+        成功）。兩支同回 bool 卻語意相反會是最容易踩的坑——改動任一支時請
+        一併確認另一支（守線：``test_mcp_sync_failure_visibility_554.py`` 的
+        ``test_sync_tools_and_safe_variant_agree_on_bool_semantics``）。
         """
         self.ensure_one()
         try:
@@ -391,7 +427,19 @@ class McpServer(models.Model):
         return True
 
     def action_test_connection(self):
-        """Test if the MCP server URL is reachable."""
+        """Test if the MCP server URL is reachable.
+
+        Returns:
+            bool: True if the server is reachable, False otherwise.
+
+        #554：原本**成功與失敗兩條分支都沒有 return 語句**（都是隱式 None），
+        是本檔幾個 action 裡唯一連判讀空間都沒有的一支——呼叫端只能回
+        ``success: True``。bool 語意與 :meth:`action_sync_tools` 一致；同樣不
+        回 dict、不往外 raise（理由見該方法的 docstring）。
+
+        這裡不需要 savepoint：:meth:`_async_test_connection` 只連線、不寫任何
+        記錄，沒有可回捲的中途狀態。
+        """
         self.ensure_one()
         try:
             asyncio.run(self._async_test_connection())
@@ -399,12 +447,14 @@ class McpServer(models.Model):
                 'state': 'connected',
                 'state_message': False,
             })
+            return True
         except Exception as e:
             _logger.warning("MCP connection test failed for %s: %s", self.name, e)
             self.write({
                 'state': 'error',
                 'state_message': str(e),
             })
+            return False
 
     async def _async_test_connection(self):
         """Async: attempt to connect to MCP server."""
