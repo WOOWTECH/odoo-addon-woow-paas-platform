@@ -256,6 +256,84 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
             '否則使用者看到「更新失敗」但 MCP server 已經被改名')
 
     # ================================================================
+    #  create 這組：同款結構，同樣要對齊對照組
+    # ================================================================
+    #  只改 update 會把「update 包／不包不一致」換成「create 包、update
+    #  不包」的新不一致——那是我們自己造成的。對照組 `_create_mcp_server`
+    #  的 `McpServer.create(...)` 同樣裸露、沒有 try。
+    # ----------------------------------------------------------------
+    def _project_create(self, name):
+        return self._post(
+            '/api/support-projects/%s/mcp-servers' % self.project.id,
+            {'action': 'create', 'name': name,
+             'url': 'http://b4-new-mcp.paas-ws-b4-svc.svc.cluster.local:3001/mcp',
+             'transport': 'streamable_http'})
+
+    def _service_create(self, name):
+        return self._post(
+            '/api/workspaces/%s/services/%s/mcp-servers'
+            % (self.workspace.id, self.service.id),
+            {'action': 'create', 'name': name,
+             'url': 'http://b4-new-mcp.paas-ws-b4-svc.svc.cluster.local:3001/mcp',
+             'transport': 'streamable_http'})
+
+    def _named_server_count(self, name):
+        self.env.invalidate_all()
+        return self.env['woow_paas_platform.mcp_server'].sudo().search_count(
+            [('name', '=', name)])
+
+    def test_positive_control_project_create_persists(self):
+        result, error = self._project_create('B4 Created OK')
+
+        self.assertIsNone(error, '成功路徑不該有框架層錯誤：%r' % (error,))
+        self.assertTrue(result and result.get('success'),
+                        'project-centric create 應成功（回 %r）' % (result,))
+        self.assertEqual(
+            self._named_server_count('B4 Created OK'), 1,
+            '成功 create 後記錄必須在——探針有鑑別力的證明')
+
+    def test_create_injection_fires_after_the_row_is_inserted(self):
+        """注入點若跑到 INSERT 之前，孤兒記錄根本不會產生，下面兩條「沒有殘留」
+        就退化成恆真。"""
+        seen = []
+        with self._fail_post_write_validation(recorder=seen):
+            self._project_create('B4 Proj Create Probe')
+
+        self.assertEqual(
+            len(seen), 1,
+            '`_validate_fields` 必須因 name 被寫而觸發恰一次——'
+            '0 次代表注入根本沒生效')
+        self.assertEqual(
+            seen[0], 'B4 Proj Create Probe',
+            '注入觸發時記錄必須已經可讀（＝INSERT 已下），'
+            '「沒有殘留」的斷言才有守到東西；實得 %r' % (seen[0],))
+
+    def test_legacy_service_create_leaves_no_residue(self):
+        """對照組實測：不包 try 的那支真的不留殘留。"""
+        with self._fail_post_write_validation():
+            result, error = self._service_create('B4 Svc Create Boom')
+
+        self.assertFalse(
+            result and result.get('success'),
+            'service-centric create 在注入下不得回報成功（回 %r）' % (result,))
+        self.assertEqual(
+            self._named_server_count('B4 Svc Create Boom'), 0,
+            '不包 try ⇒ 例外傳到 dispatcher ⇒ 框架不 commit ⇒ 記錄不得落地。'
+            '這條若紅，代表「拿掉 try 就能靠框架回捲」的前提不成立。')
+
+    def test_project_create_leaves_no_residue(self):
+        with self._fail_post_write_validation():
+            result, error = self._project_create('B4 Proj Create Boom')
+
+        self.assertFalse(
+            result and result.get('success'),
+            'project-centric create 在注入下不得回報成功（回 %r）' % (result,))
+        self.assertEqual(
+            self._named_server_count('B4 Proj Create Boom'), 0,
+            'create 回報失敗時不得留下孤兒記錄——'
+            '否則使用者看到「建立失敗」但清單裡多了一筆')
+
+    # ================================================================
     #  一致性：兩個入口對同一個 model 例外的可觀察行為必須相同
     # ================================================================
     def test_both_entry_points_agree_on_failure(self):

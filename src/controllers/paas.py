@@ -2307,23 +2307,24 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': url_error}
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
-        try:
-            server = McpServer.create({
-                'name': name,
-                'url': url,
-                'transport': params.get('transport', 'sse'),
-                'api_key': params.get('api_key', ''),
-                'headers_json': params.get('headers_json', ''),
-                'description': params.get('description', ''),
-                'scope': 'user',
-                'project_id': project.id,
-                # #271: URL↔flag consistency IS now enforced — see
-                # _validate_mcp_url(sidecar_backed=...) above + the model
-                # @api.constrains _check_sidecar_url_in_cluster.
-                'sidecar_backed': bool(params.get('sidecar_backed', False)),
-            })
-        except ValidationError as e:
-            return {'success': False, 'error': str(e)}
+        # #525 B4：與 `_update_project_mcp_server` 同理**刻意不包 try**——對齊
+        # service-centric 的 `_create_mcp_server`（那支的 `McpServer.create(...)`
+        # 同樣裸露、直接 return）。只改 update 會把「update 包／不包不一致」
+        # 換成「create 包、update 不包」的新不一致。
+        server = McpServer.create({
+            'name': name,
+            'url': url,
+            'transport': params.get('transport', 'sse'),
+            'api_key': params.get('api_key', ''),
+            'headers_json': params.get('headers_json', ''),
+            'description': params.get('description', ''),
+            'scope': 'user',
+            'project_id': project.id,
+            # #271: URL↔flag consistency IS now enforced — see
+            # _validate_mcp_url(sidecar_backed=...) above + the model
+            # @api.constrains _check_sidecar_url_in_cluster.
+            'sidecar_backed': bool(params.get('sidecar_backed', False)),
+        })
         return {'success': True, 'data': self._format_mcp_server(server)}
 
     def _resolve_project_mcp(self, project, params: dict):
