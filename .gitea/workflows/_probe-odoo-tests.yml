@@ -37,9 +37,10 @@
 #     ... INFO test odoo.addons.woow_paas_platform.tests.test_probe_sentinel: \
 #         skipped TestProbeSentinel.test_probe_sentinel_skips : probe sentinel: deliberately skipped
 #
-# ⚠ 未解：靜態 424 個「直接定義 def test_* 的 class」vs CI detail report 的 415，差 9。
-#   已歸因 4（#467 的 3 個 + @tagged('-standard') 的 TestEcpayInvoiceReal），
-#   剩 5 個不明——需要匯出那 415 行清單才能列名，刻意不給推測解釋。
+# 📌 已排程取得（非未解）：靜態 424 個「直接定義 def test_* 的 class」vs CI detail report 的 415，差 9。
+#   已歸因 4（#467 的 3 個 + @tagged('-standard') 的 TestEcpayInvoiceReal），剩 5 個不明。
+#   刻意不給推測解釋。取得方式＝搭 B+C 落地後第一趟 develop push 全套的便車一併匯出 415 行清單，
+#   不為此另外佔用單一 act-runner（2026-08-03 leader 裁決）。
 # ═══════════════════════════════════════════════════════════════════
 #
 # 目的：取得「全套 Odoo 測試在 Gitea act-runner 上跑一次要多久」的實測數字，
