@@ -7,19 +7,33 @@
 當三個條件同時成立：
 
 1. **Parent 與某個 child 是 logical owner 關係**（child 物理上是 parent 的某種 wrapper / sidecar / proxy — 沒 parent 就沒物理基礎），
-2. **但 schema FK 對 parent 設了 `ondelete='set null'`**（child 真正的 FK 父是另一個 model — 例如本 codebase `mcp_server.project_id`，而 `project.cloud_service_id` 又是 `set null`），
+2. **但刪 parent 不會連坐刪掉中介 model**（child 真正的 FK 父是另一個 model — 例如本 codebase `mcp_server.project_id` 是 `ondelete='cascade'` 但掛在 `project.project` 上；而刪 `cloud_service` 時 `project.project` 照活），
 3. **caller 可能透過多條 path 觸發 parent 刪除**（lifecycle method / controller direct call / cron / admin manual ORM），canonical lifecycle method 無法強制所有 caller 走。
 
 **典型情境（本 codebase 真實 case）**：
 
 ```
-cloud_service ───── ondelete='set null' ────► project.project
-                                                   │
-                            mcp_server.project_id  │ ondelete='cascade'
-                            ─── user-scope MCP 是 sidecar wrapper, URL 從 cloud_service 算
+cloud_service ═══ M:N: project_cloud_service_rel ═══► project.project
+   （刪 service 只拆 rel 列，project 存活）              │
+   sidecar URL = http://{release}-mcp.{ns}.svc…        │ mcp_server.project_id
+   ← 這條 URL 就是「這列 MCP 屬於哪個 service」的認領依據  │ ondelete='cascade'
+                            ─── user-scope + sidecar_backed 的 MCP 才是 wrapper
 ```
 
-`cloud_service.unlink()` 不會連坐刪 project（`set null`），也不會 trigger `mcp_server.project_id` cascade（cascade 只在 `project.unlink()` 才 fire）— 結果 cloud_service 走了，user-scope mcp_server row 留在 DB，URL 指向已不存在的 sidecar = zombie。
+`cloud_service.unlink()` 不會連坐刪 project，也不會 trigger `mcp_server.project_id` cascade（cascade 只在 `project.unlink()` 才 fire）— 結果 cloud_service 走了，sidecar-backed user-scope mcp_server row 留在 DB，URL 指向已不存在的 sidecar = zombie。
+
+> ⚠ **關於 `project.cloud_service_id` 的 `ondelete='set null'`（2026-08 補記，刻意不下定論）**：
+> 本 doc 舊版把「`project.cloud_service_id` 是 `ondelete='set null'`」當成 zombie 成因的機制。
+> 今天 `cloud_service ↔ project` 已是 **M:N**（`project_cloud_service_rel`，`cloud_service.py:332-339` /
+> `project_project.py:20-29`），單數 `cloud_service_id` 退化成 `compute` + `inverse` + `store=True` 的
+> deprecated 欄位（`project_project.py:31-45`，欄位定義內**沒有**再宣告 `ondelete`）。
+> **但「欄位定義沒寫 `ondelete`」≠「DB FK 不是 SET NULL」**——Odoo 對非 required 的 stored M2O 預設就建
+> `ON DELETE SET NULL`，而 migration `18.0.1.0.26` 是**刻意保留** column（`post-migrate.py` 的
+> `Keep the cloud_service_id column`）、全程沒有任何 drop/alter FK。develop 上也還有五處在主張 set null
+> （`cloud_service.py:3105` docstring、`test_mcp_integration.py` 四處斷言訊息）。
+> ⇒ **實際 FK 語意未經 DB 量測，本 doc 不對它下判斷。** 本 pattern 需要的前提只有一句：
+> **刪 service 不會連坐刪 project** —— 這句無論 FK 是 set-null 還是只拆 M:N rel 列都成立。
+> 要定案請跑 `\d+ project_project` / `information_schema.referential_constraints` 看 `confdeltype`。
 
 **不適用**：
 
@@ -40,27 +54,57 @@ class CloudService(models.Model):
 
         Catches every unlink path — controllers calling ``service.unlink()``
         directly after their own helm uninstall, cron taking down a stuck
-        service, manual ORM ops — without forcing callers to remember to call
-        ``_do_cleanup`` first. ``project.project.cloud_service_id`` is
-        ``ondelete='set null'`` ([[cloud-service-project-decouple]] Inv #2),
-        so a naked ``unlink()`` would leave ``project_id`` populated on
-        user-scope MCP rows while their backing sidecar is gone — D5
-        violation + zombie URL.
+        service, workspace teardown cascade, manual ORM ops — without forcing
+        callers to remember to call ``_do_cleanup`` first. 刪掉 service 之後
+        project 仍然存活，``mcp_server.project_id`` 的 cascade 不會 fire，
+        所以 sidecar-backed user-scope MCP row 會留下指向已消失的 sidecar
+        — D5 violation + zombie URL。
+
+        兩層收窄缺一不可：
+        - ``sidecar_backed`` — 使用者自帶的 external MCP（URL 與本 service
+          無物理關係）必須存活。
+        - URL prefix — M:N 下同一個 project 可綁多個 cloud_service，拆掉
+          service A 不能 collateral-unlink service B 的 sidecar MCP。
 
         Idempotent against ``_do_cleanup``: when both run, the second one
-        finds the user-scope MCP recordset already empty.
+        finds the matching recordset already empty.
         """
-        user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
-            lambda s: s.scope == 'user'
-        )
-        if user_mcps:
-            user_mcps.sudo().unlink()
-            _logger.info(
-                "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
-                "for service ids=%s", len(user_mcps), self.ids,
+        # ⚠ 節錄：真實碼在同一個迴圈裡還有 F-ENV-5 helm fail-loud guard，
+        #    迴圈外還有 #318 訂閱結算 / #278 quota 回推 / #279 workspace
+        #    reconcile。見下方「這段 code fence 省略了什麼」。
+        for service in self:
+            user_mcps = service._collect_sidecar_user_mcps(
+                service._sidecar_url_prefix()
             )
+            if user_mcps:
+                user_mcps.sudo().unlink()
+                _logger.info(
+                    "[CLOUD_SVC] unlink() unlinked %s user-scope MCP "
+                    "server(s) for service id=%s", len(user_mcps), service.id,
+                )
         return super().unlink()
+
+    def _collect_sidecar_user_mcps(self, url_prefix):
+        """M:N-safe 認領：只收「本 service 的 sidecar」那幾列。"""
+        self.ensure_one()
+        candidates = self.project_ids.mapped('mcp_server_ids').filtered(
+            lambda s: s.scope == 'user' and s.sidecar_backed
+        )
+        if url_prefix is None:
+            return candidates          # 無 helm 身分（pre-deploy fixture）才退回寬 filter
+        return candidates.filtered(
+            lambda s: (s.url or '').startswith(url_prefix)
+        )
 ```
+
+**注意是 `for service in self:` 逐筆做，不是整個 recordset 一次 filter** — URL prefix 是 per-record 的（`_sidecar_url_prefix()` 內含 `ensure_one()`），批次刪多個 service 時每筆各自認領。
+
+**這段 code fence 省略了什麼**（改真實 `unlink()` 前務必讀原檔 `src/models/cloud_service.py:3098-3179`）：
+
+- **F-ENV-5 helm fail-loud guard**（`:3142-3158`）在**同一個** `for service in self:` 迴圈內、且在 MCP cleanup **之前**：`if service.helm_release_name and service.helm_namespace:` → `if not service._cleanup_helm(): raise UserError(...)`。**C7 列的第 5 個 caller（`workspace.py:155` workspace teardown）刻意路由到這裡就是為了借這段 guard 拆 helm**（DB FK cascade 會繞過 Python unlink）。刪掉它＝workspace 拆除時 helm release 與 namespace 會活下來繼續計費。
+- **#318 訂閱結算**：`:3125-3132` 在 `super().unlink()` **前**捕獲仍 `in_progress` 的訂閱，`:3173-3174` 在**後**逐一結算（取消＋按比例退點）。放在後面是刻意的——helm fail-loud raise 時整筆 rollback，訂閱不動。
+- **#278 ns quota**：`:3135-3140` pre-delete 捕獲 `(workspace, helm_namespace)`，`:3175-3176` 事後以存活集重算。
+- **#279 workspace reach reconcile**：`:3133-3134` 捕獲 `project → workspace_ids` 舊值，`:3177-3178` 事後 reconcile。
 
 ### 2. Keep the canonical lifecycle method's cleanup step intact
 
@@ -72,10 +116,10 @@ def _do_cleanup(self):
     Re-ordering opens a time window where mcp_server rows reference a
     torn-down sidecar URL (silent network failures in AI chat tool calls).
     """
-    # Step 1 — unlink user-scope MCP (same code as unlink() override)
-    user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
-        lambda s: s.scope == 'user'
-    )
+    self.ensure_one()
+    # Step 1 — unlink sidecar-backed user MCP（與 unlink() override 共用
+    # helper，不要各寫一份 filter：兩邊漂移就是 collateral-unlink 的來源）
+    user_mcps = self._collect_sidecar_user_mcps(self._sidecar_url_prefix())
     if user_mcps:
         user_mcps.sudo().unlink()
     # Step 2 — helm uninstall
@@ -117,7 +161,7 @@ def test_blocker2_unlink_override_skips_system_mcp(self):
     self.assertTrue(system_mcp.exists())
 ```
 
-雙 test 守正反 — partial-correct fix（forget `.filtered(scope='user')`）會 red。
+四面守 — 少任何一層 filter 都會 red：忘 `scope == 'user'` → 砍到 system MCP；忘 `sidecar_backed` → 砍到使用者自帶的 external MCP；忘 URL prefix → M:N 下砍到同 project 其他 service 的 sidecar MCP；filter 過嚴 → 自己的 sidecar MCP 變孤兒。
 
 ## Why this pattern
 
@@ -126,17 +170,23 @@ def test_blocker2_unlink_override_skips_system_mcp(self):
 Canonical lifecycle method（這裡是 `_do_cleanup`）的調用樹是**社會契約**，不是技術強制。
 4 條 path 都該走 `_do_cleanup` — 但實際上：
 
-```bash
-$ grep -rn "service\.unlink()" src/
-src/controllers/paas.py:1953   # controller delete endpoint, calls unlink() directly after own helm uninstall
-src/controllers/paas.py:1966   # PaaSOperatorError 404 case, same pattern
-src/controllers/paas.py:2156   # workspace teardown, same pattern
-src/models/mcp_server.py:787   # cron self-unlink for stuck-deleting state
+刪除 CloudService row 的實際執行路徑有 **5 條**（**人工判讀，非單一 grep 可得**——
+`cloud_service.py` 那條的行內容是 `self.unlink()`，任何「行內容含 service」的過濾都抓不到它；
+起點可以用 `grep -rn --include='*.py' '\.unlink()' src/ | grep -v '^src/tests/'`
+拿到 45 行的超集，再人工挑出「刪的是 CloudService row」的那幾條）：
+
+```
+src/controllers/paas.py:3289        # delete endpoint，自己拆完 helm 後 unlink()
+src/controllers/paas.py:3302        # PaaSOperatorError 404 case，同上
+src/controllers/paas.py:3518        # status poll 撞 404 且 state='deleting' → 收屍
+src/models/cloud_service.py:2304    # 輪詢 helm 狀態撞 404 且 state='deleting' → self.unlink()
+src/models/workspace.py:155         # workspace teardown：service_ids.sudo().unlink()
 ```
 
-4 個 caller 都選擇「自己拆 helm + `service.unlink()`」而非「`service._do_cleanup()` 接管整套」—
+5 個 caller 都選擇「自己拆 helm + `service.unlink()`」而非「`service._do_cleanup()` 接管整套」—
 原因各有理由（controller 已知 helm 狀態想細控 / cron 在 helm 已 404 後只想清 DB row /
-workspace teardown 已經一次 batch 拆 helm）。**強制全 caller 走 `_do_cleanup`** 等於
+workspace teardown 刻意路由到 `CloudService.unlink()` 借它的 helm fail-loud guard，
+見 `src/models/workspace.py:135-144` docstring）。**強制全 caller 走 `_do_cleanup`** 等於
 要求他們接受 `_do_cleanup` 的 state machine（state='deleting' 寫入 / step 2 helm 重試 /
 log message format），對 caller 是過度耦合。
 
@@ -173,9 +223,7 @@ log message format），對 caller 是過度耦合。
 **這時 `user_mcps` recordset 是空的**（_do_cleanup 已清過）：
 
 ```python
-user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
-    lambda s: s.scope == 'user'
-)
+user_mcps = service._collect_sidecar_user_mcps(service._sidecar_url_prefix())
 if user_mcps:  # ← 空 recordset 直接 skip，no-op
     user_mcps.sudo().unlink()
 ```
@@ -191,23 +239,33 @@ caller-context ACL 卡。
 
 ## Common variations
 
-### 變體 A：child 跨多個 parent（M2M 反向）
+### 變體 A：child 跨多個 parent（M:N）— **本 codebase 就是這一型**
 
-若 child 透過 M2M 連到 parent，cleanup 邏輯要先檢查「**只剩這個 parent reference 還是還有其他**」：
+若 child 透過中介 model 被多個 parent 共享，cleanup **必須有認領依據**，否則拆 parent A 會
+collateral-unlink parent B 的 child。
+
+一般解是數 parent reference：
 
 ```python
-def unlink(self):
-    for record in self:
-        affected_children = record.child_ids.filtered(
-            lambda c: len(c.parent_ids) == 1  # only this parent
-        )
-        if affected_children:
-            affected_children.unlink()
-    return super().unlink()
+affected_children = record.child_ids.filtered(
+    lambda c: len(c.parent_ids) == 1  # only this parent
+)
 ```
 
-本 codebase `cloud_service ←→ project` 是 1:0..1（不是 M2M），這個變體用不到 — 但其他 model
-有 M2M 關聯時要記得加 filter。
+本 codebase 用**更強的認領依據**：child 的 URL 本身就編碼了 owner
+（`http://{release}-mcp.{ns}.svc.cluster.local`），所以直接比 URL prefix，不必數 reference
+—— 見上方 `_collect_sidecar_user_mcps`。
+⚠ 這裡**不能**用 reference counting：svc_A、svc_B 各自的 MCP row 都只掛在同一個 project 上，
+`len(parent_ids)` 恆為 1，擋不住連坐。
+
+`cloud_service ←→ project` 自 Phase A（migration `18.0.1.0.26`）起是 **M:N**
+（rel table `project_cloud_service_rel`），單數 `cloud_service_id` 只是 deprecated stored
+compute。**不要再照舊 1:0..1 的假設寫寬 filter。**
+
+（嚴重性限定：Phase A schema 已允許 multi-bind，但 **production 綁定路徑尚未開放** ——
+`cloud_service_ids` 的寫入點今天全部在 `src/tests/`，唯一的 production 寫入
+`_inverse_cloud_service_id`（`project_project.py:140-151`）是 `[(6, 0, [svc.id])]` 取代整組，
+無任何 view 曝露該欄位。所以連坐是**結構性風險**、有測試鎖著，不是現行可達的線上事故。）
 
 ### 變體 B：cleanup 失敗要 fail-fast 而非 swallow
 
@@ -225,11 +283,16 @@ cleanup 失敗會 propagate 給 caller，整個 transaction rollback。這是**�
 
 - [[mcp-project-decouple]] §Invariants #1 + #4 — 本 pattern 的 invariant lock 點
 - [[direct-unlink-bypass-cleanup-hook]] — 沒有這個 pattern 會踩的坑
-- [[cloud-service-project-decouple]] §Invariants #2 — `cloud_service ↔ project` `ondelete='set null'` 的根因
+- [[cloud-service-project-decouple]] §Invariants #2 — ⚠ 該條已被 Phase A M:N migration superseded（見該檔開頭 banner）：現況是 M:N rel table，不再是「帶 `ondelete='set null'` 的實體 M2O 欄位」。**但這不等於 DB FK 已不是 SET NULL**，見本檔 §When to use 的補記。
+- [[sidecar-backed-flag-lifecycle]] — `sidecar_backed` 這個 schema flag 的契約（為什麼 lifecycle-created 與 user-managed row 同表要靠它分流）；**兩份 doc 的 filter 規範必須一致**，見該檔 §See also 的收斂規範
 - 關鍵 code：
-  - `src/models/cloud_service.py:1176-1201` — `unlink()` override 落地
-  - `src/models/cloud_service.py:1119-1171` — `_do_cleanup` lifecycle path（step 1 與 override 共享 cleanup 邏輯）
-  - `src/tests/test_mcp_project_lifecycle.py::test_blocker2_unlink_override_*` — 正反兩面 regression test
+  - `src/models/cloud_service.py:3098-3179` — `unlink()` override 落地（含 helm fail-loud guard 與 #318/#278/#279）
+  - `src/models/cloud_service.py:3181-3212` — `_collect_sidecar_user_mcps` / `_sidecar_url_prefix`（兩條 path 共用的認領邏輯）
+  - `src/models/cloud_service.py:2635-2699` — `_do_cleanup` lifecycle path（step 1 呼叫同一組 helper）
+  - `src/tests/test_mcp_integration.py:893` / `:948` — `test_blocker2_unlink_override_*` 正反兩面（**不在** `test_mcp_project_lifecycle.py`）
+  - `src/tests/test_mcp_sidecar_backed_lifecycle.py` — `sidecar_backed` 那一層 filter 的正反鎖
+  - `src/tests/test_agent_pod_phase_a_cloud_service_mn.py` — M:N 下的 URL-prefix 認領（external MCP 存活）
+  - ⚠ 已知殘留：`test_mcp_project_lifecycle.py` 與 `test_mcp_integration.py` 有數處**斷言失敗訊息**仍逐字複述只按 `scope == 'user'` 過濾的舊 filter，並指向 `cloud_service.py:1176-1201` / `:1192` 這類失效行號（該檔今天 3212 行）。斷言本體正確、字串未更新——別把 red 訊息當契約讀。
 - 上游 Odoo 原理：
   - Odoo ORM `unlink()` 是 instance method，subclass override + `super().unlink()` 是 idiomatic 改寫點
   - `@api.constrains` 只在自身欄位 ORM write 時 fire — 不適用於跨 model FK `set null` 觸發的 transitive 變動
