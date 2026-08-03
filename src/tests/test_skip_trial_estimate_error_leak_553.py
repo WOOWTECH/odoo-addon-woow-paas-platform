@@ -29,7 +29,7 @@
 """
 from unittest.mock import patch
 
-from odoo.exceptions import AccessError, MissingError
+from odoo.exceptions import AccessDenied, AccessError, MissingError, UserError
 from odoo.tests.common import TransactionCase, tagged
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
@@ -168,6 +168,44 @@ class TestSkipTrialEstimateErrorLeak553(TransactionCase):
         self.assertNotIn(
             _INTERNAL_MODEL, result.get('error') or '',
             'model 技術名不得出現在租戶前台')
+
+    # ==================================================================
+    #  AccessDenied：UserError 的**平行**子類，不是 AccessError 的子類
+    # ==================================================================
+    def test_access_denied_does_not_leak_internal_names(self):
+        """`AccessDenied` 落在 `AccessError` 的**旁邊**，不是它底下。
+
+        `odoo/exceptions.py`：`AccessDenied(UserError)`(:45) 與
+        `AccessError(UserError)`(:64) 是**平行**子類。寫 `except AccessError`
+        （甚至 `except (AccessError, MissingError)`）都攔不到 `AccessDenied`——
+        它會落進 `except (ValidationError, UserError)` 走原文。
+
+        這條鎖住那個容易漏掉的第四個分支：把 `AccessDenied` 從 tuple 拿掉，
+        訊息就會開始外洩。
+        """
+        # 探針前置驗證：確認繼承關係真的是「平行」而非「父子」。若哪天 Odoo 改成
+        # AccessDenied(AccessError)，這條會先紅並指出原因，而不是讓本測試變成
+        # 上一條 AccessError 測試的複本（零增益卻看起來仍在守）。
+        self.assertTrue(issubclass(AccessDenied, UserError))
+        self.assertFalse(
+            issubclass(AccessDenied, AccessError),
+            'AccessDenied 若變成 AccessError 子類，本測試就失去獨立鑑別力，'
+            '請重新評估 except tuple 是否還需要各自列名')
+
+        with patch.object(
+            SubscriptionLifecycleMixin, '_skip_trial_estimate',
+            side_effect=AccessDenied('拒絕存取 %s（uid=2）' % _INTERNAL_MODEL),
+        ) as raised:
+            result = self._estimate()
+
+        self.assertEqual(raised.call_count, 1, '注入的例外必須真的被觸發過')
+        self.assertFalse(result.get('success'), result)
+        self.assertEqual(
+            result.get('error'), _GENERIC_ERROR,
+            'AccessDenied 是認證失敗，不是業務規則訊息（回 %r）' % result)
+        self.assertNotIn(
+            _INTERNAL_MODEL, result.get('error') or '',
+            'Odoo 內部 model 技術名不得出現在租戶前台')
 
     # ==================================================================
     #  未預期例外：維持泛用訊息，內部細節只留 server log

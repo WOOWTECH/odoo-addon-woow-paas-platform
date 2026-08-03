@@ -11,7 +11,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from odoo import fields
-from odoo.exceptions import AccessError, MissingError, UserError, ValidationError
+from odoo.exceptions import (
+    AccessDenied, AccessError, MissingError, UserError, ValidationError,
+)
 from psycopg2 import OperationalError
 from odoo.http import request, route, Controller
 
@@ -1245,16 +1247,26 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             estimate = service._skip_trial_estimate()
 
-        except (AccessError, MissingError) as e:
-            # 兩者都是 `UserError` 子類，卻都不是「講給租戶聽」的業務規則：
-            # `AccessError` 的訊息帶內部 model／欄位技術名；`MissingError` 的原文是
-            # `Record does not exist or has been deleted.\n(Record:
-            # woow_paas_platform.cloud_service(42,), User: 2)`——model 技術名、
-            # 記錄 id、內部 uid 全在裡面。→ 與未預期例外同樣只回泛用訊息。
+        except (AccessDenied, AccessError, MissingError) as e:
+            # `UserError` 在 Odoo 18 有**四個**子類（`odoo/exceptions.py`）：
+            # `AccessDenied`(:45)、`AccessError`(:64)、`MissingError`(:85)、
+            # `ValidationError`(:94)。這裡攔前三個，只有 `ValidationError` 走原文。
             #
-            # ⚠ 上述兩處參照實作目前只擋 `AccessError`，`MissingError` 仍走原文
-            # 分支（同一外洩面尚未收斂）。收斂那兩處屬既有已發版程式碼的改動，
-            # 另開 follow-up 追，不夾帶在本 PR。
+            # 🔴 `AccessDenied` 是 `UserError` 的**平行**子類，**不是**
+            # `AccessError` 的子類 —— 只寫 `except AccessError` 攔不到它，它會落進
+            # 下面的 `except (ValidationError, UserError)` 走原文。
+            #
+            # 三者都不是「講給租戶聽」的業務規則：`AccessError` 的訊息帶內部
+            # model／欄位技術名；`MissingError` 的原文是 `Record does not exist or
+            # has been deleted.\n(Record: woow_paas_platform.cloud_service(42,),
+            # User: 2)`——model 技術名、記錄 id、內部 uid 全在裡面；`AccessDenied`
+            # 是認證失敗（預設訊息 "Access Denied" 雖無害，但它可帶自訂訊息，且
+            # 「登入憑證錯誤」本來就不該被包裝成本端點的業務回應）。
+            #
+            # ⚠ 兩處參照實作（`_create_service` / `api_service_skip_trial`）目前
+            # 只擋 `AccessError`，`MissingError` 與 `AccessDenied` 仍走原文分支。
+            # 收斂那兩處屬既有已發版程式碼的改動，另開 follow-up（#567）追，
+            # 不夾帶在本 PR。
             _logger.error(
                 "ORM error estimating skip-trial for service %s: %s\n%s",
                 service_id, e, traceback.format_exc(),
@@ -1571,10 +1583,15 @@ class PaasController(HiddenChainMixin, Controller):
             # （sudo 會連這層一起關掉，等於把 workspace 邊界交給本 handler 獨力承擔）。
             new_password = service._reset_admin_password()
 
-        except (AccessError, MissingError) as e:
-            # #553 的同一個外洩面：兩者都是 `UserError` 子類，但訊息帶的是 ORM
-            # 內部識別字（model 技術名／記錄 id／內部 uid），不是講給租戶聽的
-            # 業務規則。原本只寫 `except UserError`，於是它們被原文吐到租戶畫面。
+        except (AccessDenied, AccessError, MissingError) as e:
+            # #553 的同一個外洩面：`UserError` 的四個子類裡，只有 `ValidationError`
+            # 是「講給租戶聽」的業務規則，其餘三個帶的是 ORM 內部識別字（model
+            # 技術名／記錄 id／內部 uid）或認證失敗。原本只寫 `except UserError`，
+            # 於是它們全被原文吐到租戶畫面。
+            #
+            # 🔴 `AccessDenied` 是 `UserError` 的**平行**子類、**不是**
+            # `AccessError` 的子類，必須各自列名——漏掉它就會落進下面的原文分支
+            # （分類清單見 `api_service_skip_trial_estimate` 該處註解）。
             _logger.error(
                 "[#357] ORM error resetting admin password for service %s: %s\n%s",
                 service.id, str(e), traceback.format_exc(),

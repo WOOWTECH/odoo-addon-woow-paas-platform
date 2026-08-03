@@ -34,7 +34,7 @@ from unittest.mock import MagicMock, patch
 
 import json
 
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessDenied, AccessError, UserError
 from odoo.tests.common import TransactionCase, tagged
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
@@ -289,6 +289,39 @@ class TestResetAdminPasswordPostCommit525B3(TransactionCase):
         self.assertEqual(
             result.get('error'), _GENERIC_ERROR,
             'AccessError 不得被當成業務規則訊息原文回傳（回 %r）' % result)
+        self.assertNotIn(
+            _INTERNAL_MODEL, result.get('error') or '',
+            'Odoo 內部 model 技術名不得出現在租戶前台')
+        self.assertEqual(
+            self._secret().admin_password, _OLD_PASSWORD,
+            '提交點之前失敗不得落庫')
+
+    def test_pre_commit_access_denied_does_not_leak_internal_names(self):
+        """`AccessDenied` 是 `UserError` 的**平行**子類，不是 `AccessError` 的子類。
+
+        `except (AccessError, MissingError)` 攔不到它 ⇒ 它會落進
+        `except (ValidationError, UserError)` 走原文。這條鎖住第四個分支。
+        """
+        self.assertFalse(
+            issubclass(AccessDenied, AccessError),
+            'AccessDenied 若變成 AccessError 子類，本測試就退化成上一條的複本，'
+            '請重新評估 except tuple 是否還需要各自列名')
+        self.assertTrue(issubclass(AccessDenied, UserError))
+
+        client = self._ok_client()
+        with patch(_OPERATOR_CLIENT, return_value=client), \
+                patch.object(
+                    CloudService, '_assemble_deploy_values',
+                    side_effect=AccessDenied(
+                        '拒絕存取 %s 的 helm_values（uid=2）' % _INTERNAL_MODEL),
+                ) as raised:
+            result = self._reset()
+
+        self.assertEqual(raised.call_count, 1, '注入的例外必須真的被觸發過')
+        self.assertFalse(result.get('success'), result)
+        self.assertEqual(
+            result.get('error'), _GENERIC_ERROR,
+            'AccessDenied 是認證失敗，不是業務規則訊息（回 %r）' % result)
         self.assertNotIn(
             _INTERNAL_MODEL, result.get('error') or '',
             'Odoo 內部 model 技術名不得出現在租戶前台')
