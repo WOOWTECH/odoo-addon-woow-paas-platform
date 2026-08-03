@@ -43,8 +43,9 @@ handler 裡拋的，一路逸出到框架 → **整筆交易被框架 rollback**
 
 ⇒ **`_list_services` 是唯一可達的路徑**，本檔的端點級測試都走它。model 層
 （`_poll_and_update_status`）結構完全同形但 cron 的 domain 不含 `deleting`，
-今天打不到；那一側的 savepoint 是結構防護，本檔以直接呼叫的方式守住它，
-**不假裝它是今天的線上事故**。
+今天打不到；那一側的 savepoint 是結構防護，本檔**刻意沒有**配殘留測試（理由寫在
+`test_teardown_failure_escapes_update_service_status` 下方的註記），只留一條
+tripwire 釘住 cron domain——**不假裝它是今天的線上事故**。
 
 ## 注入點為什麼挑「訂閱結算」
 
@@ -371,31 +372,32 @@ class TestPollTeardownLeavesNoHalfDeletedService(HttpCase):
             for p in reversed(patches):
                 p.stop()
 
-        self.assertTrue(
-            self._row_exists(),
-            '逸出時 savepoint 必須已經把刪除回捲掉')
+        # ⚠ 這裡**刻意沒有**再斷言「列還在」。實測：拿掉 savepoint 重跑，這條
+        # 仍然綠——直呼路徑（不經 HTTP）下刪除本來就會被回捲（探針顯示注入當下
+        # `row_after=True`），與 HTTP 路徑實測相反、原因未查明。加上去會是一條
+        # 在有修與沒修都綠的斷言，讀者會誤以為它守住了回捲。回捲由上面那批走
+        # 真實端點的測試守（拿掉 savepoint 時 5 紅）。
 
     # ================================================================
     #  model 層同形處（cron 路徑）——今天不可達，守的是結構
     # ================================================================
-    def test_model_poll_teardown_failure_leaves_no_half_deleted_service(self):
-        """`_poll_and_update_status` 的 404 分支與 controller 完全同形。
-
-        **今天打不到**：唯一的生產呼叫端 `_cron_check_deploying_services` 的
-        domain 是 `('deploying','upgrading','initializing')`，不含 `deleting`，
-        所以 `self.state == 'deleting'` 在被呼叫到時恆為 False。這條測試直接
-        呼叫該 method 來守住那一行的結構——domain 一旦補上 `deleting`
-        （controller 側就是這樣列的），殘留立刻可達。
-        """
-        client = self._operator_404()
-        with patch(f'{_SVC}.get_paas_operator_client', return_value=None), \
-                self._fail_settlement():
-            with self.assertRaises(UserError):
-                self.service._poll_and_update_status(client)
-
-        self.assertTrue(
-            self._row_exists(),
-            'model 層同樣不得留下刪一半的服務')
+    # ── model 層同形處（cron 路徑）：刻意沒有殘留測試 ──────────────────
+    #
+    # `_poll_and_update_status` 的 404 分支（`cloud_service.py`）與 controller
+    # 完全同形，PR 也補了同樣的 savepoint，但**這裡沒有配一條「沒有殘留」的
+    # 測試，是刻意的**：
+    #
+    # 1. 它今天不可達——唯一的生產呼叫端 `_cron_check_deploying_services` 的
+    #    domain 不含 `deleting`（由下面那條 tripwire 釘住）。
+    # 2. 用直呼 `svc._poll_and_update_status(client)` 也造不出有鑑別力的 RED：
+    #    實測把 model 側 savepoint 拿掉、注入同一個結算失敗，探針顯示注入當下
+    #    列已刪（`seen=[False]`）但呼叫返回後列又在（`row_after=True`）——直呼
+    #    路徑下刪除仍被回捲，與 controller/HTTP 路徑的實測相反，原因未查明。
+    #
+    # 寫一條在「有修」與「沒修」都綠的測試，比沒有更糟：它會讓人以為那一側
+    # 已經守住。故只留下面的 tripwire——cron domain 一納入 `deleting`，那一側
+    # 就變成可達，屆時要回來補真正走 cron 的端到端測試。（先例：#525 A2 移除
+    # 假注入的測試、保留 narrowing 並註明原因。）
 
     def test_cron_domain_still_excludes_deleting(self):
         """上一條的可達性論述綁在 cron 的 domain 上，把它釘成斷言。
@@ -411,5 +413,5 @@ class TestPollTeardownLeavesNoHalfDeletedService(HttpCase):
         self.assertNotIn(
             "'deleting'", src,
             'cron domain 已納入 deleting ⇒ model 層 404-unlink 分支變成可達，'
-            '請把 test_model_poll_teardown_failure... 的「今天不可達」註記更新，'
+            '請把本檔 model 層那段註記的「今天不可達」更新，'
             '並補一條走 `_cron_check_deploying_services` 的端到端測試')
