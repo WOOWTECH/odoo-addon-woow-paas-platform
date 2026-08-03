@@ -1,0 +1,11 @@
+# 已知「存在但沒被 tests/__init__.py 匯入」的測試檔（issue #467，尚未修）
+# 產生／更新方式：手動維護（本檔不是 --update-baseline 產出）
+#
+# ⚠ 這**不是允許清單，是待修清單**。
+#   修好一個就刪一行；沒刪的話 C1 會以「已不再是 orphan，請刪行」反過來擋你
+#   —— 否則這張清單會慢慢腐爛成一張沒人看的白名單，而那正是本 gate 要防的東西。
+#
+# 目的：讓 C1 今天就是綠的、而「新增未匯入的測試檔」明天立刻紅。
+#   常態帶紅的 gate 等於沒有 gate（#433 的斷言曾在一片紅裡藏了 8 天沒人發現）。
+src/tests/test_ai_assistant
+src/tests/test_security_access_p_rule_migration

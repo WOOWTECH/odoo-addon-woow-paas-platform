@@ -1,0 +1,32 @@
+# 測試收集完備性稽核（Refs issue #546）
+#
+# 這支只跑**靜態**檢查（C1 匯入完備性 + C2 baseline 雙向差集），約 1 秒，
+# 與觸發策略（全套要在 PR 跑還是 develop push 跑）無關，故先行落地。
+# 需要測試 log 的 C3（實際執行清單差集）／C4（skip 盤點）會掛在跑全套的那支上，
+# 待 Eugene 拍板觸發策略後補。
+#
+# 刻意**不併進 repo-lint.yml**：`repo-lint.py` 改動頻繁（045c15aa / ab692d6c /
+# b491682d 都動過），多條線同時加 gate 會互相踩；本 gate 自成一支獨立腳本。
+name: test-collection-audit
+
+on:
+  pull_request:
+    paths:
+      - "src/tests/**"
+      - "scripts/audit/test_collection_audit.py"
+      - "scripts/audit/baselines/test-collection*.txt"
+      - ".gitea/workflows/test-collection-audit.yml"
+
+jobs:
+  test-collection-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 先打自己：matcher 壞掉時要以「self-test 紅」的形式現形，
+      # 而不是以「檢查通過」的形式靜默放行（探針自毀是本 gate 最怕的失效）。
+      - name: Self-test（matcher 的邊界樣本）
+        run: python3 scripts/audit/test_collection_audit.py --self-test
+
+      - name: C1 匯入完備性 + C2 baseline 雙向差集
+        run: python3 scripts/audit/test_collection_audit.py --all
